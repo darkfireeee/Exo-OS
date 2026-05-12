@@ -64,8 +64,11 @@ const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 struct ShieldRequest {
     sender_pid: u32,
     msg_type: u32,
-    payload: [u8; 120],
+    payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
 }
+
+const _: () = assert!(core::mem::size_of::<ShieldRequest>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(ShieldRequest, payload) == syscall::IPC_HEADER_SIZE);
 
 /// Outgoing IPC reply (64 bytes).
 #[repr(C)]
@@ -830,7 +833,7 @@ pub extern "C" fn _start() -> ! {
     let mut req = ShieldRequest {
         sender_pid: 0,
         msg_type: 0,
-        payload: [0u8; 120],
+        payload: [0u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
     };
 
     loop {

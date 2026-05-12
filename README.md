@@ -11,7 +11,7 @@
 
 ### Microkernel Hybride Haute Performance
 
-[![Status](https://img.shields.io/badge/status-en%20développement-orange?style=flat-square)](.)
+[![Status](https://img.shields.io/badge/status-v0.1.0%20Elder%20and%20Bobby-22c55e?style=flat-square)](.)
 [![Rust](https://img.shields.io/badge/Rust-no__std%20nightly-orange?style=flat-square&logo=rust)](.)
 [![Arch](https://img.shields.io/badge/cible-x86__64%20·%20aarch64-blue?style=flat-square)](.)
 [![Preuves](https://img.shields.io/badge/preuves-Coq%20·%20TLA%2B-8b5cf6?style=flat-square)](.)
@@ -29,11 +29,40 @@
 
 ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant architecture (ExoPhoenix), hardware-enforced security (ExoShield), and a complete formal verification corpus of 12 TLA+ modules covering 60 safety and liveness properties.
 
-> **Status:** Architecture v7 finalized · Formal verification complete (12/12 modules) · First boot validated on QEMU · ExoPhoenix release resurrection validated · Implementation of remaining P0 security patches in progress.
+> **Status:** ExoOS v0.1.0 "Elder and Bobby" closed · QEMU boot to interactive userspace shell validated · ExoPhoenix release resurrection validated · Ring1 services and minimal terminal usable.
+
+## ExoOS v0.1.0 "Elder and Bobby"
+
+Version 0.1.0 marks the first complete interactive milestone of ExoOS: the kernel boots, seeds the Ring1 payloads, starts the service graph, launches `exosh`, and exposes a usable terminal through QEMU.
+
+Validated state:
+
+| Area | v0.1.0 result |
+|---|---|
+| Boot | GRUB Multiboot2 ISO boots under QEMU q35 and reaches the userspace console |
+| Ring1 payloads | `init_server`, `ipc_router`, `memory_server`, `vfs_server`, `crypto_server`, `device_server`, `virtio_drivers`, `network_server`, `scheduler_server`, `input_server`, `tty_server`, `exo_shield`, `exosh` |
+| Payload size | Boot payloads are copied then stripped into `target/boot-payloads-stripped` before kernel injection |
+| Timekeeping | TSC calibration now accepts PIT driver measurements and no longer falls back to fixed `FB3G` when PIT succeeds |
+| Terminal | Visible cursor, keyboard input, Ctrl+L, left/right editing, up/down history recall |
+| ExoFS shell workflow | Directory and file creation, read/write, copy, move, remove, listing, tree view, simple benchmarks |
+| Diagnostics | Kernel debug traces are quiet by default; verbose kernel trace can be re-enabled with `EXO_KERNEL_TRACE=1` |
+
+Latest validated QEMU E9 boot line:
+
+```text
+[CAL:PIT-DRV hz=2614777097][TIME-INIT hz=2614800000]
+```
+
+The detailed closure reports are in:
+
+- [`docs/kernel/EXOOS_V0_1_0_ELDER_AND_BOBBY_RELEASE.md`](docs/kernel/EXOOS_V0_1_0_ELDER_AND_BOBBY_RELEASE.md)
+- [`docs/kernel/USERSPACE_CONSOLE_SHELL_REPORT.md`](docs/kernel/USERSPACE_CONSOLE_SHELL_REPORT.md)
+- [`docs/kernel/BOOT_PAYLOADS_QEMU_RUNBOOK.md`](docs/kernel/BOOT_PAYLOADS_QEMU_RUNBOOK.md)
+- [`docs/kernel/TIMEKEEPING_TRACE_CLEANUP_REPORT.md`](docs/kernel/TIMEKEEPING_TRACE_CLEANUP_REPORT.md)
 
 ## Boot Milestone
 
-ExoOS now reaches the end of `kernel_main()` under QEMU and emits `OK` on the debug path after completing the visible boot stages:
+ExoOS now reaches the Ring1 userspace console under QEMU. The boot path completes the kernel stages, seeds the embedded `/sbin` payloads, starts `init_server`, boots the service graph, and drops into `exosh:/$` as an interactive session.
 
 - `ARCH`
 - `MEMORY`
@@ -49,7 +78,7 @@ Latest validated framebuffer capture:
 
 ![ExoOS QEMU boot milestone](docs/avancement/qemu_boot/exoos-qemu-latest.png)
 
-Boot validation artifacts are stored in [`docs/avancement/qemu_boot/`](docs/avancement/qemu_boot/).
+Boot validation artifacts are stored in [`docs/avancement/qemu_boot/`](docs/avancement/qemu_boot/) and the v0.1.0 verification log is stored in [`docs/special/1/qemu_verify/e9.log`](docs/special/1/qemu_verify/e9.log).
 
 ---
 
@@ -90,7 +119,119 @@ Validation results:
 
 Proof artifacts have been moved into [`docs/avancement/exophoenix_release_resurrection_2026-05-05/`](docs/avancement/exophoenix_release_resurrection_2026-05-05/), including the release E9 proof log, QEMU status, IDT excerpt, normal release boot log, unit/integration test logs, and TLA+ logs.
 
-Diagnostic note for external presentations: the proof log still contains `[CAL:PIT-DRV-FAIL][CAL:FB3G][TIME-INIT hz=3000000000]`. This is expected on the current QEMU TCG path: the PIT driver calibration may fail, then ExoOS intentionally falls back to the 3 GHz constant-TSC calibration path. This timing fallback is documented in [`docs/kernel/BOOT_FIX_HISTORY.md`](docs/kernel/BOOT_FIX_HISTORY.md) and is not an ExoPhoenix failure. The short pre-`OK` byte sequence (`XK...`, `4D56...`) is early bring-up/debug-port telemetry emitted before the formatted boot logger is fully initialized.
+Diagnostic note for external presentations: older proof logs may contain `[CAL:PIT-DRV-FAIL][CAL:FB3G][TIME-INIT hz=3000000000]`. That was the pre-v0.1.0 timing fallback. The PIT formula has since been corrected, and the current validated QEMU path reports `[CAL:PIT-DRV hz=...][TIME-INIT hz=...]`. The short pre-`OK` byte sequence (`XK...`, `4D56...`) is early bring-up/debug-port telemetry emitted before the formatted boot logger is fully initialized.
+
+---
+
+## Quick Start
+
+The supported development path is Linux or WSL2 with QEMU and the Rust nightly toolchain. From Windows, run all build and QEMU commands through WSL.
+
+Install the usual host tools:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential qemu-system-x86 xorriso grub-pc-bin grub-common mtools llvm
+rustup toolchain install nightly
+rustup component add rust-src rustfmt clippy llvm-tools-preview --toolchain nightly
+```
+
+Build the current ISO from source:
+
+```bash
+cd /mnt/c/Users/xavie/Desktop/Exo-OS
+make iso
+```
+
+Run the full build-and-boot path:
+
+```bash
+make qemu
+```
+
+Run an already-built ISO without rebuilding:
+
+```bash
+qemu-system-x86_64 \
+  -machine q35 \
+  -m 256M \
+  -boot d \
+  -vga std \
+  -serial stdio \
+  -no-reboot \
+  -no-shutdown \
+  -d int,cpu_reset -D /tmp/qemu-exoos.log \
+  -debugcon file:/tmp/e9k.txt \
+  -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  -drive if=none,file=target/qemu/exofs-root.img,format=raw,id=exofs0,cache=writeback \
+  -device virtio-blk-pci,drive=exofs0 \
+  -cdrom exo-os.iso
+```
+
+Read the QEMU debugcon log:
+
+```bash
+cat /tmp/e9k.txt
+```
+
+Useful validation commands:
+
+```bash
+cargo check -p exo-os-kernel --message-format short
+cargo check -p exo-exosh --message-format short
+make build-boot-payloads
+make qemu-shell-smoke
+```
+
+---
+
+## Userspace Shell
+
+The v0.1.0 shell is intentionally small, but usable enough to exercise ExoFS and the Ring1 service graph from inside QEMU.
+
+Functional builtins:
+
+| Command | Status |
+|---|---|
+| `help` | Lists available shell commands |
+| `clear`, `Ctrl+L` | Clears the console |
+| `pwd`, `cd` | Current directory and navigation |
+| `ls`, `ls -l`, `ls -a`, `ls -la`, `ls -lah` | Directory listing, long metadata, hidden files, human sizes |
+| `mkdir`, `rmdir` | Directory creation/removal |
+| `touch`, `cat`, `echo`, `echo ... > file` | Basic file creation, read, write/redirection |
+| `rm`, `rm -f`, `rm -rf`, `rm *` | File and recursive tree removal, including simple glob expansion |
+| `cp`, `mv` | File copy and rename/move, including destination directory handling |
+| `tree` | Recursive directory display |
+| `top`, `ps`, `kill`, `kill -9` | Minimal process/service inspection and signal dispatch |
+| `history` | Command history display |
+| `time` | Measures a shell command using `clock_gettime` |
+| `dd` | Minimal I/O benchmark with `/dev/zero`, `/dev/null`, `bs=`, `count=` |
+| `exit` | Exits the shell process; `init_server` may restart it |
+
+Line editing:
+
+| Key | Behavior |
+|---|---|
+| Left / Right | Move inside the current command line |
+| Up / Down | Recall previous commands from history |
+| Backspace | Delete before cursor |
+| Ctrl+C / Ctrl+D | Cancel current line |
+| Blinking reverse-video cursor | Shows the active edit position |
+
+Example session:
+
+```text
+exosh:/$ mkdir /tmp
+exosh:/$ touch /tmp/a
+exosh:/$ echo hello > /tmp/a
+exosh:/$ cat /tmp/a
+hello
+exosh:/$ cp /tmp/a /tmp/b
+exosh:/$ mv /tmp/b /tmp/c
+exosh:/$ ls -lah /tmp
+exosh:/$ time echo ok
+exosh:/$ dd if=/dev/zero of=/tmp/bench bs=1M count=4
+```
 
 ---
 
@@ -163,13 +304,15 @@ Full TLA+ specifications and verification outputs are in [`docs/Exo-OS-TLA+/`](d
 | `Exo-OS/kernel/src/ipc/` | SpscRing, CapTokens, reply_nonce |
 | `Exo-OS/kernel/src/drivers/` | Driver framework v10, syscalls 530–546 |
 | `Exo-OS/kernel/src/exophoenix/` | ExoPhoenix v6 dual-kernel handoff |
-| `Exo-OS/ring1/` | Ring 1 – system servers |
-| `Exo-OS/ring1/ipc_broker/` | PID 2, ExoCordon DAG enforcement |
-| `Exo-OS/ring1/memory_server/` | Physical memory management |
-| `Exo-OS/ring1/vfs_server/` | PID 3, ExoFS Translation Layer v5 |
-| `Exo-OS/ring1/crypto_server/` | PID 4, ChaCha20, Blake3 |
-| `Exo-OS/ring1/device_server/` | Driver host |
-| `Exo-OS/ring1/exo_shield/` | Phase 3 AI containment module |
+| `Exo-OS/servers/` | Ring1 service graph and userspace system servers |
+| `Exo-OS/servers/init_server/` | PID 1, service graph bootstrap and shell launch |
+| `Exo-OS/servers/ipc_router/` | PID 2, IPC routing service |
+| `Exo-OS/servers/memory_server/` | PID 3, memory service |
+| `Exo-OS/servers/vfs_server/` | PID 4, VFS bridge over ExoFS |
+| `Exo-OS/servers/crypto_server/` | PID 5, crypto service |
+| `Exo-OS/servers/device_server/` | PID 6, device service |
+| `Exo-OS/servers/virtio_drivers/` | PID 7, VirtIO driver host |
+| `Exo-OS/servers/exosh/` | Interactive userspace shell |
 | `Exo-OS/docs/` | Documentation root |
 | `Exo-OS/docs/Exo-OS-TLA+/` | 12 TLA+ modules + verification outputs (FR) |
 | `Exo-OS/docs/recast/` | Architecture v7 specs + CORR-01..54 audit corpus (FR) |
@@ -198,23 +341,23 @@ Six security properties are formally specified and verified in TLA+: `S33` throu
 ---
 ## Ring 1 Startup Order (V4 Canonical)
 
-```
-| PID | Server / Component     | Description                               |
-|-----|------------------------|-------------------------------------------|
-| 2   | ipc_broker             | ExoCordon DAG enforcement                 |
-| —   | memory_server          | Physical memory                           |
-| 1   | init_server            | Process lifecycle, ChildDied handler      |
-| 3   | vfs_server             | ExoFS TL v5, ~95% POSIX                   |
-| 4   | crypto_server          | ChaCha20, Blake3, nonce management        |
-| —   | device_server          | Driver host                               |
-| —   | virtio-block           | Storage                                   |
-| —   | virtio-net             | Network                                   |
-| —   | virtio-console         | Console                                   |
-| —   | network_server         | TCP/IP stack                              |
-| —   | scheduler_server       | Userspace scheduling                      |
-| —   | exo_shield             | Phase 3 only — AI containment             |
+| PID | Server / Component | Description |
+|---|---|---|
+| 1 | `init_server` | PID1, service graph, launches `exosh` and `exo_shield` |
+| 2 | `ipc_router` | IPC routing and control endpoint registration |
+| 3 | `memory_server` | Ring1 memory service |
+| 4 | `vfs_server` | VFS bridge backed by ExoFS |
+| 5 | `crypto_server` | Crypto service |
+| 6 | `device_server` | Device service |
+| 7 | `virtio_drivers` | VirtIO driver host |
+| 8 | `network_server` | Network service placeholder |
+| 9 | `scheduler_server` | Userspace scheduler service |
+| 10 | `input_server` | Input service |
+| 11 | `tty_server` | TTY service |
+| 12 | `exo_shield` | Containment service |
+| 13 | `exosh` | Interactive userspace shell |
 
-| Governing Rules | `SRV-01/02/04`, `CAP-01`, `IPC-01/02/03`, `PHX-01/02/03` |
+Governing rules: `SRV-01/02/04`, `CAP-01`, `IPC-01/02/03`, `PHX-01/02/03`.
 
 
 ---
@@ -230,18 +373,21 @@ Six security properties are formally specified and verified in TLA+: `S33` throu
 - Full TLA+ formal verification corpus (CORR-01..54 + SRV-05)
 - First boot validated on QEMU
 - ExoPhoenix release resurrection proof on QEMU (`#DE` collapse, handoff, IOMMU lock, clean image reload, relaunch)
+- ExoOS v0.1.0 userspace milestone: Ring1 service graph, interactive shell, ExoFS command workflow
+- Stripped embedded Ring1 payloads and direct no-rebuild QEMU run path
+- PIT TSC calibration fixed on the validated QEMU path
 
-**In Progress (P0 blockers)**
-- `SSR_MAX_CORES_LAYOUT` constant divergence fix (shared crate vs kernel local)
-- `security_init()` boot wiring
-- `init_syscall()` on AP cores (currently BSP only)
-- `gs:[0x20]` write during context switch (P0-D)
+**Next Hardening Targets**
+- Replace remaining fixed PID/name shell knowledge with a true process-list syscall.
+- Expand `dd`, `cp`, `mv`, and glob handling toward fuller POSIX behavior.
+- Keep reducing early debug-byte telemetry into structured boot logs.
+- Add broader non-interactive QEMU smoke tests that avoid host keyboard timing flakiness.
 
 **Roadmap**
-- Phase 0 — Codebase coherence (P0 patches above)
-- Phase 1 — Critical security (LAC-01/04/06, CVE-EXO-001)
-- Phase 2 — Robustness hardening
-- Phase 3 — Full Ring 1 servers + ExoShield activation
+- Phase 0 — v0.1.0 closure: boot, userspace console, shell workflow
+- Phase 1 — Shell/service hardening and process introspection syscall
+- Phase 2 — ExoFS benchmark and persistence hardening
+- Phase 3 — Full Ring1 server capability routing
 - Phase 4 — ExoPhoenix live testing + quality
 
 ---
@@ -284,10 +430,11 @@ java -Xmx10g -XX:+UseParallelGC \
 
 ## Contributing
 
-This project is in early development. Architecture specifications and TLA+ models are in `docs/`. Issues and discussions welcome.
+This project is in active development after the v0.1.0 userspace milestone. Architecture specifications, proof material, boot reports, and kernel notes are in `docs/`. Issues and discussions welcome.
 
 
 ---
 
-*ExoOS — Architecture v7 · April 2026*  
+*ExoOS — v0.1.0 "Elder and Bobby" · May 2026*
+
 *12 TLA+ modules · 60 properties · ~1.2B states verified*

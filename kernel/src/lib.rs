@@ -78,6 +78,9 @@ pub mod exophoenix;
 /// Interface syscall → dispatch vers les couches supérieures
 pub mod syscall;
 
+/// Bootstrap des serveurs Ring1 et du PID 1.
+pub mod userspace_boot;
+
 // ── Re-exports publics ─────────────────────────────────────────────────────────
 // Seuls les symboles nécessaires aux crates externes (tests, outils) sont exportés.
 // Le binaire kernel_main utilise ces modules directement via `exo_os_kernel::`.
@@ -147,6 +150,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
 
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
     crate::memory::heap::allocator::hybrid::init();
+    let _ = crate::arch::x86_64::apic::local_apic::init_lapic_fixmap_post_memory();
     kdb(b'3'); // Phase 2b done
     crate::arch::x86_64::boot_display::stage_ok("MEMORY");
 
@@ -294,8 +298,17 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
     {
         use crate::fs::elf_loader_impl::EXO_ELF_LOADER;
+        use crate::memory::virt::fault::demand_paging::{
+            register_file_fault_provider, FileFaultProvider,
+        };
         use crate::process::lifecycle::exec::register_elf_loader;
         register_elf_loader(&EXO_ELF_LOADER);
+
+        let provider: &dyn FileFaultProvider = &EXO_ELF_LOADER;
+        let (data, vtable): (*const (), *const ()) = unsafe { core::mem::transmute(provider) };
+        unsafe {
+            register_file_fault_provider(data, vtable);
+        }
     }
     kdb(b'E'); // ELF loader registered
 

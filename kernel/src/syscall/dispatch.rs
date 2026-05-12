@@ -51,6 +51,24 @@ static DISPATCH_COMPAT: AtomicU64 = AtomicU64::new(0);
 /// Somme des latences dispatch (cycles TSC). Échantillonné 1/256.
 static DISPATCH_LATENCY_CYC: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(all(target_arch = "x86_64", debug_assertions))]
+#[inline]
+fn syscall_trace(_message: &[u8]) {}
+
+#[cfg(not(all(target_arch = "x86_64", debug_assertions)))]
+#[inline]
+fn syscall_trace(_message: &[u8]) {}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+#[inline]
+fn exec_trace(message: &[u8]) {
+    crate::arch::x86_64::terminal::debug_write(message);
+}
+
+#[cfg(not(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace)))]
+#[inline]
+fn exec_trace(_message: &[u8]) {}
+
 /// Snapshot des compteurs de dispatch.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DispatchStats {
@@ -154,10 +172,13 @@ pub fn dispatch(frame: &mut SyscallFrame) {
 
     // ── [5b] Cas spécial fork/vfork — besoin de frame.rcx (child RIP) et frame.rsp ──
     if effective_nr == crate::syscall::numbers::SYS_FORK {
+        syscall_trace(b"sys_fork: dispatch\n");
         let result =
             handle_fork_like_inplace(frame, crate::process::lifecycle::fork::ForkFlags::default());
+        syscall_trace(b"sys_fork: result\n");
         frame.rax = result as u64;
         post_dispatch(frame, tsc_start);
+        syscall_trace(b"sys_fork: post\n");
         return;
     }
 
@@ -176,8 +197,12 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [5c] Cas spécial execve — modifie frame pour sauter au nouveau binaire ──
     if effective_nr == crate::syscall::numbers::SYS_EXECVE {
         handle_execve_inplace(frame);
-        // frame.rax et frame.rcx sont déjà mis à jour par handle_execve_inplace.
-        // Pas de post_dispatch après execve réussi (nouveau processus).
+        // Pas de post_dispatch apres execve reussi (nouvelle image). En cas
+        // d'echec, le processus continue dans l'ancienne image et doit livrer
+        // ses signaux pendants avant le retour userspace.
+        if (frame.rax as i64) < 0 {
+            post_dispatch(frame, tsc_start);
+        }
         return;
     }
 
@@ -313,6 +338,13 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
 fn post_dispatch(frame: &mut SyscallFrame, tsc_start: u64) {
     // ── Livraison de signaux pending (RÈGLE SIGNAL-01) ────────────────────
     check_and_deliver_signals(frame);
+
+    // ── Préemption demandée au retour syscall ─────────────────────────────
+    // Le tick timer pose NEED_RESCHED; le retour vers Ring3 est le point sûr
+    // où l'on peut céder le CPU sans perdre la SyscallFrame du thread courant.
+    unsafe {
+        let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+    }
 
     // ── Instrumentation latence (échantillon 1/256) ───────────────────────
     let tsc_end = read_tsc();
@@ -541,6 +573,7 @@ fn handle_fork_like_inplace(
 
     match do_fork(&ctx) {
         Ok(result) => {
+            syscall_trace(b"sys_fork: do_fork ok\n");
             if fork_flags.has(crate::process::lifecycle::fork::ForkFlags::VFORK) {
                 // SAFETY: tcb_ptr pointe le TCB courant; `do_fork` est terminé et
                 // aucune référence immutable au TCB n'est réutilisée après ce point.
@@ -551,15 +584,18 @@ fn handle_fork_like_inplace(
             }
             result.child_pid.0 as i64
         }
-        Err(e) => match e {
-            ForkError::PidExhausted
-            | ForkError::TidExhausted
-            | ForkError::RegistryError
-            | ForkError::InvalidCpu => EAGAIN,
-            ForkError::OutOfMemory | ForkError::AddressSpaceCloneFailed => ENOMEM,
-            ForkError::NoAddrCloner => EFAULT,
-            ForkError::UnsupportedFlag => EINVAL,
-        },
+        Err(e) => {
+            syscall_trace(b"sys_fork: do_fork err\n");
+            match e {
+                ForkError::PidExhausted
+                | ForkError::TidExhausted
+                | ForkError::RegistryError
+                | ForkError::InvalidCpu => EAGAIN,
+                ForkError::OutOfMemory | ForkError::AddressSpaceCloneFailed => ENOMEM,
+                ForkError::NoAddrCloner => EFAULT,
+                ForkError::UnsupportedFlag => EINVAL,
+            }
+        }
     }
 }
 
@@ -577,7 +613,7 @@ fn copy_userspace_argv(
     argv_ptr: u64,
     max_args: usize,
 ) -> Option<alloc::vec::Vec<alloc::string::String>> {
-    use crate::syscall::validation::USER_ADDR_MAX;
+    use crate::syscall::validation::{copy_from_user, UserStr, USER_ADDR_MAX};
     use alloc::string::String;
     use alloc::vec::Vec;
 
@@ -589,44 +625,38 @@ fn copy_userspace_argv(
     }
 
     let mut result: Vec<String> = Vec::new();
+    let mut saw_null = false;
 
     for i in 0..max_args {
         // Lire le i-ème pointeur (u64) du tableau.
         let ptr_addr = match argv_ptr.checked_add(i as u64 * 8) {
-            Some(a) if a < USER_ADDR_MAX => a,
+            Some(a) if a <= USER_ADDR_MAX.saturating_sub(8) => a,
             _ => return None,
         };
 
-        // SAFETY: ptr_addr est une adresse userspace validée.
-        let str_ptr: u64 = unsafe { core::ptr::read_volatile(ptr_addr as *const u64) };
+        let mut raw = [0u8; core::mem::size_of::<u64>()];
+        copy_from_user(raw.as_mut_ptr(), ptr_addr as *const u8, raw.len()).ok()?;
+        let str_ptr = u64::from_ne_bytes(raw);
 
         if str_ptr == 0 {
+            saw_null = true;
             break;
         } // terminateur NULL du tableau
         if str_ptr >= USER_ADDR_MAX {
             return None;
         }
 
-        // Lire la chaîne C octet par octet dans un vecteur heap.
-        let mut bytes: alloc::vec::Vec<u8> = Vec::new();
-        for j in 0..4095usize {
-            let byte_addr = match str_ptr.checked_add(j as u64) {
-                Some(a) if a < USER_ADDR_MAX => a,
-                _ => return None,
-            };
-            // SAFETY: byte_addr est une adresse userspace validée.
-            let byte = unsafe { core::ptr::read_volatile(byte_addr as *const u8) };
-            if byte == 0 {
-                break;
-            }
-            bytes.push(byte);
-        }
+        let user_str = UserStr::from_user(str_ptr, 4096).ok()?;
 
         // Conversion UTF-8 permissive (remplace les octets invalides par U+FFFD).
-        result.push(String::from_utf8_lossy(&bytes).into_owned());
+        result.push(String::from_utf8_lossy(user_str.as_bytes()).into_owned());
     }
 
-    Some(result)
+    if saw_null {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Traite `SYS_EXECVE` directement depuis la frame arch.
@@ -643,8 +673,8 @@ fn copy_userspace_argv(
 /// 5. Échec : `frame.rax = -errno`.
 ///
 /// ## Note : argv/envp
-/// Pour l'instant argv et envp sont transmis vides au `ElfLoader`.
-/// Le câblage complet copy_from_user(argv/envp) est prévu en Phase 4 (ARGV-01).
+/// Les tableaux `argv` et `envp` sont copiés avant le remplacement d'image via
+/// les primitives userspace centralisées (`copy_from_user` / `UserStr`).
 fn handle_execve_inplace(frame: &mut SyscallFrame) {
     use crate::process::core::pid::Pid;
     use crate::process::core::registry::PROCESS_REGISTRY;
@@ -653,10 +683,13 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     use crate::syscall::errno::*;
     use crate::syscall::validation::read_user_path;
 
+    exec_trace(b"execve: enter\n");
+
     // Lire le chemin depuis userspace.
     let user_path = match read_user_path(frame.rdi) {
         Ok(p) => p,
         Err(e) => {
+            exec_trace(b"execve: path fault\n");
             frame.rax = e.to_errno() as u64;
             return;
         }
@@ -664,6 +697,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     let path = match user_path.as_str() {
         Ok(s) => s,
         Err(_) => {
+            exec_trace(b"execve: path utf8\n");
             frame.rax = EFAULT as u64;
             return;
         }
@@ -676,6 +710,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
     }
     if tcb_ptr == 0 {
+        exec_trace(b"execve: no tcb\n");
         frame.rax = EFAULT as u64;
         return;
     }
@@ -687,6 +722,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
         Some(p) => p,
         None => {
+            exec_trace(b"execve: no pcb\n");
             frame.rax = EFAULT as u64;
             return;
         }
@@ -694,6 +730,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
 
     let thread_ptr = pcb.main_thread_ptr();
     if thread_ptr.is_null() {
+        exec_trace(b"execve: no thread\n");
         frame.rax = EAGAIN as u64;
         return;
     }
@@ -707,6 +744,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     let argv_strings = match copy_userspace_argv(frame.rsi, 1024) {
         Some(v) => v,
         None => {
+            exec_trace(b"execve: argv fault\n");
             frame.rax = EFAULT as u64;
             return;
         }
@@ -716,19 +754,28 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
     let envp_strings = match copy_userspace_argv(frame.rdx, 4096) {
         Some(v) => v,
         None => {
+            exec_trace(b"execve: env fault\n");
             frame.rax = EFAULT as u64;
             return;
         }
     };
     let envp_refs: alloc::vec::Vec<&str> = envp_strings.iter().map(|s| s.as_str()).collect();
 
+    exec_trace(b"execve: load\n");
     match do_execve(thread, pcb, &path, &argv_refs, &envp_refs) {
         Ok(()) => {
+            exec_trace(b"execve: ok\n");
             // Succès : lire le nouveau point d'entrée depuis le ProcessThread mis à jour.
             let new_rip = thread.addresses.entry_point;
             let new_rsp = thread.addresses.initial_rsp;
 
             // Mettre à jour la frame pour SYSRETQ.
+            frame.rbx = 0;
+            frame.rbp = 0;
+            frame.r12 = 0;
+            frame.r13 = 0;
+            frame.r14 = 0;
+            frame.r15 = 0;
             frame.rcx = new_rip; // RIP → nouveau point d'entrée ELF
             frame.rsp = new_rsp; // RSP → nouvelle pile userspace
             frame.r11 = 0x0202; // RFLAGS : IF=1, bit réservé=1
@@ -745,6 +792,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
             }
         }
         Err(e) => {
+            exec_trace(b"execve: err\n");
             let errno: i64 = match e {
                 ExecError::ElfLoadFailed(ElfLoadError::NotFound) => ENOENT,
                 ExecError::ElfLoadFailed(ElfLoadError::PermissionDenied)

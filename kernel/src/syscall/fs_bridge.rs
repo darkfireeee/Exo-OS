@@ -1,18 +1,13 @@
 // syscall/fs_bridge.rs — Interface de synchronisation syscall ↔ fs/
 //
 // Ce module définit le contrat entre la couche syscall et le module fs/.
-// Lorsque `pub mod fs;` sera activé dans lib.rs, les stubs ci-dessous seront
-// remplacés par des appels réels vers `crate::fs::*`.
+// Les appels sont routés vers ExoFS/VFS via `crate::fs::*`, avec une garde de
+// readiness pour éviter les accès avant l'initialisation complète du boot.
 //
 // ARCHITECTURE :
 //   syscall/table.rs            → appelle les fonctions de ce module
-//   syscall/fs_bridge.rs        → dispatch vers crate::fs (quand activé)
+//   syscall/fs_bridge.rs        → dispatch vers crate::fs
 //   crate::fs (couche 4)        → implémentation VFS réelle
-//
-// ACTIVATION :
-//   1. Activer `pub mod fs;` dans kernel/src/lib.rs
-//   2. Remplacer chaque `Err(FsBridgeError::NotReady)` par le vrai appel fs/.
-//   3. Supprimer la garde `FS_READY` (ou la laisser pour le mode dégradé).
 //
 // RÈGLE FS-BRIDGE-01 : Ce module ne doit JAMAIS importer fs/ directement.
 //   Il utilise uniquement des types primitifs (u64, u32, &[u8], i64).
@@ -103,7 +98,7 @@ impl FsBridgeError {
     /// Convertit en errno POSIX (valeur négative).
     pub fn to_errno(self) -> i64 {
         match self {
-            FsBridgeError::NotReady => -38,   // ENOSYS
+            FsBridgeError::NotReady => -11,   // EAGAIN
             FsBridgeError::BadFd => -9,       // EBADF
             FsBridgeError::BadPath => -22,    // EINVAL
             FsBridgeError::NotFound => -2,    // ENOENT
@@ -186,6 +181,14 @@ const STAT_MODE_MASK: u32 = 0o170000;
 
 static NEXT_PSEUDO_ID: AtomicU64 = AtomicU64::new(1);
 static POSIX_UMASK: AtomicU32 = AtomicU32::new(0o022);
+
+#[inline]
+fn process_pgid(pid: u32) -> u32 {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .map(|pcb| pcb.pgroup_id())
+        .unwrap_or(pid)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -1211,15 +1214,28 @@ fn resolve_path_with_symlinks(
 /// PONT : `crate::fs::vfs::read(fd, buf_slice)` — activé quand `pub mod fs;`
 #[inline]
 pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
-    if !is_fs_ready() {
-        return Err(FsBridgeError::NotReady);
-    }
     let _ = pid;
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
     if count == 0 {
         return Ok(0);
+    }
+    if fd == 0 {
+        let Some(byte) =
+            crate::arch::x86_64::terminal::poll_byte_for_process(pid, process_pgid(pid))
+        else {
+            return Err(FsBridgeError::WouldBlock);
+        };
+        copy_to_user(buf_ptr as *mut u8, &byte as *const u8, 1)
+            .map_err(|_| FsBridgeError::Fault)?;
+        return Ok(1);
+    }
+    if fd == 1 || fd == 2 {
+        return Err(FsBridgeError::BadFd);
+    }
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
 
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
@@ -1306,14 +1322,26 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
 /// `write(fd, buf, count)` → octets écrits.
 #[inline]
 pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
-    if !is_fs_ready() {
-        return Err(FsBridgeError::NotReady);
-    }
+    let _ = pid;
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
     if count == 0 {
         return Ok(0);
+    }
+    if fd == 1 || fd == 2 {
+        let mut input = Vec::new();
+        input.resize(count, 0);
+        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
+            .map_err(|_| FsBridgeError::Fault)?;
+        crate::arch::x86_64::terminal::write_from_process(pid, process_pgid(pid), &input);
+        return Ok(count as i64);
+    }
+    if fd == 0 {
+        return Err(FsBridgeError::BadFd);
+    }
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
 
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
@@ -1916,7 +1944,7 @@ pub fn fs_flock(fd: u32, operation: u32, pid: u32) -> Result<i64, FsBridgeError>
 }
 
 /// `mkdir(path, mode)`.
-#[inline]
+#[inline(never)]
 pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
@@ -3566,6 +3594,69 @@ mod tests {
         let names = parse_dirent_names(&out[..n]);
         assert!(names.iter().any(|name| name.as_slice() == b"hosts"));
         assert_eq!(fs_close(dir_fd, 51).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_shell_minimal_command_graph() {
+        init_bridge();
+
+        assert_eq!(fs_mkdir(b"/auto/chain", 0, 91).unwrap(), 0);
+        assert_eq!(fs_rmdir(b"/auto/chain", 91).unwrap(), 0);
+        assert_eq!(fs_rmdir(b"/auto", 91).unwrap(), 0);
+
+        assert_eq!(fs_mkdir(b"/tmp", 0, 91).unwrap(), 0);
+        assert_eq!(fs_mkdir(b"/tmp/t", 0, 91).unwrap(), 0);
+
+        let fd = fs_open(
+            b"/tmp/t/a",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            91,
+        )
+        .unwrap() as u32;
+        let payload = *b"hello-terminal";
+        assert_eq!(
+            fs_write(fd, payload.as_ptr() as u64, payload.len(), 91).unwrap(),
+            payload.len() as i64
+        );
+        assert_eq!(fs_lseek(fd, 0, SEEK_SET, 91).unwrap(), 0);
+        let mut out = [0u8; 32];
+        let n = fs_read(fd, out.as_mut_ptr() as u64, out.len(), 91).unwrap() as usize;
+        assert_eq!(&out[..n], &payload);
+        assert_eq!(fs_close(fd, 91).unwrap(), 0);
+
+        let dir_fd = fs_open(b"/tmp/t", open_flags::O_RDONLY, 0, 91).unwrap() as u32;
+        let mut dirents = [0u8; 256];
+        let n =
+            fs_getdents64(dir_fd, dirents.as_mut_ptr() as u64, dirents.len(), 91).unwrap() as usize;
+        let names = parse_dirent_names(&dirents[..n]);
+        assert!(names.iter().any(|name| name.as_slice() == b"a"));
+        assert_eq!(fs_close(dir_fd, 91).unwrap(), 0);
+
+        let copy_fd = fs_open(
+            b"/tmp/t/copy",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            91,
+        )
+        .unwrap() as u32;
+        assert_eq!(
+            fs_write(copy_fd, payload.as_ptr() as u64, payload.len(), 91).unwrap(),
+            payload.len() as i64
+        );
+        assert_eq!(fs_close(copy_fd, 91).unwrap(), 0);
+        assert_eq!(fs_rename(b"/tmp/t/copy", b"/tmp/t/moved", 91).unwrap(), 0);
+
+        let moved_fd = fs_open(b"/tmp/t/moved", open_flags::O_RDONLY, 0, 91).unwrap() as u32;
+        let mut moved = [0u8; 32];
+        let n = fs_read(moved_fd, moved.as_mut_ptr() as u64, moved.len(), 91).unwrap() as usize;
+        assert_eq!(&moved[..n], &payload);
+        assert_eq!(fs_close(moved_fd, 91).unwrap(), 0);
+
+        assert_eq!(fs_unlink(b"/tmp/t/a", 91).unwrap(), 0);
+        assert_eq!(fs_unlink(b"/tmp/t/moved", 91).unwrap(), 0);
+        assert_eq!(fs_rmdir(b"/tmp/t", 91).unwrap(), 0);
+        assert_eq!(fs_rmdir(b"/tmp", 91).unwrap(), 0);
     }
 
     #[test]

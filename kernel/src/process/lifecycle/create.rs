@@ -20,19 +20,62 @@
 use crate::process::core::pid::{Pid, PidAllocError, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
 use alloc::boxed::Box;
 use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 
 // Trampoline de démarrage kthread — défini dans scheduler/asm/switch_asm.s.
 // Appelé lors du premier context_switch vers un nouveau kthread.
 // À l'entrée : r12 = entry_fn, r13 = arg. Place arg dans rdi puis jmp *r12.
 extern "C" {
     fn kthread_trampoline();
+    fn user_entry_trampoline();
 }
-use crate::process::core::pcb::{Credentials, ProcessControlBlock};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::gdt::{GDT_USER_CS64, GDT_USER_DS};
+use crate::process::core::pcb::{process_flags, Credentials, ProcessControlBlock, ProcessState};
 use crate::process::core::registry::PROCESS_REGISTRY;
-use crate::process::core::tcb::ProcessThread;
+use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::lifecycle::exec::ElfLoadResult;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 use crate::scheduler::core::runqueue::run_queue;
-use crate::scheduler::core::task::{CpuId, Priority, SchedPolicy, ThreadId};
+use crate::scheduler::core::task::{CpuId, Priority, SchedPolicy, TaskState, ThreadId};
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+fn debug_hex64(value: u64) {
+    let mut buf = [0u8; 16];
+    let mut shift = 60u32;
+    for byte in &mut buf {
+        let nibble = ((value >> shift) & 0x0f) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        shift = shift.saturating_sub(4);
+    }
+    crate::arch::x86_64::terminal::debug_write(&buf);
+}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+fn debug_init_as(label: &[u8], cr3: u64, addr_space: usize) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    out(label);
+    out(b" cr3=0x");
+    debug_hex64(cr3);
+    out(b" as=0x");
+    debug_hex64(addr_space as u64);
+    out(b"\n");
+}
+
+#[inline]
+fn sync_process_kernel_half(cr3: u64) {
+    if cr3 == 0 {
+        return;
+    }
+    unsafe {
+        crate::memory::virt::address_space::KERNEL_AS
+            .sync_kernel_half_into(crate::memory::core::PhysAddr::new(cr3));
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Erreurs de création
@@ -183,6 +226,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         TID_ALLOCATOR.free(tid_raw);
         CreateError::RegistryError
     })?;
+    sync_process_kernel_half(params.cr3);
 
     // 5. Enregistrer le TCB dans la run queue du CPU cible.
     {
@@ -203,6 +247,147 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         unsafe {
             let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
             run_queue(CpuId(cpu_id)).enqueue(tcb_ptr);
+        }
+    }
+
+    Ok(ProcessHandle {
+        pid,
+        tid,
+        thread: thread_ptr,
+    })
+}
+
+/// Cree le vrai PID 1 depuis une image ELF deja chargee.
+///
+/// `pid::init()` reserve PID 1 dans le bitmap: ce chemin n'alloue donc pas de
+/// PID, il publie explicitement le PCB `init` dans la registry puis enfile son
+/// thread principal. Le premier switch vers ce thread passe par
+/// `user_entry_trampoline`, qui prepare les registres ABI minimaux avant l'IRET
+/// ring3.
+pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle, CreateError> {
+    if PROCESS_REGISTRY.find_by_pid(Pid::INIT).is_some() {
+        return Err(CreateError::RegistryError);
+    }
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    debug_init_as(b"init_create: elf", elf.cr3, elf.addr_space_ptr);
+
+    let tid_raw = TID_ALLOCATOR
+        .alloc()
+        .map_err(|_| CreateError::TidExhausted)?;
+    let tid = Tid(tid_raw);
+    let pid = Pid::INIT;
+
+    let thread = ProcessThread::new(
+        tid,
+        pid,
+        elf.cr3,
+        SchedPolicy::Normal,
+        Priority::NORMAL_DEFAULT,
+    )
+    .ok_or_else(|| {
+        TID_ALLOCATOR.free(tid_raw);
+        CreateError::OutOfMemory
+    })?;
+
+    let thread_ptr = Box::into_raw(thread);
+
+    const USER_STACK_PAGES: u64 = 8;
+    const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
+    const USER_STACK_SIZE: u64 = USER_STACK_PAGES * PAGE_SIZE_U64;
+    let stack_top = elf.initial_stack_top;
+    let stack_base = stack_top.saturating_sub(USER_STACK_SIZE) & !(PAGE_SIZE_U64 - 1);
+    let stack_size = stack_top.saturating_sub(stack_base);
+
+    unsafe {
+        let thread = &mut *thread_ptr;
+        thread.sched_tcb.cr3_phys = elf.cr3;
+        thread.sched_tcb.fs_base = elf.tls_base;
+        thread.sched_tcb.user_gs_base = 0;
+        thread.sched_tcb.signal_mask.store(0, Ordering::Release);
+        thread.sched_tcb.set_state(TaskState::Runnable);
+        thread.addresses = ThreadAddress {
+            stack_base,
+            stack_size,
+            entry_point: elf.entry_point,
+            initial_rsp: elf.initial_stack_top,
+            tls_base: elf.tls_base,
+            pthread_ptr: 0,
+            sigaltstack_base: 0,
+            sigaltstack_size: 0,
+        };
+        thread.tls_gs_base.store(elf.tls_base, Ordering::Release);
+        thread.tls_size = elf.tls_size;
+
+        let kstack_top = thread.kernel_stack.top_addr();
+        let kernel_rsp = kstack_top - 96;
+        let frame = kernel_rsp as *mut u64;
+        *frame.add(0) = 0; // rbx
+        *frame.add(1) = 0; // rbp
+        *frame.add(2) = 0; // r12
+        *frame.add(3) = 0; // r13
+        *frame.add(4) = 0; // r14
+        *frame.add(5) = 0; // r15
+        *frame.add(6) = user_entry_trampoline as *const () as u64;
+        *frame.add(7) = elf.entry_point; // RIP userspace
+        *frame.add(8) = GDT_USER_CS64 as u64; // CS ring3 64-bit
+        *frame.add(9) = 0x0202; // RFLAGS: reserved bit + IF
+        *frame.add(10) = elf.initial_stack_top; // RSP userspace
+        *frame.add(11) = GDT_USER_DS as u64; // SS ring3
+        thread.sched_tcb.kstack_ptr = kernel_rsp;
+    }
+
+    let pcb = ProcessControlBlock::try_new(
+        pid,
+        Pid::IDLE,
+        pid,
+        ThreadId(tid_raw as u64),
+        Credentials::ROOT,
+        1024,
+        elf.cr3,
+        elf.addr_space_ptr,
+    )
+    .ok_or_else(|| {
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
+        TID_ALLOCATOR.free(tid_raw);
+        CreateError::OutOfMemory
+    })?;
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    debug_init_as(
+        b"init_create: pcb",
+        pcb.cr3.load(Ordering::Relaxed),
+        pcb.address_space.load(Ordering::Relaxed),
+    );
+    pcb.set_main_thread_ptr(thread_ptr);
+    pcb.brk_start.store(elf.brk_start, Ordering::Release);
+    pcb.brk_current.store(elf.brk_start, Ordering::Release);
+    pcb.flags.fetch_or(
+        process_flags::EXEC_DONE | process_flags::VFORK_DONE,
+        Ordering::Release,
+    );
+    {
+        const BOOT_TTY_HANDLE: u64 = 1;
+        pcb.files
+            .lock()
+            .install_std_fds(BOOT_TTY_HANDLE, BOOT_TTY_HANDLE, BOOT_TTY_HANDLE);
+    }
+    pcb.set_state(ProcessState::Running);
+
+    PROCESS_REGISTRY.insert(pcb).map_err(|_| {
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
+        TID_ALLOCATOR.free(tid_raw);
+        CreateError::RegistryError
+    })?;
+    sync_process_kernel_half(elf.cr3);
+
+    {
+        let _preempt = PreemptGuard::new();
+        unsafe {
+            let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
+            run_queue(CpuId(0)).enqueue(tcb_ptr);
         }
     }
 
@@ -234,7 +419,7 @@ pub struct KthreadParams {
 /// Crée un thread kernel (kthread) et l'enfile dans la run queue.
 ///
 /// Les kthreads :
-///   - Appartiennent au processus système (PID 1).
+///   - Appartiennent au domaine noyau (PID 0 côté scheduler).
 ///   - N'ont jamais d'espace d'adressage utilisateur.
 ///   - Ont le flag KTHREAD positionné dans le TCB.
 ///
@@ -259,6 +444,8 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
     // Configurer le point d'entrée dans la stack kernel.
     // SAFETY: thread_ptr valide, kernel_stack alloué dedans.
     unsafe {
+        (*thread_ptr).sched_tcb.priority = params.priority;
+
         // Frame attendu par switch_to_new_thread lors du PREMIER switch vers ce kthread.
         // switch_to_new_thread restaure dans cet ordre (SANS MXCSR/FCW) :
         //   popq %rbx           → rbx     [rsp+ 0]

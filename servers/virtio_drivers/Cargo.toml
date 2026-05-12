@@ -1,0 +1,16 @@
+[package]
+name              = "exo-virtio-drivers"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS server: virtio_drivers readiness and control plane"
+
+[[bin]]
+name = "exo-virtio-drivers"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../syscall_abi" }

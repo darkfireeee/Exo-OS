@@ -104,14 +104,28 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
 /// S'exécute en boucle au niveau de priorité basse.
 /// À chaque passage : récupère les blobs orphelins d'au moins 2 epochs de retard.
 fn exofs_gc_kthread(_arg: usize) -> ! {
-    loop {
-        // Lance un cycle GC complet (scan + collect) pour les epochs âgées de > 2.
-        let epoch_threshold =
-            crate::fs::exofs::syscall::epoch_commit::current_epoch().saturating_sub(2);
-        let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
+    // Background GC must never win the first userspace handoff. It only scans
+    // after epochs have matured; before that it backs off without touching the
+    // global blob cache.
+    gc_backoff();
 
-        // Yield le CPU via sys_sched_yield (fast-path) pour ne pas monopoliser le scheduler.
+    loop {
+        let current_epoch = crate::fs::exofs::syscall::epoch_commit::current_epoch();
+        if current_epoch > 2 {
+            // Lance un cycle GC complet (scan + collect) pour les epochs âgées de > 2.
+            let epoch_threshold = current_epoch - 2;
+            let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
+        }
+
+        gc_backoff();
+    }
+}
+
+fn gc_backoff() {
+    let mut yields = 0usize;
+    while yields < 128 {
         crate::syscall::fast_path::sys_sched_yield();
+        yields += 1;
     }
 }
 

@@ -175,18 +175,24 @@ impl BitmapAllocator {
 
     /// Vérifie si un frame est libre.
     pub fn is_free(&self, frame: Frame) -> bool {
+        self.tracked_is_free(frame).unwrap_or(false)
+    }
+
+    /// Retourne l'état d'un frame si ce frame appartient à la fenêtre suivie
+    /// par le bitmap bootstrap.
+    pub fn tracked_is_free(&self, frame: Frame) -> Option<bool> {
         let inner = self.inner.lock();
         let phys = frame.start_address();
         if phys.as_u64() < inner.phys_start || phys.as_u64() >= inner.phys_end {
-            return false;
+            return None;
         }
         let pfn = ((phys.as_u64() - inner.phys_start) / PAGE_SIZE as u64) as usize;
         if pfn >= BOOTSTRAP_MAX_FRAMES {
-            return false;
+            return None;
         }
         let word = pfn / 64;
         let bit = pfn % 64;
-        (inner.bitmap[word] >> bit) & 1 == 0
+        Some((inner.bitmap[word] >> bit) & 1 == 0)
     }
 }
 

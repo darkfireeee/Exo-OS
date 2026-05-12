@@ -20,6 +20,7 @@ members = [
     "loader",
     "servers/crypto_server",
     "servers/device_server",
+    "servers/exosh",
     "servers/exo_shield",
     "servers/init_server",
     "servers/ipc_router",
@@ -29,6 +30,7 @@ members = [
     "servers/syscall_abi",
     "servers/input_server",
     "servers/tty_server",
+    "servers/virtio_drivers",
     "servers/vfs_server",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
@@ -98,6 +100,9 @@ opt-level     = 0
 debug         = true
 panic         = "abort"
 codegen-units = 1             # Empêche le splitting CGU → global_asm! reste dans le même objet
+
+[profile.dev.package.blake3]
+opt-level = 3
 
 [profile.release]
 opt-level     = 3

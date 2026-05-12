@@ -72,7 +72,7 @@ impl SlabPageProvider for KernelSlabProvider {
 
     fn put_page(&self, phys: PhysAddr) {
         let frame = Frame::containing(phys);
-        if free_page(frame).is_err() {
+        if matches!(free_page(frame), Err(AllocError::NotInitialized)) {
             BOOTSTRAP_BITMAP.free_frame(frame);
         }
     }

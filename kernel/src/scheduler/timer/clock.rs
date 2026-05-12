@@ -83,27 +83,13 @@ pub fn rdtsc() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lit le TSC via RDTSCP (sérialisé côté lecture) — usage profiling uniquement.
+/// Lit le TSC avec la meilleure lecture ordonnée disponible — usage profiling uniquement.
 ///
 /// RÈGLE ARCH-TIME-02 : NE PAS utiliser pour les délais/timeouts noyau.
 /// Préférer `monotonic_ns()` qui intègre l'offset per-CPU SMP.
 #[inline(always)]
 pub fn rdtscp() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    let _aux: u32;
-    // SAFETY: RDTSCP disponible sur x86_64 moderne (Nehalem+).
-    //         Sérialisé côté lecture (barrière store-load implicite).
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") _aux,
-            options(nomem, nostack)
-        );
-    }
-    ((hi as u64) << 32) | lo as u64
+    crate::arch::x86_64::time::sources::tsc::read_ordered_with_cpu().0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

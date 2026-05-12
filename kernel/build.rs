@@ -24,25 +24,26 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
-fn parse_hash32_hex(var_name: &str, warn_missing: bool) -> Option<[u8; 32]> {
+fn env_flag(var_name: &str) -> bool {
     println!("cargo:rerun-if-env-changed={var_name}");
+    matches!(
+        std::env::var(var_name).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES") | Ok("on") | Ok("ON")
+    )
+}
 
+fn parse_hash32_hex(var_name: &str) -> Result<Option<[u8; 32]>, String> {
+    println!("cargo:rerun-if-env-changed={var_name}");
     let Ok(raw) = std::env::var(var_name) else {
-        if warn_missing {
-            println!(
-                "cargo:warning={var_name} non défini — fallback hash nul (mode dégradé ExoPhoenix)"
-            );
-        }
-        return None;
+        return Ok(None);
     };
 
     let bytes = raw.as_bytes();
     if bytes.len() != 64 {
-        println!(
-            "cargo:warning={var_name} invalide (len={}) — attendu 64 hex chars, fallback hash nul",
+        return Err(format!(
+            "{var_name} invalide (len={}) — attendu 64 hex chars",
             bytes.len()
-        );
-        return None;
+        ));
     }
 
     let mut out = [0u8; 32];
@@ -51,16 +52,37 @@ fn parse_hash32_hex(var_name: &str, warn_missing: bool) -> Option<[u8; 32]> {
         let hi = hex_nibble(bytes[i * 2]);
         let lo = hex_nibble(bytes[i * 2 + 1]);
         let (Some(hi), Some(lo)) = (hi, lo) else {
-            println!(
-                "cargo:warning={var_name} contient des caractères non-hex — fallback hash nul"
-            );
-            return None;
+            return Err(format!("{var_name} contient des caractères non-hex"));
         };
         out[i] = (hi << 4) | lo;
         i += 1;
     }
 
-    Some(out)
+    Ok(Some(out))
+}
+
+fn resolve_legacy_hash(var_name: &str, require_hashes: bool, warn_degraded: bool) -> [u8; 32] {
+    match parse_hash32_hex(var_name) {
+        Ok(Some(hash)) => hash,
+        Ok(None) if require_hashes => {
+            panic!("{var_name} requis par EXOPHOENIX_REQUIRE_HASHES=1");
+        }
+        Ok(None) => {
+            if warn_degraded {
+                println!(
+                    "cargo:warning={var_name} non défini — fallback hash nul (mode compatibilité)"
+                );
+            }
+            ZERO_HASH
+        }
+        Err(err) if require_hashes => {
+            panic!("{err}");
+        }
+        Err(err) => {
+            println!("cargo:warning={err} — fallback hash nul (mode compatibilité)");
+            ZERO_HASH
+        }
+    }
 }
 
 fn read_u16_le(image: &[u8], off: usize) -> Result<u16, String> {
@@ -227,10 +249,16 @@ fn main() {
     println!("cargo:rerun-if-changed={dir}/src/ipc/core/fastcall_asm.s");
     println!("cargo:rerun-if-env-changed=EXOPHOENIX_BUILD_ROLE");
     println!("cargo:rerun-if-env-changed=EXOPHOENIX_RESCUE_TEST");
+    println!("cargo:rerun-if-env-changed=EXO_BOOT_PAYLOAD_DIR");
     println!("cargo:rustc-check-cfg=cfg(exophoenix_resurrection_test)");
+    println!("cargo:rustc-check-cfg=cfg(exo_boot_payloads)");
+    println!("cargo:rustc-check-cfg=cfg(exo_kernel_trace)");
 
     if matches!(std::env::var("EXOPHOENIX_RESCUE_TEST").as_deref(), Ok("1")) {
         println!("cargo:rustc-cfg=exophoenix_resurrection_test");
+    }
+    if env_flag("EXO_KERNEL_TRACE") {
+        println!("cargo:rustc-cfg=exo_kernel_trace");
     }
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR manquant");
@@ -256,9 +284,13 @@ fn main() {
         return;
     }
 
+    let require_hashes = env_flag("EXOPHOENIX_REQUIRE_HASHES");
+    let warn_degraded = env_flag("EXOPHOENIX_WARN_DEGRADED");
+
     // Compatibilité ancienne pipeline: hashes fournis explicitement mais pas
-    // d'image embarquée. Le forge refusera quand même la résurrection complète.
-    let image_hash = parse_hash32_hex("KERNEL_A_IMAGE_HASH", true).unwrap_or(ZERO_HASH);
-    let merkle_root = parse_hash32_hex("KERNEL_A_MERKLE_ROOT", true).unwrap_or(ZERO_HASH);
+    // d'image embarquée. Le mode check/dev reste silencieux; les builds qui
+    // exigent ce contrat peuvent activer EXOPHOENIX_REQUIRE_HASHES=1.
+    let image_hash = resolve_legacy_hash("KERNEL_A_IMAGE_HASH", require_hashes, warn_degraded);
+    let merkle_root = resolve_legacy_hash("KERNEL_A_MERKLE_ROOT", require_hashes, warn_degraded);
     write_artifacts(&out, &[], &image_hash, &merkle_root);
 }

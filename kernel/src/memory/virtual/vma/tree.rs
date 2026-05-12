@@ -5,8 +5,11 @@
 // Taille maximale : MAX_VMAS_PER_PROCESS VMAs par processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use super::descriptor::VmaDescriptor;
+use super::cow::mark_vma_cow;
+use super::descriptor::{VmaDescriptor, VmaFlags};
 use crate::memory::core::VirtAddr;
+use alloc::alloc::{alloc, Layout};
+use alloc::boxed::Box;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARBRE AVL DE VMAS
@@ -17,8 +20,8 @@ pub const MAX_VMAS_PER_PROCESS: usize = 65536;
 
 /// Arbre AVL des VMAs d'un espace d'adressage.
 ///
-/// Les noeuds sont des pointeurs vers des VmaDescriptor alloués par le slab.
-/// L'arbre ne possède PAS les descripteurs — c'est le VmaAllocator qui les gère.
+/// Les noeuds sont des pointeurs vers des VmaDescriptor alloués par le heap kernel.
+/// Une VMA insérée appartient à l'arbre jusqu'à `remove()` ou `Drop`.
 pub struct VmaTree {
     root: *mut VmaDescriptor,
     count: usize,
@@ -104,6 +107,54 @@ impl VmaTree {
         let stack = [core::ptr::null_mut::<VmaDescriptor>(); 64];
         let depth = 0usize;
         VmaTreeIter::new(self.root, stack, depth)
+    }
+
+    /// Applique `f` à chaque VMA sous accès exclusif.
+    pub fn for_each_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut VmaDescriptor),
+    {
+        // SAFETY: l'appelant détient `&mut self`, donc aucun autre accès aux noeuds.
+        unsafe { Self::for_each_mut_node(self.root, &mut f) };
+    }
+
+    /// Clone les métadonnées VMA pour fork().
+    ///
+    /// Les VMAs DONTCOPY ne sont pas héritées. Les VMAs privées writables sont
+    /// marquées COW dans le fils pour rester cohérentes avec les PTEs partagées.
+    pub fn clone_for_fork(&self) -> Option<VmaTree> {
+        let mut new_tree = VmaTree::new();
+        for vma in self.iter() {
+            if vma.flags.contains(VmaFlags::DONTCOPY) {
+                continue;
+            }
+
+            let mut cloned = vma.clone_metadata();
+            mark_vma_cow(&mut cloned);
+
+            let raw = match alloc_vma_descriptor(cloned) {
+                Some(raw) => raw,
+                None => {
+                    new_tree.clear_owned();
+                    return None;
+                }
+            };
+
+            // SAFETY: raw vient d'une allocation unique et n'est dans aucun arbre.
+            if !unsafe { new_tree.insert(raw) } {
+                free_vma_descriptor(raw);
+                new_tree.clear_owned();
+                return None;
+            }
+        }
+        Some(new_tree)
+    }
+
+    fn clear_owned(&mut self) {
+        // SAFETY: `self` possède tous les noeuds encore attachés à `root`.
+        unsafe { drop_subtree(self.root) };
+        self.root = core::ptr::null_mut();
+        self.count = 0;
     }
 
     // ─── helpers de l'arbre AVL ──────────────────────────────────────────────
@@ -239,6 +290,18 @@ impl VmaTree {
         }
     }
 
+    unsafe fn for_each_mut_node<F>(node: *mut VmaDescriptor, f: &mut F)
+    where
+        F: FnMut(&mut VmaDescriptor),
+    {
+        if node.is_null() {
+            return;
+        }
+        Self::for_each_mut_node((*node).rb_left, f);
+        f(&mut *node);
+        Self::for_each_mut_node((*node).rb_right, f);
+    }
+
     // ─── AVL helpers ─────────────────────────────────────────────────────────
 
     unsafe fn height(node: *mut VmaDescriptor) -> i32 {
@@ -319,6 +382,49 @@ impl VmaTree {
         Self::rebalance(&mut *rr);
         r
     }
+}
+
+impl Drop for VmaTree {
+    fn drop(&mut self) {
+        self.clear_owned();
+    }
+}
+
+fn alloc_vma_descriptor(desc: VmaDescriptor) -> Option<*mut VmaDescriptor> {
+    let layout = Layout::new::<VmaDescriptor>();
+    let raw = unsafe { alloc(layout) as *mut VmaDescriptor };
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: `raw` est unique et assez grand pour VmaDescriptor.
+    unsafe {
+        raw.write(desc);
+    }
+    Some(raw)
+}
+
+fn free_vma_descriptor(ptr: *mut VmaDescriptor) {
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: ptr vient de Box::into_raw ou de alloc_vma_descriptor.
+    unsafe {
+        drop(Box::from_raw(ptr));
+    }
+}
+
+unsafe fn drop_subtree(node: *mut VmaDescriptor) {
+    if node.is_null() {
+        return;
+    }
+    let left = (*node).rb_left;
+    let right = (*node).rb_right;
+    drop_subtree(left);
+    drop_subtree(right);
+    (*node).rb_left = core::ptr::null_mut();
+    (*node).rb_right = core::ptr::null_mut();
+    (*node).rb_height = 1;
+    free_vma_descriptor(node);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

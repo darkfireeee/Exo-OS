@@ -19,7 +19,7 @@ use crate::process::core::pid::{Pid, Tid};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
 use crate::scheduler::core::runqueue::run_queue;
-use crate::scheduler::core::switch::{current_thread_raw, schedule_block};
+use crate::scheduler::core::switch::{cooperative_reschedule, current_thread_raw, schedule_block};
 use crate::scheduler::core::task::{CpuId, Priority, TaskState};
 use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
 use alloc::vec::Vec;
@@ -206,12 +206,18 @@ fn sleep_until_work() {
     let tcb = current_thread_raw();
     if tcb.is_null() {
         core::hint::spin_loop();
+        unsafe {
+            cooperative_reschedule();
+        }
         return;
     }
 
     // SAFETY: le reaper est un kthread scheduler valide; le WaitNode vit jusqu'au réveil.
     let Some(node) = (unsafe { WaitNode::alloc(tcb, 0) }) else {
         core::hint::spin_loop();
+        unsafe {
+            cooperative_reschedule();
+        }
         return;
     };
 
@@ -245,9 +251,26 @@ fn sleep_until_work() {
 /// Boucle principale du kthread reaper.
 /// Ne retourne JAMAIS.
 fn reaper_loop(_arg: usize) -> ! {
+    #[cfg(all(target_arch = "x86_64", debug_assertions))]
+    unsafe {
+        core::arch::asm!("mov al, 0x57", "out 0xe9, al", options(nomem, nostack));
+    }
+
     loop {
+        let mut processed = 0usize;
         while let Some(entry) = REAPER_QUEUE.dequeue() {
             reap_entry(entry);
+            processed += 1;
+            if processed >= 64 {
+                unsafe {
+                    cooperative_reschedule();
+                }
+                break;
+            }
+        }
+
+        if processed >= 64 {
+            continue;
         }
         sleep_until_work();
     }

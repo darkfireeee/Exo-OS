@@ -394,14 +394,13 @@ pub fn update_numa_node(cpu_id: CpuId, node: NumaNode) {
     }
 }
 
-/// Retourne l'identifiant CPU logique courant (via RDTSCP TSC_AUX)
+/// Retourne l'identifiant CPU logique courant.
 ///
-/// Nécessite que `init_tsc()` ait configuré `MSR_TSC_AUX` avec le CPU ID.
+/// RDTSCP n'est pas garanti sous QEMU/TCG. Le chemin stable du noyau est le
+/// slot per-CPU GS, maintenu par l'initialisation SMP et les stubs syscall/IRQ.
 #[inline(always)]
 pub fn current_cpu_id() -> CpuId {
-    // SAFETY: RDTSCP configuré au boot — cpu_aux = cpu ID logique
-    let (_, aux) = unsafe { super::msr::rdtscp() };
-    CpuId(aux)
+    CpuId(crate::arch::x86_64::smp::percpu::current_cpu_id())
 }
 
 // ── Matrice de distance NUMA ──────────────────────────────────────────────────

@@ -237,9 +237,7 @@ mod tests {
         );
         assert!(is_compatible_magic_version(SSR_MAGIC_VERSION));
         assert!(!is_compatible_magic_version(compose_magic_version(
-            SSR_MAGIC,
-            6,
-            0
+            SSR_MAGIC, 6, 0
         )));
     }
 }

@@ -8,6 +8,10 @@ edition = "2021"
 name    = "exo_os_kernel"
 path    = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
+# Les doctests Rust utilisent un harness host `std`, incompatible avec le
+# noyau no_std et ses handlers globaux. Les tests unitaires kernel restent
+# actifs via `cargo test --lib`.
+doctest = false
 
 # Binaire d'entrée — _start (ASM) → kernel_main() + panic/OOM handlers
 [[bin]]

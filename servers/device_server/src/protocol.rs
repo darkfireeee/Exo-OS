@@ -16,7 +16,7 @@ pub const DEVICE_MSG_QUERY: u32 = 7;
 pub struct DeviceRequest {
     pub sender_pid: u32,
     pub msg_type: u32,
-    pub payload: [u8; 120],
+    pub payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
 }
 
 impl DeviceRequest {
@@ -24,10 +24,13 @@ impl DeviceRequest {
         Self {
             sender_pid: 0,
             msg_type: 0,
-            payload: [0; 120],
+            payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
         }
     }
 }
+
+const _: () = assert!(core::mem::size_of::<DeviceRequest>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(DeviceRequest, payload) == syscall::IPC_HEADER_SIZE);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -80,8 +83,9 @@ pub fn register_endpoint() {
 pub fn recv_request(request: &mut DeviceRequest) -> Result<bool, i64> {
     // SAFETY: le noyau écrit dans `request`, taille bornée à la struct ABI.
     let rc = unsafe {
-        syscall::syscall3(
+        syscall::syscall4(
             syscall::SYS_IPC_RECV,
+            SERVER_ENDPOINT_ID,
             request as *mut DeviceRequest as u64,
             core::mem::size_of::<DeviceRequest>() as u64,
             syscall::IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

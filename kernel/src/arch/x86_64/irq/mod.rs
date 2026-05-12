@@ -3,6 +3,7 @@
 //! Routage IRQ GI-03 Driver Framework v10
 //! Implémentation stricte : types canoniques + routage complet + watchdog
 
+pub mod pic;
 pub mod routing;
 pub mod types;
 pub mod watchdog;

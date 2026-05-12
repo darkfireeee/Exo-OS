@@ -296,6 +296,176 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
             frame as *mut ExceptionFrame as *mut u8,
         );
     }
+
+    // Les IRQ timer/IPI ne font que poser NEED_RESCHED. Le retour Ring3 est le
+    // point stable où l'on peut basculer vers un autre thread, en conservant la
+    // frame d'exception sur la pile kernel du thread préempté.
+    unsafe {
+        let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+    }
+}
+
+fn queue_signal_for_current(sig: crate::process::signal::Signal) {
+    let tcb_raw = unsafe { super::smp::percpu::read_current_tcb() };
+    if tcb_raw == 0 {
+        return;
+    }
+    let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+    let pid = crate::process::core::pid::Pid(tcb.pid.0);
+    let _ = crate::process::signal::delivery::send_signal_to_pid(pid, sig);
+}
+
+#[cfg(all(debug_assertions, exo_kernel_trace))]
+fn debug_hex64(value: u64) {
+    let mut buf = [0u8; 16];
+    let mut shift = 60u32;
+    for byte in &mut buf {
+        let nibble = ((value >> shift) & 0x0f) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        shift = shift.saturating_sub(4);
+    }
+    crate::arch::x86_64::terminal::debug_write(&buf);
+}
+
+#[cfg(all(debug_assertions, exo_kernel_trace))]
+fn debug_read_cr3() -> u64 {
+    let cr3: u64;
+    unsafe {
+        core::arch::asm!(
+            "mov {v}, cr3",
+            v = out(reg) cr3,
+            options(nostack, nomem, preserves_flags),
+        );
+    }
+    cr3 & !0xFFFu64
+}
+
+#[cfg(all(debug_assertions, exo_kernel_trace))]
+fn debug_user_page_fault(
+    frame: &ExceptionFrame,
+    fault_addr_raw: u64,
+    error_code: u64,
+    user_vma_found: bool,
+    user_as_for_fault: *const crate::memory::virt::UserAddressSpace,
+) {
+    if USER_PF_DEBUG_COUNT.fetch_add(1, Ordering::Relaxed) >= 16 {
+        return;
+    }
+
+    let tcb_ptr = unsafe { super::smp::percpu::read_current_tcb() };
+    let mut pid = 0u64;
+    let mut tcb_cr3 = 0u64;
+    if tcb_ptr != 0 {
+        unsafe {
+            let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
+            pid = tcb.pid.0 as u64;
+            tcb_cr3 = tcb.cr3_phys;
+        }
+    }
+
+    let mut pcb_ptr = 0u64;
+    let mut pcb_as = 0u64;
+    let mut pcb_cr3 = 0u64;
+    if pid != 0 {
+        if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+            .find_by_pid(crate::process::core::pid::Pid(pid as u32))
+        {
+            pcb_ptr = pcb as *const _ as u64;
+            pcb_as = pcb.address_space_ptr() as u64;
+            pcb_cr3 = pcb.cr3.load(Ordering::Relaxed);
+        }
+    }
+
+    let walk_cr3 = if !user_as_for_fault.is_null() {
+        let user_as = unsafe { &*user_as_for_fault };
+        user_as.pml4_phys().as_u64()
+    } else {
+        tcb_cr3
+    };
+
+    let mut rip_pte = 0u64;
+    let mut rsp_pte = 0u64;
+    let mut cr2_pte = 0u64;
+    let mut rip_frame = 0u64;
+    let mut pcb_frame = 0u64;
+    if walk_cr3 != 0 {
+        use crate::memory::core::{PhysAddr, VirtAddr, PAGE_SIZE};
+        use crate::memory::virt::page_table::PageTableWalker;
+
+        let walker = PageTableWalker::new(PhysAddr::new(walk_cr3));
+        rip_pte = walker.read_pte_raw(VirtAddr::new(frame.rip));
+        rsp_pte = walker.read_pte_raw(VirtAddr::new(frame.rsp));
+        cr2_pte = walker.read_pte_raw(VirtAddr::new(fault_addr_raw));
+        rip_frame = rip_pte & 0x000F_FFFF_FFFF_F000;
+        pcb_frame = if pcb_ptr >= crate::memory::core::layout::PHYS_MAP_BASE.as_u64() {
+            (pcb_ptr - crate::memory::core::layout::PHYS_MAP_BASE.as_u64())
+                & !(PAGE_SIZE as u64 - 1)
+        } else {
+            0
+        };
+    }
+
+    let mut rip_bytes = 0u64;
+    let rip_bytes_valid =
+        frame.rip < crate::memory::core::layout::USER_END.as_u64() && (rip_pte & 1) != 0;
+    if rip_bytes_valid {
+        for i in 0..8u64 {
+            let byte = unsafe { core::ptr::read_volatile((frame.rip + i) as *const u8) };
+            rip_bytes |= (byte as u64) << (i * 8);
+        }
+    }
+
+    let out = crate::arch::x86_64::terminal::debug_write;
+    out(b"pf: user pid=0x");
+    debug_hex64(pid);
+    out(b" tcb=0x");
+    debug_hex64(tcb_ptr);
+    out(b" tcb_cr3=0x");
+    debug_hex64(tcb_cr3);
+    out(b" cur_cr3=0x");
+    debug_hex64(debug_read_cr3());
+    out(b" pcb=0x");
+    debug_hex64(pcb_ptr);
+    out(b" pcb_as=0x");
+    debug_hex64(pcb_as);
+    out(b" pcb_cr3=0x");
+    debug_hex64(pcb_cr3);
+    out(b" rip=0x");
+    debug_hex64(frame.rip);
+    out(b" rsp=0x");
+    debug_hex64(frame.rsp);
+    out(b" cr2=0x");
+    debug_hex64(fault_addr_raw);
+    out(b" err=0x");
+    debug_hex64(error_code);
+    out(b" vma=");
+    out(if user_vma_found { b"1" } else { b"0" });
+    out(b" bytes=0x");
+    if rip_bytes_valid {
+        debug_hex64(rip_bytes);
+    } else {
+        out(b"unmapped");
+    }
+
+    if walk_cr3 != 0 {
+        out(b" walk_cr3=0x");
+        debug_hex64(walk_cr3);
+        out(b" rip_pte=0x");
+        debug_hex64(rip_pte);
+        out(b" rsp_pte=0x");
+        debug_hex64(rsp_pte);
+        out(b" cr2_pte=0x");
+        debug_hex64(cr2_pte);
+        out(b" rip_frame=0x");
+        debug_hex64(rip_frame);
+        out(b" pcb_frame=0x");
+        debug_hex64(pcb_frame);
+    }
+    out(b"\n");
 }
 
 /// Handler #DE — Division par zéro
@@ -535,7 +705,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // CR2 contient l'adresse virtuelle qui a causé le fault.
     let fault_addr_raw = super::read_cr2();
     let error_code = frame.error_code;
-
     // Décomposition de l'error code x86_64 :
     // bit 0 = P  (page présente — protection violation)
     // bit 1 = W  (écriture)
@@ -550,9 +719,10 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     let _ = is_present; // Utilisé implicitement via FaultCause + FaultContext
 
     // Construire le FaultContext
-    use super::memory_iface::KERNEL_FAULT_ALLOC;
+    use super::memory_iface::{UserFaultAllocator, KERNEL_FAULT_ALLOC};
     use crate::memory::core::VirtAddr;
     use crate::memory::virt::fault::{FaultCause, FaultContext, FaultResult};
+    use crate::memory::virt::UserAddressSpace;
 
     let cause = if is_instr_fetch {
         FaultCause::Execute
@@ -565,7 +735,9 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     let fault_addr = VirtAddr::new(fault_addr_raw);
     let from_kernel = frame.from_kernel();
     let mut ctx = FaultContext::new(fault_addr, cause, from_kernel);
-    if !from_kernel {
+    let mut user_as_for_fault: *const UserAddressSpace = core::ptr::null();
+    let mut user_vma_found = false;
+    if fault_addr.is_user() {
         let tcb_raw = unsafe { super::smp::percpu::read_current_tcb() };
         if tcb_raw != 0 {
             let tcb =
@@ -575,20 +747,47 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             {
                 let as_ptr = pcb.address_space_ptr();
                 if !as_ptr.is_null() {
-                    let user_as = unsafe {
-                        &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace)
-                    };
+                    let user_as = unsafe { &*(as_ptr as *const UserAddressSpace) };
+                    user_as_for_fault = user_as as *const UserAddressSpace;
                     user_as.record_fault();
                     if let Some(vma) = user_as.find_vma(fault_addr) {
                         ctx = ctx.with_vma(vma);
+                        user_vma_found = true;
                     }
                 }
             }
         }
     }
+    #[cfg(all(debug_assertions, exo_kernel_trace))]
+    if frame.from_userspace() {
+        debug_user_page_fault(
+            frame,
+            fault_addr_raw,
+            error_code,
+            user_vma_found,
+            user_as_for_fault,
+        );
+    }
 
     // Dispatcher vers le sous-système memory/
-    let result = crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC);
+    //
+    // Une faute sur une adresse userspace peut arriver avec CS=kernel pendant
+    // un copy_from_user/copy_to_user ou une lecture d'argv. Elle reste une faute
+    // de l'espace utilisateur courant: si une VMA existe, on la résout via le
+    // même chemin demand-paging/CoW qu'une faute Ring 3, puis on reprend
+    // l'instruction noyau qui accédait au pointeur user.
+    let resolve_as_user = fault_addr.is_user() && !user_as_for_fault.is_null() && user_vma_found;
+    if resolve_as_user {
+        ctx.from_kernel = false;
+    }
+
+    let result = if resolve_as_user {
+        let user_as = unsafe { &*user_as_for_fault };
+        let user_alloc = UserFaultAllocator::new(user_as);
+        crate::memory::virt::fault::handler::handle_page_fault(&ctx, &user_alloc)
+    } else {
+        crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC)
+    };
 
     match result {
         FaultResult::Handled => {
@@ -602,8 +801,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             // Violation d'accès mémoire.
             let _ = addr;
             if frame.from_userspace() {
-                // SIGSEGV sera livré par exception_return_to_user (RÈGLE SIGNAL-01).
-                // Quand process/ est intégré : process::signal::send(SIGSEGV).
+                queue_signal_for_current(crate::process::signal::Signal::SIGSEGV);
                 exception_return_to_user(frame);
             } else {
                 kernel_panic_exception("#PF kernel : accès invalide", frame);
@@ -613,7 +811,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             // Out of memory — OOM killer notifié.
             let _ = addr;
             if frame.from_userspace() {
-                // Le processus sera tué par l'OOM killer asynchrone.
+                queue_signal_for_current(crate::process::signal::Signal::SIGKILL);
                 exception_return_to_user(frame);
             } else {
                 kernel_panic_exception("#PF kernel : OOM", frame);
@@ -978,6 +1176,9 @@ static GP_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static TIMER_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 static SPURIOUS_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 static FPU_DEVICE_NOT_AVAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, exo_kernel_trace))]
+static USER_PF_DEBUG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub fn exc_count(vector: u8) -> u64 {
     if (vector as usize) < 32 {

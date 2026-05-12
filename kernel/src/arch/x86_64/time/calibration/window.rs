@@ -589,23 +589,10 @@ fn rdtsc_begin() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lit RDTSCP avec barrière LFENCE post (sérialisée des deux côtés).
-/// RÈGLE CAL-RDTSCP-01 : RDTSCP sérialise l'exécution + fournit coreid.
+/// Lit le TSC avec barrière de fin, sans supposer RDTSCP disponible.
+/// RÈGLE CAL-RDTSCP-01 : RDTSCP est utilisé si CPUID l'annonce, sinon fallback
+/// LFENCE/RDTSC/LFENCE avec l'ID CPU courant stable.
 #[inline(always)]
 fn rdtscp_end() -> (u64, u32) {
-    let lo: u32;
-    let hi: u32;
-    let aux: u32;
-    // SAFETY: RDTSCP + LFENCE — séquence standard pour fin de mesure précise.
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") aux,
-            options(nostack, nomem)
-        );
-        core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
-    }
-    (((hi as u64) << 32) | lo as u64, aux)
+    crate::arch::x86_64::time::sources::tsc::read_ordered_with_cpu()
 }

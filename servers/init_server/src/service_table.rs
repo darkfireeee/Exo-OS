@@ -1,6 +1,6 @@
 use super::Service;
 
-pub const SERVICE_COUNT: usize = 11;
+pub const SERVICE_COUNT: usize = 12;
 
 pub struct ServiceMetadata {
     pub name: &'static str,
@@ -18,9 +18,10 @@ const DEPS_CRYPTO: &[&str] = &["vfs_server"];
 const DEPS_DEVICE: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_VIRTIO: &[&str] = &["device_server"];
 const DEPS_NETWORK: &[&str] = &["device_server", "virtio_drivers"];
-const DEPS_SCHEDULER: &[&str] = &["init_server"];
+const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_INPUT: &[&str] = &["device_server"];
 const DEPS_TTY: &[&str] = &["input_server", "vfs_server"];
+const DEPS_EXOSH: &[&str] = &["tty_server", "vfs_server", "exo_shield"];
 const DEPS_EXO_SHIELD: &[&str] = &[
     "ipc_router",
     "memory_server",
@@ -44,6 +45,7 @@ pub static NETWORK_SERVER_BIN: &[u8] = b"/sbin/exo-network-server\0";
 pub static SCHEDULER_SERVER_BIN: &[u8] = b"/sbin/exo-scheduler-server\0";
 pub static INPUT_SERVER_BIN: &[u8] = b"/sbin/exo-input-server\0";
 pub static TTY_SERVER_BIN: &[u8] = b"/sbin/exo-tty-server\0";
+pub static EXOSH_BIN: &[u8] = b"/bin/exosh\0";
 pub static EXO_SHIELD_BIN: &[u8] = b"/sbin/exo-shield\0";
 
 pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
@@ -114,6 +116,13 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "tty_server",
         bin_path: TTY_SERVER_BIN,
         requires: DEPS_TTY,
+        ready_timeout_ms: 500,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "exosh",
+        bin_path: EXOSH_BIN,
+        requires: DEPS_EXOSH,
         ready_timeout_ms: 500,
         critical: true,
     },

@@ -92,6 +92,8 @@ pub mod process_flags {
     pub const IN_PID_NS: u32 = 1 << 9;
     /// Vfork en attente — libérer le parent bloqué.
     pub const VFORK_DONE: u32 = 1 << 10;
+    /// Enfant vfork() partageant temporairement l'adresse parent jusqu'à exec/exit.
+    pub const VFORK_SHARED_AS: u32 = 1 << 11;
 }
 
 pub use process_flags as ProcessFlags;
@@ -169,6 +171,8 @@ impl OpenFileTable {
             handle: stderr,
             flags: 0,
         });
+        self.open_count
+            .store(self.open_fd_count() as u64, Ordering::Relaxed);
     }
 
     /// Alloue le prochain fd disponible et y associe le handle.
@@ -305,7 +309,11 @@ impl OpenFileTable {
     pub fn try_clone_for_fork(&self) -> Option<Self> {
         let mut descriptors = Vec::new();
         descriptors.try_reserve_exact(self.descriptors.len()).ok()?;
-        descriptors.extend_from_slice(&self.descriptors);
+        let mut idx = 0usize;
+        while idx < self.descriptors.len() {
+            descriptors.push(self.descriptors[idx]);
+            idx += 1;
+        }
         Some(Self {
             fd_limit: self.fd_limit,
             descriptors,

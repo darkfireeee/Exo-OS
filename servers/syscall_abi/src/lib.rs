@@ -304,6 +304,7 @@ pub const SYS_EXO_IPC_RECV_NB: u64 = 302;
 pub const SYS_EXO_IPC_CALL: u64 = 303;
 pub const SYS_EXO_IPC_CREATE: u64 = 304;
 pub const SYS_EXO_IPC_DESTROY: u64 = 305;
+pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
 pub const SYS_EXO_MEM_SHARE: u64 = 310;
 pub const SYS_EXO_MEM_REVOKE: u64 = 311;
 pub const SYS_EXO_CAP_CREATE: u64 = 320;
@@ -346,8 +347,42 @@ pub const SYS_EXOFS_COUNT: u64 = SYS_EXOFS_LAST - SYS_EXOFS_FIRST + 1;
 pub const SYS_IPC_REGISTER: u64 = SYS_EXO_IPC_CREATE;
 pub const SYS_IPC_RECV: u64 = SYS_EXO_IPC_RECV;
 pub const SYS_IPC_SEND: u64 = SYS_EXO_IPC_SEND;
+pub const SYS_IPC_LOOKUP: u64 = SYS_EXO_IPC_LOOKUP;
 pub const SYS_PROC_CLONE: u64 = SYS_FORK;
 pub const SYS_PROC_EXEC: u64 = SYS_EXECVE;
+
+pub const IPC_HEADER_SIZE: usize = 8;
+pub const IPC_INLINE_PAYLOAD_SIZE: usize = 120;
+pub const IPC_ENVELOPE_SIZE: usize = IPC_HEADER_SIZE + IPC_INLINE_PAYLOAD_SIZE;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IpcMessage {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub payload: [u8; IPC_INLINE_PAYLOAD_SIZE],
+}
+
+impl IpcMessage {
+    #[inline(always)]
+    pub const fn zeroed() -> Self {
+        Self {
+            sender_pid: 0,
+            msg_type: 0,
+            payload: [0u8; IPC_INLINE_PAYLOAD_SIZE],
+        }
+    }
+}
+
+impl Default for IpcMessage {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::zeroed()
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<IpcMessage>() == IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(IpcMessage, payload) == IPC_HEADER_SIZE);
 
 pub const EXO_CAP_TOKEN_WIRE_SIZE: usize = 20;
 

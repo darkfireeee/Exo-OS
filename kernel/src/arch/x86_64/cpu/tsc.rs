@@ -237,10 +237,10 @@ pub fn calibrate_tsc_with_pit() -> u64 {
 
     // 7. Calculer fréquence
     let tsc_delta = tsc_end.wrapping_sub(tsc_start);
-    // 10ms = PIT_CALIBRATE_COUNT / PIT_BASE_HZ secondes
-    // hz = tsc_delta * PIT_BASE_HZ / PIT_CALIBRATE_COUNT / 0.01
-    //    = tsc_delta * PIT_BASE_HZ / PIT_CALIBRATE_COUNT * 100
-    let hz = (tsc_delta as u128 * PIT_BASE_HZ as u128 / PIT_CALIBRATE_COUNT as u128 * 100) as u64;
+    // La duree de mesure est deja encodee par le diviseur PIT:
+    // seconds = PIT_CALIBRATE_COUNT / PIT_BASE_HZ.
+    // Donc Hz = delta_tsc / seconds = delta_tsc * PIT_BASE_HZ / PIT_CALIBRATE_COUNT.
+    let hz = (tsc_delta as u128 * PIT_BASE_HZ as u128 / PIT_CALIBRATE_COUNT as u128) as u64;
     hz
 }
 

@@ -116,6 +116,8 @@ impl BootInfo {
 /// # Safety
 /// Préconditions : Ring 0, interruptions off, mode long 64 bits.
 pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> BootInfo {
+    super::super::disable_interrupts();
+
     // Sonde de debug inline pour chaque étape (port 0xE9)
     macro_rules! probe {
         ($b:expr) => {
@@ -141,6 +143,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     probe!(b'3');
     super::super::idt::init_idt();
     super::super::idt::load_idt();
+    super::super::irq::pic::remap_and_mask();
 
     // ── Étape 4 : TSS per-CPU BSP (IST stacks) ────────────────────────────────
     // (déjà fait dans init_gdt_for_cpu qui appelle init_tss_for_cpu + load_tss)

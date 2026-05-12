@@ -296,6 +296,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-exosh"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+]
+
+[[package]]
 name = "exo-framebuffer"
 version = "0.1.0"
 
@@ -443,6 +450,13 @@ dependencies = [
  "log",
  "spin",
  "virtio-drivers",
+]
+
+[[package]]
+name = "exo-virtio-drivers"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
 ]
 
 [[package]]

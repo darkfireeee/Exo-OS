@@ -1,0 +1,16 @@
+[package]
+name              = "exo-exosh"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description       = "Exo-OS interactive shell (bare-metal no_std)"
+
+[[bin]]
+name = "exosh"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../syscall_abi" }

@@ -99,6 +99,13 @@ pub fn write_char(ch: u8, attribute: u8) {
     let row = VGA_ROW.load(Ordering::Relaxed);
 
     match ch {
+        0x08 => {
+            let new_col = col.saturating_sub(1);
+            VGA_COL.store(new_col, Ordering::Relaxed);
+            unsafe {
+                put_cell(new_col, row, b' ', attribute);
+            }
+        }
         b'\n' => {
             VGA_COL.store(0, Ordering::Relaxed);
             let new_row = row + 1;

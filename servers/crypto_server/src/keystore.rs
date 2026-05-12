@@ -250,21 +250,6 @@ fn crypto_shred(buf: &mut [u8; KEY_SIZE]) {
     core::sync::atomic::fence(Ordering::SeqCst);
 }
 
-// ── Comparaison temps constant ───────────────────────────────────────────────
-
-/// Comparaison constante de deux tableaux u8. Ne fuit pas d'information via le timing.
-#[inline(always)]
-fn ct_eq_u8(a: &[u8], b: &[u8]) -> bool {
-    let mut diff: u8 = 0;
-    let len = a.len().min(b.len());
-    let mut i = 0usize;
-    while i < len {
-        diff |= a[i] ^ b[i];
-        i += 1;
-    }
-    diff == 0 && a.len() == b.len()
-}
-
 // ── API publique ─────────────────────────────────────────────────────────────
 
 /// Insère une clé dans le magasin. Retourne un handle opaque (non-zéro si succès).

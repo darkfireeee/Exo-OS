@@ -239,13 +239,12 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                         }
                     }
                     Err(_) => {
-                        // Erreur I/O : libérer le frame → zero-fill fallback.
+                        // Erreur I/O : ne jamais remplacer silencieusement du
+                        // code ou des données file-backed par une page zéro.
                         alloc.free_frame(frame);
-                        let result = alloc_zero_map(page_addr, vma.page_flags, alloc);
-                        if result.is_handled() {
-                            vma.record_fault();
+                        FaultResult::Segfault {
+                            addr: ctx.fault_addr,
                         }
-                        result
                     }
                 }
             } else {

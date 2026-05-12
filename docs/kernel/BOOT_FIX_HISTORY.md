@@ -76,7 +76,7 @@ popq %r15          // [rsp+56]
 ret                // [rsp+64]  ← RIP = adresse BIOS (0xf000ff53 = garbage)
 ```
 
-Le `ret` final sautait vers une adresse BIOS héritée de la mémoire non initialisée.  
+Le `ret` final sautait vers une adresse BIOS héritée de la mémoire non initialisée.
 *(Aggravé par BUG-BOOT-01 : le LAPIC non masqué déclenchait ce chemin prématurément.)*
 
 ### Correction
@@ -138,12 +138,13 @@ let frame = kernel_rsp as *mut u64;
 | `!`                | ExoFS init                         | fs/exofs/                       |
 | `I\nOK\n`          | kernel_main idle loop              | main.rs                         |
 
-### Calibration TSC (QEMU TCG)
+### Calibration TSC (QEMU, etat v0.1.0)
 ```
-[CAL:PIT-DRV-FAIL]  — PIT driver unavailable (QEMU TCG normal)
-[CAL:FB3G]          — Fallback 3 GHz (TCG constant TSC)
-[TIME-INIT hz=3000000000]
+[CAL:PIT-DRV hz=2614777097]
+[TIME-INIT hz=2614800000]
 ```
+
+Les anciens logs `[CAL:PIT-DRV-FAIL][CAL:FB3G]` correspondent a l'etat pre-v0.1.0. Le calcul PIT etait rejete car la frequence etait multipliee par erreur par 100. Voir `BUG-BOOT-03`.
 
 ---
 
@@ -161,10 +162,56 @@ let frame = kernel_rsp as *mut u64;
 
 ---
 
-## Prochaines étapes boot
+## Prochaines étapes après v0.1.0
 
-1. **Timer APIC** : activer `VEC_IRQ_TIMER` (0x20) pour que le scheduler préempte réellement
-2. **Disable PIC 8259A** : masquer complètement (OCW1=0xFF sur ports 0x21/0xA1) pour éviter toute livraison PIC en mode APIC
-3. **SMP** : boot des APs via INIT/STARTUP IPI + trampoline 0x6000
-4. **ExoFS** : backend block device réel (VirtIO ou IDE)
-5. **Userspace** : charger init_server depuis le module GRUB Multiboot2
+1. **Process list syscall** : remplacer les noms PID fixes du shell par une vraie enumeration kernel.
+2. **Smoke QEMU stable** : rendre le pilotage clavier QMP moins sensible au timing hote.
+3. **APIC timer / preemption** : poursuivre la preemption timer robuste sur le chemin interactif.
+4. **SMP** : stabiliser le boot APs via INIT/STARTUP IPI + trampoline.
+5. **ExoFS benchmarks** : utiliser `time` et `dd` pour mesurer lecture/ecriture sequentielles.
+
+---
+
+## BUG-BOOT-03 — Calibration PIT TSC multipliee par 100
+
+### Symptome
+
+Le boot userspace fonctionnait, mais le log temps restait en fallback fixe:
+
+```text
+[CAL:PIT-DRV-FAIL][CAL:FB3G hz=3000000000][TIME-INIT hz=3000000000]
+```
+
+### Cause racine
+
+`calibrate_tsc_with_pit()` mesurait deja une fenetre reelle:
+
+```text
+seconds = PIT_CALIBRATE_COUNT / PIT_BASE_HZ
+```
+
+La formule appliquee etait pourtant:
+
+```text
+tsc_hz = tsc_delta * PIT_BASE_HZ / PIT_CALIBRATE_COUNT * 100
+```
+
+La mesure obtenue etait donc environ 100 fois trop grande. La validation rejetait la frequence comme hors plage, puis la chaine de calibration tombait sur `FB3G`.
+
+### Correction
+
+Formule finale:
+
+```text
+tsc_hz = tsc_delta * PIT_BASE_HZ / PIT_CALIBRATE_COUNT
+```
+
+### Resultat
+
+Boot QEMU valide:
+
+```text
+[CAL:PIT-DRV hz=2614777097][TIME-INIT hz=2614800000]
+```
+
+Le fallback fixe `FB3G` n'apparait plus sur le chemin valide.

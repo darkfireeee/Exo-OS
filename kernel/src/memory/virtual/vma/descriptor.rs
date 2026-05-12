@@ -206,6 +206,28 @@ impl VmaDescriptor {
             && self.backing == other.backing
             && self.inode_id == other.inode_id
     }
+
+    /// Clone only the VMA metadata, resetting intrusive tree links.
+    pub fn clone_metadata(&self) -> Self {
+        let mut cloned = VmaDescriptor::new(
+            self.start,
+            self.end,
+            self.flags,
+            self.page_flags,
+            self.backing,
+        );
+        cloned.inode_id = self.inode_id;
+        cloned.file_offset = self.file_offset;
+        cloned.pages_resident.store(
+            self.pages_resident.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        cloned.pages_swapped.store(
+            self.pages_swapped.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        cloned
+    }
 }
 
 impl core::fmt::Debug for VmaDescriptor {

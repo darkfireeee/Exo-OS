@@ -157,8 +157,9 @@ pub extern "C" fn _start() -> ! {
     };
     loop {
         let rc = unsafe {
-            syscall::syscall3(
+            syscall::syscall4(
                 syscall::SYS_IPC_RECV,
+                11,
                 &mut req as *mut InputRequest as u64,
                 core::mem::size_of::<InputRequest>() as u64,
                 syscall::IPC_FLAG_TIMEOUT | 5_000,

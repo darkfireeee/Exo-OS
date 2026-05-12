@@ -40,7 +40,7 @@ pub use slub::{
 // INIT GLOBALE DES ALLOCATEURS
 // ─────────────────────────────────────────────────────────────────────────────
 
-use crate::memory::core::PhysAddr;
+use crate::memory::core::{Frame, PhysAddr, PAGE_SIZE};
 
 /// Ordre d'initialisation des allocateurs (appelé depuis memory::init()).
 ///
@@ -104,7 +104,29 @@ pub unsafe fn init_phase2b_buddy_zone(
 /// # Safety
 /// - Zone buddy initialisée, physmap opérationnelle, single-CPU.
 pub unsafe fn init_phase2b_buddy_free_region(start: PhysAddr, end: PhysAddr) {
-    BUDDY.add_free_zone_region(start, end);
+    let mut cursor = start.as_u64();
+    let end = end.as_u64();
+    let mut run_start: Option<u64> = None;
+
+    while cursor < end {
+        let frame = Frame::containing(PhysAddr::new(cursor));
+        let free_for_buddy = BOOTSTRAP_BITMAP.tracked_is_free(frame).unwrap_or(true);
+
+        match (run_start, free_for_buddy) {
+            (None, true) => run_start = Some(cursor),
+            (Some(s), false) => {
+                BUDDY.add_free_zone_region(PhysAddr::new(s), PhysAddr::new(cursor));
+                run_start = None;
+            }
+            _ => {}
+        }
+
+        cursor = cursor.saturating_add(PAGE_SIZE as u64);
+    }
+
+    if let Some(s) = run_start {
+        BUDDY.add_free_zone_region(PhysAddr::new(s), PhysAddr::new(end));
+    }
 }
 
 /// Initialise le SLUB/Slab après que le buddy soit opérationnel.

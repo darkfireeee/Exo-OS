@@ -9,8 +9,8 @@ pub mod fork;
 pub mod reap;
 pub mod wait;
 
-pub use create::{create_kthread, create_process, CreateError};
-pub use exec::{do_execve, register_elf_loader, ElfLoader, ExecError};
+pub use create::{create_init_process_from_elf, create_kthread, create_process, CreateError};
+pub use exec::{do_execve, load_elf_for_boot, register_elf_loader, ElfLoader, ExecError};
 pub use exit::{do_exit, do_exit_thread};
 pub use fork::{do_fork, ForkError, ForkFlags};
 pub use reap::init_reaper;

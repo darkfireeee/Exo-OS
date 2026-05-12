@@ -136,6 +136,10 @@ impl RegistryInner {
                 self.count += 1;
                 return Ok(());
             }
+            if slot.hash == cur_hash {
+                slot.ep_id = cur_ep_id;
+                return Ok(());
+            }
             // Robin Hood : si le slot existant est moins loin de sa position idéale,
             // on le déplace.
             if slot.rh_dist < cur_dist {

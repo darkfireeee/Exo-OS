@@ -6,13 +6,13 @@
 //! ## Caractéristiques
 //! - 256 buckets (adressage ouvert, sondage linéaire).
 //! - Facteur de charge max : 75 % (192 entrées).
-//! - Pas d allocation dynamique (tous les buckets sont statiquement sized).
+//! - Buckets alloués paresseusement sur le heap pour préserver les piles kernel.
 //! - Clé = hash FNV-1a u64 + tranché de nom (pour distinguer collisions).
 //! - Opérations O(1) amorti : insert, find, remove.
 //!
 //! # Règles spec appliquées
 //! - **ARITH-02** : `checked_add` / `wrapping_add` sur tous les calculs d index.
-//! - **OOM-02** : pas d allocation heap — tous les buckets sont inline.
+//! - **OOM-02** : allocation faillible avant initialisation des buckets.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -109,9 +109,10 @@ impl core::fmt::Debug for TreeEntry {
 
 /// Table de hachage à adressage ouvert pour les entrées de répertoire.
 ///
-/// Taille fixe, pas d allocation dynamique. Max [`TREE_MAX_LOAD`] entrées.
+/// Taille logique fixe, avec buckets alloués paresseusement hors pile kernel.
+/// Max [`TREE_MAX_LOAD`] entrées.
 pub struct PathIndexTree {
-    buckets: [TreeEntry; TREE_BUCKETS],
+    buckets: Vec<TreeEntry>,
     count: usize,
     /// Nombre de tombstones actifs (aide à décider un rebuild).
     tombstones: usize,
@@ -123,7 +124,7 @@ impl PathIndexTree {
     /// Crée une table vide avec clé aléatoire fournie au montage (PATH-01).
     pub fn new_with_key(key: [u8; 16]) -> Self {
         PathIndexTree {
-            buckets: core::array::from_fn(|_| TreeEntry::empty()),
+            buckets: Vec::new(),
             count: 0,
             tombstones: 0,
             key,
@@ -159,6 +160,7 @@ impl PathIndexTree {
     /// - [`ExofsError::PathTooLong`] si le nom dépasse `NAME_MAX`.
     /// - [`ExofsError::ObjectAlreadyExists`] si une entrée avec ce nom existe déjà.
     pub fn insert(&mut self, comp: &PathComponent, oid: ObjectId, kind: u8) -> ExofsResult<()> {
+        self.ensure_buckets()?;
         if self.is_full() {
             return Err(ExofsError::NoSpace);
         }
@@ -206,6 +208,9 @@ impl PathIndexTree {
 
     /// Recherche par hash et octets de nom.
     pub fn find_by_hash_name(&self, hash: u64, name: &[u8]) -> Option<&TreeEntry> {
+        if self.buckets.len() != TREE_BUCKETS {
+            return None;
+        }
         let start = (hash as usize) & (TREE_BUCKETS - 1);
         let mut idx = start;
         for _ in 0..TREE_BUCKETS {
@@ -226,6 +231,9 @@ impl PathIndexTree {
     /// # Errors
     /// - [`ExofsError::ObjectNotFound`] si l entrée n existe pas.
     pub fn remove(&mut self, comp: &PathComponent) -> ExofsResult<()> {
+        if self.buckets.len() != TREE_BUCKETS {
+            return Err(ExofsError::ObjectNotFound);
+        }
         let name = comp.as_bytes();
         let hash = Self::safe_hash(siphash_keyed(&self.key, name));
         let start = (hash as usize) & (TREE_BUCKETS - 1);
@@ -254,6 +262,9 @@ impl PathIndexTree {
     /// # Errors
     /// - [`ExofsError::ObjectNotFound`] si l entrée n existe pas.
     pub fn update_oid(&mut self, comp: &PathComponent, new_oid: ObjectId) -> ExofsResult<()> {
+        if self.buckets.len() != TREE_BUCKETS {
+            return Err(ExofsError::ObjectNotFound);
+        }
         let name = comp.as_bytes();
         let hash = Self::safe_hash(siphash_keyed(&self.key, name));
         let start = (hash as usize) & (TREE_BUCKETS - 1);
@@ -325,6 +336,10 @@ impl PathIndexTree {
     ///
     /// Les entrées doivent déjà être validées (magic + checksum vérifiés par l appelant).
     pub fn load_sorted(&mut self, entries: &[(u64, ObjectId, &[u8], u8)]) -> ExofsResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.ensure_buckets()?;
         for &(hash, ref oid, name, kind) in entries {
             let safe_hash = Self::safe_hash(hash);
             let start = (safe_hash as usize) & (TREE_BUCKETS - 1);
@@ -360,6 +375,23 @@ impl PathIndexTree {
         } else {
             h
         }
+    }
+
+    fn ensure_buckets(&mut self) -> ExofsResult<()> {
+        if self.buckets.len() == TREE_BUCKETS {
+            return Ok(());
+        }
+        if !self.buckets.is_empty() {
+            return Err(ExofsError::CorruptedStructure);
+        }
+
+        self.buckets
+            .try_reserve_exact(TREE_BUCKETS)
+            .map_err(|_| ExofsError::NoMemory)?;
+        while self.buckets.len() < TREE_BUCKETS {
+            self.buckets.push(TreeEntry::empty());
+        }
+        Ok(())
     }
 
     fn write_entry(&mut self, idx: usize, hash: u64, oid: ObjectId, name: &[u8], kind: u8) {

@@ -9,6 +9,8 @@ description       = "Exo-OS server: memory_server (bare-metal no_std)"
 [[bin]]
 name = "exo-memory-server"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

@@ -52,6 +52,20 @@ pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
 pub type ContextSwitchOutHook = fn(&ThreadControlBlock);
 
 static CONTEXT_SWITCH_OUT_HOOK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(target_arch = "x86_64", debug_assertions))]
+static IDLE_SCHED_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(target_arch = "x86_64", debug_assertions))]
+#[inline]
+fn idle_sched_trace(message: &[u8]) {
+    if false && IDLE_SCHED_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 32 {
+        crate::arch::x86_64::terminal::debug_write(message);
+    }
+}
+
+#[cfg(not(all(target_arch = "x86_64", debug_assertions)))]
+#[inline]
+fn idle_sched_trace(_message: &[u8]) {}
 
 #[inline]
 pub fn install_context_switch_out_hook(hook: ContextSwitchOutHook) {
@@ -357,6 +371,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
     // valides, alloues au boot et jamais liberes pendant la duree de vie du thread.
     // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
+    if next.is_kthread() {
+        idle_sched_trace(b"context_switch: ->kthread\n");
+    }
+    if next.pid.0 == 1 && next.cr3_phys != 0 {
+        idle_sched_trace(b"context_switch: ->init-user\n");
+    }
     context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
 }
 
@@ -371,35 +391,105 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 pub unsafe fn schedule_yield(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
-) {
+) -> bool {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
+    use crate::scheduler::core::preempt::PreemptGuard;
     use core::ptr::NonNull;
 
-    // Ré-enqueuer le courant AVANT de choisir le suivant (round-robin CFS).
-    // SAFETY: current est une référence mutable valide, non nulle par construction.
     let ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    rq.enqueue(ptr);
-    current.set_state(TaskState::Runnable);
+    let selected_next = {
+        let _preempt = PreemptGuard::new();
 
-    match pick_next_task(rq, Some(ptr)) {
-        PickResult::Switch(next) => {
-            // SAFETY: next provient de la run queue, toujours valide.
-            let next_ref = &mut *next.as_ptr();
-            // Ne pas se ré-switcher vers soi-même.
-            if !core::ptr::eq(current, next_ref) {
-                context_switch(current, next_ref);
-            } else {
-                // Retirer le thread qu'on vient d'enqueuer (c'est nous-mêmes).
-                rq.remove(ptr);
+        // Ré-enqueuer le courant AVANT de choisir le suivant (round-robin CFS).
+        // SAFETY: current est une référence mutable valide, non nulle par construction.
+        rq.enqueue(ptr);
+        current.set_state(TaskState::Runnable);
+
+        match pick_next_task(rq, None) {
+            PickResult::Switch(next) if next != ptr => Some(next),
+            PickResult::Switch(_) => {
+                // Le courant a été choisi puis retiré de la run queue. Si un
+                // autre thread est prêt, on le prend et on remet le courant en
+                // attente derrière lui; sinon le yield devient un no-op.
+                let replacement = if rq.nr_running_usize() > 0 {
+                    match pick_next_task(rq, None) {
+                        PickResult::Switch(next) if next != ptr => Some(next),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(next) = replacement {
+                    rq.enqueue(ptr);
+                    Some(next)
+                } else {
+                    current.set_state(TaskState::Running);
+                    None
+                }
+            }
+            PickResult::KeepRunning | PickResult::GoIdle => {
+                let _ = rq.remove(ptr);
                 current.set_state(TaskState::Running);
+                None
             }
         }
-        PickResult::KeepRunning | PickResult::GoIdle => {
-            // Aucun autre thread prêt → on se retire de la queue aussi.
-            rq.remove(ptr);
-            current.set_state(TaskState::Running);
-        }
+    };
+
+    let Some(next) = selected_next else {
+        return false;
+    };
+
+    // SAFETY: next provient de la run queue, toujours valide.
+    let next_ref = &mut *next.as_ptr();
+    if !core::ptr::eq(current, next_ref) {
+        context_switch(current, next_ref);
+        true
+    } else {
+        current.set_state(TaskState::Running);
+        false
     }
+}
+
+unsafe fn schedule_current(force: bool) -> bool {
+    let tcb_ptr = current_thread_raw();
+    if tcb_ptr.is_null() {
+        return false;
+    }
+
+    let current = &mut *tcb_ptr;
+    let cpu_id = current.current_cpu();
+    if (cpu_id.0 as usize) >= MAX_CPUS {
+        return false;
+    }
+
+    let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+    let should_schedule = if force {
+        rq.nr_running_usize() != 0 || current.need_resched()
+    } else {
+        current.need_resched()
+    };
+    if !should_schedule {
+        return false;
+    }
+
+    let _ = current.take_need_resched();
+    schedule_yield(rq, current)
+}
+
+/// Honore un `NEED_RESCHED` posé par le tick timer ou une IPI avant de revenir
+/// en userspace.
+///
+/// Le helper est volontairement petit : il ne déclenche un switch que si le TCB
+/// courant demande explicitement une préemption.
+pub unsafe fn schedule_current_if_needed() -> bool {
+    schedule_current(false)
+}
+
+/// Point de rescheduling coopératif pour les syscalls qui attendent en boucle
+/// courte tant que les vraies queues de sommeil ne sont pas encore câblées.
+pub unsafe fn cooperative_reschedule() -> bool {
+    schedule_current(true)
 }
 
 /// Une tentative de scheduling depuis le thread idle de boot du CPU courant.
@@ -423,8 +513,10 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
 
     let current_ptr = current_thread_raw();
     let Some(current_nn) = NonNull::new(current_ptr) else {
+        idle_sched_trace(b"idle_sched: no current\n");
         return false;
     };
+    idle_sched_trace(b"idle_sched: enter\n");
 
     let selected_next = {
         let _preempt = PreemptGuard::new();
@@ -432,13 +524,20 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
         let current = &mut *current_nn.as_ptr();
 
         if rq.nr_running_usize() == 0 && !current.need_resched() {
+            idle_sched_trace(b"idle_sched: empty\n");
             return false;
         }
         let _ = current.take_need_resched();
 
         match pick_next_task(rq, Some(current_nn)) {
-            PickResult::Switch(next) if next != current_nn => Some(next),
-            PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => None,
+            PickResult::Switch(next) if next != current_nn => {
+                idle_sched_trace(b"idle_sched: picked\n");
+                Some(next)
+            }
+            PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
+                idle_sched_trace(b"idle_sched: no next\n");
+                None
+            }
         }
     };
 
@@ -447,6 +546,7 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     };
 
     let current = &mut *current_nn.as_ptr();
+    idle_sched_trace(b"idle_sched: switch\n");
     context_switch(current, &mut *next.as_ptr());
     true
 }
@@ -470,6 +570,7 @@ pub unsafe fn schedule_block(
     current: &mut ThreadControlBlock,
 ) {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
+    use crate::scheduler::core::preempt::PreemptGuard;
     use core::ptr::NonNull;
 
     if !matches!(
@@ -508,60 +609,30 @@ pub unsafe fn schedule_block(
         }
     }
 
-    match pick_next_task(rq, Some(current_ptr)) {
-        PickResult::Switch(next) => {
-            if !core::ptr::eq(current, next.as_ptr()) {
-                if !matches!(
-                    current.state(),
-                    TaskState::Sleeping
-                        | TaskState::Uninterruptible
-                        | TaskState::Stopped
-                        | TaskState::Dead
-                ) {
-                    return;
-                }
-                // SAFETY: next provient de la run queue et est valide.
-                context_switch(current, &mut *next.as_ptr());
-            } else {
-                match idle_thread {
-                    Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
-                        if !matches!(
-                            current.state(),
-                            TaskState::Sleeping
-                                | TaskState::Uninterruptible
-                                | TaskState::Stopped
-                                | TaskState::Dead
-                        ) {
-                            return;
-                        }
-                        context_switch(current, &mut *idle.as_ptr());
-                    }
-                    _ => {
-                        current.set_state(TaskState::Running);
-                        return;
-                    }
-                }
+    let selected_next = {
+        let _preempt = PreemptGuard::new();
+        match pick_next_task(rq, Some(current_ptr)) {
+            PickResult::Switch(next) if !core::ptr::eq(current, next.as_ptr()) => Some(next),
+            PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
+                idle_thread.filter(|idle| !core::ptr::eq(current, idle.as_ptr()))
             }
         }
-        PickResult::KeepRunning | PickResult::GoIdle => match idle_thread {
-            Some(idle) if !core::ptr::eq(current, idle.as_ptr()) => {
-                if !matches!(
-                    current.state(),
-                    TaskState::Sleeping
-                        | TaskState::Uninterruptible
-                        | TaskState::Stopped
-                        | TaskState::Dead
-                ) {
-                    return;
-                }
-                context_switch(current, &mut *idle.as_ptr());
-            }
-            _ => {
-                current.set_state(TaskState::Running);
-                return;
-            }
-        },
+    };
+
+    let Some(next) = selected_next else {
+        current.set_state(TaskState::Running);
+        return;
+    };
+
+    if !matches!(
+        current.state(),
+        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
+    ) {
+        return;
     }
+
+    // SAFETY: next provient de la run queue ou du TCB idle publié pour ce CPU.
+    context_switch(current, &mut *next.as_ptr());
 }
 
 /// Enfile un TCB après réveil depuis WaitQueue.

@@ -184,10 +184,10 @@ kthread_trampoline:
 //   [kernel_rsp + 0..48)  = 6 registres callee-saved = 0 (format switch_to_new_thread)
 //   [kernel_rsp + 48]     = fork_child_trampoline  ← adresse de retour switch_to_new_thread
 //   [kernel_rsp + 56]     = child_rip  ← RSP pointe ici à l'entrée du trampoline
-//   [kernel_rsp + 64]     = 0x1B      (CS ring3)
+//   [kernel_rsp + 64]     = GDT_USER_CS64 (CS ring3)
 //   [kernel_rsp + 72]     = 0x0202    (RFLAGS : IF=1)
 //   [kernel_rsp + 80]     = child_rsp (RSP userspace)
-//   [kernel_rsp + 88]     = 0x23      (SS ring3)
+//   [kernel_rsp + 88]     = GDT_USER_DS   (SS ring3)
 //
 // Invariant : GS = kernel GS (le scheduler n'a PAS fait SWAPGS).
 //             On doit faire SWAPGS avant IRETQ pour restaurer GS userspace.
@@ -201,7 +201,40 @@ kthread_trampoline:
 
 fork_child_trampoline:
     xor     %eax, %eax      // rax = 0 : le fils retourne 0 de fork()
+    clts                    // autoriser FPU/SIMD dès le premier retour Ring3
     swapgs                  // restaurer GS userspace (noyau avait GS kernel)
     iretq                   // dépile RIP, CS, RFLAGS, RSP, SS → retour Ring3
 
 .size fork_child_trampoline, . - fork_child_trampoline
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER ENTRY TRAMPOLINE — Premier demarrage de PID 1 / exec initial
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Layout identique au fork child frame:
+//   [kernel_rsp + 48] = user_entry_trampoline
+//   [kernel_rsp + 56] = RIP userspace
+//   [kernel_rsp + 64] = CS ring3
+//   [kernel_rsp + 72] = RFLAGS
+//   [kernel_rsp + 80] = RSP userspace
+//   [kernel_rsp + 88] = SS ring3
+//
+// Contrairement a fork(), ce chemin ne doit pas heriter de registres parent.
+// On fournit donc les premiers registres ABI a zero avant l'IRET.
+
+.section .text
+.global user_entry_trampoline
+.type user_entry_trampoline, @function
+
+user_entry_trampoline:
+    xor     %eax, %eax      // rax = 0
+    xor     %edi, %edi      // rdi = boot_info_virt/null pour _start()
+    xor     %esi, %esi      // rsi = 0
+    xor     %edx, %edx      // rdx = 0
+    clts                    // le bootstrap Ring1 peut utiliser core::ptr SSE
+    swapgs
+    xor     %eax, %eax
+    iretq
+
+.size user_entry_trampoline, . - user_entry_trampoline

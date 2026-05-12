@@ -33,8 +33,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::memory::core::{AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr};
 use crate::memory::physical::{alloc_page, free_page};
+use crate::memory::virt::address_space::UserAddressSpace;
 use crate::memory::virt::fault::handler::FaultAllocator;
-use crate::memory::virt::page_table::FrameAllocatorForWalk;
+use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
@@ -228,6 +229,74 @@ pub unsafe fn init_memory_integration() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ALLOCATEUR FAULT USERSPACE (UserFaultAllocator)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// FaultAllocator lie a l'espace d'adressage du processus courant.
+pub struct UserFaultAllocator<'a> {
+    user_as: &'a UserAddressSpace,
+}
+
+impl<'a> UserFaultAllocator<'a> {
+    pub fn new(user_as: &'a UserAddressSpace) -> Self {
+        Self { user_as }
+    }
+}
+
+impl FrameAllocatorForWalk for UserFaultAllocator<'_> {
+    fn alloc_frame(&self, flags: AllocFlags) -> Result<Frame, AllocError> {
+        alloc_page(flags)
+    }
+
+    fn free_frame(&self, frame: Frame) {
+        let _ = free_page(frame);
+    }
+}
+
+impl FaultAllocator for UserFaultAllocator<'_> {
+    #[inline]
+    fn alloc_zeroed(&self) -> Result<Frame, AllocError> {
+        alloc_page(AllocFlags::ZEROED)
+    }
+
+    #[inline]
+    fn alloc_nonzeroed(&self) -> Result<Frame, AllocError> {
+        alloc_page(AllocFlags::NONE)
+    }
+
+    #[inline]
+    fn free_frame(&self, f: Frame) {
+        let _ = free_page(f);
+    }
+
+    fn map_page(&self, virt: VirtAddr, frame: Frame, flags: PageFlags) -> Result<(), AllocError> {
+        // SAFETY: do_page_fault ne construit cet allocateur que pour l'AS courant.
+        unsafe { self.user_as.map_page(virt, frame, flags, self) }
+    }
+
+    fn remap_flags(&self, virt: VirtAddr, flags: PageFlags) -> Result<(), AllocError> {
+        let mut walker = PageTableWalker::new(self.user_as.pml4_phys());
+        walker.remap_flags(virt, flags)
+    }
+
+    #[inline]
+    fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
+        self.user_as.translate(virt)
+    }
+
+    fn read_pte_raw(&self, virt: VirtAddr) -> u64 {
+        let walker = PageTableWalker::new(self.user_as.pml4_phys());
+        walker.read_pte_raw(virt)
+    }
+
+    fn compare_exchange_pte_raw(&self, virt: VirtAddr, current: u64, new: u64) -> Result<(), u64> {
+        let walker = PageTableWalker::new(self.user_as.pml4_phys());
+        // SAFETY: `virt` designe une PTE feuille dans l'espace utilisateur courant.
+        unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ALLOCATEUR FAULT KERNEL (KernelFaultAllocator)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -236,10 +305,9 @@ pub unsafe fn init_memory_integration() {
 /// Utilisée par `do_page_fault` (exceptions.rs) pour dispatcher vers
 /// `memory::virt::fault::handler::handle_page_fault()`.
 ///
-/// ## Limitations
+/// ## Limitation
 /// Mappe uniquement dans l'espace d'adressage kernel global (`KERNEL_AS`).
-/// Quand `process/` sera intégré, les faults utilisateur utiliseront
-/// un allocateur lié à l'espace d'adressage du processus courant.
+/// Les faults Ring 3 passent par `UserFaultAllocator`.
 ///
 /// # Safety de l'implémentation
 /// - `map_page` appelle `KERNEL_AS.map()` qui est `unsafe` car elle modifie

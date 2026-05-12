@@ -45,18 +45,63 @@ fn try_box_new<T>(value: T) -> Option<Box<T>> {
     }
 }
 
-fn order_for_pages(pages: usize) -> usize {
-    let mut order = 0usize;
-    let mut cap = 1usize;
-    while cap < pages {
-        cap <<= 1;
-        order += 1;
-    }
-    order
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+#[inline]
+fn tcb_trace(message: &[u8]) {
+    crate::arch::x86_64::terminal::debug_write(message);
 }
 
-/// Taille du stack kernel par thread (4 pages × 4096 = 16 384 bytes).
-pub const KSTACK_SIZE: usize = 16 * 1024;
+#[cfg(not(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace)))]
+#[inline]
+fn tcb_trace(_message: &[u8]) {}
+
+#[inline]
+fn sync_thread_kernel_half(cr3: u64) {
+    if cr3 == 0 {
+        return;
+    }
+    unsafe {
+        crate::memory::virt::address_space::KERNEL_AS
+            .sync_kernel_half_into(crate::memory::core::PhysAddr::new(cr3));
+    }
+}
+
+fn try_process_thread_box(
+    sched_tcb: Box<ThreadControlBlock>,
+    kernel_stack: KernelStack,
+    pid: Pid,
+    tid: Tid,
+) -> Option<Box<ProcessThread>> {
+    let layout = Layout::new::<ProcessThread>();
+    let raw = unsafe { alloc(layout) as *mut ProcessThread };
+    if raw.is_null() {
+        return None;
+    }
+
+    unsafe {
+        core::ptr::addr_of_mut!((*raw).sched_tcb).write(sched_tcb);
+        core::ptr::addr_of_mut!((*raw).kernel_stack).write(kernel_stack);
+        core::ptr::addr_of_mut!((*raw).pid).write(pid);
+        core::ptr::addr_of_mut!((*raw).tid).write(tid);
+        core::ptr::addr_of_mut!((*raw).addresses).write(ThreadAddress::default());
+        core::ptr::addr_of_mut!((*raw).tls_gs_base).write(AtomicU64::new(0));
+        core::ptr::addr_of_mut!((*raw).tls_block).write(AtomicUsize::new(0));
+        core::ptr::addr_of_mut!((*raw).tls_size).write(0);
+        core::ptr::addr_of_mut!((*raw).detached).write(AtomicBool::new(false));
+        core::ptr::addr_of_mut!((*raw).join_done).write(AtomicBool::new(false));
+        core::ptr::addr_of_mut!((*raw).join_result).write(AtomicU64::new(0));
+        SigQueue::init_at(core::ptr::addr_of_mut!((*raw).sig_queue));
+        RTSigQueue::init_at(core::ptr::addr_of_mut!((*raw).rt_sig_queue));
+        Some(Box::from_raw(raw))
+    }
+}
+
+/// Taille du stack kernel par thread.
+///
+/// Les chemins userspace critiques (fork/exec/IPC) traversent assez de Rust
+/// noyau pour que 16 KiB soit fragile en debug. 64 KiB garde une marge saine
+/// tout en restant modeste pour la charge de services Ring1 actuelle.
+pub const KSTACK_SIZE: usize = 64 * 1024;
 const KSTACK_PAGE_SIZE: usize = crate::memory::core::constants::PAGE_SIZE;
 const KSTACK_USABLE_PAGES: usize = KSTACK_SIZE / KSTACK_PAGE_SIZE;
 const KSTACK_TOTAL_PAGES: usize = KSTACK_USABLE_PAGES + 2;
@@ -84,9 +129,8 @@ impl crate::memory::virt::page_table::FrameAllocatorForWalk for KernelStackPtAll
 #[derive(Clone, Copy)]
 enum KernelStackBacking {
     Heap,
-    GuardedPhysmap {
-        frame: crate::memory::core::Frame,
-        order: usize,
+    GuardedVmalloc {
+        frames: [crate::memory::core::Frame; KSTACK_USABLE_PAGES],
         guard_id: Option<crate::memory::integrity::GuardRegionId>,
     },
 }
@@ -179,85 +223,102 @@ impl KernelStack {
     }
 
     fn alloc_guarded(size: usize, tid: Tid) -> Option<Self> {
-        use crate::memory::core::{AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr};
+        use crate::memory::core::{AllocFlags, Frame, PageFlags, VirtAddr};
 
+        tcb_trace(b"kstack: guarded enter\n");
         if size != KSTACK_SIZE
             || crate::memory::virt::address_space::KERNEL_AS
                 .pml4_phys()
                 .as_u64()
                 == 0
         {
+            tcb_trace(b"kstack: guarded unavailable\n");
             return None;
         }
 
-        let order = order_for_pages(KSTACK_TOTAL_PAGES);
-        let frame = crate::memory::physical::alloc_pages(order, AllocFlags::ZEROED).ok()?;
-        let phys_base = frame.start_address();
-        let low_guard_virt = crate::memory::phys_to_virt(phys_base);
-        let stack_base_virt = VirtAddr::new(low_guard_virt.as_u64() + KSTACK_PAGE_SIZE as u64);
-        let high_guard_virt = VirtAddr::new(
-            stack_base_virt.as_u64() + (KSTACK_USABLE_PAGES * KSTACK_PAGE_SIZE) as u64,
-        );
-
-        let low_guard_frame =
-            unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(low_guard_virt) };
-        let high_guard_frame =
-            unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(high_guard_virt) };
-
-        if low_guard_frame.is_none() || high_guard_frame.is_none() {
-            if let Some(frame) = low_guard_frame {
-                let _ = unsafe {
-                    crate::memory::virt::address_space::KERNEL_AS.map(
-                        low_guard_virt,
-                        frame,
-                        PageFlags::KERNEL_DATA,
-                        &KernelStackPtAlloc,
-                    )
-                };
-            }
-            if let Some(frame) = high_guard_frame {
-                let _ = unsafe {
-                    crate::memory::virt::address_space::KERNEL_AS.map(
-                        high_guard_virt,
-                        frame,
-                        PageFlags::KERNEL_DATA,
-                        &KernelStackPtAlloc,
-                    )
-                };
-            }
-            let _ = crate::memory::physical::free_pages(frame, order);
-            return None;
+        let mut frames = [Frame::NULL; KSTACK_USABLE_PAGES];
+        for i in 0..KSTACK_USABLE_PAGES {
+            frames[i] = match crate::memory::physical::alloc_page(AllocFlags::ZEROED) {
+                Ok(frame) => frame,
+                Err(_) => {
+                    for allocated in frames.iter().copied().take(i) {
+                        if allocated != Frame::NULL {
+                            let _ = crate::memory::physical::free_page(allocated);
+                        }
+                    }
+                    return None;
+                }
+            };
         }
+        tcb_trace(b"kstack: frames\n");
+
+        let reserved = match crate::memory::virt::address_space::KERNEL_AS
+            .reserve_vmalloc_pages(KSTACK_TOTAL_PAGES)
+        {
+            Ok(start) => start,
+            Err(_) => {
+                for frame in frames {
+                    let _ = crate::memory::physical::free_page(frame);
+                }
+                return None;
+            }
+        };
+        tcb_trace(b"kstack: reserved\n");
+
+        let stack_base_virt =
+            VirtAddr::new(reserved.as_u64().saturating_add(KSTACK_PAGE_SIZE as u64));
+        let mut mapped_pages = 0usize;
+        for (i, frame) in frames.iter().copied().enumerate() {
+            tcb_trace(b"kstack: map page\n");
+            let virt = VirtAddr::new(stack_base_virt.as_u64() + (i * KSTACK_PAGE_SIZE) as u64);
+            let mapped = unsafe {
+                crate::memory::virt::address_space::KERNEL_AS.map(
+                    virt,
+                    frame,
+                    PageFlags::KERNEL_DATA,
+                    &KernelStackPtAlloc,
+                )
+            };
+            if mapped.is_err() {
+                for j in 0..mapped_pages {
+                    let virt =
+                        VirtAddr::new(stack_base_virt.as_u64() + (j * KSTACK_PAGE_SIZE) as u64);
+                    if let Some(frame) =
+                        unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(virt) }
+                    {
+                        let _ = crate::memory::physical::free_page(frame);
+                    }
+                }
+                for frame in frames.iter().copied().skip(mapped_pages) {
+                    let _ = crate::memory::physical::free_page(frame);
+                }
+                return None;
+            }
+            mapped_pages += 1;
+        }
+        tcb_trace(b"kstack: mapped\n");
 
         let guard_id = crate::memory::integrity::register_guard_region(
             stack_base_virt.as_u64(),
             size as u64,
             crate::memory::integrity::GuardRegionKind::KernelThreadStack { tid: tid.0 as u64 },
         );
+        tcb_trace(b"kstack: guard\n");
 
         let base = stack_base_virt.as_u64() as *mut u8;
+        tcb_trace(b"kstack: canary before\n");
         unsafe {
             core::ptr::write(base as *mut u64, STACK_CANARY);
         }
+        tcb_trace(b"kstack: canary after\n");
         let top = unsafe { base.add(size) } as u64;
         let top_aligned = (top & !0xF) - 8;
-
-        let expected_low = Frame::from_phys_addr(phys_base);
-        let expected_high = Frame::from_phys_addr(PhysAddr::new(
-            phys_base.as_u64() + ((KSTACK_USABLE_PAGES + 1) * KSTACK_PAGE_SIZE) as u64,
-        ));
-        debug_assert_eq!(low_guard_frame, Some(expected_low));
-        debug_assert_eq!(high_guard_frame, Some(expected_high));
 
         Some(Self {
             base,
             size,
             top: top_aligned,
-            backing: KernelStackBacking::GuardedPhysmap {
-                frame,
-                order,
-                guard_id,
-            },
+            backing: KernelStackBacking::GuardedVmalloc { frames, guard_id },
         })
     }
 
@@ -290,55 +351,22 @@ impl Drop for KernelStack {
                     dealloc(self.base, layout);
                 }
             }
-            KernelStackBacking::GuardedPhysmap {
-                frame,
-                order,
-                guard_id,
-            } => {
+            KernelStackBacking::GuardedVmalloc { frames, guard_id } => {
                 if let Some(id) = guard_id {
                     let _ = crate::memory::integrity::unregister_guard_region(id);
                 }
 
-                let low_guard_virt =
-                    crate::memory::core::VirtAddr::new(self.base as u64 - KSTACK_PAGE_SIZE as u64);
-                let high_guard_virt =
-                    crate::memory::core::VirtAddr::new(self.base as u64 + self.size as u64);
-                let low_frame = frame;
-                let high_frame =
-                    crate::memory::core::Frame::from_phys_addr(crate::memory::core::PhysAddr::new(
-                        frame.start_address().as_u64()
-                            + ((KSTACK_USABLE_PAGES + 1) * KSTACK_PAGE_SIZE) as u64,
-                    ));
-
-                let _ =
-                    unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(low_guard_virt) };
-                let _ =
-                    unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(high_guard_virt) };
-                let _ = unsafe {
-                    crate::memory::virt::address_space::KERNEL_AS.map(
-                        low_guard_virt,
-                        low_frame,
-                        crate::memory::core::PageFlags::KERNEL_DATA,
-                        &KernelStackPtAlloc,
-                    )
-                };
-                let _ = unsafe {
-                    crate::memory::virt::address_space::KERNEL_AS.map(
-                        high_guard_virt,
-                        high_frame,
-                        crate::memory::core::PageFlags::KERNEL_DATA,
-                        &KernelStackPtAlloc,
-                    )
-                };
-
-                if crate::memory::virt::address_space::KERNEL_AS
-                    .translate(low_guard_virt)
-                    .is_some()
-                    && crate::memory::virt::address_space::KERNEL_AS
-                        .translate(high_guard_virt)
-                        .is_some()
-                {
-                    let _ = crate::memory::physical::free_pages(frame, order);
+                for i in 0..KSTACK_USABLE_PAGES {
+                    let virt = crate::memory::core::VirtAddr::new(
+                        self.base as u64 + (i * KSTACK_PAGE_SIZE) as u64,
+                    );
+                    if let Some(frame) =
+                        unsafe { crate::memory::virt::address_space::KERNEL_AS.unmap(virt) }
+                    {
+                        let _ = crate::memory::physical::free_page(frame);
+                    } else if frames[i] != crate::memory::core::Frame::NULL {
+                        let _ = crate::memory::physical::free_page(frames[i]);
+                    }
                 }
             }
         }
@@ -417,14 +445,49 @@ impl ProcessThread {
         if !crate::memory::heap::is_heap_ready() {
             return None;
         }
+        tcb_trace(b"thread_new: enter\n");
         let kstack = KernelStack::alloc(KSTACK_SIZE, tid)?;
+        tcb_trace(b"thread_new: kstack\n");
         let stack_top = kstack.top_addr();
+        sync_thread_kernel_half(cr3);
+        tcb_trace(b"thread_new: sync\n");
 
         let mut sched_tcb = try_box_new(ThreadControlBlock::new(
             ThreadId(tid.0 as u64),
             ProcessId(pid.0),
             policy,
             prio,
+            cr3,
+            stack_top,
+        ))?;
+        tcb_trace(b"thread_new: tcb\n");
+
+        if crate::security::is_cet_global_enabled() {
+            unsafe {
+                crate::security::enable_cet_for_thread(&mut sched_tcb).ok()?;
+            }
+        }
+        tcb_trace(b"thread_new: cet\n");
+
+        let thread = try_process_thread_box(sched_tcb, kstack, pid, tid)?;
+        sync_thread_kernel_half(cr3);
+        tcb_trace(b"thread_new: final sync\n");
+
+        Some(thread)
+    }
+
+    /// Crée un thread kernel dédié (pid=0, KTHREAD flag).
+    pub fn new_kthread(tid: Tid, cr3: u64) -> Option<Box<Self>> {
+        if !crate::memory::heap::is_heap_ready() {
+            return None;
+        }
+
+        let kstack = KernelStack::alloc(KSTACK_SIZE, tid)?;
+        let stack_top = kstack.top_addr();
+        sync_thread_kernel_half(cr3);
+
+        let mut sched_tcb = try_box_new(ThreadControlBlock::new_kthread(
+            ThreadId(tid.0 as u64),
             cr3,
             stack_top,
         ))?;
@@ -435,34 +498,9 @@ impl ProcessThread {
             }
         }
 
-        let thread = try_box_new(Self {
-            sched_tcb,
-            kernel_stack: kstack,
-            pid,
-            tid,
-            addresses: ThreadAddress::default(),
-            tls_gs_base: AtomicU64::new(0),
-            tls_block: AtomicUsize::new(0),
-            tls_size: 0,
-            detached: AtomicBool::new(false),
-            join_done: AtomicBool::new(false),
-            join_result: AtomicU64::new(0),
-            sig_queue: SigQueue::new(),
-            rt_sig_queue: RTSigQueue::new(),
-        })?;
-
+        let thread = try_process_thread_box(sched_tcb, kstack, Pid::IDLE, tid)?;
+        sync_thread_kernel_half(cr3);
         Some(thread)
-    }
-
-    /// Crée un thread kernel dédié (pid=1, KTHREAD flag).
-    pub fn new_kthread(tid: Tid, cr3: u64) -> Option<Box<Self>> {
-        Self::new(
-            tid,
-            Pid::INIT,
-            cr3,
-            SchedPolicy::Normal,
-            Priority::NORMAL_DEFAULT,
-        )
     }
 
     /// Référence au TCB scheduler (short-lived, hot path).

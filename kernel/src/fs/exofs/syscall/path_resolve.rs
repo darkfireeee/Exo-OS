@@ -158,13 +158,16 @@ pub(crate) fn resolve_path_to_blob(
     }
 
     // Construction du chemin canonique normalisé (sans double-slash).
-    // RECUR-01 : while.
-    let mut canonical: [u8; EXOFS_PATH_MAX] = [0u8; EXOFS_PATH_MAX];
-    let mut pos = 0usize;
+    // RECUR-01 : while. RÈGLE 10 : le buffer de chemin reste sur le tas; cette
+    // fonction est aussi appelée depuis execve(), donc la pile noyau ne doit pas
+    // porter PATH_MAX à chaque résolution.
+    let mut canonical: Vec<u8> = Vec::new();
+    canonical
+        .try_reserve(EXOFS_PATH_MAX)
+        .map_err(|_| ExofsError::NoMemory)?;
 
     if comps.absolute {
-        canonical[pos] = b'/';
-        pos = pos.wrapping_add(1);
+        canonical.push(b'/');
     }
 
     let mut ci = 0usize;
@@ -175,25 +178,23 @@ pub(crate) fn resolve_path_to_blob(
             return Err(ExofsError::InvalidPathComponent);
         }
         let plen = part.len();
-        if pos.saturating_add(plen).saturating_add(1) >= EXOFS_PATH_MAX {
+        if canonical.len().saturating_add(plen).saturating_add(1) >= EXOFS_PATH_MAX {
             return Err(ExofsError::PathTooLong);
         }
         // Copier le composant (RECUR-01 : while).
         let mut pi = 0usize;
         while pi < plen {
-            canonical[pos] = part[pi];
-            pos = pos.wrapping_add(1);
+            canonical.push(part[pi]);
             pi = pi.wrapping_add(1);
         }
         if ci.wrapping_add(1) < comps.count {
-            canonical[pos] = b'/';
-            pos = pos.wrapping_add(1);
+            canonical.push(b'/');
         }
         ci = ci.wrapping_add(1);
     }
 
     // BlobId = Blake3(chemin canonique) — utilise l'implémentation kernel.
-    let blob_id = BlobId::from_bytes_blake3(&canonical[..pos]);
+    let blob_id = BlobId::from_bytes_blake3(&canonical);
 
     // ObjectId = Blake3(BlobId bytes XOR 0xA5) — identifiant logique distinct.
     let mut obj_bytes = [0u8; 32];

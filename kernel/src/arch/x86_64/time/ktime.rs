@@ -93,8 +93,8 @@ pub fn ktime_get_ns() -> u64 {
             continue;
         }
 
-        // 2. Lire le TSC courant via RDTSCP (sérialisé + coreid).
-        let (tsc_now, coreid) = rdtscp_with_fence();
+        // 2. Lire le TSC courant via la meilleure primitive CPU disponible.
+        let (tsc_now, coreid) = super::sources::tsc::read_ordered_with_cpu();
 
         // 3. Lire les composants de l'anchor.
         let tsc_base = KTIME_STATE.tsc_base.load(Ordering::Acquire);
@@ -171,33 +171,6 @@ pub(crate) fn update_ktime_anchor(tsc_now: u64, ns_now: u64, new_tsc_hz: u64) {
 
     // Seq pair = état stable.
     KTIME_STATE.seq.fetch_add(1, Ordering::Release);
-}
-
-// ── Primitives assembleur ─────────────────────────────────────────────────────
-
-/// Lit RDTSCP avec barrière LFENCE post-lecture.
-/// Retourne (tsc_value, core_id_from_tsc_aux).
-///
-/// RÈGLE TSC-RDTSCP-01 : RDTSCP garantit que le CPU ne réordonne pas.
-/// RDTSCP fournit aussi coreid → permet d'appliquer le bon tsc_offset per-CPU.
-#[inline(always)]
-fn rdtscp_with_fence() -> (u64, u32) {
-    let lo: u32;
-    let hi: u32;
-    let aux: u32;
-    // SAFETY: RDTSCP + LFENCE — séquence standard pour lecture TSC sérialisée.
-    //         RDTSCP disponible si CPU supporte TSC_AUX (vérifié dans init_tsc).
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") aux,
-            options(nostack, nomem)
-        );
-        core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
-    }
-    (((hi as u64) << 32) | lo as u64, aux)
 }
 
 // ── Wall clock (temps réel UNIX) ─────────────────────────────────────────────

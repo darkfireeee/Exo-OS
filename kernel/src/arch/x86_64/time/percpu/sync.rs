@@ -278,19 +278,8 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
     }
 }
 
-/// Lit le TSC avec sérialisation (RDTSCP fournit aussi le coreid).
+/// Lit le TSC avec sérialisation, sans supposer RDTSCP disponible.
 #[inline(always)]
 fn rdtscp() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") _,
-            options(nostack, nomem)
-        );
-    }
-    ((hi as u64) << 32) | lo as u64
+    crate::arch::x86_64::time::sources::tsc::read_ordered_with_cpu().0
 }

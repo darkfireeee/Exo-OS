@@ -113,6 +113,9 @@ struct VfsRequest {
     payload: [u8; ops::PATH_PAYLOAD_MAX],
 }
 
+const _: () = assert!(core::mem::size_of::<VfsRequest>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(VfsRequest, payload) == syscall::IPC_HEADER_SIZE);
+
 #[repr(C)]
 struct VfsReply {
     status: i64,
@@ -650,8 +653,9 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         let r = unsafe {
-            syscall::syscall3(
+            syscall::syscall4(
                 syscall::SYS_IPC_RECV,
+                3,
                 &mut req as *mut VfsRequest as u64,
                 core::mem::size_of::<VfsRequest>() as u64,
                 IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

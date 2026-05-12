@@ -16,6 +16,8 @@
 //   via le trait abstrait AddressSpaceCloner (injection de dépendance).
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::gdt::{GDT_USER_CS64, GDT_USER_DS};
 use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState};
 use crate::process::core::pid::{Pid, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
 use crate::process::core::registry::PROCESS_REGISTRY;
@@ -26,6 +28,8 @@ use crate::scheduler::core::task::ThreadControlBlock;
 use crate::scheduler::core::task::{CpuId, ThreadId};
 use crate::scheduler::sync::wait_queue::WaitQueue;
 use alloc::boxed::Box;
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use spin::Once;
 
@@ -124,12 +128,136 @@ pub enum ForkError {
 }
 
 #[inline]
-fn rollback_child_allocations(cloned_as: &ClonedAddressSpace, pid_raw: u32, tid_raw: u32) {
-    if let Some(cl) = ADDR_SPACE_CLONER.get() {
-        cl.free_addr_space(cloned_as.addr_space_ptr);
+fn rollback_child_allocations(
+    cloned_as: &ClonedAddressSpace,
+    pid_raw: u32,
+    tid_raw: u32,
+    owns_addr_space: bool,
+) {
+    if owns_addr_space {
+        if let Some(cl) = ADDR_SPACE_CLONER.get() {
+            cl.free_addr_space(cloned_as.addr_space_ptr);
+        }
     }
     PID_ALLOCATOR.free(pid_raw);
     TID_ALLOCATOR.free(tid_raw);
+}
+
+#[inline]
+fn vfork_shares_address_space(flags: ForkFlags) -> bool {
+    flags.has(ForkFlags::VFORK) || flags.has(ForkFlags::CLONE_VM)
+}
+
+#[inline]
+fn cloned_address_space_for_vfork(parent_cr3: u64, parent_space_ptr: usize) -> ClonedAddressSpace {
+    ClonedAddressSpace {
+        cr3: parent_cr3,
+        addr_space_ptr: parent_space_ptr,
+    }
+}
+
+#[inline]
+fn clone_parent_address_space(
+    cloner: &'static dyn AddressSpaceCloner,
+    parent_cr3: u64,
+    parent_space_ptr: usize,
+) -> Result<ClonedAddressSpace, ForkError> {
+    cloner
+        .clone_cow(parent_cr3, parent_space_ptr)
+        .map_err(|_| ForkError::AddressSpaceCloneFailed)
+}
+
+#[inline]
+fn update_child_addr_space_pid(
+    cloned_as: &ClonedAddressSpace,
+    child_pid: Pid,
+    owns_addr_space: bool,
+) {
+    if owns_addr_space && cloned_as.addr_space_ptr != 0 {
+        let child_as = unsafe {
+            &mut *(cloned_as.addr_space_ptr as *mut crate::memory::virt::UserAddressSpace)
+        };
+        child_as.pid = child_pid.0 as u64;
+    }
+}
+
+#[inline]
+fn child_process_flags(flags: ForkFlags) -> u32 {
+    let mut bits = process_flags::FORKED;
+    if vfork_shares_address_space(flags) {
+        bits |= process_flags::VFORK_SHARED_AS;
+    }
+    bits
+}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+static FORK_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+#[inline]
+fn fork_trace(message: &[u8]) {
+    if FORK_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 2048 {
+        crate::arch::x86_64::terminal::debug_write(message);
+    }
+}
+
+#[cfg(not(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace)))]
+#[inline]
+fn fork_trace(_message: &[u8]) {}
+
+#[inline]
+fn sync_child_kernel_half(cr3: u64) {
+    if cr3 == 0 {
+        return;
+    }
+    unsafe {
+        crate::memory::virt::address_space::KERNEL_AS
+            .sync_kernel_half_into(crate::memory::core::PhysAddr::new(cr3));
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+fn debug_hex64(value: u64) {
+    let mut buf = [0u8; 16];
+    let mut shift = 60u32;
+    for byte in &mut buf {
+        let nibble = ((value >> shift) & 0x0f) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+        shift = shift.saturating_sub(4);
+    }
+    crate::arch::x86_64::terminal::debug_write(&buf);
+}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+fn fork_debug_parent(label: &[u8], parent: &ProcessThread, parent_pcb: &ProcessControlBlock) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    out(label);
+    out(b" pcb=0x");
+    debug_hex64(parent_pcb as *const _ as u64);
+    out(b" pcb_pid=0x");
+    debug_hex64(parent_pcb.pid.0 as u64);
+    out(b" pcb_as=0x");
+    debug_hex64(parent_pcb.address_space.load(Ordering::Relaxed) as u64);
+    out(b" pcb_cr3=0x");
+    debug_hex64(parent_pcb.cr3.load(Ordering::Relaxed));
+    out(b" tcb_cr3=0x");
+    debug_hex64(parent.sched_tcb.cr3_phys);
+    out(b"\n");
+}
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+fn fork_debug_cloned(label: &[u8], cloned_as: &ClonedAddressSpace) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    out(label);
+    out(b" child_cr3=0x");
+    debug_hex64(cloned_as.cr3);
+    out(b" child_as=0x");
+    debug_hex64(cloned_as.addr_space_ptr as u64);
+    out(b"\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,8 +300,11 @@ pub struct ForkResult {
 /// # Safety
 /// `ctx.parent_thread` doit pointer vers le thread courant du processus.
 pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
+    fork_trace(b"fork: enter\n");
     let parent = ctx.parent_thread;
     let parent_pcb = ctx.parent_pcb;
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: before", parent, parent_pcb);
 
     if ctx.flags.has(ForkFlags::CLONE_NEWPID) {
         return Err(ForkError::UnsupportedFlag);
@@ -188,6 +319,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
 
     let child_pid = Pid(child_pid_raw);
     let child_tid = Tid(child_tid_raw);
+    fork_trace(b"fork: pid/tid\n");
 
     // 2. Cloner l'espace d'adressage (CoW).
     let cloner = ADDR_SPACE_CLONER.get().ok_or_else(|| {
@@ -199,35 +331,55 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let parent_cr3 = parent.sched_tcb.cr3_phys;
     let parent_space_ptr = parent_pcb.address_space.load(Ordering::Acquire);
 
-    let cloned_as = cloner
-        .clone_cow(parent_cr3, parent_space_ptr)
-        .map_err(|_| {
+    let shares_address_space = vfork_shares_address_space(ctx.flags);
+    let owns_addr_space = !shares_address_space;
+    fork_trace(b"fork: clone-as begin\n");
+    let cloned_as = if shares_address_space {
+        cloned_address_space_for_vfork(parent_cr3, parent_space_ptr)
+    } else {
+        clone_parent_address_space(*cloner, parent_cr3, parent_space_ptr).map_err(|err| {
             PID_ALLOCATOR.free(child_pid_raw);
             TID_ALLOCATOR.free(child_tid_raw);
-            ForkError::AddressSpaceCloneFailed
-        })?;
-
-    if cloned_as.addr_space_ptr != 0 {
-        let child_as = unsafe {
-            &mut *(cloned_as.addr_space_ptr as *mut crate::memory::virt::UserAddressSpace)
-        };
-        child_as.pid = child_pid.0 as u64;
+            err
+        })?
+    };
+    fork_trace(b"fork: clone-as done\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    {
+        fork_debug_parent(b"fork_dbg: after_clone", parent, parent_pcb);
+        fork_debug_cloned(b"fork_dbg: cloned", &cloned_as);
     }
 
+    update_child_addr_space_pid(&cloned_as, child_pid, owns_addr_space);
+    fork_trace(b"fork: child-as pid\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_child_as_pid", parent, parent_pcb);
+
     // RÈGLE PROC-08 : Flush TLB parent AVANT retour (pages devenues read-only CoW).
-    cloner.flush_tlb_after_fork(parent_cr3);
+    if owns_addr_space {
+        cloner.flush_tlb_after_fork(parent_cr3);
+    }
+    fork_trace(b"fork: tlb\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_tlb", parent, parent_pcb);
 
     // 3. Créer le ProcessThread fils.
+    fork_trace(b"fork: before policy\n");
     let policy = parent.sched_tcb.policy;
+    fork_trace(b"fork: after policy\n");
     let priority = parent.sched_tcb.priority;
+    fork_trace(b"fork: after priority\n");
 
     let child_thread = ProcessThread::new(child_tid, child_pid, cloned_as.cr3, policy, priority)
         .ok_or_else(|| {
-            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
             ForkError::OutOfMemory
         })?;
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_thread_new", parent, parent_pcb);
 
     let child_thread_ptr = Box::into_raw(child_thread);
+    fork_trace(b"fork: thread\n");
 
     // Configurer le point de retour du fils (RIP + RSP au retour de fork).
     // SAFETY: child_thread_ptr valide.
@@ -259,7 +411,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
         // iretq frame (RSP pointe ici à l'entrée fork_child_trampoline).
         *frame_ptr.add(7) = ctx.child_rip; // RIP  userspace
-        *frame_ptr.add(8) = 0x1B; // CS   ring3 (code64)
+        *frame_ptr.add(8) = GDT_USER_CS64 as u64; // CS   ring3 (code64)
 
         // CORRECTION P2-02 : propager les RFLAGS du parent avec masquage sécurisé.
         // Masque des flags sûrs à hériter (POSIX + sécurité kernel).
@@ -269,9 +421,9 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         //             NT=0 (bit 14) — Nested Task flag — jamais hérité
         //             RF=0 (bit 16) — Resume Flag — jamais hérité
         //             VM=0 (bit 17) — Virtual 8086 — non supporté
-        const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0020_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
+        const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
         const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200; // IF=1
-        const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0004_0100; // TF=0, NT=0, RF=0, VM=0
+        const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_4100; // TF=0, NT=0, RF=0, VM=0
 
         let child_rflags =
             ((ctx.parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
@@ -280,35 +432,59 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
 
         *frame_ptr.add(9) = child_rflags; // RFLAGS (hérités du parent avec masquage)
         *frame_ptr.add(10) = ctx.child_rsp; // RSP  userspace
-        *frame_ptr.add(11) = 0x23; // SS   ring3
+        *frame_ptr.add(11) = GDT_USER_DS as u64; // SS   ring3
         child_tcb.kstack_ptr = kstack_top - 96;
         child_tcb.signal_mask.store(
             parent.sched_tcb.signal_mask.load(Ordering::Acquire),
             Ordering::Release,
         );
     }
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_child_frame", parent, parent_pcb);
 
     // Copier les adresses utilisateur.
     // SAFETY: child_thread_ptr valide.
     unsafe {
         (*child_thread_ptr).addresses = parent.addresses;
-        (*child_thread_ptr).addresses.tls_base = parent.tls_gs_base.load(Ordering::Relaxed);
+        let child = &mut *child_thread_ptr;
+        child.sched_tcb.fs_base = parent.sched_tcb.fs_base;
+        child.sched_tcb.user_gs_base = parent.sched_tcb.user_gs_base;
+        let tls_base = parent.tls_gs_base.load(Ordering::Relaxed);
+        child.addresses.tls_base = tls_base;
+        child.tls_gs_base.store(tls_base, Ordering::Release);
+        child
+            .tls_block
+            .store(parent.tls_block.load(Ordering::Acquire), Ordering::Release);
+        child.tls_size = parent.tls_size;
     }
+    fork_trace(b"fork: addresses\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_addresses", parent, parent_pcb);
 
     // 4. Créer le PCB fils — hérite des namespaces, credentials, etc.
     let parent_creds = parent_pcb.creds.lock().clone();
     let (fd_limit, cloned_files) = {
         let f = parent_pcb.files.lock();
+        fork_trace(b"fork: files locked\n");
         let fd_limit = f.open_fd_count().max(1024);
+        fork_trace(b"fork: fd count\n");
         let cloned_files = if !ctx.flags.has(ForkFlags::CLONE_FILES) {
             match f.try_clone_for_fork() {
-                Some(files) => Some(files),
+                Some(files) => {
+                    fork_trace(b"fork: files cloned\n");
+                    Some(files)
+                }
                 None => {
                     // SAFETY: child_thread_ptr provient de Box::into_raw et n'est pas publié.
                     unsafe {
                         drop(Box::from_raw(child_thread_ptr));
                     }
-                    rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+                    rollback_child_allocations(
+                        &cloned_as,
+                        child_pid_raw,
+                        child_tid_raw,
+                        owns_addr_space,
+                    );
                     return Err(ForkError::OutOfMemory);
                 }
             }
@@ -317,6 +493,8 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         };
         (fd_limit, cloned_files)
     };
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_files", parent, parent_pcb);
 
     let mut child_pcb = ProcessControlBlock::try_new(
         child_pid,
@@ -333,9 +511,12 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         unsafe {
             drop(Box::from_raw(child_thread_ptr));
         }
-        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
         ForkError::OutOfMemory
     })?;
+    fork_trace(b"fork: pcb\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_child_pcb", parent, parent_pcb);
 
     // Copier les fds si !CLONE_FILES.
     if let Some(cloned_files) = cloned_files {
@@ -349,12 +530,15 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     child_pcb.net_ns.clone_from(&parent_pcb.net_ns);
     child_pcb.uts_ns.clone_from(&parent_pcb.uts_ns);
     child_pcb.user_ns.clone_from(&parent_pcb.user_ns);
+    child_pcb.set_pgroup_id(parent_pcb.pgroup_id());
+    child_pcb.set_session_id(parent_pcb.session_id());
 
     // Marquer FORKED.
     child_pcb
         .flags
-        .fetch_or(process_flags::FORKED, Ordering::Release);
+        .fetch_or(child_process_flags(ctx.flags), Ordering::Release);
     child_pcb.set_state(ProcessState::Running);
+    fork_trace(b"fork: pcb state\n");
 
     // Copier les valeurs brk.
     child_pcb.brk_start.store(
@@ -365,6 +549,8 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         parent_pcb.brk_current.load(Ordering::Relaxed),
         Ordering::Relaxed,
     );
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_child_setup", parent, parent_pcb);
 
     // 5. Insérer le fils dans la registry.
     PROCESS_REGISTRY.insert(child_pcb).map_err(|_| {
@@ -372,9 +558,14 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         unsafe {
             drop(Box::from_raw(child_thread_ptr));
         }
-        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
         ForkError::RegistryError
     })?;
+    fork_trace(b"fork: registry\n");
+    sync_child_kernel_half(cloned_as.cr3);
+    fork_trace(b"fork: child cr3 sync\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: after_registry", parent, parent_pcb);
 
     // 6. Enqueue le fils dans la run queue.
     {
@@ -385,7 +576,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             unsafe {
                 drop(Box::from_raw(child_thread_ptr));
             }
-            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw);
+            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
             return Err(ForkError::InvalidCpu);
         }
         // SAFETY: cpu vérifié, child_thread_ptr valide.
@@ -394,6 +585,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             run_queue(CpuId(ctx.target_cpu)).enqueue(tcb_ptr);
         }
     }
+    parent.sched_tcb.request_preemption();
+    fork_trace(b"fork: enqueue\n");
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    fork_debug_parent(b"fork_dbg: before_return", parent, parent_pcb);
 
     Ok(ForkResult {
         child_pid,

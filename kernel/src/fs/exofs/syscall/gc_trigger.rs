@@ -11,6 +11,7 @@ use super::validation::{
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::path::path_index::PathIndex;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -19,6 +20,7 @@ use alloc::vec::Vec;
 
 pub const GC_MAX_BLOBS_PER_RUN: usize = 4096;
 pub const GC_TOMBSTONE_MAGIC: u32 = 0x54_4F_4D_42; // "TOMB"
+const PATH_INDEX_KIND_DIR: u8 = 0;
 const GC_QUEUE_FLAG_RUNNING: u32 = 0x0001;
 #[allow(dead_code)]
 const GC_QUEUE_FLAG_DRY: u32 = 0x0002;
@@ -84,12 +86,87 @@ fn gc_lock_release() {
 // Helpers internes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Décide si un blob est orphelin (aucun fd ouvert + non dans la queue active).
+/// Décide si un blob est orphelin sans perdre la racine ExoFS.
+///
+/// L'ancienne heuristique "aucun fd ouvert == orphelin" supprimait les
+/// répertoires et fichiers atteignables depuis `/`, car les entrées de
+/// PathIndex ne tiennent pas de fd ouvert. Le GC ne collecte maintenant que les
+/// candidats explicitement marqués tombstone et non atteignables.
 fn is_orphan(blob_id: &BlobId) -> bool {
+    let reachable = match collect_reachable_path_blobs() {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    is_orphan_with_reachable(blob_id, &reachable)
+}
+
+fn is_orphan_with_reachable(blob_id: &BlobId, reachable: &[BlobId]) -> bool {
+    if reachable_contains(reachable, blob_id) || is_open(blob_id) {
+        return false;
+    }
+    is_explicit_gc_candidate(blob_id)
+}
+
+fn is_open(blob_id: &BlobId) -> bool {
     OBJECT_TABLE
         .lock()
-        .map(|t| t.open_count_for(blob_id) == 0)
-        .unwrap_or(false)
+        .map(|t| t.open_count_for(blob_id) != 0)
+        .unwrap_or(true)
+}
+
+fn is_explicit_gc_candidate(blob_id: &BlobId) -> bool {
+    is_tombstone(blob_id)
+}
+
+fn collect_reachable_path_blobs() -> ExofsResult<Vec<BlobId>> {
+    let root = BlobId::from_bytes_blake3(b"/");
+    let mut reachable: Vec<BlobId> = Vec::new();
+    let mut queue: Vec<BlobId> = Vec::new();
+    reachable
+        .try_reserve(16)
+        .map_err(|_| ExofsError::NoMemory)?;
+    queue.try_reserve(16).map_err(|_| ExofsError::NoMemory)?;
+    push_unique_blob(&mut reachable, root)?;
+    push_unique_blob(&mut queue, root)?;
+
+    let mut cursor = 0usize;
+    while cursor < queue.len() && reachable.len() < GC_MAX_BLOBS_PER_RUN {
+        let dir_blob = queue[cursor];
+        cursor = cursor.wrapping_add(1);
+
+        let Some(data) = BLOB_CACHE.get(&dir_blob) else {
+            continue;
+        };
+        let Ok(index) = PathIndex::from_bytes(&data) else {
+            continue;
+        };
+
+        for entry in index.entries() {
+            let child = BlobId(*entry.oid.as_bytes());
+            let inserted = push_unique_blob(&mut reachable, child)?;
+            if inserted && entry.kind == PATH_INDEX_KIND_DIR {
+                push_unique_blob(&mut queue, child)?;
+            }
+            if reachable.len() >= GC_MAX_BLOBS_PER_RUN {
+                break;
+            }
+        }
+    }
+
+    Ok(reachable)
+}
+
+fn push_unique_blob(out: &mut Vec<BlobId>, blob_id: BlobId) -> ExofsResult<bool> {
+    if reachable_contains(out, &blob_id) {
+        return Ok(false);
+    }
+    out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+    out.push(blob_id);
+    Ok(true)
+}
+
+fn reachable_contains(haystack: &[BlobId], needle: &BlobId) -> bool {
+    haystack.iter().any(|id| id == needle)
 }
 
 /// Retourne la taille d'un blob tel que stocké dans le cache.
@@ -162,13 +239,20 @@ fn run_gc(args: &GcArgs) -> ExofsResult<GcResult> {
             return Err(e);
         }
     };
+    let reachable = match collect_reachable_path_blobs() {
+        Ok(v) => v,
+        Err(e) => {
+            gc_lock_release();
+            return Err(e);
+        }
+    };
 
     let mut res = GcResult::default();
     res.dry_run = if dry { 1 } else { 0 };
     let mut i = 0usize;
     while i < candidates.len() {
         let bid = &candidates[i];
-        let orphan = is_orphan(bid);
+        let orphan = is_orphan_with_reachable(bid, &reachable);
         let old_epoch = args.epoch_threshold > 0 && blob_epoch(bid) < args.epoch_threshold;
         let should_collect = orphan && (aggressive || old_epoch || args.epoch_threshold == 0);
         if should_collect {
@@ -230,10 +314,11 @@ pub fn count_orphans() -> ExofsResult<usize> {
     let all = BLOB_CACHE
         .list_keys()
         .map_err(|_| ExofsError::GcQueueFull)?;
+    let reachable = collect_reachable_path_blobs()?;
     let mut count = 0usize;
     let mut i = 0usize;
     while i < all.len() {
-        if is_orphan(&all[i]) {
+        if is_orphan_with_reachable(&all[i], &reachable) {
             count = count.saturating_add(1);
         }
         i = i.wrapping_add(1);
@@ -246,10 +331,11 @@ pub fn estimate_reclaimable() -> ExofsResult<u64> {
     let all = BLOB_CACHE
         .list_keys()
         .map_err(|_| ExofsError::GcQueueFull)?;
+    let reachable = collect_reachable_path_blobs()?;
     let mut total = 0u64;
     let mut i = 0usize;
     while i < all.len() {
-        if is_orphan(&all[i]) {
+        if is_orphan_with_reachable(&all[i], &reachable) {
             total = total.saturating_add(blob_size(&all[i]));
         }
         i = i.wrapping_add(1);
@@ -288,11 +374,18 @@ pub fn purge_old_epochs(min_epoch: u64) -> ExofsResult<u64> {
             return Err(ExofsError::GcQueueFull);
         }
     };
+    let reachable = match collect_reachable_path_blobs() {
+        Ok(v) => v,
+        Err(e) => {
+            gc_lock_release();
+            return Err(e);
+        }
+    };
     let mut freed = 0u64;
     let mut i = 0usize;
     while i < all.len() {
         let ep = blob_epoch(&all[i]);
-        if ep > 0 && ep < min_epoch && is_orphan(&all[i]) {
+        if ep > 0 && ep < min_epoch && is_orphan_with_reachable(&all[i], &reachable) {
             freed = freed.saturating_add(blob_size(&all[i]));
             delete_blob(&all[i]);
         }
@@ -415,6 +508,48 @@ mod tests {
         let n = count_orphans().unwrap_or(0);
         let _ = n;
     }
+
+    #[test]
+    fn test_gc_keeps_path_reachable_blobs_and_collects_tombstones() {
+        use crate::fs::exofs::core::ObjectId;
+        use crate::fs::exofs::path::path_component::validate_component;
+
+        BLOB_CACHE.flush_all_force();
+
+        let root = BlobId::from_bytes_blake3(b"/");
+        let live_file = BlobId::from_bytes_blake3(b"/live.txt");
+        let tombstone = BlobId([0xEE; 32]);
+
+        let mut root_index = PathIndex::new_with_key(ObjectId::default(), [0xA5; 16]);
+        let live_name = validate_component(b"live.txt").test_unwrap();
+        root_index
+            .insert(&live_name, ObjectId(*live_file.as_bytes()), 1)
+            .test_unwrap();
+
+        BLOB_CACHE
+            .insert(root, root_index.serialize().test_unwrap())
+            .test_unwrap();
+        BLOB_CACHE.insert(live_file, b"live".to_vec()).test_unwrap();
+        BLOB_CACHE
+            .insert(tombstone, GC_TOMBSTONE_MAGIC.to_le_bytes().to_vec())
+            .test_unwrap();
+
+        let args = GcArgs {
+            flags: 0,
+            _pad: 0,
+            epoch_threshold: 0,
+            max_blobs: 64,
+            _pad2: 0,
+        };
+        let result = run_gc(&args).test_unwrap();
+
+        assert_eq!(result.blobs_deleted, 1);
+        assert!(BLOB_CACHE.get(&root).is_some());
+        assert!(BLOB_CACHE.get(&live_file).is_some());
+        assert!(BLOB_CACHE.get(&tombstone).is_none());
+
+        BLOB_CACHE.flush_all_force();
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -477,12 +612,13 @@ pub fn list_orphans() -> ExofsResult<Vec<BlobId>> {
     let all = BLOB_CACHE
         .list_keys()
         .map_err(|_| ExofsError::GcQueueFull)?;
+    let reachable = collect_reachable_path_blobs()?;
     let mut out: Vec<BlobId> = Vec::new();
     out.try_reserve(all.len().min(GC_MAX_BLOBS_PER_RUN))
         .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < all.len() && out.len() < GC_MAX_BLOBS_PER_RUN {
-        if is_orphan(&all[i]) {
+        if is_orphan_with_reachable(&all[i], &reachable) {
             out.push(all[i]);
         }
         i = i.wrapping_add(1);

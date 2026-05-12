@@ -55,6 +55,7 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{
     DmaDirection, DmaError, DmaMapFlags, IommuDomainId, IovaAddr,
 };
+use crate::process::core::pid::Pid;
 use pci_types::PciAddress;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,6 +323,7 @@ pub fn sys_pwritev2(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, flags: u64,
 /// `open(path, flags, mode)` → fd ou errno.
 pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPEN);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -338,13 +340,13 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
     };
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_open(path.as_bytes(), flags as u32, mode, pid))
 }
 
 /// `creat(path, mode)` → alias for `open(O_CREAT|O_WRONLY|O_TRUNC)`.
 pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CREAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -355,7 +357,6 @@ pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
         Ok(v) => v,
         Err(e) => return e,
     };
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_open(
         path.as_bytes(),
         open_flags::O_CREAT | open_flags::O_WRONLY | open_flags::O_TRUNC,
@@ -400,6 +401,7 @@ pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64
 /// `openat(dirfd, path, flags, mode)`.
 pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPENAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -418,7 +420,6 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
         Err(e) => return e,
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_openat(
         dirfd,
         path.as_bytes(),
@@ -742,6 +743,7 @@ pub fn sys_ioctl(fd: u64, request: u64, arg: u64, _a4: u64, _a5: u64, _a6: u64) 
 /// `stat(path, stat_buf)`.
 pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_STAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -750,7 +752,6 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
         return EFAULT;
     }
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, pid))
 }
 
@@ -772,6 +773,7 @@ pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
 /// `lstat(path, stat_buf)` — ne suit pas le symlink terminal.
 pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_LSTAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -780,7 +782,6 @@ pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6
         return EFAULT;
     }
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_lstat(path.as_bytes(), stat_ptr, pid))
 }
 
@@ -812,12 +813,12 @@ pub fn sys_newfstatat(
 /// `access(path, mode)`.
 pub fn sys_access(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_ACCESS);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_access(path.as_bytes(), mode as u32, pid))
 }
 
@@ -834,12 +835,12 @@ pub fn sys_faccessat(dirfd: u64, path_ptr: u64, mode: u64, flags: u64, _a5: u64,
 /// `mkdir(path, mode)`.
 pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKDIR);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_mkdir(path.as_bytes(), mode as u32, pid))
 }
 
@@ -856,24 +857,24 @@ pub fn sys_mkdirat(dirfd: u64, path_ptr: u64, mode: u64, _a4: u64, _a5: u64, _a6
 /// `rmdir(path)`.
 pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_RMDIR);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), pid))
 }
 
 /// `unlink(path)`.
 pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_UNLINK);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), pid))
 }
 
@@ -905,6 +906,7 @@ pub fn sys_rename(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_RENAME);
+    let pid = current_pid_u32();
     let old_path = match read_user_path(old_path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -914,7 +916,6 @@ pub fn sys_rename(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_rename(
         old_path.as_bytes(),
         new_path.as_bytes(),
@@ -932,6 +933,7 @@ pub fn sys_renameat(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_RENAMEAT);
+    let pid = current_pid_u32();
     let old_path = match read_user_path(old_path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -941,7 +943,6 @@ pub fn sys_renameat(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_renameat(
         olddirfd as i32,
         old_path.as_bytes(),
@@ -970,12 +971,12 @@ pub fn sys_renameat2(
         return EINVAL;
     }
     if flags & RENAME_NOREPLACE != 0 {
+        let pid = current_pid_u32();
         let new_path = match read_user_path(new_path_ptr) {
             Ok(p) => p,
             Err(e) => return e.to_errno(),
         };
         use crate::syscall::fs_bridge;
-        let pid = current_pid_u32();
         match fs_bridge::fs_access(new_path.as_bytes(), 0, pid) {
             Ok(_) => return EEXIST,
             Err(fs_bridge::FsBridgeError::NotFound) => {}
@@ -995,6 +996,7 @@ pub fn sys_link(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_LINK);
+    let pid = current_pid_u32();
     let old_path = match read_user_path(old_path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -1004,7 +1006,6 @@ pub fn sys_link(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_link(
         old_path.as_bytes(),
         new_path.as_bytes(),
@@ -1022,6 +1023,7 @@ pub fn sys_linkat(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_LINKAT);
+    let pid = current_pid_u32();
     let old_path = match read_user_path(old_path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -1031,7 +1033,6 @@ pub fn sys_linkat(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_linkat(
         olddirfd as i32,
         old_path.as_bytes(),
@@ -1052,6 +1053,7 @@ pub fn sys_symlink(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_SYMLINK);
+    let pid = current_pid_u32();
     let target = match read_user_path(target_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -1061,7 +1063,6 @@ pub fn sys_symlink(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_symlink(
         target.as_bytes(),
         linkpath.as_bytes(),
@@ -1079,6 +1080,7 @@ pub fn sys_symlinkat(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_SYMLINKAT);
+    let pid = current_pid_u32();
     let target = match read_user_path(target_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -1088,7 +1090,6 @@ pub fn sys_symlinkat(
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_symlinkat(
         target.as_bytes(),
         dirfd as i32,
@@ -1124,12 +1125,12 @@ pub fn sys_readlink(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_READLINK);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_readlink(
         path.as_bytes(),
         buf_ptr,
@@ -1148,12 +1149,12 @@ pub fn sys_readlinkat(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_READLINKAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_readlinkat(
         dirfd as i32,
         path.as_bytes(),
@@ -1166,12 +1167,12 @@ pub fn sys_readlinkat(
 /// `truncate(path, length)`.
 pub fn sys_truncate(path_ptr: u64, length: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_TRUNCATE);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_truncate(path.as_bytes(), length, pid))
 }
 
@@ -1214,6 +1215,7 @@ pub fn sys_fdatasync(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
 /// `statfs(path, buf)`.
 pub fn sys_statfs(path_ptr: u64, statfs_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_STATFS);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -1222,7 +1224,6 @@ pub fn sys_statfs(path_ptr: u64, statfs_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         return EFAULT;
     }
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_statfs(path.as_bytes(), statfs_ptr, pid))
 }
 
@@ -1244,12 +1245,12 @@ pub fn sys_fstatfs(fd: u64, statfs_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 /// `chmod(path, mode)`.
 pub fn sys_chmod(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CHMOD);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_chmod(path.as_bytes(), mode as u32, pid))
 }
 
@@ -1268,12 +1269,12 @@ pub fn sys_fchmod(fd: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
 /// `chown(path, uid, gid)`.
 pub fn sys_chown(path_ptr: u64, uid: u64, gid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CHOWN);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_chown(
         path.as_bytes(),
         uid as u32,
@@ -1332,12 +1333,12 @@ pub fn sys_statx(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_STATX);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_statx(
         dirfd as i32,
         path.as_bytes(),
@@ -1359,12 +1360,12 @@ pub fn sys_getcwd(buf_ptr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 /// `chdir(path)`.
 pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CHDIR);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_chdir(path.as_bytes(), pid))
 }
 
@@ -1542,24 +1543,24 @@ pub fn sys_fadvise64(fd: u64, offset: u64, len: u64, advice: u64, _a5: u64, _a6:
 /// `mknod(path, mode, dev)`.
 pub fn sys_mknod(path_ptr: u64, mode: u64, dev: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKNOD);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_mknod(path.as_bytes(), mode as u32, dev, pid))
 }
 
 /// `mknodat(dirfd, path, mode, dev)`.
 pub fn sys_mknodat(dirfd: u64, path_ptr: u64, mode: u64, dev: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKNODAT);
+    let pid = current_pid_u32();
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
     use crate::syscall::fs_bridge;
-    let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_mknodat(
         dirfd as i32,
         path.as_bytes(),
@@ -2124,13 +2125,22 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     }
     let ns = (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64);
     // sleep_ns(ns) câblé via wait_queue lors de l'intégration scheduler/sync.
-    // Pour l'instant : busy-wait TSC (acceptable pour les délais courts de boot).
+    // Tant que les hrtimers bloquants ne sont pas câblés, cette attente reste
+    // courte mais coopérative : elle cède le CPU aux services déjà enfilés.
     let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns);
+    let mut spins = 0u32;
     loop {
         if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
             break;
         }
-        core::hint::spin_loop();
+        if spins & 0x3ff == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        } else {
+            core::hint::spin_loop();
+        }
+        spins = spins.wrapping_add(1);
     }
     let _ = rem_ptr;
     0
@@ -2173,11 +2183,19 @@ pub fn sys_clock_nanosleep(
     let target_ns = (ts.tv_sec as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
+    let mut spins = 0u32;
     loop {
         if crate::scheduler::timer::clock::monotonic_ns() >= target_ns {
             break;
         }
-        core::hint::spin_loop();
+        if spins & 0x3ff == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        } else {
+            core::hint::spin_loop();
+        }
+        spins = spins.wrapping_add(1);
     }
     let _ = rem_ptr;
     0
@@ -2248,6 +2266,132 @@ pub fn sys_getrandom(buf_ptr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6
 // Handlers IPC natifs Exo-OS (bloc 300+)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const IPC_ENDPOINT_OWNER_SLOTS: usize = 128;
+
+#[derive(Clone, Copy)]
+struct IpcEndpointOwner {
+    endpoint: u64,
+    owner_pid: u32,
+}
+
+impl IpcEndpointOwner {
+    const EMPTY: Self = Self {
+        endpoint: 0,
+        owner_pid: 0,
+    };
+}
+
+static IPC_ENDPOINT_OWNERS: spin::Mutex<[IpcEndpointOwner; IPC_ENDPOINT_OWNER_SLOTS]> =
+    spin::Mutex::new([IpcEndpointOwner::EMPTY; IPC_ENDPOINT_OWNER_SLOTS]);
+
+#[inline]
+fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::ServiceClass> {
+    match name {
+        b"memory_server" => Some(crate::security::ServiceClass::MemoryServer),
+        b"vfs_server" => Some(crate::security::ServiceClass::VfsServer),
+        b"crypto_server" => Some(crate::security::ServiceClass::CryptoServer),
+        b"device_server" => Some(crate::security::ServiceClass::DeviceServer),
+        b"virtio_drivers" => Some(crate::security::ServiceClass::VirtioDriver),
+        b"network_server" => Some(crate::security::ServiceClass::NetworkServer),
+        b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
+        b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
+        _ => None,
+    }
+}
+
+fn reserve_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Result<bool, i64> {
+    if endpoint == 0 || owner_pid == 0 {
+        return Err(EINVAL);
+    }
+
+    let packed_pid = (endpoint >> 32) as u32;
+    if packed_pid != 0 && packed_pid != owner_pid {
+        return Err(EACCES);
+    }
+
+    let mut owners = IPC_ENDPOINT_OWNERS.lock();
+    let mut empty_slot = None;
+    let mut idx = 0usize;
+    while idx < owners.len() {
+        let entry = owners[idx];
+        if entry.endpoint == endpoint {
+            if entry.owner_pid == owner_pid {
+                return Ok(false);
+            }
+            if !crate::process::is_alive(entry.owner_pid) {
+                owners[idx] = IpcEndpointOwner {
+                    endpoint,
+                    owner_pid,
+                };
+                return Ok(true);
+            }
+            return Err(EBUSY);
+        }
+        if entry.endpoint == 0 && empty_slot.is_none() {
+            empty_slot = Some(idx);
+        }
+        idx += 1;
+    }
+
+    let Some(slot) = empty_slot else {
+        return Err(ENOMEM);
+    };
+    owners[slot] = IpcEndpointOwner {
+        endpoint,
+        owner_pid,
+    };
+    Ok(false)
+}
+
+fn release_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Result<(), i64> {
+    if endpoint == 0 || owner_pid == 0 {
+        return Err(EINVAL);
+    }
+
+    let packed_pid = (endpoint >> 32) as u32;
+    if packed_pid != 0 && packed_pid != owner_pid {
+        return Err(EACCES);
+    }
+
+    let mut owners = IPC_ENDPOINT_OWNERS.lock();
+    let mut idx = 0usize;
+    while idx < owners.len() {
+        if owners[idx].endpoint == endpoint {
+            if owners[idx].owner_pid != owner_pid {
+                return Err(EACCES);
+            }
+            owners[idx] = IpcEndpointOwner::EMPTY;
+            return Ok(());
+        }
+        idx += 1;
+    }
+    Ok(())
+}
+
+fn ipc_endpoint_owner_pid(endpoint: u64) -> Option<u32> {
+    let packed_pid = (endpoint >> 32) as u32;
+    if packed_pid != 0 {
+        return Some(packed_pid);
+    }
+
+    let owners = IPC_ENDPOINT_OWNERS.lock();
+    owners
+        .iter()
+        .find(|entry| entry.endpoint == endpoint && entry.owner_pid != 0)
+        .map(|entry| entry.owner_pid)
+}
+
+fn primary_ipc_endpoint_for_owner(owner_pid: u32) -> Option<u64> {
+    if owner_pid == 0 {
+        return None;
+    }
+    let owners = IPC_ENDPOINT_OWNERS.lock();
+    owners
+        .iter()
+        .find(|entry| entry.owner_pid == owner_pid && entry.endpoint != 0)
+        .map(|entry| entry.endpoint)
+}
+
 /// `exo_ipc_send(endpoint, msg_ptr, msg_len, flags)`.
 pub fn sys_exo_ipc_send(
     endpoint: u64,
@@ -2281,6 +2425,10 @@ pub fn sys_exo_ipc_send(
             return EFAULT;
         }
     }
+    if len == 128 {
+        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    }
     let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
         0x0001
     } else {
@@ -2302,6 +2450,8 @@ pub fn sys_exo_ipc_recv(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXO_IPC_RECV);
+    let (endpoint, buf_ptr, buf_len, flags) =
+        normalize_ipc_recv_args(endpoint, buf_ptr, buf_len, flags);
     recv_ipc_message(endpoint, buf_ptr, buf_len, flags, false)
 }
 
@@ -2315,6 +2465,8 @@ pub fn sys_exo_ipc_recv_nb(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXO_IPC_RECV_NB);
+    let (endpoint, buf_ptr, buf_len, flags) =
+        normalize_ipc_recv_args(endpoint, buf_ptr, buf_len, flags);
     recv_ipc_message(endpoint, buf_ptr, buf_len, flags, true)
 }
 
@@ -2390,12 +2542,8 @@ pub fn sys_exo_ipc_create(
     if len == 0 || len > 128 {
         return EINVAL;
     }
-    let endpoint_pid = exo_ipc_endpoint_pid(endpoint);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    if endpoint_pid == 0 {
-        return EINVAL;
-    }
-    if caller_pid == 0 || endpoint_pid != caller_pid {
+    if caller_pid == 0 {
         return EACCES;
     }
     let ep = match EndpointId::new(endpoint) {
@@ -2413,9 +2561,26 @@ pub fn sys_exo_ipc_create(
         return EFAULT;
     }
 
+    let replaced_dead_owner = match reserve_ipc_endpoint_owner(endpoint, caller_pid) {
+        Ok(replaced) => replaced,
+        Err(errno) => return errno,
+    };
+    if replaced_dead_owner {
+        crate::ipc::channel::raw::mailbox_close(ep);
+    }
+
     if crate::ipc::channel::raw::mailbox_open(ep) {
+        if let Err(err) = crate::ipc::endpoint::register_endpoint(&name, ep) {
+            crate::ipc::channel::raw::mailbox_close(ep);
+            let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
+            return ipc_error_to_errno(err);
+        }
+        if let Some(class) = service_class_for_endpoint_name(&name) {
+            let _ = crate::security::register_service_class(Pid(caller_pid), class);
+        }
         0
     } else {
+        let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
         ENOMEM
     }
 }
@@ -2436,7 +2601,51 @@ pub fn sys_exo_ipc_destroy(endpoint: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         None => return EINVAL,
     };
     crate::ipc::channel::raw::mailbox_close(ep);
+    let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
     0
+}
+
+/// `exo_ipc_lookup(name_ptr, name_len)` — résout un endpoint IPC par nom.
+pub fn sys_exo_ipc_lookup(
+    name_ptr: u64,
+    name_len: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_IPC_LOOKUP);
+
+    let len = name_len as usize;
+    if len == 0 || len > crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN {
+        return EINVAL;
+    }
+    if name_ptr == 0 {
+        return EFAULT;
+    }
+
+    let _validated = match UserBuf::validate(
+        name_ptr,
+        len,
+        crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN,
+    ) {
+        Ok(buf) => buf,
+        Err(err) => return err.to_errno(),
+    };
+
+    let mut name = Vec::new();
+    if name.try_reserve(len).is_err() {
+        return ENOMEM;
+    }
+    name.resize(len, 0);
+    if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
+        return EFAULT;
+    }
+
+    match crate::ipc::endpoint::lookup_endpoint(&name) {
+        Some(endpoint) => endpoint.get() as i64,
+        None => ENOENT,
+    }
 }
 
 #[inline(always)]
@@ -2444,6 +2653,8 @@ fn exo_ipc_endpoint_pid(endpoint: u64) -> u32 {
     let packed_pid = (endpoint >> 32) as u32;
     if packed_pid != 0 {
         packed_pid
+    } else if let Some(owner_pid) = ipc_endpoint_owner_pid(endpoint) {
+        owner_pid
     } else {
         endpoint as u32
     }
@@ -2467,6 +2678,16 @@ fn current_pid_u32() -> u32 {
 
 const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
 
+fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> (u64, u64, u64, u64) {
+    if flags == 0 && a2 <= 65_536 {
+        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        let endpoint = primary_ipc_endpoint_for_owner(caller_pid).unwrap_or(caller_pid as u64);
+        (endpoint, a1, a2, a3)
+    } else {
+        (a1, a2, a3, flags)
+    }
+}
+
 fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowait: bool) -> i64 {
     let len = buf_len as usize;
     if len > 65_536 {
@@ -2479,6 +2700,10 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
         Some(id) => id,
         None => return EINVAL,
     };
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 || exo_ipc_endpoint_pid(endpoint) != caller_pid {
+        return EACCES;
+    }
 
     let recv_cap = len.min(crate::ipc::core::constants::MAX_MSG_SIZE);
     let mut payload = [0u8; crate::ipc::core::constants::MAX_MSG_SIZE];
@@ -2498,7 +2723,9 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
                     if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
                         break Err(IpcError::Timeout);
                     }
-                    core::hint::spin_loop();
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
                 }
                 Err(err) => break Err(err),
             }
@@ -2509,7 +2736,9 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
 
     match result {
         Ok(n) => {
-            if n != 0 && copy_to_user(buf_ptr as *mut u8, payload.as_ptr(), n).is_err() {
+            if recv_cap != 0
+                && copy_to_user(buf_ptr as *mut u8, payload.as_ptr(), recv_cap).is_err()
+            {
                 return EFAULT;
             }
             n as i64
@@ -3515,6 +3744,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_IPC_CALL => sys_exo_ipc_call,
         SYS_EXO_IPC_CREATE => sys_exo_ipc_create,
         SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
+        SYS_EXO_IPC_LOOKUP => sys_exo_ipc_lookup,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_CAP_CHECK => sys_exo_cap_check,

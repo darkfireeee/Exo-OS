@@ -15,6 +15,8 @@
 //   6. Enqueuer dans la run queue.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::gdt::{GDT_USER_CS64, GDT_USER_DS};
 use crate::process::core::pcb::ProcessControlBlock;
 use crate::process::core::pid::{Tid, TID_ALLOCATOR};
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
@@ -129,16 +131,16 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         // Frame iretq : [rip, cs, rflags, rsp, ss]
         let frame = (kstack_top - 48) as *mut u64;
         *frame.add(0) = params.start_func; // RIP  (point d'entrée)
-        *frame.add(1) = 0x1B; // CS   ring 3
+        *frame.add(1) = GDT_USER_CS64 as u64; // CS   ring 3, 64-bit
         *frame.add(2) = 0x0202; // RFLAGS (IF=1)
         *frame.add(3) = params
             .attr
             .stack_addr
             .wrapping_add(params.attr.stack_size)
             .wrapping_sub(16); // RSP userspace
-        *frame.add(4) = 0x23; // SS
-                              // Argument dans rdi (convention System V).
-                              // Stocké sur la stack avant le frame : sera chargé par le trampoline.
+        *frame.add(4) = GDT_USER_DS as u64; // SS
+                                            // Argument dans rdi (convention System V).
+                                            // Stocké sur la stack avant le frame : sera chargé par le trampoline.
         let rdi_slot = (kstack_top - 56) as *mut u64;
         *rdi_slot = params.arg;
 

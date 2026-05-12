@@ -17,7 +17,7 @@ pub const INIT_MSG_PREPARE_ISOLATION_ACK: u32 = 7;
 pub struct InitRequest {
     pub sender_pid: u32,
     pub msg_type: u32,
-    pub payload: [u8; 120],
+    pub payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
 }
 
 impl InitRequest {
@@ -25,10 +25,13 @@ impl InitRequest {
         Self {
             sender_pid: 0,
             msg_type: 0,
-            payload: [0; 120],
+            payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
         }
     }
 }
+
+const _: () = assert!(core::mem::size_of::<InitRequest>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(InitRequest, payload) == syscall::IPC_HEADER_SIZE);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -67,8 +70,9 @@ pub fn register_endpoint() {
 
 pub fn recv_request(request: &mut InitRequest) -> Result<bool, i64> {
     let rc = unsafe {
-        syscall::syscall3(
+        syscall::syscall4(
             syscall::SYS_IPC_RECV,
+            SERVER_ENDPOINT_ID,
             request as *mut InitRequest as u64,
             core::mem::size_of::<InitRequest>() as u64,
             syscall::IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

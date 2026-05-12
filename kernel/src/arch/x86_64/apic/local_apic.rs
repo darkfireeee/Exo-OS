@@ -15,8 +15,20 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 /// Adresse MMIO par défaut du Local APIC (peut être relue depuis MSR_IA32_APICBASE)
 pub const LAPIC_DEFAULT_BASE: u64 = 0xFEE0_0000;
 
-/// Base LAPIC actuelle (peut différer après remapping ACPI)
-static LAPIC_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
+/// Base physique LAPIC actuelle (peut différer après remapping ACPI).
+static LAPIC_PHYS_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
+/// Base virtuelle utilisée par les accès MMIO.
+///
+/// Avant l'init mémoire complète, elle reste l'adresse physique basse héritée
+/// des mappings boot. Après `init_lapic_fixmap_post_memory()`, elle pointe dans
+/// la fixmap noyau haute, partagée par les CR3 userspace.
+static LAPIC_MMIO_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
+
+#[inline(always)]
+fn lapic_uses_fixmap() -> bool {
+    LAPIC_MMIO_BASE.load(Ordering::Acquire)
+        >= crate::memory::core::layout::FIXMAP_BASE.as_u64() as usize
+}
 
 // ── Offsets des registres LAPIC ───────────────────────────────────────────────
 
@@ -87,7 +99,7 @@ pub enum ApicMode {
 /// Lit un registre LAPIC (xAPIC MMIO)
 #[inline(always)]
 pub fn lapic_read(reg: u32) -> u32 {
-    let base = LAPIC_BASE.load(Ordering::Relaxed);
+    let base = LAPIC_MMIO_BASE.load(Ordering::Relaxed);
     // SAFETY: base LAPIC validée lors de l'init, registre est un offset connu
     unsafe { read_volatile((base + reg as usize) as *const u32) }
 }
@@ -95,7 +107,7 @@ pub fn lapic_read(reg: u32) -> u32 {
 /// Écrit un registre LAPIC (xAPIC MMIO)
 #[inline(always)]
 pub fn lapic_write(reg: u32, val: u32) {
-    let base = LAPIC_BASE.load(Ordering::Relaxed);
+    let base = LAPIC_MMIO_BASE.load(Ordering::Relaxed);
     // SAFETY: base LAPIC validée lors de l'init, écriture sur registre connu
     unsafe {
         write_volatile((base + reg as usize) as *mut u32, val);
@@ -121,7 +133,10 @@ pub fn enable_xapic() {
     let lapic_addr = apicbase & APICBASE_ADDR_MASK;
 
     if lapic_addr != 0 {
-        LAPIC_BASE.store(lapic_addr as usize, Ordering::Release);
+        LAPIC_PHYS_BASE.store(lapic_addr as usize, Ordering::Release);
+        if !lapic_uses_fixmap() {
+            LAPIC_MMIO_BASE.store(lapic_addr as usize, Ordering::Release);
+        }
     }
 
     // 2. Assurer que APIC est activé (bit 11) sans x2APIC (bit 10)
@@ -137,7 +152,51 @@ pub fn enable_xapic() {
 
 /// Configure la base LAPIC (remapping ACPI possible)
 pub fn set_lapic_base(phys_addr: u64) {
-    LAPIC_BASE.store(phys_addr as usize, Ordering::Release);
+    LAPIC_PHYS_BASE.store(phys_addr as usize, Ordering::Release);
+    if !lapic_uses_fixmap() {
+        LAPIC_MMIO_BASE.store(phys_addr as usize, Ordering::Release);
+    }
+}
+
+/// Remappe le LAPIC dans la fixmap noyau haute après l'init mémoire.
+///
+/// Les chemins IRQ/IPI peuvent s'exécuter sous un CR3 userspace. Utiliser
+/// l'adresse physique basse 0xFEE0_0000 dépend alors d'un identity-map bas qui
+/// n'est pas une garantie architecturale du modèle userspace. La fixmap fait du
+/// LAPIC un mapping noyau global copié dans tous les nouveaux CR3.
+pub fn init_lapic_fixmap_post_memory() -> bool {
+    use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
+    use crate::memory::core::{fixmap_slot_addr, Frame, PageFlags, PhysAddr, FIXMAP_LAPIC};
+    use crate::memory::virt::address_space::kernel::KERNEL_AS;
+    use crate::memory::virt::address_space::tlb;
+
+    let phys_base = LAPIC_PHYS_BASE.load(Ordering::Acquire) as u64;
+    if phys_base == 0 || KERNEL_AS.pml4_phys().as_u64() == 0 {
+        return false;
+    }
+
+    let page_phys = PhysAddr::new(phys_base & !0xFFF);
+    let page_off = phys_base & 0xFFF;
+    let fix_virt = fixmap_slot_addr(FIXMAP_LAPIC);
+    let flags = PageFlags::KERNEL_DMA | PageFlags::WRITE_THROUGH;
+
+    if KERNEL_AS.translate(fix_virt).is_none() {
+        let frame = Frame::containing(page_phys);
+        // SAFETY: mapping MMIO noyau dans une adresse fixmap haute réservée.
+        if unsafe { KERNEL_AS.map(fix_virt, frame, flags, &KERNEL_FAULT_ALLOC) }.is_err() {
+            return false;
+        }
+        // SAFETY: invalidation locale du slot fixmap nouvellement installé.
+        unsafe {
+            tlb::flush_single(fix_virt);
+        }
+    }
+
+    LAPIC_MMIO_BASE.store(
+        fix_virt.as_u64().saturating_add(page_off) as usize,
+        Ordering::Release,
+    );
+    true
 }
 
 /// Retourne l'ID LAPIC du CPU courant

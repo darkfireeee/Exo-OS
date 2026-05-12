@@ -14,10 +14,10 @@
 //! 5. Alignement correct pour les types non-packed
 //!
 //! ## copy_from_user / copy_to_user
-//! Les fonctions copient octet par octet via volatile reads/writes pour
-//! prévenir l'optimisation du compilateur. Dans un kernel complet, elles
-//! activeraient SMAP (CLAC/STAC) autour des accès. Les annotations SAFETY
-//! documentent chaque invariant garanti par l'appelant.
+//! Les fonctions ne déréférencent jamais directement l'adresse Ring 3 en
+//! contexte noyau. Sur la cible kernel, elles traduisent l'adresse utilisateur
+//! via l'espace d'adressage courant, déclenchent au besoin le même chemin de
+//! demand-paging/CoW qu'un #PF userspace, puis copient via la physmap kernel.
 //!
 //! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
 //! Tout bloc `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
@@ -26,7 +26,9 @@ use core::fmt;
 use core::mem;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use super::numbers::{E2BIG, EFAULT, EINVAL};
+use alloc::vec::Vec;
+
+use super::numbers::{E2BIG, EFAULT, EINVAL, ENOMEM};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de plage d'adresses
@@ -269,9 +271,11 @@ impl UserBuf {
 ///
 /// Le contenu est copié dans un buffer kernel interne lors de la validation.
 pub struct UserStr {
-    /// Buffer kernel contenant la chaîne UTF-8 copiée (sans le '\0')
-    buf: [u8; STRING_MAX],
-    len: usize,
+    /// Buffer kernel contenant la chaîne UTF-8 copiée (sans le '\0').
+    ///
+    /// Stockage heap: les chemins/argv/envp ne doivent jamais materialiser un
+    /// buffer PATH_MAX/STRING_MAX dans une frame de syscall.
+    buf: Vec<u8>,
 }
 
 impl UserStr {
@@ -296,10 +300,9 @@ impl UserStr {
             return Err(SyscallError::Fault);
         }
         let capped_max = max.min(STRING_MAX);
-        let mut result = Self {
-            buf: [0u8; STRING_MAX],
-            len: 0,
-        };
+        let mut buf = Vec::new();
+        buf.try_reserve(capped_max)
+            .map_err(|_| SyscallError::NoMemory)?;
 
         // Copie octet par octet jusqu'au '\0' ou ptr+max
         // (safe car on vérifie la borne userspace ci-dessous)
@@ -314,42 +317,38 @@ impl UserStr {
                 record_fault();
                 return Err(SyscallError::Fault);
             }
-            // SAFETY: byte_addr est dans le canonique userspace et non-NULL.
-            // Dans un kernel complet, un page fault ici serait capturé par
-            // la table de fixup (exception_fixup_table). Ici on lit directement.
-            let byte = unsafe { core::ptr::read_volatile(byte_addr as *const u8) };
+            let mut byte = 0u8;
+            copy_from_user(&mut byte as *mut u8, byte_addr as *const u8, 1)?;
             if byte == 0 {
                 break;
             }
-            result.buf[offset] = byte;
+            buf.push(byte);
             offset += 1;
         }
-        result.len = offset;
-        COPY_FROM_USER_BYTES.fetch_add(offset as u64 + 1, Ordering::Relaxed);
-        Ok(result)
+        Ok(Self { buf })
     }
 
     /// Retourne la chaîne comme slice d'octets (sans le null terminal).
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buf[..self.len]
+        &self.buf
     }
 
     /// Retourne la longueur sans le null-terminal.
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.buf.len()
     }
 
     /// Retourne true si la chaîne est vide.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.buf.is_empty()
     }
 
     /// Tente de convertir en &str (UTF-8 strict).
     pub fn as_str(&self) -> Result<&str, SyscallError> {
-        core::str::from_utf8(&self.buf[..self.len]).map_err(|_| SyscallError::Invalid)
+        core::str::from_utf8(&self.buf).map_err(|_| SyscallError::Invalid)
     }
 }
 
@@ -375,6 +374,8 @@ pub enum SyscallError {
     Busy,
     /// Interruption par signal
     Interrupted,
+    /// Memoire insuffisante pendant une copie/validation kernel
+    NoMemory,
     /// Opération non supportée
     NotSupported,
 }
@@ -387,10 +388,11 @@ impl SyscallError {
             SyscallError::Fault => EFAULT,
             SyscallError::Invalid => EINVAL,
             SyscallError::TooBig => E2BIG,
-            SyscallError::Access => -13,       // EACCES
-            SyscallError::NotFound => -2,      // ENOENT
-            SyscallError::Busy => -16,         // EBUSY
-            SyscallError::Interrupted => -4,   // EINTR
+            SyscallError::Access => -13,     // EACCES
+            SyscallError::NotFound => -2,    // ENOENT
+            SyscallError::Busy => -16,       // EBUSY
+            SyscallError::Interrupted => -4, // EINTR
+            SyscallError::NoMemory => ENOMEM,
             SyscallError::NotSupported => -38, // ENOSYS
         }
     }
@@ -406,6 +408,7 @@ impl fmt::Display for SyscallError {
             SyscallError::NotFound => "not found (ENOENT)",
             SyscallError::Busy => "resource busy (EBUSY)",
             SyscallError::Interrupted => "interrupted (EINTR)",
+            SyscallError::NoMemory => "out of memory (ENOMEM)",
             SyscallError::NotSupported => "not supported (ENOSYS)",
         };
         f.write_str(s)
@@ -460,26 +463,169 @@ fn validate_user_range(addr: u64, len: usize, align: usize) -> Result<(), Syscal
     Ok(())
 }
 
+#[cfg(target_os = "none")]
+fn current_user_address_space() -> Option<&'static crate::memory::virt::UserAddressSpace> {
+    let tcb_raw = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
+    if tcb_raw == 0 {
+        return None;
+    }
+
+    let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+    let pid = crate::process::core::pid::Pid(tcb.pid.0);
+    let pcb = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid)?;
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return None;
+    }
+
+    // SAFETY: l'address space appartient au PCB vivant du thread courant.
+    Some(unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) })
+}
+
+#[cfg(target_os = "none")]
+fn walk_user_mapping(
+    user_as: &crate::memory::virt::UserAddressSpace,
+    addr: u64,
+) -> Option<(
+    crate::memory::core::PhysAddr,
+    crate::memory::virt::page_table::PageTableEntry,
+)> {
+    use crate::memory::core::{PhysAddr, VirtAddr, PAGE_SIZE};
+    use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
+
+    let virt = VirtAddr::new(addr);
+    let walker = PageTableWalker::new(user_as.pml4_phys());
+    match walker.walk_read(virt) {
+        WalkResult::Leaf { entry, .. } => {
+            let off = addr & (PAGE_SIZE as u64 - 1);
+            Some((PhysAddr::new(entry.phys_addr().as_u64() + off), entry))
+        }
+        WalkResult::HugePage { entry, level } => {
+            let page_size = level.page_size() as u64;
+            let off = addr & (page_size - 1);
+            Some((PhysAddr::new(entry.phys_addr().as_u64() + off), entry))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "none")]
+fn resolve_user_page(
+    user_as: &crate::memory::virt::UserAddressSpace,
+    addr: u64,
+    write: bool,
+) -> Result<crate::memory::core::PhysAddr, SyscallError> {
+    use crate::arch::x86_64::memory_iface::UserFaultAllocator;
+    use crate::memory::core::{VirtAddr, PAGE_SIZE};
+    use crate::memory::virt::fault::{handle_page_fault, FaultCause, FaultContext, FaultResult};
+
+    if let Some((phys, entry)) = walk_user_mapping(user_as, addr) {
+        if !entry.is_user() {
+            record_fault();
+            return Err(SyscallError::Fault);
+        }
+        if !write || (entry.is_writable() && !entry.is_cow()) {
+            return Ok(phys);
+        }
+    }
+
+    let page_addr = VirtAddr::new(addr & !(PAGE_SIZE as u64 - 1));
+    let vma = match user_as.find_vma(page_addr) {
+        Some(vma) => vma,
+        None => {
+            record_fault();
+            return Err(SyscallError::Fault);
+        }
+    };
+    let cause = if write {
+        FaultCause::Write
+    } else {
+        FaultCause::Read
+    };
+    let ctx = FaultContext::new(page_addr, cause, false).with_vma(vma);
+    let alloc = UserFaultAllocator::new(user_as);
+    match handle_page_fault(&ctx, &alloc) {
+        FaultResult::Handled => {}
+        _ => {
+            record_fault();
+            return Err(SyscallError::Fault);
+        }
+    }
+
+    if let Some((phys, entry)) = walk_user_mapping(user_as, addr) {
+        if entry.is_user() && (!write || (entry.is_writable() && !entry.is_cow())) {
+            return Ok(phys);
+        }
+    }
+
+    record_fault();
+    Err(SyscallError::Fault)
+}
+
+#[cfg(target_os = "none")]
+fn copy_from_user_resolved(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
+    use crate::memory::core::{phys_to_virt, PAGE_SIZE};
+
+    let user_as = current_user_address_space().ok_or_else(|| {
+        record_fault();
+        SyscallError::Fault
+    })?;
+    let mut copied = 0usize;
+    while copied < len {
+        let user_addr = (src as u64).saturating_add(copied as u64);
+        let page_off = (user_addr as usize) & (PAGE_SIZE - 1);
+        let chunk = core::cmp::min(PAGE_SIZE - page_off, len - copied);
+        let phys = resolve_user_page(user_as, user_addr, false)?;
+        let kernel_src = phys_to_virt(phys).as_u64() as *const u8;
+        // SAFETY: resolve_user_page garantit que la source est l'alias physmap
+        // de la page utilisateur courante; dst couvre len octets kernel.
+        unsafe {
+            core::ptr::copy_nonoverlapping(kernel_src, dst.add(copied), chunk);
+        }
+        copied += chunk;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "none")]
+fn copy_to_user_resolved(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
+    use crate::memory::core::{phys_to_virt, PAGE_SIZE};
+
+    let user_as = current_user_address_space().ok_or_else(|| {
+        record_fault();
+        SyscallError::Fault
+    })?;
+    let mut copied = 0usize;
+    while copied < len {
+        let user_addr = (dst as u64).saturating_add(copied as u64);
+        let page_off = (user_addr as usize) & (PAGE_SIZE - 1);
+        let chunk = core::cmp::min(PAGE_SIZE - page_off, len - copied);
+        let phys = resolve_user_page(user_as, user_addr, true)?;
+        let kernel_dst = phys_to_virt(phys).as_u64() as *mut u8;
+        // SAFETY: resolve_user_page a validé/résolu une page userspace writable
+        // et retourne son alias physmap kernel; src couvre len octets kernel.
+        unsafe {
+            core::ptr::copy_nonoverlapping(src.add(copied), kernel_dst, chunk);
+        }
+        copied += chunk;
+    }
+    Ok(())
+}
+
 /// Copie `len` octets depuis `src` (userspace) vers `dst` (kernel).
 ///
-/// Utilise des lectures volatiles octet par octet pour éviter toute
-/// optimisation compilateur conflictuelle avec les accès userspace.
-///
-/// Dans un kernel complet :
-/// - STAC/CLAC (SMAP enable/disable) encadrent cette fonction
-/// - Un fixup ASM capture le page fault et retourne EFAULT
-///
 /// # Safety
-/// `dst` doit pointer vers un buffer kernel valide de longueur ≥ `len`.
-/// `src` doit avoir été validé comme appartenant à userspace.
+/// `dst` doit pointer vers un buffer kernel valide de longueur >= `len`.
 pub fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
     if len == 0 {
         return Ok(());
     }
-    // SAFETY: src est dans l'espace userspace (validé par l'appelant via validate_user_range).
-    // dst est un pointeur kernel valide fourni par l'appelant.
-    // Les lectures sont volatiles pour empêcher le réordonnancement compilateur.
-    // Un page fault ici serait normalement capturé par exception_fixup_table.
+    validate_user_range(src as u64, len, 1)?;
+    #[cfg(target_os = "none")]
+    {
+        copy_from_user_resolved(dst, src, len)?;
+    }
+    #[cfg(not(target_os = "none"))]
     unsafe {
         for i in 0..len {
             let byte = core::ptr::read_volatile(src.add(i));
@@ -492,18 +638,18 @@ pub fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), Sy
 
 /// Copie `len` octets depuis `src` (kernel) vers `dst` (userspace).
 ///
-/// Utilise des écritures volatiles pour éviter l'optimisation compilateur.
-///
 /// # Safety
 /// `src` doit pointer vers `len` octets de données kernel valides.
-/// `dst` doit avoir été validé comme appartenant à userspace.
 pub fn copy_to_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
     if len == 0 {
         return Ok(());
     }
-    // SAFETY: dst est dans l'espace userspace (préalablement validé).
-    // src est un pointeur kernel valide fourni par l'appelant.
-    // Les écritures sont volatiles pour empêcher le réordonnancement compilateur.
+    validate_user_range(dst as u64, len, 1)?;
+    #[cfg(target_os = "none")]
+    {
+        copy_to_user_resolved(dst, src, len)?;
+    }
+    #[cfg(not(target_os = "none"))]
     unsafe {
         for i in 0..len {
             let byte = core::ptr::read(src.add(i));

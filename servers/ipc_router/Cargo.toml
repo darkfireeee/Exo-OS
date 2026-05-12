@@ -9,6 +9,8 @@ description       = "Exo-OS server: ipc_router (bare-metal no_std)"
 [[bin]]
 name = "exo-ipc-router"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

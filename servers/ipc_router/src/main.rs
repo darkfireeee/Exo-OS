@@ -55,8 +55,7 @@ impl Registry {
     }
 
     /// Enregistre un endpoint. Retourne false si la table est pleine.
-    fn register(&mut self, name: &[u8], endpoint: u32) -> bool {
-        let h = Self::hash_name(name);
+    fn register_hash(&mut self, h: u32, endpoint: u32) -> bool {
         let n = self.count.load(Ordering::Relaxed) as usize;
         if n >= 64 {
             return false;
@@ -83,31 +82,79 @@ impl Registry {
     }
 }
 
-/// Message IPC reçu du kernel (128 bytes max).
-#[repr(C)]
-struct IpcMessage {
-    sender_pid: u32,
-    msg_type: u32,
-    /// 0 = REGISTER, 1 = ROUTE, 2 = HEARTBEAT
-    payload: [u8; 120],
-}
-
 const IPC_MSG_REGISTER: u32 = 0;
 const IPC_MSG_ROUTE: u32 = 1;
 const IPC_MSG_HEARTBEAT: u32 = 2;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
+const IPC_HEADER_SIZE: usize = syscall::IPC_HEADER_SIZE;
+const IPC_PAYLOAD_SIZE: usize = syscall::IPC_INLINE_PAYLOAD_SIZE;
 
 // --- Globals no_std (pas de heap) ---
 static RUNNING: AtomicBool = AtomicBool::new(true);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+
+fn debug_write(bytes: &[u8]) {
+    let _ = unsafe {
+        syscall::syscall3(
+            syscall::SYS_WRITE,
+            2,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        )
+    };
+}
+
+#[inline(always)]
+fn payload_byte(msg: &syscall::IpcMessage, idx: usize) -> u8 {
+    debug_assert!(idx < IPC_PAYLOAD_SIZE);
+    unsafe { msg.payload.as_ptr().wrapping_add(idx).read() }
+}
+
+#[inline(always)]
+fn payload_ptr(msg: &syscall::IpcMessage, idx: usize) -> *const u8 {
+    debug_assert!(idx <= IPC_PAYLOAD_SIZE);
+    msg.payload.as_ptr().wrapping_add(idx)
+}
+
+fn read_payload_u32(msg: &syscall::IpcMessage, offset: usize, payload_len: usize) -> Option<u32> {
+    if offset > payload_len || payload_len - offset < 4 || payload_len > IPC_PAYLOAD_SIZE {
+        return None;
+    }
+    let b0 = payload_byte(msg, offset) as u32;
+    let b1 = payload_byte(msg, offset + 1) as u32;
+    let b2 = payload_byte(msg, offset + 2) as u32;
+    let b3 = payload_byte(msg, offset + 3) as u32;
+    Some(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+}
+
+fn hash_payload(
+    msg: &syscall::IpcMessage,
+    start: usize,
+    len: usize,
+    payload_len: usize,
+) -> Option<u32> {
+    if start > payload_len || len > payload_len - start || payload_len > IPC_PAYLOAD_SIZE {
+        return None;
+    }
+    let mut h: u32 = 2166136261;
+    let mut i = 0usize;
+    while i < len {
+        h = h
+            .wrapping_mul(16777619)
+            .wrapping_add(payload_byte(msg, start + i) as u32);
+        i += 1;
+    }
+    Some(h)
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // ── 1. Se déclarer auprès du kernel comme IPC router ──────────────────
     // SYS_IPC_REGISTER(b"ipc_router", endpoint_id=2)
     let name = b"ipc_router";
+    debug_write(b"ipc_router: boot\n");
     let _ = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
@@ -116,22 +163,21 @@ pub extern "C" fn _start() -> ! {
             2u64, // endpoint_id = PID 2 par convention
         )
     };
+    debug_write(b"ipc_router: registered\n");
 
     // ── 2. Boucle principale : receive → dispatch ──────────────────────────
     let mut registry = Registry::new();
-    let mut msg = IpcMessage {
-        sender_pid: 0,
-        msg_type: 0,
-        payload: [0u8; 120],
-    };
 
     while RUNNING.load(Ordering::Relaxed) {
+        let mut msg = syscall::IpcMessage::zeroed();
+
         // Attendre le prochain message (bloquant).
         let r = unsafe {
-            syscall::syscall3(
+            syscall::syscall4(
                 syscall::SYS_IPC_RECV,
-                &mut msg as *mut IpcMessage as u64,
-                core::mem::size_of::<IpcMessage>() as u64,
+                2,
+                &mut msg as *mut syscall::IpcMessage as u64,
+                core::mem::size_of::<syscall::IpcMessage>() as u64,
                 IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
             )
         };
@@ -141,40 +187,48 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         if r < 0 {
+            debug_write(b"ipc_router: recv err\n");
             continue;
         } // EINTR ou erreur temporaire
+
+        let received = r as usize;
+        debug_write(b"ipc_router: message\n");
+        if received < IPC_HEADER_SIZE {
+            continue;
+        }
+        let payload_len = received
+            .saturating_sub(IPC_HEADER_SIZE)
+            .min(IPC_PAYLOAD_SIZE);
 
         match msg.msg_type {
             IPC_MSG_REGISTER => {
                 // payload[0..4] = endpoint_id (LE), payload[4..] = nom
-                if msg.payload.len() >= 5 {
-                    let ep = u32::from_le_bytes([
-                        msg.payload[0],
-                        msg.payload[1],
-                        msg.payload[2],
-                        msg.payload[3],
-                    ]);
-                    let name_len = msg.payload[4] as usize;
-                    let name_end = 5usize.saturating_add(name_len).min(msg.payload.len());
-                    let svc_name = &msg.payload[5..name_end];
-                    registry.register(svc_name, ep);
+                if payload_len >= 5 {
+                    let Some(ep) = read_payload_u32(&msg, 0, payload_len) else {
+                        continue;
+                    };
+                    let max_name_len = payload_len - 5;
+                    let name_len = (payload_byte(&msg, 4) as usize).min(max_name_len);
+                    if name_len != 0 {
+                        if let Some(name_hash) = hash_payload(&msg, 5, name_len, payload_len) {
+                            registry.register_hash(name_hash, ep);
+                        }
+                    }
                 }
             }
             IPC_MSG_ROUTE => {
                 // payload[0..4] = dest_endpoint, payload[4..] = données
-                if msg.payload.len() >= 4 {
-                    let dest = u32::from_le_bytes([
-                        msg.payload[0],
-                        msg.payload[1],
-                        msg.payload[2],
-                        msg.payload[3],
-                    ]);
+                if payload_len >= 4 {
+                    let Some(dest) = read_payload_u32(&msg, 0, payload_len) else {
+                        continue;
+                    };
+                    let route_payload_len = payload_len - 4;
                     // Vérification via security_gate (IPC-04 + ExoCordon + audit violations).
                     let sg_verdict = security_gate::check_message(
                         msg.sender_pid,
                         dest,
                         msg.msg_type,
-                        msg.payload.len().saturating_sub(4),
+                        route_payload_len,
                     );
                     if sg_verdict != security_gate::SecurityVerdict::Allow {
                         continue;
@@ -184,9 +238,9 @@ pub extern "C" fn _start() -> ! {
                         syscall::syscall6(
                             syscall::SYS_IPC_SEND,
                             dest as u64,
-                            msg.payload[4..].as_ptr() as u64,
-                            (msg.payload.len() - 4) as u64,
-                            msg.sender_pid as u64,
+                            payload_ptr(&msg, 4) as u64,
+                            route_payload_len as u64,
+                            0,
                             0,
                             0,
                         )

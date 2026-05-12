@@ -163,6 +163,16 @@ pub fn init_tsc_source() {
     TSC_CAPS_ADJUST.store(caps.tsc_adjust_value as u64, Ordering::Relaxed);
 }
 
+/// Indique si RDTSCP est utilisable sur le CPU courant.
+///
+/// Avant `init_tsc_source()`, on retourne `false` volontairement : le chemin
+/// RDTSC sérialisé est disponible sur tout x86_64 et évite d'exécuter une
+/// instruction optionnelle tant que CPUID n'a pas été propagé dans les atomics.
+#[inline(always)]
+pub fn rdtscp_available() -> bool {
+    TSC_SOURCE_INIT_DONE.load(Ordering::Relaxed) && TSC_CAPS_RDTSCP.load(Ordering::Relaxed)
+}
+
 // ── Source TSC ClockSource ─────────────────────────────────────────────────────
 
 pub struct TscSource;
@@ -240,6 +250,48 @@ pub fn rdtscp_read() -> u64 {
         );
     }
     ((hi as u64) << 32) | lo as u64
+}
+
+/// Lecture ordonnée du TSC avec l'ID CPU logique associé.
+///
+/// RDTSCP donne le TSC et `TSC_AUX` atomiquement quand le CPU l'annonce. Sur les
+/// CPU/QEMU sans RDTSCP, on utilise LFENCE+RDTSC+LFENCE et on relit `GS:cpu_id`
+/// avant/après pour éviter d'appliquer l'offset d'un autre CPU si le thread a
+/// migré entre la lecture du TSC et l'échantillonnage per-CPU.
+#[inline(always)]
+pub fn read_ordered_with_cpu() -> (u64, u32) {
+    if rdtscp_available() {
+        let lo: u32;
+        let hi: u32;
+        let aux: u32;
+        unsafe {
+            core::arch::asm!(
+                "rdtscp",
+                out("eax") lo,
+                out("edx") hi,
+                out("ecx") aux,
+                options(nostack, nomem)
+            );
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+        }
+        return (((hi as u64) << 32) | lo as u64, aux);
+    }
+
+    loop {
+        let cpu_before = crate::arch::x86_64::smp::percpu::current_cpu_id();
+        unsafe {
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+        }
+        let tsc = rdtsc_read();
+        unsafe {
+            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
+        }
+        let cpu_after = crate::arch::x86_64::smp::percpu::current_cpu_id();
+        if cpu_before == cpu_after {
+            return (tsc, cpu_after);
+        }
+        core::hint::spin_loop();
+    }
 }
 
 /// Lecture avec LFENCE pré/post pour sérialisation totale (mesure précise).

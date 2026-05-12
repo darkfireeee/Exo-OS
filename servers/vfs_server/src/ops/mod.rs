@@ -27,7 +27,7 @@ pub const VFS_RENAME: u32 = 12;
 pub const VFS_TRUNCATE: u32 = 13;
 pub const VFS_FSYNC: u32 = 14;
 
-pub const PATH_PAYLOAD_MAX: usize = 120;
+pub const PATH_PAYLOAD_MAX: usize = syscall::IPC_INLINE_PAYLOAD_SIZE;
 
 pub const EXOFS_READ_RIGHTS: u64 =
     (syscall::EXOFS_RIGHT_READ | syscall::EXOFS_RIGHT_STAT | syscall::EXOFS_RIGHT_LIST) as u64;

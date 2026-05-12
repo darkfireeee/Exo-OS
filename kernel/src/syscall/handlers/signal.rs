@@ -13,10 +13,13 @@ use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::signal::default::{SigAction, SigActionKind};
 use crate::scheduler::core::task::ThreadControlBlock;
 use crate::syscall::errno::{EFAULT, EINVAL, ENOSYS, EPERM, ESRCH};
-use crate::syscall::validation::{validate_signal, USER_ADDR_MAX};
+use crate::syscall::validation::{
+    read_user_typed, validate_signal, write_user_typed, USER_ADDR_MAX,
+};
 
 /// Layout Linux du struct sigaction (x86_64) tel que passé par userspace.
 /// Taille : 32 bytes — DOIT correspondre à l'ABI Linux glibc/musl.
+#[derive(Copy, Clone)]
 #[repr(C)]
 struct LinuxSigaction {
     sa_handler: u64,  // offset  0 : SIG_DFL=0, SIG_IGN=1, ou adresse handler
@@ -113,16 +116,17 @@ pub fn sys_rt_sigaction(
             sa_restorer: old_action.restorer,
             sa_mask: old_action.mask,
         };
-        // SAFETY: oldact_ptr est une adresse userspace validée ci-dessus.
-        unsafe {
-            core::ptr::write_volatile(oldact_ptr as *mut LinuxSigaction, linux_old);
+        if write_user_typed(oldact_ptr, linux_old).is_err() {
+            return EFAULT;
         }
     }
 
     // Lire et installer la nouvelle action si act_ptr est fourni.
     if act_ptr != 0 {
-        // SAFETY: act_ptr est une adresse userspace validée.
-        let linux_act = unsafe { core::ptr::read_volatile(act_ptr as *const LinuxSigaction) };
+        let linux_act = match read_user_typed::<LinuxSigaction>(act_ptr) {
+            Ok(act) => act,
+            Err(_) => return EFAULT,
+        };
 
         let kind = if linux_act.sa_handler == 0 {
             SigActionKind::Term // SIG_DFL — l'action réelle dépend du signal, Term par défaut
@@ -183,16 +187,17 @@ pub fn sys_rt_sigprocmask(
 
     // Écrire oldset si demandé.
     if oldset_ptr != 0 {
-        // SAFETY: oldset_ptr est une adresse userspace validée.
-        unsafe {
-            core::ptr::write_volatile(oldset_ptr as *mut u64, old_mask);
+        if write_user_typed(oldset_ptr, old_mask).is_err() {
+            return EFAULT;
         }
     }
 
     // Appliquer le nouveau masque si set_ptr est fourni.
     if set_ptr != 0 {
-        // SAFETY: set_ptr est une adresse userspace validée.
-        let new_set = unsafe { core::ptr::read_volatile(set_ptr as *const u64) };
+        let new_set = match read_user_typed::<u64>(set_ptr) {
+            Ok(set) => set,
+            Err(_) => return EFAULT,
+        };
 
         let computed = match how {
             0 => old_mask | new_set,  // SIG_BLOCK
@@ -372,16 +377,17 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
             _pad: 0,
             ss_size: thread.addresses.sigaltstack_size,
         };
-        // SAFETY: oss_ptr est une adresse userspace validée ci-dessus.
-        unsafe {
-            core::ptr::write_volatile(oss_ptr as *mut SigAltStack, old);
+        if write_user_typed(oss_ptr, old).is_err() {
+            return EFAULT;
         }
     }
 
     // Installer le nouveau sigaltstack si ss_ptr est fourni.
     if ss_ptr != 0 {
-        // SAFETY: ss_ptr est une adresse userspace validée ci-dessus.
-        let ss = unsafe { core::ptr::read_volatile(ss_ptr as *const SigAltStack) };
+        let ss = match read_user_typed::<SigAltStack>(ss_ptr) {
+            Ok(ss) => ss,
+            Err(_) => return EFAULT,
+        };
         const MINSIGSTKSZ: u64 = 2048;
 
         if ss.ss_flags & SS_DISABLE != 0 {

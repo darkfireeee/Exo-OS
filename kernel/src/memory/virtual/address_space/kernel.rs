@@ -10,6 +10,7 @@ use crate::memory::core::{
     layout::VMALLOC_BASE, AllocError, Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE,
 };
 use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::page_table::x86_64::{phys_to_table_mut, phys_to_table_ref, read_cr3};
 use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,6 +95,7 @@ impl KernelAddressSpace {
         debug_assert!(virt.is_kernel(), "KernelAS::map avec adresse user");
         let mut walker = PageTableWalker::new(self.pml4_phys);
         walker.map(virt, frame, flags, alloc)?;
+        self.sync_active_kernel_half();
         flush_single(virt);
         self.inner.lock().stats.map_calls += 1;
         Ok(())
@@ -137,9 +139,71 @@ impl KernelAddressSpace {
         for (i, &frame) in frames.iter().enumerate() {
             let v = VirtAddr::new(start.as_u64() + (i * PAGE_SIZE) as u64);
             walker.map(v, frame, flags, alloc)?;
+        }
+        self.sync_active_kernel_half();
+        for i in 0..frames.len() {
+            let v = VirtAddr::new(start.as_u64() + (i * PAGE_SIZE) as u64);
             flush_single(v);
         }
         Ok(start)
+    }
+
+    /// Réserve une plage vmalloc sans la mapper.
+    ///
+    /// Utilisé par les stacks noyau gardées : les pages de garde restent
+    /// non-présentes, puis les pages utiles sont mappées explicitement.
+    pub fn reserve_vmalloc_pages(&self, n_pages: usize) -> Result<VirtAddr, AllocError> {
+        if n_pages == 0 {
+            return Err(AllocError::InvalidParams);
+        }
+
+        let mut inner = self.inner.lock();
+        let start = inner.vmalloc_ptr;
+        let bytes = n_pages
+            .checked_mul(PAGE_SIZE)
+            .ok_or(AllocError::InvalidParams)? as u64;
+        let end = VirtAddr::new(start.as_u64().saturating_add(bytes));
+        if end.as_u64() > crate::memory::core::layout::MODULES_BASE.as_u64() {
+            return Err(AllocError::OutOfMemory);
+        }
+
+        inner.vmalloc_ptr = end;
+        inner.stats.vmalloc_allocs += 1;
+        Ok(start)
+    }
+
+    /// Copie les entrees PML4 noyau courantes dans un espace d'adressage cible.
+    ///
+    /// Les processus utilisateur partagent les tables de la moitie haute avec le
+    /// noyau. Quand une nouvelle zone vmalloc est creee apres la construction
+    /// d'un CR3 utilisateur, son entree PML4 doit etre visible avant tout switch
+    /// vers ce CR3, car `context_switch_asm` charge CR3 avant la pile kernel.
+    ///
+    /// # Safety
+    /// `dst_pml4_phys` doit pointer vers une PML4 valide et exclusive au
+    /// processus cible pour son niveau racine.
+    pub unsafe fn sync_kernel_half_into(&self, dst_pml4_phys: PhysAddr) {
+        if dst_pml4_phys.as_u64() == 0 || dst_pml4_phys == self.pml4_phys {
+            return;
+        }
+
+        let src = phys_to_table_ref(self.pml4_phys);
+        let dst = phys_to_table_mut(dst_pml4_phys);
+        for i in 256..512 {
+            dst[i] = src[i];
+        }
+    }
+
+    /// Publie les nouvelles entrees kernel dans le CR3 actif si on mappe depuis
+    /// un syscall/IRQ tourne sous CR3 userspace.
+    #[inline]
+    fn sync_active_kernel_half(&self) {
+        let active = read_cr3();
+        if active.as_u64() != 0 && active != self.pml4_phys {
+            unsafe {
+                self.sync_kernel_half_into(active);
+            }
+        }
     }
 
     /// Traduit une adresse virtuelle kernel en adresse physique.

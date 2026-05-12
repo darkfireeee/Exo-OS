@@ -436,21 +436,8 @@ fn tsc_serialized_start() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lecture TSC sérialisée (RDTSCP + LFENCE).
+/// Lecture TSC sérialisée de fin de mesure.
 #[inline(always)]
 fn tsc_serialized_end() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    let _aux: u32;
-    unsafe {
-        core::arch::asm!(
-            "rdtscp",
-            "lfence",
-            out("eax") lo,
-            out("edx") hi,
-            out("ecx") _aux,
-            options(nostack, nomem)
-        );
-    }
-    ((hi as u64) << 32) | lo as u64
+    super::tsc::read_ordered_with_cpu().0
 }

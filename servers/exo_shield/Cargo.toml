@@ -9,6 +9,8 @@ description       = "Exo-OS server: exo_shield (bare-metal no_std)"
 [[bin]]
 name = "exo-shield"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

@@ -12,7 +12,7 @@ use crate::memory::core::{
 };
 use crate::memory::virt::address_space::tlb::flush_single;
 use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker, WalkResult};
-use crate::memory::virt::vma::{find_gap, VmaDescriptor, VmaFlags, VmaTree};
+use crate::memory::virt::vma::{find_gap, mark_vma_cow, VmaDescriptor, VmaFlags, VmaTree};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ESPACE D'ADRESSAGE UTILISATEUR
@@ -146,6 +146,28 @@ impl UserAddressSpace {
         } else {
             false
         }
+    }
+
+    /// Marque toutes les VMAs privées writables comme CoW après fork().
+    pub fn mark_all_writable_vmas_cow(&self) {
+        let mut inner = self.inner.lock();
+        inner.vma_tree.for_each_mut(|vma| mark_vma_cow(vma));
+    }
+
+    /// Clone les métadonnées internes du parent vers l'enfant de fork().
+    pub fn clone_inner_for_fork(&self, child: &UserAddressSpace) -> bool {
+        let src = self.inner.lock();
+        let Some(cloned_tree) = src.vma_tree.clone_for_fork() else {
+            return false;
+        };
+        let cloned_count = cloned_tree.len() as u64;
+
+        let mut dst = child.inner.lock();
+        dst.vma_tree = cloned_tree;
+        dst.mmap_hint = src.mmap_hint;
+        dst.stack_bottom = src.stack_bottom;
+        child.stats.vma_count.store(cloned_count, Ordering::Relaxed);
+        true
     }
 
     /// Enregistre une nouvelle VMA dans l'espace d'adressage.

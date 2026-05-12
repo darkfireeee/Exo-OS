@@ -301,6 +301,9 @@ impl PageTableWalker {
             if entry.is_huge() {
                 return Err(AllocError::InvalidParams);
             }
+            if flags.contains(PageFlags::USER) {
+                entry.set_flag(PageTableEntry::FLAG_USER);
+            }
             return Ok(entry.phys_addr());
         }
         // Allouer un nouveau frame pour la table intermédiaire

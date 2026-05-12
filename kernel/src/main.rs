@@ -348,13 +348,58 @@ pub unsafe extern "C" fn kernel_main(
     // Debug : kernel_init terminé ('I' = 0x49)
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
 
+    let userspace_status = kernel::userspace_boot::boot_userspace();
+
     // Mise à jour écran VGA/framebuffer : noyau initialisé, scheduler vivant.
     kernel::arch::x86_64::boot_display::boot_complete();
-    kernel::arch::x86_64::boot_display::userspace_status(
-        "USERSPACE HANDOFF: INIT NON DEMARRE",
-        "/sbin/exo-init-server n'est pas encore injecte dans le rootfs ExoFS.",
-        "IRQ idle actif: scheduling bloque tant que PID 1 n'existe pas.",
-    );
+    match userspace_status {
+        kernel::userspace_boot::BootUserspaceStatus::Started { .. } => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: INIT PID 1",
+                "/sbin payloads injectes dans ExoFS boot; init_server est enfile.",
+                "Scheduler actif: init lance IPC, VFS, input, TTY puis le shell.",
+            );
+            core::arch::asm!("mov al, 0x55", "out 0xe9, al", options(nostack, nomem));
+        }
+        kernel::userspace_boot::BootUserspaceStatus::AlreadyRunning => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: INIT DEJA ACTIF",
+                "PID 1 est deja present dans la registry processus.",
+                "Scheduler actif: attente des services Ring1.",
+            );
+        }
+        kernel::userspace_boot::BootUserspaceStatus::NoEmbeddedPayloads => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: PAYLOADS ABSENTS",
+                "Construire l'ISO via make iso pour embarquer /sbin/exo-init-server.",
+                "IRQ idle actif: scheduling bloque tant que PID 1 n'existe pas.",
+            );
+        }
+        kernel::userspace_boot::BootUserspaceStatus::PayloadEmpty
+        | kernel::userspace_boot::BootUserspaceStatus::PayloadPathInvalid
+        | kernel::userspace_boot::BootUserspaceStatus::PayloadCacheFailed
+        | kernel::userspace_boot::BootUserspaceStatus::PayloadOutOfMemory => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: PAYLOAD INVALIDE",
+                "Un binaire /sbin embarque n'a pas ete installe dans le cache ExoFS.",
+                "Verifier build-boot-payloads puis regenerer l'ISO.",
+            );
+        }
+        kernel::userspace_boot::BootUserspaceStatus::InitLoadFailed(_) => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: INIT ELF REFUSE",
+                "Le chargeur ELF n'a pas pu charger /sbin/exo-init-server.",
+                "Voir log E9/QEMU pour NotFound, InvalidElf ou OutOfMemory.",
+            );
+        }
+        kernel::userspace_boot::BootUserspaceStatus::InitCreateFailed(_) => {
+            kernel::arch::x86_64::boot_display::userspace_status(
+                "USERSPACE HANDOFF: PID 1 NON CREE",
+                "L'image init est chargee mais le PCB/TCB PID 1 n'a pas ete publie.",
+                "Le scheduler reste en idle interruptible pour diagnostic.",
+            );
+        }
+    }
 
     // Debug : boot complet → '\n', 'O', 'K', '\n'
     core::arch::asm!(

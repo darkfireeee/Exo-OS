@@ -38,11 +38,16 @@ pub fn handle_cow_fault<A: FaultAllocator>(
         .set(PageFlags::WRITABLE)
         .set(PageFlags::PRESENT);
 
-    if COW_TRACKER.ref_count(old_frame) <= 1 {
+    let tracked_ref_count = COW_TRACKER.tracked_ref_count(old_frame);
+    let can_restore_in_place = tracked_ref_count.is_some_and(|rc| rc <= 1) || !old_entry.is_cow();
+
+    if can_restore_in_place {
         let new_raw = PageTableEntry::from_page_flags(old_frame, writable_flags).raw();
         match alloc.compare_exchange_pte_raw(page_addr, old_raw, new_raw) {
             Ok(_) => {
-                let _ = COW_TRACKER.dec(old_frame);
+                if tracked_ref_count.is_some() {
+                    let _ = COW_TRACKER.dec(old_frame);
+                }
                 vma.record_cow_break();
                 // SAFETY: adresse canonique.
                 unsafe {

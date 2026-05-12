@@ -172,9 +172,10 @@ pub fn init_syscall() {
 // 3. Charger RSP0 kernel depuis per-CPU area
 // 4. Sauvegarder tous les registres caller-saved + RCX/R11
 // 5. Appeler `syscall_rust_handler()`
-// 6. Restaurer les registres
-// 7. SWAPGS (restaurer GS userspace)
-// 8. SYSRETQ
+// 6. Restaurer les registres depuis la SyscallFrame
+// 7. Charger RSP userspace depuis la SyscallFrame
+// 8. SWAPGS (restaurer GS userspace)
+// 9. SYSRETQ
 core::arch::global_asm!(
     ".section .text",
     ".global syscall_entry_asm",
@@ -222,28 +223,28 @@ core::arch::global_asm!(
     // ── 8. Restaurer rsp au début de la frame (annule l'alignement éventuel) ──────
     // rbx est préservé par syscall_rust_handler (callee-saved ABI)
     "mov   rsp, rbx",
-    // ── 9. Restaurer les registres depuis la frame (ordre inverse des pushs) ──────
-    // frame.rax contient la valeur retour writée par le handler Rust
-    "mov   rax, [rsp]", // return value = frame.rax
-    "add   rsp, 8",     // skip rax slot
-    "pop   r9",         // restore r9
-    "pop   r8",         // restore r8
-    "pop   r10",        // restore r10
-    "pop   rdx",        // restore rdx
-    "pop   rdi",        // restore rdi
-    "pop   rsi",        // restore rsi
-    "add   rsp, 8",     // skip user_rsp slot (restauré depuis GS ci-dessous)
-    "pop   r15",
-    "pop   r14",
-    "pop   r13",
-    "pop   r12",
-    "pop   rbx", // restaure rbx original (user rbx depuis frame.rbx)
-    "pop   rbp",
-    "pop   r11", // RFLAGS userspace
-    "pop   rcx", // RIP retour userspace
-    // ── 10. Restaurer RSP userspace depuis gs:[0x08] ──────────────────────────────
-    "mov   rsp, qword ptr gs:[0x08]",
-    // ── 11. Restaurer GS userspace ───────────────────────────────────────────────
+    // ── 9. Restaurer les registres directement depuis la frame ────────────────────
+    // Ne pas reconstruire RSP userspace depuis gs:[0x08] : ce slot est per-CPU et
+    // peut devenir stale dans les chemins longs. La SyscallFrame est la source de
+    // vérité du retour en cours; RSP est chargé en dernier.
+    "mov   rax, [rsp +   0]",
+    "mov   r9,  [rsp +   8]",
+    "mov   r8,  [rsp +  16]",
+    "mov   r10, [rsp +  24]",
+    "mov   rdx, [rsp +  32]",
+    "mov   rdi, [rsp +  40]",
+    "mov   rsi, [rsp +  48]",
+    "mov   r15, [rsp +  64]",
+    "mov   r14, [rsp +  72]",
+    "mov   r13, [rsp +  80]",
+    "mov   r12, [rsp +  88]",
+    "mov   rbx, [rsp +  96]",
+    "mov   rbp, [rsp + 104]",
+    "mov   r11, [rsp + 112]",
+    "mov   rcx, [rsp + 120]",
+    // ── 10. Restaurer RSP userspace depuis la frame ───────────────────────────────
+    "mov   rsp, [rsp +  56]",
+    // ── 11. Restaurer GS userspace ────────────────────────────────────────────────
     "swapgs",
     // ── 12. Retour en mode 64-bit Ring 3 ─────────────────────────────────────────
     "sysretq",
@@ -256,6 +257,8 @@ core::arch::global_asm!(
     ".global syscall_cstar_noop",
     ".type   syscall_cstar_noop, @function",
     "syscall_cstar_noop:",
+    // Fermer la courte fenetre Ring0 sur pile userspace avant le switch de pile.
+    "cli",
     // Activer GS kernel pour accéder à la zone per-CPU.
     "swapgs",
     // Sauvegarder le RSP userspace dans gs:[0x08] (save slot standard).
@@ -341,13 +344,17 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // On force frame.rcx = 0 → processus faultera en Ring 3 à @0 (SIGSEGV),
     // jamais en Ring 0. Solution minimale sans dépendance process::signal ici.
     if !is_user_return_addr(frame.rcx) {
+        #[cfg(debug_assertions)]
+        crate::arch::x86_64::terminal::debug_write(b"syscall: bad rcx\n");
         frame.rcx = 0; // adresse 0 = non-mappée → #PF userspace, pas kernel
     }
     if !is_user_return_addr(frame.rsp) {
+        #[cfg(debug_assertions)]
+        crate::arch::x86_64::terminal::debug_write(b"syscall: bad rsp\n");
         frame.rsp = 0;
     }
-    // L'ASM restaure RSP depuis gs:[0x08], pas depuis la frame. Publier la
-    // valeur validée évite un SYSRETQ avec une pile userspace non canonique.
+    // Garder le slot per-CPU synchronisé pour les chemins compat/debug. Le
+    // retour principal restaure RSP depuis la SyscallFrame ci-dessus.
     unsafe {
         write_saved_user_rsp(frame.rsp);
     }

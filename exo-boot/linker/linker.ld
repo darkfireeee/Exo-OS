@@ -47,12 +47,23 @@ SECTIONS
     __rodata_end = .;
     _rodata_end = .;
 
+    /* Payloads Ring1 embarques: charges en memoire mais exclus du hash .rodata. */
+    . = ALIGN(4K);
+    __boot_payloads_start = .;
+    .boot_payloads :
+    {
+        KEEP(*(.boot_payloads .boot_payloads.*))
+    }
+    __boot_payloads_end = .;
+
     /* ── Données initialisées ── */
     . = ALIGN(4K);
     __data_start = .;
     _data_start = .;
     .data :
     {
+        *(.got .got.*)
+        *(.got.plt .got.plt.*)
         *(.data .data.*)
     }
     __data_end = .;
@@ -69,6 +80,13 @@ SECTIONS
     }
     __bss_end = .;
     _bss_end = .;
+
+    /* ── Pile de boot/idle BSP — doit rester couverte par __kernel_end ── */
+    . = ALIGN(4K);
+    .boot_stack :
+    {
+        KEEP(*(.boot_stack .boot_stack.*))
+    }
 
     /* ── Fin du kernel ── */
     . = ALIGN(4K);

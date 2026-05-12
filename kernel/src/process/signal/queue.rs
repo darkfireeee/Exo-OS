@@ -93,6 +93,18 @@ impl SigQueue {
         }
     }
 
+    /// Initialise une file standard directement dans son emplacement final.
+    ///
+    /// Utilise par les allocations de thread pour eviter de materialiser les
+    /// grosses structures signal sur la pile noyau.
+    ///
+    /// # Safety
+    /// `dst` doit pointer vers une memoire valide et non initialisee pour
+    /// `SigQueue`.
+    pub unsafe fn init_at(dst: *mut Self) {
+        core::ptr::addr_of_mut!((*dst).pending).write(AtomicU64::new(0));
+    }
+
     /// Met un signal en file.
     #[inline(always)]
     pub fn enqueue(&self, sig: u8) {
@@ -189,6 +201,26 @@ impl RTRing {
         }
     }
 
+    unsafe fn init_at(dst: *mut Self) {
+        core::ptr::addr_of_mut!((*dst).entries).write(UnsafeCell::new(
+            [RTEntry {
+                info: SigInfo {
+                    signo: 0,
+                    code: 0,
+                    sender_pid: 0,
+                    sender_uid: 0,
+                    value_int: 0,
+                    value_ptr: 0,
+                    fault_addr: 0,
+                },
+                valid: false,
+            }; SIGQUEUE_DEPTH],
+        ));
+        core::ptr::addr_of_mut!((*dst).head).write(UnsafeCell::new(0));
+        core::ptr::addr_of_mut!((*dst).tail).write(AtomicUsize::new(0));
+        core::ptr::addr_of_mut!((*dst).count).write(AtomicU32::new(0));
+    }
+
     /// Enfile un SigInfo.
     fn push(&self, info: SigInfo) -> bool {
         if self.count.load(Ordering::Acquire) as usize >= SIGQUEUE_DEPTH {
@@ -264,6 +296,24 @@ impl RTSigQueue {
             rings: [Self::EMPTY_RING; RT_NSIG],
             pending_mask: AtomicU64::new(0),
         }
+    }
+
+    /// Initialise la file RT directement dans son emplacement final.
+    ///
+    /// `RTSigQueue` contient `RT_NSIG * SIGQUEUE_DEPTH` entrees fixes; la
+    /// construire comme temporaire sur une kstack peut deborder la page de
+    /// garde pendant fork/exec. Cette primitive garde l'invariant sans pression
+    /// de pile.
+    ///
+    /// # Safety
+    /// `dst` doit pointer vers une memoire valide et non initialisee pour
+    /// `RTSigQueue`.
+    pub unsafe fn init_at(dst: *mut Self) {
+        let rings = core::ptr::addr_of_mut!((*dst).rings) as *mut RTRing;
+        for idx in 0..RT_NSIG {
+            RTRing::init_at(rings.add(idx));
+        }
+        core::ptr::addr_of_mut!((*dst).pending_mask).write(AtomicU64::new(0));
     }
 
     /// Enfile un signal temps-réel.

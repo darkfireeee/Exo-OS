@@ -13,7 +13,11 @@ use spin::Mutex;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre de frames trackables simultanément (puissance de 2 pour hash).
-pub const COW_TABLE_SIZE: usize = 4096;
+///
+/// Les binaires userspace et leurs serveurs peuvent partager bien plus de 4096
+/// pages après quelques fork/exec. Saturer ici doit rester exceptionnel, pas
+/// devenir une limite pratique du terminal.
+pub const COW_TABLE_SIZE: usize = 65536;
 /// Masque de hash.
 pub const COW_TABLE_MASK: usize = COW_TABLE_SIZE - 1;
 
@@ -182,6 +186,11 @@ impl CowTracker {
 
     /// Retourne le refcount actuel sans modifier.
     pub fn ref_count(&self, frame: Frame) -> u32 {
+        self.tracked_ref_count(frame).unwrap_or(1)
+    }
+
+    /// Retourne le refcount seulement si le frame est explicitement suivi.
+    pub fn tracked_ref_count(&self, frame: Frame) -> Option<u32> {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
         let _guard = self.lock.lock();
@@ -190,16 +199,16 @@ impl CowTracker {
             let entry = &self.table[slot];
             let existing = entry.frame_idx.load(Ordering::Acquire);
             if existing == SLOT_EMPTY {
-                return 1;
+                return None;
             }
             if existing == SLOT_DELETED {
                 continue;
             }
             if existing == idx {
-                return entry.ref_count.load(Ordering::Acquire);
+                return Some(entry.ref_count.load(Ordering::Acquire));
             }
         }
-        1
+        None
     }
 
     /// Indique si un frame est partagé (refcount ≥ 2).

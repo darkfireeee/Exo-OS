@@ -226,6 +226,30 @@ impl BuddyZoneInner {
         }
         ((*self.bitmap_ptr.add(word)) & (1u64 << bit)) == 0
     }
+
+    /// Retourne `true` si le frame `pfn` est marqué alloué dans le bitmap.
+    #[inline(always)]
+    unsafe fn bitmap_is_allocated(&self, pfn: usize) -> bool {
+        if self.bitmap_ptr.is_null() {
+            return false;
+        }
+        let word = pfn / 64;
+        let bit = pfn % 64;
+        if word >= self.bitmap_words {
+            return false;
+        }
+        ((*self.bitmap_ptr.add(word)) & (1u64 << bit)) != 0
+    }
+
+    #[inline(always)]
+    unsafe fn bitmap_range_is_free(&self, pfn: usize, count: usize) -> bool {
+        (0..count).all(|i| self.bitmap_is_free(pfn + i))
+    }
+
+    #[inline(always)]
+    unsafe fn bitmap_range_is_allocated(&self, pfn: usize, count: usize) -> bool {
+        (0..count).all(|i| self.bitmap_is_allocated(pfn + i))
+    }
 }
 
 impl BuddyZone {
@@ -298,7 +322,9 @@ impl BuddyZone {
     /// avec les régions RAM disponibles.
     ///
     /// SAFETY: Doit être appelé avant l'init SMP. `first_pfn..last_pfn`
-    /// doit être une plage valide et non chevauchante avec des ranges existants.
+    /// doit être une plage valide. Les recouvrements éventuels avec des plages
+    /// déjà ajoutées sont ignorés au niveau page pour préserver l'unicité des
+    /// frames dans les free-lists.
     pub unsafe fn add_free_range(&self, first_pfn: usize, last_pfn: usize) {
         debug_assert!(self.initialized.load(Ordering::Acquire));
         debug_assert!(first_pfn < last_pfn);
@@ -308,18 +334,38 @@ impl BuddyZone {
             // Déterminer l'ordre maximal utilisable depuis ce pfn
             let remaining = last_pfn - pfn;
             let max_order_by_align = if pfn == 0 {
-                0
+                BUDDY_MAX_ORDER
             } else {
                 pfn.trailing_zeros() as usize
             };
             let max_order_by_count = (usize::BITS - remaining.leading_zeros() - 1) as usize;
-            let order = max_order_by_align
+            let mut order = max_order_by_align
                 .min(max_order_by_count)
                 .min(BUDDY_MAX_ORDER);
 
-            let phys = PhysAddr::new((self.phys_start.as_u64()) + (pfn as u64 * PAGE_SIZE as u64));
-            self.add_free_block(phys, order);
-            pfn += 1 << order;
+            loop {
+                let count = 1usize << order;
+                let still_unclaimed = {
+                    let inner = self.inner.lock();
+                    unsafe { inner.bitmap_range_is_allocated(pfn, count) }
+                };
+
+                if still_unclaimed {
+                    let phys =
+                        PhysAddr::new(self.phys_start.as_u64() + pfn as u64 * PAGE_SIZE as u64);
+                    self.add_free_block(phys, order);
+                    pfn += count;
+                    break;
+                }
+
+                if order == 0 {
+                    // Page déjà libre dans le buddy : probablement recouvrement
+                    // de la carte mémoire. Ne jamais réinsérer le même nœud.
+                    pfn += 1;
+                    break;
+                }
+                order -= 1;
+            }
         }
     }
 
@@ -328,23 +374,33 @@ impl BuddyZone {
     /// SAFETY: `phys` doit être aligné sur 2^order pages et appartenir
     /// à cette zone. Appelé uniquement pendant l'init ou la libération.
     unsafe fn add_free_block(&self, phys: PhysAddr, order: usize) {
-        debug_assert!(order <= BUDDY_MAX_ORDER);
-        debug_assert!(phys >= self.phys_start && phys < self.phys_end);
+        if order > BUDDY_MAX_ORDER || !self.contains_aligned_block(phys, order) {
+            self.fail_count.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
+        let mut inner = self.inner.lock();
+        let pfn = ((phys.as_u64() - self.phys_start.as_u64()) / PAGE_SIZE as u64) as usize;
+        let count = 1usize << order;
+        if unsafe { !inner.bitmap_range_is_allocated(pfn, count) } {
+            // L'ajout des régions firmware peut contenir des recouvrements.
+            // Réinsérer un bloc déjà libre créerait deux entrées de free-list
+            // pour la même frame physique.
+            return;
+        }
 
         let node_ptr = phys_to_virt_buddy(phys) as *mut FreeNode;
         FreeNode::init(node_ptr, order as u8);
-
-        let mut inner = self.inner.lock();
         FreeNode::insert_after(&mut inner.orders[order].head as *mut FreeNode, node_ptr);
         inner.orders[order].count.fetch_add(1, Ordering::Relaxed);
 
         // Marquer comme libre dans le bitmap
-        let pfn = ((phys.as_u64() - self.phys_start.as_u64()) / PAGE_SIZE as u64) as usize;
-        for i in 0..(1 << order) {
+        for i in 0..count {
             inner.bitmap_clear(pfn + i);
         }
+        self.mark_descriptors_free(pfn, count);
 
-        self.free_frames.fetch_add(1 << order, Ordering::Relaxed);
+        self.free_frames.fetch_add(count, Ordering::Relaxed);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -362,7 +418,10 @@ impl BuddyZone {
     ///   4. Marquer les pages comme allouées dans le bitmap.
     ///   5. Mettre à jour les statistiques.
     pub fn alloc_pages(&self, order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
-        debug_assert!(order <= BUDDY_MAX_ORDER, "ordre buddy hors limites");
+        if order > BUDDY_MAX_ORDER {
+            self.fail_count.fetch_add(1, Ordering::Relaxed);
+            return Err(AllocError::InvalidParams);
+        }
 
         if !self.initialized.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
@@ -421,6 +480,19 @@ impl BuddyZone {
                             .fetch_sub(1, Ordering::Relaxed);
 
                         let phys = virt_to_phys_buddy(node as usize);
+                        if !self.contains_aligned_block(phys, current_order) {
+                            self.fail_count.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        let popped_pfn = self.phys_to_pfn(phys);
+                        if !inner.bitmap_range_is_free(popped_pfn, 1usize << current_order) {
+                            self.fail_count.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        if !self.descriptors_range_is_free(popped_pfn, 1usize << current_order) {
+                            self.fail_count.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
 
                         // Diviser (split) si nous sommes à un ordre supérieur
                         let block_phys = phys;
@@ -454,6 +526,7 @@ impl BuddyZone {
                         for i in 0..(1usize << order) {
                             inner.bitmap_set(pfn + i);
                         }
+                        self.mark_descriptors_allocated(pfn, 1usize << order);
 
                         return Ok(block_phys);
                     }
@@ -478,25 +551,38 @@ impl BuddyZone {
     ///      - Incrémenter l'ordre et recommencer.
     ///   3. Sinon, insérer dans la free-list à l'ordre courant.
     pub fn free_pages(&self, frame: Frame, order: usize) -> Result<(), AllocError> {
-        debug_assert!(order <= BUDDY_MAX_ORDER);
+        if order > BUDDY_MAX_ORDER {
+            self.fail_count.fetch_add(1, Ordering::Relaxed);
+            return Err(AllocError::InvalidParams);
+        }
 
         if !self.initialized.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
         }
 
         let phys = frame.start_address();
-        debug_assert!(
-            phys >= self.phys_start && phys < self.phys_end,
-            "free_pages: frame hors zone"
-        );
-        debug_assert!(
-            is_aligned(phys.as_usize(), PAGE_SIZE << order),
-            "free_pages: frame mal aligné pour l'ordre {}",
-            order
-        );
+        if !self.contains_block(phys, order) {
+            self.fail_count.fetch_add(1, Ordering::Relaxed);
+            return Err(AllocError::InvalidParams);
+        }
+        let zone_relative = phys.as_u64().saturating_sub(self.phys_start.as_u64()) as usize;
+        if !is_aligned(zone_relative, PAGE_SIZE << order) {
+            self.fail_count.fetch_add(1, Ordering::Relaxed);
+            return Err(AllocError::InvalidParams);
+        }
 
         {
             let mut inner = self.inner.lock();
+            let pfn = self.phys_to_pfn(phys);
+            if unsafe { !inner.bitmap_range_is_allocated(pfn, 1usize << order) } {
+                self.fail_count.fetch_add(1, Ordering::Relaxed);
+                return Err(AllocError::InvalidParams);
+            }
+            if !self.descriptors_range_is_allocated(pfn, 1usize << order) {
+                self.fail_count.fetch_add(1, Ordering::Relaxed);
+                return Err(AllocError::InvalidParams);
+            }
+            self.mark_descriptors_free(pfn, 1usize << order);
             // SAFETY: Sous spinlock, accès exclusif.
             unsafe {
                 self.free_inner(&mut inner, phys, order);
@@ -580,10 +666,76 @@ impl BuddyZone {
         PhysAddr::new(self.phys_start.as_u64() + buddy_relative)
     }
 
+    #[inline(always)]
+    fn contains_block(&self, phys: PhysAddr, order: usize) -> bool {
+        if order > BUDDY_MAX_ORDER || phys < self.phys_start {
+            return false;
+        }
+        let bytes = (PAGE_SIZE as u64) << order;
+        match phys.as_u64().checked_add(bytes) {
+            Some(end) => end <= self.phys_end.as_u64(),
+            None => false,
+        }
+    }
+
+    #[inline(always)]
+    fn contains_aligned_block(&self, phys: PhysAddr, order: usize) -> bool {
+        if !self.contains_block(phys, order) {
+            return false;
+        }
+        let zone_relative = phys.as_u64().saturating_sub(self.phys_start.as_u64()) as usize;
+        is_aligned(zone_relative, PAGE_SIZE << order)
+    }
+
     /// Retourne le PFN relatif au début de cette zone.
     #[inline(always)]
     fn phys_to_pfn(&self, phys: PhysAddr) -> usize {
         ((phys.as_u64() - self.phys_start.as_u64()) / PAGE_SIZE as u64) as usize
+    }
+
+    #[inline(always)]
+    fn pfn_to_frame(&self, pfn: usize) -> Frame {
+        Frame::containing(PhysAddr::new(
+            self.phys_start.as_u64() + pfn as u64 * PAGE_SIZE as u64,
+        ))
+    }
+
+    #[inline(always)]
+    fn descriptors_range_is_free(&self, pfn: usize, count: usize) -> bool {
+        (0..count).all(|i| {
+            FRAME_DESCRIPTORS
+                .get(self.pfn_to_frame(pfn + i))
+                .flags()
+                .contains(FrameFlags::FREE)
+        })
+    }
+
+    #[inline(always)]
+    fn descriptors_range_is_allocated(&self, pfn: usize, count: usize) -> bool {
+        (0..count).all(|i| {
+            !FRAME_DESCRIPTORS
+                .get(self.pfn_to_frame(pfn + i))
+                .flags()
+                .contains(FrameFlags::FREE)
+        })
+    }
+
+    #[inline(always)]
+    fn mark_descriptors_free(&self, pfn: usize, count: usize) {
+        for i in 0..count {
+            FRAME_DESCRIPTORS
+                .get(self.pfn_to_frame(pfn + i))
+                .swap_flags(FrameFlags::FREE);
+        }
+    }
+
+    #[inline(always)]
+    fn mark_descriptors_allocated(&self, pfn: usize, count: usize) {
+        for i in 0..count {
+            FRAME_DESCRIPTORS
+                .get(self.pfn_to_frame(pfn + i))
+                .clear_flag(FrameFlags::FREE);
+        }
     }
 
     /// Retourne le nombre de frames libres (snapshot approximatif).

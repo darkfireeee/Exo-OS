@@ -18,7 +18,7 @@ pub const MEMORY_MSG_QUOTA_QUERY: u32 = 9;
 pub struct MemoryRequest {
     pub sender_pid: u32,
     pub msg_type: u32,
-    pub payload: [u8; 120],
+    pub payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
 }
 
 impl MemoryRequest {
@@ -26,10 +26,13 @@ impl MemoryRequest {
         Self {
             sender_pid: 0,
             msg_type: 0,
-            payload: [0; 120],
+            payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
         }
     }
 }
+
+const _: () = assert!(core::mem::size_of::<MemoryRequest>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(MemoryRequest, payload) == syscall::IPC_HEADER_SIZE);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -82,8 +85,9 @@ pub fn register_endpoint() {
 pub fn recv_request(request: &mut MemoryRequest) -> Result<bool, i64> {
     // SAFETY: le noyau écrit dans `request`, taille bornée à la struct ABI.
     let rc = unsafe {
-        syscall::syscall3(
+        syscall::syscall4(
             syscall::SYS_IPC_RECV,
+            SERVER_ENDPOINT_ID,
             request as *mut MemoryRequest as u64,
             core::mem::size_of::<MemoryRequest>() as u64,
             syscall::IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

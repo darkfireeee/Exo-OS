@@ -7,7 +7,7 @@
 //! RÈGLE BUG-09  : block_all_except_kill() durant exec pour éviter signal inter-exec.
 
 use crate::syscall::errno::{EAGAIN, ECHILD, EFAULT, EINTR, EINVAL, ENOMEM, ENOSYS};
-use crate::syscall::validation::{read_user_path, USER_ADDR_MAX};
+use crate::syscall::validation::{copy_to_user, read_user_path, write_user_typed, USER_ADDR_MAX};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fork() — Ring3 → kernel CoW
@@ -160,9 +160,8 @@ pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64
         Ok(result) => {
             // Écrire wstatus dans l'espace userspace si status_ptr non-null.
             if status_ptr != 0 {
-                // SAFETY: status_ptr est une adresse userspace validée ci-dessus.
-                unsafe {
-                    core::ptr::write_volatile(status_ptr as *mut u32, result.wstatus);
+                if write_user_typed(status_ptr, result.wstatus).is_err() {
+                    return EFAULT;
                 }
             }
             result.pid.0 as i64
@@ -242,16 +241,15 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
                     _ => (CLD_KILLED, (result.wstatus & 0x7F) as i32),
                 };
 
-                // SAFETY: infop est une adresse userspace validée ci-dessus.
-                unsafe {
-                    let p = infop as *mut u8;
-                    core::ptr::write_bytes(p, 0u8, 128);
-                    core::ptr::write_volatile(p.add(0) as *mut i32, SIGCHLD);
-                    core::ptr::write_volatile(p.add(4) as *mut i32, 0i32);
-                    core::ptr::write_volatile(p.add(8) as *mut i32, si_code);
-                    core::ptr::write_volatile(p.add(12) as *mut i32, result.pid.0 as i32);
-                    core::ptr::write_volatile(p.add(16) as *mut u32, 0u32);
-                    core::ptr::write_volatile(p.add(20) as *mut i32, si_status);
+                let mut siginfo = [0u8; 128];
+                siginfo[0..4].copy_from_slice(&SIGCHLD.to_ne_bytes());
+                siginfo[4..8].copy_from_slice(&0i32.to_ne_bytes());
+                siginfo[8..12].copy_from_slice(&si_code.to_ne_bytes());
+                siginfo[12..16].copy_from_slice(&(result.pid.0 as i32).to_ne_bytes());
+                siginfo[16..20].copy_from_slice(&0u32.to_ne_bytes());
+                siginfo[20..24].copy_from_slice(&si_status.to_ne_bytes());
+                if copy_to_user(infop as *mut u8, siginfo.as_ptr(), siginfo.len()).is_err() {
+                    return EFAULT;
                 }
             }
             0 // waitid retourne 0 en succès (contrairement à wait4)

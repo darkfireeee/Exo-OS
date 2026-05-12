@@ -394,7 +394,9 @@ pub fn sys_setpgid(pid: u64, pgid: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     inc_posix();
     use crate::process::core::pid::Pid;
     use crate::process::group::pgrp::{setpgid, PgId};
-    match setpgid(Pid(pid as u32), PgId(pgid as u32)) {
+    let caller = syscall_current_pid();
+    let target_pid = if pid == 0 { caller } else { pid as u32 };
+    match setpgid(Pid(target_pid), PgId(pgid as u32)) {
         Ok(_) => 0,
         Err(_) => EINVAL,
     }

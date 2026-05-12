@@ -302,6 +302,8 @@ pub const SYS_EXO_IPC_CALL: u64 = 303;
 pub const SYS_EXO_IPC_CREATE: u64 = 304;
 /// Détruire un endpoint IPC
 pub const SYS_EXO_IPC_DESTROY: u64 = 305;
+/// Résoudre un endpoint IPC par nom
+pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
 /// Partager une page de mémoire via capability
 pub const SYS_EXO_MEM_SHARE: u64 = 310;
 /// Révoquer un partage mémoire

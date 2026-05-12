@@ -268,7 +268,7 @@ impl CfsRunQueue {
                         .vruntime
                         .load(Ordering::Acquire)
                 };
-                if mv < vr {
+                if mv <= vr {
                     lo = mid + 1;
                 } else {
                     hi = mid;

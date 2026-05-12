@@ -9,6 +9,8 @@ description       = "Exo-OS server: scheduler_server (bare-metal no_std)"
 [[bin]]
 name = "exo-scheduler-server"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

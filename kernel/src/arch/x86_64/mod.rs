@@ -19,6 +19,7 @@ pub mod sched_iface; // Pont FFI arch → scheduler (C ABI exports)
 pub mod smp;
 pub mod spectre;
 pub mod syscall;
+pub mod terminal;
 pub mod time;
 pub mod tss;
 pub mod vga_early;
@@ -88,15 +89,11 @@ pub fn run_scheduler_idle() -> ! {
             enable_interrupts();
         }
 
-        let switched = if crate::process::is_alive(crate::process::Pid::INIT.0) {
-            let cpu_id = smp::percpu::current_cpu_id();
-            unsafe {
-                crate::scheduler::core::switch::schedule_idle_cpu_once(
-                    crate::scheduler::core::task::CpuId(cpu_id),
-                )
-            }
-        } else {
-            false
+        let cpu_id = smp::percpu::current_cpu_id();
+        let switched = unsafe {
+            crate::scheduler::core::switch::schedule_idle_cpu_once(
+                crate::scheduler::core::task::CpuId(cpu_id),
+            )
         };
         if switched {
             continue;

@@ -18,6 +18,7 @@
 //! ```
 
 use crate::arch::x86_64::cpu::msr;
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const MAX_CPUS: usize = 256;
@@ -95,17 +96,37 @@ impl PerCpuData {
 /// Tableau statique — un PerCpuData par CPU possible
 ///
 /// Initialisé à zéro au boot, puis configuré par `init_percpu_for_bsp/ap`.
-/// Placé dans `.bss` — pas d'initialisation dynamique nécessaire.
+/// Place dans `.data.percpu` pour rester hors de `.rodata`: ces slots sont
+/// mutables par construction et participent au chemin syscall/IRQ.
 #[repr(align(64))]
-struct PerCpuTable([PerCpuData; MAX_CPUS]);
+struct PerCpuTable(UnsafeCell<[PerCpuData; MAX_CPUS]>);
 
-// SAFETY: PerCpuData ne contient pas de pointeurs interthread non-Sync
+// SAFETY: les acces mutables sont disciplines par CPU via `per_cpu_mut()`.
 unsafe impl Sync for PerCpuTable {}
 
+#[link_section = ".data.percpu"]
 static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
     // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valide pour #[repr(C,align(64))] zeros-init.
-    unsafe { core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()]) },
+    UnsafeCell::new(unsafe {
+        core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()])
+    }),
 );
+
+#[inline(always)]
+fn per_cpu_ptr(cpu_id: usize) -> *mut PerCpuData {
+    let low_ptr = unsafe { (*PER_CPU_TABLE.0.get()).as_mut_ptr().add(cpu_id) };
+
+    #[cfg(target_os = "none")]
+    {
+        crate::memory::phys_to_virt(crate::memory::PhysAddr::new(low_ptr as u64)).as_u64()
+            as *mut PerCpuData
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        low_ptr
+    }
+}
 
 // ── Accès par CPU ID ──────────────────────────────────────────────────────────
 
@@ -115,7 +136,9 @@ static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
 /// Si `cpu_id >= MAX_CPUS`.
 #[inline]
 pub fn per_cpu(cpu_id: usize) -> &'static PerCpuData {
-    &PER_CPU_TABLE.0[cpu_id]
+    // SAFETY: lecture partagee d'un slot per-CPU. Les mutations de ce slot sont
+    // reservees au CPU proprietaire ou aux phases d'initialisation exclusives.
+    unsafe { &*per_cpu_ptr(cpu_id) }
 }
 
 /// Retourne une référence mutable aux données du CPU `cpu_id`
@@ -125,10 +148,9 @@ pub fn per_cpu(cpu_id: usize) -> &'static PerCpuData {
 /// aux données de ce CPU (invariant respecté car chaque CPU accède à ses propres données).
 #[inline]
 pub unsafe fn per_cpu_mut(cpu_id: usize) -> &'static mut PerCpuData {
-    // SAFETY: PER_CPU_TABLE est un tableau statique mutable via UnsafeCell pattern ;
-    // chaque CPU accède exclusivement à sa propre entrée.
-    let ptr = PER_CPU_TABLE.0.as_ptr().add(cpu_id) as *mut PerCpuData;
-    &mut *ptr
+    // SAFETY: PER_CPU_TABLE est un tableau statique mutable via UnsafeCell ;
+    // chaque CPU accede exclusivement a sa propre entree.
+    &mut *per_cpu_ptr(cpu_id)
 }
 
 /// Retourne l'ID du CPU courant en lisant GS:[0x10]
@@ -249,7 +271,7 @@ pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
     data.online = true;
     data.bsp = true;
 
-    // Pointer GS_BASE vers cette structure
+    // Pointer GS_BASE vers l'alias physmap de cette structure.
     let addr = data as *const PerCpuData as u64;
     // SAFETY: MSR_GS_BASE write depuis Ring 0
     unsafe {

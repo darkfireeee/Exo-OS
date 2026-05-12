@@ -39,6 +39,8 @@ const CRYPTO_TLS_HANDSHAKE: u32 = 8;
 const CRYPTO_TLS_CLOSE: u32 = 9;
 const CRYPTO_KEY_REVOKE: u32 = 10;
 const CRYPTO_KEY_ROTATE: u32 = 11;
+const CRYPTO_KEY_REVOKE_OWNER: u32 = 12;
+const CRYPTO_KEY_STATS: u32 = 13;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
 
 const VERIFY_OP_BEGIN: u8 = 0;
@@ -176,6 +178,15 @@ fn read_u64_le(buf: &[u8], offset: usize) -> Option<u64> {
         buf[offset + 6],
         buf[offset + 7],
     ]))
+}
+
+#[inline(always)]
+fn write_u32_le(buf: &mut [u8], offset: usize, value: u32) -> bool {
+    if offset + 4 > buf.len() {
+        return false;
+    }
+    buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    true
 }
 
 fn derive_key_hkdf(material: &[u8], output: &mut [u8; KEY_SIZE]) {
@@ -408,6 +419,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             };
             let pt_len = pt_len as usize;
 
+            if !keystore::is_valid_handle(key_handle) {
+                reply.status = CRYPTO_ERR_KEY_INVALID;
+                REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+                return reply;
+            }
+
             if 6 + pt_len > payload.len()
                 || pt_len > reply.data.len().saturating_sub(NONCE_SIZE + TAG_SIZE)
             {
@@ -455,6 +472,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 return reply;
             };
             let sealed_len = sealed_len as usize;
+
+            if !keystore::is_valid_handle(key_handle) {
+                reply.status = CRYPTO_ERR_KEY_INVALID;
+                REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+                return reply;
+            }
 
             if 6 + sealed_len > payload.len() || sealed_len < NONCE_SIZE + TAG_SIZE {
                 reply.status = CRYPTO_ERR_ARGS;
@@ -508,6 +531,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 return reply;
             };
             let msg_len = msg_len as usize;
+
+            if !keystore::is_valid_handle(key_handle) {
+                reply.status = CRYPTO_ERR_KEY_INVALID;
+                REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+                return reply;
+            }
 
             if 6 + msg_len > payload.len() {
                 reply.status = CRYPTO_ERR_ARGS;
@@ -623,7 +652,9 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 return reply;
             };
 
-            if keystore::get_key(key_handle, caller_principal).is_none() {
+            if !keystore::is_valid_handle(key_handle)
+                || keystore::get_key(key_handle, caller_principal).is_none()
+            {
                 reply.status = CRYPTO_ERR_KEY_INVALID;
             } else if keystore::revoke_key(key_handle) {
                 reply.status = CRYPTO_OK;
@@ -639,13 +670,34 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 return reply;
             };
 
-            let rotated = keystore::rotate_key(key_handle, caller_principal);
+            let rotated = if keystore::is_valid_handle(key_handle) {
+                keystore::rotate_key(key_handle, caller_principal)
+            } else {
+                0
+            };
             if rotated != 0 {
                 reply.status = CRYPTO_OK;
                 reply.key_handle = rotated;
             } else {
                 reply.status = CRYPTO_ERR_KEY_INVALID;
             }
+        }
+        CRYPTO_KEY_REVOKE_OWNER => {
+            let revoked = keystore::revoke_all_for_owner(caller_principal);
+            reply.status = CRYPTO_OK;
+            reply.key_handle = revoked;
+        }
+        CRYPTO_KEY_STATS => {
+            let stats = keystore::get_stats();
+            let active_counter = keystore::active_key_count();
+            let mut encoded = [0u8; 20];
+            let _ = write_u32_le(&mut encoded, 0, stats.active);
+            let _ = write_u32_le(&mut encoded, 4, stats.expired);
+            let _ = write_u32_le(&mut encoded, 8, stats.revoked);
+            let _ = write_u32_le(&mut encoded, 12, stats.free);
+            let _ = write_u32_le(&mut encoded, 16, active_counter);
+            reply.status = CRYPTO_OK;
+            reply.write_data(&encoded);
         }
         PHOENIX_WAKE_ENTROPY => {
             if req.sender_endpoint != 0 {

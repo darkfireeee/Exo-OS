@@ -9,6 +9,8 @@ description       = "Exo-OS server: device_server (bare-metal no_std)"
 [[bin]]
 name = "exo-device-server"
 path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 spin.workspace = true

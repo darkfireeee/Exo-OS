@@ -59,7 +59,7 @@ pub use self::core::pcb::{ProcessControlBlock, ProcessFlags, ProcessState};
 pub use self::core::pid::{Pid, PidAllocator, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
 pub use self::core::registry::{ProcessRegistry, PROCESS_REGISTRY};
 pub use self::core::tcb::{ProcessThread, ThreadAddress};
-pub use self::lifecycle::exec::{register_elf_loader, ElfLoader, ExecError};
+pub use self::lifecycle::exec::{load_elf_for_boot, register_elf_loader, ElfLoader, ExecError};
 pub use self::signal::delivery::handle_pending_signals;
 pub use self::state::wakeup::{register_with_dma, PROCESS_WAKEUP_HANDLER};
 
@@ -82,7 +82,7 @@ impl Default for ProcessInitParams {
         Self {
             max_pids: 32768,
             max_tids: 131072,
-            kstack_size: 16384, // 4 × 4K pages
+            kstack_size: self::core::tcb::KSTACK_SIZE,
         }
     }
 }

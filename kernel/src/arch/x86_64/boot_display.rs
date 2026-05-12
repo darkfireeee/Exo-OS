@@ -100,3 +100,31 @@ pub fn userspace_status(title: &str, detail: &str, hint: &str) {
 
     framebuffer_early::userspace_status(title, detail, hint);
 }
+
+/// Bascule l'ecran de boot en console texte interactive et ecrit des octets.
+pub fn terminal_write_bytes(bytes: &[u8]) {
+    if framebuffer_early::is_active() {
+        framebuffer_early::terminal_write_bytes(bytes);
+        return;
+    }
+
+    let attr = vga_early::attr(vga_early::LIGHT_GRAY, vga_early::BLACK);
+    for &byte in bytes {
+        match byte {
+            0x0c => vga_early::clear(vga_early::BLACK),
+            0x08 => {
+                vga_early::write_char(0x08, attr);
+            }
+            _ => vga_early::write_char(byte, attr),
+        }
+    }
+}
+
+/// Efface la console interactive sans repasser par l'ecran de progression.
+pub fn terminal_clear() {
+    if framebuffer_early::is_active() {
+        framebuffer_early::terminal_clear();
+    } else {
+        vga_early::clear(vga_early::BLACK);
+    }
+}

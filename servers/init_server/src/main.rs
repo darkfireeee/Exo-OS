@@ -6,7 +6,7 @@
 //! Rôle : processus racine de l'espace utilisateur.
 //!   1. Démarre ipc_router (PID 2) en premier.
 //!   2. Démarre ensuite la chaîne Ring1 canonique complète.
-//!   3. Respecte l'ordre SRV-01/SRV-02/SRV-04 jusqu'à exo_shield en dernier.
+//!   3. Stabilise les services de fond avant d'ouvrir le shell interactif.
 //!   4. Supervise tous les services : relance automatique si crash (SIGCHLD).
 //!   5. Gère l'arrêt propre du système (SIGTERM → arrêt ordonné).
 //!
@@ -23,6 +23,7 @@ mod boot_info;
 mod boot_sequence;
 mod dependency;
 mod isolation;
+mod log;
 mod protocol;
 mod service_manager;
 mod service_table;
@@ -98,15 +99,14 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
     Service::new("input_server", service_table::INPUT_SERVER_BIN),
     Service::new("tty_server", service_table::TTY_SERVER_BIN),
+    Service::new("exosh", service_table::EXOSH_BIN),
     Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
 ];
 
 #[inline(always)]
 fn halt_forever() -> ! {
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }
 
@@ -158,8 +158,13 @@ fn start_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
 
     service.set_pid(pid);
     service_watchdog.observe_spawn(idx);
-    if unsafe { boot_sequence::wait_for_ipc_ready(pid, dependency::ready_timeout_ms(service.name)) }
-    {
+    if unsafe {
+        boot_sequence::wait_for_ipc_ready(
+            service.name,
+            pid,
+            dependency::ready_timeout_ms(service.name),
+        )
+    } {
         pid as i64
     } else {
         kill_service(pid, 15);
@@ -295,21 +300,26 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
 
 #[no_mangle]
 pub extern "C" fn _start(boot_info_virt: usize) -> ! {
+    log::line(b"init_server: PID1 online");
+
     let boot_info = unsafe { boot_info::BootInfo::from_virt(boot_info_virt) };
     if let Some(info) = boot_info {
         if !info.validate() {
+            log::line(b"init_server: invalid boot info");
             halt_forever();
         }
     }
 
     let mut service_watchdog = ServiceWatchdog::new();
 
+    log::line(b"init_server: registering control endpoint");
     protocol::register_endpoint();
     unsafe {
         sigchld_handler::install_handlers();
     }
 
     // ── 2. Démarrer tous les services dans l'ordre ────────────────────────
+    log::line(b"init_server: starting service graph");
     let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
     let mut idx = 0usize;
     while idx < SERVICES.len() {
@@ -318,6 +328,7 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
         }
         idx += 1;
     }
+    log::line(b"init_server: service graph booted");
 
     // ── 3. Boucle de supervision ──────────────────────────────────────────
     loop {

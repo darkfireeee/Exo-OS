@@ -251,13 +251,12 @@ pub fn recalibrate_tsc() -> u64 {
 
 /// Cœur de la calibration — exécute la chaîne de fallback et construit le `CalibratedTsc`.
 ///
-/// ## Ordre de priorité (rating décroissant) :
-///   1. HPET window    (best — MMIO 14.318 MHz)
-///   2. PM Timer window(stable — I/O 3.579 MHz)
-///   3. CPUID 0x15     (nominal Intel — pas de mesure)
-///   4. CPUID 0x16     (base MHz — moins précis)
-///   5. PIT window     (héritage — QEMU TCG peu fiable)
-///   6. 3 GHz fallback (dernier recours)
+/// ## Ordre de priorité :
+///   1. CPUID 0x15     (ratio TSC/cristal, instantané sous QEMU/KVM)
+///   2. CPUID 0x16     (base MHz — moins précis)
+///   3. CPUID best     (cross-check nominal)
+///   4. PIT driver     (fallback port I/O)
+///   5. 3 GHz fallback (dernier recours)
 fn run_calibration_chain() -> CalibratedTsc {
     let seq = CALIB_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let tsc_invariant = cpu_tsc::tsc_invariant();
@@ -277,7 +276,7 @@ fn run_calibration_chain() -> CalibratedTsc {
     if let Some(hz) = cpuid_nominal::cpuid_tsc_hz() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-            e9_tag(b"CAL:CPUID15");
+            e9_tag_hz(b"CAL:CPUID15", hz);
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Cpuid15,
@@ -296,7 +295,7 @@ fn run_calibration_chain() -> CalibratedTsc {
     if let Some(hz) = cpuid_nominal::cpuid_tsc_hz_leaf16() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-            e9_tag(b"CAL:CPUID16");
+            e9_tag_hz(b"CAL:CPUID16", hz);
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Cpuid16,
@@ -315,7 +314,7 @@ fn run_calibration_chain() -> CalibratedTsc {
     if let Some(hz) = cpuid_nominal::cpuid_best_estimate() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-            e9_tag(b"CAL:CPUID-BEST");
+            e9_tag_hz(b"CAL:CPUID-BEST", hz);
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Cpuid15, // meilleure estimation via CPUID
@@ -336,7 +335,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         let hz = cpu_tsc::calibrate_tsc_with_pit();
         if hz > 0 && validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-            e9_tag(b"CAL:PIT-DRV");
+            e9_tag_hz(b"CAL:PIT-DRV", hz);
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Pit,
@@ -353,7 +352,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         // Bring-up pragmatique : si PIT driver échoue, on évite les chemins
         // de calibration coûteux/fragiles restants et on bascule immédiatement
         // sur le fallback 3 GHz pour ne pas bloquer le boot.
-        e9_tag(b"CAL:FB3G");
+        e9_tag_hz(b"CAL:FB3G", 3_000_000_000u64);
         let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
         return CalibratedTsc {
             tsc_hz: 3_000_000_000u64,
@@ -508,6 +507,42 @@ fn e9_tag(tag: &[u8]) {
         out(b'[');
         for &b in tag {
             out(b);
+        }
+        out(b']');
+    }
+}
+
+#[inline]
+fn e9_tag_hz(tag: &[u8], hz: u64) {
+    #[inline(always)]
+    unsafe fn out(b: u8) {
+        core::arch::asm!("out 0xe9, al", in("al") b, options(nomem, nostack, preserves_flags));
+    }
+    unsafe {
+        out(b'[');
+        for &b in tag {
+            out(b);
+        }
+        out(b' ');
+        for &b in b"hz=" {
+            out(b);
+        }
+        let mut buf = [0u8; 20];
+        let mut n = hz;
+        let mut i = buf.len();
+        if n == 0 {
+            i -= 1;
+            buf[i] = b'0';
+        } else {
+            while n != 0 {
+                i -= 1;
+                buf[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+        }
+        while i < buf.len() {
+            out(buf[i]);
+            i += 1;
         }
         out(b']');
     }

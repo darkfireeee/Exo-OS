@@ -12,8 +12,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::core::address::phys_to_virt;
 use crate::memory::core::constants::PAGE_SIZE;
+use crate::memory::core::layout::PHYS_MAP_BASE;
 use crate::memory::core::types::{AllocError, AllocFlags, Frame, PhysAddr};
+use crate::memory::core::BUDDY_MAX_ORDER;
 use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
+use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEADER DE CHAQUE ALLOCATION VMALLOC
@@ -50,6 +53,82 @@ pub struct VmallocHeader {
 
 const _: () = assert!(core::mem::size_of::<VmallocHeader>() == 64);
 const _: () = assert!(core::mem::align_of::<VmallocHeader>() == 64);
+
+const VMALLOC_REGISTRY_CAP: usize = 4096;
+
+#[derive(Clone, Copy)]
+struct VmallocRegistryEntry {
+    user_addr: u64,
+    header_addr: u64,
+}
+
+impl VmallocRegistryEntry {
+    const EMPTY: Self = Self {
+        user_addr: 0,
+        header_addr: 0,
+    };
+
+    #[inline]
+    fn is_empty(self) -> bool {
+        self.user_addr == 0
+    }
+}
+
+struct VmallocRegistry {
+    entries: [VmallocRegistryEntry; VMALLOC_REGISTRY_CAP],
+}
+
+impl VmallocRegistry {
+    const fn new() -> Self {
+        Self {
+            entries: [VmallocRegistryEntry::EMPTY; VMALLOC_REGISTRY_CAP],
+        }
+    }
+
+    fn insert(&mut self, user_addr: u64, header_addr: u64) -> bool {
+        let mut free_slot = None;
+        for idx in 0..self.entries.len() {
+            let entry = self.entries[idx];
+            if entry.user_addr == user_addr {
+                self.entries[idx].header_addr = header_addr;
+                return true;
+            }
+            if entry.is_empty() && free_slot.is_none() {
+                free_slot = Some(idx);
+            }
+        }
+        if let Some(idx) = free_slot {
+            self.entries[idx] = VmallocRegistryEntry {
+                user_addr,
+                header_addr,
+            };
+            return true;
+        }
+        false
+    }
+
+    fn lookup(&self, user_addr: u64) -> Option<u64> {
+        for entry in &self.entries {
+            if entry.user_addr == user_addr {
+                return Some(entry.header_addr);
+            }
+        }
+        None
+    }
+
+    fn remove(&mut self, user_addr: u64) -> Option<u64> {
+        for entry in &mut self.entries {
+            if entry.user_addr == user_addr {
+                let header_addr = entry.header_addr;
+                *entry = VmallocRegistryEntry::EMPTY;
+                return Some(header_addr);
+            }
+        }
+        None
+    }
+}
+
+static VMALLOC_REGISTRY: Mutex<VmallocRegistry> = Mutex::new(VmallocRegistry::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ALLOCATEUR VMALLOC INTERNE
@@ -110,6 +189,36 @@ fn order_for_pages(pages: usize) -> u32 {
     order
 }
 
+#[inline]
+fn header_metadata_valid(header: &VmallocHeader, header_addr: u64) -> bool {
+    if header.magic != VMALLOC_MAGIC || header.state != HEADER_ALIVE {
+        return false;
+    }
+    if header.user_size == 0
+        || header.page_count == 0
+        || header.alignment == 0
+        || !header.alignment.is_power_of_two()
+        || header.buddy_order as usize > BUDDY_MAX_ORDER
+    {
+        return false;
+    }
+    if header.phys_base & (PAGE_SIZE as u64 - 1) != 0 {
+        return false;
+    }
+    if PHYS_MAP_BASE.as_u64().saturating_add(header.phys_base) != header_addr {
+        return false;
+    }
+    let expected_pages = pages_needed(header.user_size, header.alignment);
+    if expected_pages != header.page_count {
+        return false;
+    }
+    let expected_order = order_for_pages(header.page_count);
+    if expected_order != header.buddy_order {
+        return false;
+    }
+    header.page_count <= (1usize << header.buddy_order)
+}
+
 /// Alloue `size` octets avec `alignment` (puissance de 2, au minimum 8).
 /// L'allocation est bornée par des pages entières.
 ///
@@ -158,6 +267,12 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
     // L'objet utilisateur commence juste après l'en-tête.
     let user_ptr = virt_base.as_u64() + core::mem::size_of::<VmallocHeader>() as u64;
 
+    if !VMALLOC_REGISTRY.lock().insert(user_ptr, virt_base.as_u64()) {
+        let _ = free_pages(frame, order as usize);
+        VMALLOC_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
+        return Err(AllocError::OutOfMemory);
+    }
+
     // Mise à jour des statistiques.
     VMALLOC_STATS.alloc_count.fetch_add(1, Ordering::Relaxed);
     VMALLOC_STATS
@@ -189,7 +304,14 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
 pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
     // Retrouve le header qui précède la zone utilisateur.
     let user_addr = ptr.as_ptr() as u64;
-    let header_addr = user_addr - core::mem::size_of::<VmallocHeader>() as u64;
+    if user_addr < core::mem::size_of::<VmallocHeader>() as u64 {
+        VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let Some(header_addr) = VMALLOC_REGISTRY.lock().lookup(user_addr) else {
+        VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
     let header_ptr = header_addr as *mut VmallocHeader;
 
     // SAFETY: Le header est à l'adresse attendue dans le physmap.
@@ -207,6 +329,10 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
         VMALLOC_STATS.double_free.fetch_add(1, Ordering::Relaxed);
         return;
     }
+    if header.state != HEADER_ALIVE || !header_metadata_valid(header, header_addr) {
+        VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
 
     let user_size = header.user_size;
     let page_count = header.page_count;
@@ -216,12 +342,16 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
     // Marque comme libéré avant d'appeler buddy (fence mémoire).
     header.state = HEADER_FREED;
     core::sync::atomic::fence(Ordering::Release);
+    let _ = VMALLOC_REGISTRY.lock().remove(user_addr);
 
     // Empoisonne la zone utilisateur (aide à détecter les UAF).
     core::ptr::write_bytes(user_addr as *mut u8, 0xAB, user_size);
 
     // Libère les frames physiques via buddy.
-    let _ = free_pages(Frame::from_phys_addr(phys_base), buddy_order as usize);
+    if free_pages(Frame::from_phys_addr(phys_base), buddy_order as usize).is_err() {
+        VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
 
     // Mise à jour des statistiques.
     VMALLOC_STATS.free_count.fetch_add(1, Ordering::Relaxed);
@@ -239,31 +369,48 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
 /// `ptr` doit être valide (retourné par `kalloc`).
 pub unsafe fn krealloc(
     ptr: NonNull<u8>,
-    old_size: usize,
+    _old_size: usize,
     new_size: usize,
     flags: AllocFlags,
 ) -> Result<NonNull<u8>, AllocError> {
     if new_size == 0 {
-        kfree(ptr, old_size);
+        kfree(ptr, _old_size);
         return Err(AllocError::InvalidParams);
     }
 
-    // Si les deux tailles tiennent dans le même nombre de pages, réutilise.
-    let old_pages = pages_needed(old_size, 8);
-    let new_pages = pages_needed(new_size, 8);
+    let user_addr = ptr.as_ptr() as u64;
+    let header_addr = VMALLOC_REGISTRY
+        .lock()
+        .lookup(user_addr)
+        .ok_or(AllocError::InvalidParams)?;
+    let header = &mut *(header_addr as *mut VmallocHeader);
+    if !header_metadata_valid(header, header_addr) {
+        VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
+        return Err(AllocError::InvalidParams);
+    }
+    let old_user_size = header.user_size;
+    let old_pages = header.page_count;
+    let new_pages = pages_needed(new_size, header.alignment);
     if old_pages == new_pages {
         // Met à jour user_size dans le header.
-        let header_addr = ptr.as_ptr() as u64 - core::mem::size_of::<VmallocHeader>() as u64;
-        let header = &mut *(header_addr as *mut VmallocHeader);
         header.user_size = new_size;
+        if new_size >= old_user_size {
+            VMALLOC_STATS
+                .bytes_inuse
+                .fetch_add((new_size - old_user_size) as u64, Ordering::Relaxed);
+        } else {
+            VMALLOC_STATS
+                .bytes_inuse
+                .fetch_sub((old_user_size - new_size) as u64, Ordering::Relaxed);
+        }
         return Ok(ptr);
     }
 
     // Allocate + copy + free.
     let new_ptr = kalloc(new_size, flags)?;
-    let copy_len = old_size.min(new_size);
+    let copy_len = old_user_size.min(new_size);
     core::ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), copy_len);
-    kfree(ptr, old_size);
+    kfree(ptr, old_user_size);
     Ok(new_ptr)
 }
 
@@ -273,9 +420,13 @@ pub unsafe fn krealloc(
 /// # Safety
 /// `ptr` doit être une adresse retournée par `kalloc`.
 pub unsafe fn kalloc_usable_size(ptr: NonNull<u8>) -> Option<usize> {
-    let header_addr = ptr.as_ptr() as u64 - core::mem::size_of::<VmallocHeader>() as u64;
+    let user_addr = ptr.as_ptr() as u64;
+    if user_addr < core::mem::size_of::<VmallocHeader>() as u64 {
+        return None;
+    }
+    let header_addr = VMALLOC_REGISTRY.lock().lookup(user_addr)?;
     let header = &*(header_addr as *const VmallocHeader);
-    if header.magic != VMALLOC_MAGIC || header.state != HEADER_ALIVE {
+    if !header_metadata_valid(header, header_addr) {
         return None;
     }
     Some(header.user_size)

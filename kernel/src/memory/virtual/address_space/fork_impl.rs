@@ -9,10 +9,12 @@
 //   3. Copie les pages userspace et les marque CoW
 //   4. Fournit les primitives de libération pour les chemins d'erreur
 
-use crate::memory::core::{Frame, PhysAddr};
+use crate::memory::core::{AllocError, AllocFlags, Frame, PhysAddr};
 use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::physical::allocator::buddy;
-use crate::memory::virt::address_space::tlb::{shootdown_sync, TlbFlushType};
+use crate::memory::virt::address_space::tlb::flush_all;
+use crate::memory::virt::page_table::builder::PageTableBuilder;
+use crate::memory::virt::page_table::walker::FrameAllocatorForWalk;
 use crate::memory::virt::page_table::x86_64::{
     phys_to_table_mut, phys_to_table_ref, PageTableEntry,
 };
@@ -45,6 +47,18 @@ fn track_cow_frame(frame: Frame) -> Result<(), AddrSpaceCloneError> {
         .try_inc(frame)
         .map(|_| ())
         .map_err(|_| AddrSpaceCloneError::OutOfMemory)
+}
+
+struct ForkWalkAllocator;
+
+impl FrameAllocatorForWalk for ForkWalkAllocator {
+    fn alloc_frame(&self, flags: AllocFlags) -> Result<Frame, AllocError> {
+        buddy::alloc_pages(0, flags)
+    }
+
+    fn free_frame(&self, frame: Frame) {
+        let _ = buddy::free_pages(frame, 0);
+    }
 }
 
 /// Résultat de la duplication CoW de l'espace d'adressage.
@@ -107,16 +121,39 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
                 free_userspace_tables(child_pml4_phys);
                 return Err(AddrSpaceCloneError::OutOfMemory);
             }
+            let fork_alloc = ForkWalkAllocator;
+            if PageTableBuilder::from_existing(PhysAddr::new(src_cr3), &fork_alloc)
+                .remap_low_kernel_identity()
+                .is_err()
+            {
+                free_userspace_tables(child_pml4_phys);
+                return Err(AddrSpaceCloneError::OutOfMemory);
+            }
+            if PageTableBuilder::from_existing(child_pml4_phys, &fork_alloc)
+                .remap_low_kernel_identity()
+                .is_err()
+            {
+                free_userspace_tables(child_pml4_phys);
+                return Err(AddrSpaceCloneError::OutOfMemory);
+            }
         }
 
-        let inherited_heap_end = if src_space_ptr != 0 {
-            let parent_as = unsafe { &*(src_space_ptr as *const UserAddressSpace) };
-            parent_as
-                .heap_end
-                .load(core::sync::atomic::Ordering::Acquire)
+        let parent_as = if src_space_ptr != 0 {
+            Some(unsafe { &*(src_space_ptr as *const UserAddressSpace) })
         } else {
-            0
+            None
         };
+        if let Some(parent_as) = parent_as {
+            parent_as.mark_all_writable_vmas_cow();
+        }
+
+        let inherited_heap_end = parent_as
+            .map(|parent_as| {
+                parent_as
+                    .heap_end
+                    .load(core::sync::atomic::Ordering::Acquire)
+            })
+            .unwrap_or(0);
 
         let child_as = match try_box_new(UserAddressSpace::new(child_pml4_phys, 0)) {
             Some(addr_space) => addr_space,
@@ -127,6 +164,14 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
                 return Err(AddrSpaceCloneError::OutOfMemory);
             }
         };
+        if let Some(parent_as) = parent_as {
+            if !parent_as.clone_inner_for_fork(&child_as) {
+                unsafe {
+                    free_userspace_tables(child_pml4_phys);
+                }
+                return Err(AddrSpaceCloneError::OutOfMemory);
+            }
+        }
         if inherited_heap_end != 0 {
             child_as
                 .heap_end
@@ -141,10 +186,7 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
 
     fn flush_tlb_after_fork(&self, _parent_cr3: u64) {
         unsafe {
-            shootdown_sync(
-                TlbFlushType::All,
-                crate::arch::x86_64::smp::init::smp_cpu_count(),
-            );
+            flush_all();
         }
     }
 
@@ -174,6 +216,10 @@ unsafe fn clone_userspace_tables(
         if !src_entry.is_present() {
             continue;
         }
+        if !src_entry.is_user() {
+            dst_pml4[l4_idx] = src_entry;
+            continue;
+        }
 
         let dst_pdpt_phys = alloc_zeroed_table()?;
         if let Err(err) = clone_pdpt(src_entry.phys_addr(), dst_pdpt_phys) {
@@ -196,6 +242,10 @@ unsafe fn clone_pdpt(
     for l3_idx in 0..512 {
         let src_entry = src_pdpt[l3_idx];
         if !src_entry.is_present() {
+            continue;
+        }
+        if !src_entry.is_user() {
+            dst_pdpt[l3_idx] = src_entry;
             continue;
         }
         if src_entry.is_huge() {
@@ -231,6 +281,10 @@ unsafe fn clone_pd(
         if !src_entry.is_present() {
             continue;
         }
+        if !src_entry.is_user() {
+            dst_pd[l2_idx] = src_entry;
+            continue;
+        }
         if src_entry.is_huge() {
             if let Some(frame) = src_entry.frame() {
                 track_cow_frame(frame)?;
@@ -262,6 +316,10 @@ unsafe fn clone_pt(
     for l1_idx in 0..512 {
         let src_entry = src_pt[l1_idx];
         if src_entry.is_present() {
+            if !src_entry.is_user() {
+                dst_pt[l1_idx] = src_entry;
+                continue;
+            }
             if let Some(frame) = src_entry.frame() {
                 track_cow_frame(frame)?;
             }
@@ -275,13 +333,9 @@ unsafe fn clone_pt(
 
 #[inline]
 fn shared_entry(src_entry: PageTableEntry) -> PageTableEntry {
-    if src_entry.is_writable() {
-        PageTableEntry::from_raw(
-            (src_entry.raw() & !PageTableEntry::FLAG_WRITABLE) | PageTableEntry::FLAG_COW,
-        )
-    } else {
-        src_entry
-    }
+    PageTableEntry::from_raw(
+        (src_entry.raw() & !PageTableEntry::FLAG_WRITABLE) | PageTableEntry::FLAG_COW,
+    )
 }
 
 fn alloc_zeroed_table() -> Result<PhysAddr, AddrSpaceCloneError> {
@@ -299,7 +353,7 @@ unsafe fn free_userspace_tables(root_pml4_phys: PhysAddr) {
     let pml4 = phys_to_table_ref(root_pml4_phys);
     for l4_idx in 0..256 {
         let entry = pml4[l4_idx];
-        if entry.is_present() && !entry.is_huge() {
+        if entry.is_present() && entry.is_user() && !entry.is_huge() {
             free_pdpt_tree(entry.phys_addr());
         }
     }
@@ -311,6 +365,9 @@ unsafe fn free_pdpt_tree(pdpt_phys: PhysAddr) {
     for l3_idx in 0..512 {
         let entry = pdpt[l3_idx];
         if !entry.is_present() {
+            continue;
+        }
+        if !entry.is_user() {
             continue;
         }
         if entry.is_huge() {
@@ -329,6 +386,9 @@ unsafe fn free_pd_tree(pd_phys: PhysAddr) {
         if !entry.is_present() {
             continue;
         }
+        if !entry.is_user() {
+            continue;
+        }
         if entry.is_huge() {
             release_huge_frame(entry, 9);
         } else {
@@ -345,6 +405,9 @@ unsafe fn free_pt_tree(pt_phys: PhysAddr) {
         if !entry.is_present() {
             continue;
         }
+        if !entry.is_user() {
+            continue;
+        }
         release_leaf_frame(entry);
     }
     let _ = buddy::free_pages(Frame::containing(pt_phys), 0);
@@ -355,7 +418,7 @@ fn release_leaf_frame(entry: PageTableEntry) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    if remaining == 0 {
+    if remaining == 0 || (remaining == u32::MAX && !entry.is_cow()) {
         let _ = buddy::free_pages(frame, 0);
     }
 }
@@ -365,7 +428,7 @@ fn release_huge_frame(entry: PageTableEntry, order: usize) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    if remaining == 0 {
+    if remaining == 0 || (remaining == u32::MAX && !entry.is_cow()) {
         let _ = buddy::free_pages(frame, order);
     }
 }
@@ -394,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_entry_keeps_read_only_mapping_unchanged() {
+    fn shared_entry_marks_read_only_mapping_as_shared() {
         let frame = Frame::containing(PhysAddr::new(0x24_000));
         let entry = PageTableEntry::new(
             frame,
@@ -403,6 +466,10 @@ mod tests {
 
         let shared = shared_entry(entry);
 
-        assert_eq!(shared.raw(), entry.raw());
+        assert!(shared.is_present());
+        assert!(shared.is_user());
+        assert!(shared.is_cow());
+        assert!(!shared.is_writable());
+        assert_eq!(shared.phys_addr().as_u64(), entry.phys_addr().as_u64());
     }
 }

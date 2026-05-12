@@ -131,6 +131,28 @@ pub fn register_elf_loader(loader: &'static dyn ElfLoader) {
     ELF_LOADER.call_once(|| loader);
 }
 
+/// Charge un binaire ELF pour le bootstrap userspace, avant qu'un thread
+/// appelant existe. Ce chemin est utilise uniquement pour fabriquer PID 1.
+pub fn load_elf_for_boot(
+    path: &str,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<ElfLoadResult, ExecError> {
+    if path.len() > 4096 {
+        return Err(ExecError::NameTooLong);
+    }
+    let total_arg_len: usize = argv.iter().map(|s| s.len() + 1).sum::<usize>()
+        + envp.iter().map(|s| s.len() + 1).sum::<usize>();
+    if total_arg_len > 128 * 1024 {
+        return Err(ExecError::ArgListTooLong);
+    }
+
+    let loader = ELF_LOADER.get().ok_or(ExecError::NoLoader)?;
+    loader
+        .load_elf(path, argv, envp, 0)
+        .map_err(ExecError::ElfLoadFailed)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // do_execve — implémentation principale
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +194,8 @@ pub fn do_execve(
     let loader = ELF_LOADER.get().ok_or(ExecError::NoLoader)?;
     let saved_signal_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
     let old_as_ptr = pcb.address_space.load(Ordering::Acquire);
+    let old_process_flags = pcb.flags.load(Ordering::Acquire);
+    let old_as_is_vfork_shared = old_process_flags & process_flags::VFORK_SHARED_AS != 0;
 
     // Étape 3 (LAC-08 / PROC-03) : bloquer TOUS les signaux sauf SIGKILL/SIGSTOP
     // AVANT le chargement ELF. Empêche un signal livré entre load_elf() et
@@ -192,6 +216,11 @@ pub fn do_execve(
             return Err(ExecError::ElfLoadFailed(err));
         }
     };
+    #[cfg(target_os = "none")]
+    unsafe {
+        crate::memory::virt::address_space::KERNEL_AS
+            .sync_kernel_half_into(crate::memory::core::PhysAddr::new(elf_result.cr3));
+    }
 
     // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTCOPY | DONTEXPAND.
     // Empêche un attaquant d'utiliser mmap(MAP_FIXED) pour écraser le SignalTcb.
@@ -275,6 +304,8 @@ pub fn do_execve(
     unsafe {
         let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
         let kstack_top = thread.sched_tcb.kstack_top();
+        crate::memory::virt::address_space::KERNEL_AS
+            .sync_kernel_half_into(crate::memory::core::PhysAddr::new(elf_result.cr3));
         crate::arch::x86_64::smp::percpu::set_kernel_rsp(kstack_top);
         crate::arch::x86_64::tss::update_rsp0(cpu_id, kstack_top);
         crate::arch::x86_64::write_cr3(elf_result.cr3);
@@ -314,10 +345,12 @@ pub fn do_execve(
         process_flags::EXEC_DONE | process_flags::VFORK_DONE,
         Ordering::Release,
     );
-    pcb.flags
-        .fetch_and(!process_flags::FORKED, Ordering::Release);
+    pcb.flags.fetch_and(
+        !(process_flags::FORKED | process_flags::VFORK_SHARED_AS),
+        Ordering::Release,
+    );
 
-    if old_as_ptr != 0 && old_as_ptr != elf_result.addr_space_ptr {
+    if old_as_ptr != 0 && old_as_ptr != elf_result.addr_space_ptr && !old_as_is_vfork_shared {
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER.free_addr_space(old_as_ptr);
     }
 
