@@ -15,7 +15,7 @@ use super::validation::{
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ pub struct ReadResult {
 // Logique de lecture
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn resolve_blob_data(blob_id: BlobId) -> ExofsResult<Box<[u8]>> {
+fn resolve_blob_data(blob_id: BlobId) -> ExofsResult<Arc<[u8]>> {
     if let Some(data) = BLOB_CACHE.get(&blob_id) {
         return Ok(data);
     }
@@ -89,7 +89,7 @@ fn resolve_blob_data(blob_id: BlobId) -> ExofsResult<Box<[u8]>> {
             .map_err(|_| ExofsError::NoMemory)?;
         cache_copy.extend_from_slice(&loaded);
         BLOB_CACHE.insert(blob_id, cache_copy)?;
-        return Ok(loaded.into_boxed_slice());
+        return Ok(Arc::from(loaded.into_boxed_slice()));
     }
 
     Err(ExofsError::BlobNotFound)

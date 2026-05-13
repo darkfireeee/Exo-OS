@@ -649,8 +649,7 @@ pub fn vfs_open(ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
         if entry.flags & inode_flags::DIRECTORY != 0 {
             return Err(ExofsError::WrongObjectKind);
         }
-        let blob_id = blob_id_for_object(entry.object_id);
-        persist_inode_data(blob_id, &[])?;
+        resize_inode_data(&entry, 0)?;
         INODE_EMULATION.update_size(ino, 0)?;
     }
     FD_TABLE.open_fd(ino, flags, pid)
@@ -675,16 +674,18 @@ pub fn vfs_read(fd: u64, buf: &mut [u8], count: usize) -> ExofsResult<usize> {
     if entry.flags & inode_flags::DIRECTORY != 0 {
         return Err(ExofsError::WrongObjectKind);
     }
-    let data = load_inode_data(&entry)?;
+    let blob_id = ensure_inode_blob_cached(&entry)?;
     let start = desc.offset as usize;
-    if start >= data.len() {
+    let current_len = BLOB_CACHE.len(&blob_id).unwrap_or(0);
+    if start >= current_len {
         return Ok(0);
     }
-    let readable = count.min(buf.len()).min(data.len().saturating_sub(start));
+    let readable = count.min(buf.len()).min(current_len.saturating_sub(start));
     if readable == 0 {
         return Ok(0);
     }
-    buf[..readable].copy_from_slice(&data[start..start + readable]);
+    let data = BLOB_CACHE.read_at(&blob_id, start, readable)?;
+    buf[..readable].copy_from_slice(&data);
     let new_offset = desc.offset.saturating_add(readable as u64);
     FD_TABLE.update_offset(fd, new_offset);
     Ok(readable)
@@ -706,27 +707,22 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
         return Err(ExofsError::WrongObjectKind);
     }
     let written = count.min(buf.len());
-    let mut data = load_inode_data(&entry)?;
+    let blob_id = ensure_inode_blob_cached(&entry)?;
+    let current_len = BLOB_CACHE.len(&blob_id).unwrap_or(0);
     let start_offset = if desc.flags & open_flags::O_APPEND != 0 {
-        data.len()
+        current_len
     } else {
         desc.offset as usize
     };
     let end_offset = start_offset
         .checked_add(written)
         .ok_or(ExofsError::OffsetOverflow)?;
-    if end_offset > data.len() {
-        data.try_reserve(end_offset.saturating_sub(data.len()))
-            .map_err(|_| ExofsError::NoMemory)?;
-        data.resize(end_offset, 0u8);
-    }
-    data[start_offset..end_offset].copy_from_slice(&buf[..written]);
-    let blob_id = blob_id_for_object(entry.object_id);
-    persist_inode_data(blob_id, &data)?;
+    BLOB_CACHE.write_at(blob_id, start_offset, &buf[..written])?;
     let new_offset = end_offset as u64;
     FD_TABLE.update_offset(fd, new_offset);
-    if new_offset > entry.size {
-        INODE_EMULATION.update_size(desc.ino, new_offset)?;
+    let new_size = (current_len.max(end_offset)) as u64;
+    if new_size != entry.size {
+        INODE_EMULATION.update_size(desc.ino, new_size)?;
     }
     Ok(written)
 }
@@ -874,16 +870,11 @@ pub fn vfs_truncate(ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
     if e.flags & inode_flags::DIRECTORY != 0 {
         return Err(ExofsError::WrongObjectKind);
     }
-    let mut data = load_inode_data(&e)?;
-    let new_len = new_size as usize;
-    if new_len > data.len() {
-        data.try_reserve(new_len.saturating_sub(data.len()))
-            .map_err(|_| ExofsError::NoMemory)?;
-        data.resize(new_len, 0u8);
-    } else {
-        data.truncate(new_len);
+    if new_size > usize::MAX as u64 {
+        return Err(ExofsError::OffsetOverflow);
     }
-    persist_inode_data(blob_id_for_object(e.object_id), &data)?;
+    let new_len = new_size as usize;
+    resize_inode_data(&e, new_len)?;
     INODE_EMULATION.update_size(ino, new_size)
 }
 
@@ -938,29 +929,22 @@ fn blob_id_for_object(object_id: u64) -> BlobId {
     BlobId::from_bytes_blake3(&object_id.to_le_bytes())
 }
 
-fn load_inode_data(entry: &InodeEntry) -> ExofsResult<Vec<u8>> {
+fn ensure_inode_blob_cached(entry: &InodeEntry) -> ExofsResult<BlobId> {
     let blob_id = blob_id_for_object(entry.object_id);
-    if let Some(data) = BLOB_CACHE.get(&blob_id) {
-        return Ok(data.into_vec());
+    if BLOB_CACHE.contains(&blob_id) {
+        return Ok(blob_id);
     }
     if let Some(data) = object_store::load_blob_data_if_available(&blob_id)? {
-        BLOB_CACHE.insert(blob_id, data.clone())?;
-        return Ok(data);
+        BLOB_CACHE.insert(blob_id, data)?;
+    } else {
+        BLOB_CACHE.insert(blob_id, Vec::new())?;
     }
-    Ok(Vec::new())
+    Ok(blob_id)
 }
 
-fn persist_inode_data(blob_id: BlobId, data: &[u8]) -> ExofsResult<()> {
-    let mut cached = Vec::new();
-    cached
-        .try_reserve(data.len())
-        .map_err(|_| ExofsError::NoMemory)?;
-    cached.extend_from_slice(data);
-    BLOB_CACHE.insert(blob_id, cached)?;
-    BLOB_CACHE.mark_dirty(&blob_id)?;
-    if object_store::persist_blob_data_if_disk(blob_id, data, true)? {
-        BLOB_CACHE.mark_clean(&blob_id)?;
-    }
+fn resize_inode_data(entry: &InodeEntry, new_len: usize) -> ExofsResult<()> {
+    let blob_id = ensure_inode_blob_cached(entry)?;
+    BLOB_CACHE.resize(blob_id, new_len)?;
     Ok(())
 }
 

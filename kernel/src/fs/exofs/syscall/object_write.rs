@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille maximale d'un seul appel exofs_object_write().
-pub const WRITE_MAX_BYTES: usize = 8 * 1_024 * 1_024; // 8 MiB.
+pub const WRITE_MAX_BYTES: usize = 128 * 1_024 * 1_024; // 128 MiB.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Arguments étendus
@@ -73,72 +73,41 @@ pub struct WriteResult {
 // Logique d'écriture
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn load_existing_blob(blob_id: BlobId) -> ExofsResult<Option<Vec<u8>>> {
-    if let Some(data) = BLOB_CACHE.get(&blob_id) {
-        let mut copy = Vec::new();
-        copy.try_reserve(data.len())
-            .map_err(|_| ExofsError::NoMemory)?;
-        copy.extend_from_slice(&data);
-        return Ok(Some(copy));
+fn ensure_blob_cached(blob_id: BlobId) -> ExofsResult<()> {
+    if BLOB_CACHE.contains(&blob_id) {
+        return Ok(());
     }
-
-    object_store::load_blob_data_if_available(&blob_id)
+    if let Some(data) = object_store::load_blob_data_if_available(&blob_id)? {
+        BLOB_CACHE.insert(blob_id, data)?;
+    }
+    Ok(())
 }
 
 /// Écrit `data` dans le blob `blob_id` à l'offset `offset`.
 ///
-/// Si le blob n'existe pas, le crée. Si le blob existait, réécrit entièrement
-/// les octets à l'offset (copy-on-write sémantique).
-/// OOM-02 : try_reserve pour le nouveau contenu.
+/// Si le blob n'existe pas, le crée. Si le blob existait, modifie uniquement
+/// les pages touchées via `BlobCache::write_at`.
 fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteResult> {
     let write_end = offset
         .checked_add(data.len() as u64)
         .ok_or(ExofsError::OffsetOverflow)?;
 
-    // Lire le contenu existant (ou créer un blob vide).
-    let existing = load_existing_blob(blob_id)?;
-    let existing_size = existing.as_ref().map(|d| d.len()).unwrap_or(0) as u64;
+    if offset > usize::MAX as u64 {
+        return Err(ExofsError::OffsetOverflow);
+    }
+
+    ensure_blob_cached(blob_id)?;
+    let existing_size = BLOB_CACHE.len(&blob_id).unwrap_or(0) as u64;
     let new_size = write_end.max(existing_size);
 
-    // Construire le nouveau contenu.
     let new_size_usize = new_size as usize;
     if new_size_usize > WRITE_MAX_BYTES {
         return Err(ExofsError::NoSpace);
     }
 
-    let mut new_content: Vec<u8> = Vec::new();
-    new_content
-        .try_reserve(new_size_usize)
-        .map_err(|_| ExofsError::NoMemory)?;
-    new_content.resize(new_size_usize, 0u8);
-
-    // Copier le contenu existant si présent (RECUR-01 : while).
-    if let Some(ref existing_data) = existing {
-        let copy_len = existing_data.len().min(new_size_usize);
-        let mut i = 0usize;
-        while i < copy_len {
-            new_content[i] = existing_data[i];
-            i = i.wrapping_add(1);
-        }
-    }
-
-    // Ecrire les nouvelles données à l'offset (RECUR-01 : while).
     let start = offset as usize;
     let dlen = data.len();
-    let mut i = 0usize;
-    while i < dlen {
-        new_content[start.wrapping_add(i)] = data[i];
-        i = i.wrapping_add(1);
-    }
-
-    // Insérer dans le cache.
-    BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
-    BLOB_CACHE.mark_dirty(&blob_id).ok();
-
-    // ── Phase 6 : Persistance Block Device ─────────────────────────
-    if object_store::persist_blob_data_if_disk(blob_id, &new_content, true)? {
-        let _ = BLOB_CACHE.mark_clean(&blob_id);
-    }
+    BLOB_CACHE.write_at(blob_id, start, data)?;
 
     Ok(WriteResult {
         bytes_written: dlen,
@@ -362,6 +331,28 @@ mod tests {
     }
 
     #[test]
+    fn test_write_blob_accepts_sequential_128_mib() {
+        let blob = BlobId::from_bytes_blake3(b"write_blob_accepts_sequential_128_mib");
+        let block = alloc::vec![0x5Au8; 1024 * 1024];
+        let mut idx = 0usize;
+        while idx < 128 {
+            let offset = (idx * 1024 * 1024) as u64;
+            let r = write_blob(blob, offset, &block).test_unwrap();
+            assert_eq!(r.bytes_written, block.len());
+            assert_eq!(r.new_size, ((idx + 1) * 1024 * 1024) as u64);
+            idx = idx.wrapping_add(1);
+        }
+
+        assert_eq!(cached_size(&blob), 128 * 1024 * 1024);
+        let head = BLOB_CACHE.read_at(&blob, 0, 1).test_unwrap();
+        let tail = BLOB_CACHE
+            .read_at(&blob, 128 * 1024 * 1024 - 1, 1)
+            .test_unwrap();
+        assert_eq!(head[0], 0x5A);
+        assert_eq!(tail[0], 0x5A);
+    }
+
+    #[test]
     fn test_sys_write_null_buf() {
         assert_eq!(sys_exofs_object_write(4, 0, 100, 0, 0, 0), EFAULT);
     }
@@ -422,36 +413,17 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
         return Err(ExofsError::NoSpace);
     }
 
-    let existing = load_existing_blob(blob_id)?;
-    let current_size = existing.as_ref().map(|d| d.len()).unwrap_or(0);
+    ensure_blob_cached(blob_id)?;
+    let current_size = BLOB_CACHE.len(&blob_id).unwrap_or(0);
 
     if new_size == current_size {
         return Ok(());
     }
 
-    let mut new_content: Vec<u8> = Vec::new();
-    new_content
-        .try_reserve(new_size)
-        .map_err(|_| ExofsError::NoMemory)?;
-    new_content.resize(new_size, 0u8);
-
-    // Copier l'existant jusqu'à min(current_size, new_size) (RECUR-01 : while).
-    if let Some(ref data) = existing {
-        let copy_len = current_size.min(new_size);
-        let mut i = 0usize;
-        while i < copy_len {
-            new_content[i] = data[i];
-            i = i.wrapping_add(1);
-        }
+    if !BLOB_CACHE.contains(&blob_id) {
+        BLOB_CACHE.insert(blob_id, Vec::new())?;
     }
-
-    BLOB_CACHE.insert(blob_id, new_content.to_vec())?;
-    BLOB_CACHE.mark_dirty(&blob_id).ok();
-
-    // ── Phase 6 : Persistance Block Device (Truncate) ─────────────
-    if object_store::persist_blob_data_if_disk(blob_id, &new_content, true)? {
-        let _ = BLOB_CACHE.mark_clean(&blob_id);
-    }
+    BLOB_CACHE.resize(blob_id, new_size)?;
 
     Ok(())
 }
@@ -464,7 +436,7 @@ pub fn clear_blob(blob_id: BlobId) -> ExofsResult<()> {
 
 /// Retourne la taille actuelle d'un blob en cache (0 si absent).
 pub fn cached_size(blob_id: &BlobId) -> u64 {
-    BLOB_CACHE.get(blob_id).map(|d| d.len() as u64).unwrap_or(0)
+    BLOB_CACHE.len(blob_id).map(|len| len as u64).unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::memory::core::{BUDDY_MAX_ORDER, PAGE_SIZE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -127,7 +127,7 @@ pub fn seed_kernel_a_image_blob() -> Result<(), ForgeError> {
 
 // ── Étape 1 : charger l'image de A depuis ExoFS ───────────────────────────
 
-static A_IMAGE_BUF: Mutex<Option<Box<[u8]>>> = Mutex::new(None);
+static A_IMAGE_BUF: Mutex<Option<Arc<[u8]>>> = Mutex::new(None);
 
 fn load_a_image_from_exofs() -> Result<&'static [u8], ForgeError> {
     let mut guard = A_IMAGE_BUF.lock();

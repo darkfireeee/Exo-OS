@@ -7,6 +7,7 @@
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +22,9 @@ use crate::scheduler::sync::spinlock::SpinLock;
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BLOB_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const BLOB_ALLOC_PAGE_BYTES: usize = 4096;
+const ARC_HEADER_BYTES: usize = core::mem::size_of::<usize>() * 2;
+const BLOB_PAGE_SIZE: usize = BLOB_ALLOC_PAGE_BYTES - ARC_HEADER_BYTES;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BlobEntry
@@ -28,8 +32,13 @@ const BLOB_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Entrée dans le cache de blobs.
 struct BlobEntry {
-    /// Données du blob.
-    data: Vec<u8>,
+    /// Données du blob, découpées en pages dont l'allocation totale avec
+    /// l'en-tête Arc tient dans 4 KiB.
+    pages: Vec<Option<Arc<[u8; BLOB_PAGE_SIZE]>>>,
+    /// Snapshot contigu partagé pour les lectures complètes via `get()`.
+    snapshot: Option<Arc<[u8]>>,
+    /// Taille logique du blob.
+    len: usize,
     /// `true` si l'entrée a été modifiée et n'a pas encore été écrite sur disque.
     dirty: bool,
     /// Ticks d'insertion.
@@ -42,14 +51,54 @@ struct BlobEntry {
 }
 
 impl BlobEntry {
-    fn new(data: Vec<u8>, now: u64) -> Self {
-        Self {
-            data,
+    fn new(data: Vec<u8>, now: u64) -> ExofsResult<Self> {
+        let len = data.len();
+        let mut entry = Self {
+            pages: Vec::new(),
+            snapshot: None,
+            len,
             dirty: false,
             inserted_at: now,
             last_accessed: now,
             access_count: 1,
+        };
+        if len != 0 {
+            let page_count = len.saturating_add(BLOB_PAGE_SIZE - 1) / BLOB_PAGE_SIZE;
+            entry
+                .pages
+                .try_reserve(page_count)
+                .map_err(|_| ExofsError::NoMemory)?;
+            let mut offset = 0usize;
+            while offset < len {
+                let n = (len - offset).min(BLOB_PAGE_SIZE);
+                entry
+                    .pages
+                    .push(Self::page_from_slice(&data[offset..offset + n])?);
+                offset = offset.wrapping_add(n);
+            }
         }
+        Ok(entry)
+    }
+
+    fn is_zero_slice(data: &[u8]) -> bool {
+        let mut i = 0usize;
+        while i < data.len() {
+            if data[i] != 0 {
+                return false;
+            }
+            i = i.wrapping_add(1);
+        }
+        true
+    }
+
+    fn page_from_slice(data: &[u8]) -> ExofsResult<Option<Arc<[u8; BLOB_PAGE_SIZE]>>> {
+        if Self::is_zero_slice(data) {
+            return Ok(None);
+        }
+        let mut page = Arc::new([0u8; BLOB_PAGE_SIZE]);
+        Arc::get_mut(&mut page).ok_or(ExofsError::InternalError)?[..data.len()]
+            .copy_from_slice(data);
+        Ok(Some(page))
     }
 
     fn touch(&mut self, now: u64) {
@@ -58,7 +107,149 @@ impl BlobEntry {
     }
 
     fn len(&self) -> u64 {
-        self.data.len() as u64
+        self.len as u64
+    }
+
+    fn to_vec(&self) -> ExofsResult<Vec<u8>> {
+        let mut out = Vec::new();
+        out.try_reserve(self.len)
+            .map_err(|_| ExofsError::NoMemory)?;
+        let mut copied = 0usize;
+        while copied < self.len {
+            let page_idx = copied / BLOB_PAGE_SIZE;
+            let page_off = copied % BLOB_PAGE_SIZE;
+            let n = (self.len - copied).min(BLOB_PAGE_SIZE - page_off);
+            if let Some(page) = &self.pages[page_idx] {
+                out.extend_from_slice(&page[page_off..page_off + n]);
+            } else {
+                let new_len = out.len().saturating_add(n);
+                out.resize(new_len, 0);
+            }
+            copied = copied.wrapping_add(n);
+        }
+        Ok(out)
+    }
+
+    fn materialize_snapshot(&mut self) -> ExofsResult<Arc<[u8]>> {
+        if let Some(snapshot) = &self.snapshot {
+            return Ok(Arc::clone(snapshot));
+        }
+        let data = self.to_vec()?;
+        let snapshot: Arc<[u8]> = Arc::from(data.into_boxed_slice());
+        self.snapshot = Some(Arc::clone(&snapshot));
+        Ok(snapshot)
+    }
+
+    fn read_range(&self, offset: usize, count: usize) -> ExofsResult<Vec<u8>> {
+        if count == 0 || offset >= self.len {
+            return Ok(Vec::new());
+        }
+        let read_len = count.min(self.len - offset);
+        let mut out = Vec::new();
+        out.try_reserve(read_len)
+            .map_err(|_| ExofsError::NoMemory)?;
+
+        let mut copied = 0usize;
+        while copied < read_len {
+            let pos = offset + copied;
+            let page_idx = pos / BLOB_PAGE_SIZE;
+            let page_off = pos % BLOB_PAGE_SIZE;
+            let n = (read_len - copied).min(BLOB_PAGE_SIZE - page_off);
+            if let Some(page) = &self.pages[page_idx] {
+                out.extend_from_slice(&page[page_off..page_off + n]);
+            } else {
+                let new_len = out.len().saturating_add(n);
+                out.resize(new_len, 0);
+            }
+            copied = copied.wrapping_add(n);
+        }
+        Ok(out)
+    }
+
+    fn ensure_page(&mut self, page_idx: usize) -> ExofsResult<()> {
+        while self.pages.len() <= page_idx {
+            self.pages.push(None);
+        }
+        Ok(())
+    }
+
+    fn write_range(&mut self, offset: usize, bytes: &[u8]) -> ExofsResult<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let end = offset.checked_add(bytes.len()).ok_or(ExofsError::NoSpace)?;
+        let last_page = (end - 1) / BLOB_PAGE_SIZE;
+        self.ensure_page(last_page)?;
+
+        let mut copied = 0usize;
+        while copied < bytes.len() {
+            let pos = offset + copied;
+            let page_idx = pos / BLOB_PAGE_SIZE;
+            let page_off = pos % BLOB_PAGE_SIZE;
+            let n = (bytes.len() - copied).min(BLOB_PAGE_SIZE - page_off);
+            let chunk = &bytes[copied..copied + n];
+            if Self::is_zero_slice(chunk) && self.pages[page_idx].is_none() {
+                copied = copied.wrapping_add(n);
+                continue;
+            }
+
+            let mut page = Arc::new([0u8; BLOB_PAGE_SIZE]);
+            let page_mut = Arc::get_mut(&mut page).ok_or(ExofsError::InternalError)?;
+            if let Some(existing) = &self.pages[page_idx] {
+                page_mut.copy_from_slice(&existing[..]);
+            }
+            page_mut[page_off..page_off + n].copy_from_slice(chunk);
+            self.pages[page_idx] = if Self::is_zero_slice(page_mut) {
+                None
+            } else {
+                Some(page)
+            };
+            copied = copied.wrapping_add(n);
+        }
+        self.len = self.len.max(end);
+        self.snapshot = None;
+        Ok(())
+    }
+
+    fn resize(&mut self, new_len: usize) -> ExofsResult<()> {
+        if new_len == 0 {
+            self.pages.clear();
+            self.snapshot = None;
+            self.len = 0;
+            return Ok(());
+        }
+
+        if new_len > self.len {
+            let last_page = (new_len - 1) / BLOB_PAGE_SIZE;
+            self.ensure_page(last_page)?;
+        } else {
+            let keep_pages = new_len.saturating_add(BLOB_PAGE_SIZE - 1) / BLOB_PAGE_SIZE;
+            self.pages.truncate(keep_pages);
+            let tail = new_len % BLOB_PAGE_SIZE;
+            if tail != 0 && !self.pages.is_empty() {
+                let page_idx = self.pages.len() - 1;
+                if self.pages[page_idx].is_none() {
+                    self.len = new_len;
+                    self.snapshot = None;
+                    return Ok(());
+                }
+                let mut page = Arc::new([0u8; BLOB_PAGE_SIZE]);
+                let page_mut = Arc::get_mut(&mut page).ok_or(ExofsError::InternalError)?;
+                if let Some(existing) = &self.pages[page_idx] {
+                    page_mut.copy_from_slice(&existing[..]);
+                }
+                page_mut[tail..].fill(0);
+                self.pages[page_idx] = if Self::is_zero_slice(page_mut) {
+                    None
+                } else {
+                    Some(page)
+                };
+            }
+        }
+
+        self.len = new_len;
+        self.snapshot = None;
+        Ok(())
     }
 }
 
@@ -82,19 +273,36 @@ impl BlobCacheInner {
     }
 
     fn evict_to_fit(&mut self, needed: u64, max_bytes: u64) -> ExofsResult<()> {
+        self.evict_to_fit_except(needed, max_bytes, None)
+    }
+
+    fn evict_to_fit_except(
+        &mut self,
+        needed: u64,
+        max_bytes: u64,
+        protected: Option<BlobId>,
+    ) -> ExofsResult<()> {
         let mut iters: usize = 0;
         while self.used.saturating_add(needed) > max_bytes {
             let victims = self.eviction.pick_eviction_candidates(4);
             if victims.is_empty() {
                 return Err(ExofsError::NoSpace);
             }
+            let mut removed_any = false;
             for v in &victims {
+                if protected == Some(*v) {
+                    continue;
+                }
                 if let Some(e) = self.map.remove(v) {
                     let sz = e.len();
                     self.eviction.remove(v);
                     self.used = self.used.saturating_sub(sz);
                     CACHE_STATS.record_eviction(sz);
+                    removed_any = true;
                 }
+            }
+            if !removed_any {
+                return Err(ExofsError::NoSpace);
             }
             iters = iters.wrapping_add(1);
             if iters > 64 {
@@ -131,24 +339,63 @@ impl BlobCache {
 
     // ── Lecture ──────────────────────────────────────────────────────────────
 
-    /// Retourne une copie des données du blob, ou `None` si absent.
-    pub fn get(&self, id: &BlobId) -> Option<Box<[u8]>> {
+    /// Retourne un snapshot partagé des données du blob, ou `None` si absent.
+    pub fn get(&self, id: &BlobId) -> Option<Arc<[u8]>> {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
-        if let Some(cloned_data) = inner.map.get_mut(id).map(|e| {
-            e.touch(now);
-            e.data.clone()
-        }) {
-            inner.eviction.touch(id);
-            let data: Box<[u8]> = cloned_data.into_boxed_slice();
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            CACHE_STATS.record_hit();
-            Some(data)
-        } else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            CACHE_STATS.record_miss();
-            None
+        let snapshot = {
+            let entry = match inner.map.get_mut(id) {
+                Some(entry) => entry,
+                None => {
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    CACHE_STATS.record_miss();
+                    return None;
+                }
+            };
+            entry.touch(now);
+            match entry.materialize_snapshot() {
+                Ok(data) => data,
+                Err(_) => return None,
+            }
+        };
+
+        inner.eviction.touch(id);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        CACHE_STATS.record_hit();
+        Some(snapshot)
+    }
+
+    /// Retourne la taille d'un blob sans cloner son contenu.
+    pub fn len(&self, id: &BlobId) -> Option<usize> {
+        self.inner.lock().map.get(id).map(|e| e.len)
+    }
+
+    /// Copie uniquement l'intervalle demandé d'un blob.
+    pub fn read_at(&self, id: &BlobId, offset: usize, count: usize) -> ExofsResult<Vec<u8>> {
+        if count == 0 {
+            return Ok(Vec::new());
         }
+
+        let mut inner = self.inner.lock();
+        let now = crate::arch::time::read_ticks();
+        let out = {
+            let entry = match inner.map.get_mut(id) {
+                Some(entry) => entry,
+                None => {
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    CACHE_STATS.record_miss();
+                    return Err(ExofsError::BlobNotFound);
+                }
+            };
+
+            entry.touch(now);
+            entry.read_range(offset, count)?
+        };
+
+        inner.eviction.touch(id);
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        CACHE_STATS.record_hit();
+        Ok(out)
     }
 
     /// `true` si le blob est présent en cache.
@@ -171,7 +418,7 @@ impl BlobCache {
             inner.used = inner.used.saturating_sub(old_size);
             inner.eviction.remove(&id);
             let existing = inner.map.get_mut(&id).ok_or(ExofsError::InternalError)?;
-            existing.data = data;
+            *existing = BlobEntry::new(data, now)?;
             existing.dirty = false;
             existing.touch(now);
             inner.used = inner.used.saturating_add(size);
@@ -183,11 +430,121 @@ impl BlobCache {
         // OOM-02 : réserver avant insertion.
         inner.evict_to_fit(size, max)?;
 
-        let entry = BlobEntry::new(data, now);
+        let entry = BlobEntry::new(data, now)?;
         inner.map.insert(id, entry);
         inner.eviction.insert(id, size)?;
         inner.used = inner.used.saturating_add(size);
         CACHE_STATS.record_insert(size);
+        Ok(())
+    }
+
+    /// Ecrit un intervalle dans un blob sans cloner tout le blob existant.
+    pub fn write_at(&self, id: BlobId, offset: usize, bytes: &[u8]) -> ExofsResult<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+
+        let end = offset.checked_add(bytes.len()).ok_or(ExofsError::NoSpace)?;
+        let now = crate::arch::time::read_ticks();
+        let max = self.max_bytes;
+        let mut inner = self.inner.lock();
+
+        if inner.map.contains_key(&id) {
+            let old_size = inner
+                .map
+                .get(&id)
+                .map(|e| e.len())
+                .ok_or(ExofsError::InternalError)?;
+            let new_size = (end as u64).max(old_size);
+            let growth = new_size.saturating_sub(old_size);
+            if growth > 0 {
+                inner.evict_to_fit_except(growth, max, Some(id))?;
+            }
+
+            inner.eviction.remove(&id);
+            let was_dirty;
+            {
+                let entry = inner.map.get_mut(&id).ok_or(ExofsError::InternalError)?;
+                was_dirty = entry.dirty;
+                entry.write_range(offset, bytes)?;
+                entry.dirty = true;
+                entry.touch(now);
+            }
+
+            let final_size = inner
+                .map
+                .get(&id)
+                .map(|e| e.len() as u64)
+                .ok_or(ExofsError::InternalError)?;
+            inner.used = inner
+                .used
+                .saturating_sub(old_size)
+                .saturating_add(final_size);
+            inner.eviction.insert(id, final_size)?;
+            let dirty_delta = if was_dirty {
+                final_size.saturating_sub(old_size)
+            } else {
+                final_size
+            };
+            if dirty_delta > 0 {
+                CACHE_STATS.record_dirty_add(dirty_delta);
+            }
+            CACHE_STATS.record_insert(final_size);
+            return Ok(bytes.len());
+        }
+
+        let size = end as u64;
+
+        inner.evict_to_fit(size, max)?;
+        let mut entry = BlobEntry::new(Vec::new(), now)?;
+        entry.write_range(offset, bytes)?;
+        entry.dirty = true;
+        inner.map.insert(id, entry);
+        inner.eviction.insert(id, size)?;
+        inner.used = inner.used.saturating_add(size);
+        CACHE_STATS.record_insert(size);
+        CACHE_STATS.record_dirty_add(size);
+        Ok(bytes.len())
+    }
+
+    /// Redimensionne un blob sans materialiser son contenu dans un bloc contigu.
+    pub fn resize(&self, id: BlobId, new_len: usize) -> ExofsResult<()> {
+        let now = crate::arch::time::read_ticks();
+        let max = self.max_bytes;
+        let mut inner = self.inner.lock();
+
+        let old_size = inner
+            .map
+            .get(&id)
+            .map(|entry| entry.len())
+            .ok_or(ExofsError::BlobNotFound)?;
+        let new_size = new_len as u64;
+        let growth = new_size.saturating_sub(old_size);
+        if growth > 0 {
+            inner.evict_to_fit_except(growth, max, Some(id))?;
+        }
+
+        inner.eviction.remove(&id);
+        let was_dirty;
+        {
+            let entry = inner.map.get_mut(&id).ok_or(ExofsError::BlobNotFound)?;
+            was_dirty = entry.dirty;
+            entry.resize(new_len)?;
+            entry.dirty = true;
+            entry.touch(now);
+        }
+
+        inner.used = inner.used.saturating_sub(old_size).saturating_add(new_size);
+        inner.eviction.insert(id, new_size)?;
+        let dirty_delta = if was_dirty {
+            new_size.saturating_sub(old_size)
+        } else {
+            new_size
+        };
+        if dirty_delta > 0 {
+            CACHE_STATS.record_dirty_add(dirty_delta);
+        }
+        CACHE_STATS.record_insert(new_size);
         Ok(())
     }
 
@@ -350,7 +707,7 @@ impl BlobCache {
             .map
             .iter()
             .filter(|(_, e)| e.dirty)
-            .map(|(id, e)| (*id, e.data.clone().into_boxed_slice()))
+            .filter_map(|(id, e)| e.to_vec().ok().map(|data| (*id, data.into_boxed_slice())))
             .collect()
     }
 }
@@ -377,6 +734,11 @@ mod tests {
     }
 
     #[test]
+    fn test_page_payload_keeps_arc_allocation_within_4k() {
+        assert_eq!(BLOB_PAGE_SIZE + ARC_HEADER_BYTES, BLOB_ALLOC_PAGE_BYTES);
+    }
+
+    #[test]
     fn test_miss_increments_counter() {
         let c = BlobCache::new_const();
         assert!(c.get(&blob(42)).is_none());
@@ -389,6 +751,26 @@ mod tests {
         c.insert(blob(1), alloc::vec![0u8; 32]).test_unwrap();
         c.get(&blob(1));
         assert_eq!(c.hits(), 1);
+    }
+
+    #[test]
+    fn test_get_reuses_arc_snapshot() {
+        let c = BlobCache::new_const();
+        c.insert(blob(11), b"snapshot".to_vec()).test_unwrap();
+        let first = c.get(&blob(11)).test_unwrap();
+        let second = c.get(&blob(11)).test_unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn test_write_at_invalidates_arc_snapshot() {
+        let c = BlobCache::new_const();
+        c.insert(blob(12), b"abcdef".to_vec()).test_unwrap();
+        let before = c.get(&blob(12)).test_unwrap();
+        c.write_at(blob(12), 2, b"XY").test_unwrap();
+        let after = c.get(&blob(12)).test_unwrap();
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert_eq!(&after[..], b"abXYef");
     }
 
     #[test]
@@ -436,6 +818,90 @@ mod tests {
         assert!(!c.contains(&blob(5)));
         c.insert(blob(5), alloc::vec![0u8; 8]).test_unwrap();
         assert!(c.contains(&blob(5)));
+    }
+
+    #[test]
+    fn test_len_does_not_clone_blob() {
+        let c = BlobCache::new_const();
+        c.insert(blob(6), alloc::vec![0u8; 128]).test_unwrap();
+        assert_eq!(c.len(&blob(6)), Some(128));
+        assert_eq!(c.hits(), 0);
+    }
+
+    #[test]
+    fn test_read_at_returns_only_requested_range() {
+        let c = BlobCache::new_const();
+        c.insert(blob(7), b"abcdef".to_vec()).test_unwrap();
+        let out = c.read_at(&blob(7), 2, 3).test_unwrap();
+        assert_eq!(&out[..], b"cde");
+    }
+
+    #[test]
+    fn test_write_at_updates_existing_blob_in_place() {
+        let c = BlobCache::new_const();
+        c.insert(blob(8), b"abcdef".to_vec()).test_unwrap();
+        c.write_at(blob(8), 2, b"XY").test_unwrap();
+        let out = c.get(&blob(8)).test_unwrap();
+        assert_eq!(&out[..], b"abXYef");
+        assert_eq!(c.used_bytes(), 6);
+    }
+
+    #[test]
+    fn test_write_at_extends_sparse_blob() {
+        let c = BlobCache::new_const();
+        c.write_at(blob(9), 4, b"xy").test_unwrap();
+        let out = c.get(&blob(9)).test_unwrap();
+        assert_eq!(&out[..], b"\0\0\0\0xy");
+        assert_eq!(c.used_bytes(), 6);
+    }
+
+    #[test]
+    fn test_zero_writes_remain_sparse() {
+        let c = BlobCache::new_const();
+        let id = blob(13);
+        let zeros = alloc::vec![0u8; 1024 * 1024];
+
+        let mut idx = 0usize;
+        while idx < 8 {
+            c.write_at(id, idx * 1024 * 1024, &zeros).test_unwrap();
+            idx = idx.wrapping_add(1);
+        }
+
+        assert_eq!(c.len(&id), Some(8 * 1024 * 1024));
+        let inner = c.inner.lock();
+        let entry = inner.map.get(&id).unwrap();
+        assert!(entry.pages.iter().all(|page| page.is_none()));
+    }
+
+    #[test]
+    fn test_resize_grow_remains_sparse() {
+        let c = BlobCache::new_const();
+        let id = blob(14);
+        c.insert(id, Vec::new()).test_unwrap();
+        c.resize(id, 128 * 1024 * 1024).test_unwrap();
+
+        assert_eq!(c.len(&id), Some(128 * 1024 * 1024));
+        let inner = c.inner.lock();
+        let entry = inner.map.get(&id).unwrap();
+        assert!(entry.pages.iter().all(|page| page.is_none()));
+    }
+
+    #[test]
+    fn test_write_at_handles_16_mib_without_contiguous_blob() {
+        let c = BlobCache::new_const();
+        let id = blob(10);
+        let block = alloc::vec![0x5Au8; 1024 * 1024];
+
+        let mut idx = 0usize;
+        while idx < 16 {
+            c.write_at(id, idx * 1024 * 1024, &block).test_unwrap();
+            idx += 1;
+        }
+
+        assert_eq!(c.len(&id), Some(16 * 1024 * 1024));
+        let tail = c.read_at(&id, 15 * 1024 * 1024, 1024).test_unwrap();
+        assert_eq!(tail.len(), 1024);
+        assert!(tail.iter().all(|byte| *byte == 0x5A));
     }
 
     #[test]

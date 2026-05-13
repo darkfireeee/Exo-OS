@@ -30,6 +30,7 @@ use crate::fs::exofs::path::symlink::{
     invalidate_symlink, is_valid_symlink_target, register_symlink, SYMLINK_MAX_DEPTH,
 };
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
+use crate::fs::exofs::syscall::object_store;
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,6 +79,8 @@ pub enum FsBridgeError {
     Invalid,
     /// Espace disque insuffisant.
     NoSpace,
+    /// Memoire kernel insuffisante.
+    NoMemory,
     /// Existe déjà.
     Exists,
     /// Pas un répertoire.
@@ -106,6 +109,7 @@ impl FsBridgeError {
             FsBridgeError::Fault => -14,      // EFAULT
             FsBridgeError::Invalid => -22,    // EINVAL
             FsBridgeError::NoSpace => -28,    // ENOSPC
+            FsBridgeError::NoMemory => -12,   // ENOMEM
             FsBridgeError::Exists => -17,     // EEXIST
             FsBridgeError::NotDir => -20,     // ENOTDIR
             FsBridgeError::IsDir => -21,      // EISDIR
@@ -352,6 +356,7 @@ fn exofs_to_bridge_error(err: ExofsError) -> FsBridgeError {
         | ExofsError::OffsetOverflow
         | ExofsError::Overflow
         | ExofsError::Underflow => FsBridgeError::Invalid,
+        ExofsError::NoMemory => FsBridgeError::NoMemory,
         ExofsError::NoSpace => FsBridgeError::NoSpace,
         ExofsError::ObjectAlreadyExists | ExofsError::AlreadyExists => FsBridgeError::Exists,
         ExofsError::NotADirectory => FsBridgeError::NotDir,
@@ -415,13 +420,20 @@ fn blob_id_for_path(path: &[u8]) -> Result<BlobId, FsBridgeError> {
 
 #[inline]
 fn blob_len(blob_id: &BlobId) -> usize {
-    BLOB_CACHE.get(blob_id).map(|data| data.len()).unwrap_or(0)
+    BLOB_CACHE.len(blob_id).unwrap_or(0)
 }
 
 #[inline]
 fn ensure_blob_exists(blob_id: BlobId) -> Result<(), FsBridgeError> {
     if BLOB_CACHE.contains(&blob_id) {
         return Ok(());
+    }
+    if let Some(data) =
+        object_store::load_blob_data_if_available(&blob_id).map_err(exofs_to_bridge_error)?
+    {
+        return BLOB_CACHE
+            .insert(blob_id, data)
+            .map_err(exofs_to_bridge_error);
     }
     BLOB_CACHE
         .insert(blob_id, Vec::new())
@@ -431,7 +443,7 @@ fn ensure_blob_exists(blob_id: BlobId) -> Result<(), FsBridgeError> {
 #[inline]
 fn snapshot_blob(blob_id: &BlobId) -> Result<Vec<u8>, FsBridgeError> {
     match BLOB_CACHE.get(blob_id) {
-        Some(data) => Ok(data.into_vec()),
+        Some(data) => Ok(data.to_vec()),
         None => Err(FsBridgeError::NotFound),
     }
 }
@@ -442,24 +454,14 @@ fn resize_regular_blob(blob_id: BlobId, length: u64) -> Result<(), FsBridgeError
         return Err(FsBridgeError::Invalid);
     }
 
-    let mut data = snapshot_blob(&blob_id)?;
-    if blob_is_directory(&data) {
+    ensure_blob_exists(blob_id)?;
+    if blob_is_directory_by_id(&blob_id) {
         return Err(FsBridgeError::IsDir);
     }
 
-    let new_len = length as usize;
-    if new_len > data.len() {
-        data.try_reserve(new_len - data.len())
-            .map_err(|_| FsBridgeError::NoSpace)?;
-        data.resize(new_len, 0);
-    } else {
-        data.truncate(new_len);
-    }
-
     BLOB_CACHE
-        .insert(blob_id, data)
+        .resize(blob_id, length as usize)
         .map_err(exofs_to_bridge_error)?;
-    let _ = BLOB_CACHE.mark_dirty(&blob_id);
     Ok(())
 }
 
@@ -477,23 +479,19 @@ fn read_blob_at(
         return Ok(0);
     }
 
-    let data = match BLOB_CACHE.get(&blob_id) {
-        Some(bytes) => bytes,
-        None => return Err(FsBridgeError::NotFound),
-    };
-    let start = offset as usize;
-    if start >= data.len() {
-        return Ok(0);
+    if offset > usize::MAX as u64 {
+        return Err(FsBridgeError::Invalid);
     }
 
-    let read_len = count.min(data.len() - start);
-    copy_to_user(
-        buf_ptr as *mut u8,
-        data[start..start + read_len].as_ptr(),
-        read_len,
-    )
-    .map_err(|_| FsBridgeError::Fault)?;
-    Ok(read_len as i64)
+    let data = BLOB_CACHE
+        .read_at(&blob_id, offset as usize, count)
+        .map_err(exofs_to_bridge_error)?;
+    if data.is_empty() {
+        return Ok(0);
+    }
+    copy_to_user(buf_ptr as *mut u8, data.as_ptr(), data.len())
+        .map_err(|_| FsBridgeError::Fault)?;
+    Ok(data.len() as i64)
 }
 
 #[inline]
@@ -518,23 +516,10 @@ fn write_blob_at(
     copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
         .map_err(|_| FsBridgeError::Fault)?;
 
-    let mut data = match BLOB_CACHE.get(&blob_id) {
-        Some(bytes) => bytes.into_vec(),
-        None => Vec::new(),
-    };
     let start = offset as usize;
-    let end = start.checked_add(count).ok_or(FsBridgeError::NoSpace)?;
-    if data.len() < end {
-        data.try_reserve(end - data.len())
-            .map_err(|_| FsBridgeError::NoSpace)?;
-        data.resize(end, 0);
-    }
-    data[start..end].copy_from_slice(&input);
-
     BLOB_CACHE
-        .insert(blob_id, data)
+        .write_at(blob_id, start, &input)
         .map_err(exofs_to_bridge_error)?;
-    let _ = BLOB_CACHE.mark_dirty(&blob_id);
     Ok(count as i64)
 }
 
@@ -547,16 +532,12 @@ fn read_blob_bytes_at(
     if count == 0 {
         return Ok(Vec::new());
     }
-    let data = match BLOB_CACHE.get(&blob_id) {
-        Some(bytes) => bytes,
-        None => return Err(FsBridgeError::NotFound),
-    };
-    let start = offset as usize;
-    if start >= data.len() {
-        return Ok(Vec::new());
+    if offset > usize::MAX as u64 {
+        return Err(FsBridgeError::Invalid);
     }
-    let read_len = count.min(data.len() - start);
-    Ok(data[start..start + read_len].to_vec())
+    BLOB_CACHE
+        .read_at(&blob_id, offset as usize, count)
+        .map_err(exofs_to_bridge_error)
 }
 
 #[inline]
@@ -568,24 +549,10 @@ fn write_blob_bytes_at(blob_id: BlobId, offset: u64, bytes: &[u8]) -> Result<i64
         return Err(FsBridgeError::Invalid);
     }
 
-    let mut data = match BLOB_CACHE.get(&blob_id) {
-        Some(existing) => existing.into_vec(),
-        None => Vec::new(),
-    };
     let start = offset as usize;
-    let end = start
-        .checked_add(bytes.len())
-        .ok_or(FsBridgeError::NoSpace)?;
-    if data.len() < end {
-        data.try_reserve(end - data.len())
-            .map_err(|_| FsBridgeError::NoSpace)?;
-        data.resize(end, 0);
-    }
-    data[start..end].copy_from_slice(bytes);
     BLOB_CACHE
-        .insert(blob_id, data)
+        .write_at(blob_id, start, bytes)
         .map_err(exofs_to_bridge_error)?;
-    let _ = BLOB_CACHE.mark_dirty(&blob_id);
     Ok(bytes.len() as i64)
 }
 
@@ -730,7 +697,7 @@ fn read_pipe_payload(
 ) -> Result<Vec<u8>, FsBridgeError> {
     let data = BLOB_CACHE
         .get(&blob_id)
-        .map(|bytes| bytes.into_vec())
+        .map(|bytes| bytes.to_vec())
         .unwrap_or_default();
     if data.is_empty() {
         return Ok(Vec::new());
@@ -753,7 +720,7 @@ fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeErr
     }
     let mut data = BLOB_CACHE
         .get(&blob_id)
-        .map(|existing| existing.into_vec())
+        .map(|existing| existing.to_vec())
         .unwrap_or_default();
     data.try_reserve(bytes.len())
         .map_err(|_| FsBridgeError::NoSpace)?;
@@ -1044,17 +1011,20 @@ fn blob_is_directory(data: &[u8]) -> bool {
 }
 
 #[inline]
-fn stat_mode_for_kind(kind: u8, data: &[u8]) -> u32 {
+fn blob_is_directory_by_id(blob_id: &BlobId) -> bool {
+    BLOB_CACHE
+        .read_at(blob_id, 0, size_of::<PathIndexHeader>())
+        .ok()
+        .and_then(|data| path_index_entry_count(&data))
+        .is_some()
+}
+
+fn stat_mode_for_kind_meta(kind: u8, is_dir: bool) -> u32 {
     match kind {
         PATH_INDEX_KIND_DIR => STAT_MODE_DIR,
         PATH_INDEX_KIND_SYMLINK => STAT_MODE_SYMLINK,
-        _ => {
-            if blob_is_directory(data) {
-                STAT_MODE_DIR
-            } else {
-                STAT_MODE_FILE
-            }
-        }
+        _ if is_dir => STAT_MODE_DIR,
+        _ => STAT_MODE_FILE,
     }
 }
 
@@ -1072,13 +1042,18 @@ fn blocks_for_size(size: u64) -> i64 {
 }
 
 #[inline]
-fn linux_stat_for_blob(blob_id: BlobId, data: &[u8], owner_uid: u32, kind: u8) -> LinuxStat {
-    let size = data.len() as u64;
+fn linux_stat_for_blob_meta(
+    blob_id: BlobId,
+    size: u64,
+    owner_uid: u32,
+    kind: u8,
+    is_dir: bool,
+) -> LinuxStat {
     LinuxStat {
         st_dev: 0,
         st_ino: inode_from_blob_id(&blob_id),
         st_nlink: 1,
-        st_mode: stat_mode_for_kind(kind, data),
+        st_mode: stat_mode_for_kind_meta(kind, is_dir),
         st_uid: owner_uid,
         st_gid: owner_uid,
         __pad0: 0,
@@ -1094,8 +1069,19 @@ fn linux_stat_for_blob(blob_id: BlobId, data: &[u8], owner_uid: u32, kind: u8) -
 }
 
 #[inline]
-fn linux_statx_for_blob(blob_id: BlobId, data: &[u8], owner_uid: u32, kind: u8) -> LinuxStatx {
-    let stat = linux_stat_for_blob(blob_id, data, owner_uid, kind);
+fn linux_statx_for_blob_meta(
+    blob_id: BlobId,
+    size: u64,
+    owner_uid: u32,
+    kind: u8,
+    is_dir: bool,
+) -> LinuxStatx {
+    let stat = linux_stat_for_blob_meta(blob_id, size, owner_uid, kind, is_dir);
+    linux_statx_from_stat(stat)
+}
+
+#[inline]
+fn linux_statx_from_stat(stat: LinuxStat) -> LinuxStatx {
     LinuxStatx {
         stx_mask: 0x0000_1FFF,
         stx_blksize: stat.st_blksize as u32,
@@ -1246,7 +1232,7 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
         let data = BLOB_CACHE
             .get(&entry.blob_id)
-            .map(|bytes| bytes.into_vec())
+            .map(|bytes| bytes.to_vec())
             .unwrap_or_default();
         if data.is_empty() {
             return Err(FsBridgeError::WouldBlock);
@@ -1295,24 +1281,17 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
         return Ok(data.len() as i64);
     }
 
-    let data = match BLOB_CACHE.get(&entry.blob_id) {
-        Some(bytes) => bytes,
-        None if entry.size == 0 => return Ok(0),
-        None => return Err(FsBridgeError::NotFound),
-    };
-
     let start = entry.cursor as usize;
-    if start >= data.len() {
+    let data = match BLOB_CACHE.read_at(&entry.blob_id, start, count) {
+        Ok(data) => data,
+        Err(ExofsError::BlobNotFound) if entry.size == 0 => return Ok(0),
+        Err(err) => return Err(exofs_to_bridge_error(err)),
+    };
+    if data.is_empty() {
         return Ok(0);
     }
-
-    let read_len = count.min(data.len() - start);
-    copy_to_user(
-        buf_ptr as *mut u8,
-        data[start..start + read_len].as_ptr(),
-        read_len,
-    )
-    .map_err(|_| FsBridgeError::Fault)?;
+    let read_len = data.len();
+    copy_to_user(buf_ptr as *mut u8, data.as_ptr(), read_len).map_err(|_| FsBridgeError::Fault)?;
     OBJECT_TABLE
         .advance_cursor(fd, read_len as u64)
         .map_err(exofs_to_bridge_error)?;
@@ -1356,7 +1335,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
             .map_err(|_| FsBridgeError::Fault)?;
         let mut data = BLOB_CACHE
             .get(&entry.blob_id)
-            .map(|bytes| bytes.into_vec())
+            .map(|bytes| bytes.to_vec())
             .unwrap_or_default();
         data.try_reserve(input.len())
             .map_err(|_| FsBridgeError::NoSpace)?;
@@ -1396,25 +1375,15 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
         .map_err(|_| FsBridgeError::Fault)?;
 
-    let mut data = match BLOB_CACHE.get(&entry.blob_id) {
-        Some(bytes) => bytes.into_vec(),
-        None => Vec::new(),
-    };
     let start = if entry.flags & open_flags::O_APPEND != 0 {
-        data.len()
+        blob_len(&entry.blob_id)
     } else {
         entry.cursor as usize
     };
     let end = start.checked_add(count).ok_or(FsBridgeError::NoSpace)?;
-    if data.len() < end {
-        data.resize(end, 0);
-    }
-    data[start..end].copy_from_slice(&input);
-
     BLOB_CACHE
-        .insert(entry.blob_id, data)
+        .write_at(entry.blob_id, start, &input)
         .map_err(exofs_to_bridge_error)?;
-    let _ = BLOB_CACHE.mark_dirty(&entry.blob_id);
     OBJECT_TABLE
         .set_cursor(fd, end as u64)
         .map_err(exofs_to_bridge_error)?;
@@ -1595,8 +1564,7 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         if !open_flags::can_write(fd_flags) {
             return Err(FsBridgeError::Invalid);
         }
-        let existing = snapshot_blob(&blob_id)?;
-        if blob_is_directory(&existing) {
+        if blob_is_directory_by_id(&blob_id) {
             return Err(FsBridgeError::IsDir);
         }
         BLOB_CACHE
@@ -1642,9 +1610,7 @@ pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBr
     let base = match whence {
         SEEK_SET => 0i64,
         SEEK_CUR => entry.cursor as i64,
-        SEEK_END => snapshot_blob(&entry.blob_id)
-            .map(|data| data.len() as i64)
-            .unwrap_or(entry.size as i64),
+        SEEK_END => blob_len(&entry.blob_id) as i64,
         _ => return Err(FsBridgeError::Invalid),
     };
     let new_pos = base.checked_add(offset).ok_or(FsBridgeError::Invalid)?;
@@ -1668,8 +1634,13 @@ pub fn fs_stat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErro
     }
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let data = snapshot_blob(&blob_id)?;
-    let stat = linux_stat_for_blob(blob_id, &data, pid, kind);
+    let stat = linux_stat_for_blob_meta(
+        blob_id,
+        blob_len(&blob_id) as u64,
+        pid,
+        kind,
+        blob_is_directory_by_id(&blob_id),
+    );
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
@@ -1685,8 +1656,13 @@ pub fn fs_lstat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErr
     }
     let normalized_path = resolve_path_with_symlinks(path, false, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let data = snapshot_blob(&blob_id)?;
-    let stat = linux_stat_for_blob(blob_id, &data, pid, kind);
+    let stat = linux_stat_for_blob_meta(
+        blob_id,
+        blob_len(&blob_id) as u64,
+        pid,
+        kind,
+        blob_is_directory_by_id(&blob_id),
+    );
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
@@ -1701,18 +1677,24 @@ pub fn fs_fstat(fd: u32, stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> 
         return Err(FsBridgeError::Fault);
     }
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
-    let data = snapshot_blob(&entry.blob_id)?;
     let owner_uid = if entry.owner_uid == 0 {
         pid
     } else {
         entry.owner_uid as u32
     };
-    let kind = if blob_is_directory(&data) {
+    let is_dir = blob_is_directory_by_id(&entry.blob_id);
+    let kind = if is_dir {
         PATH_INDEX_KIND_DIR
     } else {
         PATH_INDEX_KIND_FILE
     };
-    let stat = linux_stat_for_blob(entry.blob_id, &data, owner_uid, kind);
+    let stat = linux_stat_for_blob_meta(
+        entry.blob_id,
+        blob_len(&entry.blob_id) as u64,
+        owner_uid,
+        kind,
+        is_dir,
+    );
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
@@ -3208,8 +3190,13 @@ pub fn fs_statx(
     let follow = flags & AT_SYMLINK_NOFOLLOW == 0;
     let normalized_path = resolve_path_with_symlinks(path, follow, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let data = snapshot_blob(&blob_id)?;
-    let statx = linux_statx_for_blob(blob_id, &data, pid, kind);
+    let statx = linux_statx_for_blob_meta(
+        blob_id,
+        blob_len(&blob_id) as u64,
+        pid,
+        kind,
+        blob_is_directory_by_id(&blob_id),
+    );
     write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
@@ -3241,8 +3228,7 @@ pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     let _ = pid;
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let data = snapshot_blob(&blob_id)?;
-    if kind != PATH_INDEX_KIND_DIR && !blob_is_directory(&data) {
+    if kind != PATH_INDEX_KIND_DIR && !blob_is_directory_by_id(&blob_id) {
         return Err(FsBridgeError::NotDir);
     }
     Ok(0)
@@ -3256,8 +3242,7 @@ pub fn fs_fchdir(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
     let _ = pid;
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
-    let data = snapshot_blob(&entry.blob_id)?;
-    if !blob_is_directory(&data) {
+    if !blob_is_directory_by_id(&entry.blob_id) {
         return Err(FsBridgeError::NotDir);
     }
     Ok(0)
@@ -3881,6 +3866,76 @@ mod tests {
             assert_eq!(stat_buf.st_size, grow_len as i64);
             assert_eq!(fs_close(fd, 72).unwrap(), 0);
         }
+    }
+
+    #[test]
+    fn test_fs_bridge_large_sequential_write_128_mib() {
+        init_bridge();
+
+        let fd = fs_open(
+            b"/bench/seq128",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            73,
+        )
+        .unwrap() as u32;
+        let block = alloc::vec![0xA5u8; 1024 * 1024];
+
+        let mut idx = 0usize;
+        while idx < 128 {
+            assert_eq!(
+                fs_write(fd, block.as_ptr() as u64, block.len(), 73).unwrap(),
+                block.len() as i64
+            );
+            idx += 1;
+        }
+
+        let mut stat = LinuxStat::default();
+        assert_eq!(fs_fstat(fd, &mut stat as *mut _ as u64, 73).unwrap(), 0);
+        assert_eq!(stat.st_size, 128 * 1024 * 1024);
+        assert_eq!(
+            fs_lseek(fd, 127 * 1024 * 1024, SEEK_SET, 73).unwrap(),
+            127 * 1024 * 1024
+        );
+
+        let mut tail = [0u8; 4096];
+        assert_eq!(
+            fs_read(fd, tail.as_mut_ptr() as u64, tail.len(), 73).unwrap(),
+            tail.len() as i64
+        );
+        assert!(tail.iter().all(|byte| *byte == 0xA5));
+        assert_eq!(fs_close(fd, 73).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_fs_bridge_ftruncate_sparse_extends_128_mib() {
+        init_bridge();
+
+        let fd = fs_open(
+            b"/bench/sparse128",
+            open_flags::O_CREAT | open_flags::O_RDWR | open_flags::O_TRUNC,
+            0,
+            74,
+        )
+        .unwrap() as u32;
+
+        assert_eq!(fs_ftruncate(fd, 128 * 1024 * 1024, 74).unwrap(), 0);
+
+        let mut stat = LinuxStat::default();
+        assert_eq!(fs_fstat(fd, &mut stat as *mut _ as u64, 74).unwrap(), 0);
+        assert_eq!(stat.st_size, 128 * 1024 * 1024);
+
+        assert_eq!(
+            fs_lseek(fd, 127 * 1024 * 1024, SEEK_SET, 74).unwrap(),
+            127 * 1024 * 1024
+        );
+        let mut tail = [0xFFu8; 4096];
+        assert_eq!(
+            fs_read(fd, tail.as_mut_ptr() as u64, tail.len(), 74).unwrap(),
+            tail.len() as i64
+        );
+        assert!(tail.iter().all(|byte| *byte == 0));
+        assert_eq!(fs_close(fd, 74).unwrap(), 0);
     }
 
     #[test]

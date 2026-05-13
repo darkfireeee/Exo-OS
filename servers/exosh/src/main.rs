@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 
@@ -10,6 +11,7 @@ const AT_FDCWD: u64 = (-100i64) as u64;
 const PATH_MAX: usize = 256;
 const LINE_MAX: usize = 256;
 const IO_BUF: usize = 2048;
+const DD_IO_BUF: usize = 1024 * 1024;
 const DIRENT64_HEADER_SIZE: usize = 24;
 const DT_DIR: u8 = 4;
 const TREE_MAX_DEPTH: usize = 4;
@@ -26,6 +28,12 @@ const ANSI_EXEC: &[u8] = b"\x1b[1;32m";
 const ANSI_REVERSE: &[u8] = b"\x1b[7m";
 const SIGTERM: u64 = 15;
 const SIGKILL: u64 = 9;
+
+struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
+
+unsafe impl Sync for DdIoBuffer {}
+
+static DD_IO_BUFFER: DdIoBuffer = DdIoBuffer(UnsafeCell::new([0; DD_IO_BUF]));
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -838,7 +846,38 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
     }
 
     let start = monotonic_ns();
-    let mut buf = [0u8; IO_BUF];
+    if input_zero {
+        let Some(max_blocks) = count else {
+            write_all(b"dd: count required with /dev/zero\n");
+            return;
+        };
+        let Some(total_bytes) = block_size.checked_mul(max_blocks) else {
+            write_all(b"dd: size overflow\n");
+            if output_fd >= 0 {
+                let _ = close_fd(output_fd);
+            }
+            return;
+        };
+
+        if !output_null {
+            let rc = ftruncate_fd(output_fd, total_bytes);
+            if rc < 0 {
+                print_errno(b"dd", rc);
+                let _ = close_fd(output_fd);
+                return;
+            }
+            let _ = close_fd(output_fd);
+        }
+
+        let elapsed = match (start, monotonic_ns()) {
+            (Some(a), Some(b)) if b >= a => b - a,
+            _ => 0,
+        };
+        print_dd_summary(total_bytes, elapsed);
+        return;
+    }
+
+    let buf = unsafe { &mut *DD_IO_BUFFER.0.get() };
     let mut total = 0u64;
     let mut blocks = 0u64;
     let mut eof = false;
@@ -853,18 +892,14 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
         let mut remaining = block_size;
         let mut copied_any = false;
         while remaining > 0 {
-            let chunk = remaining.min(IO_BUF as u64) as usize;
-            let n = if input_zero {
-                chunk as i64
-            } else {
-                unsafe {
-                    syscall::syscall3(
-                        syscall::SYS_READ,
-                        input_fd as u64,
-                        buf.as_mut_ptr() as u64,
-                        chunk as u64,
-                    )
-                }
+            let chunk = remaining.min(buf.len() as u64) as usize;
+            let n = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_READ,
+                    input_fd as u64,
+                    buf.as_mut_ptr() as u64,
+                    chunk as u64,
+                )
             };
 
             if n < 0 {
@@ -890,7 +925,7 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
             remaining = remaining.saturating_sub(n as u64);
             copied_any = true;
 
-            if !input_zero && n_usize < chunk {
+            if n_usize < chunk {
                 eof = true;
                 break;
             }
@@ -915,12 +950,16 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
         (Some(a), Some(b)) if b >= a => b - a,
         _ => 0,
     };
+    print_dd_summary(total, elapsed);
+}
+
+fn print_dd_summary(total: u64, elapsed: u64) {
     write_u64(total);
     write_all(b" bytes copied in ");
     write_duration_ms(elapsed);
     write_all(b" -> ");
     write_mib_per_sec(total, elapsed);
-    write_all(b" MB/s\n");
+    write_all(b" MiB/s\n");
 }
 
 fn cmd_kill(rest: &[u8]) {
@@ -2034,20 +2073,34 @@ fn write_duration_ms(ns: u64) {
 
 fn write_mib_per_sec(bytes: u64, ns: u64) {
     if ns == 0 {
-        write_all(b"0");
+        write_all(b"0.00");
         return;
     }
-    let mib_per_sec = (bytes as u128)
+    let centi_mib_per_sec = (bytes as u128)
+        .saturating_mul(100)
         .saturating_mul(1_000_000_000)
         .checked_div(1024u128 * 1024u128)
         .unwrap_or(0)
         .checked_div(ns as u128)
         .unwrap_or(0);
-    write_u64(mib_per_sec.min(u64::MAX as u128) as u64);
+    write_fixed_2(centi_mib_per_sec.min(u64::MAX as u128) as u64);
+}
+
+fn write_fixed_2(centi_units: u64) {
+    let whole = centi_units / 100;
+    let frac = centi_units % 100;
+    write_u64(whole);
+    write_all(b".");
+    write_byte(b'0' + (frac / 10) as u8);
+    write_byte(b'0' + (frac % 10) as u8);
 }
 
 fn write_all(bytes: &[u8]) {
     write_bytes(bytes);
+}
+
+fn write_byte(byte: u8) {
+    write_bytes(&[byte]);
 }
 
 fn write_bytes(bytes: &[u8]) {
@@ -2085,6 +2138,10 @@ fn write_fd_all(fd: i64, bytes: &[u8]) -> i64 {
 
 fn close_fd(fd: i64) -> i64 {
     unsafe { syscall::syscall1(syscall::SYS_CLOSE, fd as u64) }
+}
+
+fn ftruncate_fd(fd: i64, len: u64) -> i64 {
+    unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, fd as u64, len) }
 }
 
 fn sleep_ms(ms: u64) {

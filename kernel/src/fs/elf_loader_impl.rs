@@ -25,6 +25,7 @@ use crate::memory::virt::UserAddressSpace;
 use crate::memory::{phys_to_virt, AllocFlags, Frame, VirtAddr, PAGE_SIZE};
 use crate::process::lifecycle::exec::{ElfLoadError, ElfLoadResult, ElfLoader};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -388,7 +389,7 @@ fn resolve_blob_id(path_bytes: &[u8]) -> Result<BlobId, ElfLoadError> {
 /// Retombe sur les payloads de boot embarqués si le cache ExoFS ne contient pas
 /// encore l'entrée. Les binaires critiques du démarrage ne doivent pas dépendre
 /// d'un état cache mutable pour `execve()`.
-fn read_blob_from_cache(blob_id: &BlobId) -> Result<alloc::boxed::Box<[u8]>, ElfLoadError> {
+fn read_blob_from_cache(blob_id: &BlobId) -> Result<Arc<[u8]>, ElfLoadError> {
     if let Some(data) = BLOB_CACHE.get(blob_id) {
         trace_blob(b"elf: cache hit ", blob_id);
         return Ok(data);
@@ -401,7 +402,7 @@ fn read_blob_from_cache(blob_id: &BlobId) -> Result<alloc::boxed::Box<[u8]>, Elf
         data.try_reserve_exact(bytes.len())
             .map_err(|_| ElfLoadError::OutOfMemory)?;
         data.extend_from_slice(bytes);
-        return Ok(data.into_boxed_slice());
+        return Ok(Arc::from(data.into_boxed_slice()));
     }
 
     Err(ElfLoadError::NotFound)

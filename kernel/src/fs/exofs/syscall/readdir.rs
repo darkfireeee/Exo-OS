@@ -126,7 +126,7 @@ fn list_dir_entries(fd: u32, max_entries: usize) -> ExofsResult<Vec<ExofsDirEntr
 
 fn load_directory_blob(blob_id: &BlobId) -> ExofsResult<Vec<u8>> {
     if let Some(data) = BLOB_CACHE.get(blob_id) {
-        return Ok(data.into_vec());
+        return Ok(data.to_vec());
     }
     if let Some(data) = object_store::load_blob_data_if_available(blob_id)? {
         BLOB_CACHE.insert(*blob_id, data.clone())?;
