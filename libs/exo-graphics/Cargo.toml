@@ -1,0 +1,10 @@
+[package]
+name = "exo-graphics"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Exo-OS graphics adaptation boundaries"
+
+[dependencies]
+

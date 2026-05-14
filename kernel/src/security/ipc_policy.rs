@@ -19,8 +19,11 @@ pub enum ServiceClass {
     DeviceServer,
     NetworkServer,
     SchedulerServer,
+    InputServer,
+    TtyServer,
     VirtioDriver,
     ExoShield,
+    Exosh,
     Unknown,
 }
 
@@ -56,14 +59,33 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::NetworkServer, ServiceClass::VfsServer),
     (ServiceClass::DeviceServer, ServiceClass::VirtioDriver),
     (ServiceClass::VirtioDriver, ServiceClass::DeviceServer),
+    (ServiceClass::DeviceServer, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::DeviceServer),
+    (ServiceClass::InputServer, ServiceClass::TtyServer),
+    (ServiceClass::TtyServer, ServiceClass::InputServer),
+    (ServiceClass::TtyServer, ServiceClass::VfsServer),
+    (ServiceClass::VfsServer, ServiceClass::TtyServer),
     (ServiceClass::ExoShield, ServiceClass::CryptoServer),
     (ServiceClass::CryptoServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::TtyServer),
+    (ServiceClass::TtyServer, ServiceClass::ExoShield),
+    (ServiceClass::Exosh, ServiceClass::IpcBroker),
+    (ServiceClass::Exosh, ServiceClass::CryptoServer),
+    (ServiceClass::CryptoServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::TtyServer),
+    (ServiceClass::TtyServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::Exosh),
     (ServiceClass::NetworkServer, ServiceClass::DeviceServer),
     (ServiceClass::DeviceServer, ServiceClass::NetworkServer),
+    (ServiceClass::NetworkServer, ServiceClass::VirtioDriver),
+    (ServiceClass::VirtioDriver, ServiceClass::NetworkServer),
 ];
 
 const _: () = assert!(
-    POLICY.len() == 22,
+    POLICY.len() == 41,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 

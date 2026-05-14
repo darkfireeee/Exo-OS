@@ -224,7 +224,7 @@ pub mod task_flags {
 //   [16] priority:     u8
 //   [17] policy:       u8
 //   [18] _pad0:        [u8; 6]
-//   [24] sched_state:  AtomicU64  pid|flags|signal|state
+//   [24] sched_state:  AtomicU64  flags|signal|state (PID direct à [92])
 //   [32] vruntime:     AtomicU64  vruntime CFS (ns)
 //   [40] deadline_abs: u64        deadline EDF absolue (ns depuis boot)
 //   [48] cpu_affinity: AtomicU64  bitmask affinité CPU

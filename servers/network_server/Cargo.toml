@@ -11,7 +11,13 @@ name = "exo-network-server"
 path = "src/main.rs"
 test = false
 bench = false
+required-features = ["baremetal-bin"]
+
+[features]
+default = ["baremetal-bin"]
+baremetal-bin = []
 
 [dependencies]
 spin.workspace = true
+smoltcp.workspace = true
 exo-syscall-abi = { path = "../syscall_abi" }

@@ -41,10 +41,9 @@ impl KvmStealTime {
 
 /// Taille de la table stolen-time KVM.
 ///
-/// Gardée au-dessus de la valeur canonique du scheduler pour conserver une
-/// marge d'enregistrement côté hyperviseur sans désaligner silencieusement
-/// l'architecture SMP du noyau.
-const STOLEN_TIME_MAX_CPUS: usize = 512;
+/// Alignée sur la valeur canonique du scheduler pour éviter toute divergence
+/// silencieuse entre les tables par CPU.
+const STOLEN_TIME_MAX_CPUS: usize = MAX_CPUS;
 const _: () = assert!(
     STOLEN_TIME_MAX_CPUS >= MAX_CPUS,
     "STOLEN_TIME_MAX_CPUS doit rester >= MAX_CPUS canonique"

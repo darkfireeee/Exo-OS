@@ -37,6 +37,12 @@ const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
 const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
+const CRYPTO_OK: u32 = 0;
+const CRYPTO_REPLY_SIZE: usize = 240;
+const CRYPTO_REPLY_STATUS_OFFSET: usize = 0;
+const CRYPTO_REPLY_VERSION_OFFSET: usize = 10;
+const PHOENIX_WAKE_ACK_TIMEOUT_NS: u64 = 5_000_000_000;
+const RAW_NOWAIT: u32 = 0x0001;
 
 #[repr(C)]
 struct PhoenixWakeRequest {
@@ -52,6 +58,52 @@ const _: () = assert!(
     core::mem::size_of::<PhoenixWakeRequest>() <= crate::ipc::core::constants::MAX_MSG_SIZE,
     "PhoenixWakeRequest dépasse MAX_MSG_SIZE"
 );
+
+fn phoenix_wake_reply_endpoint(
+    entropy: u64,
+    timestamp: u64,
+) -> Option<crate::ipc::core::types::EndpointId> {
+    let cookie = (entropy ^ timestamp ^ 0x5048_4f45_4e49_58) & 0x7fff_ffff_ffff_ffff;
+    crate::ipc::core::types::EndpointId::new((1u64 << 63) | cookie.max(1))
+}
+
+fn wait_crypto_phoenix_ack(
+    reply_endpoint: crate::ipc::core::types::EndpointId,
+) -> Result<(), &'static str> {
+    let deadline =
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(PHOENIX_WAKE_ACK_TIMEOUT_NS);
+    let mut reply = [0u8; CRYPTO_REPLY_SIZE];
+
+    loop {
+        match crate::ipc::channel::raw::recv_raw(reply_endpoint, &mut reply, RAW_NOWAIT) {
+            Ok(n) if n >= CRYPTO_REPLY_VERSION_OFFSET + 1 => {
+                let status = u32::from_le_bytes([
+                    reply[CRYPTO_REPLY_STATUS_OFFSET],
+                    reply[CRYPTO_REPLY_STATUS_OFFSET + 1],
+                    reply[CRYPTO_REPLY_STATUS_OFFSET + 2],
+                    reply[CRYPTO_REPLY_STATUS_OFFSET + 3],
+                ]);
+                if reply[CRYPTO_REPLY_VERSION_OFFSET] == CRYPTO_PROTOCOL_VERSION
+                    && status == CRYPTO_OK
+                {
+                    return Ok(());
+                }
+                return Err("phoenix_wake_ack_rejected");
+            }
+            Ok(_) => return Err("phoenix_wake_short_ack"),
+            Err(crate::ipc::core::types::IpcError::WouldBlock)
+            | Err(crate::ipc::core::types::IpcError::QueueEmpty) => {
+                if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    return Err("phoenix_wake_ack_timeout");
+                }
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+            Err(_) => return Err("phoenix_wake_ack_failed"),
+        }
+    }
+}
 
 #[inline(always)]
 fn xapic_mmio_base() -> usize {
@@ -127,8 +179,15 @@ fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
 
     let entropy = phoenix_wake_entropy();
     let timestamp = crate::arch::x86_64::cpu::tsc::read_tsc();
+    let reply_endpoint =
+        phoenix_wake_reply_endpoint(entropy, timestamp).ok_or("phoenix_wake_reply_endpoint")?;
+
+    if !crate::ipc::channel::raw::mailbox_open(reply_endpoint) {
+        return Err("phoenix_wake_reply_open_failed");
+    }
+
     let mut request = PhoenixWakeRequest {
-        sender_endpoint: 0,
+        sender_endpoint: reply_endpoint.get(),
         msg_type: PHOENIX_WAKE_ENTROPY,
         payload_len: 16,
         version: CRYPTO_PROTOCOL_VERSION,
@@ -145,9 +204,17 @@ fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
         )
     };
 
-    crate::ipc::channel::raw::send_raw(endpoint, request_bytes, 0)
+    let send_result = crate::ipc::channel::raw::send_raw(endpoint, request_bytes, RAW_NOWAIT)
         .map(|_| ())
-        .map_err(|_| "phoenix_wake_send_failed")
+        .map_err(|_| "phoenix_wake_send_failed");
+    if send_result.is_err() {
+        crate::ipc::channel::raw::mailbox_close(reply_endpoint);
+        return send_result;
+    }
+
+    let ack_result = wait_crypto_phoenix_ack(reply_endpoint);
+    crate::ipc::channel::raw::mailbox_close(reply_endpoint);
+    ack_result
 }
 
 fn for_each_mapped_apic_slot(mut f: impl FnMut(u8, usize)) {

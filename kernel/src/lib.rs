@@ -316,8 +316,9 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     // SAFETY: exofs_init() terminé, appelé une seule fois depuis BSP
     unsafe {
         crate::syscall::fs_bridge::fs_bridge_init();
+        crate::syscall::net_bridge::net_bridge_preinit();
     }
-    kdb(b'@'); // fs_bridge actif
+    kdb(b'@'); // fs_bridge/net_bridge actifs
     crate::arch::x86_64::boot_display::stage_ok("FS");
 }
 

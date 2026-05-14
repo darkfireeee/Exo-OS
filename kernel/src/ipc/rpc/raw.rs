@@ -10,8 +10,8 @@
 //   4. Attend le message de retour sur la mailbox éphémère.
 //   5. Libère la mailbox éphémère et retourne le payload de réponse.
 //
-// Cette approche est synchrone (spin-wait) et no-alloc.
-// Timeout après ~2 * 10^6 itérations de spin_loop.
+// Cette approche est synchrone et no-alloc. L'attente rend la main au
+// scheduler afin que le serveur userspace puisse traiter la requête.
 //
 // RÈGLE IPC-CALL-01 : call_raw est TOUJOURS synchrone (pas de callback).
 // RÈGLE IPC-CALL-02 : les mailboxes éphémères sont libérées après chaque appel.
@@ -21,6 +21,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ipc::channel::raw as channel_raw;
 use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{EndpointId, IpcError};
+
+const RAW_NOWAIT: u32 = 0x0001;
+const CALL_TIMEOUT_NS: u64 = 5_000_000_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur de cookies — unique par appel, jamais réutilisé dans la session.
@@ -68,6 +71,70 @@ fn ephemeral_ep(cookie: u64) -> Option<EndpointId> {
     // Bit 63 = 1 → namespace "réponse éphémère kernel"
     let id = (1u64 << 63) | (cookie & 0x7FFF_FFFF_FFFF_FFFF);
     EndpointId::new(id)
+}
+
+#[cfg(not(test))]
+#[inline]
+fn monotonic_ns() -> u64 {
+    crate::scheduler::timer::clock::monotonic_ns()
+}
+
+#[cfg(test)]
+#[inline]
+fn monotonic_ns() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
+#[cfg(not(test))]
+#[inline]
+fn yield_to_peer() {
+    unsafe {
+        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+    }
+}
+
+#[cfg(test)]
+#[inline]
+fn yield_to_peer() {
+    std::thread::yield_now();
+}
+
+fn send_request(server_ep: EndpointId, data: &[u8], deadline_ns: u64) -> Result<(), IpcError> {
+    loop {
+        match channel_raw::send_raw(server_ep, data, RAW_NOWAIT) {
+            Ok(_) => return Ok(()),
+            Err(IpcError::WouldBlock) | Err(IpcError::QueueFull) | Err(IpcError::Full) => {
+                if monotonic_ns() >= deadline_ns {
+                    return Err(IpcError::Timeout);
+                }
+                yield_to_peer();
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn recv_reply(
+    reply_ep: EndpointId,
+    raw_reply: &mut [u8; MAX_MSG_SIZE],
+    deadline_ns: u64,
+) -> Result<usize, IpcError> {
+    loop {
+        match channel_raw::recv_raw(reply_ep, raw_reply, RAW_NOWAIT) {
+            Ok(n) => return Ok(n),
+            Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => {
+                if monotonic_ns() >= deadline_ns {
+                    return Err(IpcError::Timeout);
+                }
+                yield_to_peer();
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,10 +187,11 @@ pub fn call_raw(
     call_buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + msg.len()].copy_from_slice(msg);
 
     // 3. Envoyer vers la mailbox du serveur.
-    let send_result = channel_raw::send_raw(
+    let deadline_ns = monotonic_ns().saturating_add(CALL_TIMEOUT_NS);
+    let send_result = send_request(
         server_ep,
         &call_buf[..CALL_HEADER_SIZE + msg.len()],
-        0, // bloquant
+        deadline_ns,
     );
     if let Err(e) = send_result {
         channel_raw::mailbox_close(reply_ep);
@@ -132,7 +200,7 @@ pub fn call_raw(
 
     // 4. Attendre la réponse sur la mailbox éphémère.
     let mut raw_reply = [0u8; MAX_MSG_SIZE];
-    let recv_result = channel_raw::recv_raw(reply_ep, &mut raw_reply, 0);
+    let recv_result = recv_reply(reply_ep, &mut raw_reply, deadline_ns);
 
     // 5. Libérer la mailbox éphémère.
     channel_raw::mailbox_close(reply_ep);

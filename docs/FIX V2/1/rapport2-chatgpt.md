@@ -1,0 +1,95 @@
+Audit des incohérences Exo‑OS – seconde passe sur les autres modules
+1 Servers (Ring 1)
+
+L’analyse des modules servers d’Exo‑OS met en évidence de nombreux écarts par rapport aux spécifications et à la cohérence interne. Les principaux problèmes proviennent d’une implémentation hétérogène de la table des services, d’un manque de vérifications de permissions et d’erreurs de conception. Les points les plus saillants sont :
+
+Problème	Description et impact	Sources
+Dépendances Cargo	Le serveur init_server est le seul à ne pas importer le crate exo‑syscall‑abi, alors qu’il duplique des constantes de syscall dans son code. Cette duplication entraîne un risque d’incohérence et complique la maintenance. La solution consiste à ajouter exo‑syscall‑abi dans Cargo.toml et à supprimer les définitions locales.	docs_analyse_incoherences_servers_diff.md
+Nommage incohérent	Le paquet exo_shield est nommé “exo‑exo‑shield” dans son Cargo.toml. Ce doublon “exo” crée des répétitions et doit être corrigé en exo‑shield.	docs_analyse_incoherences_servers_diff.md
+Enregistrement d’endpoint / PID	Plusieurs serveurs utilisent des identifiants d’endpoint implicites ou différents des PID attendus. Par exemple, network_server, memory_server ou device_server appellent register_endpoint() sans spécifier d’identifiant, contrairement à ipc_router (PID 2) ou vfs_server (PID 3). Cette disparité rend le routage IPC ambigu et complique le débogage. Il est recommandé de standardiser l’enregistrement en définissant une constante SERVER_ENDPOINT_ID dans chaque serveur et en fournissant une table canonique des ID (ipc_router = 2, vfs_server = 3, crypto_server = 4, …).	docs_analyse_incoherences_servers_diff.md
+Timeouts IPC	Les serveurs utilisent des stratégies de time‑out hétérogènes : certains (crypto_server, ipc_router, exo_shield, vfs_server) définissent IPC_RECV_TIMEOUT_MS = 5 000 ms, alors que d’autres (network_server, memory_server, device_server, scheduler_server) appellent recv_request() sans aucune limite et peuvent bloquer indéfiniment. Tous les serveurs doivent adopter un délai raisonnable et gérer l’erreur ETIMEDOUT.	docs_analyse_incoherences_servers_diff.md
+Vérifications de permissions	Plusieurs handlers de device_server et vfs_server ne vérifient pas l’identité de l’appelant. Par exemple, handle_fault() dans device_server permet à n’importe quel processus de signaler une faute d’IO MMU et handle_mount() dans vfs_server n’exige pas que l’appelant soit l’init (PID 1). Les appels sensibles (montage, umount, attach_device, etc.) doivent s’assurer que sender_pid==1 ou vérifier explicitement l’autorité du processus.	docs_analyse_incoherences_servers_diff.md
+Crypto server : keystore	Le keystore du crypto_server comporte un nombre fixe de 32 slots sans politique d’éviction. S’il est plein, la fonction ks_insert() renvoie 0 silencieusement. Cela permet à un processus malveillant d’épuiser la table et empêche les autres d’enregistrer des clés. Il faut implémenter un quota par PID (par exemple 8 clés maximum par processus) et un mécanisme d’expiration, et retourner un code d’erreur explicite.	docs_analyse_incoherences_servers_diff.md
+Codes d’erreur	Les serveurs utilisent des conventions disparates : network_server renvoie des constantes E* de l’ABI, crypto_server définit ses propres codes, vfs_server renvoie des valeurs négatives littérales (‑22 pour EINVAL, ‑2 pour ENOENT, etc.). Pour faciliter la maintenance et l’interopérabilité, il est recommandé d’utiliser systématiquement les constantes d’exo_syscall_abi.	docs_analyse_incoherences_servers_diff.md
+Gestion d’erreur dans les boucles principales	De nombreux serveurs ignorent les retours d’erreur des appels recv_request(). Le code continue sans journaliser ni compter les erreurs, ce qui empêche toute détection de problème. La correction consiste à incrémenter un compteur d’erreurs et à enregistrer le type d’erreur.	docs_analyse_incoherences_servers_diff.md
+Panic handlers silencieux	Tous les serveurs disposent d’un handler #[panic_handler] qui boucle sur hlt sans enregistrer d’information. Cela empêche toute analyse post‑mortem et rend le watchdog aveugle. Il faut écrire les informations de panic dans une zone mémoire partagée et notifier le init_server.	docs_analyse_incoherences_servers_diff.md
+Bugs divers	L’analyse identifie d’autres problèmes : extraction de l’adresse MAC sans vérifier la taille du payload dans network_server; race condition et barrière mémoire insuffisante dans le keystore du crypto_server; absence de vérification du PID dans vfs_server::handle_umount(); division par zéro possible dans scheduler_server::handle_realtime_admit(); commentaires obsolètes et documentation manquante pour plusieurs serveurs.	docs_analyse_incoherences_servers_diff.md
+
+Le document Audit complet des corrections propose une liste structurée des 18 correctifs nécessaires, en décrivant pour chacun l’état actuel et le patch à appliquer. Les corrections critiques incluent l’ajout de exo‑syscall‑abi au init_server et l’ajout d’un timeout IPC au memory_server, tandis que les corrections hautes priorisent la mise en place d’un quota de clés par PID, la vérification des PID dans network_server et vfs_server, la suppression des .unwrap() dangereux et la validation de period_us. Le plan de déploiement fournit un calendrier de trois semaines pour appliquer ces corrections et évalue les métriques de succès (timeouts, taux d’utilisation de l’ABI, etc.).
+
+2 Syscall ABI
+
+Le module syscall sert de pont entre le kernel et l’espace utilisateur. L’audit révèle un écart massif entre la définition des appels système dans le noyau et celles exposées aux programmes utilisateur : le fichier numbers.rs du kernel définit 283 syscalls, alors que le crate syscall_abi n’en expose que 46. 241 syscalls manquent, ce qui empêche toute compatibilité POSIX et limite fortement les fonctionnalités.
+
+Principales incohérences :
+
+Syscalls POSIX de base (0‑99) : de nombreux appels comme read, write, open, dup, fork, execve, etc., sont absents de l’ABI. La correction consiste à recopier toutes ces constantes depuis le kernel vers syscall_abi::lib.rs.
+Syscalls temps/processus/signaux (100‑199) : les appels relatifs à l’UID, GID, gestion des signaux et horaires (times, ptrace, getuid, setuid, etc.) doivent être ajoutés.
+Syscalls natifs Exo‑OS (300‑399) : l’ABI n’expose pas les fonctions d’échange de mémoire (SYS_EXO_MEM_SHARE, SYS_EXO_MEM_REVOKE), de gestion de capacités (SYS_EXO_CAP_*), de performance (SYS_EXO_PERF_*) ou de debug. Ces appels sont indispensables pour l’IPC et les capacités.
+ExoFS (500‑520) : seule une poignée d’opérations de fichiers système est exposée. Sans les appels object_read, object_write, snapshot_create, etc., le système de fichiers n’est pas utilisable depuis l’espace utilisateur.
+Drivers (530‑546) : les appels pour enregistrer des IRQ (SYS_IRQ_REGISTER, SYS_IRQ_ACK), pour manipuler le DMA, l’IOMMU et le PCI sont manquants.
+
+La correction proposée consiste à synchroniser entièrement les constantes de syscall::numbers.rs avec celles de syscall_abi::lib.rs, en incluant les alias de compatibilité et en documentant leur usage. Cette uniformisation est indispensable pour que les serveurs et la libc puissent utiliser les mêmes numéros de syscall.
+
+3 Sécurité (ExoShield)
+
+Les rapports de sécurité identifient plusieurs vulnérabilités critiques et majeures qui subsistent après l’application de certains patchs :
+
+Identifiant	Description et risque	Correctif recommandé	Sources
+CVE‑EXO‑001	Race condition à l’initialisation SMP : les processeurs secondaires (AP) démarrent avant que SECURITY_READY ne soit positionné, ce qui permet d’exécuter des IPC non vérifiées pendant la fenêtre d’initialisation.	Ajouter un spin‑wait dans ap_entry() pour attendre que la sécurité soit prête ou appeler ap_wait_security_ready().	SECURITY_AUDIT_DEEP_2026‑04‑28_diff.md
+Vérification de capacités non constant‑time (S‑03 / SEC‑004)	La fonction capability::verify() utilise des comparaisons ordinaires sur des entiers et des ensembles de droits, ce qui crée des fuites temporelles. Bien que le code suive un chemin unifié pour éviter les early‑returns, aucune utilisation de la crate subtle n’est faite.	Ajouter subtle::{ConstantTimeEq, Choice} dans le Cargo.toml et utiliser les fonctions constant‑time pour comparer les générations et droits.	SECURITY_AUDIT_DEEP_2026‑04‑28_diff.md
+Static assert TCB (S‑04 / SEC‑005)	La spécification impose que le ThreadControlBlock fasse exactement 256 octets et que certaines réserves _cold_reserve correspondent à des offsets précis. Aucun static_assert! n’est présent dans task.rs pour le garantir.	Ajouter un const_assert! ou un static_assert! pour vérifier à la compilation que size_of::<ThreadControlBlock>()==256.	SECURITY_AUDIT_DEEP_2026‑04‑28_diff.md
+mark_a_pages_not_present() vide (S‑05)	Dans exophoenix/isolate.rs, la fonction censée invalider les pages de l’ancien kernel lors du handoff ExoPhoenix est un stub vide.	Implémenter l’invalidation des TLB et la mise à non‑présent des pages A (voir patch_07_supplementary_fixes.rs).	SECURITY_AUDIT_DEEP_2026‑04‑28_diff.md
+PMC snapshot sans validation (MAJEUR‑02bis)	La fonction pmc_snapshot() de exoargos.rs lit les compteurs PMC sans vérifier que le TCB appartient au thread appelant, entraînant une fuite d’information cross‑process.	Valider que tcb.pid == current_thread_id() et vérifier la capacité PMC avant d’autoriser la lecture.	SECURITY_AUDIT_DEEP_2026‑04‑28_diff.md
+Autres vulnérabilités	Le rapport plus synthétique signale d’autres failles : CET non câblé dans chaque thread, verify_p0_fixes() absent du boot, la table cap_deadline_table accessible sans protection PKS, un timeout watchdog codé en dur, et la duplication d’erreurs dans verify_cap_token(). Ces éléments doivent être corrigés en suivant les patches disponibles dans docs/FIX/5 security/.	Appliquer enable_cet_for_thread() lors de la création des threads, appeler verify_p0_fixes() au début du boot, protéger cap_deadline_table par PKS, paramétrer dynamiquement le watchdog et utiliser subtle pour tous les comparatifs de tokens.	SECURITY_ANALYSIS_REPORT_diff.md
+
+Le rapport conclut que, malgré des améliorations (CET per‑thread activé, verify_p0_fixes() implémenté dans certaines branches), plusieurs failles critiques persistent et doivent être corrigées avant la mise en production.
+
+4 Système de fichiers (ExoFS)
+
+Le module ExoFS souffre de lacunes fondamentales qui empêchent toute utilisation fiable du VFS :
+
+Lecture retournant des zéros : vfs_read() calcule la taille lisible mais remplit le tampon de zéros au lieu de lire le contenu du cache. Toute lecture de fichier renvoie donc des données nulles. La correction consiste à résoudre l’identifiant de blob puis à copier les données depuis BLOB_CACHE, en remplissant les trous par des zéros uniquement si le blob n’existe pas.
+Écriture non persistante : vfs_write() met à jour l’offset et la taille en mémoire mais n’écrit jamais les octets dans le cache ou le stockage. Les données sont perdues dès qu’elles sont évincées du cache ou à chaque redémarrage. Il faut enregistrer le BlobId, copier le tampon dans le BLOB_CACHE et marquer l’entrée comme dirty pour qu’elle soit persistée.
+Flush inversé : flush_dirty_blobs() appelle mark_dirty() au lieu de flusher, inversant complètement la sémantique. La fonction doit marquer les blobs comme propres ou déclencher un writeback avant de les retirer du cache.
+Offsets de journal incorrects : lors de la désérialisation des commits d’epoch, les offsets de entry_count et de checksum sont décalés de 4 octets par rapport au format réel ; en conséquence, la vérification de checksum est toujours fausse. Il faut corriger le format en ajoutant un padding ou en supprimant la struct C et en utilisant des offsets constants.
+Flush_all détruisant les données : BlobCache::flush_all() vide la map sans écrire les entrées dirty, conduisant à une perte de données sous pression mémoire. La solution est de distinguer drop_all() (détruit sans écrire) et flush_all() (persiste puis vide). | CORRECTIONS_EXOFS_P0_P1.md |
+Operations POSIX non conformes : vfs_rmdir() ne vérifie pas que le répertoire est vide et retourne Ok(()) même s’il contient des fichiers. vfs_readdir() ne renvoie que . et .., donc aucun répertoire n’affiche son contenu. Ces fonctions doivent parcourir la table des inodes et retourner ENOTEMPTY ou les entrées réelles. | CORRECTIONS_EXOFS_P0_P1.md |
+
+Le plan de correction complet (dossier fs 2) dénombre plus de 3 600 appels à unwrap() ou expect() et de nombreux usages non documentés de UnsafeCell et de conversions de pointeurs. Il propose un refactoring général : systématiser l’usage de Result, remplacer les UnsafeCell par des verrous (RwLock), documenter les invariants, et corriger la crypto (key_storage.rs, object_key.rs, etc.). Cette remise à niveau est nécessaire pour rendre ExoFS fiable et sûr.
+
+5 IPC (Inter‑Process Communication)
+
+L’audit du module IPC met en évidence plusieurs catégories d’incohérences :
+
+Exemples et drapeaux : les exemples de documentation utilisent MsgFlags::empty() ou MsgFlags::default(), ce qui n’a pas de signification claire. Il faut montrer comment utiliser MsgFlags::SYNC ou MsgFlags::NOWAIT selon le comportement souhaité. Un guide de correction détaille les modifications à effectuer dans typed.rs et spsc.rs.
+Gestion d’erreurs : le code contient de nombreux unwrap() et expect() (11 occurrences), ce qui provoque des panics en production en cas d’erreur inattendue. Les conversions de pointeurs bruts (unsafe { &*(ptr) }) se font souvent sans validation d’alignement ou justification, augmentant le risque de corruption mémoire. Les alias d’erreurs (IpcError::Closed pour ChannelClosed, OutOfResources pour ResourceExhausted, etc.) multiplient les variantes et rendent le traitement difficile.
+Incohérences architecturales : deux types de drapeaux (MsgFlags sur 32 bits et MessageFlags sur 16 bits) existent avec la même sémantique. Cette duplication entraîne des conversions inutiles et un risque de confusion. De plus, les tables IPC utilisent des tailles fixes (MAX_SPSC_RINGS=4096, TYPED_CHANNEL_TABLE_SIZE=256) sans possibilité d’allocation dynamique.
+Documentation et sécurité : une large part des blocs unsafe manque de commentaire SAFETY: expliquant les invariants, ce qui complique l’audit ; seuls 206 blocs sur 319 sont documentés. Les exemples de code obsolètes et les commentaires sans mise à jour propagent de mauvaises pratiques.
+
+Le plan de correction recommande :
+
+Standardiser MsgFlags et déprécier MessageFlags ; ajouter une constante NONE et migrer tous les modules vers un seul type.
+Éliminer tous les unwrap() en production et propager des erreurs explicites (Result).
+Ajouter des commentaires SAFETY à chaque conversion de pointeur pour justifier qu’elle est sûre.
+Unifier les codes d’erreur et supprimer les alias redondants afin qu’un même type d’erreur retourne la même variante.
+Introduire l’allocation dynamique pour les tables de canaux et de rings ou, à défaut, documenter les limites et ajouter un fallback lorsque les tables sont pleines.
+6 Scheduler et Arch / Memory
+
+Le scheduler et l’interface arch/memory présentent plusieurs incohérences structurelles :
+
+Constantes MAX_CPUS : la valeur MAX_CPUS est correctement définie à 256 dans scheduler/smp/topology.rs et importée par la plupart des modules, mais quelques modules isolés (par ex. virt/stolen_time.rs, frame/reclaim.rs) définissent localement MAX_CPUS=512, ce qui créé un risque d’allocation incorrecte et doit être uniformisé.
+Double stockage du TCB : switch.rs maintient un tableau CURRENT_THREAD_PER_CPU[256] tandis que percpu stocke le TCB dans le GS register. Ces deux sources de vérité doivent être synchronisées, car certains modules (IPC) lisent directement le tableau. La correction consiste à ne pas supprimer le tableau mais à garantir leur cohérence.
+Affinité limitée : l’implémentation d’affinité (affinity.rs) utilise un masque u64, limitant l’affinité à 64 cœurs. La correction propose d’étendre la structure à quatre mots de 64 bits afin de supporter 256 cœurs.
+Memory ordering : certains compteurs du scheduler utilisent Ordering::Relaxed, ce qui est acceptable pour des statistiques mais dangereux pour des structures critiques comme PREEMPT_COUNT ou vruntime. Des Release/Acquire doivent être ajoutés sur les chemins de migration de threads.
+Assertions et tests : les assertions assert_preempt_disabled() disparaissent en build release car elles utilisent debug_assert!, laissant le code sans protection en production. Il faut utiliser des assertions actives ou des tests conditionnels permanents.
+
+L’audit signale également des problèmes plus profonds dans l’architecture : stubs vides pour des fonctions critiques (mark_a_pages_not_present(), override_a_idt_with_b_handlers()), absence d’appels à des routines nécessaires (par ex. register_swap_provider() jamais appelé), race sur ONLINE_CPU_COUNT (deux variables atomiques distinctes), et erreurs d’implémentation dans les routines KPTI (table non initialisée). Des corrections détaillées (CORR‑55 à CORR‑71) sont proposées dans les fichiers correspondants et doivent être appliquées selon l’ordre de priorité indiqué.
+
+Conclusion
+
+Cette seconde passe d’audit met en lumière des incohérences importantes dans les modules périphériques d’Exo‑OS. Les modules servers souffrent de dépendances manquantes, de politiques hétérogènes pour l’enregistrement des endpoints, de lacunes dans les vérifications de permissions et de timeouts, ainsi que de bugs logiques. Le syscall ABI est très incomplet et nécessite une synchronisation totale avec le noyau pour supporter POSIX et les fonctionnalités Exo‑OS. Le volet sécurité révèle des races condition et des fonctions stub qui, si elles ne sont pas corrigées, exposent le système à des attaques ou à des corruptions silencieuses. Le système de fichiers ne persiste pas correctement les données et ses API ne respectent pas les contrats POSIX, tandis que le module IPC accumule des dettes techniques (duplication de types, conversion de pointeurs non justifiée, gestion d’erreurs fragiles). Enfin, le scheduler et l’architecture mémoire présentent des incohérences dans les constantes et la gestion de la concurrence.
+
+L’ensemble des correctifs documentés dans les dossiers docs/FIX fournit un plan clair pour atteindre la version v0.2.0 stable. La priorité doit être donnée aux corrections critiques qui touchent la sécurité (CVE‑EXO‑001, constant‑time, invalidation KPTI), à l’ajout des syscalls manquants et à l’intégration de l’ABI dans tous les serveurs. Une démarche méthodique, accompagnée de tests unitaires, de fuzzing et de validation formelle (TLA+) permettra de passer à une version stabilisée avant d’entamer la prise en charge de Wayland et des manipulations visuelles.
+
+Rapport rédigé par ChatGPT, le 13 mai 2026.

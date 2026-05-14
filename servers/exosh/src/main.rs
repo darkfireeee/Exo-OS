@@ -12,6 +12,8 @@ const PATH_MAX: usize = 256;
 const LINE_MAX: usize = 256;
 const IO_BUF: usize = 2048;
 const DD_IO_BUF: usize = 1024 * 1024;
+const SHELL_WRITE_CHUNK: usize = 64 * 1024;
+const FS_BENCH_CHUNK: usize = 64 * 1024;
 const DIRENT64_HEADER_SIZE: usize = 24;
 const DT_DIR: u8 = 4;
 const TREE_MAX_DEPTH: usize = 4;
@@ -28,6 +30,10 @@ const ANSI_EXEC: &[u8] = b"\x1b[1;32m";
 const ANSI_REVERSE: &[u8] = b"\x1b[7m";
 const SIGTERM: u64 = 15;
 const SIGKILL: u64 = 9;
+const AF_INET: u16 = 2;
+const SOCK_STREAM: u64 = 1;
+const SOCK_DGRAM: u64 = 2;
+const PING_PAYLOAD: &[u8] = b"exoos-ping";
 
 struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
 
@@ -229,6 +235,14 @@ fn run_command(line: &[u8], state: &mut ShellState) {
         cmd_time(rest, state);
     } else if bytes_eq(cmd, b"dd") {
         cmd_dd(rest, state);
+    } else if bytes_eq(cmd, b"sync") {
+        cmd_sync();
+    } else if bytes_eq(cmd, b"ping") {
+        cmd_ping(rest);
+    } else if bytes_eq(cmd, b"tcping") {
+        cmd_tcping(rest);
+    } else if bytes_eq(cmd, b"bench") {
+        cmd_bench(rest);
     } else if bytes_eq(cmd, b"top") || bytes_eq(cmd, b"ps") {
         cmd_top();
     } else if bytes_eq(cmd, b"kill") {
@@ -250,11 +264,13 @@ fn run_command(line: &[u8], state: &mut ShellState) {
 fn cmd_help() {
     write_all(b"Commands:\n");
     write_all(
-        b"  help clear pwd cd ls mkdir touch cat echo rm cp mv rmdir tree top ps kill history time dd exit\n",
+        b"  help clear pwd cd ls mkdir touch cat echo rm cp mv rmdir tree top ps kill history time dd sync ping tcping bench exit\n",
     );
     write_all(b"Examples:\n");
     write_all(b"  ls -lah /tmp ; rm -rf /tmp/t ; history\n");
-    write_all(b"  time echo test ; dd if=/dev/zero of=/tmp/bench bs=1M count=4\n");
+    write_all(b"  time echo test ; dd if=/dev/urandom of=/tmp/bench bs=1M count=4\n");
+    write_all(b"  ping 127.0.0.1 4\n");
+    write_all(b"  tcping 127.0.0.1 80\n");
     write_all(b"  top ; kill <pid> ; kill -9 <pid>\n");
 }
 
@@ -784,20 +800,23 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
     }
 
     if input_arg.is_empty() || output_arg.is_empty() {
-        write_all(b"dd: usage: dd if=<path|/dev/zero> of=<path|/dev/null> [bs=1M] [count=N]\n");
+        write_all(
+            b"dd: usage: dd if=<path|/dev/zero|/dev/urandom> of=<path|/dev/null> [bs=1M] [count=N]\n",
+        );
         return;
     }
-    if is_dev_zero(input_arg) && count.is_none() {
-        write_all(b"dd: count required with /dev/zero\n");
+    if (is_dev_zero(input_arg) || is_dev_urandom(input_arg)) && count.is_none() {
+        write_all(b"dd: count required with generated input\n");
         return;
     }
 
     let input_zero = is_dev_zero(input_arg);
+    let input_random = is_dev_urandom(input_arg);
     let output_null = is_dev_null(output_arg);
     let mut input_fd = -1i64;
     let mut output_fd = -1i64;
 
-    if !input_zero {
+    if !input_zero && !input_random {
         let mut path = [0u8; PATH_MAX];
         if absolute_path(state.cwd(), input_arg, &mut path).is_none() {
             write_all(b"dd: input path too long\n");
@@ -893,13 +912,24 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
         let mut copied_any = false;
         while remaining > 0 {
             let chunk = remaining.min(buf.len() as u64) as usize;
-            let n = unsafe {
-                syscall::syscall3(
-                    syscall::SYS_READ,
-                    input_fd as u64,
-                    buf.as_mut_ptr() as u64,
-                    chunk as u64,
-                )
+            let n = if input_random {
+                unsafe {
+                    syscall::syscall3(
+                        syscall::SYS_GETRANDOM,
+                        buf.as_mut_ptr() as u64,
+                        chunk as u64,
+                        0,
+                    )
+                }
+            } else {
+                unsafe {
+                    syscall::syscall3(
+                        syscall::SYS_READ,
+                        input_fd as u64,
+                        buf.as_mut_ptr() as u64,
+                        chunk as u64,
+                    )
+                }
             };
 
             if n < 0 {
@@ -925,7 +955,7 @@ fn cmd_dd(rest: &[u8], state: &ShellState) {
             remaining = remaining.saturating_sub(n as u64);
             copied_any = true;
 
-            if n_usize < chunk {
+            if !input_random && n_usize < chunk {
                 eof = true;
                 break;
             }
@@ -1103,6 +1133,172 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
             render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
         }
     }
+}
+
+fn cmd_ping(rest: &[u8]) {
+    let (host, tail) = next_arg(rest);
+    if host.is_empty() {
+        write_all(b"ping: usage: ping <ipv4> [count]\n");
+        return;
+    }
+    let Some(addr) = parse_ipv4(host) else {
+        write_all(b"ping: invalid IPv4 address\n");
+        return;
+    };
+    let (count_arg, _) = next_arg(tail);
+    let count = if count_arg.is_empty() {
+        4
+    } else {
+        parse_u64(count_arg).unwrap_or(4).min(32)
+    };
+
+    let fd = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_DGRAM, 0) };
+    if fd < 0 {
+        print_errno(b"ping socket", fd);
+        return;
+    }
+
+    let sockaddr = sockaddr_in(addr, 7);
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_CONNECT,
+            fd as u64,
+            sockaddr.as_ptr() as u64,
+            sockaddr.len() as u64,
+        )
+    };
+    if rc < 0 {
+        print_errno(b"ping connect", rc);
+        let _ = close_fd(fd);
+        return;
+    }
+
+    write_all(b"PING ");
+    write_bytes(host);
+    write_all(b" via ExoNet V4\n");
+
+    let mut seq = 0u64;
+    while seq < count {
+        let Some(start) = monotonic_ns() else {
+            write_all(b"ping: clock unavailable\n");
+            break;
+        };
+
+        let send_rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_SENDTO,
+                fd as u64,
+                PING_PAYLOAD.as_ptr() as u64,
+                PING_PAYLOAD.len() as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if send_rc < 0 {
+            print_errno(b"ping sendto", send_rc);
+            break;
+        }
+
+        let mut recv_buf = [0u8; 64];
+        let mut from = [0u8; 16];
+        let mut from_len = from.len() as u32;
+        let recv_rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_RECVFROM,
+                fd as u64,
+                recv_buf.as_mut_ptr() as u64,
+                recv_buf.len() as u64,
+                0,
+                from.as_mut_ptr() as u64,
+                &mut from_len as *mut u32 as u64,
+            )
+        };
+        let elapsed = monotonic_ns().unwrap_or(start).saturating_sub(start);
+        if recv_rc < 0 {
+            print_errno(b"ping recvfrom", recv_rc);
+            break;
+        }
+
+        write_u64(recv_rc as u64);
+        write_all(b" bytes from ");
+        write_ipv4(addr);
+        write_all(b": seq=");
+        write_u64(seq);
+        write_all(b" time=");
+        write_u64(elapsed / 1_000);
+        write_all(b"us\n");
+
+        seq = seq.saturating_add(1);
+        if seq < count {
+            sleep_ms(250);
+        }
+    }
+
+    let _ = close_fd(fd);
+}
+
+fn cmd_tcping(rest: &[u8]) {
+    let (host, tail) = next_arg(rest);
+    if host.is_empty() {
+        write_all(b"tcping: usage: tcping <ipv4> [port]\n");
+        return;
+    }
+    let Some(addr) = parse_ipv4(host) else {
+        write_all(b"tcping: invalid IPv4 address\n");
+        return;
+    };
+    let (port_arg, _) = next_arg(tail);
+    let port = if port_arg.is_empty() {
+        80
+    } else {
+        let Some(parsed) = parse_u64(port_arg) else {
+            write_all(b"tcping: invalid port\n");
+            return;
+        };
+        if parsed == 0 || parsed > u16::MAX as u64 {
+            write_all(b"tcping: invalid port\n");
+            return;
+        }
+        parsed as u16
+    };
+
+    let fd = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_STREAM, 0) };
+    if fd < 0 {
+        print_errno(b"tcping socket", fd);
+        return;
+    }
+
+    let sockaddr = sockaddr_in(addr, port);
+    let Some(start) = monotonic_ns() else {
+        write_all(b"tcping: clock unavailable\n");
+        let _ = close_fd(fd);
+        return;
+    };
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_CONNECT,
+            fd as u64,
+            sockaddr.as_ptr() as u64,
+            sockaddr.len() as u64,
+        )
+    };
+    let elapsed = monotonic_ns().unwrap_or(start).saturating_sub(start);
+    if rc < 0 {
+        print_errno(b"tcping connect", rc);
+        let _ = close_fd(fd);
+        return;
+    }
+
+    write_all(b"tcping ");
+    write_ipv4(addr);
+    write_all(b":");
+    write_u64(port as u64);
+    write_all(b" connected time=");
+    write_u64(elapsed / 1_000);
+    write_all(b"us\n");
+
+    let _ = close_fd(fd);
 }
 
 fn handle_escape_sequence(
@@ -1876,6 +2072,41 @@ fn parse_u64(input: &[u8]) -> Option<u64> {
     Some(value)
 }
 
+fn parse_ipv4(input: &[u8]) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut part = 0usize;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i <= input.len() {
+        if i == input.len() || input[i] == b'.' {
+            if part >= out.len() || start == i {
+                return None;
+            }
+            let value = parse_u32(&input[start..i])?;
+            if value > 255 {
+                return None;
+            }
+            out[part] = value as u8;
+            part += 1;
+            start = i.saturating_add(1);
+        }
+        i += 1;
+    }
+    if part == 4 {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+fn sockaddr_in(addr: [u8; 4], port: u16) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[0..2].copy_from_slice(&AF_INET.to_ne_bytes());
+    out[2..4].copy_from_slice(&port.to_be_bytes());
+    out[4..8].copy_from_slice(&addr);
+    out
+}
+
 fn parse_size(input: &[u8]) -> Option<u64> {
     if input.is_empty() {
         return None;
@@ -1906,6 +2137,10 @@ fn is_dev_zero(path: &[u8]) -> bool {
 
 fn is_dev_null(path: &[u8]) -> bool {
     bytes_eq(path, b"/dev/null")
+}
+
+fn is_dev_urandom(path: &[u8]) -> bool {
+    bytes_eq(path, b"/dev/urandom") || bytes_eq(path, b"/dev/random")
 }
 
 fn service_pid(name: &[u8]) -> Option<u32> {
@@ -1961,6 +2196,16 @@ fn write_u32(mut value: u32) {
         value /= 10;
     }
     write_bytes(&buf[pos..]);
+}
+
+fn write_ipv4(addr: [u8; 4]) {
+    write_u32(addr[0] as u32);
+    write_all(b".");
+    write_u32(addr[1] as u32);
+    write_all(b".");
+    write_u32(addr[2] as u32);
+    write_all(b".");
+    write_u32(addr[3] as u32);
 }
 
 fn push_u32(out: &mut [u8], len: &mut usize, mut value: u32) {
@@ -2120,12 +2365,14 @@ fn write_bytes(bytes: &[u8]) {
 fn write_fd_all(fd: i64, bytes: &[u8]) -> i64 {
     let mut written = 0usize;
     while written < bytes.len() {
+        let remaining = bytes.len() - written;
+        let chunk = remaining.min(SHELL_WRITE_CHUNK);
         let rc = unsafe {
             syscall::syscall3(
                 syscall::SYS_WRITE,
                 fd as u64,
                 bytes[written..].as_ptr() as u64,
-                (bytes.len() - written) as u64,
+                chunk as u64,
             )
         };
         if rc <= 0 {
@@ -2142,6 +2389,10 @@ fn close_fd(fd: i64) -> i64 {
 
 fn ftruncate_fd(fd: i64, len: u64) -> i64 {
     unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, fd as u64, len) }
+}
+
+fn fdatasync_fd(fd: i64) -> i64 {
+    unsafe { syscall::syscall1(syscall::SYS_FDATASYNC, fd as u64) }
 }
 
 fn sleep_ms(ms: u64) {
@@ -2165,6 +2416,477 @@ fn monotonic_ns() -> Option<u64> {
         return None;
     }
     Some((ts.tv_sec as u64).saturating_mul(1_000_000_000) + ts.tv_nsec as u64)
+}
+
+fn cmd_sync() {
+    let rc = unsafe { syscall::syscall0(syscall::SYS_SYNC) };
+    if rc < 0 {
+        print_errno(b"sync", rc);
+    }
+}
+
+fn cmd_bench(rest: &[u8]) {
+    let (sub, args) = next_arg(rest);
+    if bytes_eq(sub, b"ipc") {
+        bench_ipc(args);
+    } else if bytes_eq(sub, b"sched") {
+        bench_sched(args);
+    } else if bytes_eq(sub, b"crypto") {
+        bench_crypto(args);
+    } else if bytes_eq(sub, b"fs") {
+        bench_fs(args);
+    } else {
+        write_all(b"bench: subcommands: ipc sched crypto fs\n");
+        write_all(b"  bench ipc    [n=10000]  -- IPC round-trip latency\n");
+        write_all(b"  bench sched  [n=10000]  -- scheduler yield cost\n");
+        write_all(b"  bench crypto [n=1000]   -- crypto_server random throughput\n");
+        write_all(b"  bench fs     [n=128]    -- write+read N MiB non-zero\n");
+    }
+}
+
+fn parse_bench_n(args: &[u8], default: u64) -> u64 {
+    let (arg, _) = next_arg(args);
+    if let Some(val) = strip_prefix(arg, b"n=") {
+        if let Some(n) = parse_u64(val) {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    default
+}
+
+fn bench_ipc(args: &[u8]) {
+    let n = parse_bench_n(args, 10_000);
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid <= 0 {
+        write_all(b"bench ipc: getpid failed\n");
+        return;
+    }
+
+    let name = b"ipc_router";
+    let endpoint = unsafe {
+        syscall::syscall2(
+            syscall::SYS_IPC_LOOKUP,
+            name.as_ptr() as u64,
+            name.len() as u64,
+        )
+    };
+    if endpoint <= 0 {
+        write_all(b"bench ipc: ipc_router not found\n");
+        return;
+    }
+
+    let reply_endpoint = ((pid as u64) << 32) | 0x4950_4342;
+    let reply_name = b"exosh_ipc_bench";
+    let _ = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_REGISTER,
+            reply_name.as_ptr() as u64,
+            reply_name.len() as u64,
+            reply_endpoint,
+        )
+    };
+
+    let mut msg = syscall::IpcMessage::zeroed();
+    msg.msg_type = 2; // ipc_router heartbeat
+    msg.payload[..8].copy_from_slice(&reply_endpoint.to_le_bytes());
+    write_all(b"bench ipc: ");
+    write_u64(n);
+    write_all(b" heartbeats... ");
+
+    let Some(start) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let mut i = 0u64;
+    while i < n {
+        let send_rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                endpoint as u64,
+                &msg as *const syscall::IpcMessage as u64,
+                core::mem::size_of::<syscall::IpcMessage>() as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if send_rc < 0 {
+            print_errno(b"bench ipc send", send_rc);
+            return;
+        }
+
+        let mut reply = [0u8; 4];
+        let recv_rc = unsafe {
+            syscall::syscall4(
+                syscall::SYS_IPC_RECV,
+                reply_endpoint,
+                reply.as_mut_ptr() as u64,
+                reply.len() as u64,
+                syscall::IPC_FLAG_TIMEOUT | 100,
+            )
+        };
+        if recv_rc < 0 {
+            print_errno(b"bench ipc recv", recv_rc);
+            return;
+        }
+
+        i = i.wrapping_add(1);
+    }
+
+    let Some(end) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let elapsed_ns = end.saturating_sub(start);
+    let elapsed_ms = elapsed_ns / 1_000_000;
+    let ns_per_op = if n > 0 { elapsed_ns / n } else { 0 };
+    let kops_centi = if elapsed_ns > 0 {
+        n.saturating_mul(100_000_000) / elapsed_ns
+    } else {
+        0
+    };
+
+    write_u64(elapsed_ms);
+    write_all(b"ms -> ");
+    write_u64(ns_per_op);
+    write_all(b"ns/op (");
+    write_fixed_2(kops_centi);
+    write_all(b" Kops/s)\n");
+}
+
+fn bench_sched(args: &[u8]) {
+    let n = parse_bench_n(args, 10_000);
+
+    write_all(b"bench sched: ");
+    write_u64(n);
+    write_all(b" yields... ");
+
+    let Some(start) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let mut i = 0u64;
+    while i < n {
+        unsafe {
+            syscall::syscall0(syscall::SYS_SCHED_YIELD);
+        }
+        i = i.wrapping_add(1);
+    }
+
+    let Some(end) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let elapsed_ns = end.saturating_sub(start);
+    let elapsed_ms = elapsed_ns / 1_000_000;
+    let ns_per_yield = if n > 0 { elapsed_ns / n } else { 0 };
+    let us_per_yield = ns_per_yield / 1_000;
+    let ns_frac = ns_per_yield % 1_000;
+
+    write_u64(elapsed_ms);
+    write_all(b"ms -> ");
+    write_u64(us_per_yield);
+    write_all(b".");
+    if ns_frac < 100 {
+        write_all(b"0");
+    }
+    if ns_frac < 10 {
+        write_all(b"0");
+    }
+    write_u64(ns_frac);
+    write_all(b"us/yield\n");
+}
+
+const CRYPTO_SERVER_ENDPOINT: u64 = 4;
+const CRYPTO_SERVER_PID: u32 = 5;
+const CRYPTO_PROTOCOL_VERSION: u8 = 3;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
+const CRYPTO_REPLY_DATA_SIZE: usize = 228;
+const CRYPTO_RANDOM: u32 = 1;
+const CRYPTO_OK: u32 = 0;
+const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+
+#[repr(C)]
+struct CryptoRequestBench {
+    sender_endpoint: u64,
+    msg_type: u32,
+    payload_len: u16,
+    version: u8,
+    flags: u8,
+    cap_token: syscall::ExoCapTokenWire,
+    payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+}
+
+#[repr(C)]
+struct CryptoReplyBench {
+    status: u32,
+    key_handle: u32,
+    data_len: u16,
+    version: u8,
+    flags: u8,
+    data: [u8; CRYPTO_REPLY_DATA_SIZE],
+}
+
+fn bench_crypto(args: &[u8]) {
+    let n = parse_bench_n(args, 1_000);
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid <= 0 {
+        write_all(b"bench crypto: getpid failed\n");
+        return;
+    }
+
+    let reply_endpoint = ((pid as u64) << 32) | 0x4352_5950;
+    let reply_name = b"exosh_crypto_bench";
+    let _ = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_REGISTER,
+            reply_name.as_ptr() as u64,
+            reply_name.len() as u64,
+            reply_endpoint,
+        )
+    };
+
+    let mut token = syscall::ExoCapTokenWire::empty();
+    let cap_rc = unsafe {
+        syscall::exo_cap_create(
+            syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
+            syscall::EXO_CAP_RIGHT_IPC_SEND,
+            CRYPTO_SERVER_PID,
+            &mut token,
+        )
+    };
+    if cap_rc < 0 || token.is_empty() {
+        write_all(b"bench crypto: crypto_server capability unavailable\n");
+        return;
+    }
+
+    let mut req = CryptoRequestBench {
+        sender_endpoint: reply_endpoint,
+        msg_type: CRYPTO_RANDOM,
+        payload_len: 1,
+        version: CRYPTO_PROTOCOL_VERSION,
+        flags: 0,
+        cap_token: token,
+        payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
+    };
+    req.payload[0] = 32;
+
+    write_all(b"bench crypto: ");
+    write_u64(n);
+    write_all(b" ops RANDOM... ");
+
+    let Some(start) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let mut i = 0u64;
+    while i < n {
+        let send_rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                CRYPTO_SERVER_ENDPOINT,
+                &req as *const CryptoRequestBench as u64,
+                core::mem::size_of::<CryptoRequestBench>() as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if send_rc < 0 {
+            print_errno(b"bench crypto send", send_rc);
+            return;
+        }
+
+        let mut reply = CryptoReplyBench {
+            status: 0,
+            key_handle: 0,
+            data_len: 0,
+            version: 0,
+            flags: 0,
+            data: [0u8; CRYPTO_REPLY_DATA_SIZE],
+        };
+        let recv_rc = unsafe {
+            syscall::syscall4(
+                syscall::SYS_IPC_RECV,
+                reply_endpoint,
+                &mut reply as *mut CryptoReplyBench as u64,
+                core::mem::size_of::<CryptoReplyBench>() as u64,
+                syscall::IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
+            )
+        };
+        if recv_rc < 0 {
+            print_errno(b"bench crypto recv", recv_rc);
+            return;
+        }
+        if reply.status != CRYPTO_OK {
+            write_all(b"bench crypto: crypto_server status ");
+            write_u64(reply.status as u64);
+            write_all(b"\n");
+            return;
+        }
+
+        i = i.wrapping_add(1);
+    }
+
+    let Some(end) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let elapsed_ns = end.saturating_sub(start);
+    let elapsed_ms = elapsed_ns / 1_000_000;
+    let us_per_op = if n > 0 { elapsed_ns / n / 1_000 } else { 0 };
+    let total_bytes = n.saturating_mul(32);
+    let mb_per_sec_centi = if elapsed_ns > 0 {
+        (total_bytes as u128).saturating_mul(100_000) / (elapsed_ns as u128)
+    } else {
+        0
+    };
+
+    write_u64(elapsed_ms);
+    write_all(b"ms -> ");
+    write_u64(us_per_op);
+    write_all(b"us/op (");
+    write_fixed_2(mb_per_sec_centi.min(u64::MAX as u128) as u64);
+    write_all(b" MB/s CSPRNG)\n");
+}
+
+fn bench_fs(args: &[u8]) {
+    let n = parse_bench_n(args, 128);
+    let target_bytes = n.saturating_mul(1024 * 1024);
+    let path = b"/tmp/bench_fs_data";
+    let mut out_path = [0u8; PATH_MAX];
+    out_path[..path.len()].copy_from_slice(path);
+
+    write_all(b"bench fs write: ");
+    write_u64(n);
+    write_all(b" MiB in 64 KiB chunks + one fdatasync... ");
+
+    let buf = unsafe { &mut *DD_IO_BUFFER.0.get() };
+    let bench_chunk = FS_BENCH_CHUNK.min(buf.len());
+    let getrandom_rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_GETRANDOM,
+            buf.as_mut_ptr() as u64,
+            bench_chunk as u64,
+            0,
+        )
+    };
+    if getrandom_rc <= 0 {
+        let mut k = 0usize;
+        while k < bench_chunk {
+            buf[k] = (k.wrapping_mul(0x6B).wrapping_add(0xA5) & 0xFF) as u8;
+            k = k.wrapping_add(1);
+        }
+    }
+
+    let Some(write_start) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let out_fd = unsafe {
+        syscall::syscall4(
+            syscall::SYS_OPENAT,
+            AT_FDCWD,
+            out_path.as_ptr() as u64,
+            syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC,
+            0o644,
+        )
+    };
+    if out_fd < 0 {
+        print_errno(b"bench fs", out_fd);
+        return;
+    }
+
+    let mut written_bytes = 0u64;
+    while written_bytes < target_bytes {
+        let this_write = (target_bytes - written_bytes).min(bench_chunk as u64) as usize;
+        let rc = write_fd_all(out_fd, &buf[..this_write]);
+        if rc < 0 {
+            print_errno(b"bench fs write", rc);
+            let _ = close_fd(out_fd);
+            return;
+        }
+        written_bytes = written_bytes.saturating_add(this_write as u64);
+    }
+    let rc = fdatasync_fd(out_fd);
+    if rc < 0 {
+        print_errno(b"bench fs fdatasync", rc);
+        let _ = close_fd(out_fd);
+        return;
+    }
+    let _ = close_fd(out_fd);
+
+    let Some(write_end) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    print_dd_summary(target_bytes, write_end.saturating_sub(write_start));
+
+    write_all(b"bench fs read:  ");
+    write_u64(n);
+    write_all(b" MiB in 64 KiB chunks... ");
+
+    let Some(read_start) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    let mut total_read = 0u64;
+    while total_read < target_bytes {
+        let in_fd = unsafe {
+            syscall::syscall4(
+                syscall::SYS_OPENAT,
+                AT_FDCWD,
+                out_path.as_ptr() as u64,
+                syscall::O_RDONLY,
+                0,
+            )
+        };
+        if in_fd < 0 {
+            print_errno(b"bench fs read", in_fd);
+            return;
+        }
+
+        let mut read_this_open = 0u64;
+        while total_read < target_bytes {
+            let request = (target_bytes - total_read).min(bench_chunk as u64) as usize;
+            let n_read = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_READ,
+                    in_fd as u64,
+                    buf.as_mut_ptr() as u64,
+                    request as u64,
+                )
+            };
+            if n_read <= 0 {
+                break;
+            }
+            read_this_open = read_this_open.saturating_add(n_read as u64);
+            total_read = total_read.saturating_add(n_read as u64);
+        }
+        let _ = close_fd(in_fd);
+        if read_this_open == 0 {
+            break;
+        }
+    }
+
+    let Some(read_end) = monotonic_ns() else {
+        write_all(b"clock unavailable\n");
+        return;
+    };
+
+    print_dd_summary(total_read, read_end.saturating_sub(read_start));
+    let _ = unsafe { syscall::syscall1(syscall::SYS_UNLINK, out_path.as_ptr() as u64) };
 }
 
 #[panic_handler]

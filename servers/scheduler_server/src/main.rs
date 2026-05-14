@@ -176,10 +176,7 @@ impl SchedulerService {
         };
 
         if matches!(class, SchedulingClass::Realtime | SchedulingClass::Deadline) {
-            if let Err(err) =
-                self.realtime
-                    .admit(tid, runtime_us.max(1), period_us.max(runtime_us.max(1)))
-            {
+            if let Err(err) = self.realtime.admit(tid, runtime_us, period_us) {
                 self.stats.note_error(owner_pid, tid, err);
                 return SchedulerReply::error(err);
             }
@@ -295,10 +292,16 @@ impl SchedulerService {
             return SchedulerReply::error(exo_syscall_abi::EPERM);
         }
 
-        let stats = self.stats.snapshot(tid).unwrap_or_else(|| {
-            self.stats.note_register(thread);
-            self.stats.snapshot(tid).unwrap()
-        });
+        let stats = match self.stats.snapshot(tid) {
+            Some(stats) => stats,
+            None => {
+                self.stats.note_register(thread);
+                match self.stats.snapshot(tid) {
+                    Some(stats) => stats,
+                    None => return SchedulerReply::error(exo_syscall_abi::ENOSPC),
+                }
+            }
+        };
         let rt = self.realtime.snapshot(tid);
         SchedulerReply::ok(
             ((stats.pid as u64) << 32) | stats.tid as u64,

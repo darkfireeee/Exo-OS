@@ -1,0 +1,15 @@
+[package]
+name = "exo-virtio-net-driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "exo-virtio-net-driver"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }

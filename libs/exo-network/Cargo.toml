@@ -1,0 +1,13 @@
+[package]
+name = "exo-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Exo-OS network library adaptation layer backed by vendored smoltcp"
+build = "build.rs"
+
+[dependencies]
+log.workspace = true
+smoltcp = { path = "../vendors/smoltcp-upstream", default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp"] }
+

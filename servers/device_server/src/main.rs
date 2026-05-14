@@ -234,7 +234,7 @@ impl DeviceService {
         }
     }
 
-    fn handle_fault(&mut self, payload: &[u8]) -> DeviceReply {
+    fn handle_fault(&mut self, sender_pid: u32, payload: &[u8]) -> DeviceReply {
         let driver_pid = match read_u32(payload, 0) {
             Ok(value) => value,
             Err(err) => return DeviceReply::error(err),
@@ -252,9 +252,15 @@ impl DeviceService {
             Err(err) => return DeviceReply::error(err),
         };
 
+        let Some(bdf_raw) = self.registry.bdf_of_owner(driver_pid) else {
+            return DeviceReply::error(exo_syscall_abi::ENOENT);
+        };
+        if sender_pid != 1 && sender_pid != driver_pid {
+            return DeviceReply::error(exo_syscall_abi::EPERM);
+        }
+
         self.iommu
             .report_fault(driver_pid, fault_code, value0, value1);
-        let bdf_raw = self.registry.bdf_of_owner(driver_pid).unwrap_or(0);
         self.hotplug.push(DeviceEvent::new(
             DeviceEventKind::Faulted,
             bdf_raw,
@@ -385,7 +391,7 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
         }
         DEVICE_MSG_CLAIM => service.handle_claim(request.sender_pid, &request.payload),
         DEVICE_MSG_RELEASE => service.handle_release(request.sender_pid, &request.payload),
-        DEVICE_MSG_FAULT => service.handle_fault(&request.payload),
+        DEVICE_MSG_FAULT => service.handle_fault(request.sender_pid, &request.payload),
         DEVICE_MSG_EVENT_POLL => service.handle_event_poll(),
         DEVICE_MSG_POWER_SET => service.handle_power_set(request.sender_pid, &request.payload),
         DEVICE_MSG_QUERY => service.handle_query(&request.payload),

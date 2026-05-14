@@ -80,7 +80,7 @@ impl RealtimeAdmission {
                 utilization_ppm,
             };
             self.total_utilization_ppm = next_total;
-            return Ok(self.snapshot(tid).unwrap());
+            return Ok(self.snapshot_from_record(self.records[idx]));
         }
 
         let Some(idx) = self.records.iter().position(|record| !record.active) else {
@@ -95,7 +95,7 @@ impl RealtimeAdmission {
             utilization_ppm,
         };
         self.total_utilization_ppm = next_total;
-        Ok(self.snapshot(tid).unwrap())
+        Ok(self.snapshot_from_record(self.records[idx]))
     }
 
     pub fn release(&mut self, tid: u32) -> Option<RtSnapshot> {
@@ -133,5 +133,15 @@ impl RealtimeAdmission {
 
     pub const fn total_utilization_ppm(&self) -> u32 {
         self.total_utilization_ppm
+    }
+
+    fn snapshot_from_record(&self, record: RtRecord) -> RtSnapshot {
+        RtSnapshot {
+            tid: record.tid,
+            runtime_us: record.runtime_us,
+            period_us: record.period_us,
+            utilization_ppm: record.utilization_ppm,
+            total_utilization_ppm: self.total_utilization_ppm,
+        }
     }
 }

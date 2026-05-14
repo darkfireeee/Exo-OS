@@ -14,9 +14,9 @@ pub use futex_table::{
 
 // Re-exports oom_killer
 pub use oom_killer::{
-    oom_kill, oom_kill_default, oom_suppress, oom_unsuppress, register_oom_kill_sender,
-    select_oom_victim, set_tsc_hz, DefaultOomScorer, OomKillCandidate, OomKillSendFn, OomScorer,
-    OomStats, OOM_STATS,
+    oom_kill, oom_kill_default, oom_suppress, oom_unsuppress, register_oom_candidate_provider,
+    register_oom_kill_sender, select_oom_victim, set_tsc_hz, DefaultOomScorer,
+    OomCandidateProviderFn, OomKillCandidate, OomKillSendFn, OomScorer, OomStats, OOM_STATS,
 };
 
 // Re-exports shrinker

@@ -37,7 +37,7 @@ const DEFAULT_RATE_LIMIT: u32 = 1000;
 const KERNEL_PID: u32 = 0;
 const INIT_SERVER_PID: u32 = 1;
 const IPC_ROUTER_PID: u32 = 2;
-const EXO_SHIELD_PID: u32 = 10;
+const EXO_SHIELD_PID: u32 = 12;
 
 const SCAN_REQUEST: u32 = 0;
 const EVENT_REPORT: u32 = 1;
@@ -576,7 +576,7 @@ pub fn policy_init() {
     RATE_LIMITED.store(0, Ordering::Release);
     DEFAULT_APPLIED.store(0, Ordering::Release);
 
-    // Install default rules for the live exo_shield endpoint (PID 10).
+    // Install default rules for the live exo_shield service PID.
     // Public telemetry paths stay open but audited / rate-limited, while
     // mutating administrative paths are reserved to privileged senders.
 

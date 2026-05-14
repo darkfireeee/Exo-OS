@@ -73,7 +73,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     // ── 2. Vruntime CFS ──────────────────────────────────────────────────
     let rq = runqueue::run_queue(CpuId(cpu_id));
-    let nr = rq.nr_running_usize();
+    let ready_nr = rq.nr_running_usize();
 
     // Accumuler l'elapsed sur ce CPU.
     let cpu_idx = (cpu_id as usize).min(MAX_CPUS - 1);
@@ -95,8 +95,13 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
             // Avancer le vruntime du thread pondéré.
             tcb.advance_vruntime(TICK_NS, tcb.priority.cfs_weight());
 
-            // Calculer le timeslice actuel.
-            let tw = rq.total_cfs_weight();
+            // Le thread courant est retiré de la runqueue pendant qu'il tourne:
+            // l'inclure dans nr/total_weight évite de désactiver la préemption
+            // quand un seul autre thread CFS est prêt.
+            let nr = ready_nr.saturating_add(1);
+            let tw = rq
+                .total_cfs_weight()
+                .saturating_add(tcb.priority.cfs_weight() as u64);
             let slice = timeslice_for(tcb, nr, tw);
 
             // ── 3. Préemption CFS ───────────────────────────────────────

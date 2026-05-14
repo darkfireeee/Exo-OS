@@ -16,6 +16,8 @@ use spin::Mutex;
 
 /// Nombre maximum de clés simultanées dans le magasin.
 const MAX_KEYS: usize = 64;
+/// Quota par principal pour éviter l'épuisement global du keystore.
+const MAX_KEYS_PER_OWNER: usize = 8;
 
 /// Taille d'une clé en octets (256 bits).
 pub const KEY_SIZE: usize = 32;
@@ -260,6 +262,36 @@ fn crypto_shred(buf: &mut [u8; KEY_SIZE]) {
 /// - `owner_principal` est enregistré pour le contrôle d'accès.
 pub fn insert_key(key: &[u8; KEY_SIZE], key_type: KeyType, owner_principal: u64) -> u32 {
     let mut table = KEY_TABLE.lock();
+    let now = read_tsc();
+    let mut expired_count = 0u32;
+    let mut owner_active = 0usize;
+
+    for entry in table.iter_mut() {
+        if !entry.is_active() {
+            continue;
+        }
+        let creation = entry.creation_tsc.load(Ordering::Acquire);
+        if now.wrapping_sub(creation) > KEY_MAX_LIFETIME_TSC {
+            crypto_shred(&mut entry.key);
+            entry
+                .flags
+                .store(KeyFlags::Expired as u8, Ordering::Release);
+            entry.generation.fetch_add(1, Ordering::AcqRel);
+            expired_count += 1;
+            continue;
+        }
+        if owner_principal != 0 && entry.owner_principal.load(Ordering::Acquire) == owner_principal
+        {
+            owner_active += 1;
+        }
+    }
+
+    if expired_count > 0 {
+        ACTIVE_KEY_COUNT.fetch_sub(expired_count, Ordering::Relaxed);
+    }
+    if owner_principal != 0 && owner_active >= MAX_KEYS_PER_OWNER {
+        return 0;
+    }
 
     // Recherche linéaire à partir du hint
     let hint = NEXT_SLOT_HINT.load(Ordering::Relaxed) as usize;

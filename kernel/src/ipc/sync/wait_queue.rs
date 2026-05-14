@@ -12,6 +12,14 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{ChannelId, IpcError};
 
+#[inline]
+fn timeout_expired(enqueued_at: u64, timeout_ns: u64) -> bool {
+    if timeout_ns == 0 {
+        return false;
+    }
+    crate::scheduler::timer::clock::monotonic_ns().saturating_sub(enqueued_at) >= timeout_ns
+}
+
 // ---------------------------------------------------------------------------
 // Politique de réveil
 // ---------------------------------------------------------------------------
@@ -227,6 +235,7 @@ impl IpcWaitQueue {
         let w = &self.waiters[waiter_idx];
         let tid = w.thread_id.load(Ordering::Relaxed);
         let timeout_ns = w.timeout_ns.load(Ordering::Relaxed);
+        let enqueued_at = w.enqueued_at.load(Ordering::Relaxed);
         let mut spin_count: u32 = 0;
         const SPIN_BEFORE_BLOCK: u32 = 64;
 
@@ -259,30 +268,34 @@ impl IpcWaitQueue {
                 return Err(IpcError::Closed);
             }
 
-            // 3. Phase spin courte (≤ SPIN_BEFORE_BLOCK tours) pour les réveils rapides.
+            // 3. Vérifier timeout avec l'horloge monotone réelle.
+            if timeout_expired(enqueued_at, timeout_ns) && !w.is_woken() {
+                w.wake(WakeReason::Timeout);
+                w.dequeue();
+                self.count.fetch_sub(1, Ordering::Relaxed);
+                self.total_timeouts.fetch_add(1, Ordering::Relaxed);
+                return Err(IpcError::Timeout);
+            }
+
+            // 4. Phase spin courte (≤ SPIN_BEFORE_BLOCK tours) pour les réveils rapides.
             if spin_count < SPIN_BEFORE_BLOCK {
                 core::hint::spin_loop();
                 spin_count += 1;
                 continue;
             }
 
-            // 4. Vérifier timeout (uniquement si timeout activé).
+            // 5. Une attente finie ne doit pas dormir sans timer armé : on rend
+            // le CPU puis on reteste le deadline. Les attentes infinies peuvent
+            // utiliser le vrai sommeil scheduler jusqu'au wake explicite.
             if timeout_ns != 0 {
-                // NOTE : utiliser monotonic_ns() pour une vraie vérification temporelle.
-                // Pour l'instant : compteur de blocages comme proxy de durée.
-                // Chaque blocage = ~quantum scheduler (~1–10 ms).
-                // 1000 blocages ≈ 1–10 s ; valeur conservatrice.
-                let elapsed_proxy = (spin_count as u64).saturating_sub(SPIN_BEFORE_BLOCK as u64);
-                if elapsed_proxy > timeout_ns / 1_000_000 + 1 {
-                    w.wake(WakeReason::Timeout);
-                    w.dequeue();
-                    self.count.fetch_sub(1, Ordering::Relaxed);
-                    self.total_timeouts.fetch_add(1, Ordering::Relaxed);
-                    return Err(IpcError::Timeout);
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
+                spin_count = SPIN_BEFORE_BLOCK;
+                continue;
             }
 
-            // 5. Blocage réel via le scheduler.
+            // 6. Blocage réel via le scheduler.
             // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
             debug_assert!(
                 crate::scheduler::core::preempt::PreemptGuard::depth() == 0,

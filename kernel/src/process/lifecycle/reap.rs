@@ -8,7 +8,7 @@
 // est effectuée par un kthread dédié (jamais inline dans exit()).
 //
 // File reaper :
-//   • SPSC lock-free ring de 512 entrées.
+//   • MPSC ring de 4096 entrées + débordement dynamique best-effort.
 //   • Chaque entrée = (pid, tid) du thread à reaper.
 //   • Le kthread reaper lit la file, trouve le ProcessThread via registry,
 //     et libère toutes les ressources.
@@ -92,7 +92,7 @@ static REAPER_OVERFLOW: Mutex<OverflowQueue> = Mutex::new(OverflowQueue::new());
 static REAPER_SLEEP_LOCK: Mutex<()> = Mutex::new(());
 static REAPER_WAIT_QUEUE: WaitQueue = WaitQueue::new();
 
-/// File SPSC lock-free pour le reaper.
+/// File MPSC bornée pour le reaper.
 pub struct ReaperQueue {
     /// Anneau principal borné.
     ring: [core::cell::UnsafeCell<ReaperEntry>; REAPER_RING_SIZE],
@@ -307,14 +307,22 @@ pub fn init_reaper() {
         core::arch::asm!("mov al, 0x52", "out 0xe9, al", options(nomem, nostack));
         // 'R'
     }
-    create_kthread(&KthreadParams {
+    let reaper = create_kthread(&KthreadParams {
         name: "reaper",
         entry: reaper_loop,
         arg: 0,
         target_cpu: 0,
         priority: Priority::NORMAL_DEFAULT,
-    })
-    .expect("init_reaper: impossible de démarrer le kthread reaper");
+    });
+    if reaper.is_err() {
+        // Le boot ne doit pas paniquer dans le chemin basse mémoire. Les zombies
+        // resteront observables via waitpid(), et les compteurs signaleront
+        // l'absence de progression du reaper.
+        unsafe {
+            core::arch::asm!("mov al, 0x21", "out 0xe9, al", options(nomem, nostack));
+        }
+        return;
+    }
     // SAFETY: trace E9 bornée pour confirmer la fin d'init_reaper.
     unsafe {
         core::arch::asm!("mov al, 0x72", "out 0xe9, al", options(nomem, nostack));

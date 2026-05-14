@@ -511,10 +511,7 @@ fn write_blob_at(
         return Err(FsBridgeError::Invalid);
     }
 
-    let mut input = Vec::new();
-    input.resize(count, 0);
-    copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
-        .map_err(|_| FsBridgeError::Fault)?;
+    let input = read_user_bytes(buf_ptr, count)?;
 
     let start = offset as usize;
     BLOB_CACHE
@@ -577,23 +574,6 @@ fn next_pseudo_blob(tag: u8) -> BlobId {
 fn is_pseudo_blob(blob_id: &BlobId, tag: u8) -> bool {
     let bytes = blob_id.as_bytes();
     bytes[0] == tag && bytes[1] == b'E' && bytes[2] == b'X' && bytes[3] == b'O'
-}
-
-#[inline]
-fn mark_blob_clean(blob_id: &BlobId) {
-    if BLOB_CACHE.contains(blob_id) {
-        let _ = BLOB_CACHE.mark_clean(blob_id);
-    }
-}
-
-#[inline]
-fn mark_all_blobs_clean() {
-    let dirty = BLOB_CACHE.dirty_ids();
-    let mut i = 0usize;
-    while i < dirty.len() {
-        let _ = BLOB_CACHE.mark_clean(&dirty[i]);
-        i += 1;
-    }
 }
 
 #[inline]
@@ -1309,10 +1289,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         return Ok(0);
     }
     if fd == 1 || fd == 2 {
-        let mut input = Vec::new();
-        input.resize(count, 0);
-        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
-            .map_err(|_| FsBridgeError::Fault)?;
+        let input = read_user_bytes(buf_ptr, count)?;
         crate::arch::x86_64::terminal::write_from_process(pid, process_pgid(pid), &input);
         return Ok(count as i64);
     }
@@ -1329,10 +1306,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        let mut input = Vec::new();
-        input.resize(count, 0);
-        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
-            .map_err(|_| FsBridgeError::Fault)?;
+        let input = read_user_bytes(buf_ptr, count)?;
         let mut data = BLOB_CACHE
             .get(&entry.blob_id)
             .map(|bytes| bytes.to_vec())
@@ -1362,18 +1336,12 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        let mut input = Vec::new();
-        input.resize(count, 0);
-        copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
-            .map_err(|_| FsBridgeError::Fault)?;
+        let input = read_user_bytes(buf_ptr, count)?;
         let peer = socket_peer_blob(entry.blob_id)?;
         return append_socket_payload(peer, &input);
     }
 
-    let mut input = Vec::new();
-    input.resize(count, 0);
-    copy_from_user(input.as_mut_ptr(), buf_ptr as *const u8, count)
-        .map_err(|_| FsBridgeError::Fault)?;
+    let input = read_user_bytes(buf_ptr, count)?;
 
     let start = if entry.flags & open_flags::O_APPEND != 0 {
         blob_len(&entry.blob_id)
@@ -1557,7 +1525,10 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
     if !exists {
         let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
         ensure_directory_exists(&parent_path)?;
-        ensure_blob_exists(blob_id)?;
+        BLOB_CACHE
+            .insert(blob_id, Vec::new())
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&blob_id);
         upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_FILE)?;
     }
     if fd_flags & open_flags::O_TRUNC != 0 {
@@ -2330,9 +2301,20 @@ pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError
     }
     let _ = (data_only, pid);
     let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
-    if BLOB_CACHE.contains(&entry.blob_id) {
-        let _ = BLOB_CACHE.mark_clean(&entry.blob_id);
+
+    if !BLOB_CACHE.contains(&entry.blob_id) {
+        return Ok(0);
     }
+
+    if let Some(data) = BLOB_CACHE.get(&entry.blob_id) {
+        match object_store::persist_blob_data_if_disk(entry.blob_id, &data, true) {
+            Ok(_) => {
+                let _ = BLOB_CACHE.mark_clean(&entry.blob_id);
+            }
+            Err(err) => return Err(exofs_to_bridge_error(err)),
+        }
+    }
+
     Ok(0)
 }
 
@@ -2787,10 +2769,7 @@ pub fn fs_vmsplice(
         return Err(FsBridgeError::Invalid);
     }
     vectored_io(iov_ptr, iovcnt, |base, len| {
-        let mut input = Vec::new();
-        input.resize(len, 0);
-        copy_from_user(input.as_mut_ptr(), base as *const u8, len)
-            .map_err(|_| FsBridgeError::Fault)?;
+        let input = read_user_bytes(base, len)?;
         append_pipe_payload(entry.blob_id, &input)
     })
 }
@@ -2924,9 +2903,23 @@ pub fn fs_select(
 #[inline]
 fn vec_with_zeroes(len: usize) -> Result<Vec<u8>, FsBridgeError> {
     let mut out = Vec::new();
-    out.try_reserve(len).map_err(|_| FsBridgeError::NoSpace)?;
+    out.try_reserve_exact(len)
+        .map_err(|_| FsBridgeError::NoMemory)?;
     out.resize(len, 0);
     Ok(out)
+}
+
+#[inline]
+fn read_user_bytes(ptr: u64, len: usize) -> Result<Vec<u8>, FsBridgeError> {
+    if ptr == 0 && len != 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let mut input = vec_with_zeroes(len)?;
+    if len != 0 {
+        copy_from_user(input.as_mut_ptr(), ptr as *const u8, len)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    Ok(input)
 }
 
 /// `copy_file_range`.
@@ -3095,9 +3088,7 @@ pub fn fs_sync_file_range(
     if flags & !allowed != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
-    mark_blob_clean(&entry.blob_id);
-    Ok(0)
+    fs_fsync(fd, false, pid)
 }
 
 /// `sync()`.
@@ -3107,7 +3098,31 @@ pub fn fs_sync(pid: u32) -> Result<i64, FsBridgeError> {
         return Err(FsBridgeError::NotReady);
     }
     let _ = pid;
-    mark_all_blobs_clean();
+
+    let dirty = BLOB_CACHE.collect_dirty();
+    if dirty.is_empty() {
+        return Ok(0);
+    }
+
+    let mut io_err = false;
+    let mut i = 0usize;
+    while i < dirty.len() {
+        let (blob_id, ref data) = dirty[i];
+        match object_store::persist_blob_data_if_disk(blob_id, data, true) {
+            Ok(_) => {
+                let _ = BLOB_CACHE.mark_clean(&blob_id);
+            }
+            Err(_) => {
+                io_err = true;
+            }
+        }
+        i = i.wrapping_add(1);
+    }
+
+    if io_err {
+        return Err(FsBridgeError::Io);
+    }
+
     Ok(0)
 }
 

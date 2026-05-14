@@ -155,9 +155,14 @@ pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> Ex
 
         let mut lba = mapping.base_lba;
         let mut pos = 0usize;
+        let mut block = Vec::new();
+        block
+            .try_reserve_exact(block_size_usize)
+            .map_err(|_| ExofsError::NoMemory)?;
+        block.resize(block_size_usize, 0);
         while pos < data.len() {
             let chunk = core::cmp::min(block_size_usize, data.len().saturating_sub(pos));
-            let mut block = alloc::vec![0u8; block_size_usize];
+            block.fill(0);
             block[..chunk].copy_from_slice(&data[pos..pos + chunk]);
             device.write_block(lba, &block)?;
             lba = lba.saturating_add(1);
@@ -197,8 +202,12 @@ pub fn load_blob_data_if_available(blob_id: &BlobId) -> ExofsResult<Option<Vec<u
         let block_size = mapping.block_size as usize;
         let mut remaining = mapping.size_bytes as usize;
         let mut lba = mapping.base_lba;
+        let mut block = Vec::new();
+        block
+            .try_reserve_exact(block_size)
+            .map_err(|_| ExofsError::NoMemory)?;
+        block.resize(block_size, 0);
         while remaining > 0 {
-            let mut block = alloc::vec![0u8; block_size];
             device.read_block(lba, &mut block)?;
             let take = core::cmp::min(remaining, block_size);
             out.extend_from_slice(&block[..take]);

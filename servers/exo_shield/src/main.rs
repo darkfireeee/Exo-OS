@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
 
-//! # exo_shield — PID 10, AI/Process Containment Security Server (ExoShield Phase 3)
+//! # exo_shield — AI/Process Containment Security Server (ExoShield Phase 3)
 //!
 //! Monitors processes, detects anomalies, contains threats, and provides forensics.
 //! All other servers delegate security queries here.
 //!
 //! ## IPC Protocol (incoming messages)
-//! Clients send requests via SYS_IPC_SEND to endpoint "exo_shield" (PID 10).
+//! Clients send requests via SYS_IPC_SEND to endpoint "exo_shield".
 //!
 //! ### Message types (msg_type)
 //! - SCAN_REQUEST   (0) : request a scan of a process/memory region
@@ -59,7 +59,7 @@ const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 /// Incoming IPC request (128 bytes).
 ///
 /// When `ipc_gate` classifies a request as privileged, `payload[100..120]`
-/// carries an `ExoCapTokenWire` targeting endpoint 10.
+/// carries an `ExoCapTokenWire` targeting the live exo_shield service PID.
 #[repr(C)]
 struct ShieldRequest {
     sender_pid: u32,
@@ -91,7 +91,8 @@ impl ShieldReply {
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
-const EXO_SHIELD_PID: u64 = 10;
+const EXO_SHIELD_ENDPOINT: u64 = 10;
+const EXO_SHIELD_PID: u64 = 12;
 const _: () = assert!(syscall::EXO_CAP_TOKEN_WIRE_SIZE == ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN);
 
 // ── Global Statistics ───────────────────────────────────────────────────────
@@ -818,14 +819,14 @@ pub extern "C" fn _start() -> ! {
     signatures::signatures_init();
     behavioral::behavioral_init();
 
-    // ── 1. Register with ipc_router as exo_shield (PID 10) ─────────────────
+    // ── 1. Register public exo_shield endpoint ─────────────────────────────
     let name = b"exo_shield";
     let _ = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
             name.len() as u64,
-            EXO_SHIELD_PID, // endpoint_id = PID 10
+            EXO_SHIELD_ENDPOINT,
         )
     };
 
@@ -840,7 +841,7 @@ pub extern "C" fn _start() -> ! {
         let r = unsafe {
             syscall::syscall4(
                 syscall::SYS_EXO_IPC_RECV,
-                EXO_SHIELD_PID,
+                EXO_SHIELD_ENDPOINT,
                 &mut req as *mut ShieldRequest as u64,
                 core::mem::size_of::<ShieldRequest>() as u64,
                 IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,

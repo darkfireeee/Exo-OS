@@ -22,7 +22,11 @@
 //! - Counter-based nonce (jamais de réutilisation)
 //! - Vérification de certificat via PKI
 
+#![allow(dead_code)]
+
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use x25519_dalek::{PublicKey, StaticSecret};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -42,7 +46,9 @@ const IV_SIZE: usize = 12;
 const MAX_SESSIONS: usize = 16;
 
 /// Taille maximale d'un enregistrement TLS.
+#[allow(dead_code)]
 const MAX_RECORD_SIZE: usize = 1024;
+const TLS_ROLE_SERVER: u32 = 1 << 0;
 
 // ── Lecture TSC et RDRAND ────────────────────────────────────────────────────
 
@@ -242,62 +248,38 @@ impl TlsSession {
 
 /// Pool de sessions TLS statique.
 static SESSION_POOL: spin::Mutex<[TlsSession; MAX_SESSIONS]> = spin::Mutex::new([
-    TlsSession::new(), TlsSession::new(), TlsSession::new(), TlsSession::new(),
-    TlsSession::new(), TlsSession::new(), TlsSession::new(), TlsSession::new(),
-    TlsSession::new(), TlsSession::new(), TlsSession::new(), TlsSession::new(),
-    TlsSession::new(), TlsSession::new(), TlsSession::new(), TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
+    TlsSession::new(),
 ]);
 
 static ACTIVE_SESSION_COUNT: AtomicU32 = AtomicU32::new(0);
 
-// ── Dérivation HKDF-Blake3 simplifiée ───────────────────────────────────────
+// ── Dérivation BLAKE3 keyed ──────────────────────────────────────────────────
 
-/// Dérivation de clé HKDF simplifiée (Extract + Expand).
-/// En production, ceci sera délégué au kernel kdf.rs via syscall.
+/// Dérivation de clé extensible basée sur BLAKE3 keyed hashing.
 fn hkdf_expand(secret: &[u8], label: &[u8], context: &[u8], output: &mut [u8]) {
-    // Extract phase : hash du secret avec le sel
-    let mut extractor: [u64; 4] = [
-        0x6A09_E667_F3BC_C908 ^ u64::from_le_bytes([label[0], label[1 % label.len()], label[2 % label.len()], label[3 % label.len()], 0, 0, 0, 0]),
-        0xBB67_AE85_84CA_A73B,
-        0x3C6E_F372_FE94_F82B,
-        0xA54F_F53A_5F1D_36F1,
-    ];
-
-    // Absorber le secret
-    for chunk in secret.chunks(8) {
-        let mut bytes = [0u8; 8];
-        bytes[..chunk.len()].copy_from_slice(chunk);
-        let val = u64::from_le_bytes(bytes);
-        extractor[0] = extractor[0].wrapping_add(val);
-        extractor[1] ^= extractor[0].rotate_left(17);
-        extractor[2] = extractor[2].wrapping_add(extractor[1]);
-        extractor[3] ^= extractor[2].rotate_right(11);
-    }
-
-    // Absorber le contexte
-    for chunk in context.chunks(8) {
-        let mut bytes = [0u8; 8];
-        bytes[..chunk.len()].copy_from_slice(chunk);
-        let val = u64::from_le_bytes(bytes);
-        extractor[0] = extractor[0].wrapping_add(val).rotate_left(7);
-        extractor[1] = extractor[1].wrapping_add(extractor[0]);
-        extractor[2] ^= extractor[1].rotate_left(13);
-        extractor[3] = extractor[3].wrapping_add(extractor[2]);
-    }
-
-    // Expand phase : produire la sortie
-    let mut counter: u64 = 1;
-    for chunk in output.chunks_mut(8) {
-        extractor[0] = extractor[0].wrapping_add(counter);
-        extractor[1] ^= extractor[0].rotate_left(5);
-        extractor[2] = extractor[2].wrapping_add(extractor[1]).rotate_left(11);
-        extractor[3] ^= extractor[2];
-
-        let out_bytes = extractor[3].to_le_bytes();
-        let copy_len = chunk.len().min(8);
-        chunk[..copy_len].copy_from_slice(&out_bytes[..copy_len]);
-        counter += 1;
-    }
+    let salt = [0u8; 32];
+    let prk = blake3::keyed_hash(&salt, secret);
+    let mut hasher = blake3::Hasher::new_keyed(prk.as_bytes());
+    hasher.update(b"ExoOS TLS 1.3 traffic secret");
+    hasher.update(label);
+    hasher.update(context);
+    let mut reader = hasher.finalize_xof();
+    reader.fill(output);
 }
 
 /// Dérive les clés de trafic à partir du secret partagé.
@@ -311,17 +293,30 @@ fn derive_traffic_keys(session: &mut TlsSession) {
     let mut derived_secret = [0u8; 32];
 
     // Dérivation intermédiaire
-    let context = [session.client_random, session.server_random].concat();
-    // Éviter l'allocation : construire le contexte manuellement
     let mut full_context = [0u8; 64];
     full_context[..32].copy_from_slice(&session.client_random);
     full_context[32..64].copy_from_slice(&session.server_random);
 
-    hkdf_expand(&session.shared_secret, b"derived", &full_context, &mut derived_secret);
+    hkdf_expand(
+        &session.shared_secret,
+        b"derived",
+        &full_context,
+        &mut derived_secret,
+    );
 
     // Dérivation des clés
-    hkdf_expand(&derived_secret, b"c ws", &full_context, &mut session.client_write_key);
-    hkdf_expand(&derived_secret, b"s ws", &full_context, &mut session.server_write_key);
+    hkdf_expand(
+        &derived_secret,
+        b"c ws",
+        &full_context,
+        &mut session.client_write_key,
+    );
+    hkdf_expand(
+        &derived_secret,
+        b"s ws",
+        &full_context,
+        &mut session.server_write_key,
+    );
 
     // Dérivation des IVs
     let mut client_iv_buf = [0u8; IV_SIZE];
@@ -337,30 +332,13 @@ fn derive_traffic_keys(session: &mut TlsSession) {
     }
 }
 
-// ── X25519 simplifié ─────────────────────────────────────────────────────────
+// ── X25519 ───────────────────────────────────────────────────────────────────
 
-/// Échange de clés X25519 simplifié.
-/// En production, ceci sera délégué au kernel x25519.rs via syscall.
-/// Pour le développement, utilise un dérivé déterministe.
-fn x25519_dh(_private_key: &[u8; 32], _public_key: &[u8; 32]) -> [u8; 32] {
-    let mut shared = [0u8; 32];
-
-    // Dérivation déterministe pour le développement
-    let mut state: u64 = 0x42_4F_4F_54_53_54_52_41; // "BOOTSTRA"
-    for &b in _private_key {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(b as u64);
-    }
-    for &b in _public_key {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(b as u64);
-    }
-
-    for i in 0..4 {
-        let val = state.wrapping_add(i as u64 * 0x9E3779B97F4A7C15);
-        shared[i * 8..i * 8 + 8].copy_from_slice(&val.to_le_bytes());
-        state = state.wrapping_mul(0x5851F42D4C957F2D).wrapping_add(1);
-    }
-
-    shared
+/// Échange de clés X25519 via x25519-dalek.
+fn x25519_dh(private_key: &[u8; 32], public_key: &[u8; 32]) -> [u8; 32] {
+    let secret = StaticSecret::from(*private_key);
+    let public = PublicKey::from(*public_key);
+    secret.diffie_hellman(&public).to_bytes()
 }
 
 /// Génère une paire de clés X25519 éphémère.
@@ -372,13 +350,14 @@ fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
     // Remplir la clé privée avec de l'entropie
     let mut seed = tsc ^ rand;
     for i in 0..4 {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         private[i * 8..i * 8 + 8].copy_from_slice(&seed.to_le_bytes());
     }
 
-    // Clé publique dérivée (simplifiée)
-    let public_base: [u8; 32] = [9u8; 32]; // Point de base X25519
-    let public = x25519_dh(&private, &public_base);
+    let secret = StaticSecret::from(private);
+    let public = PublicKey::from(&secret).to_bytes();
 
     (private, public)
 }
@@ -429,8 +408,11 @@ pub fn tls_handshake_initiate(peer_pid: u32) -> (u32, [u8; 67]) {
             session.state = TlsState::HandshakePending as u8;
             session.cipher_suite = CipherSuite::XChaCha20Blake3 as u16;
             session.peer_pid = peer_pid;
+            session.flags = 0;
             session.send_counter.store(1, Ordering::Release);
-            session.last_activity_tsc.store(read_tsc(), Ordering::Release);
+            session
+                .last_activity_tsc
+                .store(read_tsc(), Ordering::Release);
 
             ACTIVE_SESSION_COUNT.fetch_add(1, Ordering::Relaxed);
             break;
@@ -464,6 +446,14 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
         return false;
     }
 
+    // Récupérer notre clé privée avant d'écraser le stockage temporaire par
+    // le vrai server_random reçu.
+    let private_key: [u8; 32] = {
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(&session.server_random[..32]);
+        pk
+    };
+
     // Vérifier le msg_type
     if server_hello[0] != 2 {
         session.state = TlsState::Error as u8;
@@ -487,13 +477,6 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
         pk
     };
 
-    // Récupérer notre clé privée (stockée temporairement dans server_random)
-    let private_key: [u8; 32] = {
-        let mut pk = [0u8; 32];
-        pk.copy_from_slice(&session.server_random[..32]);
-        pk
-    };
-
     // Calculer le secret partagé
     session.shared_secret = x25519_dh(&private_key, &server_public);
 
@@ -503,7 +486,9 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
     // Mettre à jour l'état
     session.state = TlsState::Verified as u8;
     session.recv_counter.store(1, Ordering::Release);
-    session.last_activity_tsc.store(read_tsc(), Ordering::Release);
+    session
+        .last_activity_tsc
+        .store(read_tsc(), Ordering::Release);
 
     // Shredder la clé privée
     // (on ne peut pas shred server_random car on l'a déjà écrasé avec le vrai server_random)
@@ -567,16 +552,20 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
 
             // Construire le ServerHello
             server_hello[0] = 2; // msg_type = ServerHello
-            server_hello[1..3].copy_from_slice(&(CipherSuite::XChaCha20Blake3 as u16).to_le_bytes());
+            server_hello[1..3]
+                .copy_from_slice(&(CipherSuite::XChaCha20Blake3 as u16).to_le_bytes());
             server_hello[3..35].copy_from_slice(&session.server_random);
             server_hello[35..67].copy_from_slice(&public_key);
 
             session.state = TlsState::Verified as u8;
             session.cipher_suite = CipherSuite::XChaCha20Blake3 as u16;
             session.peer_pid = peer_pid;
+            session.flags = TLS_ROLE_SERVER;
             session.send_counter.store(1, Ordering::Release);
             session.recv_counter.store(0, Ordering::Release);
-            session.last_activity_tsc.store(read_tsc(), Ordering::Release);
+            session
+                .last_activity_tsc
+                .store(read_tsc(), Ordering::Release);
 
             ACTIVE_SESSION_COUNT.fetch_add(1, Ordering::Relaxed);
             break;
@@ -603,25 +592,25 @@ pub fn tls_encrypt_record(session_handle: u32, data: &[u8], output: &mut [u8]) -
         return false;
     }
 
-    let counter = session.send_counter.load(Ordering::Acquire);
-
-    // Construire le nonce à partir de l'IV et du compteur
-    let mut nonce = [0u8; 24]; // XChaCha20 nonce = 24 octets
-    nonce[..12].copy_from_slice(&session.client_write_iv);
-    let counter_bytes = counter.to_le_bytes();
-    for i in 0..8 {
-        nonce[12 + i] = counter_bytes[i];
-    }
-
-    // Chiffrer avec XChaCha20-BLAKE3 AEAD
-    // En-tête : content_type + counter
     let aad = [ContentType::ApplicationData as u8];
-
-    // Utiliser le module xchacha20 local
-    let key: [u8; 32] = session.client_write_key;
+    let key: [u8; 32] = if session.flags & TLS_ROLE_SERVER != 0 {
+        session.server_write_key
+    } else {
+        session.client_write_key
+    };
     drop(pool); // Libérer le lock avant l'opération lourde
 
-    crate::xchacha20::aead_seal(&key, data, &aad, output)
+    if output.len() < 24 + data.len() + crate::xchacha20::TAG_SIZE {
+        return false;
+    }
+    let mut nonce = [0u8; crate::xchacha20::NONCE_SIZE];
+    let sealed_len =
+        crate::xchacha20::xchacha20_seal(&key, data, &aad, &mut nonce, &mut output[24..]);
+    if sealed_len == 0 {
+        return false;
+    }
+    output[..24].copy_from_slice(&nonce);
+    true
 }
 
 /// Déchiffre un enregistrement d'application TLS.
@@ -638,11 +627,20 @@ pub fn tls_decrypt_record(session_handle: u32, input: &[u8], plaintext: &mut [u8
         return false;
     }
 
-    let key: [u8; 32] = session.server_write_key;
+    let key: [u8; 32] = if session.flags & TLS_ROLE_SERVER != 0 {
+        session.client_write_key
+    } else {
+        session.server_write_key
+    };
     drop(pool);
 
+    if input.len() < 24 + crate::xchacha20::TAG_SIZE {
+        return false;
+    }
+    let mut nonce = [0u8; crate::xchacha20::NONCE_SIZE];
+    nonce.copy_from_slice(&input[..24]);
     let aad = [ContentType::ApplicationData as u8];
-    crate::xchacha20::aead_open(&key, input, &aad, plaintext)
+    crate::xchacha20::xchacha20_open(&key, &nonce, &input[24..], &aad, plaintext) != 0
 }
 
 /// Ferme une session TLS de manière sécurisée.
@@ -703,7 +701,7 @@ pub fn cleanup_expired_sessions() -> u32 {
     let mut closed = 0u32;
 
     let mut pool = SESSION_POOL.lock();
-    for (idx, session) in pool.iter_mut().enumerate() {
+    for session in pool.iter_mut() {
         if session.state == TlsState::Closed as u8 {
             continue;
         }

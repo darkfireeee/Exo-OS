@@ -16,6 +16,8 @@ members = [
     "drivers/tty",
     "drivers/display/vga",
     "drivers/display/framebuffer",
+    "drivers/network/loopback",
+    "drivers/network/virtio_net",
     "drivers/storage/virtio_blk",
     "loader",
     "servers/crypto_server",
@@ -85,9 +87,10 @@ xmas-elf = { version = "0.10", default-features = false }
 
 # IPC
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+smoltcp = { path = "libs/vendors/smoltcp-upstream", default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp"] }
 
 # Logging
-log = { version = "0.4", default-features = false }
+log = { path = "libs/vendors/log-upstream", default-features = false }
 
 # Tests
 proptest          = { version = "1", default-features = false, features = ["alloc"] }

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-//! # crypto_server — PID 4, Service de cryptographie (SRV-04)
+//! # crypto_server — Service de cryptographie (SRV-04)
 //!
 //! Seul service Ring 1 autorisé à exposer des primitives cryptographiques.
 //! Les autres serveurs délèguent ici les opérations de dérivation, chiffrement,
@@ -18,9 +18,12 @@ use keystore::{KeyType, KEY_SIZE};
 use xchacha20::{NONCE_SIZE, TAG_SIZE};
 
 mod keystore;
+mod pki;
+mod tls;
 mod xchacha20;
 
 const CRYPTO_SERVER_ENDPOINT: u64 = 4;
+const CRYPTO_SERVER_PID: u32 = 5;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
 const CRYPTO_REPLY_DATA_SIZE: usize = 228;
@@ -42,10 +45,13 @@ const CRYPTO_KEY_ROTATE: u32 = 11;
 const CRYPTO_KEY_REVOKE_OWNER: u32 = 12;
 const CRYPTO_KEY_STATS: u32 = 13;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
+const KERNEL_EPHEMERAL_REPLY_BIT: u64 = 1u64 << 63;
 
 const VERIFY_OP_BEGIN: u8 = 0;
 const VERIFY_OP_UPDATE: u8 = 1;
 const VERIFY_OP_FINAL: u8 = 2;
+const TLS_OP_RESPOND: u8 = 0;
+const TLS_OP_COMPLETE_CLIENT: u8 = 1;
 
 const CRYPTO_OK: u32 = 0;
 const CRYPTO_ERR_ARGS: u32 = 1;
@@ -53,8 +59,6 @@ const CRYPTO_ERR_CAP: u32 = 2;
 const CRYPTO_ERR_KEY_INVALID: u32 = 3;
 const CRYPTO_ERR_AUTH: u32 = 4;
 const CRYPTO_ERR_BUSY: u32 = 5;
-const CRYPTO_ERR_NOT_IMPLEMENTED: u32 = 6;
-
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
@@ -321,7 +325,7 @@ fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
         syscall::exo_cap_check(
             &req.cap_token,
             syscall::EXO_CAP_RIGHT_IPC_SEND,
-            CRYPTO_SERVER_ENDPOINT as u32,
+            CRYPTO_SERVER_PID,
             syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
         )
     };
@@ -342,6 +346,105 @@ fn phoenix_wake_entropy_from_request(req: &CryptoRequest, payload: &[u8]) -> Opt
         return Some(compact_entropy);
     }
     read_u64_le(payload, 0)
+}
+
+fn caller_peer_pid(caller_principal: u64) -> u32 {
+    caller_principal.min(u32::MAX as u64) as u32
+}
+
+fn tls_init_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
+    let peer_pid = read_u32_le(payload, 0).unwrap_or_else(|| caller_peer_pid(caller_principal));
+    let (session_handle, client_hello) = tls::tls_handshake_initiate(peer_pid);
+    if session_handle == 0 {
+        reply.status = CRYPTO_ERR_BUSY;
+        return;
+    }
+    reply.status = CRYPTO_OK;
+    reply.key_handle = session_handle;
+    reply.write_data(&client_hello);
+}
+
+fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
+    if payload.is_empty() {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    }
+
+    // Compatibilité simple: un ClientHello brut peut être envoyé directement.
+    if payload[0] == 1 && payload.len() >= 67 {
+        let (session_handle, server_hello) =
+            tls::tls_handshake_respond(&payload[..67], caller_peer_pid(caller_principal));
+        if session_handle == 0 {
+            reply.status = CRYPTO_ERR_AUTH;
+            return;
+        }
+        reply.status = CRYPTO_OK;
+        reply.key_handle = session_handle;
+        reply.write_data(&server_hello);
+        return;
+    }
+
+    match payload[0] {
+        TLS_OP_RESPOND => {
+            let peer_pid =
+                read_u32_le(payload, 1).unwrap_or_else(|| caller_peer_pid(caller_principal));
+            let Some(hello_len) = read_u16_le(payload, 5) else {
+                reply.status = CRYPTO_ERR_ARGS;
+                return;
+            };
+            let hello_len = hello_len as usize;
+            if 7 + hello_len > payload.len() {
+                reply.status = CRYPTO_ERR_ARGS;
+                return;
+            }
+            let (session_handle, server_hello) =
+                tls::tls_handshake_respond(&payload[7..7 + hello_len], peer_pid);
+            if session_handle == 0 {
+                reply.status = CRYPTO_ERR_AUTH;
+                return;
+            }
+            reply.status = CRYPTO_OK;
+            reply.key_handle = session_handle;
+            reply.write_data(&server_hello);
+        }
+        TLS_OP_COMPLETE_CLIENT => {
+            let Some(session_handle) = read_u32_le(payload, 1) else {
+                reply.status = CRYPTO_ERR_ARGS;
+                return;
+            };
+            let Some(hello_len) = read_u16_le(payload, 5) else {
+                reply.status = CRYPTO_ERR_ARGS;
+                return;
+            };
+            let hello_len = hello_len as usize;
+            if 7 + hello_len > payload.len() {
+                reply.status = CRYPTO_ERR_ARGS;
+                return;
+            }
+            if tls::tls_handshake_complete_client(session_handle, &payload[7..7 + hello_len]) {
+                reply.status = CRYPTO_OK;
+                reply.key_handle = session_handle;
+            } else {
+                reply.status = CRYPTO_ERR_AUTH;
+            }
+        }
+        _ => {
+            reply.status = CRYPTO_ERR_ARGS;
+        }
+    }
+}
+
+fn tls_close_reply(payload: &[u8], reply: &mut CryptoReply) {
+    let Some(session_handle) = read_u32_le(payload, 0) else {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    };
+    if tls::tls_close(session_handle) {
+        reply.status = CRYPTO_OK;
+        reply.key_handle = session_handle;
+    } else {
+        reply.status = CRYPTO_ERR_KEY_INVALID;
+    }
 }
 
 fn handle_request(req: &CryptoRequest) -> CryptoReply {
@@ -642,8 +745,14 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
                 }
             }
         }
-        CRYPTO_TLS_INIT | CRYPTO_TLS_HANDSHAKE | CRYPTO_TLS_CLOSE => {
-            reply.status = CRYPTO_ERR_NOT_IMPLEMENTED;
+        CRYPTO_TLS_INIT => {
+            tls_init_reply(payload, caller_principal, &mut reply);
+        }
+        CRYPTO_TLS_HANDSHAKE => {
+            tls_handshake_reply(payload, caller_principal, &mut reply);
+        }
+        CRYPTO_TLS_CLOSE => {
+            tls_close_reply(payload, &mut reply);
         }
         CRYPTO_KEY_REVOKE => {
             let Some(key_handle) = read_u32_le(payload, 0) else {
@@ -700,7 +809,9 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             reply.write_data(&encoded);
         }
         PHOENIX_WAKE_ENTROPY => {
-            if req.sender_endpoint != 0 {
+            let authenticated_kernel_wake =
+                req.sender_endpoint == 0 || (req.sender_endpoint & KERNEL_EPHEMERAL_REPLY_BIT) != 0;
+            if !authenticated_kernel_wake {
                 reply.status = CRYPTO_ERR_CAP;
             } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {
                 xchacha20::xchacha20_reseed(entropy);
@@ -728,6 +839,8 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
 pub extern "C" fn _start() -> ! {
     xchacha20::xchacha20_init();
     keystore::keystore_init();
+    pki::pki_init();
+    tls::tls_init();
 
     let name = b"crypto_server";
     let _ = unsafe {

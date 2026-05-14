@@ -62,11 +62,10 @@ pub struct DefaultOomScorer;
 
 impl OomScorer for DefaultOomScorer {
     fn pick_victim(&self) -> Option<OomKillCandidate> {
-        // Avant que process/ soit disponible : pas de victime connue.
         None
     }
-    fn candidates(&self, _buf: &mut [OomKillCandidate]) -> usize {
-        0
+    fn candidates(&self, buf: &mut [OomKillCandidate]) -> usize {
+        fill_registered_candidates(buf)
     }
 }
 
@@ -78,6 +77,7 @@ impl OomScorer for DefaultOomScorer {
 /// `pid` : PID à tuer.
 /// Returns `true` si le signal a pu être envoyé.
 pub type OomKillSendFn = fn(pid: u64) -> bool;
+pub type OomCandidateProviderFn = fn(buf: &mut [OomKillCandidate]) -> usize;
 
 #[allow(dead_code)]
 fn nop_oom_kill(_pid: u64) -> bool {
@@ -86,11 +86,21 @@ fn nop_oom_kill(_pid: u64) -> bool {
 
 /// Pointeur fonction vers le handler OOM de process/ — write-once.
 static OOM_KILL_SENDER: AtomicUsize = AtomicUsize::new(0);
+/// Pointeur fonction vers le fournisseur de candidats OOM de process/.
+static OOM_CANDIDATE_PROVIDER: AtomicUsize = AtomicUsize::new(0);
 
 /// Enregistre le handler OOM de process/.
 /// Doit être appelé une seule fois par process/ lors de son init.
 pub fn register_oom_kill_sender(f: OomKillSendFn) {
     OOM_KILL_SENDER
+        .compare_exchange(0, f as usize, Ordering::Release, Ordering::Relaxed)
+        .ok();
+}
+
+/// Enregistre le fournisseur de candidats OOM de process/.
+/// Doit être appelé une seule fois par process/ lors de son init.
+pub fn register_oom_candidate_provider(f: OomCandidateProviderFn) {
+    OOM_CANDIDATE_PROVIDER
         .compare_exchange(0, f as usize, Ordering::Release, Ordering::Relaxed)
         .ok();
 }
@@ -103,6 +113,15 @@ fn invoke_kill_sender(pid: u64) -> bool {
     }
     let f: OomKillSendFn = unsafe { core::mem::transmute(ptr) };
     f(pid)
+}
+
+fn fill_registered_candidates(buf: &mut [OomKillCandidate]) -> usize {
+    let ptr = OOM_CANDIDATE_PROVIDER.load(Ordering::Acquire);
+    if ptr == 0 {
+        return 0;
+    }
+    let f: OomCandidateProviderFn = unsafe { core::mem::transmute(ptr) };
+    f(buf).min(buf.len())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -46,6 +46,7 @@ pub mod dispatch;
 pub mod fast_path;
 pub mod fixup;
 pub mod fs_bridge;
+pub mod net_bridge;
 pub mod numbers;
 pub mod table;
 pub mod validation;

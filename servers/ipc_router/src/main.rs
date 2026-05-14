@@ -129,6 +129,15 @@ fn read_payload_u32(msg: &syscall::IpcMessage, offset: usize, payload_len: usize
     Some(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
 }
 
+fn read_payload_u64(msg: &syscall::IpcMessage, offset: usize, payload_len: usize) -> Option<u64> {
+    if offset > payload_len || payload_len - offset < 8 || payload_len > IPC_PAYLOAD_SIZE {
+        return None;
+    }
+    let lo = read_payload_u32(msg, offset, payload_len)? as u64;
+    let hi = read_payload_u32(msg, offset + 4, payload_len)? as u64;
+    Some(lo | (hi << 32))
+}
+
 fn hash_payload(
     msg: &syscall::IpcMessage,
     start: usize,
@@ -192,7 +201,6 @@ pub extern "C" fn _start() -> ! {
         } // EINTR ou erreur temporaire
 
         let received = r as usize;
-        debug_write(b"ipc_router: message\n");
         if received < IPC_HEADER_SIZE {
             continue;
         }
@@ -251,10 +259,12 @@ pub extern "C" fn _start() -> ! {
                 // Répondre avec notre propre PID pour confirmer que le router est vivant.
                 let our_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
                 let pid_bytes = (our_pid as u32).to_le_bytes();
+                let reply_endpoint =
+                    read_payload_u64(&msg, 0, payload_len).unwrap_or(msg.sender_pid as u64);
                 let _ = unsafe {
                     syscall::syscall6(
                         syscall::SYS_IPC_SEND,
-                        msg.sender_pid as u64,
+                        reply_endpoint,
                         pid_bytes.as_ptr() as u64,
                         4,
                         0,

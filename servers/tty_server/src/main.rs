@@ -10,7 +10,7 @@ pub const TTY_MSG_INPUT_BYTE: u32 = 0x130;
 pub const TTY_MSG_READ_LINE: u32 = 0x131;
 pub const TTY_MSG_WRITE: u32 = 0x132;
 pub const TTY_MSG_IOCTL: u32 = 0x133;
-const LINE_OUT_MAX: usize = 256;
+const LINE_OUT_MAX: usize = 216;
 
 #[repr(C)]
 struct TtyRequest {
@@ -28,6 +28,9 @@ struct TtyReply {
     len: u32,
     data: [u8; LINE_OUT_MAX],
 }
+
+const _: () = assert!(core::mem::size_of::<TtyRequest>() <= 240);
+const _: () = assert!(core::mem::size_of::<TtyReply>() <= 240);
 
 struct TtyState {
     line: LineDiscipline,

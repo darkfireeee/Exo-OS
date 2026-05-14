@@ -1570,17 +1570,201 @@ pub fn sys_mknodat(dirfd: u64, path_ptr: u64, mode: u64, dev: u64, _a5: u64, _a6
     ))
 }
 
+/// `socket(domain, type, protocol)`.
+pub fn sys_socket(domain: u64, ty: u64, protocol: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SOCKET);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_socket(
+        domain as i32,
+        ty as i32,
+        protocol as i32,
+    ))
+}
+
+/// `connect(fd, sockaddr*, addrlen)`.
+pub fn sys_connect(fd: u64, addr_ptr: u64, addr_len: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CONNECT);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_connect(fd as i32, addr_ptr, addr_len))
+}
+
+/// `bind(fd, sockaddr*, addrlen)`.
+pub fn sys_bind(fd: u64, addr_ptr: u64, addr_len: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_BIND);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_bind(fd as i32, addr_ptr, addr_len))
+}
+
+/// `listen(fd, backlog)`.
+pub fn sys_listen(fd: u64, backlog: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_LISTEN);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_listen(fd as i32, backlog as i32))
+}
+
+/// `accept(fd, sockaddr*, socklen_t*)`.
+pub fn sys_accept(fd: u64, addr_ptr: u64, addr_len_ptr: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_ACCEPT);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_accept(fd as i32, addr_ptr, addr_len_ptr))
+}
+
+/// `sendto(fd, buf, len, flags, sockaddr*, addrlen)`.
+pub fn sys_sendto(
+    fd: u64,
+    buf_ptr: u64,
+    len: u64,
+    flags: u64,
+    addr_ptr: u64,
+    addr_len: u64,
+) -> i64 {
+    stat_inc(SYS_SENDTO);
+    if len as usize as u64 != len || len as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_sendto(
+        fd as i32,
+        buf_ptr,
+        len as usize,
+        flags as u32,
+        addr_ptr,
+        addr_len,
+    ))
+}
+
+/// `recvfrom(fd, buf, len, flags, sockaddr*, socklen_t*)`.
+pub fn sys_recvfrom(
+    fd: u64,
+    buf_ptr: u64,
+    len: u64,
+    flags: u64,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+) -> i64 {
+    stat_inc(SYS_RECVFROM);
+    if len as usize as u64 != len || len as usize > IO_BUF_MAX {
+        return E2BIG;
+    }
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_recvfrom(
+        fd as i32,
+        buf_ptr,
+        len as usize,
+        flags as u32,
+        addr_ptr,
+        addr_len_ptr,
+    ))
+}
+
+/// `sendmsg(fd, msghdr*, flags)`.
+pub fn sys_sendmsg(fd: u64, msg_ptr: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SENDMSG);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_sendmsg(fd as i32, msg_ptr, flags as u32))
+}
+
+/// `recvmsg(fd, msghdr*, flags)`.
+pub fn sys_recvmsg(fd: u64, msg_ptr: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_RECVMSG);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_recvmsg(fd as i32, msg_ptr, flags as u32))
+}
+
+/// `shutdown(fd, how)`.
+pub fn sys_shutdown(fd: u64, how: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_SHUTDOWN);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_shutdown(fd as i32, how as i32))
+}
+
+/// `getsockname(fd, sockaddr*, socklen_t*)`.
+pub fn sys_getsockname(
+    fd: u64,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_GETSOCKNAME);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_getsockname(
+        fd as i32,
+        addr_ptr,
+        addr_len_ptr,
+    ))
+}
+
+/// `getpeername(fd, sockaddr*, socklen_t*)`.
+pub fn sys_getpeername(
+    fd: u64,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_GETPEERNAME);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_getpeername(
+        fd as i32,
+        addr_ptr,
+        addr_len_ptr,
+    ))
+}
+
 /// `socketpair(domain, type, protocol, sv)`.
 pub fn sys_socketpair(domain: u64, ty: u64, protocol: u64, sv_ptr: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_SOCKETPAIR);
-    use crate::syscall::fs_bridge;
+    use crate::syscall::net_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_socketpair(
+    net_bridge::bridge_result(net_bridge::net_socketpair(
         domain as i32,
         ty as i32,
         protocol as i32,
         sv_ptr,
         pid,
+    ))
+}
+
+/// `setsockopt(fd, level, optname, optval, optlen)`.
+pub fn sys_setsockopt(
+    fd: u64,
+    level: u64,
+    optname: u64,
+    optval: u64,
+    optlen: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_SETSOCKOPT);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_setsockopt(
+        fd as i32,
+        level as i32,
+        optname as i32,
+        optval,
+        optlen as u32,
+    ))
+}
+
+/// `getsockopt(fd, level, optname, optval, optlen*)`.
+pub fn sys_getsockopt(
+    fd: u64,
+    level: u64,
+    optname: u64,
+    optval: u64,
+    optlen_ptr: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_GETSOCKOPT);
+    use crate::syscall::net_bridge;
+    net_bridge::bridge_result(net_bridge::net_getsockopt(
+        fd as i32,
+        level as i32,
+        optname as i32,
+        optval,
+        optlen_ptr,
     ))
 }
 
@@ -1747,8 +1931,13 @@ pub fn sys_mremap(
             let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
             return e.to_errno();
         }
-        let mut bytes = Vec::new();
-        bytes.resize(copy_len, 0);
+        let mut bytes = match zeroed_user_vec(copy_len) {
+            Ok(bytes) => bytes,
+            Err(errno) => {
+                let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
+                return errno;
+            }
+        };
         if let Err(e) = copy_from_user(bytes.as_mut_ptr(), old_addr as *const u8, copy_len) {
             let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
             return e.to_errno();
@@ -2294,7 +2483,10 @@ fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::Servi
         b"virtio_drivers" => Some(crate::security::ServiceClass::VirtioDriver),
         b"network_server" => Some(crate::security::ServiceClass::NetworkServer),
         b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
+        b"input_server" => Some(crate::security::ServiceClass::InputServer),
+        b"tty_server" => Some(crate::security::ServiceClass::TtyServer),
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
+        b"exosh" => Some(crate::security::ServiceClass::Exosh),
         _ => None,
     }
 }
@@ -2418,8 +2610,10 @@ pub fn sys_exo_ipc_send(
             Ok(b) => b,
             Err(e) => return e.to_errno(),
         };
-    let mut payload = Vec::new();
-    payload.resize(len, 0);
+    let mut payload = match zeroed_user_vec(len) {
+        Ok(payload) => payload,
+        Err(errno) => return errno,
+    };
     if len != 0 {
         if copy_from_user(payload.as_mut_ptr(), msg_ptr as *const u8, len).is_err() {
             return EFAULT;
@@ -2428,6 +2622,9 @@ pub fn sys_exo_ipc_send(
     if len == 128 {
         let caller_pid = crate::syscall::fast_path::syscall_current_pid();
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    }
+    if is_reserved_kernel_ipc(endpoint, &payload) {
+        return EACCES;
     }
     let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
         0x0001
@@ -2504,16 +2701,20 @@ pub fn sys_exo_ipc_call(
         None => return EINVAL,
     };
 
-    let mut request = Vec::new();
-    request.resize(send_len, 0);
+    let mut request = match zeroed_user_vec(send_len) {
+        Ok(request) => request,
+        Err(errno) => return errno,
+    };
     if send_len != 0 {
         if copy_from_user(request.as_mut_ptr(), msg_ptr as *const u8, send_len).is_err() {
             return EFAULT;
         }
     }
 
-    let mut response = Vec::new();
-    response.resize(recv_len, 0);
+    let mut response = match zeroed_user_vec(recv_len) {
+        Ok(response) => response,
+        Err(errno) => return errno,
+    };
 
     match crate::ipc::rpc::call_raw(server_ep, &request, &mut response) {
         Ok(reply_len) => {
@@ -2555,8 +2756,10 @@ pub fn sys_exo_ipc_create(
         Ok(buf) => buf,
         Err(err) => return err.to_errno(),
     };
-    let mut name = Vec::new();
-    name.resize(len, 0);
+    let mut name = match zeroed_user_vec(len) {
+        Ok(name) => name,
+        Err(errno) => return errno,
+    };
     if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
         return EFAULT;
     }
@@ -2633,11 +2836,10 @@ pub fn sys_exo_ipc_lookup(
         Err(err) => return err.to_errno(),
     };
 
-    let mut name = Vec::new();
-    if name.try_reserve(len).is_err() {
-        return ENOMEM;
-    }
-    name.resize(len, 0);
+    let mut name = match zeroed_user_vec(len) {
+        Ok(name) => name,
+        Err(errno) => return errno,
+    };
     if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
         return EFAULT;
     }
@@ -2677,6 +2879,30 @@ fn current_pid_u32() -> u32 {
 }
 
 const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
+const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
+const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
+
+#[inline]
+fn zeroed_user_vec(len: usize) -> Result<Vec<u8>, i64> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| ENOMEM)?;
+    out.resize(len, 0);
+    Ok(out)
+}
+
+#[inline]
+fn is_reserved_kernel_ipc(endpoint: u64, payload: &[u8]) -> bool {
+    if endpoint != CRYPTO_SERVER_ENDPOINT_ID || payload.len() < 12 {
+        return false;
+    }
+    let msg_type = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    msg_type == CRYPTO_PHOENIX_WAKE_ENTROPY
+}
+
+#[inline]
+fn is_kernel_ephemeral_reply_endpoint(endpoint: u64) -> bool {
+    endpoint & (1u64 << 63) != 0
+}
 
 fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> (u64, u64, u64, u64) {
     if flags == 0 && a2 <= 65_536 {
@@ -2731,14 +2957,21 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
             }
         }
     } else {
-        crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0)
+        loop {
+            match crate::ipc::channel::raw::recv_raw(endpoint_id, &mut payload[..recv_cap], 0x0001)
+            {
+                Ok(n) => break Ok(n),
+                Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                },
+                Err(err) => break Err(err),
+            }
+        }
     };
 
     match result {
         Ok(n) => {
-            if recv_cap != 0
-                && copy_to_user(buf_ptr as *mut u8, payload.as_ptr(), recv_cap).is_err()
-            {
+            if n != 0 && copy_to_user(buf_ptr as *mut u8, payload.as_ptr(), n).is_err() {
                 return EFAULT;
             }
             n as i64
@@ -2781,6 +3014,10 @@ fn ipc_error_to_errno(err: IpcError) -> i64 {
 }
 
 fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
+    if is_kernel_ephemeral_reply_endpoint(endpoint) {
+        return Ok(());
+    }
+
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
         return Err(EACCES);
@@ -3690,7 +3927,21 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EVENTFD => sys_eventfd,
         SYS_EVENTFD2 => sys_eventfd2,
         SYS_INOTIFY_INIT1 => sys_inotify_init1,
+        SYS_SOCKET => sys_socket,
+        SYS_CONNECT => sys_connect,
+        SYS_ACCEPT => sys_accept,
+        SYS_SENDTO => sys_sendto,
+        SYS_RECVFROM => sys_recvfrom,
+        SYS_SENDMSG => sys_sendmsg,
+        SYS_RECVMSG => sys_recvmsg,
+        SYS_SHUTDOWN => sys_shutdown,
+        SYS_BIND => sys_bind,
+        SYS_LISTEN => sys_listen,
+        SYS_GETSOCKNAME => sys_getsockname,
+        SYS_GETPEERNAME => sys_getpeername,
         SYS_SOCKETPAIR => sys_socketpair,
+        SYS_SETSOCKOPT => sys_setsockopt,
+        SYS_GETSOCKOPT => sys_getsockopt,
         SYS_PREADV => sys_preadv,
         SYS_PWRITEV => sys_pwritev,
         SYS_PREADV2 => sys_preadv2,

@@ -1,0 +1,10 @@
+[package]
+name = "exo-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Exo-OS async, parallel and allocator adaptation boundaries"
+
+[dependencies]
+

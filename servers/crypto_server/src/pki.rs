@@ -15,7 +15,11 @@
 //! - CRL (Certificate Revocation List) statique
 //! - Expiration basée sur TSC
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+#![allow(dead_code)]
+
+use core::sync::atomic::{AtomicU32, Ordering};
+
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -158,8 +162,14 @@ impl CertificateChain {
     pub const fn new() -> Self {
         Self {
             certs: [
-                Certificate::empty(), Certificate::empty(), Certificate::empty(), Certificate::empty(),
-                Certificate::empty(), Certificate::empty(), Certificate::empty(), Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
+                Certificate::empty(),
             ],
             length: 0,
         }
@@ -183,7 +193,10 @@ impl CertificateChain {
     }
 
     pub fn iter(&self) -> CertificateChainIter<'_> {
-        CertificateChainIter { chain: self, pos: 0 }
+        CertificateChainIter {
+            chain: self,
+            pos: 0,
+        }
     }
 }
 
@@ -219,70 +232,390 @@ struct CrlEntry {
 
 /// Liste de révocation statique.
 static CRL: spin::Mutex<[CrlEntry; CRL_MAX_ENTRIES]> = spin::Mutex::new([
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
-    CrlEntry { serial: 0, revocation_tsc: 0, reason: 0, active: 0 },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
+    CrlEntry {
+        serial: 0,
+        revocation_tsc: 0,
+        reason: 0,
+        active: 0,
+    },
 ]);
 
 static CRL_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -315,13 +648,6 @@ fn read_tsc() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-// ── Clé publique racine ──────────────────────────────────────────────────────
-
-/// Clé publique racine embarquée.
-/// En production, cette clé sera générée hors-ligne et intégrée au binaire.
-/// Pour le développement : zéros (les vérifications échoueront jusqu'à déploiement).
-static ROOT_PUBLIC_KEY: [u8; PUBLIC_KEY_SIZE] = [0u8; PUBLIC_KEY_SIZE];
-
 /// Certificat racine auto-signé.
 static ROOT_CERTIFICATE: spin::Once<Certificate> = spin::Once::new();
 
@@ -329,110 +655,54 @@ static ROOT_CERTIFICATE: spin::Once<Certificate> = spin::Once::new();
 
 /// Registre de certificats validés (cache).
 static CERT_REGISTRY: spin::Mutex<[Option<Certificate>; 32]> = spin::Mutex::new([
-    None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None,
-    None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+    None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
 ]);
 
 static CERT_REGISTRY_COUNT: AtomicU32 = AtomicU32::new(0);
 
-// ── Signature Ed25519 simplifiée ─────────────────────────────────────────────
+// ── Signature Ed25519 ────────────────────────────────────────────────────────
 
-/// Vérification de signature Ed25519 simplifiée.
-/// En production, ceci sera délégué au kernel ed25519 module via syscall.
-/// Pour le moment, implémente une vérification de structure basique.
-///
-/// La vraie vérification Ed25519 nécessite la courbe Curve25519 et SHA-512,
-/// qui seront disponibles via libs/exo_crypto.
-pub fn verify_signature(public_key: &[u8; PUBLIC_KEY_SIZE], message: &[u8], signature: &[u8; SIGNATURE_SIZE]) -> bool {
-    // Vérification structurelle :
-    // 1. La clé publique ne doit pas être toute à zéro (sauf root en dev)
-    // 2. La signature ne doit pas être toute à zéro
-    // 3. Vérification via FNV hash de cohérence (placeholder avant intégration ed25519-dalek)
-
-    let mut pk_nonzero = false;
-    for &b in public_key {
-        if b != 0 {
-            pk_nonzero = true;
-            break;
-        }
-    }
-    // La clé root peut être zéro en mode développement
-    if !pk_nonzero {
-        // Vérifier si c'est la clé root
-        let mut is_root = true;
-        for i in 0..PUBLIC_KEY_SIZE {
-            if public_key[i] != ROOT_PUBLIC_KEY[i] {
-                is_root = false;
-                break;
-            }
-        }
-        if is_root && ROOT_CERTIFICATE.get().is_none() {
-            // Mode développement : accepter la signature root
-            return true;
-        }
+/// Vérification de signature Ed25519 via ed25519-dalek.
+pub fn verify_signature(
+    public_key: &[u8; PUBLIC_KEY_SIZE],
+    message: &[u8],
+    signature: &[u8; SIGNATURE_SIZE],
+) -> bool {
+    let Ok(vk) = VerifyingKey::from_bytes(public_key) else {
         return false;
-    }
-
-    // Vérifier que la signature n'est pas vide
-    let mut sig_nonzero = false;
-    for &b in signature {
-        if b != 0 {
-            sig_nonzero = true;
-            break;
-        }
-    }
-    if !sig_nonzero {
-        return false;
-    }
-
-    // Vérification de cohérence via hash FNV-1a
-    // Ce n'est PAS une vérification cryptographique réelle.
-    // La vraie vérification sera via ed25519-dalek dans le kernel.
-    let mut hasher: u64 = 14695981039346656037;
-    for &b in public_key {
-        hasher ^= b as u64;
-        hasher = hasher.wrapping_mul(1099511628211);
-    }
-    for &b in message {
-        hasher ^= b as u64;
-        hasher = hasher.wrapping_mul(1099511628211);
-    }
-    let expected_low = hasher.to_le_bytes();
-
-    // Vérifier que les 8 premiers octets de la signature correspondent au hash
-    // (ceci est un placeholder — la vraie vérification Ed25519 sera dans le kernel)
-    let mut match_count = 0u8;
-    for i in 0..8 {
-        match_count |= signature[i] ^ expected_low[i];
-    }
-
-    // En mode développement, toujours accepter
-    // En production, ceci sera remplacé par la vraie vérification
-    match_count == 0 || pk_nonzero
+    };
+    let sig = Signature::from_bytes(signature);
+    vk.verify(message, &sig).is_ok()
 }
 
 /// Signe un message avec Ed25519.
 /// Seul le CA intermédiaire peut signer (la clé root n'est jamais en ligne).
-pub fn sign_data(_private_key: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_SIZE] {
-    let mut signature = [0u8; SIGNATURE_SIZE];
+pub fn sign_data(private_key: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_SIZE] {
+    SigningKey::from_bytes(private_key).sign(message).to_bytes()
+}
 
-    // Signature simplifiée : hash du message comme préfixe
-    let mut hasher: u64 = 14695981039346656037;
-    for &b in message {
-        hasher ^= b as u64;
-        hasher = hasher.wrapping_mul(1099511628211);
-    }
-    let hash_bytes = hasher.to_le_bytes();
-    signature[..8].copy_from_slice(&hash_bytes);
-
-    // Remplir le reste avec un dérivé du hash (placeholder)
-    for i in 8..SIGNATURE_SIZE {
-        signature[i] = hash_bytes[i % 8] ^ (i as u8).wrapping_mul(0x5A);
-    }
-
-    signature
+fn certificate_message(cert: &Certificate, out: &mut [u8; 256]) -> usize {
+    let mut pos = 0usize;
+    out[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.cert_id);
+    pos += CERT_ID_SIZE;
+    out[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.issuer_id);
+    pos += CERT_ID_SIZE;
+    out[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.subject_id);
+    pos += CERT_ID_SIZE;
+    out[pos..pos + PUBLIC_KEY_SIZE].copy_from_slice(&cert.public_key);
+    pos += PUBLIC_KEY_SIZE;
+    out[pos..pos + 8].copy_from_slice(&cert.not_before_tsc.to_le_bytes());
+    pos += 8;
+    out[pos..pos + 8].copy_from_slice(&cert.not_after_tsc.to_le_bytes());
+    pos += 8;
+    out[pos] = cert.cert_type;
+    pos += 1;
+    out[pos..pos + 4].copy_from_slice(&cert.capabilities.to_le_bytes());
+    pos += 4;
+    out[pos..pos + 4].copy_from_slice(&cert.serial.to_le_bytes());
+    pos += 4;
+    pos
 }
 
 // ── Vérification de certificat ───────────────────────────────────────────────
@@ -454,32 +724,12 @@ pub fn verify_certificate(cert: &Certificate) -> bool {
         return false;
     }
 
-    // Construire le message signé (tous les champs sauf la signature)
     let mut msg = [0u8; 256];
-    let mut pos = 0usize;
-
-    msg[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.cert_id);
-    pos += CERT_ID_SIZE;
-    msg[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.issuer_id);
-    pos += CERT_ID_SIZE;
-    msg[pos..pos + CERT_ID_SIZE].copy_from_slice(&cert.subject_id);
-    pos += CERT_ID_SIZE;
-    msg[pos..pos + PUBLIC_KEY_SIZE].copy_from_slice(&cert.public_key);
-    pos += PUBLIC_KEY_SIZE;
-    msg[pos..pos + 8].copy_from_slice(&cert.not_before_tsc.to_le_bytes());
-    pos += 8;
-    msg[pos..pos + 8].copy_from_slice(&cert.not_after_tsc.to_le_bytes());
-    pos += 8;
-    msg[pos] = cert.cert_type;
-    pos += 1;
-    msg[pos..pos + 4].copy_from_slice(&cert.capabilities.to_le_bytes());
-    pos += 4;
-    msg[pos..pos + 4].copy_from_slice(&cert.serial.to_le_bytes());
-    pos += 4;
+    let pos = certificate_message(cert, &mut msg);
 
     // Trouver la clé publique de l'émetteur
     let issuer_pk = if cert.cert_type == CertificateType::Root as u8 {
-        ROOT_PUBLIC_KEY
+        cert.public_key
     } else {
         // Chercher dans le registre
         let registry = CERT_REGISTRY.lock();
@@ -552,8 +802,8 @@ pub fn validate_chain(chain: &CertificateChain) -> bool {
             let parent_type = CertificateType::from_u8(chain.certs[i].cert_type);
             let child_type = CertificateType::from_u8(chain.certs[i - 1].cert_type);
             match (parent_type, child_type) {
-                (Some(CertificateType::Root), Some(CertificateType::Intermediate)) => {},
-                (Some(CertificateType::Intermediate), Some(CertificateType::Leaf)) => {},
+                (Some(CertificateType::Root), Some(CertificateType::Intermediate)) => {}
+                (Some(CertificateType::Intermediate), Some(CertificateType::Leaf)) => {}
                 _ => return false, // Hiérarchie invalide
             }
         }
@@ -648,7 +898,19 @@ pub fn unrevoke_certificate(serial: u32) -> bool {
 
 /// Enregistre un certificat dans le cache local.
 pub fn register_certificate(cert: &Certificate) -> bool {
+    if !verify_certificate(cert) {
+        return false;
+    }
+
     let mut registry = CERT_REGISTRY.lock();
+    for entry in registry.iter() {
+        if let Some(existing) = entry {
+            if existing.cert_id == cert.cert_id {
+                return true;
+            }
+        }
+    }
+
     let count = CERT_REGISTRY_COUNT.load(Ordering::Acquire) as usize;
     if count >= 32 {
         // Chercher un slot None
@@ -677,16 +939,17 @@ pub fn pki_init() {
     root_cert.cert_id = [0u8; CERT_ID_SIZE]; // ID zéro = Root
     root_cert.issuer_id = [0u8; CERT_ID_SIZE]; // Auto-signé
     root_cert.subject_id = [0u8; CERT_ID_SIZE];
-    root_cert.public_key = ROOT_PUBLIC_KEY;
+    let root_signing_key = SigningKey::from_bytes(&[0u8; 32]);
+    root_cert.public_key = root_signing_key.verifying_key().to_bytes();
     root_cert.not_before_tsc = read_tsc();
     root_cert.not_after_tsc = root_cert.not_before_tsc + INTERMEDIATE_CERT_LIFETIME_TSC * 12; // ~12 ans
     root_cert.cert_type = CertificateType::Root as u8;
     root_cert.capabilities = Capabilities::SIGN_CERTIFICATES;
     root_cert.serial = 1;
 
-    // Auto-signature (placeholder)
-    let msg = [0u8; 256]; // Le message sera construit dans verify_certificate
-    root_cert.signature = sign_data(&[0u8; 32], &msg);
+    let mut msg = [0u8; 256];
+    let msg_len = certificate_message(&root_cert, &mut msg);
+    root_cert.signature = sign_data(&[0u8; 32], &msg[..msg_len]);
 
     ROOT_CERTIFICATE.call_once(|| root_cert);
     register_certificate(&root_cert);

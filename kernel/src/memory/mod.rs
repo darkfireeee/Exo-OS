@@ -106,8 +106,9 @@ pub use numa::{closest_node, numa_distance, NUMA_NODES};
 
 // Utils (UNIQUE table futex + OOM killer + shrinker).
 pub use utils::{
-    futex_cancel, futex_wait, futex_wake, futex_wake_n, oom_kill, register_oom_kill_sender,
-    register_shrinker, run_shrinkers, OomScorer, FUTEX_TABLE,
+    futex_cancel, futex_wait, futex_wake, futex_wake_n, oom_kill, register_oom_candidate_provider,
+    register_oom_kill_sender, register_shrinker, run_shrinkers, OomKillCandidate, OomScorer,
+    FUTEX_TABLE,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -24,8 +24,9 @@
 //   1. core::pid::init()
 //   2. core::registry::init()
 //   3. lifecycle::reap::init_reaper()
-//   4. state::wakeup::register_with_dma()
-//   5. resource::cgroup::init()
+//   4. register_with_oom()
+//   5. state::wakeup::register_with_dma()
+//   6. resource::cgroup::init()
 //
 // RÈGLES ABSOLUES :
 //   • PROC-01 : exec() via trait ElfLoader abstrait
@@ -50,6 +51,11 @@ pub mod resource;
 pub mod signal;
 pub mod state;
 pub mod thread;
+
+use self::signal::default::Signal;
+use self::signal::delivery::send_signal_to_pid;
+use crate::memory::OomKillCandidate;
+use ::core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports principaux
@@ -97,8 +103,61 @@ pub unsafe fn init(params: &ProcessInitParams) {
     self::core::pid::init(params.max_pids, params.max_tids);
     self::core::registry::init(params.max_pids);
     self::lifecycle::reap::init_reaper();
+    register_with_oom();
     self::state::wakeup::register_with_dma();
     self::resource::cgroup::init();
+}
+
+fn oom_send_sigkill(pid: u64) -> bool {
+    if pid == 0 || pid > u32::MAX as u64 {
+        return false;
+    }
+    send_signal_to_pid(Pid(pid as u32), Signal::SIGKILL).is_ok()
+}
+
+fn oom_candidates(buf: &mut [OomKillCandidate]) -> usize {
+    let mut n = 0usize;
+    PROCESS_REGISTRY.for_each(|pcb| {
+        if n >= buf.len() || pcb.pid.0 <= 1 {
+            return;
+        }
+        let state = pcb.state();
+        if matches!(state, ProcessState::Zombie | ProcessState::Dead) || pcb.is_exiting() {
+            return;
+        }
+
+        let brk_pages = pcb.brk_current.load(Ordering::Acquire) / crate::memory::PAGE_SIZE as u64;
+        let fault_score = pcb
+            .major_faults
+            .load(Ordering::Relaxed)
+            .saturating_mul(16)
+            .saturating_add(pcb.minor_faults.load(Ordering::Relaxed));
+        let thread_score = (pcb.thread_count.load(Ordering::Acquire) as u64).saturating_mul(128);
+        let io_score = pcb
+            .io_read_bytes
+            .load(Ordering::Relaxed)
+            .saturating_add(pcb.io_write_bytes.load(Ordering::Relaxed))
+            / 4096;
+
+        buf[n] = OomKillCandidate {
+            pid: pcb.pid.0 as u64,
+            oom_score: brk_pages
+                .saturating_mul(4)
+                .saturating_add(fault_score)
+                .saturating_add(thread_score)
+                .saturating_add(io_score)
+                .max(1),
+            vm_rss: brk_pages,
+            name: [0; 16],
+        };
+        n += 1;
+    });
+    n
+}
+
+fn register_with_oom() {
+    crate::memory::register_oom_kill_sender(oom_send_sigkill);
+    crate::memory::register_oom_candidate_provider(oom_candidates);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

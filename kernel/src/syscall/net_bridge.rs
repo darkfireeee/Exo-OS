@@ -1,0 +1,536 @@
+// syscall/net_bridge.rs -- pont BSD sockets -> network_server
+//
+// Architecture V4: les syscalls reseau Ring 3 ne manipulent pas de memoire
+// partagee inter-process. Le noyau copie les petites structures userspace,
+// encode un NetMsg fixe (48B), puis effectue un appel IPC raw synchrone vers
+// network_server. Les buffers applicatifs longs ne sont pas transmis au serveur
+// dans cette phase; le serveur gere l'etat socket et retourne des tailles.
+
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use crate::ipc::core::types::{EndpointId, IpcError};
+use crate::syscall::validation::{copy_from_user, copy_to_user};
+
+pub const NET_OP_OPEN: u32 = 0x4E00;
+pub const NET_OP_CONNECT: u32 = 0x4E01;
+pub const NET_OP_BIND: u32 = 0x4E02;
+pub const NET_OP_LISTEN: u32 = 0x4E03;
+pub const NET_OP_ACCEPT: u32 = 0x4E04;
+pub const NET_OP_SENDTO: u32 = 0x4E05;
+pub const NET_OP_RECVFROM: u32 = 0x4E06;
+pub const NET_OP_SENDMSG: u32 = 0x4E07;
+pub const NET_OP_RECVMSG: u32 = 0x4E08;
+pub const NET_OP_SHUTDOWN: u32 = 0x4E09;
+pub const NET_OP_GETSOCKNAME: u32 = 0x4E0A;
+pub const NET_OP_SOCKETPAIR: u32 = 0x4E0B;
+pub const NET_OP_SETSOCKOPT: u32 = 0x4E0C;
+pub const NET_OP_GETSOCKOPT: u32 = 0x4E0D;
+pub const NET_OP_CLOSE: u32 = 0x4E0E;
+pub const NET_OP_GETPEERNAME: u32 = 0x4E0F;
+
+const AF_UNIX: i32 = 1;
+const AF_INET: u16 = 2;
+const SOCKADDR_IN_LEN: usize = 16;
+
+const EBADF: i64 = -9;
+const EFAULT: i64 = -14;
+const EINVAL: i64 = -22;
+const ENOSYS: i64 = -38;
+const ENOTSUP: i64 = -95;
+const ENETDOWN: i64 = -100;
+
+static NET_READY: AtomicBool = AtomicBool::new(false);
+static NETWORK_ENDPOINT: AtomicU64 = AtomicU64::new(0);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NetMsg {
+    pub opcode: u32,
+    pub sender_pid: u32,
+    pub fd: u32,
+    pub _pad0: u32,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u32,
+    pub arg4: u32,
+    pub _reserved: [u8; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<NetMsg>() == 48);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NetReply {
+    pub status: i64,
+    pub payload: [u8; 40],
+}
+
+const _: () = assert!(core::mem::size_of::<NetReply>() == 48);
+
+/// Active le pont reseau apres l'initialisation de base du noyau.
+///
+/// # Safety
+/// Appeler une seule fois depuis le chemin boot BSP, apres l'initialisation IPC.
+pub unsafe fn net_bridge_preinit() {
+    NET_READY.store(true, Ordering::Release);
+}
+
+#[inline]
+pub fn bridge_result(result: Result<i64, i64>) -> i64 {
+    match result {
+        Ok(value) => value,
+        Err(errno) => errno,
+    }
+}
+
+fn current_pid() -> u32 {
+    crate::syscall::fast_path::syscall_current_pid()
+}
+
+fn network_endpoint() -> Result<EndpointId, i64> {
+    if !NET_READY.load(Ordering::Acquire) {
+        return Err(ENOSYS);
+    }
+
+    let cached = NETWORK_ENDPOINT.load(Ordering::Acquire);
+    if cached != 0 {
+        return EndpointId::new(cached).ok_or(ENETDOWN);
+    }
+
+    let endpoint = crate::ipc::endpoint::lookup_endpoint(b"network_server").ok_or(ENETDOWN)?;
+    NETWORK_ENDPOINT.store(endpoint.get(), Ordering::Release);
+    Ok(endpoint)
+}
+
+fn ipc_errno(err: IpcError) -> i64 {
+    match err {
+        IpcError::MessageTooLarge => -7,
+        IpcError::WouldBlock | IpcError::QueueEmpty | IpcError::QueueFull | IpcError::Full => -11,
+        IpcError::OutOfResources | IpcError::ResourceExhausted | IpcError::ShmPoolFull => -12,
+        IpcError::NotFound
+        | IpcError::EndpointNotFound
+        | IpcError::ChannelClosed
+        | IpcError::Closed
+        | IpcError::ConnRefused => ENETDOWN,
+        IpcError::Timeout => -110,
+        IpcError::NullEndpoint
+        | IpcError::InvalidEndpoint
+        | IpcError::InvalidParam
+        | IpcError::Invalid
+        | IpcError::InvalidArgument
+        | IpcError::InvalidHandle
+        | IpcError::ProtocolError
+        | IpcError::HandshakeFailed
+        | IpcError::OutOfOrder => EINVAL,
+        IpcError::PermissionDenied => -13,
+        _ => ENETDOWN,
+    }
+}
+
+fn call_network(msg: &NetMsg) -> Result<NetReply, i64> {
+    let endpoint = network_endpoint()?;
+    let request = unsafe {
+        core::slice::from_raw_parts(
+            msg as *const NetMsg as *const u8,
+            core::mem::size_of::<NetMsg>(),
+        )
+    };
+    let mut reply = NetReply {
+        status: ENETDOWN,
+        payload: [0; 40],
+    };
+    let reply_buf = unsafe {
+        core::slice::from_raw_parts_mut(
+            &mut reply as *mut NetReply as *mut u8,
+            core::mem::size_of::<NetReply>(),
+        )
+    };
+    match crate::ipc::rpc::call_raw(endpoint, request, reply_buf) {
+        Ok(n) if n >= core::mem::size_of::<NetReply>() => Ok(reply),
+        Ok(_) => Err(EINVAL),
+        Err(err) => Err(ipc_errno(err)),
+    }
+}
+
+fn dispatch(
+    opcode: u32,
+    fd: u32,
+    arg1: u64,
+    arg2: u64,
+    arg3: u32,
+    arg4: u32,
+) -> Result<NetReply, i64> {
+    let msg = NetMsg {
+        opcode,
+        sender_pid: current_pid(),
+        fd,
+        _pad0: 0,
+        arg1,
+        arg2,
+        arg3,
+        arg4,
+        _reserved: [0; 8],
+    };
+    let reply = call_network(&msg)?;
+    if reply.status < 0 {
+        Err(reply.status)
+    } else {
+        Ok(reply)
+    }
+}
+
+fn read_sockaddr_in(addr_ptr: u64, addr_len: u64) -> Result<(u32, u16), i64> {
+    if addr_ptr == 0 || addr_len < SOCKADDR_IN_LEN as u64 {
+        return Err(EINVAL);
+    }
+    let mut raw = [0u8; SOCKADDR_IN_LEN];
+    if copy_from_user(raw.as_mut_ptr(), addr_ptr as *const u8, raw.len()).is_err() {
+        return Err(EFAULT);
+    }
+    let family = u16::from_ne_bytes([raw[0], raw[1]]);
+    if family != AF_INET {
+        return Err(ENOTSUP);
+    }
+    let port = u16::from_be_bytes([raw[2], raw[3]]);
+    let addr = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
+    Ok((addr, port))
+}
+
+fn write_sockaddr_in(addr_ptr: u64, addr_len_ptr: u64, addr: u32, port: u16) -> Result<(), i64> {
+    if addr_ptr != 0 {
+        let mut raw = [0u8; SOCKADDR_IN_LEN];
+        raw[0..2].copy_from_slice(&AF_INET.to_ne_bytes());
+        raw[2..4].copy_from_slice(&port.to_be_bytes());
+        raw[4..8].copy_from_slice(&addr.to_be_bytes());
+        if copy_to_user(addr_ptr as *mut u8, raw.as_ptr(), raw.len()).is_err() {
+            return Err(EFAULT);
+        }
+    }
+    if addr_len_ptr != 0 {
+        let len = SOCKADDR_IN_LEN as u32;
+        if copy_to_user(
+            addr_len_ptr as *mut u8,
+            &len as *const u32 as *const u8,
+            core::mem::size_of::<u32>(),
+        )
+        .is_err()
+        {
+            return Err(EFAULT);
+        }
+    }
+    Ok(())
+}
+
+fn reply_u64(reply: &NetReply, offset: usize) -> u64 {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&reply.payload[offset..offset + 8]);
+    u64::from_le_bytes(bytes)
+}
+
+fn reply_u32(reply: &NetReply, offset: usize) -> u32 {
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&reply.payload[offset..offset + 4]);
+    u32::from_le_bytes(bytes)
+}
+
+fn reply_u16(reply: &NetReply, offset: usize) -> u16 {
+    let mut bytes = [0u8; 2];
+    bytes.copy_from_slice(&reply.payload[offset..offset + 2]);
+    u16::from_le_bytes(bytes)
+}
+
+fn zero_user_buffer(buf_ptr: u64, len: usize) -> Result<(), i64> {
+    if len == 0 {
+        return Ok(());
+    }
+    if buf_ptr == 0 {
+        return Err(EFAULT);
+    }
+    static ZEROES: [u8; 64] = [0; 64];
+    let mut done = 0usize;
+    while done < len {
+        let chunk = (len - done).min(ZEROES.len());
+        if copy_to_user((buf_ptr + done as u64) as *mut u8, ZEROES.as_ptr(), chunk).is_err() {
+            return Err(EFAULT);
+        }
+        done += chunk;
+    }
+    Ok(())
+}
+
+pub fn net_socket(domain: i32, ty: i32, protocol: i32) -> Result<i64, i64> {
+    let reply = dispatch(
+        NET_OP_OPEN,
+        0,
+        domain as u32 as u64,
+        ty as u32 as u64,
+        protocol as u32,
+        0,
+    )?;
+    Ok(reply_u64(&reply, 0) as i64)
+}
+
+pub fn net_bind(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
+    dispatch(
+        NET_OP_BIND,
+        fd as u32,
+        addr as u64,
+        port as u64,
+        addr_len as u32,
+        0,
+    )?;
+    Ok(0)
+}
+
+pub fn net_connect(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
+    dispatch(
+        NET_OP_CONNECT,
+        fd as u32,
+        addr as u64,
+        port as u64,
+        addr_len as u32,
+        0,
+    )?;
+    Ok(0)
+}
+
+pub fn net_listen(fd: i32, backlog: i32) -> Result<i64, i64> {
+    if fd < 0 || backlog < 0 {
+        return Err(EINVAL);
+    }
+    dispatch(NET_OP_LISTEN, fd as u32, backlog as u64, 0, 0, 0)?;
+    Ok(0)
+}
+
+pub fn net_accept(fd: i32, addr_ptr: u64, addr_len_ptr: u64) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let reply = dispatch(NET_OP_ACCEPT, fd as u32, 0, 0, 0, 0)?;
+    let peer_addr = reply_u32(&reply, 8);
+    let peer_port = reply_u16(&reply, 12);
+    write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+    Ok(reply_u64(&reply, 0) as i64)
+}
+
+pub fn net_sendto(
+    fd: i32,
+    buf_ptr: u64,
+    len: usize,
+    flags: u32,
+    addr_ptr: u64,
+    addr_len: u64,
+) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    if len != 0 && buf_ptr == 0 {
+        return Err(EFAULT);
+    }
+    let (addr, port) = if addr_ptr != 0 {
+        read_sockaddr_in(addr_ptr, addr_len)?
+    } else {
+        (0, 0)
+    };
+    let reply = dispatch(
+        NET_OP_SENDTO,
+        fd as u32,
+        len as u64,
+        addr as u64,
+        port as u32,
+        flags,
+    )?;
+    Ok(reply.status)
+}
+
+pub fn net_recvfrom(
+    fd: i32,
+    buf_ptr: u64,
+    len: usize,
+    flags: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let reply = dispatch(NET_OP_RECVFROM, fd as u32, len as u64, 0, flags, 0)?;
+    let n = reply.status.max(0) as usize;
+    zero_user_buffer(buf_ptr, n.min(len))?;
+    let peer_addr = reply_u32(&reply, 8);
+    let peer_port = reply_u16(&reply, 12);
+    write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+    Ok(n as i64)
+}
+
+pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    if msg_ptr == 0 {
+        return Err(EFAULT);
+    }
+    let reply = dispatch(NET_OP_SENDMSG, fd as u32, msg_ptr, 0, flags, 0)?;
+    Ok(reply.status)
+}
+
+pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    if msg_ptr == 0 {
+        return Err(EFAULT);
+    }
+    let reply = dispatch(NET_OP_RECVMSG, fd as u32, msg_ptr, 0, flags, 0)?;
+    Ok(reply.status)
+}
+
+pub fn net_shutdown(fd: i32, how: i32) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    dispatch(NET_OP_SHUTDOWN, fd as u32, how as u32 as u64, 0, 0, 0)?;
+    Ok(0)
+}
+
+pub fn net_getsockname(fd: i32, addr_ptr: u64, addr_len_ptr: u64) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let reply = dispatch(NET_OP_GETSOCKNAME, fd as u32, 0, 0, 0, 0)?;
+    write_sockaddr_in(
+        addr_ptr,
+        addr_len_ptr,
+        reply_u32(&reply, 8),
+        reply_u16(&reply, 12),
+    )?;
+    Ok(0)
+}
+
+pub fn net_getpeername(fd: i32, addr_ptr: u64, addr_len_ptr: u64) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let reply = dispatch(NET_OP_GETPEERNAME, fd as u32, 0, 0, 0, 0)?;
+    write_sockaddr_in(
+        addr_ptr,
+        addr_len_ptr,
+        reply_u32(&reply, 8),
+        reply_u16(&reply, 12),
+    )?;
+    Ok(0)
+}
+
+pub fn net_socketpair(
+    domain: i32,
+    ty: i32,
+    protocol: i32,
+    sv_ptr: u64,
+    pid: u32,
+) -> Result<i64, i64> {
+    if domain == AF_UNIX {
+        return crate::syscall::fs_bridge::fs_socketpair(domain, ty, protocol, sv_ptr, pid)
+            .map_err(|e| e.to_errno());
+    }
+    if sv_ptr == 0 {
+        return Err(EFAULT);
+    }
+    let reply = dispatch(
+        NET_OP_SOCKETPAIR,
+        0,
+        domain as u32 as u64,
+        ty as u32 as u64,
+        protocol as u32,
+        0,
+    )?;
+    let a = reply_u64(&reply, 0);
+    let b = reply_u64(&reply, 8);
+    let fds = [a as i32, b as i32];
+    if copy_to_user(
+        sv_ptr as *mut u8,
+        fds.as_ptr() as *const u8,
+        core::mem::size_of_val(&fds),
+    )
+    .is_err()
+    {
+        return Err(EFAULT);
+    }
+    Ok(0)
+}
+
+pub fn net_setsockopt(
+    fd: i32,
+    level: i32,
+    optname: i32,
+    optval: u64,
+    optlen: u32,
+) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    if optlen != 0 && optval == 0 {
+        return Err(EFAULT);
+    }
+    dispatch(
+        NET_OP_SETSOCKOPT,
+        fd as u32,
+        level as u32 as u64,
+        optname as u32 as u64,
+        optlen,
+        0,
+    )?;
+    Ok(0)
+}
+
+pub fn net_getsockopt(
+    fd: i32,
+    level: i32,
+    optname: i32,
+    optval: u64,
+    optlen_ptr: u64,
+) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    let reply = dispatch(
+        NET_OP_GETSOCKOPT,
+        fd as u32,
+        level as u32 as u64,
+        optname as u32 as u64,
+        0,
+        0,
+    )?;
+    if optval != 0 {
+        let value = reply_u32(&reply, 16);
+        if copy_to_user(
+            optval as *mut u8,
+            &value as *const u32 as *const u8,
+            core::mem::size_of::<u32>(),
+        )
+        .is_err()
+        {
+            return Err(EFAULT);
+        }
+    }
+    if optlen_ptr != 0 {
+        let len = core::mem::size_of::<u32>() as u32;
+        if copy_to_user(
+            optlen_ptr as *mut u8,
+            &len as *const u32 as *const u8,
+            core::mem::size_of::<u32>(),
+        )
+        .is_err()
+        {
+            return Err(EFAULT);
+        }
+    }
+    Ok(0)
+}

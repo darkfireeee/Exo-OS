@@ -1,0 +1,12 @@
+[package]
+name = "exo-observability"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Exo-OS logging and tracing adaptation layer"
+build = "build.rs"
+
+[dependencies]
+log.workspace = true
+

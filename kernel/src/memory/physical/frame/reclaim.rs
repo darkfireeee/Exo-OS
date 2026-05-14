@@ -41,9 +41,9 @@ pub const HIGH_WATER_ACTIVE: usize = LRU_LIST_SIZE * 3 / 4;
 
 /// Taille de la table RECLAIM_FLAGS.
 ///
-/// Gardée au-dessus de la constante canonique pour conserver une marge hôte/test
-/// tout en forçant une relation explicite avec le MAX_CPUS réel du noyau.
-const RECLAIM_MAX_CPUS: usize = 512;
+/// Alignée sur la constante canonique pour éviter une table reclaim plus large
+/// que le nombre réel de CPUs supportés par le noyau.
+const RECLAIM_MAX_CPUS: usize = MAX_CPUS;
 const _: () = assert!(
     RECLAIM_MAX_CPUS >= MAX_CPUS,
     "RECLAIM_MAX_CPUS doit rester >= MAX_CPUS canonique"

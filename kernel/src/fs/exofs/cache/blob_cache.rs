@@ -167,6 +167,15 @@ impl BlobEntry {
     }
 
     fn ensure_page(&mut self, page_idx: usize) -> ExofsResult<()> {
+        if self.pages.len() <= page_idx {
+            let needed = page_idx
+                .checked_add(1)
+                .and_then(|target| target.checked_sub(self.pages.len()))
+                .ok_or(ExofsError::NoSpace)?;
+            self.pages
+                .try_reserve(needed)
+                .map_err(|_| ExofsError::NoMemory)?;
+        }
         while self.pages.len() <= page_idx {
             self.pages.push(None);
         }

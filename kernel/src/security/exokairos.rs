@@ -167,7 +167,7 @@ impl TemporalCap {
         let deadline_mac = compute_deadline_mac(base.object_id(), deadline_tsc);
 
         // Stocker la deadline dans la table kernel-only
-        cap_deadline_table::insert(base.object_id(), deadline_tsc);
+        let _ = cap_deadline_table::insert(base.object_id(), deadline_tsc);
 
         Self {
             base,
@@ -199,6 +199,9 @@ impl TemporalCap {
     pub fn verify(&self, current_tsc: u64) -> Result<(), CapError> {
         // 1. Récupérer la deadline depuis la table kernel (inaccessible Ring 1)
         let deadline = cap_deadline_table::get_const_time(self.base.object_id());
+        if deadline == u64::MAX {
+            return Err(CapError::NotFound);
+        }
 
         // 2. Vérifier le MAC (protection contre falsification du deadline_mac)
         let expected_mac = compute_deadline_mac(self.base.object_id(), deadline);
@@ -388,7 +391,7 @@ pub mod cap_deadline_table {
     ///
     /// # Safety
     /// Ring 0 uniquement. La table est protégée par PKS Credentials.
-    pub unsafe fn insert(oid: ObjectId, deadline_tsc: u64) {
+    pub unsafe fn insert(oid: ObjectId, deadline_tsc: u64) -> bool {
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
         };
@@ -404,7 +407,7 @@ pub mod cap_deadline_table {
             if occupied == 1 && (*entry).oid == oid_val {
                 // Mise à jour d'une entrée existante
                 (*entry).deadline_tsc = deadline_tsc;
-                return;
+                return true;
             }
 
             if occupied == 0 {
@@ -417,18 +420,14 @@ pub mod cap_deadline_table {
                         (*entry).oid = oid_val;
                         (*entry).deadline_tsc = deadline_tsc;
                         USED.fetch_add(1, Ordering::Relaxed);
-                        return;
+                        return true;
                     }
                     Err(_) => continue, // CAS raté — un autre thread a pris le slot
                 }
             }
         }
 
-        // Table pleine — panique (ne devrait jamais arriver en Phase 3.1)
-        panic!(
-            "EXOKAIROS: deadline table full ({} entries)",
-            DEADLINE_TABLE_SIZE
-        );
+        false
     }
 
     /// Récupère la deadline TSC pour un ObjectId — temps constant.
@@ -586,9 +585,7 @@ pub fn init_kernel_secret(secret: &[u8; 32]) {
 fn get_kernel_secret() -> [u8; 32] {
     let _guard =
         unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly) };
-    *KERNEL_SECRET
-        .get()
-        .expect("KERNEL_SECRET non initialisé — exoseal_boot_phase0 doit précéder verify()")
+    KERNEL_SECRET.get().copied().unwrap_or([0u8; 32])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

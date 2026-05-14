@@ -697,7 +697,10 @@ pub fn read_user_buf_to_vec(
     max: usize,
 ) -> Result<alloc::vec::Vec<u8>, SyscallError> {
     let buf = UserBuf::validate(ptr, len, max)?;
-    let mut vec = alloc::vec![0u8; len];
+    let mut vec = Vec::new();
+    vec.try_reserve_exact(len)
+        .map_err(|_| SyscallError::NoMemory)?;
+    vec.resize(len, 0);
     buf.read_into(&mut vec)?;
     Ok(vec)
 }

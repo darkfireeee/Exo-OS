@@ -23,6 +23,7 @@ use chacha20poly1305::{
     aead::{AeadInPlace, KeyInit},
     XChaCha20Poly1305,
 };
+use exo_syscall_abi as syscall;
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -48,20 +49,35 @@ static XCHACHA_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Lit 8 octets aléatoires via SYS_GETRANDOM (Linux-compatible).
 fn getrandom_u64() -> u64 {
     let mut buf = [0u8; 8];
-    let r = unsafe {
+    let ret: i64;
+    unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax")  318u64,           // SYS_GETRANDOM
+            in("rax")  syscall::SYS_GETRANDOM,
             in("rdi")  buf.as_mut_ptr() as u64,
             in("rsi")  8u64,
             in("rdx")  0u64,             // flags = 0 (GRND_DEFAULT)
-            lateout("rax") _,
+            lateout("rax") ret,
             out("rcx") _, out("r11") _,
             options(nostack),
         );
-    };
-    let _ = r;
-    u64::from_le_bytes(buf)
+    }
+    if ret == 8 {
+        return u64::from_le_bytes(buf);
+    }
+
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!(
+            "rdtsc",
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, nomem),
+        );
+    }
+    let tsc = ((hi as u64) << 32) | lo as u64;
+    tsc ^ ((&buf as *const [u8; 8] as usize) as u64).rotate_left(17)
 }
 
 /// Initialise le sous-système XChaCha20-Poly1305.

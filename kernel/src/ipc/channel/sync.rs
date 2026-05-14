@@ -54,6 +54,32 @@ impl RendezVousState {
     }
 }
 
+#[inline]
+fn monotonic_ns() -> u64 {
+    crate::scheduler::timer::clock::monotonic_ns()
+}
+
+#[inline]
+fn deadline_from(timeout_ns: u64) -> u64 {
+    if timeout_ns == 0 {
+        u64::MAX
+    } else {
+        monotonic_ns().saturating_add(timeout_ns)
+    }
+}
+
+#[inline]
+fn deadline_expired(deadline_ns: u64) -> bool {
+    deadline_ns != u64::MAX && monotonic_ns() >= deadline_ns
+}
+
+#[inline]
+fn wake_tid(tid: u64) {
+    if tid != 0 {
+        crate::ipc::sync::sched_hooks::wake_thread(tid);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Slot de rendezvous — stockage inline du message (no-alloc)
 // ---------------------------------------------------------------------------
@@ -203,9 +229,11 @@ impl SyncChannel {
         self.closed.load(Ordering::Acquire) != 0
     }
 
-    /// Ferme le canal — réveille tout émetteur bloqué avec Cancelled.
+    /// Ferme le canal — réveille tout émetteur/récepteur bloqué avec Cancelled.
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
+        let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
+        let receiver_tid = self.slot.receiver_tid.load(Ordering::Relaxed);
         // Signaler toute attente en cours
         let state = self.slot.state.load(Ordering::Acquire);
         if RendezVousState::from_u32(state) == RendezVousState::SenderWaiting {
@@ -213,6 +241,8 @@ impl SyncChannel {
                 .state
                 .store(RendezVousState::Cancelled as u32, Ordering::Release);
         }
+        wake_tid(sender_tid);
+        wake_tid(receiver_tid);
     }
 
     // -----------------------------------------------------------------------
@@ -241,9 +271,10 @@ impl SyncChannel {
             if flags.contains(MsgFlags::NOWAIT) {
                 return Err(IpcError::WouldBlock);
             }
-            // Spin court, puis blocage réel via scheduler.
-            let my_tid = crate::ipc::sync::sched_hooks::current_tid();
-            self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
+            // Attente de contention entre senders. Ne pas écrire sender_tid ici :
+            // ce champ appartient au sender actif dans le rendez-vous courant.
+            let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+            let deadline_ns = deadline_from(timeout_ns);
             let mut spins: u32 = 0;
             loop {
                 core::hint::spin_loop();
@@ -255,22 +286,15 @@ impl SyncChannel {
                 if self.is_closed() {
                     return Err(IpcError::Closed);
                 }
-                if spins > 64 {
-                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
-                    debug_assert!(
-                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
-                        "SyncChannel::send: block_current() appelé avec PreemptGuard actif"
-                    );
-                    // Blocage réel — sera réveillé quand l'émetteur précédent termine.
-                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus), my_tid valide.
-                    unsafe {
-                        crate::ipc::sync::sched_hooks::block_current(my_tid);
-                    }
-                    spins = 0;
-                }
-                if spins > 1_000_000 {
+                if deadline_expired(deadline_ns) {
                     self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
                     return Err(IpcError::Timeout);
+                }
+                if spins > 64 {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                    spins = 0;
                 }
             }
         }
@@ -295,16 +319,13 @@ impl SyncChannel {
         self.slot
             .state
             .store(RendezVousState::SenderWaiting as u32, Ordering::Release);
+        wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
 
         // Attendre ReceiverAcked ou Cancelled.
         // Stratégie : spin court (≤ 64 tours) puis blocage réel via scheduler.
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+        let deadline_ns = deadline_from(timeout_ns);
         let mut spins: u64 = 0;
-        let spin_hard_limit = if timeout_ns == 0 {
-            u64::MAX
-        } else {
-            timeout_ns / 10
-        };
 
         loop {
             core::hint::spin_loop();
@@ -338,13 +359,14 @@ impl SyncChannel {
                 return Err(IpcError::Closed);
             }
 
-            if spins >= spin_hard_limit && timeout_ns != 0 {
+            if deadline_expired(deadline_ns) {
                 let _ = self.slot.state.compare_exchange(
                     RendezVousState::SenderWaiting as u32,
                     RendezVousState::Cancelled as u32,
                     Ordering::AcqRel,
                     Ordering::Acquire,
                 );
+                wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
                 self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Timeout);
             }
@@ -356,14 +378,20 @@ impl SyncChannel {
                 if s2 == RendezVousState::ReceiverAcked || s2 == RendezVousState::Cancelled {
                     continue; // Sera traité à la prochaine itération
                 }
-                // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
-                debug_assert!(
-                    crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
-                    "SyncChannel::send (attente ack): block_current() avec PreemptGuard actif"
-                );
-                // SAFETY: block_current() sûr si PreemptGuard::depth() == 0.
-                unsafe {
-                    crate::ipc::sync::sched_hooks::block_current(my_tid);
+                if timeout_ns == 0 {
+                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    debug_assert!(
+                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                        "SyncChannel::send (attente ack): block_current() avec PreemptGuard actif"
+                    );
+                    // SAFETY: block_current() sûr si PreemptGuard::depth() == 0.
+                    unsafe {
+                        crate::ipc::sync::sched_hooks::block_current(my_tid);
+                    }
+                } else {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
                 }
                 spins = 0;
             }
@@ -405,7 +433,10 @@ impl SyncChannel {
         self.slot
             .state
             .store(RendezVousState::SenderWaiting as u32, Ordering::Release);
+        wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
 
+        let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+        let deadline_ns = deadline_from(timeout_ns);
         let mut spins: u64 = 0;
         loop {
             core::hint::spin_loop();
@@ -423,31 +454,38 @@ impl SyncChannel {
                 unsafe { self.slot.reset() };
                 return Err(IpcError::Closed);
             }
-            // Blocage réel après 64 itérations de spin.
-            if spins == 64 {
-                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-                if s2 != RendezVousState::SenderWaiting {
-                    continue;
-                }
-                // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
-                debug_assert!(
-                    crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
-                    "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
-                );
-                // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, send_zerocopy).
-                unsafe {
-                    crate::ipc::sync::sched_hooks::block_current(my_tid);
-                }
-                spins = 0;
-            }
-            if spins > 2_000_000 {
+            if deadline_expired(deadline_ns) {
                 let _ = self.slot.state.compare_exchange(
                     RendezVousState::SenderWaiting as u32,
                     RendezVousState::Cancelled as u32,
                     Ordering::AcqRel,
                     Ordering::Acquire,
                 );
+                wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
                 return Err(IpcError::Timeout);
+            }
+            // Blocage réel après 64 itérations de spin.
+            if spins == 64 {
+                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s2 != RendezVousState::SenderWaiting {
+                    continue;
+                }
+                if timeout_ns == 0 {
+                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    debug_assert!(
+                        crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
+                        "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
+                    );
+                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, send_zerocopy).
+                    unsafe {
+                        crate::ipc::sync::sched_hooks::block_current(my_tid);
+                    }
+                } else {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                }
+                spins = 0;
             }
         }
     }
@@ -530,9 +568,7 @@ impl SyncChannel {
                 .state
                 .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
             // Réveiller l'émetteur s'il est bloqué.
-            if sender_tid != 0 {
-                crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
-            }
+            wake_tid(sender_tid);
             self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageReceived);
             return Ok((mid, copy_len, msg_flags));
@@ -554,9 +590,7 @@ impl SyncChannel {
             .state
             .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
         // Réveiller l'émetteur s'il est bloqué dans le scheduler.
-        if sender_tid != 0 {
-            crate::ipc::sync::sched_hooks::wake_thread(sender_tid);
-        }
+        wake_tid(sender_tid);
 
         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
         self.stats
@@ -580,9 +614,11 @@ impl SyncChannel {
         }
         // SAFETY: état SenderWaiting et flag ZEROCOPY — l'émetteur a écrit zc_ref
         let zc = unsafe { *self.slot.zc_ref.get() };
+        let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         self.slot
             .state
             .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
+        wake_tid(sender_tid);
         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
         IPC_STATS.record(StatEvent::MessageReceived);
         Some(zc)
