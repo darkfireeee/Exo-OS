@@ -1,8 +1,10 @@
 use exo_syscall_abi as syscall;
 
 pub const SERVER_ENDPOINT_ID: u64 = 7;
-pub const RAW_MSG_SIZE: usize = 240;
+pub const RAW_MSG_SIZE: usize = syscall::IPC_ENVELOPE_SIZE;
 pub const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+
+const _: () = assert!(RAW_MSG_SIZE == syscall::IPC_ENVELOPE_SIZE);
 
 pub const NET_OP_OPEN: u32 = 0x4E00;
 pub const NET_OP_CONNECT: u32 = 0x4E01;

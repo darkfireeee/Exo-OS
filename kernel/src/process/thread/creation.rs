@@ -32,6 +32,7 @@ use core::sync::atomic::Ordering;
 pub enum ThreadCreateError {
     TidExhausted,
     OutOfMemory,
+    TooManyThreads,
     InvalidCpu,
     ProcessExiting,
     StackSetupFailed,
@@ -172,6 +173,15 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         }
     }
 
+    if !pcb.register_thread_ptr(thread_ptr) {
+        // SAFETY: thread_ptr vient d'être alloué et n'est pas publié.
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
+        TID_ALLOCATOR.free(tid_raw);
+        return Err(ThreadCreateError::TooManyThreads);
+    }
+
     // 4. Incrémenter le compteur de threads du PCB.
     pcb.inc_threads();
 
@@ -180,6 +190,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         let _preempt = PreemptGuard::new();
         if params.target_cpu as usize >= MAX_CPUS {
             pcb.dec_threads();
+            pcb.unregister_thread_ptr(thread_ptr);
             // SAFETY: thread_ptr valide.
             unsafe {
                 drop(Box::from_raw(thread_ptr));

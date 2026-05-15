@@ -5,6 +5,7 @@ use crate::ipc_bridge::{payload_u32, payload_u64, MemoryReply};
 
 const PAGE_SIZE: u64 = 4_096;
 const MAX_REGIONS: usize = 128;
+const HANDLE_MIX_KEY: u64 = 0x9E37_79B9_7F4A_7C15;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RegionKind {
@@ -81,6 +82,25 @@ impl MemoryService {
             .position(|region| region.active && region.handle == handle)
     }
 
+    fn make_handle(&mut self, owner_pid: u32, slot_idx: usize) -> u64 {
+        loop {
+            let seq = self.next_handle;
+            self.next_handle = self.next_handle.wrapping_add(1).max(1);
+            let mut x = seq
+                ^ ((owner_pid as u64) << 32)
+                ^ ((slot_idx as u64) << 48)
+                ^ HANDLE_MIX_KEY;
+            x ^= x >> 30;
+            x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            x ^= x >> 27;
+            x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+            x ^= x >> 31;
+            if x != 0 && self.region_index(x).is_none() {
+                return x;
+            }
+        }
+    }
+
     fn allocate_region(
         &mut self,
         owner_pid: u32,
@@ -119,8 +139,7 @@ impl MemoryService {
             return Err(base);
         }
 
-        let handle = self.next_handle;
-        self.next_handle = self.next_handle.saturating_add(1).max(1);
+        let handle = self.make_handle(owner_pid, idx);
 
         self.regions[idx] = RegionEntry {
             active: true,

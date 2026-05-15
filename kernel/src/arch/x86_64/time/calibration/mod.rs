@@ -260,12 +260,14 @@ pub fn recalibrate_tsc() -> u64 {
 /// Cœur de la calibration — exécute la chaîne de fallback et construit le `CalibratedTsc`.
 ///
 /// ## Ordre de priorité :
-///   1. CPUID 0x15     (ratio TSC/cristal, instantané sous QEMU/KVM)
-///   2. CPUID 0x16     (base MHz — moins précis)
-///   3. CPUID best     (cross-check nominal)
-///   4. KVM/QEMU CPUID hypervisor TSC
-///   5. PIT driver     (fallback port I/O)
-///   6. 3 GHz fallback (dernier recours)
+///   1. HPET window    (source matérielle haute précision)
+///   2. PM Timer       (source ACPI stable)
+///   3. CPUID 0x15     (ratio TSC/cristal, instantané sous QEMU/KVM)
+///   4. CPUID 0x16     (base MHz — moins précis)
+///   5. CPUID best     (cross-check nominal)
+///   6. KVM/QEMU CPUID hypervisor TSC
+///   7. PIT driver     (fallback port I/O)
+///   8. 3 GHz fallback (dernier recours)
 fn run_calibration_chain() -> CalibratedTsc {
     let seq = CALIB_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let tsc_invariant = cpu_tsc::tsc_invariant();
@@ -275,7 +277,50 @@ fn run_calibration_chain() -> CalibratedTsc {
 
     let start_cycles = cpu_tsc::read_tsc();
 
-    // ── Tentative 1 : CPUID leaf 0x15 (TSC/Crystal ratio) ─────────────────
+    // ── Tentative 1 : HPET window (MMIO, précision haute) ──────────────────
+    if sources::hpet::available() {
+        let hpet_hz = sources::hpet::freq_hz();
+        if let Some(hz) = window::calibrate_tsc_via_hpet(hpet_hz) {
+            if validation::hz_in_range(hz) {
+                let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
+                e9_tag_hz(b"CAL:HPET", hz);
+                return CalibratedTsc {
+                    tsc_hz: round_hz(hz),
+                    source: CalibSource::Hpet,
+                    confidence: 95,
+                    variance_hz2: 0,
+                    valid_samples: 10,
+                    duration_tsc_cycles: duration,
+                    tsc_invariant,
+                    seq,
+                };
+            }
+        }
+        e9_tag(b"CAL:HPET-FAIL");
+    }
+
+    // ── Tentative 2 : ACPI PM Timer (port I/O, stable sous VM) ─────────────
+    if sources::pm_timer::available() || sources::pm_timer::auto_detect() {
+        if let Some(hz) = window::calibrate_tsc_via_pm_timer() {
+            if validation::hz_in_range(hz) {
+                let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
+                e9_tag_hz(b"CAL:PMT", hz);
+                return CalibratedTsc {
+                    tsc_hz: round_hz(hz),
+                    source: CalibSource::PmTimer,
+                    confidence: 90,
+                    variance_hz2: 0,
+                    valid_samples: 10,
+                    duration_tsc_cycles: duration,
+                    tsc_invariant,
+                    seq,
+                };
+            }
+        }
+        e9_tag(b"CAL:PMT-FAIL");
+    }
+
+    // ── Tentative 3 : CPUID leaf 0x15 (TSC/Crystal ratio) ─────────────────
     // Source nominale instantanée — pas de MMIO, pas de busy-poll.
     // Intel Core gen 6+ et Atom : ratio TSC/cristal exact.
     // PRIORITÉ : essayé EN PREMIER car :
@@ -299,7 +344,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 2 : CPUID leaf 0x16 (fréquence de base CPU) ─────────────
+    // ── Tentative 4 : CPUID leaf 0x16 (fréquence de base CPU) ─────────────
     // Résolution limitée : multiple de 1 MHz. Pas de boucle → instantané.
     if let Some(hz) = cpuid_nominal::cpuid_tsc_hz_leaf16() {
         if validation::hz_in_range(hz) {
@@ -318,7 +363,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 3 : meilleure estimation CPUID (cross-check 0x15/0x16) ───
+    // ── Tentative 5 : meilleure estimation CPUID (cross-check 0x15/0x16) ───
     // cpuid_best_estimate() croise les deux feuilles CPUID pour affiner.
     if let Some(hz) = cpuid_nominal::cpuid_best_estimate() {
         if validation::hz_in_range(hz) {
@@ -337,7 +382,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 4 : KVM/QEMU hypervisor TSC frequency ─────────────────────
+    // ── Tentative 6 : KVM/QEMU hypervisor TSC frequency ─────────────────────
     if let Some(hz) = cpuid_nominal::hypervisor_tsc_hz() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
@@ -355,7 +400,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 5 : PIT one-shot via cpu_tsc driver (port I/O, fiable QEMU) ──
+    // ── Tentative 7 : PIT one-shot via cpu_tsc driver (port I/O, fiable QEMU) ──
     // Sur QEMU TCG, le PIT canal 2 est bien simulé (port I/O, pas MMIO).
     // Retourne 0 si PIT inactif ou I/O trop lent (QEMU TCG 10K iter × inb).
     {

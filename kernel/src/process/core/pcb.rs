@@ -99,6 +99,8 @@ pub mod process_flags {
 pub use process_flags as ProcessFlags;
 
 pub const PROCESS_NAME_LEN: usize = 16;
+pub const MAX_THREADS_PER_PROCESS: usize = 64;
+pub const DEFAULT_UMASK: u32 = 0o022;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenFileTable — table des descripteurs de fichiers ouverts
@@ -263,6 +265,7 @@ impl OpenFileTable {
                 if fd_entry.flags & O_CLOEXEC != 0 {
                     closed_handles.push(fd_entry.handle);
                     *slot = None;
+                    self.close_count.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
@@ -411,12 +414,17 @@ pub struct ProcessControlBlock {
     pub flags: AtomicU32,
     /// Code de sortie (renseigné par exit()).
     pub exit_code: AtomicU32,
+    /// Umask POSIX par processus.
+    pub umask: AtomicU32,
 
     // ── Threads ───────────────────────────────────────────────────────────────
     /// Nombre de threads actifs dans ce processus.
     pub thread_count: AtomicU32,
     /// ID du thread principal (TID = PID au sens POSIX).
     pub main_thread: ThreadId,
+    /// Registre borné des threads du processus, utilisé par exit_group().
+    pub thread_slots: [AtomicPtr<crate::process::core::tcb::ProcessThread>;
+        MAX_THREADS_PER_PROCESS],
 
     // ── Ressources ────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
@@ -514,8 +522,11 @@ impl ProcessControlBlock {
             state: AtomicU32::new(ProcessState::Creating as u32),
             flags: AtomicU32::new(0),
             exit_code: AtomicU32::new(0),
+            umask: AtomicU32::new(DEFAULT_UMASK),
             thread_count: AtomicU32::new(1),
             main_thread,
+            thread_slots: [const { AtomicPtr::new(core::ptr::null_mut()) };
+                MAX_THREADS_PER_PROCESS],
             creds: SpinLock::new(creds),
             files: SpinLock::new(files),
             address_space: AtomicUsize::new(addr_space),
@@ -645,6 +656,18 @@ impl ProcessControlBlock {
     pub fn set_exiting(&self) {
         self.flags
             .fetch_or(process_flags::EXITING, Ordering::Release);
+    }
+
+    /// Lit l'umask POSIX du processus.
+    #[inline(always)]
+    pub fn umask(&self) -> u32 {
+        self.umask.load(Ordering::Acquire)
+    }
+
+    /// Remplace l'umask POSIX et retourne l'ancienne valeur.
+    #[inline(always)]
+    pub fn swap_umask(&self, mask: u32) -> u32 {
+        self.umask.swap(mask & 0o777, Ordering::AcqRel)
     }
 
     /// Incrémente le compteur de threads actifs.
@@ -824,6 +847,63 @@ impl ProcessControlBlock {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
+    /// Enregistre un thread dans le registre borné du processus.
+    pub fn register_thread_ptr(
+        &self,
+        ptr: *mut crate::process::core::tcb::ProcessThread,
+    ) -> bool {
+        if ptr.is_null() {
+            return false;
+        }
+        for slot in &self.thread_slots {
+            if slot.load(Ordering::Acquire) == ptr {
+                return true;
+            }
+        }
+        for slot in &self.thread_slots {
+            if slot
+                .compare_exchange(
+                    core::ptr::null_mut(),
+                    ptr,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Retire un thread du registre borné.
+    pub fn unregister_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
+        if ptr.is_null() {
+            return;
+        }
+        for slot in &self.thread_slots {
+            let _ = slot.compare_exchange(
+                ptr,
+                core::ptr::null_mut(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+
+    /// Parcourt les threads connus du processus.
+    pub fn for_each_thread_ptr<F>(&self, mut f: F)
+    where
+        F: FnMut(*mut crate::process::core::tcb::ProcessThread),
+    {
+        for slot in &self.thread_slots {
+            let ptr = slot.load(Ordering::Acquire);
+            if !ptr.is_null() {
+                f(ptr);
+            }
+        }
+    }
+
     /// Retourne un thread vivant pouvant recevoir un signal.
     ///
     /// La table multi-thread complète n'est pas encore matérialisée dans le PCB ;
@@ -846,6 +926,9 @@ impl ProcessControlBlock {
     #[inline(always)]
     pub fn set_main_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
         self.main_thread_rawptr.store(ptr, Ordering::Release);
+        if !ptr.is_null() {
+            let _ = self.register_thread_ptr(ptr);
+        }
     }
 }
 

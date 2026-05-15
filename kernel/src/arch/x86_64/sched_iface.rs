@@ -17,7 +17,7 @@
 // ## Fonctions exportées
 //
 //   arch_send_reschedule_ipi(target_cpu: u32)
-//       Envoie un IPI reschedule (vecteur 0xF1) au CPU logique `target_cpu`.
+//       Envoie un IPI reschedule au CPU logique `target_cpu`.
 //       Utilisé par `scheduler::smp::migration` pour déclencher un reschedule
 //       sur le CPU de destination après migration de thread.
 //
@@ -75,7 +75,7 @@ pub fn pstate_changes() -> u64 {
 // arch_send_reschedule_ipi — C ABI export
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie un IPI reschedule (vecteur 0xF1) au CPU logique `target_cpu`.
+/// Envoie un IPI reschedule au CPU logique `target_cpu`.
 ///
 /// Séquence :
 /// 1. Lire le LAPIC ID du CPU cible dans `PER_CPU_TABLE[target_cpu]`.
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
 
     let lapic_id = cpu_data.lapic_id as u32;
 
-    // Envoyer l'IPI reschedule (vecteur 0xF1 — voir arch/x86_64/apic/ipi.rs)
+    // Envoyer l'IPI reschedule (voir arch/x86_64/apic/ipi.rs)
     apic::ipi::send_ipi_reschedule(lapic_id);
     RESCHEDULE_IPIS_SENT.fetch_add(1, Ordering::Relaxed);
 }

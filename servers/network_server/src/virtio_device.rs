@@ -100,6 +100,10 @@ impl ExoNetDevice {
         true
     }
 
+    pub fn pop_rx_for_stack(&mut self) -> Option<NetBufRef> {
+        self.rx_ring.pop()
+    }
+
     pub fn submit_tx(&mut self, pool: &NetBufPool, len: usize) -> Result<u16, i64> {
         let Some(idx) = pool.tx_alloc() else {
             self.dropped_tx = self.dropped_tx.saturating_add(1);
@@ -123,6 +127,17 @@ impl ExoNetDevice {
 
     pub fn pop_tx_for_driver(&mut self) -> Option<NetBufRef> {
         self.tx_ring.pop()
+    }
+
+    pub fn queue_tx_idx(&mut self, pool_idx: u16, len: usize) -> Result<(), i64> {
+        if !self.tx_ring.push(NetBufRef {
+            pool_idx,
+            len: len.min(u16::MAX as usize) as u16,
+        }) {
+            self.dropped_tx = self.dropped_tx.saturating_add(1);
+            return Err(exo_syscall_abi::ENOBUFS);
+        }
+        Ok(())
     }
 
     pub fn release_rx(&mut self, pool_idx: u16) {

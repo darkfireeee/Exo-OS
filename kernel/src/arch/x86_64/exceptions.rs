@@ -27,7 +27,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // des liens.
 //
 // sched_fpu_handle_nm   — scheduler/fpu/lazy.rs     — handler #NM (FPU lazy)
-// sched_ipi_reschedule  — scheduler/timer/tick.rs   — IPI reschedule 0xF1
+// sched_ipi_reschedule  — scheduler/timer/tick.rs   — IPI reschedule
 extern "C" {
     /// Gère l'exception #NM (Device Not Available) pour le TCB courant.
     /// Efface CR0.TS et restaure le contexte FPU via xrstor.
@@ -110,6 +110,13 @@ macro_rules! define_exception_handler_errcode {
             "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
             "jz   1f",                      // ZF=1 ⇒ Ring 0 (kernel), sauter swapgs
             "swapgs",
+            "mov  gs:[0x50], rax", // préserver rax pendant le switch CR3
+            "mov  rax, gs:[0x40]", // kpti_kernel_cr3
+            "test rax, rax",
+            "jz   3f",
+            "mov  cr3, rax",
+            "3:",
+            "mov  rax, gs:[0x50]",
             "1:",
             // Sauvegarder registres callee-saved + scratch
             "push rax",
@@ -152,6 +159,13 @@ macro_rules! define_exception_handler_errcode {
             // Vérifier CS RPL pour le SWAPGS de sortie
             "test qword ptr [rsp + 8], 3", // CS & 3 != 0 ⇒ retour Ring 3
             "jz   2f",
+            "mov  gs:[0x50], rax",
+            "mov  rax, gs:[0x48]", // kpti_user_cr3
+            "test rax, rax",
+            "jz   4f",
+            "mov  cr3, rax",
+            "4:",
+            "mov  rax, gs:[0x50]",
             "swapgs",
             "2:",
             "iretq",
@@ -177,6 +191,13 @@ macro_rules! define_exception_handler_no_errcode {
             "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
             "jz   1f",
             "swapgs",
+            "mov  gs:[0x50], rax", // préserver rax pendant le switch CR3
+            "mov  rax, gs:[0x40]", // kpti_kernel_cr3
+            "test rax, rax",
+            "jz   3f",
+            "mov  cr3, rax",
+            "3:",
+            "mov  rax, gs:[0x50]",
             "1:",
             "push rax",
             "push rbx",
@@ -214,6 +235,13 @@ macro_rules! define_exception_handler_no_errcode {
             // Après add rsp,8 : [rsp+0]=RIP, [rsp+8]=CS
             "test qword ptr [rsp + 8], 3", // CS RPL bits
             "jz   2f",
+            "mov  gs:[0x50], rax",
+            "mov  rax, gs:[0x48]", // kpti_user_cr3
+            "test rax, rax",
+            "jz   4f",
+            "mov  cr3, rax",
+            "4:",
+            "mov  rax, gs:[0x50]",
             "swapgs",
             "2:",
             "iretq",
@@ -266,6 +294,9 @@ define_exception_handler_no_errcode!(ipi_reschedule_handler, do_ipi_reschedule);
 define_exception_handler_no_errcode!(ipi_tlb_shootdown_handler, do_ipi_tlb_shootdown);
 define_exception_handler_no_errcode!(ipi_cpu_hotplug_handler, do_ipi_cpu_hotplug);
 define_exception_handler_no_errcode!(ipi_panic_handler, do_ipi_panic);
+define_exception_handler_no_errcode!(exophoenix_freeze_handler, do_exophoenix_freeze);
+define_exception_handler_no_errcode!(exophoenix_pmc_handler, do_exophoenix_pmc);
+define_exception_handler_no_errcode!(exophoenix_tlb_handler, do_exophoenix_tlb);
 
 // ── Handlers Rust d'exceptions ────────────────────────────────────────────────
 
@@ -617,13 +648,50 @@ extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
 /// NE PAS allouer, NE PAS prendre de verrous.
 #[no_mangle]
 extern "C" fn do_double_fault(frame: *mut ExceptionFrame) {
-    let _ = frame;
     EXC_COUNTERS[8].fetch_add(1, Ordering::Relaxed);
+    df_debug_write(b"\n[#DF] double fault");
+    if !frame.is_null() {
+        let frame = unsafe { &*frame };
+        df_debug_field(b" rip=0x", frame.rip);
+        df_debug_field(b" cs=0x", frame.cs);
+        df_debug_field(b" rsp=0x", frame.rsp);
+        df_debug_field(b" rflags=0x", frame.rflags);
+        df_debug_field(b" err=0x", frame.error_code);
+    }
+    df_debug_field(
+        b" cpu=0x",
+        crate::arch::x86_64::cpu::topology::current_cpu_id().0 as u64,
+    );
+    df_debug_write(b"\n");
 
     // RÈGLE NO-ALLOC : cette fonction ne peut faire aucune allocation
     // Elle ne peut qu'arrêter le CPU
     // SAFETY: situation non-récupérable — halt immédiat
     super::halt_cpu();
+}
+
+#[inline(always)]
+fn df_debug_write(bytes: &[u8]) {
+    crate::arch::x86_64::terminal::debug_write(bytes);
+}
+
+fn df_debug_hex64(value: u64) {
+    let mut out = [0u8; 16];
+    for (idx, byte) in out.iter_mut().enumerate() {
+        let shift = 60 - (idx as u32 * 4);
+        let nibble = ((value >> shift) & 0x0f) as u8;
+        *byte = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        };
+    }
+    df_debug_write(&out);
+}
+
+fn df_debug_field(label: &[u8], value: u64) {
+    df_debug_write(label);
+    df_debug_hex64(value);
 }
 
 /// Handler #TS — Invalid TSS
@@ -776,7 +844,8 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // de l'espace utilisateur courant: si une VMA existe, on la résout via le
     // même chemin demand-paging/CoW qu'une faute Ring 3, puis on reprend
     // l'instruction noyau qui accédait au pointeur user.
-    let resolve_as_user = fault_addr.is_user() && !user_as_for_fault.is_null() && user_vma_found;
+    let resolve_as_user =
+        fault_addr.is_user() && !user_as_for_fault.is_null() && (frame.from_userspace() || user_vma_found);
     if resolve_as_user {
         ctx.from_kernel = false;
     }
@@ -921,6 +990,10 @@ fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
     let frame = unsafe { &mut *frame };
     super::idt::irq_counter_inc(vector);
 
+    if vector == 33 {
+        crate::arch::x86_64::terminal::keyboard_irq_drain();
+    }
+
     // Routage vers l'architecture GI-03
     crate::arch::x86_64::irq::routing::dispatch_irq(vector, None);
 
@@ -1003,10 +1076,10 @@ extern "C" fn do_irq_spurious(_frame: *mut ExceptionFrame) {
 
 // ── IPI Handlers ──────────────────────────────────────────────────────────────
 
-/// IPI wakeup thread (0xF0)
+/// IPI wakeup thread
 #[no_mangle]
 extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
-    super::idt::irq_counter_inc(0xF0);
+    super::idt::irq_counter_inc(super::idt::VEC_IPI_WAKEUP);
     // Réutiliser sched_ipi_reschedule : positionne NEED_RESCHED sur le thread
     // courant (RÈGLE IPI-01) — le reschedule effectif a lieu à l'IRET.
     let tcb_ptr: u64;
@@ -1027,18 +1100,11 @@ extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
     super::apic::eoi();
 }
 
-/// IPI reschedule (0xF1)
+/// IPI reschedule
 #[no_mangle]
 extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     let _ = frame;
-    super::idt::irq_counter_inc(0xF1);
-
-    // Mode ExoPhoenix : 0xF1 = Freeze coopératif lock-free.
-    if crate::exophoenix::stage0::exophoenix_vectors_active() {
-        // SAFETY: handler dédié no-alloc/no-lock ; il acquitte l'IPI lui-même.
-        unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
-        return;
-    }
+    super::idt::irq_counter_inc(super::idt::VEC_IPI_RESCHEDULE);
 
     // Lire le TCB courant (GS:[0x20] = current_tcb dans PerCpuData).
     let tcb_ptr: u64;
@@ -1065,7 +1131,7 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     super::apic::eoi();
 }
 
-/// IPI TLB shootdown (0xF2)
+/// IPI TLB shootdown
 ///
 /// ## Intégration memory/ (RÈGLE TLB-01 DOC2)
 /// 1. Récupérer l'identifiant CPU courant depuis le GS per-CPU.
@@ -1080,15 +1146,8 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
 /// (c'est `tlb::shootdown()` qui attend l'acquittement, pas ce handler).
 #[no_mangle]
 extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
-    super::idt::irq_counter_inc(0xF2);
+    super::idt::irq_counter_inc(super::idt::VEC_IPI_TLB_SHOOTDOWN);
     super::paging::inc_tlb_shootdown();
-
-    // Mode ExoPhoenix : 0xF2 = snapshot PMC lock-free.
-    if crate::exophoenix::stage0::exophoenix_vectors_active() {
-        // SAFETY: handler dédié no-alloc/no-lock.
-        unsafe { crate::exophoenix::interrupts::handle_pmc_snapshot_ipi() };
-        return;
-    }
 
     // Identifiant logique du CPU courant (0-based).
     let cpu_id = super::smp::percpu::current_cpu_id() as u8;
@@ -1104,17 +1163,10 @@ extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
     super::apic::eoi();
 }
 
-/// IPI hotplug CPU (0xF3)
+/// IPI hotplug CPU
 #[no_mangle]
 extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
-    super::idt::irq_counter_inc(0xF3);
-
-    // Mode ExoPhoenix : 0xF3 = TLB flush + ACK lock-free.
-    if crate::exophoenix::stage0::exophoenix_vectors_active() {
-        // SAFETY: handler dédié no-alloc/no-lock.
-        unsafe { crate::exophoenix::interrupts::handle_tlb_flush_ipi() };
-        return;
-    }
+    super::idt::irq_counter_inc(super::idt::VEC_IPI_CPU_HOTPLUG);
 
     // EOI avant halt pour que le BSP ne reste pas bloqué en attente.
     // SAFETY: LAPIC initialisé avant tout IPI hotplug.
@@ -1133,6 +1185,24 @@ extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
 extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
     // SAFETY: réponse à un panic — arrêt irréversible requis
     super::halt_cpu();
+}
+
+#[no_mangle]
+extern "C" fn do_exophoenix_freeze(_frame: *mut ExceptionFrame) {
+    super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_FREEZE);
+    unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
+}
+
+#[no_mangle]
+extern "C" fn do_exophoenix_pmc(_frame: *mut ExceptionFrame) {
+    super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_PMC);
+    unsafe { crate::exophoenix::interrupts::handle_pmc_snapshot_ipi() };
+}
+
+#[no_mangle]
+extern "C" fn do_exophoenix_tlb(_frame: *mut ExceptionFrame) {
+    super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_TLB);
+    unsafe { crate::exophoenix::interrupts::handle_tlb_flush_ipi() };
 }
 
 // ── Kernel Panic ──────────────────────────────────────────────────────────────

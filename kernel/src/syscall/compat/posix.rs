@@ -29,7 +29,7 @@ use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::syscall::fast_path::syscall_current_pid;
 use crate::syscall::numbers::*;
-use crate::syscall::validation::{write_user_typed, SyscallError};
+use crate::syscall::validation::{read_user_typed, write_user_typed, SyscallError};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -433,8 +433,7 @@ pub fn sys_umask(mask: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
 /// `getdents64(fd, dirp, count)` — câblé lors de l'activation de fs/.
 pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let _ = (fd, dirp, count);
-    ENOSYS
+    crate::syscall::table::sys_getdents64(fd, dirp, count, 0, 0, 0)
 }
 
 /// `readlink(path, buf, bufsize)` — câblé lors de l'activation de fs/.
@@ -447,8 +446,7 @@ pub fn sys_readlink(
     _a6: u64,
 ) -> i64 {
     inc_posix();
-    let _ = (path_ptr, buf_ptr, bufsize);
-    ENOSYS
+    crate::syscall::table::sys_readlink(path_ptr, buf_ptr, bufsize, 0, 0, 0)
 }
 
 /// `readlinkat(dirfd, path, buf, bufsize)` — câblé lors de l'activation de fs/.
@@ -461,8 +459,7 @@ pub fn sys_readlinkat(
     _a6: u64,
 ) -> i64 {
     inc_posix();
-    let _ = (dirfd, path_ptr, buf_ptr, bufsize);
-    ENOSYS
+    crate::syscall::table::sys_readlinkat(dirfd, path_ptr, buf_ptr, bufsize, 0, 0)
 }
 
 /// `times(tbuf)` — retourne les temps CPU consommés.
@@ -484,8 +481,8 @@ pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
             return e.to_errno();
         }
     }
-    // Ticks depuis le boot (ms comme approximation d'un tick HZ=1000)
-    let ticks = crate::scheduler::timer::clock::monotonic_ns() / 1_000_000;
+    // POSIX CLK_TCK = 100 : un tick vaut 10 ms.
+    let ticks = crate::scheduler::timer::clock::monotonic_ns() / 10_000_000;
     ticks as i64
 }
 
@@ -496,29 +493,83 @@ pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 /// `getgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
 pub fn sys_getgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let _ = (size, list_ptr);
-    ENOSYS
+    if size != 0 && list_ptr == 0 {
+        return EFAULT;
+    }
+    0
 }
 
 /// `setgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
 pub fn sys_setgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let _ = (size, list_ptr);
-    ENOSYS
+    if size != 0 && list_ptr == 0 {
+        return EFAULT;
+    }
+    if size == 0 {
+        return 0;
+    }
+    EPERM
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+struct LinuxCapHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+struct LinuxCapData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
 }
 
 /// `capget(hdrp, datap)` — câblé lors de l'intégration security/capability.
 pub fn sys_capget(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let _ = (hdrp, datap);
-    ENOSYS
+    if hdrp == 0 {
+        return EFAULT;
+    }
+    let _hdr = match read_user_typed::<LinuxCapHeader>(hdrp) {
+        Ok(hdr) => hdr,
+        Err(_) => return EFAULT,
+    };
+    if datap != 0 {
+        let empty = [LinuxCapData::default(); 2];
+        if write_user_typed::<[LinuxCapData; 2]>(datap, empty).is_err() {
+            return EFAULT;
+        }
+    }
+    0
 }
 
 /// `capset(hdrp, datap)` — câblé lors de l'intégration security/capability.
 pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    let _ = (hdrp, datap);
-    ENOSYS
+    if hdrp == 0 || datap == 0 {
+        return EFAULT;
+    }
+    let _hdr = match read_user_typed::<LinuxCapHeader>(hdrp) {
+        Ok(hdr) => hdr,
+        Err(_) => return EFAULT,
+    };
+    let data = match read_user_typed::<[LinuxCapData; 2]>(datap) {
+        Ok(data) => data,
+        Err(_) => return EFAULT,
+    };
+    let mut requested = 0u32;
+    let mut idx = 0usize;
+    while idx < data.len() {
+        requested |= data[idx].effective | data[idx].permitted | data[idx].inheritable;
+        idx += 1;
+    }
+    if requested == 0 {
+        0
+    } else {
+        EPERM
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -121,6 +121,8 @@ pub trait ElfLoader: Send + Sync {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static ELF_LOADER: Once<&'static dyn ElfLoader> = Once::new();
+pub type CloseExecHandlesHook = fn(pid: u32, handles: &[u64]);
+static CLOSE_EXEC_HANDLES_HOOK: Once<CloseExecHandlesHook> = Once::new();
 
 /// Enregistre le chargeur ELF (appelé une seule fois depuis fs/ au boot).
 ///
@@ -129,6 +131,17 @@ static ELF_LOADER: Once<&'static dyn ElfLoader> = Once::new();
 /// à un objet alloué statiquement dans fs/).
 pub fn register_elf_loader(loader: &'static dyn ElfLoader) {
     ELF_LOADER.call_once(|| loader);
+}
+
+pub fn register_close_exec_handles_hook(hook: CloseExecHandlesHook) {
+    let _ = CLOSE_EXEC_HANDLES_HOOK.call_once(|| hook);
+}
+
+#[inline]
+fn close_exec_handles(pid: u32, handles: &[u64]) {
+    if let Some(hook) = CLOSE_EXEC_HANDLES_HOOK.get() {
+        hook(pid, handles);
+    }
 }
 
 /// Charge un binaire ELF pour le bootstrap userspace, avant qu'un thread
@@ -253,10 +266,7 @@ pub fn do_execve(
             return Err(ExecError::OutOfMemory);
         }
     };
-    // Notifier fs/ de la fermeture (via handle opaque — pas d'import fs/).
-    // NOTE: les handles sont simplement abandonnés ; fs/ les collectera via
-    // un mécanisme de GC de handles (hors scope de ce module).
-    drop(closed_handles);
+    close_exec_handles(pcb.pid.0, &closed_handles);
 
     // Réinitialiser les signaux et purger les signaux de l'ancienne image.
     reset_signals_on_exec(&thread.sched_tcb);
@@ -269,6 +279,7 @@ pub fn do_execve(
 
     // Mettre à jour l'espace d'adressage dans le TCB scheduler.
     thread.sched_tcb.cr3_phys = elf_result.cr3;
+    thread.sched_tcb.set_kpti_user_cr3(0);
     thread.sched_tcb.fs_base = elf_result.tls_base;
     thread.sched_tcb.user_gs_base = 0;
 

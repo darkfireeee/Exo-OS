@@ -5,6 +5,7 @@
 //! bytes. The full input_server/tty_server stack still starts in userspace; this
 //! path guarantees PID1 and the first shell have a usable controlling console.
 
+use crate::scheduler::sync::wait_queue::WaitQueue;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
@@ -66,6 +67,7 @@ impl KeyboardState {
 }
 
 static KEYBOARD: Mutex<KeyboardState> = Mutex::new(KeyboardState::new());
+static KEYBOARD_WAIT: WaitQueue = WaitQueue::new();
 static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_MODE: AtomicU32 = AtomicU32::new(KEYBOARD_MODE_UNKNOWN as u32);
 
@@ -158,7 +160,68 @@ pub fn poll_byte_for_process(pid: u32, pgid: u32) -> Option<u8> {
 
 pub fn poll_byte() -> Option<u8> {
     let mode = keyboard_mode();
-    let mut state = KEYBOARD.lock();
+    let flags = super::irq_save();
+    let result = {
+        let mut state = KEYBOARD.lock();
+        poll_byte_locked(&mut state, mode)
+    };
+    super::irq_restore(flags);
+    result
+}
+
+/// Blocking stdin byte read for the foreground console process.
+pub fn read_byte_for_process(pid: u32, pgid: u32) -> Result<Option<u8>, ()> {
+    claim_foreground_if_unclaimed(pid, pgid);
+    if !is_foreground(pid, pgid) {
+        return Ok(None);
+    }
+
+    loop {
+        if let Some(byte) = poll_byte() {
+            return Ok(Some(byte));
+        }
+
+        let tcb = crate::scheduler::core::switch::current_thread_raw();
+        if tcb.is_null() {
+            return Ok(None);
+        }
+
+        // SAFETY: `tcb` is the current thread; WaitQueue owns the transient node.
+        if !unsafe { KEYBOARD_WAIT.wait_interruptible(tcb) } {
+            return Err(());
+        }
+    }
+}
+
+/// IRQ1 path: drain PS/2 scancodes into the shared keyboard buffer and wake readers.
+pub fn keyboard_irq_drain() {
+    let mode = match KEYBOARD_MODE.load(Ordering::Acquire) as u8 {
+        KEYBOARD_MODE_UNKNOWN => KEYBOARD_MODE_SET1,
+        mode => mode,
+    };
+    let mut produced = false;
+    {
+        let mut state = KEYBOARD.lock();
+        let mut drained = 0usize;
+        while drained < KEYBOARD_DRAIN_LIMIT {
+            let status = unsafe { inb(0x64) };
+            if status & I8042_STATUS_OUTPUT_FULL == 0 {
+                break;
+            }
+            let scancode = unsafe { inb(0x60) };
+            if let Some(byte) = decode_scancode(&mut state, scancode, mode) {
+                state.push_byte(byte);
+                produced = true;
+            }
+            drained += 1;
+        }
+    }
+    if produced {
+        KEYBOARD_WAIT.notify_all();
+    }
+}
+
+fn poll_byte_locked(state: &mut KeyboardState, mode: u8) -> Option<u8> {
     if let Some(byte) = state.pop_byte() {
         return Some(byte);
     }
@@ -172,7 +235,7 @@ pub fn poll_byte() -> Option<u8> {
         }
 
         let scancode = unsafe { inb(0x60) };
-        if let Some(byte) = decode_scancode(&mut state, scancode, mode) {
+        if let Some(byte) = decode_scancode(state, scancode, mode) {
             if first.is_none() {
                 first = Some(byte);
             } else {

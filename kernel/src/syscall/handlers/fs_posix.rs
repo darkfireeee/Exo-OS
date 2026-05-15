@@ -202,14 +202,7 @@ pub fn sys_readlink(
 
 /// `getcwd(buf, size)` → longueur du chemin ou errno.
 pub fn sys_getcwd(buf_ptr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    if buf_ptr == 0 || buf_ptr >= USER_ADDR_MAX {
-        return EFAULT;
-    }
-    if size == 0 {
-        return EINVAL;
-    }
-    let _ = (buf_ptr, size);
-    ENOSYS
+    crate::syscall::table::sys_getcwd(buf_ptr, size, 0, 0, 0, 0)
 }
 
 /// `chdir(path)` → 0 ou errno.
@@ -231,22 +224,7 @@ pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 /// **BUG-02 FIX** : Ce syscall était absent (liste '???'). Sans lui : ls/find/opendir()
 /// sont impossibles. Délègue vers le même `fs_bridge` que la table principale.
 pub fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    let fd = match validate_fd(fd) {
-        Ok(f) => f,
-        Err(e) => return e.to_errno(),
-    };
-    if buf_ptr == 0 || buf_ptr >= USER_ADDR_MAX {
-        return EFAULT;
-    }
-    if count == 0 {
-        return EINVAL;
-    }
-    fs_bridge::bridge_result(fs_bridge::fs_getdents64(
-        fd as u32,
-        buf_ptr,
-        count as usize,
-        current_pid(),
-    ))
+    crate::syscall::table::sys_getdents64(fd, buf_ptr, count, 0, 0, 0)
 }
 
 /// `openat(dirfd, path, flags, mode)`.

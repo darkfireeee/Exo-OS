@@ -744,22 +744,7 @@ fn cmd_top() {
         return;
     }
 
-    let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
-    let mut pid = 1u32;
-    while pid <= 64 {
-        let alive = unsafe { syscall::syscall2(syscall::SYS_KILL, pid as u64, 0) } == 0;
-        if alive {
-            write_u32(pid);
-            if pid < 10 {
-                write_all(b"    ");
-            } else {
-                write_all(b"   ");
-            }
-            write_padded(known_process_name(pid, self_pid as u32), 17);
-            write_all(b"running\n");
-        }
-        pid += 1;
-    }
+    write_all(b"process list unavailable\n");
 }
 
 fn process_list_snapshot(entries: &mut [syscall::ExoProcessInfo]) -> i64 {
@@ -2213,34 +2198,7 @@ fn service_pid(name: &[u8]) -> Option<u32> {
         return None;
     }
 
-    let mut pid = 1u32;
-    while pid <= 13 {
-        if bytes_eq(name, known_process_name(pid, 0)) {
-            return Some(pid);
-        }
-        pid += 1;
-    }
     None
-}
-
-fn known_process_name(pid: u32, self_pid: u32) -> &'static [u8] {
-    match pid {
-        1 => b"init_server",
-        2 => b"ipc_router",
-        3 => b"memory_server",
-        4 => b"vfs_server",
-        5 => b"crypto_server",
-        6 => b"device_server",
-        7 => b"virtio_drivers",
-        8 => b"network_server",
-        9 => b"scheduler_server",
-        10 => b"input_server",
-        11 => b"tty_server",
-        12 => b"exo_shield",
-        13 => b"exosh",
-        _ if pid == self_pid => b"exosh",
-        _ => b"user_process",
-    }
 }
 
 fn write_padded(bytes: &[u8], width: usize) {

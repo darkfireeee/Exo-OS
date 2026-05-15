@@ -158,11 +158,10 @@ fn remove_service_cap_meta(object_id: token::ObjectId) {
 ///
 /// # Boot sequence
 /// Appelé par `security::init()` avant toute autre initialisation de couche 2b+.
-/// Doit être appelé UNE SEULE fois — panique à la seconde invocation (build debug).
+/// Doit être appelé UNE SEULE fois ; les appels suivants sont idempotents.
 pub fn init_capability_subsystem() {
     if CAP_INIT_DONE.swap(true, Ordering::SeqCst) {
-        // Seconde initialisation — erreur architecturale
-        panic!("capability: double initialization");
+        return;
     }
     // Initialiser la table kernel globale
     *KERNEL_CAP_TABLE.lock() = Some(table::CapTable::new());

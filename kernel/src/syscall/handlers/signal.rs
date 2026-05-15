@@ -219,10 +219,13 @@ pub fn sys_rt_sigprocmask(
 /// SIG-13 : vérification magic 0x5349474E avant tout restore.
 /// SIG-14 : INTERDIT de restaurer sans vérifier le magic.
 pub fn sys_rt_sigreturn(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // Délègue → process::signal::handler::restore_signal_frame()
-    // La vérification magic est faite dans restore_signal_frame() AVANT toute restauration.
-    // SAFETY: appelé depuis Ring3 via trampoline sigreturn — GS kernel actif.
-    ENOSYS
+    // NOTE: ce handler de table n'est pas le chemin réel. `dispatch.rs`
+    // intercepte SYS_RT_SIGRETURN avec la frame arch et appelle
+    // handle_sigreturn_inplace(), seul endroit où les registres peuvent être
+    // restaurés correctement. Si ce handler est atteint, la table a été
+    // réorganisée de façon incohérente.
+    crate::arch::x86_64::terminal::debug_write(b"rt_sigreturn: handler table atteint\n");
+    EINVAL
 }
 
 /// `kill(pid, sig)` → 0 ou errno.

@@ -77,6 +77,9 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     crate::process::lifecycle::exit::register_vfs_close_all_pid_hook(
         posix_bridge::vfs_close_all_pid,
     );
+    crate::process::lifecycle::exec::register_close_exec_handles_hook(
+        crate::syscall::fs_bridge::close_exec_handles_for_pid,
+    );
 
     // Phase 4 : Threads background GC/writeback
     // Le kthread GC tourne en priorité basse — il appelle run_gc_two_phase() en boucle.
@@ -86,7 +89,7 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
         entry: exofs_gc_kthread,
         arg: 0,
         target_cpu: 0,
-        priority: Priority::IDLE, // priorité basse — GC ne doit pas bloquer les I/O
+        priority: Priority(130), // nice +10: background, but not starved behind idle.
     };
     // Ignorer l'erreur si le scheduler n'est pas encore actif au boot
     let _ = create_kthread(&gc_params);

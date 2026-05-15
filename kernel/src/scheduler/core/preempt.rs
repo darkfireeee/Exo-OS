@@ -82,6 +82,7 @@ fn current_cpu_id() -> usize {
 fn preempt_disable_raw() {
     let cpu = current_cpu_id();
     let prev = PREEMPT_COUNT[cpu].0.fetch_add(1, Ordering::Acquire);
+    publish_preempt_shadow(prev.saturating_add(1));
     PREEMPT_DISABLE_TOTAL.fetch_add(1, Ordering::Relaxed);
     // Détection de débordement positif > 64 → signe d'un bug d'imbrication.
     debug_assert!(
@@ -96,10 +97,26 @@ fn preempt_disable_raw() {
 fn preempt_enable_raw() {
     let cpu = current_cpu_id();
     let prev = PREEMPT_COUNT[cpu].0.fetch_sub(1, Ordering::Release);
+    publish_preempt_shadow(prev.saturating_sub(1));
     debug_assert!(
         prev > 0,
         "preempt_enable: compteur était <= 0 — déséquilibre disable/enable FATAL"
     );
+}
+
+#[inline(always)]
+fn publish_preempt_shadow(depth: i32) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        extern "C" {
+            fn arch_set_preempt_count_shadow(depth: i32);
+        }
+        arch_set_preempt_count_shadow(depth);
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = depth;
+    }
 }
 
 /// Retourne `true` si la préemption est désactivée sur le CPU courant.

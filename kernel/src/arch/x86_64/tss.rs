@@ -9,7 +9,7 @@
 //! - RSP0 : pile kernel (entrée Ring 3 → Ring 0)
 //!
 //! ## IST Assignments (Exo-OS)
-//! - IST1 : ExoPhoenix IPIs (0xF1/0xF2/0xF3)
+//! - IST1 : ExoPhoenix IPIs (0xF0/0xF1/0xF2)
 //! - IST2 : #PF (durcissement)
 //! - IST3 : NMI fallback (early-pool, gardée)
 //! - IST4 : Double Fault (#DF)
@@ -35,7 +35,7 @@ pub const KERNEL_STACK_SIZE: usize = 16384;
 /// Nombre de piles IST dans le TSS
 pub const IST_COUNT: usize = 7;
 
-/// Index IST pour IPIs critiques ExoPhoenix (0xF1/0xF2/0xF3)
+/// Index IST pour IPIs critiques ExoPhoenix (0xF0/0xF1/0xF2)
 pub const IST_EXOPHOENIX_IPI: usize = 0; // IST1
 
 /// Index IST pour #PF (durcissement contre pile corrompue)

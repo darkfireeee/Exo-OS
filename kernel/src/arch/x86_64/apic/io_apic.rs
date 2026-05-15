@@ -153,7 +153,7 @@ pub fn write_rte(gsi: u32, rte: u64) -> bool {
 pub fn route_irq(gsi: u32, vector: u8, dest_apic: u8, active_low: bool, level: bool) -> bool {
     assert!(
         !super::super::idt::is_exophoenix_reserved_vector(vector),
-        "route_irq: vecteur {:#x} réservé ExoPhoenix (0xF1/0xF2/0xF3)",
+        "route_irq: vecteur {:#x} réservé ExoPhoenix (0xF0/0xF1/0xF2)",
         vector,
     );
 

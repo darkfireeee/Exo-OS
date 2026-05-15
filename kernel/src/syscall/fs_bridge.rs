@@ -32,6 +32,7 @@ use crate::fs::exofs::path::symlink::{
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
 use crate::fs::exofs::syscall::object_store;
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
+use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // État du bridge — atomique pour thread-safety
@@ -95,6 +96,10 @@ pub enum FsBridgeError {
     Io,
     /// Opération non bloquante sans donnée disponible.
     WouldBlock,
+    /// Appel bloquant interrompu par un signal.
+    Interrupted,
+    /// Écriture sur pipe sans lecteur.
+    BrokenPipe,
 }
 
 impl FsBridgeError {
@@ -117,6 +122,8 @@ impl FsBridgeError {
             FsBridgeError::Loop => -40,       // ELOOP
             FsBridgeError::Io => -5,          // EIO
             FsBridgeError::WouldBlock => -11, // EAGAIN
+            FsBridgeError::Interrupted => -4, // EINTR
+            FsBridgeError::BrokenPipe => -32, // EPIPE
         }
     }
 }
@@ -179,12 +186,70 @@ const PSEUDO_SOCKET_TAG: u8 = 0x5C;
 const SOCKET_HEADER_LEN: usize = 32;
 const S_IFMT: u32 = 0o170000;
 const S_IFIFO: u32 = 0o010000;
+const S_IFDIR: u32 = 0o040000;
 const S_IFREG: u32 = 0o100000;
 #[cfg(test)]
 const STAT_MODE_MASK: u32 = 0o170000;
 
 static NEXT_PSEUDO_ID: AtomicU64 = AtomicU64::new(1);
 static POSIX_UMASK: AtomicU32 = AtomicU32::new(0o022);
+
+#[derive(Clone, Copy)]
+struct ModeRecord {
+    blob_id: BlobId,
+    mode: u32,
+}
+
+static FILE_MODE_TABLE: Mutex<Vec<ModeRecord>> = Mutex::new(Vec::new());
+
+#[inline]
+fn process_umask(pid: u32) -> u32 {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .map(|pcb| pcb.umask())
+        .unwrap_or_else(|| POSIX_UMASK.load(Ordering::Acquire))
+}
+
+#[inline]
+fn swap_process_umask(pid: u32, mask: u32) -> u32 {
+    match crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+    {
+        Some(pcb) => pcb.swap_umask(mask),
+        None => POSIX_UMASK.swap(mask & 0o777, Ordering::AcqRel),
+    }
+}
+
+#[inline]
+fn apply_umask(mode: u32, default_perms: u32, pid: u32) -> u32 {
+    let requested = if mode & 0o777 != 0 {
+        mode & 0o777
+    } else {
+        default_perms
+    };
+    requested & !process_umask(pid) & 0o777
+}
+
+fn upsert_mode(blob_id: BlobId, mode: u32) {
+    let mut table = FILE_MODE_TABLE.lock();
+    for record in table.iter_mut() {
+        if record.blob_id == blob_id {
+            record.mode = mode;
+            return;
+        }
+    }
+    if table.try_reserve(1).is_ok() {
+        table.push(ModeRecord { blob_id, mode });
+    }
+}
+
+fn stored_mode(blob_id: &BlobId) -> Option<u32> {
+    FILE_MODE_TABLE
+        .lock()
+        .iter()
+        .find(|record| record.blob_id == *blob_id)
+        .map(|record| record.mode)
+}
 
 #[inline]
 fn process_pgid(pid: u32) -> u32 {
@@ -999,13 +1064,17 @@ fn blob_is_directory_by_id(blob_id: &BlobId) -> bool {
         .is_some()
 }
 
-fn stat_mode_for_kind_meta(kind: u8, is_dir: bool) -> u32 {
+fn default_stat_mode_for_kind(kind: u8, is_dir: bool) -> u32 {
     match kind {
         PATH_INDEX_KIND_DIR => STAT_MODE_DIR,
         PATH_INDEX_KIND_SYMLINK => STAT_MODE_SYMLINK,
         _ if is_dir => STAT_MODE_DIR,
         _ => STAT_MODE_FILE,
     }
+}
+
+fn stat_mode_for_blob(blob_id: &BlobId, kind: u8, is_dir: bool) -> u32 {
+    stored_mode(blob_id).unwrap_or_else(|| default_stat_mode_for_kind(kind, is_dir))
 }
 
 #[inline]
@@ -1033,7 +1102,7 @@ fn linux_stat_for_blob_meta(
         st_dev: 0,
         st_ino: inode_from_blob_id(&blob_id),
         st_nlink: 1,
-        st_mode: stat_mode_for_kind_meta(kind, is_dir),
+        st_mode: stat_mode_for_blob(&blob_id, kind, is_dir),
         st_uid: owner_uid,
         st_gid: owner_uid,
         __pad0: 0,
@@ -1180,7 +1249,6 @@ fn resolve_path_with_symlinks(
 /// PONT : `crate::fs::vfs::read(fd, buf_slice)` — activé quand `pub mod fs;`
 #[inline]
 pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
-    let _ = pid;
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
@@ -1189,7 +1257,8 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     }
     if fd == 0 {
         let Some(byte) =
-            crate::arch::x86_64::terminal::poll_byte_for_process(pid, process_pgid(pid))
+            crate::arch::x86_64::terminal::read_byte_for_process(pid, process_pgid(pid))
+                .map_err(|_| FsBridgeError::Interrupted)?
         else {
             return Err(FsBridgeError::WouldBlock);
         };
@@ -1281,7 +1350,6 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
 /// `write(fd, buf, count)` → octets écrits.
 #[inline]
 pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
-    let _ = pid;
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
@@ -1306,6 +1374,13 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        if OBJECT_TABLE.readable_count_for(&entry.blob_id) == 0 {
+            let _ = crate::process::signal::delivery::send_signal_to_pid(
+                crate::process::core::pid::Pid(pid),
+                crate::process::signal::default::Signal::SIGPIPE,
+            );
+            return Err(FsBridgeError::BrokenPipe);
+        }
         let input = read_user_bytes(buf_ptr, count)?;
         let mut data = BLOB_CACHE
             .get(&entry.blob_id)
@@ -1496,7 +1571,6 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = mode;
     let fd_flags = flags & !(O_CLOEXEC | O_NONBLOCK);
     if !open_flags::validate(fd_flags) {
         return Err(FsBridgeError::Invalid);
@@ -1523,12 +1597,14 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         return Err(FsBridgeError::Exists);
     }
     if !exists {
+        let effective_mode = S_IFREG | apply_umask(mode, 0o666, pid);
         let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
         ensure_directory_exists(&parent_path)?;
         BLOB_CACHE
             .insert(blob_id, Vec::new())
             .map_err(exofs_to_bridge_error)?;
         let _ = BLOB_CACHE.mark_dirty(&blob_id);
+        upsert_mode(blob_id, effective_mode);
         upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_FILE)?;
     }
     if fd_flags & open_flags::O_TRUNC != 0 {
@@ -1562,11 +1638,24 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    if pid != 0 && entry.owner_uid != 0 && entry.owner_uid != pid as u64 {
+        return Err(FsBridgeError::BadFd);
+    }
     if OBJECT_TABLE.close(fd) {
         Ok(0)
     } else {
         Err(FsBridgeError::BadFd)
+    }
+}
+
+/// Close the opaque handles removed from a PCB by execve(O_CLOEXEC).
+pub fn close_exec_handles_for_pid(pid: u32, handles: &[u64]) {
+    for &handle in handles {
+        if handle <= u32::MAX as u64 {
+            let _ = fs_close(handle as u32, pid);
+        }
+        let _ = crate::fs::exofs::posix_bridge::vfs_close(handle);
     }
 }
 
@@ -1902,7 +1991,6 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (mode, pid);
     let normalized_path = normalized_path_bytes(path)?;
     if normalized_path == b"/" {
         ensure_root_directory()?;
@@ -1915,6 +2003,7 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     if BLOB_CACHE.contains(&blob_id) {
         return Err(FsBridgeError::Exists);
     }
+    let effective_mode = S_IFDIR | apply_umask(mode, 0o777, pid);
 
     let parent_oid = if parent_path == b"/" {
         ObjectId::default()
@@ -1927,6 +2016,7 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
         .insert(blob_id, bytes)
         .map_err(exofs_to_bridge_error)?;
     let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    upsert_mode(blob_id, effective_mode);
     upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_DIR)?;
     Ok(0)
 }
@@ -2356,9 +2446,12 @@ pub fn fs_chmod(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (mode, pid);
+    let _ = pid;
     let normalized_path = resolve_path_with_symlinks(path, false, false)?;
-    let _ = path_entry(&normalized_path)?;
+    let (blob_id, kind) = path_entry(&normalized_path)?;
+    let is_dir = blob_is_directory_by_id(&blob_id);
+    let type_bits = default_stat_mode_for_kind(kind, is_dir) & S_IFMT;
+    upsert_mode(blob_id, type_bits | (mode & 0o7777));
     Ok(0)
 }
 
@@ -2367,8 +2460,11 @@ pub fn fs_fchmod(fd: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (mode, pid);
-    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = pid;
+    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let is_dir = blob_is_directory_by_id(&entry.blob_id);
+    let type_bits = if is_dir { S_IFDIR } else { S_IFREG };
+    upsert_mode(entry.blob_id, type_bits | (mode & 0o7777));
     Ok(0)
 }
 
@@ -3269,8 +3365,7 @@ pub fn fs_umask(mask: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let old = POSIX_UMASK.swap(mask & 0o777, Ordering::AcqRel);
+    let old = swap_process_umask(pid, mask);
     Ok(old as i64)
 }
 

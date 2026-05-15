@@ -1920,38 +1920,32 @@ pub fn sys_mremap(
 
     let copy_len = old_len.min(new_len);
     if copy_len != 0 {
-        if copy_len > IO_BUF_MAX {
+        if let Err(errno) = copy_user_range_streamed(old_addr, mapped, copy_len) {
             let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-            return E2BIG;
-        }
-        if let Err(e) = UserBuf::validate(old_addr, copy_len, IO_BUF_MAX) {
-            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-            return e.to_errno();
-        }
-        if let Err(e) = UserBuf::validate(mapped, copy_len, IO_BUF_MAX) {
-            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-            return e.to_errno();
-        }
-        let mut bytes = match zeroed_user_vec(copy_len) {
-            Ok(bytes) => bytes,
-            Err(errno) => {
-                let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-                return errno;
-            }
-        };
-        if let Err(e) = copy_from_user(bytes.as_mut_ptr(), old_addr as *const u8, copy_len) {
-            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-            return e.to_errno();
-        }
-        if let Err(e) = copy_to_user(mapped as *mut u8, bytes.as_ptr(), copy_len) {
-            let _ = crate::memory::virt::mmap::do_munmap(mapped, new_len);
-            return e.to_errno();
+            return errno;
         }
     }
     if flags & MREMAP_DONTUNMAP == 0 {
         let _ = crate::memory::virt::mmap::do_munmap(old_addr, old_len);
     }
     mapped as i64
+}
+
+fn copy_user_range_streamed(src: u64, dst: u64, len: usize) -> Result<(), i64> {
+    const MREMAP_COPY_CHUNK: usize = crate::memory::core::PAGE_SIZE;
+    let mut buf = [0u8; MREMAP_COPY_CHUNK];
+    let mut copied = 0usize;
+    while copied < len {
+        let n = core::cmp::min(MREMAP_COPY_CHUNK, len - copied);
+        let src_addr = src.checked_add(copied as u64).ok_or(EFAULT)?;
+        let dst_addr = dst.checked_add(copied as u64).ok_or(EFAULT)?;
+        UserBuf::validate(src_addr, n, MREMAP_COPY_CHUNK).map_err(|e| e.to_errno())?;
+        UserBuf::validate(dst_addr, n, MREMAP_COPY_CHUNK).map_err(|e| e.to_errno())?;
+        copy_from_user(buf.as_mut_ptr(), src_addr as *const u8, n).map_err(|e| e.to_errno())?;
+        copy_to_user(dst_addr as *mut u8, buf.as_ptr(), n).map_err(|e| e.to_errno())?;
+        copied += n;
+    }
+    Ok(())
 }
 
 /// `clock_gettime(clockid, tp)` slow-path wrapper.
@@ -2074,6 +2068,40 @@ pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> 
 pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLONE);
 
+    const CLONE_VM: u64 = 0x0000_0100;
+    const CLONE_FS: u64 = 0x0000_0200;
+    const CLONE_FILES: u64 = 0x0000_0400;
+    const CLONE_SIGHAND: u64 = 0x0000_0800;
+    const CLONE_THREAD: u64 = 0x0001_0000;
+    const CLONE_SYSVSEM: u64 = 0x0004_0000;
+    const CLONE_SETTLS: u64 = 0x0008_0000;
+    const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
+    const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
+    const CLONE_DETACHED: u64 = 0x0040_0000;
+    const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
+    const SUPPORTED_THREAD_FLAGS: u64 = CLONE_VM
+        | CLONE_FS
+        | CLONE_FILES
+        | CLONE_SIGHAND
+        | CLONE_THREAD
+        | CLONE_SYSVSEM
+        | CLONE_SETTLS
+        | CLONE_PARENT_SETTID
+        | CLONE_CHILD_CLEARTID
+        | CLONE_DETACHED
+        | CLONE_CHILD_SETTID;
+
+    let thread_core = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+    if flags & CLONE_THREAD == 0 {
+        return ENOSYS;
+    }
+    if flags & thread_core != thread_core {
+        return EINVAL;
+    }
+    if flags & !SUPPORTED_THREAD_FLAGS != 0 {
+        return EINVAL;
+    }
+
     // Récupérer le PID du thread courant via GS:[0x20].
     // SAFETY: GS:[0x20] est initialisé par context_switch avant toute entrée syscall.
     let current_pid_val: u32 = unsafe {
@@ -2097,6 +2125,9 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
 
     // Point d'entrée : tls en priorité (pthread_create convention) puis ctid.
     let start_func = if tls != 0 { tls } else { ctid };
+    if start_func == 0 {
+        return EINVAL;
+    }
     // Stack : l'appelant fournit RSP ou on alloue un stack kernel par défaut.
     let stack_addr = if stack != 0 {
         stack.saturating_sub(16)
@@ -2104,7 +2135,7 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
         0
     };
     let stack_size = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
-    let detached = (flags & 0x0040_0000) != 0; // CLONE_DETACHED
+    let detached = (flags & CLONE_DETACHED) != 0;
 
     let attr = crate::process::thread::creation::ThreadAttr {
         stack_size,
@@ -2126,7 +2157,8 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
     match crate::process::thread::creation::create_thread(&params) {
         Ok(handle) => handle.tid.0 as i64,
         Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory) => ENOMEM,
-        Err(crate::process::thread::creation::ThreadCreateError::TidExhausted) => EAGAIN,
+        Err(crate::process::thread::creation::ThreadCreateError::TidExhausted)
+        | Err(crate::process::thread::creation::ThreadCreateError::TooManyThreads) => EAGAIN,
         Err(_) => EINVAL,
     }
 }
@@ -2206,8 +2238,74 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 /// L'itération sur tous les threads frères requiert process/ pleinement intégré.
 pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT_GROUP);
-    // Déléguer vers sys_exit — même sémantique pour le thread courant.
-    sys_exit(status, 0, 0, 0, 0, 0)
+    let exit_code = (status & 0xFF) as u32;
+
+    // SAFETY: GS:[0x20] est le TCB courant pendant le syscall.
+    unsafe {
+        let tcb_ptr: u64;
+        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
+        if tcb_ptr == 0 {
+            return EFAULT;
+        }
+        let current_tcb =
+            &mut *(tcb_ptr as *mut crate::scheduler::core::task::ThreadControlBlock);
+        let pid = crate::process::core::pid::Pid(current_tcb.pid.0);
+        let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) else {
+            return -3;
+        };
+
+        pcb.set_exiting();
+        pcb.exit_code.store(exit_code, core::sync::atomic::Ordering::Release);
+        pcb.flags.fetch_or(
+            crate::process::core::pcb::process_flags::VFORK_DONE,
+            core::sync::atomic::Ordering::Release,
+        );
+
+        {
+            let mut files = pcb.files.lock();
+            files.close_all_noalloc();
+        }
+        crate::process::lifecycle::exit::close_all_pid_vfs(pcb.pid.0);
+        crate::drivers::driver_do_exit(pcb.pid.0);
+
+        pcb.for_each_thread_ptr(|thread_ptr| {
+            let thread = &mut *thread_ptr;
+            thread
+                .join_result
+                .store(exit_code as u64, core::sync::atomic::Ordering::Release);
+            thread
+                .join_done
+                .store(true, core::sync::atomic::Ordering::Release);
+            thread.sched_tcb.mark_exiting();
+            thread.set_state(crate::scheduler::core::task::TaskState::Dead);
+            crate::process::lifecycle::reap::REAPER_QUEUE.enqueue(thread.pid, thread.tid);
+        });
+        current_tcb.mark_exiting();
+        current_tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
+
+        pcb.thread_count
+            .store(0, core::sync::atomic::Ordering::Release);
+        pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
+        let ppid = pcb.ppid();
+        if ppid.0 != 0 {
+            let _ = crate::process::signal::delivery::send_signal_to_pid(
+                ppid,
+                crate::process::signal::default::Signal::SIGCHLD,
+            );
+        }
+        crate::process::lifecycle::wait::wake_waiting_parents(pcb.pid, ppid);
+        crate::process::lifecycle::fork::notify_vfork_completion(pcb.pid);
+
+        let cpu_id = current_tcb.current_cpu();
+        let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+        crate::scheduler::core::switch::schedule_block(rq, current_tcb);
+    }
+
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack));
+        }
+    }
 }
 
 /// `wait4(pid, wstatus, options, rusage)`.
@@ -2314,23 +2412,8 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
         return EINVAL;
     }
     let ns = (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64);
-    // sleep_ns(ns) câblé via wait_queue lors de l'intégration scheduler/sync.
-    // Tant que les hrtimers bloquants ne sont pas câblés, cette attente reste
-    // courte mais coopérative : elle cède le CPU aux services déjà enfilés.
-    let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns);
-    let mut spins = 0u32;
-    loop {
-        if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
-            break;
-        }
-        if spins & 0x3ff == 0 {
-            unsafe {
-                let _ = crate::scheduler::core::switch::cooperative_reschedule();
-            }
-        } else {
-            core::hint::spin_loop();
-        }
-        spins = spins.wrapping_add(1);
+    if !crate::scheduler::timer::sleep_ns(ns) {
+        return EINTR;
     }
     let _ = rem_ptr;
     0
@@ -2373,19 +2456,8 @@ pub fn sys_clock_nanosleep(
     let target_ns = (ts.tv_sec as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
-    let mut spins = 0u32;
-    loop {
-        if crate::scheduler::timer::clock::monotonic_ns() >= target_ns {
-            break;
-        }
-        if spins & 0x3ff == 0 {
-            unsafe {
-                let _ = crate::scheduler::core::switch::cooperative_reschedule();
-            }
-        } else {
-            core::hint::spin_loop();
-        }
-        spins = spins.wrapping_add(1);
+    if !crate::scheduler::timer::sleep_until_ns(target_ns) {
+        return EINTR;
     }
     let _ = rem_ptr;
     0
@@ -4082,6 +4154,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_MUNMAP => sys_munmap,
         SYS_MPROTECT => sys_mprotect,
         SYS_BRK => sys_brk,
+        SYS_SHMGET | SYS_SHMAT | SYS_SHMCTL | SYS_SHMDT => sys_enosys,
         // ── Processus ──────────────────────────────────────────────────────
         SYS_FORK => sys_fork,
         SYS_VFORK => sys_vfork,
@@ -4098,6 +4171,10 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_GETGID => crate::syscall::handlers::misc::sys_getgid,
         SYS_GETEUID => crate::syscall::handlers::misc::sys_geteuid,
         SYS_GETEGID => crate::syscall::handlers::misc::sys_getegid,
+        SYS_GETGROUPS => crate::syscall::compat::posix::sys_getgroups,
+        SYS_SETGROUPS => crate::syscall::compat::posix::sys_setgroups,
+        SYS_CAPGET => crate::syscall::compat::posix::sys_capget,
+        SYS_CAPSET => crate::syscall::compat::posix::sys_capset,
         SYS_UNAME => crate::syscall::handlers::misc::sys_uname,
         SYS_ARCH_PRCTL => crate::syscall::handlers::misc::sys_arch_prctl,
         SYS_SET_TID_ADDRESS => crate::syscall::handlers::misc::sys_set_tid_address,
@@ -4116,6 +4193,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_GETTIMEOFDAY => sys_gettimeofday,
         SYS_CLOCK_NANOSLEEP => sys_clock_nanosleep,
         SYS_NANOSLEEP => sys_nanosleep,
+        SYS_TIMES => crate::syscall::compat::posix::sys_times,
         SYS_FUTEX => sys_futex,
         SYS_GETRANDOM => sys_getrandom,
         // ── IPC Exo-OS ─────────────────────────────────────────────────────

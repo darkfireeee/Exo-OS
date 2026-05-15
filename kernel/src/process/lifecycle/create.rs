@@ -38,6 +38,7 @@ use crate::process::lifecycle::exec::ElfLoadResult;
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::task::{CpuId, Priority, SchedPolicy, TaskState, ThreadId};
+use crate::scheduler::smp::topology::nr_cpus;
 
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 fn debug_hex64(value: u64) {
@@ -143,6 +144,24 @@ impl Default for CreateParams {
     }
 }
 
+fn least_loaded_cpu() -> u32 {
+    let n = nr_cpus().clamp(1, MAX_CPUS);
+    let mut best_cpu = 0u32;
+    let mut best_load = usize::MAX;
+    let mut cpu = 0usize;
+    while cpu < n {
+        // SAFETY: cpu < nr_cpus() <= MAX_CPUS and run queues are initialized
+        // before process creation is allowed to enqueue user threads.
+        let load = unsafe { run_queue(CpuId(cpu as u32)) }.nr_running_usize();
+        if load < best_load {
+            best_load = load;
+            best_cpu = cpu as u32;
+        }
+        cpu += 1;
+    }
+    best_cpu
+}
+
 /// Handle de création — regroupe les objets créés pour les passer de façon atomique.
 pub struct ProcessHandle {
     /// PID du processus créé.
@@ -231,7 +250,11 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     // 5. Enregistrer le TCB dans la run queue du CPU cible.
     {
         let _preempt = PreemptGuard::new();
-        let cpu_id = params.target_cpu;
+        let cpu_id = if params.target_cpu == 0 {
+            least_loaded_cpu()
+        } else {
+            params.target_cpu
+        };
         if cpu_id as usize >= MAX_CPUS {
             // CPU invalide — nettoyer et retourner erreur.
             let _ = PROCESS_REGISTRY.remove(pid);
@@ -388,7 +411,7 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
         let _preempt = PreemptGuard::new();
         unsafe {
             let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
-            run_queue(CpuId(0)).enqueue(tcb_ptr);
+            run_queue(CpuId(least_loaded_cpu())).enqueue(tcb_ptr);
         }
     }
 

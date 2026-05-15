@@ -252,7 +252,7 @@ pub mod task_flags {
 //       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
 //       [168] creation_tsc       : u64   (anti-réutilisation PID / audit)
 //       [176] kstack_top         : u64   (sommet stable de pile kernel)
-//       [184..192] réservé
+//       [184] kpti_user_cr3      : u64   (shadow PML4 user par thread)
 //       [192] pl0_ssp            : u64   (CET Shadow Stack Pointer)
 //       [200] affinity_hi[0]     : u64   (CPUs 64..127)
 //       [208] affinity_hi[1]     : u64   (CPUs 128..191)
@@ -381,6 +381,10 @@ const _: () = assert!(
     "TCB scheduler: kstack_top doit rester avant fpu_state_ptr (232)"
 );
 const _: () = assert!(
+    offset_of!(ThreadControlBlock, _cold_reserve) + 40 + 8 <= 232,
+    "TCB KPTI: kpti_user_cr3 doit tenir dans _cold_reserve avant fpu_state_ptr (232)"
+);
+const _: () = assert!(
     offset_of!(ThreadControlBlock, _cold_reserve) + 56 == 200,
     "TCB scheduler: affinity_hi[0] doit être à l'offset absolu 200"
 );
@@ -411,6 +415,7 @@ const _: () = assert!(
 
 impl ThreadControlBlock {
     const KSTACK_TOP_COLD_OFFSET: usize = 32;
+    const KPTI_USER_CR3_COLD_OFFSET: usize = 40;
 
     /// Crée un nouveau TCB utilisateur.
     pub fn new(
@@ -606,6 +611,13 @@ impl ThreadControlBlock {
     pub fn is_exiting(&self) -> bool {
         self.sched_state.load(Ordering::Relaxed) & SCHED_EXITING_BIT != 0
     }
+
+    #[inline(always)]
+    pub fn mark_exiting(&self) {
+        self.sched_state
+            .fetch_or(SCHED_EXITING_BIT | SCHED_NEED_RESCHED_BIT, Ordering::Release);
+    }
+
     #[inline(always)]
     pub fn is_idle(&self) -> bool {
         self.sched_state.load(Ordering::Relaxed) & SCHED_IDLE_BIT != 0
@@ -676,6 +688,31 @@ impl ThreadControlBlock {
         }
     }
 
+    /// CR3 user KPTI caché pour l'espace d'adressage de ce thread.
+    #[inline(always)]
+    pub fn kpti_user_cr3(&self) -> u64 {
+        unsafe {
+            core::ptr::read_unaligned(
+                self._cold_reserve
+                    .as_ptr()
+                    .add(Self::KPTI_USER_CR3_COLD_OFFSET) as *const u64,
+            )
+        }
+    }
+
+    /// Mémorise le CR3 user KPTI construit pour ce thread.
+    #[inline(always)]
+    pub fn set_kpti_user_cr3(&mut self, cr3: u64) {
+        unsafe {
+            core::ptr::write_unaligned(
+                self._cold_reserve
+                    .as_mut_ptr()
+                    .add(Self::KPTI_USER_CR3_COLD_OFFSET) as *mut u64,
+                cr3,
+            )
+        }
+    }
+
     /// TSC de création du thread, stocké dans `_cold_reserve[24..32]`.
     #[inline(always)]
     pub fn creation_tsc(&self) -> u64 {
@@ -721,37 +758,48 @@ impl ThreadControlBlock {
     }
 
     #[inline(always)]
-    fn affinity_ext_word(&self, word_index: usize) -> &AtomicU64 {
+    fn affinity_ext_word(&self, word_index: usize) -> Option<&AtomicU64> {
         let offset = match word_index {
             1 => 56,
             2 => 64,
             3 => 72,
-            _ => panic!("affinity_ext_word: word_index hors plage"),
+            _ => return None,
         };
         // SAFETY: ces offsets 8-alignés de `_cold_reserve` sont réservés aux
         // trois mots d'affinité CPU supplémentaires du scheduler.
-        unsafe { &*(self._cold_reserve.as_ptr().add(offset) as *const AtomicU64) }
+        Some(unsafe { &*(self._cold_reserve.as_ptr().add(offset) as *const AtomicU64) })
+    }
+
+    #[inline(always)]
+    fn affinity_ext_load(&self, word_index: usize) -> u64 {
+        match self.affinity_ext_word(word_index) {
+            Some(word) => word.load(Ordering::Acquire),
+            None => 0,
+        }
     }
 
     #[inline(always)]
     pub fn cpu_affinity_mask(&self) -> crate::scheduler::smp::affinity::CpuSet {
         crate::scheduler::smp::affinity::CpuSet::new([
             self.cpu_affinity.load(Ordering::Acquire),
-            self.affinity_ext_word(1).load(Ordering::Acquire),
-            self.affinity_ext_word(2).load(Ordering::Acquire),
-            self.affinity_ext_word(3).load(Ordering::Acquire),
+            self.affinity_ext_load(1),
+            self.affinity_ext_load(2),
+            self.affinity_ext_load(3),
         ])
     }
 
     #[inline(always)]
     pub fn set_cpu_affinity_mask(&self, mask: crate::scheduler::smp::affinity::CpuSet) {
         self.cpu_affinity.store(mask.bits[0], Ordering::Release);
-        self.affinity_ext_word(1)
-            .store(mask.bits[1], Ordering::Release);
-        self.affinity_ext_word(2)
-            .store(mask.bits[2], Ordering::Release);
-        self.affinity_ext_word(3)
-            .store(mask.bits[3], Ordering::Release);
+        if let Some(word) = self.affinity_ext_word(1) {
+            word.store(mask.bits[1], Ordering::Release);
+        }
+        if let Some(word) = self.affinity_ext_word(2) {
+            word.store(mask.bits[2], Ordering::Release);
+        }
+        if let Some(word) = self.affinity_ext_word(3) {
+            word.store(mask.bits[3], Ordering::Release);
+        }
     }
 
     #[inline(always)]

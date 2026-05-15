@@ -26,8 +26,14 @@ pub const XSAVE_AVX512_HI16: u64 = 1 << 7; // ZMM16–31
 pub const XSAVE_PT: u64 = 1 << 8; // Intel PT
 pub const XSAVE_PKRU: u64 = 1 << 9; // Protection Keys
 
-/// Masque XSAVE minimal — x87 + SSE + AVX (obligatoire pour Exo-OS)
-pub const XSAVE_MASK_MINIMAL: u64 = XSAVE_X87 | XSAVE_SSE;
+/// Masque historique minimal strict — x87 + SSE uniquement.
+pub const XSAVE_MASK_X87_SSE_ONLY: u64 = XSAVE_X87 | XSAVE_SSE;
+
+/// Masque XSAVE minimal Exo-OS — x87 + SSE + AVX.
+///
+/// Ce masque décrit le contrat de contexte quand AVX est disponible. L'init
+/// CPU garde la vérification CPUID/XCR0 avant d'activer réellement AVX.
+pub const XSAVE_MASK_MINIMAL: u64 = XSAVE_X87 | XSAVE_SSE | XSAVE_AVX;
 
 /// Masque XSAVE complet — tout ce que l'OS supporte
 pub const XSAVE_MASK_ALL: u64 = 0xFFFF_FFFF_FFFF_FFFFu64;
@@ -259,10 +265,6 @@ pub unsafe fn write_xcr0(val: u64) {
 /// - Configure XCR0 avec x87 + SSE (+ AVX si disponible)
 /// - Exécute FINIT pour nettoyer l'état x87
 pub fn init_fpu_for_cpu() {
-    // Lecture CR0 courant
-    let cr0 = super::super::read_cr4();
-    let _ = cr0; // utilisation future
-
     let mut cr0_raw: u64;
     // SAFETY: lecture CR0 — aucun effet de bord
     unsafe {

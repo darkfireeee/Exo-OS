@@ -12,9 +12,11 @@
 //! gs:[0x18]  = u64 : lapic_id      — APIC ID du CPU courant
 //! gs:[0x20]  = u64 : current_tcb   — pointeur TCB du thread courant
 //! gs:[0x28]  = u64 : idle_rsp      — RSP de la pile idle de ce CPU
-//! gs:[0x30]  = u64 : réservé — préemption canonique dans scheduler::core::preempt
+//! gs:[0x30]  = u64 : preempt_shadow — miroir du compteur canonique scheduler
 //! gs:[0x38]  = u64 : irq_depth     — profondeur d'imbrication IRQ
-//! gs:[0x40]  = *   — réservé (futur)
+//! gs:[0x40]  = u64 : kpti_kernel_cr3 — CR3 kernel pour l'entrée syscall
+//! gs:[0x48]  = u64 : kpti_user_cr3   — CR3 user pour la sortie syscall
+//! gs:[0x50]  = u64 : syscall_scratch — scratch ASM pendant switch CR3
 //! ```
 
 use crate::arch::x86_64::cpu::msr;
@@ -41,14 +43,17 @@ pub fn cpu_count() -> u32 {
 #[repr(C, align(64))]
 pub struct PerCpuData {
     // Champs accédés depuis l'ASM — offsets FIXES (voir module doc)
-    pub kernel_rsp: u64,    // 0x00
-    pub user_rsp: u64,      // 0x08
-    pub cpu_id: u64,        // 0x10
-    pub lapic_id: u64,      // 0x18
-    pub current_tcb: u64,   // 0x20 (pointeur opaque, cast vers TCB extern)
-    pub idle_rsp: u64,      // 0x28
-    pub preempt_count: u64, // 0x30 réservé (ne pas utiliser comme compteur canonique)
-    pub irq_depth: u64,     // 0x38
+    pub kernel_rsp: u64,      // 0x00
+    pub user_rsp: u64,        // 0x08
+    pub cpu_id: u64,          // 0x10
+    pub lapic_id: u64,        // 0x18
+    pub current_tcb: u64,     // 0x20 (pointeur opaque, cast vers TCB extern)
+    pub idle_rsp: u64,        // 0x28
+    pub preempt_shadow: u64,  // 0x30 miroir du compteur canonique scheduler
+    pub irq_depth: u64,       // 0x38
+    pub kpti_kernel_cr3: u64, // 0x40
+    pub kpti_user_cr3: u64,   // 0x48
+    pub syscall_scratch: u64, // 0x50
 
     // Données Rust (offsets non contraints par l'ASM)
     pub online: bool,
@@ -77,8 +82,11 @@ impl PerCpuData {
             lapic_id: 0,
             current_tcb: 0,
             idle_rsp: 0,
-            preempt_count: 0,
+            preempt_shadow: 0,
             irq_depth: 0,
+            kpti_kernel_cr3: 0,
+            kpti_user_cr3: 0,
+            syscall_scratch: 0,
             online: false,
             bsp: false,
             nmi_in_progress: false,
@@ -180,6 +188,23 @@ pub unsafe extern "C" fn arch_current_cpu() -> u32 {
     current_cpu_id()
 }
 
+/// Publie le miroir du compteur de préemption canonique dans GS:[0x30].
+///
+/// Ce slot existe uniquement pour le code ASM bas niveau; la source de vérité
+/// reste `scheduler::core::preempt::PREEMPT_COUNT`.
+#[no_mangle]
+pub extern "C" fn arch_set_preempt_count_shadow(depth: i32) {
+    let value = depth.max(0) as u64;
+    // SAFETY: GS pointe sur le slot per-CPU courant; offset 0x30 = preempt_shadow.
+    unsafe {
+        core::arch::asm!(
+            "mov gs:[0x30], {}",
+            in(reg) value,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
 /// Retourne une référence aux données per-CPU du CPU courant
 ///
 /// # Safety
@@ -252,6 +277,22 @@ pub unsafe fn read_kernel_rsp() -> u64 {
     let rsp: u64;
     core::arch::asm!("mov {}, gs:[0x00]", out(reg) rsp, options(nostack, preserves_flags));
     rsp
+}
+
+/// Publie les CR3 utilisés par le stub syscall KPTI.
+#[inline(always)]
+pub fn set_kpti_cr3_slots(kernel_cr3: u64, user_cr3: u64) {
+    // SAFETY: GS pointe sur une zone per-CPU valide. Les offsets 0x40/0x48
+    // sont lus directement par syscall_entry_asm avant/après le handler Rust.
+    unsafe {
+        core::arch::asm!(
+            "mov gs:[0x40], {kernel}",
+            "mov gs:[0x48], {user}",
+            kernel = in(reg) kernel_cr3,
+            user = in(reg) user_cr3,
+            options(nostack, preserves_flags),
+        );
+    }
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────────

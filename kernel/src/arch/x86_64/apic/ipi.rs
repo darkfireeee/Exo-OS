@@ -3,10 +3,10 @@
 //! Envoi d'IPIs vers les autres CPU pour la synchronisation SMP.
 //!
 //! ## Vecteurs IPI (définis dans idt.rs)
-//! - 0xF0 `VEC_IPI_WAKEUP`         : reveiller un thread sur un CPU
-//! - 0xF1 `VEC_IPI_RESCHEDULE`     : forcer un reschedule
-//! - 0xF2 `VEC_IPI_TLB_SHOOTDOWN`  : invalider une page TLB
-//! - 0xF3 `VEC_IPI_CPU_HOTPLUG`    : notification hotplug CPU
+//! - 0xE0 `VEC_IPI_RESCHEDULE`     : forcer un reschedule
+//! - 0xE1 `VEC_IPI_WAKEUP`         : reveiller un thread sur un CPU
+//! - 0xE2 `VEC_IPI_TLB_SHOOTDOWN`  : invalider une page TLB
+//! - 0xE3 `VEC_IPI_CPU_HOTPLUG`    : notification hotplug CPU
 //! - 0xFE `VEC_IPI_PANIC`          : arrêt d'urgence (broadcast)
 //!
 //! ## Routage

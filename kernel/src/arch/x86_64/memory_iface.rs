@@ -41,8 +41,8 @@ use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 // CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vecteur IPI TLB shootdown (0xF2 — voir IDT du kernel).
-pub const IPI_TLB_SHOOTDOWN_VECTOR: u8 = 0xF2;
+/// Vecteur IPI TLB shootdown (voir IDT du kernel).
+pub const IPI_TLB_SHOOTDOWN_VECTOR: u8 = super::idt::VEC_IPI_TLB_SHOOTDOWN;
 
 /// Nombre maximum de CPUs supportés (correspond à percpu::MAX_CPUS).
 const MAX_CPUS: usize = super::smp::percpu::MAX_CPUS;
@@ -156,7 +156,7 @@ pub unsafe fn flush_tlb_global() {
 // ENVOI D'IPI TLB SHOOTDOWN
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie un IPI TLB shootdown (vecteur 0xF2) à tous les CPUs du masque.
+/// Envoie un IPI TLB shootdown à tous les CPUs du masque.
 ///
 /// Pour chaque bit `i` de `cpu_mask`, récupère le `lapic_id` du CPU
 /// `base_cpu + i` depuis la table per-CPU et envoie un IPI via l'APIC actif.
@@ -186,7 +186,7 @@ unsafe fn send_tlb_ipi_to_mask(base_cpu: usize, cpu_mask: u64) {
             continue;
         }
         let lapic_id = percpu::per_cpu(cpu_idx).lapic_id as u32;
-        // Envoi IPI fixe vecteur 0xF2 (TLB shootdown, règle TLB-01 DOC2)
+        // Envoi IPI fixe TLB shootdown (règle TLB-01 DOC2)
         if apic::is_x2apic() {
             x2apic::send_ipi_x2apic(lapic_id, IPI_TLB_SHOOTDOWN_VECTOR, 0);
         } else if lapic_id <= u8::MAX as u32 {

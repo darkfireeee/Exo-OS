@@ -115,7 +115,7 @@ pub struct MpmcStatsSnapshot {
 
 /// Canal MPMC utilisant le ring CAS lock-free de Vyukov.
 ///
-/// La capacité effective est `MPMC_RING_SIZE` (= 4096 slots).
+/// La capacité effective est `MPMC_RING_SIZE` (= `RING_SIZE`, 16 slots par défaut).
 /// Plusieurs producteurs et consommateurs peuvent opérer simultanément
 /// sans mutex.
 #[repr(C, align(64))]

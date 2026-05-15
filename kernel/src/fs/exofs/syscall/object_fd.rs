@@ -14,6 +14,23 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+#[inline]
+fn current_owner_pid() -> u64 {
+    #[cfg(target_os = "none")]
+    {
+        crate::syscall::fast_path::syscall_current_pid() as u64
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
+
+#[inline]
+fn owner_matches(entry: ObjectFdEntry, owner_pid: u64) -> bool {
+    owner_pid == 0 || entry.owner_uid == 0 || entry.owner_uid == owner_pid
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -502,10 +519,19 @@ impl ObjectFdTable {
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &*self.inner.get() }.get_entry(fd);
         self.release();
-        if r.is_err() {
-            self.errors.fetch_add(1, Ordering::Relaxed);
+        match r {
+            Ok(entry) => {
+                if !owner_matches(entry, current_owner_pid()) {
+                    self.errors.fetch_add(1, Ordering::Relaxed);
+                    return Err(ExofsError::PermissionDenied);
+                }
+                Ok(entry)
+            }
+            Err(err) => {
+                self.errors.fetch_add(1, Ordering::Relaxed);
+                Err(err)
+            }
         }
-        r
     }
 
     /// Retourne le BlobId d'un fd.
@@ -555,7 +581,13 @@ impl ObjectFdTable {
     pub fn dup(&self, fd: u32) -> ExofsResult<u32> {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let r = unsafe { &mut *self.inner.get() }.dup_fd(fd);
+        let owner = current_owner_pid();
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(fd) {
+            Ok(entry) if owner_matches(entry, owner) => inner.dup_fd(fd),
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
         self.release();
         r
     }
@@ -564,7 +596,16 @@ impl ObjectFdTable {
     pub fn dup2(&self, oldfd: u32, newfd: u32) -> ExofsResult<u32> {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let r = unsafe { &mut *self.inner.get() }.dup2_fd(oldfd, newfd);
+        let owner = current_owner_pid();
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(oldfd) {
+            Ok(entry) if owner_matches(entry, owner) => match inner.get_entry(newfd) {
+                Ok(existing) if !owner_matches(existing, owner) => Err(ExofsError::PermissionDenied),
+                _ => inner.dup2_fd(oldfd, newfd),
+            },
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
         self.release();
         r
     }
@@ -573,7 +614,13 @@ impl ObjectFdTable {
     pub fn dup_from(&self, fd: u32, min_fd: u32) -> ExofsResult<u32> {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let r = unsafe { &mut *self.inner.get() }.dup_from_fd(fd, min_fd);
+        let owner = current_owner_pid();
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(fd) {
+            Ok(entry) if owner_matches(entry, owner) => inner.dup_from_fd(fd, min_fd),
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
         self.release();
         r
     }
@@ -582,7 +629,13 @@ impl ObjectFdTable {
     pub fn set_status_flags(&self, fd: u32, flags: u32) -> ExofsResult<u32> {
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let r = unsafe { &mut *self.inner.get() }.set_status_flags(fd, flags);
+        let owner = current_owner_pid();
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(fd) {
+            Ok(entry) if owner_matches(entry, owner) => inner.set_status_flags(fd, flags),
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
         self.release();
         r
     }
@@ -655,6 +708,24 @@ impl ObjectFdTable {
         let mut i = 0usize;
         while i < MAX_FDS {
             if !inner.slots[i].is_free() && inner.slots[i].blob_id == *id {
+                count = count.saturating_add(1);
+            }
+            i = i.wrapping_add(1);
+        }
+        self.release();
+        count
+    }
+
+    /// Nombre de descripteurs lisibles ouverts pour un BlobId donné.
+    pub fn readable_count_for(&self, id: &BlobId) -> usize {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let inner = unsafe { &*self.inner.get() };
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i < MAX_FDS {
+            let entry = inner.slots[i];
+            if !entry.is_free() && entry.blob_id == *id && entry.can_read() {
                 count = count.saturating_add(1);
             }
             i = i.wrapping_add(1);

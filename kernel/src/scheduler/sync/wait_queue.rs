@@ -308,9 +308,10 @@ pub unsafe fn init() {
     // Vérification : tenter une alloc/free de test depuis l'EmergencyPool.
     let test = emergency_pool_alloc_wait_node();
     if test.is_null() {
-        panic!(
-            "WaitQueue: SchedNodePool/EmergencyPool non initialise - appeler memory::physical::frame::emergency_pool::init() avant scheduler::init()"
+        crate::arch::x86_64::terminal::debug_write(
+            b"WaitQueue: EmergencyPool non initialise\n",
         );
+        crate::arch::x86_64::halt_cpu();
     }
     emergency_pool_free_wait_node(test);
 }

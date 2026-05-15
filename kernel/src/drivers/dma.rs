@@ -31,6 +31,7 @@ use crate::process::PROCESS_REGISTRY;
 use super::{device_claims, MmioError};
 
 const PAGE_SIZE: usize = 4096;
+const MAX_DMA_ALLOC_RECORDS: usize = 128;
 
 pub static BOOT_TSC_KHZ: AtomicU64 = AtomicU64::new(0);
 
@@ -311,6 +312,7 @@ pub struct DmaRecord {
 
 pub static DMA_MAP_TABLE: RwLock<Vec<DmaRecord>> = RwLock::new(Vec::new());
 
+#[derive(Clone, Copy)]
 pub struct DmaAllocRecord {
     pub pid: u32,
     pub domain: IommuDomainId,
@@ -321,14 +323,81 @@ pub struct DmaAllocRecord {
     pub order: usize,
 }
 
-pub static DMA_ALLOC_TABLE: RwLock<Vec<DmaAllocRecord>> = RwLock::new(Vec::new());
+pub struct DmaAllocTable {
+    records: [Option<DmaAllocRecord>; MAX_DMA_ALLOC_RECORDS],
+}
+
+impl DmaAllocTable {
+    pub const fn new() -> Self {
+        Self {
+            records: [None; MAX_DMA_ALLOC_RECORDS],
+        }
+    }
+
+    fn size_for(&self, pid: u32, iova: IovaAddr) -> Option<usize> {
+        self.records
+            .iter()
+            .flatten()
+            .find(|record| record.pid == pid && record.iova == iova)
+            .map(|record| record.size)
+    }
+
+    fn contains(&self, pid: u32, iova: IovaAddr) -> bool {
+        self.records
+            .iter()
+            .flatten()
+            .any(|record| record.pid == pid && record.iova == iova)
+    }
+
+    fn insert(&mut self, record: DmaAllocRecord) -> Result<(), DmaError> {
+        if self.records.iter().flatten().any(|existing| {
+            existing.pid == record.pid
+                && existing.domain == record.domain
+                && existing.iova == record.iova
+        }) {
+            return Err(DmaError::InvalidParams);
+        }
+
+        if let Some(slot) = self.records.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(record);
+            return Ok(());
+        }
+
+        Err(DmaError::OutOfMemory)
+    }
+
+    fn remove(&mut self, pid: u32, iova: IovaAddr, domain: IommuDomainId) -> Option<DmaAllocRecord> {
+        for slot in &mut self.records {
+            if matches!(
+                slot,
+                Some(record)
+                    if record.pid == pid && record.iova == iova && record.domain == domain
+            ) {
+                return slot.take();
+            }
+        }
+        None
+    }
+
+    fn revoke_pid(&mut self, pid: u32) -> usize {
+        let mut released = 0usize;
+        for slot in &mut self.records {
+            if matches!(slot, Some(record) if record.pid == pid) {
+                if let Some(record) = slot.take() {
+                    let _ = IOVA_ALLOCATOR.unmap(record.iova, record.domain);
+                    let _ = free_pages(record.frame, record.order);
+                    released += 1;
+                }
+            }
+        }
+        released
+    }
+}
+
+pub static DMA_ALLOC_TABLE: RwLock<DmaAllocTable> = RwLock::new(DmaAllocTable::new());
 
 pub fn dma_alloc_size_for_pid(pid: u32, iova: IovaAddr) -> Option<usize> {
-    DMA_ALLOC_TABLE
-        .read()
-        .iter()
-        .find(|record| record.pid == pid && record.iova == iova)
-        .map(|record| record.size)
+    DMA_ALLOC_TABLE.read().size_for(pid, iova)
 }
 
 fn rollback_pinned_pages(pinned: &[PinnedPage]) {
@@ -557,22 +626,7 @@ fn order_for_size(size: usize) -> usize {
 }
 
 pub fn revoke_all_alloc_for_pid(pid: u32) -> usize {
-    let mut table = DMA_ALLOC_TABLE.write();
-    let mut i = 0;
-    let mut released = 0usize;
-
-    while i < table.len() {
-        if table[i].pid == pid {
-            let record = table.remove(i);
-            let _ = IOVA_ALLOCATOR.unmap(record.iova, record.domain);
-            let _ = free_pages(record.frame, record.order);
-            released += 1;
-        } else {
-            i += 1;
-        }
-    }
-
-    released
+    DMA_ALLOC_TABLE.write().revoke_pid(pid)
 }
 
 pub fn revoke_all_for_pid(pid: u32) -> usize {
@@ -602,7 +656,7 @@ pub fn sys_dma_alloc_for_pid(
 
     match IOVA_ALLOCATOR.map(phys, size, direction, flags, domain) {
         Ok(iova) => {
-            DMA_ALLOC_TABLE.write().push(DmaAllocRecord {
+            let record = DmaAllocRecord {
                 pid,
                 domain,
                 iova,
@@ -610,7 +664,12 @@ pub fn sys_dma_alloc_for_pid(
                 size,
                 frame,
                 order,
-            });
+            };
+            if let Err(err) = DMA_ALLOC_TABLE.write().insert(record) {
+                let _ = IOVA_ALLOCATOR.unmap(iova, domain);
+                let _ = free_pages(frame, order);
+                return Err(err);
+            }
             Ok((virt, iova))
         }
         Err(err) => {
@@ -625,15 +684,10 @@ pub fn sys_dma_free_for_pid(
     iova: IovaAddr,
     domain: IommuDomainId,
 ) -> Result<(), DmaError> {
-    let mut table = DMA_ALLOC_TABLE.write();
-    let Some(pos) = table
-        .iter()
-        .position(|record| record.pid == pid && record.iova == iova && record.domain == domain)
-    else {
+    let Some(record) = DMA_ALLOC_TABLE.write().remove(pid, iova, domain) else {
         return Err(DmaError::InvalidParams);
     };
 
-    let record = table.remove(pos);
     IOVA_ALLOCATOR.unmap(record.iova, record.domain)?;
     let _ = free_pages(record.frame, record.order);
     Ok(())
@@ -645,10 +699,7 @@ pub fn sys_dma_sync_for_pid(
     size: usize,
     dir: DmaDirection,
 ) -> Result<(), DmaError> {
-    let owned_alloc = DMA_ALLOC_TABLE
-        .read()
-        .iter()
-        .any(|record| record.pid == pid && record.iova == iova);
+    let owned_alloc = DMA_ALLOC_TABLE.read().contains(pid, iova);
     let owned_map = DMA_MAP_TABLE
         .read()
         .iter()

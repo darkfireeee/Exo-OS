@@ -21,6 +21,7 @@ use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
+use spin::Once;
 
 // ── MARQUEURS POUR GPT-5.3-CODEX ─────────────────────────────────────────
 // Les lignes marquées [ADAPT] nécessitent la substitution des noms d'API
@@ -34,6 +35,14 @@ pub enum ForgeError {
     MerkleVerifyFailed,
     DriverResetFailed,
     ChecklistFailed(&'static str),
+}
+
+pub type Ring1DriverReloadHook = fn(bus: u8, device: u8, func: u8, blob_id: BlobId, image: &[u8]) -> bool;
+
+static RING1_DRIVER_RELOAD_HOOK: Once<Ring1DriverReloadHook> = Once::new();
+
+pub fn register_ring1_driver_reload_hook(hook: Ring1DriverReloadHook) {
+    let _ = RING1_DRIVER_RELOAD_HOOK.call_once(|| hook);
 }
 
 // Hash Blake3 connu de l'image propre de A — établi au Stage 0
@@ -564,13 +573,18 @@ fn reload_driver_binary_from_exofs(bus: u8, device: u8, func: u8) -> Result<(), 
     let bdf_key = ((bus as u32) << 16) | ((device as u32) << 8) | func as u32;
     let blob_id = stage0::driver_blob_id(bdf_key).ok_or(ForgeError::DriverResetFailed)?;
 
-    // Vérifie la disponibilité du binaire dans ExoFS cache (phase actuelle).
-    let _data = BLOB_CACHE
+    let data = BLOB_CACHE
         .get(&blob_id)
         .ok_or(ForgeError::DriverResetFailed)?;
 
-    // TODO ExoPhoenix Phase suivante: mapper le binaire Ring1 + signaler redémarrage driver.
-    Ok(())
+    let hook = RING1_DRIVER_RELOAD_HOOK
+        .get()
+        .ok_or(ForgeError::DriverResetFailed)?;
+    if hook(bus, device, func, blob_id, &data) {
+        Ok(())
+    } else {
+        Err(ForgeError::DriverResetFailed)
+    }
 }
 
 fn reset_all_ring1_drivers() -> Result<(), ForgeError> {

@@ -124,7 +124,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: EXO_SHIELD_BIN,
         requires: DEPS_EXO_SHIELD,
         ready_timeout_ms: 1_000,
-        critical: false,
+        critical: true,
     },
     ServiceMetadata {
         name: "exosh",

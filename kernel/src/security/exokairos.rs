@@ -209,9 +209,8 @@ impl TemporalCap {
             return Err(CapError::MacMismatch);
         }
 
-        // 3. Vérifier expiration (constant-time comparison)
-        //    ct_u64_gte(a, b) retourne true si a >= b, en temps constant.
-        if ct_u64_gte(current_tsc, deadline) {
+        // 3. Vérifier expiration (comparaison sans branche sur les bits secrets).
+        if ct_u64_gte_mask(current_tsc, deadline) != 0 {
             return Err(CapError::Expired);
         }
 
@@ -514,13 +513,15 @@ fn ct_u64_eq(a: u64, b: u64) -> u64 {
     (v >> 63).wrapping_sub(1) & 1 // 1 si égal, 0 sinon
 }
 
-/// Comparaison constant-time : a >= b.
+/// Comparaison sans branche : a >= b.
 ///
-/// Retourne true si a >= b, en temps constant.
-/// Utilise la technique du bit de signe de (a - b) quand il n'y a pas d'overflow.
+/// Retourne 1 si a >= b, 0 sinon. La formule calcule le bit d'emprunt de
+/// `a - b` en arithmétique non signée, sans dépendre du bit de signe seul.
 #[inline(always)]
-fn ct_u64_gte(a: u64, b: u64) -> bool {
-    (a.wrapping_sub(b) >> 63) == 0
+fn ct_u64_gte_mask(a: u64, b: u64) -> u64 {
+    let diff = a.wrapping_sub(b);
+    let borrow = ((!a & b) | (!(a ^ b) & diff)) >> 63;
+    borrow ^ 1
 }
 
 /// Comparaison constant-time de deux tableaux de 16 bytes.

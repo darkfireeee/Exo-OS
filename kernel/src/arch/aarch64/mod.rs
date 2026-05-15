@@ -8,6 +8,11 @@
 //! SMP ni ABI syscall AArch64. Les primitives ci-dessous existent seulement pour
 //! garder le port futur localise.
 
+#[cfg(target_arch = "aarch64")]
+compile_error!(
+    "ExoOS v0.2.0 ne supporte pas encore le boot AArch64; cible supportee: x86_64 uniquement"
+);
+
 // ── Primitives de base ────────────────────────────────────────────────────────
 
 /// Lit le compteur de temps (CNTVCT_EL0)

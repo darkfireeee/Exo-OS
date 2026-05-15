@@ -10,7 +10,7 @@
 //! - #DF (vecteur 8)  → IST4 (Double Fault)
 //! - #NMI(vecteur 2)  → IST3 (NMI fallback)
 //! - #PF (vecteur 14) → IST2 (#PF dédié)
-//! - 0xF1/0xF2/0xF3   → IST1 (ExoPhoenix critiques)
+//! - 0xF0/0xF1/0xF2   → IST1 (ExoPhoenix critiques)
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -52,30 +52,32 @@ pub const IRQ_BASE: u8 = 32;
 /// Vecteur IRQ timer (APIC Local Timer)
 pub const VEC_IRQ_TIMER: u8 = IRQ_BASE;
 
+/// Vecteur IPI reschedule (scheduler)
+pub const VEC_IPI_RESCHEDULE: u8 = 0xE0;
+
 /// Vecteur IPI wakeup (scheduler)
-pub const VEC_IPI_WAKEUP: u8 = 0xF0;
+pub const VEC_IPI_WAKEUP: u8 = 0xE1;
+
+/// Vecteur IPI TLB shootdown
+pub const VEC_IPI_TLB_SHOOTDOWN: u8 = 0xE2;
+
+/// Vecteur IPI hotplug CPU
+pub const VEC_IPI_CPU_HOTPLUG: u8 = 0xE3;
 
 /// Vecteur ExoPhoenix Freeze (réservé)
-pub const VEC_EXOPHOENIX_FREEZE: u8 = 0xF1;
+pub const VEC_EXOPHOENIX_FREEZE: u8 = 0xF0;
 
 /// Vecteur ExoPhoenix PMC snapshot (réservé)
-pub const VEC_EXOPHOENIX_PMC: u8 = 0xF2;
+pub const VEC_EXOPHOENIX_PMC: u8 = 0xF1;
 
 /// Vecteur ExoPhoenix TLB flush (réservé)
-pub const VEC_EXOPHOENIX_TLB: u8 = 0xF3;
+pub const VEC_EXOPHOENIX_TLB: u8 = 0xF2;
 
 /// Retourne `true` si `vector` appartient aux vecteurs réservés ExoPhoenix.
 #[inline(always)]
 pub const fn is_exophoenix_reserved_vector(vector: u8) -> bool {
     vector == VEC_EXOPHOENIX_FREEZE || vector == VEC_EXOPHOENIX_PMC || vector == VEC_EXOPHOENIX_TLB
 }
-
-/// Alias de compatibilité scheduler (utilisation historique)
-pub const VEC_IPI_RESCHEDULE: u8 = VEC_EXOPHOENIX_FREEZE;
-/// Alias de compatibilité memory shootdown (utilisation historique)
-pub const VEC_IPI_TLB_SHOOTDOWN: u8 = VEC_EXOPHOENIX_PMC;
-/// Alias de compatibilité hotplug (utilisation historique)
-pub const VEC_IPI_CPU_HOTPLUG: u8 = VEC_EXOPHOENIX_TLB;
 
 /// Vecteur IPI panic broadcast
 pub const VEC_IPI_PANIC: u8 = 0xFE;
@@ -244,6 +246,11 @@ extern "C" {
     fn ipi_tlb_shootdown_handler();
     fn ipi_cpu_hotplug_handler();
     fn ipi_panic_handler();
+
+    // ExoPhoenix handlers dédiés
+    fn exophoenix_freeze_handler();
+    fn exophoenix_pmc_handler();
+    fn exophoenix_tlb_handler();
 }
 
 // ── Initialisation IDT ────────────────────────────────────────────────────────
@@ -488,21 +495,39 @@ pub fn init_idt() {
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
-        VEC_EXOPHOENIX_FREEZE,
+        VEC_IPI_RESCHEDULE,
         ipi_reschedule_handler as *const () as u64,
         0,
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
-        VEC_EXOPHOENIX_PMC,
+        VEC_IPI_TLB_SHOOTDOWN,
         ipi_tlb_shootdown_handler as *const () as u64,
         0,
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
-        VEC_EXOPHOENIX_TLB,
+        VEC_IPI_CPU_HOTPLUG,
         ipi_cpu_hotplug_handler as *const () as u64,
         0,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_FREEZE,
+        exophoenix_freeze_handler as *const () as u64,
+        IST_EXOPHOENIX_IPI as u8 + 1,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_PMC,
+        exophoenix_pmc_handler as *const () as u64,
+        IST_EXOPHOENIX_IPI as u8 + 1,
+        IdtEntryFlags::INTERRUPT_GATE,
+    );
+    idt.set_handler(
+        VEC_EXOPHOENIX_TLB,
+        exophoenix_tlb_handler as *const () as u64,
+        IST_EXOPHOENIX_IPI as u8 + 1,
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_stack_index(VEC_EXOPHOENIX_FREEZE, IST_EXOPHOENIX_IPI as u8 + 1);
@@ -559,6 +584,11 @@ pub fn get_handler_addr(vector: u8) -> Option<u64> {
     } else {
         None
     }
+}
+
+#[inline(always)]
+pub fn idt_base_addr_for_kpti() -> u64 {
+    unsafe { IDT.entries.as_ptr() as u64 }
 }
 
 #[inline(always)]

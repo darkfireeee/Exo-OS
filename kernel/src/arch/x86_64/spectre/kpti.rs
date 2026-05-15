@@ -73,6 +73,7 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     let slot = current_cpu_slot();
     slot.kernel.store(cr3_kernel, Ordering::Release);
     slot.user.store(cr3_user, Ordering::Release);
+    percpu::set_kpti_cr3_slots(cr3_kernel & !CR3_PCID_MASK, cr3_user & !CR3_PCID_MASK);
 }
 
 // ── Switch Kernel → User CR3 ─────────────────────────────────────────────────
@@ -159,7 +160,12 @@ pub fn init_kpti() {
         crate::memory::core::PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
 
     let user_shadow = unsafe {
-        crate::memory::virt::page_table::kpti_split::build_user_shadow_pml4(kernel_pml4_phys)
+        crate::memory::virt::page_table::kpti_split::build_user_shadow_pml4(
+            kernel_pml4_phys,
+            cpu_id,
+            trampoline_phys,
+            crate::arch::x86_64::smp::percpu::read_kernel_rsp(),
+        )
     };
 
     match user_shadow {
@@ -172,6 +178,7 @@ pub fn init_kpti() {
                     trampoline_phys,
                 );
             }
+            crate::memory::virt::page_table::kpti_split::KPTI.enable();
             // FIX-KPTI-01 : initialiser le slot per-CPU lors de l'activation.
             set_current_cr3(kernel_pml4_phys.as_u64(), user_pml4_phys.as_u64());
             KPTI_ENABLED.store(true, Ordering::Release);

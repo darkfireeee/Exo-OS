@@ -14,7 +14,8 @@
 //                      CR3 switché dans switch_asm AVANT restauration des registres (KPTI)
 //   CORR-11 : FS/GS base sauvegardés via rdmsr/wrmsr dans context_switch()
 //   V7-C-03 : TSS.RSP0 mis à jour après chaque switch (sinon IRQ sur mauvaise pile)
-//   ZONE NO-ALLOC : aucune allocation dans ce chemin chaud
+//   ZONE NO-ALLOC : aucune allocation récurrente dans ce chemin chaud
+//                   (shadow KPTI construit une seule fois par TCB si requis)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::MAX_CPUS;
@@ -28,7 +29,8 @@ use crate::arch::x86_64::{
     smp::percpu,
     tss,
 };
-use crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu;
+use crate::memory::core::PhysAddr;
+use crate::memory::virt::page_table::kpti_split::{build_user_shadow_pml4, user_cr3_for_cpu};
 use crate::scheduler::fpu;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -320,13 +322,37 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // charger sa pile kernel.
     next.assign_cpu(CpuId(cpu_idx as u32));
 
+    let next_kstack_top = next.kstack_top();
+
     if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-        let user_cr3 = user_cr3_for_cpu(cpu_idx).unwrap_or_else(|| {
-            panic!(
-                "KPTI actif mais user CR3 absent pour le CPU {} pendant le context switch",
-                cpu_idx
-            )
-        });
+        let mut user_cr3 = next.kpti_user_cr3();
+        if user_cr3 == 0 && next.pid.0 != 0 && next.cr3_phys != 0 {
+            let trampoline_phys = PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
+            user_cr3 = unsafe {
+                match build_user_shadow_pml4(
+                    PhysAddr::new(next.cr3_phys),
+                    cpu_idx,
+                    trampoline_phys,
+                    next_kstack_top,
+                ) {
+                    Ok(cr3) => cr3.as_u64(),
+                    Err(_err) => {
+                        crate::arch::x86_64::terminal::debug_write(
+                            b"KPTI: echec construction user shadow\n",
+                        );
+                        crate::arch::x86_64::halt_cpu();
+                    }
+                }
+            };
+            next.set_kpti_user_cr3(user_cr3);
+        }
+        if user_cr3 == 0 {
+            user_cr3 = user_cr3_for_cpu(cpu_idx).unwrap_or(next.cr3_phys);
+        }
+        if user_cr3 == 0 {
+            crate::arch::x86_64::terminal::debug_write(b"KPTI: user CR3 absent\n");
+            crate::arch::x86_64::halt_cpu();
+        }
         crate::arch::x86_64::spectre::kpti::set_current_cr3(next.cr3_phys, user_cr3);
     }
 
@@ -344,7 +370,6 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
-    let next_kstack_top = next.kstack_top();
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
         tss::update_rsp0(cpu_idx, next_kstack_top);

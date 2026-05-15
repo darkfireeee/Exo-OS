@@ -17,8 +17,9 @@
 //! - Sortie  : SWAPGS avant SYSRET pour restaurer GS userspace
 //!
 //! ## KPTI
-//! Le switch CR3 se fait dans le code ASM de bas niveau (switch_asm.s).
-//! syscall.rs gère la logique Rust après le passage en mode kernel.
+//! Le chemin syscall commute CR3 directement dans `syscall_entry_asm` via les
+//! slots GS per-CPU `kpti_kernel_cr3`/`kpti_user_cr3`. `switch_asm.s` ne couvre
+//! que les changements de contexte scheduler.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -151,10 +152,12 @@ pub fn init_syscall() {
     }
 
     // 5. MSR SFMASK : masque RFLAGS lors de SYSCALL
-    // Masquer IF (bit 9), TF (bit 8), DF (bit 10), AC (bit 18)
+    // Masquer IF, TF, DF, NT, RF et AC avant l'entrée Ring 0.
     let sfmask = (1 << 9)  // IF
                | (1 << 8)  // TF
                | (1 << 10) // DF
+               | (1 << 14) // NT
+               | (1 << 16) // RF
                | (1 << 18); // AC
                             // SAFETY: SFMASK masque les flags dangereux uniquement
     unsafe {
@@ -168,14 +171,16 @@ pub fn init_syscall() {
 //
 // Séquence :
 // 1. SWAPGS (kernel GS)
-// 2. Sauvegarder RSP userspace dans per-CPU area
-// 3. Charger RSP0 kernel depuis per-CPU area
-// 4. Sauvegarder tous les registres caller-saved + RCX/R11
-// 5. Appeler `syscall_rust_handler()`
-// 6. Restaurer les registres depuis la SyscallFrame
-// 7. Charger RSP userspace depuis la SyscallFrame
-// 8. SWAPGS (restaurer GS userspace)
-// 9. SYSRETQ
+// 2. Si KPTI actif, charger CR3 kernel depuis GS:[0x40]
+// 3. Sauvegarder RSP userspace dans per-CPU area
+// 4. Charger RSP0 kernel depuis per-CPU area
+// 5. Sauvegarder tous les registres caller-saved + RCX/R11
+// 6. Appeler `syscall_rust_handler()`
+// 7. Restaurer les registres depuis la SyscallFrame
+// 8. Si KPTI actif, charger CR3 user depuis GS:[0x48]
+// 9. Charger RSP userspace depuis la SyscallFrame
+// 10. SWAPGS (restaurer GS userspace)
+// 11. SYSRETQ
 core::arch::global_asm!(
     ".section .text",
     ".global syscall_entry_asm",
@@ -183,6 +188,15 @@ core::arch::global_asm!(
     "syscall_entry_asm:",
     // ── 1. SWAPGS : active le GS kernel (kernel GS_BASE ← KERNEL_GS_BASE) ──────
     "swapgs",
+    // ── 1b. KPTI : passer sur CR3 kernel avant tout accès pile kernel ─────────
+    // rax contient le numéro de syscall : on le sauve dans GS:[0x50].
+    "mov   qword ptr gs:[0x50], rax",
+    "mov   rax, qword ptr gs:[0x40]",
+    "test  rax, rax",
+    "jz    998f",
+    "mov   cr3, rax",
+    "998:",
+    "mov   rax, qword ptr gs:[0x50]",
     // ── 2. Sauvegarder RSP userspace dans gs:[0x08] (user_rsp slot) ─────────────
     // gs:[0x00] = kernel_rsp (pile kernel pré-allouée)
     // gs:[0x08] = user_rsp  (save slot pour le RSP userspace courant)
@@ -242,8 +256,17 @@ core::arch::global_asm!(
     "mov   rbp, [rsp + 104]",
     "mov   r11, [rsp + 112]",
     "mov   rcx, [rsp + 120]",
-    // ── 10. Restaurer RSP userspace depuis la frame ───────────────────────────────
-    "mov   rsp, [rsp +  56]",
+    // ── 10. Préparer RSP userspace et CR3 user sans perdre RAX ───────────────────
+    "mov   qword ptr gs:[0x50], rax",
+    "mov   rax, [rsp +  56]",
+    "mov   qword ptr gs:[0x08], rax",
+    "mov   rax, qword ptr gs:[0x48]",
+    "test  rax, rax",
+    "jz    999f",
+    "mov   cr3, rax",
+    "999:",
+    "mov   rax, qword ptr gs:[0x50]",
+    "mov   rsp, qword ptr gs:[0x08]",
     // ── 11. Restaurer GS userspace ────────────────────────────────────────────────
     "swapgs",
     // ── 12. Retour en mode 64-bit Ring 3 ─────────────────────────────────────────
@@ -261,6 +284,12 @@ core::arch::global_asm!(
     "cli",
     // Activer GS kernel pour accéder à la zone per-CPU.
     "swapgs",
+    // KPTI : basculer vers CR3 kernel si le slot est publié.
+    "mov rax, qword ptr gs:[0x40]",
+    "test rax, rax",
+    "jz 997f",
+    "mov cr3, rax",
+    "997:",
     // Sauvegarder le RSP userspace dans gs:[0x08] (save slot standard).
     // RSP n'a PAS encore été changé (SYSCALL compat ne touche pas RSP).
     "mov qword ptr gs:[0x08], rsp",
@@ -268,6 +297,14 @@ core::arch::global_asm!(
     "mov rsp, qword ptr gs:[0x00]",
     // Retourner -ENOSYS (errno 38 = ENOSYS en Linux ABI).
     "mov eax, -38",
+    // KPTI : basculer vers CR3 user juste avant le retour.
+    "mov qword ptr gs:[0x50], rax",
+    "mov rax, qword ptr gs:[0x48]",
+    "test rax, rax",
+    "jz 996f",
+    "mov cr3, rax",
+    "996:",
+    "mov rax, qword ptr gs:[0x50]",
     // Restaurer RSP userspace depuis le save slot.
     "mov rsp, qword ptr gs:[0x08]",
     // Restaurer GS userspace.

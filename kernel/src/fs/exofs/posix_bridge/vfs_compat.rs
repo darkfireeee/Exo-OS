@@ -197,11 +197,24 @@ impl OpenFdTable {
             self.lock_release();
             return Err(ExofsError::QuotaExceeded);
         }
-        let Some(slot_idx) = fds.iter().position(|entry| entry.is_none()) else {
+        let start = self.next_fd.load(Ordering::Relaxed) % VFS_OPEN_MAX as u64;
+        let mut slot_idx = None;
+        let mut offset = 0u64;
+        while offset < VFS_OPEN_MAX as u64 {
+            let idx = ((start + offset) % VFS_OPEN_MAX as u64) as usize;
+            if fds[idx].is_none() {
+                slot_idx = Some(idx);
+                break;
+            }
+            offset = offset.wrapping_add(1);
+        }
+        let Some(slot_idx) = slot_idx else {
             self.lock_release();
             return Err(ExofsError::QuotaExceeded);
         };
-        let fd = self.next_fd.fetch_add(1, Ordering::Relaxed);
+        let fd = (slot_idx as u64).saturating_add(3);
+        self.next_fd
+            .store(((slot_idx + 1) % VFS_OPEN_MAX) as u64, Ordering::Relaxed);
         let entry = VfsFd {
             fd,
             ino,
@@ -217,14 +230,20 @@ impl OpenFdTable {
     }
 
     fn close_fd(&self, fd: u64) -> ExofsResult<()> {
+        let caller = current_vfs_owner_pid();
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         let mut found = false;
+        let mut denied = false;
         let mut i = 0usize;
         while i < fds.len() {
             if let Some(entry) = fds[i] {
                 if entry.fd == fd && entry.active {
+                    if !vfs_owner_matches(entry, caller) {
+                        denied = true;
+                        break;
+                    }
                     fds[i] = None;
                     self.fd_count.fetch_sub(1, Ordering::Relaxed);
                     found = true;
@@ -236,12 +255,15 @@ impl OpenFdTable {
         self.lock_release();
         if found {
             Ok(())
+        } else if denied {
+            Err(ExofsError::PermissionDenied)
         } else {
             Err(ExofsError::ObjectNotFound)
         }
     }
 
     fn get_fd(&self, fd: u64) -> Option<VfsFd> {
+        let caller = current_vfs_owner_pid();
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &*self.fds.get() };
@@ -249,7 +271,7 @@ impl OpenFdTable {
         let mut i = 0usize;
         while i < fds.len() {
             if let Some(entry) = fds[i] {
-                if entry.fd == fd && entry.active {
+                if entry.fd == fd && entry.active && vfs_owner_matches(entry, caller) {
                     r = Some(entry);
                     break;
                 }
@@ -316,6 +338,23 @@ impl OpenFdTable {
 }
 
 static FD_TABLE: OpenFdTable = OpenFdTable::new();
+
+#[inline]
+fn current_vfs_owner_pid() -> u32 {
+    #[cfg(target_os = "none")]
+    {
+        crate::syscall::fast_path::syscall_current_pid()
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
+
+#[inline]
+fn vfs_owner_matches(entry: VfsFd, caller: u32) -> bool {
+    caller == 0 || entry.pid == 0 || entry.pid == caller
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Registre VFS

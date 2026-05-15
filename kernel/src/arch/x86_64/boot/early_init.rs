@@ -131,8 +131,14 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     let features = super::super::cpu::features::cpu_features();
 
     // Assertions critiques (init_cpu_features() en fait déjà certaines)
-    assert!(features.has_sse2(), "SSE2 requis");
-    assert!(features.has_syscall(), "SYSCALL requis");
+    if !features.has_sse2() {
+        crate::arch::x86_64::terminal::debug_write(b"early_init: SSE2 requis\n");
+        crate::arch::x86_64::halt_cpu();
+    }
+    if !features.has_syscall() {
+        crate::arch::x86_64::terminal::debug_write(b"early_init: SYSCALL requis\n");
+        crate::arch::x86_64::halt_cpu();
+    }
 
     // ── Étape 2 : GDT per-CPU BSP ────────────────────────────────────────────
     probe!(b'2');
@@ -147,6 +153,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
 
     // ── Étape 4 : TSS per-CPU BSP (IST stacks) ────────────────────────────────
     // (déjà fait dans init_gdt_for_cpu qui appelle init_tss_for_cpu + load_tss)
+    probe!(b'4');
 
     // ── Étape 5 : Per-CPU data / GS ───────────────────────────────────────────
     probe!(b'5');
@@ -224,7 +231,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     super::super::syscall::init_syscall();
 
     // ── Étape 12 : Multiboot2 / UEFI ─────────────────────────────────────────
-    probe!(b'f');
+    probe!(b'e');
     if mb2_magic == 0x36d76289 && mb2_info != 0 {
         boot_info.multiboot2_magic = mb2_magic;
         boot_info.multiboot2_addr = mb2_info;
@@ -314,22 +321,20 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         // Protections mémoire hardware (NX / SMEP / SMAP)
         crate::memory::protection::init();
     } else {
-        panic!(
-            "unsupported boot protocol: magic={:#x} info={:#x}",
-            mb2_magic, mb2_info
-        );
+        crate::arch::x86_64::terminal::debug_write(b"early_init: boot protocol non supporte\n");
+        crate::arch::x86_64::halt_cpu();
     }
 
     // ── Étape 12b : Mitigations Spectre/Meltdown ─────────────────────────────
     // KPTI peut construire des shadow page tables et allouer des frames ; il faut
     // donc attendre que le sous-système mémoire et la PML4 kernel soient prêts.
-    probe!(b'e');
+    probe!(b'f');
     super::super::spectre::apply_mitigations_bsp();
 
     // ── Étape 13b : Security init (SECURITY_READY) ─────────────────────────
     // Libère les APs du spin-wait BOOT-SEC dans smp/init.rs.
     // L'appel est idempotent côté boot flow: kernel_init() vérifie aussi ce flag.
-    probe!(b'h');
+    probe!(b'g');
     if !crate::security::is_security_ready() {
         let kaslr_entropy =
             super::super::cpu::tsc::read_tsc() ^ ((mb2_magic as u64) << 32) ^ mb2_info ^ rsdp;
@@ -340,7 +345,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     }
 
     // ── Étape 14 : SMP — boot des APs ────────────────────────────────────────
-    probe!(b'g');
+    probe!(b'h');
     if let Some(ref madt) = madt_info {
         if madt.cpu_count > 1 {
             super::trampoline_asm::install_trampoline();
@@ -349,11 +354,11 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         }
     }
     boot_info.cpu_count = super::super::smp::init::smp_cpu_count();
-    assert!(
-        boot_info.cpu_count as usize <= 256,
-        "Trop de CPUs pour MAX_CPUS"
-    );
+    if boot_info.cpu_count as usize > 256 {
+        crate::arch::x86_64::terminal::debug_write(b"early_init: trop de CPUs\n");
+        crate::arch::x86_64::halt_cpu();
+    }
 
-    probe!(b'Z'); // arch_boot_init terminé
+    probe!(b'i'); // arch_boot_init terminé
     boot_info
 }

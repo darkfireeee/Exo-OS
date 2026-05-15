@@ -291,7 +291,8 @@ pub fn register_ap(apic_id: ApicId, numa_node: NumaNode) -> CpuId {
     if idx >= MAX_CPUS {
         // Dépassement — ignorer ce CPU
         CPU_COUNT_TOTAL.fetch_sub(1, Ordering::Relaxed);
-        panic!("register_ap: trop de CPUs (max {})", MAX_CPUS);
+        crate::arch::x86_64::terminal::debug_write(b"register_ap: trop de CPUs\n");
+        crate::arch::x86_64::halt_cpu();
     }
 
     let (smt_shift, core_shift, pkg_shift) = detect_topo_shifts(false);

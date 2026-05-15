@@ -9,7 +9,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{EndpointId, IpcError};
-use crate::syscall::validation::{copy_from_user, copy_to_user};
+use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
 pub const NET_OP_OPEN: u32 = 0x4E00;
 pub const NET_OP_CONNECT: u32 = 0x4E01;
@@ -31,6 +31,7 @@ pub const NET_OP_GETPEERNAME: u32 = 0x4E0F;
 const AF_UNIX: i32 = 1;
 const AF_INET: u16 = 2;
 const SOCKADDR_IN_LEN: usize = 16;
+const IOV_MAX: u64 = 1024;
 
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
@@ -66,6 +67,29 @@ pub struct NetReply {
 }
 
 const _: () = assert!(core::mem::size_of::<NetReply>() == 48);
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxIovec {
+    iov_base: u64,
+    iov_len: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxMsghdr {
+    msg_name: u64,
+    msg_namelen: u32,
+    _pad0: u32,
+    msg_iov: u64,
+    msg_iovlen: u64,
+    msg_control: u64,
+    msg_controllen: u64,
+    msg_flags: i32,
+    _pad1: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<LinuxMsghdr>() == 56);
 
 /// Active le pont reseau apres l'initialisation de base du noyau.
 ///
@@ -258,6 +282,60 @@ fn zero_user_buffer(buf_ptr: u64, len: usize) -> Result<(), i64> {
     Ok(())
 }
 
+fn msghdr_total_iov_len(msg: &LinuxMsghdr) -> Result<usize, i64> {
+    if msg.msg_iovlen > IOV_MAX {
+        return Err(EINVAL);
+    }
+    if msg.msg_iovlen != 0 && msg.msg_iov == 0 {
+        return Err(EFAULT);
+    }
+
+    let mut total = 0usize;
+    let mut idx = 0u64;
+    while idx < msg.msg_iovlen {
+        let ptr = msg
+            .msg_iov
+            .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
+            .ok_or(EFAULT)?;
+        let iov = read_user_typed::<LinuxIovec>(ptr).map_err(|_| EFAULT)?;
+        if iov.iov_len > usize::MAX as u64 {
+            return Err(EINVAL);
+        }
+        if iov.iov_len != 0 && iov.iov_base == 0 {
+            return Err(EFAULT);
+        }
+        total = total
+            .checked_add(iov.iov_len as usize)
+            .ok_or(EINVAL)?;
+        idx += 1;
+    }
+    Ok(total)
+}
+
+fn zero_msghdr_iov(msg: &LinuxMsghdr, len: usize) -> Result<(), i64> {
+    let mut remaining = len;
+    let mut idx = 0u64;
+    while idx < msg.msg_iovlen && remaining != 0 {
+        let ptr = msg
+            .msg_iov
+            .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
+            .ok_or(EFAULT)?;
+        let iov = read_user_typed::<LinuxIovec>(ptr).map_err(|_| EFAULT)?;
+        let chunk = remaining.min(iov.iov_len as usize);
+        zero_user_buffer(iov.iov_base, chunk)?;
+        remaining -= chunk;
+        idx += 1;
+    }
+    Ok(())
+}
+
+fn msghdr_peer(msg: &LinuxMsghdr) -> Result<(u32, u16), i64> {
+    if msg.msg_name == 0 {
+        return Ok((0, 0));
+    }
+    read_sockaddr_in(msg.msg_name, msg.msg_namelen as u64)
+}
+
 pub fn net_socket(domain: i32, ty: i32, protocol: i32) -> Result<i64, i64> {
     let reply = dispatch(
         NET_OP_OPEN,
@@ -378,7 +456,17 @@ pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     if msg_ptr == 0 {
         return Err(EFAULT);
     }
-    let reply = dispatch(NET_OP_SENDMSG, fd as u32, msg_ptr, 0, flags, 0)?;
+    let msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
+    let len = msghdr_total_iov_len(&msg)?;
+    let (addr, port) = msghdr_peer(&msg)?;
+    let reply = dispatch(
+        NET_OP_SENDTO,
+        fd as u32,
+        len as u64,
+        addr as u64,
+        port as u32,
+        flags,
+    )?;
     Ok(reply.status)
 }
 
@@ -389,8 +477,20 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     if msg_ptr == 0 {
         return Err(EFAULT);
     }
-    let reply = dispatch(NET_OP_RECVMSG, fd as u32, msg_ptr, 0, flags, 0)?;
-    Ok(reply.status)
+    let mut msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
+    let len = msghdr_total_iov_len(&msg)?;
+    let reply = dispatch(NET_OP_RECVFROM, fd as u32, len as u64, 0, flags, 0)?;
+    let n = reply.status.max(0) as usize;
+    zero_msghdr_iov(&msg, n.min(len))?;
+    if msg.msg_name != 0 {
+        let peer_addr = reply_u32(&reply, 8);
+        let peer_port = reply_u16(&reply, 12);
+        write_sockaddr_in(msg.msg_name, 0, peer_addr, peer_port)?;
+        msg.msg_namelen = SOCKADDR_IN_LEN as u32;
+    }
+    msg.msg_flags = 0;
+    write_user_typed::<LinuxMsghdr>(msg_ptr, msg).map_err(|_| EFAULT)?;
+    Ok(n as i64)
 }
 
 pub fn net_shutdown(fd: i32, how: i32) -> Result<i64, i64> {
