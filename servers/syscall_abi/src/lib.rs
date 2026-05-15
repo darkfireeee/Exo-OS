@@ -317,7 +317,13 @@ pub const SYS_EXO_PERF_DISABLE: u64 = 332;
 pub const SYS_EXO_DEBUG_ATTACH: u64 = 340;
 pub const SYS_EXO_DEBUG_REGS: u64 = 341;
 pub const SYS_EXO_LOG: u64 = 350;
+pub const SYS_EXO_PROCESS_LIST: u64 = 351;
+pub const SYS_EXO_PHOENIX_STATE_SET: u64 = 352;
 pub const SYS_EXO_BPF: u64 = 360;
+
+pub const EXO_PHOENIX_STATE_NORMAL: u64 = 1;
+pub const EXO_PHOENIX_STATE_NETWORK_DRAINING: u64 = 9;
+pub const EXO_PHOENIX_STATE_NETWORK_SERIALIZED: u64 = 10;
 
 pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
 pub const SYS_EXOFS_OBJECT_OPEN: u64 = 501;
@@ -354,6 +360,42 @@ pub const SYS_PROC_EXEC: u64 = SYS_EXECVE;
 pub const IPC_HEADER_SIZE: usize = 8;
 pub const IPC_INLINE_PAYLOAD_SIZE: usize = 120;
 pub const IPC_ENVELOPE_SIZE: usize = IPC_HEADER_SIZE + IPC_INLINE_PAYLOAD_SIZE;
+
+pub const EXO_PROCESS_NAME_LEN: usize = 16;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ExoProcessInfo {
+    pub pid: u32,
+    pub ppid: u32,
+    pub state: u32,
+    pub threads: u32,
+    pub name: [u8; EXO_PROCESS_NAME_LEN],
+    pub utime_ns: u64,
+    pub stime_ns: u64,
+}
+
+impl ExoProcessInfo {
+    #[inline(always)]
+    pub const fn zeroed() -> Self {
+        Self {
+            pid: 0,
+            ppid: 0,
+            state: 0,
+            threads: 0,
+            name: [0u8; EXO_PROCESS_NAME_LEN],
+            utime_ns: 0,
+            stime_ns: 0,
+        }
+    }
+}
+
+impl Default for ExoProcessInfo {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::zeroed()
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]

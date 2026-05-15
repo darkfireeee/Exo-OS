@@ -56,6 +56,7 @@ use crate::memory::dma::core::types::{
     DmaDirection, DmaError, DmaMapFlags, IommuDomainId, IovaAddr,
 };
 use crate::process::core::pid::Pid;
+use crate::process::core::registry::PROCESS_REGISTRY;
 use pci_types::PciAddress;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2878,6 +2879,24 @@ fn current_pid_u32() -> u32 {
     }
 }
 
+fn process_name_eq(name: &[u8; EXO_PROCESS_NAME_LEN], expected: &[u8]) -> bool {
+    let mut len = 0usize;
+    while len < name.len() && name[len] != 0 {
+        len += 1;
+    }
+    if len != expected.len() {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < len {
+        if name[i] != expected[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
@@ -3250,6 +3269,117 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
     let _ = level;
     // Les octets sont déjà dans kbuf — ils seront consommés par le prochain lecteur.
     0
+}
+
+const EXO_PROCESS_NAME_LEN: usize = 16;
+const EXO_PROCESS_LIST_MAX: usize = 4096;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ExoProcessInfo {
+    pid: u32,
+    ppid: u32,
+    state: u32,
+    threads: u32,
+    name: [u8; EXO_PROCESS_NAME_LEN],
+    utime_ns: u64,
+    stime_ns: u64,
+}
+
+/// `exo_process_list(buf, capacity, entry_size)` — snapshot de la registry PCB.
+pub fn sys_exo_process_list(
+    buf_ptr: u64,
+    capacity: u64,
+    entry_size: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_PROCESS_LIST);
+    let expected = core::mem::size_of::<ExoProcessInfo>();
+    if entry_size != expected as u64 {
+        return EINVAL;
+    }
+    if capacity == 0 {
+        return PROCESS_REGISTRY.count() as i64;
+    }
+    if capacity > EXO_PROCESS_LIST_MAX as u64 {
+        return E2BIG;
+    }
+    let capacity = capacity as usize;
+    let total_len = match capacity.checked_mul(expected) {
+        Some(len) => len,
+        None => return E2BIG,
+    };
+    if UserBuf::validate(buf_ptr, total_len, EXO_PROCESS_LIST_MAX * expected).is_err() {
+        return EFAULT;
+    }
+
+    let mut written = 0usize;
+    let mut fault = false;
+    PROCESS_REGISTRY.for_each(|pcb| {
+        if written >= capacity || fault {
+            return;
+        }
+        let entry = ExoProcessInfo {
+            pid: pcb.pid.0,
+            ppid: pcb.ppid.load(Ordering::Acquire),
+            state: pcb.state.load(Ordering::Acquire),
+            threads: pcb.thread_count.load(Ordering::Acquire),
+            name: pcb.name_snapshot(),
+            utime_ns: pcb.utime_ns.load(Ordering::Acquire),
+            stime_ns: pcb.stime_ns.load(Ordering::Acquire),
+        };
+        let dst = (buf_ptr as *mut u8).wrapping_add(written * expected);
+        let src = &entry as *const ExoProcessInfo as *const u8;
+        if copy_to_user(dst, src, expected).is_err() {
+            fault = true;
+        } else {
+            written += 1;
+        }
+    });
+
+    if fault {
+        EFAULT
+    } else {
+        written as i64
+    }
+}
+
+/// `exo_phoenix_state_set(state)` — synchronise une transition Phoenix root.
+pub fn sys_exo_phoenix_state_set(
+    state: u64,
+    _a2: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_PHOENIX_STATE_SET);
+    if state > u8::MAX as u64 {
+        return EINVAL;
+    }
+    if !matches!(state as u8, 1 | 9 | 10) {
+        return EINVAL;
+    }
+    let caller = current_pid_u32();
+    if caller != 0 {
+        let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
+            return EPERM;
+        };
+        if !pcb.is_root() {
+            return EPERM;
+        }
+        let name = pcb.name_snapshot();
+        if !process_name_eq(&name, b"network_server") && !process_name_eq(&name, b"init_server") {
+            return EPERM;
+        }
+    }
+    if crate::exophoenix::try_set_state_raw(state as u8) {
+        0
+    } else {
+        EINVAL
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4000,6 +4130,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_CAP_CHECK => sys_exo_cap_check,
         SYS_EXO_LOG => sys_exo_log,
+        SYS_EXO_PROCESS_LIST => sys_exo_process_list,
+        SYS_EXO_PHOENIX_STATE_SET => sys_exo_phoenix_state_set,
         // ── ExoFS (500–518) ────────────────────────────────────────────────
         SYS_EXOFS_PATH_RESOLVE => sys_exofs_path_resolve,
         SYS_EXOFS_OBJECT_OPEN => sys_exofs_object_open,

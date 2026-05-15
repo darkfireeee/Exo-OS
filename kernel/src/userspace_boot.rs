@@ -142,12 +142,12 @@ static EMBEDDED_PAYLOADS: &[EmbeddedPayload] = &[
         bytes: &TTY_SERVER_BYTES,
     },
     EmbeddedPayload {
-        path: "/bin/exosh",
-        bytes: &EXOSH_BYTES,
-    },
-    EmbeddedPayload {
         path: "/sbin/exo-shield",
         bytes: &EXO_SHIELD_BYTES,
+    },
+    EmbeddedPayload {
+        path: "/bin/exosh",
+        bytes: &EXOSH_BYTES,
     },
 ];
 

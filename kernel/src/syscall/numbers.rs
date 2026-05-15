@@ -5,8 +5,11 @@
 //! ## Compatibilité
 //! - [0..299]   : numéros compatibles Linux x86_64 (même ABI que glibc)
 //! - [300..399] : extensions Exo-OS (IPC natif, capabilities, sécurité)
-//! - [400..511] : réservés pour usage futur
-//! - 512        : SYSCALL_TABLE_SIZE (taille totale de la table)
+//! - [400..499] : réservés pour usage futur
+//! - [500..520] : ExoFS syscalls natifs
+//! - [521..529] : réservés pour usage futur
+//! - [530..546] : GI-03 drivers syscalls
+//! - 547        : SYSCALL_TABLE_SIZE (taille totale de la table)
 //!
 //! ## Règle architecturale
 //! Les numéros Linux sont repris à l'identique pour permettre une libc
@@ -328,6 +331,10 @@ pub const SYS_EXO_DEBUG_ATTACH: u64 = 340;
 pub const SYS_EXO_DEBUG_REGS: u64 = 341;
 /// Log kernel direct (ring 0 permissions requises)
 pub const SYS_EXO_LOG: u64 = 350;
+/// Lister les processus vivants depuis la registry kernel
+pub const SYS_EXO_PROCESS_LIST: u64 = 351;
+/// Synchroniser l'état Phoenix global depuis un serveur root
+pub const SYS_EXO_PHOENIX_STATE_SET: u64 = 352;
 /// Sonde eBPF Exo-OS
 pub const SYS_EXO_BPF: u64 = 360;
 

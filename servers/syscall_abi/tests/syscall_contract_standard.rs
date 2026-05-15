@@ -21,6 +21,8 @@ fn syscall_contract_standard_exofs_and_core_numbers() {
     assert_eq!(abi::SYS_EXO_MEM_SHARE, 310);
     assert_eq!(abi::SYS_EXO_CAP_CHECK, 323);
     assert_eq!(abi::SYS_EXO_LOG, 350);
+    assert_eq!(abi::SYS_EXO_PROCESS_LIST, 351);
+    assert_eq!(abi::SYS_EXO_PHOENIX_STATE_SET, 352);
 
     assert_eq!(abi::SYS_EXOFS_FIRST, 500);
     assert_eq!(abi::SYS_EXOFS_PATH_RESOLVE, 500);
@@ -45,6 +47,7 @@ fn syscall_contract_standard_exofs_and_core_numbers() {
 fn syscall_contract_standard_exofs_layouts_and_rights() {
     assert_eq!(core::mem::size_of::<abi::ExofsPathResolveResult>(), 104);
     assert_eq!(core::mem::size_of::<abi::ExofsOpenArgs>(), 48);
+    assert_eq!(core::mem::size_of::<abi::ExoProcessInfo>(), 48);
 
     let mut resolved = abi::ExofsPathResolveResult::default();
     resolved.blob_id[..8].copy_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());

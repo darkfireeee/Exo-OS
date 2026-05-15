@@ -359,6 +359,7 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
         pcb.cr3.load(Ordering::Relaxed),
         pcb.address_space.load(Ordering::Relaxed),
     );
+    pcb.set_name_bytes(b"init_server");
     pcb.set_main_thread_ptr(thread_ptr);
     pcb.brk_start.store(elf.brk_start, Ordering::Release);
     pcb.brk_current.store(elf.brk_start, Ordering::Release);

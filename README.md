@@ -13,7 +13,7 @@
 
 [![Status](https://img.shields.io/badge/status-v0.1.0%20Elder%20and%20Bobby-22c55e?style=flat-square)](.)
 [![Rust](https://img.shields.io/badge/Rust-no__std%20nightly-orange?style=flat-square&logo=rust)](.)
-[![Arch](https://img.shields.io/badge/cible-x86__64%20·%20aarch64-blue?style=flat-square)](.)
+[![Arch](https://img.shields.io/badge/cible-x86__64-blue?style=flat-square)](.)
 [![Preuves](https://img.shields.io/badge/preuves-Coq%20·%20TLA%2B-8b5cf6?style=flat-square)](.)
 [![Crypto](https://img.shields.io/badge/crypto-XChaCha20--Poly1305-22c55e?style=flat-square)](.)
 [![Licence](https://img.shields.io/badge/licence-MIT-lightgrey?style=flat-square)](.)
@@ -59,6 +59,15 @@ The detailed closure reports are in:
 - [`docs/kernel/USERSPACE_CONSOLE_SHELL_REPORT.md`](docs/kernel/USERSPACE_CONSOLE_SHELL_REPORT.md)
 - [`docs/kernel/BOOT_PAYLOADS_QEMU_RUNBOOK.md`](docs/kernel/BOOT_PAYLOADS_QEMU_RUNBOOK.md)
 - [`docs/kernel/TIMEKEEPING_TRACE_CLEANUP_REPORT.md`](docs/kernel/TIMEKEEPING_TRACE_CLEANUP_REPORT.md)
+
+v0.2.0 support status: `x86_64` is the only boot-supported architecture. The
+`kernel/src/arch/aarch64/` tree remains a future-port placeholder and is not a
+validated boot target.
+
+Shell status: the ISO shell is [`servers/exosh/`](servers/exosh/). The
+[`userspace/apps/exosh/`](userspace/apps/exosh/) crate is a host prototype only.
+Dynamic linking status: [`loader/`](loader/) is a future `exo-loader` skeleton;
+current Ring1 payloads are statically loaded by `kernel/src/fs/elf_loader_impl.rs`.
 
 ## Boot Milestone
 

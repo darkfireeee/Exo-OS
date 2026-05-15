@@ -98,6 +98,8 @@ pub mod process_flags {
 
 pub use process_flags as ProcessFlags;
 
+pub const PROCESS_NAME_LEN: usize = 16;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenFileTable — table des descripteurs de fichiers ouverts
 // Opaque : les handles sont des indices dans la table fs/.
@@ -391,6 +393,8 @@ pub struct ProcessControlBlock {
     // ── Identité ──────────────────────────────────────────────────────────────
     /// PID du processus.
     pub pid: Pid,
+    /// Nom court issu du binaire exécuté, exposé par SYS_EXO_PROCESS_LIST.
+    pub name: SpinLock<[u8; PROCESS_NAME_LEN]>,
     /// PID du processus parent.
     pub ppid: AtomicU32,
     /// PID du leader de thread group (= pid du premier thread, tgid POSIX).
@@ -502,6 +506,7 @@ impl ProcessControlBlock {
         let files = OpenFileTable::try_new(fd_limit)?;
         try_box_new(ProcessControlBlock {
             pid,
+            name: SpinLock::new([0u8; PROCESS_NAME_LEN]),
             ppid: AtomicU32::new(ppid.0),
             tgid,
             sid: AtomicU32::new(0),
@@ -534,6 +539,86 @@ impl ProcessControlBlock {
     }
 
     // ── Accesseurs d'état ──────────────────────────────────────────────────────
+
+    #[inline]
+    fn copy_normalized_name(dst: &mut [u8; PROCESS_NAME_LEN], src: &[u8]) -> usize {
+        let mut written = 0usize;
+        while written < PROCESS_NAME_LEN && written < src.len() {
+            let b = src[written];
+            if b == 0 {
+                break;
+            }
+            dst[written] = if b == b'-' { b'_' } else { b };
+            written += 1;
+        }
+        written
+    }
+
+    pub fn set_name_bytes(&self, name: &[u8]) {
+        let mut out = [0u8; PROCESS_NAME_LEN];
+        let written = Self::copy_normalized_name(&mut out, name);
+        if written == 0 {
+            let _ = Self::copy_normalized_name(&mut out, b"process");
+        }
+        *self.name.lock() = out;
+    }
+
+    pub fn set_name_from_path(&self, path: &[u8]) {
+        let mut end = 0usize;
+        while end < path.len() && path[end] != 0 {
+            end += 1;
+        }
+
+        let mut start = 0usize;
+        let mut i = 0usize;
+        while i < end {
+            if path[i] == b'/' {
+                start = i + 1;
+            }
+            i += 1;
+        }
+
+        let base = &path[start..end];
+        if base.is_empty() {
+            self.set_name_bytes(b"process");
+            return;
+        }
+
+        if base == b"exo-shield" {
+            self.set_name_bytes(base);
+            return;
+        }
+
+        if base.starts_with(b"exo-") && base.ends_with(b"-server") && base.len() > 11 {
+            let service = &base[4..base.len() - 7];
+            let mut out = [0u8; PROCESS_NAME_LEN];
+            let mut written = Self::copy_normalized_name(&mut out, service);
+            if written < PROCESS_NAME_LEN {
+                out[written] = b'_';
+                written += 1;
+            }
+            let suffix = b"server";
+            let mut s = 0usize;
+            while written < PROCESS_NAME_LEN && s < suffix.len() {
+                out[written] = suffix[s];
+                written += 1;
+                s += 1;
+            }
+            *self.name.lock() = out;
+            return;
+        }
+
+        if base.starts_with(b"exo-") && base.len() > 4 {
+            self.set_name_bytes(&base[4..]);
+        } else {
+            self.set_name_bytes(base);
+        }
+    }
+
+    #[inline]
+    pub fn name_snapshot(&self) -> [u8; PROCESS_NAME_LEN] {
+        *self.name.lock()
+    }
 
     #[inline(always)]
     pub fn state(&self) -> ProcessState {

@@ -1,11 +1,12 @@
-//! # arch/aarch64 — Support AArch64
+//! # arch/aarch64 — Placeholder AArch64
 //!
-//! Module d'architecture pour les cibles AArch64 (ARMv8-A 64 bits).
+//! Module d'architecture minimal pour les cibles AArch64 (ARMv8-A 64 bits).
 //!
 //! ## État
-//! Placeholder — l'implémentation complète sera réalisée lors du portage AArch64.
-//! Les primitives ci-dessous permettent de compiler le kernel pour aarch64
-//! sans erreur de symbole manquant.
+//! Placeholder uniquement. ExoOS v0.2.0 ne declare pas AArch64 comme cible de
+//! boot supportee : pas de VBAR/EL1 complet, pas de GIC/APIC equivalent, pas de
+//! SMP ni ABI syscall AArch64. Les primitives ci-dessous existent seulement pour
+//! garder le port futur localise.
 
 // ── Primitives de base ────────────────────────────────────────────────────────
 

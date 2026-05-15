@@ -724,6 +724,26 @@ fn tree_walk(path: &[u8; PATH_MAX], path_len: usize, depth: usize) {
 
 fn cmd_top() {
     write_all(b"PID  NAME              STATE\n");
+    let mut entries = [syscall::ExoProcessInfo::zeroed(); 64];
+    let count = process_list_snapshot(&mut entries);
+    if count > 0 {
+        let mut idx = 0usize;
+        while idx < count as usize && idx < entries.len() {
+            let entry = entries[idx];
+            write_u32(entry.pid);
+            if entry.pid < 10 {
+                write_all(b"    ");
+            } else {
+                write_all(b"   ");
+            }
+            write_padded(process_entry_name(&entry), 17);
+            write_process_state(entry.state);
+            write_all(b"\n");
+            idx += 1;
+        }
+        return;
+    }
+
     let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
     let mut pid = 1u32;
     while pid <= 64 {
@@ -739,6 +759,41 @@ fn cmd_top() {
             write_all(b"running\n");
         }
         pid += 1;
+    }
+}
+
+fn process_list_snapshot(entries: &mut [syscall::ExoProcessInfo]) -> i64 {
+    unsafe {
+        syscall::syscall3(
+            syscall::SYS_EXO_PROCESS_LIST,
+            entries.as_mut_ptr() as u64,
+            entries.len() as u64,
+            core::mem::size_of::<syscall::ExoProcessInfo>() as u64,
+        )
+    }
+}
+
+fn process_entry_name(entry: &syscall::ExoProcessInfo) -> &[u8] {
+    let mut len = 0usize;
+    while len < entry.name.len() && entry.name[len] != 0 {
+        len += 1;
+    }
+    if len == 0 {
+        b"user_process"
+    } else {
+        &entry.name[..len]
+    }
+}
+
+fn write_process_state(state: u32) {
+    match state {
+        0 => write_all(b"creating"),
+        1 => write_all(b"running"),
+        2 => write_all(b"sleeping"),
+        3 => write_all(b"stopped"),
+        4 => write_all(b"zombie"),
+        5 => write_all(b"dead"),
+        _ => write_all(b"unknown"),
     }
 }
 
@@ -2144,6 +2199,20 @@ fn is_dev_urandom(path: &[u8]) -> bool {
 }
 
 fn service_pid(name: &[u8]) -> Option<u32> {
+    let mut entries = [syscall::ExoProcessInfo::zeroed(); 64];
+    let count = process_list_snapshot(&mut entries);
+    if count > 0 {
+        let mut idx = 0usize;
+        while idx < count as usize && idx < entries.len() {
+            let entry = entries[idx];
+            if bytes_eq(name, process_entry_name(&entry)) {
+                return Some(entry.pid);
+            }
+            idx += 1;
+        }
+        return None;
+    }
+
     let mut pid = 1u32;
     while pid <= 13 {
         if bytes_eq(name, known_process_name(pid, 0)) {

@@ -15,8 +15,9 @@
 //   2. PM Timer window 1ms × 10 samples(rating 200) — port I/O, ±0.05%
 //   3. CPUID leaf 0x15                 (rating 150) — nominal fabricant
 //   4. CPUID leaf 0x16                 (rating 100) — fréquence base MHz
-//   5. PIT one-shot 1ms × 10 samples   (rating  50) — héritage x86
-//   6. Fallback 3 GHz                  (rating  10) — dernier recours
+//   5. KVM/QEMU CPUID hypervisor TSC   (rating  80) — paravirtualisé
+//   6. PIT one-shot 1ms × 10 samples   (rating  50) — héritage x86
+//   7. Fallback 3 GHz                  (rating  10) — dernier recours
 //
 // ## Règles respectées
 //   CAL-FALLBACK-01 : chaque fallback est tracé (port 0xE9 + log interne).
@@ -90,6 +91,7 @@ pub enum CalibSource {
     Cpuid16 = 3,
     Pit = 4,
     Fallback3G = 5,
+    Hypervisor = 6,
     None = 0xFF,
 }
 
@@ -102,6 +104,7 @@ impl CalibSource {
             CalibSource::PmTimer => 200,
             CalibSource::Cpuid15 => 150,
             CalibSource::Cpuid16 => 100,
+            CalibSource::Hypervisor => 80,
             CalibSource::Pit => 50,
             CalibSource::Fallback3G => 10,
             CalibSource::None => 0,
@@ -122,7 +125,10 @@ impl CalibSource {
     pub fn is_trusted(self) -> bool {
         matches!(
             self,
-            CalibSource::Hpet | CalibSource::PmTimer | CalibSource::Cpuid15
+            CalibSource::Hpet
+                | CalibSource::PmTimer
+                | CalibSource::Cpuid15
+                | CalibSource::Hypervisor
         )
     }
 
@@ -136,6 +142,7 @@ impl CalibSource {
             CalibSource::Cpuid16 => b"CPUID16",
             CalibSource::Pit => b"PIT",
             CalibSource::Fallback3G => b"FB3G",
+            CalibSource::Hypervisor => b"KVM-TSC",
             CalibSource::None => b"NONE",
         }
     }
@@ -149,6 +156,7 @@ impl CalibSource {
             3 => CalibSource::Cpuid16,
             4 => CalibSource::Pit,
             5 => CalibSource::Fallback3G,
+            6 => CalibSource::Hypervisor,
             _ => CalibSource::None,
         }
     }
@@ -255,8 +263,9 @@ pub fn recalibrate_tsc() -> u64 {
 ///   1. CPUID 0x15     (ratio TSC/cristal, instantané sous QEMU/KVM)
 ///   2. CPUID 0x16     (base MHz — moins précis)
 ///   3. CPUID best     (cross-check nominal)
-///   4. PIT driver     (fallback port I/O)
-///   5. 3 GHz fallback (dernier recours)
+///   4. KVM/QEMU CPUID hypervisor TSC
+///   5. PIT driver     (fallback port I/O)
+///   6. 3 GHz fallback (dernier recours)
 fn run_calibration_chain() -> CalibratedTsc {
     let seq = CALIB_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let tsc_invariant = cpu_tsc::tsc_invariant();
@@ -328,7 +337,25 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 4 : PIT one-shot via cpu_tsc driver (port I/O, fiable QEMU) ──
+    // ── Tentative 4 : KVM/QEMU hypervisor TSC frequency ─────────────────────
+    if let Some(hz) = cpuid_nominal::hypervisor_tsc_hz() {
+        if validation::hz_in_range(hz) {
+            let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
+            e9_tag_hz(b"CAL:KVM-TSC", hz);
+            return CalibratedTsc {
+                tsc_hz: round_hz(hz),
+                source: CalibSource::Hypervisor,
+                confidence: 80,
+                variance_hz2: 0,
+                valid_samples: 0,
+                duration_tsc_cycles: duration,
+                tsc_invariant,
+                seq,
+            };
+        }
+    }
+
+    // ── Tentative 5 : PIT one-shot via cpu_tsc driver (port I/O, fiable QEMU) ──
     // Sur QEMU TCG, le PIT canal 2 est bien simulé (port I/O, pas MMIO).
     // Retourne 0 si PIT inactif ou I/O trop lent (QEMU TCG 10K iter × inb).
     {

@@ -176,10 +176,11 @@ fn alloc_guarded_stack(cpu_id: usize, purpose: &'static str) -> u64 {
 pub fn init_tss_for_cpu(cpu_id: usize, kernel_rsp0: u64) {
     assert!(cpu_id < MAX_CPUS, "TSS: cpu_id hors bornes");
 
-    // SAFETY: cpu_id unique par CPU — pas de course entre CPUs différents
-    let tss = unsafe { &mut CPU_TSS[cpu_id] };
-    // SAFETY: même invariant — CPU_STACKS[cpu_id] est exclusif à ce CPU.
-    let stacks = unsafe { &CPU_STACKS[cpu_id] };
+    // SAFETY: cpu_id unique par CPU ; addr_of_mut!/addr_of! évitent de créer
+    // une référence à toute la static mutable.
+    let tss = unsafe { &mut *core::ptr::addr_of_mut!(CPU_TSS[cpu_id]) };
+    // SAFETY: CPU_STACKS[cpu_id] est initialisé statiquement et lu seulement ici.
+    let stacks = unsafe { &*core::ptr::addr_of!(CPU_STACKS[cpu_id]) };
 
     // RSP0 : pile kernel pour les exceptions depuis userspace
     tss.rsp[0] = kernel_rsp0;
@@ -216,7 +217,7 @@ pub fn init_tss_for_cpu(cpu_id: usize, kernel_rsp0: u64) {
 /// `cpu_id` doit être < MAX_CPUS et le TSS doit avoir été initialisé.
 pub unsafe fn tss_ptr(cpu_id: usize) -> *const TaskStateSegment {
     // SAFETY: délégué à l'appelant
-    unsafe { &CPU_TSS[cpu_id] as *const _ }
+    unsafe { core::ptr::addr_of!(CPU_TSS[cpu_id]) }
 }
 
 /// Retourne un pointeur mutable vers le TSS du CPU `cpu_id`
@@ -225,7 +226,7 @@ pub unsafe fn tss_ptr(cpu_id: usize) -> *const TaskStateSegment {
 /// Idem `tss_ptr`. De plus, l'appelant garantit l'absence de race.
 pub unsafe fn tss_ptr_mut(cpu_id: usize) -> *mut TaskStateSegment {
     // SAFETY: délégué à l'appelant
-    unsafe { &mut CPU_TSS[cpu_id] as *mut _ }
+    unsafe { core::ptr::addr_of_mut!(CPU_TSS[cpu_id]) }
 }
 
 /// Met à jour RSP0 dans le TSS courant (après context switch)
@@ -279,7 +280,7 @@ pub fn validate_ist_alignment(cpu_id: usize) -> Result<(), &'static str> {
     // dont l'index cpu_id n'est accédé qu'en lecture ici — pas de race possible.
     // SAFETY: Lecture non-concurrente d'un TSS initialisé par ce CPU.
     // Utilise read_unaligned car TaskStateSegment est repr(packed).
-    let tss_ptr = unsafe { &CPU_TSS[cpu_id] as *const TaskStateSegment };
+    let tss_ptr = unsafe { core::ptr::addr_of!(CPU_TSS[cpu_id]) };
     let ist_copy: [u64; 7] =
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*tss_ptr).ist)) };
 

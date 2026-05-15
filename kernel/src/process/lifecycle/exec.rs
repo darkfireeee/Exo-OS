@@ -339,6 +339,7 @@ pub fn do_execve(
     pcb.brk_start.store(elf_result.brk_start, Ordering::Release);
     pcb.brk_current
         .store(elf_result.brk_start, Ordering::Release);
+    pcb.set_name_from_path(path.as_bytes());
 
     // Marquer EXEC_DONE et retirer FORKED.
     pcb.flags.fetch_or(

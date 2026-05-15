@@ -37,8 +37,9 @@
 //! - **SIGNAL-01 (DOC1)** : livraison des signaux uniquement au retour vers
 //!   userspace, via `dispatch::post_dispatch()`.
 //! - **SCHED-03 (DOC3)** : futex logé dans `memory::utils::futex_table`.
-//! - **regle_bonus** : ordonnancement des verrous IPC < Sched < Mem < FS ;
-//!   chaque `unsafe` précédé de `// SAFETY:`.
+//! - **regle_bonus** : ordonnancement des verrous Memory < Sched < Security < IPC < FS
+//!   (= Memory acquis en premier, FS acquis en dernier) ; chaque `unsafe` précédé
+//!   de `// SAFETY:`.
 //! - **NO-ALLOC** sur les chemins chauds (`fast_path`, dispatch fast branch).
 
 pub mod compat;
@@ -122,6 +123,8 @@ pub use numbers::{
     // Numéros Exo-OS natifs
     SYS_EXO_IPC_SEND,
     SYS_EXO_LOG,
+    SYS_EXO_PHOENIX_STATE_SET,
+    SYS_EXO_PROCESS_LIST,
     SYS_FORK,
     SYS_FSTAT,
     SYS_FUTEX,

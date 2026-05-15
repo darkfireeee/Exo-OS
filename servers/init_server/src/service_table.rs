@@ -120,18 +120,18 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         critical: true,
     },
     ServiceMetadata {
-        name: "exosh",
-        bin_path: EXOSH_BIN,
-        requires: DEPS_EXOSH,
-        ready_timeout_ms: 500,
-        critical: true,
-    },
-    ServiceMetadata {
         name: "exo_shield",
         bin_path: EXO_SHIELD_BIN,
         requires: DEPS_EXO_SHIELD,
         ready_timeout_ms: 1_000,
         critical: false,
+    },
+    ServiceMetadata {
+        name: "exosh",
+        bin_path: EXOSH_BIN,
+        requires: DEPS_EXOSH,
+        ready_timeout_ms: 500,
+        critical: true,
     },
 ];
 

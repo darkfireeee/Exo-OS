@@ -50,6 +50,7 @@ pub const CRYSTAL_FREQ_100MHZ: u64 = 100_000_000;
 pub const TSC_MIN_HZ: u64 = 100_000_000;
 /// Fréquence maximum acceptable pour un TSC nominal [10 GHz].
 pub const TSC_MAX_HZ: u64 = 10_000_000_000;
+const KVM_TSC_FREQ_LEAF: u32 = 0x4000_0010;
 
 // ── Résultats détaillés ────────────────────────────────────────────────────────
 
@@ -176,6 +177,27 @@ pub fn cpuid_best_estimate() -> Option<u64> {
         return Some(hz);
     }
     cpuid_tsc_hz_leaf16()
+}
+
+/// Tente de lire la fréquence TSC publiée par l'hyperviseur KVM/QEMU.
+///
+/// Leaf 0x4000_0010 : EAX = TSC frequency en kHz. Cette source évite le
+/// fallback fixe lorsque QEMU expose une fréquence paravirtualisée mais ne
+/// fournit pas les leaves fabricants 0x15/0x16.
+pub fn hypervisor_tsc_hz() -> Option<u64> {
+    if max_hypervisor_leaf() < KVM_TSC_FREQ_LEAF {
+        return None;
+    }
+    let (eax, _ebx, _ecx, _edx) = read_cpuid_leaf(KVM_TSC_FREQ_LEAF, 0);
+    if eax == 0 {
+        return None;
+    }
+    let hz = (eax as u64).saturating_mul(1_000);
+    if hz < TSC_MIN_HZ || hz > TSC_MAX_HZ {
+        None
+    } else {
+        Some(hz)
+    }
 }
 
 // ── Implémentation interne leaf 0x15 ─────────────────────────────────────────
@@ -326,6 +348,44 @@ fn max_cpuid_leaf() -> u32 {
         );
     }
     max
+}
+
+/// Retourne le max leaf CPUID hyperviseur supporté.
+fn max_hypervisor_leaf() -> u32 {
+    let max: u32;
+    // SAFETY: CPUID leaf hyperviseur, non-privilégié.
+    unsafe {
+        core::arch::asm!(
+            "push rbx", "cpuid", "pop rbx",
+            inout("eax") 0x4000_0000u32 => max,
+            inout("ecx") 0u32 => _,
+            out("edx") _,
+            options(nostack, nomem)
+        );
+    }
+    max
+}
+
+fn read_cpuid_leaf(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
+    let eax_out: u32;
+    let ebx_out: u32;
+    let ecx_out: u32;
+    let edx_out: u32;
+    // SAFETY: CPUID non-privilégié. RBX est préservé car réservé par LLVM en PIC.
+    unsafe {
+        core::arch::asm!(
+            "push rbx",
+            "cpuid",
+            "mov {ebx_r:e}, ebx",
+            "pop rbx",
+            inout("eax") leaf => eax_out,
+            inout("ecx") subleaf => ecx_out,
+            out("edx") edx_out,
+            ebx_r = out(reg) ebx_out,
+            options(nostack, nomem)
+        );
+    }
+    (eax_out, ebx_out, ecx_out, edx_out)
 }
 
 /// Lit CPUID leaf 0x15 en préservant rbx.

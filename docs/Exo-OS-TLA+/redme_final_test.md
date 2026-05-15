@@ -13,7 +13,7 @@
 
 [![Status](https://img.shields.io/badge/status-en%20développement-orange?style=flat-square)](.)
 [![Rust](https://img.shields.io/badge/Rust-no__std%20nightly-orange?style=flat-square&logo=rust)](.)
-[![Arch](https://img.shields.io/badge/cible-x86__64%20·%20aarch64-blue?style=flat-square)](.)
+[![Arch](https://img.shields.io/badge/cible-x86__64-blue?style=flat-square)](.)
 [![Preuves](https://img.shields.io/badge/preuves-Coq%20·%20TLA%2B-8b5cf6?style=flat-square)](.)
 [![Crypto](https://img.shields.io/badge/crypto-XChaCha20--Poly1305-22c55e?style=flat-square)](.)
 [![Licence](https://img.shields.io/badge/licence-MIT-lightgrey?style=flat-square)](.)

@@ -57,6 +57,7 @@ pub struct CowTracker {
     pub tracked_count: AtomicU64,
     pub inc_count: AtomicU64,
     pub dec_count: AtomicU64,
+    pub overflow_count: AtomicU64,
     pub collision_max: AtomicU32,
 }
 
@@ -78,9 +79,35 @@ impl CowTracker {
             tracked_count: AtomicU64::new(0),
             inc_count: AtomicU64::new(0),
             dec_count: AtomicU64::new(0),
+            overflow_count: AtomicU64::new(0),
             collision_max: AtomicU32::new(0),
         }
     }
+
+    #[cfg(target_arch = "x86_64")]
+    fn log_overflow(count: u64) {
+        if count == 1 || count.is_power_of_two() {
+            crate::arch::x86_64::terminal::debug_write(b"[COW:OVF count=");
+            let mut buf = [0u8; 20];
+            let mut value = count;
+            let mut pos = buf.len();
+            if value == 0 {
+                pos -= 1;
+                buf[pos] = b'0';
+            } else {
+                while value > 0 && pos > 0 {
+                    pos -= 1;
+                    buf[pos] = b'0' + (value % 10) as u8;
+                    value /= 10;
+                }
+            }
+            crate::arch::x86_64::terminal::debug_write(&buf[pos..]);
+            crate::arch::x86_64::terminal::debug_write(b"]\n");
+        }
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn log_overflow(_count: u64) {}
 
     /// Hash d'un numéro de frame FNV-1a (rapide, pas de division).
     #[inline]
@@ -132,6 +159,8 @@ impl CowTracker {
             collisions += 1;
         }
         // Table pleine — cas dégénéré.
+        let overflow = self.overflow_count.fetch_add(1, Ordering::Relaxed) + 1;
+        Self::log_overflow(overflow);
         Err(CowTrackerError::TableFull)
     }
 
@@ -215,6 +244,11 @@ impl CowTracker {
     #[inline]
     pub fn is_shared(&self, frame: Frame) -> bool {
         self.ref_count(frame) >= 2
+    }
+
+    #[inline]
+    pub fn overflow_count(&self) -> u64 {
+        self.overflow_count.load(Ordering::Relaxed)
     }
 }
 

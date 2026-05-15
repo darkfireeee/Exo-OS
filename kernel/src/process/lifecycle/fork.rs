@@ -522,6 +522,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     if let Some(cloned_files) = cloned_files {
         *child_pcb.files.lock() = cloned_files;
     }
+    child_pcb.set_name_bytes(&parent_pcb.name_snapshot());
     child_pcb.set_main_thread_ptr(child_thread_ptr);
 
     // Copier les namespaces.

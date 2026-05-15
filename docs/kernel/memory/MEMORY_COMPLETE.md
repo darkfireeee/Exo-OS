@@ -594,10 +594,11 @@ Regroupe les écritures swap consécutives en une seule I/O vectorielle
 ## 10. cow/ — Copy-on-Write
 
 ### `tracker.rs`
-Table de hachage `COW_TABLE_SIZE = 4096` entrées.
+Table de hachage `COW_TABLE_SIZE = 65536` entrées.
 - Clé : numéro de frame.
 - Valeur : refcount CoW (AtomicU32).
-- Lock-free : CAS sur `frame_idx` pour insertion/suppression.
+- Mutations sérialisées par le mutex interne du tracker pendant la fenêtre v0.2.0.
+- Saturation observable : chaque échec d'insertion incrémente `overflow_count`; le kernel émet `[COW:OVF count=N]` au premier overflow puis aux puissances de deux pour rendre la limite visible sans noyer le log.
 
 ### `breaker.rs`
 Réalise la rupture CoW lors d'une faute d'écriture :

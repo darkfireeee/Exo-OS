@@ -3,6 +3,7 @@ use crate::driver_link::DriverLink;
 use crate::smoltcp_iface::SmoltcpIface;
 use crate::tcp_store::TcpStateStore;
 use crate::virtio_device::ExoNetDevice;
+use exo_syscall_abi as syscall;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PhoenixPhase {
@@ -26,6 +27,17 @@ impl IsolationState {
         self.phase
     }
 
+    fn sync_kernel_phase(phase: PhoenixPhase) {
+        let state = match phase {
+            PhoenixPhase::Normal => syscall::EXO_PHOENIX_STATE_NORMAL,
+            PhoenixPhase::Draining => syscall::EXO_PHOENIX_STATE_NETWORK_DRAINING,
+            PhoenixPhase::Serialized => syscall::EXO_PHOENIX_STATE_NETWORK_SERIALIZED,
+        };
+        // SAFETY: best-effort kernel state synchronization; failures keep the
+        // network server local phase coherent and are observed by later health checks.
+        let _ = unsafe { syscall::syscall1(syscall::SYS_EXO_PHOENIX_STATE_SET, state) };
+    }
+
     pub fn prepare(
         &mut self,
         iface: &mut SmoltcpIface,
@@ -35,13 +47,16 @@ impl IsolationState {
         store: &mut TcpStateStore,
     ) {
         self.phase = PhoenixPhase::Draining;
+        Self::sync_kernel_phase(self.phase);
         iface.drain_all(device, pool);
         driver.flush_released(device);
         store.clear();
         self.phase = PhoenixPhase::Serialized;
+        Self::sync_kernel_phase(self.phase);
     }
 
     pub fn restore(&mut self) {
         self.phase = PhoenixPhase::Normal;
+        Self::sync_kernel_phase(self.phase);
     }
 }

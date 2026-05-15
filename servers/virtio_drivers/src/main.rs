@@ -1,6 +1,11 @@
 #![no_std]
 #![no_main]
 
+// v0.2.0 contract:
+// this Ring1 service is a lifecycle/status endpoint only. Real virtio_blk I/O
+// is still owned by the kernel driver at drivers/storage/virtio_blk, not routed
+// through this IPC server.
+
 use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 
