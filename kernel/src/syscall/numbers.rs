@@ -307,10 +307,20 @@ pub const SYS_EXO_IPC_CREATE: u64 = 304;
 pub const SYS_EXO_IPC_DESTROY: u64 = 305;
 /// Résoudre un endpoint IPC par nom
 pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
+/// Copier depuis l'espace d'adressage d'un PID vers le processus appelant
+pub const SYS_EXO_MEM_COPY_FROM_PID: u64 = 307;
+/// Copier depuis le processus appelant vers l'espace d'adressage d'un PID
+pub const SYS_EXO_MEM_COPY_TO_PID: u64 = 308;
 /// Partager une page de mémoire via capability
 pub const SYS_EXO_MEM_SHARE: u64 = 310;
 /// Révoquer un partage mémoire
 pub const SYS_EXO_MEM_REVOKE: u64 = 311;
+/// Mapper une VMA dans l'espace d'un PID cible depuis memory_server
+pub const SYS_EXO_MEM_MAP_PID: u64 = 312;
+/// Démapper une VMA dans l'espace d'un PID cible depuis memory_server
+pub const SYS_EXO_MEM_MUNMAP_PID: u64 = 313;
+/// Modifier les protections d'une VMA d'un PID cible depuis memory_server
+pub const SYS_EXO_MEM_MPROTECT_PID: u64 = 314;
 /// Obtenir une capability
 pub const SYS_EXO_CAP_CREATE: u64 = 320;
 /// Déléguer une capability à un autre processus
@@ -335,6 +345,8 @@ pub const SYS_EXO_LOG: u64 = 350;
 pub const SYS_EXO_PROCESS_LIST: u64 = 351;
 /// Synchroniser l'état Phoenix global depuis un serveur root
 pub const SYS_EXO_PHOENIX_STATE_SET: u64 = 352;
+/// Lire l'état Phoenix global
+pub const SYS_EXO_PHOENIX_STATE_GET: u64 = 353;
 /// Sonde eBPF Exo-OS
 pub const SYS_EXO_BPF: u64 = 360;
 
@@ -490,6 +502,8 @@ pub const EISDIR: i64 = -21;
 pub const ENOSPC: i64 = -28;
 /// Opération non supportée
 pub const ENOTSUP: i64 = -95;
+/// Alias POSIX/Linux de ENOTSUP
+pub const EOPNOTSUPP: i64 = -95;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers de classification

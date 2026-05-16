@@ -17,10 +17,6 @@ use crate::memory::virt::page_table::{phys_to_table_mut, phys_to_table_ref};
 extern "C" {
     fn syscall_entry_asm();
     fn syscall_cstar_noop();
-    fn exc_page_fault_handler();
-    fn exc_double_fault_handler();
-    fn exc_nmi_handler();
-    fn irq_timer_handler();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,34 +204,11 @@ pub unsafe fn build_user_shadow_pml4(
         false,
         true,
     )?;
-    map_transition_page(
-        source_pml4_phys,
-        user_pml4,
-        exc_page_fault_handler as *const () as u64,
-        false,
-        true,
-    )?;
-    map_transition_page(
-        source_pml4_phys,
-        user_pml4,
-        exc_double_fault_handler as *const () as u64,
-        false,
-        true,
-    )?;
-    map_transition_page(
-        source_pml4_phys,
-        user_pml4,
-        exc_nmi_handler as *const () as u64,
-        false,
-        true,
-    )?;
-    map_transition_page(
-        source_pml4_phys,
-        user_pml4,
-        irq_timer_handler as *const () as u64,
-        false,
-        true,
-    )?;
+    // Tous les handlers installés dans l'IDT doivent être exécutables pendant
+    // que CR3 pointe encore vers la PML4 user: exceptions 0..31, IRQ 32..47,
+    // IPIs, spurious IRQ et vecteurs ExoPhoenix. La source canonique est l'IDT,
+    // ce qui évite d'oublier un nouveau stub lors d'un ajout de vecteur.
+    map_idt_handler_pages(source_pml4_phys, user_pml4)?;
 
     map_transition_page(
         source_pml4_phys,
@@ -331,6 +304,20 @@ unsafe fn map_transition_page(
     map_phys_page(user_pml4, virt, phys, writable, executable)
 }
 
+unsafe fn map_idt_handler_pages(
+    kernel_pml4_phys: PhysAddr,
+    user_pml4: &mut PageTable,
+) -> Result<(), AllocError> {
+    for vector in 0u16..=255 {
+        if let Some(handler) = crate::arch::x86_64::idt::get_handler_addr(vector as u8) {
+            if handler != 0 {
+                map_transition_page(kernel_pml4_phys, user_pml4, handler, false, true)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 unsafe fn map_stack_window(
     kernel_pml4_phys: PhysAddr,
     user_pml4: &mut PageTable,
@@ -424,7 +411,7 @@ pub fn should_enable_kpti() -> bool {
     };
 
     match features.vendor {
-        CpuVendor::Amd => false,
+        CpuVendor::Amd => !(features.rdcl_no() || features.amd_noreplay()),
         CpuVendor::Intel => !(features.has_arch_cap() && features.rdcl_no()),
         CpuVendor::Unknown => true,
     }

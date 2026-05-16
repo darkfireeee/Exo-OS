@@ -1,6 +1,8 @@
 use super::{dependency, log, service_manager, supervisor, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
+const BOOT_PHASE_TIMEOUT_MS: u64 = 30_000;
+const CLOCK_MONOTONIC: u64 = 1;
 
 #[repr(C)]
 struct Timespec {
@@ -18,6 +20,27 @@ fn sleep_ms(ms: u64) {
     unsafe {
         let _ = syscall::syscall2(syscall::SYS_NANOSLEEP, &ts as *const Timespec as u64, 0);
     }
+}
+
+#[inline]
+fn monotonic_ms() -> u64 {
+    let mut ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_CLOCK_GETTIME,
+            CLOCK_MONOTONIC,
+            &mut ts as *mut Timespec as u64,
+        )
+    };
+    if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000)
+        .saturating_add((ts.tv_nsec as u64) / 1_000_000)
 }
 
 #[inline]
@@ -106,8 +129,32 @@ pub unsafe fn wait_for_ipc_ready(service_name: &str, pid: u32, timeout_ms: u64) 
 /// La dépendance est volontairement stricte : chaque service doit être vivant
 /// et stabilisé avant le lancement du suivant.
 pub unsafe fn boot_services(services: &[Service]) -> usize {
+    let boot_start = monotonic_ms();
     let mut progress = true;
     while progress {
+        let now = monotonic_ms();
+        if boot_start != 0 && now.saturating_sub(boot_start) >= BOOT_PHASE_TIMEOUT_MS {
+            log::line(b"init: service graph timeout");
+            let mut report_idx = 0usize;
+            while report_idx < services.len() {
+                if services[report_idx].current_pid() != 0 {
+                    log::service_pid(
+                        b"init: service alive ",
+                        services[report_idx].name,
+                        services[report_idx].current_pid(),
+                    );
+                } else {
+                    log::service_status(
+                        b"init: service pending ",
+                        services[report_idx].name,
+                        b"\n",
+                    );
+                }
+                report_idx += 1;
+            }
+            break;
+        }
+
         progress = false;
 
         let mut idx = 0usize;

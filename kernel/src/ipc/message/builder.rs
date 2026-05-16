@@ -19,8 +19,17 @@ use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 // Constantes
 // ---------------------------------------------------------------------------
 
-/// Taille maximale du payload inline dans un IpcMessage (octets)
-pub const MAX_MSG_INLINE: usize = 4096;
+/// Taille maximale du payload inline dans un IpcMessage (octets).
+///
+/// Doit rester bornée par le slot SPSC (`ipc::core::MAX_MSG_SIZE`) pour éviter
+/// toute troncature silencieuse quand un message builder passe ensuite par le
+/// fast path ring.
+pub const MAX_MSG_INLINE: usize = crate::ipc::core::constants::MAX_MSG_SIZE;
+
+const _: () = assert!(
+    MAX_MSG_INLINE <= crate::ipc::core::constants::MAX_MSG_SIZE,
+    "IpcMessage inline depasse la capacite du ring SPSC"
+);
 
 /// Capacité maximale des descripteurs jointes à un message
 pub const MAX_MSG_DESCRIPTORS: usize = 8;
@@ -57,7 +66,7 @@ impl IpcDescriptor {
 /// Message IPC complet : header + payload inline + descripteurs.
 ///
 /// Struct packed pour faciliter le passage sur les ring buffers.
-/// Total : 4096 + 192 = ~4288 bytes max.
+/// Total : MAX_MSG_INLINE + 192 bytes max.
 #[repr(C, align(64))]
 pub struct IpcMessage {
     // --- Header (64 bytes) ---
@@ -86,7 +95,7 @@ pub struct IpcMessage {
     // --- Descripteurs (8 × 16 octets = 128 bytes) ---
     pub descriptors: [IpcDescriptor; MAX_MSG_DESCRIPTORS],
 
-    // --- Payload inline (jusqu'à 4096 octets) ---
+    // --- Payload inline (borne par le ring SPSC) ---
     payload: [u8; MAX_MSG_INLINE],
 }
 

@@ -423,8 +423,8 @@ pub struct ProcessControlBlock {
     /// ID du thread principal (TID = PID au sens POSIX).
     pub main_thread: ThreadId,
     /// Registre borné des threads du processus, utilisé par exit_group().
-    pub thread_slots: [AtomicPtr<crate::process::core::tcb::ProcessThread>;
-        MAX_THREADS_PER_PROCESS],
+    pub thread_slots:
+        [AtomicPtr<crate::process::core::tcb::ProcessThread>; MAX_THREADS_PER_PROCESS],
 
     // ── Ressources ────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
@@ -848,10 +848,7 @@ impl ProcessControlBlock {
     }
 
     /// Enregistre un thread dans le registre borné du processus.
-    pub fn register_thread_ptr(
-        &self,
-        ptr: *mut crate::process::core::tcb::ProcessThread,
-    ) -> bool {
+    pub fn register_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) -> bool {
         if ptr.is_null() {
             return false;
         }

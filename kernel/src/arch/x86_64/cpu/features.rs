@@ -59,6 +59,8 @@ pub struct CpuFeatureFlags {
     pub extleaf1_ecx: u32,
     /// Extended leaf 80000001 EDX
     pub extleaf1_edx: u32,
+    /// Extended leaf 80000008 EBX
+    pub extleaf8_ebx: u32,
     /// Leaf 0xD subleaf 0 EAX (XSAVE component bitmap)
     pub xsave_features: u32,
     /// Max CPUID basic leaf supporté
@@ -199,6 +201,7 @@ const EXT1_EDX_LM: u32 = 1 << 29; // Long Mode (64-bit)
 const EXT1_ECX_IBRS_AMD: u32 = 1 << 14; // AMD : IBRS/IBPB (CPUID_80000001_ECX)
 const EXT1_ECX_IBPB_AMD: u32 = 1 << 12; // AMD : IBPB standalone
 const EXT1_ECX_VIRT_SSBD: u32 = 1 << 25; // AMD : Virtualized SSBD
+const EXT8_EBX_NOREPLAY: u32 = 1 << 6; // AMD: no rogue data cache replay / RDCL-like immunity
 
 // ── Structure CpuFeatures ─────────────────────────────────────────────────────
 
@@ -300,6 +303,12 @@ impl CpuFeatures {
         } else {
             (0, 0)
         };
+        let ext8_ebx = if max_ext >= 0x8000_0008 {
+            let (_, b, _, _) = cpuid(0x8000_0008);
+            b
+        } else {
+            0
+        };
 
         // XSAVE area size (leaf 0xD subleaf 0, EBX = min size)
         let xsave_area_size = if ecx1 & LEAF1_ECX_XSAVE != 0 && max_basic >= 0xD {
@@ -339,6 +348,7 @@ impl CpuFeatures {
                 leaf7_edx,
                 extleaf1_ecx: ext1_ecx,
                 extleaf1_edx: ext1_edx,
+                extleaf8_ebx: ext8_ebx,
                 xsave_features: if max_basic >= 0xD {
                     cpuid_ex(0xD, 0).0
                 } else {
@@ -571,6 +581,13 @@ impl CpuFeatures {
         self.arch_cap & super::msr::ARCH_CAP_RDCL_NO != 0
     }
 
+    /// AMD CPUID Fn8000_0008_EBX[6] indique l'absence de replay de cache
+    /// exploitable pour les variantes RDCL documentées côté AMD.
+    #[inline(always)]
+    pub fn amd_noreplay(&self) -> bool {
+        self.flags.extleaf8_ebx & EXT8_EBX_NOREPLAY != 0
+    }
+
     /// CPU non vulnérable à Spectre v4 SSB
     #[inline(always)]
     pub fn ssb_no(&self) -> bool {
@@ -628,6 +645,7 @@ impl CpuFeaturesCell {
                     leaf7_edx: 0,
                     extleaf1_ecx: 0,
                     extleaf1_edx: 0,
+                    extleaf8_ebx: 0,
                     xsave_features: 0,
                     max_basic_leaf: 0,
                     max_ext_leaf: 0,

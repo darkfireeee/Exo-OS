@@ -25,7 +25,7 @@ pub mod tss;
 pub mod vga_early;
 pub mod virt;
 
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::ArchInfo;
 use crate::arch::x86_64::cpu::features::cpu_features_or_none;
@@ -46,8 +46,17 @@ pub const PAGE_TABLE_LEVELS: usize = 4;
 
 // ── État global de l'architecture ────────────────────────────────────────────
 
-#[allow(dead_code)]
 static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+pub(crate) fn mark_arch_initialized() {
+    ARCH_INITIALIZED.store(true, Ordering::Release);
+}
+
+#[inline]
+pub fn arch_initialized() -> bool {
+    ARCH_INITIALIZED.load(Ordering::Acquire)
+}
 
 /// Collecte les informations d'architecture post-init
 pub fn arch_info() -> ArchInfo {

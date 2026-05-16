@@ -21,6 +21,43 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+// ─── Contrat de sûreté pour bibliothèques à état ─────────────────────────────
+
+/// Erreur générique retournée lorsqu'une bibliothèque ne peut pas préparer ou
+/// restaurer son état autour d'une bascule ExoPhoenix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhoenixError {
+    Busy,
+    Unsupported,
+    CorruptState,
+}
+
+/// Politique de récupération exigée pour une bibliothèque à état.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PhoenixRecovery {
+    Stateless,
+    RecreateAfterSwitch,
+    SerializeBeforeSwitch,
+    InvalidateBeforeSwitch,
+}
+
+/// Contrat obligatoire pour toute bibliothèque conservant un état inter-IPC.
+pub trait PhoenixSafe {
+    /// Politique déclarative ; utilisée par les tests d'intégration et audits.
+    const RECOVERY: PhoenixRecovery;
+
+    /// Appelé avant la bascule A/B.
+    fn on_pre_switch(&self) -> Result<(), PhoenixError>;
+
+    /// Appelé après la bascule sur le kernel actif.
+    fn on_post_switch(&self) -> Result<(), PhoenixError>;
+
+    /// Indique si la bibliothèque ne conserve aucun état à restaurer.
+    fn is_stateless(&self) -> bool {
+        matches!(Self::RECOVERY, PhoenixRecovery::Stateless)
+    }
+}
+
 // ─── Adresse + taille ─────────────────────────────────────────────────────────
 
 /// Adresse physique de base de la SSR.

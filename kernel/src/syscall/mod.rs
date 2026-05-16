@@ -123,6 +123,9 @@ pub use numbers::{
     // Numéros Exo-OS natifs
     SYS_EXO_IPC_SEND,
     SYS_EXO_LOG,
+    SYS_EXO_MEM_COPY_FROM_PID,
+    SYS_EXO_MEM_COPY_TO_PID,
+    SYS_EXO_PHOENIX_STATE_GET,
     SYS_EXO_PHOENIX_STATE_SET,
     SYS_EXO_PROCESS_LIST,
     SYS_FORK,

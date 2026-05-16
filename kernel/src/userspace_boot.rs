@@ -243,6 +243,7 @@ pub fn boot_userspace() -> BootUserspaceStatus {
     debug_byte(b'C');
     match create_init_process_from_elf(elf) {
         Ok(handle) => {
+            crate::exophoenix::set_state(crate::exophoenix::PhoenixState::Normal);
             debug_byte(b'D');
             BootUserspaceStatus::Started {
                 payloads_seeded,

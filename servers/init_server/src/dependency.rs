@@ -30,6 +30,13 @@ where
     service.requires.iter().copied().all(|dep| has_service(dep))
 }
 
+#[inline]
+pub fn optional_dependencies(name: &str) -> &'static [&'static str] {
+    metadata(name)
+        .map(|service| service.requires_optional)
+        .unwrap_or(&[])
+}
+
 #[allow(dead_code)]
 #[inline]
 pub fn is_critical(name: &str) -> bool {

@@ -366,7 +366,12 @@ impl DmaAllocTable {
         Err(DmaError::OutOfMemory)
     }
 
-    fn remove(&mut self, pid: u32, iova: IovaAddr, domain: IommuDomainId) -> Option<DmaAllocRecord> {
+    fn remove(
+        &mut self,
+        pid: u32,
+        iova: IovaAddr,
+        domain: IommuDomainId,
+    ) -> Option<DmaAllocRecord> {
         for slot in &mut self.records {
             if matches!(
                 slot,

@@ -141,6 +141,42 @@ impl PageTableWalker {
         Ok(())
     }
 
+    /// Mappe une huge page 2 MiB au niveau PD.
+    ///
+    /// Utilisé pour la physmap kernel: les tables intermédiaires sont créées
+    /// normalement, mais la feuille est une entrée PD avec le bit PS.
+    pub fn map_huge_2m<A: FrameAllocatorForWalk>(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        flags: PageFlags,
+        alloc: &A,
+    ) -> Result<(), AllocError> {
+        const HUGE_2M: u64 = 2 * 1024 * 1024;
+        if (virt.as_u64() & (HUGE_2M - 1)) != 0 || !phys.is_aligned(HUGE_2M) {
+            return Err(AllocError::InvalidParams);
+        }
+
+        let huge_flags = flags.set(PageFlags::HUGE_PAGE);
+        // SAFETY: pml4_phys est une PML4 valide.
+        let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
+
+        let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, huge_flags)?;
+        // SAFETY: l3_phys pointe sur un PDPT valide ou fraîchement alloué.
+        let pdpt = unsafe { phys_to_table_mut(l3_phys) };
+
+        let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, huge_flags)?;
+        // SAFETY: l2_phys pointe sur un PD valide ou fraîchement alloué.
+        let pd = unsafe { phys_to_table_mut(l2_phys) };
+
+        let entry = &mut pd[virt.p2_index()];
+        if entry.is_present() && !entry.is_huge() {
+            return Err(AllocError::InvalidParams);
+        }
+        *entry = PageTableEntry::from_page_flags(Frame::containing(phys), huge_flags);
+        Ok(())
+    }
+
     /// Démappate `virt`.
     ///
     /// Retourne le frame précédemment mappé, ou `None` si non mappé.
@@ -225,6 +261,61 @@ impl PageTableWalker {
         let frame = entry.frame().ok_or(AllocError::InvalidParams)?;
         *entry = PageTableEntry::from_page_flags(frame, new_flags);
         Ok(())
+    }
+
+    /// Déplace une PTE feuille 4 KiB de `src` vers `dst` sans copier le frame.
+    ///
+    /// Les niveaux intermédiaires de destination sont alloués avant de modifier
+    /// la source, donc un échec d'allocation ne perd pas le mapping d'origine.
+    /// Retourne `Ok(false)` si `src` n'est pas résident (demand paging).
+    pub fn move_leaf<A: FrameAllocatorForWalk>(
+        &mut self,
+        src: VirtAddr,
+        dst: VirtAddr,
+        alloc: &A,
+    ) -> Result<bool, AllocError> {
+        if src.as_u64() == dst.as_u64() {
+            return Ok(true);
+        }
+
+        let Some(src_entry_ptr) = self.leaf_entry_ptr(src) else {
+            return Ok(false);
+        };
+        // SAFETY: le pointeur vient de leaf_entry_ptr() et pointe vers une PTE 4 KiB.
+        let old_entry = unsafe { *src_entry_ptr };
+        if !old_entry.is_present() {
+            return Ok(false);
+        }
+
+        let page_flags = old_entry.to_page_flags();
+
+        // SAFETY: pml4_phys est une PML4 valide.
+        let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
+
+        let l3_phys = self.ensure_table(pml4, dst.p4_index(), alloc, page_flags)?;
+        // SAFETY: l3_phys pointe vers une table valide.
+        let pdpt = unsafe { phys_to_table_mut(l3_phys) };
+
+        let l2_phys = self.ensure_table(pdpt, dst.p3_index(), alloc, page_flags)?;
+        // SAFETY: l2_phys pointe vers une table valide.
+        let pd = unsafe { phys_to_table_mut(l2_phys) };
+
+        let l1_phys = self.ensure_table(pd, dst.p2_index(), alloc, page_flags)?;
+        // SAFETY: l1_phys pointe vers une table valide.
+        let pt = unsafe { phys_to_table_mut(l1_phys) };
+
+        let dst_entry = &mut pt[dst.p1_index()];
+        if dst_entry.is_present() {
+            return Err(AllocError::InvalidParams);
+        }
+
+        *dst_entry = old_entry;
+        // SAFETY: src_entry_ptr pointe toujours vers la PTE source; les tables
+        // intermédiaires restent vivantes pendant toute la vie de l'AS.
+        unsafe {
+            (*src_entry_ptr).clear();
+        }
+        Ok(true)
     }
 
     /// Lit la valeur brute de la PTE feuille 4 KiB pour `virt`.

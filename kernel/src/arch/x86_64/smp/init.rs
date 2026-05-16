@@ -125,6 +125,10 @@ fn boot_ap(dest_apic_id: u8) {
 /// Appelé uniquement depuis le trampoline, en contexte monothread pour ce CPU.
 #[no_mangle]
 pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: u64) -> ! {
+    while !super::super::arch_initialized() {
+        core::hint::spin_loop();
+    }
+
     // 1. Per-CPU data (GS_BASE)
     percpu::init_percpu_for_ap(cpu_id, kernel_stack_top, lapic_id);
 

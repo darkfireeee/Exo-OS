@@ -31,7 +31,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
-const USER_ELF_BASE_MIN: u64 = 0x0000_0100_0000_0000;
+const USER_ELF_BASE_MIN: u64 = 0x0000_0000_0040_0000;
 const ELF_BLOB_REGISTRY_CAP: usize = 1024;
 
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]

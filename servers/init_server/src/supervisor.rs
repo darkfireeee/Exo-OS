@@ -9,7 +9,10 @@ pub fn dependency_ready(services: &[Service], dep: &str) -> bool {
 
 #[inline]
 pub fn can_start(services: &[Service], name: &str) -> bool {
-    dependency::dependencies_satisfied(name, |dep| dependency_ready(services, dep))
+    let optional = dependency::optional_dependencies(name);
+    dependency::dependencies_satisfied(name, |dep| {
+        dependency_ready(services, dep) || optional.contains(&dep)
+    })
 }
 
 #[inline]

@@ -16,7 +16,13 @@ pub enum NetworkPortKind {
     TlsService,
     DnsService,
     DhcpService,
-    NetlinkService,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkVerdict {
+    NativeRing1,
+    Ring3PostV02,
+    Rejected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +31,8 @@ pub struct NetworkPort {
     pub vendor_tree: &'static str,
     pub kind: NetworkPortKind,
     pub exo_boundary: &'static str,
+    pub verdict: NetworkVerdict,
+    pub phoenix_policy: &'static str,
 }
 
 pub const NETWORK_PORTS: &[NetworkPort] = &[
@@ -33,48 +41,56 @@ pub const NETWORK_PORTS: &[NetworkPort] = &[
         vendor_tree: "smoltcp-upstream",
         kind: NetworkPortKind::PacketStack,
         exo_boundary: "network_server/Ring1/no_std",
+        verdict: NetworkVerdict::NativeRing1,
+        phoenix_policy: "serialize-or-drop-active-sockets-before-switch",
     },
     NetworkPort {
         name: "tokio",
         vendor_tree: "tokio-upstream",
         kind: NetworkPortKind::Ring3Runtime,
-        exo_boundary: "Ring3 service runtime",
+        exo_boundary: "Ring3 sync/io types only; no tokio runtime in v0.2",
+        verdict: NetworkVerdict::Ring3PostV02,
+        phoenix_policy: "stateless-types-only",
     },
     NetworkPort {
         name: "hyper",
         vendor_tree: "hyper-upstream",
         kind: NetworkPortKind::HttpService,
         exo_boundary: "Ring3 HTTP service",
+        verdict: NetworkVerdict::Ring3PostV02,
+        phoenix_policy: "recreate-connections-after-switch",
     },
     NetworkPort {
         name: "axum",
         vendor_tree: "axum-upstream",
         kind: NetworkPortKind::HttpService,
         exo_boundary: "Ring3 HTTP router",
+        verdict: NetworkVerdict::Ring3PostV02,
+        phoenix_policy: "recreate-router-state-after-switch",
     },
     NetworkPort {
         name: "rustls",
         vendor_tree: "rustls-upstream",
         kind: NetworkPortKind::TlsService,
         exo_boundary: "crypto_server/network_server TLS handoff",
+        verdict: NetworkVerdict::NativeRing1,
+        phoenix_policy: "discard-session-cache-before-switch",
     },
     NetworkPort {
         name: "hickory-dns",
         vendor_tree: "hickory-dns-upstream",
         kind: NetworkPortKind::DnsService,
         exo_boundary: "network_server DNS client/service",
+        verdict: NetworkVerdict::NativeRing1,
+        phoenix_policy: "flush-dns-cache-before-switch",
     },
     NetworkPort {
         name: "dhcp4r",
         vendor_tree: "dhcp4r-upstream",
         kind: NetworkPortKind::DhcpService,
         exo_boundary: "network_server DHCP service",
-    },
-    NetworkPort {
-        name: "rtnetlink",
-        vendor_tree: "rtnetlink-upstream",
-        kind: NetworkPortKind::NetlinkService,
-        exo_boundary: "Ring3 network configuration service",
+        verdict: NetworkVerdict::NativeRing1,
+        phoenix_policy: "persist-lease-via-capability-or-renew",
     },
 ];
 
@@ -165,6 +181,12 @@ pub fn find_network_port(name: &str) -> Option<&'static NetworkPort> {
     NETWORK_PORTS.iter().find(|port| port.name == name)
 }
 
+pub fn network_port_allowed(name: &str) -> bool {
+    find_network_port(name)
+        .map(|port| port.verdict != NetworkVerdict::Rejected)
+        .unwrap_or(false)
+}
+
 pub fn smoltcp_stress_signature(iterations: u32) -> u64 {
     let mut clock = ExoNetClock::new();
     let mut acc = 0x4558_4f4e_4554_u64;
@@ -184,4 +206,24 @@ pub fn smoltcp_stress_signature(iterations: u32) -> u64 {
             ^ now.millis() as u64;
     }
     acc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rtnetlink_is_removed_from_exoos_network_ports() {
+        assert!(find_network_port("rtnetlink").is_none());
+        assert!(!network_port_allowed("rtnetlink"));
+    }
+
+    #[test]
+    fn native_network_ports_have_phoenix_policy() {
+        for port in NETWORK_PORTS {
+            if port.verdict == NetworkVerdict::NativeRing1 {
+                assert!(!port.phoenix_policy.is_empty());
+            }
+        }
+    }
 }

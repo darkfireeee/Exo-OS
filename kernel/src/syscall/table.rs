@@ -51,7 +51,7 @@ use crate::fs::exofs::syscall::{
     sys_exofs_snapshot_list, sys_exofs_snapshot_mount,
 };
 use crate::ipc::core::types::{EndpointId, IpcError};
-use crate::memory::core::types::PhysAddr;
+use crate::memory::core::{phys_to_virt, PhysAddr, VirtAddr};
 use crate::memory::dma::core::types::{
     DmaDirection, DmaError, DmaMapFlags, IommuDomainId, IovaAddr,
 };
@@ -1901,6 +1901,14 @@ pub fn sys_mremap(
         return ENOMEM;
     }
 
+    match crate::memory::virt::mmap::do_mremap_zero_copy(
+        old_addr, old_len, new_len, flags, new_addr,
+    ) {
+        Ok(crate::memory::virt::mmap::MremapZeroCopy::Moved(addr)) => return addr as i64,
+        Ok(crate::memory::virt::mmap::MremapZeroCopy::Unsupported) => {}
+        Err(e) => return e.to_kernel_errno() as i64,
+    }
+
     let hint = if flags & MREMAP_FIXED != 0 {
         new_addr
     } else {
@@ -2247,15 +2255,15 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
         if tcb_ptr == 0 {
             return EFAULT;
         }
-        let current_tcb =
-            &mut *(tcb_ptr as *mut crate::scheduler::core::task::ThreadControlBlock);
+        let current_tcb = &mut *(tcb_ptr as *mut crate::scheduler::core::task::ThreadControlBlock);
         let pid = crate::process::core::pid::Pid(current_tcb.pid.0);
         let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) else {
             return -3;
         };
 
         pcb.set_exiting();
-        pcb.exit_code.store(exit_code, core::sync::atomic::Ordering::Release);
+        pcb.exit_code
+            .store(exit_code, core::sync::atomic::Ordering::Release);
         pcb.flags.fetch_or(
             crate::process::core::pcb::process_flags::VFORK_DONE,
             core::sync::atomic::Ordering::Release,
@@ -2692,7 +2700,7 @@ pub fn sys_exo_ipc_send(
             return EFAULT;
         }
     }
-    if len == 128 {
+    if len >= crate::ipc::core::constants::ABI_IPC_HEADER_SIZE {
         let caller_pid = crate::syscall::fast_path::syscall_current_pid();
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
@@ -2993,6 +3001,313 @@ fn is_reserved_kernel_ipc(endpoint: u64, payload: &[u8]) -> bool {
 #[inline]
 fn is_kernel_ephemeral_reply_endpoint(endpoint: u64) -> bool {
     endpoint & (1u64 << 63) != 0
+}
+
+fn caller_can_manage_target_memory(caller_pid: u32) -> bool {
+    if caller_pid == 1 {
+        return true;
+    }
+    match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
+        Some(pcb) => process_name_eq(&pcb.name_snapshot(), b"memory_server"),
+        None => false,
+    }
+}
+
+fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
+    if caller_pid == 1 {
+        return true;
+    }
+    match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
+        Some(pcb) => {
+            let name = pcb.name_snapshot();
+            process_name_eq(&name, b"memory_server") || process_name_eq(&name, b"vfs_server")
+        }
+        None => false,
+    }
+}
+
+fn user_as_for_pid(pid: u32) -> Result<&'static crate::memory::virt::UserAddressSpace, i64> {
+    if pid == 0 {
+        return Err(EINVAL);
+    }
+    let pcb = PROCESS_REGISTRY.find_by_pid(Pid(pid)).ok_or(ENOENT)?;
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return Err(ENOMEM);
+    }
+    // SAFETY: le PCB reste dans PROCESS_REGISTRY pendant le syscall et
+    // address_space pointe vers un UserAddressSpace créé par lifecycle/create.
+    Ok(unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) })
+}
+
+fn validate_remote_user_range(addr: u64, len: usize) -> Result<(), i64> {
+    if len == 0 {
+        return Ok(());
+    }
+    if addr == 0 {
+        return Err(EFAULT);
+    }
+    let end = addr.checked_add(len as u64).ok_or(EFAULT)?;
+    if end > crate::syscall::validation::USER_ADDR_MAX {
+        return Err(EFAULT);
+    }
+    Ok(())
+}
+
+fn remote_user_phys(
+    user_as: &crate::memory::virt::UserAddressSpace,
+    addr: u64,
+    write: bool,
+) -> Result<(u64, usize), i64> {
+    use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
+
+    let walker = PageTableWalker::new(user_as.pml4_phys());
+    let virt = VirtAddr::new(addr);
+    let (entry, level) = match walker.walk_read(virt) {
+        WalkResult::Leaf { entry, level } | WalkResult::HugePage { entry, level } => (entry, level),
+        _ => return Err(EFAULT),
+    };
+    if !entry.is_user() || (write && !entry.is_writable()) {
+        return Err(EFAULT);
+    }
+    let page_size = level.page_size();
+    let offset = (addr as usize) & (page_size - 1);
+    Ok((
+        entry.phys_addr().as_u64() + offset as u64,
+        page_size - offset,
+    ))
+}
+
+/// `exo_mem_copy_from_pid(target_pid, remote_src, local_dst, len, flags)`.
+///
+/// Réservé aux serveurs racine qui doivent servir des requêtes IPC avec des
+/// pointeurs appartenant au client. Le buffer local est toujours copié via
+/// `copy_to_user`; le buffer distant est traduit via la PML4 du PID cible.
+pub fn sys_exo_mem_copy_from_pid(
+    target_pid: u64,
+    remote_src: u64,
+    local_dst: u64,
+    len: u64,
+    flags: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_COPY_FROM_PID);
+    if flags != 0 {
+        return EINVAL;
+    }
+    let caller_pid = current_pid_u32();
+    if !caller_can_copy_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(e) = validate_remote_user_range(remote_src, len) {
+        return e;
+    }
+    if let Err(e) = validate_remote_user_range(local_dst, len) {
+        return e;
+    }
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let mut copied = 0usize;
+    let mut scratch = [0u8; 256];
+    while copied < len {
+        let src = remote_src + copied as u64;
+        let (phys, page_avail) = match remote_user_phys(user_as, src, false) {
+            Ok(v) => v,
+            Err(e) => return if copied == 0 { e } else { copied as i64 },
+        };
+        let n = (len - copied).min(page_avail).min(scratch.len());
+        let src_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *const u8;
+        // SAFETY: `remote_user_phys` a validé la traduction du PID cible et
+        // `scratch` est un buffer kernel local de taille `n`.
+        unsafe {
+            core::ptr::copy_nonoverlapping(src_ptr, scratch.as_mut_ptr(), n);
+        }
+        if copy_to_user((local_dst + copied as u64) as *mut u8, scratch.as_ptr(), n).is_err() {
+            return if copied == 0 { EFAULT } else { copied as i64 };
+        }
+        copied += n;
+    }
+    copied as i64
+}
+
+/// `exo_mem_copy_to_pid(target_pid, remote_dst, local_src, len, flags)`.
+pub fn sys_exo_mem_copy_to_pid(
+    target_pid: u64,
+    remote_dst: u64,
+    local_src: u64,
+    len: u64,
+    flags: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_COPY_TO_PID);
+    if flags != 0 {
+        return EINVAL;
+    }
+    let caller_pid = current_pid_u32();
+    if !caller_can_copy_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if let Err(e) = validate_remote_user_range(remote_dst, len) {
+        return e;
+    }
+    if let Err(e) = validate_remote_user_range(local_src, len) {
+        return e;
+    }
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+
+    let mut copied = 0usize;
+    let mut scratch = [0u8; 256];
+    while copied < len {
+        let dst = remote_dst + copied as u64;
+        let (phys, page_avail) = match remote_user_phys(user_as, dst, true) {
+            Ok(v) => v,
+            Err(e) => return if copied == 0 { e } else { copied as i64 },
+        };
+        let n = (len - copied).min(page_avail).min(scratch.len());
+        if copy_from_user(
+            scratch.as_mut_ptr(),
+            (local_src + copied as u64) as *const u8,
+            n,
+        )
+        .is_err()
+        {
+            return if copied == 0 { EFAULT } else { copied as i64 };
+        }
+        let dst_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *mut u8;
+        // SAFETY: `remote_user_phys(..., write=true)` garantit une page user
+        // présente et writable; `scratch` contient `n` octets copiés du caller.
+        unsafe {
+            core::ptr::copy_nonoverlapping(scratch.as_ptr(), dst_ptr, n);
+        }
+        copied += n;
+    }
+    copied as i64
+}
+
+/// `exo_mem_map_pid(target_pid, hint, len, prot, flags)` réservé à memory_server.
+pub fn sys_exo_mem_map_pid(
+    target_pid: u64,
+    hint: u64,
+    len: u64,
+    prot: u64,
+    flags: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_MAP_PID);
+    let caller_pid = current_pid_u32();
+    if !caller_can_manage_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let prot = match checked_u32_sysarg(prot) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let flags = match checked_u32_sysarg(flags) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_mmap_in_as(user_as, hint, len, prot, flags) {
+        Ok(addr) => addr as i64,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+/// `exo_mem_munmap_pid(target_pid, addr)` réservé à memory_server.
+pub fn sys_exo_mem_munmap_pid(
+    target_pid: u64,
+    addr: u64,
+    _len: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_MUNMAP_PID);
+    let caller_pid = current_pid_u32();
+    if !caller_can_manage_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_munmap_in_as(user_as, addr) {
+        Ok(()) => 0,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+/// `exo_mem_mprotect_pid(target_pid, addr, len, prot)` réservé à memory_server.
+pub fn sys_exo_mem_mprotect_pid(
+    target_pid: u64,
+    addr: u64,
+    len: u64,
+    prot: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_MPROTECT_PID);
+    let caller_pid = current_pid_u32();
+    if !caller_can_manage_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let prot = match checked_u32_sysarg(prot) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_mprotect_in_as(user_as, addr, len, prot) {
+        Ok(()) => 0,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
 }
 
 fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> (u64, u64, u64, u64) {
@@ -3452,6 +3767,19 @@ pub fn sys_exo_phoenix_state_set(
     } else {
         EINVAL
     }
+}
+
+/// `exo_phoenix_state_get()` — retourne l'état Phoenix courant.
+pub fn sys_exo_phoenix_state_get(
+    _a1: u64,
+    _a2: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_PHOENIX_STATE_GET);
+    crate::exophoenix::state() as u8 as i64
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4204,12 +4532,18 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_IPC_CREATE => sys_exo_ipc_create,
         SYS_EXO_IPC_DESTROY => sys_exo_ipc_destroy,
         SYS_EXO_IPC_LOOKUP => sys_exo_ipc_lookup,
+        SYS_EXO_MEM_COPY_FROM_PID => sys_exo_mem_copy_from_pid,
+        SYS_EXO_MEM_COPY_TO_PID => sys_exo_mem_copy_to_pid,
+        SYS_EXO_MEM_MAP_PID => sys_exo_mem_map_pid,
+        SYS_EXO_MEM_MUNMAP_PID => sys_exo_mem_munmap_pid,
+        SYS_EXO_MEM_MPROTECT_PID => sys_exo_mem_mprotect_pid,
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_CAP_CHECK => sys_exo_cap_check,
         SYS_EXO_LOG => sys_exo_log,
         SYS_EXO_PROCESS_LIST => sys_exo_process_list,
         SYS_EXO_PHOENIX_STATE_SET => sys_exo_phoenix_state_set,
+        SYS_EXO_PHOENIX_STATE_GET => sys_exo_phoenix_state_get,
         // ── ExoFS (500–518) ────────────────────────────────────────────────
         SYS_EXOFS_PATH_RESOLVE => sys_exofs_path_resolve,
         SYS_EXOFS_OBJECT_OPEN => sys_exofs_object_open,

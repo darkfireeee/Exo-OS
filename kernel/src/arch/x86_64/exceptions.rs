@@ -844,8 +844,9 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // de l'espace utilisateur courant: si une VMA existe, on la résout via le
     // même chemin demand-paging/CoW qu'une faute Ring 3, puis on reprend
     // l'instruction noyau qui accédait au pointeur user.
-    let resolve_as_user =
-        fault_addr.is_user() && !user_as_for_fault.is_null() && (frame.from_userspace() || user_vma_found);
+    let resolve_as_user = fault_addr.is_user()
+        && !user_as_for_fault.is_null()
+        && (frame.from_userspace() || user_vma_found);
     if resolve_as_user {
         ctx.from_kernel = false;
     }

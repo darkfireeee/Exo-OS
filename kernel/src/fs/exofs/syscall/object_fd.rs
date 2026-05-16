@@ -600,7 +600,9 @@ impl ObjectFdTable {
         let inner = unsafe { &mut *self.inner.get() };
         let r = match inner.get_entry(oldfd) {
             Ok(entry) if owner_matches(entry, owner) => match inner.get_entry(newfd) {
-                Ok(existing) if !owner_matches(existing, owner) => Err(ExofsError::PermissionDenied),
+                Ok(existing) if !owner_matches(existing, owner) => {
+                    Err(ExofsError::PermissionDenied)
+                }
                 _ => inner.dup2_fd(oldfd, newfd),
             },
             Ok(_) => Err(ExofsError::PermissionDenied),

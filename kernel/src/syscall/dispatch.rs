@@ -336,6 +336,10 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
 /// 2. Échantillonne la latence dispatch (1/256) pour éviter la contention atomique.
 #[inline]
 fn post_dispatch(frame: &mut SyscallFrame, tsc_start: u64) {
+    if (frame.rax as i64) < 0 {
+        crate::arch::x86_64::syscall::record_syscall_error();
+    }
+
     // ── Livraison de signaux pending (RÈGLE SIGNAL-01) ────────────────────
     check_and_deliver_signals(frame);
 

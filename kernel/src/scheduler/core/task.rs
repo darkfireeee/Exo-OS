@@ -614,8 +614,10 @@ impl ThreadControlBlock {
 
     #[inline(always)]
     pub fn mark_exiting(&self) {
-        self.sched_state
-            .fetch_or(SCHED_EXITING_BIT | SCHED_NEED_RESCHED_BIT, Ordering::Release);
+        self.sched_state.fetch_or(
+            SCHED_EXITING_BIT | SCHED_NEED_RESCHED_BIT,
+            Ordering::Release,
+        );
     }
 
     #[inline(always)]

@@ -408,3 +408,7 @@ pub fn syscall_count() -> u64 {
 pub fn syscall_error_count() -> u64 {
     SYSCALL_ERROR_COUNT.load(Ordering::Relaxed)
 }
+
+pub fn record_syscall_error() {
+    SYSCALL_ERROR_COUNT.fetch_add(1, Ordering::Relaxed);
+}

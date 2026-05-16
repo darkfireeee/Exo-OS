@@ -33,10 +33,13 @@ pub mod tests;
 use crate::fs::exofs::core::error::ExofsError;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
 use crate::fs::exofs::syscall::epoch_commit::{do_shutdown_commit, epoch_flags, EpochCommitArgs};
+use crate::fs::exofs::{cache::BLOB_CACHE, syscall::object_store};
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
 use crate::scheduler::core::task::Priority;
 
 use ::core::sync::atomic::{AtomicBool, Ordering};
+
+const EXOFS_WRITEBACK_INTERVAL_NS: u64 = 5_000_000_000;
 
 /// Macro de log noyau — no-op en attendant le système de log Ring-0.
 #[allow(unused_macros)]
@@ -93,6 +96,14 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     };
     // Ignorer l'erreur si le scheduler n'est pas encore actif au boot
     let _ = create_kthread(&gc_params);
+    let writeback_params = KthreadParams {
+        name: "exofs-writeback",
+        entry: exofs_writeback_kthread,
+        arg: 0,
+        target_cpu: 0,
+        priority: Priority(128),
+    };
+    let _ = create_kthread(&writeback_params);
 
     log_kernel!(
         "[exofs] initialisé — disk_size={} MB",
@@ -121,6 +132,45 @@ fn exofs_gc_kthread(_arg: usize) -> ! {
         }
 
         gc_backoff();
+    }
+}
+
+fn exofs_writeback_kthread(_arg: usize) -> ! {
+    gc_backoff();
+
+    loop {
+        let _ = exofs_writeback_dirty();
+        if !crate::scheduler::timer::sleep_ns(EXOFS_WRITEBACK_INTERVAL_NS) {
+            gc_backoff();
+        }
+    }
+}
+
+fn exofs_writeback_dirty() -> Result<(), ExofsError> {
+    let dirty = BLOB_CACHE.collect_dirty();
+    if dirty.is_empty() {
+        return Ok(());
+    }
+
+    let mut io_err = false;
+    let mut i = 0usize;
+    while i < dirty.len() {
+        let (blob_id, ref data) = dirty[i];
+        match object_store::persist_blob_data_if_disk(blob_id, data, true) {
+            Ok(_) => {
+                let _ = BLOB_CACHE.mark_clean(&blob_id);
+            }
+            Err(_) => {
+                io_err = true;
+            }
+        }
+        i = i.wrapping_add(1);
+    }
+
+    if io_err {
+        Err(ExofsError::IoError)
+    } else {
+        Ok(())
     }
 }
 

@@ -160,6 +160,9 @@ impl PageTableEntry {
         if flags.contains(PageFlags::PINNED) {
             raw |= Self::FLAG_PINNED;
         }
+        if flags.contains(PageFlags::HUGE_PAGE) {
+            raw |= Self::FLAG_HUGE_PAGE;
+        }
         PageTableEntry(raw)
     }
 
@@ -186,6 +189,9 @@ impl PageTableEntry {
         }
         if self.0 & Self::FLAG_DIRTY != 0 {
             f = f.set(PageFlags::DIRTY);
+        }
+        if self.0 & Self::FLAG_HUGE_PAGE != 0 {
+            f = f.set(PageFlags::HUGE_PAGE);
         }
         if self.0 & Self::FLAG_GLOBAL != 0 {
             f = f.set(PageFlags::GLOBAL);

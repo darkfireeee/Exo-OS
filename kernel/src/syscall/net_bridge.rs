@@ -304,9 +304,7 @@ fn msghdr_total_iov_len(msg: &LinuxMsghdr) -> Result<usize, i64> {
         if iov.iov_len != 0 && iov.iov_base == 0 {
             return Err(EFAULT);
         }
-        total = total
-            .checked_add(iov.iov_len as usize)
-            .ok_or(EINVAL)?;
+        total = total.checked_add(iov.iov_len as usize).ok_or(EINVAL)?;
         idx += 1;
     }
     Ok(total)

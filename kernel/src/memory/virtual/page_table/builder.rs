@@ -5,7 +5,7 @@
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
 use crate::memory::core::{
-    AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE,
+    AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr, HUGE_PAGE_SIZE, PAGE_SIZE,
 };
 use crate::memory::virt::page_table::walker::{FrameAllocatorForWalk, PageTableWalker};
 use crate::memory::virt::page_table::x86_64::{phys_to_table_mut, read_cr3};
@@ -75,13 +75,26 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
     /// `phys_size` est la taille totale de RAM détectée.
     pub fn map_physmap(&mut self, phys_size: u64) -> Result<&mut Self, AllocError> {
         let phys_map_base = crate::memory::core::layout::PHYS_MAP_BASE;
-        let n_pages = (phys_size as usize + PAGE_SIZE - 1) / PAGE_SIZE;
         let flags = PageFlags::KERNEL_DATA;
-        for i in 0..n_pages {
-            let v = VirtAddr::new(phys_map_base.as_u64() + (i * PAGE_SIZE) as u64);
-            let p = PhysAddr::new((i * PAGE_SIZE) as u64);
-            self.walker
-                .map(v, Frame::containing(p), flags, self.alloc)?;
+
+        let page_size = PAGE_SIZE as u64;
+        let huge_size = HUGE_PAGE_SIZE as u64;
+        let mut offset = 0u64;
+        while offset < phys_size {
+            let remaining = phys_size - offset;
+            let virt = VirtAddr::new(phys_map_base.as_u64() + offset);
+            let phys = PhysAddr::new(offset);
+            if remaining >= huge_size
+                && (virt.as_u64() & (huge_size - 1)) == 0
+                && phys.is_aligned(huge_size)
+            {
+                self.walker.map_huge_2m(virt, phys, flags, self.alloc)?;
+                offset = offset.saturating_add(huge_size);
+            } else {
+                self.walker
+                    .map(virt, Frame::containing(phys), flags, self.alloc)?;
+                offset = offset.saturating_add(page_size);
+            }
         }
         Ok(self)
     }

@@ -19,6 +19,8 @@ fn syscall_contract_standard_exofs_and_core_numbers() {
 
     assert_eq!(abi::SYS_EXO_IPC_SEND, 300);
     assert_eq!(abi::SYS_EXO_MEM_SHARE, 310);
+    assert_eq!(abi::SYS_EXO_MEM_MAP_PID, 312);
+    assert_eq!(abi::SYS_EXO_MEM_MPROTECT_PID, 314);
     assert_eq!(abi::SYS_EXO_CAP_CHECK, 323);
     assert_eq!(abi::SYS_EXO_LOG, 350);
     assert_eq!(abi::SYS_EXO_PROCESS_LIST, 351);

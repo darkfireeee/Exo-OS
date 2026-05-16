@@ -45,6 +45,7 @@ impl RegionEntry {
 #[derive(Clone, Copy)]
 pub struct RegionSnapshot {
     pub handle: u64,
+    pub base_addr: u64,
     pub length: u64,
     pub prot: u32,
     pub flags: u32,
@@ -86,10 +87,8 @@ impl MemoryService {
         loop {
             let seq = self.next_handle;
             self.next_handle = self.next_handle.wrapping_add(1).max(1);
-            let mut x = seq
-                ^ ((owner_pid as u64) << 32)
-                ^ ((slot_idx as u64) << 48)
-                ^ HANDLE_MIX_KEY;
+            let mut x =
+                seq ^ ((owner_pid as u64) << 32) ^ ((slot_idx as u64) << 48) ^ HANDLE_MIX_KEY;
             x ^= x >> 30;
             x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
             x ^= x >> 27;
@@ -121,16 +120,16 @@ impl MemoryService {
             RegionKind::Shared => syscall::MAP_SHARED | syscall::MAP_ANONYMOUS,
         } | extra_flags as u64;
 
-        // SAFETY: allocation locale de backing store dans le serveur mémoire.
+        // SAFETY: syscall réservé au memory_server ; le kernel mappe la VMA
+        // dans l'espace d'adressage du PID propriétaire.
         let base = unsafe {
-            syscall::syscall6(
-                syscall::SYS_MMAP,
+            syscall::syscall5(
+                syscall::SYS_EXO_MEM_MAP_PID,
+                owner_pid as u64,
                 0,
                 length,
                 prot as u64,
                 map_flags,
-                u64::MAX,
-                0,
             )
         };
 
@@ -156,6 +155,7 @@ impl MemoryService {
         Ok((
             RegionSnapshot {
                 handle,
+                base_addr: base as u64,
                 length,
                 prot,
                 flags: extra_flags,
@@ -169,6 +169,7 @@ impl MemoryService {
         let region = self.regions[idx];
         RegionSnapshot {
             handle: region.handle,
+            base_addr: region.base_addr,
             length: region.length,
             prot: region.prot,
             flags: region.flags,
@@ -176,14 +177,14 @@ impl MemoryService {
         }
     }
 
-    fn reply_with_quota(snapshot: RegionSnapshot, quota: QuotaSnapshot) -> MemoryReply {
+    fn reply_with_region(snapshot: RegionSnapshot, _quota: QuotaSnapshot) -> MemoryReply {
         let flags = ((snapshot.prot as u64) & 0xFFFF)
             | (((snapshot.flags as u64) & 0xFFFF) << 16)
             | ((snapshot.share_count as u64) << 32);
         MemoryReply::ok(
             snapshot.handle,
+            snapshot.base_addr,
             snapshot.length,
-            quota.used_bytes,
             flags as u32,
         )
     }
@@ -203,7 +204,7 @@ impl MemoryService {
         };
 
         match self.allocate_region(sender_pid, RegionKind::Private, size, prot, flags) {
-            Ok((snapshot, quota)) => Self::reply_with_quota(snapshot, quota),
+            Ok((snapshot, quota)) => Self::reply_with_region(snapshot, quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -226,8 +227,16 @@ impl MemoryService {
             return MemoryReply::error(syscall::EBUSY);
         }
 
-        // SAFETY: unmap du backing store alloué plus haut pour cette région.
-        let rc = unsafe { syscall::syscall2(syscall::SYS_MUNMAP, region.base_addr, region.length) };
+        // SAFETY: syscall réservé au memory_server ; le kernel démappe la VMA
+        // dans l'espace du propriétaire réel.
+        let rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_EXO_MEM_MUNMAP_PID,
+                region.owner_pid as u64,
+                region.base_addr,
+                region.length,
+            )
+        };
         if rc < 0 {
             return MemoryReply::error(rc);
         }
@@ -257,10 +266,12 @@ impl MemoryService {
             return MemoryReply::error(syscall::EACCES);
         }
 
-        // SAFETY: `mprotect` agit sur le mapping local détenu par le serveur.
+        // SAFETY: syscall réservé au memory_server ; le kernel applique la
+        // protection sur l'espace d'adressage du propriétaire.
         let rc = unsafe {
-            syscall::syscall3(
-                syscall::SYS_MPROTECT,
+            syscall::syscall4(
+                syscall::SYS_EXO_MEM_MPROTECT_PID,
+                region.owner_pid as u64,
                 region.base_addr,
                 region.length,
                 prot as u64,
@@ -272,7 +283,7 @@ impl MemoryService {
 
         region.prot = prot;
         match self.quotas.snapshot(region.owner_pid) {
-            Ok(quota) => Self::reply_with_quota(self.region_snapshot(idx), quota),
+            Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -292,7 +303,7 @@ impl MemoryService {
         }
 
         match self.quotas.snapshot(region.owner_pid) {
-            Ok(quota) => Self::reply_with_quota(self.region_snapshot(idx), quota),
+            Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -356,7 +367,7 @@ impl MemoryService {
         };
 
         match self.allocate_region(sender_pid, RegionKind::Shared, size, prot, flags) {
-            Ok((snapshot, quota)) => Self::reply_with_quota(snapshot, quota),
+            Ok((snapshot, quota)) => Self::reply_with_region(snapshot, quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -376,7 +387,7 @@ impl MemoryService {
 
         region.share_count = region.share_count.saturating_add(1);
         match self.quotas.snapshot(region.owner_pid) {
-            Ok(quota) => Self::reply_with_quota(self.region_snapshot(idx), quota),
+            Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -399,13 +410,13 @@ impl MemoryService {
             }
             self.regions[idx].share_count = region.share_count.saturating_sub(1);
             match self.quotas.snapshot(region.owner_pid) {
-                Ok(quota) => Self::reply_with_quota(self.region_snapshot(idx), quota),
+                Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
                 Err(err) => MemoryReply::error(err),
             }
         } else if region.share_count > 0 {
             self.regions[idx].share_count = region.share_count - 1;
             match self.quotas.snapshot(region.owner_pid) {
-                Ok(quota) => Self::reply_with_quota(self.region_snapshot(idx), quota),
+                Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
                 Err(err) => MemoryReply::error(err),
             }
         } else {

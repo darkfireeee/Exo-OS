@@ -7,6 +7,7 @@ pub struct ServiceMetadata {
     #[allow(dead_code)]
     pub bin_path: &'static [u8],
     pub requires: &'static [&'static str],
+    pub requires_optional: &'static [&'static str],
     pub ready_timeout_ms: u64,
     pub critical: bool,
 }
@@ -14,14 +15,19 @@ pub struct ServiceMetadata {
 const NO_DEPS: &[&str] = &[];
 const DEPS_MEMORY: &[&str] = &["ipc_router"];
 const DEPS_VFS: &[&str] = &["ipc_router", "memory_server"];
-const DEPS_CRYPTO: &[&str] = &["vfs_server"];
+const DEPS_CRYPTO: &[&str] = &["ipc_router", "vfs_server"];
 const DEPS_DEVICE: &[&str] = &["ipc_router", "memory_server"];
-const DEPS_VIRTIO: &[&str] = &["device_server"];
-const DEPS_NETWORK: &[&str] = &["device_server", "virtio_drivers"];
+const DEPS_VIRTIO: &[&str] = &["ipc_router", "device_server"];
+const DEPS_NETWORK: &[&str] = &[
+    "ipc_router",
+    "vfs_server",
+    "device_server",
+    "virtio_drivers",
+];
 const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
-const DEPS_INPUT: &[&str] = &["device_server"];
-const DEPS_TTY: &[&str] = &["input_server", "vfs_server"];
-const DEPS_EXOSH: &[&str] = &["tty_server", "vfs_server", "exo_shield"];
+const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
+const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "vfs_server"];
+const DEPS_EXOSH: &[&str] = &["ipc_router", "tty_server", "vfs_server", "exo_shield"];
 const DEPS_EXO_SHIELD: &[&str] = &[
     "ipc_router",
     "memory_server",
@@ -29,11 +35,10 @@ const DEPS_EXO_SHIELD: &[&str] = &[
     "crypto_server",
     "device_server",
     "virtio_drivers",
-    "network_server",
-    "scheduler_server",
     "input_server",
     "tty_server",
 ];
+const OPT_DEPS_EXO_SHIELD: &[&str] = &["network_server", "scheduler_server"];
 
 pub static IPC_ROUTER_BIN: &[u8] = b"/sbin/exo-ipc-router\0";
 pub static MEMORY_SERVER_BIN: &[u8] = b"/sbin/exo-memory-server\0";
@@ -53,6 +58,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "ipc_router",
         bin_path: IPC_ROUTER_BIN,
         requires: NO_DEPS,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },
@@ -60,6 +66,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "memory_server",
         bin_path: MEMORY_SERVER_BIN,
         requires: DEPS_MEMORY,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 750,
         critical: true,
     },
@@ -67,6 +74,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "vfs_server",
         bin_path: VFS_SERVER_BIN,
         requires: DEPS_VFS,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 750,
         critical: true,
     },
@@ -74,6 +82,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "crypto_server",
         bin_path: CRYPTO_SERVER_BIN,
         requires: DEPS_CRYPTO,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },
@@ -81,6 +90,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "device_server",
         bin_path: DEVICE_SERVER_BIN,
         requires: DEPS_DEVICE,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },
@@ -88,6 +98,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "virtio_drivers",
         bin_path: VIRTIO_DRIVERS_BIN,
         requires: DEPS_VIRTIO,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 750,
         critical: false,
     },
@@ -95,6 +106,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "network_server",
         bin_path: NETWORK_SERVER_BIN,
         requires: DEPS_NETWORK,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: false,
     },
@@ -102,6 +114,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "scheduler_server",
         bin_path: SCHEDULER_SERVER_BIN,
         requires: DEPS_SCHEDULER,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: false,
     },
@@ -109,6 +122,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "input_server",
         bin_path: INPUT_SERVER_BIN,
         requires: DEPS_INPUT,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },
@@ -116,6 +130,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "tty_server",
         bin_path: TTY_SERVER_BIN,
         requires: DEPS_TTY,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },
@@ -123,6 +138,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "exo_shield",
         bin_path: EXO_SHIELD_BIN,
         requires: DEPS_EXO_SHIELD,
+        requires_optional: OPT_DEPS_EXO_SHIELD,
         ready_timeout_ms: 1_000,
         critical: true,
     },
@@ -130,6 +146,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "exosh",
         bin_path: EXOSH_BIN,
         requires: DEPS_EXOSH,
+        requires_optional: NO_DEPS,
         ready_timeout_ms: 500,
         critical: true,
     },

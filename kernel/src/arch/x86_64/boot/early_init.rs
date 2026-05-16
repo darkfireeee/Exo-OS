@@ -343,6 +343,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
             crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR,
         );
     }
+    super::super::mark_arch_initialized();
 
     // ── Étape 14 : SMP — boot des APs ────────────────────────────────────────
     probe!(b'h');

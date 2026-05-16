@@ -11,6 +11,14 @@
 //
 // RÈGLE UNSAFE : tout bloc unsafe précédé de // SAFETY:
 // RÈGLE NO-ALLOC : ce fichier — zéro Vec/Box/Arc (types de base uniquement)
+//
+// Contrat sender_pid:
+// Les messages IPC exposés aux serveurs peuvent contenir un champ sender_pid
+// dans les premiers octets du payload. Ce champ n'est pas fiable depuis
+// userspace: `SYS_EXO_IPC_SEND` le remplace systématiquement par le PID réel
+// de l'émetteur avant l'enqueue kernel. Les contrôles d'autorisation côté
+// serveur (mount/umount VFS, contrôle réseau, etc.) peuvent donc comparer ce
+// champ au PID attendu sans accepter une identité forgée par le client.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;

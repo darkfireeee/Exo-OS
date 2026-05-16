@@ -23,11 +23,14 @@ use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAI
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;
 use crate::exophoenix::ssr;
 use crate::memory::core::AllocError;
-use crate::memory::core::{Frame, PhysAddr, PAGE_SIZE};
+use crate::memory::core::{AllocFlags, Frame, PhysAddr, PAGE_SIZE};
 use crate::memory::physical::allocator::{
     alloc_page, free_page, init_phase1_bitmap, init_phase2_free_region,
     init_phase2b_buddy_free_region, init_phase2b_buddy_zone, init_phase3_slab_slub,
     init_phase4_numa, register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
+};
+use crate::memory::virt::page_table::{
+    read_cr3, write_cr3, FrameAllocatorForWalk, PageTableBuilder,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,6 +84,18 @@ impl SlabPageProvider for KernelSlabProvider {
 /// Instance statique du provider (durée de vie 'static requise par slab).
 static KERNEL_SLAB_PROVIDER: KernelSlabProvider = KernelSlabProvider;
 
+struct BootPageTableAllocator;
+
+impl FrameAllocatorForWalk for BootPageTableAllocator {
+    fn alloc_frame(&self, flags: AllocFlags) -> Result<Frame, AllocError> {
+        BOOTSTRAP_BITMAP.alloc_frame(flags)
+    }
+
+    fn free_frame(&self, frame: Frame) {
+        BOOTSTRAP_BITMAP.free_frame(frame);
+    }
+}
+
 #[inline]
 fn assert_buddy_has_free_frames(origin: &str) {
     let free = crate::memory::physical::allocator::BUDDY.total_free_frames();
@@ -89,6 +104,20 @@ fn assert_buddy_has_free_frames(origin: &str) {
         "{}: buddy initialise sans aucune frame libre",
         origin
     );
+}
+
+fn install_extended_physmap(phys_end: PhysAddr) {
+    let pt_alloc = BootPageTableAllocator;
+    let active = read_cr3();
+    let mut builder = PageTableBuilder::from_existing(active, &pt_alloc);
+    let result = builder.map_physmap(phys_end.as_u64());
+    if result.is_err() {
+        crate::arch::x86_64::halt_cpu();
+    }
+    // SAFETY: réécrire CR3 avec la PML4 active force un flush TLB après extension.
+    unsafe {
+        write_cr3(active);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,6 +297,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    install_extended_physmap(phys_end_pa);
 
     // ── Phase 2b : Initialiser le buddy allocator (zone DMA32, < 4 GiB) ──────
     // Requis par vmalloc/kalloc (allocations > 2 KiB : stacks kernel, etc.).
@@ -392,6 +422,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    install_extended_physmap(phys_end_pa);
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
     init_phase2b_buddy_zone(
         phys_start_pa,
@@ -657,6 +688,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
+    install_extended_physmap(phys_end_pa);
 
     // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
     init_phase2b_buddy_zone(

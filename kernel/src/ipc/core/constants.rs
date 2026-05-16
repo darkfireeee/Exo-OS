@@ -19,6 +19,18 @@
 /// Les messages > 240 octets doivent emprunter le chemin zero-copy SHM.
 pub const MAX_MSG_SIZE: usize = 240;
 
+/// Taille du payload dans l'enveloppe ABI Ring1 (`syscall_abi::IpcMessage`).
+/// Les serveurs Ring1 utilisent 8 bytes d'en-tête (`sender_pid`, `msg_type`)
+/// et 120 bytes de payload, soit 128 bytes par enveloppe userspace.
+pub const ABI_IPC_HEADER_SIZE: usize = 8;
+pub const ABI_IPC_PAYLOAD_SIZE: usize = 120;
+pub const ABI_IPC_ENVELOPE_SIZE: usize = ABI_IPC_HEADER_SIZE + ABI_IPC_PAYLOAD_SIZE;
+
+const _: () = assert!(
+    ABI_IPC_ENVELOPE_SIZE <= MAX_MSG_SIZE,
+    "l'enveloppe IPC ABI doit tenir dans un slot SPSC"
+);
+
 /// Taille de l'en-tête de message (MessageHeader dans le ring).
 /// 16 bytes : msg_id(8) + flags(4) + len(2) + pad(2).
 pub const MSG_HEADER_SIZE: usize = 16;

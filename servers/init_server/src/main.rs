@@ -16,7 +16,7 @@
 //!   - Un service crashé est relancé avec un délai exponentiel (max 32s).
 
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 pub(crate) use exo_syscall_abi as syscall;
 
 mod boot_info;
@@ -31,6 +31,33 @@ mod sigchld_handler;
 mod supervisor;
 mod watchdog;
 
+const CLOCK_MONOTONIC: u64 = 1;
+const SERVICE_STABLE_MS: u64 = 5_000;
+
+#[repr(C)]
+#[derive(Default)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+fn monotonic_ms() -> u64 {
+    let mut ts = Timespec::default();
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_CLOCK_GETTIME,
+            CLOCK_MONOTONIC,
+            &mut ts as *mut Timespec as u64,
+        )
+    };
+    if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000)
+        .saturating_add((ts.tv_nsec as u64) / 1_000_000)
+}
+
 /// Descripteur d'un service supervisé.
 struct Service {
     #[allow(dead_code)]
@@ -38,6 +65,7 @@ struct Service {
     bin_path: &'static [u8], // chemin u8 null-terminated vers le binaire
     pid: AtomicU32,          // PID courant (0 = non démarré)
     restart_delay_ticks: AtomicU32, // délai avant relance (backoff exponentiel)
+    spawn_time_ms: AtomicU64,
     disabled: AtomicBool,
 }
 
@@ -48,6 +76,7 @@ impl Service {
             bin_path: bin,
             pid: AtomicU32::new(0),
             restart_delay_ticks: AtomicU32::new(1),
+            spawn_time_ms: AtomicU64::new(0),
             disabled: AtomicBool::new(false),
         }
     }
@@ -63,7 +92,7 @@ impl Service {
     fn set_pid(&self, pid: u32) {
         self.pid.store(pid, Ordering::Release);
         self.disabled.store(false, Ordering::Release);
-        self.restart_delay_ticks.store(1, Ordering::Relaxed);
+        self.spawn_time_ms.store(monotonic_ms(), Ordering::Release);
     }
 
     fn enable(&self) {
@@ -73,15 +102,33 @@ impl Service {
     fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
         self.pid.store(0, Ordering::Release);
+        self.spawn_time_ms.store(0, Ordering::Release);
         self.restart_delay_ticks.store(1, Ordering::Relaxed);
     }
 
     fn mark_dead(&self) {
+        let now = monotonic_ms();
+        let spawn = self.spawn_time_ms.load(Ordering::Acquire);
         self.pid.store(0, Ordering::Release);
-        // Délai exponentiel cappé à 32 ticks
-        let d = self.restart_delay_ticks.load(Ordering::Relaxed);
-        self.restart_delay_ticks
-            .store(d.saturating_mul(2).min(32), Ordering::Relaxed);
+        self.spawn_time_ms.store(0, Ordering::Release);
+        if spawn != 0 && now.saturating_sub(spawn) >= SERVICE_STABLE_MS {
+            self.restart_delay_ticks.store(1, Ordering::Relaxed);
+        } else {
+            let d = self.restart_delay_ticks.load(Ordering::Relaxed).max(1);
+            self.restart_delay_ticks
+                .store(d.saturating_mul(2).min(32), Ordering::Relaxed);
+        }
+    }
+
+    fn note_alive(&self) {
+        let pid = self.current_pid();
+        if pid == 0 {
+            return;
+        }
+        let spawn = self.spawn_time_ms.load(Ordering::Acquire);
+        if spawn != 0 && monotonic_ms().saturating_sub(spawn) >= SERVICE_STABLE_MS {
+            self.restart_delay_ticks.store(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -358,6 +405,8 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
             if !service_watchdog.check(check_idx, &SERVICES[check_idx]) {
                 SERVICES[check_idx].mark_dead();
                 service_watchdog.observe_stop(check_idx);
+            } else {
+                SERVICES[check_idx].note_alive();
             }
             check_idx += 1;
         }

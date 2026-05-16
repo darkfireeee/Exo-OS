@@ -37,7 +37,8 @@ pub enum ForgeError {
     ChecklistFailed(&'static str),
 }
 
-pub type Ring1DriverReloadHook = fn(bus: u8, device: u8, func: u8, blob_id: BlobId, image: &[u8]) -> bool;
+pub type Ring1DriverReloadHook =
+    fn(bus: u8, device: u8, func: u8, blob_id: BlobId, image: &[u8]) -> bool;
 
 static RING1_DRIVER_RELOAD_HOOK: Once<Ring1DriverReloadHook> = Once::new();
 

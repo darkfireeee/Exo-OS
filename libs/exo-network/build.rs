@@ -10,7 +10,6 @@ fn main() {
         "rustls-upstream",
         "hickory-dns-upstream",
         "dhcp4r-upstream",
-        "rtnetlink-upstream",
     ] {
         let path = root.join(tree);
         println!("cargo:rerun-if-changed={}", path.display());

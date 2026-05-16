@@ -91,6 +91,8 @@ unsafe impl Sync for MountTable {}
 
 static MOUNTS: MountTable = MountTable(UnsafeCell::new([MountEntry::empty(); MAX_MOUNTS]));
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+const CROSS_PROCESS_CHUNK: usize = 4096;
+const LINUX_STAT_SIZE: usize = 144;
 
 fn fnv32(s: &[u8]) -> u32 {
     let mut h: u32 = 2166136261;
@@ -416,28 +418,33 @@ fn handle_close(payload: &[u8]) -> VfsReply {
     }
 }
 
-fn handle_read(payload: &[u8]) -> VfsReply {
-    let fd = match ops::read_u64(payload, 0) {
-        Ok(fd) => fd,
-        Err(status) => return reply_status(status),
-    };
-    let buf = match ops::read_u64(payload, 8) {
-        Ok(buf) => buf,
-        Err(status) => return reply_status(status),
-    };
-    let len = match ops::read_u64(payload, 16) {
-        Ok(len) => len,
-        Err(status) => return reply_status(status),
-    };
-    let rc = unsafe { syscall::syscall3(syscall::SYS_READ, fd, buf, len) };
-    if rc < 0 {
-        reply_status(rc)
-    } else {
-        reply_count(0, rc)
+fn copy_from_sender(sender_pid: u32, src: u64, dst: *mut u8, len: usize) -> i64 {
+    unsafe {
+        syscall::syscall5(
+            syscall::SYS_EXO_MEM_COPY_FROM_PID,
+            sender_pid as u64,
+            src,
+            dst as u64,
+            len as u64,
+            0,
+        )
     }
 }
 
-fn handle_write(payload: &[u8]) -> VfsReply {
+fn copy_to_sender(sender_pid: u32, dst: u64, src: *const u8, len: usize) -> i64 {
+    unsafe {
+        syscall::syscall5(
+            syscall::SYS_EXO_MEM_COPY_TO_PID,
+            sender_pid as u64,
+            dst,
+            src as u64,
+            len as u64,
+            0,
+        )
+    }
+}
+
+fn handle_read(sender_pid: u32, payload: &[u8]) -> VfsReply {
     let fd = match ops::read_u64(payload, 0) {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
@@ -450,12 +457,98 @@ fn handle_write(payload: &[u8]) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let rc = unsafe { syscall::syscall3(syscall::SYS_WRITE, fd, buf, len) };
-    if rc < 0 {
-        reply_status(rc)
-    } else {
-        reply_count(0, rc)
+
+    let mut scratch = [0u8; CROSS_PROCESS_CHUNK];
+    let mut done = 0u64;
+    while done < len {
+        let chunk = (len - done).min(scratch.len() as u64) as usize;
+        let rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_READ,
+                fd,
+                scratch.as_mut_ptr() as u64,
+                chunk as u64,
+            )
+        };
+        if rc < 0 {
+            return if done == 0 {
+                reply_status(rc)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        if rc == 0 {
+            break;
+        }
+        let copied = copy_to_sender(sender_pid, buf + done, scratch.as_ptr(), rc as usize);
+        if copied < 0 {
+            return if done == 0 {
+                reply_status(copied)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        done = done.saturating_add(copied as u64);
+        if copied < rc {
+            break;
+        }
+        if rc < chunk as i64 {
+            break;
+        }
     }
+    reply_count(0, done as i64)
+}
+
+fn handle_write(sender_pid: u32, payload: &[u8]) -> VfsReply {
+    let fd = match ops::read_u64(payload, 0) {
+        Ok(fd) => fd,
+        Err(status) => return reply_status(status),
+    };
+    let buf = match ops::read_u64(payload, 8) {
+        Ok(buf) => buf,
+        Err(status) => return reply_status(status),
+    };
+    let len = match ops::read_u64(payload, 16) {
+        Ok(len) => len,
+        Err(status) => return reply_status(status),
+    };
+
+    let mut scratch = [0u8; CROSS_PROCESS_CHUNK];
+    let mut done = 0u64;
+    while done < len {
+        let chunk = (len - done).min(scratch.len() as u64) as usize;
+        let copied = copy_from_sender(sender_pid, buf + done, scratch.as_mut_ptr(), chunk);
+        if copied < 0 {
+            return if done == 0 {
+                reply_status(copied)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        if copied == 0 {
+            break;
+        }
+        let rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_WRITE,
+                fd,
+                scratch.as_ptr() as u64,
+                copied as u64,
+            )
+        };
+        if rc < 0 {
+            return if done == 0 {
+                reply_status(rc)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        done = done.saturating_add(rc as u64);
+        if rc < copied {
+            break;
+        }
+    }
+    reply_count(0, done as i64)
 }
 
 fn handle_path_mode(payload: &[u8], nr: u64) -> VfsReply {
@@ -484,7 +577,7 @@ fn handle_path_only(payload: &[u8], nr: u64) -> VfsReply {
     reply_status(if rc < 0 { rc } else { 0 })
 }
 
-fn handle_stat(payload: &[u8]) -> VfsReply {
+fn handle_stat(sender_pid: u32, payload: &[u8]) -> VfsReply {
     let stat_ptr = match ops::read_u64(payload, 0) {
         Ok(ptr) => ptr,
         Err(status) => return reply_status(status),
@@ -495,11 +588,22 @@ fn handle_stat(payload: &[u8]) -> VfsReply {
         Err(status) => return reply_status(status),
     };
     let _ = path_len;
-    let rc = unsafe { syscall::syscall2(syscall::SYS_STAT, path.as_ptr() as u64, stat_ptr) };
-    reply_status(if rc < 0 { rc } else { 0 })
+    let mut stat_buf = [0u8; LINUX_STAT_SIZE];
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_STAT,
+            path.as_ptr() as u64,
+            stat_buf.as_mut_ptr() as u64,
+        )
+    };
+    if rc < 0 {
+        return reply_status(rc);
+    }
+    let copied = copy_to_sender(sender_pid, stat_ptr, stat_buf.as_ptr(), stat_buf.len());
+    reply_status(if copied < 0 { copied } else { 0 })
 }
 
-fn handle_getdents(payload: &[u8]) -> VfsReply {
+fn handle_getdents(sender_pid: u32, payload: &[u8]) -> VfsReply {
     let fd = match ops::read_u64(payload, 0) {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
@@ -512,12 +616,43 @@ fn handle_getdents(payload: &[u8]) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let rc = unsafe { syscall::syscall3(syscall::SYS_GETDENTS64, fd, buf, len) };
-    if rc < 0 {
-        reply_status(rc)
-    } else {
-        reply_count(0, rc)
+
+    let mut scratch = [0u8; CROSS_PROCESS_CHUNK];
+    let mut done = 0u64;
+    while done < len {
+        let chunk = (len - done).min(scratch.len() as u64) as usize;
+        let rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_GETDENTS64,
+                fd,
+                scratch.as_mut_ptr() as u64,
+                chunk as u64,
+            )
+        };
+        if rc < 0 {
+            return if done == 0 {
+                reply_status(rc)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        if rc == 0 {
+            break;
+        }
+        let copied = copy_to_sender(sender_pid, buf + done, scratch.as_ptr(), rc as usize);
+        if copied < 0 {
+            return if done == 0 {
+                reply_status(copied)
+            } else {
+                reply_count(0, done as i64)
+            };
+        }
+        done = done.saturating_add(copied as u64);
+        if copied < rc || rc < chunk as i64 {
+            break;
+        }
     }
+    reply_count(0, done as i64)
 }
 
 fn handle_rename(payload: &[u8]) -> VfsReply {
@@ -585,10 +720,10 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
         ops::VFS_OPEN => handle_open(&req.payload),
         ops::VFS_UMOUNT => handle_umount(req.sender_pid, &req.payload),
         ops::VFS_CLOSE => handle_close(&req.payload),
-        ops::VFS_READ => handle_read(&req.payload),
-        ops::VFS_WRITE => handle_write(&req.payload),
-        ops::VFS_STAT => handle_stat(&req.payload),
-        ops::VFS_GETDENTS => handle_getdents(&req.payload),
+        ops::VFS_READ => handle_read(req.sender_pid, &req.payload),
+        ops::VFS_WRITE => handle_write(req.sender_pid, &req.payload),
+        ops::VFS_STAT => handle_stat(req.sender_pid, &req.payload),
+        ops::VFS_GETDENTS => handle_getdents(req.sender_pid, &req.payload),
         ops::VFS_MKDIR => handle_path_mode(&req.payload, syscall::SYS_MKDIR),
         ops::VFS_UNLINK => handle_path_only(&req.payload, syscall::SYS_UNLINK),
         ops::VFS_RMDIR => handle_path_only(&req.payload, syscall::SYS_RMDIR),
