@@ -40,6 +40,8 @@ pub const ECHILD: i64 = -10;
 pub const EIO: i64 = -5;
 /// Argument trop grand — len > MAX (E2BIG)
 pub const E2BIG: i64 = -7;
+/// Message trop long pour le buffer/protocole IPC (EMSGSIZE)
+pub const EMSGSIZE: i64 = -90;
 /// Mauvais descripteur de fichier (EBADF)
 pub const EBADF: i64 = -9;
 /// Ressource temporairement indisponible / non-bloquant (EAGAIN)

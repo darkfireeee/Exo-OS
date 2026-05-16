@@ -25,8 +25,8 @@ mod xchacha20;
 const CRYPTO_SERVER_ENDPOINT: u64 = 4;
 const CRYPTO_SERVER_PID: u32 = 5;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
-const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
-const CRYPTO_REPLY_DATA_SIZE: usize = 228;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 200;
+const CRYPTO_REPLY_DATA_SIZE: usize = 224;
 const VERIFY_CONTEXTS: usize = 4;
 const VERIFY_MAX_MESSAGE: usize = 4096;
 
@@ -66,8 +66,9 @@ const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoRequest {
-    sender_endpoint: u64,
+    sender_pid: u32,
     msg_type: u32,
+    reply_endpoint: u64,
     payload_len: u16,
     version: u8,
     flags: u8,
@@ -75,9 +76,12 @@ struct CryptoRequest {
     payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
 }
 
+const _: () = assert!(core::mem::size_of::<CryptoRequest>() <= syscall::IPC_KERNEL_MAX_MSG_SIZE);
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoReply {
+    sender_pid: u32,
     status: u32,
     key_handle: u32,
     data_len: u16,
@@ -89,6 +93,7 @@ struct CryptoReply {
 impl CryptoReply {
     const fn new(status: u32) -> Self {
         Self {
+            sender_pid: 0,
             status,
             key_handle: 0,
             data_len: 0,
@@ -104,6 +109,8 @@ impl CryptoReply {
         self.data_len = copy_len as u16;
     }
 }
+
+const _: () = assert!(core::mem::size_of::<CryptoReply>() <= syscall::IPC_KERNEL_MAX_MSG_SIZE);
 
 static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REQUESTS_OK: AtomicU64 = AtomicU64::new(0);
@@ -342,7 +349,7 @@ fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
 
 fn phoenix_wake_entropy_from_request(req: &CryptoRequest, payload: &[u8]) -> Option<u64> {
     let compact_entropy = read_u64_le(&req.cap_token.bytes, 0).unwrap_or(0);
-    if req.sender_endpoint == 0 && compact_entropy != 0 {
+    if req.reply_endpoint == 0 && compact_entropy != 0 {
         return Some(compact_entropy);
     }
     read_u64_le(payload, 0)
@@ -810,7 +817,7 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
         }
         PHOENIX_WAKE_ENTROPY => {
             let authenticated_kernel_wake =
-                req.sender_endpoint == 0 || (req.sender_endpoint & KERNEL_EPHEMERAL_REPLY_BIT) != 0;
+                req.sender_pid == 0 || (req.reply_endpoint & KERNEL_EPHEMERAL_REPLY_BIT) != 0;
             if !authenticated_kernel_wake {
                 reply.status = CRYPTO_ERR_CAP;
             } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {
@@ -853,8 +860,9 @@ pub extern "C" fn _start() -> ! {
     };
 
     let mut req = CryptoRequest {
-        sender_endpoint: 0,
+        sender_pid: 0,
         msg_type: 0,
+        reply_endpoint: 0,
         payload_len: 0,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
@@ -883,7 +891,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         let reply = handle_request(&req);
-        send_reply(req.sender_endpoint, &reply);
+        send_reply(req.reply_endpoint, &reply);
     }
 }
 

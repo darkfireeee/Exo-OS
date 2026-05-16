@@ -29,9 +29,13 @@ impl IsolationState {
 
     fn sync_kernel_phase(phase: PhoenixPhase) {
         let state = match phase {
-            PhoenixPhase::Normal => syscall::EXO_PHOENIX_STATE_NORMAL,
-            PhoenixPhase::Draining => syscall::EXO_PHOENIX_STATE_NETWORK_DRAINING,
-            PhoenixPhase::Serialized => syscall::EXO_PHOENIX_STATE_NETWORK_SERIALIZED,
+            PhoenixPhase::Normal => syscall::ExoPhoenixStateWire::Normal.as_syscall_arg(),
+            PhoenixPhase::Draining => {
+                syscall::ExoPhoenixStateWire::NetworkDraining.as_syscall_arg()
+            }
+            PhoenixPhase::Serialized => {
+                syscall::ExoPhoenixStateWire::NetworkSerialized.as_syscall_arg()
+            }
         };
         // SAFETY: best-effort kernel state synchronization; failures keep the
         // network server local phase coherent and are observed by later health checks.

@@ -52,6 +52,10 @@ pub struct KernelLoadResult {
     pub entry_phys:     u64,
     /// Offset de l'entry depuis phys_base.
     pub entry_offset:   u64,
+    /// Adresse physique de l'entree 64-bit de handoff exo-boot.
+    pub handoff64_phys: u64,
+    /// Offset de `_start_uefi` depuis phys_base.
+    pub handoff64_offset: u64,
 }
 
 /// Charge le kernel depuis une image ELF.
@@ -104,15 +108,22 @@ pub unsafe fn load_kernel(
     unsafe { apply_pie_relocations(&elf, phys_base) }
         .map_err(|e| KernelLoadError::Relocation(e))?;
 
-    // ── 6. Calcul de l'entry point ────────────────────────────────────────
+    // ── 6. Calcul des points d'entree ─────────────────────────────────────
     let entry_offset = elf.entry_offset();
     let entry_phys   = phys_base + entry_offset;
+    let handoff64_offset = elf
+        .symbol_offset(b"_start_uefi")
+        .map_err(KernelLoadError::ElfParse)?
+        .ok_or(KernelLoadError::MissingHandoff64)?;
+    let handoff64_phys = phys_base + handoff64_offset;
 
     Ok(KernelLoadResult {
         phys_base,
         virt_base,
         entry_phys,
         entry_offset,
+        handoff64_phys,
+        handoff64_offset,
     })
 }
 
@@ -123,6 +134,7 @@ pub enum KernelLoadError {
     ElfParse(ElfError),
     ElfLoad(ElfError),
     Relocation(relocations::RelocationError),
+    MissingHandoff64,
 }
 
 impl core::fmt::Display for KernelLoadError {
@@ -131,6 +143,8 @@ impl core::fmt::Display for KernelLoadError {
             Self::ElfParse(e)      => write!(f, "Parse ELF : {}", e),
             Self::ElfLoad(e)       => write!(f, "Chargement ELF : {}", e),
             Self::Relocation(e)    => write!(f, "Relocation : {}", e),
+            Self::MissingHandoff64 =>
+                write!(f, "Symbole kernel _start_uefi absent : handoff 64-bit impossible"),
         }
     }
 }

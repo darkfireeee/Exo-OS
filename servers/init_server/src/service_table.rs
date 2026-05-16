@@ -34,11 +34,10 @@ const DEPS_EXO_SHIELD: &[&str] = &[
     "vfs_server",
     "crypto_server",
     "device_server",
-    "virtio_drivers",
     "input_server",
     "tty_server",
 ];
-const OPT_DEPS_EXO_SHIELD: &[&str] = &["network_server", "scheduler_server"];
+const OPT_DEPS_EXO_SHIELD: &[&str] = &["virtio_drivers", "network_server", "scheduler_server"];
 
 pub static IPC_ROUTER_BIN: &[u8] = b"/sbin/exo-ipc-router\0";
 pub static MEMORY_SERVER_BIN: &[u8] = b"/sbin/exo-memory-server\0";

@@ -33,13 +33,13 @@ pub unsafe fn install_handlers() {
     };
 
     let _ = syscall::syscall3(
-        syscall::SYS_SIGACTION,
+        syscall::SYS_RT_SIGACTION,
         17,
         &chld_sa as *const Sigaction as u64,
         0,
     );
     let _ = syscall::syscall3(
-        syscall::SYS_SIGACTION,
+        syscall::SYS_RT_SIGACTION,
         15,
         &term_sa as *const Sigaction as u64,
         0,

@@ -24,7 +24,8 @@
 extern crate alloc;
 
 use crate::syscall::errno::{
-    E2BIG, EACCES, EAGAIN, EBUSY, EEXIST, EFAULT, EINTR, EINVAL, ENOENT, ENOMEM, ENOSYS, EPERM,
+    E2BIG, EACCES, EAGAIN, EBUSY, EEXIST, EFAULT, EINTR, EINVAL, EMSGSIZE, ENOENT, ENOMEM, ENOSYS,
+    EPERM,
 };
 use crate::syscall::fast_path::Timespec;
 use crate::syscall::numbers::*;
@@ -2991,10 +2992,12 @@ fn zeroed_user_vec(len: usize) -> Result<Vec<u8>, i64> {
 
 #[inline]
 fn is_reserved_kernel_ipc(endpoint: u64, payload: &[u8]) -> bool {
-    if endpoint != CRYPTO_SERVER_ENDPOINT_ID || payload.len() < 12 {
+    if endpoint != CRYPTO_SERVER_ENDPOINT_ID
+        || payload.len() < crate::ipc::core::constants::ABI_IPC_HEADER_SIZE
+    {
         return false;
     }
-    let msg_type = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    let msg_type = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
     msg_type == CRYPTO_PHOENIX_WAKE_ENTROPY
 }
 
@@ -3311,8 +3314,16 @@ pub fn sys_exo_mem_mprotect_pid(
 }
 
 fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> (u64, u64, u64, u64) {
-    if flags == 0 && a2 <= 65_536 {
-        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let shorthand_len = a2 <= 65_536;
+    let user_buf = a1 >= 0x1000
+        && a1 < crate::syscall::validation::USER_ADDR_MAX
+        && a1
+            .checked_add(a2)
+            .map(|end| end <= crate::syscall::validation::USER_ADDR_MAX)
+            .unwrap_or(false);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let explicit_endpoint = ipc_endpoint_owner_pid(a1).is_some();
+    if flags == 0 && shorthand_len && user_buf && !explicit_endpoint {
         let endpoint = primary_ipc_endpoint_for_owner(caller_pid).unwrap_or(caller_pid as u64);
         (endpoint, a1, a2, a3)
     } else {
@@ -3396,7 +3407,7 @@ fn ipc_error_to_errno(err: IpcError) -> i64 {
         | IpcError::QueueEmpty => EAGAIN,
         IpcError::EndpointNotFound | IpcError::NotFound => ENOENT,
         IpcError::PermissionDenied => EACCES,
-        IpcError::MessageTooLarge => E2BIG,
+        IpcError::MessageTooLarge => EMSGSIZE,
         IpcError::Timeout => EAGAIN,
         IpcError::ResourceExhausted | IpcError::ShmPoolFull | IpcError::OutOfResources => ENOMEM,
         IpcError::ConnRefused => ENOENT,

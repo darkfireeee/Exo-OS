@@ -25,6 +25,8 @@ const PT_LOAD:      u32     = 1;
 const PT_DYNAMIC:   u32     = 2;
 #[allow(dead_code)]
 const PT_GNU_RELRO: u32     = 0x6474_E552;
+const SHT_SYMTAB:   u32     = 2;
+const SHT_DYNSYM:   u32     = 11;
 
 // Flags de segment ELF
 #[allow(dead_code)]
@@ -54,6 +56,34 @@ struct Elf64Header {
     e_shentsize:    u16,
     e_shnum:        u16,
     e_shstrndx:     u16,
+}
+
+/// Section Header ELF64.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Elf64SectionHeader {
+    sh_name:      u32,
+    sh_type:      u32,
+    sh_flags:     u64,
+    sh_addr:      u64,
+    sh_offset:    u64,
+    sh_size:      u64,
+    sh_link:      u32,
+    sh_info:      u32,
+    sh_addralign: u64,
+    sh_entsize:   u64,
+}
+
+/// Symbole ELF64.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Elf64Symbol {
+    st_name:  u32,
+    st_info:  u8,
+    st_other: u8,
+    st_shndx: u16,
+    st_value: u64,
+    st_size:  u64,
 }
 
 /// Program Header ELF64.
@@ -167,6 +197,63 @@ impl<'a> ElfKernel<'a> {
         self.entry_virt.saturating_sub(self.virt_base)
     }
 
+    /// Cherche un symbole ELF et retourne son offset depuis `virt_base`.
+    ///
+    /// Utilise `.symtab` si present, sinon `.dynsym`. Le bootloader en a besoin
+    /// pour sauter sur `_start_uefi`, entree 64-bit distincte du point d'entree
+    /// Multiboot2 `_start` qui reste en `.code32`.
+    pub fn symbol_offset(&self, name: &[u8]) -> Result<Option<u64>, ElfError> {
+        let shs = self.section_headers()?;
+        for sh in shs {
+            if sh.sh_type != SHT_SYMTAB && sh.sh_type != SHT_DYNSYM {
+                continue;
+            }
+            if sh.sh_entsize < core::mem::size_of::<Elf64Symbol>() as u64 {
+                continue;
+            }
+
+            let strtab_idx = sh.sh_link as usize;
+            if strtab_idx >= shs.len() {
+                return Err(ElfError::InvalidStringTableIndex {
+                    index: strtab_idx,
+                    count: shs.len(),
+                });
+            }
+            let strtab = self.section_data(&shs[strtab_idx])?;
+            let symbols = self.section_data(sh)?;
+            let count = (sh.sh_size / sh.sh_entsize) as usize;
+
+            for i in 0..count {
+                let off = i * sh.sh_entsize as usize;
+                if off + core::mem::size_of::<Elf64Symbol>() > symbols.len() {
+                    return Err(ElfError::SymbolTableOutOfBounds {
+                        sym_end: off + core::mem::size_of::<Elf64Symbol>(),
+                        table_size: symbols.len(),
+                    });
+                }
+                // SAFETY : bornes verifiees ci-dessus, lecture non-alignee OK.
+                let sym = unsafe {
+                    core::ptr::read_unaligned(symbols.as_ptr().add(off) as *const Elf64Symbol)
+                };
+                let name_off = sym.st_name as usize;
+                if name_off >= strtab.len() {
+                    continue;
+                }
+                if cstr_eq(&strtab[name_off..], name) {
+                    if sym.st_value < self.virt_base || sym.st_value >= self.virt_end {
+                        return Err(ElfError::SymbolOutOfLoadBounds {
+                            value: sym.st_value,
+                            virt_base: self.virt_base,
+                            virt_end: self.virt_end,
+                        });
+                    }
+                    return Ok(Some(sym.st_value - self.virt_base));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Adresse physique préférée pour le chargement (segment 0 p_paddr).
     /// Pertinent uniquement pour les kernels non-PIE.
     pub fn preferred_load_address(&self) -> u64 {
@@ -247,6 +334,57 @@ impl<'a> ElfKernel<'a> {
         }
     }
 
+    fn section_headers(&self) -> Result<&[Elf64SectionHeader], ElfError> {
+        if self.header.e_shoff == 0 || self.header.e_shnum == 0 {
+            return Ok(&[]);
+        }
+        if self.header.e_shentsize as usize != core::mem::size_of::<Elf64SectionHeader>() {
+            return Err(ElfError::InvalidShentsize {
+                size: self.header.e_shentsize,
+            });
+        }
+        let sh_end = (self.header.e_shoff as usize)
+            .checked_add(
+                (self.header.e_shnum as usize)
+                    .saturating_mul(core::mem::size_of::<Elf64SectionHeader>()),
+            )
+            .ok_or(ElfError::SectionHeaderOutOfBounds {
+                sh_end: usize::MAX,
+                file_size: self.data.len(),
+            })?;
+        if sh_end > self.data.len() {
+            return Err(ElfError::SectionHeaderOutOfBounds {
+                sh_end,
+                file_size: self.data.len(),
+            });
+        }
+        // SAFETY : taille et bornes validees ci-dessus.
+        Ok(unsafe {
+            core::slice::from_raw_parts(
+                self.data.as_ptr().add(self.header.e_shoff as usize)
+                    as *const Elf64SectionHeader,
+                self.header.e_shnum as usize,
+            )
+        })
+    }
+
+    fn section_data(&self, sh: &Elf64SectionHeader) -> Result<&[u8], ElfError> {
+        let start = sh.sh_offset as usize;
+        let end = start
+            .checked_add(sh.sh_size as usize)
+            .ok_or(ElfError::SectionDataOutOfBounds {
+                sec_end: usize::MAX,
+                file_size: self.data.len(),
+            })?;
+        if end > self.data.len() {
+            return Err(ElfError::SectionDataOutOfBounds {
+                sec_end: end,
+                file_size: self.data.len(),
+            });
+        }
+        Ok(&self.data[start..end])
+    }
+
     /// Retourne le segment `.dynamic` (PT_DYNAMIC) si présent.
     /// Utilisé par `relocations.rs` pour trouver la table de relocations.
     pub(crate) fn dynamic_segment(&self) -> Option<Elf64ProgramHeader> {
@@ -263,6 +401,17 @@ impl<'a> ElfKernel<'a> {
     /// Retourne virt_base (pour calcul des offsets de relocation).
     #[inline]
     pub fn virt_base(&self) -> u64 { self.virt_base }
+}
+
+fn cstr_eq(raw: &[u8], expected: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < raw.len() && raw[i] != 0 {
+        if i >= expected.len() || raw[i] != expected[i] {
+            return false;
+        }
+        i += 1;
+    }
+    i == expected.len()
 }
 
 // ─── Calcul bornes virtuelles ─────────────────────────────────────────────────
@@ -308,6 +457,12 @@ pub enum ElfError {
     WrongArch             { machine: u16 },
     InvalidPhentsize      { size: u16 },
     ProgramHeaderOutOfBounds { ph_end: usize, file_size: usize },
+    InvalidShentsize      { size: u16 },
+    SectionHeaderOutOfBounds { sh_end: usize, file_size: usize },
+    SectionDataOutOfBounds { sec_end: usize, file_size: usize },
+    InvalidStringTableIndex { index: usize, count: usize },
+    SymbolTableOutOfBounds { sym_end: usize, table_size: usize },
+    SymbolOutOfLoadBounds { value: u64, virt_base: u64, virt_end: u64 },
     SegmentOutOfFile      { offset: u64, size: u64, file: u64 },
     NoPtLoadSegments,
     VirtAddressOverflow   { vaddr: u64, size: u64 },
@@ -334,6 +489,20 @@ impl core::fmt::Display for ElfError {
                     size, core::mem::size_of::<Elf64ProgramHeader>()),
             Self::ProgramHeaderOutOfBounds { ph_end, file_size } =>
                 write!(f, "Program headers hors fichier : {} > {}", ph_end, file_size),
+            Self::InvalidShentsize { size } =>
+                write!(f, "e_shentsize invalide : {} (attendu {})",
+                    size, core::mem::size_of::<Elf64SectionHeader>()),
+            Self::SectionHeaderOutOfBounds { sh_end, file_size } =>
+                write!(f, "Section headers hors fichier : {} > {}", sh_end, file_size),
+            Self::SectionDataOutOfBounds { sec_end, file_size } =>
+                write!(f, "Section hors fichier : {} > {}", sec_end, file_size),
+            Self::InvalidStringTableIndex { index, count } =>
+                write!(f, "Index strtab invalide : {} >= {}", index, count),
+            Self::SymbolTableOutOfBounds { sym_end, table_size } =>
+                write!(f, "Symtab hors table : {} > {}", sym_end, table_size),
+            Self::SymbolOutOfLoadBounds { value, virt_base, virt_end } =>
+                write!(f, "Symbole hors image chargee : {:#x} pas dans [{:#x}, {:#x})",
+                    value, virt_base, virt_end),
             Self::SegmentOutOfFile { offset, size, file } =>
                 write!(f, "Segment hors fichier : +{}+{} > {}", offset, size, file),
             Self::NoPtLoadSegments =>

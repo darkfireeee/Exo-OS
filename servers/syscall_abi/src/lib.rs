@@ -67,6 +67,7 @@ pub const SYS_MPROTECT: u64 = 10;
 pub const SYS_MUNMAP: u64 = 11;
 pub const SYS_BRK: u64 = 12;
 pub const SYS_RT_SIGACTION: u64 = 13;
+#[deprecated(note = "alias compatibilite: utiliser SYS_RT_SIGACTION")]
 pub const SYS_SIGACTION: u64 = SYS_RT_SIGACTION;
 pub const SYS_RT_SIGPROCMASK: u64 = 14;
 pub const SYS_RT_SIGRETURN: u64 = 15;
@@ -327,9 +328,26 @@ pub const SYS_EXO_PHOENIX_STATE_SET: u64 = 352;
 pub const SYS_EXO_PHOENIX_STATE_GET: u64 = 353;
 pub const SYS_EXO_BPF: u64 = 360;
 
-pub const EXO_PHOENIX_STATE_NORMAL: u64 = 1;
-pub const EXO_PHOENIX_STATE_NETWORK_DRAINING: u64 = 9;
-pub const EXO_PHOENIX_STATE_NETWORK_SERIALIZED: u64 = 10;
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExoPhoenixStateWire {
+    Normal = 1,
+    NetworkDraining = 9,
+    NetworkSerialized = 10,
+}
+
+impl ExoPhoenixStateWire {
+    #[inline(always)]
+    pub const fn as_syscall_arg(self) -> u64 {
+        self as u8 as u64
+    }
+}
+
+pub const EXO_PHOENIX_STATE_NORMAL: u64 = ExoPhoenixStateWire::Normal.as_syscall_arg();
+pub const EXO_PHOENIX_STATE_NETWORK_DRAINING: u64 =
+    ExoPhoenixStateWire::NetworkDraining.as_syscall_arg();
+pub const EXO_PHOENIX_STATE_NETWORK_SERIALIZED: u64 =
+    ExoPhoenixStateWire::NetworkSerialized.as_syscall_arg();
 
 pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
 pub const SYS_EXOFS_OBJECT_OPEN: u64 = 501;
@@ -366,6 +384,14 @@ pub const SYS_PROC_EXEC: u64 = SYS_EXECVE;
 pub const IPC_HEADER_SIZE: usize = 8;
 pub const IPC_INLINE_PAYLOAD_SIZE: usize = 120;
 pub const IPC_ENVELOPE_SIZE: usize = IPC_HEADER_SIZE + IPC_INLINE_PAYLOAD_SIZE;
+pub const IPC_KERNEL_MAX_MSG_SIZE: usize = 240;
+pub const IPC_RECV_MAX_LEN: usize = 65_536;
+
+/// Convention canonique: `SYS_EXO_IPC_RECV(endpoint, buf, len, flags)`.
+/// Compatibilite legacy: quand `flags == 0` et que le premier argument ressemble
+/// a un pointeur userspace, le kernel accepte encore `recv(buf, len, flags)`.
+/// Les nouveaux serveurs doivent toujours utiliser la forme canonique.
+pub const IPC_RECV_LEGACY_SHORTHAND_MAX_LEN: usize = IPC_RECV_MAX_LEN;
 
 pub const EXO_PROCESS_NAME_LEN: usize = 16;
 
@@ -728,6 +754,7 @@ pub const ENOENT: i64 = -2;
 pub const EINTR: i64 = -4;
 pub const EIO: i64 = -5;
 pub const E2BIG: i64 = -7;
+pub const EMSGSIZE: i64 = -90;
 pub const EBADF: i64 = -9;
 pub const EAGAIN: i64 = -11;
 pub const ENOMEM: i64 = -12;

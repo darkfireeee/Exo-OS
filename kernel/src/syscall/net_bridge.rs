@@ -9,6 +9,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{EndpointId, IpcError};
+use crate::syscall::errno::EMSGSIZE;
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
 pub const NET_OP_OPEN: u32 = 0x4E00;
@@ -128,7 +129,7 @@ fn network_endpoint() -> Result<EndpointId, i64> {
 
 fn ipc_errno(err: IpcError) -> i64 {
     match err {
-        IpcError::MessageTooLarge => -7,
+        IpcError::MessageTooLarge => EMSGSIZE,
         IpcError::WouldBlock | IpcError::QueueEmpty | IpcError::QueueFull | IpcError::Full => -11,
         IpcError::OutOfResources | IpcError::ResourceExhausted | IpcError::ShmPoolFull => -12,
         IpcError::NotFound

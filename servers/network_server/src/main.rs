@@ -77,7 +77,7 @@ impl NetworkService {
         self.iface = SmoltcpIface::init(self.driver.mac(), ip, prefix_len);
         let phoenix =
             unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_EXO_PHOENIX_STATE_GET) };
-        if phoenix == exo_syscall_abi::EXO_PHOENIX_STATE_NORMAL as i64 {
+        if phoenix == exo_syscall_abi::ExoPhoenixStateWire::Normal.as_syscall_arg() as i64 {
             self.isolation.restore();
         }
         self.bootstrapped = true;

@@ -3,15 +3,10 @@
 //! Module d'architecture minimal pour les cibles AArch64 (ARMv8-A 64 bits).
 //!
 //! ## État
-//! Placeholder uniquement. ExoOS v0.2.0 ne declare pas AArch64 comme cible de
-//! boot supportee : pas de VBAR/EL1 complet, pas de GIC/APIC equivalent, pas de
-//! SMP ni ABI syscall AArch64. Les primitives ci-dessous existent seulement pour
-//! garder le port futur localise.
-
-#[cfg(target_arch = "aarch64")]
-compile_error!(
-    "ExoOS v0.2.0 ne supporte pas encore le boot AArch64; cible supportee: x86_64 uniquement"
-);
+//! ExoOS v0.2.0 ne declare pas AArch64 comme cible de boot supportee : pas de
+//! VBAR/EL1 complet, pas de GIC/APIC equivalent, pas de SMP ni ABI syscall
+//! AArch64. Les primitives ci-dessous restent localisees pour un futur port ;
+//! le refus de cible se fait au niveau crate, pas dans ce module.
 
 // ── Primitives de base ────────────────────────────────────────────────────────
 
@@ -142,10 +137,11 @@ use super::ArchInfo;
 /// Retourne les informations d'architecture AArch64
 pub fn arch_info() -> ArchInfo {
     ArchInfo {
-        arch_name: "aarch64",
+        cpu_count: 1,
+        has_apic: false,
+        has_x2apic: false,
+        has_acpi: false,
         page_size: 4096,
-        cache_line: 64,
-        timer_freq_hz: read_cntfrq(),
     }
 }
 

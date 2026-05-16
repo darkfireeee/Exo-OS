@@ -14,8 +14,8 @@
 //! Flux de boot (exo-boot UEFI) :
 //! ```
 //!   exo-boot → handoff_to_kernel() → met EAX=EXOBOOT_MAGIC_U32, RBX=BootInfo
-//!     → jump vers _start (32-bit compat, mais continue identiquement)
-//!     → même trampoline → kernel_main(EXOBOOT_MAGIC_U32, boot_info_phys, 0)
+//!     → jump vers _start_uefi (entry 64-bit, long mode deja actif)
+//!     → _start64 → kernel_main(EXOBOOT_MAGIC_U32, boot_info_phys, 0)
 //! ```
 
 #![no_std]
@@ -234,9 +234,24 @@ core::arch::global_asm!(
     "hlt",
     "jmp _boot_halt32",
     // ─────────────────────────────────────────────────────────────────────────
-    // _start64 : premier code 64-bit après transition long mode
+    // _start_uefi : entree 64-bit pour exo-boot.
+    //
+    // exo-boot arrive deja en long mode avec CR3 final charge. Sauter sur
+    // _start (code32) depuis ce contexte est invalide ; cette entree sauvegarde
+    // la meme convention EAX/RBX puis rejoint le chemin commun _start64.
     // ─────────────────────────────────────────────────────────────────────────
     ".code64",
+    ".global _start_uefi",
+    ".type _start_uefi, @function",
+    "_start_uefi:",
+    "cli",
+    "cld",
+    "mov dword ptr [rip + _mb2_saved_magic], eax",
+    "mov qword ptr [rip + _mb2_saved_info], rbx",
+    "jmp _start64",
+    // ─────────────────────────────────────────────────────────────────────────
+    // _start64 : premier code 64-bit après transition long mode
+    // ─────────────────────────────────────────────────────────────────────────
     ".global _start64",
     ".type _start64, @function",
     "_start64:",

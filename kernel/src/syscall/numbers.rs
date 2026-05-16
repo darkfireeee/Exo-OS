@@ -474,6 +474,7 @@ pub const EACCES: i64 = -13;
 pub const EFAULT: i64 = -14;
 /// Trop grand
 pub const E2BIG: i64 = -7;
+pub const EMSGSIZE: i64 = -90;
 /// Ressource occupée
 pub const EBUSY: i64 = -16;
 /// Interruption par signal

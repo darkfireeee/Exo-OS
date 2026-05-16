@@ -110,7 +110,12 @@ fn efi_main(
     let load_result = unsafe {
         kernel_loader::load_kernel(&params, kernel_phys_dest)
     }.expect("Erreur chargement kernel ELF");
-    boot_println!("Kernel mappé: base={:#x} entry={:#x}", load_result.phys_base, load_result.entry_phys);
+    boot_println!(
+        "Kernel mappé: base={:#x} entry={:#x} handoff64={:#x}",
+        load_result.phys_base,
+        load_result.entry_phys,
+        load_result.handoff64_phys
+    );
 
     // Étape 8 : Allocation du pool de tables de pages (AVANT ExitBootServices)
     let page_table_pool = memory::paging::allocate_page_table_pool(boot_services)
@@ -169,7 +174,7 @@ fn efi_main(
     unsafe {
         kernel_loader::handoff::handoff_to_kernel(
             boot_info_ref as *const kernel_loader::handoff::BootInfo,
-            load_result.entry_phys,
+            load_result.handoff64_phys,
             load_result.phys_base,
             &page_tables,
         )
@@ -244,7 +249,7 @@ pub unsafe extern "C" fn exoboot_main_bios(
     unsafe {
         kernel_loader::handoff::handoff_to_kernel(
             boot_info_ref as *const kernel_loader::handoff::BootInfo,
-            load_result.entry_phys,
+            load_result.handoff64_phys,
             load_result.phys_base,
             &page_tables,
         )

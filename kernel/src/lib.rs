@@ -8,8 +8,8 @@
 //! Couche 0   : memory/    — aucune dépendance kernel
 //! Couche 1   : scheduler/ — dépend de memory/
 //! Couche 1.5 : process/   — dépend de memory/ + scheduler/
-//! Couche 2a  : ipc/       — dépend de memory/ + scheduler/ + security/
-//! Couche 2b  : security/  — dépend de memory/
+//! Couche 2a  : security/  — dépend de memory/ + scheduler/process bootstrap
+//! Couche 2b  : ipc/       — dépend de memory/ + scheduler/ + process/ + security/
 //! Couche 3   : fs/        — dépend de tout sauf ipc/ direct
 //! Transverse : arch/      — peut appeler n'importe quelle couche
 //! ```
@@ -27,6 +27,9 @@
 #![allow(unexpected_cfgs)]
 #![allow(static_mut_refs)]
 #![cfg_attr(not(test), feature(alloc_error_handler))]
+
+#[cfg(all(not(target_arch = "x86_64"), not(test)))]
+compile_error!("ExoOS kernel v0.2.0 supporte uniquement x86_64 comme cible de boot.");
 
 // Garde-fou anti-piège: les tests unitaires du crate kernel doivent être
 // compilés sur une cible host (std), pas sur la cible bare-metal no_std.
@@ -113,7 +116,7 @@ pub use arch::x86_64::cpu::{
 /// 2. memory/       — EmergencyPool EN PREMIER (RÈGLE EMERGENCY-01)
 /// 3. scheduler/    — après memory
 /// 4. process/      — après scheduler
-/// 5. security/     — après memory (RÈGLE SEC-BOOT-GAP : avant IPC)
+/// 5. security/     — après process bootstrap (RÈGLE SEC-BOOT-GAP : avant IPC)
 /// 6. ipc/          — après process + security
 /// 7. fs/           — en dernier
 ///

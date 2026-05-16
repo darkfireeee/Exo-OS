@@ -2633,16 +2633,17 @@ fn bench_sched(args: &[u8]) {
 const CRYPTO_SERVER_ENDPOINT: u64 = 4;
 const CRYPTO_SERVER_PID: u32 = 5;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
-const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
-const CRYPTO_REPLY_DATA_SIZE: usize = 228;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 200;
+const CRYPTO_REPLY_DATA_SIZE: usize = 224;
 const CRYPTO_RANDOM: u32 = 1;
 const CRYPTO_OK: u32 = 0;
 const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 
 #[repr(C)]
 struct CryptoRequestBench {
-    sender_endpoint: u64,
+    sender_pid: u32,
     msg_type: u32,
+    reply_endpoint: u64,
     payload_len: u16,
     version: u8,
     flags: u8,
@@ -2650,8 +2651,12 @@ struct CryptoRequestBench {
     payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
 }
 
+const _: () =
+    assert!(core::mem::size_of::<CryptoRequestBench>() <= syscall::IPC_KERNEL_MAX_MSG_SIZE);
+
 #[repr(C)]
 struct CryptoReplyBench {
+    sender_pid: u32,
     status: u32,
     key_handle: u32,
     data_len: u16,
@@ -2694,8 +2699,9 @@ fn bench_crypto(args: &[u8]) {
     }
 
     let mut req = CryptoRequestBench {
-        sender_endpoint: reply_endpoint,
+        sender_pid: 0,
         msg_type: CRYPTO_RANDOM,
+        reply_endpoint,
         payload_len: 1,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
@@ -2732,6 +2738,7 @@ fn bench_crypto(args: &[u8]) {
         }
 
         let mut reply = CryptoReplyBench {
+            sender_pid: 0,
             status: 0,
             key_handle: 0,
             data_len: 0,

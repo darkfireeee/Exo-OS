@@ -95,17 +95,23 @@ impl InnerRing {
     }
 
     /// Défile un message. Retourne `None` si vide.
+    ///
+    /// Si le buffer appelant est trop petit, le message reste en tete de file :
+    /// aucun dequeue partiel n'est autorise, afin d'eviter la troncature IPC.
     #[inline]
-    fn dequeue(&mut self, buf: &mut [u8]) -> Option<usize> {
+    fn dequeue(&mut self, buf: &mut [u8]) -> Result<Option<usize>, IpcError> {
         if self.count == 0 {
-            return None;
+            return Ok(None);
         }
         let slot = &self.msgs[self.head & RAW_RING_MASK];
-        let len = slot.len.min(buf.len());
+        if slot.len > buf.len() {
+            return Err(IpcError::MessageTooLarge);
+        }
+        let len = slot.len;
         buf[..len].copy_from_slice(&slot.data[..len]);
         self.head = self.head.wrapping_add(1);
         self.count -= 1;
-        Some(len)
+        Ok(Some(len))
     }
 
     #[inline(always)]
@@ -360,10 +366,14 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
 
     {
         let mut ring = slot.ring.lock();
-        if let Some(n) = ring.dequeue(buf) {
-            slot.recv_count.fetch_add(1, Ordering::Relaxed);
-            IPC_STATS.record(StatEvent::MessageReceived);
-            return Ok(n);
+        match ring.dequeue(buf) {
+            Ok(Some(n)) => {
+                slot.recv_count.fetch_add(1, Ordering::Relaxed);
+                IPC_STATS.record(StatEvent::MessageReceived);
+                return Ok(n);
+            }
+            Ok(None) => {}
+            Err(err) => return Err(err),
         }
         if nowait {
             return Err(IpcError::WouldBlock);
@@ -376,10 +386,14 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         let mut ring = slot.ring.lock();
-        if let Some(n) = ring.dequeue(buf) {
-            slot.recv_count.fetch_add(1, Ordering::Relaxed);
-            IPC_STATS.record(StatEvent::MessageReceived);
-            return Ok(n);
+        match ring.dequeue(buf) {
+            Ok(Some(n)) => {
+                slot.recv_count.fetch_add(1, Ordering::Relaxed);
+                IPC_STATS.record(StatEvent::MessageReceived);
+                return Ok(n);
+            }
+            Ok(None) => {}
+            Err(err) => return Err(err),
         }
         if spins > 1_000_000 {
             return Err(IpcError::Timeout);
@@ -494,6 +508,28 @@ mod tests {
             assert_eq!(n, payload.len());
             assert_eq!(&out[..n], &payload);
         }
+
+        mailbox_close(ep);
+    }
+
+    #[test]
+    fn test_raw_recv_too_small_preserves_message() {
+        let ep = EndpointId::new(10).unwrap();
+        mailbox_close(ep);
+        assert!(mailbox_open(ep));
+
+        let payload = *b"oversized-for-small-buffer";
+        send_raw(ep, &payload, 0).expect("send raw");
+
+        let mut tiny = [0u8; 4];
+        assert_eq!(
+            recv_raw(ep, &mut tiny, 0x0001),
+            Err(crate::ipc::core::types::IpcError::MessageTooLarge)
+        );
+
+        let mut out = [0u8; 64];
+        let n = recv_raw(ep, &mut out, 0x0001).expect("recv preserved raw");
+        assert_eq!(&out[..n], &payload);
 
         mailbox_close(ep);
     }

@@ -227,14 +227,15 @@ const _BOOT_INFO_SIZE_OK: () = assert!(core::mem::size_of::<BootInfo>() <= 65536
 ///
 /// PARAMÈTRES :
 ///   - `boot_info`   : Référence à la structure BootInfo allouée statiquement.
-///   - `entry_point` : Adresse physique (identité-mappée) de `_start` du kernel.
+///   - `entry_point` : Adresse physique (identité-mappée) de `_start_uefi`.
 ///   - `_kaslr_base` : Réservé  / compatibilité appelants (non utilisé dans l'ASM).
 ///   - `page_tables` : Tables de pages finales (pml4_phys pour CR3).
 ///
-/// CONVENTION D'APPEL (correspond à `_start` du kernel, kernel/src/main.rs) :
-///   EAX = EXOBOOT_MAGIC_U32   → _start met dans RDI → kernel_main(mb2_magic)
-///   RBX = adresse physique BootInfo → RSI → kernel_main(mb2_info)
-///   xor RDX,RDX (0)           → RDX → kernel_main(rsdp_phys=0, lu depuis BootInfo.acpi_rsdp)
+/// CONVENTION D'APPEL (correspond à `_start_uefi` du kernel, kernel/src/main.rs) :
+///   EAX = EXOBOOT_MAGIC_U32
+///   RBX = adresse physique BootInfo
+///   `_start_uefi` sauvegarde ces valeurs puis rejoint `_start64`, qui appelle
+///   kernel_main(mb2_magic, mb2_info, rsdp_phys=0).
 ///
 /// # Safety
 /// Toutes les préconditions DOIVENT être satisfaites avant l'appel.
@@ -255,11 +256,9 @@ pub unsafe fn handoff_to_kernel(
         );
     }
 
-    // Convention d'appel correspondant à `_start` du kernel (kernel/src/main.rs) :
-    //   _start : mov edi, eax  → RDI = mb2_magic = EXOBOOT_MAGIC_U32
-    //            mov rsi, rbx  → RSI = mb2_info  = adresse physique BootInfo
-    //            xor edx, edx  → RDX = rsdp_phys = 0 (lu par arch_boot_init depuis BootInfo)
-    //            call kernel_main
+    // Convention d'appel correspondant à `_start_uefi` du kernel :
+    //   EAX = EXOBOOT_MAGIC_U32, RBX = BootInfo physique. Le stub 64-bit
+    //   rejoint ensuite `_start64` pour installer la pile et appeler kernel_main.
     //
     // RÈGLE BOOT-06 : point de non-retour — `jmp`, pas `call`.
     // SAFETY : entry_point est l'adresse validée du kernel, boot_info est initialisé.

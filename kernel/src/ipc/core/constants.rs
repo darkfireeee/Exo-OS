@@ -22,6 +22,9 @@ pub const MAX_MSG_SIZE: usize = 240;
 /// Taille du payload dans l'enveloppe ABI Ring1 (`syscall_abi::IpcMessage`).
 /// Les serveurs Ring1 utilisent 8 bytes d'en-tête (`sender_pid`, `msg_type`)
 /// et 120 bytes de payload, soit 128 bytes par enveloppe userspace.
+/// Le kernel accepte aussi des messages raw jusqu'a `MAX_MSG_SIZE`; si le
+/// receveur fournit un buffer plus petit que le message en tete de file,
+/// `recv_raw` retourne `MessageTooLarge` sans consommer ni tronquer le message.
 pub const ABI_IPC_HEADER_SIZE: usize = 8;
 pub const ABI_IPC_PAYLOAD_SIZE: usize = 120;
 pub const ABI_IPC_ENVELOPE_SIZE: usize = ABI_IPC_HEADER_SIZE + ABI_IPC_PAYLOAD_SIZE;

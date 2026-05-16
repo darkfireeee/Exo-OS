@@ -36,21 +36,23 @@ const LAPIC_ID_REG_OFFSET: usize = 0x20;
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
-const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 200;
 const CRYPTO_OK: u32 = 0;
 const CRYPTO_REPLY_SIZE: usize = 240;
-const CRYPTO_REPLY_STATUS_OFFSET: usize = 0;
-const CRYPTO_REPLY_VERSION_OFFSET: usize = 10;
+const CRYPTO_REPLY_STATUS_OFFSET: usize = 4;
+const CRYPTO_REPLY_VERSION_OFFSET: usize = 14;
 const PHOENIX_WAKE_ACK_TIMEOUT_NS: u64 = 5_000_000_000;
 const RAW_NOWAIT: u32 = 0x0001;
 
 #[repr(C)]
 struct PhoenixWakeRequest {
-    sender_endpoint: u64,
+    sender_pid: u32,
     msg_type: u32,
+    reply_endpoint: u64,
     payload_len: u16,
     version: u8,
     flags: u8,
+    cap_token: [u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE],
     payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
 }
 
@@ -187,11 +189,13 @@ fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
     }
 
     let mut request = PhoenixWakeRequest {
-        sender_endpoint: reply_endpoint.get(),
+        sender_pid: 0,
         msg_type: PHOENIX_WAKE_ENTROPY,
+        reply_endpoint: reply_endpoint.get(),
         payload_len: 16,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
+        cap_token: [0u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE],
         payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
     };
     request.payload[..8].copy_from_slice(&entropy.to_le_bytes());

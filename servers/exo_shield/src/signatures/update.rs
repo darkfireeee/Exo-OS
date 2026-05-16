@@ -33,8 +33,8 @@ const CRYPTO_SERVER_ENDPOINT: u64 = 4;
 const CRYPTO_SERVER_PID: u32 = 5;
 const EXO_SHIELD_CRYPTO_REPLY_SLOT: u64 = 0x5349_4755;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
-const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 224;
-const CRYPTO_REPLY_DATA_SIZE: usize = 228;
+const CRYPTO_REQUEST_PAYLOAD_SIZE: usize = 200;
+const CRYPTO_REPLY_DATA_SIZE: usize = 224;
 const VERIFY_UPDATE_CHUNK_SIZE: usize = CRYPTO_REQUEST_PAYLOAD_SIZE - 7;
 const CRYPTO_VERIFY: u32 = 6;
 const VERIFY_OP_BEGIN: u8 = 0;
@@ -64,8 +64,9 @@ fn read_tsc() -> u64 {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoRequest {
-    sender_endpoint: u64,
+    sender_pid: u32,
     msg_type: u32,
+    reply_endpoint: u64,
     payload_len: u16,
     version: u8,
     flags: u8,
@@ -73,9 +74,12 @@ struct CryptoRequest {
     payload: [u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
 }
 
+const _: () = assert!(core::mem::size_of::<CryptoRequest>() <= syscall::IPC_KERNEL_MAX_MSG_SIZE);
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoReply {
+    sender_pid: u32,
     status: u32,
     key_handle: u32,
     data_len: u16,
@@ -87,6 +91,7 @@ struct CryptoReply {
 impl CryptoReply {
     const fn empty() -> Self {
         Self {
+            sender_pid: 0,
             status: 0,
             key_handle: 0,
             data_len: 0,
@@ -176,8 +181,9 @@ fn ensure_crypto_service_token() -> bool {
 
 fn crypto_verify_finalize(ctx_handle: u32, reply_endpoint: u64) -> Option<CryptoReply> {
     let mut req = CryptoRequest {
-        sender_endpoint: reply_endpoint,
+        sender_pid: 0,
         msg_type: CRYPTO_VERIFY,
+        reply_endpoint,
         payload_len: 5,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
@@ -209,8 +215,9 @@ fn crypto_verify_ed25519(
     let cap_token = *CRYPTO_SERVICE_TOKEN.lock();
 
     let mut begin = CryptoRequest {
-        sender_endpoint: reply_endpoint,
+        sender_pid: 0,
         msg_type: CRYPTO_VERIFY,
+        reply_endpoint,
         payload_len: 99,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
@@ -232,8 +239,9 @@ fn crypto_verify_ed25519(
     let ctx_handle = begin_reply.key_handle;
     for chunk in message.chunks(VERIFY_UPDATE_CHUNK_SIZE) {
         let mut update = CryptoRequest {
-            sender_endpoint: reply_endpoint,
+            sender_pid: 0,
             msg_type: CRYPTO_VERIFY,
+            reply_endpoint,
             payload_len: (7 + chunk.len()) as u16,
             version: CRYPTO_PROTOCOL_VERSION,
             flags: 0,
