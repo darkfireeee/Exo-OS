@@ -103,7 +103,7 @@ impl FeatureVector {
 
     /// Convert a Q16.16 value to an approximate f32 equivalent (for
     /// documentation / debug; actual arithmetic stays in fixed-point).
-    pub fn to_f32(idx: usize) -> f32 {
+    pub fn to_f32(_idx: usize) -> f32 {
         // This is only used for human-readable output; in no_std we
         // return a rough approximation using integer math.
         // For actual computation, use the fixed-point values directly.
@@ -137,11 +137,7 @@ impl FeatureVector {
 
     /// Z-score normalisation (subtract mean, divide by stddev) in Q16.16.
     /// `mean` and `stddev` arrays are provided by the caller.
-    pub fn normalise_zscore(
-        &mut self,
-        mean: &[i32; FEATURE_COUNT],
-        stddev: &[i32; FEATURE_COUNT],
-    ) {
+    pub fn normalise_zscore(&mut self, mean: &[i32; FEATURE_COUNT], stddev: &[i32; FEATURE_COUNT]) {
         for i in 0..FEATURE_COUNT {
             if stddev[i] == 0 {
                 self.values[i] = 0;

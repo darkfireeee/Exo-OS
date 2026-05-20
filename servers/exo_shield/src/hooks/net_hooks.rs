@@ -266,36 +266,30 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Ring buffer of recent net events.
-static NET_EVENTS: Mutex<[NetEvent; MAX_NET_EVENTS]> = Mutex::new(
-    [const { NetEvent::empty() }; MAX_NET_EVENTS],
-);
+static NET_EVENTS: Mutex<[NetEvent; MAX_NET_EVENTS]> =
+    Mutex::new([const { NetEvent::empty() }; MAX_NET_EVENTS]);
 static NET_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Port scan tracking table.
-static PORT_SCAN_TABLE: Mutex<[PortScanEntry; MAX_PORT_SCAN_ENTRIES]> = Mutex::new(
-    [const { PortScanEntry::new() }; MAX_PORT_SCAN_ENTRIES],
-);
+static PORT_SCAN_TABLE: Mutex<[PortScanEntry; MAX_PORT_SCAN_ENTRIES]> =
+    Mutex::new([const { PortScanEntry::new() }; MAX_PORT_SCAN_ENTRIES]);
 
 /// Exfiltration tracking table.
-static EXFIL_TABLE: Mutex<[ExfilEntry; MAX_EXFIL_ENTRIES]> = Mutex::new(
-    [const { ExfilEntry::new() }; MAX_EXFIL_ENTRIES],
-);
+static EXFIL_TABLE: Mutex<[ExfilEntry; MAX_EXFIL_ENTRIES]> =
+    Mutex::new([const { ExfilEntry::new() }; MAX_EXFIL_ENTRIES]);
 
 /// DNS query ring buffer.
-static DNS_BUFFER: Mutex<[DnsQueryEntry; MAX_DNS_ENTRIES]> = Mutex::new(
-    [const { DnsQueryEntry::empty() }; MAX_DNS_ENTRIES],
-);
+static DNS_BUFFER: Mutex<[DnsQueryEntry; MAX_DNS_ENTRIES]> =
+    Mutex::new([const { DnsQueryEntry::empty() }; MAX_DNS_ENTRIES]);
 static DNS_BUFFER_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// DNS rate tracking table.
-static DNS_RATE_TABLE: Mutex<[DnsRateEntry; MAX_EXFIL_ENTRIES]> = Mutex::new(
-    [const { DnsRateEntry::new() }; MAX_EXFIL_ENTRIES],
-);
+static DNS_RATE_TABLE: Mutex<[DnsRateEntry; MAX_EXFIL_ENTRIES]> =
+    Mutex::new([const { DnsRateEntry::new() }; MAX_EXFIL_ENTRIES]);
 
 /// Connection tracking table (active connections).
-static CONN_TABLE: Mutex<[NetEvent; MAX_CONN_ENTRIES]> = Mutex::new(
-    [const { NetEvent::empty() }; MAX_CONN_ENTRIES],
-);
+static CONN_TABLE: Mutex<[NetEvent; MAX_CONN_ENTRIES]> =
+    Mutex::new([const { NetEvent::empty() }; MAX_CONN_ENTRIES]);
 static CONN_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Statistics counters.
@@ -317,7 +311,7 @@ fn store_net_event(event: NetEvent) {
 /// Track a destination port for a given source IP in the port-scan detector.
 /// Returns `true` if a port scan is detected.
 fn track_port_for_scan(src_ip: u32, dst_port: u16) -> bool {
-    let mut table = PORT_SCAN_TABLE.lock();
+    let table = PORT_SCAN_TABLE.lock();
     let now = read_tsc();
 
     // Find existing entry for this source IP
@@ -346,7 +340,8 @@ fn track_port_for_scan(src_ip: u32, dst_port: u16) -> bool {
                 table[i].ports[count].store(dst_port, Ordering::Release);
                 let new_count = table[i].port_count.fetch_add(1, Ordering::AcqRel) + 1;
 
-                if new_count >= PORT_SCAN_THRESHOLD && table[i].flagged.load(Ordering::Acquire) == 0 {
+                if new_count >= PORT_SCAN_THRESHOLD && table[i].flagged.load(Ordering::Acquire) == 0
+                {
                     table[i].flagged.store(1, Ordering::Release);
                     PORT_SCAN_DETECTIONS.fetch_add(1, Ordering::Relaxed);
                     return true;
@@ -390,7 +385,7 @@ fn track_port_for_scan(src_ip: u32, dst_port: u16) -> bool {
 /// Track outbound bytes for a PID in the exfiltration detector.
 /// Returns `true` if exfiltration is detected.
 fn track_exfil_bytes(pid: u32, bytes: u64) -> bool {
-    let mut table = EXFIL_TABLE.lock();
+    let table = EXFIL_TABLE.lock();
     let now = read_tsc();
 
     for i in 0..MAX_EXFIL_ENTRIES {
@@ -444,7 +439,7 @@ fn track_exfil_bytes(pid: u32, bytes: u64) -> bool {
 /// Track DNS query rate per PID.
 /// Returns `true` if the rate exceeds the threshold.
 fn track_dns_rate(pid: u32) -> bool {
-    let mut table = DNS_RATE_TABLE.lock();
+    let table = DNS_RATE_TABLE.lock();
     let now = read_tsc();
 
     for i in 0..MAX_EXFIL_ENTRIES {

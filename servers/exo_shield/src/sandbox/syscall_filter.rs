@@ -122,10 +122,18 @@ impl SyscallViolation {
         }
     }
 
-    pub fn pid(&self) -> u32 { self.pid }
-    pub fn syscall_nr(&self) -> u8 { self.syscall_nr }
-    pub fn timestamp(&self) -> u64 { self.timestamp }
-    pub fn is_lethal(&self) -> bool { self.lethal }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+    pub fn syscall_nr(&self) -> u8 {
+        self.syscall_nr
+    }
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+    pub fn is_lethal(&self) -> bool {
+        self.lethal
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,16 +214,24 @@ impl SyscallFilterProfile {
     }
 
     /// Get the PID.
-    pub fn pid(&self) -> u32 { self.pid }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
 
     /// Whether the profile is in active use.
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     /// Total violations recorded.
-    pub fn total_violations(&self) -> u64 { self.total_violations }
+    pub fn total_violations(&self) -> u64 {
+        self.total_violations
+    }
 
     /// Current violation threshold.
-    pub fn violation_threshold(&self) -> u32 { self.violation_threshold }
+    pub fn violation_threshold(&self) -> u32 {
+        self.violation_threshold
+    }
 
     /// Set the violation threshold.
     pub fn set_violation_threshold(&mut self, threshold: u32) {
@@ -402,7 +418,7 @@ mod tests {
     #[test]
     fn bitmap_allow_deny() {
         let mut bm = SyscallBitmap::deny_all();
-        bm.allow(1);  // write
+        bm.allow(1); // write
         bm.allow(60); // exit
         assert!(bm.is_allowed(1));
         assert!(bm.is_allowed(60));

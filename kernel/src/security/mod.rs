@@ -178,8 +178,8 @@ pub use exoseal::{
 };
 
 pub use ipc_policy::{
-    check_direct_ipc, register_service, register_service_class, unregister_service,
-    IpcPolicyResult, ServiceClass,
+    can_inject_src_pid, check_direct_ipc, register_service, register_service_class,
+    unregister_service, IpcPolicyResult, ServiceClass,
 };
 
 fn exoargos_context_switch_snapshot(tcb: &crate::scheduler::core::task::ThreadControlBlock) {

@@ -17,6 +17,37 @@ pub use exo_phoenix_ssr::{
 pub const FREEZE_ACK_DONE: u32 = 0xACED_0001;
 pub const TLB_ACK_DONE: u32 = 0xACED_0002;
 
+/// Process records retained for recovery metadata during a Phoenix switch.
+pub const SSR_MAX_PROCESSES: usize = 24;
+/// IPC endpoints retained for recovery metadata during a Phoenix switch.
+pub const SSR_MAX_ENDPOINTS: usize = 48;
+pub const SSR_PROCESS_RECORD_SIZE: usize = 96;
+pub const SSR_ENDPOINT_RECORD_SIZE: usize = 24;
+pub const SSR_RECOVERY_STATE_SIZE: usize = 64
+    + 44
+    + 4
+    + SSR_MAX_PROCESSES * SSR_PROCESS_RECORD_SIZE
+    + 4
+    + SSR_MAX_ENDPOINTS * SSR_ENDPOINT_RECORD_SIZE
+    + 16;
+
+const _: () = assert!(
+    SSR_SIZE <= 16 * 4096,
+    "SSR physical layout must fit in the reserved 64 KiB region"
+);
+const _: () = assert!(
+    SSR_RECOVERY_STATE_SIZE <= 4096,
+    "SSR recovery metadata budget must fit in one 4 KiB page"
+);
+const _: () = assert!(
+    SSR_MAX_PROCESSES >= 12,
+    "SSR must preserve all Ring1 services before optional Ring3 records"
+);
+const _: () = assert!(
+    MAX_CORES == crate::arch::constants::SSR_MAX_CORES_LAYOUT,
+    "SSR core layout must match arch constants"
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsrVersionError {
     IncompatibleMagicVersion(u64),

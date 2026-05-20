@@ -350,18 +350,27 @@ pub fn generate_report(
 ) -> Report {
     let mut report = Report::default();
     report.timestamp = read_tsc();
-    report.total_events_analyzed = (exec_total + net_scan_detections + net_exfil_detections
-        + mem_overflows + mem_uaf + syscall_rate_anomalies + syscall_seq_matches + ipc_denied)
-        as u32;
+    report.total_events_analyzed = (exec_total
+        + net_scan_detections
+        + net_exfil_detections
+        + mem_overflows
+        + mem_uaf
+        + syscall_rate_anomalies
+        + syscall_seq_matches
+        + ipc_denied) as u32;
 
     let mut threat_idx = 0usize;
     let mut max_severity = 0u8;
 
     // ── Threat: Privilege Escalation (exec denials) ──
     if exec_denied > 0 {
-        let severity = if exec_denied > 10 { ThreatLevel::Critical as u8 }
-                       else if exec_denied > 3 { ThreatLevel::High as u8 }
-                       else { ThreatLevel::Medium as u8 };
+        let severity = if exec_denied > 10 {
+            ThreatLevel::Critical as u8
+        } else if exec_denied > 3 {
+            ThreatLevel::High as u8
+        } else {
+            ThreatLevel::Medium as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -382,8 +391,11 @@ pub fn generate_report(
 
     // ── Threat: Reconnaissance (port scans) ──
     if net_scan_detections > 0 {
-        let severity = if net_scan_detections > 5 { ThreatLevel::High as u8 }
-                       else { ThreatLevel::Medium as u8 };
+        let severity = if net_scan_detections > 5 {
+            ThreatLevel::High as u8
+        } else {
+            ThreatLevel::Medium as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -426,9 +438,13 @@ pub fn generate_report(
     // ── Threat: Malware (memory anomalies) ──
     if mem_overflows > 0 || mem_uaf > 0 {
         let total_mem = mem_overflows + mem_uaf;
-        let severity = if total_mem > 5 { ThreatLevel::Critical as u8 }
-                       else if total_mem > 2 { ThreatLevel::High as u8 }
-                       else { ThreatLevel::Medium as u8 };
+        let severity = if total_mem > 5 {
+            ThreatLevel::Critical as u8
+        } else if total_mem > 2 {
+            ThreatLevel::High as u8
+        } else {
+            ThreatLevel::Medium as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -449,8 +465,11 @@ pub fn generate_report(
 
     // ── Threat: Lateral Movement (syscall sequences) ──
     if syscall_seq_matches > 0 {
-        let severity = if syscall_seq_matches > 3 { ThreatLevel::Critical as u8 }
-                       else { ThreatLevel::High as u8 };
+        let severity = if syscall_seq_matches > 3 {
+            ThreatLevel::Critical as u8
+        } else {
+            ThreatLevel::High as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -471,8 +490,11 @@ pub fn generate_report(
 
     // ── Threat: DoS (rate anomalies) ──
     if syscall_rate_anomalies > 0 {
-        let severity = if syscall_rate_anomalies > 10 { ThreatLevel::High as u8 }
-                       else { ThreatLevel::Medium as u8 };
+        let severity = if syscall_rate_anomalies > 10 {
+            ThreatLevel::High as u8
+        } else {
+            ThreatLevel::Medium as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -493,8 +515,11 @@ pub fn generate_report(
 
     // ── Threat: Policy Violation (IPC denials) ──
     if ipc_denied > 0 {
-        let severity = if ipc_denied > 20 { ThreatLevel::High as u8 }
-                       else { ThreatLevel::Low as u8 };
+        let severity = if ipc_denied > 20 {
+            ThreatLevel::High as u8
+        } else {
+            ThreatLevel::Low as u8
+        };
         max_severity = max_severity.max(severity);
 
         if threat_idx < MAX_THREATS {
@@ -794,12 +819,8 @@ pub fn serialize_report(report: &Report, buf: &mut [u8]) -> usize {
     buf[12..16].copy_from_slice(&report.checksum.to_le_bytes());
 
     // Write payload
-    let payload_bytes = unsafe {
-        core::slice::from_raw_parts(
-            report as *const Report as *const u8,
-            payload_size,
-        )
-    };
+    let payload_bytes =
+        unsafe { core::slice::from_raw_parts(report as *const Report as *const u8, payload_size) };
     buf[header_size..total_size].copy_from_slice(payload_bytes);
 
     total_size
@@ -836,19 +857,13 @@ pub fn deserialize_report(buf: &[u8]) -> Option<Report> {
     let mut report = Report::default();
     let payload_bytes = &buf[header_size..header_size + payload_size];
     let report_bytes = unsafe {
-        core::slice::from_raw_parts_mut(
-            &mut report as *mut Report as *mut u8,
-            payload_size,
-        )
+        core::slice::from_raw_parts_mut(&mut report as *mut Report as *mut u8, payload_size)
     };
     report_bytes.copy_from_slice(payload_bytes);
 
     // Verify checksum (compute over the report excluding the checksum field)
     let check_bytes = unsafe {
-        core::slice::from_raw_parts(
-            &report as *const Report as *const u8,
-            payload_size - 4,
-        )
+        core::slice::from_raw_parts(&report as *const Report as *const u8, payload_size - 4)
     };
     let computed_checksum = crc32(check_bytes);
 

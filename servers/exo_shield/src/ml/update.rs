@@ -3,7 +3,7 @@
 //! Implements weight update, version tracking, update verification, and
 //! rollback capability — all with static arrays and atomic counters.
 
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::features::FEATURE_COUNT;
 use super::model::{ActivationFn, ModelWeights, OUTPUT_SIZE};
@@ -37,8 +37,12 @@ impl ModelVersion {
         Self { version, checksum }
     }
 
-    pub fn version(&self) -> u32 { self.version }
-    pub fn checksum(&self) -> u64 { self.checksum }
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+    pub fn checksum(&self) -> u64 {
+        self.checksum
+    }
 
     /// Compute a simple XOR checksum over the model weights and biases.
     pub fn compute_checksum(model: &ModelWeights) -> u64 {
@@ -148,9 +152,15 @@ impl ModelUpdate {
         true
     }
 
-    pub fn target_version(&self) -> u32 { self.target_version }
-    pub fn claimed_checksum(&self) -> u64 { self.claimed_checksum }
-    pub fn activation(&self) -> ActivationFn { self.activation }
+    pub fn target_version(&self) -> u32 {
+        self.target_version
+    }
+    pub fn claimed_checksum(&self) -> u64 {
+        self.claimed_checksum
+    }
+    pub fn activation(&self) -> ActivationFn {
+        self.activation
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -230,12 +240,11 @@ impl ModelUpdateManager {
     /// Apply a model update with verification.
     pub fn apply_update(&mut self, update: &ModelUpdate) -> UpdateStatus {
         // Acquire simple lock.
-        if self.updating.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ).is_err() {
+        if self
+            .updating
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             // Already updating; reject.
             return UpdateStatus::InvalidPayload;
         }
@@ -291,12 +300,11 @@ impl ModelUpdateManager {
 
     /// Rollback to the most recent snapshot.
     pub fn rollback(&mut self) -> UpdateStatus {
-        if self.updating.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ).is_err() {
+        if self
+            .updating
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return UpdateStatus::InvalidPayload;
         }
 
@@ -404,7 +412,13 @@ mod tests {
         tmp_model.set_version(target_version);
         let checksum = ModelVersion::compute_checksum(&tmp_model);
 
-        let update = ModelUpdate::new(weights, bias, target_version, ActivationFn::Sigmoid, checksum);
+        let update = ModelUpdate::new(
+            weights,
+            bias,
+            target_version,
+            ActivationFn::Sigmoid,
+            checksum,
+        );
         let status = mgr.apply_update(&update);
         assert_eq!(status, UpdateStatus::Applied);
         assert_eq!(mgr.current_model().version(), 2);

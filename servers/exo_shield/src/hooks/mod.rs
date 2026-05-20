@@ -11,39 +11,32 @@
 //! - `syscall_hooks`— syscall frequency & dangerous-syscall detection
 
 pub mod exec_hooks;
-pub mod net_hooks;
 pub mod memory_hooks;
+pub mod net_hooks;
 pub mod syscall_hooks;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use exec_hooks::{
-    ExecEvent, ExecAction, ExecChainEntry, ExecStats,
-    pre_exec_validate, post_exec_monitor, check_exec_chain,
-    record_exec_event, get_exec_stats, add_blacklist_path,
-    remove_blacklist_path, get_exec_chain_for_pid,
-    query_exec_events_for_pid, exec_hooks_init,
+    add_blacklist_path, check_exec_chain, exec_hooks_init, get_exec_chain_for_pid, get_exec_stats,
+    post_exec_monitor, pre_exec_validate, query_exec_events_for_pid, record_exec_event,
+    remove_blacklist_path, ExecAction, ExecChainEntry, ExecEvent, ExecStats,
 };
 
 pub use net_hooks::{
-    NetEvent, NetEventType, DnsQueryEntry, NetStats,
-    pre_connect_check, post_connect_monitor, detect_port_scan,
-    detect_exfiltration, record_dns_query, get_net_stats,
-    query_dns_for_pid, close_connection, net_hooks_init,
+    close_connection, detect_exfiltration, detect_port_scan, get_net_stats, net_hooks_init,
+    post_connect_monitor, pre_connect_check, query_dns_for_pid, record_dns_query, DnsQueryEntry,
+    NetEvent, NetEventType, NetStats,
 };
 
 pub use memory_hooks::{
-    MemEvent, MemEventType, AllocRecord, FreedRegion, MemStats,
-    pre_alloc_check, post_alloc_monitor, detect_buffer_overflow,
-    detect_use_after_free, scan_memory_region, get_mem_stats,
-    verify_canaries_for_pid, query_mem_events_for_pid,
-    record_free, mem_hooks_init,
+    detect_buffer_overflow, detect_use_after_free, get_mem_stats, mem_hooks_init,
+    post_alloc_monitor, pre_alloc_check, query_mem_events_for_pid, record_free, scan_memory_region,
+    verify_canaries_for_pid, AllocRecord, FreedRegion, MemEvent, MemEventType, MemStats,
 };
 
 pub use syscall_hooks::{
-    SyscallEvent, SyscallFreqEntry, SyscallSeqEntry, SyscallStats,
-    pre_syscall_check, post_syscall_monitor, detect_dangerous_syscall,
-    analyze_syscall_sequence, get_syscall_stats,
-    get_syscall_freq, get_syscall_sequence,
-    query_syscall_events_for_pid, syscall_hooks_init,
+    analyze_syscall_sequence, detect_dangerous_syscall, get_syscall_freq, get_syscall_sequence,
+    get_syscall_stats, post_syscall_monitor, pre_syscall_check, query_syscall_events_for_pid,
+    syscall_hooks_init, SyscallEvent, SyscallFreqEntry, SyscallSeqEntry, SyscallStats,
 };

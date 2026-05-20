@@ -26,7 +26,7 @@
 //   3. lifecycle::reap::init_reaper()
 //   4. register_with_oom()
 //   5. state::wakeup::register_with_dma()
-//   6. resource::cgroup::init()
+//   6. resource::cgroup::init() (idempotent; root already prepared before runqueues)
 //
 // RÈGLES ABSOLUES :
 //   • PROC-01 : exec() via trait ElfLoader abstrait

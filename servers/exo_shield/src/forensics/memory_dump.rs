@@ -179,9 +179,8 @@ fn read_tsc() -> u64 {
 static DUMP_BUFFER: Mutex<[u8; DUMP_STORAGE_SIZE]> = Mutex::new([0u8; DUMP_STORAGE_SIZE]);
 
 /// Dump region descriptors.
-static DUMP_REGIONS: Mutex<[DumpRegion; MAX_DUMP_REGIONS]> = Mutex::new(
-    [const { DumpRegion::empty() }; MAX_DUMP_REGIONS],
-);
+static DUMP_REGIONS: Mutex<[DumpRegion; MAX_DUMP_REGIONS]> =
+    Mutex::new([const { DumpRegion::empty() }; MAX_DUMP_REGIONS]);
 
 /// Number of active dump regions.
 static DUMP_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -378,9 +377,7 @@ pub fn retrieve_dump(region_idx: u8, out_buf: &mut [u8]) -> Option<DumpRegion> {
         let buffer = DUMP_BUFFER.lock();
         let src_start = region.storage_offset as usize;
         if src_start + size <= DUMP_STORAGE_SIZE {
-            out_buf[..copy_len].copy_from_slice(
-                &buffer[src_start..src_start + copy_len],
-            );
+            out_buf[..copy_len].copy_from_slice(&buffer[src_start..src_start + copy_len]);
         }
     }
 

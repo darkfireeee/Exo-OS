@@ -166,12 +166,24 @@ impl IdsSignature {
         false
     }
 
-    pub fn sig_id(&self) -> u32 { self.sig_id }
-    pub fn severity(&self) -> AlertSeverity { self.severity }
-    pub fn category(&self) -> u8 { self.category }
-    pub fn is_active(&self) -> bool { self.active }
-    pub fn protocol(&self) -> u8 { self.protocol }
-    pub fn dst_port(&self) -> u16 { self.dst_port }
+    pub fn sig_id(&self) -> u32 {
+        self.sig_id
+    }
+    pub fn severity(&self) -> AlertSeverity {
+        self.severity
+    }
+    pub fn category(&self) -> u8 {
+        self.category
+    }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+    pub fn protocol(&self) -> u8 {
+        self.protocol
+    }
+    pub fn dst_port(&self) -> u16 {
+        self.dst_port
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -226,18 +238,42 @@ impl IdsAlert {
         }
     }
 
-    pub fn sig_id(&self) -> u32 { self.sig_id }
-    pub fn src_ip(&self) -> u32 { self.src_ip }
-    pub fn dst_ip(&self) -> u32 { self.dst_ip }
-    pub fn src_port(&self) -> u16 { self.src_port }
-    pub fn dst_port(&self) -> u16 { self.dst_port }
-    pub fn protocol(&self) -> u8 { self.protocol }
-    pub fn severity(&self) -> AlertSeverity { self.severity }
-    pub fn category(&self) -> u8 { self.category }
-    pub fn timestamp(&self) -> u64 { self.timestamp }
-    pub fn anomaly_score(&self) -> i32 { self.anomaly_score }
-    pub fn is_resolved(&self) -> bool { self.resolved }
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn sig_id(&self) -> u32 {
+        self.sig_id
+    }
+    pub fn src_ip(&self) -> u32 {
+        self.src_ip
+    }
+    pub fn dst_ip(&self) -> u32 {
+        self.dst_ip
+    }
+    pub fn src_port(&self) -> u16 {
+        self.src_port
+    }
+    pub fn dst_port(&self) -> u16 {
+        self.dst_port
+    }
+    pub fn protocol(&self) -> u8 {
+        self.protocol
+    }
+    pub fn severity(&self) -> AlertSeverity {
+        self.severity
+    }
+    pub fn category(&self) -> u8 {
+        self.category
+    }
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+    pub fn anomaly_score(&self) -> i32 {
+        self.anomaly_score
+    }
+    pub fn is_resolved(&self) -> bool {
+        self.resolved
+    }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     /// Mark the alert as resolved.
     pub fn resolve(&mut self) {
@@ -293,12 +329,7 @@ impl IdsSignatureMatcher {
 
     /// Match a payload against all signatures.  Returns the first matching
     /// signature ID (highest severity first), or `None`.
-    pub fn match_payload(
-        &self,
-        payload: &[u8],
-        protocol: u8,
-        dst_port: u16,
-    ) -> Option<u32> {
+    pub fn match_payload(&self, payload: &[u8], protocol: u8, dst_port: u16) -> Option<u32> {
         let mut best_sig_id: Option<u32> = None;
         let mut best_severity = AlertSeverity::Info;
 
@@ -325,7 +356,9 @@ impl IdsSignatureMatcher {
     }
 
     /// Number of active signatures.
-    pub fn sig_count(&self) -> u32 { self.sig_count }
+    pub fn sig_count(&self) -> u32 {
+        self.sig_count
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -364,8 +397,11 @@ impl IntrusionDetectionSystem {
             anomaly_threshold: 32768, // 0.5 in Q16.16
             total_alerts: AtomicU64::new(0),
             alerts_by_severity: [
-                AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0),
-                AtomicU32::new(0), AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
             ],
             generation: AtomicU32::new(0),
         }
@@ -595,14 +631,30 @@ impl IntrusionDetectionSystem {
     // Statistics
     // -----------------------------------------------------------------------
 
-    pub fn total_alerts(&self) -> u64 { self.total_alerts.load(Ordering::Relaxed) }
-    pub fn alerts_info(&self) -> u32 { self.alerts_by_severity[0].load(Ordering::Relaxed) }
-    pub fn alerts_low(&self) -> u32 { self.alerts_by_severity[1].load(Ordering::Relaxed) }
-    pub fn alerts_medium(&self) -> u32 { self.alerts_by_severity[2].load(Ordering::Relaxed) }
-    pub fn alerts_high(&self) -> u32 { self.alerts_by_severity[3].load(Ordering::Relaxed) }
-    pub fn alerts_critical(&self) -> u32 { self.alerts_by_severity[4].load(Ordering::Relaxed) }
-    pub fn generation(&self) -> u32 { self.generation.load(Ordering::Acquire) }
-    pub fn alert_count(&self) -> u32 { self.alert_count }
+    pub fn total_alerts(&self) -> u64 {
+        self.total_alerts.load(Ordering::Relaxed)
+    }
+    pub fn alerts_info(&self) -> u32 {
+        self.alerts_by_severity[0].load(Ordering::Relaxed)
+    }
+    pub fn alerts_low(&self) -> u32 {
+        self.alerts_by_severity[1].load(Ordering::Relaxed)
+    }
+    pub fn alerts_medium(&self) -> u32 {
+        self.alerts_by_severity[2].load(Ordering::Relaxed)
+    }
+    pub fn alerts_high(&self) -> u32 {
+        self.alerts_by_severity[3].load(Ordering::Relaxed)
+    }
+    pub fn alerts_critical(&self) -> u32 {
+        self.alerts_by_severity[4].load(Ordering::Relaxed)
+    }
+    pub fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Acquire)
+    }
+    pub fn alert_count(&self) -> u32 {
+        self.alert_count
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -622,7 +674,8 @@ mod tests {
             80,
             AlertSeverity::High,
             1,
-        ).unwrap();
+        )
+        .unwrap();
         // Should match
         assert!(sig.matches(b"GET /EXPLOIT HTTP/1.1", 6, 80));
         // Wrong protocol
@@ -642,7 +695,8 @@ mod tests {
             0, // any port
             AlertSeverity::Medium,
             2,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(sig.matches(b"data TUNNEL data", 6, 12345));
         assert!(sig.matches(b"data TUNNEL data", 17, 53));
     }
@@ -650,17 +704,16 @@ mod tests {
     #[test]
     fn ids_inspect_payload() {
         let mut ids = IntrusionDetectionSystem::new();
-        let sig = IdsSignature::new(
-            2001,
-            b"MALWARE",
-            6,
-            0,
-            AlertSeverity::Critical,
-            2,
-        ).unwrap();
+        let sig = IdsSignature::new(2001, b"MALWARE", 6, 0, AlertSeverity::Critical, 2).unwrap();
         assert!(ids.add_signature(sig));
         let result = ids.inspect_payload(
-            b"MALWARE_PAYLOAD", 0x0A000001, 0x0A000002, 12345, 80, 6, 1000,
+            b"MALWARE_PAYLOAD",
+            0x0A000001,
+            0x0A000002,
+            12345,
+            80,
+            6,
+            1000,
         );
         assert_eq!(result, Some(2001));
         assert_eq!(ids.total_alerts(), 1);
@@ -671,16 +724,12 @@ mod tests {
     fn ids_anomaly_detection() {
         let mut ids = IntrusionDetectionSystem::new();
         // Anomaly score above threshold (0.5 = 32768)
-        let triggered = ids.report_anomaly(
-            0x0A000001, 0x0A000002, 12345, 80, 6, 40000, 1000,
-        );
+        let triggered = ids.report_anomaly(0x0A000001, 0x0A000002, 12345, 80, 6, 40000, 1000);
         assert!(triggered);
         assert_eq!(ids.total_alerts(), 1);
 
         // Below threshold
-        let triggered2 = ids.report_anomaly(
-            0x0A000001, 0x0A000002, 12345, 80, 6, 10000, 2000,
-        );
+        let triggered2 = ids.report_anomaly(0x0A000001, 0x0A000002, 12345, 80, 6, 10000, 2000);
         assert!(!triggered2);
     }
 
@@ -691,15 +740,16 @@ mod tests {
         assert_eq!(ids.classify_anomaly_severity(20000), AlertSeverity::Low);
         assert_eq!(ids.classify_anomaly_severity(35000), AlertSeverity::Medium);
         assert_eq!(ids.classify_anomaly_severity(50000), AlertSeverity::High);
-        assert_eq!(ids.classify_anomaly_severity(60000), AlertSeverity::Critical);
+        assert_eq!(
+            ids.classify_anomaly_severity(60000),
+            AlertSeverity::Critical
+        );
     }
 
     #[test]
     fn ids_resolve_alert() {
         let mut ids = IntrusionDetectionSystem::new();
-        let sig = IdsSignature::new(
-            3001, b"SIG", 6, 0, AlertSeverity::High, 1,
-        ).unwrap();
+        let sig = IdsSignature::new(3001, b"SIG", 6, 0, AlertSeverity::High, 1).unwrap();
         ids.add_signature(sig);
         ids.inspect_payload(b"SIG_DATA", 1, 2, 3, 4, 6, 100);
         assert_eq!(ids.unresolved_alert_count(), 1);

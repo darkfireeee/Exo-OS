@@ -301,11 +301,21 @@ impl InferenceResult {
         }
     }
 
-    pub fn raw_output(&self) -> &[i32; OUTPUT_SIZE] { &self.raw_output }
-    pub fn max_index(&self) -> u8 { self.max_index }
-    pub fn max_value(&self) -> i32 { self.max_value }
-    pub fn anomaly_prob(&self) -> i32 { self.anomaly_prob }
-    pub fn model_version(&self) -> u32 { self.model_version }
+    pub fn raw_output(&self) -> &[i32; OUTPUT_SIZE] {
+        &self.raw_output
+    }
+    pub fn max_index(&self) -> u8 {
+        self.max_index
+    }
+    pub fn max_value(&self) -> i32 {
+        self.max_value
+    }
+    pub fn anomaly_prob(&self) -> i32 {
+        self.anomaly_prob
+    }
+    pub fn model_version(&self) -> u32 {
+        self.model_version
+    }
 }
 
 // ---------------------------------------------------------------------------

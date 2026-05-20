@@ -72,6 +72,14 @@ pub mod ttl {
 /// Profondeur maximale de délégation (4 niveaux).
 pub const MAX_DELEGATION_DEPTH: u8 = 4;
 
+/// Fenêtre d'audit et de renouvellement des budgets temporels Kairos.
+pub const KAIROS_WINDOW_NS: u64 = 1_000_000_000;
+
+const _: () = assert!(
+    KAIROS_WINDOW_NS == 1_000_000_000,
+    "KAIROS_WINDOW_NS must remain a 1s audit window"
+);
+
 /// Taille maximale de la deadline table (nombre d'entrées).
 /// En Phase 3.1, on utilise une table statique. En Phase 3.2+,
 /// la table sera dynamique (hash map protégée par PKS Credentials).

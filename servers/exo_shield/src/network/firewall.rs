@@ -164,14 +164,30 @@ impl FirewallRule {
     }
 
     // Accessors
-    pub fn src_ip(&self) -> u32 { self.src_ip }
-    pub fn dst_ip(&self) -> u32 { self.dst_ip }
-    pub fn src_port(&self) -> u16 { self.src_port }
-    pub fn dst_port(&self) -> u16 { self.dst_port }
-    pub fn protocol(&self) -> u8 { self.protocol }
-    pub fn action(&self) -> FirewallAction { self.action }
-    pub fn priority(&self) -> u16 { self.priority }
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn src_ip(&self) -> u32 {
+        self.src_ip
+    }
+    pub fn dst_ip(&self) -> u32 {
+        self.dst_ip
+    }
+    pub fn src_port(&self) -> u16 {
+        self.src_port
+    }
+    pub fn dst_port(&self) -> u16 {
+        self.dst_port
+    }
+    pub fn protocol(&self) -> u8 {
+        self.protocol
+    }
+    pub fn action(&self) -> FirewallAction {
+        self.action
+    }
+    pub fn priority(&self) -> u16 {
+        self.priority
+    }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +347,8 @@ impl Firewall {
         dst_port: u16,
         protocol: u8,
     ) -> bool {
-        self.evaluate(src_ip, dst_ip, src_port, dst_port, protocol).is_allowed()
+        self.evaluate(src_ip, dst_ip, src_port, dst_port, protocol)
+            .is_allowed()
     }
 
     // -----------------------------------------------------------------------
@@ -461,20 +478,34 @@ mod tests {
         let mut fw = Firewall::new_deny_default();
         // Low-priority deny rule.
         fw.add_rule(FirewallRule::new(
-            FIREWALL_WILDCARD_IP, FIREWALL_WILDCARD_IP,
-            FIREWALL_WILDCARD_PORT, 80,
-            FIREWALL_WILDCARD_PROTO, FirewallAction::Drop, 100,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_PORT,
+            80,
+            FIREWALL_WILDCARD_PROTO,
+            FirewallAction::Drop,
+            100,
         ));
         // High-priority allow rule.
         fw.add_rule(FirewallRule::new(
-            0x0A000001, FIREWALL_WILDCARD_IP,
-            FIREWALL_WILDCARD_PORT, 80,
-            FIREWALL_WILDCARD_PROTO, FirewallAction::Allow, 10,
+            0x0A000001,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_PORT,
+            80,
+            FIREWALL_WILDCARD_PROTO,
+            FirewallAction::Allow,
+            10,
         ));
         // From the allowed IP → Allow (higher priority)
-        assert_eq!(fw.evaluate(0x0A000001, 0x0A000002, 12345, 80, 6), FirewallAction::Allow);
+        assert_eq!(
+            fw.evaluate(0x0A000001, 0x0A000002, 12345, 80, 6),
+            FirewallAction::Allow
+        );
         // From another IP → Drop (lower priority deny)
-        assert_eq!(fw.evaluate(0x0A000003, 0x0A000002, 12345, 80, 6), FirewallAction::Drop);
+        assert_eq!(
+            fw.evaluate(0x0A000003, 0x0A000002, 12345, 80, 6),
+            FirewallAction::Drop
+        );
     }
 
     #[test]
@@ -487,12 +518,16 @@ mod tests {
     fn firewall_counters() {
         let mut fw = Firewall::new_allow_default();
         fw.add_rule(FirewallRule::new(
-            FIREWALL_WILDCARD_IP, FIREWALL_WILDCARD_IP,
-            FIREWALL_WILDCARD_PORT, 22,
-            FIREWALL_WILDCARD_PROTO, FirewallAction::Drop, 1,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_PORT,
+            22,
+            FIREWALL_WILDCARD_PROTO,
+            FirewallAction::Drop,
+            1,
         ));
-        fw.evaluate(0, 0, 0, 80, 6);  // allowed (no match → default)
-        fw.evaluate(0, 0, 0, 22, 6);  // denied
+        fw.evaluate(0, 0, 0, 80, 6); // allowed (no match → default)
+        fw.evaluate(0, 0, 0, 22, 6); // denied
         assert_eq!(fw.packets_allowed(), 1);
         assert_eq!(fw.packets_denied(), 1);
     }
@@ -501,9 +536,13 @@ mod tests {
     fn firewall_remove_rule() {
         let mut fw = Firewall::new_deny_default();
         fw.add_rule(FirewallRule::new(
-            FIREWALL_WILDCARD_IP, FIREWALL_WILDCARD_IP,
-            FIREWALL_WILDCARD_PORT, 80,
-            FIREWALL_WILDCARD_PROTO, FirewallAction::Allow, 10,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_IP,
+            FIREWALL_WILDCARD_PORT,
+            80,
+            FIREWALL_WILDCARD_PROTO,
+            FirewallAction::Allow,
+            10,
         ));
         assert_eq!(fw.rule_count(), 1);
         assert!(fw.remove_rule(0));

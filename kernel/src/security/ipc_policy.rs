@@ -173,6 +173,24 @@ fn class_of(pid: Pid) -> ServiceClass {
     }
 }
 
+pub fn can_inject_src_pid(pid: Pid) -> bool {
+    matches!(
+        class_of(pid),
+        ServiceClass::InitServer
+            | ServiceClass::IpcBroker
+            | ServiceClass::MemoryServer
+            | ServiceClass::VfsServer
+            | ServiceClass::CryptoServer
+            | ServiceClass::DeviceServer
+            | ServiceClass::NetworkServer
+            | ServiceClass::SchedulerServer
+            | ServiceClass::InputServer
+            | ServiceClass::TtyServer
+            | ServiceClass::VirtioDriver
+            | ServiceClass::ExoShield
+    )
+}
+
 pub fn check_direct_ipc(src: Pid, dst: Pid) -> IpcPolicyResult {
     let src_class = class_of(src);
     let dst_class = class_of(dst);
@@ -258,6 +276,20 @@ mod tests {
             check_direct_ipc(Pid(INIT_SERVER_PID), Pid(9000)),
             IpcPolicyResult::UnknownService
         );
+        assert!(!can_inject_src_pid(Pid(9000)));
+    }
+
+    #[test]
+    fn only_ring1_services_can_request_kernel_pid_injection() {
+        let network = with_service(52, ServiceClass::NetworkServer);
+        let shell = with_service(53, ServiceClass::Exosh);
+
+        assert!(can_inject_src_pid(Pid(INIT_SERVER_PID)));
+        assert!(can_inject_src_pid(network));
+        assert!(!can_inject_src_pid(shell));
+
+        let _ = unregister_service(network);
+        let _ = unregister_service(shell);
     }
 
     #[test]

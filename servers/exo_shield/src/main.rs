@@ -267,17 +267,14 @@ fn behaviour_data_for_event(
             let net_stats = hooks::get_net_stats();
             data.net_connect_rate = 1 + u64_to_i32_saturating(net_stats.total_events.min(99));
             data.net_bytes_sent = u64_to_i32_saturating(event.arg1.min(99));
-            data.port_scan_score =
-                u64_to_i32_saturating(net_stats.port_scan_detections.min(99));
+            data.port_scan_score = u64_to_i32_saturating(net_stats.port_scan_detections.min(99));
             data.dns_query_rate = u64_to_i32_saturating(net_stats.dns_anomalies.min(99));
         }
         engine::EventType::Memory => {
             let mem_stats = hooks::get_mem_stats();
             data.mem_usage = u64_to_i32_saturating(event.arg0.min(99));
-            data.anomaly_running_avg =
-                u64_to_i32_saturating(mem_stats.overflow_detections.min(99));
-            data.suspicious_path_access =
-                u64_to_i32_saturating(mem_stats.uaf_detections.min(99));
+            data.anomaly_running_avg = u64_to_i32_saturating(mem_stats.overflow_detections.min(99));
+            data.suspicious_path_access = u64_to_i32_saturating(mem_stats.uaf_detections.min(99));
         }
         engine::EventType::Process => {
             let exec_stats = hooks::get_exec_stats();
@@ -345,10 +342,7 @@ fn release_containment(pid: u32) -> bool {
     engine_ok || sandbox_ok || firewall_ok
 }
 
-fn process_security_hooks(
-    event: &engine::MonitoredEvent,
-    payload: &[u8],
-) -> HookPipelineResult {
+fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) -> HookPipelineResult {
     let mut result = HookPipelineResult::pass();
 
     match event.event_type {

@@ -220,22 +220,19 @@ static EXEC_EVENTS: Mutex<[ExecEvent; MAX_EXEC_EVENTS]> = Mutex::new(
 static EXEC_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Exec frequency table.
-static EXEC_FREQ_TABLE: Mutex<[ExecFreqEntry; MAX_FREQ_ENTRIES]> = Mutex::new(
-    [const { ExecFreqEntry::new() }; MAX_FREQ_ENTRIES],
-);
+static EXEC_FREQ_TABLE: Mutex<[ExecFreqEntry; MAX_FREQ_ENTRIES]> =
+    Mutex::new([const { ExecFreqEntry::new() }; MAX_FREQ_ENTRIES]);
 
 /// Exec chain table.
-static EXEC_CHAIN_TABLE: Mutex<[ExecChainEntry; MAX_CHAIN_ENTRIES]> = Mutex::new(
-    [const { ExecChainEntry::empty() }; MAX_CHAIN_ENTRIES],
-);
+static EXEC_CHAIN_TABLE: Mutex<[ExecChainEntry; MAX_CHAIN_ENTRIES]> =
+    Mutex::new([const { ExecChainEntry::empty() }; MAX_CHAIN_ENTRIES]);
 
 /// Write index for the exec chain table.
 static EXEC_CHAIN_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Blacklist of forbidden path hashes.
-static BLACKLIST: Mutex<[BlacklistEntry; MAX_BLACKLIST_ENTRIES]> = Mutex::new(
-    [const { BlacklistEntry::new() }; MAX_BLACKLIST_ENTRIES],
-);
+static BLACKLIST: Mutex<[BlacklistEntry; MAX_BLACKLIST_ENTRIES]> =
+    Mutex::new([const { BlacklistEntry::new() }; MAX_BLACKLIST_ENTRIES]);
 
 /// Number of active blacklist entries.
 static BLACKLIST_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -267,7 +264,7 @@ fn is_blacklisted(path_hash: u64) -> bool {
 /// Increment the exec frequency counter for a PID.
 /// Returns the current count within the tracking window.
 fn bump_exec_freq(pid: u32) -> u32 {
-    let mut table = EXEC_FREQ_TABLE.lock();
+    let table = EXEC_FREQ_TABLE.lock();
     let now = read_tsc();
 
     // Search for existing entry
@@ -360,7 +357,7 @@ fn compute_chain_depth(pid: u32) -> u32 {
 /// 4. Default → `Allow`
 ///
 /// Returns the action the kernel should take.
-pub fn pre_exec_validate(pid: u32, ppid: u32, path: &[u8], uid: u32, flags: u8) -> ExecAction {
+pub fn pre_exec_validate(pid: u32, _ppid: u32, path: &[u8], uid: u32, flags: u8) -> ExecAction {
     let path_hash = fnv1a_hash(path);
     TOTAL_EXECS.fetch_add(1, Ordering::Relaxed);
 
@@ -488,7 +485,7 @@ pub fn record_exec_event(event: ExecEvent) {
 /// Returns `true` if the entry was successfully added.
 pub fn add_blacklist_path(path: &[u8]) -> bool {
     let hash = fnv1a_hash(path);
-    let mut bl = BLACKLIST.lock();
+    let bl = BLACKLIST.lock();
     let count = BLACKLIST_COUNT.load(Ordering::Acquire) as usize;
 
     // Check for duplicate

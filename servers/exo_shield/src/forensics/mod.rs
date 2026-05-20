@@ -9,28 +9,25 @@
 //! - `report`      — Forensic report generation & serialization
 
 pub mod memory_dump;
-pub mod timeline;
 pub mod report;
+pub mod timeline;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use memory_dump::{
-    DumpRegion, DumpStorage, DumpChecksum, DumpStats,
-    store_dump, retrieve_dump, verify_dump_checksum,
-    enumerate_dumps, delete_dump, verify_all_dumps,
-    crc32, get_dump_stats, memory_dump_init,
+    crc32, delete_dump, enumerate_dumps, get_dump_stats, memory_dump_init, retrieve_dump,
+    store_dump, verify_all_dumps, verify_dump_checksum, DumpChecksum, DumpRegion, DumpStats,
+    DumpStorage,
 };
 
 pub use timeline::{
-    TimelineEntry, TimelineEventType, TimelineCorrelation, TimelineStats,
-    record_timeline_event, query_timeline, query_timeline_by_time,
-    query_timeline_by_type, correlate_events, get_correlation_chain,
-    get_timeline_stats, timeline_init,
+    correlate_events, get_correlation_chain, get_timeline_stats, query_timeline,
+    query_timeline_by_time, query_timeline_by_type, record_timeline_event, timeline_init,
+    TimelineCorrelation, TimelineEntry, TimelineEventType, TimelineStats,
 };
 
 pub use report::{
-    Report, ThreatSummary, IncidentDetail, Recommendation,
-    ThreatLevel, ThreatCategory, ReportStats,
-    generate_report, serialize_report, deserialize_report,
-    get_report_stats, report_init,
+    deserialize_report, generate_report, get_report_stats, report_init, serialize_report,
+    IncidentDetail, Recommendation, Report, ReportStats, ThreatCategory, ThreatLevel,
+    ThreatSummary,
 };

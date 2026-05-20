@@ -229,29 +229,37 @@ impl AttackPattern {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Ring buffer of recent syscall events.
-static SYSCALL_EVENTS: Mutex<[SyscallEvent; MAX_SYSCALL_EVENTS]> = Mutex::new(
-    [const { SyscallEvent::empty() }; MAX_SYSCALL_EVENTS],
-);
+static SYSCALL_EVENTS: Mutex<[SyscallEvent; MAX_SYSCALL_EVENTS]> =
+    Mutex::new([const { SyscallEvent::empty() }; MAX_SYSCALL_EVENTS]);
 static SYSCALL_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Per-PID frequency tracking table.
-static FREQ_TABLE: Mutex<[SyscallFreqEntry; MAX_FREQ_ENTRIES]> = Mutex::new(
-    [const { SyscallFreqEntry::empty() }; MAX_FREQ_ENTRIES],
-);
+static FREQ_TABLE: Mutex<[SyscallFreqEntry; MAX_FREQ_ENTRIES]> =
+    Mutex::new([const { SyscallFreqEntry::empty() }; MAX_FREQ_ENTRIES]);
 
 /// Per-PID sequence tracking table.
-static SEQ_TABLE: Mutex<[SyscallSeqEntry; MAX_SEQ_ENTRIES]> = Mutex::new(
-    [const { SyscallSeqEntry::empty() }; MAX_SEQ_ENTRIES],
-);
+static SEQ_TABLE: Mutex<[SyscallSeqEntry; MAX_SEQ_ENTRIES]> =
+    Mutex::new([const { SyscallSeqEntry::empty() }; MAX_SEQ_ENTRIES]);
 
 /// Dangerous syscall numbers table.
-static DANGEROUS_SYSCALLS: Mutex<[u32; MAX_DANGEROUS_SYSCALLS]> = Mutex::new(
-    [SYS_PTRACE, SYS_EXECVE, SYS_MOUNT, SYS_CHROOT,
-     SYS_SETUID, SYS_SETGID, SYS_PRCTL, SYS_REBOOT,
-     SYS_KEXEC_LOAD, SYS_INIT_MODULE, SYS_DELETE_MODULE,
-     SYS_BPF, SYS_KEYCTL, SYS_PERF_EVENT_OPEN,
-     SYS_CLONE, SYS_FORK],
-);
+static DANGEROUS_SYSCALLS: Mutex<[u32; MAX_DANGEROUS_SYSCALLS]> = Mutex::new([
+    SYS_PTRACE,
+    SYS_EXECVE,
+    SYS_MOUNT,
+    SYS_CHROOT,
+    SYS_SETUID,
+    SYS_SETGID,
+    SYS_PRCTL,
+    SYS_REBOOT,
+    SYS_KEXEC_LOAD,
+    SYS_INIT_MODULE,
+    SYS_DELETE_MODULE,
+    SYS_BPF,
+    SYS_KEYCTL,
+    SYS_PERF_EVENT_OPEN,
+    SYS_CLONE,
+    SYS_FORK,
+]);
 
 /// Known attack patterns:
 ///   0: fork→ptrace→execve (classic debugger attach exploit)
@@ -526,12 +534,7 @@ pub fn pre_syscall_check(pid: u32, syscall_nr: u32, _args: [u64; 3]) -> bool {
 ///
 /// Records the event, checks for dangerous syscalls, and performs
 /// sequence analysis.
-pub fn post_syscall_monitor(
-    pid: u32,
-    syscall_nr: u32,
-    args: [u64; 3],
-    ret_val: i64,
-) {
+pub fn post_syscall_monitor(pid: u32, syscall_nr: u32, args: [u64; 3], ret_val: i64) {
     let now = read_tsc();
     let is_dangerous = is_dangerous_syscall(syscall_nr);
 

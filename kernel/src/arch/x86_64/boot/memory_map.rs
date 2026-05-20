@@ -33,6 +33,12 @@ use crate::memory::virt::page_table::{
     phys_to_table_mut, read_cr3, write_cr3, FrameAllocatorForWalk, PageTableEntry,
 };
 
+const _: () = assert!(
+    crate::memory::core::layout::PHYS_MAP_SIZE as u64
+        >= crate::arch::constants::PHYSMAP_INITIAL_COVERAGE_BYTES,
+    "physmap must cover at least CORR-76 initial memory"
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BITMAP STATIQUE POUR LE BUDDY ALLOCATOR (zone DMA32 — <4 GiB)
 // ─────────────────────────────────────────────────────────────────────────────

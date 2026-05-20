@@ -236,27 +236,23 @@ impl AllocRateEntry {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Ring buffer of recent memory events.
-static MEM_EVENTS: Mutex<[MemEvent; MAX_MEM_EVENTS]> = Mutex::new(
-    [const { MemEvent::empty() }; MAX_MEM_EVENTS],
-);
+static MEM_EVENTS: Mutex<[MemEvent; MAX_MEM_EVENTS]> =
+    Mutex::new([const { MemEvent::empty() }; MAX_MEM_EVENTS]);
 static MEM_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Allocation tracking table.
-static ALLOC_TABLE: Mutex<[AllocRecord; MAX_ALLOC_RECORDS]> = Mutex::new(
-    [const { AllocRecord::empty() }; MAX_ALLOC_RECORDS],
-);
+static ALLOC_TABLE: Mutex<[AllocRecord; MAX_ALLOC_RECORDS]> =
+    Mutex::new([const { AllocRecord::empty() }; MAX_ALLOC_RECORDS]);
 static ALLOC_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Freed region quarantine table.
-static FREED_TABLE: Mutex<[FreedRegion; MAX_FREED_REGIONS]> = Mutex::new(
-    [const { FreedRegion::empty() }; MAX_FREED_REGIONS],
-);
+static FREED_TABLE: Mutex<[FreedRegion; MAX_FREED_REGIONS]> =
+    Mutex::new([const { FreedRegion::empty() }; MAX_FREED_REGIONS]);
 static FREED_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Allocation rate tracking table.
-static ALLOC_RATE_TABLE: Mutex<[AllocRateEntry; 64]> = Mutex::new(
-    [const { AllocRateEntry::new() }; 64],
-);
+static ALLOC_RATE_TABLE: Mutex<[AllocRateEntry; 64]> =
+    Mutex::new([const { AllocRateEntry::new() }; 64]);
 
 /// Statistics counters.
 static TOTAL_MEM_EVENTS: AtomicU64 = AtomicU64::new(0);
@@ -278,7 +274,7 @@ fn store_mem_event(event: MemEvent) {
 /// Check and bump allocation rate for a PID.
 /// Returns `true` if rate anomaly detected.
 fn check_alloc_rate(pid: u32) -> bool {
-    let mut table = ALLOC_RATE_TABLE.lock();
+    let table = ALLOC_RATE_TABLE.lock();
     let now = read_tsc();
 
     for i in 0..64 {
@@ -433,7 +429,7 @@ pub fn post_alloc_monitor(pid: u32, addr: u64, size: u64, flags: u8) {
 /// `addr + size` by the kernel. This function checks the stored
 /// canary value against the expected `CANARY_VALUE`.
 pub fn detect_buffer_overflow(pid: u32, addr: u64) -> Option<bool> {
-    let mut table = ALLOC_TABLE.lock();
+    let table = ALLOC_TABLE.lock();
 
     for i in 0..MAX_ALLOC_RECORDS {
         let entry = &table[i];

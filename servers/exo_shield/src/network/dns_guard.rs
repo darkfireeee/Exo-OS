@@ -4,7 +4,7 @@
 //! exfiltration detection, and DNS tunneling detection — all `no_std`
 //! compatible.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -128,12 +128,24 @@ impl DnsQueryLog {
         &self.domain[..self.domain_len as usize]
     }
 
-    pub fn src_ip(&self) -> u32 { self.src_ip }
-    pub fn qtype(&self) -> u16 { self.qtype }
-    pub fn timestamp(&self) -> u64 { self.timestamp }
-    pub fn was_blocked(&self) -> bool { self.blocked }
-    pub fn exfil_detected(&self) -> bool { self.exfil_flag }
-    pub fn tunnel_detected(&self) -> bool { self.tunnel_flag }
+    pub fn src_ip(&self) -> u32 {
+        self.src_ip
+    }
+    pub fn qtype(&self) -> u16 {
+        self.qtype
+    }
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+    pub fn was_blocked(&self) -> bool {
+        self.blocked
+    }
+    pub fn exfil_detected(&self) -> bool {
+        self.exfil_flag
+    }
+    pub fn tunnel_detected(&self) -> bool {
+        self.tunnel_flag
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +185,18 @@ impl DnsExfilDetection {
         Self::new(false, false, 0, 0)
     }
 
-    pub fn exfil_suspected(&self) -> bool { self.exfil_suspected }
-    pub fn tunnel_suspected(&self) -> bool { self.tunnel_suspected }
-    pub fn query_rate(&self) -> u64 { self.query_rate }
-    pub fn entropy_scaled(&self) -> u32 { self.entropy_scaled }
+    pub fn exfil_suspected(&self) -> bool {
+        self.exfil_suspected
+    }
+    pub fn tunnel_suspected(&self) -> bool {
+        self.tunnel_suspected
+    }
+    pub fn query_rate(&self) -> u64 {
+        self.query_rate
+    }
+    pub fn entropy_scaled(&self) -> u32 {
+        self.entropy_scaled
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +314,9 @@ impl DnsGuard {
     }
 
     /// Number of allowed domains.
-    pub fn domain_count(&self) -> u32 { self.domain_count }
+    pub fn domain_count(&self) -> u32 {
+        self.domain_count
+    }
 
     // -----------------------------------------------------------------------
     // Query processing
@@ -335,16 +357,28 @@ impl DnsGuard {
 
         // Tunneling detection — entropy analysis.
         let entropy_scaled = compute_entropy_scaled(domain);
-        let tunnel_suspected = entropy_scaled >= ENTROPY_THRESHOLD_SCALED
-            && domain.len() > 10; // short domains are likely legit
+        let tunnel_suspected = entropy_scaled >= ENTROPY_THRESHOLD_SCALED && domain.len() > 10; // short domains are likely legit
         if tunnel_suspected {
             self.total_tunnel_alerts.fetch_add(1, Ordering::Relaxed);
         }
 
         // Log the query.
-        self.log_query(domain, src_ip, qtype, timestamp, blocked, exfil_suspected, tunnel_suspected);
+        self.log_query(
+            domain,
+            src_ip,
+            qtype,
+            timestamp,
+            blocked,
+            exfil_suspected,
+            tunnel_suspected,
+        );
 
-        DnsExfilDetection::new(exfil_suspected, tunnel_suspected, query_rate, entropy_scaled)
+        DnsExfilDetection::new(
+            exfil_suspected,
+            tunnel_suspected,
+            query_rate,
+            entropy_scaled,
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -379,11 +413,21 @@ impl DnsGuard {
     // Statistics
     // -----------------------------------------------------------------------
 
-    pub fn total_queries(&self) -> u64 { self.total_queries.load(Ordering::Relaxed) }
-    pub fn total_blocked(&self) -> u64 { self.total_blocked.load(Ordering::Relaxed) }
-    pub fn total_exfil_alerts(&self) -> u32 { self.total_exfil_alerts.load(Ordering::Relaxed) }
-    pub fn total_tunnel_alerts(&self) -> u32 { self.total_tunnel_alerts.load(Ordering::Relaxed) }
-    pub fn generation(&self) -> u32 { self.generation.load(Ordering::Acquire) }
+    pub fn total_queries(&self) -> u64 {
+        self.total_queries.load(Ordering::Relaxed)
+    }
+    pub fn total_blocked(&self) -> u64 {
+        self.total_blocked.load(Ordering::Relaxed)
+    }
+    pub fn total_exfil_alerts(&self) -> u32 {
+        self.total_exfil_alerts.load(Ordering::Relaxed)
+    }
+    pub fn total_tunnel_alerts(&self) -> u32 {
+        self.total_tunnel_alerts.load(Ordering::Relaxed)
+    }
+    pub fn generation(&self) -> u32 {
+        self.generation.load(Ordering::Acquire)
+    }
 
     // -----------------------------------------------------------------------
     // Internal helpers
@@ -527,8 +571,6 @@ pub fn compute_entropy_scaled(data: &[u8]) -> u32 {
     // We compute log2_approx × 256.
     let log2_scaled = log2_approx_scaled(unique);
 
-    // Weight by the fraction of unique bytes used (penalise sparse usage).
-    let unique_fraction_scaled = (unique as u64 * 256 / 256) as u32; // always 256 for byte data
     // Final: log2(unique) × (unique / max_unique) × scale
     // For simplicity, return log2_scaled (bits per byte × 256 for the
     // worst case of uniform distribution).
@@ -543,15 +585,15 @@ pub fn compute_entropy_scaled(data: &[u8]) -> u32 {
 fn log2_approx_scaled(n: u32) -> u32 {
     // Precomputed log2 values × 256 for powers of 2.
     const LUT: [u32; 9] = [
-        0,           // log2(1) × 256
-        256,         // log2(2) × 256
-        512,         // log2(4) × 256
-        768,         // log2(8) × 256
-        1024,        // log2(16) × 256
-        1280,        // log2(32) × 256
-        1536,        // log2(64) × 256
-        1792,        // log2(128) × 256
-        2048,        // log2(256) × 256
+        0,    // log2(1) × 256
+        256,  // log2(2) × 256
+        512,  // log2(4) × 256
+        768,  // log2(8) × 256
+        1024, // log2(16) × 256
+        1280, // log2(32) × 256
+        1536, // log2(64) × 256
+        1792, // log2(128) × 256
+        2048, // log2(256) × 256
     ];
 
     if n == 0 {

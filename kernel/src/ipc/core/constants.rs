@@ -17,7 +17,10 @@
 /// Taille maximale d'un message inline dans le ring (copie physique).
 /// 240 octets = 256 - 16 (header) → 1 slot tient dans 4 cache lines.
 /// Les messages > 240 octets doivent emprunter le chemin zero-copy SHM.
-pub const MAX_MSG_SIZE: usize = 240;
+pub use crate::arch::constants::MAX_MSG_SIZE;
+
+/// Taille inline réservée aux protocoles qui ajoutent leur propre en-tête.
+pub use crate::arch::constants::IPC_INLINE_MAX;
 
 /// Taille du payload dans l'enveloppe ABI Ring1 (`syscall_abi::IpcMessage`).
 /// Les serveurs Ring1 utilisent 8 bytes d'en-tête (`sender_pid`, `msg_type`)

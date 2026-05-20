@@ -18,12 +18,8 @@ const DEPS_VFS: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_CRYPTO: &[&str] = &["ipc_router", "vfs_server"];
 const DEPS_DEVICE: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_VIRTIO: &[&str] = &["ipc_router", "device_server"];
-const DEPS_NETWORK: &[&str] = &[
-    "ipc_router",
-    "vfs_server",
-    "device_server",
-    "virtio_drivers",
-];
+const DEPS_NETWORK: &[&str] = &["ipc_router", "vfs_server", "device_server"];
+const OPT_DEPS_NETWORK: &[&str] = &["virtio_drivers"];
 const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
 const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "vfs_server"];
@@ -105,7 +101,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "network_server",
         bin_path: NETWORK_SERVER_BIN,
         requires: DEPS_NETWORK,
-        requires_optional: NO_DEPS,
+        requires_optional: OPT_DEPS_NETWORK,
         ready_timeout_ms: 3_000,
         critical: false,
     },

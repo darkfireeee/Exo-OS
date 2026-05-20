@@ -12,14 +12,10 @@ pub use container::{
     container_manager_init, is_pid_quarantined, quarantine_allows_syscall, quarantine_pid,
     release_quarantine, ContainerId, ContainerManager, ContainerProfile, ContainerState,
 };
-pub use fs_restriction::{
-    AccessMode, FsPolicy, PathEntry, PathMatcher, FsRestrictionConfig,
-};
-pub use net_isolation::{
-    BandwidthLimit, HostEntry, NetIsolationConfig, Protocol, ProtocolFilter,
-};
+pub use fs_restriction::{AccessMode, FsPolicy, FsRestrictionConfig, PathEntry, PathMatcher};
+pub use net_isolation::{BandwidthLimit, HostEntry, NetIsolationConfig, Protocol, ProtocolFilter};
 pub use syscall_filter::{
-    SyscallBitmap, SyscallFilterProfile, SyscallViolation, SyscallFilterManager,
+    SyscallBitmap, SyscallFilterManager, SyscallFilterProfile, SyscallViolation,
 };
 
 /// Initialize sandbox containment state.

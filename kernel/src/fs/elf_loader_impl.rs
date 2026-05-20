@@ -10,6 +10,7 @@
 //   - map_stack_pages : alloc frames ZEROED + map_page() via PageTableBuilder
 //   - ElfLoadError    : InvalidElf/UnsupportedArch (variants qui existent dans l'enum)
 
+use crate::arch::constants::USER_ELF_BASE_MIN;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::syscall::path_resolve::resolve_path_to_blob;
@@ -33,7 +34,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
-const USER_ELF_BASE_MIN: u64 = 0x0040_0000;
 const USER_ELF_BASE_MAX: u64 = USER_END.as_u64();
 const _: () = assert!(USER_ELF_BASE_MIN < USER_ELF_BASE_MAX);
 const _: () = assert!(USER_ELF_BASE_MIN == 0x0040_0000);

@@ -160,6 +160,10 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     kdb(b'D'); // Phase 2d done
     crate::arch::x86_64::boot_display::stage_ok("DRIVERS");
 
+    // ── Phase 2e : cgroup root before runqueues (CORR-77) ─────────────
+    crate::process::resource::cgroup::init();
+    kdb(b'c'); // cgroup root ready before scheduler runqueues
+
     // ── Phase 3 : Scheduler ───────────────────────────────────────────
     let sched_cpus = if crate::arch::x86_64::smp::init::smp_boot_complete() {
         cpu_count.max(1)

@@ -3,7 +3,7 @@
 //! Provides allowed-ports / allowed-hosts lists, protocol filtering, and
 //! bandwidth-limit enforcement — all with static fixed-capacity arrays.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -338,9 +338,7 @@ impl NetIsolationConfig {
     pub fn remove_host(&mut self, pattern: &[u8]) -> bool {
         let count = self.host_count as usize;
         for i in 0..count {
-            if self.allowed_hosts[i].is_active()
-                && Self::host_eq(&self.allowed_hosts[i], pattern)
-            {
+            if self.allowed_hosts[i].is_active() && Self::host_eq(&self.allowed_hosts[i], pattern) {
                 for j in i..count.saturating_sub(1) {
                     self.allowed_hosts[j] = self.allowed_hosts[j + 1];
                 }

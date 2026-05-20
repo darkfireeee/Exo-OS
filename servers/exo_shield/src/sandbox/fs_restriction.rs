@@ -304,9 +304,7 @@ impl FsRestrictionConfig {
     pub fn remove_whitelist(&mut self, pattern: &[u8]) -> bool {
         let count = self.whitelist_count as usize;
         for i in 0..count {
-            if self.whitelist[i].is_active()
-                && Self::pattern_eq(&self.whitelist[i], pattern)
-            {
+            if self.whitelist[i].is_active() && Self::pattern_eq(&self.whitelist[i], pattern) {
                 // Shift remaining entries down
                 for j in i..count.saturating_sub(1) {
                     self.whitelist[j] = self.whitelist[j + 1];
@@ -324,9 +322,7 @@ impl FsRestrictionConfig {
     pub fn remove_blacklist(&mut self, pattern: &[u8]) -> bool {
         let count = self.blacklist_count as usize;
         for i in 0..count {
-            if self.blacklist[i].is_active()
-                && Self::pattern_eq(&self.blacklist[i], pattern)
-            {
+            if self.blacklist[i].is_active() && Self::pattern_eq(&self.blacklist[i], pattern) {
                 for j in i..count.saturating_sub(1) {
                     self.blacklist[j] = self.blacklist[j + 1];
                 }
@@ -516,8 +512,13 @@ mod tests {
 
     #[test]
     fn fs_restriction_whitelist_first() {
-        let mut cfg = FsRestrictionConfig::new(FsPolicy::WhitelistFirst, AccessMode::new(AccessMode::NONE));
-        let entry = PathEntry::from_bytes(b"/usr/bin/*", AccessMode::new(AccessMode::READ | AccessMode::EXECUTE)).unwrap();
+        let mut cfg =
+            FsRestrictionConfig::new(FsPolicy::WhitelistFirst, AccessMode::new(AccessMode::NONE));
+        let entry = PathEntry::from_bytes(
+            b"/usr/bin/*",
+            AccessMode::new(AccessMode::READ | AccessMode::EXECUTE),
+        )
+        .unwrap();
         assert!(cfg.add_whitelist(entry));
         assert!(cfg.check_access(b"/usr/bin/ls", AccessMode::new(AccessMode::READ)));
         assert!(!cfg.check_access(b"/usr/bin/ls", AccessMode::new(AccessMode::WRITE)));
@@ -526,8 +527,10 @@ mod tests {
 
     #[test]
     fn fs_restriction_blacklist_first() {
-        let mut cfg = FsRestrictionConfig::new(FsPolicy::BlacklistFirst, AccessMode::new(AccessMode::ALL));
-        let entry = PathEntry::from_bytes(b"/etc/shadow", AccessMode::new(AccessMode::READ)).unwrap();
+        let mut cfg =
+            FsRestrictionConfig::new(FsPolicy::BlacklistFirst, AccessMode::new(AccessMode::ALL));
+        let entry =
+            PathEntry::from_bytes(b"/etc/shadow", AccessMode::new(AccessMode::READ)).unwrap();
         assert!(cfg.add_blacklist(entry));
         assert!(!cfg.check_access(b"/etc/shadow", AccessMode::new(AccessMode::READ)));
         assert!(cfg.check_access(b"/etc/shadow", AccessMode::new(AccessMode::WRITE)));
@@ -535,7 +538,8 @@ mod tests {
 
     #[test]
     fn fs_restriction_remove() {
-        let mut cfg = FsRestrictionConfig::new(FsPolicy::WhitelistFirst, AccessMode::new(AccessMode::NONE));
+        let mut cfg =
+            FsRestrictionConfig::new(FsPolicy::WhitelistFirst, AccessMode::new(AccessMode::NONE));
         let entry = PathEntry::from_bytes(b"/tmp/*", AccessMode::new(AccessMode::ALL)).unwrap();
         assert!(cfg.add_whitelist(entry));
         assert_eq!(cfg.whitelist_count(), 1);

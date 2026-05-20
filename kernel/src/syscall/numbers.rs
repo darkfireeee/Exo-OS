@@ -5,7 +5,11 @@
 //! ## Compatibilité
 //! - [0..299]   : numéros compatibles Linux x86_64 (même ABI que glibc)
 //! - [300..399] : extensions Exo-OS (IPC natif, capabilities, sécurité)
-//! - [400..499] : réservés pour usage futur
+//! - [400..436] : réservés pour usage futur
+//! - [437]      : SYS_OPENAT2 (Linux compat)
+//! - [438..440] : réservés pour usage futur
+//! - [441]      : SYS_EPOLL_PWAIT2 (Linux compat)
+//! - [442..499] : réservés pour usage futur
 //! - [500..520] : ExoFS syscalls natifs
 //! - [521..529] : réservés pour usage futur
 //! - [530..546] : GI-03 drivers syscalls

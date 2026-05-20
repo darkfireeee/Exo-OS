@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::sync::spinlock::SpinLock;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Nombre maximum de cgroups.
 const MAX_CGROUPS: usize = 256;
@@ -219,6 +219,7 @@ impl CgroupTable {
 
 /// Table globale.
 static CGROUP_TABLE: CgroupTable = CgroupTable::new();
+static CGROUP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Handle vers un cgroup (type opaque utilisé dans le PCB).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -229,13 +230,25 @@ impl CgroupHandle {
     pub const ROOT: Self = Self(ROOT_CGROUP_ID);
 }
 
-/// Initialise le cgroup racine (appelé par process::init).
+/// Initialise le cgroup racine.
+///
+/// Idempotent: le boot l'appelle avant `scheduler::init()` pour que les
+/// runqueues ne puissent jamais observer un cgroup racine absent, puis
+/// `process::init()` le rappelle pendant l'initialisation complète process.
 /// Les champs non-atomiques (id, parent_id) sont déjà 0 par construction statique.
 pub fn init() {
+    if CGROUP_INITIALIZED.swap(true, Ordering::AcqRel) {
+        return;
+    }
     let root = &CGROUP_TABLE.slots[0];
     root.refcount.store(1, Ordering::Release);
     root.valid.store(1, Ordering::Release);
     CGROUP_TABLE.count.store(1, Ordering::Release);
+}
+
+#[inline]
+pub fn is_initialized() -> bool {
+    CGROUP_INITIALIZED.load(Ordering::Acquire)
 }
 
 /// Accède à la table globale.

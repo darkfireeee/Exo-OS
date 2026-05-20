@@ -9,12 +9,12 @@ pub mod ids;
 pub mod traffic_analysis;
 
 // Re-export primary public types.
+pub use dns_guard::{DnsExfilDetection, DnsGuard, DnsQueryLog};
 pub use firewall::{
     block_pid, firewall_init, is_pid_blocked, unblock_pid, Firewall, FirewallAction, FirewallRule,
     FIREWALL_WILDCARD,
 };
-pub use traffic_analysis::{FlowEntry, FlowKey, TrafficAnalyzer, BURST_THRESHOLD};
-pub use dns_guard::{DnsGuard, DnsQueryLog, DnsExfilDetection};
 pub use ids::{
     AlertSeverity, IdsAlert, IdsSignature, IdsSignatureMatcher, IntrusionDetectionSystem,
 };
+pub use traffic_analysis::{FlowEntry, FlowKey, TrafficAnalyzer, BURST_THRESHOLD};

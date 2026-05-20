@@ -3,7 +3,7 @@
 //! Provides packet counting, flow tracking (max 64 flows), statistical
 //! analysis, and burst detection — all `no_std` compatible.
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -34,13 +34,7 @@ pub struct FlowKey {
 }
 
 impl FlowKey {
-    pub const fn new(
-        src_ip: u32,
-        dst_ip: u32,
-        src_port: u16,
-        dst_port: u16,
-        protocol: u8,
-    ) -> Self {
+    pub const fn new(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, protocol: u8) -> Self {
         Self {
             src_ip,
             dst_ip,
@@ -63,11 +57,21 @@ impl FlowKey {
         h
     }
 
-    pub fn src_ip(&self) -> u32 { self.src_ip }
-    pub fn dst_ip(&self) -> u32 { self.dst_ip }
-    pub fn src_port(&self) -> u16 { self.src_port }
-    pub fn dst_port(&self) -> u16 { self.dst_port }
-    pub fn protocol(&self) -> u8 { self.protocol }
+    pub fn src_ip(&self) -> u32 {
+        self.src_ip
+    }
+    pub fn dst_ip(&self) -> u32 {
+        self.dst_ip
+    }
+    pub fn src_port(&self) -> u16 {
+        self.src_port
+    }
+    pub fn dst_port(&self) -> u16 {
+        self.dst_port
+    }
+    pub fn protocol(&self) -> u8 {
+        self.protocol
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,13 +117,27 @@ impl FlowEntry {
         }
     }
 
-    pub fn key(&self) -> &FlowKey { &self.key }
-    pub fn packet_count(&self) -> u64 { self.packet_count }
-    pub fn byte_count(&self) -> u64 { self.byte_count }
-    pub fn first_seen(&self) -> u64 { self.first_seen }
-    pub fn last_seen(&self) -> u64 { self.last_seen }
-    pub fn burst_detected(&self) -> bool { self.burst_detected }
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn key(&self) -> &FlowKey {
+        &self.key
+    }
+    pub fn packet_count(&self) -> u64 {
+        self.packet_count
+    }
+    pub fn byte_count(&self) -> u64 {
+        self.byte_count
+    }
+    pub fn first_seen(&self) -> u64 {
+        self.first_seen
+    }
+    pub fn last_seen(&self) -> u64 {
+        self.last_seen
+    }
+    pub fn burst_detected(&self) -> bool {
+        self.burst_detected
+    }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
 
     /// Flow duration in ticks.
     pub fn duration(&self) -> u64 {
@@ -170,14 +188,24 @@ impl TrafficStats {
             total_packets: AtomicU64::new(0),
             total_bytes: AtomicU64::new(0),
             proto_packets: [
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
             proto_bytes: [
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0),
-                AtomicU64::new(0), AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
         }
     }
@@ -200,11 +228,21 @@ impl TrafficStats {
         self.proto_bytes[slot].fetch_add(bytes, Ordering::Relaxed);
     }
 
-    pub fn total_packets(&self) -> u64 { self.total_packets.load(Ordering::Relaxed) }
-    pub fn total_bytes(&self) -> u64 { self.total_bytes.load(Ordering::Relaxed) }
-    pub fn tcp_packets(&self) -> u64 { self.proto_packets[0].load(Ordering::Relaxed) }
-    pub fn udp_packets(&self) -> u64 { self.proto_packets[1].load(Ordering::Relaxed) }
-    pub fn icmp_packets(&self) -> u64 { self.proto_packets[2].load(Ordering::Relaxed) }
+    pub fn total_packets(&self) -> u64 {
+        self.total_packets.load(Ordering::Relaxed)
+    }
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes.load(Ordering::Relaxed)
+    }
+    pub fn tcp_packets(&self) -> u64 {
+        self.proto_packets[0].load(Ordering::Relaxed)
+    }
+    pub fn udp_packets(&self) -> u64 {
+        self.proto_packets[1].load(Ordering::Relaxed)
+    }
+    pub fn icmp_packets(&self) -> u64 {
+        self.proto_packets[2].load(Ordering::Relaxed)
+    }
 }
 
 /// The main traffic analysis engine.
@@ -245,12 +283,7 @@ impl TrafficAnalyzer {
 
     /// Process an incoming packet.  Updates flow tracking, statistics,
     /// and burst detection.
-    pub fn process_packet(
-        &mut self,
-        key: FlowKey,
-        bytes: u64,
-        timestamp: u64,
-    ) {
+    pub fn process_packet(&mut self, key: FlowKey, bytes: u64, timestamp: u64) {
         // Update global stats.
         self.stats.record(bytes, key.protocol());
 
@@ -301,9 +334,7 @@ impl TrafficAnalyzer {
     fn find_or_create_flow(&mut self, key: FlowKey, timestamp: u64) -> usize {
         // Search existing.
         for i in 0..self.flow_count as usize {
-            if self.flows[i].is_active()
-                && self.flows[i].key() == &key
-            {
+            if self.flows[i].is_active() && self.flows[i].key() == &key {
                 return i;
             }
         }
@@ -400,7 +431,9 @@ impl TrafficAnalyzer {
         let mut write = 0usize;
         let count = self.flow_count as usize;
         for read in 0..count {
-            if self.flows[read].is_active() && now.saturating_sub(self.flows[read].last_seen) > max_age {
+            if self.flows[read].is_active()
+                && now.saturating_sub(self.flows[read].last_seen) > max_age
+            {
                 evicted += 1;
             } else {
                 if write != read {
@@ -425,10 +458,14 @@ impl TrafficAnalyzer {
     // -----------------------------------------------------------------------
 
     /// Number of active flows.
-    pub fn flow_count(&self) -> u32 { self.flow_count }
+    pub fn flow_count(&self) -> u32 {
+        self.flow_count
+    }
 
     /// Whether a global burst is currently detected.
-    pub fn is_burst_detected(&self) -> bool { self.burst_flag }
+    pub fn is_burst_detected(&self) -> bool {
+        self.burst_flag
+    }
 
     /// Find flows from a specific source IP.
     pub fn flows_by_src_ip(&self, src_ip: u32, results: &mut [usize; MAX_FLOWS]) -> usize {
@@ -445,7 +482,9 @@ impl TrafficAnalyzer {
     }
 
     /// Get a reference to the traffic statistics.
-    pub fn stats(&self) -> &TrafficStats { &self.stats }
+    pub fn stats(&self) -> &TrafficStats {
+        &self.stats
+    }
 
     /// Generation counter.
     pub fn generation(&self) -> u32 {

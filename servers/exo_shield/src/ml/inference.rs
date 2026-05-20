@@ -109,11 +109,21 @@ pub struct BatchInferenceItem {
 }
 
 impl BatchInferenceItem {
-    pub fn features(&self) -> &FeatureVector { &self.features }
-    pub fn result(&self) -> &InferenceResult { &self.result }
-    pub fn classification(&self) -> Classification { self.classification }
-    pub fn confidence(&self) -> ConfidenceScore { self.confidence }
-    pub fn anomaly_prob(&self) -> i32 { self.anomaly_prob }
+    pub fn features(&self) -> &FeatureVector {
+        &self.features
+    }
+    pub fn result(&self) -> &InferenceResult {
+        &self.result
+    }
+    pub fn classification(&self) -> Classification {
+        self.classification
+    }
+    pub fn confidence(&self) -> ConfidenceScore {
+        self.confidence
+    }
+    pub fn anomaly_prob(&self) -> i32 {
+        self.anomaly_prob
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,17 +199,21 @@ impl InferenceEngine {
             fv.normalise_minmax(&self.feat_min, &self.feat_max);
         }
 
-        let result = InferenceResult::from_output(
-            &self.model.forward(&fv),
-            self.model.version(),
-        );
+        let result = InferenceResult::from_output(&self.model.forward(&fv), self.model.version());
 
         let anomaly_prob = result.anomaly_prob();
         let confidence = Self::compute_confidence(&result);
-        let classification = Self::classify(anomaly_prob, confidence, self.anomaly_threshold, self.confidence_threshold);
+        let classification = Self::classify(
+            anomaly_prob,
+            confidence,
+            self.anomaly_threshold,
+            self.confidence_threshold,
+        );
 
         self.total_inferences.fetch_add(1, Ordering::Relaxed);
-        if classification == Classification::Malicious || classification == Classification::Suspicious {
+        if classification == Classification::Malicious
+            || classification == Classification::Suspicious
+        {
             self.total_anomalies.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -351,8 +365,8 @@ impl InferenceEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::ActivationFn;
+    use super::*;
 
     #[test]
     fn single_inference() {
@@ -399,7 +413,7 @@ mod tests {
     fn classification_threshold() {
         // High anomaly + high confidence → Malicious
         let c = InferenceEngine::classify(
-            50000, // > threshold
+            50000,                       // > threshold
             ConfidenceScore::new(50000), // > confidence threshold
             DEFAULT_ANOMALY_THRESHOLD,
             DEFAULT_CONFIDENCE_THRESHOLD,

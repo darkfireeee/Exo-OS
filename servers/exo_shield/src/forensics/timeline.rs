@@ -91,7 +91,11 @@ impl TimelineEventType {
     /// Returns the severity level of this event type (0=info, 1=low, 2=medium, 3=high, 4=critical).
     pub fn severity(&self) -> u8 {
         match self {
-            Self::Exec | Self::NetConnect | Self::ProcessExit | Self::PolicyChange | Self::ForensicDump => 0,
+            Self::Exec
+            | Self::NetConnect
+            | Self::ProcessExit
+            | Self::PolicyChange
+            | Self::ForensicDump => 0,
             Self::SyscallAnomaly | Self::DnsAnomaly => 1,
             Self::ExecChainAnomaly | Self::IpcViolation | Self::SandboxViolation => 2,
             Self::PortScan | Self::MemAnomaly | Self::UseAfterFree | Self::BufferOverflow => 3,
@@ -206,9 +210,8 @@ fn read_tsc() -> u64 {
 // ── Static storage ────────────────────────────────────────────────────────────
 
 /// Timeline entry ring buffer.
-static TIMELINE_BUFFER: Mutex<[TimelineEntry; MAX_TIMELINE_ENTRIES]> = Mutex::new(
-    [const { TimelineEntry::empty() }; MAX_TIMELINE_ENTRIES],
-);
+static TIMELINE_BUFFER: Mutex<[TimelineEntry; MAX_TIMELINE_ENTRIES]> =
+    Mutex::new([const { TimelineEntry::empty() }; MAX_TIMELINE_ENTRIES]);
 
 /// Write index into the timeline ring buffer.
 static TIMELINE_IDX: AtomicU32 = AtomicU32::new(0);
@@ -217,9 +220,8 @@ static TIMELINE_IDX: AtomicU32 = AtomicU32::new(0);
 static TIMELINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Correlation link table.
-static CORRELATION_TABLE: Mutex<[TimelineCorrelation; MAX_CORRELATION_LINKS]> = Mutex::new(
-    [const { TimelineCorrelation::empty() }; MAX_CORRELATION_LINKS],
-);
+static CORRELATION_TABLE: Mutex<[TimelineCorrelation; MAX_CORRELATION_LINKS]> =
+    Mutex::new([const { TimelineCorrelation::empty() }; MAX_CORRELATION_LINKS]);
 static CORRELATION_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Next correlation group ID.
@@ -253,23 +255,32 @@ fn are_causally_related(type_a: u8, type_b: u8) -> bool {
         return true;
     }
     // Exec → SyscallAnomaly (exec followed by suspicious syscalls)
-    if type_a == TimelineEventType::Exec as u8 && type_b == TimelineEventType::SyscallAnomaly as u8 {
+    if type_a == TimelineEventType::Exec as u8 && type_b == TimelineEventType::SyscallAnomaly as u8
+    {
         return true;
     }
     // PortScan → Exfiltration (port scan followed by data exfiltration)
-    if type_a == TimelineEventType::PortScan as u8 && type_b == TimelineEventType::Exfiltration as u8 {
+    if type_a == TimelineEventType::PortScan as u8
+        && type_b == TimelineEventType::Exfiltration as u8
+    {
         return true;
     }
     // SyscallAnomaly → BufferOverflow
-    if type_a == TimelineEventType::SyscallAnomaly as u8 && type_b == TimelineEventType::BufferOverflow as u8 {
+    if type_a == TimelineEventType::SyscallAnomaly as u8
+        && type_b == TimelineEventType::BufferOverflow as u8
+    {
         return true;
     }
     // MemAnomaly → UseAfterFree
-    if type_a == TimelineEventType::MemAnomaly as u8 && type_b == TimelineEventType::UseAfterFree as u8 {
+    if type_a == TimelineEventType::MemAnomaly as u8
+        && type_b == TimelineEventType::UseAfterFree as u8
+    {
         return true;
     }
     // ExecChainAnomaly → Exfiltration
-    if type_a == TimelineEventType::ExecChainAnomaly as u8 && type_b == TimelineEventType::Exfiltration as u8 {
+    if type_a == TimelineEventType::ExecChainAnomaly as u8
+        && type_b == TimelineEventType::Exfiltration as u8
+    {
         return true;
     }
     // Exec → IpcViolation
@@ -277,11 +288,15 @@ fn are_causally_related(type_a: u8, type_b: u8) -> bool {
         return true;
     }
     // IpcViolation → SandboxViolation
-    if type_a == TimelineEventType::IpcViolation as u8 && type_b == TimelineEventType::SandboxViolation as u8 {
+    if type_a == TimelineEventType::IpcViolation as u8
+        && type_b == TimelineEventType::SandboxViolation as u8
+    {
         return true;
     }
     // DnsAnomaly → Exfiltration
-    if type_a == TimelineEventType::DnsAnomaly as u8 && type_b == TimelineEventType::Exfiltration as u8 {
+    if type_a == TimelineEventType::DnsAnomaly as u8
+        && type_b == TimelineEventType::Exfiltration as u8
+    {
         return true;
     }
     false
@@ -435,11 +450,7 @@ pub fn query_timeline(pid: u32, out: &mut [TimelineEntry]) -> usize {
 /// Queries timeline entries by time range.
 ///
 /// Returns entries with timestamps in `[min_ts, max_ts]`.
-pub fn query_timeline_by_time(
-    min_ts: u64,
-    max_ts: u64,
-    out: &mut [TimelineEntry],
-) -> usize {
+pub fn query_timeline_by_time(min_ts: u64, max_ts: u64, out: &mut [TimelineEntry]) -> usize {
     let buffer = TIMELINE_BUFFER.lock();
     let head = TIMELINE_IDX.load(Ordering::Acquire) as usize;
     let mut written = 0usize;
@@ -462,10 +473,7 @@ pub fn query_timeline_by_time(
 }
 
 /// Queries timeline entries by event type.
-pub fn query_timeline_by_type(
-    event_type: TimelineEventType,
-    out: &mut [TimelineEntry],
-) -> usize {
+pub fn query_timeline_by_type(event_type: TimelineEventType, out: &mut [TimelineEntry]) -> usize {
     let buffer = TIMELINE_BUFFER.lock();
     let head = TIMELINE_IDX.load(Ordering::Acquire) as usize;
     let mut written = 0usize;

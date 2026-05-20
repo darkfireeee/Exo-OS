@@ -2728,6 +2728,9 @@ pub fn sys_exo_ipc_send(
             return EINVAL;
         }
         let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        if !crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid)) {
+            return EPERM;
+        }
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
     if is_reserved_kernel_ipc(endpoint, &payload) {

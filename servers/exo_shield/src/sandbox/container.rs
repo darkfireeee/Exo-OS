@@ -189,13 +189,19 @@ impl ContainerProfile {
 
     // -- Accessors ----------------------------------------------------------
 
-    pub fn id(&self) -> ContainerId { self.id }
-    pub fn pid(&self) -> u32 { self.pid }
+    pub fn id(&self) -> ContainerId {
+        self.id
+    }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
     pub fn state(&self) -> ContainerState {
         ContainerState::from_u8(self.state.load(Ordering::Acquire))
             .unwrap_or(ContainerState::Destroyed)
     }
-    pub fn is_active(&self) -> bool { self.active }
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
     pub fn violation_count(&self) -> u32 {
         self.violation_count.load(Ordering::Relaxed)
     }
@@ -208,12 +214,24 @@ impl ContainerProfile {
         &self.net_namespace[..self.net_ns_len as usize]
     }
 
-    pub fn syscall_filter(&self) -> &SyscallBitmap { &self.syscall_filter }
-    pub fn syscall_filter_mut(&mut self) -> &mut SyscallBitmap { &mut self.syscall_filter }
-    pub fn fs_config(&self) -> &FsRestrictionConfig { &self.fs_config }
-    pub fn fs_config_mut(&mut self) -> &mut FsRestrictionConfig { &mut self.fs_config }
-    pub fn net_config(&self) -> &NetIsolationConfig { &self.net_config }
-    pub fn net_config_mut(&mut self) -> &mut NetIsolationConfig { &mut self.net_config }
+    pub fn syscall_filter(&self) -> &SyscallBitmap {
+        &self.syscall_filter
+    }
+    pub fn syscall_filter_mut(&mut self) -> &mut SyscallBitmap {
+        &mut self.syscall_filter
+    }
+    pub fn fs_config(&self) -> &FsRestrictionConfig {
+        &self.fs_config
+    }
+    pub fn fs_config_mut(&mut self) -> &mut FsRestrictionConfig {
+        &mut self.fs_config
+    }
+    pub fn net_config(&self) -> &NetIsolationConfig {
+        &self.net_config
+    }
+    pub fn net_config_mut(&mut self) -> &mut NetIsolationConfig {
+        &mut self.net_config
+    }
 
     /// Check whether a syscall is allowed for this container.
     pub fn check_syscall(&self, nr: u8) -> bool {
@@ -235,12 +253,16 @@ impl ContainerProfile {
             if cur_state != ContainerState::Created && cur_state != ContainerState::Stopped {
                 return false;
             }
-            if self.state.compare_exchange(
-                cur,
-                ContainerState::Running as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange(
+                    cur,
+                    ContainerState::Running as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -254,12 +276,16 @@ impl ContainerProfile {
             if cur_state != ContainerState::Running && cur_state != ContainerState::Paused {
                 return false;
             }
-            if self.state.compare_exchange(
-                cur,
-                ContainerState::Stopped as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange(
+                    cur,
+                    ContainerState::Stopped as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -273,12 +299,16 @@ impl ContainerProfile {
             if cur_state != ContainerState::Running {
                 return false;
             }
-            if self.state.compare_exchange(
-                cur,
-                ContainerState::Paused as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange(
+                    cur,
+                    ContainerState::Paused as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -292,12 +322,16 @@ impl ContainerProfile {
             if cur_state != ContainerState::Paused {
                 return false;
             }
-            if self.state.compare_exchange(
-                cur,
-                ContainerState::Running as u8,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ).is_ok() {
+            if self
+                .state
+                .compare_exchange(
+                    cur,
+                    ContainerState::Running as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
                 return true;
             }
         }
@@ -490,7 +524,12 @@ pub fn quarantine_pid(pid: u32) -> bool {
         );
     }
 
-    let id = manager.create(pid, b"/quarantine", b"quarantine", SyscallBitmap::deny_all());
+    let id = manager.create(
+        pid,
+        b"/quarantine",
+        b"quarantine",
+        SyscallBitmap::deny_all(),
+    );
     id.is_valid() && manager.start(id)
 }
 
