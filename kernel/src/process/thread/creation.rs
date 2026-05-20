@@ -154,6 +154,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
             entry_point: params.start_func,
             initial_rsp: params.attr.stack_addr + params.attr.stack_size - 16,
             tls_base: 0,
+            entry_arg0: params.arg,
             pthread_ptr: params.pthread_out,
             sigaltstack_base: 0,
             sigaltstack_size: params.attr.sigaltstack_size,

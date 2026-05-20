@@ -28,6 +28,7 @@ members = [
     "servers/ipc_router",
     "servers/memory_server",
     "servers/network_server",
+    "servers/phase5-tests",
     "servers/scheduler_server",
     "servers/syscall_abi",
     "servers/input_server",

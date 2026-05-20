@@ -22,6 +22,7 @@
 
 use core::ptr::NonNull;
 
+use crate::scheduler::core::preempt::IrqGuard;
 use crate::scheduler::core::preempt::MAX_CPUS;
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::current_thread_raw;
@@ -243,6 +244,7 @@ pub fn wake_thread(tid: u64) {
         let tcb = &mut *tcb_ptr;
         let cpu_id = tcb.current_cpu();
         if (cpu_id.0 as usize) < MAX_CPUS {
+            let _irq = IrqGuard::new();
             let rq = run_queue(cpu_id);
             // CAS Sleeping → Runnable protège contre les doubles-réveils.
             if tcb.try_transition(TaskState::Sleeping, TaskState::Runnable) {

@@ -1,5 +1,5 @@
-use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ObjectId};
 use crate::fs::exofs::core::blob_id::compute_blob_id;
+use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ObjectId};
 use crate::fs::exofs::crypto::{SecretReader, SecretWriter};
 use crate::fs::exofs::export::{
     CollectingReceiver, ExoarReader, ExoarReaderConfig, ExoarWriteOptions, ExoarWriter, SinkVec,
@@ -21,7 +21,7 @@ use crate::fs::exofs::storage::dedup_writer::{DedupDecision, DedupWriter};
 use crate::fs::exofs::storage::object_reader::{
     verify_objects, ObjectRangeRead, ObjectRangeReader, ObjectReader, ObjectVerifyMode,
 };
-use crate::fs::exofs::storage::object_writer::{ObjectWriter, ObjectWriterConfig, ObjectType};
+use crate::fs::exofs::storage::object_writer::{ObjectType, ObjectWriter, ObjectWriterConfig};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::vec::Vec;
@@ -176,7 +176,9 @@ fn multi_blob_object_roundtrip_uses_real_extent_map() {
     assert_eq!(read_back.meta.blob_count, result.blob_count);
     assert!(read_back.hash_verified);
 
-    let report = verify_objects(&[header_offset], &|offset, len| read_buf(&disk, offset, len));
+    let report = verify_objects(&[header_offset], &|offset, len| {
+        read_buf(&disk, offset, len)
+    });
     assert_eq!(report.checked, 1);
     assert_eq!(report.ok, 1);
 }
@@ -229,7 +231,8 @@ fn object_range_reader_spans_chunk_boundaries_without_full_scan_loss() {
         chunk_size,
     ));
 
-    let expected = &payload[range.logical_offset as usize..range.logical_offset as usize + range.length];
+    let expected =
+        &payload[range.logical_offset as usize..range.logical_offset as usize + range.length];
     assert_eq!(ranged, expected);
 }
 
@@ -253,7 +256,10 @@ fn compression_crypto_and_dedup_roundtrip_stays_coherent() {
         }
         DedupDecision::Hit { blob_id, .. } => blob_id,
     };
-    assert!(matches!(dedup_writer.check(&raw), DedupDecision::Hit { .. }));
+    assert!(matches!(
+        dedup_writer.check(&raw),
+        DedupDecision::Hit { .. }
+    ));
 
     let pipeline = DedupReadPipeline::new(&dedup_reader, &dedup_writer);
     let read_back = ok(pipeline.read_blob(&blob_id, &|offset, out| {
@@ -296,7 +302,9 @@ fn snapshot_export_and_restore_roundtrip() {
     let archive = sink.into_inner();
     let mut source = SliceSource::new(&archive);
     let mut receiver = CollectingReceiver::new();
-    let report = ok(ExoarReader::new(ExoarReaderConfig::strict()).read(&mut source, &mut receiver).map_err(ExofsError::from));
+    let report = ok(ExoarReader::new(ExoarReaderConfig::strict())
+        .read(&mut source, &mut receiver)
+        .map_err(ExofsError::from));
     assert!(report.archive_valid);
     assert_eq!(report.entries_read, 2);
     assert_eq!(receiver.blobs.len(), 2);
@@ -324,8 +332,14 @@ fn snapshot_export_and_restore_roundtrip() {
     );
     assert!(restore_sink.finalized);
     assert!(!restore_sink.aborted);
-    assert_eq!(restore_sink.payloads.get(blob_a.as_bytes()), Some(&payload_a));
-    assert_eq!(restore_sink.payloads.get(blob_b.as_bytes()), Some(&payload_b));
+    assert_eq!(
+        restore_sink.payloads.get(blob_a.as_bytes()),
+        Some(&payload_a)
+    );
+    assert_eq!(
+        restore_sink.payloads.get(blob_b.as_bytes()),
+        Some(&payload_b)
+    );
 
     SNAPSHOT_LIST.clear();
 }

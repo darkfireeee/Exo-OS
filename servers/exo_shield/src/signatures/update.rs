@@ -134,7 +134,7 @@ fn crypto_ipc_roundtrip(req: &CryptoRequest, reply_endpoint: u64) -> Option<Cryp
             CRYPTO_SERVER_ENDPOINT,
             req as *const CryptoRequest as u64,
             core::mem::size_of::<CryptoRequest>() as u64,
-            0,
+            syscall::IPC_FLAG_INJECT_SRC_PID,
             0,
             0,
         )

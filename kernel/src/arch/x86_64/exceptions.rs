@@ -134,9 +134,14 @@ macro_rules! define_exception_handler_errcode {
             "push r13",
             "push r14",
             "push r15",
-            // ExceptionFrame* dans rdi
+            // ExceptionFrame* dans rdi. Le CPU peut entrer ici avec une pile
+            // dont l'alignement n'est pas celui attendu par l'ABI SysV; aligner
+            // la pile d'appel Rust sans déplacer la frame que le handler reçoit.
             "mov  rdi, rsp",
+            "mov  r12, rsp",
+            "and  rsp, -16",
             concat!("call ", stringify!($rust_handler)),
+            "mov  rsp, r12",
             // Restaurer registres
             "pop  r15",
             "pop  r14",
@@ -215,7 +220,10 @@ macro_rules! define_exception_handler_no_errcode {
             "push r14",
             "push r15",
             "mov  rdi, rsp",
+            "mov  r12, rsp",
+            "and  rsp, -16",
             concat!("call ", stringify!($rust_handler)),
+            "mov  rsp, r12",
             "pop  r15",
             "pop  r14",
             "pop  r13",
@@ -300,6 +308,18 @@ define_exception_handler_no_errcode!(exophoenix_tlb_handler, do_exophoenix_tlb);
 
 // ── Handlers Rust d'exceptions ────────────────────────────────────────────────
 
+#[inline(always)]
+fn current_tcb_raw_checked() -> u64 {
+    // SAFETY: la lecture vérifie d'abord que MSR_GS_BASE pointe sur la zone
+    // per-CPU kernel avant de toucher `gs:[0x20]`.
+    unsafe { super::smp::percpu::try_read_current_tcb().unwrap_or(0) }
+}
+
+#[inline(always)]
+fn current_cpu_id_checked() -> u32 {
+    super::smp::percpu::try_current_cpu_id().unwrap_or(0)
+}
+
 /// Retour vers userspace après exception depuis Ring 3
 ///
 /// ## RÈGLE SIGNAL-01 (DOC1)
@@ -307,16 +327,7 @@ define_exception_handler_no_errcode!(exophoenix_tlb_handler, do_exophoenix_tlb);
 /// Vérifie `signal_pending` dans le TCB et orchestre la livraison.
 /// La livraison effective est déléguée à `process::signal::delivery`.
 fn exception_return_to_user(frame: &mut ExceptionFrame) {
-    // Lire le TCB courant depuis GS:[0x20] (PerCpuData::current_tcb).
-    let tcb_ptr: u64;
-    // SAFETY: GS initialisé par percpu::init() avant tout handler d'exception.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem),
-        );
-    }
+    let tcb_ptr = current_tcb_raw_checked();
     if tcb_ptr == 0 {
         return;
     }
@@ -336,8 +347,39 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
     }
 }
 
+#[inline]
+fn sync_kpti_user_fault_mapping(fault_addr: u64, source_cr3: u64) {
+    if !crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+        return;
+    }
+
+    let tcb_raw = current_tcb_raw_checked();
+    if tcb_raw == 0 {
+        return;
+    }
+    let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+    let user_cr3 = tcb.kpti_user_cr3();
+    let kernel_cr3 = if source_cr3 != 0 {
+        source_cr3
+    } else {
+        tcb.cr3_phys
+    };
+    if kernel_cr3 == 0 || user_cr3 == 0 {
+        return;
+    }
+
+    let _ = unsafe {
+        crate::memory::virt::page_table::kpti_split::sync_user_pml4_entry(
+            crate::memory::core::PhysAddr::new(kernel_cr3),
+            crate::memory::core::PhysAddr::new(user_cr3),
+            fault_addr,
+        )
+    };
+    crate::arch::x86_64::spectre::kpti::set_current_cr3(kernel_cr3, user_cr3);
+}
+
 fn queue_signal_for_current(sig: crate::process::signal::Signal) {
-    let tcb_raw = unsafe { super::smp::percpu::read_current_tcb() };
+    let tcb_raw = current_tcb_raw_checked();
     if tcb_raw == 0 {
         return;
     }
@@ -387,7 +429,7 @@ fn debug_user_page_fault(
         return;
     }
 
-    let tcb_ptr = unsafe { super::smp::percpu::read_current_tcb() };
+    let tcb_ptr = current_tcb_raw_checked();
     let mut pid = 0u64;
     let mut tcb_cr3 = 0u64;
     if tcb_ptr != 0 {
@@ -617,17 +659,7 @@ extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
     EXC_COUNTERS[7].fetch_add(1, Ordering::Relaxed);
     FPU_DEVICE_NOT_AVAIL_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // Lire le TCB courant depuis la donnée per-CPU partagée.
-    // GS:[0x20] = `current_tcb: u64` dans la structure PerCpuData (percpu.rs).
-    let tcb_ptr: u64;
-    // SAFETY: GS initialisé par percpu::init() avant tout traitement d'interruption.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem),
-        );
-    }
+    let tcb_ptr = current_tcb_raw_checked();
 
     // Déléguer au scheduler (RÈGLE FPU-02 DOC3) :
     //   • Efface CR0.TS (autorise l'accès FPU/SIMD).
@@ -802,11 +834,11 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
 
     let fault_addr = VirtAddr::new(fault_addr_raw);
     let from_kernel = frame.from_kernel();
-    let mut ctx = FaultContext::new(fault_addr, cause, from_kernel);
+    let mut ctx = FaultContext::new(fault_addr, cause, from_kernel).with_present(is_present);
     let mut user_as_for_fault: *const UserAddressSpace = core::ptr::null();
     let mut user_vma_found = false;
     if fault_addr.is_user() {
-        let tcb_raw = unsafe { super::smp::percpu::read_current_tcb() };
+        let tcb_raw = current_tcb_raw_checked();
         if tcb_raw != 0 {
             let tcb =
                 unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
@@ -861,6 +893,14 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
 
     match result {
         FaultResult::Handled => {
+            if resolve_as_user {
+                let source_cr3 = if !user_as_for_fault.is_null() {
+                    unsafe { (&*user_as_for_fault).pml4_phys().as_u64() }
+                } else {
+                    0
+                };
+                sync_kpti_user_fault_mapping(fault_addr_raw, source_cr3);
+            }
             // Fault résolu (demand paging, CoW, swap-in) — reprendre l'exécution.
             if frame.from_userspace() {
                 exception_return_to_user(frame);
@@ -1040,23 +1080,11 @@ extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
     // 1. EOI APIC — acquitté en premier pour minimiser la latence APIC.
     // SAFETY: LAPIC initialisé avant que les IRQ timer soient activées.
     super::apic::eoi();
+    super::apic::local_apic::rearm_scheduler_timer_tick();
 
     // 2. Tick scheduler : avance les quantum CPU et décide des préemptions.
-    let cpu_id: u32;
-    let tcb_ptr: u64;
-    // SAFETY: GS initialisé par percpu::init() avant tout IRQ timer.
-    unsafe {
-        core::arch::asm!(
-            "mov {:e}, gs:[0x10]",
-            out(reg) cpu_id,
-            options(nostack, nomem),
-        );
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem),
-        );
-    }
+    let cpu_id = current_cpu_id_checked();
+    let tcb_ptr = current_tcb_raw_checked();
     // SAFETY: scheduler_tick est thread-safe ; cli implicite dans handler IRQ.
     unsafe {
         scheduler_tick(cpu_id, tcb_ptr as *mut u8);
@@ -1083,15 +1111,7 @@ extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(super::idt::VEC_IPI_WAKEUP);
     // Réutiliser sched_ipi_reschedule : positionne NEED_RESCHED sur le thread
     // courant (RÈGLE IPI-01) — le reschedule effectif a lieu à l'IRET.
-    let tcb_ptr: u64;
-    // SAFETY: GS initialisé par percpu::init() avant tout IPI.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem),
-        );
-    }
+    let tcb_ptr = current_tcb_raw_checked();
     // SAFETY: sched_ipi_reschedule est thread-safe pour le CPU courant.
     unsafe {
         sched_ipi_reschedule(tcb_ptr as *mut u8);
@@ -1107,16 +1127,7 @@ extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     let _ = frame;
     super::idt::irq_counter_inc(super::idt::VEC_IPI_RESCHEDULE);
 
-    // Lire le TCB courant (GS:[0x20] = current_tcb dans PerCpuData).
-    let tcb_ptr: u64;
-    // SAFETY: segment GS initialisé avant tout traitement d'interruption.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem),
-        );
-    }
+    let tcb_ptr = current_tcb_raw_checked();
 
     // Positionner NEED_RESCHED sur le thread courant (RÈGLE IPI-01 DOC3).
     // Le reschedule effectif aura lieu au retour d'interruption quand le code

@@ -26,6 +26,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::arch::x86_64::apic::local_apic::{self, LapicTimerOwner};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::cpu::tsc;
 
@@ -227,6 +228,10 @@ fn get_apic_timer_frequency() -> u64 {
         }
     }
 
+    if local_apic::lapic_timer_owner() != LapicTimerOwner::ExoNmiWatchdog {
+        return 0;
+    }
+
     // Method 2: Empirical measurement via TSC
     // Configure the timer APIC with a known count, measure TSC elapsed
     let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
@@ -330,9 +335,11 @@ pub fn exonmi_init() {
         crate::memory::phys_to_virt(crate::memory::core::PhysAddr::new(apic_base_phys)).as_u64();
     LAPIC_VIRT_BASE.store(apic_base_virt, Ordering::Release);
 
-    // Ensure the timer is masked
-    unsafe {
-        lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
+    if local_apic::claim_lapic_timer(LapicTimerOwner::ExoNmiWatchdog) {
+        // Ensure the timer is masked while ExoNmi owns it.
+        unsafe {
+            lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
+        }
     }
 
     // Reset all counters
@@ -356,13 +363,22 @@ pub fn arm_watchdog(timeout_ms: u64) {
         WATCHDOG_ARMED.store(false, Ordering::Release);
         CONFIGURED_TIMEOUT_MS.store(0, Ordering::Release);
         CACHED_INITIAL_COUNT.store(0, Ordering::Release);
-        unsafe {
-            lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
+        if local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog {
+            unsafe {
+                lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
+            }
         }
         return;
     }
 
     let timeout_ms = normalize_timeout_ms(timeout_ms);
+    let owns_lapic_timer = local_apic::claim_lapic_timer(LapicTimerOwner::ExoNmiWatchdog);
+    if !owns_lapic_timer {
+        WATCHDOG_ARMED.store(false, Ordering::Release);
+        CONFIGURED_TIMEOUT_MS.store(timeout_ms, Ordering::Release);
+        CACHED_INITIAL_COUNT.store(0, Ordering::Release);
+        return;
+    }
 
     // Compute the APIC timer initial count for the requested timeout
     let initial_count = compute_initial_count(timeout_ms);
@@ -379,14 +395,16 @@ pub fn arm_watchdog(timeout_ms: u64) {
     CONFIGURED_TIMEOUT_MS.store(timeout_ms, Ordering::Release);
     CACHED_INITIAL_COUNT.store(initial_count, Ordering::Release);
 
-    // Configure the APIC timer
-    unsafe {
-        // Set divisor to 1
-        lapic_write32(LAPIC_TIMER_DCR, APIC_TIMER_DIV_1);
-        // Write initial count (starts the timer)
-        lapic_write32(LAPIC_TIMER_ICR, initial_count);
-        // Enable one-shot timer with watchdog vector
-        lapic_write32(LAPIC_LVT_TIMER, WATCHDOG_VECTOR | LVT_TIMER_ONESHOT);
+    if owns_lapic_timer {
+        // Configure the APIC timer only while ExoNmi owns it.
+        unsafe {
+            // Set divisor to 1
+            lapic_write32(LAPIC_TIMER_DCR, APIC_TIMER_DIV_1);
+            // Write initial count (starts the timer)
+            lapic_write32(LAPIC_TIMER_ICR, initial_count);
+            // Enable one-shot timer with watchdog vector
+            lapic_write32(LAPIC_LVT_TIMER, WATCHDOG_VECTOR | LVT_TIMER_ONESHOT);
+        }
     }
 
     WATCHDOG_ARMED.store(true, Ordering::Release);
@@ -402,7 +420,9 @@ pub fn ping() {
     LAST_PING_TSC.store(tsc::read_tsc(), Ordering::Release);
 
     // If the watchdog is armed, reload the APIC timer
-    if WATCHDOG_ARMED.load(Ordering::Acquire) {
+    if WATCHDOG_ARMED.load(Ordering::Acquire)
+        && local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog
+    {
         // Reload the one-shot timer (writing ICR restarts it)
         unsafe {
             reload_timer();
@@ -440,7 +460,9 @@ pub fn tick() {
     }
 
     // Threshold not reached: reload the timer for the next period
-    if WATCHDOG_ARMED.load(Ordering::Acquire) {
+    if WATCHDOG_ARMED.load(Ordering::Acquire)
+        && local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog
+    {
         unsafe {
             reload_timer();
         }

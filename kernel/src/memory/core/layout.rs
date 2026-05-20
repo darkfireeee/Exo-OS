@@ -168,6 +168,13 @@ pub const USER_STACK_TOP: VirtAddr = VirtAddr::new(0x0000_7FFF_FFFF_0000);
 /// Taille maximale de la stack utilisateur (8 MiB par défaut, configurable via setrlimit).
 pub const USER_STACK_DEFAULT_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
+/// Stack initiale physiquement mappée au démarrage d'une image ELF.
+///
+/// La limite rlimit reste `USER_STACK_DEFAULT_SIZE`; ces pages sont seulement
+/// le bootstrap eager minimal avant croissance demand-paged.
+pub const USER_STACK_BOOTSTRAP_PAGES: usize = 8;
+pub const USER_STACK_BOOTSTRAP_SIZE: usize = USER_STACK_BOOTSTRAP_PAGES * PAGE_SIZE;
+
 /// Base de la stack utilisateur (USER_STACK_TOP - USER_STACK_DEFAULT_SIZE).
 pub const USER_STACK_BASE: VirtAddr =
     VirtAddr::new(0x0000_7FFF_FFFF_0000 - USER_STACK_DEFAULT_SIZE as u64);

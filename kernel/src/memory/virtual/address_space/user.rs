@@ -3,9 +3,6 @@
 // Espace d'adressage utilisateur — un par processus.
 // Couche 0 — aucune dépendance externe sauf `spin`.
 
-use core::sync::atomic::{AtomicU64, Ordering};
-use spin::Mutex;
-
 use crate::memory::core::{
     layout::{USER_END, USER_STACK_TOP},
     AllocError, Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE,
@@ -13,6 +10,8 @@ use crate::memory::core::{
 use crate::memory::virt::address_space::tlb::flush_single;
 use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker, WalkResult};
 use crate::memory::virt::vma::{find_gap, mark_vma_cow, VmaDescriptor, VmaFlags, VmaTree};
+use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ESPACE D'ADRESSAGE UTILISATEUR
@@ -50,7 +49,10 @@ pub struct UserAddressSpace {
     pml4_phys: PhysAddr,
     /// ID de processus associé (pour le TLB shootdown ciblé).
     pub pid: u64,
-    /// Break du heap utilisateur (0 = non initialisé, do_brk fixe la base au premier appel).
+    /// Base ELF du heap utilisateur. 0 signifie qu'aucun ELF n'a encore publié
+    /// son break initial et que le fallback historique de brk() doit être utilisé.
+    pub heap_start: AtomicU64,
+    /// Break courant absolu du heap utilisateur.
     pub heap_end: AtomicU64,
 }
 
@@ -80,6 +82,7 @@ impl UserAddressSpace {
             stats: UserAsStats::new(),
             pml4_phys,
             pid,
+            heap_start: AtomicU64::new(0),
             heap_end: AtomicU64::new(0),
         }
     }
@@ -87,6 +90,38 @@ impl UserAddressSpace {
     /// Addresse physique de la PML4 de cet espace.
     pub fn pml4_phys(&self) -> PhysAddr {
         self.pml4_phys
+    }
+
+    /// Initialise les bornes brk de cet espace après chargement ELF.
+    #[inline]
+    pub fn init_heap_bounds(&self, brk_start: u64) {
+        self.heap_start.store(brk_start, Ordering::Release);
+        self.heap_end.store(brk_start, Ordering::Release);
+    }
+
+    /// Retourne la première adresse non couverte par des VMA HEAP dans
+    /// `[start, end)`. `None` signale qu'une VMA non-heap occupe la plage.
+    pub fn heap_covered_end_from(&self, start: VirtAddr, end: VirtAddr) -> Option<VirtAddr> {
+        let inner = self.inner.lock();
+        let mut cursor = start.as_u64();
+        let end_raw = end.as_u64();
+
+        while cursor < end_raw {
+            let addr = VirtAddr::new(cursor);
+            let Some(vma) = inner.vma_tree.find(addr) else {
+                return Some(addr);
+            };
+            if !vma.flags.contains(VmaFlags::HEAP) {
+                return None;
+            }
+            let next = vma.end.as_u64();
+            if next <= cursor {
+                return None;
+            }
+            cursor = next.min(end_raw);
+        }
+
+        Some(end)
     }
 
     /// Mappe `virt` → `frame` directement (sans VMA — pour le loader ELF).

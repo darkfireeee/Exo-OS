@@ -747,6 +747,7 @@ pub const MAP_FIXED: u64 = 0x10;
 pub const MAP_ANONYMOUS: u64 = 0x20;
 
 pub const IPC_FLAG_TIMEOUT: u64 = 0x0001;
+pub const IPC_FLAG_INJECT_SRC_PID: u64 = 0x0002;
 pub const WNOHANG: u64 = 1;
 pub const SA_RESTART: u64 = 0x10000000;
 pub const EPERM: i64 = -1;

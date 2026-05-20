@@ -219,7 +219,7 @@ impl IrqGuard {
         unsafe {
             core::arch::asm!(
                 "pushfq",
-                "popq {flags}",
+                "pop {flags}",
                 "cli",
                 flags = out(reg) rflags,
                 options(nomem)
@@ -241,6 +241,35 @@ impl IrqGuard {
     #[inline(always)]
     pub fn irqs_were_enabled(&self) -> bool {
         self.rflags & (1 << 9) != 0
+    }
+
+    /// Libere la profondeur de preemption mais conserve les IRQ coupees.
+    ///
+    /// Le context switch ne peut pas garder un guard RAII vivant a travers le
+    /// changement de pile: son Drop s'executerait dans l'ancien contexte quand
+    /// ce thread serait reschedule. Ce helper couvre le cas scheduler:
+    /// selection sous preemption desactivee, puis saut ASM avec IF=0 et compteur
+    /// de preemption deja restaure.
+    #[inline(always)]
+    pub fn release_keep_irqs_disabled(self) -> u64 {
+        let rflags = self.rflags;
+        preempt_enable_raw();
+        core::mem::forget(self);
+        rflags
+    }
+
+    /// Restaure l'etat IRQ capture par `release_keep_irqs_disabled`.
+    ///
+    /// # Safety
+    /// `rflags` doit provenir d'un `IrqGuard` acquis sur ce CPU.
+    #[inline(always)]
+    pub unsafe fn restore_irq_flags(rflags: u64) {
+        if rflags & (1 << 9) != 0 {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                core::arch::asm!("sti", options(nomem, nostack));
+            }
+        }
     }
 }
 

@@ -171,6 +171,7 @@ const EXOFS_STATFS_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const STAT_MODE_DIR: u32 = 0o040000 | 0o755;
 const STAT_MODE_FILE: u32 = 0o100000 | 0o644;
 const STAT_MODE_SYMLINK: u32 = 0o120000 | 0o777;
+const BOOT_TTY_HANDLE: u64 = 1;
 const PATH_INDEX_KIND_DIR: u8 = 0;
 const PATH_INDEX_KIND_FILE: u8 = 1;
 const PATH_INDEX_KIND_SYMLINK: u8 = 2;
@@ -193,6 +194,100 @@ const STAT_MODE_MASK: u32 = 0o170000;
 
 static NEXT_PSEUDO_ID: AtomicU64 = AtomicU64::new(1);
 static POSIX_UMASK: AtomicU32 = AtomicU32::new(0o022);
+
+#[derive(Clone, Copy)]
+struct ResolvedFd {
+    handle: u32,
+    flags: u32,
+}
+
+#[inline]
+fn fd_can_read_flags(flags: u32) -> bool {
+    let rw = flags & 0x3;
+    rw == open_flags::O_RDONLY || rw == open_flags::O_RDWR
+}
+
+#[inline]
+fn fd_can_write_flags(flags: u32) -> bool {
+    let rw = flags & 0x3;
+    rw == open_flags::O_WRONLY || rw == open_flags::O_RDWR
+}
+
+#[inline]
+fn fd_table_flags(open_flags_raw: u32, fd_flags: u32) -> u32 {
+    (fd_flags & 0x3)
+        | (fd_flags & open_flags::O_APPEND)
+        | (open_flags_raw & (O_CLOEXEC | O_NONBLOCK))
+}
+
+#[inline]
+fn process_has_fd_table(pid: u32) -> bool {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .is_some()
+}
+
+#[inline]
+fn process_fd_descriptor(pid: u32, fd: u32) -> Option<crate::process::core::pcb::FileDescriptor> {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .and_then(|pcb| pcb.files.lock().get(fd as i32).copied())
+}
+
+#[inline]
+fn resolve_fd(pid: u32, fd: u32) -> Result<ResolvedFd, FsBridgeError> {
+    if let Some(desc) = process_fd_descriptor(pid, fd) {
+        if desc.handle > u32::MAX as u64 {
+            return Err(FsBridgeError::BadFd);
+        }
+        return Ok(ResolvedFd {
+            handle: desc.handle as u32,
+            flags: desc.flags,
+        });
+    }
+
+    let flags = match fd {
+        0 => open_flags::O_RDONLY,
+        1 | 2 => open_flags::O_WRONLY,
+        _ => open_flags::O_RDWR,
+    };
+    let handle = if fd <= 2 { BOOT_TTY_HANDLE as u32 } else { fd };
+    Ok(ResolvedFd { handle, flags })
+}
+
+#[inline]
+fn install_process_fd(pid: u32, handle: u64, flags: u32) -> Option<i32> {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .and_then(|pcb| {
+            let mut files = pcb.files.lock();
+            let fd = files.install(handle, flags);
+            (fd >= 0).then_some(fd)
+        })
+}
+
+#[inline]
+fn install_process_fd_at(pid: u32, fd: u32, handle: u64, flags: u32) -> bool {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .map(|pcb| pcb.files.lock().install_at(fd as i32, handle, flags))
+        .unwrap_or(false)
+}
+
+#[inline]
+fn close_process_fd(pid: u32, fd: u32) -> Option<u64> {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .and_then(|pcb| pcb.files.lock().close(fd as i32))
+}
+
+#[inline]
+fn set_process_fd_flags(pid: u32, fd: u32, flags: u32) -> bool {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .map(|pcb| pcb.files.lock().set_flags(fd as i32, flags))
+        .unwrap_or(false)
+}
 
 #[derive(Clone, Copy)]
 struct ModeRecord {
@@ -778,8 +873,17 @@ fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeErr
 }
 
 #[inline]
-fn fd_readiness(fd: u32) -> Result<(bool, bool), FsBridgeError> {
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
+    let resolved = resolve_fd(pid, fd)?;
+    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+        return Ok((
+            fd_can_read_flags(resolved.flags),
+            fd_can_write_flags(resolved.flags),
+        ));
+    }
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
     let mut readable = entry.can_read();
     let writable = entry.can_write();
 
@@ -1255,10 +1359,13 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     if count == 0 {
         return Ok(0);
     }
-    if fd == 0 {
+    let resolved = resolve_fd(pid, fd)?;
+    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+        if !fd_can_read_flags(resolved.flags) {
+            return Err(FsBridgeError::BadFd);
+        }
         let Some(byte) =
-            crate::arch::x86_64::terminal::read_byte_for_process(pid, process_pgid(pid))
-                .map_err(|_| FsBridgeError::Interrupted)?
+            crate::arch::x86_64::terminal::poll_byte_for_process(pid, process_pgid(pid))
         else {
             return Err(FsBridgeError::WouldBlock);
         };
@@ -1266,14 +1373,12 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
             .map_err(|_| FsBridgeError::Fault)?;
         return Ok(1);
     }
-    if fd == 1 || fd == 2 {
-        return Err(FsBridgeError::BadFd);
-    }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
 
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolved.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_read() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -1342,7 +1447,7 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     let read_len = data.len();
     copy_to_user(buf_ptr as *mut u8, data.as_ptr(), read_len).map_err(|_| FsBridgeError::Fault)?;
     OBJECT_TABLE
-        .advance_cursor(fd, read_len as u64)
+        .advance_cursor(obj_fd, read_len as u64)
         .map_err(exofs_to_bridge_error)?;
     Ok(read_len as i64)
 }
@@ -1356,19 +1461,21 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     if count == 0 {
         return Ok(0);
     }
-    if fd == 1 || fd == 2 {
+    let resolved = resolve_fd(pid, fd)?;
+    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+        if !fd_can_write_flags(resolved.flags) {
+            return Err(FsBridgeError::BadFd);
+        }
         let input = read_user_bytes(buf_ptr, count)?;
         crate::arch::x86_64::terminal::write_from_process(pid, process_pgid(pid), &input);
         return Ok(count as i64);
-    }
-    if fd == 0 {
-        return Err(FsBridgeError::BadFd);
     }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
 
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolved.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -1428,10 +1535,10 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         .write_at(entry.blob_id, start, &input)
         .map_err(exofs_to_bridge_error)?;
     OBJECT_TABLE
-        .set_cursor(fd, end as u64)
+        .set_cursor(obj_fd, end as u64)
         .map_err(exofs_to_bridge_error)?;
     OBJECT_TABLE
-        .set_size(fd, end as u64)
+        .set_size(obj_fd, end as u64)
         .map_err(exofs_to_bridge_error)?;
     let _ = pid;
     Ok(count as i64)
@@ -1450,7 +1557,8 @@ pub fn fs_pread64(
         return Err(FsBridgeError::NotReady);
     }
     let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_read() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -1470,7 +1578,8 @@ pub fn fs_pwrite64(
         return Err(FsBridgeError::NotReady);
     }
     let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -1629,7 +1738,11 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
             .set_cursor(fd, size)
             .map_err(exofs_to_bridge_error)?;
     }
-    Ok(fd as i64)
+    if let Some(logical_fd) = install_process_fd(pid, fd as u64, fd_table_flags(flags, fd_flags)) {
+        Ok(logical_fd as i64)
+    } else {
+        Ok(fd as i64)
+    }
 }
 
 /// `close(fd)`.
@@ -1638,11 +1751,20 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let resolved = resolve_fd(pid, fd)?;
+    let handle = close_process_fd(pid, fd).unwrap_or(resolved.handle as u64);
+    if handle == BOOT_TTY_HANDLE {
+        return Ok(0);
+    }
+    if handle > u32::MAX as u64 {
+        return Err(FsBridgeError::BadFd);
+    }
+    let obj_fd = handle as u32;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if pid != 0 && entry.owner_uid != 0 && entry.owner_uid != pid as u64 {
         return Err(FsBridgeError::BadFd);
     }
-    if OBJECT_TABLE.close(fd) {
+    if OBJECT_TABLE.close(obj_fd) {
         Ok(0)
     } else {
         Err(FsBridgeError::BadFd)
@@ -1652,11 +1774,15 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
 /// Close the opaque handles removed from a PCB by execve(O_CLOEXEC).
 pub fn close_exec_handles_for_pid(pid: u32, handles: &[u64]) {
     for &handle in handles {
+        if handle == BOOT_TTY_HANDLE {
+            continue;
+        }
         if handle <= u32::MAX as u64 {
-            let _ = fs_close(handle as u32, pid);
+            let _ = OBJECT_TABLE.close(handle as u32);
         }
         let _ = crate::fs::exofs::posix_bridge::vfs_close(handle);
     }
+    let _ = pid;
 }
 
 /// `lseek(fd, offset, whence)` → nouvelle position.
@@ -1665,8 +1791,8 @@ pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     let base = match whence {
         SEEK_SET => 0i64,
         SEEK_CUR => entry.cursor as i64,
@@ -1678,7 +1804,7 @@ pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBr
         return Err(FsBridgeError::Invalid);
     }
     OBJECT_TABLE
-        .set_cursor(fd, new_pos as u64)
+        .set_cursor(obj_fd, new_pos as u64)
         .map_err(exofs_to_bridge_error)?;
     Ok(new_pos)
 }
@@ -1736,7 +1862,8 @@ pub fn fs_fstat(fd: u32, stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> 
     if stat_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     let owner_uid = if entry.owner_uid == 0 {
         pid
     } else {
@@ -1835,11 +1962,21 @@ pub fn fs_dup(oldfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    OBJECT_TABLE
-        .dup(oldfd)
-        .map(|fd| fd as i64)
-        .map_err(exofs_to_bridge_error)
+    let resolved = resolve_fd(pid, oldfd)?;
+    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+        if let Some(fd) = install_process_fd(pid, BOOT_TTY_HANDLE, resolved.flags) {
+            return Ok(fd as i64);
+        }
+        return Err(FsBridgeError::NoMemory);
+    }
+    let handle = OBJECT_TABLE
+        .dup(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if let Some(fd) = install_process_fd(pid, handle as u64, resolved.flags) {
+        Ok(fd as i64)
+    } else {
+        Ok(handle as i64)
+    }
 }
 
 /// `dup2(oldfd, newfd)`.
@@ -1848,11 +1985,33 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    OBJECT_TABLE
-        .dup2(oldfd, newfd)
-        .map(|fd| fd as i64)
-        .map_err(exofs_to_bridge_error)
+    if oldfd == newfd {
+        let _ = resolve_fd(pid, oldfd)?;
+        return Ok(newfd as i64);
+    }
+    let resolved = resolve_fd(pid, oldfd)?;
+    if let Some(old_handle) = close_process_fd(pid, newfd) {
+        if old_handle != BOOT_TTY_HANDLE && old_handle <= u32::MAX as u64 {
+            let _ = OBJECT_TABLE.close(old_handle as u32);
+        }
+    }
+    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+        if install_process_fd_at(pid, newfd, BOOT_TTY_HANDLE, resolved.flags) {
+            return Ok(newfd as i64);
+        }
+        return Err(FsBridgeError::NoMemory);
+    }
+    let handle = OBJECT_TABLE
+        .dup(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if install_process_fd_at(pid, newfd, handle as u64, resolved.flags) {
+        Ok(newfd as i64)
+    } else {
+        OBJECT_TABLE
+            .dup2(resolved.handle, newfd)
+            .map(|fd| fd as i64)
+            .map_err(exofs_to_bridge_error)
+    }
 }
 
 /// `fcntl(fd, cmd, arg)`.
@@ -1862,34 +2021,122 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
         return Err(FsBridgeError::NotReady);
     }
     match cmd {
-        F_DUPFD => OBJECT_TABLE
-            .dup_from(fd, arg as u32)
-            .map(|new_fd| new_fd as i64)
-            .map_err(exofs_to_bridge_error),
-        F_GETFD => Ok(0),
+        F_DUPFD => {
+            let resolved = resolve_fd(pid, fd)?;
+            if arg > i32::MAX as u64 {
+                return Err(FsBridgeError::Invalid);
+            }
+            let min_fd = arg as i32;
+            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+                if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+                    .find_by_pid(crate::process::core::pid::Pid(pid))
+                {
+                    let mut files = pcb.files.lock();
+                    let mut candidate = min_fd.max(0);
+                    while candidate < 65536 {
+                        if files.get(candidate).is_none() {
+                            if files.install_at(candidate, BOOT_TTY_HANDLE, resolved.flags) {
+                                return Ok(candidate as i64);
+                            }
+                            return Err(FsBridgeError::NoMemory);
+                        }
+                        candidate += 1;
+                    }
+                    return Err(FsBridgeError::NoSpace);
+                }
+                return Err(FsBridgeError::BadFd);
+            }
+            let handle = OBJECT_TABLE
+                .dup(resolved.handle)
+                .map_err(exofs_to_bridge_error)?;
+            if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+                .find_by_pid(crate::process::core::pid::Pid(pid))
+            {
+                let mut files = pcb.files.lock();
+                let mut candidate = min_fd.max(0);
+                while candidate < 65536 {
+                    if files.get(candidate).is_none() {
+                        if files.install_at(candidate, handle as u64, resolved.flags) {
+                            return Ok(candidate as i64);
+                        }
+                        let _ = OBJECT_TABLE.close(handle);
+                        return Err(FsBridgeError::NoMemory);
+                    }
+                    candidate += 1;
+                }
+                let _ = OBJECT_TABLE.close(handle);
+                Err(FsBridgeError::NoSpace)
+            } else {
+                OBJECT_TABLE
+                    .dup_from(resolved.handle, arg as u32)
+                    .map(|new_fd| new_fd as i64)
+                    .map_err(exofs_to_bridge_error)
+            }
+        }
+        F_GETFD => {
+            let _ = resolve_fd(pid, fd)?;
+            let flags = process_fd_descriptor(pid, fd)
+                .map(|desc| desc.flags)
+                .unwrap_or(0);
+            Ok(if flags & O_CLOEXEC != 0 {
+                FD_CLOEXEC as i64
+            } else {
+                0
+            })
+        }
         F_SETFD => {
             if arg & !FD_CLOEXEC != 0 {
                 return Err(FsBridgeError::Invalid);
             }
+            let mut flags = process_fd_descriptor(pid, fd)
+                .map(|desc| desc.flags)
+                .unwrap_or(0);
+            if arg & FD_CLOEXEC != 0 {
+                flags |= O_CLOEXEC;
+            } else {
+                flags &= !O_CLOEXEC;
+            }
+            let _ = set_process_fd_flags(pid, fd, flags);
             Ok(0)
         }
-        F_GETFL => OBJECT_TABLE
-            .get(fd)
-            .map(|entry| entry.flags as i64)
-            .map_err(exofs_to_bridge_error),
+        F_GETFL => {
+            let resolved = resolve_fd(pid, fd)?;
+            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+                Ok(resolved.flags as i64)
+            } else {
+                OBJECT_TABLE
+                    .get(resolved.handle)
+                    .map(|entry| (entry.flags | (resolved.flags & O_NONBLOCK)) as i64)
+                    .map_err(exofs_to_bridge_error)
+            }
+        }
         F_SETFL => {
             let supported = (open_flags::O_APPEND | O_NONBLOCK) as u64;
             if arg & !supported != 0 {
                 return Err(FsBridgeError::Invalid);
             }
-            OBJECT_TABLE
-                .set_status_flags(fd, (arg as u32) & !O_NONBLOCK)
-                .map(|flags| flags as i64)
-                .map_err(exofs_to_bridge_error)
+            let resolved = resolve_fd(pid, fd)?;
+            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+                let access = resolved.flags & 0x3;
+                let flags = access | ((arg as u32) & O_NONBLOCK);
+                let _ = set_process_fd_flags(pid, fd, flags);
+                Ok(flags as i64)
+            } else {
+                let flags = OBJECT_TABLE
+                    .set_status_flags(resolved.handle, (arg as u32) & !O_NONBLOCK)
+                    .map_err(exofs_to_bridge_error)?;
+                let descriptor_flags = (resolved.flags & (0x3 | O_CLOEXEC))
+                    | (flags & open_flags::O_APPEND)
+                    | ((arg as u32) & O_NONBLOCK);
+                let _ = set_process_fd_flags(pid, fd, descriptor_flags);
+                Ok((flags | (descriptor_flags & O_NONBLOCK)) as i64)
+            }
         }
         F_SETLK | F_SETLKW => {
             let fl = read_user_typed::<LinuxFlock>(arg).map_err(|_| FsBridgeError::Fault)?;
-            let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+            let entry = OBJECT_TABLE
+                .get(resolve_fd(pid, fd)?.handle)
+                .map_err(exofs_to_bridge_error)?;
             let (start, length) = flock_range_from_abi(fl)?;
             let object_id = inode_from_blob_id(&entry.blob_id);
             use crate::fs::exofs::posix_bridge::fcntl_lock::{
@@ -1912,7 +2159,9 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
         }
         F_GETLK => {
             let mut fl = read_user_typed::<LinuxFlock>(arg).map_err(|_| FsBridgeError::Fault)?;
-            let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+            let entry = OBJECT_TABLE
+                .get(resolve_fd(pid, fd)?.handle)
+                .map_err(exofs_to_bridge_error)?;
             let (start, length) = flock_range_from_abi(fl)?;
             let object_id = inode_from_blob_id(&entry.blob_id);
             use crate::fs::exofs::posix_bridge::fcntl_lock::{
@@ -1966,7 +2215,9 @@ pub fn fs_flock(fd: u32, operation: u32, pid: u32) -> Result<i64, FsBridgeError>
         return Err(FsBridgeError::NotReady);
     }
     let clean = operation & !LOCK_NB;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     let kind = match clean {
         LOCK_SH => crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Read,
         LOCK_EX => crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Write,
@@ -2221,7 +2472,7 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
     if dirp == 0 {
         return Err(FsBridgeError::Fault);
     }
@@ -2229,7 +2480,7 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
         return Err(FsBridgeError::Invalid);
     }
 
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     let data = snapshot_blob(&entry.blob_id)?;
     if !blob_is_directory(&data) {
         return Err(FsBridgeError::NotDir);
@@ -2287,7 +2538,7 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
 
     copy_to_user(dirp as *mut u8, out.as_ptr(), out.len()).map_err(|_| FsBridgeError::Fault)?;
     OBJECT_TABLE
-        .set_cursor(fd, cursor as u64)
+        .set_cursor(obj_fd, cursor as u64)
         .map_err(exofs_to_bridge_error)?;
     Ok(out.len() as i64)
 }
@@ -2356,14 +2607,14 @@ pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
     resize_regular_blob(entry.blob_id, length)?;
     OBJECT_TABLE
-        .set_size(fd, length)
+        .set_size(obj_fd, length)
         .map_err(exofs_to_bridge_error)?;
     Ok(0)
 }
@@ -2389,8 +2640,10 @@ pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (data_only, pid);
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = data_only;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
 
     if !BLOB_CACHE.contains(&entry.blob_id) {
         return Ok(0);
@@ -2430,11 +2683,12 @@ pub fn fs_fstatfs(fd: u32, statfs_ptr: u64, pid: u32) -> Result<i64, FsBridgeErr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if statfs_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
-    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     write_user_typed(statfs_ptr, statfs_snapshot()).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
@@ -2460,8 +2714,9 @@ pub fn fs_fchmod(fd: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     let is_dir = blob_is_directory_by_id(&entry.blob_id);
     let type_bits = if is_dir { S_IFDIR } else { S_IFREG };
     upsert_mode(entry.blob_id, type_bits | (mode & 0o7777));
@@ -2484,8 +2739,10 @@ pub fn fs_fchown(fd: u32, uid: u32, gid: u32, pid: u32) -> Result<i64, FsBridgeE
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (uid, gid, pid);
-    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = (uid, gid);
+    let _ = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     Ok(0)
 }
 
@@ -2521,8 +2778,29 @@ pub fn fs_pipe2(fds_ptr: u64, flags: u32, pid: u32) -> Result<i64, FsBridgeError
         }
     };
 
-    let fds = [read_fd as i32, write_fd as i32];
+    let mut fds = [read_fd as i32, write_fd as i32];
+    let has_fd_table = process_has_fd_table(pid);
+    if has_fd_table {
+        let read_flags = fd_table_flags(flags, open_flags::O_RDONLY);
+        let write_flags = fd_table_flags(flags, open_flags::O_WRONLY | open_flags::O_APPEND);
+        let Some(read_logical) = install_process_fd(pid, read_fd as u64, read_flags) else {
+            let _ = OBJECT_TABLE.close(read_fd);
+            let _ = OBJECT_TABLE.close(write_fd);
+            return Err(FsBridgeError::NoMemory);
+        };
+        let Some(write_logical) = install_process_fd(pid, write_fd as u64, write_flags) else {
+            let _ = close_process_fd(pid, read_logical as u32);
+            let _ = OBJECT_TABLE.close(read_fd);
+            let _ = OBJECT_TABLE.close(write_fd);
+            return Err(FsBridgeError::NoMemory);
+        };
+        fds = [read_logical, write_logical];
+    }
     if write_user_typed(fds_ptr, fds).is_err() {
+        if has_fd_table {
+            let _ = close_process_fd(pid, fds[0] as u32);
+            let _ = close_process_fd(pid, fds[1] as u32);
+        }
         let _ = OBJECT_TABLE.close(read_fd);
         let _ = OBJECT_TABLE.close(write_fd);
         return Err(FsBridgeError::Fault);
@@ -2542,7 +2820,7 @@ pub fn fs_eventfd2(initval: u32, flags: u32, pid: u32) -> Result<i64, FsBridgeEr
 
     let blob_id = next_pseudo_blob(PSEUDO_EVENTFD_TAG);
     store_eventfd_state(blob_id, initval as u64, flags)?;
-    OBJECT_TABLE
+    let fd = OBJECT_TABLE
         .open(
             blob_id,
             open_flags::O_RDWR,
@@ -2550,8 +2828,19 @@ pub fn fs_eventfd2(initval: u32, flags: u32, pid: u32) -> Result<i64, FsBridgeEr
             0,
             pid as u64,
         )
-        .map(|fd| fd as i64)
-        .map_err(exofs_to_bridge_error)
+        .map_err(exofs_to_bridge_error)?;
+    if process_has_fd_table(pid) {
+        if let Some(logical_fd) =
+            install_process_fd(pid, fd as u64, fd_table_flags(flags, open_flags::O_RDWR))
+        {
+            Ok(logical_fd as i64)
+        } else {
+            let _ = OBJECT_TABLE.close(fd);
+            Err(FsBridgeError::NoMemory)
+        }
+    } else {
+        Ok(fd as i64)
+    }
 }
 
 /// `epoll_create1(flags)`.
@@ -2565,10 +2854,21 @@ pub fn fs_epoll_create1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
     let blob_id = next_pseudo_blob(PSEUDO_EPOLL_TAG);
     ensure_blob_exists(blob_id)?;
-    OBJECT_TABLE
+    let fd = OBJECT_TABLE
         .open(blob_id, open_flags::O_RDWR, 0, 0, pid as u64)
-        .map(|fd| fd as i64)
-        .map_err(exofs_to_bridge_error)
+        .map_err(exofs_to_bridge_error)?;
+    if process_has_fd_table(pid) {
+        if let Some(logical_fd) =
+            install_process_fd(pid, fd as u64, fd_table_flags(flags, open_flags::O_RDWR))
+        {
+            Ok(logical_fd as i64)
+        } else {
+            let _ = OBJECT_TABLE.close(fd);
+            Err(FsBridgeError::NoMemory)
+        }
+    } else {
+        Ok(fd as i64)
+    }
 }
 
 /// `epoll_ctl(epfd, op, fd, event)`.
@@ -2583,12 +2883,18 @@ pub fn fs_epoll_ctl(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let ep_entry = OBJECT_TABLE.get(epfd).map_err(exofs_to_bridge_error)?;
+    let ep_obj = resolve_fd(pid, epfd)?.handle;
+    let target_obj = resolve_fd(pid, fd)?.handle;
+    if ep_obj as u64 == BOOT_TTY_HANDLE || target_obj as u64 == BOOT_TTY_HANDLE {
+        return Err(FsBridgeError::Invalid);
+    }
+    let ep_entry = OBJECT_TABLE.get(ep_obj).map_err(exofs_to_bridge_error)?;
     if !is_pseudo_blob(&ep_entry.blob_id, PSEUDO_EPOLL_TAG) {
         return Err(FsBridgeError::Invalid);
     }
-    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = OBJECT_TABLE
+        .get(target_obj)
+        .map_err(exofs_to_bridge_error)?;
     match op {
         EPOLL_CTL_ADD | EPOLL_CTL_MOD => {
             if event_ptr == 0 {
@@ -2615,14 +2921,18 @@ pub fn fs_epoll_wait(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (timeout, pid);
+    let _ = timeout;
     if events_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
     if maxevents <= 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let ep_entry = OBJECT_TABLE.get(epfd).map_err(exofs_to_bridge_error)?;
+    let ep_obj = resolve_fd(pid, epfd)?.handle;
+    if ep_obj as u64 == BOOT_TTY_HANDLE {
+        return Err(FsBridgeError::Invalid);
+    }
+    let ep_entry = OBJECT_TABLE.get(ep_obj).map_err(exofs_to_bridge_error)?;
     if !is_pseudo_blob(&ep_entry.blob_id, PSEUDO_EPOLL_TAG) {
         return Err(FsBridgeError::Invalid);
     }
@@ -2640,10 +2950,21 @@ pub fn fs_inotify_init1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
     let blob_id = next_pseudo_blob(PSEUDO_INOTIFY_TAG);
     ensure_blob_exists(blob_id)?;
-    OBJECT_TABLE
+    let fd = OBJECT_TABLE
         .open(blob_id, open_flags::O_RDONLY, 0, 0, pid as u64)
-        .map(|fd| fd as i64)
-        .map_err(exofs_to_bridge_error)
+        .map_err(exofs_to_bridge_error)?;
+    if process_has_fd_table(pid) {
+        if let Some(logical_fd) =
+            install_process_fd(pid, fd as u64, fd_table_flags(flags, open_flags::O_RDONLY))
+        {
+            Ok(logical_fd as i64)
+        } else {
+            let _ = OBJECT_TABLE.close(fd);
+            Err(FsBridgeError::NoMemory)
+        }
+    } else {
+        Ok(fd as i64)
+    }
 }
 
 /// `socketpair(AF_UNIX, SOCK_STREAM|SOCK_DGRAM, 0, sv)`.
@@ -2688,8 +3009,28 @@ pub fn fs_socketpair(
             return Err(exofs_to_bridge_error(err));
         }
     };
-    let sv = [a_fd as i32, b_fd as i32];
+    let mut sv = [a_fd as i32, b_fd as i32];
+    let has_fd_table = process_has_fd_table(pid);
+    if has_fd_table {
+        let fd_flags = fd_table_flags(ty as u32, open_flags::O_RDWR);
+        let Some(a_logical) = install_process_fd(pid, a_fd as u64, fd_flags) else {
+            let _ = OBJECT_TABLE.close(a_fd);
+            let _ = OBJECT_TABLE.close(b_fd);
+            return Err(FsBridgeError::NoMemory);
+        };
+        let Some(b_logical) = install_process_fd(pid, b_fd as u64, fd_flags) else {
+            let _ = close_process_fd(pid, a_logical as u32);
+            let _ = OBJECT_TABLE.close(a_fd);
+            let _ = OBJECT_TABLE.close(b_fd);
+            return Err(FsBridgeError::NoMemory);
+        };
+        sv = [a_logical, b_logical];
+    }
     if write_user_typed(sv_ptr, sv).is_err() {
+        if has_fd_table {
+            let _ = close_process_fd(pid, sv[0] as u32);
+            let _ = close_process_fd(pid, sv[1] as u32);
+        }
         let _ = OBJECT_TABLE.close(a_fd);
         let _ = OBJECT_TABLE.close(b_fd);
         return Err(FsBridgeError::Fault);
@@ -2714,7 +3055,7 @@ pub fn fs_mknod(path: &[u8], mode: u32, dev: u64, pid: u32) -> Result<i64, FsBri
         mode,
         pid,
     )? as u32;
-    let _ = OBJECT_TABLE.close(fd);
+    let _ = fs_close(fd, pid);
     Ok(0)
 }
 
@@ -2747,12 +3088,13 @@ pub fn fs_splice(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if flags & !0x0F != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
-    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    let in_fd = resolve_fd(pid, fd_in)?.handle;
+    let out_fd = resolve_fd(pid, fd_out)?.handle;
+    let in_entry = OBJECT_TABLE.get(in_fd).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(out_fd).map_err(exofs_to_bridge_error)?;
     if !in_entry.can_read() || !out_entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -2775,7 +3117,7 @@ pub fn fs_splice(
         let data = read_blob_bytes_at(in_entry.blob_id, offset, len)?;
         if off_in_ptr == 0 {
             OBJECT_TABLE
-                .set_cursor(fd_in, offset.saturating_add(data.len() as u64))
+                .set_cursor(in_fd, offset.saturating_add(data.len() as u64))
                 .map_err(exofs_to_bridge_error)?;
         } else {
             write_user_typed(
@@ -2804,14 +3146,14 @@ pub fn fs_splice(
         let written = write_blob_bytes_at(out_entry.blob_id, offset, &data)? as u64;
         if off_out_ptr == 0 {
             OBJECT_TABLE
-                .set_cursor(fd_out, offset.saturating_add(written))
+                .set_cursor(out_fd, offset.saturating_add(written))
                 .map_err(exofs_to_bridge_error)?;
         } else {
             write_user_typed(off_out_ptr, (offset.saturating_add(written)) as i64)
                 .map_err(|_| FsBridgeError::Fault)?;
         }
         OBJECT_TABLE
-            .set_size(fd_out, blob_len(&out_entry.blob_id) as u64)
+            .set_size(out_fd, blob_len(&out_entry.blob_id) as u64)
             .map_err(exofs_to_bridge_error)?;
         Ok(written as i64)
     }
@@ -2829,12 +3171,15 @@ pub fn fs_tee(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if flags & !0x0F != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
-    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    let in_entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd_in)?.handle)
+        .map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd_out)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     if !is_pseudo_blob(&in_entry.blob_id, PSEUDO_PIPE_TAG)
         || !is_pseudo_blob(&out_entry.blob_id, PSEUDO_PIPE_TAG)
     {
@@ -2856,11 +3201,12 @@ pub fn fs_vmsplice(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if flags & !0x0F != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     if !entry.can_write() || !is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
         return Err(FsBridgeError::Invalid);
     }
@@ -2896,7 +3242,7 @@ pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64,
         let mut pfd = read_user_typed::<LinuxPollFd>(addr).map_err(|_| FsBridgeError::Fault)?;
         pfd.revents = 0;
         if pfd.fd >= 0 {
-            match fd_readiness(pfd.fd as u32) {
+            match fd_readiness(pfd.fd as u32, pid) {
                 Ok((readable, writable)) => {
                     if readable && (pfd.events & POLLIN) != 0 {
                         pfd.revents |= POLLIN;
@@ -2958,7 +3304,7 @@ pub fn fs_select(
     let mut fd = 0usize;
     while fd < nfds {
         if readfds_ptr != 0 && fdset_bit(&readfds, fd) {
-            let keep = fd_readiness(fd as u32)
+            let keep = fd_readiness(fd as u32, pid)
                 .map(|(readable, _)| readable)
                 .unwrap_or(false);
             set_fdset_bit(&mut readfds, fd, keep);
@@ -2967,7 +3313,7 @@ pub fn fs_select(
             }
         }
         if writefds_ptr != 0 && fdset_bit(&writefds, fd) {
-            let keep = fd_readiness(fd as u32)
+            let keep = fd_readiness(fd as u32, pid)
                 .map(|(_, writable)| writable)
                 .unwrap_or(false);
             set_fdset_bit(&mut writefds, fd, keep);
@@ -3032,12 +3378,13 @@ pub fn fs_copy_file_range(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if flags != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let in_entry = OBJECT_TABLE.get(fd_in).map_err(exofs_to_bridge_error)?;
-    let out_entry = OBJECT_TABLE.get(fd_out).map_err(exofs_to_bridge_error)?;
+    let in_fd = resolve_fd(pid, fd_in)?.handle;
+    let out_fd = resolve_fd(pid, fd_out)?.handle;
+    let in_entry = OBJECT_TABLE.get(in_fd).map_err(exofs_to_bridge_error)?;
+    let out_entry = OBJECT_TABLE.get(out_fd).map_err(exofs_to_bridge_error)?;
     if !in_entry.can_read() || !out_entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -3060,7 +3407,7 @@ pub fn fs_copy_file_range(
     let written = write_blob_bytes_at(out_entry.blob_id, out_offset, &data)? as u64;
     if off_in_ptr == 0 {
         OBJECT_TABLE
-            .set_cursor(fd_in, in_offset.saturating_add(written))
+            .set_cursor(in_fd, in_offset.saturating_add(written))
             .map_err(exofs_to_bridge_error)?;
     } else {
         write_user_typed(off_in_ptr, (in_offset.saturating_add(written)) as i64)
@@ -3068,14 +3415,14 @@ pub fn fs_copy_file_range(
     }
     if off_out_ptr == 0 {
         OBJECT_TABLE
-            .set_cursor(fd_out, out_offset.saturating_add(written))
+            .set_cursor(out_fd, out_offset.saturating_add(written))
             .map_err(exofs_to_bridge_error)?;
     } else {
         write_user_typed(off_out_ptr, (out_offset.saturating_add(written)) as i64)
             .map_err(|_| FsBridgeError::Fault)?;
     }
     OBJECT_TABLE
-        .set_size(fd_out, blob_len(&out_entry.blob_id) as u64)
+        .set_size(out_fd, blob_len(&out_entry.blob_id) as u64)
         .map_err(exofs_to_bridge_error)?;
     Ok(written as i64)
 }
@@ -3092,7 +3439,8 @@ pub fn fs_sendfile(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
+    let in_fd = resolve_fd(pid, in_fd)?.handle;
+    let out_fd = resolve_fd(pid, out_fd)?.handle;
     let in_entry = OBJECT_TABLE.get(in_fd).map_err(exofs_to_bridge_error)?;
     let out_entry = OBJECT_TABLE.get(out_fd).map_err(exofs_to_bridge_error)?;
     if !in_entry.can_read() || !out_entry.can_write() {
@@ -3147,11 +3495,11 @@ pub fn fs_fallocate(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if len == 0 || mode & !FALLOC_FL_KEEP_SIZE != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let obj_fd = resolve_fd(pid, fd)?.handle;
+    let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
@@ -3159,7 +3507,7 @@ pub fn fs_fallocate(
     if mode & FALLOC_FL_KEEP_SIZE == 0 && end > blob_len(&entry.blob_id) as u64 {
         resize_regular_blob(entry.blob_id, end)?;
         OBJECT_TABLE
-            .set_size(fd, end)
+            .set_size(obj_fd, end)
             .map_err(exofs_to_bridge_error)?;
     } else {
         ensure_blob_exists(entry.blob_id)?;
@@ -3234,11 +3582,13 @@ pub fn fs_fadvise64(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (offset, len, pid);
+    let _ = (offset, len);
     if advice > 5 {
         return Err(FsBridgeError::Invalid);
     }
-    let _ = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let _ = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     Ok(0)
 }
 
@@ -3248,8 +3598,9 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     match request {
         FIONREAD => {
             if arg == 0 {
@@ -3351,8 +3702,9 @@ pub fn fs_fchdir(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
-    let entry = OBJECT_TABLE.get(fd).map_err(exofs_to_bridge_error)?;
+    let entry = OBJECT_TABLE
+        .get(resolve_fd(pid, fd)?.handle)
+        .map_err(exofs_to_bridge_error)?;
     if !blob_is_directory_by_id(&entry.blob_id) {
         return Err(FsBridgeError::NotDir);
     }

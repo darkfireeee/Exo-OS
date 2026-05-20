@@ -126,7 +126,9 @@ fn oom_candidates(buf: &mut [OomKillCandidate]) -> usize {
             return;
         }
 
-        let brk_pages = pcb.brk_current.load(Ordering::Acquire) / crate::memory::PAGE_SIZE as u64;
+        let brk_start = pcb.brk_start.load(Ordering::Acquire);
+        let brk_current = pcb.brk_current.load(Ordering::Acquire);
+        let brk_pages = brk_current.saturating_sub(brk_start) / crate::memory::PAGE_SIZE as u64;
         let fault_score = pcb
             .major_faults
             .load(Ordering::Relaxed)

@@ -32,6 +32,31 @@ struct TtyReply {
 const _: () = assert!(core::mem::size_of::<TtyRequest>() <= 240);
 const _: () = assert!(core::mem::size_of::<TtyReply>() <= 240);
 
+#[inline]
+fn boot_log(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
+
+fn exit_failed() -> ! {
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 127);
+        let _ = syscall::syscall1(syscall::SYS_EXIT_GROUP, 127);
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 struct TtyState {
     line: LineDiscipline,
     ready: [u8; LINE_OUT_MAX],
@@ -127,7 +152,8 @@ fn handle(req: &TtyRequest) -> TtyReply {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let name = b"tty_server";
-    let _ = unsafe {
+    boot_log(b"tty_server: boot\n");
+    let register_rc = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
@@ -135,6 +161,11 @@ pub extern "C" fn _start() -> ! {
             12,
         )
     };
+    if register_rc < 0 {
+        boot_log(b"tty_server: register failed\n");
+        exit_failed();
+    }
+    boot_log(b"tty_server: registered\n");
     let mut req = TtyRequest {
         sender_pid: 0,
         msg_type: 0,

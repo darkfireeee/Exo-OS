@@ -129,7 +129,7 @@ fn send(endpoint: u64, msg_type: u32, payload: &[u8]) -> i64 {
             endpoint,
             &request as *const DriverRequest as u64,
             core::mem::size_of::<DriverRequest>() as u64,
-            0,
+            syscall::IPC_FLAG_INJECT_SRC_PID,
             0,
             0,
         )

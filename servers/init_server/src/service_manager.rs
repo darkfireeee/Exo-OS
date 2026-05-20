@@ -10,6 +10,15 @@ pub fn service_started(services: &[Service], name: &str) -> bool {
 }
 
 #[inline]
+pub fn service_dead(services: &[Service], name: &str) -> bool {
+    services
+        .iter()
+        .find(|service| service.name == name)
+        .map(|service| service.current_pid() == 0 && service.is_dead())
+        .unwrap_or(false)
+}
+
+#[inline]
 pub fn service_index_by_pid(services: &[Service], pid: u32) -> Option<usize> {
     services
         .iter()

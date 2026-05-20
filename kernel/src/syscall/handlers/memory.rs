@@ -48,7 +48,30 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
 /// `brk(addr)` → nouvelle borne du segment data ou errno.
 pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     match crate::memory::virt::mmap::do_brk(addr) {
-        Ok(new_brk) => new_brk as i64,
+        Ok(new_brk) => {
+            sync_current_pcb_brk(new_brk);
+            new_brk as i64
+        }
         Err(_) => ENOMEM,
+    }
+}
+
+fn sync_current_pcb_brk(new_brk: u64) {
+    let tcb = crate::scheduler::core::switch::current_thread_raw();
+    if tcb.is_null() {
+        return;
+    }
+
+    // SAFETY: current_thread_raw() returned a non-null TCB for the running thread.
+    let pid = unsafe { (*tcb).pid.0 };
+    if pid == 0 {
+        return;
+    }
+
+    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+    {
+        pcb.brk_current
+            .store(new_brk, core::sync::atomic::Ordering::Release);
     }
 }

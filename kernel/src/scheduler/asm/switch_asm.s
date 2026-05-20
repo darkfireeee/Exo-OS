@@ -169,6 +169,7 @@ switch_to_new_thread:
 
 kthread_trampoline:
     movq    %r13, %rdi      // arg → rdi (1er paramètre SystemV AMD64)
+    sti                     // premier contexte kthread: IF doit être actif
     jmpq    *%r12           // saute à entry_fn(arg) — ne revient jamais
 
 .size kthread_trampoline, . - kthread_trampoline
@@ -183,11 +184,12 @@ kthread_trampoline:
 //
 //   [kernel_rsp + 0..48)  = 6 registres callee-saved = 0 (format switch_to_new_thread)
 //   [kernel_rsp + 48]     = fork_child_trampoline  ← adresse de retour switch_to_new_thread
-//   [kernel_rsp + 56]     = child_rip  ← RSP pointe ici à l'entrée du trampoline
-//   [kernel_rsp + 64]     = GDT_USER_CS64 (CS ring3)
-//   [kernel_rsp + 72]     = 0x0202    (RFLAGS : IF=1)
-//   [kernel_rsp + 80]     = child_rsp (RSP userspace)
-//   [kernel_rsp + 88]     = GDT_USER_DS   (SS ring3)
+//   [kernel_rsp + 56..104) = caller-saved regs userspace (rdi,rsi,rdx,r10,r8,r9)
+//   [kernel_rsp + 104]     = child_rip  ← RSP pointe ici après les 6 pops ci-dessous
+//   [kernel_rsp + 112]     = GDT_USER_CS64 (CS ring3)
+//   [kernel_rsp + 120]     = 0x0202    (RFLAGS : IF=1)
+//   [kernel_rsp + 128]     = child_rsp (RSP userspace)
+//   [kernel_rsp + 136]     = GDT_USER_DS   (SS ring3)
 //
 // Invariant : GS = kernel GS (le scheduler n'a PAS fait SWAPGS).
 //             On doit faire SWAPGS avant IRETQ pour restaurer GS userspace.
@@ -200,8 +202,20 @@ kthread_trampoline:
 .type fork_child_trampoline, @function
 
 fork_child_trampoline:
+    popq    %rdi            // restaurer les registres visibles après syscall
+    popq    %rsi
+    popq    %rdx
+    popq    %r10
+    popq    %r8
+    popq    %r9
     xor     %eax, %eax      // rax = 0 : le fils retourne 0 de fork()
     clts                    // autoriser FPU/SIMD dès le premier retour Ring3
+    movq    %gs:0x48, %rax  // KPTI user CR3 publié par switch.rs (0 si inactif)
+    testq   %rax, %rax
+    jz      .L_fork_child_no_kpti
+    movq    %rax, %cr3
+.L_fork_child_no_kpti:
+    xor     %eax, %eax      // préserver la sémantique fork(): retour fils = 0
     swapgs                  // restaurer GS userspace (noyau avait GS kernel)
     iretq                   // dépile RIP, CS, RFLAGS, RSP, SS → retour Ring3
 
@@ -221,7 +235,7 @@ fork_child_trampoline:
 //   [kernel_rsp + 88] = SS ring3
 //
 // Contrairement a fork(), ce chemin ne doit pas heriter de registres parent.
-// On fournit donc les premiers registres ABI a zero avant l'IRET.
+// r12 transporte l'argument ABI optionnel fourni par ElfLoadResult::entry_arg0.
 
 .section .text
 .global user_entry_trampoline
@@ -229,10 +243,15 @@ fork_child_trampoline:
 
 user_entry_trampoline:
     xor     %eax, %eax      // rax = 0
-    xor     %edi, %edi      // rdi = boot_info_virt/null pour _start()
+    mov     %r12, %rdi      // rdi = handoff/boot_info/null pour _start()
     xor     %esi, %esi      // rsi = 0
     xor     %edx, %edx      // rdx = 0
     clts                    // le bootstrap Ring1 peut utiliser core::ptr SSE
+    movq    %gs:0x48, %rax  // KPTI user CR3 publié par switch.rs (0 si inactif)
+    testq   %rax, %rax
+    jz      .L_user_entry_no_kpti
+    movq    %rax, %cr3
+.L_user_entry_no_kpti:
     swapgs
     xor     %eax, %eax
     iretq

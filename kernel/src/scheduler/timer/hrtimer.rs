@@ -167,6 +167,7 @@ pub unsafe fn init(nr_cpus: usize) {
 /// # Safety
 /// Préemption désactivée requise ; le CPU doit être initialisé.
 pub unsafe fn arm(cpu: usize, delay_ns: u64, data: u64, cb: HrTimerCallback) -> u32 {
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let expiry = monotonic_ns().saturating_add(delay_ns);
     HR_LISTS[cpu].assume_init_mut().insert(expiry, data, cb)
 }
@@ -176,6 +177,7 @@ pub unsafe fn arm(cpu: usize, delay_ns: u64, data: u64, cb: HrTimerCallback) -> 
 /// # Safety
 /// Préemption désactivée requise.
 pub unsafe fn cancel(cpu: usize, id: u32) -> bool {
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let r = HR_LISTS[cpu].assume_init_mut().cancel(id);
     if r {
         HRTIMER_CANCELLED.fetch_add(1, Ordering::Relaxed);
@@ -189,6 +191,7 @@ pub unsafe fn cancel(cpu: usize, id: u32) -> bool {
 /// # Safety
 /// Préemption désactivée requise.
 pub unsafe fn fire_expired(cpu: usize) -> usize {
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let fired = HR_LISTS[cpu].assume_init_mut().fire_expired();
     HRTIMER_FIRED.fetch_add(fired as u64, Ordering::Relaxed);
     fired

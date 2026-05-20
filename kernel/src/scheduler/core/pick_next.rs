@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::assert_preempt_disabled;
-use super::runqueue::PerCpuRunQueue;
+use super::runqueue::{PerCpuRunQueue, MAX_TASKS_PER_CPU};
 use super::task::{TaskState, ThreadControlBlock};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +34,8 @@ pub static PICK_SAME_CURRENT: AtomicU64 = AtomicU64::new(0);
 pub static PICK_RT_RT: AtomicU64 = AtomicU64::new(0);
 /// Nombre de fois qu'un thread inéligible a été ignoré.
 pub static PICK_SKIP_INELIGIBLE: AtomicU64 = AtomicU64::new(0);
+
+const MAX_PICK_SKIP_SCAN: usize = MAX_TASKS_PER_CPU + 256 + 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Résultat de pick_next
@@ -81,18 +83,19 @@ pub unsafe fn pick_next_task(
     // on ne fait pas de switch (optimisation hot path).
     if let Some(cur) = current {
         let cur_ref = cur.as_ref();
-        if cur_ref.policy == crate::scheduler::core::task::SchedPolicy::Fifo
-            || cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin
+        if cur_ref.state() == TaskState::Running
+            && (cur_ref.policy == crate::scheduler::core::task::SchedPolicy::Fifo
+                || cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin)
         {
             // Vérifier si un thread RT de priorité supérieure attend.
             if let Some(best_prio) = rq.rt_bitmap_highest_prio() {
                 if best_prio < cur_ref.priority.0 {
                     // Préempter le thread RT courant au profit d'un RT plus prioritaire.
                     PICK_RT_RT.fetch_add(1, Ordering::Relaxed);
-                    // Re-enqueuer le courant (sauf FIFO qui garde la priorité).
-                    if cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin {
-                        rq.enqueue(cur);
-                    }
+                    // Re-enqueuer le courant: meme FIFO doit rester pret apres
+                    // preemption par une priorite RT superieure.
+                    cur_ref.set_state(TaskState::Runnable);
+                    rq.enqueue(cur);
                     if let Some(next) = rq.dequeue_highest_rt() {
                         return PickResult::Switch(next);
                     }
@@ -105,32 +108,39 @@ pub unsafe fn pick_next_task(
         }
     }
 
-    // Sélection standard.
-    let candidate = rq.pick_next();
+    // Sélection standard. Une runqueue peut contenir transitoirement une entree
+    // stale apres un reveil/preemption concurrent; on la depile et on continue
+    // au lieu de basculer vers idle alors qu'un parent runnable attend derriere.
+    for _ in 0..MAX_PICK_SKIP_SCAN {
+        match rq.pick_next() {
+            None => return PickResult::GoIdle,
+            Some(next) => {
+                // Vérification : seul un thread Runnable peut être sélectionné.
+                // Exception: l'idle courant est publié comme Running et sert de
+                // dernier recours quand aucune file active n'a de travail.
+                let next_ref = next.as_ref();
+                let state = next_ref.state();
+                let idle_running = state == TaskState::Running && next_ref.is_idle();
+                if state != TaskState::Runnable && !idle_running {
+                    // Thread non éligible (zombie, stopped, etc.) — on le réinsère pas.
+                    PICK_SKIP_INELIGIBLE.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
 
-    match candidate {
-        None => PickResult::GoIdle,
-        Some(next) => {
-            // Vérification : le thread doit être en état Runnable.
-            let state = next.as_ref().state();
-            if state != TaskState::Runnable && state != TaskState::Running {
-                // Thread non éligible (zombie, stopped, etc.) — on le réinsère pas.
-                PICK_SKIP_INELIGIBLE.fetch_add(1, Ordering::Relaxed);
-                // Continuer avec idle.
-                return PickResult::GoIdle;
-            }
+                // Sélection déterministe CFS pure — aucun ajustement heuristique.
+                let final_next = next;
 
-            // Sélection déterministe CFS pure — aucun ajustement heuristique.
-            let final_next = next;
-
-            if current == Some(final_next) {
-                PICK_SAME_CURRENT.fetch_add(1, Ordering::Relaxed);
-                PickResult::KeepRunning
-            } else {
-                PickResult::Switch(final_next)
+                if current == Some(final_next) {
+                    PICK_SAME_CURRENT.fetch_add(1, Ordering::Relaxed);
+                    return PickResult::KeepRunning;
+                } else {
+                    return PickResult::Switch(final_next);
+                }
             }
         }
     }
+
+    PickResult::GoIdle
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

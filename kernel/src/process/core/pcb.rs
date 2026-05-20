@@ -168,15 +168,42 @@ impl OpenFileTable {
         self.descriptors[1] = Some(FileDescriptor {
             fd: 1,
             handle: stdout,
-            flags: 0,
+            flags: 1,
         });
         self.descriptors[2] = Some(FileDescriptor {
             fd: 2,
             handle: stderr,
-            flags: 0,
+            flags: 1,
         });
         self.open_count
             .store(self.open_fd_count() as u64, Ordering::Relaxed);
+    }
+
+    /// Installe ou remplace un fd précis par un handle opaque.
+    pub fn install_at(&mut self, fd: i32, handle: u64, flags: u32) -> bool {
+        if fd < 0 || fd as usize >= self.fd_limit {
+            return false;
+        }
+        let idx = fd as usize;
+        while self.descriptors.len() <= idx {
+            if self.descriptors.try_reserve(1).is_err() {
+                return false;
+            }
+            self.descriptors.push(None);
+        }
+
+        if self.descriptors[idx].is_none() {
+            self.open_count.fetch_add(1, Ordering::Relaxed);
+        }
+        self.descriptors[idx] = Some(FileDescriptor { fd, handle, flags });
+        if idx == self.next_hint {
+            while self.next_hint < self.descriptors.len()
+                && self.descriptors[self.next_hint].is_some()
+            {
+                self.next_hint += 1;
+            }
+        }
+        true
     }
 
     /// Alloue le prochain fd disponible et y associe le handle.
@@ -246,6 +273,15 @@ impl OpenFileTable {
     #[inline(always)]
     pub fn get(&self, fd: i32) -> Option<&FileDescriptor> {
         self.descriptors.get(fd as usize)?.as_ref()
+    }
+
+    /// Met à jour les flags de descripteur (FD_CLOEXEC, O_NONBLOCK miroir...).
+    pub fn set_flags(&mut self, fd: i32, flags: u32) -> bool {
+        let Some(Some(entry)) = self.descriptors.get_mut(fd as usize) else {
+            return false;
+        };
+        entry.flags = flags;
+        true
     }
 
     /// Ferme tous les fds marqués O_CLOEXEC (appelé lors de execve).
@@ -438,8 +474,9 @@ pub struct ProcessControlBlock {
     pub address_space: AtomicUsize, // *mut opaque
     /// CR3 courant (base de la PML4 physique).
     pub cr3: AtomicU64,
-    /// taille du heap brk courant (bytes au-dessus de brk_start).
+    /// Break courant absolu du heap utilisateur.
     pub brk_current: AtomicU64,
+    /// Break initial absolu publié par le chargeur ELF.
     pub brk_start: AtomicU64,
 
     // ── Compteurs de performance ───────────────────────────────────────────────

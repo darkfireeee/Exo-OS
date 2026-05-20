@@ -336,8 +336,12 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     // L'appel est idempotent côté boot flow: kernel_init() vérifie aussi ce flag.
     probe!(b'g');
     if !crate::security::is_security_ready() {
-        let kaslr_entropy =
+        let mut kaslr_entropy =
             super::super::cpu::tsc::read_tsc() ^ ((mb2_magic as u64) << 32) ^ mb2_info ^ rsdp;
+        let mut rdrand = [0u8; 8];
+        if crate::security::crypto::rng::rdrand_fill(&mut rdrand).is_ok() {
+            kaslr_entropy ^= u64::from_le_bytes(rdrand);
+        }
         crate::security::security_init(
             kaslr_entropy,
             crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR,

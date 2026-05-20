@@ -1,8 +1,10 @@
 use super::{dependency, log, service_manager, supervisor, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
-const BOOT_PHASE_TIMEOUT_MS: u64 = 30_000;
+const BOOT_PHASE_TIMEOUT_MS: u64 = 120_000;
 const CLOCK_MONOTONIC: u64 = 1;
+const POLL_YIELD_ROUNDS: usize = 4;
+const POLL_SPIN_ROUNDS: usize = 256;
 
 #[repr(C)]
 struct Timespec {
@@ -11,14 +13,18 @@ struct Timespec {
 }
 
 #[inline]
-fn sleep_ms(ms: u64) {
-    let ts = Timespec {
-        tv_sec: (ms / 1_000) as i64,
-        tv_nsec: ((ms % 1_000) * 1_000_000) as i64,
-    };
-
-    unsafe {
-        let _ = syscall::syscall2(syscall::SYS_NANOSLEEP, &ts as *const Timespec as u64, 0);
+fn service_poll_delay() {
+    let mut yields = 0usize;
+    while yields < POLL_YIELD_ROUNDS {
+        unsafe {
+            let _ = syscall::syscall0(syscall::SYS_SCHED_YIELD);
+        }
+        let mut spins = 0usize;
+        while spins < POLL_SPIN_ROUNDS {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+        yields += 1;
     }
 }
 
@@ -62,10 +68,8 @@ fn endpoint_registered(service_name: &str) -> bool {
 }
 
 #[inline]
-unsafe fn isolate_process_group(pid: u32) {
-    if pid != 0 {
-        let _ = syscall::syscall2(syscall::SYS_SETPGID, pid as u64, pid as u64);
-    }
+fn owns_interactive_console(service_name: &str) -> bool {
+    service_name == "exosh"
 }
 
 /// Démarre un serveur Ring1 via fork + execve.
@@ -100,8 +104,9 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
         }
     }
 
-    isolate_process_group(child_pid as u32);
-    log::service_pid(b"init: spawned ", service_name, child_pid as u32);
+    if !owns_interactive_console(service_name) {
+        log::service_pid(b"init: spawned ", service_name, child_pid as u32);
+    }
     child_pid as u32
 }
 
@@ -111,17 +116,25 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
 /// 1. le processus existe toujours (`kill(pid, 0)`);
 /// 2. son endpoint IPC est bien visible dans le registre kernel.
 pub unsafe fn wait_for_ipc_ready(service_name: &str, pid: u32, timeout_ms: u64) -> bool {
+    let start_ms = monotonic_ms();
     let mut waited_ms = 0u64;
-    while waited_ms <= timeout_ms {
+    loop {
         if pid_alive(pid) && endpoint_registered(service_name) {
             return true;
         }
 
-        sleep_ms(POLL_INTERVAL_MS);
+        let now_ms = monotonic_ms();
+        if start_ms != 0 && now_ms != 0 {
+            if now_ms.saturating_sub(start_ms) >= timeout_ms {
+                return false;
+            }
+        } else if waited_ms >= timeout_ms {
+            return false;
+        }
+
+        service_poll_delay();
         waited_ms = waited_ms.saturating_add(POLL_INTERVAL_MS);
     }
-
-    false
 }
 
 /// Démarre séquentiellement la chaîne Ring1 canonique V4.
@@ -181,7 +194,11 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                 pid,
                 dependency::ready_timeout_ms(service.name),
             ) {
-                log::service_pid(b"init: ready ", service.name, pid);
+                if owns_interactive_console(service.name) {
+                    log::set_console_quiet(true);
+                } else {
+                    log::service_pid(b"init: ready ", service.name, pid);
+                }
                 progress = true;
             } else {
                 log::service_status(b"init: timeout ", service.name, b"\n");

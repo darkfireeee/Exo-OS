@@ -599,16 +599,20 @@ pub fn do_mremap_zero_copy(
 // do_brk
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse de base du heap utilisateur — début de la zone [4 GiB … USER_MMAP_BASE).
-/// Stockée ici uniquement comme constante de référence ; l'état réel est dans
-/// `UserAddressSpace::heap_end` (per-process, sans state global).
+/// Fallback historique pour les espaces sans image ELF publiée. Les processus
+/// normaux utilisent `UserAddressSpace::heap_start`, initialisé par le loader.
 const BRK_BASE: u64 = 0x0000_0001_0000_0000; // 4 GiB
 
-/// Étend ou réduit le heap utilisateur (per-process via `UserAddressSpace::heap_end`).
+fn align_up_page(addr: u64) -> Option<u64> {
+    let mask = PAGE_SIZE as u64 - 1;
+    addr.checked_add(mask).map(|value| value & !mask)
+}
+
+/// Étend ou réduit le heap utilisateur (per-process via `UserAddressSpace`).
 ///
-/// - `addr == 0` : retourne le break courant (ou `BRK_BASE` si jamais initialisé).
+/// - `addr == 0` : retourne le break courant.
 /// - `addr != 0` : déplace le break vers `addr` (arrondi au prochain multiple
-///   de PAGE_SIZE) et crée la VMA correspondante si le heap s'étend.
+///   de PAGE_SIZE) et crée uniquement la portion de VMA réellement nouvelle.
 ///
 /// Retourne la nouvelle valeur du break.
 pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
@@ -616,31 +620,41 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
     // SAFETY: user_as_ptr est non-null (garanti par get_current_user_as) et vit le temps du syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
 
-    // Initialiser le break au démarrage (première fois : heap_end == 0).
-    let cur = {
-        let v = user_as.heap_end.load(Ordering::Acquire);
-        if v == 0 {
-            BRK_BASE
-        } else {
-            v
-        }
+    let heap_base = match user_as.heap_start.load(Ordering::Acquire) {
+        0 => BRK_BASE,
+        base => base,
+    };
+    let cur = match user_as.heap_end.load(Ordering::Acquire) {
+        0 => heap_base,
+        current => current,
     };
 
     if addr == 0 {
         return Ok(cur);
     }
 
-    // Vérifier que l'adresse est dans une plage valide
-    if addr < BRK_BASE || addr > USER_MMAP_BASE {
+    if addr < heap_base || addr > USER_MMAP_BASE {
         return Err(MmapError::InvalidAddress);
     }
 
-    // Aligner sur PAGE_SIZE
-    let new_brk = (addr + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
+    let new_brk = align_up_page(addr).ok_or(MmapError::InvalidAddress)?;
+    if new_brk < heap_base || new_brk > USER_MMAP_BASE {
+        return Err(MmapError::InvalidAddress);
+    }
+
+    if user_as.heap_start.load(Ordering::Acquire) == 0 {
+        user_as.init_heap_bounds(heap_base);
+    }
 
     if new_brk > cur {
-        // Extension du heap : créer une VMA pour la nouvelle région
-        let start = VirtAddr::new(cur);
+        let start = user_as
+            .heap_covered_end_from(VirtAddr::new(cur), VirtAddr::new(new_brk))
+            .ok_or(MmapError::PermissionDenied)?;
+        if start.as_u64() >= new_brk {
+            user_as.heap_end.store(new_brk, Ordering::Release);
+            return Ok(new_brk);
+        }
+
         let end = VirtAddr::new(new_brk);
         let page_flags =
             PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE;

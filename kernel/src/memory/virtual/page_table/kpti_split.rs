@@ -161,6 +161,30 @@ pub fn user_cr3_for_cpu(cpu_id: usize) -> Option<u64> {
     KPTI.user_cr3_for_cpu(cpu_id)
 }
 
+/// Synchronise l'entree PML4 user couvrant `virt` dans une shadow KPTI.
+///
+/// Les niveaux inferieurs restent partages avec la table source pour l'espace
+/// utilisateur. Cette operation est donc suffisante quand le demand paging cree
+/// une nouvelle entree PML4 apres la construction initiale du shadow.
+///
+/// # Safety
+/// `source_pml4_phys` et `user_pml4_phys` doivent pointer vers des PML4 valides.
+pub unsafe fn sync_user_pml4_entry(
+    source_pml4_phys: PhysAddr,
+    user_pml4_phys: PhysAddr,
+    virt: u64,
+) -> Result<(), AllocError> {
+    let (pml4_i, _, _, _) = virt_indices(virt);
+    if pml4_i >= 256 {
+        return Ok(());
+    }
+
+    let source_pml4 = phys_to_table_ref(source_pml4_phys);
+    let user_pml4 = phys_to_table_mut(user_pml4_phys);
+    user_pml4[pml4_i] = source_pml4[pml4_i];
+    Ok(())
+}
+
 /// Construit une PML4 user shadow à partir de la PML4 source du thread.
 ///
 /// La table user conserve:

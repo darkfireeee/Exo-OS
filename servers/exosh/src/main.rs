@@ -2535,7 +2535,7 @@ fn bench_ipc(args: &[u8]) {
                 endpoint as u64,
                 &msg as *const syscall::IpcMessage as u64,
                 core::mem::size_of::<syscall::IpcMessage>() as u64,
-                0,
+                syscall::IPC_FLAG_INJECT_SRC_PID,
                 0,
                 0,
             )
@@ -2727,7 +2727,7 @@ fn bench_crypto(args: &[u8]) {
                 CRYPTO_SERVER_ENDPOINT,
                 &req as *const CryptoRequestBench as u64,
                 core::mem::size_of::<CryptoRequestBench>() as u64,
-                0,
+                syscall::IPC_FLAG_INJECT_SRC_PID,
                 0,
                 0,
             )

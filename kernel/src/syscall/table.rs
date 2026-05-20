@@ -2044,8 +2044,30 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
 pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_BRK);
     match crate::memory::virt::mmap::do_brk(addr) {
-        Ok(new_brk) => new_brk as i64,
+        Ok(new_brk) => {
+            sync_current_pcb_brk(new_brk);
+            new_brk as i64
+        }
         Err(_) => ENOMEM,
+    }
+}
+
+fn sync_current_pcb_brk(new_brk: u64) {
+    let tcb = crate::scheduler::core::switch::current_thread_raw();
+    if tcb.is_null() {
+        return;
+    }
+
+    // SAFETY: current_thread_raw() returned a non-null TCB for the running thread.
+    let pid = unsafe { (*tcb).pid.0 };
+    if pid == 0 {
+        return;
+    }
+
+    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+    {
+        pcb.brk_current.store(new_brk, Ordering::Release);
     }
 }
 
@@ -2701,7 +2723,10 @@ pub fn sys_exo_ipc_send(
             return EFAULT;
         }
     }
-    if len >= crate::ipc::core::constants::ABI_IPC_HEADER_SIZE {
+    if flags & IPC_FLAG_INJECT_SRC_PID != 0 {
+        if len < core::mem::size_of::<u32>() {
+            return EINVAL;
+        }
         let caller_pid = crate::syscall::fast_path::syscall_current_pid();
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
@@ -2979,6 +3004,7 @@ fn process_name_eq(name: &[u8; EXO_PROCESS_NAME_LEN], expected: &[u8]) -> bool {
 }
 
 const IPC_RECV_TIMEOUT_FLAG: u64 = 0x0001;
+const IPC_FLAG_INJECT_SRC_PID: u64 = 0x0002;
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
 
@@ -3332,6 +3358,8 @@ fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> (u64, u64, 
 }
 
 fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowait: bool) -> i64 {
+    const IPC_RECV_IDLE_NAP_NS: u64 = 2_000_000;
+
     let len = buf_len as usize;
     if len > 65_536 {
         return E2BIG;
@@ -3363,11 +3391,15 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
             {
                 Ok(n) => break Ok(n),
                 Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => {
-                    if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    let now = crate::scheduler::timer::clock::monotonic_ns();
+                    if now >= deadline {
                         break Err(IpcError::Timeout);
                     }
-                    unsafe {
-                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    let nap_ns = deadline.saturating_sub(now).min(IPC_RECV_IDLE_NAP_NS);
+                    if !crate::scheduler::timer::sleep_ns(nap_ns) {
+                        unsafe {
+                            let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                        }
                     }
                 }
                 Err(err) => break Err(err),
@@ -3379,7 +3411,9 @@ fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowai
             {
                 Ok(n) => break Ok(n),
                 Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => unsafe {
-                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    if !crate::scheduler::timer::sleep_ns(IPC_RECV_IDLE_NAP_NS) {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
                 },
                 Err(err) => break Err(err),
             }

@@ -153,6 +153,8 @@ pub struct ThreadAddress {
     pub initial_rsp: u64,
     /// Pointeur vers la TLS statique (GS.base pour x86_64).
     pub tls_base: u64,
+    /// Premier argument injecté en RDI au point d'entrée initial.
+    pub entry_arg0: u64,
     /// Pointeur vers la structure `pthread_t` userspace.
     pub pthread_ptr: u64,
     /// Zone `sigaltstack` (stack alternatif pour signaux).
@@ -461,6 +463,11 @@ impl ProcessThread {
             stack_top,
         ))?;
         tcb_trace(b"thread_new: tcb\n");
+
+        if unsafe { !crate::scheduler::fpu::save_restore::alloc_fpu_state(&mut sched_tcb) } {
+            return None;
+        }
+        tcb_trace(b"thread_new: fpu\n");
 
         if crate::security::is_cet_global_enabled() {
             unsafe {

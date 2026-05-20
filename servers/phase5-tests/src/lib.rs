@@ -33,26 +33,34 @@ mod ipc_router {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     pub struct Registry {
-        names:     [u32; 64],
+        names: [u32; 64],
         endpoints: [u32; 64],
-        count:     AtomicU32,
+        count: AtomicU32,
     }
 
     impl Registry {
         pub fn new() -> Self {
-            Self { names: [0u32; 64], endpoints: [0u32; 64], count: AtomicU32::new(0) }
+            Self {
+                names: [0u32; 64],
+                endpoints: [0u32; 64],
+                count: AtomicU32::new(0),
+            }
         }
 
         pub fn hash_name(name: &[u8]) -> u32 {
             let mut h: u32 = 2166136261;
-            for &b in name { h = h.wrapping_mul(16777619).wrapping_add(b as u32); }
+            for &b in name {
+                h = h.wrapping_mul(16777619).wrapping_add(b as u32);
+            }
             h
         }
 
         pub fn register(&mut self, name: &[u8], endpoint: u32) -> bool {
             let h = Self::hash_name(name);
             let n = self.count.load(Ordering::Relaxed) as usize;
-            if n >= 64 { return false; }
+            if n >= 64 {
+                return false;
+            }
             self.names[n] = h;
             self.endpoints[n] = endpoint;
             self.count.store((n + 1) as u32, Ordering::Release);
@@ -63,12 +71,16 @@ mod ipc_router {
             let h = Self::hash_name(name);
             let n = self.count.load(Ordering::Acquire) as usize;
             for i in 0..n {
-                if self.names[i] == h { return Some(self.endpoints[i]); }
+                if self.names[i] == h {
+                    return Some(self.endpoints[i]);
+                }
             }
             None
         }
 
-        pub fn count(&self) -> u32 { self.count.load(Ordering::Relaxed) }
+        pub fn count(&self) -> u32 {
+            self.count.load(Ordering::Relaxed)
+        }
     }
 }
 
@@ -81,17 +93,23 @@ mod init_server {
 
     /// Miroir de Service dans servers/init_server/src/main.rs
     pub struct Service {
-        pub name:                &'static str,
-        pub pid:                 AtomicU32,
+        pub name: &'static str,
+        pub pid: AtomicU32,
         pub restart_delay_ticks: AtomicU32,
     }
 
     impl Service {
         pub fn new(name: &'static str) -> Self {
-            Self { name, pid: AtomicU32::new(0), restart_delay_ticks: AtomicU32::new(1) }
+            Self {
+                name,
+                pid: AtomicU32::new(0),
+                restart_delay_ticks: AtomicU32::new(1),
+            }
         }
 
-        pub fn current_pid(&self) -> u32 { self.pid.load(Ordering::Acquire) }
+        pub fn current_pid(&self) -> u32 {
+            self.pid.load(Ordering::Acquire)
+        }
 
         pub fn set_pid(&self, pid: u32) {
             self.pid.store(pid, Ordering::Release);
@@ -101,10 +119,13 @@ mod init_server {
         pub fn mark_dead(&self) {
             self.pid.store(0, Ordering::Release);
             let d = self.restart_delay_ticks.load(Ordering::Relaxed);
-            self.restart_delay_ticks.store(d.saturating_mul(2).min(32), Ordering::Relaxed);
+            self.restart_delay_ticks
+                .store(d.saturating_mul(2).min(32), Ordering::Relaxed);
         }
 
-        pub fn delay(&self) -> u32 { self.restart_delay_ticks.load(Ordering::Relaxed) }
+        pub fn delay(&self) -> u32 {
+            self.restart_delay_ticks.load(Ordering::Relaxed)
+        }
     }
 }
 
@@ -116,12 +137,12 @@ mod crypto_server {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     pub const CRYPTO_DERIVE_KEY: u32 = 0;
-    pub const CRYPTO_RANDOM:     u32 = 1;
-    pub const CRYPTO_ENCRYPT:    u32 = 2;
-    pub const CRYPTO_DECRYPT:    u32 = 3;
-    pub const CRYPTO_HASH:       u32 = 4;
+    pub const CRYPTO_RANDOM: u32 = 1;
+    pub const CRYPTO_ENCRYPT: u32 = 2;
+    pub const CRYPTO_DECRYPT: u32 = 3;
+    pub const CRYPTO_HASH: u32 = 4;
 
-    pub const CRYPTO_OK:       u32 = 0;
+    pub const CRYPTO_OK: u32 = 0;
     pub const CRYPTO_ERR_ARGS: u32 = 1;
     pub const CRYPTO_ERR_BUSY: u32 = 2;
 
@@ -154,30 +175,40 @@ mod crypto_server {
     #[repr(C)]
     pub struct CryptoRequest {
         pub sender_pid: u32,
-        pub msg_type:   u32,
-        pub payload:    [u8; 120],
+        pub msg_type: u32,
+        pub payload: [u8; 120],
     }
 
     #[repr(C)]
     #[derive(Debug)]
     pub struct CryptoReply {
-        pub status:     u32,
+        pub status: u32,
         pub key_handle: u32,
-        pub data:       [u8; 56],
+        pub data: [u8; 56],
     }
 
     impl Keystore {
         pub fn new() -> Self {
-            Self { table: [[0u8; 32]; 32], count: AtomicU32::new(0) }
+            Self {
+                table: [[0u8; 32]; 32],
+                count: AtomicU32::new(0),
+            }
         }
 
         pub fn handle_request(&mut self, req: &CryptoRequest) -> CryptoReply {
-            let mut reply = CryptoReply { status: CRYPTO_ERR_ARGS, key_handle: 0, data: [0u8; 56] };
+            let mut reply = CryptoReply {
+                status: CRYPTO_ERR_ARGS,
+                key_handle: 0,
+                data: [0u8; 56],
+            };
 
             match req.msg_type {
                 CRYPTO_DERIVE_KEY => {
                     let idx = self.count.load(Ordering::Relaxed) as usize;
-                    if idx >= 32 { reply.status = CRYPTO_ERR_BUSY; return reply; }
+                    if idx >= 32 {
+                        reply.status = CRYPTO_ERR_BUSY;
+                        return reply;
+                    }
                     derive_key_stub(&req.payload, &mut self.table[idx]);
                     self.count.store((idx + 1) as u32, Ordering::Release);
                     reply.status = CRYPTO_OK;
@@ -211,25 +242,38 @@ mod crypto_server {
 mod vfs_server {
     #[repr(u8)]
     #[derive(Copy, Clone, PartialEq, Debug)]
-    pub enum FsType { None = 0, ExoFs = 1, ProcFs = 2, SysFs = 3, DevFs = 4 }
+    pub enum FsType {
+        None = 0,
+        ExoFs = 1,
+        ProcFs = 2,
+        SysFs = 3,
+        DevFs = 4,
+    }
 
     #[derive(Copy, Clone, Debug)]
     pub struct MountEntry {
-        pub fs_type:   FsType,
+        pub fs_type: FsType,
         pub path_hash: u32,
         pub root_blob: u64,
-        pub active:    bool,
+        pub active: bool,
     }
 
     impl MountEntry {
         pub const fn empty() -> Self {
-            Self { fs_type: FsType::None, path_hash: 0, root_blob: 0, active: false }
+            Self {
+                fs_type: FsType::None,
+                path_hash: 0,
+                root_blob: 0,
+                active: false,
+            }
         }
     }
 
     pub fn fnv32(s: &[u8]) -> u32 {
         let mut h: u32 = 2166136261;
-        for &b in s { h = h.wrapping_mul(16777619).wrapping_add(b as u32); }
+        for &b in s {
+            h = h.wrapping_mul(16777619).wrapping_add(b as u32);
+        }
         h
     }
 
@@ -240,14 +284,22 @@ mod vfs_server {
 
     impl MountTable {
         pub fn new() -> Self {
-            Self { entries: [MountEntry::empty(); 32], count: 0 }
+            Self {
+                entries: [MountEntry::empty(); 32],
+                count: 0,
+            }
         }
 
         pub fn add(&mut self, fs: FsType, path: &[u8], blob: u64) -> Result<usize, i64> {
-            if self.count >= 32 { return Err(-28); } // ENOSPC
+            if self.count >= 32 {
+                return Err(-28);
+            } // ENOSPC
             let idx = self.count;
             self.entries[idx] = MountEntry {
-                fs_type: fs, path_hash: fnv32(path), root_blob: blob, active: true,
+                fs_type: fs,
+                path_hash: fnv32(path),
+                root_blob: blob,
+                active: true,
             };
             self.count += 1;
             Ok(idx)
@@ -255,29 +307,45 @@ mod vfs_server {
 
         pub fn find_by_path(&self, path: &[u8]) -> Option<&MountEntry> {
             let h = fnv32(path);
-            self.entries[..self.count].iter().find(|e| e.active && e.path_hash == h)
+            self.entries[..self.count]
+                .iter()
+                .find(|e| e.active && e.path_hash == h)
         }
 
         pub fn remove(&mut self, path: &[u8]) -> bool {
             let h = fnv32(path);
             for e in &mut self.entries[..self.count] {
-                if e.active && e.path_hash == h { e.active = false; return true; }
+                if e.active && e.path_hash == h {
+                    e.active = false;
+                    return true;
+                }
             }
             false
         }
 
         pub fn active_count(&self) -> usize {
-            self.entries[..self.count].iter().filter(|e| e.active).count()
+            self.entries[..self.count]
+                .iter()
+                .filter(|e| e.active)
+                .count()
         }
     }
 
     /// Mock de handle_mount (sans SYS_EXOFS_PATH_RESOLVE)
     pub fn handle_mount_payload(table: &mut MountTable, payload: &[u8]) -> i64 {
-        if payload.len() < 14 { return -22; }
+        if payload.len() < 14 {
+            return -22;
+        }
         let fstype = payload[0];
         let root_blob = u64::from_le_bytes([
-            payload[5], payload[6], payload[7], payload[8],
-            payload[9], payload[10], payload[11], payload[12],
+            payload[5],
+            payload[6],
+            payload[7],
+            payload[8],
+            payload[9],
+            payload[10],
+            payload[11],
+            payload[12],
         ]);
         let path = &payload[13..];
         let path_len = path.iter().position(|&b| b == 0).unwrap_or(path.len());
@@ -288,7 +356,10 @@ mod vfs_server {
             4 => FsType::DevFs,
             _ => return -22,
         };
-        table.add(fs, &path[..path_len], root_blob).map(|_| 0i64).unwrap_or(-28)
+        table
+            .add(fs, &path[..path_len], root_blob)
+            .map(|_| 0i64)
+            .unwrap_or(-28)
     }
 }
 
@@ -344,14 +415,14 @@ mod tests_ipc_router {
     #[test]
     fn test_register_plusieurs_services() {
         let mut r = Registry::new();
-        assert!(r.register(b"ipc_router",    2));
-        assert!(r.register(b"vfs_server",    3));
+        assert!(r.register(b"ipc_router", 2));
+        assert!(r.register(b"vfs_server", 3));
         assert!(r.register(b"crypto_server", 4));
-        assert!(r.register(b"init_server",   1));
-        assert_eq!(r.resolve(b"ipc_router"),    Some(2));
-        assert_eq!(r.resolve(b"vfs_server"),    Some(3));
+        assert!(r.register(b"init_server", 1));
+        assert_eq!(r.resolve(b"ipc_router"), Some(2));
+        assert_eq!(r.resolve(b"vfs_server"), Some(3));
         assert_eq!(r.resolve(b"crypto_server"), Some(4));
-        assert_eq!(r.resolve(b"init_server"),   Some(1));
+        assert_eq!(r.resolve(b"init_server"), Some(1));
     }
 
     #[test]
@@ -448,10 +519,12 @@ mod tests_init_server {
         let svc = Service::new("test_svc");
         // Délai initial = 1
         assert_eq!(svc.delay(), 1);
-        svc.set_pid(1); svc.mark_dead(); // crash 1 → delay = 2
+        svc.set_pid(1);
+        svc.mark_dead(); // crash 1 → delay = 2
         assert_eq!(svc.delay(), 2);
-        svc.set_pid(2); svc.mark_dead(); // crash 2 → delay = 2 (reset à 1, puis *2)
-        // Note : set_pid remet à 1, mark_dead le double → 2
+        svc.set_pid(2);
+        svc.mark_dead(); // crash 2 → delay = 2 (reset à 1, puis *2)
+                         // Note : set_pid remet à 1, mark_dead le double → 2
         assert_eq!(svc.delay(), 2);
         svc.mark_dead(); // crash successif sans relance → *2 = 4
         assert_eq!(svc.delay(), 4);
@@ -491,7 +564,9 @@ mod tests_init_server {
             Service::new("crypto_server"),
         ];
         assert_eq!(services.len(), 3);
-        for svc in &services { assert_eq!(svc.current_pid(), 0); }
+        for svc in &services {
+            assert_eq!(svc.current_pid(), 0);
+        }
 
         services[0].set_pid(2);
         services[1].set_pid(3);
@@ -504,10 +579,7 @@ mod tests_init_server {
 
     #[test]
     fn test_reap_trouve_service_par_pid() {
-        let services = [
-            Service::new("ipc_router"),
-            Service::new("vfs_server"),
-        ];
+        let services = [Service::new("ipc_router"), Service::new("vfs_server")];
         services[0].set_pid(2);
         services[1].set_pid(3);
 
@@ -519,8 +591,16 @@ mod tests_init_server {
             }
         }
 
-        assert_eq!(services[0].current_pid(), 2, "ipc_router ne doit pas être affecté");
-        assert_eq!(services[1].current_pid(), 0, "vfs_server doit être marqué mort");
+        assert_eq!(
+            services[0].current_pid(),
+            2,
+            "ipc_router ne doit pas être affecté"
+        );
+        assert_eq!(
+            services[1].current_pid(),
+            0,
+            "vfs_server doit être marqué mort"
+        );
     }
 }
 
@@ -533,7 +613,11 @@ mod tests_crypto_server {
     use super::crypto_server::*;
 
     fn make_req(msg_type: u32, payload: [u8; 120]) -> CryptoRequest {
-        CryptoRequest { sender_pid: 1, msg_type, payload }
+        CryptoRequest {
+            sender_pid: 1,
+            msg_type,
+            payload,
+        }
     }
 
     // ── derive_key_stub ────────────────────────────────────────────────────
@@ -551,7 +635,10 @@ mod tests_crypto_server {
     fn test_kdf_sortie_non_nulle_sur_input_non_nul() {
         let mut out = [0u8; 32];
         derive_key_stub(b"non_empty_input", &mut out);
-        assert_ne!(out, [0u8; 32], "KDF ne doit pas produire des zéros pour un input non-vide");
+        assert_ne!(
+            out, [0u8; 32],
+            "KDF ne doit pas produire des zéros pour un input non-vide"
+        );
     }
 
     #[test]
@@ -560,7 +647,10 @@ mod tests_crypto_server {
         let mut out2 = [0u8; 32];
         derive_key_stub(b"key_material_A", &mut out1);
         derive_key_stub(b"key_material_B", &mut out2);
-        assert_ne!(out1, out2, "Inputs différents doivent donner clés différentes");
+        assert_ne!(
+            out1, out2,
+            "Inputs différents doivent donner clés différentes"
+        );
     }
 
     #[test]
@@ -633,7 +723,11 @@ mod tests_crypto_server {
         let req = make_req(CRYPTO_HASH, payload);
         let r = ks.handle_request(&req);
         assert_eq!(r.status, CRYPTO_OK);
-        assert_ne!(&r.data[..32], &[0u8; 32], "Hash de 'hello' ne doit pas être nul");
+        assert_ne!(
+            &r.data[..32],
+            &[0u8; 32],
+            "Hash de 'hello' ne doit pas être nul"
+        );
     }
 
     #[test]
@@ -652,8 +746,10 @@ mod tests_crypto_server {
     #[test]
     fn test_hash_inputs_differents() {
         let mut ks = Keystore::new();
-        let mut p1 = [0u8; 120]; p1[0] = 1;
-        let mut p2 = [0u8; 120]; p2[0] = 2;
+        let mut p1 = [0u8; 120];
+        p1[0] = 1;
+        let mut p2 = [0u8; 120];
+        p2[0] = 2;
         let r1 = ks.handle_request(&make_req(CRYPTO_HASH, p1));
         let r2 = ks.handle_request(&make_req(CRYPTO_HASH, p2));
         assert_ne!(r1.data, r2.data);
@@ -665,14 +761,20 @@ mod tests_crypto_server {
     fn test_encrypt_non_implemente_retourne_err_args() {
         let mut ks = Keystore::new();
         let r = ks.handle_request(&make_req(CRYPTO_ENCRYPT, [0u8; 120]));
-        assert_eq!(r.status, CRYPTO_ERR_ARGS, "ENCRYPT doit retourner ERR_ARGS (Phase 5)");
+        assert_eq!(
+            r.status, CRYPTO_ERR_ARGS,
+            "ENCRYPT doit retourner ERR_ARGS (Phase 5)"
+        );
     }
 
     #[test]
     fn test_decrypt_non_implemente_retourne_err_args() {
         let mut ks = Keystore::new();
         let r = ks.handle_request(&make_req(CRYPTO_DECRYPT, [0u8; 120]));
-        assert_eq!(r.status, CRYPTO_ERR_ARGS, "DECRYPT doit retourner ERR_ARGS (Phase 5)");
+        assert_eq!(
+            r.status, CRYPTO_ERR_ARGS,
+            "DECRYPT doit retourner ERR_ARGS (Phase 5)"
+        );
     }
 
     // ── handle_request : msg_type inconnu ─────────────────────────────────
@@ -713,11 +815,11 @@ mod tests_vfs_server {
     #[test]
     fn test_fnv32_pseudo_fs_pas_de_collision() {
         let h_proc = fnv32(b"/proc");
-        let h_sys  = fnv32(b"/sys");
-        let h_dev  = fnv32(b"/dev");
+        let h_sys = fnv32(b"/sys");
+        let h_dev = fnv32(b"/dev");
         assert_ne!(h_proc, h_sys);
         assert_ne!(h_proc, h_dev);
-        assert_ne!(h_sys,  h_dev);
+        assert_ne!(h_sys, h_dev);
     }
 
     #[test]
@@ -747,8 +849,8 @@ mod tests_vfs_server {
     fn test_add_pseudo_fs() {
         let mut t = MountTable::new();
         t.add(FsType::ProcFs, b"/proc", 0).unwrap();
-        t.add(FsType::SysFs,  b"/sys",  0).unwrap();
-        t.add(FsType::DevFs,  b"/dev",  0).unwrap();
+        t.add(FsType::SysFs, b"/sys", 0).unwrap();
+        t.add(FsType::DevFs, b"/dev", 0).unwrap();
         assert_eq!(t.active_count(), 3);
     }
 
@@ -809,19 +911,19 @@ mod tests_vfs_server {
         // Reproduire mount_default_namespaces() du vfs_server
         let mut t = MountTable::new();
         t.add(FsType::ProcFs, b"/proc", 0).unwrap();
-        t.add(FsType::SysFs,  b"/sys",  0).unwrap();
-        t.add(FsType::DevFs,  b"/dev",  0).unwrap();
+        t.add(FsType::SysFs, b"/sys", 0).unwrap();
+        t.add(FsType::DevFs, b"/dev", 0).unwrap();
 
         let proc_e = t.find_by_path(b"/proc").expect("/proc doit être monté");
-        let sys_e  = t.find_by_path(b"/sys").expect("/sys doit être monté");
-        let dev_e  = t.find_by_path(b"/dev").expect("/dev doit être monté");
+        let sys_e = t.find_by_path(b"/sys").expect("/sys doit être monté");
+        let dev_e = t.find_by_path(b"/dev").expect("/dev doit être monté");
 
         assert_eq!(proc_e.fs_type, FsType::ProcFs);
-        assert_eq!(sys_e.fs_type,  FsType::SysFs);
-        assert_eq!(dev_e.fs_type,  FsType::DevFs);
+        assert_eq!(sys_e.fs_type, FsType::SysFs);
+        assert_eq!(dev_e.fs_type, FsType::DevFs);
         assert_eq!(proc_e.root_blob, 0);
-        assert_eq!(sys_e.root_blob,  0);
-        assert_eq!(dev_e.root_blob,  0);
+        assert_eq!(sys_e.root_blob, 0);
+        assert_eq!(dev_e.root_blob, 0);
     }
 
     // ── handle_mount_payload ──────────────────────────────────────────────
@@ -839,7 +941,11 @@ mod tests_vfs_server {
         let mut payload = [0u8; 32];
         payload[0] = 99; // fstype invalide
         payload[13..17].copy_from_slice(b"/mnt");
-        assert_eq!(handle_mount_payload(&mut t, &payload), -22, "fstype inconnu → EINVAL");
+        assert_eq!(
+            handle_mount_payload(&mut t, &payload),
+            -22,
+            "fstype inconnu → EINVAL"
+        );
     }
 
     #[test]
@@ -847,7 +953,7 @@ mod tests_vfs_server {
         let mut t = MountTable::new();
         let mut payload = [0u8; 32];
         payload[0] = 1; // ExoFs
-        // root_blob = 0x1122334455667788 à offset 5
+                        // root_blob = 0x1122334455667788 à offset 5
         let blob: u64 = 0x1122334455667788;
         payload[5..13].copy_from_slice(&blob.to_le_bytes());
         payload[13] = b'/';
@@ -875,7 +981,7 @@ mod tests_vfs_server {
     fn test_active_count_apres_remove() {
         let mut t = MountTable::new();
         t.add(FsType::ProcFs, b"/proc", 0).unwrap();
-        t.add(FsType::SysFs,  b"/sys",  0).unwrap();
+        t.add(FsType::SysFs, b"/sys", 0).unwrap();
         t.remove(b"/proc");
         assert_eq!(t.active_count(), 1);
         assert!(t.find_by_path(b"/proc").is_none());
@@ -885,9 +991,9 @@ mod tests_vfs_server {
     #[test]
     fn test_mount_multiple_exofs() {
         let mut t = MountTable::new();
-        t.add(FsType::ExoFs, b"/",     0x1000).unwrap();
+        t.add(FsType::ExoFs, b"/", 0x1000).unwrap();
         t.add(FsType::ExoFs, b"/home", 0x2000).unwrap();
-        t.add(FsType::ExoFs, b"/var",  0x3000).unwrap();
+        t.add(FsType::ExoFs, b"/var", 0x3000).unwrap();
         assert_eq!(t.active_count(), 3);
         assert_eq!(t.find_by_path(b"/home").unwrap().root_blob, 0x2000);
     }
@@ -911,8 +1017,8 @@ mod tests_integration {
     #[test]
     fn test_boot_sequence_complete() {
         // 1. Table de services
-        let svc_ipc_router    = init_server::Service::new("ipc_router");
-        let svc_vfs_server    = init_server::Service::new("vfs_server");
+        let svc_ipc_router = init_server::Service::new("ipc_router");
+        let svc_vfs_server = init_server::Service::new("vfs_server");
         let svc_crypto_server = init_server::Service::new("crypto_server");
 
         // 2. Spawn simulé : assigner des PIDs
@@ -922,17 +1028,23 @@ mod tests_integration {
 
         // 3. ipc_router enregistre les services
         let mut registry = ipc_router::Registry::new();
-        registry.register(b"ipc_router",    2);
-        registry.register(b"vfs_server",    3);
+        registry.register(b"ipc_router", 2);
+        registry.register(b"vfs_server", 3);
         registry.register(b"crypto_server", 4);
 
         assert_eq!(registry.resolve(b"vfs_server"), Some(3));
 
         // 4. vfs_server monte les pseudo-FS
         let mut vfs_table = vfs_server::MountTable::new();
-        vfs_table.add(vfs_server::FsType::ProcFs, b"/proc", 0).unwrap();
-        vfs_table.add(vfs_server::FsType::SysFs,  b"/sys",  0).unwrap();
-        vfs_table.add(vfs_server::FsType::DevFs,  b"/dev",  0).unwrap();
+        vfs_table
+            .add(vfs_server::FsType::ProcFs, b"/proc", 0)
+            .unwrap();
+        vfs_table
+            .add(vfs_server::FsType::SysFs, b"/sys", 0)
+            .unwrap();
+        vfs_table
+            .add(vfs_server::FsType::DevFs, b"/dev", 0)
+            .unwrap();
         assert_eq!(vfs_table.active_count(), 3);
 
         // 5. crypto_server dérive une clé maître
@@ -941,7 +1053,8 @@ mod tests_integration {
         let mut kdf_payload = [0u8; 120];
         kdf_payload[..master_material.len()].copy_from_slice(master_material);
         let req = crypto_server::CryptoRequest {
-            sender_pid: 1, msg_type: crypto_server::CRYPTO_DERIVE_KEY,
+            sender_pid: 1,
+            msg_type: crypto_server::CRYPTO_DERIVE_KEY,
             payload: kdf_payload,
         };
         let reply = ks.handle_request(&req);
@@ -951,13 +1064,23 @@ mod tests_integration {
         // 6. vfs_server crash détecté par init
         let dead_pid: u32 = 3;
         for svc in &[&svc_ipc_router, &svc_vfs_server, &svc_crypto_server] {
-            if svc.current_pid() == dead_pid { svc.mark_dead(); }
+            if svc.current_pid() == dead_pid {
+                svc.mark_dead();
+            }
         }
 
         assert_eq!(svc_vfs_server.current_pid(), 0, "vfs_server doit être mort");
         assert_eq!(svc_vfs_server.delay(), 2, "Premier crash → delay = 2");
-        assert_eq!(svc_ipc_router.current_pid(), 2, "ipc_router doit rester vivant");
-        assert_eq!(svc_crypto_server.current_pid(), 4, "crypto_server doit rester vivant");
+        assert_eq!(
+            svc_ipc_router.current_pid(),
+            2,
+            "ipc_router doit rester vivant"
+        );
+        assert_eq!(
+            svc_crypto_server.current_pid(),
+            4,
+            "crypto_server doit rester vivant"
+        );
 
         // 7. ipc_router toujours résolvable (service stable)
         assert_eq!(registry.resolve(b"ipc_router"), Some(2));
@@ -969,29 +1092,33 @@ mod tests_integration {
     fn test_srv04_cle_opaque_pas_dans_reply() {
         let mut ks = crypto_server::Keystore::new();
         let req = crypto_server::CryptoRequest {
-            sender_pid: 3, msg_type: crypto_server::CRYPTO_DERIVE_KEY,
+            sender_pid: 3,
+            msg_type: crypto_server::CRYPTO_DERIVE_KEY,
             payload: [0x99; 120],
         };
         let reply = ks.handle_request(&req);
         assert_eq!(reply.status, crypto_server::CRYPTO_OK);
         // La réponse DERIVE_KEY ne doit pas contenir les octets de clé dans data[]
         // (data[] doit rester nul pour DERIVE_KEY)
-        assert_eq!(&reply.data, &[0u8; 56], "Réponse DERIVE_KEY ne doit pas exposer la clé");
+        assert_eq!(
+            &reply.data, &[0u8; 56],
+            "Réponse DERIVE_KEY ne doit pas exposer la clé"
+        );
     }
 
     /// Invariant SRV-05 : tous les services sont résolvables via ipc_router.
     #[test]
     fn test_srv05_tous_services_resolvables() {
         let mut r = ipc_router::Registry::new();
-        r.register(b"init_server",   1);
-        r.register(b"ipc_router",    2);
-        r.register(b"vfs_server",    3);
+        r.register(b"init_server", 1);
+        r.register(b"ipc_router", 2);
+        r.register(b"vfs_server", 3);
         r.register(b"crypto_server", 4);
 
         // Chaque service doit être résolvable avec son PID attendu
-        assert_eq!(r.resolve(b"init_server"),   Some(1));
-        assert_eq!(r.resolve(b"ipc_router"),    Some(2));
-        assert_eq!(r.resolve(b"vfs_server"),    Some(3));
+        assert_eq!(r.resolve(b"init_server"), Some(1));
+        assert_eq!(r.resolve(b"ipc_router"), Some(2));
+        assert_eq!(r.resolve(b"vfs_server"), Some(3));
         assert_eq!(r.resolve(b"crypto_server"), Some(4));
 
         // Aucun service fantôme
@@ -1012,7 +1139,9 @@ mod tests_integration {
         }
 
         // Tous les services crashent
-        for svc in &services { svc.mark_dead(); }
+        for svc in &services {
+            svc.mark_dead();
+        }
 
         // Vérifier qu'init peut relancer (délai = 2 = min backoff)
         for svc in &services {
@@ -1021,7 +1150,9 @@ mod tests_integration {
         }
 
         // Second crash sans relance intermédiaire → délai double
-        for svc in &services { svc.mark_dead(); }
+        for svc in &services {
+            svc.mark_dead();
+        }
         for svc in &services {
             assert_eq!(svc.delay(), 4);
         }
@@ -1241,6 +1372,10 @@ mod tests_exocordon {
 
         assert_eq!(check_ipc(1, 3), Err(IpcError::QuotaExhausted));
         assert_eq!(check_ipc(1, 4), Err(IpcError::QuotaExhausted));
-        assert_eq!(check_ipc(4, 5), Ok(()), "VFS -> Crypto doit rester utilisable");
+        assert_eq!(
+            check_ipc(4, 5),
+            Ok(()),
+            "VFS -> Crypto doit rester utilisable"
+        );
     }
 }

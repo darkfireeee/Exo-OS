@@ -67,7 +67,7 @@ fn syscall_pipeline_reloads_from_disk_after_cache_flush() {
     assert_eq!(write_at(fd, &payload, 0), payload.len());
     close_fd(fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let reopened = open_rdwr(path);
@@ -94,7 +94,7 @@ fn cold_append_preserves_existing_content() {
     assert_eq!(write_at(fd, &prefix, 0), prefix.len());
     close_fd(fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let reopened = open_rdwr(path);
@@ -102,7 +102,7 @@ fn cold_append_preserves_existing_content() {
     assert_eq!(write_at(reopened, &suffix, append_offset), suffix.len());
     close_fd(reopened);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let mut expected = prefix.clone();
@@ -113,7 +113,7 @@ fn cold_append_preserves_existing_content() {
     assert_eq!(appended, expected);
     close_fd(appended_fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let final_fd = open_path(path, open_flags::O_RDWR | open_flags::O_TRUNC);
@@ -125,7 +125,7 @@ fn cold_append_preserves_existing_content() {
     assert_eq!(write_at(rewritten_fd, &expected, 0), expected.len());
     close_fd(rewritten_fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let verify_fd = open_rdwr(path);
@@ -149,7 +149,7 @@ fn open_by_path_accepts_canonical_aliases_and_reloads_persisted_content() {
     assert_eq!(write_at(fd, &payload, 0), payload.len());
     close_fd(fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let reopened = open_rdwr(canonical_path);
@@ -169,8 +169,11 @@ fn readdir_reads_path_index_from_disk_after_cache_flush() {
     let dir_path = "/tier4/readdir/persisted";
     let dir_blob_id = BlobId::from_bytes_blake3(dir_path.as_bytes());
     let mut index = PathIndex::new_with_key(ObjectId([0u8; 32]), mount_secret_key());
-    if let Err(err) = index.insert(&ok(validate_component(b"alpha.txt")), ObjectId([0x11; 32]), 8)
-    {
+    if let Err(err) = index.insert(
+        &ok(validate_component(b"alpha.txt")),
+        ObjectId([0x11; 32]),
+        8,
+    ) {
         panic!("insert alpha failed: {err:?}");
     }
     if let Err(err) = index.insert(&ok(validate_component(b"nested")), ObjectId([0x22; 32]), 4) {
@@ -183,7 +186,7 @@ fn readdir_reads_path_index_from_disk_after_cache_flush() {
     };
     assert!(persisted);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let fd = open_path_atomic(dir_path, open_flags::O_RDONLY);
@@ -191,8 +194,12 @@ fn readdir_reads_path_index_from_disk_after_cache_flush() {
     close_fd(fd);
 
     let parsed = parse_dirent_names(&dirents);
-    assert!(parsed.iter().any(|(name, kind)| name == "alpha.txt" && *kind == 8));
-    assert!(parsed.iter().any(|(name, kind)| name == "nested" && *kind == 4));
+    assert!(parsed
+        .iter()
+        .any(|(name, kind)| name == "alpha.txt" && *kind == 8));
+    assert!(parsed
+        .iter()
+        .any(|(name, kind)| name == "nested" && *kind == 4));
 
     reset_state();
 }

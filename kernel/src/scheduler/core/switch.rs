@@ -19,7 +19,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::MAX_CPUS;
-use super::task::{CpuId, TaskState, ThreadControlBlock};
+use super::task::{CpuId, SchedPolicy, TaskState, ThreadControlBlock};
 use crate::arch::x86_64::{
     cpu::{
         features::cpu_features_or_none,
@@ -130,26 +130,30 @@ pub unsafe fn block_current_thread() {
     }
 
     let tcb = &mut *tcb_ptr;
-    debug_assert!(
-        matches!(
-            tcb.state(),
-            TaskState::Sleeping
-                | TaskState::Uninterruptible
-                | TaskState::Stopped
-                | TaskState::Dead
-        ),
-        "block_current_thread: état inattendu {:?}; l'appelant doit transitionner le thread avant blocage",
-        tcb.state()
-    );
-    match tcb.state() {
-        TaskState::Runnable | TaskState::Running => {
-            return;
-        }
-        _ => {}
-    }
     let cpu_id = tcb.current_cpu();
     if (cpu_id.0 as usize) < MAX_CPUS {
         let rq = run_queue(cpu_id);
+        match tcb.state() {
+            TaskState::Runnable => {
+                unsafe {
+                    finish_preblock_wake(rq, tcb);
+                }
+                return;
+            }
+            TaskState::Running => return,
+            TaskState::Sleeping
+            | TaskState::Uninterruptible
+            | TaskState::Stopped
+            | TaskState::Dead => {}
+            state => {
+                debug_assert!(
+                    false,
+                    "block_current_thread: état inattendu {:?}; l'appelant doit transitionner le thread avant blocage",
+                    state
+                );
+                return;
+            }
+        }
         schedule_block(rq, tcb);
         // Le thread reprend ici après que wake_enqueue() a été appelé.
     }
@@ -211,7 +215,7 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 ///
 /// # Séquence (GI-02 complète)
 /// 1. Lazy FPU : si `prev` a utilisé la FPU → XSAVE (sans toucher MXCSR/FCW V7-C-02).
-/// 2. Poser CR0.TS=1, puis marquer l'état FPU lazy comme non chargé.
+/// 2. Restaurer l'etat FPU/SIMD entrant et garder CR0.TS clair pour Ring 3.
 /// 3. Sauvegarder PKRS (Intel PKS).
 /// 4. Sauvegarder CET PL0_SSP si shadow stack actif.
 /// 5. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
@@ -236,18 +240,22 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     let has_pks = features.map_or(false, |cpu| cpu.has_pks());
     let has_cet_ss = features.map_or(false, |cpu| cpu.has_cet_ss());
 
-    // ── Étape 1 : Lazy FPU save (RÈGLE SWITCH-02) ─────────────────────────────
-    // Sauvegarder l'état FPU du thread sortant si elle était chargée (CR0.TS=0).
+    // ── Etape 1 : sauvegarde FPU/SIMD du thread sortant ──────────────────────
+    // Les binaires Ring3 Rust utilisent SSE pour des copies de structures
+    // meme sans flottants explicites. Un mode lazy qui repose sur #NM rend le
+    // premier shell fragile; on sauvegarde/restaure donc au switch.
     if prev.fpu_loaded() {
         fpu::save_restore::xsave_current(prev);
     }
-    // TLA-01 : le bit TS doit être visible AVANT l'ASM de switch, juste après
-    // l'éventuelle sauvegarde XSAVE du sortant.
-    unsafe {
-        fpu::lazy::cr0_set_ts();
-    }
     prev.set_fpu_loaded(false);
-    next.set_fpu_loaded(false);
+    unsafe {
+        fpu::lazy::cr0_clear_ts();
+        if next.is_kthread() {
+            next.set_fpu_loaded(false);
+        } else {
+            fpu::save_restore::xrstor_for(next);
+        }
+    }
 
     // ── Étape 3 : Sauvegarde PKRS (S6) si le CPU supporte PKS ───────────────
     if has_pks {
@@ -311,6 +319,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         if last != 0 {
             let delta_ns = tsc::tsc_cycles_to_ns(now_tsc.wrapping_sub(last));
             prev.run_time_acc = prev.run_time_acc.saturating_add(delta_ns);
+            match prev.policy {
+                SchedPolicy::Normal | SchedPolicy::Batch => {
+                    prev.advance_vruntime(delta_ns, prev.priority.cfs_weight());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -418,19 +432,26 @@ pub unsafe fn schedule_yield(
     current: &mut ThreadControlBlock,
 ) -> bool {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
-    use crate::scheduler::core::preempt::PreemptGuard;
+    use crate::scheduler::core::preempt::IrqGuard;
     use core::ptr::NonNull;
 
     let ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    let selected_next = {
-        let _preempt = PreemptGuard::new();
+    let (selected_next, irq_flags) = {
+        let irq = IrqGuard::new();
 
         // Ré-enqueuer le courant AVANT de choisir le suivant (round-robin CFS).
         // SAFETY: current est une référence mutable valide, non nulle par construction.
-        rq.enqueue(ptr);
+        if current.is_queued() {
+            let _ = rq.remove(ptr);
+            current.clear_queued();
+        }
         current.set_state(TaskState::Runnable);
+        if !rq.enqueue(ptr) {
+            current.set_state(TaskState::Running);
+            return false;
+        }
 
-        match pick_next_task(rq, None) {
+        let selected = match pick_next_task(rq, None) {
             PickResult::Switch(next) if next != ptr => Some(next),
             PickResult::Switch(_) => {
                 // Le courant a été choisi puis retiré de la run queue. Si un
@@ -446,8 +467,13 @@ pub unsafe fn schedule_yield(
                 };
 
                 if let Some(next) = replacement {
-                    rq.enqueue(ptr);
-                    Some(next)
+                    if rq.enqueue(ptr) {
+                        Some(next)
+                    } else {
+                        current.set_state(TaskState::Running);
+                        rq.enqueue(next);
+                        None
+                    }
                 } else {
                     current.set_state(TaskState::Running);
                     None
@@ -458,19 +484,33 @@ pub unsafe fn schedule_yield(
                 current.set_state(TaskState::Running);
                 None
             }
+        };
+
+        if selected.is_some() {
+            let flags = irq.release_keep_irqs_disabled();
+            (selected, Some(flags))
+        } else {
+            (None, None)
         }
     };
 
     let Some(next) = selected_next else {
         return false;
     };
+    let irq_flags = irq_flags.unwrap_or(0);
 
     // SAFETY: next provient de la run queue, toujours valide.
     let next_ref = &mut *next.as_ptr();
     if !core::ptr::eq(current, next_ref) {
         context_switch(current, next_ref);
+        unsafe {
+            IrqGuard::restore_irq_flags(irq_flags);
+        }
         true
     } else {
+        unsafe {
+            IrqGuard::restore_irq_flags(irq_flags);
+        }
         current.set_state(TaskState::Running);
         false
     }
@@ -490,7 +530,10 @@ unsafe fn schedule_current(force: bool) -> bool {
 
     let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
     let should_schedule = if force {
-        rq.nr_running_usize() != 0 || current.need_resched()
+        // Un yield coopératif est une demande explicite de sélection. Ne pas
+        // le conditionner à nr_running: ce compteur peut être transitoirement
+        // en retard sur la structure CFS/RT pendant les chemins fork/IPC.
+        true
     } else {
         current.need_resched()
     };
@@ -532,7 +575,7 @@ pub unsafe fn cooperative_reschedule() -> bool {
 /// courant doit etre le TCB idle publie pour ce CPU ou un TCB kernel valide.
 pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
-    use crate::scheduler::core::preempt::PreemptGuard;
+    use crate::scheduler::core::preempt::IrqGuard;
     use crate::scheduler::core::runqueue::run_queue;
     use core::ptr::NonNull;
 
@@ -543,8 +586,8 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     };
     idle_sched_trace(b"idle_sched: enter\n");
 
-    let selected_next = {
-        let _preempt = PreemptGuard::new();
+    let (selected_next, irq_flags) = {
+        let irq = IrqGuard::new();
         let rq = run_queue(cpu_id);
         let current = &mut *current_nn.as_ptr();
 
@@ -554,7 +597,7 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
         }
         let _ = current.take_need_resched();
 
-        match pick_next_task(rq, Some(current_nn)) {
+        let selected = match pick_next_task(rq, Some(current_nn)) {
             PickResult::Switch(next) if next != current_nn => {
                 idle_sched_trace(b"idle_sched: picked\n");
                 Some(next)
@@ -563,21 +606,55 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
                 idle_sched_trace(b"idle_sched: no next\n");
                 None
             }
+        };
+
+        if selected.is_some() {
+            let flags = irq.release_keep_irqs_disabled();
+            (selected, Some(flags))
+        } else {
+            (None, None)
         }
     };
 
     let Some(next) = selected_next else {
         return false;
     };
+    let irq_flags = irq_flags.unwrap_or(0);
 
     let current = &mut *current_nn.as_ptr();
     idle_sched_trace(b"idle_sched: switch\n");
     context_switch(current, &mut *next.as_ptr());
+    unsafe {
+        IrqGuard::restore_irq_flags(irq_flags);
+    }
     true
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // schedule_block — blocage du thread courant (sans ré-enfilage)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Termine une course de réveil arrivée avant le vrai blocage.
+///
+/// Le protocole sleep/wait est en deux phases : l'appelant publie d'abord le
+/// thread comme `Sleeping`, puis appelle `schedule_block()`. Un timer ou un
+/// waker peut légalement faire `Sleeping -> Runnable` et l'enfiler entre ces
+/// deux opérations. Comme le thread tourne encore sur ce CPU, il faut retirer
+/// l'entrée de runqueue et revenir à `Running` au lieu de bloquer.
+///
+/// # Safety
+/// `current` doit être le TCB courant du CPU associé à `rq`.
+pub unsafe fn finish_preblock_wake(
+    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    current: &mut ThreadControlBlock,
+) {
+    use crate::scheduler::core::preempt::IrqGuard;
+    use core::ptr::NonNull;
+
+    let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
+    let _irq = IrqGuard::new();
+    let _ = rq.remove(current_ptr);
+    current.set_state(TaskState::Running);
+}
 
 /// Bloque le thread courant sans le ré-enqueuer dans la run queue.
 ///
@@ -595,17 +672,20 @@ pub unsafe fn schedule_block(
     current: &mut ThreadControlBlock,
 ) {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
-    use crate::scheduler::core::preempt::PreemptGuard;
+    use crate::scheduler::core::preempt::IrqGuard;
     use core::ptr::NonNull;
 
-    if !matches!(
-        current.state(),
-        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
-    ) {
-        return;
-    }
-
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
+    match current.state() {
+        TaskState::Runnable => {
+            finish_preblock_wake(rq, current);
+            return;
+        }
+        TaskState::Running => return,
+        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead => {
+        }
+        _ => return,
+    }
     let mut idle_thread = match rq.idle_thread {
         Some(idle) => Some(idle),
         None => {
@@ -634,13 +714,24 @@ pub unsafe fn schedule_block(
         }
     }
 
-    let selected_next = {
-        let _preempt = PreemptGuard::new();
-        match pick_next_task(rq, Some(current_ptr)) {
+    let (selected_next, irq_flags) = {
+        let irq = IrqGuard::new();
+        if current.is_queued() {
+            let _ = rq.remove(current_ptr);
+            current.clear_queued();
+        }
+        let selected = match pick_next_task(rq, Some(current_ptr)) {
             PickResult::Switch(next) if !core::ptr::eq(current, next.as_ptr()) => Some(next),
             PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
                 idle_thread.filter(|idle| !core::ptr::eq(current, idle.as_ptr()))
             }
+        };
+
+        if selected.is_some() {
+            let flags = irq.release_keep_irqs_disabled();
+            (selected, Some(flags))
+        } else {
+            (None, None)
         }
     };
 
@@ -648,16 +739,23 @@ pub unsafe fn schedule_block(
         current.set_state(TaskState::Running);
         return;
     };
+    let irq_flags = irq_flags.unwrap_or(0);
 
     if !matches!(
         current.state(),
         TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
     ) {
+        unsafe {
+            IrqGuard::restore_irq_flags(irq_flags);
+        }
         return;
     }
 
     // SAFETY: next provient de la run queue ou du TCB idle publié pour ce CPU.
     context_switch(current, &mut *next.as_ptr());
+    unsafe {
+        IrqGuard::restore_irq_flags(irq_flags);
+    }
 }
 
 /// Enfile un TCB après réveil depuis WaitQueue.
@@ -671,6 +769,17 @@ pub unsafe fn wake_enqueue(
     tcb: core::ptr::NonNull<ThreadControlBlock>,
 ) {
     use crate::scheduler::core::task::TaskState;
-    (*tcb.as_ptr()).set_state(TaskState::Runnable);
-    rq.enqueue(tcb);
+    let tcb_ref = &*tcb.as_ptr();
+    let should_enqueue = match tcb_ref.state() {
+        TaskState::Sleeping => tcb_ref.try_transition(TaskState::Sleeping, TaskState::Runnable),
+        TaskState::Uninterruptible => {
+            tcb_ref.try_transition(TaskState::Uninterruptible, TaskState::Runnable)
+        }
+        TaskState::Stopped => tcb_ref.try_transition(TaskState::Stopped, TaskState::Runnable),
+        TaskState::Runnable => true,
+        TaskState::Running | TaskState::Zombie | TaskState::Dead => false,
+    };
+    if should_enqueue {
+        rq.enqueue(tcb);
+    }
 }

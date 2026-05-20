@@ -281,6 +281,23 @@ pub struct ForkContext<'a> {
     /// RFLAGS du parent au moment du fork (depuis frame.r11 sauvé par SYSCALL).
     /// CORRECTION P2-02 : propagé au fils avec masquage sécurisé.
     pub parent_rflags: u64,
+    /// Registres utilisateur à restaurer dans le fils.
+    ///
+    /// Le wrapper userspace `syscall` ne déclare que `rax`, `rcx` et `r11`
+    /// comme clobbers. Le fils doit donc reprendre avec les mêmes registres
+    /// visibles que le parent, sauf `rax=0`.
+    pub user_rbx: u64,
+    pub user_rbp: u64,
+    pub user_r12: u64,
+    pub user_r13: u64,
+    pub user_r14: u64,
+    pub user_r15: u64,
+    pub user_rdi: u64,
+    pub user_rsi: u64,
+    pub user_rdx: u64,
+    pub user_r10: u64,
+    pub user_r8: u64,
+    pub user_r9: u64,
 }
 
 /// Résultat de fork() pour le parent.
@@ -385,6 +402,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     // SAFETY: child_thread_ptr valide.
     unsafe {
         let child_tcb = (*child_thread_ptr).tcb_mut();
+        let parent_vruntime = parent.sched_tcb.vruntime.load(Ordering::Acquire);
+        child_tcb
+            .vruntime
+            .store(parent_vruntime.saturating_add(6_000_000), Ordering::Release);
         // Le fils retourne 0 via la convention de syscall (rax=0 dans le frame).
         // switch_to_new_thread restaure le stack puis ret vers fork_child_trampoline.
         // fork_child_trampoline : xor eax,eax ; swapgs ; iretq → userspace.
@@ -394,24 +415,32 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         }
 
         let kstack_top = (*child_thread_ptr).kernel_stack.top_addr();
-        // Frame complet : 12 × u64 = 96 bytes.
-        // Layout (indices depuis kernel_rsp = kstack_top - 96) :
-        //   [0..48)  = 6 callee-saved regs = 0       ← format switch_to_new_thread
-        //   [48]     = fork_child_trampoline          ← adresse ret après 6 pops
-        //   [56..96) = iretq frame (RIP, CS, RFLAGS, RSP, SS)
-        let frame_ptr = (kstack_top - 96) as *mut u64;
+        // Frame complet : 18 × u64 = 144 bytes.
+        // Layout (indices depuis kernel_rsp = kstack_top - 144) :
+        //   [0..48)    = 6 callee-saved regs parent  ← format switch_to_new_thread
+        //   [48]       = fork_child_trampoline        ← adresse ret après 6 pops
+        //   [56..104)  = 6 caller-saved regs restaurés par le trampoline
+        //   [104..144) = iretq frame (RIP, CS, RFLAGS, RSP, SS)
+        let frame_ptr = (kstack_top - 144) as *mut u64;
         // Callee-saved registers. switch_to_new_thread les dépile avant le ret.
-        *frame_ptr.add(0) = 0; // rbx
-        *frame_ptr.add(1) = 0; // rbp
-        *frame_ptr.add(2) = 0; // r12
-        *frame_ptr.add(3) = 0; // r13
-        *frame_ptr.add(4) = 0; // r14
-        *frame_ptr.add(5) = 0; // r15
-                               // Adresse de retour : fork_child_trampoline (exécuté après les 6 pops).
+        *frame_ptr.add(0) = ctx.user_rbx; // rbx
+        *frame_ptr.add(1) = ctx.user_rbp; // rbp
+        *frame_ptr.add(2) = ctx.user_r12; // r12
+        *frame_ptr.add(3) = ctx.user_r13; // r13
+        *frame_ptr.add(4) = ctx.user_r14; // r14
+        *frame_ptr.add(5) = ctx.user_r15; // r15
+                                          // Adresse de retour : fork_child_trampoline (exécuté après les 6 pops).
         *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
+        // Registres caller-saved que le wrapper syscall userspace attend préservés.
+        *frame_ptr.add(7) = ctx.user_rdi;
+        *frame_ptr.add(8) = ctx.user_rsi;
+        *frame_ptr.add(9) = ctx.user_rdx;
+        *frame_ptr.add(10) = ctx.user_r10;
+        *frame_ptr.add(11) = ctx.user_r8;
+        *frame_ptr.add(12) = ctx.user_r9;
         // iretq frame (RSP pointe ici à l'entrée fork_child_trampoline).
-        *frame_ptr.add(7) = ctx.child_rip; // RIP  userspace
-        *frame_ptr.add(8) = GDT_USER_CS64 as u64; // CS   ring3 (code64)
+        *frame_ptr.add(13) = ctx.child_rip; // RIP  userspace
+        *frame_ptr.add(14) = GDT_USER_CS64 as u64; // CS   ring3 (code64)
 
         // CORRECTION P2-02 : propager les RFLAGS du parent avec masquage sécurisé.
         // Masque des flags sûrs à hériter (POSIX + sécurité kernel).
@@ -419,21 +448,22 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         // - Forcer  : IF=1 (bit 9) — le fils doit accepter les interruptions
         // - Effacer : TF=0 (bit 8) — ne pas tracer le fils si le parent était en trace
         //             NT=0 (bit 14) — Nested Task flag — jamais hérité
+        //             IOPL=0 (bits 12-13) — jamais hérité en Ring3/capability model
         //             RF=0 (bit 16) — Resume Flag — jamais hérité
         //             VM=0 (bit 17) — Virtual 8086 — non supporté
         const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
         const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200; // IF=1
-        const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_4100; // TF=0, NT=0, RF=0, VM=0
+        const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100; // TF=0, IOPL=0, NT=0, RF=0, VM=0
 
         let child_rflags =
             ((ctx.parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
         // Garantir que le bit réservé 1 est toujours à 1.
         let child_rflags = child_rflags | 0x0002;
 
-        *frame_ptr.add(9) = child_rflags; // RFLAGS (hérités du parent avec masquage)
-        *frame_ptr.add(10) = ctx.child_rsp; // RSP  userspace
-        *frame_ptr.add(11) = GDT_USER_DS as u64; // SS   ring3
-        child_tcb.kstack_ptr = kstack_top - 96;
+        *frame_ptr.add(15) = child_rflags; // RFLAGS (hérités du parent avec masquage)
+        *frame_ptr.add(16) = ctx.child_rsp; // RSP  userspace
+        *frame_ptr.add(17) = GDT_USER_DS as u64; // SS   ring3
+        child_tcb.kstack_ptr = kstack_top - 144;
         child_tcb.signal_mask.store(
             parent.sched_tcb.signal_mask.load(Ordering::Acquire),
             Ordering::Release,
@@ -586,7 +616,11 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             run_queue(CpuId(ctx.target_cpu)).enqueue(tcb_ptr);
         }
     }
-    parent.sched_tcb.request_preemption();
+    // Le fils est runnable dès maintenant, mais le parent doit pouvoir finir le
+    // chemin de retour fork() et publier ses effets immédiats (init/service
+    // bookkeeping, setpgid, vfork wait explicite) avant une préemption forcée.
+    // Le tick scheduler et les points de blocage coopératifs prendront ensuite
+    // le relais sans imposer une politique child-first fragile.
     fork_trace(b"fork: enqueue\n");
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: before_return", parent, parent_pcb);

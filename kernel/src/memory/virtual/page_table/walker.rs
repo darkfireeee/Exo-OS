@@ -157,15 +157,16 @@ impl PageTableWalker {
             return Err(AllocError::InvalidParams);
         }
 
+        let table_flags = flags.clear(PageFlags::HUGE_PAGE);
         let huge_flags = flags.set(PageFlags::HUGE_PAGE);
         // SAFETY: pml4_phys est une PML4 valide.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
 
-        let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, huge_flags)?;
+        let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, table_flags)?;
         // SAFETY: l3_phys pointe sur un PDPT valide ou fraîchement alloué.
         let pdpt = unsafe { phys_to_table_mut(l3_phys) };
 
-        let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, huge_flags)?;
+        let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, table_flags)?;
         // SAFETY: l2_phys pointe sur un PD valide ou fraîchement alloué.
         let pd = unsafe { phys_to_table_mut(l2_phys) };
 
@@ -231,6 +232,8 @@ impl PageTableWalker {
         if !l4_entry.is_present() {
             return Err(AllocError::InvalidParams);
         }
+        let l4_entry = &mut pml4[virt.p4_index()];
+        Self::upgrade_table_entry_permissions(l4_entry, new_flags);
 
         let pdpt = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
@@ -241,6 +244,8 @@ impl PageTableWalker {
         if l3_entry.is_huge() {
             return Err(AllocError::InvalidParams);
         }
+        let l3_entry = &mut pdpt[virt.p3_index()];
+        Self::upgrade_table_entry_permissions(l3_entry, new_flags);
 
         let pd = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
@@ -251,6 +256,8 @@ impl PageTableWalker {
         if l2_entry.is_huge() {
             return Err(AllocError::InvalidParams);
         }
+        let l2_entry = &mut pd[virt.p2_index()];
+        Self::upgrade_table_entry_permissions(l2_entry, new_flags);
 
         let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         let entry = &mut pt[virt.p1_index()];
@@ -392,6 +399,9 @@ impl PageTableWalker {
             if entry.is_huge() {
                 return Err(AllocError::InvalidParams);
             }
+            if flags.contains(PageFlags::WRITABLE) {
+                entry.set_flag(PageTableEntry::FLAG_WRITABLE);
+            }
             if flags.contains(PageFlags::USER) {
                 entry.set_flag(PageTableEntry::FLAG_USER);
             }
@@ -411,5 +421,19 @@ impl PageTableWalker {
             };
         *entry = PageTableEntry::from_raw(new_phys.as_u64() | parent_flags);
         Ok(new_phys)
+    }
+
+    #[inline]
+    fn upgrade_table_entry_permissions(entry: &mut PageTableEntry, leaf_flags: PageFlags) {
+        // Les bits U/S et R/W des niveaux intermediaires restreignent toutes
+        // les feuilles du sous-arbre. La feuille garde la politique fine
+        // read-only/NX; les tables doivent seulement ne pas bloquer une page
+        // legitime user ou writable plus bas.
+        if leaf_flags.contains(PageFlags::WRITABLE) {
+            entry.set_flag(PageTableEntry::FLAG_WRITABLE);
+        }
+        if leaf_flags.contains(PageFlags::USER) {
+            entry.set_flag(PageTableEntry::FLAG_USER);
+        }
     }
 }

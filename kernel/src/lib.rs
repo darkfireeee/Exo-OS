@@ -141,6 +141,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
 
     // ── Phase 2b : Allocateur heap (SLUB + large) ────────────────────────────
     crate::memory::heap::allocator::hybrid::init();
+    crate::memory::cow::init();
     let _ = crate::arch::x86_64::apic::local_apic::init_lapic_fixmap_post_memory();
     kdb(b'3'); // Phase 2b done
     crate::arch::x86_64::boot_display::stage_ok("MEMORY");
@@ -222,7 +223,12 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     // Si la sécurité a déjà été initialisée en early boot (SECURITY_READY=true),
     // ne pas réinitialiser capability/crypto (double init -> panic).
     if !crate::security::is_security_ready() {
-        let kaslr_entropy = crate::arch::x86_64::cpu::tsc::read_tsc();
+        let mut kaslr_entropy = crate::arch::x86_64::cpu::tsc::read_tsc()
+            ^ crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR.rotate_left(17);
+        let mut rdrand = [0u8; 8];
+        if crate::security::crypto::rng::rdrand_fill(&mut rdrand).is_ok() {
+            kaslr_entropy ^= u64::from_le_bytes(rdrand);
+        }
         crate::security::security_init(
             kaslr_entropy,
             crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR,

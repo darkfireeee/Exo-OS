@@ -63,6 +63,26 @@ const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 
+#[inline]
+fn boot_log(bytes: &[u8]) {
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
+
+fn halt_forever() -> ! {
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nostack, nomem));
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoRequest {
@@ -844,13 +864,14 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    boot_log(b"crypto_server: boot\n");
     xchacha20::xchacha20_init();
     keystore::keystore_init();
     pki::pki_init();
     tls::tls_init();
 
     let name = b"crypto_server";
-    let _ = unsafe {
+    let register_rc = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
@@ -858,6 +879,11 @@ pub extern "C" fn _start() -> ! {
             CRYPTO_SERVER_ENDPOINT,
         )
     };
+    if register_rc < 0 {
+        boot_log(b"crypto_server: register failed\n");
+        halt_forever();
+    }
+    boot_log(b"crypto_server: registered\n");
 
     let mut req = CryptoRequest {
         sender_pid: 0,
@@ -897,9 +923,6 @@ pub extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
-    }
+    boot_log(b"crypto_server: panic\n");
+    halt_forever();
 }

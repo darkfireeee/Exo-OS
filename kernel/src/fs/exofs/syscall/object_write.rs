@@ -83,6 +83,19 @@ fn ensure_blob_cached(blob_id: BlobId) -> ExofsResult<()> {
     Ok(())
 }
 
+fn persist_cached_blob_if_disk(blob_id: BlobId) -> ExofsResult<()> {
+    if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
+        return Ok(());
+    }
+    let Some(data) = BLOB_CACHE.get(&blob_id) else {
+        return Ok(());
+    };
+    if object_store::persist_blob_data_if_disk(blob_id, data.as_ref(), true)? {
+        let _ = BLOB_CACHE.mark_clean(&blob_id);
+    }
+    Ok(())
+}
+
 /// Écrit `data` dans le blob `blob_id` à l'offset `offset`.
 ///
 /// Si le blob n'existe pas, le crée. Si le blob existait, modifie uniquement
@@ -108,6 +121,7 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     let start = offset as usize;
     let dlen = data.len();
     BLOB_CACHE.write_at(blob_id, start, data)?;
+    persist_cached_blob_if_disk(blob_id)?;
 
     Ok(WriteResult {
         bytes_written: dlen,
@@ -424,6 +438,7 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
         BLOB_CACHE.insert(blob_id, Vec::new())?;
     }
     BLOB_CACHE.resize(blob_id, new_size)?;
+    persist_cached_blob_if_disk(blob_id)?;
 
     Ok(())
 }

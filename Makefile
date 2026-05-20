@@ -45,7 +45,9 @@ BOOT_SERVER_PACKAGES = \
 	-p exo-input-server \
 	-p exo-tty-server \
 	-p exo-exosh \
-	-p exo-shield
+	-p exo-shield \
+	-p exo-loader
+BOOT_PAYLOAD_FEATURES = --features exo-loader/dynamic_linking
 BOOT_PAYLOAD_BINS = \
 	exo-init-server \
 	exo-ipc-router \
@@ -59,7 +61,8 @@ BOOT_PAYLOAD_BINS = \
 	exo-input-server \
 	exo-tty-server \
 	exosh \
-	exo-shield
+	exo-shield \
+	exo-loader
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
@@ -119,7 +122,7 @@ all: iso
 ## 1a. Build des payloads Ring1 embarques dans le rootfs ExoFS de boot
 build-boot-payloads:
 	@echo "$(BLUE)[payloads] Compilation serveurs Ring1 pour l'injection /sbin...$(NC)"
-	@$(CARGO) build $(BOOT_SERVER_PACKAGES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build $(BOOT_SERVER_PACKAGES) $(BOOT_PAYLOAD_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(BOOT_PAYLOAD_DIR)"
 	@mkdir -p "$(BOOT_PAYLOAD_DIR)"
 	@for bin in $(BOOT_PAYLOAD_BINS); do \

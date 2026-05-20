@@ -670,13 +670,13 @@ impl BlobCache {
         freed
     }
 
-    /// Vide entièrement le cache après avoir vérifié qu'il n'y a pas d'entrées dirty.
+    /// Évince uniquement les entrées clean.
     ///
     /// # Erreur
     /// Retourne `Err(ExofsError::DirtyDataLoss(n))` si `n` entrées dirty
     /// seraient perdues. Appeler `flush_dirty_to_disk()` avant, ou utiliser
     /// `flush_all_force()` uniquement en contexte de panique/arrêt d'urgence.
-    pub fn flush_all(&self) -> ExofsResult<()> {
+    pub fn evict_clean_only(&self) -> ExofsResult<()> {
         let mut inner = self.inner.lock();
         let dirty_count = inner.map.values().filter(|e| e.dirty).count();
         if dirty_count > 0 {
@@ -685,6 +685,14 @@ impl BlobCache {
         inner.map.clear();
         inner.used = 0;
         Ok(())
+    }
+
+    /// Compatibilité historique : ne fait pas de writeback.
+    ///
+    /// Le nom précis est `evict_clean_only()`. Les nouveaux appels doivent
+    /// l'utiliser pour éviter de confondre éviction et persistance disque.
+    pub fn flush_all(&self) -> ExofsResult<()> {
+        self.evict_clean_only()
     }
 
     /// Vide le cache sans vérification — UNIQUEMENT pour panic/shutdown d'urgence.

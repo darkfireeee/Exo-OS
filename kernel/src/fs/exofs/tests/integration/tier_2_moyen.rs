@@ -74,7 +74,10 @@ fn blob_roundtrip_survives_header_and_payload_verification() {
 
     assert_eq!(read_back.data, payload);
     assert_eq!(read_back.blob_id, result.blob_id);
-    assert_eq!(result.disk_size, blob_total_disk_size(result.stored_size as u32));
+    assert_eq!(
+        result.disk_size,
+        blob_total_disk_size(result.stored_size as u32)
+    );
     assert!(read_back.id_verified);
 }
 

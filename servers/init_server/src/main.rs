@@ -67,6 +67,7 @@ struct Service {
     restart_delay_ticks: AtomicU32, // délai avant relance (backoff exponentiel)
     spawn_time_ms: AtomicU64,
     disabled: AtomicBool,
+    dead: AtomicBool,
 }
 
 impl Service {
@@ -78,6 +79,7 @@ impl Service {
             restart_delay_ticks: AtomicU32::new(1),
             spawn_time_ms: AtomicU64::new(0),
             disabled: AtomicBool::new(false),
+            dead: AtomicBool::new(false),
         }
     }
 
@@ -89,18 +91,25 @@ impl Service {
         self.disabled.load(Ordering::Acquire)
     }
 
+    fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::Acquire)
+    }
+
     fn set_pid(&self, pid: u32) {
         self.pid.store(pid, Ordering::Release);
         self.disabled.store(false, Ordering::Release);
+        self.dead.store(false, Ordering::Release);
         self.spawn_time_ms.store(monotonic_ms(), Ordering::Release);
     }
 
     fn enable(&self) {
         self.disabled.store(false, Ordering::Release);
+        self.dead.store(false, Ordering::Release);
     }
 
     fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
+        self.dead.store(true, Ordering::Release);
         self.pid.store(0, Ordering::Release);
         self.spawn_time_ms.store(0, Ordering::Release);
         self.restart_delay_ticks.store(1, Ordering::Relaxed);
@@ -110,6 +119,7 @@ impl Service {
         let now = monotonic_ms();
         let spawn = self.spawn_time_ms.load(Ordering::Acquire);
         self.pid.store(0, Ordering::Release);
+        self.dead.store(true, Ordering::Release);
         self.spawn_time_ms.store(0, Ordering::Release);
         if spawn != 0 && now.saturating_sub(spawn) >= SERVICE_STABLE_MS {
             self.restart_delay_ticks.store(1, Ordering::Relaxed);

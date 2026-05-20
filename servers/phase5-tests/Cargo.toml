@@ -6,8 +6,4 @@ edition = "2021"
 # Teste la logique pure Phase 5 (servers Ring 1) d'Exo-OS en re-implémentant
 # les parties testables sans dépendances hardware ni IPC kernel.
 
-# Workspace vide pour éviter d'hériter du [unstable] build-std = ["core",...]
-# du workspace parent (incompatible avec cargo test standard).
-[workspace]
-
 [dependencies]

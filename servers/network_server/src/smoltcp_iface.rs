@@ -214,9 +214,25 @@ impl SmoltcpIface {
         }
     }
 
-    pub fn drain_all(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool) {
-        while self.poll_one(device, pool) {}
+    pub fn drain_bounded(
+        &mut self,
+        device: &mut ExoNetDevice,
+        pool: &NetBufPool,
+        max_ingress_polls: usize,
+    ) -> bool {
+        let mut polls = 0usize;
+        while self.poll_one(device, pool) {
+            polls = polls.saturating_add(1);
+            if polls >= max_ingress_polls {
+                return false;
+            }
+        }
         self.poll_egress(device, pool);
+        true
+    }
+
+    pub fn drain_all(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool) {
+        let _ = self.drain_bounded(device, pool, usize::MAX);
     }
 
     pub const fn ip(&self) -> u32 {
@@ -398,15 +414,7 @@ impl<'dev> Device for ExoSmoltcpDevice<'dev> {
         }
 
         let rx = self.device.borrow_mut().pop_rx_for_stack()?;
-        let tx_idx = match self.alloc_tx() {
-            Some(idx) => idx,
-            None => {
-                let mut device = self.device.borrow_mut();
-                device.release_rx(rx.pool_idx);
-                device.dropped_tx = device.dropped_tx.saturating_add(1);
-                return None;
-            }
-        };
+        let tx_idx = self.alloc_tx();
 
         Some((
             ExoRxToken {
@@ -427,7 +435,7 @@ impl<'dev> Device for ExoSmoltcpDevice<'dev> {
         Some(ExoTxToken {
             device: &self.device,
             pool: self.pool,
-            pool_idx,
+            pool_idx: Some(pool_idx),
         })
     }
 
@@ -468,7 +476,7 @@ impl RxToken for ExoRxToken<'_, '_> {
 struct ExoTxToken<'a, 'dev> {
     device: &'a RefCell<&'dev mut ExoNetDevice>,
     pool: &'dev NetBufPool,
-    pool_idx: u16,
+    pool_idx: Option<u16>,
 }
 
 impl TxToken for ExoTxToken<'_, '_> {
@@ -478,24 +486,33 @@ impl TxToken for ExoTxToken<'_, '_> {
     {
         let max_len = PAGE_SIZE.saturating_sub(self.pool.hdr_size());
         let len = len.min(max_len);
-        unsafe {
-            core::ptr::write_bytes(
-                self.pool.tx_header_ptr_mut(self.pool_idx as usize),
-                0,
-                self.pool.hdr_size(),
-            );
+        if let Some(pool_idx) = self.pool_idx {
+            unsafe {
+                core::ptr::write_bytes(
+                    self.pool.tx_header_ptr_mut(pool_idx as usize),
+                    0,
+                    self.pool.hdr_size(),
+                );
+            }
+            let payload = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.pool.tx_payload_ptr_mut(pool_idx as usize),
+                    len,
+                )
+            };
+            let result = f(payload);
+            let queued = self.device.borrow_mut().queue_tx_idx(pool_idx, len);
+            if queued.is_err() {
+                self.pool.tx_free(pool_idx);
+            }
+            return result;
         }
-        let payload = unsafe {
-            core::slice::from_raw_parts_mut(
-                self.pool.tx_payload_ptr_mut(self.pool_idx as usize),
-                len,
-            )
-        };
-        let result = f(payload);
-        let queued = self.device.borrow_mut().queue_tx_idx(self.pool_idx, len);
-        if queued.is_err() {
-            self.pool.tx_free(self.pool_idx);
-        }
+
+        let mut drop_buf = [0u8; ETHERNET_MTU_WITH_HEADER];
+        let scratch_len = len.min(drop_buf.len());
+        let result = f(&mut drop_buf[..scratch_len]);
+        let mut device = self.device.borrow_mut();
+        device.dropped_rx_tx_token = device.dropped_rx_tx_token.saturating_add(1);
         result
     }
 }

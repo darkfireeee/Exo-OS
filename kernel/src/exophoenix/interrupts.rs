@@ -62,7 +62,7 @@ fn apic_ack() {
 }
 
 unsafe fn save_current_fpu_before_freeze_ack() {
-    let tcb_raw = crate::arch::x86_64::smp::percpu::read_current_tcb();
+    let tcb_raw = unsafe { crate::arch::x86_64::smp::percpu::try_read_current_tcb() }.unwrap_or(0);
     if tcb_raw == 0 {
         return;
     }

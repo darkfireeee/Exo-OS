@@ -21,7 +21,11 @@
 //   bit  [9]    = KTHREAD flag
 //   bit  [10]   = FPU_LOADED flag
 //   bit  [11]   = NEED_RESCHED flag
-//   bits [31:12]= flags scheduler étendus (réservés)
+//   bit  [12]   = EXITING
+//   bit  [13]   = IDLE
+//   bit  [14]   = IN_RECLAIM
+//   bit  [15]   = QUEUED in a scheduler run queue
+//   bits [31:16]= flags scheduler étendus (réservés)
 //   bits [63:32]= réservés ; pid est le champ direct `pid` à l'offset [92]
 //
 // SÉCURITÉ ISR :
@@ -198,6 +202,8 @@ pub const SCHED_EXITING_BIT: u64 = 1 << 12;
 pub const SCHED_IDLE_BIT: u64 = 1 << 13;
 /// Thread en reclaim mémoire — allocation FPU interdite (bit 14).
 pub const SCHED_IN_RECLAIM_BIT: u64 = 1 << 14;
+/// Thread présent dans une run queue scheduler (bit 15).
+pub const SCHED_QUEUED_BIT: u64 = 1 << 15;
 
 /// Flags compat pour l'ancien code utilisant `task_flags::*`.
 /// Ces constantes ne sont PAS utilisées par le TCB canonique (encodage sched_state).
@@ -623,6 +629,43 @@ impl ThreadControlBlock {
     #[inline(always)]
     pub fn is_idle(&self) -> bool {
         self.sched_state.load(Ordering::Relaxed) & SCHED_IDLE_BIT != 0
+    }
+
+    /// Vrai si le TCB est actuellement present dans une run queue.
+    #[inline(always)]
+    pub fn is_queued(&self) -> bool {
+        self.sched_state.load(Ordering::Acquire) & SCHED_QUEUED_BIT != 0
+    }
+
+    /// Marque atomiquement le TCB comme enfile.
+    ///
+    /// Retourne false si le bit etait deja pose. Ce bit est l'invariant global
+    /// anti-double-enqueue: sans lui, un reveil timer/IPC concurrent peut laisser
+    /// une entree de runqueue pointant vers un thread deja en execution, puis le
+    /// scheduler recharge une pile qui ne contient pas de frame `context_switch`.
+    #[inline(always)]
+    pub fn try_mark_queued(&self) -> bool {
+        loop {
+            let cur = self.sched_state.load(Ordering::Acquire);
+            if cur & SCHED_QUEUED_BIT != 0 {
+                return false;
+            }
+            let next = cur | SCHED_QUEUED_BIT;
+            match self
+                .sched_state
+                .compare_exchange(cur, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return true,
+                Err(_) => continue,
+            }
+        }
+    }
+
+    /// Efface le bit runqueue apres extraction ou retrait explicite.
+    #[inline(always)]
+    pub fn clear_queued(&self) {
+        self.sched_state
+            .fetch_and(!SCHED_QUEUED_BIT, Ordering::AcqRel);
     }
 
     #[inline(always)]

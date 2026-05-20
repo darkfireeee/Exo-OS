@@ -177,7 +177,10 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             handle_fork_like_inplace(frame, crate::process::lifecycle::fork::ForkFlags::default());
         syscall_trace(b"sys_fork: result\n");
         frame.rax = result as u64;
-        post_dispatch(frame, tsc_start);
+        // Fork publie un nouveau runnable, mais le parent doit retourner une
+        // fois en Ring3 avant une préemption forcée: init_server dépend de ce
+        // point pour enregistrer l'état du service qui vient d'être créé.
+        post_dispatch_defer_resched(frame, tsc_start);
         syscall_trace(b"sys_fork: post\n");
         return;
     }
@@ -336,6 +339,16 @@ fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
 /// 2. Échantillonne la latence dispatch (1/256) pour éviter la contention atomique.
 #[inline]
 fn post_dispatch(frame: &mut SyscallFrame, tsc_start: u64) {
+    post_dispatch_inner(frame, tsc_start, true);
+}
+
+#[inline]
+fn post_dispatch_defer_resched(frame: &mut SyscallFrame, tsc_start: u64) {
+    post_dispatch_inner(frame, tsc_start, false);
+}
+
+#[inline]
+fn post_dispatch_inner(frame: &mut SyscallFrame, tsc_start: u64, allow_resched: bool) {
     if (frame.rax as i64) < 0 {
         crate::arch::x86_64::syscall::record_syscall_error();
     }
@@ -346,8 +359,10 @@ fn post_dispatch(frame: &mut SyscallFrame, tsc_start: u64) {
     // ── Préemption demandée au retour syscall ─────────────────────────────
     // Le tick timer pose NEED_RESCHED; le retour vers Ring3 est le point sûr
     // où l'on peut céder le CPU sans perdre la SyscallFrame du thread courant.
-    unsafe {
-        let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+    if allow_resched {
+        unsafe {
+            let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+        }
     }
 
     // ── Instrumentation latence (échantillon 1/256) ───────────────────────
@@ -523,7 +538,7 @@ fn check_and_deliver_signals(frame: &mut SyscallFrame) {
 /// ## Protocole (POSIX fork)
 /// 1. Lit TCB courant via `gs:[0x20]` → PID → PCB.
 /// 2. Récupère le `ProcessThread` via `pcb.main_thread_ptr()`.
-/// 3. Construit `ForkContext { child_rip: frame.rcx, child_rsp: frame.rsp }`.
+/// 3. Construit `ForkContext` depuis la frame syscall complète.
 /// 4. Appelle `do_fork()` — crée PCB/TCB fils, CoW, TLB flush, enqueue RunQueue.
 /// 5. Retourne `child_pid` au parent (fils démarre via `fork_child_trampoline`).
 fn handle_fork_like_inplace(
@@ -573,6 +588,18 @@ fn handle_fork_like_inplace(
         child_rip: frame.rcx,     // RIP de retour sauvé par SYSCALL hw
         child_rsp: frame.rsp,     // RSP userspace sauvé au stub ASM
         parent_rflags: frame.r11, // RFLAGS sauvés par SYSCALL hw — CORRECTION P2-02
+        user_rbx: frame.rbx,
+        user_rbp: frame.rbp,
+        user_r12: frame.r12,
+        user_r13: frame.r13,
+        user_r14: frame.r14,
+        user_r15: frame.r15,
+        user_rdi: frame.rdi,
+        user_rsi: frame.rsi,
+        user_rdx: frame.rdx,
+        user_r10: frame.r10,
+        user_r8: frame.r8,
+        user_r9: frame.r9,
     };
 
     match do_fork(&ctx) {
@@ -780,6 +807,7 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
             frame.r13 = 0;
             frame.r14 = 0;
             frame.r15 = 0;
+            frame.rdi = thread.addresses.entry_arg0;
             frame.rcx = new_rip; // RIP → nouveau point d'entrée ELF
             frame.rsp = new_rsp; // RSP → nouvelle pile userspace
             frame.r11 = 0x0202; // RFLAGS : IF=1, bit réservé=1

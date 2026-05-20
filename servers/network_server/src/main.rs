@@ -414,6 +414,12 @@ fn socket_reply(status: i64, snapshot: &socket_table::SocketSnapshot) -> NetRepl
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    let _ = unsafe {
+        exo_syscall_abi::syscall1(
+            exo_syscall_abi::SYS_EXO_PHOENIX_STATE_SET,
+            exo_syscall_abi::ExoPhoenixStateWire::Normal.as_syscall_arg(),
+        )
+    };
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nostack, nomem));

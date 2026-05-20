@@ -147,6 +147,13 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
             parent_as.mark_all_writable_vmas_cow();
         }
 
+        let inherited_heap_start = parent_as
+            .map(|parent_as| {
+                parent_as
+                    .heap_start
+                    .load(core::sync::atomic::Ordering::Acquire)
+            })
+            .unwrap_or(0);
         let inherited_heap_end = parent_as
             .map(|parent_as| {
                 parent_as
@@ -172,7 +179,10 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
                 return Err(AddrSpaceCloneError::OutOfMemory);
             }
         }
-        if inherited_heap_end != 0 {
+        if inherited_heap_start != 0 || inherited_heap_end != 0 {
+            child_as
+                .heap_start
+                .store(inherited_heap_start, core::sync::atomic::Ordering::Release);
             child_as
                 .heap_end
                 .store(inherited_heap_end, core::sync::atomic::Ordering::Release);
@@ -252,7 +262,7 @@ unsafe fn clone_pdpt(
             if let Some(frame) = src_entry.frame() {
                 track_cow_frame(frame)?;
             }
-            let shared = shared_entry(src_entry);
+            let shared = shared_leaf_entry(src_entry);
             src_pdpt[l3_idx] = shared;
             dst_pdpt[l3_idx] = shared;
             continue;
@@ -289,7 +299,7 @@ unsafe fn clone_pd(
             if let Some(frame) = src_entry.frame() {
                 track_cow_frame(frame)?;
             }
-            let shared = shared_entry(src_entry);
+            let shared = shared_leaf_entry(src_entry);
             src_pd[l2_idx] = shared;
             dst_pd[l2_idx] = shared;
             continue;
@@ -323,7 +333,7 @@ unsafe fn clone_pt(
             if let Some(frame) = src_entry.frame() {
                 track_cow_frame(frame)?;
             }
-            let shared = shared_entry(src_entry);
+            let shared = shared_leaf_entry(src_entry);
             src_pt[l1_idx] = shared;
             dst_pt[l1_idx] = shared;
         }
@@ -332,10 +342,14 @@ unsafe fn clone_pt(
 }
 
 #[inline]
-fn shared_entry(src_entry: PageTableEntry) -> PageTableEntry {
-    PageTableEntry::from_raw(
-        (src_entry.raw() & !PageTableEntry::FLAG_WRITABLE) | PageTableEntry::FLAG_COW,
-    )
+fn shared_leaf_entry(src_entry: PageTableEntry) -> PageTableEntry {
+    if src_entry.is_writable() || src_entry.is_cow() {
+        PageTableEntry::from_raw(
+            (src_entry.raw() & !PageTableEntry::FLAG_WRITABLE) | PageTableEntry::FLAG_COW,
+        )
+    } else {
+        src_entry
+    }
 }
 
 fn alloc_zeroed_table() -> Result<PhysAddr, AddrSpaceCloneError> {
@@ -447,7 +461,7 @@ mod tests {
                 | PageTableEntry::FLAG_USER,
         );
 
-        let shared = shared_entry(entry);
+        let shared = shared_leaf_entry(entry);
 
         assert!(shared.is_present());
         assert!(shared.is_user());
@@ -457,14 +471,31 @@ mod tests {
     }
 
     #[test]
-    fn shared_entry_marks_read_only_mapping_as_shared() {
+    fn shared_entry_preserves_read_only_mapping_without_cow() {
         let frame = Frame::containing(PhysAddr::new(0x24_000));
         let entry = PageTableEntry::new(
             frame,
             PageTableEntry::FLAG_PRESENT | PageTableEntry::FLAG_USER,
         );
 
-        let shared = shared_entry(entry);
+        let shared = shared_leaf_entry(entry);
+
+        assert!(shared.is_present());
+        assert!(shared.is_user());
+        assert!(!shared.is_cow());
+        assert!(!shared.is_writable());
+        assert_eq!(shared.phys_addr().as_u64(), entry.phys_addr().as_u64());
+    }
+
+    #[test]
+    fn shared_entry_preserves_existing_cow_mapping() {
+        let frame = Frame::containing(PhysAddr::new(0x28_000));
+        let entry = PageTableEntry::new(
+            frame,
+            PageTableEntry::FLAG_PRESENT | PageTableEntry::FLAG_USER | PageTableEntry::FLAG_COW,
+        );
+
+        let shared = shared_leaf_entry(entry);
 
         assert!(shared.is_present());
         assert!(shared.is_user());

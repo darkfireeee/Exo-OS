@@ -155,8 +155,12 @@ pub fn init_tsc_source() {
         return;
     }
     let caps = TscCapabilities::detect();
+    // Boot-stability rule: do not execute RDTSCP from critical clock paths until
+    // the kernel has a recoverable #UD feature probe. Some QEMU/TCG profiles
+    // expose inconsistent RDTSCP state; LFENCE+RDTSC is slower but universal.
+    let rdtscp_usable = false;
     TSC_CAPS_INVARIANT.store(caps.invariant, Ordering::Relaxed);
-    TSC_CAPS_RDTSCP.store(caps.rdtscp, Ordering::Relaxed);
+    TSC_CAPS_RDTSCP.store(caps.rdtscp && rdtscp_usable, Ordering::Relaxed);
     TSC_CAPS_HYPERVISOR.store(caps.hypervisor, Ordering::Relaxed);
     TSC_CAPS_RATING.store(caps.rating(), Ordering::Relaxed);
     // IA32_TSC_ADJUST en valeur brute (bit pattern de l'i64).
@@ -260,23 +264,6 @@ pub fn rdtscp_read() -> u64 {
 /// migré entre la lecture du TSC et l'échantillonnage per-CPU.
 #[inline(always)]
 pub fn read_ordered_with_cpu() -> (u64, u32) {
-    if rdtscp_available() {
-        let lo: u32;
-        let hi: u32;
-        let aux: u32;
-        unsafe {
-            core::arch::asm!(
-                "rdtscp",
-                out("eax") lo,
-                out("edx") hi,
-                out("ecx") aux,
-                options(nostack, nomem)
-            );
-            core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
-        }
-        return (((hi as u64) << 32) | lo as u64, aux);
-    }
-
     loop {
         let cpu_before = crate::arch::x86_64::smp::percpu::current_cpu_id();
         unsafe {

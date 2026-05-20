@@ -85,3 +85,39 @@ pub(crate) fn take_slot_once(seen: &mut [u64; 4], slot: usize) -> bool {
     seen[word] |= bit;
     !was_seen
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phoenix_state_wire_values_roundtrip() {
+        for raw in 0u8..=10 {
+            let state = PhoenixState::from_raw(raw).expect("known Phoenix state");
+            assert_eq!(state as u8, raw);
+        }
+        assert!(PhoenixState::from_raw(11).is_none());
+        assert!(PhoenixState::from_raw(u8::MAX).is_none());
+    }
+
+    #[test]
+    fn try_set_state_raw_rejects_unknown_values_without_clobbering_state() {
+        set_state(PhoenixState::Normal);
+
+        assert!(!try_set_state_raw(250));
+        assert_eq!(state(), PhoenixState::Normal);
+
+        assert!(try_set_state_raw(PhoenixState::NetworkDraining as u8));
+        assert_eq!(state(), PhoenixState::NetworkDraining);
+    }
+
+    #[test]
+    fn take_slot_once_rejects_out_of_range_and_duplicates() {
+        let mut seen = [0u64; 4];
+
+        assert!(take_slot_once(&mut seen, 0));
+        assert!(!take_slot_once(&mut seen, 0));
+        assert!(take_slot_once(&mut seen, 127));
+        assert!(!take_slot_once(&mut seen, ssr::MAX_CORES));
+    }
+}

@@ -7,6 +7,9 @@ use alloc::sync::Arc;
 use exo_virtio_blk::ExoVirtioBlkDevice;
 use spin::Mutex;
 
+pub const DEFAULT_VIRTIO_BLK_MMIO_BASE: usize = 0x1000_0000;
+pub const DEFAULT_VIRTIO_BLK_CAPACITY_BYTES: usize = 512 * 1024 * 1024;
+
 pub struct VirtioBlockAdapter {
     pub device: Mutex<ExoVirtioBlkDevice>,
 }
@@ -50,14 +53,27 @@ impl BlockDevice for VirtioBlockAdapter {
 
 pub static GLOBAL_DISK: Mutex<Option<Arc<dyn BlockDevice>>> = Mutex::new(None);
 
-pub fn init_global_disk() {
+pub fn register_global_disk(device: Arc<dyn BlockDevice>) -> bool {
     let mut disk = GLOBAL_DISK.lock();
-    if disk.is_none() {
-        *disk = Some(Arc::new(VirtioBlockAdapter::new(
-            0x1000_0000,
-            1024 * 1024 * 512,
-        )));
+    if disk.is_some() {
+        return false;
     }
+    *disk = Some(device);
+    true
+}
+
+pub fn init_global_disk_with_mmio(base_address: usize, capacity_bytes: usize) {
+    let _ = register_global_disk(Arc::new(VirtioBlockAdapter::new(
+        base_address,
+        capacity_bytes,
+    )));
+}
+
+pub fn init_global_disk() {
+    init_global_disk_with_mmio(
+        DEFAULT_VIRTIO_BLK_MMIO_BASE,
+        DEFAULT_VIRTIO_BLK_CAPACITY_BYTES,
+    );
 }
 
 pub fn has_global_disk() -> bool {
@@ -82,7 +98,7 @@ pub fn default_global_disk_size_bytes() -> u64 {
         .lock()
         .as_ref()
         .map(|disk| disk.total_blocks().saturating_mul(disk.block_size() as u64))
-        .unwrap_or(1024 * 1024 * 512)
+        .unwrap_or(DEFAULT_VIRTIO_BLK_CAPACITY_BYTES as u64)
 }
 
 #[cfg(test)]

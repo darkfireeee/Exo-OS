@@ -61,6 +61,7 @@ fn mark_exit(
 
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
+    crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&thread.sched_tcb);
     thread.set_state(TaskState::Dead);
     unsafe {
         crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);

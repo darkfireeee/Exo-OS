@@ -196,6 +196,7 @@ impl WaitQueue {
                     // En release mode, debug_assert est no-op → UB si cpu hors limites.
                     let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
                         let cpu_id = CpuId(cpu_raw as u32);
                         let rq = run_queue(cpu_id);
                         rq.enqueue(NonNull::new_unchecked(tcb));

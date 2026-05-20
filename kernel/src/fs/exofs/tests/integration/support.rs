@@ -10,11 +10,11 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
 use crate::fs::exofs::storage::virtio_adapter;
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
-use crate::fs::exofs::syscall::open_by_path::sys_exofs_open_by_path;
 use crate::fs::exofs::syscall::object_open::{sys_exofs_object_open, OpenArgs};
 use crate::fs::exofs::syscall::object_read::sys_exofs_object_read;
 use crate::fs::exofs::syscall::object_store::OBJECT_STORE;
 use crate::fs::exofs::syscall::object_write::sys_exofs_object_write;
+use crate::fs::exofs::syscall::open_by_path::sys_exofs_open_by_path;
 use crate::fs::exofs::syscall::readdir::sys_exofs_readdir;
 use crate::fs::exofs::syscall::validation::EXOFS_PATH_MAX;
 
@@ -77,7 +77,7 @@ impl BlockDevice for MockBlockDevice {
 }
 
 pub(crate) fn reset_state() {
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
     OBJECT_STORE.reset_all();
     virtio_adapter::clear_global_disk_for_test();

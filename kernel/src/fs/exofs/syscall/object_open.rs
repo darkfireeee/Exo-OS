@@ -11,6 +11,7 @@ use super::validation::{
     exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
     EFAULT,
 };
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::path::path_component::validate_component;
@@ -78,7 +79,11 @@ pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -
     let persisted_size = if args.size_hint != 0 {
         args.size_hint
     } else {
-        object_store::persisted_size(&blob_id).unwrap_or(0)
+        BLOB_CACHE
+            .len(&blob_id)
+            .map(|len| len as u64)
+            .or_else(|| object_store::persisted_size(&blob_id))
+            .unwrap_or(0)
     };
 
     // Ouvrir via la table de fd.

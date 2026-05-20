@@ -29,6 +29,9 @@ pub struct FaultContext {
     pub fault_addr: VirtAddr,
     /// Cause du fault.
     pub cause: FaultCause,
+    /// Bit P de l'error-code x86: true signifie protection fault sur une
+    /// traduction deja presente, pas demand paging.
+    pub present: bool,
     /// Fault depuis le mode kernel (Ring 0) ?
     pub from_kernel: bool,
     /// Pointeur vers la VMA de l'espace utilisateur (lookup déjà fait, facultatif).
@@ -40,9 +43,15 @@ impl FaultContext {
         FaultContext {
             fault_addr,
             cause,
+            present: false,
             from_kernel,
             vma_ptr: core::ptr::null(),
         }
+    }
+
+    pub fn with_present(mut self, present: bool) -> Self {
+        self.present = present;
+        self
     }
 
     pub fn with_vma(mut self, vma: *const VmaDescriptor) -> Self {

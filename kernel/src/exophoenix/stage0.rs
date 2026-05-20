@@ -1,13 +1,13 @@
-//! ExoPhoenix Stage 0 — bootstrap Kernel-B (étapes 1→7 du plan v4).
+//! ExoPhoenix Stage 0 — bootstrap Kernel-B (étapes 1a→12 du plan v4).
 //!
 //! Objectif ici : implémenter strictement la séquence demandée pour 3.3a :
-//! 1) install page tables B
-//! 0.5) probe CPUID global
+//! 1a) install page tables B
+//! 1b) probe CPUID global
 //! 2) stack B + guard page !PRESENT
 //! 3) init TSS (init_b_tss)
 //! 4) IDT stubs (vecteurs ExoPhoenix inactifs)
 //! 5) parse ACPI (MADT/FADT/FACS)
-//! 5.5) enum PCI + calcul taille pool R3
+//! 5b) enum PCI + calcul taille pool R3
 //! 6) build apic_to_slot[256] depuis MADT réel
 //! 7) calibration APIC timer via PIT ch2 -> TICKS_PER_US
 
@@ -283,7 +283,7 @@ fn detect_invariant_tsc() -> bool {
     (edx & (1 << 8)) != 0
 }
 
-/// Étape 0.5 : probe global des features B.
+/// Étape 1b : probe global des features B.
 ///
 /// `hpet_available` est injecté par le parseur ACPI (étape 5) ; avant parse ACPI,
 /// l'appelant peut passer `false` puis mettre à jour ensuite.
@@ -511,7 +511,7 @@ pub fn calc_pool_r3_size(device_count: usize, bar_count: usize) -> u64 {
     aligned.min(MAX)
 }
 
-/// Étape 5.5 : enum PCI (devices + BARs) + taille pool R3.
+/// Étape 5b : enum PCI (devices + BARs) + taille pool R3.
 pub fn enumerate_pci_devices() -> usize {
     B_DEVICE_COUNT.store(0, Ordering::Release);
     B_DEVICE_BAR_COUNT.store(0, Ordering::Release);
@@ -976,6 +976,13 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
 
     let watchdog_us = ms.saturating_mul(1000);
     let ticks = watchdog_us.saturating_mul(ticks_per_us);
+    if !crate::arch::x86_64::apic::local_apic::claim_lapic_timer(
+        crate::arch::x86_64::apic::local_apic::LapicTimerOwner::BootWatchdog,
+    ) {
+        WATCHDOG_ARMED_MS.store(ms, Ordering::Release);
+        WATCHDOG_ARMED_TICKS.store(ticks, Ordering::Release);
+        return ticks;
+    }
     let initial_count = ticks.min(u32::MAX as u64) as u32;
 
     apic_timer_write(
@@ -990,7 +997,7 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
     ticks
 }
 
-/// Orchestrateur strict des étapes 1→12.
+/// Orchestrateur strict des étapes 1a→12.
 pub fn stage0_init_all_steps() -> Stage0Summary {
     // SAFETY: Stage0 s'exécute sur Kernel B avant la prise de contrôle normale
     // de Kernel A ; ExoSeal phase 0 est idempotent.
@@ -998,7 +1005,7 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
         crate::security::exoseal::exoseal_boot_phase0();
     }
 
-    // 1) Page tables de B
+    // 1a) Page tables de B
     let b_cr3 = install_b_page_tables();
 
     if let Err(err) = super::ssr::initialize_layout_v7() {
@@ -1017,7 +1024,7 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
         }
     }
 
-    // 0.5) Probe CPUID global (HPET faux jusqu'au parse ACPI)
+    // 1b) Probe CPUID global (HPET faux jusqu'au parse ACPI)
     init_feature_probe(false);
 
     // 2) Stack B + guard page
@@ -1032,7 +1039,7 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
     // 5) ACPI (MADT/FADT/FACS)
     let acpi = parse_stage0_acpi();
 
-    // 5.5) PCI + taille pool R3
+    // 5b) PCI + taille pool R3
     let pci_device_count = enumerate_pci_devices();
     const POOL_R3_MIN_SIZE: u64 = 8 * 1024 * 1024;
     let pool_r3_size = POOL_R3_SIZE_BYTES

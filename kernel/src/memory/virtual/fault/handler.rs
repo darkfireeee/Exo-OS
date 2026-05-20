@@ -6,6 +6,8 @@
 
 use super::{FaultCause, FaultContext, FaultResult};
 use crate::memory::core::{AllocError, PageFlags, VirtAddr};
+use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::page_table::PageTableEntry;
 use crate::memory::virt::vma::{VmaBacking, VmaFlags};
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -40,6 +42,67 @@ impl FaultStats {
 }
 
 pub static FAULT_STATS: FaultStats = FaultStats::new();
+
+fn present_permission_allowed(cause: FaultCause, flags: VmaFlags) -> bool {
+    match cause {
+        FaultCause::Read => flags.contains(VmaFlags::READ),
+        FaultCause::Write => flags.contains(VmaFlags::WRITE),
+        FaultCause::Execute => flags.contains(VmaFlags::EXEC),
+    }
+}
+
+fn handle_present_permission_fault<A: FaultAllocator>(
+    ctx: &FaultContext,
+    vma: &crate::memory::virt::vma::VmaDescriptor,
+    alloc: &A,
+) -> FaultResult {
+    let page_addr =
+        VirtAddr::new(ctx.fault_addr.as_u64() & !(crate::memory::core::PAGE_SIZE as u64 - 1));
+    let pte_raw = alloc.read_pte_raw(page_addr);
+    let pte = PageTableEntry::from_raw(pte_raw);
+
+    if ctx.cause == FaultCause::Write && (vma.flags.contains(VmaFlags::COW) || pte.is_cow()) {
+        FAULT_STATS.cow_breaks.fetch_add(1, Ordering::Relaxed);
+        return super::cow::handle_cow_fault(ctx, vma, alloc);
+    }
+
+    if !present_permission_allowed(ctx.cause, vma.flags) {
+        FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
+        return FaultResult::Segfault {
+            addr: ctx.fault_addr,
+        };
+    }
+
+    if !pte.is_present() {
+        FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
+        return FaultResult::Segfault {
+            addr: ctx.fault_addr,
+        };
+    }
+
+    let mut repaired_flags = vma.page_flags.set(PageFlags::PRESENT).set(PageFlags::USER);
+    if ctx.cause == FaultCause::Write {
+        repaired_flags = repaired_flags
+            .set(PageFlags::WRITABLE)
+            .clear(PageFlags::COW);
+    }
+
+    match alloc.remap_flags(page_addr, repaired_flags) {
+        Ok(()) => {
+            // SAFETY: page_addr est alignee et provient de CR2.
+            unsafe {
+                flush_single(page_addr);
+            }
+            FaultResult::Handled
+        }
+        Err(_) => {
+            FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
+            FaultResult::Segfault {
+                addr: ctx.fault_addr,
+            }
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HANDLER PRINCIPAL
@@ -92,6 +155,10 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
             }
         }
         FaultCause::Read => {} // Toujours OK si la VMA est présente
+    }
+
+    if ctx.present {
+        return handle_present_permission_fault(ctx, vma, alloc);
     }
 
     // Dispatcher selon la cause.

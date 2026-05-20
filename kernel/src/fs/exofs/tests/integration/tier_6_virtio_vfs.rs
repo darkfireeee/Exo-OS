@@ -1,4 +1,6 @@
-use super::support::{close_fd, install_mock_disk, open_path, open_rdwr, read_at, reset_state, write_at};
+use super::support::{
+    close_fd, install_mock_disk, open_path, open_rdwr, read_at, reset_state, write_at,
+};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::posix_bridge::vfs_compat::{
     file_mode, open_flags as vfs_open_flags, register_exofs_vfs_ops, reset_vfs_state_for_test,
@@ -46,7 +48,7 @@ fn virtio_backed_syscall_workflow_survives_cold_cache_appends() {
         i = i.wrapping_add(1);
     }
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let mut j = 0usize;
@@ -60,7 +62,7 @@ fn virtio_backed_syscall_workflow_survives_cold_cache_appends() {
         j = j.wrapping_add(1);
     }
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let mut k = 0usize;
@@ -88,14 +90,14 @@ fn virtio_backed_truncate_is_visible_after_reopen() {
     assert_eq!(write_at(fd, &payload, 0), payload.len());
     close_fd(fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let trunc_fd = open_path(path, open_flags::O_RDWR | open_flags::O_TRUNC);
     assert_eq!(ok(OBJECT_TABLE.get(trunc_fd)).size, 0);
     close_fd(trunc_fd);
 
-    BLOB_CACHE.flush_all();
+    let _ = BLOB_CACHE.flush_all();
     OBJECT_TABLE.reset_all();
 
     let reopened = open_rdwr(path);
@@ -126,7 +128,10 @@ fn vfs_bridge_tracks_names_and_persists_file_content() {
 
     let reopened = ok(vfs_open(note, vfs_open_flags::O_RDONLY, 77));
     let mut read_back = vec![0u8; payload.len()];
-    assert_eq!(ok(vfs_read(reopened, &mut read_back, payload.len())), payload.len());
+    assert_eq!(
+        ok(vfs_read(reopened, &mut read_back, payload.len())),
+        payload.len()
+    );
     assert_eq!(read_back, payload);
     ok(vfs_close(reopened));
 
@@ -136,7 +141,9 @@ fn vfs_bridge_tracks_names_and_persists_file_content() {
     ok(vfs_rename(docs, b"note.txt", docs, b"renamed.txt"));
     assert_eq!(ok(vfs_lookup(docs, b"renamed.txt")), note);
     let renamed_dirents = ok(vfs_readdir(docs, 0));
-    assert!(renamed_dirents.iter().any(|entry| entry.get_name() == b"renamed.txt"));
+    assert!(renamed_dirents
+        .iter()
+        .any(|entry| entry.get_name() == b"renamed.txt"));
 
     ok(vfs_unlink(docs, b"renamed.txt"));
     assert!(vfs_lookup(docs, b"renamed.txt").is_err());

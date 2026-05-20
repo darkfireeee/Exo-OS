@@ -94,6 +94,8 @@ boot_payload!(TTY_SERVER_BYTES, "exo-tty-server");
 boot_payload!(EXOSH_BYTES, "exosh");
 #[cfg(exo_boot_payloads)]
 boot_payload!(EXO_SHIELD_BYTES, "exo-shield");
+#[cfg(exo_boot_payloads)]
+boot_payload!(EXO_LOADER_BYTES, "exo-loader");
 
 #[cfg(exo_boot_payloads)]
 static EMBEDDED_PAYLOADS: &[EmbeddedPayload] = &[
@@ -148,6 +150,10 @@ static EMBEDDED_PAYLOADS: &[EmbeddedPayload] = &[
     EmbeddedPayload {
         path: "/bin/exosh",
         bytes: &EXOSH_BYTES,
+    },
+    EmbeddedPayload {
+        path: "/lib/ld-exo.so",
+        bytes: &EXO_LOADER_BYTES,
     },
 ];
 

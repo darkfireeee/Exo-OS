@@ -105,6 +105,11 @@ pub unsafe fn init(params: &SchedInitParams) {
     // Étape 8 — Deadline timers.
     self::timer::deadline_timer::init(nr_cpus);
 
+    // Étape 8b — le tick scheduler devient propriétaire du LAPIC timer.
+    crate::arch::x86_64::apic::local_apic::init_scheduler_timer(
+        crate::arch::x86_64::idt::VEC_IRQ_TIMER,
+    );
+
     // Étape 9 — Wait queues (vérifie que l'EmergencyPool est prêt).
     self::sync::wait_queue::init();
 

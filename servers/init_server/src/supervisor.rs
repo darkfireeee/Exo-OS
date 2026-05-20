@@ -4,7 +4,15 @@ use super::{dependency, service_manager, service_table, Service};
 
 #[inline]
 pub fn dependency_ready(services: &[Service], dep: &str) -> bool {
-    dep == "init_server" || service_manager::service_started(services, dep)
+    if dep == "init_server" || service_manager::service_started(services, dep) {
+        return true;
+    }
+    if let Some(meta) = dependency::metadata(dep) {
+        if !meta.critical && service_manager::service_dead(services, dep) {
+            return true;
+        }
+    }
+    false
 }
 
 #[inline]

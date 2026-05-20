@@ -4,15 +4,14 @@
 /// readdir, append, truncate, erreurs, persistence, epoch.
 ///
 /// Chaque test est autonome : reset_state() en début + fin.
-
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use super::support::{
-    close_fd, install_mock_disk, open_path, open_path_atomic, open_rdwr,
-    read_at, readdir_fd, reset_state, write_at,
+    close_fd, install_mock_disk, open_path_atomic, open_rdwr, read_at, readdir_fd, reset_state,
+    write_at,
 };
 use crate::fs::exofs::cache::blob_cache::BlobCache;
 use crate::fs::exofs::cache::BLOB_CACHE;
@@ -21,9 +20,8 @@ use crate::fs::exofs::storage::blob_reader::{BlobReader, BlobVerifyMode};
 use crate::fs::exofs::storage::blob_writer::{BlobWriter, BlobWriterConfig};
 use crate::fs::exofs::storage::superblock::SuperblockManager;
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
-use crate::fs::exofs::syscall::object_stat::{object_size, ObjectStat};
+use crate::fs::exofs::syscall::object_stat::object_size;
 use crate::fs::exofs::syscall::readdir::HEADER_SIZE;
-z
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,7 +112,10 @@ fn cache_invalidate_removes_entry() {
 #[test]
 fn cache_mark_dirty_absent_returns_err() {
     let c = BlobCache::new_const();
-    assert!(matches!(c.mark_dirty(&blob(50)), Err(ExofsError::ObjectNotFound)));
+    assert!(matches!(
+        c.mark_dirty(&blob(50)),
+        Err(ExofsError::ObjectNotFound)
+    ));
 }
 
 #[test]
@@ -195,7 +196,7 @@ fn cache_hit_ratio_pct_correct() {
     c.get(&blob(20)); // hit
     c.get(&blob(20)); // hit
     c.get(&blob(21)); // miss
-    // 2 hits / 3 total = 66%
+                      // 2 hits / 3 total = 66%
     assert_eq!(c.hit_ratio_pct(), 66);
 }
 
@@ -231,22 +232,19 @@ fn superblock_format_and_mount_roundtrip() {
         },
     ));
 
-    let mgr = ok(SuperblockManager::mount(
-        disk_size,
-        |offset, len| {
-            disk.borrow()
-                .get(&offset.0)
-                .cloned()
-                .ok_or(ExofsError::IoError)
-                .and_then(|b| {
-                    if b.len() >= len {
-                        Ok(b[..len].to_vec())
-                    } else {
-                        Err(ExofsError::IoError)
-                    }
-                })
-        },
-    ));
+    let mgr = ok(SuperblockManager::mount(disk_size, |offset, len| {
+        disk.borrow()
+            .get(&offset.0)
+            .cloned()
+            .ok_or(ExofsError::IoError)
+            .and_then(|b| {
+                if b.len() >= len {
+                    Ok(b[..len].to_vec())
+                } else {
+                    Err(ExofsError::IoError)
+                }
+            })
+    }));
 
     assert_eq!(mgr.disk_size(), disk_size);
 }
@@ -260,18 +258,19 @@ fn superblock_mount_rejects_disk_too_small() {
     // 1 MiB < MIN_DISK_SIZE (16 MiB)
     let small_disk: u64 = 1 * 1024 * 1024;
 
-    let result = SuperblockManager::mount(
-        small_disk,
-        |offset, len| {
-            disk.borrow()
-                .get(&offset.0)
-                .cloned()
-                .ok_or(ExofsError::IoError)
-                .and_then(|b| {
-                    if b.len() >= len { Ok(b[..len].to_vec()) } else { Err(ExofsError::IoError) }
-                })
-        },
-    );
+    let result = SuperblockManager::mount(small_disk, |offset, len| {
+        disk.borrow()
+            .get(&offset.0)
+            .cloned()
+            .ok_or(ExofsError::IoError)
+            .and_then(|b| {
+                if b.len() >= len {
+                    Ok(b[..len].to_vec())
+                } else {
+                    Err(ExofsError::IoError)
+                }
+            })
+    });
     assert!(
         matches!(result, Err(ExofsError::DiskTooSmall { .. })),
         "mount() doit rejeter un disque < MIN_DISK_SIZE, got: {result:?}"
@@ -313,21 +312,35 @@ fn blob_write_read_full_verify() {
             *n = n.saturating_add(blocks.saturating_mul(4096));
             Ok(DiskOffset(base))
         },
-        |off, buf| { disk.borrow_mut().insert(off.0, buf.to_vec()); Ok(buf.len()) },
+        |off, buf| {
+            disk.borrow_mut().insert(off.0, buf.to_vec());
+            Ok(buf.len())
+        },
         |_| None,
     ));
 
     let read = ok(BlobReader::read_blob(
         result.offset,
         |off, len| {
-            disk.borrow().get(&off.0).cloned()
+            disk.borrow()
+                .get(&off.0)
+                .cloned()
                 .ok_or(ExofsError::IoError)
-                .and_then(|b| if b.len() >= len { Ok(b[..len].to_vec()) } else { Err(ExofsError::IoError) })
+                .and_then(|b| {
+                    if b.len() >= len {
+                        Ok(b[..len].to_vec())
+                    } else {
+                        Err(ExofsError::IoError)
+                    }
+                })
         },
         BlobVerifyMode::Full,
     ));
 
-    assert_eq!(read.data, data, "données lues doivent correspondre à celles écrites");
+    assert_eq!(
+        read.data, data,
+        "données lues doivent correspondre à celles écrites"
+    );
     assert_eq!(read.blob_id, result.blob_id, "BlobId doit être stable");
     assert!(read.id_verified, "vérification d'intégrité doit réussir");
 }
@@ -343,14 +356,18 @@ fn blob_tampered_data_fails_verification() {
     let cfg = BlobWriterConfig::new(EpochId(2)).verify();
 
     let result = ok(BlobWriter::write_blob(
-        &data, &cfg,
+        &data,
+        &cfg,
         |blocks| {
             let mut n = next_off.borrow_mut();
             let base = *n;
             *n = n.saturating_add(blocks.saturating_mul(4096));
             Ok(DiskOffset(base))
         },
-        |off, buf| { disk.borrow_mut().insert(off.0, buf.to_vec()); Ok(buf.len()) },
+        |off, buf| {
+            disk.borrow_mut().insert(off.0, buf.to_vec());
+            Ok(buf.len())
+        },
         |_| None,
     ));
 
@@ -366,14 +383,25 @@ fn blob_tampered_data_fails_verification() {
     let read_result = BlobReader::read_blob(
         result.offset,
         |off, len| {
-            disk.borrow().get(&off.0).cloned()
+            disk.borrow()
+                .get(&off.0)
+                .cloned()
                 .ok_or(ExofsError::IoError)
-                .and_then(|b| if b.len() >= len { Ok(b[..len].to_vec()) } else { Err(ExofsError::IoError) })
+                .and_then(|b| {
+                    if b.len() >= len {
+                        Ok(b[..len].to_vec())
+                    } else {
+                        Err(ExofsError::IoError)
+                    }
+                })
         },
         BlobVerifyMode::Full,
     );
 
-    assert!(read_result.is_err(), "données corrompues doivent être détectées");
+    assert!(
+        read_result.is_err(),
+        "données corrompues doivent être détectées"
+    );
 }
 
 #[test]
@@ -394,16 +422,27 @@ fn blob_write_empty_payload() {
             *n = n.saturating_add(blocks.saturating_mul(4096));
             Ok(DiskOffset(base))
         },
-        |off, buf| { disk.borrow_mut().insert(off.0, buf.to_vec()); Ok(buf.len()) },
+        |off, buf| {
+            disk.borrow_mut().insert(off.0, buf.to_vec());
+            Ok(buf.len())
+        },
         |_| None,
     ));
 
     let read = ok(BlobReader::read_blob(
         result.offset,
         |off, len| {
-            disk.borrow().get(&off.0).cloned()
+            disk.borrow()
+                .get(&off.0)
+                .cloned()
                 .ok_or(ExofsError::IoError)
-                .and_then(|b| if b.len() >= len { Ok(b[..len].to_vec()) } else { Err(ExofsError::IoError) })
+                .and_then(|b| {
+                    if b.len() >= len {
+                        Ok(b[..len].to_vec())
+                    } else {
+                        Err(ExofsError::IoError)
+                    }
+                })
         },
         BlobVerifyMode::Full,
     ));
@@ -421,7 +460,10 @@ fn fd_open_close_lifecycle() {
     let fd = ok(OBJECT_TABLE.open(b, open_flags::O_RDWR, 0, 0, 0));
     assert!(OBJECT_TABLE.get(fd).is_ok());
     assert!(OBJECT_TABLE.close(fd));
-    assert!(OBJECT_TABLE.get(fd).is_err(), "fd fermé ne doit plus être valide");
+    assert!(
+        OBJECT_TABLE.get(fd).is_err(),
+        "fd fermé ne doit plus être valide"
+    );
     OBJECT_TABLE.reset_all();
 }
 
@@ -468,7 +510,10 @@ fn fd_rdonly_rejects_write_flag() {
     let b = blob(0x05);
     let fd = ok(OBJECT_TABLE.open(b, open_flags::O_RDONLY, 0, 0, 0));
     let entry = ok(OBJECT_TABLE.get(fd));
-    assert!(!entry.can_write(), "fd O_RDONLY ne doit pas autoriser l'écriture");
+    assert!(
+        !entry.can_write(),
+        "fd O_RDONLY ne doit pas autoriser l'écriture"
+    );
     assert!(entry.can_read(), "fd O_RDONLY doit autoriser la lecture");
     OBJECT_TABLE.close(fd);
     OBJECT_TABLE.reset_all();
@@ -477,7 +522,10 @@ fn fd_rdonly_rejects_write_flag() {
 #[test]
 fn fd_get_invalid_returns_err() {
     OBJECT_TABLE.reset_all();
-    assert!(OBJECT_TABLE.get(9999).is_err(), "fd invalide doit retourner Err");
+    assert!(
+        OBJECT_TABLE.get(9999).is_err(),
+        "fd invalide doit retourner Err"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -556,7 +604,11 @@ fn object_read_beyond_size_returns_partial() {
     write_at(fd, &data, 0);
     // demander plus que la taille de l'objet
     let got = read_at(fd, 256, 0);
-    assert_eq!(got.len(), 64, "lecture au-delà de la taille doit retourner seulement les données disponibles");
+    assert_eq!(
+        got.len(),
+        64,
+        "lecture au-delà de la taille doit retourner seulement les données disponibles"
+    );
     assert_eq!(got, data);
     close_fd(fd);
     reset_state();
@@ -620,7 +672,10 @@ fn path_different_paths_return_different_objects() {
     let fd2 = open_rdwr("/std/path/beta");
     let e1 = ok(OBJECT_TABLE.get(fd1));
     let e2 = ok(OBJECT_TABLE.get(fd2));
-    assert_ne!(e1.blob_id, e2.blob_id, "paths différents → BlobId différents");
+    assert_ne!(
+        e1.blob_id, e2.blob_id,
+        "paths différents → BlobId différents"
+    );
     close_fd(fd1);
     close_fd(fd2);
     reset_state();
@@ -663,7 +718,10 @@ fn path_case_sensitive() {
     let fd2 = open_rdwr("/std/path/file");
     let e1 = ok(OBJECT_TABLE.get(fd1));
     let e2 = ok(OBJECT_TABLE.get(fd2));
-    assert_ne!(e1.blob_id, e2.blob_id, "paths sensibles à la casse → objets distincts");
+    assert_ne!(
+        e1.blob_id, e2.blob_id,
+        "paths sensibles à la casse → objets distincts"
+    );
     close_fd(fd1);
     close_fd(fd2);
     reset_state();
@@ -732,7 +790,10 @@ fn readdir_buffer_too_small_truncates_gracefully() {
     close_fd(dir_fd);
     // doit retourner sans panique, avec au moins 0 ou 1 entrée
     let entries = parse_dirents(&buf);
-    assert!(entries.len() <= 10, "nombre d'entrées ne peut pas dépasser le nombre créé");
+    assert!(
+        entries.len() <= 10,
+        "nombre d'entrées ne peut pas dépasser le nombre créé"
+    );
     reset_state();
 }
 
@@ -789,8 +850,11 @@ fn persistence_multiple_writes_survive_cache_flush() {
     close_fd(fd2);
 
     for (i, w) in writes.iter().enumerate() {
-        assert_eq!(&got[i * 200..(i + 1) * 200], w.as_slice(),
-            "segment {i} doit survivre au flush");
+        assert_eq!(
+            &got[i * 200..(i + 1) * 200],
+            w.as_slice(),
+            "segment {i} doit survivre au flush"
+        );
     }
     reset_state();
 }
@@ -803,7 +867,10 @@ fn persistence_multiple_writes_survive_cache_flush() {
 fn error_inline_data_max_constant_is_canonical() {
     use crate::fs::exofs::core::constants::INLINE_DATA_MAX;
     // INLINE_DATA_MAX doit être 512 (valeur canonique post-fix CORR)
-    assert_eq!(INLINE_DATA_MAX, 512, "INLINE_DATA_MAX doit être 512 (valeur canonique)");
+    assert_eq!(
+        INLINE_DATA_MAX, 512,
+        "INLINE_DATA_MAX doit être 512 (valeur canonique)"
+    );
 }
 
 #[test]
@@ -812,10 +879,11 @@ fn error_gc_delay_constant_is_unique() {
     assert!(GC_MIN_EPOCH_DELAY > 0, "GC_MIN_EPOCH_DELAY doit être > 0");
     // Vérifier que la constante dépréciée pointe vers la même valeur
     #[allow(deprecated)]
-    use crate::fs::exofs::core::constants::GC_MIN_EPOCH_DELAY_SECS;
-    #[allow(deprecated)]
-    assert_eq!(GC_MIN_EPOCH_DELAY, GC_MIN_EPOCH_DELAY_SECS,
-        "les deux constantes doivent avoir la même valeur");
+    let deprecated_delay = crate::fs::exofs::core::constants::GC_MIN_EPOCH_DELAY_SECS;
+    assert_eq!(
+        GC_MIN_EPOCH_DELAY, deprecated_delay,
+        "les deux constantes doivent avoir la même valeur"
+    );
 }
 
 #[test]
@@ -829,14 +897,18 @@ fn error_blob_id_deterministic_for_same_content() {
 
     let write_once = |disk: &RefCell<BTreeMap<u64, Vec<u8>>>| {
         BlobWriter::write_blob(
-            &data, &cfg,
+            &data,
+            &cfg,
             |blocks| {
                 let mut n = next_off.borrow_mut();
                 let base = *n;
                 *n = n.saturating_add(blocks.saturating_mul(4096));
                 Ok(DiskOffset(base))
             },
-            |off, buf| { disk.borrow_mut().insert(off.0, buf.to_vec()); Ok(buf.len()) },
+            |off, buf| {
+                disk.borrow_mut().insert(off.0, buf.to_vec());
+                Ok(buf.len())
+            },
             |_| None,
         )
     };
@@ -846,7 +918,10 @@ fn error_blob_id_deterministic_for_same_content() {
     let disk2 = RefCell::new(BTreeMap::new());
     let r2 = ok(write_once(&disk2));
 
-    assert_eq!(r1.blob_id, r2.blob_id, "même contenu → même BlobId (déterministe)");
+    assert_eq!(
+        r1.blob_id, r2.blob_id,
+        "même contenu → même BlobId (déterministe)"
+    );
 }
 
 #[test]
@@ -859,14 +934,18 @@ fn error_different_content_gives_different_blob_id() {
 
     let write = |data: &[u8], disk: &RefCell<BTreeMap<u64, Vec<u8>>>| {
         ok(BlobWriter::write_blob(
-            data, &cfg,
+            data,
+            &cfg,
             |blocks| {
                 let mut n = next_off.borrow_mut();
                 let base = *n;
                 *n = n.saturating_add(blocks.saturating_mul(4096));
                 Ok(DiskOffset(base))
             },
-            |off, buf| { disk.borrow_mut().insert(off.0, buf.to_vec()); Ok(buf.len()) },
+            |off, buf| {
+                disk.borrow_mut().insert(off.0, buf.to_vec());
+                Ok(buf.len())
+            },
             |_| None,
         ))
     };
@@ -874,5 +953,8 @@ fn error_different_content_gives_different_blob_id() {
     let disk = RefCell::new(BTreeMap::new());
     let r1 = write(&payload(0x01, 64), &disk);
     let r2 = write(&payload(0x02, 64), &disk);
-    assert_ne!(r1.blob_id, r2.blob_id, "contenus différents → BlobIds différents");
+    assert_ne!(
+        r1.blob_id, r2.blob_id,
+        "contenus différents → BlobIds différents"
+    );
 }

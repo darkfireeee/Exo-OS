@@ -172,6 +172,30 @@ pub fn current_cpu_id() -> u32 {
     id as u32
 }
 
+#[inline(always)]
+fn percpu_table_bounds() -> (u64, u64) {
+    let base = per_cpu_ptr(0) as u64;
+    let len = (core::mem::size_of::<PerCpuData>() * MAX_CPUS) as u64;
+    (base, base.saturating_add(len))
+}
+
+#[inline(always)]
+pub fn is_kernel_percpu_gs_base(gs_base: u64) -> bool {
+    let (base, end) = percpu_table_bounds();
+    gs_base >= base && gs_base < end
+}
+
+#[inline(always)]
+pub fn try_current_cpu_id() -> Option<u32> {
+    // SAFETY: lecture de MSR privilégiée en Ring 0. On vérifie la base GS avant
+    // tout accès `gs:[...]` afin d'éviter une faute récursive en handler.
+    let gs_base = unsafe { msr::read_msr(msr::MSR_GS_BASE) };
+    if !is_kernel_percpu_gs_base(gs_base) {
+        return None;
+    }
+    Some(current_cpu_id())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // C ABI EXPORT — scheduler/core/preempt.rs interface (RÈGLE SCHED-01 DOC3)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,6 +271,21 @@ pub unsafe fn read_current_tcb() -> u64 {
         options(nostack, preserves_flags),
     );
     tcb
+}
+
+/// Lit `current_tcb` uniquement si GS pointe sur une zone per-CPU kernel valide.
+///
+/// Les handlers d'exception peuvent être appelés dans des fenêtres sensibles
+/// (retour syscall/KPTI, faute noyau imbriquée). Dans ces chemins, lire
+/// directement `gs:[0x20]` peut transformer la faute initiale en cascade sur
+/// `CR2=0x20`. Cette API rend le contrat explicite.
+#[inline(always)]
+pub unsafe fn try_read_current_tcb() -> Option<u64> {
+    let gs_base = unsafe { msr::read_msr(msr::MSR_GS_BASE) };
+    if !is_kernel_percpu_gs_base(gs_base) {
+        return None;
+    }
+    Some(unsafe { read_current_tcb() })
 }
 
 /// Met à jour le slot `gs:[0x00]` avec la pile kernel du thread entrant.

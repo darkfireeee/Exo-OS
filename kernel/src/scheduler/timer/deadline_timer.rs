@@ -126,12 +126,15 @@ pub unsafe fn init(nr_cpus: usize) {
 ///
 /// # Safety
 /// Préemption désactivée requise.
-pub unsafe fn dl_enqueue(cpu: usize, tcb_ptr: NonNull<ThreadControlBlock>) {
+pub unsafe fn dl_enqueue(cpu: usize, tcb_ptr: NonNull<ThreadControlBlock>) -> bool {
     let tcb = &mut *tcb_ptr.as_ptr();
     refresh_deadline(tcb);
     let q = DL_QUEUES[cpu].assume_init_mut();
     if q.insert(tcb_ptr) {
         DL_ENQUEUES.fetch_add(1, Ordering::Relaxed);
+        true
+    } else {
+        false
     }
 }
 
@@ -142,7 +145,8 @@ pub unsafe fn dl_enqueue(cpu: usize, tcb_ptr: NonNull<ThreadControlBlock>) {
 pub unsafe fn dl_pick_next(cpu: usize) -> Option<NonNull<ThreadControlBlock>> {
     let q = DL_QUEUES[cpu].assume_init_mut();
     let tcb_opt = q.pop_earliest();
-    if tcb_opt.is_some() {
+    if let Some(tcb) = tcb_opt {
+        tcb.as_ref().clear_queued();
         DL_DEQUEUES.fetch_add(1, Ordering::Relaxed);
     }
     tcb_opt
@@ -164,6 +168,7 @@ pub unsafe fn dl_remove(cpu: usize, target: NonNull<ThreadControlBlock>) -> bool
             }
             q.tasks[q.count - 1] = None;
             q.count -= 1;
+            target.as_ref().clear_queued();
             return true;
         }
     }

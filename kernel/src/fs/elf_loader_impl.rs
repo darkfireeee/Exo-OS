@@ -6,14 +6,16 @@
 // Corrections appliquées (FIX-4) :
 //   - resolve_blob_id : appelle resolve_path_to_blob() au lieu de toujours retourner NotFound
 //   - Lecture cache   : BLOB_CACHE.get(&BlobId) — API correcte (plus get_blob_data)
-//   - map_elf_segment : alloc frame + copie données + map_page() via PageTableBuilder
+//   - PT_LOAD         : demand paging pur via VMA File-backed + FileFaultProvider
 //   - map_stack_pages : alloc frames ZEROED + map_page() via PageTableBuilder
 //   - ElfLoadError    : InvalidElf/UnsupportedArch (variants qui existent dans l'enum)
 
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::syscall::path_resolve::resolve_path_to_blob;
-use crate::memory::core::layout::KERNEL_LOAD_PHYS_ADDR;
+use crate::memory::core::layout::{
+    USER_END, USER_STACK_BOOTSTRAP_PAGES, USER_STACK_BOOTSTRAP_SIZE, USER_STACK_TOP,
+};
 use crate::memory::core::AllocError;
 use crate::memory::core::PageFlags;
 use crate::memory::physical::allocator::buddy;
@@ -22,7 +24,7 @@ use crate::memory::virt::page_table::builder::PageTableBuilder;
 use crate::memory::virt::page_table::walker::FrameAllocatorForWalk;
 use crate::memory::virt::vma::{VmaBacking, VmaDescriptor, VmaFlags};
 use crate::memory::virt::UserAddressSpace;
-use crate::memory::{phys_to_virt, AllocFlags, Frame, VirtAddr, PAGE_SIZE};
+use crate::memory::{phys_to_virt, AllocFlags, Frame, PhysAddr, VirtAddr, PAGE_SIZE};
 use crate::process::lifecycle::exec::{ElfLoadError, ElfLoadResult, ElfLoader};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -31,8 +33,17 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
-const USER_ELF_BASE_MIN: u64 = 0x0000_0000_0040_0000;
+const USER_ELF_BASE_MIN: u64 = crate::memory::core::layout::USER_START.as_u64();
+const PT_LOAD: u32 = 1;
+const PT_DYNAMIC: u32 = 2;
+const PT_INTERP: u32 = 3;
+const PT_PHDR: u32 = 6;
+const PHDR_SIZE: usize = 56;
+const DYNAMIC_LOADER_HANDOFF_MAGIC: u64 = 0x5845_4f4c_4459_4e01; // "XEOLDYN\1"
+const DYNAMIC_LOADER_HANDOFF_VERSION: u32 = 1;
+const DYNAMIC_LOADER_PATH_MAX: usize = 128;
 const ELF_BLOB_REGISTRY_CAP: usize = 1024;
+const ELF_MAX_SEGMENTS_PER_BLOB: usize = 8;
 
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 static ELF_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -110,8 +121,71 @@ fn trace_blob(prefix: &[u8], blob_id: &BlobId) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ElfSegmentMeta {
+    file_data_start: u64,
+    file_data_end: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DynamicLoaderHandoff {
+    magic: u64,
+    version: u32,
+    flags: u32,
+    executable_base: u64,
+    executable_entry: u64,
+    executable_phdr: u64,
+    executable_phnum: u64,
+    executable_phent: u64,
+    executable_dynamic: u64,
+    executable_dynamic_count: u64,
+    interpreter_base: u64,
+    interpreter_entry: u64,
+    page_size: u64,
+    executable_path_len: u32,
+    interpreter_path_len: u32,
+    executable_path: [u8; DYNAMIC_LOADER_PATH_MAX],
+    interpreter_path: [u8; DYNAMIC_LOADER_PATH_MAX],
+}
+
+#[derive(Clone, Copy)]
+struct LoadedElfImage {
+    entry_point: u64,
+    base: u64,
+    phdr_vaddr: u64,
+    phnum: u64,
+    phent: u64,
+    dynamic_vaddr: u64,
+    dynamic_count: u64,
+    brk_end: u64,
+}
+
+#[derive(Clone, Copy)]
+struct InterpreterPath {
+    bytes: [u8; DYNAMIC_LOADER_PATH_MAX],
+    len: usize,
+}
+
+impl InterpreterPath {
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl ElfSegmentMeta {
+    const fn empty() -> Self {
+        Self {
+            file_data_start: 0,
+            file_data_end: 0,
+        }
+    }
+}
+
 struct ElfBlobRegistry {
     ids: [BlobId; ELF_BLOB_REGISTRY_CAP],
+    segments: [[ElfSegmentMeta; ELF_MAX_SEGMENTS_PER_BLOB]; ELF_BLOB_REGISTRY_CAP],
+    segment_counts: [u8; ELF_BLOB_REGISTRY_CAP],
     count: usize,
 }
 
@@ -119,6 +193,8 @@ impl ElfBlobRegistry {
     const fn new() -> Self {
         Self {
             ids: [BlobId::ZERO; ELF_BLOB_REGISTRY_CAP],
+            segments: [[ElfSegmentMeta::empty(); ELF_MAX_SEGMENTS_PER_BLOB]; ELF_BLOB_REGISTRY_CAP],
+            segment_counts: [0; ELF_BLOB_REGISTRY_CAP],
             count: 0,
         }
     }
@@ -134,6 +210,7 @@ impl ElfBlobRegistry {
         }
         let idx = self.count;
         self.ids[idx] = blob_id;
+        self.segment_counts[idx] = 0;
         self.count += 1;
         Some((idx + 1) as u64)
     }
@@ -145,6 +222,48 @@ impl ElfBlobRegistry {
         }
         Some(self.ids[idx])
     }
+
+    fn clear_segments(&mut self, file_id: u64) {
+        let Some(idx) = file_id.checked_sub(1).map(|v| v as usize) else {
+            return;
+        };
+        if idx >= self.count {
+            return;
+        }
+        self.segment_counts[idx] = 0;
+    }
+
+    fn add_segment(&mut self, file_id: u64, p_offset: u64, p_filesz: u64) -> bool {
+        let Some(idx) = file_id.checked_sub(1).map(|v| v as usize) else {
+            return false;
+        };
+        if idx >= self.count {
+            return false;
+        }
+        let slot = self.segment_counts[idx] as usize;
+        if slot >= ELF_MAX_SEGMENTS_PER_BLOB {
+            return false;
+        }
+        self.segments[idx][slot] = ElfSegmentMeta {
+            file_data_start: p_offset,
+            file_data_end: p_offset.saturating_add(p_filesz),
+        };
+        self.segment_counts[idx] = self.segment_counts[idx].saturating_add(1);
+        true
+    }
+
+    fn segments_for(&self, file_id: u64) -> ([ElfSegmentMeta; ELF_MAX_SEGMENTS_PER_BLOB], usize) {
+        let Some(idx) = file_id.checked_sub(1).map(|v| v as usize) else {
+            return ([ElfSegmentMeta::empty(); ELF_MAX_SEGMENTS_PER_BLOB], 0);
+        };
+        if idx >= self.count {
+            return ([ElfSegmentMeta::empty(); ELF_MAX_SEGMENTS_PER_BLOB], 0);
+        }
+        (
+            self.segments[idx],
+            (self.segment_counts[idx] as usize).min(ELF_MAX_SEGMENTS_PER_BLOB),
+        )
+    }
 }
 
 static ELF_BLOB_REGISTRY: Mutex<ElfBlobRegistry> = Mutex::new(ElfBlobRegistry::new());
@@ -155,6 +274,25 @@ fn register_elf_blob(blob_id: BlobId) -> Option<u64> {
 
 fn lookup_elf_blob(file_id: u64) -> Option<BlobId> {
     ELF_BLOB_REGISTRY.lock().get(file_id)
+}
+
+fn clear_elf_segments(file_id: u64) {
+    ELF_BLOB_REGISTRY.lock().clear_segments(file_id);
+}
+
+fn register_elf_segment(file_id: u64, p_offset: u64, p_filesz: u64) -> Result<(), ElfLoadError> {
+    if ELF_BLOB_REGISTRY
+        .lock()
+        .add_segment(file_id, p_offset, p_filesz)
+    {
+        Ok(())
+    } else {
+        Err(ElfLoadError::OutOfMemory)
+    }
+}
+
+fn lookup_elf_segments(file_id: u64) -> ([ElfSegmentMeta; ELF_MAX_SEGMENTS_PER_BLOB], usize) {
+    ELF_BLOB_REGISTRY.lock().segments_for(file_id)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,21 +334,14 @@ impl ElfLoader for ExoFsElfLoader {
         let blob_id = resolve_blob_id(path.as_bytes())?;
         trace_blob(b"elf: resolved ", &blob_id);
         let file_id = register_elf_blob(blob_id).ok_or(ElfLoadError::OutOfMemory)?;
+        clear_elf_segments(file_id);
 
         // ── 2. Lire le blob depuis le cache ──────────────────────────────────
         let elf_data = read_blob_from_cache(&blob_id)?;
 
-        // ── 3. Valider l'en-tête ELF ─────────────────────────────────────────
+        // ── 3. Valider l'en-tête ELF et détecter PT_INTERP ───────────────────
         validate_elf_header(&elf_data)?;
-
-        // ── 4. Extraire les champs de l'en-tête ELF64 ────────────────────────
-        // Offsets spec ELF64 :
-        //   [24..32] e_entry     adresse d'entrée
-        //   [32..40] e_phoff     offset table program headers
-        //   [56..58] e_phnum     nombre de program headers
-        let entry_point = u64::from_le_bytes(elf_data[24..32].try_into().unwrap());
-        let e_phoff = u64::from_le_bytes(elf_data[32..40].try_into().unwrap()) as usize;
-        let e_phnum = u16::from_le_bytes([elf_data[56], elf_data[57]]) as usize;
+        let interp_path = read_interpreter_path(&elf_data)?;
 
         // ── 5. Créer le nouvel espace d'adressage ────────────────────────────
         let alloc = ElfWalkAllocator;
@@ -225,82 +356,51 @@ impl ElfLoader for ExoFsElfLoader {
         let pml4_phys = builder.pml4_phys();
         let child_as = Box::new(UserAddressSpace::new(pml4_phys, 0));
 
-        // ── 6. Charger les segments PT_LOAD ──────────────────────────────────
-        // Chaque program header ELF64 = 56 octets
-        const PHDR_SIZE: usize = 56;
-        let mut brk_end: u64 = 0;
+        // ── 6. Charger l'exécutable et éventuellement son interpréteur ───────
+        let main_image = install_elf_image(&elf_data, file_id, &child_as, 0)?;
+        let mut entry_point = main_image.entry_point;
+        let mut entry_arg0 = 0u64;
+        let mut interp_image = None;
 
-        for i in 0..e_phnum {
-            let ph_off = e_phoff.saturating_add(i.saturating_mul(PHDR_SIZE));
-            let ph_end = ph_off.saturating_add(PHDR_SIZE);
-            if ph_end > elf_data.len() {
-                return Err(ElfLoadError::InvalidElf);
-            }
-            let ph = &elf_data[ph_off..ph_end];
-
-            // p_type [0..4] — seul PT_LOAD (1) nous intéresse
-            let p_type = u32::from_le_bytes([ph[0], ph[1], ph[2], ph[3]]);
-            if p_type != 1 {
-                continue;
-            }
-
-            // Champs ELF64 program header :
-            //  [0..4]   p_type
-            //  [4..8]   p_flags   PF_X=1, PF_W=2, PF_R=4
-            //  [8..16]  p_offset  offset dans le fichier ELF
-            //  [16..24] p_vaddr   adresse virtuelle de destination
-            //  [32..40] p_filesz  taille des données dans le fichier
-            //  [40..48] p_memsz   taille en mémoire (> p_filesz = .bss zeroed)
-            let p_flags = u32::from_le_bytes([ph[4], ph[5], ph[6], ph[7]]);
-            let p_offset = u64::from_le_bytes(ph[8..16].try_into().unwrap()) as usize;
-            let p_vaddr = u64::from_le_bytes(ph[16..24].try_into().unwrap());
-            let p_filesz = u64::from_le_bytes(ph[32..40].try_into().unwrap()) as usize;
-            let p_memsz = u64::from_le_bytes(ph[40..48].try_into().unwrap()) as usize;
-
-            if p_memsz == 0 {
-                continue;
-            }
-            if p_offset.saturating_add(p_filesz) > elf_data.len() {
-                return Err(ElfLoadError::InvalidElf);
-            }
-            validate_user_segment_range(p_vaddr, p_memsz)?;
-
-            map_elf_segment(
-                &mut builder,
-                &alloc,
-                &elf_data,
-                p_offset,
-                p_vaddr,
-                p_filesz,
-                p_memsz,
-                p_flags,
-            )?;
-            install_elf_vma(
-                &child_as,
-                p_vaddr,
-                p_memsz,
-                p_flags,
-                p_offset as u64,
-                file_id,
-            )?;
-
-            let seg_end = p_vaddr.saturating_add(p_memsz as u64);
-            if seg_end > brk_end {
-                brk_end = seg_end;
-            }
+        if let Some(interp) = interp_path {
+            let interp_blob = resolve_blob_id(interp.as_bytes())?;
+            let interp_file_id = register_elf_blob(interp_blob).ok_or(ElfLoadError::OutOfMemory)?;
+            clear_elf_segments(interp_file_id);
+            let interp_data = read_blob_from_cache(&interp_blob)?;
+            validate_elf_header(&interp_data)?;
+            let image = install_elf_image(&interp_data, interp_file_id, &child_as, 0)?;
+            entry_point = image.entry_point;
+            interp_image = Some((interp, image));
         }
 
         // ── 7. brk_start = page suivante au-dessus du dernier segment ────────
-        let brk_start = brk_end.saturating_add(PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
+        let brk_start =
+            main_image.brk_end.saturating_add(PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
+        child_as.init_heap_bounds(brk_start);
 
-        // ── 8. Pile utilisateur : 8 pages, sommet à 0x7FFF_FFFF_0000 ─────────
-        const STACK_TOP: u64 = 0x0000_7fff_ffff_0000u64;
-        const STACK_PAGES: usize = 8;
-        let stack_size = STACK_PAGES * PAGE_SIZE;
+        // ── 8. Pile utilisateur : bootstrap eager minimal, plafond layout partagé ─
+        const STACK_TOP: u64 = USER_STACK_TOP.as_u64();
+        const STACK_SIZE: usize = USER_STACK_BOOTSTRAP_SIZE;
+        let stack_size = STACK_SIZE;
         let stack_base = STACK_TOP.saturating_sub(stack_size as u64);
 
-        map_stack_pages(&mut builder, &alloc, stack_base, stack_size)?;
+        let stack_frames = map_stack_pages(&mut builder, &alloc, stack_base, stack_size)?;
         install_stack_vma(&child_as, stack_base, stack_size)?;
+        if let Some((interp, image)) = interp_image {
+            let handoff = build_dynamic_handoff(path, &interp, &main_image, &image);
+            let handoff_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &handoff as *const DynamicLoaderHandoff as *const u8,
+                    core::mem::size_of::<DynamicLoaderHandoff>(),
+                )
+            };
+            let handoff_vaddr = (STACK_TOP
+                .saturating_sub(8)
+                .saturating_sub(handoff_bytes.len() as u64))
+                & !15u64;
+            write_stack_bytes(&stack_frames, stack_base, handoff_vaddr, handoff_bytes)?;
+            entry_arg0 = handoff_vaddr;
+        }
 
         // User ELF mappings are kept outside PML4[0]. Re-apply the low
         // supervisor window last so every userspace CR3 can safely run syscall
@@ -320,6 +420,7 @@ impl ElfLoader for ExoFsElfLoader {
             // RSP % 16 == 8 à l'entrée pour que les frames internes restent
             // alignées 16 B avant les appels et les `movaps`.
             initial_stack_top: STACK_TOP - 8,
+            entry_arg0,
             tls_base: 0,
             tls_size: 0,
             brk_start,
@@ -356,13 +457,46 @@ impl FileFaultProvider for ExoFsElfLoader {
             unsafe { core::slice::from_raw_parts_mut(dst_virt.as_u64() as *mut u8, PAGE_SIZE) };
         dst.fill(0);
 
-        let start = file_offset as usize;
-        if start >= data.len() {
+        let (segments, segment_count) = lookup_elf_segments(file_id);
+        if segment_count == 0 {
+            let start = file_offset as usize;
+            if start >= data.len() {
+                return Ok(());
+            }
+            let end = start.saturating_add(PAGE_SIZE).min(data.len());
+            let len = end.saturating_sub(start);
+            dst[..len].copy_from_slice(&data[start..end]);
             return Ok(());
         }
-        let end = start.saturating_add(PAGE_SIZE).min(data.len());
-        let len = end.saturating_sub(start);
-        dst[..len].copy_from_slice(&data[start..end]);
+
+        let page_start = file_offset;
+        let page_end = page_start.saturating_add(PAGE_SIZE as u64);
+        for segment in segments.iter().take(segment_count) {
+            if page_end <= segment.file_data_start || page_start >= segment.file_data_end {
+                continue;
+            }
+
+            let copy_start = page_start.max(segment.file_data_start);
+            let copy_end = page_end.min(segment.file_data_end);
+            if copy_start >= copy_end || copy_start > usize::MAX as u64 {
+                continue;
+            }
+
+            let src_start = copy_start as usize;
+            if src_start >= data.len() {
+                continue;
+            }
+            let src_end = (copy_end as usize).min(data.len());
+            if src_start >= src_end {
+                continue;
+            }
+
+            let dst_start = copy_start.saturating_sub(page_start) as usize;
+            let len = src_end.saturating_sub(src_start);
+            if dst_start.saturating_add(len) <= PAGE_SIZE {
+                dst[dst_start..dst_start + len].copy_from_slice(&data[src_start..src_end]);
+            }
+        }
         Ok(())
     }
 }
@@ -432,17 +566,194 @@ fn validate_elf_header(data: &[u8]) -> Result<(), ElfLoadError> {
     Ok(())
 }
 
-#[cfg(target_os = "none")]
-fn kernel_low_identity_end() -> u64 {
-    unsafe extern "C" {
-        static __kernel_end: u8;
-    }
-    (&raw const __kernel_end) as u64
+fn elf_u16(data: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([data[off], data[off + 1]])
 }
 
-#[cfg(not(target_os = "none"))]
-fn kernel_low_identity_end() -> u64 {
-    0
+fn elf_u32(data: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+}
+
+fn elf_u64(data: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(data[off..off + 8].try_into().unwrap())
+}
+
+fn phdr_span(data: &[u8]) -> Result<(usize, usize, usize), ElfLoadError> {
+    if data.len() < 64 {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    let e_phoff = elf_u64(data, 32) as usize;
+    let e_phentsize = elf_u16(data, 54) as usize;
+    let e_phnum = elf_u16(data, 56) as usize;
+    if e_phentsize < PHDR_SIZE {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    let table_bytes = e_phentsize
+        .checked_mul(e_phnum)
+        .ok_or(ElfLoadError::InvalidElf)?;
+    let end = e_phoff
+        .checked_add(table_bytes)
+        .ok_or(ElfLoadError::InvalidElf)?;
+    if end > data.len() {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    Ok((e_phoff, e_phnum, e_phentsize))
+}
+
+fn phdr_at(
+    data: &[u8],
+    e_phoff: usize,
+    e_phentsize: usize,
+    idx: usize,
+) -> Result<&[u8], ElfLoadError> {
+    let off = e_phoff
+        .checked_add(idx.saturating_mul(e_phentsize))
+        .ok_or(ElfLoadError::InvalidElf)?;
+    let end = off.checked_add(PHDR_SIZE).ok_or(ElfLoadError::InvalidElf)?;
+    if end > data.len() {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    Ok(&data[off..end])
+}
+
+fn read_interpreter_path(data: &[u8]) -> Result<Option<InterpreterPath>, ElfLoadError> {
+    let (e_phoff, e_phnum, e_phentsize) = phdr_span(data)?;
+    let mut i = 0usize;
+    while i < e_phnum {
+        let ph = phdr_at(data, e_phoff, e_phentsize, i)?;
+        if elf_u32(ph, 0) == PT_INTERP {
+            let offset = elf_u64(ph, 8) as usize;
+            let filesz = elf_u64(ph, 32) as usize;
+            if filesz == 0 || filesz > DYNAMIC_LOADER_PATH_MAX {
+                return Err(ElfLoadError::InvalidElf);
+            }
+            let end = offset.checked_add(filesz).ok_or(ElfLoadError::InvalidElf)?;
+            if end > data.len() {
+                return Err(ElfLoadError::InvalidElf);
+            }
+            let raw = &data[offset..end];
+            let len = raw.iter().position(|b| *b == 0).unwrap_or(raw.len());
+            if len == 0 || len >= DYNAMIC_LOADER_PATH_MAX {
+                return Err(ElfLoadError::InvalidElf);
+            }
+            let mut bytes = [0u8; DYNAMIC_LOADER_PATH_MAX];
+            bytes[..len].copy_from_slice(&raw[..len]);
+            return Ok(Some(InterpreterPath { bytes, len }));
+        }
+        i += 1;
+    }
+    Ok(None)
+}
+
+fn install_elf_image(
+    elf_data: &[u8],
+    file_id: u64,
+    child_as: &UserAddressSpace,
+    load_bias: u64,
+) -> Result<LoadedElfImage, ElfLoadError> {
+    let entry_point = elf_u64(elf_data, 24).saturating_add(load_bias);
+    let phent = elf_u16(elf_data, 54) as u64;
+    let (e_phoff, e_phnum, e_phentsize) = phdr_span(elf_data)?;
+    let mut brk_end = 0u64;
+    let mut phdr_vaddr = 0u64;
+    let mut dynamic_vaddr = 0u64;
+    let mut dynamic_count = 0u64;
+
+    let mut i = 0usize;
+    while i < e_phnum {
+        let ph = phdr_at(elf_data, e_phoff, e_phentsize, i)?;
+        let p_type = elf_u32(ph, 0);
+        let p_flags = elf_u32(ph, 4);
+        let p_offset = elf_u64(ph, 8) as usize;
+        let p_vaddr = elf_u64(ph, 16).saturating_add(load_bias);
+        let p_filesz = elf_u64(ph, 32) as usize;
+        let p_memsz = elf_u64(ph, 40) as usize;
+
+        if p_type == PT_PHDR {
+            phdr_vaddr = p_vaddr;
+        } else if p_type == PT_DYNAMIC {
+            dynamic_vaddr = p_vaddr;
+            dynamic_count = (p_filesz / 16) as u64;
+        }
+
+        if p_type != PT_LOAD {
+            i += 1;
+            continue;
+        }
+        if p_memsz == 0 {
+            i += 1;
+            continue;
+        }
+        if p_filesz > p_memsz || p_offset.saturating_add(p_filesz) > elf_data.len() {
+            return Err(ElfLoadError::InvalidElf);
+        }
+        validate_user_segment_range(p_vaddr, p_memsz)?;
+        register_elf_segment(file_id, p_offset as u64, p_filesz as u64)?;
+
+        install_elf_vma(
+            child_as,
+            p_vaddr,
+            p_memsz,
+            p_flags,
+            p_offset as u64,
+            file_id,
+        )?;
+
+        let seg_end = p_vaddr.saturating_add(p_memsz as u64);
+        if seg_end > brk_end {
+            brk_end = seg_end;
+        }
+        i += 1;
+    }
+
+    if phdr_vaddr == 0 {
+        phdr_vaddr = load_bias.saturating_add(e_phoff as u64);
+    }
+
+    Ok(LoadedElfImage {
+        entry_point,
+        base: load_bias,
+        phdr_vaddr,
+        phnum: e_phnum as u64,
+        phent,
+        dynamic_vaddr,
+        dynamic_count,
+        brk_end,
+    })
+}
+
+fn build_dynamic_handoff(
+    executable_path: &str,
+    interpreter_path: &InterpreterPath,
+    executable: &LoadedElfImage,
+    interpreter: &LoadedElfImage,
+) -> DynamicLoaderHandoff {
+    let mut handoff = DynamicLoaderHandoff {
+        magic: DYNAMIC_LOADER_HANDOFF_MAGIC,
+        version: DYNAMIC_LOADER_HANDOFF_VERSION,
+        flags: 0,
+        executable_base: executable.base,
+        executable_entry: executable.entry_point,
+        executable_phdr: executable.phdr_vaddr,
+        executable_phnum: executable.phnum,
+        executable_phent: executable.phent,
+        executable_dynamic: executable.dynamic_vaddr,
+        executable_dynamic_count: executable.dynamic_count,
+        interpreter_base: interpreter.base,
+        interpreter_entry: interpreter.entry_point,
+        page_size: PAGE_SIZE as u64,
+        executable_path_len: 0,
+        interpreter_path_len: interpreter_path.len as u32,
+        executable_path: [0; DYNAMIC_LOADER_PATH_MAX],
+        interpreter_path: [0; DYNAMIC_LOADER_PATH_MAX],
+    };
+
+    let exe = executable_path.as_bytes();
+    let exe_len = exe.len().min(DYNAMIC_LOADER_PATH_MAX);
+    handoff.executable_path[..exe_len].copy_from_slice(&exe[..exe_len]);
+    handoff.executable_path_len = exe_len as u32;
+    handoff.interpreter_path[..interpreter_path.len].copy_from_slice(interpreter_path.as_bytes());
+    handoff
 }
 
 fn validate_user_segment_range(p_vaddr: u64, p_memsz: usize) -> Result<(), ElfLoadError> {
@@ -452,14 +763,12 @@ fn validate_user_segment_range(p_vaddr: u64, p_memsz: usize) -> Result<(), ElfLo
     let page_mask = PAGE_SIZE as u64 - 1;
     let start = p_vaddr & !page_mask;
     let end = end_unaligned.saturating_add(page_mask) & !page_mask;
-    let kernel_start = KERNEL_LOAD_PHYS_ADDR;
-    let kernel_end = kernel_low_identity_end();
 
     if start < USER_ELF_BASE_MIN {
         return Err(ElfLoadError::InvalidElf);
     }
 
-    if kernel_end > kernel_start && start < kernel_end && end > kernel_start {
+    if end > USER_END.as_u64() {
         return Err(ElfLoadError::InvalidElf);
     }
 
@@ -546,78 +855,18 @@ fn install_stack_vma(
     Ok(())
 }
 
-/// Mappe un segment ELF PT_LOAD dans le nouvel espace d'adressage.
-///
-/// Pour chaque page couverte par [p_vaddr .. p_vaddr + p_memsz) :
-///   1. Alloue un frame physique ZEROED (les octets hors p_filesz restent à 0 = .bss)
-///   2. Copie la portion du fichier correspondante via le physmap kernel
-///   3. Mappe le frame dans le PageTableBuilder avec les flags ELF traduits en PageFlags
-#[allow(clippy::too_many_arguments)]
-fn map_elf_segment<A: FrameAllocatorForWalk>(
-    builder: &mut PageTableBuilder<A>,
-    _alloc: &A,
-    elf_data: &[u8],
-    p_offset: usize,
-    p_vaddr: u64,
-    p_filesz: usize,
-    p_memsz: usize,
-    p_flags: u32,
-) -> Result<(), ElfLoadError> {
-    // Traduire les flags ELF en PageFlags x86-64.
-    let page_flags = elf_page_flags(p_flags);
-
-    // Aligner vaddr sur la page (un segment peut commencer au milieu d'une page)
-    let vaddr_page = p_vaddr & !(PAGE_SIZE as u64 - 1);
-    let page_offset = (p_vaddr - vaddr_page) as usize; // décalage dans la 1ère page
-    let total_size = page_offset + p_memsz;
-    let n_pages = total_size.saturating_add(PAGE_SIZE - 1) / PAGE_SIZE;
-
-    for page_idx in 0..n_pages {
-        let frame =
-            buddy::alloc_pages(0, AllocFlags::ZEROED).map_err(|_| ElfLoadError::OutOfMemory)?;
-
-        // Plage de bytes du segment à copier dans cette page :
-        //   seg_byte_start/end : relatif au début du segment (p_vaddr)
-        //   file_start/end     : relatif au début du blob (p_offset)
-        let seg_byte_start = (page_idx * PAGE_SIZE).saturating_sub(page_offset);
-        let seg_byte_end = ((page_idx + 1) * PAGE_SIZE)
-            .saturating_sub(page_offset)
-            .min(p_filesz);
-
-        if seg_byte_start < seg_byte_end {
-            let file_start = p_offset.saturating_add(seg_byte_start);
-            let file_end = p_offset.saturating_add(seg_byte_end);
-            // Offset d'écriture dans la page (0 pour toutes les pages sauf la 1ère)
-            let dst_off = if page_idx == 0 { page_offset } else { 0 };
-            let copy_len = seg_byte_end - seg_byte_start;
-
-            if file_end <= elf_data.len() {
-                // Accès à la frame via le physmap direct kernel (PHYS_MAP_BASE + phys)
-                let frame_virt = phys_to_virt(frame.start_address());
-                let dst = unsafe {
-                    core::slice::from_raw_parts_mut(frame_virt.as_u64() as *mut u8, PAGE_SIZE)
-                };
-                dst[dst_off..dst_off + copy_len].copy_from_slice(&elf_data[file_start..file_end]);
-            }
-        }
-
-        let virt = VirtAddr::new(vaddr_page.saturating_add((page_idx * PAGE_SIZE) as u64));
-        builder
-            .map_page(virt, frame, page_flags)
-            .map_err(|_| ElfLoadError::OutOfMemory)?;
-    }
-
-    Ok(())
-}
-
 /// Alloue et mappe les pages de pile utilisateur (toutes ZEROED, USER_DATA).
 fn map_stack_pages<A: FrameAllocatorForWalk>(
     builder: &mut PageTableBuilder<A>,
     _alloc: &A,
     stack_base: u64,
     stack_size: usize,
-) -> Result<(), ElfLoadError> {
+) -> Result<[Frame; USER_STACK_BOOTSTRAP_PAGES], ElfLoadError> {
     let n_pages = stack_size / PAGE_SIZE;
+    if n_pages != USER_STACK_BOOTSTRAP_PAGES {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    let mut frames = [Frame::containing(PhysAddr::new(0)); USER_STACK_BOOTSTRAP_PAGES];
     for page_idx in 0..n_pages {
         let frame =
             buddy::alloc_pages(0, AllocFlags::ZEROED).map_err(|_| ElfLoadError::OutOfMemory)?;
@@ -625,6 +874,40 @@ fn map_stack_pages<A: FrameAllocatorForWalk>(
         builder
             .map_page(virt, frame, PageFlags::USER_DATA)
             .map_err(|_| ElfLoadError::OutOfMemory)?;
+        frames[page_idx] = frame;
+    }
+    Ok(frames)
+}
+
+fn write_stack_bytes(
+    stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
+    stack_base: u64,
+    user_vaddr: u64,
+    bytes: &[u8],
+) -> Result<(), ElfLoadError> {
+    let stack_len = USER_STACK_BOOTSTRAP_SIZE as u64;
+    let start_off = user_vaddr
+        .checked_sub(stack_base)
+        .ok_or(ElfLoadError::InvalidElf)?;
+    let end_off = start_off
+        .checked_add(bytes.len() as u64)
+        .ok_or(ElfLoadError::InvalidElf)?;
+    if end_off > stack_len {
+        return Err(ElfLoadError::InvalidElf);
+    }
+
+    let mut copied = 0usize;
+    while copied < bytes.len() {
+        let off = start_off as usize + copied;
+        let page_idx = off / PAGE_SIZE;
+        let page_off = off % PAGE_SIZE;
+        let n = (bytes.len() - copied).min(PAGE_SIZE - page_off);
+        let dst_virt = phys_to_virt(stack_frames[page_idx].start_address());
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut((dst_virt.as_u64() as usize + page_off) as *mut u8, n)
+        };
+        dst.copy_from_slice(&bytes[copied..copied + n]);
+        copied += n;
     }
     Ok(())
 }

@@ -30,6 +30,33 @@ use crate::process::signal::mask::reset_signals_on_exec;
 use core::sync::atomic::Ordering;
 use spin::Once;
 
+#[cfg(target_os = "none")]
+fn build_exec_kpti_shadow(kstack_top: u64, cr3: u64) -> Result<u64, ExecError> {
+    if !crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+        return Ok(0);
+    }
+
+    let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
+    let trampoline_phys =
+        crate::memory::core::PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
+    let user_cr3 = unsafe {
+        crate::memory::virt::page_table::kpti_split::build_user_shadow_pml4(
+            crate::memory::core::PhysAddr::new(cr3),
+            cpu_id,
+            trampoline_phys,
+            kstack_top,
+        )
+    }
+    .map_err(|_| ExecError::OutOfMemory)?;
+
+    Ok(user_cr3.as_u64())
+}
+
+#[cfg(not(target_os = "none"))]
+fn build_exec_kpti_shadow(_kstack_top: u64, _cr3: u64) -> Result<u64, ExecError> {
+    Ok(0)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait ElfLoader — RÈGLE PROC-01 : abstraction de la couche fs/
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,6 +68,8 @@ pub struct ElfLoadResult {
     pub entry_point: u64,
     /// Pointeur de pile initial (RSP au démarrage).
     pub initial_stack_top: u64,
+    /// Premier argument userspace (RDI) injecté au point d'entrée.
+    pub entry_arg0: u64,
     /// Base de la TLS statique chargée (segment .tdata/.tbss).
     pub tls_base: u64,
     /// Taille de la TLS statique.
@@ -235,6 +264,22 @@ pub fn do_execve(
             .sync_kernel_half_into(crate::memory::core::PhysAddr::new(elf_result.cr3));
     }
 
+    let exec_kpti_user_cr3 =
+        match build_exec_kpti_shadow(thread.sched_tcb.kstack_top(), elf_result.cr3) {
+            Ok(cr3) => cr3,
+            Err(err) => {
+                thread
+                    .sched_tcb
+                    .signal_mask
+                    .store(saved_signal_mask, Ordering::Release);
+                if elf_result.addr_space_ptr != 0 && elf_result.addr_space_ptr != old_as_ptr {
+                    crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
+                        .free_addr_space(elf_result.addr_space_ptr);
+                }
+                return Err(err);
+            }
+        };
+
     // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTCOPY | DONTEXPAND.
     // Empêche un attaquant d'utiliser mmap(MAP_FIXED) pour écraser le SignalTcb.
     if elf_result.signal_tcb_vaddr != 0 {
@@ -279,15 +324,14 @@ pub fn do_execve(
 
     // Mettre à jour l'espace d'adressage dans le TCB scheduler.
     thread.sched_tcb.cr3_phys = elf_result.cr3;
-    thread.sched_tcb.set_kpti_user_cr3(0);
+    thread.sched_tcb.set_kpti_user_cr3(exec_kpti_user_cr3);
     thread.sched_tcb.fs_base = elf_result.tls_base;
     thread.sched_tcb.user_gs_base = 0;
 
     // Mettre à jour les adresses du thread.
     // CORRECTION P2-03 : calculer et propager stack_base et stack_size au lieu de 0
-    const DEFAULT_STACK_PAGES: u64 = 8;
     const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
-    const DEFAULT_STACK_SIZE: u64 = DEFAULT_STACK_PAGES * PAGE_SIZE_U64;
+    const DEFAULT_STACK_SIZE: u64 = crate::memory::core::layout::USER_STACK_BOOTSTRAP_SIZE as u64;
 
     let stack_top = elf_result.initial_stack_top;
     let stack_base = (stack_top.saturating_sub(DEFAULT_STACK_SIZE)) & !(PAGE_SIZE_U64 - 1);
@@ -299,6 +343,7 @@ pub fn do_execve(
         entry_point: elf_result.entry_point,
         initial_rsp: elf_result.initial_stack_top,
         tls_base: elf_result.tls_base,
+        entry_arg0: elf_result.entry_arg0,
         pthread_ptr: 0,
         sigaltstack_base: 0,
         sigaltstack_size: 0,
@@ -319,6 +364,9 @@ pub fn do_execve(
             .sync_kernel_half_into(crate::memory::core::PhysAddr::new(elf_result.cr3));
         crate::arch::x86_64::smp::percpu::set_kernel_rsp(kstack_top);
         crate::arch::x86_64::tss::update_rsp0(cpu_id, kstack_top);
+        if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+            crate::arch::x86_64::spectre::kpti::set_current_cr3(elf_result.cr3, exec_kpti_user_cr3);
+        }
         crate::arch::x86_64::write_cr3(elf_result.cr3);
     }
 

@@ -314,9 +314,8 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
 
     let thread_ptr = Box::into_raw(thread);
 
-    const USER_STACK_PAGES: u64 = 8;
     const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
-    const USER_STACK_SIZE: u64 = USER_STACK_PAGES * PAGE_SIZE_U64;
+    const USER_STACK_SIZE: u64 = crate::memory::core::layout::USER_STACK_BOOTSTRAP_SIZE as u64;
     let stack_top = elf.initial_stack_top;
     let stack_base = stack_top.saturating_sub(USER_STACK_SIZE) & !(PAGE_SIZE_U64 - 1);
     let stack_size = stack_top.saturating_sub(stack_base);
@@ -334,6 +333,7 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
             entry_point: elf.entry_point,
             initial_rsp: elf.initial_stack_top,
             tls_base: elf.tls_base,
+            entry_arg0: elf.entry_arg0,
             pthread_ptr: 0,
             sigaltstack_base: 0,
             sigaltstack_size: 0,
@@ -346,7 +346,7 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
         let frame = kernel_rsp as *mut u64;
         *frame.add(0) = 0; // rbx
         *frame.add(1) = 0; // rbp
-        *frame.add(2) = 0; // r12
+        *frame.add(2) = elf.entry_arg0; // r12 -> rdi par user_entry_trampoline
         *frame.add(3) = 0; // r13
         *frame.add(4) = 0; // r14
         *frame.add(5) = 0; // r15

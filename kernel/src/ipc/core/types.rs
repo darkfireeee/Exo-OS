@@ -15,10 +15,10 @@
 // Contrat sender_pid:
 // Les messages IPC exposés aux serveurs peuvent contenir un champ sender_pid
 // dans les premiers octets du payload. Ce champ n'est pas fiable depuis
-// userspace: `SYS_EXO_IPC_SEND` le remplace systématiquement par le PID réel
-// de l'émetteur avant l'enqueue kernel. Les contrôles d'autorisation côté
-// serveur (mount/umount VFS, contrôle réseau, etc.) peuvent donc comparer ce
-// champ au PID attendu sans accepter une identité forgée par le client.
+// userspace: `SYS_EXO_IPC_SEND` le remplace par le PID réel seulement si
+// l'appelant pose le flag ABI IPC_FLAG_INJECT_SRC_PID. Les formats raw dont les
+// quatre premiers octets ne sont pas un sender_pid ne sont donc plus corrompus
+// par une heuristique de taille.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;

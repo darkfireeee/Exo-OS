@@ -92,6 +92,31 @@ static QUEUE: QueueCell = QueueCell(UnsafeCell::new(InputQueue::new()));
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
 #[inline]
+fn boot_log(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
+
+fn exit_failed() -> ! {
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 127);
+        let _ = syscall::syscall1(syscall::SYS_EXIT_GROUP, 127);
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
 fn queue_mut() -> &'static mut InputQueue {
     // SAFETY: input_server is a single-threaded event loop; all queue access is
     // serialized in `_start` before a reply is sent.
@@ -142,7 +167,8 @@ fn handle(req: &InputRequest) -> InputReply {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let name = b"input_server";
-    let _ = unsafe {
+    boot_log(b"input_server: boot\n");
+    let register_rc = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
@@ -150,6 +176,11 @@ pub extern "C" fn _start() -> ! {
             11,
         )
     };
+    if register_rc < 0 {
+        boot_log(b"input_server: register failed\n");
+        exit_failed();
+    }
+    boot_log(b"input_server: registered\n");
     let mut req = InputRequest {
         sender_pid: 0,
         msg_type: 0,

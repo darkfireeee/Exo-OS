@@ -9,15 +9,16 @@
 //! ## IST Assignments (voir tss.rs)
 //! - #DF (vecteur 8)  → IST4 (Double Fault)
 //! - #NMI(vecteur 2)  → IST3 (NMI fallback)
-//! - #PF (vecteur 14) → IST2 (#PF dédié)
 //! - 0xF0/0xF1/0xF2   → IST1 (ExoPhoenix critiques)
+//!
+//! #PF et #DB utilisent la pile kernel du thread courant, pas une IST. Le
+//! retour d'exception peut livrer un signal ou déclencher un reschedule; la
+//! frame sauvegardée doit donc rester dans la pile du TCB courant.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use super::gdt::GDT_KERNEL_CS;
-use super::tss::{
-    IST_DEBUG, IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI, IST_PAGE_FAULT,
-};
+use super::tss::{IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI};
 
 // ── Vecteurs d'exception ──────────────────────────────────────────────────────
 
@@ -272,8 +273,8 @@ pub fn init_idt() {
     idt.set_handler(
         EXC_DEBUG,
         exc_debug_handler as *const () as u64,
-        IST_DEBUG as u8 + 1,
-        IdtEntryFlags::TRAP_GATE,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
         EXC_NMI,
@@ -349,8 +350,8 @@ pub fn init_idt() {
     idt.set_handler(
         EXC_PAGE_FAULT,
         exc_page_fault_handler as *const () as u64,
-        IST_PAGE_FAULT as u8 + 1,
-        IdtEntryFlags::TRAP_GATE,
+        0,
+        IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
         EXC_X87_FP,

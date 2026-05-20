@@ -92,8 +92,9 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     match tcb.policy {
         SchedPolicy::Normal | SchedPolicy::Batch => {
-            // Avancer le vruntime du thread pondéré.
-            tcb.advance_vruntime(TICK_NS, tcb.priority.cfs_weight());
+            // Le vruntime CFS est comptabilise au context switch avec le delta
+            // TSC exact. Le tick ne fait que décider si la tranche est expirée;
+            // cela évite de sous-facturer les serveurs qui dorment avant 1ms.
 
             // Le thread courant est retiré de la runqueue pendant qu'il tourne:
             // l'inclure dans nr/total_weight évite de désactiver la préemption

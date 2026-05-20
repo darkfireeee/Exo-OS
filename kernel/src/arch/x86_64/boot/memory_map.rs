@@ -23,14 +23,14 @@ use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAI
 use crate::arch::x86_64::boot::uefi::UefiMemoryMap;
 use crate::exophoenix::ssr;
 use crate::memory::core::AllocError;
-use crate::memory::core::{AllocFlags, Frame, PhysAddr, PAGE_SIZE};
+use crate::memory::core::{AllocFlags, Frame, PageFlags, PhysAddr, HUGE_PAGE_SIZE, PAGE_SIZE};
 use crate::memory::physical::allocator::{
     alloc_page, free_page, init_phase1_bitmap, init_phase2_free_region,
     init_phase2b_buddy_free_region, init_phase2b_buddy_zone, init_phase3_slab_slub,
     init_phase4_numa, register_slab_page_provider, SlabPageProvider, BOOTSTRAP_BITMAP,
 };
 use crate::memory::virt::page_table::{
-    read_cr3, write_cr3, FrameAllocatorForWalk, PageTableBuilder,
+    phys_to_table_mut, read_cr3, write_cr3, FrameAllocatorForWalk, PageTableEntry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,8 +109,7 @@ fn assert_buddy_has_free_frames(origin: &str) {
 fn install_extended_physmap(phys_end: PhysAddr) {
     let pt_alloc = BootPageTableAllocator;
     let active = read_cr3();
-    let mut builder = PageTableBuilder::from_existing(active, &pt_alloc);
-    let result = builder.map_physmap(phys_end.as_u64());
+    let result = unsafe { install_fresh_high_physmap(active, phys_end.as_u64(), &pt_alloc) };
     if result.is_err() {
         crate::arch::x86_64::halt_cpu();
     }
@@ -118,6 +117,103 @@ fn install_extended_physmap(phys_end: PhysAddr) {
     unsafe {
         write_cr3(active);
     }
+}
+
+unsafe fn install_fresh_high_physmap<A: FrameAllocatorForWalk>(
+    active_pml4: PhysAddr,
+    phys_size: u64,
+    alloc: &A,
+) -> Result<(), AllocError> {
+    let pml4 = phys_to_table_mut(active_pml4);
+    let mut offset = 0u64;
+    let mut delayed_p4_256 = PhysAddr::new(0);
+    let mut has_delayed_p4_256 = false;
+
+    while offset < phys_size {
+        let virt = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + offset;
+        let p4_idx = crate::memory::core::VirtAddr::new(virt).p4_index();
+        let pdpt_frame = alloc.alloc_frame(AllocFlags::ZEROED)?;
+        let pdpt_phys = pdpt_frame.start_address();
+        let pdpt = phys_to_table_mut(pdpt_phys);
+
+        while offset < phys_size {
+            let virt = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + offset;
+            let vaddr = crate::memory::core::VirtAddr::new(virt);
+            if vaddr.p4_index() != p4_idx {
+                break;
+            }
+
+            let pd_frame = alloc.alloc_frame(AllocFlags::ZEROED)?;
+            let pd_phys = pd_frame.start_address();
+            pdpt[vaddr.p3_index()] = table_pointer_entry(pd_phys);
+            let pd = phys_to_table_mut(pd_phys);
+
+            while offset < phys_size {
+                let virt = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + offset;
+                let vaddr = crate::memory::core::VirtAddr::new(virt);
+                if vaddr.p4_index() != p4_idx
+                    || pdpt[vaddr.p3_index()].phys_addr().as_u64() != pd_phys.as_u64()
+                {
+                    break;
+                }
+
+                let remaining = phys_size - offset;
+                let phys = PhysAddr::new(offset);
+                if remaining >= HUGE_PAGE_SIZE as u64
+                    && (virt & (HUGE_PAGE_SIZE as u64 - 1)) == 0
+                    && phys.is_aligned(HUGE_PAGE_SIZE as u64)
+                {
+                    pd[vaddr.p2_index()] = PageTableEntry::from_page_flags(
+                        Frame::containing(phys),
+                        PageFlags::KERNEL_DATA | PageFlags::HUGE_PAGE,
+                    );
+                    offset = offset.saturating_add(HUGE_PAGE_SIZE as u64);
+                } else {
+                    let pt_frame = alloc.alloc_frame(AllocFlags::ZEROED)?;
+                    let pt_phys = pt_frame.start_address();
+                    pd[vaddr.p2_index()] = table_pointer_entry(pt_phys);
+                    let pt = phys_to_table_mut(pt_phys);
+                    while offset < phys_size {
+                        let virt = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + offset;
+                        let tail_vaddr = crate::memory::core::VirtAddr::new(virt);
+                        if tail_vaddr.p4_index() != p4_idx
+                            || tail_vaddr.p3_index() != vaddr.p3_index()
+                            || tail_vaddr.p2_index() != vaddr.p2_index()
+                        {
+                            break;
+                        }
+                        let tail_phys = PhysAddr::new(offset);
+                        pt[tail_vaddr.p1_index()] = PageTableEntry::from_page_flags(
+                            Frame::containing(tail_phys),
+                            PageFlags::KERNEL_DATA,
+                        );
+                        offset = offset.saturating_add(PAGE_SIZE as u64);
+                    }
+                }
+            }
+        }
+
+        if p4_idx == 256 {
+            delayed_p4_256 = pdpt_phys;
+            has_delayed_p4_256 = true;
+        } else {
+            pml4[p4_idx] = table_pointer_entry(pdpt_phys);
+        }
+    }
+
+    if has_delayed_p4_256 {
+        // Basculer l'entrée partagée boot PML4[256] en dernier: les nouvelles
+        // tables high-half mappent déjà le frame PML4 actif via PHYS_MAP_BASE.
+        pml4[256] = table_pointer_entry(delayed_p4_256);
+    }
+    Ok(())
+}
+
+#[inline]
+fn table_pointer_entry(phys: PhysAddr) -> PageTableEntry {
+    PageTableEntry::from_raw(
+        phys.as_u64() | PageTableEntry::FLAG_PRESENT | PageTableEntry::FLAG_WRITABLE,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

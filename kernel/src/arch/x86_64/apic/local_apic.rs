@@ -6,9 +6,9 @@
 //! ## Registres LAPIC (offset depuis LAPIC_BASE)
 //! Les registres sont tous 32 bits, alignés sur 16 octets.
 
-use super::super::cpu::msr;
+use super::super::cpu::{msr, tsc};
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 // ── Adresse MMIO LAPIC ────────────────────────────────────────────────────────
 
@@ -23,6 +23,9 @@ static LAPIC_PHYS_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usi
 /// des mappings boot. Après `init_lapic_fixmap_post_memory()`, elle pointe dans
 /// la fixmap noyau haute, partagée par les CR3 userspace.
 static LAPIC_MMIO_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
+static LAPIC_TIMER_OWNER: AtomicU8 = AtomicU8::new(LapicTimerOwner::None as u8);
+static SCHEDULER_TIMER_USES_TSC_DEADLINE: AtomicU8 = AtomicU8::new(0);
+const SCHEDULER_TICK_US: u64 = 1_000;
 
 #[inline(always)]
 fn lapic_uses_fixmap() -> bool {
@@ -92,6 +95,27 @@ pub const ICR_PENDING: u32 = 1 << 12; // Delivery Status
 pub enum ApicMode {
     XApic,
     X2Apic,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LapicTimerOwner {
+    None = 0,
+    BootWatchdog = 1,
+    SchedulerTick = 2,
+    ExoNmiWatchdog = 3,
+}
+
+impl LapicTimerOwner {
+    #[inline]
+    fn from_raw(raw: u8) -> Self {
+        match raw {
+            x if x == Self::BootWatchdog as u8 => Self::BootWatchdog,
+            x if x == Self::SchedulerTick as u8 => Self::SchedulerTick,
+            x if x == Self::ExoNmiWatchdog as u8 => Self::ExoNmiWatchdog,
+            _ => Self::None,
+        }
+    }
 }
 
 // ── Lecture / écriture MMIO ───────────────────────────────────────────────────
@@ -261,6 +285,85 @@ pub fn timer_oneshot_us(us: u64) {
     let count = us.saturating_mul(ticks_per_us as u64);
     let count = count.min(u32::MAX as u64) as u32;
     lapic_write(LAPIC_TIMER_ICR, count);
+}
+
+#[inline]
+fn has_tsc_deadline_timer() -> bool {
+    super::super::cpu::features::cpu_features_or_none()
+        .map_or(false, |features| features.has_tsc_deadline())
+}
+
+/// Retourne vrai quand le LAPIC timer est réservé au tick scheduler.
+#[inline]
+pub fn scheduler_timer_active() -> bool {
+    lapic_timer_owner() == LapicTimerOwner::SchedulerTick
+}
+
+#[inline]
+pub fn lapic_timer_owner() -> LapicTimerOwner {
+    LapicTimerOwner::from_raw(LAPIC_TIMER_OWNER.load(Ordering::Acquire))
+}
+
+pub fn claim_lapic_timer(owner: LapicTimerOwner) -> bool {
+    let owner_raw = owner as u8;
+    loop {
+        let current = LAPIC_TIMER_OWNER.load(Ordering::Acquire);
+        if current == owner_raw {
+            return true;
+        }
+        if current != LapicTimerOwner::None as u8 {
+            return false;
+        }
+        if LAPIC_TIMER_OWNER
+            .compare_exchange(
+                LapicTimerOwner::None as u8,
+                owner_raw,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+/// Configure le LAPIC timer comme source du tick scheduler.
+///
+/// Le LAPIC ne fournit qu'un seul timer local. Après cette activation, les
+/// watchdogs doivent être servis par le tick scheduler ou par un autre vecteur,
+/// sans réécrire LVT_TIMER.
+pub fn init_scheduler_timer(vector: u8) {
+    LAPIC_TIMER_OWNER.store(LapicTimerOwner::SchedulerTick as u8, Ordering::Release);
+    let uses_tsc_deadline = has_tsc_deadline_timer();
+    if uses_tsc_deadline {
+        timer_init_tsc_deadline(vector);
+    } else {
+        timer_init_oneshot(vector);
+    }
+    SCHEDULER_TIMER_USES_TSC_DEADLINE.store(uses_tsc_deadline as u8, Ordering::Release);
+    rearm_scheduler_timer_tick();
+}
+
+/// Réarme le prochain tick scheduler en mode one-shot/TSC-deadline.
+#[inline]
+pub fn rearm_scheduler_timer_tick() {
+    if !scheduler_timer_active() {
+        return;
+    }
+
+    if SCHEDULER_TIMER_USES_TSC_DEADLINE.load(Ordering::Acquire) != 0 {
+        let hz = tsc::tsc_hz();
+        if hz == 0 {
+            return;
+        }
+        let cycles = ((SCHEDULER_TICK_US as u128) * (hz as u128) / 1_000_000u128)
+            .max(1)
+            .min(u64::MAX as u128) as u64;
+        timer_set_deadline(tsc::read_tsc().wrapping_add(cycles));
+    } else {
+        timer_oneshot_us(SCHEDULER_TICK_US);
+    }
 }
 
 /// Lit le compteur courant du timer LAPIC (mode one-shot/periodic)

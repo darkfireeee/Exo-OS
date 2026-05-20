@@ -64,6 +64,7 @@ pub struct ExoNetDevice {
     pub released_count: usize,
     pub dropped_rx: u64,
     pub dropped_tx: u64,
+    pub dropped_rx_tx_token: u64,
 }
 
 impl ExoNetDevice {
@@ -75,6 +76,7 @@ impl ExoNetDevice {
             released_count: 0,
             dropped_rx: 0,
             dropped_tx: 0,
+            dropped_rx_tx_token: 0,
         }
     }
 

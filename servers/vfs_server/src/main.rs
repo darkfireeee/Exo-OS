@@ -93,6 +93,22 @@ static MOUNTS: MountTable = MountTable(UnsafeCell::new([MountEntry::empty(); MAX
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 const CROSS_PROCESS_CHUNK: usize = 4096;
 const LINUX_STAT_SIZE: usize = 144;
+const SERVER_ENDPOINT_ID: u64 = 3;
+
+#[inline]
+fn boot_log(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
 
 fn fnv32(s: &[u8]) -> u32 {
     let mut h: u32 = 2166136261;
@@ -770,14 +786,19 @@ pub extern "C" fn _start() -> ! {
 
     // ── 2. S'enregistrer auprès de l'ipc_router ──────────────────────────────
     let name = b"vfs_server";
-    let _ = unsafe {
+    let register_rc = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
             name.len() as u64,
-            3u64, // endpoint_id = PID 3
+            SERVER_ENDPOINT_ID,
         )
     };
+    if register_rc < 0 {
+        boot_log(b"vfs_server: register failed\n");
+        halt_forever();
+    }
+    boot_log(b"vfs_server: registered\n");
 
     // ── 3. Boucle de service ──────────────────────────────────────────────────
     let mut req = VfsRequest {
@@ -790,7 +811,7 @@ pub extern "C" fn _start() -> ! {
         let r = unsafe {
             syscall::syscall4(
                 syscall::SYS_IPC_RECV,
-                3,
+                SERVER_ENDPOINT_ID,
                 &mut req as *mut VfsRequest as u64,
                 core::mem::size_of::<VfsRequest>() as u64,
                 IPC_FLAG_TIMEOUT | IPC_RECV_TIMEOUT_MS,
@@ -823,6 +844,11 @@ pub extern "C" fn _start() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    boot_log(b"vfs_server: panic\n");
+    halt_forever();
+}
+
+fn halt_forever() -> ! {
     loop {
         unsafe {
             core::arch::asm!("hlt", options(nostack, nomem));

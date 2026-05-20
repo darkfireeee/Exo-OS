@@ -21,7 +21,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::MAX_CPUS;
-use super::task::{CpuId, SchedPolicy, ThreadControlBlock};
+use super::task::{CpuId, SchedPolicy, TaskState, ThreadControlBlock};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -300,6 +300,7 @@ impl CfsRunQueue {
         // SAFETY: tcb est un NonNull valide — même invariant que enqueue().
         let weight = unsafe { tcb.as_ref() }.priority.cfs_weight() as u64;
         self.weight_sum = self.weight_sum.saturating_sub(weight);
+        unsafe { tcb.as_ref() }.clear_queued();
 
         // Actualiser min_vruntime.
         if self.count > 0 {
@@ -440,9 +441,17 @@ impl PerCpuRunQueue {
     /// Ajoute un thread à la run queue selon sa politique.
     ///
     /// INVARIANT : appelé avec préemption désactivée.
-    pub fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) {
+    pub fn enqueue(&mut self, tcb: NonNull<ThreadControlBlock>) -> bool {
         // SAFETY: tcb est un NonNull valide, préemption désactivée (invariant).
-        let policy = unsafe { tcb.as_ref() }.policy;
+        let tcb_ref = unsafe { tcb.as_ref() };
+        if tcb_ref.state() != TaskState::Runnable {
+            return false;
+        }
+        if !tcb_ref.try_mark_queued() {
+            return false;
+        }
+
+        let policy = tcb_ref.policy;
         let enqueued = match policy {
             SchedPolicy::Fifo | SchedPolicy::RoundRobin => self.rt.enqueue(tcb),
             SchedPolicy::Normal | SchedPolicy::Batch => self.cfs.enqueue(tcb),
@@ -450,22 +459,23 @@ impl PerCpuRunQueue {
                 // SCHED_DEADLINE → file EDF dédiée (échéance la plus proche en tête).
                 // SAFETY: préemption désactivée (INVARIANT), cpu.0 < MAX_CPUS garanti.
                 unsafe {
-                    crate::scheduler::timer::deadline_timer::dl_enqueue(self.cpu.0 as usize, tcb);
+                    crate::scheduler::timer::deadline_timer::dl_enqueue(self.cpu.0 as usize, tcb)
                 }
-                true
             }
             SchedPolicy::Idle => false, /* géré par idle_thread */
         };
         if !enqueued {
+            tcb_ref.clear_queued();
             debug_assert!(
                 policy == SchedPolicy::Idle,
                 "RunQueue::enqueue: file pleine ou échec d'enfilage pour {:?}",
                 policy
             );
-            return;
+            return false;
         }
         let prev = self.stats.nr_running.fetch_add(1, Ordering::Relaxed);
         self.update_load_avg(prev as u64 + 1);
+        true
     }
 
     /// Retire un thread spécifique de la queue (migration, signal mort).
@@ -518,6 +528,7 @@ impl PerCpuRunQueue {
             _ => self.cfs.remove(tcb),
         };
         if removed {
+            unsafe { tcb.as_ref() }.clear_queued();
             self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
         }
         removed
@@ -659,6 +670,7 @@ impl PerCpuRunQueue {
             // SAFETY: t est un NonNull valide sorti de tasks[idx].
             let weight = unsafe { t.as_ref() }.priority.cfs_weight() as u64;
             self.cfs.weight_sum = self.cfs.weight_sum.saturating_sub(weight);
+            unsafe { t.as_ref() }.clear_queued();
         }
         self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
         tcb
@@ -678,6 +690,7 @@ impl PerCpuRunQueue {
     #[inline(always)]
     pub fn dequeue_highest_rt(&mut self) -> Option<NonNull<ThreadControlBlock>> {
         let tcb = self.rt.dequeue_highest()?;
+        unsafe { tcb.as_ref() }.clear_queued();
         let prev = self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
         self.update_load_avg(prev.saturating_sub(1) as u64);
         Some(tcb)

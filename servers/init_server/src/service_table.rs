@@ -58,7 +58,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: IPC_ROUTER_BIN,
         requires: NO_DEPS,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 5_000,
         critical: true,
     },
     ServiceMetadata {
@@ -66,7 +66,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: MEMORY_SERVER_BIN,
         requires: DEPS_MEMORY,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 750,
+        ready_timeout_ms: 5_000,
         critical: true,
     },
     ServiceMetadata {
@@ -74,7 +74,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: VFS_SERVER_BIN,
         requires: DEPS_VFS,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 750,
+        ready_timeout_ms: 8_000,
         critical: true,
     },
     ServiceMetadata {
@@ -82,7 +82,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: CRYPTO_SERVER_BIN,
         requires: DEPS_CRYPTO,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 30_000,
         critical: true,
     },
     ServiceMetadata {
@@ -90,7 +90,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: DEVICE_SERVER_BIN,
         requires: DEPS_DEVICE,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 5_000,
         critical: true,
     },
     ServiceMetadata {
@@ -98,7 +98,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: VIRTIO_DRIVERS_BIN,
         requires: DEPS_VIRTIO,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 750,
+        ready_timeout_ms: 5_000,
         critical: false,
     },
     ServiceMetadata {
@@ -106,7 +106,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: NETWORK_SERVER_BIN,
         requires: DEPS_NETWORK,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 3_000,
         critical: false,
     },
     ServiceMetadata {
@@ -114,7 +114,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: SCHEDULER_SERVER_BIN,
         requires: DEPS_SCHEDULER,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 3_000,
         critical: false,
     },
     ServiceMetadata {
@@ -122,7 +122,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: INPUT_SERVER_BIN,
         requires: DEPS_INPUT,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 5_000,
         critical: true,
     },
     ServiceMetadata {
@@ -130,7 +130,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: TTY_SERVER_BIN,
         requires: DEPS_TTY,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
+        ready_timeout_ms: 5_000,
         critical: true,
     },
     ServiceMetadata {
@@ -138,7 +138,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: EXO_SHIELD_BIN,
         requires: DEPS_EXO_SHIELD,
         requires_optional: OPT_DEPS_EXO_SHIELD,
-        ready_timeout_ms: 1_000,
+        ready_timeout_ms: 30_000,
         critical: true,
     },
     ServiceMetadata {
@@ -146,8 +146,8 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: EXOSH_BIN,
         requires: DEPS_EXOSH,
         requires_optional: NO_DEPS,
-        ready_timeout_ms: 500,
-        critical: true,
+        ready_timeout_ms: 5_000,
+        critical: false,
     },
 ];
 

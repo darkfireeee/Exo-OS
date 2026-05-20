@@ -5,6 +5,8 @@ use crate::tcp_store::TcpStateStore;
 use crate::virtio_device::ExoNetDevice;
 use exo_syscall_abi as syscall;
 
+const PHOENIX_DRAIN_MAX_POLLS: usize = 1024;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PhoenixPhase {
     Normal,
@@ -49,14 +51,20 @@ impl IsolationState {
         pool: &NetBufPool,
         driver: &DriverLink,
         store: &mut TcpStateStore,
-    ) {
+    ) -> bool {
         self.phase = PhoenixPhase::Draining;
         Self::sync_kernel_phase(self.phase);
-        iface.drain_all(device, pool);
+        let drained = iface.drain_bounded(device, pool, PHOENIX_DRAIN_MAX_POLLS);
         driver.flush_released(device);
+        if !drained {
+            self.phase = PhoenixPhase::Normal;
+            Self::sync_kernel_phase(self.phase);
+            return false;
+        }
         store.clear();
         self.phase = PhoenixPhase::Serialized;
         Self::sync_kernel_phase(self.phase);
+        true
     }
 
     pub fn restore(&mut self) {

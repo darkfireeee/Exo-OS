@@ -657,6 +657,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "phase5-tests"
+version = "0.1.0"
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
