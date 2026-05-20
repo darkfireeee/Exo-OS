@@ -11,7 +11,7 @@
 //! - CRC-32 checksum for tamper detection
 //! - Maximum 16 dump regions tracked simultaneously
 
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -53,6 +53,12 @@ pub struct DumpRegion {
 
 impl Default for DumpRegion {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl DumpRegion {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             addr: 0,
@@ -174,7 +180,7 @@ static DUMP_BUFFER: Mutex<[u8; DUMP_STORAGE_SIZE]> = Mutex::new([0u8; DUMP_STORA
 
 /// Dump region descriptors.
 static DUMP_REGIONS: Mutex<[DumpRegion; MAX_DUMP_REGIONS]> = Mutex::new(
-    [DumpRegion::default(); MAX_DUMP_REGIONS],
+    [const { DumpRegion::empty() }; MAX_DUMP_REGIONS],
 );
 
 /// Number of active dump regions.

@@ -8,7 +8,8 @@ use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use super::fs_restriction::FsRestrictionConfig;
 use super::net_isolation::NetIsolationConfig;
-use super::syscall_filter::{SyscallBitmap, SyscallFilterProfile};
+use super::syscall_filter::SyscallBitmap;
+use spin::Mutex;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -320,7 +321,7 @@ impl ContainerManager {
     /// Create a new manager with no containers.
     pub const fn new() -> Self {
         Self {
-            containers: [ContainerProfile::empty(); MAX_CONTAINERS],
+            containers: [const { ContainerProfile::empty() }; MAX_CONTAINERS],
             next_id: AtomicU32::new(1),
             generation: AtomicU32::new(0),
         }
@@ -429,6 +430,16 @@ impl ContainerManager {
         None
     }
 
+    /// Get an immutable reference to a container by primary PID.
+    pub fn get_by_pid(&self, pid: u32) -> Option<&ContainerProfile> {
+        for c in &self.containers {
+            if c.is_active() && c.pid() == pid {
+                return Some(c);
+            }
+        }
+        None
+    }
+
     /// Count active containers.
     pub fn active_count(&self) -> u32 {
         let mut count = 0u32;
@@ -455,6 +466,61 @@ impl ContainerManager {
         }
         None
     }
+}
+
+static GLOBAL_CONTAINER_MANAGER: Mutex<ContainerManager> = Mutex::new(ContainerManager::new());
+
+/// Reset the global container manager used by exo_shield containment commands.
+pub fn container_manager_init() {
+    let mut manager = GLOBAL_CONTAINER_MANAGER.lock();
+    *manager = ContainerManager::new();
+}
+
+/// Apply a deny-by-default quarantine profile to a PID.
+pub fn quarantine_pid(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    let mut manager = GLOBAL_CONTAINER_MANAGER.lock();
+    if let Some(profile) = manager.get_by_pid(pid) {
+        return matches!(
+            profile.state(),
+            ContainerState::Created | ContainerState::Running | ContainerState::Paused
+        );
+    }
+
+    let id = manager.create(pid, b"/quarantine", b"quarantine", SyscallBitmap::deny_all());
+    id.is_valid() && manager.start(id)
+}
+
+/// Release the quarantine profile associated with a PID.
+pub fn release_quarantine(pid: u32) -> bool {
+    let mut manager = GLOBAL_CONTAINER_MANAGER.lock();
+    let Some(id) = manager.get_by_pid(pid).map(|profile| profile.id()) else {
+        return false;
+    };
+
+    let _ = manager.stop(id);
+    manager.destroy(id)
+}
+
+/// Check whether a PID currently has an active quarantine profile.
+pub fn is_pid_quarantined(pid: u32) -> bool {
+    let manager = GLOBAL_CONTAINER_MANAGER.lock();
+    manager
+        .get_by_pid(pid)
+        .map(|profile| profile.state() != ContainerState::Destroyed)
+        .unwrap_or(false)
+}
+
+/// Check a syscall against the PID's quarantine profile, if one exists.
+pub fn quarantine_allows_syscall(pid: u32, nr: u8) -> bool {
+    let manager = GLOBAL_CONTAINER_MANAGER.lock();
+    manager
+        .get_by_pid(pid)
+        .map(|profile| profile.check_syscall(nr))
+        .unwrap_or(true)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use exo_virtio_blk::ExoVirtioBlkDevice;
 use spin::Mutex;
 
-pub const DEFAULT_VIRTIO_BLK_MMIO_BASE: usize = 0x1000_0000;
+pub const UNDISCOVERED_BLOCK_MMIO_BASE: usize = 0;
 pub const DEFAULT_VIRTIO_BLK_CAPACITY_BYTES: usize = 512 * 1024 * 1024;
 
 pub struct VirtioBlockAdapter {
@@ -70,10 +70,9 @@ pub fn init_global_disk_with_mmio(base_address: usize, capacity_bytes: usize) {
 }
 
 pub fn init_global_disk() {
-    init_global_disk_with_mmio(
-        DEFAULT_VIRTIO_BLK_MMIO_BASE,
-        DEFAULT_VIRTIO_BLK_CAPACITY_BYTES,
-    );
+    let base_address =
+        crate::drivers::find_virtio_blk_mmio_bar().unwrap_or(UNDISCOVERED_BLOCK_MMIO_BASE);
+    init_global_disk_with_mmio(base_address, DEFAULT_VIRTIO_BLK_CAPACITY_BYTES);
 }
 
 pub fn has_global_disk() -> bool {

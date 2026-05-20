@@ -10,7 +10,7 @@
 //!   buffer (no heap allocation)
 //! - Reports are self-contained snapshots of the security state
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ const MAX_INCIDENTS: usize = 16;
 const MAX_RECOMMENDATIONS: usize = 8;
 
 /// Report magic number for binary format identification.
-const REPORT_MAGIC_VALUE: u32 = 0xF05E_F1LE;
+const REPORT_MAGIC_VALUE: u32 = 0xF05E_F11E;
 
 /// Report format version.
 const REPORT_VERSION: u32 = 1;
@@ -771,7 +771,7 @@ pub fn generate_report(
 ///
 /// ## Binary format
 /// - 16-byte header:
-///   - Bytes 0–3:  magic number `0xF05E_F1LE`
+///   - Bytes 0–3:  magic number `0xF05E_F11E`
 ///   - Bytes 4–7:  format version (u32 LE)
 ///   - Bytes 8–11: report size in bytes (u32 LE)
 ///   - Bytes 12–15: CRC-32 of the report payload

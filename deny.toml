@@ -1,0 +1,33 @@
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+notice = "warn"
+ignore = []
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-DFS-2016",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+deny = [
+    { name = "libsodium-sys", reason = "FFI C dependency is not allowed in the Exo-OS kernel/server base; use RustCrypto or an audited no_std path" },
+    { name = "dbus", reason = "D-Bus is incompatible with the Exo-OS IPC model" },
+    { name = "zbus", reason = "D-Bus is incompatible with the Exo-OS IPC model" },
+    { name = "tokio", version = "*", reason = "Tokio runtime is not part of the Exo-OS runtime contract" },
+    { name = "async-std", reason = "async-std is redundant with the Exo-OS runtime model" },
+    { name = "systemd", reason = "systemd is incompatible with the Exo-OS boot and service model" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

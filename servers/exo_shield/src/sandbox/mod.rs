@@ -8,7 +8,10 @@ pub mod net_isolation;
 pub mod syscall_filter;
 
 // Re-export the primary public types for ergonomic downstream use.
-pub use container::{ContainerId, ContainerProfile, ContainerState, ContainerManager};
+pub use container::{
+    container_manager_init, is_pid_quarantined, quarantine_allows_syscall, quarantine_pid,
+    release_quarantine, ContainerId, ContainerManager, ContainerProfile, ContainerState,
+};
 pub use fs_restriction::{
     AccessMode, FsPolicy, PathEntry, PathMatcher, FsRestrictionConfig,
 };
@@ -18,3 +21,8 @@ pub use net_isolation::{
 pub use syscall_filter::{
     SyscallBitmap, SyscallFilterProfile, SyscallViolation, SyscallFilterManager,
 };
+
+/// Initialize sandbox containment state.
+pub fn sandbox_init() {
+    container_manager_init();
+}

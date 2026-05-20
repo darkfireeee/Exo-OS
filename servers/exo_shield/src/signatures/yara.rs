@@ -25,6 +25,12 @@ pub const MAX_CONDITIONS_PER_RULE: usize = 8;
 /// Nombre maximum de résultats d'évaluation.
 pub const MAX_EVAL_RESULTS: usize = 16;
 
+/// Taille maximale d'une valeur de condition YARA-like.
+pub const CONDITION_VALUE_SIZE: usize = 64;
+
+/// Taille du format binaire compact d'une condition.
+const CONDITION_WIRE_SIZE: usize = 1 + 1 + 2 + 1 + CONDITION_VALUE_SIZE + 8 + 1;
+
 // ── Type de condition ────────────────────────────────────────────────────────
 
 /// Type de condition dans une règle YARA-like.
@@ -102,10 +108,10 @@ pub struct Condition {
     pub field: FieldType,
     /// Décalage dans le champ (en octets).
     pub offset: u16,
-    /// Longueur de la valeur à comparer (en octets, max 8).
+    /// Longueur de la valeur à comparer (en octets, max 64).
     pub length: u8,
-    /// Valeur de comparaison (jusqu'à 8 octets en little-endian).
-    pub value: [u8; 8],
+    /// Valeur de comparaison (jusqu'à 64 octets).
+    pub value: [u8; CONDITION_VALUE_SIZE],
     /// Seuil numérique pour GreaterThan/LessThan (little-endian u64).
     pub threshold: u64,
     /// Opérateur logique avec la condition suivante (AND/OR).
@@ -123,7 +129,7 @@ impl Condition {
             field: FieldType::RawData,
             offset: 0,
             length: 0,
-            value: [0u8; 8],
+            value: [0u8; CONDITION_VALUE_SIZE],
             threshold: 0,
             logic_op: LogicOp::And,
             enabled: false,
@@ -133,8 +139,8 @@ impl Condition {
 
     /// Crée une condition d'égalité.
     pub fn equals(field: FieldType, offset: u16, value: &[u8]) -> Self {
-        let len = value.len().min(8);
-        let mut val = [0u8; 8];
+        let len = value.len().min(CONDITION_VALUE_SIZE);
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
         val[..len].copy_from_slice(&value[..len]);
         Self {
             cond_type: ConditionType::Equals,
@@ -151,8 +157,8 @@ impl Condition {
 
     /// Crée une condition "contient".
     pub fn contains(field: FieldType, value: &[u8]) -> Self {
-        let len = value.len().min(8);
-        let mut val = [0u8; 8];
+        let len = value.len().min(CONDITION_VALUE_SIZE);
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
         val[..len].copy_from_slice(&value[..len]);
         Self {
             cond_type: ConditionType::Contains,
@@ -169,12 +175,14 @@ impl Condition {
 
     /// Crée une condition "supérieur à".
     pub fn greater_than(field: FieldType, offset: u16, threshold: u64) -> Self {
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
+        val[..8].copy_from_slice(&threshold.to_le_bytes());
         Self {
             cond_type: ConditionType::GreaterThan,
             field,
             offset,
             length: 8,
-            value: threshold.to_le_bytes(),
+            value: val,
             threshold,
             logic_op: LogicOp::And,
             enabled: true,
@@ -184,12 +192,14 @@ impl Condition {
 
     /// Crée une condition "inférieur à".
     pub fn less_than(field: FieldType, offset: u16, threshold: u64) -> Self {
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
+        val[..8].copy_from_slice(&threshold.to_le_bytes());
         Self {
             cond_type: ConditionType::LessThan,
             field,
             offset,
             length: 8,
-            value: threshold.to_le_bytes(),
+            value: val,
             threshold,
             logic_op: LogicOp::And,
             enabled: true,
@@ -199,8 +209,8 @@ impl Condition {
 
     /// Crée une condition "non égal".
     pub fn not_equals(field: FieldType, offset: u16, value: &[u8]) -> Self {
-        let len = value.len().min(8);
-        let mut val = [0u8; 8];
+        let len = value.len().min(CONDITION_VALUE_SIZE);
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
         val[..len].copy_from_slice(&value[..len]);
         Self {
             cond_type: ConditionType::NotEquals,
@@ -217,12 +227,14 @@ impl Condition {
 
     /// Crée une condition "AND bit-à-bit".
     pub fn bitwise_and(field: FieldType, offset: u16, mask: u64) -> Self {
+        let mut val = [0u8; CONDITION_VALUE_SIZE];
+        val[..8].copy_from_slice(&mask.to_le_bytes());
         Self {
             cond_type: ConditionType::BitwiseAnd,
             field,
             offset,
             length: 8,
-            value: mask.to_le_bytes(),
+            value: val,
             threshold: mask,
             logic_op: LogicOp::And,
             enabled: true,
@@ -473,7 +485,7 @@ pub fn evaluate_condition(cond: &Condition, data: &[u8]) -> bool {
 
     let offset = cond.offset as usize;
     let len = cond.length as usize;
-    if len == 0 {
+    if len == 0 || len > CONDITION_VALUE_SIZE {
         return false;
     }
 
@@ -599,13 +611,13 @@ pub fn evaluate_rule(rule: &Rule, data: &[u8]) -> (bool, u8, u8) {
 
 /// Parse une condition depuis un format binaire compact.
 ///
-/// Format : [cond_type:u8, field:u8, offset:u16, length:u8, value:8, threshold:8, logic_op:u8]
-/// Total : 29 octets.
+/// Format : [cond_type:u8, field:u8, offset:u16, length:u8, value:64, threshold:8, logic_op:u8]
+/// Total : 78 octets.
 ///
 /// # Retour
 /// - La condition parsée, ou `Condition::empty()` si le format est invalide.
 pub fn parse_condition(data: &[u8]) -> Condition {
-    if data.len() < 29 {
+    if data.len() < CONDITION_WIRE_SIZE {
         return Condition::empty();
     }
 
@@ -621,15 +633,27 @@ pub fn parse_condition(data: &[u8]) -> Condition {
 
     let offset = u16::from_le_bytes([data[2], data[3]]);
     let length = data[4];
+    if length as usize > CONDITION_VALUE_SIZE {
+        return Condition::empty();
+    }
 
-    let mut value = [0u8; 8];
-    value.copy_from_slice(&data[5..13]);
+    let mut value = [0u8; CONDITION_VALUE_SIZE];
+    value.copy_from_slice(&data[5..5 + CONDITION_VALUE_SIZE]);
+
+    let threshold_start = 5 + CONDITION_VALUE_SIZE;
 
     let threshold = u64::from_le_bytes([
-        data[13], data[14], data[15], data[16], data[17], data[18], data[19], data[20],
+        data[threshold_start],
+        data[threshold_start + 1],
+        data[threshold_start + 2],
+        data[threshold_start + 3],
+        data[threshold_start + 4],
+        data[threshold_start + 5],
+        data[threshold_start + 6],
+        data[threshold_start + 7],
     ]);
 
-    let logic_op = match LogicOp::from_u8(data[21]) {
+    let logic_op = match LogicOp::from_u8(data[threshold_start + 8]) {
         Some(lo) => lo,
         None => LogicOp::And,
     };

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "ExoOS pre-commit audit"
+
+cargo check --workspace --quiet
+python3 tools/audit_constants.py
+
+if command -v semgrep >/dev/null 2>&1; then
+  semgrep --config tools/semgrep-rules/exoos.yaml kernel/ --error --quiet
+else
+  echo "semgrep not found; skipping Semgrep audit"
+fi

@@ -5,6 +5,7 @@
 //! stored in a static array.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use spin::Mutex;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -12,6 +13,9 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Maximum number of firewall rules.
 pub const MAX_FIREWALL_RULES: usize = 64;
+
+/// Maximum number of process-level quarantine blocks.
+pub const MAX_BLOCKED_PIDS: usize = 64;
 
 /// Wildcard value for IP (0 = match any).
 pub const FIREWALL_WILDCARD_IP: u32 = 0;
@@ -24,6 +28,8 @@ pub const FIREWALL_WILDCARD_PROTO: u8 = 0;
 
 // Legacy name alias.
 pub const FIREWALL_WILDCARD: u32 = FIREWALL_WILDCARD_IP;
+
+static PID_BLOCKLIST: Mutex<[u32; MAX_BLOCKED_PIDS]> = Mutex::new([0; MAX_BLOCKED_PIDS]);
 
 // ---------------------------------------------------------------------------
 // Firewall action
@@ -361,6 +367,53 @@ impl Firewall {
     pub fn set_default_action(&mut self, action: FirewallAction) {
         self.default_action = action;
     }
+}
+
+/// Reset process-level firewall containment state.
+pub fn firewall_init() {
+    let mut blocklist = PID_BLOCKLIST.lock();
+    for slot in blocklist.iter_mut() {
+        *slot = 0;
+    }
+}
+
+/// Add a PID to the process-level network blocklist.
+pub fn block_pid(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    let mut blocklist = PID_BLOCKLIST.lock();
+    for slot in blocklist.iter() {
+        if *slot == pid {
+            return true;
+        }
+    }
+    for slot in blocklist.iter_mut() {
+        if *slot == 0 {
+            *slot = pid;
+            return true;
+        }
+    }
+    false
+}
+
+/// Remove a PID from the process-level network blocklist.
+pub fn unblock_pid(pid: u32) -> bool {
+    let mut blocklist = PID_BLOCKLIST.lock();
+    for slot in blocklist.iter_mut() {
+        if *slot == pid {
+            *slot = 0;
+            return true;
+        }
+    }
+    false
+}
+
+/// Check whether a PID is currently blocked by quarantine policy.
+pub fn is_pid_blocked(pid: u32) -> bool {
+    let blocklist = PID_BLOCKLIST.lock();
+    blocklist.iter().any(|slot| *slot == pid)
 }
 
 // ---------------------------------------------------------------------------

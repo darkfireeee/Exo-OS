@@ -126,6 +126,12 @@ pub struct TimelineEntry {
 
 impl Default for TimelineEntry {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl TimelineEntry {
+    pub const fn empty() -> Self {
         Self {
             timestamp: 0,
             event_type: 0,
@@ -162,6 +168,12 @@ pub struct TimelineCorrelation {
 
 impl Default for TimelineCorrelation {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl TimelineCorrelation {
+    pub const fn empty() -> Self {
         Self {
             group_id: 0,
             seq_a: 0,
@@ -195,7 +207,7 @@ fn read_tsc() -> u64 {
 
 /// Timeline entry ring buffer.
 static TIMELINE_BUFFER: Mutex<[TimelineEntry; MAX_TIMELINE_ENTRIES]> = Mutex::new(
-    [TimelineEntry::default(); MAX_TIMELINE_ENTRIES],
+    [const { TimelineEntry::empty() }; MAX_TIMELINE_ENTRIES],
 );
 
 /// Write index into the timeline ring buffer.
@@ -206,7 +218,7 @@ static TIMELINE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Correlation link table.
 static CORRELATION_TABLE: Mutex<[TimelineCorrelation; MAX_CORRELATION_LINKS]> = Mutex::new(
-    [TimelineCorrelation::default(); MAX_CORRELATION_LINKS],
+    [const { TimelineCorrelation::empty() }; MAX_CORRELATION_LINKS],
 );
 static CORRELATION_COUNT: AtomicU32 = AtomicU32::new(0);
 

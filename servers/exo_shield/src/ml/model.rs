@@ -3,8 +3,6 @@
 //! Implements a single-layer feedforward network: 32 inputs → 16 outputs
 //! with configurable activation, stored as static arrays.
 
-use core::sync::atomic::{AtomicU32, Ordering};
-
 use super::features::{FeatureVector, FEATURE_COUNT};
 
 // ---------------------------------------------------------------------------

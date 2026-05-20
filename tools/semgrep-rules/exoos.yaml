@@ -1,0 +1,136 @@
+rules:
+  - id: drv-arch-01-mmio-in-ring0
+    patterns:
+      - pattern: unsafe { $REG.write_volatile($VAL) }
+      - pattern-not-inside: |
+          mod tests { ... }
+    paths:
+      include:
+        - kernel/src/**
+      exclude:
+        - kernel/src/drivers/**
+        - kernel/src/security/iommu/**
+        - kernel/src/memory/dma/**
+    message: "DRV-ARCH-01: MMIO register write in Ring0 outside the approved driver/DMA paths."
+    languages: [rust]
+    severity: ERROR
+
+  - id: ipc-rule-01-len-as-type
+    pattern-either:
+      - pattern: if $MSG.len == $MAGIC { ... }
+      - pattern: if $MSG.payload.len() == $MAGIC { ... }
+      - pattern: if $BUF.len() == $MAGIC { ... }
+    message: "IPC-RULE-01: message length is being used as a type discriminator; use msg_type."
+    languages: [rust]
+    severity: ERROR
+
+  - id: exofs-write-without-immutable-check
+    patterns:
+      - pattern: |
+          fn $WRITE_FN(...) -> $RET {
+            ...
+            write_blob_data(...)
+            ...
+          }
+      - pattern-not: |
+          fn $WRITE_FN(...) -> $RET {
+            ...
+            is_immutable(...)
+            ...
+            write_blob_data(...)
+            ...
+          }
+      - pattern-not: |
+          fn $WRITE_FN(...) -> $RET {
+            ...
+            $META.is_immutable()
+            ...
+            write_blob_data(...)
+            ...
+          }
+    paths:
+      include:
+        - kernel/src/fs/exofs/syscall/**
+    message: "ExoFS write path reaches write_blob_data without an immutable-object check."
+    languages: [rust]
+    severity: ERROR
+
+  - id: missing-phoenix-safe
+    patterns:
+      - pattern: |
+          struct $NAME {
+            ...
+            $FIELD: CapToken,
+            ...
+          }
+      - pattern-not: |
+          impl PhoenixSafe for $NAME { ... }
+    paths:
+      include:
+        - libs/**
+        - servers/**
+    message: "PHX-01: struct contains a CapToken but has no PhoenixSafe implementation."
+    languages: [rust]
+    severity: WARNING
+
+  - id: isr-alloc-forbidden
+    pattern-either:
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            Vec::new()
+            ...
+          }
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            Box::new(...)
+            ...
+          }
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            alloc!(...)
+            ...
+          }
+    message: "DRV-ISR-01: allocation inside an interrupt handler."
+    languages: [rust]
+    severity: ERROR
+
+  - id: virtio-hardcoded-bar
+    pattern-either:
+      - pattern: const $NAME: $TY = 0x1000_0000;
+      - pattern: pub const $NAME: $TY = 0x1000_0000;
+      - pattern: const $NAME: $TY = 0x10000000;
+      - pattern: pub const $NAME: $TY = 0x10000000;
+    metavariable-regex:
+      metavariable: $NAME
+      regex: ".*(VIRTIO|MMIO|BAR).*"
+    message: "CORR-86: hardcoded VirtIO/MMIO BAR address; discover the BAR through PCI config space."
+    languages: [rust]
+    severity: ERROR
+
+  - id: kairos-no-window-reset
+    patterns:
+      - pattern: $BUDGET.used_ns += $ELAPSED;
+      - pattern-not-inside: |
+          if $NOW.saturating_sub($BUDGET.window_start_ns) >= KAIROS_WINDOW_NS {
+            ...
+            $BUDGET.used_ns = 0;
+            ...
+          }
+    paths:
+      include:
+        - kernel/src/security/exokairos.rs
+    message: "ERR-07: ExoKairos used_ns increment without a visible time-window reset."
+    languages: [rust]
+    severity: ERROR
+
+  - id: u64-bitmask-too-small
+    pattern: "$FIELD: u64"
+    metavariable-regex:
+      metavariable: $FIELD
+      regex: ".*(core_mask|active_cores|cpu_mask|core_bitmap).*"
+    message: "Core bitmask stored in u64; use [u64; CORE_MASK_WORDS] for 256-core layouts."
+    languages: [rust]
+    severity: WARNING

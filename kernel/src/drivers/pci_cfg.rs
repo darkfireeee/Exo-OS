@@ -18,8 +18,11 @@ const PCI_CFG_DATA: u16 = 0xCFC;
 
 const PCI_COMMAND_OFFSET: u16 = 0x04;
 const PCI_STATUS_OFFSET: u16 = 0x06;
+const PCI_CLASS_REV_OFFSET: u16 = 0x08;
+const PCI_HEADER_TYPE_OFFSET: u16 = 0x0E;
 const PCI_CAPABILITY_LIST_OFFSET: u16 = 0x34;
 const PCI_BRIDGE_CONTROL_OFFSET: u16 = 0x3E;
+const PCI_BAR0_OFFSET: u16 = 0x10;
 
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
@@ -30,6 +33,9 @@ const PCI_EXP_DEVSTA: u16 = 0x0A;
 const PCI_EXP_DEVSTA_TRPND: u16 = 1 << 5;
 const PCI_EXP_LNKSTA: u16 = 0x12;
 const PCI_EXP_LNKSTA_DLLLA: u16 = 1 << 13;
+const PCI_VENDOR_VIRTIO: u16 = 0x1AF4;
+const PCI_DEVICE_VIRTIO_BLK_LEGACY: u16 = 0x1001;
+const PCI_DEVICE_VIRTIO_BLK_MODERN: u16 = 0x1042;
 
 static PCI_CFG_LOCK: Mutex<()> = Mutex::new(());
 
@@ -114,6 +120,39 @@ fn pci_cfg_read8(bdf: PciBdf, offset: u16) -> u8 {
     (pci_cfg_read32(bdf, offset) >> shift) as u8
 }
 
+fn is_virtio_block_device(vendor_id: u16, device_id: u16, class_code: u8, subclass: u8) -> bool {
+    vendor_id == PCI_VENDOR_VIRTIO
+        && (device_id == PCI_DEVICE_VIRTIO_BLK_LEGACY
+            || device_id == PCI_DEVICE_VIRTIO_BLK_MODERN
+            || ((0x1040..=0x107F).contains(&device_id) && class_code == 0x01 && subclass == 0x00))
+}
+
+fn pci_mmio_bar_base(bdf: PciBdf, bar_offset: u16) -> Option<u64> {
+    let raw = pci_cfg_read32(bdf, bar_offset);
+    if raw == 0 || raw == u32::MAX || raw & 1 != 0 {
+        return None;
+    }
+
+    let mem_type = (raw >> 1) & 0x3;
+    if mem_type == 0x1 {
+        return None;
+    }
+
+    let low = (raw & 0xFFFF_FFF0) as u64;
+    let base = if mem_type == 0x2 {
+        let high = pci_cfg_read32(bdf, bar_offset + 4) as u64;
+        (high << 32) | low
+    } else {
+        low
+    };
+
+    if base == 0 {
+        None
+    } else {
+        Some(base)
+    }
+}
+
 fn find_capability(bdf: PciBdf, cap_id: u8) -> Option<u16> {
     if pci_cfg_read16(bdf, PCI_STATUS_OFFSET) & PCI_STATUS_CAP_LIST == 0 {
         return None;
@@ -142,6 +181,55 @@ fn find_capability(bdf: PciBdf, cap_id: u8) -> Option<u16> {
 
 pub fn sys_pci_cfg_read_for_pid(pid: u32, offset: u16) -> Result<u32, PciCfgError> {
     Ok(pci_cfg_read32(claimed_bdf(pid)?, offset))
+}
+
+pub fn find_virtio_blk_mmio_bar() -> Option<usize> {
+    for bus in 0u16..=255 {
+        let bus = bus as u8;
+        for dev in 0u8..32 {
+            let bdf0 = PciBdf { bus, dev, func: 0 };
+            if pci_cfg_read16(bdf0, 0x00) == u16::MAX {
+                continue;
+            }
+
+            let header_type = pci_cfg_read8(bdf0, PCI_HEADER_TYPE_OFFSET);
+            let function_count = if header_type & 0x80 != 0 { 8 } else { 1 };
+
+            for func in 0u8..function_count {
+                let bdf = PciBdf { bus, dev, func };
+                let id = pci_cfg_read32(bdf, 0x00);
+                let vendor_id = (id & 0xFFFF) as u16;
+                if vendor_id == u16::MAX {
+                    continue;
+                }
+                let device_id = (id >> 16) as u16;
+                let class_reg = pci_cfg_read32(bdf, PCI_CLASS_REV_OFFSET);
+                let class_code = (class_reg >> 24) as u8;
+                let subclass = (class_reg >> 16) as u8;
+                if !is_virtio_block_device(vendor_id, device_id, class_code, subclass) {
+                    continue;
+                }
+
+                let header_type = pci_cfg_read8(bdf, PCI_HEADER_TYPE_OFFSET) & 0x7F;
+                let bar_slots = if header_type == 0x01 { 2 } else { 6 };
+                let mut bar_idx = 0u16;
+                while bar_idx < bar_slots {
+                    let offset = PCI_BAR0_OFFSET + bar_idx * 4;
+                    let raw = pci_cfg_read32(bdf, offset);
+                    if let Some(base) = pci_mmio_bar_base(bdf, offset) {
+                        if base <= usize::MAX as u64 {
+                            return Some(base as usize);
+                        }
+                    }
+
+                    let is_64_bit_mem_bar = raw & 1 == 0 && ((raw >> 1) & 0x3) == 0x2;
+                    bar_idx += if is_64_bit_mem_bar { 2 } else { 1 };
+                }
+            }
+        }
+    }
+
+    None
 }
 
 pub fn sys_pci_cfg_write_for_pid(pid: u32, offset: u16, value: u32) -> Result<(), PciCfgError> {

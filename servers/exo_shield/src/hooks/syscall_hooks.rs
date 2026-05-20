@@ -114,6 +114,12 @@ pub struct SyscallEvent {
 
 impl Default for SyscallEvent {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl SyscallEvent {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             syscall_nr: 0,
@@ -144,6 +150,12 @@ pub struct SyscallFreqEntry {
 
 impl Default for SyscallFreqEntry {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl SyscallFreqEntry {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             count: 0,
@@ -174,6 +186,12 @@ pub struct SyscallSeqEntry {
 
 impl Default for SyscallSeqEntry {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl SyscallSeqEntry {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             sequence: [0; MAX_SEQ_LENGTH],
@@ -212,18 +230,18 @@ impl AttackPattern {
 
 /// Ring buffer of recent syscall events.
 static SYSCALL_EVENTS: Mutex<[SyscallEvent; MAX_SYSCALL_EVENTS]> = Mutex::new(
-    [SyscallEvent::default(); MAX_SYSCALL_EVENTS],
+    [const { SyscallEvent::empty() }; MAX_SYSCALL_EVENTS],
 );
 static SYSCALL_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Per-PID frequency tracking table.
 static FREQ_TABLE: Mutex<[SyscallFreqEntry; MAX_FREQ_ENTRIES]> = Mutex::new(
-    [SyscallFreqEntry::default(); MAX_FREQ_ENTRIES],
+    [const { SyscallFreqEntry::empty() }; MAX_FREQ_ENTRIES],
 );
 
 /// Per-PID sequence tracking table.
 static SEQ_TABLE: Mutex<[SyscallSeqEntry; MAX_SEQ_ENTRIES]> = Mutex::new(
-    [SyscallSeqEntry::default(); MAX_SEQ_ENTRIES],
+    [const { SyscallSeqEntry::empty() }; MAX_SEQ_ENTRIES],
 );
 
 /// Dangerous syscall numbers table.

@@ -130,6 +130,10 @@ pub fn sys_pci_cfg_read_for_pid(pid: u32, offset: u16) -> Result<u32, PciCfgErro
     pci_cfg::sys_pci_cfg_read_for_pid(pid, offset)
 }
 
+pub fn find_virtio_blk_mmio_bar() -> Option<usize> {
+    pci_cfg::find_virtio_blk_mmio_bar()
+}
+
 pub fn sys_pci_cfg_write_for_pid(pid: u32, offset: u16, value: u32) -> Result<(), PciCfgError> {
     pci_cfg::sys_pci_cfg_write_for_pid(pid, offset, value)
 }

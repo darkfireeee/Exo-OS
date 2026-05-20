@@ -308,7 +308,7 @@ impl TrafficAnalyzer {
             }
         }
         // Create new.
-        if self.flow_count as usize < MAX_FLOWS {
+        if (self.flow_count as usize) < MAX_FLOWS {
             let idx = self.flow_count as usize;
             self.flows[idx] = FlowEntry {
                 key,

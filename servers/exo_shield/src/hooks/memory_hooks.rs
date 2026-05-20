@@ -119,6 +119,12 @@ pub struct MemEvent {
 
 impl Default for MemEvent {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl MemEvent {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             event_type: 0,
@@ -153,6 +159,12 @@ pub struct AllocRecord {
 
 impl Default for AllocRecord {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl AllocRecord {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             addr: 0,
@@ -185,6 +197,12 @@ pub struct FreedRegion {
 
 impl Default for FreedRegion {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl FreedRegion {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             addr: 0,
@@ -219,25 +237,25 @@ impl AllocRateEntry {
 
 /// Ring buffer of recent memory events.
 static MEM_EVENTS: Mutex<[MemEvent; MAX_MEM_EVENTS]> = Mutex::new(
-    [MemEvent::default(); MAX_MEM_EVENTS],
+    [const { MemEvent::empty() }; MAX_MEM_EVENTS],
 );
 static MEM_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Allocation tracking table.
 static ALLOC_TABLE: Mutex<[AllocRecord; MAX_ALLOC_RECORDS]> = Mutex::new(
-    [AllocRecord::default(); MAX_ALLOC_RECORDS],
+    [const { AllocRecord::empty() }; MAX_ALLOC_RECORDS],
 );
 static ALLOC_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Freed region quarantine table.
 static FREED_TABLE: Mutex<[FreedRegion; MAX_FREED_REGIONS]> = Mutex::new(
-    [FreedRegion::default(); MAX_FREED_REGIONS],
+    [const { FreedRegion::empty() }; MAX_FREED_REGIONS],
 );
 static FREED_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Allocation rate tracking table.
 static ALLOC_RATE_TABLE: Mutex<[AllocRateEntry; 64]> = Mutex::new(
-    [AllocRateEntry::new(); 64],
+    [const { AllocRateEntry::new() }; 64],
 );
 
 /// Statistics counters.

@@ -129,6 +129,12 @@ pub struct NetEvent {
 
 impl Default for NetEvent {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl NetEvent {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             event_type: 0,
@@ -164,6 +170,12 @@ pub struct DnsQueryEntry {
 
 impl Default for DnsQueryEntry {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl DnsQueryEntry {
+    pub const fn empty() -> Self {
         Self {
             pid: 0,
             domain_hash: 0,
@@ -255,34 +267,34 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 
 /// Ring buffer of recent net events.
 static NET_EVENTS: Mutex<[NetEvent; MAX_NET_EVENTS]> = Mutex::new(
-    [NetEvent::default(); MAX_NET_EVENTS],
+    [const { NetEvent::empty() }; MAX_NET_EVENTS],
 );
 static NET_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Port scan tracking table.
 static PORT_SCAN_TABLE: Mutex<[PortScanEntry; MAX_PORT_SCAN_ENTRIES]> = Mutex::new(
-    [PortScanEntry::new(); MAX_PORT_SCAN_ENTRIES],
+    [const { PortScanEntry::new() }; MAX_PORT_SCAN_ENTRIES],
 );
 
 /// Exfiltration tracking table.
 static EXFIL_TABLE: Mutex<[ExfilEntry; MAX_EXFIL_ENTRIES]> = Mutex::new(
-    [ExfilEntry::new(); MAX_EXFIL_ENTRIES],
+    [const { ExfilEntry::new() }; MAX_EXFIL_ENTRIES],
 );
 
 /// DNS query ring buffer.
 static DNS_BUFFER: Mutex<[DnsQueryEntry; MAX_DNS_ENTRIES]> = Mutex::new(
-    [DnsQueryEntry::default(); MAX_DNS_ENTRIES],
+    [const { DnsQueryEntry::empty() }; MAX_DNS_ENTRIES],
 );
 static DNS_BUFFER_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// DNS rate tracking table.
 static DNS_RATE_TABLE: Mutex<[DnsRateEntry; MAX_EXFIL_ENTRIES]> = Mutex::new(
-    [DnsRateEntry::new(); MAX_EXFIL_ENTRIES],
+    [const { DnsRateEntry::new() }; MAX_EXFIL_ENTRIES],
 );
 
 /// Connection tracking table (active connections).
 static CONN_TABLE: Mutex<[NetEvent; MAX_CONN_ENTRIES]> = Mutex::new(
-    [NetEvent::default(); MAX_CONN_ENTRIES],
+    [const { NetEvent::empty() }; MAX_CONN_ENTRIES],
 );
 static CONN_COUNT: AtomicU32 = AtomicU32::new(0);
 

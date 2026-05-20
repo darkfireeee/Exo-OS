@@ -149,7 +149,7 @@ impl HostEntry {
 // ---------------------------------------------------------------------------
 
 /// Bandwidth limit in bytes per second.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct BandwidthLimit {
     /// Bytes per second allowed (0 = no limit).

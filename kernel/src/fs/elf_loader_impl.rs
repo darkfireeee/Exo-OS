@@ -33,7 +33,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
-const USER_ELF_BASE_MIN: u64 = crate::memory::core::layout::USER_START.as_u64();
+const USER_ELF_BASE_MIN: u64 = 0x0040_0000;
+const USER_ELF_BASE_MAX: u64 = USER_END.as_u64();
+const _: () = assert!(USER_ELF_BASE_MIN < USER_ELF_BASE_MAX);
+const _: () = assert!(USER_ELF_BASE_MIN == 0x0040_0000);
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
@@ -768,7 +771,7 @@ fn validate_user_segment_range(p_vaddr: u64, p_memsz: usize) -> Result<(), ElfLo
         return Err(ElfLoadError::InvalidElf);
     }
 
-    if end > USER_END.as_u64() {
+    if end > USER_ELF_BASE_MAX {
         return Err(ElfLoadError::InvalidElf);
     }
 

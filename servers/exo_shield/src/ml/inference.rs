@@ -3,10 +3,10 @@
 //! Provides batch inference, confidence scoring, threshold-based
 //! classification, and anomaly probability calculation.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::features::{FeatureExtractor, FeatureVector, ProcessBehaviourData, FEATURE_COUNT};
-use super::model::{InferenceResult, ModelWeights, OUTPUT_SIZE};
+use super::model::{InferenceResult, ModelWeights};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,7 +62,14 @@ pub struct ConfidenceScore(i32);
 
 impl ConfidenceScore {
     pub const fn new(raw: i32) -> Self {
-        Self(raw.clamp(0, 1 << 16))
+        let bounded = if raw < 0 {
+            0
+        } else if raw > 1 << 16 {
+            1 << 16
+        } else {
+            raw
+        };
+        Self(bounded)
     }
 
     /// Confidence as a fraction of 65536.
@@ -310,7 +317,7 @@ impl InferenceEngine {
         let conf = if margin < 0 {
             0i32
         } else if margin >= (1i64 << 16) {
-            (1i32 << 16)
+            1i32 << 16
         } else {
             margin as i32
         };

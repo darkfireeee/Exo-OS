@@ -168,6 +168,12 @@ pub struct ExecChainEntry {
 
 impl Default for ExecChainEntry {
     fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl ExecChainEntry {
+    pub const fn empty() -> Self {
         Self {
             child_pid: 0,
             parent_pid: 0,
@@ -215,12 +221,12 @@ static EXEC_EVENT_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Exec frequency table.
 static EXEC_FREQ_TABLE: Mutex<[ExecFreqEntry; MAX_FREQ_ENTRIES]> = Mutex::new(
-    [ExecFreqEntry::new(); MAX_FREQ_ENTRIES],
+    [const { ExecFreqEntry::new() }; MAX_FREQ_ENTRIES],
 );
 
 /// Exec chain table.
 static EXEC_CHAIN_TABLE: Mutex<[ExecChainEntry; MAX_CHAIN_ENTRIES]> = Mutex::new(
-    [ExecChainEntry::default(); MAX_CHAIN_ENTRIES],
+    [const { ExecChainEntry::empty() }; MAX_CHAIN_ENTRIES],
 );
 
 /// Write index for the exec chain table.
@@ -228,7 +234,7 @@ static EXEC_CHAIN_IDX: AtomicU32 = AtomicU32::new(0);
 
 /// Blacklist of forbidden path hashes.
 static BLACKLIST: Mutex<[BlacklistEntry; MAX_BLACKLIST_ENTRIES]> = Mutex::new(
-    [BlacklistEntry::new(); MAX_BLACKLIST_ENTRIES],
+    [const { BlacklistEntry::new() }; MAX_BLACKLIST_ENTRIES],
 );
 
 /// Number of active blacklist entries.

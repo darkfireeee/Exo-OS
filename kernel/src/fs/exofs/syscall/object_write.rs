@@ -13,8 +13,10 @@ use super::validation::{
     CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::rights::RIGHT_WRITE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::security::exoledger::{self, ActionTag};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,6 +25,8 @@ use alloc::vec::Vec;
 
 /// Taille maximale d'un seul appel exofs_object_write().
 pub const WRITE_MAX_BYTES: usize = 128 * 1_024 * 1_024; // 128 MiB.
+
+const IMMUTABLE_META_KEY: &[u8] = b"immutable";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Arguments étendus
@@ -96,11 +100,48 @@ fn persist_cached_blob_if_disk(blob_id: BlobId) -> ExofsResult<()> {
     Ok(())
 }
 
+fn immutable_value_enabled(value: &[u8]) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    value[0] != 0 && value != b"0" && value != b"false"
+}
+
+fn is_immutable(blob_id: BlobId) -> ExofsResult<bool> {
+    let mut value: Vec<u8> = Vec::new();
+    match super::object_set_meta::meta_get(blob_id, IMMUTABLE_META_KEY, &mut value) {
+        Ok(_) => Ok(immutable_value_enabled(&value)),
+        Err(ExofsError::ObjectNotFound) | Err(ExofsError::BlobNotFound) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn audit_immutable_write_denied(blob_id: BlobId) {
+    let raw = blob_id.as_bytes();
+    let oid = u64::from_le_bytes([
+        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+    ]);
+    exoledger::exo_ledger_append(ActionTag::AccessDenied {
+        oid,
+        rights: RIGHT_WRITE,
+    });
+}
+
+fn reject_if_immutable(blob_id: BlobId) -> ExofsResult<()> {
+    if is_immutable(blob_id)? {
+        audit_immutable_write_denied(blob_id);
+        return Err(ExofsError::PermissionDenied);
+    }
+    Ok(())
+}
+
 /// Écrit `data` dans le blob `blob_id` à l'offset `offset`.
 ///
 /// Si le blob n'existe pas, le crée. Si le blob existait, modifie uniquement
 /// les pages touchées via `BlobCache::write_at`.
 fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteResult> {
+    reject_if_immutable(blob_id)?;
+
     let write_end = offset
         .checked_add(data.len() as u64)
         .ok_or(ExofsError::OffsetOverflow)?;
@@ -367,6 +408,18 @@ mod tests {
     }
 
     #[test]
+    fn test_write_blob_rejects_immutable_meta() {
+        let blob = BlobId::from_bytes_blake3(b"write_blob_rejects_immutable_meta");
+        super::super::object_set_meta::meta_set(blob, IMMUTABLE_META_KEY, b"1").test_unwrap();
+
+        match write_blob(blob, 0, b"tamper") {
+            Ok(_) => panic!("immutable write unexpectedly succeeded"),
+            Err(err) => assert_eq!(err, ExofsError::PermissionDenied),
+        }
+        assert_eq!(cached_size(&blob), 0);
+    }
+
+    #[test]
     fn test_sys_write_null_buf() {
         assert_eq!(sys_exofs_object_write(4, 0, 100, 0, 0, 0), EFAULT);
     }
@@ -423,6 +476,8 @@ mod tests {
 /// Si `new_size > current_size`, étend avec des zéros (sparse extension).
 /// OOM-02 : try_reserve. ARITH-02 : min/saturating_sub.
 pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
+    reject_if_immutable(blob_id)?;
+
     if new_size > WRITE_MAX_BYTES {
         return Err(ExofsError::NoSpace);
     }
