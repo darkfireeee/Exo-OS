@@ -148,7 +148,7 @@ rustup component add rust-src rustfmt clippy llvm-tools-preview --toolchain nigh
 Build the current ISO from source:
 
 ```bash
-cd /mnt/c/Users/xavie/Desktop/Exo-OS
+cd /mnt/c/Users/Desktop/Exo-OS
 make iso
 ```
 
