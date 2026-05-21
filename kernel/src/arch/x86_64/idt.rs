@@ -195,6 +195,12 @@ impl InterruptDescriptorTable {
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 static IDT_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+#[inline(always)]
+fn idt_entries_ptr() -> *const IdtEntry {
+    // SAFETY: raw address only; callers decide whether they read or load it.
+    unsafe { core::ptr::addr_of!(IDT.entries).cast::<IdtEntry>() }
+}
+
 // ── Handlers ASM externes ─────────────────────────────────────────────────────
 
 // Ces fonctions sont définies dans les fichiers .s ou exceptions.rs
@@ -261,7 +267,7 @@ extern "C" {
 /// Doit être appelé une seule fois depuis le BSP.
 pub fn init_idt() {
     // SAFETY: appelé une seule fois depuis le BSP en single-thread
-    let idt = unsafe { &mut IDT };
+    let idt = unsafe { &mut *core::ptr::addr_of_mut!(IDT) };
 
     // ── Exceptions (vecteurs 0–31) ────────────────────────────────────────────
     idt.set_handler(
@@ -557,7 +563,7 @@ pub fn load_idt() {
     let idtr = IdtRegister {
         limit: (core::mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
         // SAFETY: IDT est une static — son adresse est stable
-        base: unsafe { IDT.entries.as_ptr() as u64 },
+        base: idt_entries_ptr() as u64,
     };
 
     // SAFETY: idtr pointe vers une IDT valide avec tous les handlers présents
@@ -579,7 +585,7 @@ pub fn idt_ready() -> bool {
 /// Retourne le handler address pour le vecteur `vector` (debugging)
 pub fn get_handler_addr(vector: u8) -> Option<u64> {
     // SAFETY: IDT read-only après init
-    let entry = unsafe { &IDT.entries[vector as usize] };
+    let entry = unsafe { &*idt_entries_ptr().add(vector as usize) };
     if entry.is_present() {
         Some(entry.handler_addr())
     } else {
@@ -589,7 +595,7 @@ pub fn get_handler_addr(vector: u8) -> Option<u64> {
 
 #[inline(always)]
 pub fn idt_base_addr_for_kpti() -> u64 {
-    unsafe { IDT.entries.as_ptr() as u64 }
+    idt_entries_ptr() as u64
 }
 
 #[inline(always)]

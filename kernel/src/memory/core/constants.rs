@@ -148,9 +148,6 @@ pub const DMA_MAX_TRANSFER_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 // IPC RING (partagé avec ipc/ via memory/utils/)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale d'un message IPC petit (inline dans le ring)
-pub const IPC_MAX_SMALL_MSG: usize = 4080;
-
 /// Taille d'un ring IPC (puissance de 2 obligatoire)
 pub const IPC_RING_SIZE: usize = 4096;
 

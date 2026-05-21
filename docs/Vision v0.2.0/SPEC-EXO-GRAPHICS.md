@@ -1,9 +1,9 @@
 # SPEC-EXO-GRAPHICS — Pile Graphique ExoOS v0.2.0
-## winit · wgpu · iced · Framebuffer Ring1
+## Framebuffer Ring1 · winit/wgpu/iced reportés v0.3.0
 
 **Auteur :** claude-alpha  
 **Date :** 2026-05-14  
-**Statut :** SPEC OFFICIELLE v0.2.0 — Périmètre limité (pas de Wayland)
+**Statut :** SPEC OFFICIELLE v0.2.0 — Périmètre limité (pas de Wayland, pas de wgpu/iced)
 
 ---
 
@@ -12,35 +12,26 @@
 **Ce que v0.2.0 établit :**
 - L'architecture complète de la pile graphique (design, interfaces, intégration Ring1)
 - Le `fb_server` (Ring1) opérationnel avec rendu framebuffer
-- winit intégré pour la capture d'événements clavier/souris
-- wgpu initialisé en mode software (wgpu-hal + software rasterizer) si pas de GPU
-- iced opérationnel pour le rendu de l'`exosh` (shell graphique minimal)
+- Le routage d'événements clavier/souris via `input_server`
+- Le shell texte/TTY et le rendu framebuffer direct
 
 **Ce que v0.2.0 ne fait PAS :**
 - Serveur de compositing Wayland (v0.3.0)
 - Accélération GPU via DRM/KMS (v0.3.0)
+- `winit`, `wgpu` et `iced` (v0.3.0, après userspace `std` complet)
 - Multi-fenêtrage (v0.3.0)
 - Applications graphiques POSIX (vlc, firefox) — nécessitent Wayland
 
 **Résultat attendu à la fin de v0.2.0 :**
-Un terminal/shell framebuffer fonctionnel avec rendu de texte propre, saisie clavier, et une interface minimaliste basée sur iced. Pas de bureau complet — mais la fondation est en place.
+Un terminal/shell framebuffer fonctionnel avec rendu de texte propre et saisie clavier. Pas de bureau complet, pas de toolkit GUI, mais la fondation framebuffer est en place.
 
 ---
 
 ## 2. Architecture Globale
 
 ```
-RING 3 — Applications
+RING 3 — Applications texte
     │
-    │  iced (GUI déclaratif)
-    │    │  widgets, layout, update/view cycle
-    │    ▼
-    │  wgpu (rendu GPU ou software)
-    │    │  command buffers, textures, pipelines
-    │    ▼
-    │  winit (events + surface)
-    │    │  keyboard, mouse, window events
-    │    ▼
     │  exo-graphics (client IPC Ring3)
     │    │  IPC: GraphicsRequest::{ Blit, EventPoll, ... }
     │    ▼
@@ -180,9 +171,9 @@ pub enum InputKind {
 
 ---
 
-## 4. winit — Intégration ExoOS
+## 4. winit — Report v0.3.0
 
-winit gère les événements de fenêtre et la création de surface de rendu. Sur ExoOS, le backend winit est `exo_fb_backend` — il remplace les backends X11/Wayland/Win32.
+`winit` est hors périmètre v0.2.0. Le brouillon ci-dessous est conservé comme cible v0.3.0, après disponibilité d'un userspace `std` complet et d'un backend graphique ExoOS.
 
 ```rust
 // exo-graphics/src/winit_backend.rs
@@ -242,16 +233,16 @@ impl winit::platform::ExoPlatform for ExoFbBackend {
 
 ---
 
-## 5. wgpu — Configuration ExoOS v0.2.0
+## 5. wgpu — Report v0.3.0
 
-En v0.2.0, wgpu fonctionne en mode **software rasterizer** (wgpu-hal + `wgpu::Backends::GL` ou backend software `wgpu-software`). L'accélération GPU matérielle arrive en v0.3.0 via DRM/KMS.
+`wgpu` est hors périmètre v0.2.0. Le brouillon ci-dessous est conservé comme cible v0.3.0, avec Wayland/DRM-KMS et les primitives `std` requises.
 
 ```rust
 // exo-graphics/src/wgpu_init.rs
 
 pub async fn create_wgpu_context(surface: &ExoSurface) -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        // v0.2.0 : software uniquement
+        // v0.3.0 : backend software ou DRM/KMS selon plateforme
         backends: wgpu::Backends::empty() | wgpu::Backends::GL,
         ..Default::default()
     });
@@ -295,9 +286,9 @@ impl wgpu::SurfaceTarget for ExoSurface {
 
 ---
 
-## 6. iced — Shell ExoOS
+## 6. iced — Report v0.3.0
 
-iced est utilisé pour le rendu de l'interface de l'`exosh`. En v0.2.0, l'interface est minimaliste : un terminal avec prompt ExoOS.
+`iced` est hors périmètre v0.2.0 parce qu'il dépend du chemin `winit/wgpu`. Le brouillon ci-dessous décrit le shell graphique v0.3.0.
 
 ```rust
 // exosh/src/main.rs — Shell graphique ExoOS (iced)
@@ -328,7 +319,7 @@ impl Application for ExoShell {
         (ExoShell {
             history: Vec::new(),
             input:   String::new(),
-            output:  vec!["ExoOS v0.2.0 — exosh 0.1.0".into(),
+            output:  vec!["ExoOS v0.3.0 — exosh graphique".into(),
                           "Type 'exo help' for commands.".into()],
         }, Command::none())
     }
@@ -398,7 +389,7 @@ async fn execute_command(cmd: String) -> String {
 
 ## 7. ExoPhoenix-Safety de la Pile Graphique
 
-wgpu maintient des ressources GPU (buffers, textures, pipelines) dans le driver. Lors d'une bascule ExoPhoenix :
+Cette section cible v0.3.0. En v0.2.0, la contrainte ExoPhoenix porte sur `fb_server` et les buffers framebuffer directs. Pour v0.3.0, `wgpu` maintiendra des ressources GPU (buffers, textures, pipelines) dans le driver. Lors d'une bascule ExoPhoenix :
 
 ```rust
 impl PhoenixSafe for ExoGraphicsContext {
@@ -441,13 +432,13 @@ impl PhoenixSafe for ExoGraphicsContext {
 
 - [ ] `fb_server` Ring1 fonctionnel (framebuffer GOP UEFI)
 - [ ] `input_server` → `fb_server` : événements PS/2 routés correctement
-- [ ] winit backend ExoOS compilé et linkable
-- [ ] wgpu en mode software rasterizer opérationnel
-- [ ] iced rendu d'un widget `text` + `text_input` sur framebuffer
-- [ ] `exosh` compilé et exécutable avec prompt fonctionnel
+- [-] winit backend ExoOS — reporté v0.3.0
+- [-] wgpu — reporté v0.3.0
+- [-] iced — reporté v0.3.0
+- [ ] `exosh` texte compilé et exécutable avec prompt fonctionnel
 - [ ] `exo ls` dans exosh affiche le format capability natif
-- [ ] Bascule ExoPhoenix avec exosh actif → exosh redémarre proprement
-- [ ] Pas de pixel artifact après bascule (surface recréée correctement)
+- [ ] Bascule ExoPhoenix avec exosh texte actif → exosh redémarre proprement
+- [ ] Pas de corruption framebuffer après bascule
 
 ---
 

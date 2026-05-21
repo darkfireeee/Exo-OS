@@ -53,18 +53,19 @@ pub active_cores: [u64; 4],  // 256 cores max
 
 ---
 
-### 0.2 — exo-alloc (snmalloc + mmap) [BLOQUANT]
+### 0.2 — exo-alloc (dlmalloc no_std + mmap) [BLOQUANT]
 
 **Priorité :** P0  
 **Fichiers :** `libs/exo-alloc/src/`  
-**Description :** Allocateur userland standard basé sur snmalloc avec hooks mmap ExoOS
+**Description :** Allocateur userland standard basé sur un backend no_std sans libc, exposant l'interface `DlmallocAllocator<Exo>` et initialisé par les hooks mmap ExoOS.
 
 **Checklist :**
-- [ ] `ExoAllocator` implémente `GlobalAlloc`
+- [ ] `DlmallocAllocator<Exo>` implémente `GlobalAlloc`
+- [ ] `#[global_allocator]` pointe vers l'allocateur ExoOS
+- [ ] Aucun import `libc`, `malloc`, `free` ou `sbrk` système
 - [ ] `align_up()` correct (multiply supérieur de align, PAS max)
 - [ ] `exo_mmap_anon()` appelle `SYS_MMAP` avec `MAP_ANON | MAP_PRIVATE`
 - [ ] `exo_mremap()` pour `realloc` quand possible
-- [ ] Feature flag pour backend dlmalloc (fallback)
 - [ ] Tests : allocation 8B, 64B, 4KiB, 2MiB, déallocation, realloc
 
 **Tests requis :**
@@ -78,6 +79,20 @@ exo_alloc_test::concurrent_alloc_free  PASS
 
 **Dépend de :** SYS_MMAP kernel (déjà implémenté)  
 **Bloque :** Toutes les crates Ring3 qui allouent de la mémoire
+
+---
+
+### 0.2b — Séquence de boot sécurité [BLOQUANT]
+
+**Priorité :** P0
+**Fichier :** `docs/Vision v0.2.0/BOOT_SEQUENCE_V0.2.md`
+**Description :** Documenter l'ordre exact memory → arch → mitigations → ExoPhoenix → security → Ring1, avec SSR 64 KiB et démarrage Ring1 par vagues.
+
+**Checklist :**
+- [ ] Phases memory/arch/security documentées
+- [ ] SSR `[0x0100_0000..0x0110_0000)` documentée
+- [ ] `SECURITY_READY` avant IPC/ExoFS AP documenté
+- [ ] Ring1 par vagues documenté
 
 ---
 
@@ -391,20 +406,31 @@ Voir tableau complet dans `SPEC-EXO-LIBC.md` — Priorités 1 et 2
 
 ---
 
-### 6.2 — wgpu software rasterizer [P1]
+### 6.2 — wgpu software rasterizer [-] — reporté v0.3.0
 
-**Checklist :**
-- [ ] wgpu compile en no_std (ou avec alloc uniquement)
-- [ ] Backend software (`wgpu::Backends::empty()` + fallback)
-- [ ] Surface basée sur le SHM fb_server
-- [ ] Rendu d'un rectangle coloré → visible sur le framebuffer
+`wgpu` n'est pas un objectif v0.2.0 : la pile dépend de `std`, de threads/runtime
+et d'un backend graphique qui n'existe pas encore dans ExoOS. Le jalon v0.2.0
+reste le rendu framebuffer direct via `fb_server`; `wgpu` revient en v0.3.0
+avec Wayland/DRM-KMS et un userspace `std` complet.
+
+**Statut :** `[-]` hors périmètre v0.2.0.
 
 ---
 
-### 6.3 — iced + exosh [P1]
+### 6.3 — iced + exosh [-] — reporté v0.3.0
+
+`iced` dépend du chemin `winit/wgpu` et ne peut pas être exigé en v0.2.0.
+Le shell v0.2.0 reste texte/TTY avec framebuffer minimal si `fb_server` est
+présent. Le shell graphique `iced` passe en v0.3.0 avec le compositeur.
+
+**Statut :** `[-]` hors périmètre v0.2.0.
+
+---
+
+### 6.4 — Shell texte v0.2.0 [P1]
 
 **Checklist :**
-- [ ] iced compile avec l'executor exo-runtime
+- [ ] `exosh` accessible via TTY
 - [ ] Prompt `$ ` visible et interactif
 - [ ] `exo ls` dans le shell → affichage format capability natif
 - [ ] `exo install` depuis le shell → fonctionnel

@@ -2,9 +2,9 @@ name: ExoOS Audit
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, v0.2.0-stabilisation]
   pull_request:
-    branches: [main]
+    branches: [main, v0.2.0-stabilisation]
 
 jobs:
   audit-constants:
@@ -20,20 +20,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: returntocorp/semgrep-action@v1
+      - uses: actions/setup-python@v5
         with:
-          config: tools/semgrep-rules/exoos.yaml
-          generateSarif: "0"
+          python-version: "3.12"
+      - run: |
+          pip install semgrep
+          semgrep --config tools/semgrep-rules/exoos.yaml --error kernel/src servers
 
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check all
 
   cargo-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo check --workspace
+        with:
+          components: rust-src
+      - run: |
+          cargo check -p exo-os-kernel \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem \
+            --target x86_64-unknown-none

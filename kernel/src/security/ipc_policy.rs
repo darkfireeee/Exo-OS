@@ -103,6 +103,25 @@ fn class_from_capability(cap_type: CapabilityType) -> ServiceClass {
     }
 }
 
+#[inline]
+fn is_ring1_trusted_class(class: ServiceClass) -> bool {
+    matches!(
+        class,
+        ServiceClass::InitServer
+            | ServiceClass::IpcBroker
+            | ServiceClass::MemoryServer
+            | ServiceClass::VfsServer
+            | ServiceClass::CryptoServer
+            | ServiceClass::DeviceServer
+            | ServiceClass::NetworkServer
+            | ServiceClass::SchedulerServer
+            | ServiceClass::InputServer
+            | ServiceClass::TtyServer
+            | ServiceClass::VirtioDriver
+            | ServiceClass::ExoShield
+    )
+}
+
 pub fn register_service(pid: Pid, cap: &CapToken) -> bool {
     if cap.generation == 0
         || cap._pad != [0; 2]
@@ -133,6 +152,12 @@ pub fn register_service_class(pid: Pid, class: ServiceClass) -> bool {
     for slot in reg.iter_mut() {
         if let Some(entry) = slot {
             if entry.pid == pid {
+                if is_ring1_trusted_class(entry.class) && !is_ring1_trusted_class(class) {
+                    crate::security::zero_trust::unregister_ring1_pid(pid.0);
+                }
+                if is_ring1_trusted_class(class) {
+                    crate::security::zero_trust::register_ring1_pid(pid.0);
+                }
                 entry.class = class;
                 return true;
             }
@@ -141,6 +166,9 @@ pub fn register_service_class(pid: Pid, class: ServiceClass) -> bool {
     for slot in reg.iter_mut() {
         if slot.is_none() {
             *slot = Some(ServiceEntry { pid, class });
+            if is_ring1_trusted_class(class) {
+                crate::security::zero_trust::register_ring1_pid(pid.0);
+            }
             return true;
         }
     }
@@ -150,7 +178,13 @@ pub fn register_service_class(pid: Pid, class: ServiceClass) -> bool {
 pub fn unregister_service(pid: Pid) -> bool {
     let mut reg = SERVICE_REGISTRY.write();
     for slot in reg.iter_mut() {
-        if slot.is_some_and(|entry| entry.pid == pid) {
+        if let Some(entry) = *slot {
+            if entry.pid != pid {
+                continue;
+            }
+            if is_ring1_trusted_class(entry.class) {
+                crate::security::zero_trust::unregister_ring1_pid(pid.0);
+            }
             *slot = None;
             return true;
         }
@@ -174,21 +208,7 @@ fn class_of(pid: Pid) -> ServiceClass {
 }
 
 pub fn can_inject_src_pid(pid: Pid) -> bool {
-    matches!(
-        class_of(pid),
-        ServiceClass::InitServer
-            | ServiceClass::IpcBroker
-            | ServiceClass::MemoryServer
-            | ServiceClass::VfsServer
-            | ServiceClass::CryptoServer
-            | ServiceClass::DeviceServer
-            | ServiceClass::NetworkServer
-            | ServiceClass::SchedulerServer
-            | ServiceClass::InputServer
-            | ServiceClass::TtyServer
-            | ServiceClass::VirtioDriver
-            | ServiceClass::ExoShield
-    )
+    is_ring1_trusted_class(class_of(pid))
 }
 
 pub fn check_direct_ipc(src: Pid, dst: Pid) -> IpcPolicyResult {

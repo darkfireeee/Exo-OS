@@ -50,7 +50,13 @@ const _: () = assert!(
 // Alloué en .bss (zero-init par le bootloader). BuddyZone::init() le
 // réinitialise à 0xFF…FF (all-allocated) puis add_free_range() efface
 // les bits des pages réellement libres.
-static mut BUDDY_DMA32_BITMAP: [u64; 16384] = [0u64; 16384];
+const BUDDY_DMA32_BITMAP_WORDS: usize = 16_384;
+static mut BUDDY_DMA32_BITMAP: [u64; BUDDY_DMA32_BITMAP_WORDS] = [0u64; BUDDY_DMA32_BITMAP_WORDS];
+
+#[inline(always)]
+fn buddy_dma32_bitmap_ptr() -> *mut u64 {
+    core::ptr::addr_of_mut!(BUDDY_DMA32_BITMAP).cast::<u64>()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FOURNISSEUR DE PAGES PHYSIQUES POUR LE SLAB (bootstrap)
@@ -123,6 +129,7 @@ fn install_extended_physmap(phys_end: PhysAddr) {
     unsafe {
         write_cr3(active);
     }
+    crate::memory::core::layout::set_physmap_limit(phys_end.as_u64());
 }
 
 unsafe fn install_fresh_high_physmap<A: FrameAllocatorForWalk>(
@@ -410,8 +417,8 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         phys_start_pa,
         phys_end_pa,
         // SAFETY: mutable static dans BSS, durée de vie 'static ≥ celle du buddy.
-        BUDDY_DMA32_BITMAP.as_mut_ptr(),
-        BUDDY_DMA32_BITMAP.len(),
+        buddy_dma32_bitmap_ptr(),
+        BUDDY_DMA32_BITMAP_WORDS,
     );
     // Peupler le buddy avec les mêmes régions libres que le bitmap.
     for entry in entries {
@@ -529,8 +536,8 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     init_phase2b_buddy_zone(
         phys_start_pa,
         phys_end_pa,
-        BUDDY_DMA32_BITMAP.as_mut_ptr(),
-        BUDDY_DMA32_BITMAP.len(),
+        buddy_dma32_bitmap_ptr(),
+        BUDDY_DMA32_BITMAP_WORDS,
     );
     for desc in uefi_map.iter() {
         if !desc.is_usable() {
@@ -796,8 +803,8 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     init_phase2b_buddy_zone(
         phys_start_pa,
         phys_end_pa,
-        BUDDY_DMA32_BITMAP.as_mut_ptr(),
-        BUDDY_DMA32_BITMAP.len(),
+        buddy_dma32_bitmap_ptr(),
+        BUDDY_DMA32_BITMAP_WORDS,
     );
     for i in 0..count {
         let r = &bi.memory_regions[i];

@@ -25,7 +25,6 @@
 #![cfg_attr(any(not(test), target_os = "none"), no_std)]
 #![allow(binary_asm_labels)]
 #![allow(unexpected_cfgs)]
-#![allow(static_mut_refs)]
 #![cfg_attr(not(test), feature(alloc_error_handler))]
 
 #[cfg(all(not(target_arch = "x86_64"), not(test)))]
@@ -160,7 +159,16 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     kdb(b'D'); // Phase 2d done
     crate::arch::x86_64::boot_display::stage_ok("DRIVERS");
 
-    // ── Phase 2e : cgroup root before runqueues (CORR-77) ─────────────
+    // ── Phase 2e : ExoSeal/ExoCage pré-scheduler (CORR-82 / S-03) ───────────
+    // ExoSeal phase0 est idempotente et doit verrouiller CET/PKS/IOMMU avant
+    // l'initialisation des runqueues et la création de threads.
+    unsafe {
+        crate::security::exoseal::exoseal_boot_phase0();
+    }
+    kdb(b'C');
+    crate::arch::x86_64::boot_display::stage_ok("EXOSEAL0");
+
+    // ── Phase 2f : cgroup root before runqueues (CORR-77) ─────────────
     crate::process::resource::cgroup::init();
     kdb(b'c'); // cgroup root ready before scheduler runqueues
 

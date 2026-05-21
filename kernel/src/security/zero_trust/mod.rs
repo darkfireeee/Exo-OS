@@ -16,6 +16,7 @@ pub use policy::{
     global_policy, AccessRequest, PolicyAction, PolicyStats, ResourceKind, ZeroTrustPolicy,
 };
 pub use verify::{
+    register_ring1_pid, ring1_pair_trusted, ring1_trusted_mask, unregister_ring1_pid,
     verify_access, verify_crypto_key_access, verify_dma_access, verify_file_read,
-    verify_file_write, verify_ipc_access, verify_syscall, AccessError,
+    verify_file_write, verify_ipc_access, verify_ipc_access_between, verify_syscall, AccessError,
 };

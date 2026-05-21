@@ -79,23 +79,21 @@ const FADT_TMR_VAL_EXT: u32 = 1 << 8;
 ///
 /// Appelé par `init_acpi()` après localisation de la table FACP/FADT.
 pub fn init_pm_timer(fadt_phys: u64) -> bool {
+    use super::parser::acpi_read_unaligned;
     if fadt_phys == 0 {
         return false;
-    }
-
-    if fadt_phys >= 0x4000_0000 {
+    };
+    let Some(pm_tmr_blk) = acpi_read_unaligned::<u32>(fadt_phys + FADT_PM_TMR_BLK_OFF as u64)
+    else {
         return false;
-    } // hors identity map
-      // read_unaligned : table FADT potentiellement non-alignée sur 4 octets
-    let pm_tmr_blk = unsafe {
-        core::ptr::read_unaligned((fadt_phys as usize + FADT_PM_TMR_BLK_OFF) as *const u32)
     };
     if pm_tmr_blk == 0 {
         return false;
     }
 
-    let fadt_flags =
-        unsafe { core::ptr::read_unaligned((fadt_phys as usize + FADT_FLAGS_OFF) as *const u32) };
+    let Some(fadt_flags) = acpi_read_unaligned::<u32>(fadt_phys + FADT_FLAGS_OFF as u64) else {
+        return false;
+    };
 
     PM_TMR_PORT.store(pm_tmr_blk, Ordering::Release);
     PM_TMR_32BIT.store((fadt_flags & FADT_TMR_VAL_EXT) != 0, Ordering::Release);

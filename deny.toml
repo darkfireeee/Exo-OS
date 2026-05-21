@@ -1,13 +1,21 @@
+[graph]
+targets = [
+    { triple = "x86_64-unknown-none" },
+]
+
 [advisories]
 vulnerability = "deny"
 unmaintained = "warn"
+unsound = "deny"
 notice = "warn"
 ignore = []
 
 [licenses]
 unlicensed = "deny"
+copyleft = "deny"
 allow = [
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -17,12 +25,16 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "deny"
 deny = [
     { name = "libsodium-sys", reason = "FFI C dependency is not allowed in the Exo-OS kernel/server base; use RustCrypto or an audited no_std path" },
+    { name = "libsodium", reason = "Use the audited ExoOS/RustCrypto path instead" },
+    { name = "openssl", reason = "Use the audited ExoOS/RustCrypto path instead" },
+    { name = "ring", reason = "Requires explicit evaluation before being allowed in ExoOS" },
     { name = "dbus", reason = "D-Bus is incompatible with the Exo-OS IPC model" },
     { name = "zbus", reason = "D-Bus is incompatible with the Exo-OS IPC model" },
     { name = "tokio", version = "*", reason = "Tokio runtime is not part of the Exo-OS runtime contract" },
+    { name = "tokio-runtime", reason = "Tokio runtime is not part of the Exo-OS runtime contract" },
     { name = "async-std", reason = "async-std is redundant with the Exo-OS runtime model" },
     { name = "systemd", reason = "systemd is incompatible with the Exo-OS boot and service model" },
 ]

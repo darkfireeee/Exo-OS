@@ -55,7 +55,7 @@ ExoOS is built around three core design principles:
 | Boot sequence | 18-step ordered boot, SECURITY_READY at step 18 |
 | Lock order | Memory → Scheduler → Security → IPC → FS |
 | TCB layout | GI-01 canonical, 256 bytes, hardcoded offsets |
-| SSR layout | Physical `[0x1000000..0x110000]`, E820 reserved |
+| SSR layout | Physical `[0x1000000..0x1100000]`, E820 reserved |
 | Syscalls | 530–546 (driver framework) |
 | POSIX coverage | ~95% via ExoFS Translation Layer v5 |
 | Formal verification | 12 TLA+ modules, 60 properties, ~1.2B states checked |

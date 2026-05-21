@@ -178,6 +178,17 @@ static mut ZSWAP_SLOTS: [ZswapSlot; MAX_ZSWAP_SLOTS] = {
     [S; MAX_ZSWAP_SLOTS]
 };
 
+#[inline(always)]
+fn zswap_slots_mut() -> &'static mut [ZswapSlot] {
+    // SAFETY: all callers hold `ZswapPool::inner`, so mutable access is serialized.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            core::ptr::addr_of_mut!(ZSWAP_SLOTS).cast::<ZswapSlot>(),
+            MAX_ZSWAP_SLOTS,
+        )
+    }
+}
+
 impl ZswapPool {
     const fn new() -> Self {
         ZswapPool {
@@ -214,7 +225,7 @@ impl ZswapPool {
         let _guard = self.inner.lock();
 
         // Trouver un slot libre (scan linéaire).
-        let slots = unsafe { &mut ZSWAP_SLOTS };
+        let slots = zswap_slots_mut();
         for (idx, slot) in slots.iter_mut().enumerate() {
             if !slot.valid.load(Ordering::Acquire) {
                 slot.data[..compressed_len].copy_from_slice(&tmp[..compressed_len]);
@@ -235,7 +246,7 @@ impl ZswapPool {
     pub fn load(&self, pfn: u64, out: &mut [u8]) -> ZswapLoadResult {
         debug_assert_eq!(out.len(), PAGE_SIZE);
         let _guard = self.inner.lock();
-        let slots = unsafe { &mut ZSWAP_SLOTS };
+        let slots = zswap_slots_mut();
 
         for slot in slots.iter_mut() {
             if slot.valid.load(Ordering::Acquire) && slot.orig_pfn == pfn {
@@ -264,7 +275,7 @@ impl ZswapPool {
     /// Invalide (expulse) le slot associé à `pfn` sans décompresser.
     pub fn evict(&self, pfn: u64) -> bool {
         let _guard = self.inner.lock();
-        let slots = unsafe { &mut ZSWAP_SLOTS };
+        let slots = zswap_slots_mut();
         for slot in slots.iter_mut() {
             if slot.valid.load(Ordering::Acquire) && slot.orig_pfn == pfn {
                 slot.valid.store(false, Ordering::Release);
@@ -279,7 +290,7 @@ impl ZswapPool {
     /// Nombre de slots occupés.
     pub fn occupancy(&self) -> usize {
         let _guard = self.inner.lock();
-        let slots = unsafe { &ZSWAP_SLOTS };
+        let slots = zswap_slots_mut();
         slots
             .iter()
             .filter(|s| s.valid.load(Ordering::Relaxed))

@@ -300,6 +300,28 @@ static mut RING_BUFFER: [LedgerEntry; RING_BUFFER_ENTRIES] = {
     [INIT; RING_BUFFER_ENTRIES]
 };
 
+#[inline(always)]
+fn p0_zone_ptr() -> *mut LedgerEntry {
+    core::ptr::addr_of_mut!(P0_ZONE).cast::<LedgerEntry>()
+}
+
+#[inline(always)]
+fn ring_buffer_ptr() -> *mut LedgerEntry {
+    core::ptr::addr_of_mut!(RING_BUFFER).cast::<LedgerEntry>()
+}
+
+fn clear_ledger_storage() {
+    // SAFETY: called during explicit init/test reset while no ledger reader runs.
+    unsafe {
+        for idx in 0..P0_ZONE_ENTRIES {
+            core::ptr::write_volatile(p0_zone_ptr().add(idx), LedgerEntry::zeroed());
+        }
+        for idx in 0..RING_BUFFER_ENTRIES {
+            core::ptr::write_volatile(ring_buffer_ptr().add(idx), LedgerEntry::zeroed());
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs globaux
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,7 +478,7 @@ pub fn exo_ledger_append_p0(action: ActionTag) {
     // SAFETY: idx < P0_ZONE_ENTRIES garanti par le check ci-dessus.
     //         L'écriture est unique par slot (append-only).
     unsafe {
-        core::ptr::write_volatile(&mut P0_ZONE[idx] as *mut LedgerEntry, entry);
+        core::ptr::write_volatile(p0_zone_ptr().add(idx), entry);
     }
 
     // Mettre à jour le dernier hash et les compteurs
@@ -495,7 +517,7 @@ pub fn exo_ledger_append(action: ActionTag) {
     // Écriture dans le ring buffer
     // SAFETY: head < RING_BUFFER_ENTRIES par construction du modulo.
     unsafe {
-        core::ptr::write_volatile(&mut RING_BUFFER[head] as *mut LedgerEntry, entry);
+        core::ptr::write_volatile(ring_buffer_ptr().add(head), entry);
     }
 
     // Mettre à jour le dernier hash et les compteurs
@@ -530,18 +552,8 @@ pub fn exo_ledger_init() {
     TOTAL_WRITTEN.store(0, Ordering::Release);
     P0_OVERFLOW_REPORTED.store(false, Ordering::Release);
 
-    // Zéro-initialiser les zones (déjà BSS = zéro, mais explicite)
-    // Note: on ne peut pas prendre &mut de static mut de manière sûre
-    // en Rust safe. L'init se fait une seule fois au boot (single-threaded).
-    // SAFETY: boot single-threaded, pas de concurrent access.
-    unsafe {
-        for entry in P0_ZONE.iter_mut() {
-            *entry = LedgerEntry::zeroed();
-        }
-        for entry in RING_BUFFER.iter_mut() {
-            *entry = LedgerEntry::zeroed();
-        }
-    }
+    // Zéro-initialiser les zones (déjà BSS = zéro, mais explicite).
+    clear_ledger_storage();
 
     // Initialiser le dernier hash à zéro (genesis entry)
     for byte in LAST_HASH.iter() {
@@ -568,7 +580,7 @@ pub fn verify_p0_integrity() -> Result<usize, LedgerIntegrityError> {
 
     for i in 0..p0_used.min(P0_ZONE_ENTRIES) {
         // SAFETY: i < p0_used <= P0_ZONE_ENTRIES, lecture seule.
-        let entry = unsafe { core::ptr::read_volatile(&P0_ZONE[i] as *const LedgerEntry) };
+        let entry = unsafe { core::ptr::read_volatile(p0_zone_ptr().add(i) as *const LedgerEntry) };
 
         // Vérifier le chaînage : prev_hash de l'entrée doit correspondre
         if entry.prev_hash != prev_hash {
@@ -600,7 +612,8 @@ pub fn verify_ring_integrity() -> Result<usize, LedgerIntegrityError> {
 
     for i in 0..count {
         // SAFETY: i < count <= RING_BUFFER_ENTRIES, lecture seule.
-        let entry = unsafe { core::ptr::read_volatile(&RING_BUFFER[i] as *const LedgerEntry) };
+        let entry =
+            unsafe { core::ptr::read_volatile(ring_buffer_ptr().add(i) as *const LedgerEntry) };
 
         // Les entrées non-écrites ont seq=0, on les ignore
         if entry.seq == 0 && valid == 0 {
@@ -670,7 +683,7 @@ pub fn read_p0_entry(idx: usize) -> Option<LedgerEntry> {
         return None;
     }
     // SAFETY: idx < P0_ZONE_ENTRIES, lecture seule.
-    Some(unsafe { core::ptr::read_volatile(&P0_ZONE[idx] as *const LedgerEntry) })
+    Some(unsafe { core::ptr::read_volatile(p0_zone_ptr().add(idx) as *const LedgerEntry) })
 }
 
 /// Lit une entrée du ring buffer par index.
@@ -679,7 +692,8 @@ pub fn read_ring_entry(idx: usize) -> Option<LedgerEntry> {
         return None;
     }
     // SAFETY: idx < RING_BUFFER_ENTRIES, lecture seule.
-    let entry = unsafe { core::ptr::read_volatile(&RING_BUFFER[idx] as *const LedgerEntry) };
+    let entry =
+        unsafe { core::ptr::read_volatile(ring_buffer_ptr().add(idx) as *const LedgerEntry) };
     if entry.seq == 0 {
         return None; // entrée non écrite
     }
@@ -744,14 +758,7 @@ mod tests {
         RING_HEAD.store(0, Ordering::Release);
         TOTAL_WRITTEN.store(0, Ordering::Release);
         P0_OVERFLOW_REPORTED.store(false, Ordering::Release);
-        unsafe {
-            for entry in P0_ZONE.iter_mut() {
-                *entry = LedgerEntry::zeroed();
-            }
-            for entry in RING_BUFFER.iter_mut() {
-                *entry = LedgerEntry::zeroed();
-            }
-        }
+        clear_ledger_storage();
         for byte in LAST_HASH.iter() {
             byte.store(0, Ordering::Release);
         }

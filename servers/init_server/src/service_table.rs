@@ -102,7 +102,7 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         bin_path: NETWORK_SERVER_BIN,
         requires: DEPS_NETWORK,
         requires_optional: OPT_DEPS_NETWORK,
-        ready_timeout_ms: 3_000,
+        ready_timeout_ms: 10_000,
         critical: false,
     },
     ServiceMetadata {

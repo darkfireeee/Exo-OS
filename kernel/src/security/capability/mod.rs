@@ -308,6 +308,25 @@ pub fn check_token(
     Ok(meta.object_id)
 }
 
+/// Vérifie un token de service IPC et son propriétaire attendu.
+pub fn check_token_owner(
+    token: token::CapToken,
+    required_rights: u32,
+    expected_owner_pid: u32,
+    expected_target_pid: u32,
+    expected_type: u32,
+) -> Result<token::ObjectId, KernelCapError> {
+    if expected_owner_pid == 0 {
+        return Err(KernelCapError::InvalidArg);
+    }
+    let object_id = check_token(token, required_rights, expected_target_pid, expected_type)?;
+    let meta = lookup_service_cap_meta(token.object_id()).ok_or(KernelCapError::NotFound)?;
+    if meta.owner_pid != expected_owner_pid {
+        return Err(KernelCapError::PermissionDenied);
+    }
+    Ok(object_id)
+}
+
 /// Révoque une capability par handle opaque (syscall exo_cap_revoke).
 ///
 /// Traduit le handle (u32 = 32 bits bas de l'ObjectId) en ObjectId, puis
@@ -393,6 +412,25 @@ mod tests {
         .expect("token accepted");
 
         assert_eq!(verified, token.object_id());
+        let owner_verified = check_token_owner(
+            token,
+            Rights::IPC_SEND.bits(),
+            EXO_SHIELD_PID,
+            CRYPTO_PID,
+            CapObjectType::IpcEndpoint as u32,
+        )
+        .expect("owner token accepted");
+        assert_eq!(owner_verified, token.object_id());
+        assert_eq!(
+            check_token_owner(
+                token,
+                Rights::IPC_SEND.bits(),
+                9999,
+                CRYPTO_PID,
+                CapObjectType::IpcEndpoint as u32,
+            ),
+            Err(KernelCapError::PermissionDenied)
+        );
         let _ = revoke_handle(token.object_id().as_u64() as u32);
         unregister_test_service(CRYPTO_PID);
         unregister_test_service(EXO_SHIELD_PID);

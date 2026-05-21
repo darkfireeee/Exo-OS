@@ -34,7 +34,7 @@ Ce corpus remplace et invalide les roadmaps précédentes (v1 et v2 fournies par
 | `SPEC-EXOPHOENIX-V0.2.md` | ExoPhoenix parfait — bascule A↔B < 500ms |
 | `SPEC-EXO-CRATES.md` | exo-alloc · exo-net · exo-crypto · exo-fs · exo-runtime |
 | `SPEC-EXO-LIBC.md` | musl-exo — 127 syscalls, sandbox POSIX |
-| `SPEC-EXO-GRAPHICS.md` | winit + wgpu + iced + fb_server |
+| `SPEC-EXO-GRAPHICS.md` | fb_server v0.2.0 ; winit/wgpu/iced reportés v0.3.0 |
 | `SPEC-EXO-OBSERVABILITY.md` | log + tracing + monitor_server |
 | `SPEC-EXO-DRIVERS-V0.2.md` | virtio, NVMe, AHCI, e1000e, rtl8139 |
 
@@ -43,6 +43,7 @@ Ce corpus remplace et invalide les roadmaps précédentes (v1 et v2 fournies par
 | Document | Contenu |
 |----------|---------|
 | `ROADMAP-IMPLEMENTATION-V0.2.md` | 8 phases, dépendances, ordre de développement |
+| `BOOT_SEQUENCE_V0.2.md` | Ordre memory/arch/security/Ring1 et invariants SSR |
 | `MASTER-CHECKLIST-V0.2.md` | 143 critères de validation — document vivant |
 
 ---

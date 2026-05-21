@@ -23,6 +23,9 @@ pub const MAX_SIGNATURES: usize = 128;
 /// Maximum scan profile name length.
 pub const MAX_PROFILE_NAME: usize = 24;
 
+/// Maximum signature pattern size accepted by the scanner and policy IPC.
+pub const SIGNATURE_PATTERN_SIZE: usize = 64;
+
 /// Scan interval in ticks for periodic scans.
 pub const DEFAULT_SCAN_INTERVAL_TICKS: u64 = 1000;
 
@@ -36,8 +39,8 @@ pub struct SignatureEntry {
     pub sig_type: u8, // 0=pattern, 1=heuristic, 2=behavioral
     pub category: ThreatCategory,
     pub severity: ThreatLevel,
-    pub base_score: u32,   // 0..1000
-    pub pattern: [u8; 16], // pattern bytes for matching
+    pub base_score: u32, // 0..1000
+    pub pattern: [u8; SIGNATURE_PATTERN_SIZE],
     pub pattern_len: u8,
     pub name: [u8; MAX_SIG_NAME],
     pub name_len: u8,
@@ -52,7 +55,7 @@ impl SignatureEntry {
             category: ThreatCategory::None,
             severity: ThreatLevel::Low,
             base_score: 0,
-            pattern: [0u8; 16],
+            pattern: [0u8; SIGNATURE_PATTERN_SIZE],
             pattern_len: 0,
             name: [0u8; MAX_SIG_NAME],
             name_len: 0,
@@ -658,7 +661,7 @@ pub fn execute_scan(
                 continue; // skip non-pattern sigs in this phase
             }
             let pat_len = sig.pattern_len as usize;
-            if pat_len == 0 || pat_len > 16 {
+            if pat_len == 0 || pat_len > SIGNATURE_PATTERN_SIZE {
                 continue;
             }
             let matches = match_pattern(scan_data, &sig.pattern[..pat_len]);
@@ -1067,7 +1070,7 @@ pub fn scanner_init() {
             entry.category = category;
             entry.severity = severity;
             entry.base_score = base_score;
-            let plen = pattern.len().min(16);
+            let plen = pattern.len().min(SIGNATURE_PATTERN_SIZE);
             entry.pattern[..plen].copy_from_slice(&pattern[..plen]);
             entry.pattern_len = plen as u8;
             let nlen = name.len().min(MAX_SIG_NAME);

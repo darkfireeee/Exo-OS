@@ -147,11 +147,10 @@ impl SigInfoC {
 }
 
 // Taille totale du frame signal : doit être <= 4096 pour tenir sur une page.
-const _ASSERT_FRAME_SIZE: () = {
-    // const_assert!(core::mem::size_of::<SignalFrame>() <= 4096)
-    // Activation possible en nightly avec const_panic.
-    ();
-};
+const _: () = assert!(
+    core::mem::size_of::<SignalFrame>() <= 4096,
+    "SignalFrame doit tenir dans une page utilisateur"
+);
 
 /// Offset du champ `uc` (UContext) dans `SignalFrame`, en octets.
 ///

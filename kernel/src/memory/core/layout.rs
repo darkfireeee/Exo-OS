@@ -5,7 +5,9 @@
 // l'espace d'adressage noyau (au-dessus de 0xFFFF_8000_0000_0000).
 // Couche 0 — aucune dépendance externe.
 
-use super::constants::PAGE_SIZE;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use super::constants::{GIGA_PAGE_SIZE, PAGE_SIZE};
 use super::types::VirtAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,8 +41,30 @@ pub const PHYS_MAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_8000_0000_0000);
 /// Taille de la physmap (64 TiB — couvre les systèmes NUMA les plus grands).
 pub const PHYS_MAP_SIZE: usize = 64 * 1024 * 1024 * 1024 * 1024; // 64 TiB
 
+/// Couverture initiale garantie par les tables de boot avant extension.
+pub const PHYSMAP_INITIAL_COVERAGE: usize = GIGA_PAGE_SIZE; // 1 GiB
+
+static PHYSMAP_LIMIT: AtomicU64 = AtomicU64::new(PHYSMAP_INITIAL_COVERAGE as u64);
+
 /// Fin de la physmap (exclusive).
 pub const PHYS_MAP_END: VirtAddr = VirtAddr::new(0xFFFF_C000_0000_0000);
+
+#[inline]
+pub fn physmap_limit() -> u64 {
+    PHYSMAP_LIMIT.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn set_physmap_limit(limit: u64) {
+    let capped = limit.min(PHYS_MAP_SIZE as u64);
+    let mut current = PHYSMAP_LIMIT.load(Ordering::Acquire);
+    while capped > current {
+        match PHYSMAP_LIMIT.compare_exchange(current, capped, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VMALLOC — allocations virtuellement contiguës (non contiguës physiquement)

@@ -79,8 +79,13 @@ arch/
 │   ├── vga_early.rs            sortie VGA simple
 │   └── sched_iface.rs          pont ABI vers le scheduler
 └── aarch64/
-      └── mod.rs                  placeholder ARM64
+      └── mod.rs                  source de port futur, cible boot non supportee en v0.2.0
 ```
+
+`x86_64` est la seule cible de boot supportee par le kernel v0.2.0. Un build
+kernel non-test sur une autre architecture est bloque par `compile_error!` dans
+`kernel/src/lib.rs`; le module `arch/aarch64` reste uniquement un point de
+depart pour un portage ulterieur.
 
 ---
 

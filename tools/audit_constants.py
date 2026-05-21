@@ -20,7 +20,7 @@ CRITICAL_PATTERNS: list[tuple[str, str]] = [
     (r"IPC_INLINE_MAX", "kernel/src/arch/constants.rs"),
     (r"MAX_PROCESSES?", "kernel/src/arch/constants.rs"),
     (r"USER_ELF_BASE_MIN", "kernel/src/arch/constants.rs"),
-    (r"KAIROS_WINDOW_NS", "kernel/src/security/exokairos.rs"),
+    (r"KAIROS_WINDOW_NS", "kernel/src/arch/constants.rs"),
     (r"DECEPTION_THRESHOLD", "kernel/src/security/exoargos.rs"),
     (r"SSR_MAX_PROCESSES", "kernel/src/exophoenix/ssr.rs"),
     (r"SSR_MAX_ENDPOINTS", "kernel/src/exophoenix/ssr.rs"),
@@ -33,6 +33,15 @@ FORBIDDEN_VALUE_RULES: list[tuple[str, str, str]] = [
         "hardcoded VirtIO/MMIO BAR address; use PCI config BAR discovery",
     ),
 ]
+
+IPC_README_EXPECTED: dict[str, list[str]] = {
+    "IPC_MAX_CHANNELS": ["65 536", "65536"],
+    "IPC_MAX_ENDPOINTS": ["8 192", "8192"],
+    "IPC_MAX_PROCESSES": ["65 536", "65536"],
+    "MSG_HEADER_MAGIC": ["0x4D53_4748", "0x4D534748"],
+    "IPC_FUTEX_MAGIC": ["0x1FCF_07E0", "0x1FCF07E0"],
+    "SYNC_CHANNEL_TIMEOUT_NS": ["5 ms", "5 000 000 ns", "5000000"],
+}
 
 
 @dataclass(frozen=True)
@@ -58,6 +67,58 @@ def canonical_for(name: str) -> str:
         if re.fullmatch(pattern, name, re.IGNORECASE):
             return canonical
     return "unknown"
+
+
+def normalize_doc_value(value: str) -> str:
+    return re.sub(r"[\s_`]", "", value).upper()
+
+
+def audit_ipc_readme(repo_root: Path) -> list[dict]:
+    errors: list[dict] = []
+    readme = repo_root / "docs" / "kernel" / "ipc" / "README.md"
+    if not readme.exists():
+        errors.append(
+            {
+                "type": "MISSING_IPC_DOC",
+                "file": readme.relative_to(repo_root).as_posix(),
+                "reason": "docs/kernel/ipc/README.md not found",
+            }
+        )
+        return errors
+
+    rows: dict[str, str] = {}
+    text = readme.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        match = re.match(r"\|\s*`([^`]+)`\s*\|\s*([^|]+)\|", line)
+        if match:
+            rows[match.group(1)] = match.group(2).strip()
+
+    for name, expected_values in IPC_README_EXPECTED.items():
+        value = rows.get(name)
+        if value is None:
+            errors.append(
+                {
+                    "type": "MISSING_IPC_DOC_CONSTANT",
+                    "constant": name,
+                    "file": readme.relative_to(repo_root).as_posix(),
+                    "reason": "constant absent from README key constants table",
+                }
+            )
+            continue
+
+        normalized = normalize_doc_value(value)
+        if not any(normalize_doc_value(expected) in normalized for expected in expected_values):
+            errors.append(
+                {
+                    "type": "STALE_IPC_DOC_CONSTANT",
+                    "constant": name,
+                    "file": readme.relative_to(repo_root).as_posix(),
+                    "value": value,
+                    "expected_any": expected_values,
+                }
+            )
+
+    return errors
 
 
 def audit(repo_root: Path) -> tuple[list[dict], list[dict], dict[str, list[Finding]]]:
@@ -102,6 +163,8 @@ def audit(repo_root: Path) -> tuple[list[dict], list[dict], dict[str, list[Findi
                             "reason": reason,
                         }
                     )
+
+    errors.extend(audit_ipc_readme(repo_root))
 
     for name, findings in sorted(findings_by_name.items()):
         values = {finding.value for finding in findings}

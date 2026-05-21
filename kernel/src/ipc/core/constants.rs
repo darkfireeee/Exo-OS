@@ -24,17 +24,29 @@ pub use crate::arch::constants::IPC_INLINE_MAX;
 
 /// Taille du payload dans l'enveloppe ABI Ring1 (`syscall_abi::IpcMessage`).
 /// Les serveurs Ring1 utilisent 8 bytes d'en-tête (`sender_pid`, `msg_type`)
-/// et 120 bytes de payload, soit 128 bytes par enveloppe userspace.
+/// et 192 bytes de payload, soit 200 bytes par enveloppe userspace.
 /// Le kernel accepte aussi des messages raw jusqu'a `MAX_MSG_SIZE`; si le
 /// receveur fournit un buffer plus petit que le message en tete de file,
 /// `recv_raw` retourne `MessageTooLarge` sans consommer ni tronquer le message.
 pub const ABI_IPC_HEADER_SIZE: usize = 8;
-pub const ABI_IPC_PAYLOAD_SIZE: usize = 120;
+pub const ABI_IPC_CAP_TOKEN_SIZE: usize = 20;
+pub const ABI_IPC_PAYLOAD_SIZE: usize = 192;
 pub const ABI_IPC_ENVELOPE_SIZE: usize = ABI_IPC_HEADER_SIZE + ABI_IPC_PAYLOAD_SIZE;
+pub const IPC_CAP_TOKEN_PAYLOAD_OFFSET: usize = ABI_IPC_PAYLOAD_SIZE - ABI_IPC_CAP_TOKEN_SIZE;
+pub const IPC_CAP_TOKEN_OFFSET: usize = ABI_IPC_HEADER_SIZE + IPC_CAP_TOKEN_PAYLOAD_OFFSET;
+pub const IPC_CAP_TOKEN_SIZE: usize = ABI_IPC_CAP_TOKEN_SIZE;
 
 const _: () = assert!(
     ABI_IPC_ENVELOPE_SIZE <= MAX_MSG_SIZE,
     "l'enveloppe IPC ABI doit tenir dans un slot SPSC"
+);
+const _: () = assert!(
+    ABI_IPC_ENVELOPE_SIZE == 200,
+    "l'enveloppe IPC ABI v0.2 doit faire 200 octets"
+);
+const _: () = assert!(
+    IPC_CAP_TOKEN_OFFSET + IPC_CAP_TOKEN_SIZE == ABI_IPC_ENVELOPE_SIZE,
+    "le jeton de capabilite doit terminer l'enveloppe IPC ABI"
 );
 
 /// Taille de l'en-tête de message (MessageHeader dans le ring).

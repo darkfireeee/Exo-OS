@@ -13,10 +13,53 @@
 //   déclenche une alerte immédiate vers le security monitor (Ring 1).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use super::context::SecurityContext;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use super::context::{PrincipalId, SecurityContext};
 use super::labels::SecurityLabel;
 use super::policy::{global_policy, AccessRequest, PolicyAction, ResourceKind};
 use crate::security::audit;
+
+/// Bitmask des PIDs Ring1 de confiance. La forme compacte couvre les PIDs
+/// précoces des serveurs canoniques; les PIDs >= 64 prennent le slow path.
+static RING1_TRUSTED_MASK: AtomicU64 = AtomicU64::new((1u64 << 1) | (1u64 << 2));
+
+#[inline(always)]
+fn ring1_bit(pid: u32) -> Option<u64> {
+    if pid < 64 {
+        Some(1u64 << pid)
+    } else {
+        None
+    }
+}
+
+pub fn register_ring1_pid(pid: u32) {
+    if let Some(bit) = ring1_bit(pid) {
+        RING1_TRUSTED_MASK.fetch_or(bit, Ordering::Release);
+    }
+}
+
+pub fn unregister_ring1_pid(pid: u32) {
+    if let Some(bit) = ring1_bit(pid) {
+        RING1_TRUSTED_MASK.fetch_and(!bit, Ordering::Release);
+    }
+}
+
+pub fn ring1_trusted_mask() -> u64 {
+    RING1_TRUSTED_MASK.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn ring1_pair_trusted(sender_pid: u32, receiver_pid: u32) -> bool {
+    let Some(sender_bit) = ring1_bit(sender_pid) else {
+        return false;
+    };
+    let Some(receiver_bit) = ring1_bit(receiver_pid) else {
+        return false;
+    };
+    let mask = RING1_TRUSTED_MASK.load(Ordering::Acquire);
+    (mask & sender_bit) != 0 && (mask & receiver_bit) != 0
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AccessError — erreur de vérification d'accès
@@ -154,6 +197,40 @@ pub fn verify_ipc_access(
     endpoint_id: u64,
     is_send: bool,
 ) -> Result<(), AccessError> {
+    let receiver_pid = (endpoint_id >> 32) as u32;
+    if receiver_pid != 0 && ring1_pair_trusted(subject.principal.pid, receiver_pid) {
+        return Ok(());
+    }
+    verify_ipc_peer_access(subject, None, ep_label, endpoint_id, is_send)
+}
+
+/// Vérifie un accès IPC quand le PID destinataire est connu par l'appelant.
+#[inline(always)]
+pub fn verify_ipc_access_between(
+    subject: &SecurityContext,
+    receiver: PrincipalId,
+    ep_label: SecurityLabel,
+    endpoint_id: u64,
+    is_send: bool,
+) -> Result<(), AccessError> {
+    verify_ipc_peer_access(subject, Some(receiver.pid), ep_label, endpoint_id, is_send)
+}
+
+#[inline]
+fn verify_ipc_peer_access(
+    subject: &SecurityContext,
+    receiver_pid: Option<u32>,
+    ep_label: SecurityLabel,
+    endpoint_id: u64,
+    is_send: bool,
+) -> Result<(), AccessError> {
+    if receiver_pid
+        .map(|pid| ring1_pair_trusted(subject.principal.pid, pid))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
     verify_access(
         subject,
         ResourceKind::IpcEndpoint,
@@ -201,4 +278,47 @@ pub fn verify_syscall(subject: &SecurityContext, syscall_no: u64) -> Result<(), 
         false,
         syscall_no,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn principal(pid: u32) -> PrincipalId {
+        PrincipalId {
+            uid: 1000,
+            gid: 1000,
+            pid,
+            tid: pid,
+            ns_id: 0,
+        }
+    }
+
+    #[test]
+    fn ring1_pair_bypasses_full_mls_check() {
+        register_ring1_pid(40);
+        register_ring1_pid(41);
+        let subject = SecurityContext::new_normal(principal(40));
+        let endpoint_id = (41u64 << 32) | 7;
+
+        assert_eq!(
+            verify_ipc_access(&subject, SecurityLabel::kernel(), endpoint_id, true),
+            Ok(())
+        );
+
+        unregister_ring1_pid(40);
+        unregister_ring1_pid(41);
+    }
+
+    #[test]
+    fn unregister_removes_ring1_fast_path() {
+        register_ring1_pid(42);
+        register_ring1_pid(43);
+        assert!(ring1_pair_trusted(42, 43));
+
+        unregister_ring1_pid(42);
+        assert!(!ring1_pair_trusted(42, 43));
+
+        unregister_ring1_pid(43);
+    }
 }

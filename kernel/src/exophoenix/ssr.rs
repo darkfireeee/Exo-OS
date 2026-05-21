@@ -2,6 +2,9 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64};
 
+use crate::arch::constants::{
+    CORE_MASK_WORDS, SSR_MAX_CORES_LAYOUT, SSR_PHYS_BASE, SSR_PHYS_END, SSR_PHYS_SIZE,
+};
 use crate::memory::{phys_to_virt, PhysAddr};
 
 pub use exo_phoenix_ssr::{
@@ -23,29 +26,60 @@ pub const SSR_MAX_PROCESSES: usize = 24;
 pub const SSR_MAX_ENDPOINTS: usize = 48;
 pub const SSR_PROCESS_RECORD_SIZE: usize = 96;
 pub const SSR_ENDPOINT_RECORD_SIZE: usize = 24;
-pub const SSR_RECOVERY_STATE_SIZE: usize = 64
-    + 44
-    + 4
-    + SSR_MAX_PROCESSES * SSR_PROCESS_RECORD_SIZE
-    + 4
-    + SSR_MAX_ENDPOINTS * SSR_ENDPOINT_RECORD_SIZE
-    + 16;
+pub const SSR_OFFSET_HEADER: usize = 0;
+pub const SSR_OFFSET_CHECKSUM: usize = 64;
+pub const SSR_OFFSET_FLAGS: usize = SSR_OFFSET_CHECKSUM + 32;
+pub const SSR_OFFSET_PROCS: usize = 104;
+pub const SSR_OFFSET_ENDPOINTS: usize =
+    SSR_OFFSET_PROCS + SSR_MAX_PROCESSES * SSR_PROCESS_RECORD_SIZE;
+pub const SSR_OFFSET_END: usize =
+    SSR_OFFSET_ENDPOINTS + SSR_MAX_ENDPOINTS * SSR_ENDPOINT_RECORD_SIZE;
+pub const SSR_RECOVERY_STATE_SIZE: usize = (SSR_OFFSET_END + 15) & !15;
+pub const SSR_PROCESS_CORE_MASK_OFFSET: usize = 64;
 
 const _: () = assert!(
     SSR_SIZE <= 16 * 4096,
     "SSR physical layout must fit in the reserved 64 KiB region"
 );
 const _: () = assert!(
+    SSR_BASE == SSR_PHYS_BASE,
+    "SSR library base must match arch constants"
+);
+const _: () = assert!(
+    SSR_PHYS_SIZE as usize >= SSR_SIZE,
+    "SSR physical window must cover the shared 64 KiB SSR"
+);
+const _: () = assert!(
+    SSR_PHYS_END - SSR_PHYS_BASE >= SSR_SIZE as u64,
+    "SSR physical window is smaller than SSR_SIZE"
+);
+const _: () = assert!(
     SSR_RECOVERY_STATE_SIZE <= 4096,
     "SSR recovery metadata budget must fit in one 4 KiB page"
+);
+const _: () = assert!(
+    SSR_OFFSET_PROCS < SSR_OFFSET_ENDPOINTS,
+    "SSR recovery process records must precede endpoint records"
+);
+const _: () = assert!(
+    SSR_MAX_PROCESSES <= u8::MAX as usize,
+    "SSR_MAX_PROCESSES must fit in the recovery count field"
+);
+const _: () = assert!(
+    SSR_MAX_ENDPOINTS <= u8::MAX as usize,
+    "SSR_MAX_ENDPOINTS must fit in the recovery count field"
 );
 const _: () = assert!(
     SSR_MAX_PROCESSES >= 12,
     "SSR must preserve all Ring1 services before optional Ring3 records"
 );
 const _: () = assert!(
-    MAX_CORES == crate::arch::constants::SSR_MAX_CORES_LAYOUT,
+    MAX_CORES == SSR_MAX_CORES_LAYOUT,
     "SSR core layout must match arch constants"
+);
+const _: () = assert!(
+    SSR_PROCESS_CORE_MASK_OFFSET + CORE_MASK_WORDS * 8 <= SSR_PROCESS_RECORD_SIZE,
+    "SSR process core mask exceeds ProcessRecord"
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

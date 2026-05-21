@@ -120,7 +120,7 @@ Algorithme : stack lock-free via `AtomicUsize` pointant vers le sommet. `pool_al
 ### Taille du pool
 
 ```
-MAX_POOL_PAGES = IPC_MAX_CHANNELS × RING_SIZE = 4096 × 16 = 65 536 pages
+MAX_POOL_PAGES = IPC_MAX_CHANNELS × RING_SIZE = 65 536 × 16 = 1 048 576 pages
 ```
 
 ---

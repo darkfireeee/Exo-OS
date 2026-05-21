@@ -35,7 +35,7 @@ pub struct IpcMessage {
 
 ```rust
 pub struct MsgFrameHeader {
-    magic:    u32,    // MSG_HEADER_MAGIC = 0x1FCF_07E0
+    magic:    u32,    // MSG_HEADER_MAGIC = 0x4D53_4748
     version:  u16,    // IPC_VERSION = 1
     msg_type: u8,
     flags:    u8,

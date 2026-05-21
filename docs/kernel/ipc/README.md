@@ -136,11 +136,12 @@ Voir [INIT.md](INIT.md) pour le séquençage complet.
 | `RING_SIZE` | 16 | Slots par ring statique |
 | `RING_MASK` | 15 | Masque pour accès indexés |
 | `IPC_VERSION` | 1 | Version du protocole |
-| `IPC_MAX_CHANNELS` | 4 096 | Canaux simultanés max |
-| `IPC_MAX_ENDPOINTS` | 1 024 | Endpoints enregistrés max |
-| `IPC_MAX_PROCESSES` | 512 | Processus IPC simultanés max |
-| `MSG_HEADER_MAGIC` | 0x1FCF_07E0 | Validité de l'en-tête BdB |
-| `SYNC_CHANNEL_TIMEOUT_NS` | 100 ms | Timeout canal synchrone |
+| `IPC_MAX_CHANNELS` | 65 536 | Canaux simultanés max |
+| `IPC_MAX_ENDPOINTS` | 8 192 | Endpoints enregistrés max |
+| `IPC_MAX_PROCESSES` | 65 536 | Processus IPC simultanés max |
+| `MSG_HEADER_MAGIC` | 0x4D53_4748 | Magic en-tête frame message (`M`,`S`,`G`,`H`) |
+| `IPC_FUTEX_MAGIC` | 0x1FCF_07E0 | Magic futex IPC |
+| `SYNC_CHANNEL_TIMEOUT_NS` | 5 ms (5 000 000 ns) | Timeout canal synchrone |
 
 ---
 

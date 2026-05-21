@@ -193,9 +193,12 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     boot_info.rsdp_phys = rsdp;
 
     let acpi = super::super::acpi::parser::acpi_info();
+    let madt_missing_before_memory = acpi.madt_phys == 0;
+    let hpet_missing_before_memory = acpi.hpet_phys == 0;
+    let fadt_missing_before_memory = acpi.fadt_phys == 0;
 
     // MADT → LAPIC IDs + I/O APIC
-    let madt_info = if acpi.madt_phys != 0 {
+    let mut madt_info = if acpi.madt_phys != 0 {
         Some(super::super::acpi::madt::parse_madt(acpi.madt_phys))
     } else {
         None
@@ -323,6 +326,26 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     } else {
         crate::arch::x86_64::terminal::debug_write(b"early_init: boot protocol non supporte\n");
         crate::arch::x86_64::halt_cpu();
+    }
+
+    if boot_info.rsdp_phys != 0
+        && (madt_missing_before_memory || hpet_missing_before_memory || fadt_missing_before_memory)
+    {
+        super::super::acpi::parser::init_acpi_from_rsdp(boot_info.rsdp_phys);
+        let acpi_post_memory = super::super::acpi::parser::acpi_info();
+
+        if madt_missing_before_memory && acpi_post_memory.madt_phys != 0 {
+            madt_info = Some(super::super::acpi::madt::parse_madt(
+                acpi_post_memory.madt_phys,
+            ));
+            super::super::apic::io_apic::init_all_ioapics();
+        }
+        if hpet_missing_before_memory && acpi_post_memory.hpet_phys != 0 {
+            super::super::acpi::hpet::init_hpet(acpi_post_memory.hpet_phys);
+        }
+        if fadt_missing_before_memory && acpi_post_memory.fadt_phys != 0 {
+            super::super::acpi::pm_timer::init_pm_timer(acpi_post_memory.fadt_phys);
+        }
     }
 
     // ── Étape 12b : Mitigations Spectre/Meltdown ─────────────────────────────

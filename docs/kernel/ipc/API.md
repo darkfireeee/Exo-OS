@@ -122,13 +122,14 @@ pub const MAX_MSG_SIZE:            usize = 240;
 pub const RING_SIZE:               usize = 16;
 pub const RING_MASK:               usize = 15;
 pub const IPC_VERSION:             u32   = 1;
-pub const IPC_MAX_CHANNELS:        usize = 4_096;
-pub const IPC_MAX_ENDPOINTS:       usize = 1_024;
-pub const IPC_MAX_PROCESSES:       usize = 512;
-pub const MSG_HEADER_MAGIC:        u32   = 0x1FCF_07E0;
-pub const SYNC_CHANNEL_TIMEOUT_NS: u64   = 100_000_000;
-pub const FUSION_RING_SIZE:        usize = /* voir source */;
-pub const FUSION_BATCH_THRESHOLD:  usize = 4;
+pub const IPC_MAX_CHANNELS:        usize = 65_536;
+pub const IPC_MAX_ENDPOINTS:       usize = 8_192;
+pub const IPC_MAX_PROCESSES:       usize = 65_536;
+pub const MSG_HEADER_MAGIC:        u32   = 0x4D53_4748;
+pub const IPC_FUTEX_MAGIC:         u32   = 0x1FCF_07E0;
+pub const SYNC_CHANNEL_TIMEOUT_NS: u64   = 5_000_000;
+pub const FUSION_RING_SIZE:        usize = 256;
+pub const FUSION_BATCH_THRESHOLD:  usize = 16;
 ```
 
 ---

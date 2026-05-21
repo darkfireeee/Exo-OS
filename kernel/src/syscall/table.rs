@@ -2723,13 +2723,20 @@ pub fn sys_exo_ipc_send(
             return EFAULT;
         }
     }
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let caller_can_inject =
+        crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid));
+    let envelope_auth =
+        match validate_ipc_envelope_auth(endpoint, caller_pid, caller_can_inject, &payload) {
+            Ok(auth) => auth,
+            Err(errno) => return errno,
+        };
     if flags & IPC_FLAG_INJECT_SRC_PID != 0 {
         if len < core::mem::size_of::<u32>() {
             return EINVAL;
         }
-        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-        if !crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid)) {
-            return EPERM;
+        if !caller_can_inject && envelope_auth != IpcEnvelopeAuth::ValidToken {
+            return EACCES;
         }
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
@@ -3028,6 +3035,60 @@ fn is_reserved_kernel_ipc(endpoint: u64, payload: &[u8]) -> bool {
     }
     let msg_type = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
     msg_type == CRYPTO_PHOENIX_WAKE_ENTROPY
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IpcEnvelopeAuth {
+    NotRequired,
+    TrustedCaller,
+    ValidToken,
+}
+
+fn validate_ipc_envelope_auth(
+    endpoint: u64,
+    caller_pid: u32,
+    caller_can_inject: bool,
+    payload: &[u8],
+) -> Result<IpcEnvelopeAuth, i64> {
+    use crate::ipc::core::constants::{
+        ABI_IPC_ENVELOPE_SIZE, IPC_CAP_TOKEN_OFFSET, IPC_CAP_TOKEN_SIZE,
+    };
+
+    if payload.len() != ABI_IPC_ENVELOPE_SIZE || is_kernel_ephemeral_reply_endpoint(endpoint) {
+        return Ok(IpcEnvelopeAuth::NotRequired);
+    }
+    if caller_can_inject {
+        return Ok(IpcEnvelopeAuth::TrustedCaller);
+    }
+
+    let token_end = IPC_CAP_TOKEN_OFFSET + IPC_CAP_TOKEN_SIZE;
+    let Some(token_slice) = payload.get(IPC_CAP_TOKEN_OFFSET..token_end) else {
+        return Err(EINVAL);
+    };
+    if IPC_CAP_TOKEN_SIZE != crate::security::CAP_TOKEN_WIRE_SIZE {
+        return Err(EINVAL);
+    }
+    let mut token_bytes = [0u8; crate::security::CAP_TOKEN_WIRE_SIZE];
+    token_bytes.copy_from_slice(token_slice);
+    let Some(token) = crate::security::CapToken::from_bytes(&token_bytes) else {
+        return Err(EACCES);
+    };
+
+    let target_pid = exo_ipc_endpoint_pid(endpoint);
+    if target_pid == 0 || caller_pid == 0 {
+        return Err(EACCES);
+    }
+
+    crate::security::capability::check_token_owner(
+        token,
+        crate::security::Rights::IPC_SEND.bits(),
+        caller_pid,
+        target_pid,
+        crate::security::CapObjectType::IpcEndpoint as u32,
+    )
+    .map_err(|_| EACCES)?;
+
+    Ok(IpcEnvelopeAuth::ValidToken)
 }
 
 #[inline]

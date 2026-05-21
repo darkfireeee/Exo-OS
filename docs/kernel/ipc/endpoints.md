@@ -62,7 +62,7 @@ Table de hachage Robin Hood mappant un nom (chaîne statique ou hash 64 bits) ve
 ### Constantes
 
 ```rust
-const REGISTRY_CAPACITY: usize = IPC_MAX_ENDPOINTS;  // 1 024 slots
+const REGISTRY_CAPACITY: usize = IPC_MAX_ENDPOINTS;  // 8 192 slots
 ```
 
 ### API
@@ -147,7 +147,7 @@ static ENDPOINT_POOL: SpinLock<[Option<EndpointDesc>; MAX_ENDPOINTS]> =
     SpinLock::new([const { None }; MAX_ENDPOINTS]);
 ```
 
-`MAX_ENDPOINTS` = `IPC_MAX_ENDPOINTS` = 1 024.
+`MAX_ENDPOINTS` = `IPC_MAX_ENDPOINTS` = 8 192.
 
 ### Création
 

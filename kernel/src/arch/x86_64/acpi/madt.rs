@@ -10,7 +10,6 @@
 //! Header SdtHeader + LAPIC_ADDR (32 bits) + FLAGS (32 bits)
 //! + liste de structures de longueur variable (type, length, ...)
 
-use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 // ── Structures MADT ───────────────────────────────────────────────────────────
@@ -124,20 +123,17 @@ pub fn madt_cpu_count() -> u32 {
 /// Appelé par `init_acpi()` après avoir localisé la table.
 pub fn parse_madt(madt_phys: u64) -> MadtInfo {
     let mut info = MadtInfo::default();
-    if madt_phys == 0 || madt_phys >= 0x4000_0000 {
-        return info;
-    } // hors identity map
 
-    use super::parser::SdtHeader;
-    // SAFETY: adresse MADT validée par le parseur ACPI
-    let header = unsafe { &*(madt_phys as *const SdtHeader) };
-    let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    use super::parser::{acpi_phys_accessible, acpi_phys_ptr, acpi_read_unaligned, SdtHeader};
+    let Some(header) = acpi_read_unaligned::<SdtHeader>(madt_phys) else {
+        return info;
+    };
+    let sig = header.signature;
     if &sig != b"APIC" {
         return info;
     }
 
-    let madt_len_raw = unsafe { core::ptr::read_unaligned(&raw const (*header).length) };
-    let madt_len = madt_len_raw as usize;
+    let madt_len = header.length as usize;
 
     let madt_base_offset = core::mem::size_of::<SdtHeader>();
     // Sanity : besoin d'au moins SdtHeader + lapic_addr(4) + flags(4) = 44 octets
@@ -147,24 +143,34 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
 
     // Lire LAPIC addr (offset 36, u32, potentiellement non-aligné)
     // read_unaligned obligatoire : Rust ≥1.82 vérifie l'alignement dans read_volatile
-    let lapic_addr =
-        unsafe { core::ptr::read_unaligned((madt_phys as usize + madt_base_offset) as *const u32) }
-            as u64;
+    let Some(lapic_addr) = acpi_read_unaligned::<u32>(madt_phys + madt_base_offset as u64) else {
+        return info;
+    };
+    let lapic_addr = lapic_addr as u64;
     info.lapic_phys = lapic_addr;
 
     // Itérer les entrées (offset 44 = SdtHeader(36) + lapic_addr(4) + flags(4))
     let mut offset = madt_base_offset + 8;
 
     while offset + 2 <= madt_len {
-        // u8 reads — alignment 1, read_volatile OK ici
-        let entry_type = unsafe { read_volatile((madt_phys as usize + offset) as *const u8) };
-        let entry_len =
-            unsafe { read_volatile((madt_phys as usize + offset + 1) as *const u8) } as usize;
+        let entry_phys = madt_phys + offset as u64;
+        let Some(entry_type) = acpi_read_unaligned::<u8>(entry_phys) else {
+            break;
+        };
+        let Some(entry_len_raw) = acpi_read_unaligned::<u8>(entry_phys + 1) else {
+            break;
+        };
+        let entry_len = entry_len_raw as usize;
         if entry_len < 2 || offset + entry_len > madt_len {
             break;
         }
+        if !acpi_phys_accessible(entry_phys, entry_len) {
+            break;
+        }
 
-        let entry_base = madt_phys as usize + offset + 2;
+        let Some(base) = acpi_phys_ptr::<u8>(entry_phys + 2) else {
+            break;
+        };
 
         match entry_type {
             MADT_TYPE_LAPIC => {
@@ -173,7 +179,6 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     continue;
                 }
                 // Lecture des champs packed via ptr::read pour éviter UB sur références non-alignées
-                let base = entry_base as *const u8;
                 let _acpi_proc_id = unsafe { *base };
                 let apic_id = unsafe { *base.add(1) };
                 let flags = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
@@ -187,7 +192,6 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     offset += entry_len;
                     continue;
                 }
-                let base = entry_base as *const u8;
                 let ioapic_id = unsafe { *base };
                 let _reserved = unsafe { *base.add(1) };
                 let ioapic_addr = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
@@ -202,7 +206,6 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     offset += entry_len;
                     continue;
                 }
-                let base = entry_base as *const u8;
                 let _bus = unsafe { *base };
                 let source = unsafe { *base.add(1) };
                 let gsi = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
@@ -217,7 +220,6 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     offset += entry_len;
                     continue;
                 }
-                let base = entry_base as *const u8;
                 let addr = unsafe { core::ptr::read_unaligned(base.add(2) as *const u64) };
                 info.lapic_phys = addr;
                 super::super::apic::local_apic::set_lapic_base(addr);
@@ -227,7 +229,6 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     offset += entry_len;
                     continue;
                 }
-                let base = entry_base as *const u8;
                 let _reserved = unsafe { core::ptr::read_unaligned(base as *const u16) };
                 let x2apic_id = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };
                 let flags = unsafe { core::ptr::read_unaligned(base.add(6) as *const u32) };

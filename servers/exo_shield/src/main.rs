@@ -56,6 +56,16 @@ const SHIELD_ERR_DENIED: u32 = 4;
 const SHIELD_ERR_CAP: u32 = 5;
 const SHIELD_ERR_NOT_CONTAINED: u32 = 7;
 
+const POLICY_SIGNATURE_PATTERN_OFFSET: usize = 8;
+const POLICY_SIGNATURE_PATTERN_LEN_OFFSET: usize =
+    POLICY_SIGNATURE_PATTERN_OFFSET + engine::SIGNATURE_PATTERN_SIZE;
+const POLICY_SIGNATURE_NAME_LEN_OFFSET: usize = POLICY_SIGNATURE_PATTERN_LEN_OFFSET + 1;
+const POLICY_SIGNATURE_NAME_OFFSET: usize = POLICY_SIGNATURE_NAME_LEN_OFFSET + 1;
+const _: () = assert!(
+    POLICY_SIGNATURE_NAME_OFFSET + engine::MAX_SIG_NAME <= syscall::IPC_INLINE_PAYLOAD_SIZE,
+    "POLICY_UPDATE signature payload must fit in one IPC envelope"
+);
+
 // ── IPC Message Structures ──────────────────────────────────────────────────
 
 /// Incoming IPC request (128 bytes).
@@ -1042,8 +1052,8 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
         5 => {
             // Add signature
             // [1] sig_type, [2] category, [3] severity, [4..8] base_score (LE)
-            // [8..24] pattern (16 bytes), [24] pattern_len,
-            // [25] name_len, [26..58] name
+            // [8..72] pattern (64 bytes), [72] pattern_len,
+            // [73] name_len, [74..106] name
             let sig_type = req.payload[1];
             let category = engine::ThreatCategory::from_u8(req.payload[2]);
             let severity = engine::ThreatLevel::from_u8(req.payload[3]);
@@ -1055,14 +1065,16 @@ fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
             entry.severity = severity;
             entry.base_score = base_score;
 
-            if req.payload.len() >= 24 {
-                entry.pattern.copy_from_slice(&req.payload[8..24]);
-            }
-            entry.pattern_len = req.payload[24];
-            entry.name_len = req.payload[25];
-            let name_start = 26;
+            entry.pattern.copy_from_slice(
+                &req.payload[POLICY_SIGNATURE_PATTERN_OFFSET..POLICY_SIGNATURE_PATTERN_LEN_OFFSET],
+            );
+            entry.pattern_len = req.payload[POLICY_SIGNATURE_PATTERN_LEN_OFFSET]
+                .min(engine::SIGNATURE_PATTERN_SIZE as u8);
+            entry.name_len =
+                req.payload[POLICY_SIGNATURE_NAME_LEN_OFFSET].min(engine::MAX_SIG_NAME as u8);
+            let name_start = POLICY_SIGNATURE_NAME_OFFSET;
             let name_len = entry.name_len as usize;
-            if name_start + name_len <= req.payload.len() && name_len <= 32 {
+            if name_start + name_len <= req.payload.len() {
                 entry.name[..name_len]
                     .copy_from_slice(&req.payload[name_start..name_start + name_len]);
             }

@@ -1,4 +1,4 @@
-use super::{dependency, log, service_manager, supervisor, syscall, Service};
+use super::{dependency, log, service_manager, service_table, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
 const BOOT_PHASE_TIMEOUT_MS: u64 = 120_000;
@@ -137,39 +137,82 @@ pub unsafe fn wait_for_ipc_ready(service_name: &str, pid: u32, timeout_ms: u64) 
     }
 }
 
-/// Démarre séquentiellement la chaîne Ring1 canonique V4.
+#[inline]
+fn service_index_by_name(services: &[Service], name: &str) -> Option<usize> {
+    let mut idx = 0usize;
+    while idx < services.len() {
+        if services[idx].name == name {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
+}
+
+#[inline]
+fn dependency_ready_in_wave(services: &[Service], ready_mask: u64, dep: &str) -> bool {
+    if dep == "init_server" {
+        return true;
+    }
+    let Some(idx) = service_index_by_name(services, dep) else {
+        return false;
+    };
+    if (ready_mask & (1u64 << idx)) != 0 {
+        return true;
+    }
+    dependency::metadata(dep)
+        .map(|meta| !meta.critical && services[idx].is_dead())
+        .unwrap_or(false)
+}
+
+#[inline]
+fn can_start_in_wave(services: &[Service], name: &str, ready_mask: u64) -> bool {
+    let optional = dependency::optional_dependencies(name);
+    dependency::dependencies_satisfied(name, |dep| {
+        dependency_ready_in_wave(services, ready_mask, dep) || optional.contains(&dep)
+    })
+}
+
+fn log_service_graph_timeout(services: &[Service]) {
+    log::line(b"init: service graph timeout");
+    let mut report_idx = 0usize;
+    while report_idx < services.len() {
+        if services[report_idx].current_pid() != 0 {
+            log::service_pid(
+                b"init: service alive ",
+                services[report_idx].name,
+                services[report_idx].current_pid(),
+            );
+        } else {
+            log::service_status(b"init: service pending ", services[report_idx].name, b"\n");
+        }
+        report_idx += 1;
+    }
+}
+
+#[inline]
+fn graph_timeout_expired(boot_start: u64) -> bool {
+    let now = monotonic_ms();
+    boot_start != 0 && now.saturating_sub(boot_start) >= BOOT_PHASE_TIMEOUT_MS
+}
+
+/// Démarre la chaîne Ring1 canonique V4 par vagues de dépendances.
 ///
-/// La dépendance est volontairement stricte : chaque service doit être vivant
-/// et stabilisé avant le lancement du suivant.
+/// Tous les services dont les dépendances déjà prêtes sont satisfaites sont
+/// lancés ensemble. La readiness de la vague est ensuite pollée en groupe afin
+/// d'éviter de payer un timeout séquentiel par service.
 pub unsafe fn boot_services(services: &[Service]) -> usize {
     let boot_start = monotonic_ms();
-    let mut progress = true;
-    while progress {
-        let now = monotonic_ms();
-        if boot_start != 0 && now.saturating_sub(boot_start) >= BOOT_PHASE_TIMEOUT_MS {
-            log::line(b"init: service graph timeout");
-            let mut report_idx = 0usize;
-            while report_idx < services.len() {
-                if services[report_idx].current_pid() != 0 {
-                    log::service_pid(
-                        b"init: service alive ",
-                        services[report_idx].name,
-                        services[report_idx].current_pid(),
-                    );
-                } else {
-                    log::service_status(
-                        b"init: service pending ",
-                        services[report_idx].name,
-                        b"\n",
-                    );
-                }
-                report_idx += 1;
-            }
+    let mut ready_mask = 0u64;
+    let mut fallback_wait_ms = [0u64; service_table::SERVICE_COUNT];
+
+    loop {
+        if graph_timeout_expired(boot_start) {
+            log_service_graph_timeout(services);
             break;
         }
 
-        progress = false;
-
+        let mut launched = false;
         let mut idx = 0usize;
         while idx < services.len() {
             let service = &services[idx];
@@ -177,7 +220,11 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                 idx += 1;
                 continue;
             }
-            if !supervisor::can_start(services, service.name) {
+            if service.is_dead() {
+                idx += 1;
+                continue;
+            }
+            if !can_start_in_wave(services, service.name, ready_mask) {
                 idx += 1;
                 continue;
             }
@@ -189,23 +236,93 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
             }
 
             service.set_pid(pid);
-            if wait_for_ipc_ready(
-                service.name,
-                pid,
-                dependency::ready_timeout_ms(service.name),
-            ) {
-                if owns_interactive_console(service.name) {
-                    log::set_console_quiet(true);
-                } else {
-                    log::service_pid(b"init: ready ", service.name, pid);
-                }
-                progress = true;
-            } else {
-                log::service_status(b"init: timeout ", service.name, b"\n");
-                let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
-                service.mark_dead();
+            if idx < fallback_wait_ms.len() {
+                fallback_wait_ms[idx] = 0;
             }
+            launched = true;
             idx += 1;
+        }
+
+        let mut pending;
+        let mut readiness_changed = false;
+        loop {
+            if graph_timeout_expired(boot_start) {
+                log_service_graph_timeout(services);
+                return service_manager::running_count(services);
+            }
+
+            pending = false;
+            let mut settled = false;
+            idx = 0;
+            while idx < services.len() {
+                let service = &services[idx];
+                if (ready_mask & (1u64 << idx)) != 0 {
+                    idx += 1;
+                    continue;
+                }
+
+                let pid = service.current_pid();
+                if pid == 0 {
+                    idx += 1;
+                    continue;
+                }
+
+                if pid_alive(pid) && endpoint_registered(service.name) {
+                    ready_mask |= 1u64 << idx;
+                    if owns_interactive_console(service.name) {
+                        log::set_console_quiet(true);
+                    } else {
+                        log::service_pid(b"init: ready ", service.name, pid);
+                    }
+                    settled = true;
+                    readiness_changed = true;
+                    idx += 1;
+                    continue;
+                }
+
+                let spawn_ms = service
+                    .spawn_time_ms
+                    .load(core::sync::atomic::Ordering::Acquire);
+                let now_ms = monotonic_ms();
+                let timeout_ms = dependency::ready_timeout_ms(service.name);
+                let timed_out = if spawn_ms != 0 && now_ms != 0 {
+                    now_ms.saturating_sub(spawn_ms) >= timeout_ms
+                } else {
+                    idx < fallback_wait_ms.len() && fallback_wait_ms[idx] >= timeout_ms
+                };
+                if timed_out {
+                    log::service_status(b"init: timeout ", service.name, b"\n");
+                    let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
+                    service.mark_dead();
+                    settled = true;
+                    readiness_changed = true;
+                    idx += 1;
+                    continue;
+                }
+
+                pending = true;
+                idx += 1;
+            }
+
+            if !pending {
+                break;
+            }
+            if settled {
+                break;
+            }
+            let mut wait_idx = 0usize;
+            while wait_idx < services.len() && wait_idx < fallback_wait_ms.len() {
+                if (ready_mask & (1u64 << wait_idx)) == 0 && services[wait_idx].current_pid() != 0 {
+                    fallback_wait_ms[wait_idx] =
+                        fallback_wait_ms[wait_idx].saturating_add(POLL_INTERVAL_MS);
+                }
+                wait_idx += 1;
+            }
+            service_poll_delay();
+        }
+
+        if !launched && !readiness_changed {
+            break;
         }
     }
 

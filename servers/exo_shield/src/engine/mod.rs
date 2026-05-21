@@ -23,7 +23,7 @@ pub use scanner::{
     periodic_scan_tick, queue_scan, register_periodic_scan, scanner_init, scanner_is_init,
     set_scan_profile, stat_scan_executed, stat_scan_queued, store_scan_result,
     unregister_periodic_scan, ScanProfile, ScanRequest, ScanResult, ScannerStats, SignatureEntry,
-    DEFAULT_SCAN_INTERVAL_TICKS, MAX_SIGNATURES, SCAN_QUEUE_MAX,
+    DEFAULT_SCAN_INTERVAL_TICKS, MAX_SIGNATURES, SCAN_QUEUE_MAX, SIGNATURE_PATTERN_SIZE,
 };
 
 // ── Re-export commonly used types from realtime ─────────────────────────────

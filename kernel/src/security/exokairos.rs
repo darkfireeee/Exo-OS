@@ -33,8 +33,8 @@
 //   Seul `deadline_mac: [u8; 16]` est stocké — la deadline réelle est dans
 //   cap_deadline_table (domaine PKS Credentials, inaccessible depuis Ring 1).
 //
-// RÈGLE EXOKAIROS-01 : verify() est constant-time — zéro branchement dépendant
-//   des données de la capability (seul le résultat final diffère).
+// RÈGLE EXOKAIROS-01 : la vérification MAC/deadline reste constant-time.
+//   Les décisions throttle/kill branchent uniquement sur des compteurs publics.
 // RÈGLE EXOKAIROS-02 : verify() ne fait AUCUN IPC — toute la logique est inline.
 // RÈGLE EXOKAIROS-03 : depth_max = 4 — pas de délégation au-delà de 4 niveaux.
 //
@@ -46,6 +46,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use spin::Once;
 
+pub use crate::arch::constants::{KAIROS_KILL_PCT, KAIROS_THROTTLE_PCT, KAIROS_WINDOW_NS};
 use crate::security::capability::rights::Rights;
 use crate::security::capability::token::CapToken;
 use crate::security::exoveil::{self, PksDomain, PksPermission};
@@ -72,8 +73,7 @@ pub mod ttl {
 /// Profondeur maximale de délégation (4 niveaux).
 pub const MAX_DELEGATION_DEPTH: u8 = 4;
 
-/// Fenêtre d'audit et de renouvellement des budgets temporels Kairos.
-pub const KAIROS_WINDOW_NS: u64 = 1_000_000_000;
+const KAIROS_THROTTLE_SPINS: usize = 64;
 
 const _: () = assert!(
     KAIROS_WINDOW_NS == 1_000_000_000,
@@ -106,6 +106,10 @@ pub enum CapError {
     MacMismatch,
     /// La capability n'existe pas dans la deadline table.
     NotFound,
+    /// Le budget fenêtre a atteint le seuil de ralentissement (100%).
+    ThrottleRequired,
+    /// Le budget fenêtre a atteint le seuil de terminaison (200%).
+    KillThresholdExceeded,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,15 +126,17 @@ pub enum CapError {
 /// | deadline_mac   | [u8; 16]  | 16     | HMAC-Blake3(oid\|\|deadline\|\|SECRET)|
 /// | calls_left     | AtomicU32 | 4      | Budget d'appels restant              |
 /// | bytes_left     | AtomicU64 | 8      | Volume restant (octets)              |
+/// | window_start_ns| AtomicU64 | 8      | Début fenêtre courante               |
+/// | window budgets | u32/u64   | 12     | Budget par fenêtre                   |
+/// | window used    | Atomic*   | 16     | Consommation fenêtre                 |
 /// | depth          | u8        | 1      | Profondeur de délégation (0..4)      |
-/// | _pad           | [u8; 7]   | 7      | Alignement                           |
-/// |                |            | 60     | Total                                |
 ///
 /// # Sécurité
 /// - `deadline_mac` : HMAC-Blake3 de (oid || deadline_tsc || KERNEL_SECRET).
 ///   L'attaquant ne peut PAS déduire le TSC de deadline depuis le MAC.
-/// - `calls_left` / `bytes_left` : atomiques, décrémentés monotiquement.
-///   La propriété S4 (BudgetMonotonicity) est garantie par fetch_sub.
+/// - `calls_left` / `bytes_left` : atomiques, rechargés uniquement au changement
+///   de fenêtre `KAIROS_WINDOW_NS`.
+/// - `window_used_*` : déclenchent throttle à 100% et kill à 200%.
 /// - `depth` : ne peut jamais dépasser MAX_DELEGATION_DEPTH (4).
 #[repr(C)]
 pub struct TemporalCap {
@@ -143,10 +149,18 @@ pub struct TemporalCap {
     pub calls_left: AtomicU32,
     /// Volume restant en octets (décrémenté atomiquement).
     pub bytes_left: AtomicU64,
+    /// Début de la fenêtre courante en temps monotone.
+    pub window_start_ns: AtomicU64,
+    /// Budget d'appels rechargé à chaque fenêtre.
+    window_budget_calls: u32,
+    /// Budget de volume rechargé à chaque fenêtre.
+    window_budget_bytes: u64,
+    /// Appels consommés dans la fenêtre courante.
+    window_used_calls: AtomicU64,
+    /// Octets consommés dans la fenêtre courante.
+    window_used_bytes: AtomicU64,
     /// Profondeur de délégation (0 = original, 1..4 = délégué).
     pub depth: u8,
-    /// Padding d'alignement.
-    _pad: [u8; 7],
 }
 
 impl TemporalCap {
@@ -182,15 +196,108 @@ impl TemporalCap {
             deadline_mac,
             calls_left: AtomicU32::new(initial_calls),
             bytes_left: AtomicU64::new(initial_bytes),
+            window_start_ns: AtomicU64::new(0),
+            window_budget_calls: initial_calls,
+            window_budget_bytes: initial_bytes,
+            window_used_calls: AtomicU64::new(0),
+            window_used_bytes: AtomicU64::new(0),
             depth,
-            _pad: [0u8; 7],
         }
     }
 
-    /// Vérifie la validité de cette capability — constant-time, ZÉRO IPC.
+    #[inline]
+    #[cfg(test)]
+    fn current_window_ns(fallback: u64) -> u64 {
+        fallback
+    }
+
+    #[inline]
+    #[cfg(not(test))]
+    fn current_window_ns(fallback: u64) -> u64 {
+        let now = crate::scheduler::timer::clock::monotonic_ns();
+        if now == 0 {
+            fallback
+        } else {
+            now
+        }
+    }
+
+    fn check_and_advance_window(&self, now_ns: u64) {
+        let mut start = self.window_start_ns.load(Ordering::Acquire);
+        if start == 0 {
+            match self.window_start_ns.compare_exchange(
+                0,
+                now_ns,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(actual) => start = actual,
+            }
+        }
+
+        if now_ns.saturating_sub(start) < KAIROS_WINDOW_NS {
+            return;
+        }
+
+        if self
+            .window_start_ns
+            .compare_exchange(start, now_ns, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.window_used_calls.store(0, Ordering::Release);
+            self.window_used_bytes.store(0, Ordering::Release);
+            self.calls_left
+                .store(self.window_budget_calls, Ordering::Release);
+            self.bytes_left
+                .store(self.window_budget_bytes, Ordering::Release);
+        }
+    }
+
+    #[inline(always)]
+    fn throttle_window() {
+        let mut spins = 0usize;
+        while spins < KAIROS_THROTTLE_SPINS {
+            core::hint::spin_loop();
+            spins += 1;
+        }
+    }
+
+    #[inline]
+    fn throttle_or_kill(used: u64, budget: u64) -> Result<(), CapError> {
+        if budget == 0 {
+            return Err(CapError::BudgetExhausted);
+        }
+        let used_pct = used.saturating_mul(100);
+        if used_pct >= budget.saturating_mul(KAIROS_KILL_PCT) {
+            return Err(CapError::KillThresholdExceeded);
+        }
+        if used_pct >= budget.saturating_mul(KAIROS_THROTTLE_PCT) {
+            Self::throttle_window();
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn debit_call_budget(&self) {
+        let mut current = self.calls_left.load(Ordering::Acquire);
+        while current != 0 {
+            match self.calls_left.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    /// Vérifie la validité de cette capability — MAC/deadline constant-time, ZÉRO IPC.
     ///
     /// # Propriétés
-    /// - Constant-time : le temps d'exécution ne dépend PAS du résultat
+    /// - Constant-time pour la deadline et le MAC cachés
     /// - Zéro IPC : toute la logique est inline dans Ring 0
     /// - Monotone : calls_left et bytes_left décroissent toujours
     ///
@@ -202,8 +309,8 @@ impl TemporalCap {
     /// 5. Vérifier le budget restant
     ///
     /// # RÈGLE EXOKAIROS-01
-    /// verify() est constant-time : toutes les opérations sont effectuées
-    /// quelle que soit l'issue (seul le résultat Err/Ok diffère).
+    /// La partie secrète (deadline table + MAC) reste constant-time. La fenêtre
+    /// de budget peut déclencher throttle/kill sur compteurs publics.
     pub fn verify(&self, current_tsc: u64) -> Result<(), CapError> {
         // 1. Récupérer la deadline depuis la table kernel (inaccessible Ring 1)
         let deadline = cap_deadline_table::get_const_time(self.base.object_id());
@@ -222,40 +329,24 @@ impl TemporalCap {
             return Err(CapError::Expired);
         }
 
-        // 4. Décompte atomique des appels
-        //    fetch_sub retourne la valeur AVANT décrémentation.
-        //    Si calls_left était 0, on retourne BudgetExhausted.
-        //    Mais on décrémente quand même pour maintenir le temps constant.
-        let calls_result = {
-            let mut result = Err(CapError::BudgetExhausted);
-            let mut current = self.calls_left.load(Ordering::Acquire);
-            loop {
-                if current == 0 {
-                    break;
-                }
-                match self.calls_left.compare_exchange_weak(
-                    current,
-                    current - 1,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(_) => {
-                        result = Ok(());
-                        break;
-                    }
-                    Err(actual) => current = actual,
-                }
-            }
-            result
-        };
+        // 4. Fenêtre glissante : reset toutes les `KAIROS_WINDOW_NS`, throttle
+        //    à 100% du budget et kill à 200%.
+        let now_ns = Self::current_window_ns(current_tsc);
+        self.check_and_advance_window(now_ns);
+        let used_calls = self
+            .window_used_calls
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        Self::throttle_or_kill(used_calls, self.window_budget_calls as u64)?;
 
-        // 5. Vérifier le volume restant (lecture seule — décrémenté par le caller)
-        let bytes = self.bytes_left.load(Ordering::Acquire);
-        if bytes == 0 && calls_result.is_ok() {
+        // 5. Décompte atomique saturant du budget visible dans la fenêtre.
+        self.debit_call_budget();
+
+        if self.window_budget_bytes == 0 {
             return Err(CapError::VolumeExhausted);
         }
 
-        calls_result
+        Ok(())
     }
 
     /// Décrémente le volume restant de `n` octets.
@@ -264,6 +355,14 @@ impl TemporalCap {
     /// est épuisé (saturating_sub).
     #[inline(always)]
     pub fn consume_bytes(&self, n: u64) -> u64 {
+        let now_ns = Self::current_window_ns(0);
+        self.check_and_advance_window(now_ns);
+        let used_bytes = self
+            .window_used_bytes
+            .fetch_add(n, Ordering::AcqRel)
+            .saturating_add(n);
+        let _ = Self::throttle_or_kill(used_bytes, self.window_budget_bytes);
+
         loop {
             let current = self.bytes_left.load(Ordering::Acquire);
             let new_val = current.saturating_sub(n);
@@ -644,14 +743,20 @@ pub fn exokairos_stats() -> ExoKairosStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{cap_deadline_table, DEADLINE_TABLE_SIZE};
-    use crate::security::capability::token::ObjectId;
+    use super::{cap_deadline_table, CapError, TemporalCap, DEADLINE_TABLE_SIZE, KAIROS_WINDOW_NS};
+    use crate::security::capability::rights::Rights;
+    use crate::security::capability::token::{CapObjectType, CapToken, ObjectId};
+    use core::sync::atomic::Ordering;
     use spin::Mutex;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_oid(raw: u64) -> ObjectId {
         ObjectId::from_raw(0x4558_4f4b_0000_0000 | raw)
+    }
+
+    fn test_token(raw: u64) -> CapToken {
+        CapToken::new(test_oid(raw), Rights::READ, 1, CapObjectType::FileInode)
     }
 
     #[test]
@@ -716,5 +821,39 @@ mod tests {
             cap_deadline_table::remove(oid);
         }
         assert_eq!(cap_deadline_table::used_count(), 0);
+    }
+
+    #[test]
+    fn window_budget_throttles_then_kills_at_double_budget() {
+        let _guard = TEST_LOCK.lock();
+        let oid = test_oid(0x3000);
+        cap_deadline_table::remove(oid);
+        let cap = unsafe { TemporalCap::new(test_token(0x3000), u64::MAX - 1, 2, 64, 0) };
+
+        assert_eq!(cap.verify(1), Ok(()));
+        assert_eq!(cap.verify(2), Ok(()));
+        assert_eq!(cap.verify(3), Ok(()));
+        assert_eq!(cap.verify(4), Err(CapError::KillThresholdExceeded));
+
+        cap_deadline_table::remove(oid);
+    }
+
+    #[test]
+    fn window_reset_recharges_visible_budgets() {
+        let _guard = TEST_LOCK.lock();
+        let oid = test_oid(0x3001);
+        cap_deadline_table::remove(oid);
+        let cap = unsafe { TemporalCap::new(test_token(0x3001), u64::MAX - 1, 2, 64, 0) };
+
+        assert_eq!(cap.verify(1), Ok(()));
+        assert_eq!(cap.verify(2), Ok(()));
+        assert_eq!(cap.calls_remaining(), 0);
+
+        let start = cap.window_start_ns.load(Ordering::Acquire);
+        cap.check_and_advance_window(start.saturating_add(KAIROS_WINDOW_NS + 2));
+        assert_eq!(cap.calls_remaining(), 2);
+        assert_eq!(cap.bytes_remaining(), 64);
+
+        cap_deadline_table::remove(oid);
     }
 }

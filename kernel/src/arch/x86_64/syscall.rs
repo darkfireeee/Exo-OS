@@ -167,6 +167,10 @@ pub fn init_syscall() {
 
 // ── Entrée SYSCALL en ASM ─────────────────────────────────────────────────────
 
+const SYSRETQ_USER_CS64: u64 = super::gdt::GDT_USER_CS64 as u64;
+const SYSRETQ_USER_DS: u64 = super::gdt::GDT_USER_DS as u64;
+const SYSRETQ_SAFE_RSP: u64 = crate::memory::core::layout::USER_STACK_TOP.as_u64();
+
 // Point d'entrée SYSCALL 64-bit — défini en global_asm!
 //
 // Séquence :
@@ -177,10 +181,11 @@ pub fn init_syscall() {
 // 5. Sauvegarder tous les registres caller-saved + RCX/R11
 // 6. Appeler `syscall_rust_handler()`
 // 7. Restaurer les registres depuis la SyscallFrame
-// 8. Si KPTI actif, charger CR3 user depuis GS:[0x48]
-// 9. Charger RSP userspace depuis la SyscallFrame
-// 10. SWAPGS (restaurer GS userspace)
-// 11. SYSRETQ
+// 8. Vérifier RCX/RSP avant SYSRETQ (CVE-2012-0217)
+// 9. Si KPTI actif, charger CR3 user depuis GS:[0x48]
+// 10. Charger RSP userspace depuis la SyscallFrame
+// 11. SWAPGS (restaurer GS userspace)
+// 12. SYSRETQ ou fallback IRETQ
 core::arch::global_asm!(
     ".section .text",
     ".global syscall_entry_asm",
@@ -256,10 +261,22 @@ core::arch::global_asm!(
     "mov   rbp, [rsp + 104]",
     "mov   r11, [rsp + 112]",
     "mov   rcx, [rsp + 120]",
-    // ── 10. Préparer RSP userspace et CR3 user sans perdre RAX ───────────────────
+    // ── 10. Préparer RSP userspace et vérifier le retour SYSRETQ ────────────────
     "mov   qword ptr gs:[0x50], rax",
     "mov   rax, [rsp +  56]",
     "mov   qword ptr gs:[0x08], rax",
+    // CVE-2012-0217 : SYSRETQ peut lever #GP en CPL0 avec RCX/RSP non-canonique.
+    // Tester la canonicité par sign-extension bit 47 avant de quitter Ring0.
+    "mov   rax, rcx",
+    "shl   rax, 16",
+    "sar   rax, 16",
+    "cmp   rax, rcx",
+    "jne   997f",
+    "mov   rax, qword ptr gs:[0x08]",
+    "shl   rax, 16",
+    "sar   rax, 16",
+    "cmp   rax, qword ptr gs:[0x08]",
+    "jne   997f",
     "mov   rax, qword ptr gs:[0x48]",
     "test  rax, rax",
     "jz    999f",
@@ -271,7 +288,28 @@ core::arch::global_asm!(
     "swapgs",
     // ── 12. Retour en mode 64-bit Ring 3 ─────────────────────────────────────────
     "sysretq",
+    "997:",
+    // Fallback IRETQ : repasser sur CR3 user, puis construire une frame user
+    // canonique qui fault en Ring3 sur RIP=0 au lieu de #GP en Ring0.
+    "mov   rax, qword ptr gs:[0x48]",
+    "test  rax, rax",
+    "jz    996f",
+    "mov   cr3, rax",
+    "996:",
+    "sub   rsp, 40",
+    "mov   qword ptr [rsp +  0], 0",
+    "mov   qword ptr [rsp +  8], {user_cs}",
+    "mov   qword ptr [rsp + 16], r11",
+    "mov   rax, {safe_rsp}",
+    "mov   qword ptr [rsp + 24], rax",
+    "mov   qword ptr [rsp + 32], {user_ds}",
+    "mov   rax, qword ptr gs:[0x50]",
+    "swapgs",
+    "iretq",
     ".size syscall_entry_asm, . - syscall_entry_asm",
+    user_cs = const SYSRETQ_USER_CS64,
+    user_ds = const SYSRETQ_USER_DS,
+    safe_rsp = const SYSRETQ_SAFE_RSP,
 );
 
 // Noop CSTAR pour SYSCALL compat mode (non supporté)
@@ -375,20 +413,23 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // valide depuis l'ASM. La durée de vie est bornée à cette stackframe.
     crate::syscall::dispatch::dispatch(frame);
 
-    // ── ARCH-SYSRET (V-35) : vérification canonique de l'adresse de retour ──
-    // Si frame.rcx (RIP retour userspace) n'est pas canonique, SYSRETQ causera
-    // un fault en Ring 0 (errata Intel/AMD).
-    // On force frame.rcx = 0 → processus faultera en Ring 3 à @0 (SIGSEGV),
-    // jamais en Ring 0. Solution minimale sans dépendance process::signal ici.
+    // ── ARCH-SYSRET (V-35) : vérification de l'adresse de retour ───────────
+    // Les adresses non-canoniques sont laissées à l'ASM, qui bascule alors sur
+    // IRETQ pour éviter le #GP Ring0 de CVE-2012-0217. Les adresses canoniques
+    // mais hors espace user sont redirigées vers un fault Ring3 contrôlé.
     if !is_user_return_addr(frame.rcx) {
         #[cfg(debug_assertions)]
         crate::arch::x86_64::terminal::debug_write(b"syscall: bad rcx\n");
-        frame.rcx = 0; // adresse 0 = non-mappée → #PF userspace, pas kernel
+        if is_canonical(frame.rcx) {
+            frame.rcx = 0; // adresse 0 = non-mappée → #PF userspace, pas kernel
+        }
     }
     if !is_user_return_addr(frame.rsp) {
         #[cfg(debug_assertions)]
         crate::arch::x86_64::terminal::debug_write(b"syscall: bad rsp\n");
-        frame.rsp = 0;
+        if is_canonical(frame.rsp) {
+            frame.rsp = SYSRETQ_SAFE_RSP;
+        }
     }
     // Garder le slot per-CPU synchronisé pour les chemins compat/debug. Le
     // retour principal restaure RSP depuis la SyscallFrame ci-dessus.

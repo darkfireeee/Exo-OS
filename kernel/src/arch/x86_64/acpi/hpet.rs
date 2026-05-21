@@ -101,14 +101,9 @@ fn hpet_write(offset: u64, val: u64) {
 /// accéder aux registres (le MMIO HPET à 0xFED00000 dépasse notre
 /// identity map de 1 GiB — l'accès MMIO aura lieu après init mémoire).
 pub fn init_hpet(hpet_table_phys: u64) -> Option<HpetInfo> {
-    if hpet_table_phys == 0 || hpet_table_phys >= 0x4000_0000 {
-        return None;
-    }
-
-    use super::parser::SdtHeader;
-    // SAFETY: adresse passée par le parseur ACPI (dans notre identity map)
-    let header = unsafe { &*(hpet_table_phys as *const SdtHeader) };
-    let sig = unsafe { core::ptr::read_unaligned(&raw const (*header).signature) };
+    use super::parser::{acpi_read_unaligned, SdtHeader};
+    let header = acpi_read_unaligned::<SdtHeader>(hpet_table_phys)?;
+    let sig = header.signature;
     if &sig != b"HPET" {
         return None;
     }
@@ -117,9 +112,7 @@ pub fn init_hpet(hpet_table_phys: u64) -> Option<HpetInfo> {
     // Dans la GAS (Generic Address Structure) l'adresse 64 bits est aux derniers 8 octets
     let gas_addr_offset = core::mem::size_of::<SdtHeader>() + 4 + 4;
     // read_unaligned : la table HPET peut être à une adresse non-alignée sur 8 octets
-    let mmio_base = unsafe {
-        core::ptr::read_unaligned((hpet_table_phys as usize + gas_addr_offset) as *const u64)
-    };
+    let mmio_base = acpi_read_unaligned::<u64>(hpet_table_phys + gas_addr_offset as u64)?;
 
     // Enregistrer la base MMIO HPET pour utilisation future (après init mémoire)
     // Ne PAS accéder aux registres HPET ici : 0xFED00000 > 1 GiB (hors identity map boot)

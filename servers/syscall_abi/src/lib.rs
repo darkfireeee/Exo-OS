@@ -382,10 +382,30 @@ pub const SYS_PROC_CLONE: u64 = SYS_FORK;
 pub const SYS_PROC_EXEC: u64 = SYS_EXECVE;
 
 pub const IPC_HEADER_SIZE: usize = 8;
-pub const IPC_INLINE_PAYLOAD_SIZE: usize = 120;
+pub const IPC_CAP_TOKEN_SIZE: usize = 20;
+pub const IPC_INLINE_PAYLOAD_SIZE: usize = 192;
 pub const IPC_ENVELOPE_SIZE: usize = IPC_HEADER_SIZE + IPC_INLINE_PAYLOAD_SIZE;
+pub const IPC_CAP_TOKEN_PAYLOAD_OFFSET: usize = IPC_INLINE_PAYLOAD_SIZE - IPC_CAP_TOKEN_SIZE;
+pub const IPC_CAP_TOKEN_OFFSET: usize = IPC_HEADER_SIZE + IPC_CAP_TOKEN_PAYLOAD_OFFSET;
 pub const IPC_KERNEL_MAX_MSG_SIZE: usize = 240;
 pub const IPC_RECV_MAX_LEN: usize = 65_536;
+
+const _: () = assert!(
+    IPC_INLINE_PAYLOAD_SIZE <= 200,
+    "IPC_INLINE_PAYLOAD_SIZE must stay within the v0.2 inline budget"
+);
+const _: () = assert!(
+    IPC_ENVELOPE_SIZE == 200,
+    "IPC_ENVELOPE_SIZE must be the canonical 200-byte ABI envelope"
+);
+const _: () = assert!(
+    IPC_ENVELOPE_SIZE <= IPC_KERNEL_MAX_MSG_SIZE,
+    "IPC_ENVELOPE_SIZE must fit in the kernel raw IPC slot"
+);
+const _: () = assert!(
+    IPC_CAP_TOKEN_OFFSET + IPC_CAP_TOKEN_SIZE == IPC_ENVELOPE_SIZE,
+    "ExoCapTokenWire must be stored at the end of the IPC envelope"
+);
 
 /// Convention canonique: `SYS_EXO_IPC_RECV(endpoint, buf, len, flags)`.
 /// Compatibilite legacy: quand `flags == 0` et que le premier argument ressemble
@@ -458,7 +478,7 @@ impl Default for IpcMessage {
 const _: () = assert!(core::mem::size_of::<IpcMessage>() == IPC_ENVELOPE_SIZE);
 const _: () = assert!(core::mem::offset_of!(IpcMessage, payload) == IPC_HEADER_SIZE);
 
-pub const EXO_CAP_TOKEN_WIRE_SIZE: usize = 20;
+pub const EXO_CAP_TOKEN_WIRE_SIZE: usize = IPC_CAP_TOKEN_SIZE;
 
 pub const EXO_CAP_TYPE_IPC_ENDPOINT: u32 = 1;
 

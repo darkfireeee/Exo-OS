@@ -56,7 +56,7 @@ pub fn sync_channel_close(ch: ChannelId) -> Result<(), IpcError>
 
 ### Timeout
 
-Le timeout par défaut est `SYNC_CHANNEL_TIMEOUT_NS` (100 ms). En cas d'expiration, `sync_channel_send` retourne `Err(IpcError::Timeout)`.
+Le timeout par défaut est `SYNC_CHANNEL_TIMEOUT_NS` (5 ms, soit 5 000 000 ns). En cas d'expiration, `sync_channel_send` retourne `Err(IpcError::Timeout)`.
 
 ---
 

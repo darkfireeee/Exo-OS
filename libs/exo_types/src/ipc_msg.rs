@@ -6,14 +6,14 @@
 // INVARIANTS :
 //   - IPC-02 : Tous les types Sized et taille fixe. Aucun &str / Vec / Box.
 //   - IPC-03 : IpcMessage.sender_pid renseigné par le kernel (non falsifiable Ring 3).
-//   - IPC-04 : payload max 120B inline. Données plus grandes → SHM handle.
-//   - IPC-04 : payload max 120B inline. Données plus grandes -> SHM handle.
+//   - IPC-04 : payload max 192B inline. Données plus grandes → SHM handle.
+//   - IPC-04 : payload max 192B inline. Données plus grandes -> SHM handle.
 //   - CORR-40/45 : IpcEndpoint DOIT être Copy (assert compile-time).
 //
-// LAYOUT IpcMessage (128 bytes = enveloppe userspace canonique) :
+// LAYOUT IpcMessage (200 bytes = enveloppe userspace canonique) :
 //   [0]  sender_pid:  u32 — renseigné par kernel
 //   [4]  msg_type:    u32 — discriminant du protocole
-//   [8]  payload:    [u8;120]
+//   [8]  payload:    [u8;192]
 //
 // SOURCE DE VÉRITÉ :
 //   ExoOS_Architecture_v7.md §1.3, ExoOS_Corrections_06 CORR-17,
@@ -21,18 +21,24 @@
 
 /// Taille fixe de l'en-tête commun `sender_pid + msg_type`.
 pub const IPC_HEADER_SIZE: usize = 8;
+/// Taille sérialisée d'un jeton de capability ExoOS dans une enveloppe IPC.
+pub const IPC_CAP_TOKEN_SIZE: usize = 20;
 /// Nombre d'octets inline disponibles dans l'enveloppe IPC canonique.
-pub const IPC_INLINE_PAYLOAD_SIZE: usize = 120;
+pub const IPC_INLINE_PAYLOAD_SIZE: usize = 192;
 /// Taille totale de l'enveloppe IPC canonique.
 pub const IPC_ENVELOPE_SIZE: usize = IPC_HEADER_SIZE + IPC_INLINE_PAYLOAD_SIZE;
+/// Offset payload-relatif du jeton de capability en fin de payload.
+pub const IPC_CAP_TOKEN_PAYLOAD_OFFSET: usize = IPC_INLINE_PAYLOAD_SIZE - IPC_CAP_TOKEN_SIZE;
+/// Offset enveloppe-relatif du jeton de capability.
+pub const IPC_CAP_TOKEN_OFFSET: usize = IPC_HEADER_SIZE + IPC_CAP_TOKEN_PAYLOAD_OFFSET;
 
-/// Message IPC — exactement **128 bytes**.
+/// Message IPC — exactement **200 bytes**.
 ///
 /// **ABI VERROUILLÉE** — tout changement de layout nécessite la recompilation
 /// de TOUS les servers en même temps (workspace unique).
 ///
 /// # Utilisation du payload
-/// - Données ≤ 120B : inline dans `payload`.
+/// - Données ≤ 192B : inline dans `payload`.
 /// - Données plus grandes : allouer un SHM via `memory_server` et passer un handle dans payload.
 ///
 /// # Réponses directes
@@ -44,7 +50,7 @@ pub struct IpcMessage {
     pub sender_pid: u32,
     /// Discriminant du protocole Ring 1 (défini dans protocol.rs du server). [4] 4B
     pub msg_type: u32,
-    /// Données inline — maximum **120 bytes** (IPC-04). [8] 120B
+    /// Données inline — maximum **192 bytes** (IPC-04). [8] 192B
     pub payload: [u8; IPC_INLINE_PAYLOAD_SIZE],
 }
 
@@ -62,11 +68,15 @@ impl Default for IpcMessage {
 // Assertions ABI compile-time obligatoires (GI-01 §5)
 const _: () = assert!(
     core::mem::size_of::<IpcMessage>() == IPC_ENVELOPE_SIZE,
-    "IpcMessage doit faire 128B"
+    "IpcMessage doit faire 200B"
 );
 const _: () = assert!(
     core::mem::offset_of!(IpcMessage, payload) == IPC_HEADER_SIZE,
     "payload doit être à l'offset 8"
+);
+const _: () = assert!(
+    IPC_CAP_TOKEN_OFFSET + IPC_CAP_TOKEN_SIZE == IPC_ENVELOPE_SIZE,
+    "ExoCapTokenWire doit terminer l'enveloppe IPC"
 );
 
 impl IpcMessage {
