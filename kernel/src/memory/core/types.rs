@@ -331,7 +331,7 @@ impl VirtAddr {
     }
 
     pub const NULL: VirtAddr = VirtAddr(0);
-    pub const KERNEL_BASE: VirtAddr = VirtAddr(0xFFFF_8000_0000_0000);
+    pub const KERNEL_HIGH_HALF_BASE: VirtAddr = VirtAddr(0xFFFF_8000_0000_0000);
 }
 
 impl Add<u64> for VirtAddr {

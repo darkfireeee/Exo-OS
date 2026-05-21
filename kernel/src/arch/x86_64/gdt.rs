@@ -43,6 +43,19 @@ pub const GDT_USER_DS: u16 = 0x20 | 3; // Ring 3
 pub const GDT_USER_CS64: u16 = 0x28 | 3; // Ring 3
 pub const GDT_TSS_SEL: u16 = 0x30; // TSS (Ring 0)
 
+const _: () = assert!(
+    GDT_KERNEL_DS == GDT_KERNEL_CS + 8,
+    "GDT kernel CS/DS selectors must stay contiguous for SYSCALL"
+);
+const _: () = assert!(
+    GDT_USER_DS == GDT_USER_CS32 + 8,
+    "GDT user SYSRET SS selector must stay adjacent to STAR user base"
+);
+const _: () = assert!(
+    GDT_USER_CS64 == GDT_USER_CS32 + 16,
+    "GDT user SYSRET CS selector must stay STAR-compatible"
+);
+
 /// Valeur MSR STAR bits [47:32] = SYSCALL CS/SS (kernel)
 /// SYSCALL : CS = STAR[47:32], SS = CS+8
 pub const STAR_KERNEL_SEG: u32 = GDT_KERNEL_CS as u32;

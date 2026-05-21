@@ -17,7 +17,7 @@
 
 #![allow(dead_code)]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
@@ -660,6 +660,7 @@ static CERT_REGISTRY: spin::Mutex<[Option<Certificate>; 32]> = spin::Mutex::new(
 ]);
 
 static CERT_REGISTRY_COUNT: AtomicU32 = AtomicU32::new(0);
+static PKI_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 // ── Signature Ed25519 ────────────────────────────────────────────────────────
 
@@ -934,6 +935,10 @@ pub fn register_certificate(cert: &Certificate) -> bool {
 
 /// Initialise la PKI : configure le certificat racine.
 pub fn pki_init() {
+    if PKI_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+
     // Créer le certificat racine auto-signé
     let mut root_cert = Certificate::empty();
     root_cert.cert_id = [0u8; CERT_ID_SIZE]; // ID zéro = Root
@@ -952,5 +957,7 @@ pub fn pki_init() {
     root_cert.signature = sign_data(&[0u8; 32], &msg[..msg_len]);
 
     ROOT_CERTIFICATE.call_once(|| root_cert);
-    register_certificate(&root_cert);
+    if register_certificate(&root_cert) {
+        PKI_INITIALIZED.store(true, Ordering::Release);
+    }
 }

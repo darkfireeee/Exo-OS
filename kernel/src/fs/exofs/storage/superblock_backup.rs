@@ -27,7 +27,7 @@ use crate::fs::exofs::storage::layout::{
     superblock_mirror_12k, superblock_mirror_end, superblock_mirror_offsets, superblock_primary,
 };
 use crate::fs::exofs::storage::storage_stats::STORAGE_STATS;
-use crate::fs::exofs::storage::superblock::ExoSuperblockDisk;
+use crate::fs::exofs::storage::superblock::{ExoSuperblockDisk, SUPERBLOCK_DISK_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MirrorIndex — identifiant d'un miroir
@@ -213,7 +213,7 @@ pub fn read_superblock_mirror(
     read_fn: &dyn Fn(DiskOffset, &mut [u8]) -> ExofsResult<usize>,
 ) -> MirrorReadResult {
     let sb_size = size_of::<ExoSuperblockDisk>();
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; SUPERBLOCK_DISK_SIZE];
 
     // Lire depuis le disque.
     let n = match read_fn(offset, &mut buf[..sb_size]) {
@@ -250,7 +250,7 @@ pub fn read_superblock_mirror(
             STORAGE_STATS.inc_checksum_ok();
             MirrorStatus::Valid
         }
-        Err(ExofsError::InvalidMagic) => {
+        Err(ExofsError::InvalidMagic) | Err(ExofsError::BadMagic) => {
             STORAGE_STATS.inc_checksum_error();
             MirrorStatus::BadMagic
         }

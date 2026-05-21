@@ -2,12 +2,13 @@
 //!
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use super::object_fd::OBJECT_TABLE;
+use super::object_fd::{OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
+use super::quota_query::{check_quota, quota_add_usage};
 use super::validation::{
     exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 use crate::fs::exofs::path::path_component::validate_component;
 use crate::fs::exofs::path::path_index::PathIndex;
@@ -115,6 +116,7 @@ fn create_object(
     path_len: usize,
     args: &CreateArgs,
 ) -> ExofsResult<CreateResult> {
+    let _lifecycle = OBJECT_LIFECYCLE_LOCK.lock();
     if args.flags & !0x07FF != 0 {
         return Err(ExofsError::InvalidArgument);
     }
@@ -122,6 +124,13 @@ fn create_object(
 
     // Dériver le BlobId du chemin.
     let blob_id = BlobId::from_bytes_blake3(&path_bytes[..path_len]);
+    if args.initial_size > super::object_write::WRITE_MAX_BYTES as u64 {
+        return Err(ExofsError::NoSpace);
+    }
+    let existed_before = BLOB_CACHE.contains(&blob_id);
+    if !existed_before {
+        check_quota(args.owner_uid, args.initial_size, 1)?;
+    }
 
     // Répercuter la création dans le répertoire parent pour que readdir
     // puisse lister les enfants. Les répertoires eux-mêmes reçoivent aussi
@@ -130,29 +139,43 @@ fn create_object(
 
     // Vérifier l'exclusivité si O_EXCL.
     if args.flags & super::object_fd::open_flags::O_EXCL != 0 {
-        if BLOB_CACHE.get(&blob_id).is_some() {
+        if BLOB_CACHE.contains(&blob_id) {
             return Err(ExofsError::ObjectAlreadyExists);
         }
     }
+
+    let mut actual_size = BLOB_CACHE.len(&blob_id).unwrap_or(0) as u64;
+    let mut quota_object_added = false;
 
     // O_TRUNC : vider le contenu existant.
     if args.flags & super::object_fd::open_flags::O_TRUNC != 0 {
         if kind == ObjectKind::Directory {
             let dir_index = PathIndex::new(ObjectId([0u8; 32]));
             let bytes = dir_index.serialize()?;
+            actual_size = bytes.len() as u64;
+            if !existed_before {
+                check_quota(args.owner_uid, actual_size, 1)?;
+            }
             BLOB_CACHE.insert(blob_id, bytes)?;
+            BLOB_CACHE.mark_dirty(&blob_id).ok();
         } else {
             let empty: [u8; 0] = [];
             let _ = BLOB_CACHE.insert(blob_id, empty.to_vec());
+            BLOB_CACHE.mark_dirty(&blob_id).ok();
+            actual_size = 0;
         }
-    } else if BLOB_CACHE.get(&blob_id).is_none() {
+        quota_object_added = !existed_before;
+    } else if !BLOB_CACHE.contains(&blob_id) {
         // Créer un payload initial uniquement s'il n'existe pas.
         if kind == ObjectKind::Directory {
             let dir_index = PathIndex::new(ObjectId([0u8; 32]));
             let bytes = dir_index.serialize()?;
+            actual_size = bytes.len() as u64;
+            check_quota(args.owner_uid, actual_size, 1)?;
             BLOB_CACHE.insert(blob_id, bytes)?;
         } else if args.initial_size > 0 {
-            let sz = (args.initial_size as usize).min(super::object_write::WRITE_MAX_BYTES);
+            let sz = args.initial_size as usize;
+            actual_size = args.initial_size;
             let mut buf: Vec<u8> = Vec::new();
             buf.try_reserve(sz).map_err(|_| ExofsError::NoMemory)?;
             buf.resize(sz, 0u8);
@@ -160,46 +183,42 @@ fn create_object(
         } else {
             let empty: [u8; 0] = [];
             BLOB_CACHE.insert(blob_id, empty.to_vec())?;
+            actual_size = 0;
         }
+        BLOB_CACHE.mark_dirty(&blob_id).ok();
+        quota_object_added = true;
     }
 
     // Ouvrir un fd.
     let fd = OBJECT_TABLE.open(
         blob_id,
         args.flags & 0x0003,
-        args.initial_size,
+        actual_size,
         args.epoch_id,
         args.owner_uid,
     )?;
 
-    // ObjectId = Blake3(BlobId bytes XOR 0x5A).
-    let mut obj_bytes = [0u8; 32];
-    let bid_bytes = blob_id.as_bytes();
-    let mut i = 0usize;
-    while i < 32 {
-        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
-        i = i.wrapping_add(1);
+    if quota_object_added {
+        if let Err(err) = quota_add_usage(args.owner_uid, actual_size, 1) {
+            OBJECT_TABLE.close(fd);
+            return Err(err);
+        }
     }
+
+    let object_id = object_id_from_blob_id(&blob_id);
 
     Ok(CreateResult {
         fd,
         _pad: 0,
-        blob_id: *bid_bytes,
-        object_id: obj_bytes,
+        blob_id: *blob_id.as_bytes(),
+        object_id: object_id.0,
         epoch_id: args.epoch_id,
         _reserved: [0u8; 8],
     })
 }
 
 fn object_id_from_blob(blob_id: &BlobId) -> ObjectId {
-    let mut obj_bytes = [0u8; 32];
-    let bid_bytes = blob_id.as_bytes();
-    let mut i = 0usize;
-    while i < 32 {
-        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
-        i = i.wrapping_add(1);
-    }
-    ObjectId(obj_bytes)
+    object_id_from_blob_id(blob_id)
 }
 
 fn ensure_directory_blob(blob_id: BlobId, parent_oid: ObjectId) -> ExofsResult<()> {
@@ -209,6 +228,7 @@ fn ensure_directory_blob(blob_id: BlobId, parent_oid: ObjectId) -> ExofsResult<(
     let idx = PathIndex::new(parent_oid);
     let bytes = idx.serialize()?;
     BLOB_CACHE.insert(blob_id, bytes)?;
+    BLOB_CACHE.mark_dirty(&blob_id).ok();
     Ok(())
 }
 
@@ -259,6 +279,7 @@ fn update_parent_directory_index(
     let _ = index.insert(&comp, child_oid, kind as u8);
     let bytes = index.serialize()?;
     BLOB_CACHE.insert(parent_blob, bytes)?;
+    BLOB_CACHE.mark_dirty(&parent_blob).ok();
     Ok(())
 }
 

@@ -212,6 +212,14 @@ impl ShmMappingTable {
     pub(crate) fn entry(&self, idx: usize) -> Option<&ShmMapping> {
         self.entries.get(idx)
     }
+
+    pub(crate) fn active_mapping_for_desc(&self, desc_idx: usize) -> Option<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| entry.is_active() && entry.desc_idx() == desc_idx)
+            .map(|(idx, _)| idx)
+    }
 }
 
 pub(crate) static SHM_MAPPING_TABLE: SpinLock<ShmMappingTable> =
@@ -406,6 +414,25 @@ pub fn shm_unmap(mapping_idx: usize) -> Result<(), IpcError> {
     }
 
     Ok(())
+}
+
+/// Revoke every active mapping of one descriptor before the descriptor pages
+/// are returned to the SHM pool.
+pub fn shm_unmap_all_for_desc(desc_idx: usize) -> usize {
+    let mut unmapped = 0usize;
+
+    loop {
+        let mapping_idx = SHM_MAPPING_TABLE.lock().active_mapping_for_desc(desc_idx);
+        let Some(mapping_idx) = mapping_idx else {
+            break;
+        };
+        if shm_unmap(mapping_idx).is_err() {
+            break;
+        }
+        unmapped += 1;
+    }
+
+    unmapped
 }
 
 /// Retourne le nombre de mappings actifs.

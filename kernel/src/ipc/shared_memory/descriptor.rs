@@ -231,6 +231,26 @@ impl ShmDescriptor {
         self.mapping_count.load(Ordering::Relaxed)
     }
 
+    /// Stop new mappings while an existing region is being revoked/destroyed.
+    pub fn begin_close(&self) -> bool {
+        let mut state = self.state.load(Ordering::Acquire);
+        loop {
+            match ShmState::from_u32(state) {
+                ShmState::Active => match self.state.compare_exchange_weak(
+                    state,
+                    ShmState::Closing as u32,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return true,
+                    Err(next) => state = next,
+                },
+                ShmState::Closing => return true,
+                ShmState::Uninitialized | ShmState::Destroyed => return false,
+            }
+        }
+    }
+
     /// Libère toutes les pages allouées et passe à l'état Destroyed.
     pub fn destroy(&self) {
         self.state
@@ -404,6 +424,16 @@ pub fn shm_get_size(idx: usize) -> Option<u64> {
 
 /// Détruit la région SHM `idx` (libère toutes ses pages).
 pub fn shm_destroy(idx: usize) -> Result<(), IpcError> {
+    {
+        let dir = SHM_DESC_DIR.lock();
+        let desc = unsafe { dir.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+        if !desc.begin_close() {
+            return Err(IpcError::InvalidHandle);
+        }
+    }
+
+    crate::ipc::shared_memory::mapping::shm_unmap_all_for_desc(idx);
+
     let mut dir = SHM_DESC_DIR.lock();
     if !dir.free(idx) {
         return Err(IpcError::InvalidHandle);

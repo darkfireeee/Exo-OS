@@ -110,7 +110,7 @@ pub const SHM_ALIGN: usize = PAGE_SIZE;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre maximal d'endpoints dans le registre global.
-pub const MAX_ENDPOINTS: usize = 8_192;
+pub use crate::arch::constants::MAX_ENDPOINTS;
 
 /// Longueur maximale d'un nom d'endpoint (ASCII, null-terminé dans le registre).
 pub const MAX_ENDPOINT_NAME_LEN: usize = 64;

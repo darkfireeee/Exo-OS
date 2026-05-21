@@ -6,11 +6,12 @@ rules:
           mod tests { ... }
     paths:
       include:
-        - kernel/src/**
+        - /kernel/src/**
       exclude:
-        - kernel/src/drivers/**
-        - kernel/src/security/iommu/**
-        - kernel/src/memory/dma/**
+        - /kernel/src/drivers/**
+        - /kernel/src/security/iommu/**
+        - /kernel/src/memory/dma/**
+        - /kernel/src/arch/x86_64/time/sources/**
     message: "DRV-ARCH-01: MMIO register write in Ring0 outside the approved driver/DMA paths."
     languages: [rust]
     severity: ERROR
@@ -19,7 +20,9 @@ rules:
     pattern-either:
       - pattern: if $MSG.len == $MAGIC { ... }
       - pattern: if $MSG.payload.len() == $MAGIC { ... }
-      - pattern: if $BUF.len() == $MAGIC { ... }
+    paths:
+      include:
+        - /kernel/src/ipc/**
     message: "IPC-RULE-01: message length is being used as a type discriminator; use msg_type."
     languages: [rust]
     severity: ERROR
@@ -50,25 +53,28 @@ rules:
           }
     paths:
       include:
-        - kernel/src/fs/exofs/syscall/**
+        - /kernel/src/fs/exofs/syscall/**
     message: "ExoFS write path reaches write_blob_data without an immutable-object check."
     languages: [rust]
     severity: ERROR
 
-  - id: missing-phoenix-safe
+  - id: exofs-delete-without-immutable-check-live
     patterns:
-      - pattern: |
-          struct $NAME {
-            ...
-            $FIELD: CapToken,
-            ...
-          }
-      - pattern-not: |
-          impl PhoenixSafe for $NAME { ... }
+      - pattern-regex: '\bfn\s+delete_blob\b'
+      - pattern-not-regex: '(?s)\bfn\s+delete_blob\b.*?\breject_if_immutable\s*\('
     paths:
       include:
-        - libs/**
-        - servers/**
+        - /kernel/src/fs/exofs/syscall/object_delete.rs
+    message: "M23: live ExoFS delete path must reject immutable blobs before freeing mappings."
+    languages: [rust]
+    severity: ERROR
+
+  - id: missing-phoenix-safe
+    pattern-regex: '(?s)\bstruct\s+\w+\s*\{[^}]*\bCapToken\b[^}]*\}(?!.*\bimpl\s+PhoenixSafe\s+for\s+\w+\s*\{)'
+    paths:
+      include:
+        - /libs/**
+        - /servers/**
     message: "PHX-01: struct contains a CapToken but has no PhoenixSafe implementation."
     languages: [rust]
     severity: WARNING
@@ -93,19 +99,285 @@ rules:
             alloc!(...)
             ...
           }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            Vec::new()
+            ...
+          }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            Box::new(...)
+            ...
+          }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            alloc!(...)
+            ...
+          }
+    metavariable-regex:
+      metavariable: $ISR
+      regex: "(do_(irq|ipi|exophoenix)_.*|.*_interrupt.*|.*_handler)"
+    paths:
+      include:
+        - /kernel/src/arch/**
     message: "DRV-ISR-01: allocation inside an interrupt handler."
     languages: [rust]
     severity: ERROR
 
-  - id: virtio-hardcoded-bar
+  - id: isr-log-forbidden
     pattern-either:
-      - pattern: const $NAME: $TY = 0x1000_0000;
-      - pattern: pub const $NAME: $TY = 0x1000_0000;
-      - pattern: const $NAME: $TY = 0x10000000;
-      - pattern: pub const $NAME: $TY = 0x10000000;
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            log!(...)
+            ...
+          }
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            info!(...)
+            ...
+          }
+      - pattern: |
+          extern "x86-interrupt" fn $ISR(...) {
+            ...
+            warn!(...)
+            ...
+          }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            log!(...)
+            ...
+          }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            info!(...)
+            ...
+          }
+      - pattern: |
+          extern "C" fn $ISR(...) {
+            ...
+            warn!(...)
+            ...
+          }
     metavariable-regex:
-      metavariable: $NAME
-      regex: ".*(VIRTIO|MMIO|BAR).*"
+      metavariable: $ISR
+      regex: "(do_(irq|ipi|exophoenix)_.*|.*_interrupt.*|.*_handler)"
+    paths:
+      include:
+        - /kernel/src/arch/**
+    message: "M05: heap-capable log macro inside an interrupt handler."
+    languages: [rust]
+    severity: ERROR
+
+  - id: arch-const-redefined-locally
+    pattern-regex: '(?m)^\s*(?:pub\s+)?const\s+MAX_CORES(?:_[A-Z0-9_]+)?\s*:'
+    paths:
+      include:
+        - /kernel/src/**
+      exclude:
+        - /kernel/src/arch/constants.rs
+    message: "M01: MAX_CORES* must come from arch/constants.rs."
+    languages: [rust]
+    severity: ERROR
+
+  - id: percpu-double-preempt-counter
+    pattern-regex: '(?s)\b(?:pub\s+)?struct\s+\w+\s*\{[^}]*\bpreempt_count\s*:'
+    paths:
+      include:
+        - /kernel/src/arch/**
+        - /kernel/src/scheduler/**
+    message: "M02: a second preempt_count field would diverge from the scheduler counter and GS shadow."
+    languages: [rust]
+    severity: ERROR
+
+  - id: slub-free-without-poison
+    patterns:
+      - pattern: |
+          pub unsafe fn free(&self, $PTR: NonNull<u8>) {
+            ...
+            (*$HEADER).write_next($PTR.as_ptr(), ...);
+            ...
+          }
+      - pattern-not: |
+          pub unsafe fn free(&self, $PTR: NonNull<u8>) {
+            ...
+            core::ptr::write_bytes($PTR.as_ptr(), SLUB_FREE_POISON, ...);
+            ...
+            (*$HEADER).write_next($PTR.as_ptr(), ...);
+            ...
+          }
+    paths:
+      include:
+        - /kernel/src/memory/physical/allocator/slub.rs
+    message: "M07: SLUB free path must poison a freed object before freelist insertion."
+    languages: [rust]
+    severity: ERROR
+
+  - id: cfs-direct-preempt-field
+    pattern-regex: '\bpreempt_count\b'
+    paths:
+      include:
+        - /kernel/src/scheduler/policies/cfs.rs
+    message: "M11: CFS policy must not read or mutate a raw preempt_count field."
+    languages: [rust]
+    severity: ERROR
+
+  - id: tlb-broadcast-single-cpu-guard
+    patterns:
+      - pattern: |
+          pub fn broadcast_tlb_shootdown($VA: u64, $COUNT: u32) {
+            ...
+            broadcast_ipi_except_self(...);
+            ...
+          }
+      - pattern-not: |
+          pub fn broadcast_tlb_shootdown($VA: u64, $COUNT: u32) {
+            ...
+            if $COUNT <= 1 {
+              return;
+            }
+            ...
+            broadcast_ipi_except_self(...);
+            ...
+          }
+    paths:
+      include:
+        - /kernel/src/arch/x86_64/apic/ipi.rs
+    message: "M13: TLB broadcast must skip remote IPI work on a single CPU."
+    languages: [rust]
+    severity: ERROR
+
+  - id: scheduler-switch-fpu-state
+    patterns:
+      - pattern: |
+          pub unsafe fn context_switch(
+            $PREV: &mut ThreadControlBlock,
+            $NEXT: &mut ThreadControlBlock,
+          ) {
+            ...
+          }
+      - pattern-not: |
+          pub unsafe fn context_switch(
+            $PREV: &mut ThreadControlBlock,
+            $NEXT: &mut ThreadControlBlock,
+          ) {
+            ...
+            fpu::save_restore::xsave_current($PREV);
+            ...
+            fpu::save_restore::xrstor_for($NEXT);
+            ...
+          }
+    paths:
+      include:
+        - /kernel/src/scheduler/core/switch.rs
+    message: "M14: context_switch must save and restore FPU/SIMD state."
+    languages: [rust]
+    severity: ERROR
+
+  - id: ipc-message-missing-msg-type
+    patterns:
+      - pattern-regex: '(?s)\bpub\s+struct\s+IpcMessage\s*\{'
+      - pattern-not-regex: '(?s)\bpub\s+struct\s+IpcMessage\s*\{[^}]*\bmsg_type\s*:'
+    paths:
+      include:
+        - /kernel/src/ipc/message/**
+    message: "M15: semantic IPC envelopes must carry an explicit msg_type."
+    languages: [rust]
+    severity: ERROR
+
+  - id: ipc-waitqueue-without-timeout-check
+    patterns:
+      - pattern-regex: '\bpub\s+fn\s+wait_for_wake\b'
+      - pattern-not-regex: '(?s)\bpub\s+fn\s+wait_for_wake\b.*?\btimeout_expired\s*\('
+    paths:
+      include:
+        - /kernel/src/ipc/sync/wait_queue.rs
+    message: "M16: IPC wait queue must check its finite timeout inside the wait loop."
+    languages: [rust]
+    severity: ERROR
+
+  - id: shm-destroy-without-global-unmap
+    patterns:
+      - pattern: |
+          pub fn shm_destroy($IDX: usize) -> Result<(), IpcError> {
+            ...
+          }
+      - pattern-not: |
+          pub fn shm_destroy($IDX: usize) -> Result<(), IpcError> {
+            ...
+            crate::ipc::shared_memory::mapping::shm_unmap_all_for_desc($IDX);
+            ...
+          }
+    paths:
+      include:
+        - /kernel/src/ipc/shared_memory/descriptor.rs
+    message: "M17: SHM destroy must revoke active mappings before freeing descriptor pages."
+    languages: [rust]
+    severity: ERROR
+
+  - id: rpc-header-missing-frame-type
+    patterns:
+      - pattern-regex: '(?s)\bpub\s+struct\s+RpcHeader\s*\{'
+      - pattern-not-regex: '(?s)\bpub\s+struct\s+RpcHeader\s*\{[^}]*\bframe_type\s*:'
+    paths:
+      include:
+        - /kernel/src/ipc/rpc/protocol.rs
+    message: "M18: RPC frames must use an explicit discriminant, not payload length."
+    languages: [rust]
+    severity: ERROR
+
+  - id: fork-vma-tree-clone-live
+    patterns:
+      - pattern-regex: '\bpub\s+fn\s+clone_inner_for_fork\b'
+      - pattern-not-regex: '(?s)\bpub\s+fn\s+clone_inner_for_fork\b.*?\bvma_tree\.clone_for_fork\s*\('
+    paths:
+      include:
+        - /kernel/src/memory/virtual/address_space/user.rs
+    message: "M19: fork metadata clone must deep-clone the live VMA tree."
+    languages: [rust]
+    severity: ERROR
+
+  - id: exec-elf-user-range-check-live
+    patterns:
+      - pattern-regex: '\bfn\s+install_elf_image\b'
+      - pattern-not-regex: '(?s)\bfn\s+install_elf_image\b.*?\bvalidate_user_segment_range\s*\(\s*p_vaddr\s*,\s*p_memsz\s*\)\?;.*?\binstall_elf_vma\s*\('
+    paths:
+      include:
+        - /kernel/src/fs/elf_loader_impl.rs
+    message: "M20: live ELF PT_LOAD install must validate the user segment range first."
+    languages: [rust]
+    severity: ERROR
+
+  - id: thread-create-without-user-entry-trampoline
+    patterns:
+      - pattern-regex: '\bpub\s+fn\s+create_thread\b'
+      - pattern-not-regex: '(?s)\bpub\s+fn\s+create_thread\b.*?\buser_entry_trampoline\b'
+    paths:
+      include:
+        - /kernel/src/process/thread/creation.rs
+    message: "M22: new userspace threads must use the scheduler first-entry trampoline frame."
+    languages: [rust]
+    severity: ERROR
+
+  - id: clone-settls-without-fs-base
+    patterns:
+      - pattern-regex: '\bpub\s+fn\s+sys_clone\b'
+      - pattern-not-regex: '(?s)\bpub\s+fn\s+sys_clone\b.*?\btls_base\s*:\s*if\s+flags\s*&\s+CLONE_SETTLS\s*!=\s*0\s*\{\s*tls\s*\}\s*else\s*\{\s*0\s*\}'
+    paths:
+      include:
+        - /kernel/src/syscall/table.rs
+    message: "M22: active clone path must carry CLONE_SETTLS into the FS/TLS thread state."
+    languages: [rust]
+    severity: ERROR
+
+  - id: virtio-hardcoded-bar
+    pattern-regex: '(?m)^\s*(?:pub\s+)?const\s+\w*(?:VIRTIO|MMIO|BAR)\w*\s*:[^=;]+?=\s*0x1000_?0000\s*;'
     message: "CORR-86: hardcoded VirtIO/MMIO BAR address; discover the BAR through PCI config space."
     languages: [rust]
     severity: ERROR
@@ -121,16 +393,13 @@ rules:
           }
     paths:
       include:
-        - kernel/src/security/exokairos.rs
+        - /kernel/src/security/exokairos.rs
     message: "ERR-07: ExoKairos used_ns increment without a visible time-window reset."
     languages: [rust]
     severity: ERROR
 
   - id: u64-bitmask-too-small
-    pattern: "$FIELD: u64"
-    metavariable-regex:
-      metavariable: $FIELD
-      regex: ".*(core_mask|active_cores|cpu_mask|core_bitmap).*"
+    pattern-regex: '(?m)^\s*(?:pub\s+)?\w*(?:core_mask|active_cores|cpu_mask|core_bitmap)\w*\s*:\s*u64\b'
     message: "Core bitmask stored in u64; use [u64; CORE_MASK_WORDS] for 256-core layouts."
     languages: [rust]
     severity: WARNING

@@ -867,7 +867,6 @@ pub extern "C" fn _start() -> ! {
     boot_log(b"crypto_server: boot\n");
     xchacha20::xchacha20_init();
     keystore::keystore_init();
-    pki::pki_init();
     tls::tls_init();
 
     let name = b"crypto_server";

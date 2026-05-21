@@ -14,6 +14,18 @@ pub mod rendezvous;
 pub mod sched_hooks;
 pub mod wait_queue;
 
+/// Default bounded IPC wait budget used by audit-facing synchronization APIs.
+pub const IPC_TIMEOUT_DEFAULT_NS: u64 = 1_000_000;
+/// Maximum bounded IPC wait budget for the IPC synchronization layer.
+pub const IPC_TIMEOUT_MAX_NS: u64 = 10_000_000;
+/// Live wait queues use zero as the no-deadline sentinel.
+pub const IPC_TIMEOUT_ZERO: u64 = 0;
+
+const _: () = assert!(
+    IPC_TIMEOUT_DEFAULT_NS <= IPC_TIMEOUT_MAX_NS,
+    "IPC default timeout exceeds its bounded maximum"
+);
+
 // Re-exports : futex
 pub use futex::{
     futex_cancel, futex_requeue, futex_stats, futex_wait, futex_wake, futex_wake_all,

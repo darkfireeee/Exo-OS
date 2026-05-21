@@ -5,14 +5,14 @@
 //! RECUR-01 : while, pas de for.
 //! OOM-02   : try_reserve avant push.
 
-use super::object_fd::{open_flags, OBJECT_TABLE};
+use super::object_fd::{open_flags, OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
 use super::object_store;
 use super::validation::{
     exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
     EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::path::path_component::validate_component;
 use crate::fs::exofs::path::path_index::PathIndex;
@@ -65,13 +65,20 @@ impl OpenArgs {
 ///
 /// Retourne le fd (u32) ou une ExofsError.
 pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -> ExofsResult<u32> {
+    let _lifecycle = OBJECT_LIFECYCLE_LOCK.lock();
     // Valider les flags.
     if args.flags & !0x07FF != 0 {
         return Err(ExofsError::InvalidArgument);
     }
     validate_flags_combination(args.flags)?;
 
-    let resolved = super::path_resolve::resolve_path_to_blob(&path_bytes[..path_len], 0)?;
+    let resolve_flags = if args.flags & open_flags::O_CREAT != 0 {
+        super::path_resolve::resolve_flags::CREATE_IF_ABSENT
+    } else {
+        0
+    };
+    let resolved =
+        super::path_resolve::resolve_path_to_blob(&path_bytes[..path_len], resolve_flags)?;
     let blob_id = crate::fs::exofs::core::types::BlobId(resolved.blob_id);
 
     ensure_parent_directory_index(path_bytes, path_len, blob_id)?;
@@ -107,14 +114,7 @@ pub(crate) fn open_object(path_bytes: &[u8], path_len: usize, args: &OpenArgs) -
 }
 
 fn object_id_from_blob(blob_id: &BlobId) -> crate::fs::exofs::core::ObjectId {
-    let mut obj_bytes = [0u8; 32];
-    let bid_bytes = blob_id.as_bytes();
-    let mut i = 0usize;
-    while i < 32 {
-        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
-        i = i.wrapping_add(1);
-    }
-    crate::fs::exofs::core::ObjectId(obj_bytes)
+    object_id_from_blob_id(blob_id)
 }
 
 fn ensure_parent_directory_index(
@@ -163,6 +163,9 @@ fn ensure_parent_directory_index(
     let _ = index.insert(&comp, child_oid, 0);
     let bytes = index.serialize()?;
     crate::fs::exofs::cache::blob_cache::BLOB_CACHE.insert(parent_blob, bytes)?;
+    crate::fs::exofs::cache::blob_cache::BLOB_CACHE
+        .mark_dirty(&parent_blob)
+        .ok();
     Ok(())
 }
 

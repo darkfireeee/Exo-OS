@@ -4,6 +4,7 @@
 //! et passer son adresse virtuelle en premier argument de `_start()`.
 
 use core::mem::size_of;
+use exo_phoenix_ssr::{PhoenixError, PhoenixRecovery, PhoenixSafe};
 
 pub const BOOT_INFO_MAGIC: u64 = 0x424F_4F54_5F49_4E46;
 pub const BOOT_INFO_VERSION: u32 = 1;
@@ -92,5 +93,19 @@ impl BootInfo {
         // SAFETY: l'appelant garantit que `boot_info_virt` pointe une page
         // `BootInfo` mappée en lecture seule dans l'espace d'adressage de PID 1.
         Some(&*(boot_info_virt as *const Self))
+    }
+}
+
+impl PhoenixSafe for BootInfo {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    #[inline]
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    #[inline]
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
     }
 }

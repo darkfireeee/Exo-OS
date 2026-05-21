@@ -110,8 +110,8 @@ pub unsafe fn flush_range(start: VirtAddr, end: VirtAddr) {
 pub struct TlbShootdownRequest {
     pub flush_type: TlbFlushType,
     pub base_cpu: usize,      // CPU logique correspondant au bit 0 du masque
-    pub cpu_mask: u64,        // Fenetre de 64 CPUs cibles
-    pub completed: AtomicU64, // Bitmask des CPUs ayant terminé
+    pub window_mask: u64,     // Fenetre de 64 CPUs cibles
+    pub completed: AtomicU64, // Bitmask des CPUs ayant termine
 }
 
 /// File d'attente de TLB shootdowns globale.
@@ -132,7 +132,7 @@ struct TlbShootdownEntry {
     active: bool,
     flush_type: TlbFlushType,
     base_cpu: usize,
-    cpu_mask: u64,
+    window_mask: u64,
     completed: u64,
 }
 
@@ -142,7 +142,7 @@ impl TlbShootdownEntry {
             active: false,
             flush_type: TlbFlushType::All,
             base_cpu: 0,
-            cpu_mask: 0,
+            window_mask: 0,
             completed: 0,
         }
     }
@@ -172,9 +172,9 @@ impl TlbShootdownQueue {
     /// Soumet une demande de TLB shootdown.
     /// Envoie un IPI aux CPUs cibles (via le vecteur IPI_TLB_SHOOTDOWN).
     ///
-    /// SAFETY: `cpu_mask` doit être un masque valide des CPUs actifs dans la
+    /// SAFETY: `window_mask` doit être un masque valide des CPUs actifs dans la
     /// fenetre `[base_cpu, base_cpu + 64)`.
-    pub unsafe fn request(&self, flush_type: TlbFlushType, base_cpu: usize, cpu_mask: u64) {
+    pub unsafe fn request(&self, flush_type: TlbFlushType, base_cpu: usize, window_mask: u64) {
         {
             let mut inner = self.inner.lock();
             let slot = &mut inner.requests[0];
@@ -185,16 +185,16 @@ impl TlbShootdownQueue {
                 flush_type
             };
             let merged_mask = if can_merge {
-                slot.cpu_mask | cpu_mask
+                slot.window_mask | window_mask
             } else {
-                cpu_mask
+                window_mask
             };
 
             *slot = TlbShootdownEntry {
                 active: true,
                 flush_type: merged_flush,
                 base_cpu,
-                cpu_mask: merged_mask,
+                window_mask: merged_mask,
                 completed: 0,
             };
             inner.head = 0;
@@ -204,7 +204,7 @@ impl TlbShootdownQueue {
         // Envoyer l'IPI (le vecteur sera configuré par le sous-système APIC).
         // Pour ne pas créer de dépendance circulaire Couche 0, l'IPI est envoyé
         // via un pointeur de fonction enregistré au boot.
-        Self::send_tlb_ipi(base_cpu, cpu_mask);
+        Self::send_tlb_ipi(base_cpu, window_mask);
         TLB_STATS.ipi_sent.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -225,7 +225,7 @@ impl TlbShootdownQueue {
                 continue;
             }
             let bit = logical_cpu - entry.base_cpu;
-            if (entry.cpu_mask >> bit) & 1 == 0 {
+            if (entry.window_mask >> bit) & 1 == 0 {
                 continue;
             }
             match entry.flush_type {
@@ -242,11 +242,11 @@ impl TlbShootdownQueue {
         }
     }
 
-    unsafe fn send_tlb_ipi(base_cpu: usize, cpu_mask: u64) {
+    unsafe fn send_tlb_ipi(base_cpu: usize, window_mask: u64) {
         let fp = TLB_IPI_SENDER.load(Ordering::Acquire);
         if fp != 0 {
             let f: unsafe fn(usize, u64) = core::mem::transmute(fp);
-            f(base_cpu, cpu_mask);
+            f(base_cpu, window_mask);
         }
     }
 }

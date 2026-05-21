@@ -2091,12 +2091,12 @@ pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> 
 /// `clone(flags, stack, ptid, ctid, tls)` — crée un nouveau thread via create_thread.
 ///
 /// Convention Exo-OS :
-/// - `stack`     : RSP initial du thread fils (userspace, ou 0 → stack kernel 8 MiB).
-/// - `tls`       : point d'entrée du thread fils (si non nul, prioritaire sur ctid).
-/// - `ctid`      : point d'entrée alternatif ou pointeur ctid POSIX.
-/// - `ptid`      : adresse où écrire le TID du fils (pthread_out).
+/// - `stack`     : RSP initial du thread fils et slot `arg` du wrapper musl.
+/// - `tls`       : base FS quand `CLONE_SETTLS` est présent.
+/// - `entry`     : 6e registre syscall; le wrapper x86_64 musl y porte `func`.
+/// - `ctid`/`ptid`: pointeurs TID POSIX conservés pour le protocole clone.
 /// - CLONE_DETACHED (0x0040_0000) : thread détaché.
-pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u64) -> i64 {
+pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: u64) -> i64 {
     stat_inc(SYS_CLONE);
 
     const CLONE_VM: u64 = 0x0000_0100;
@@ -2154,17 +2154,30 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
         None => return -3i64, // ESRCH
     };
 
-    // Point d'entrée : tls en priorité (pthread_create convention) puis ctid.
-    let start_func = if tls != 0 { tls } else { ctid };
+    // Le wrapper musl x86_64 garde `func` dans r9 pendant SYS_clone. Tolérer
+    // l'ancien chemin Exo-OS uniquement quand `tls` n'est pas une base TLS.
+    let start_func = if entry != 0 {
+        entry
+    } else if flags & CLONE_SETTLS == 0 && tls != 0 {
+        tls
+    } else {
+        ctid
+    };
     if start_func == 0 {
         return EINVAL;
     }
-    // Stack : l'appelant fournit RSP ou on alloue un stack kernel par défaut.
-    let stack_addr = if stack != 0 {
-        stack.saturating_sub(16)
+
+    let arg = if entry != 0 && stack != 0 {
+        match read_user_typed::<u64>(stack) {
+            Ok(value) => value,
+            Err(e) => return e.to_errno(),
+        }
     } else {
         0
     };
+
+    // Stack : l'appelant fournit RSP ou on conserve le fallback historique.
+    let stack_addr = stack;
     let stack_size = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
     let detached = (flags & CLONE_DETACHED) != 0;
 
@@ -2181,7 +2194,9 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
         pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
         attr,
         start_func,
-        arg: 0,
+        arg,
+        initial_rsp: stack,
+        tls_base: if flags & CLONE_SETTLS != 0 { tls } else { 0 },
         target_cpu: 0,
         pthread_out: ptid,
     };

@@ -2,7 +2,9 @@
 //!
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
-use super::object_fd::OBJECT_TABLE;
+use super::object_fd::{OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
+use super::object_store;
+use super::quota_query::quota_sub_usage;
 use super::validation::{
     exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap, verify_cap, write_user_struct,
     CapabilityType, EFAULT,
@@ -65,11 +67,14 @@ fn validate_delete_flags(flags: u32) -> ExofsResult<()> {
 /// - Invalide le cache.
 fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
     validate_delete_flags(flags)?;
+    super::object_write::reject_if_immutable(blob_id)?;
+    let _lifecycle = OBJECT_LIFECYCLE_LOCK.lock();
 
     // Vérifier l'existence.
-    let existing = BLOB_CACHE.get(&blob_id);
-    let bytes_freed = match &existing {
-        Some(data) => data.len() as u64,
+    let cached_size = BLOB_CACHE.len(&blob_id).map(|len| len as u64);
+    let persisted = object_store::lookup_mapping(&blob_id);
+    let bytes_freed = match cached_size.or_else(|| persisted.map(|mapping| mapping.size_bytes)) {
+        Some(size) => size,
         None => {
             if flags & delete_flags::IDEMPOTENT != 0 {
                 return Ok(DeleteResult {
@@ -82,7 +87,6 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
             return Err(ExofsError::BlobNotFound);
         }
     };
-    drop(existing);
 
     // Refuser si des fd sont ouverts et que FORCE est absent.
     let open = OBJECT_TABLE.open_count();
@@ -92,8 +96,15 @@ fn delete_blob(blob_id: BlobId, flags: u32) -> ExofsResult<DeleteResult> {
             return Err(ExofsError::PermissionDenied);
         }
     }
+    let owner_uid = OBJECT_TABLE
+        .entry_for_blob(&blob_id)
+        .map(|entry| entry.owner_uid);
 
     BLOB_CACHE.invalidate(&blob_id);
+    let _ = object_store::free_blob_mapping(&blob_id)?;
+    if let Some(owner) = owner_uid {
+        quota_sub_usage(owner, bytes_freed, 1)?;
+    }
 
     Ok(DeleteResult {
         blob_id: *blob_id.as_bytes(),
@@ -124,11 +135,14 @@ fn delete_object_by_path(
 
 /// Supprime l'objet associé au fd, puis ferme le fd.
 pub fn delete_by_fd(fd: u32, flags: u32) -> ExofsResult<DeleteResult> {
-    let blob_id = OBJECT_TABLE.blob_id_of(fd)?;
+    let entry = OBJECT_TABLE.get(fd)?;
+    let blob_id = entry.blob_id;
     // Fermer d'abord le fd pour éviter le conflit.
     OBJECT_TABLE.close(fd);
     let force_flags = flags | delete_flags::FORCE;
-    delete_blob(blob_id, force_flags)
+    let result = delete_blob(blob_id, force_flags)?;
+    quota_sub_usage(entry.owner_uid, result.bytes_freed, 1)?;
+    Ok(result)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,17 +194,25 @@ pub fn sys_exofs_object_delete(
 /// Retourne le nombre d'octets libérés lors de la suppression d'un blob.
 /// Retourne 0 si le blob n'existe pas.
 pub fn blob_size(blob_id: &BlobId) -> u64 {
-    BLOB_CACHE.get(blob_id).map(|d| d.len() as u64).unwrap_or(0)
+    BLOB_CACHE
+        .len(blob_id)
+        .map(|len| len as u64)
+        .or_else(|| object_store::persisted_size(blob_id))
+        .unwrap_or(0)
 }
 
 /// Suppression silencieuse (idempotente) : ne remonte jamais d'erreur.
 pub fn silent_delete(blob_id: BlobId) {
+    if super::object_write::reject_if_immutable(blob_id).is_err() {
+        return;
+    }
     BLOB_CACHE.invalidate(&blob_id);
+    let _ = object_store::free_blob_mapping(&blob_id);
 }
 
 /// Retourne `true` si l'objet existe dans le cache.
 pub fn object_exists(blob_id: &BlobId) -> bool {
-    BLOB_CACHE.get(blob_id).is_some()
+    BLOB_CACHE.contains(blob_id) || object_store::lookup_mapping(blob_id).is_some()
 }
 
 /// Supprime un batch de BlobIds.
@@ -232,6 +254,18 @@ mod tests {
         let r = delete_blob(id, 0).test_unwrap();
         assert_eq!(r.bytes_freed, 4);
         assert_eq!(r.tombstoned, 1);
+    }
+
+    #[test]
+    fn test_delete_rejects_immutable_meta() {
+        let id = make_blob(b"/delete/immutable", b"sealed");
+        super::super::object_set_meta::meta_set(id, b"immutable", b"1").test_unwrap();
+
+        match delete_blob(id, delete_flags::FORCE) {
+            Ok(_) => panic!("immutable delete unexpectedly succeeded"),
+            Err(err) => assert_eq!(err, ExofsError::PermissionDenied),
+        }
+        assert!(object_exists(&id));
     }
 
     #[test]
@@ -384,7 +418,8 @@ pub fn encode_tombstones(entries: &[TombstoneEntry]) -> ExofsResult<Vec<u8>> {
 ///
 /// Format répertoire : magic[4] + count[4] + entry_blob_id[32] * count.
 /// RECUR-01 : while, pas de récursion.
-pub fn delete_directory(dir_blob: BlobId, _flags: u32) -> ExofsResult<u64> {
+pub fn delete_directory(dir_blob: BlobId, flags: u32) -> ExofsResult<u64> {
+    super::object_write::reject_if_immutable(dir_blob)?;
     let data = BLOB_CACHE.get(&dir_blob).ok_or(ExofsError::BlobNotFound)?;
 
     let mut total_freed = 0u64;
@@ -405,17 +440,14 @@ pub fn delete_directory(dir_blob: BlobId, _flags: u32) -> ExofsResult<u64> {
                 id_bytes[k] = data[off.saturating_add(k)];
                 k = k.wrapping_add(1);
             }
-            let child = BlobId(id_bytes);
-            let child_size = blob_size(&child);
-            BLOB_CACHE.invalidate(&child);
-            total_freed = total_freed.saturating_add(child_size);
+            let child = delete_blob(BlobId(id_bytes), flags | delete_flags::FORCE)?;
+            total_freed = total_freed.saturating_add(child.bytes_freed);
             i = i.wrapping_add(1);
         }
     }
     drop(data);
-    let dir_size = blob_size(&dir_blob);
-    BLOB_CACHE.invalidate(&dir_blob);
-    Ok(total_freed.saturating_add(dir_size))
+    let dir = delete_blob(dir_blob, flags | delete_flags::FORCE)?;
+    Ok(total_freed.saturating_add(dir.bytes_freed))
 }
 
 #[cfg(test)]

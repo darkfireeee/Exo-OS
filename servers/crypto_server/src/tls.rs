@@ -675,6 +675,7 @@ pub fn tls_close(session_handle: u32) -> bool {
 
 /// Vérifie le certificat d'un pair via la PKI.
 pub fn tls_verify_certificate(cert: &crate::pki::Certificate) -> bool {
+    crate::pki::pki_init();
     crate::pki::verify_certificate(cert)
 }
 

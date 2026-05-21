@@ -61,9 +61,14 @@ const LVT_TIMER_MASKED: u32 = 0x0001_0000;
 /// Divisor by 1 for the APIC timer (bits [3:1] of DCR).
 const APIC_TIMER_DIV_1: u32 = 0x0B;
 
-/// Default watchdog vector (last user-available vector).
-const WATCHDOG_VECTOR: u32 = 0xFE;
-const WATCHDOG_TIMEOUT_MIN_MS: u64 = 500;
+/// Default NMI watchdog period.
+pub const NMI_WATCHDOG_PERIOD_MS: u64 = 200;
+const _: () = assert!(
+    NMI_WATCHDOG_PERIOD_MS > 0 && NMI_WATCHDOG_PERIOD_MS <= 1_000,
+    "ExoNmi watchdog period must stay in [1, 1000] ms"
+);
+
+const WATCHDOG_TIMEOUT_MIN_MS: u64 = NMI_WATCHDOG_PERIOD_MS;
 const WATCHDOG_TIMEOUT_MAX_MS: u64 = 30_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -402,8 +407,12 @@ pub fn arm_watchdog(timeout_ms: u64) {
             lapic_write32(LAPIC_TIMER_DCR, APIC_TIMER_DIV_1);
             // Write initial count (starts the timer)
             lapic_write32(LAPIC_TIMER_ICR, initial_count);
-            // Enable one-shot timer with watchdog vector
-            lapic_write32(LAPIC_LVT_TIMER, WATCHDOG_VECTOR | LVT_TIMER_ONESHOT);
+            // The LAPIC timer interrupt is routed through the shared timer
+            // vector; the handler dispatches by LAPIC timer owner.
+            lapic_write32(
+                LAPIC_LVT_TIMER,
+                crate::arch::x86_64::idt::VEC_IRQ_TIMER as u32 | LVT_TIMER_ONESHOT,
+            );
         }
     }
 
@@ -469,6 +478,25 @@ pub fn tick() {
     }
 }
 
+/// Checks the sealed IDT from the NMI path and requests ExoPhoenix handoff on
+/// descriptor tampering.
+///
+/// NMI-safe: volatile IDT reads and atomics only.
+pub fn exonmi_check_idt_integrity() {
+    if crate::arch::x86_64::idt::idt_integrity_ok() {
+        return;
+    }
+
+    unsafe {
+        crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
+            .store(HANDOFF_FREEZE_REQ, Ordering::Release);
+    }
+
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 /// Returns the current strike count.
 #[inline(always)]
 pub fn current_strikes() -> u32 {
@@ -493,7 +521,7 @@ mod tests {
 
     #[test]
     fn test_normalize_timeout_ms_clamps_low_values() {
-        assert_eq!(normalize_timeout_ms(1), 500);
+        assert_eq!(normalize_timeout_ms(1), 200);
     }
 
     #[test]

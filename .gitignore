@@ -28,6 +28,7 @@ servers/phase5-tests/rustc-ice-*.txt
 .sixth
 tla2tools.jar
 /states/
+/.codex-audit-kernel-protocol-pre-v0.2-worklog.md
 
 # macOS
 .DS_Store

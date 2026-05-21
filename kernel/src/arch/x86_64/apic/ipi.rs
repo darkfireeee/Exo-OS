@@ -83,6 +83,10 @@ pub fn send_ipi_tlb_shootdown(dest_apic_id: u32, virt_addr: u64) {
 ///
 /// Attend le retour ACK de tous les CPUs (timeout 100µs par défaut).
 pub fn broadcast_tlb_shootdown(virt_addr: u64, cpu_count: u32) {
+    if cpu_count <= 1 {
+        return;
+    }
+
     TLB_SHOOTDOWN_ADDR.store(virt_addr, Ordering::Release);
     TLB_SHOOTDOWN_ACK.store(0, Ordering::Release);
     let gen = TLB_SHOOTDOWN_GEN.fetch_add(1, Ordering::AcqRel) + 1;

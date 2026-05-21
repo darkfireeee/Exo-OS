@@ -85,6 +85,8 @@ pub fn PTHREAD_CREATE(
         },
         start_func,
         arg,
+        initial_rsp: 0,
+        tls_base: 0,
         target_cpu,
         pthread_out,
     };

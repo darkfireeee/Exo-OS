@@ -105,6 +105,22 @@ impl Default for BlobId {
     }
 }
 
+/// Dérive l'ObjectId logique utilisé par les syscalls ExoFS depuis un BlobId.
+///
+/// Cette transformation était historiquement recopiée dans plusieurs handlers.
+/// La centraliser évite que `create/open/stat/path_resolve` divergent sur la
+/// même identité logique.
+pub fn object_id_from_blob_id(blob_id: &BlobId) -> ObjectId {
+    let mut obj_bytes = [0u8; 32];
+    let bid_bytes = blob_id.as_bytes();
+    let mut i = 0usize;
+    while i < 32 {
+        obj_bytes[i] = bid_bytes[i] ^ 0x5A;
+        i = i.wrapping_add(1);
+    }
+    ObjectId(obj_bytes)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EpochId — compteur monotone d'epoch de commit
 // ─────────────────────────────────────────────────────────────────────────────

@@ -72,6 +72,19 @@ pub struct PerCpuData {
     _pad: [u8; 0], // garantit l'alignement 64
 }
 
+const _: () = assert!(
+    core::mem::size_of::<PerCpuData>() <= 4096,
+    "PerCpuData must fit in one page"
+);
+const _: () = assert!(
+    core::mem::offset_of!(PerCpuData, current_tcb) == 0x20,
+    "PerCpuData.current_tcb must stay at GS:0x20"
+);
+const _: () = assert!(
+    core::mem::offset_of!(PerCpuData, preempt_shadow) == 0x30,
+    "PerCpuData.preempt_shadow must stay at GS:0x30"
+);
+
 impl PerCpuData {
     #[allow(dead_code)]
     const fn zeroed() -> Self {

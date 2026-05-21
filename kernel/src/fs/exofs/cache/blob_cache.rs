@@ -302,6 +302,9 @@ impl BlobCacheInner {
                 if protected == Some(*v) {
                     continue;
                 }
+                if self.map.get(v).map(|e| e.dirty).unwrap_or(false) {
+                    continue;
+                }
                 if let Some(e) = self.map.remove(v) {
                     let sz = e.len();
                     self.eviction.remove(v);
@@ -610,6 +613,16 @@ impl BlobCache {
         }
     }
 
+    /// Retourne vrai si l'entrée est présente et dirty.
+    pub fn is_dirty(&self, id: &BlobId) -> bool {
+        self.inner
+            .lock()
+            .map
+            .get(id)
+            .map(|entry| entry.dirty)
+            .unwrap_or(false)
+    }
+
     // ── Statistiques ──────────────────────────────────────────────────────────
 
     pub fn used_bytes(&self) -> u64 {
@@ -659,6 +672,9 @@ impl BlobCache {
         let victims = inner.eviction.pick_eviction_candidates(n);
         let mut freed = 0u64;
         for id in &victims {
+            if inner.map.get(id).map(|e| e.dirty).unwrap_or(false) {
+                continue;
+            }
             if let Some(e) = inner.map.remove(id) {
                 let sz = e.len();
                 inner.eviction.remove(id);
@@ -804,8 +820,19 @@ mod tests {
         c.insert(blob(1), alloc::vec![0u8; 32]).test_unwrap();
         c.mark_dirty(&blob(1)).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 1);
+        assert!(c.is_dirty(&blob(1)));
         c.mark_clean(&blob(1)).test_unwrap();
         assert_eq!(c.dirty_ids().len(), 0);
+        assert!(!c.is_dirty(&blob(1)));
+    }
+
+    #[test]
+    fn test_evict_n_skips_dirty_entries() {
+        let c = BlobCache::new_const();
+        c.insert(blob(21), alloc::vec![0u8; 64]).test_unwrap();
+        c.mark_dirty(&blob(21)).test_unwrap();
+        assert_eq!(c.evict_n(1), 0);
+        assert!(c.contains(&blob(21)));
     }
 
     #[test]

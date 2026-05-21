@@ -4,7 +4,7 @@ use super::{dependency, service_manager, service_table, Service};
 
 #[inline]
 pub fn dependency_ready(services: &[Service], dep: &str) -> bool {
-    if dep == "init_server" || service_manager::service_started(services, dep) {
+    if dep == "init_server" || service_manager::service_ready(services, dep) {
         return true;
     }
     if let Some(meta) = dependency::metadata(dep) {

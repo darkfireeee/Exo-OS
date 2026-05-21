@@ -9,8 +9,14 @@ use super::validation::{
     verify_cap, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::types::BlobId;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
+use crate::fs::exofs::core::{DiskOffset, EpochFlags, EpochId, ExofsError, ExofsResult};
+use crate::fs::exofs::epoch::epoch_commit as durable_epoch_commit;
+use crate::fs::exofs::epoch::epoch_root::{EpochRootEntry, EpochRootInMemory};
+use crate::fs::exofs::epoch::epoch_root_chain::{
+    rebuild_chain_offsets, serialize_epoch_root_chain, EPOCH_ROOT_PAGE_SIZE,
+};
+use crate::fs::exofs::storage::{layout, superblock, superblock_backup, virtio_adapter};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -30,6 +36,7 @@ pub const EPOCH_JOURNAL_KEY: &[u8] = b"EPOCH_JOURNAL";
 
 static CURRENT_EPOCH: AtomicU64 = AtomicU64::new(1);
 static COMMIT_STATE: AtomicU32 = AtomicU32::new(0); // 0=idle 1=in_progress
+static LAST_COMMITTED_SLOT: AtomicU64 = AtomicU64::new(0);
 
 const STATE_IDLE: u32 = 0;
 const STATE_IN_PROGRESS: u32 = 1;
@@ -37,6 +44,12 @@ const STATE_IN_PROGRESS: u32 = 1;
 /// Retourne l'epoch courante.
 pub fn current_epoch() -> u64 {
     CURRENT_EPOCH.load(Ordering::Acquire)
+}
+
+/// Restaure l'epoch courante depuis le recovery ou un superblock validé.
+pub fn set_current_epoch(epoch: u64) {
+    let normalized = if epoch == 0 { 1 } else { epoch };
+    CURRENT_EPOCH.store(normalized, Ordering::Release);
 }
 
 /// Retourne vrai si un commit est en cours.
@@ -185,7 +198,7 @@ fn load_journal(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
 
 /// Sérialise et sauvegarde le journal.
 /// OOM-02 / RECUR-01.
-fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> ExofsResult<()> {
+fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> ExofsResult<BlobId> {
     let n = entries.len().min(EPOCH_MAX_ENTRIES);
     let total = EPOCH_HDR_SIZE.saturating_add(n.saturating_mul(EPOCH_ENTRY_SIZE));
     let mut buf: Vec<u8> = Vec::new();
@@ -236,36 +249,32 @@ fn save_journal(epoch_id: u64, entries: &[EpochJournalEntry], flags: u8) -> Exof
     BLOB_CACHE
         .insert(jid, buf.to_vec())
         .map_err(|_| ExofsError::NoSpace)?;
-    Ok(())
+    if crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
+        if super::object_store::persist_blob_data_if_disk(jid, &buf, true)? {
+            let _ = BLOB_CACHE.mark_clean(&jid);
+        }
+    }
+    Ok(jid)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Logique de commit
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Détermine si un blob appartient à une epoch donnée.
-fn blob_epoch_id(blob_id: &BlobId) -> u64 {
-    match BLOB_CACHE.get(blob_id) {
-        Some(d) if d.len() >= 8 => {
-            u64::from_le_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]])
-        }
-        _ => 0,
-    }
-}
-
 /// Collecte tous les blobs appartenant à l'epoch `epoch_id`.
 /// OOM-02 / RECUR-01.
 fn collect_epoch_blobs(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
-    let all = BLOB_CACHE
-        .list_keys()
-        .map_err(|_| ExofsError::GcQueueFull)?;
+    let all = BLOB_CACHE.dirty_ids();
     let mut out: Vec<EpochJournalEntry> = Vec::new();
     out.try_reserve(all.len().min(EPOCH_MAX_ENTRIES))
         .map_err(|_| ExofsError::NoMemory)?;
     let mut i = 0usize;
     while i < all.len() && out.len() < EPOCH_MAX_ENTRIES {
-        let ep = blob_epoch_id(&all[i]);
-        if ep == epoch_id {
+        let fd_epoch = super::object_fd::OBJECT_TABLE
+            .entry_for_blob(&all[i])
+            .map(|entry| entry.epoch_id)
+            .unwrap_or(epoch_id);
+        if fd_epoch == 0 || fd_epoch == epoch_id {
             let sz = BLOB_CACHE.get(&all[i]).map(|d| d.len() as u64).unwrap_or(0);
             let mut entry = EpochJournalEntry::default();
             let bid = all[i].as_bytes();
@@ -283,13 +292,184 @@ fn collect_epoch_blobs(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
 }
 
 /// Invalide les blobs marqués dirty après commit.
-fn flush_dirty_blobs(entries: &[EpochJournalEntry]) {
+fn flush_dirty_blobs(entries: &[EpochJournalEntry]) -> ExofsResult<()> {
     let mut i = 0usize;
     while i < entries.len() {
         let bid = BlobId(entries[i].blob_id);
-        BLOB_CACHE.mark_dirty(&bid).ok();
+        if let Some(data) = BLOB_CACHE.get(&bid) {
+            if super::object_store::persist_blob_data_if_disk(bid, data.as_ref(), true)? {
+                let _ = BLOB_CACHE.mark_clean(&bid);
+            }
+        }
         i = i.wrapping_add(1);
     }
+    Ok(())
+}
+
+fn flatten_root_pages(pages: &[Vec<u8>]) -> ExofsResult<Vec<u8>> {
+    let total = pages.len().saturating_mul(EPOCH_ROOT_PAGE_SIZE);
+    let mut out = Vec::new();
+    out.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+    let mut i = 0usize;
+    while i < pages.len() {
+        out.extend_from_slice(&pages[i]);
+        i = i.wrapping_add(1);
+    }
+    Ok(out)
+}
+
+fn epoch_root_blob_id(epoch_id: u64) -> BlobId {
+    let mut buf = [0u8; 18];
+    let ep = epoch_id.to_le_bytes();
+    let mut i = 0usize;
+    while i < 8 {
+        buf[i] = ep[i];
+        i = i.wrapping_add(1);
+    }
+    buf[8..18].copy_from_slice(b"EPOCH_ROOT");
+    BlobId::from_bytes_blake3(&buf)
+}
+
+fn build_epoch_root(
+    epoch_id: u64,
+    entries: &[EpochJournalEntry],
+) -> ExofsResult<EpochRootInMemory> {
+    let mut root = EpochRootInMemory::new(EpochId(epoch_id));
+    let mut i = 0usize;
+    while i < entries.len() {
+        let blob_id = BlobId(entries[i].blob_id);
+        let object_id = object_id_from_blob_id(&blob_id);
+        let disk_offset =
+            super::object_store::mapping_disk_offset(&blob_id).unwrap_or(DiskOffset::ZERO);
+        root.add_modified(object_id, disk_offset, EpochRootEntry::FLAG_MODIFIED)?;
+        i = i.wrapping_add(1);
+    }
+    Ok(root)
+}
+
+fn save_epoch_root_blob(epoch_id: u64, root: &EpochRootInMemory) -> ExofsResult<BlobId> {
+    let root_blob = epoch_root_blob_id(epoch_id);
+    let mut pages = serialize_epoch_root_chain(root)?;
+    let first_flat = flatten_root_pages(&pages)?;
+    BLOB_CACHE
+        .insert(root_blob, first_flat.to_vec())
+        .map_err(|_| ExofsError::NoSpace)?;
+    let _ = super::object_store::persist_blob_data_if_disk(root_blob, &first_flat, true)?;
+
+    if let Some(base) = super::object_store::mapping_disk_offset(&root_blob) {
+        let mut offsets = Vec::new();
+        offsets
+            .try_reserve(pages.len())
+            .map_err(|_| ExofsError::NoMemory)?;
+        let mut i = 0usize;
+        while i < pages.len() {
+            offsets.push(DiskOffset(
+                base.0
+                    .checked_add((i as u64).saturating_mul(EPOCH_ROOT_PAGE_SIZE as u64))
+                    .ok_or(ExofsError::OffsetOverflow)?,
+            ));
+            i = i.wrapping_add(1);
+        }
+        rebuild_chain_offsets(&mut pages, &offsets)?;
+        let flat = flatten_root_pages(&pages)?;
+        BLOB_CACHE
+            .insert(root_blob, flat.to_vec())
+            .map_err(|_| ExofsError::NoSpace)?;
+        let _ = super::object_store::persist_blob_data_if_disk(root_blob, &flat, true)?;
+        let _ = BLOB_CACHE.mark_clean(&root_blob);
+    }
+    Ok(root_blob)
+}
+
+fn next_epoch_slot() -> ExofsResult<(DiskOffset, DiskOffset)> {
+    let prev = DiskOffset(LAST_COMMITTED_SLOT.load(Ordering::Acquire));
+    let disk_size = virtio_adapter::default_global_disk_size_bytes();
+    let slot_a = layout::epoch_slot_a();
+    let slot_b = layout::epoch_slot_b();
+    let slot_c = layout::epoch_slot_c(disk_size).unwrap_or(slot_a);
+    let next = if prev == slot_a {
+        slot_b
+    } else if prev == slot_b {
+        slot_c
+    } else {
+        slot_a
+    };
+    Ok((prev, next))
+}
+
+fn update_superblock_epoch_if_present(next_epoch: u64) -> ExofsResult<()> {
+    if !virtio_adapter::has_global_disk() {
+        return Ok(());
+    }
+    let disk_size = virtio_adapter::default_global_disk_size_bytes();
+    if disk_size < superblock::MIN_DISK_SIZE {
+        return Ok(());
+    }
+    let read_fn = |offset: DiskOffset, buf: &mut [u8]| -> ExofsResult<usize> {
+        let data = virtio_adapter::read_at_offset(offset, buf.len())?;
+        buf.copy_from_slice(&data);
+        Ok(data.len())
+    };
+    let recovered = match superblock_backup::recover_superblock(disk_size, &read_fn) {
+        Ok(result) => result,
+        Err(ExofsError::BadMagic)
+        | Err(ExofsError::InvalidMagic)
+        | Err(ExofsError::CorruptFilesystem)
+        | Err(ExofsError::InvalidState)
+        | Err(ExofsError::IoError) => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let mut sb = recovered.superblock;
+    if sb.epoch_current >= next_epoch {
+        return Ok(());
+    }
+    sb.epoch_current = next_epoch;
+    sb.last_commit_time = crate::arch::time::read_ticks();
+    sb.finalize();
+    let write_fn = |data: &[u8], offset: DiskOffset| -> ExofsResult<usize> {
+        virtio_adapter::write_at_offset(offset, data)
+    };
+    let _ = superblock_backup::write_superblock_mirrors(&sb, disk_size, &write_fn)?;
+    virtio_adapter::flush_global_disk()
+}
+
+fn commit_durable_epoch_if_disk(
+    epoch_to_commit: u64,
+    entries: &[EpochJournalEntry],
+    flags: u32,
+) -> ExofsResult<Option<u64>> {
+    if !virtio_adapter::has_global_disk() || flags & epoch_flags::NO_ADVANCE != 0 {
+        return Ok(None);
+    }
+    let root = build_epoch_root(epoch_to_commit, entries)?;
+    let root_blob = save_epoch_root_blob(epoch_to_commit, &root)?;
+    let root_disk_offset =
+        super::object_store::mapping_disk_offset(&root_blob).unwrap_or(DiskOffset::ZERO);
+    let (prev_slot, slot_offset) = next_epoch_slot()?;
+    let get_current_epoch = || EpochId(epoch_to_commit);
+    let advance_epoch = |next: EpochId| -> ExofsResult<()> {
+        set_current_epoch(next.0);
+        update_superblock_epoch_if_present(next.0)
+    };
+    let get_tsc = || crate::arch::time::read_ticks();
+    let write_fn = |data: &[u8], offset: DiskOffset| -> ExofsResult<usize> {
+        virtio_adapter::write_at_offset(offset, data)
+    };
+    let result = durable_epoch_commit::commit_epoch(durable_epoch_commit::CommitInput {
+        root: &root,
+        callbacks: durable_epoch_commit::CommitCallbacks {
+            get_current_epoch: &get_current_epoch,
+            advance_epoch: &advance_epoch,
+            get_tsc: &get_tsc,
+            write_fn: &write_fn,
+        },
+        root_disk_offset,
+        slot_offset,
+        prev_slot_offset: prev_slot,
+        extra_flags: EpochFlags::default(),
+    })?;
+    LAST_COMMITTED_SLOT.store(result.slot_offset.0, Ordering::Release);
+    Ok(Some(result.epoch_id.0))
 }
 
 /// Exécute le commit d'une epoch.
@@ -333,24 +513,37 @@ fn do_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
             return Err(ExofsError::ChecksumMismatch);
         }
     }
+    if let Err(e) = flush_dirty_blobs(&entries) {
+        COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
+        return Err(e);
+    }
     if let Err(e) = save_journal(epoch_to_commit, &entries, args.flags as u8) {
         COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
         return Err(e);
     }
-    flush_dirty_blobs(&entries);
+    let durable_new_epoch =
+        match commit_durable_epoch_if_disk(epoch_to_commit, &entries, args.flags) {
+            Ok(epoch) => epoch,
+            Err(e) => {
+                COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
+                return Err(e);
+            }
+        };
     let mut bytes_sealed = 0u64;
     let mut i = 0usize;
     while i < entries.len() {
         bytes_sealed = bytes_sealed.saturating_add(entries[i].size);
         i = i.wrapping_add(1);
     }
-    let new_epoch = if args.flags & epoch_flags::NO_ADVANCE != 0 {
+    let new_epoch = if let Some(epoch) = durable_new_epoch {
+        epoch
+    } else if args.flags & epoch_flags::NO_ADVANCE != 0 {
         epoch_to_commit
     } else {
         epoch_to_commit.wrapping_add(1)
     };
-    if args.flags & epoch_flags::NO_ADVANCE == 0 {
-        CURRENT_EPOCH.store(new_epoch, Ordering::Release);
+    if args.flags & epoch_flags::NO_ADVANCE == 0 && durable_new_epoch.is_none() {
+        set_current_epoch(new_epoch);
     }
     COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
     Ok(EpochCommitResult {
@@ -448,6 +641,7 @@ pub fn force_advance_epoch() -> u64 {
 pub fn reset_epoch_counter() {
     CURRENT_EPOCH.store(1, Ordering::Release);
     COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
+    LAST_COMMITTED_SLOT.store(0, Ordering::Release);
 }
 
 /// Retourne vrai si le journal d'une epoch est présent dans le cache.

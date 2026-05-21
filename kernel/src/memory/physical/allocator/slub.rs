@@ -10,10 +10,23 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
+use crate::memory::core::constants::{SLAB_MAX_OBJ_SIZE, SLAB_MIN_OBJ_SIZE};
 use crate::memory::core::{AllocError, AllocFlags, PAGE_SIZE};
 use crate::memory::physical::allocator::slab::{
     alloc_slab_backing_page, size_class_for, SizeClassInfo, N_SIZE_CLASSES,
 };
+
+const SLUB_FREE_POISON: u8 = 0xCC;
+const SLUB_FREELIST_WORD: usize = mem::size_of::<*mut u8>();
+
+const _: () = assert!(
+    SLAB_MIN_OBJ_SIZE >= SLUB_FREELIST_WORD,
+    "SLUB objects must fit the encoded freelist pointer"
+);
+const _: () = assert!(
+    SLAB_MAX_OBJ_SIZE < PAGE_SIZE,
+    "SLUB objects must stay inside one backing page"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HEADER DE SLUB (compact, 32 octets)
@@ -82,6 +95,9 @@ pub struct SlubCacheStats {
     pub slubs_reaped: AtomicU64,
     pub current_inuse: AtomicUsize,
     pub oom_count: AtomicU64,
+    pub invalid_frees: AtomicU64,
+    pub double_frees: AtomicU64,
+    pub use_after_free: AtomicU64,
 }
 
 impl SlubCacheStats {
@@ -93,6 +109,9 @@ impl SlubCacheStats {
             slubs_reaped: AtomicU64::new(0),
             current_inuse: AtomicUsize::new(0),
             oom_count: AtomicU64::new(0),
+            invalid_frees: AtomicU64::new(0),
+            double_frees: AtomicU64::new(0),
+            use_after_free: AtomicU64::new(0),
         }
     }
 }
@@ -184,6 +203,21 @@ impl SlubCache {
         let page_start = ptr.as_ptr() as usize & !(PAGE_SIZE - 1);
         let header = page_start as *mut SlubHeader;
 
+        if !self.object_belongs_to_slub(header, ptr.as_ptr()) {
+            self.stats.invalid_frees.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(false, "SLUB free outside cache object layout: {:p}", ptr);
+            return;
+        }
+        if (*header).inuse == 0 || self.freelist_contains(&*header, ptr.as_ptr()) {
+            self.stats.double_frees.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(false, "SLUB double free detected: {:p}", ptr);
+            return;
+        }
+
+        // Poison before writing the encoded link so stale payload reads and writes
+        // leave evidence when this object is allocated again.
+        core::ptr::write_bytes(ptr.as_ptr(), SLUB_FREE_POISON, self.info.size);
+
         // SAFETY: header pointe sur un SlubHeader géré par ce cache.
         (*header).write_next(ptr.as_ptr(), (*header).freelist);
         (*header).freelist = ptr.as_ptr();
@@ -229,6 +263,21 @@ impl SlubCache {
         }
 
         let obj = header.freelist;
+        if unsafe { !self.object_belongs_to_slub(header as *mut SlubHeader, obj) } {
+            self.stats.invalid_frees.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(
+                false,
+                "SLUB freelist object escaped cache layout: {:p}",
+                obj
+            );
+            return None;
+        }
+        if unsafe { !self.free_poison_is_intact(obj) } {
+            self.stats.use_after_free.fetch_add(1, Ordering::Relaxed);
+            debug_assert!(false, "SLUB free object payload modified: {:p}", obj);
+            return None;
+        }
+
         // SAFETY: header est valide, obj pointe sur un objet libre encodé XOR.
         let next = unsafe { header.read_next(obj) };
         header.freelist = next;
@@ -272,6 +321,10 @@ impl SlubCache {
         let first_off = align_up_slub(header_end, self.info.alignment);
         let usable = PAGE_SIZE - first_off;
         let n_objs = usable / self.info.size;
+        let class_idx = size_class_for(self.info.size).ok_or(AllocError::InvalidParams)?;
+        if n_objs == 0 || n_objs > u16::MAX as usize || class_idx > u8::MAX as usize {
+            return Err(AllocError::InvalidParams);
+        }
 
         // SAFETY: virt_base pointe sur une page valide fraîchement mappée.
         unsafe {
@@ -283,6 +336,7 @@ impl SlubCache {
                 } else {
                     core::ptr::null_mut()
                 };
+                core::ptr::write_bytes(obj, SLUB_FREE_POISON, self.info.size);
                 let encoded = ((next as usize) ^ key) as *mut u8;
                 core::ptr::write(obj as *mut *mut u8, encoded);
             }
@@ -296,7 +350,7 @@ impl SlubCache {
                     freelist_key: key,
                     inuse: 0,
                     total: n_objs as u16,
-                    class_idx: 0,
+                    class_idx: class_idx as u8,
                     _pad: [0; 3],
                     next: core::ptr::null_mut(),
                     prev: core::ptr::null_mut(),
@@ -307,6 +361,66 @@ impl SlubCache {
 
         let ptr = self.alloc_partial(inner).ok_or(AllocError::OutOfMemory)?;
         Ok(ptr)
+    }
+
+    unsafe fn object_belongs_to_slub(&self, header: *const SlubHeader, obj: *mut u8) -> bool {
+        if header.is_null() || obj.is_null() {
+            return false;
+        }
+
+        let header = &*header;
+        let Some(class_idx) = size_class_for(self.info.size) else {
+            return false;
+        };
+        if header.class_idx as usize != class_idx
+            || header.total == 0
+            || header.inuse > header.total
+        {
+            return false;
+        }
+
+        let first_off = align_up_slub(mem::size_of::<SlubHeader>(), self.info.alignment);
+        let page_start = header as *const SlubHeader as usize;
+        let Some(first_obj) = page_start.checked_add(first_off) else {
+            return false;
+        };
+        let Some(obj_span) = (header.total as usize).checked_mul(self.info.size) else {
+            return false;
+        };
+        let Some(obj_end) = first_obj.checked_add(obj_span) else {
+            return false;
+        };
+        let addr = obj as usize;
+
+        addr >= first_obj && addr < obj_end && (addr - first_obj) % self.info.size == 0
+    }
+
+    unsafe fn freelist_contains(&self, header: &SlubHeader, needle: *mut u8) -> bool {
+        let mut cursor = header.freelist;
+        let mut remaining = header.total as usize;
+
+        while !cursor.is_null() && remaining != 0 {
+            if cursor == needle {
+                return true;
+            }
+            if !self.object_belongs_to_slub(header as *const SlubHeader, cursor) {
+                return false;
+            }
+            cursor = header.read_next(cursor);
+            remaining -= 1;
+        }
+        false
+    }
+
+    unsafe fn free_poison_is_intact(&self, obj: *const u8) -> bool {
+        let mut offset = SLUB_FREELIST_WORD.min(self.info.size);
+        while offset < self.info.size {
+            if obj.add(offset).read() != SLUB_FREE_POISON {
+                return false;
+            }
+            offset += 1;
+        }
+        true
     }
 }
 

@@ -31,6 +31,15 @@ pub const CFS_TARGET_PERIOD_NS: u64 = CFS_TARGET_LATENCY_MS * 1_000_000;
 /// plus que ce seuil par rapport au min_vruntime, on préempte immédiatement.
 pub const CFS_WAKEUP_PREEMPT_NS: u64 = 1_000_000; // 1ms
 
+const _: () = assert!(
+    CFS_MIN_SLICE_NS < CFS_TARGET_PERIOD_NS,
+    "CFS minimum slice must fit inside the target period"
+);
+const _: () = assert!(
+    CFS_WAKEUP_PREEMPT_NS < CFS_TARGET_PERIOD_NS,
+    "CFS wakeup preemption threshold must fit inside the target period"
+);
+
 /// Compteur global de préemptions CFS (instrumentation).
 pub static CFS_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
 /// Compteur global de wakeup-preemptions (instrumentation).

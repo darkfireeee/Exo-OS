@@ -82,8 +82,8 @@ pub use object_class::{ClassOperation, CowPolicy, ObjectClass};
 pub use object_id::{new_class1, new_class2};
 pub use object_kind::{KindOperation, ObjectKind};
 pub use types::{
-    BlobId, ByteRange, DiskOffset, EpochId, Extent, InlineData, ObjectId, PhysAddr, SnapshotId,
-    TimeSpec,
+    object_id_from_blob_id, BlobId, ByteRange, DiskOffset, EpochId, Extent, InlineData, ObjectId,
+    PhysAddr, SnapshotId, TimeSpec,
 };
 // Module CRC32C intégré dans blob_id.rs
 pub use blob_id::crc32c;

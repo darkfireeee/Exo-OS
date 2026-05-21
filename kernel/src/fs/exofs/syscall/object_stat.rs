@@ -3,12 +3,13 @@
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
 use super::object_fd::OBJECT_TABLE;
+use super::object_store;
 use super::validation::{
     copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap,
     verify_cap, write_user_struct, CapabilityType, EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
@@ -84,12 +85,7 @@ impl ObjectStat {
     /// Construit un stat depuis un BlobId + données du cache.
     fn from_blob(blob_id: BlobId, data: &[u8], epoch_id: u64, kind: u8) -> Self {
         let bid = blob_id.as_bytes();
-        let mut obj_id = [0u8; 32];
-        let mut i = 0usize;
-        while i < 32 {
-            obj_id[i] = bid[i] ^ 0x5A;
-            i = i.wrapping_add(1);
-        }
+        let obj_id = object_id_from_blob_id(&blob_id);
 
         let mut s = ObjectStat {
             size: data.len() as u64,
@@ -106,7 +102,7 @@ impl ObjectStat {
         }
         let mut k = 0usize;
         while k < 32 {
-            s.object_id[k] = obj_id[k];
+            s.object_id[k] = obj_id.0[k];
             k = k.wrapping_add(1);
         }
         s
@@ -129,7 +125,16 @@ impl ObjectStat {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn stat_blob(blob_id: BlobId, flags: u32) -> ExofsResult<ObjectStat> {
-    let data = BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?;
+    let data = match BLOB_CACHE.get(&blob_id) {
+        Some(data) => data,
+        None => match object_store::load_blob_data_if_available(&blob_id)? {
+            Some(data) => {
+                BLOB_CACHE.insert(blob_id, data)?;
+                BLOB_CACHE.get(&blob_id).ok_or(ExofsError::BlobNotFound)?
+            }
+            None => return Err(ExofsError::BlobNotFound),
+        },
+    };
     let mut s = ObjectStat::from_blob(blob_id, &data, 0, 0);
     if flags & stat_flags::INCLUDE_HASH != 0 {
         s.fill_hash(&data);
@@ -229,7 +234,11 @@ pub fn sys_exofs_object_stat(
 
 /// Retourne la taille logique d'un objet (0 si absent).
 pub fn object_size(blob_id: &BlobId) -> u64 {
-    BLOB_CACHE.get(blob_id).map(|d| d.len() as u64).unwrap_or(0)
+    BLOB_CACHE
+        .len(blob_id)
+        .map(|len| len as u64)
+        .or_else(|| object_store::persisted_size(blob_id))
+        .unwrap_or(0)
 }
 
 /// Retourne le temps de dernière modification simulé (epoch_id fourni, 0 sinon).

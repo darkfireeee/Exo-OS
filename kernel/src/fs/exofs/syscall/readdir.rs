@@ -22,7 +22,7 @@ use super::validation::{
     write_user_buf, CapabilityType, EINVAL, EXOFS_LIST_MAX, EXOFS_NAME_MAX,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
-use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::path::path_index::PathIndex;
 use alloc::vec::Vec;
@@ -130,6 +130,13 @@ fn load_directory_blob(blob_id: &BlobId) -> ExofsResult<Vec<u8>> {
     }
     if let Some(data) = object_store::load_blob_data_if_available(blob_id)? {
         BLOB_CACHE.insert(*blob_id, data.clone())?;
+        return Ok(data);
+    }
+    if OBJECT_TABLE.entry_for_blob(blob_id).is_some() {
+        let idx = PathIndex::new(object_id_from_blob_id(blob_id));
+        let data = idx.serialize()?;
+        BLOB_CACHE.insert(*blob_id, data.clone())?;
+        BLOB_CACHE.mark_dirty(blob_id).ok();
         return Ok(data);
     }
     Err(ExofsError::ObjectNotFound)

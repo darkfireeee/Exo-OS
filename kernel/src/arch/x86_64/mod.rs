@@ -35,8 +35,11 @@ use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 /// Taille de page standard (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Adresse de base du noyau en espace virtuel
-pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
+/// Première adresse canonique du high-half noyau.
+pub use crate::arch::constants::KERNEL_BASE;
+
+/// Adresse de link de l'image noyau.
+pub const KERNEL_IMAGE_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 
 /// Limite supérieure de la mémoire physique addressable (48 bits PA)
 pub const MAX_PHYS_ADDR: u64 = (1u64 << 48) - 1;

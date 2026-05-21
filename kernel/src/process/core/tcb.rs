@@ -151,7 +151,7 @@ pub struct ThreadAddress {
     pub entry_point: u64,
     /// Pointeur de cadre utilisateur initial (RSP au démarrage).
     pub initial_rsp: u64,
-    /// Pointeur vers la TLS statique (GS.base pour x86_64).
+    /// Pointeur vers la TLS statique (FS.base pour x86_64).
     pub tls_base: u64,
     /// Premier argument injecté en RDI au point d'entrée initial.
     pub entry_arg0: u64,
@@ -407,7 +407,7 @@ pub struct ProcessThread {
     pub addresses: ThreadAddress,
 
     // ── TLS (Thread Local Storage) ─────────────────────────────────────────────
-    /// Base du segment TLS (valeur de GS.base en mode kernel).
+    /// Base FS du segment TLS. Le nom historique conserve l'ABI interne existante.
     pub tls_gs_base: AtomicU64,
     /// Bloc TLS statique (segment .tdata/.tbss du binaire).
     pub tls_block: AtomicUsize, // *mut u8 opaque

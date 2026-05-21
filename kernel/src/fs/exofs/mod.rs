@@ -157,9 +157,10 @@ fn exofs_writeback_dirty() -> Result<(), ExofsError> {
     while i < dirty.len() {
         let (blob_id, ref data) = dirty[i];
         match object_store::persist_blob_data_if_disk(blob_id, data, true) {
-            Ok(_) => {
+            Ok(true) => {
                 let _ = BLOB_CACHE.mark_clean(&blob_id);
             }
+            Ok(false) => {}
             Err(_) => {
                 io_err = true;
             }

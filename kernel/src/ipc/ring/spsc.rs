@@ -35,6 +35,20 @@ use core::sync::atomic::{fence, AtomicU64, Ordering};
 /// Re-exporté pour usage dans les modules message/ et channel/.
 pub const SPSC_CAPACITY: usize = RING_SIZE;
 
+const _: () = assert!(
+    SPSC_CAPACITY.is_power_of_two(),
+    "SPSC capacity must support ring masking"
+);
+const _: () = assert!(
+    core::mem::size_of::<crate::ipc::core::transfer::RingSlot>()
+        >= core::mem::size_of::<MessageHeader>() + crate::ipc::core::MAX_MSG_SIZE,
+    "SPSC ring slot cannot hold the IPC header and inline payload"
+);
+const _: () = assert!(
+    core::mem::size_of::<SlotCell>() * SPSC_CAPACITY <= 4 * 1024 * 1024,
+    "SPSC ring storage exceeds the audit budget"
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SpscRing — la structure principale
 // ─────────────────────────────────────────────────────────────────────────────

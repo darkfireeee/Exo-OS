@@ -1,11 +1,11 @@
 use super::Service;
 
 #[inline]
-pub fn service_started(services: &[Service], name: &str) -> bool {
+pub fn service_ready(services: &[Service], name: &str) -> bool {
     services
         .iter()
         .find(|service| service.name == name)
-        .map(|service| service.current_pid() != 0)
+        .map(Service::is_ready)
         .unwrap_or(false)
 }
 

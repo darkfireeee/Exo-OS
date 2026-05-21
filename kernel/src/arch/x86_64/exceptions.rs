@@ -588,8 +588,7 @@ extern "C" fn do_nmi(frame: *mut ExceptionFrame) {
         return;
     }
 
-    // NMI handler : vérifier watchdog, hpet, mce
-    // Minimal : incrémenter compteur sans allocation ni verrou
+    crate::security::exonmi::exonmi_check_idt_integrity();
 }
 
 /// Handler #BP — Breakpoint (INT3)
@@ -1080,6 +1079,14 @@ extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
     // 1. EOI APIC — acquitté en premier pour minimiser la latence APIC.
     // SAFETY: LAPIC initialisé avant que les IRQ timer soient activées.
     super::apic::eoi();
+
+    if super::apic::local_apic::lapic_timer_owner()
+        == super::apic::local_apic::LapicTimerOwner::ExoNmiWatchdog
+    {
+        crate::security::exonmi::tick();
+        return;
+    }
+
     super::apic::local_apic::rearm_scheduler_timer_tick();
 
     // 2. Tick scheduler : avance les quantum CPU et décide des préemptions.

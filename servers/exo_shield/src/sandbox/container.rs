@@ -233,6 +233,18 @@ impl ContainerProfile {
         &mut self.net_config
     }
 
+    fn reset_slot(&mut self) {
+        self.id = ContainerId::invalid();
+        self.pid = 0;
+        self.fs_root_len = 0;
+        self.net_ns_len = 0;
+        self.syscall_filter = SyscallBitmap::deny_all();
+        self.state
+            .store(ContainerState::Destroyed.as_u8(), Ordering::Release);
+        self.violation_count.store(0, Ordering::Release);
+        self.active = false;
+    }
+
     /// Check whether a syscall is allowed for this container.
     pub fn check_syscall(&self, nr: u8) -> bool {
         self.syscall_filter.is_allowed(nr)
@@ -490,6 +502,14 @@ impl ContainerManager {
         self.generation.load(Ordering::Acquire)
     }
 
+    fn reset(&mut self) {
+        for container in self.containers.iter_mut() {
+            container.reset_slot();
+        }
+        self.next_id.store(1, Ordering::Release);
+        self.generation.store(0, Ordering::Release);
+    }
+
     // -- Internal -----------------------------------------------------------
 
     fn find_by_id(&self, id: ContainerId) -> Option<&ContainerProfile> {
@@ -507,7 +527,7 @@ static GLOBAL_CONTAINER_MANAGER: Mutex<ContainerManager> = Mutex::new(ContainerM
 /// Reset the global container manager used by exo_shield containment commands.
 pub fn container_manager_init() {
     let mut manager = GLOBAL_CONTAINER_MANAGER.lock();
-    *manager = ContainerManager::new();
+    manager.reset();
 }
 
 /// Apply a deny-by-default quarantine profile to a PID.

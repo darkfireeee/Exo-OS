@@ -15,7 +15,7 @@
 //! retour d'exception peut livrer un signal ou déclencher un reschedule; la
 //! frame sauvegardée doit donc rester dans la pile du TCB courant.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::gdt::GDT_KERNEL_CS;
 use super::tss::{IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI};
@@ -49,6 +49,17 @@ pub const EXC_SECURITY: u8 = 30;
 
 /// Premier vecteur IRQ hardware (après les 32 exceptions)
 pub const IRQ_BASE: u8 = 32;
+pub const FIRST_USER_IRQ_VECTOR: u8 = IRQ_BASE;
+pub const IDT_ENTRY_COUNT: usize = 256;
+
+const _: () = assert!(
+    FIRST_USER_IRQ_VECTOR >= 32,
+    "first IRQ vector must not overlap CPU exceptions"
+);
+const _: () = assert!(
+    IDT_ENTRY_COUNT == 256,
+    "x86_64 IDT must contain 256 entries"
+);
 
 /// Vecteur IRQ timer (APIC Local Timer)
 pub const VEC_IRQ_TIMER: u8 = IRQ_BASE;
@@ -162,7 +173,7 @@ impl IdtEntry {
 /// L'IDT est read-only après init, donc le partage est safe.
 #[repr(C, align(16))]
 pub struct InterruptDescriptorTable {
-    entries: [IdtEntry; 256],
+    entries: [IdtEntry; IDT_ENTRY_COUNT],
 }
 
 /// Registre IDTR
@@ -175,7 +186,7 @@ struct IdtRegister {
 impl InterruptDescriptorTable {
     const fn new() -> Self {
         Self {
-            entries: [IdtEntry::missing(); 256],
+            entries: [IdtEntry::missing(); IDT_ENTRY_COUNT],
         }
     }
 
@@ -194,11 +205,30 @@ impl InterruptDescriptorTable {
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 static IDT_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static IDT_SEALED_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
 
 #[inline(always)]
 fn idt_entries_ptr() -> *const IdtEntry {
     // SAFETY: raw address only; callers decide whether they read or load it.
     unsafe { core::ptr::addr_of!(IDT.entries).cast::<IdtEntry>() }
+}
+
+fn idt_fingerprint() -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let ptr = idt_entries_ptr().cast::<u8>();
+    let len = core::mem::size_of::<InterruptDescriptorTable>();
+    let mut hash = FNV_OFFSET_BASIS;
+
+    for offset in 0..len {
+        // SAFETY: ptr points at the static IDT and offset stays inside it.
+        let byte = unsafe { core::ptr::read_volatile(ptr.add(offset)) };
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    hash
 }
 
 // ── Handlers ASM externes ─────────────────────────────────────────────────────
@@ -553,6 +583,7 @@ pub fn init_idt() {
         IdtEntryFlags::INTERRUPT_GATE,
     );
 
+    IDT_SEALED_FINGERPRINT.store(idt_fingerprint(), Ordering::Release);
     IDT_INITIALIZED.store(true, Ordering::Release);
 }
 
@@ -580,6 +611,16 @@ pub fn load_idt() {
 #[inline(always)]
 pub fn idt_ready() -> bool {
     IDT_INITIALIZED.load(Ordering::Relaxed)
+}
+
+/// Verifies that the post-init IDT bytes still match the sealed fingerprint.
+///
+/// NMI callers use a volatile byte fingerprint so a descriptor rewrite is
+/// observed without allocating or taking locks in the interrupt path.
+#[inline]
+pub fn idt_integrity_ok() -> bool {
+    let sealed = IDT_SEALED_FINGERPRINT.load(Ordering::Acquire);
+    sealed != 0 && idt_ready() && sealed == idt_fingerprint()
 }
 
 /// Retourne le handler address pour le vecteur `vector` (debugging)
@@ -616,9 +657,9 @@ pub fn exophoenix_tlb_handler_addr() -> u64 {
 // ── Instrumentation IDT ───────────────────────────────────────────────────────
 
 /// Compteurs d'interruptions par vecteur (256 entrées)
-static IRQ_COUNTERS: [core::sync::atomic::AtomicU64; 256] = {
+static IRQ_COUNTERS: [core::sync::atomic::AtomicU64; IDT_ENTRY_COUNT] = {
     const ZERO: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [ZERO; 256]
+    [ZERO; IDT_ENTRY_COUNT]
 };
 
 /// Incrémente le compteur pour le vecteur donné (appelé depuis les handlers)

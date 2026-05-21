@@ -27,6 +27,16 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Quantum SCHED_RR (10ms en nanosecondes).
 pub const RR_TIMESLICE_NS: u64 = 10_000_000;
+/// Priorité POSIX RT la plus basse.
+pub const RT_PRIO_MIN: u8 = 1;
+/// Priorité POSIX RT la plus haute.
+pub const RT_PRIO_MAX: u8 = 99;
+
+const _: () = assert!(RT_PRIO_MIN < RT_PRIO_MAX, "RT priority range is invalid");
+const _: () = assert!(
+    (RT_PRIO_MAX as usize) < crate::scheduler::core::runqueue::RT_LEVELS,
+    "RT runqueue does not cover POSIX RT priorities"
+);
 
 /// Compteur de préemptions RT sur interruption de thread plus haute priorité.
 pub static RT_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);

@@ -27,6 +27,11 @@ use alloc::boxed::Box;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
 
+#[cfg(target_arch = "x86_64")]
+extern "C" {
+    fn user_entry_trampoline();
+}
+
 /// Erreur de création de thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadCreateError {
@@ -81,6 +86,10 @@ pub struct ThreadCreateParams {
     pub start_func: u64,
     /// Argument passé au thread (valeur userspace, rdi).
     pub arg: u64,
+    /// RSP userspace initial explicite (0 = dériver de `attr`).
+    pub initial_rsp: u64,
+    /// Base FS/TLS userspace initiale.
+    pub tls_base: u64,
     /// CPU cible pour l'enqueue.
     pub target_cpu: u32,
     /// Adresse de la structure pthread_t à remplir.
@@ -129,36 +138,51 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
     unsafe {
         // Configurer le frame de démarrage sur le stack kernel pour le trampoline.
         let kstack_top = (*thread_ptr).kernel_stack.top_addr();
-        // Frame iretq : [rip, cs, rflags, rsp, ss]
-        let frame = (kstack_top - 48) as *mut u64;
-        *frame.add(0) = params.start_func; // RIP  (point d'entrée)
-        *frame.add(1) = GDT_USER_CS64 as u64; // CS   ring 3, 64-bit
-        *frame.add(2) = 0x0202; // RFLAGS (IF=1)
-        *frame.add(3) = params
-            .attr
-            .stack_addr
-            .wrapping_add(params.attr.stack_size)
-            .wrapping_sub(16); // RSP userspace
-        *frame.add(4) = GDT_USER_DS as u64; // SS
-                                            // Argument dans rdi (convention System V).
-                                            // Stocké sur la stack avant le frame : sera chargé par le trampoline.
-        let rdi_slot = (kstack_top - 56) as *mut u64;
-        *rdi_slot = params.arg;
+        let initial_rsp = if params.initial_rsp != 0 {
+            params.initial_rsp
+        } else {
+            params
+                .attr
+                .stack_addr
+                .wrapping_add(params.attr.stack_size)
+                .wrapping_sub(16)
+        };
 
-        (*thread_ptr).sched_tcb.kstack_ptr = kstack_top - 56;
+        // Layout attendu par switch_to_new_thread puis user_entry_trampoline :
+        // 6 callee-saved registers, a return address, then the iretq frame.
+        let kernel_rsp = kstack_top - 96;
+        let frame = kernel_rsp as *mut u64;
+        *frame.add(0) = 0; // rbx
+        *frame.add(1) = 0; // rbp
+        *frame.add(2) = params.arg; // r12 -> rdi par user_entry_trampoline
+        *frame.add(3) = 0; // r13
+        *frame.add(4) = 0; // r14
+        *frame.add(5) = 0; // r15
+        *frame.add(6) = user_entry_trampoline as *const () as u64;
+        *frame.add(7) = params.start_func; // RIP userspace
+        *frame.add(8) = GDT_USER_CS64 as u64; // CS ring 3, 64-bit
+        *frame.add(9) = 0x0202; // RFLAGS (IF=1)
+        *frame.add(10) = initial_rsp; // RSP userspace
+        *frame.add(11) = GDT_USER_DS as u64; // SS
+        (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
 
         // Adresses userspace.
         (*thread_ptr).addresses = ThreadAddress {
             stack_base: params.attr.stack_addr,
             stack_size: params.attr.stack_size,
             entry_point: params.start_func,
-            initial_rsp: params.attr.stack_addr + params.attr.stack_size - 16,
-            tls_base: 0,
+            initial_rsp,
+            tls_base: params.tls_base,
             entry_arg0: params.arg,
             pthread_ptr: params.pthread_out,
             sigaltstack_base: 0,
             sigaltstack_size: params.attr.sigaltstack_size,
         };
+        (*thread_ptr).sched_tcb.fs_base = params.tls_base;
+        (*thread_ptr).sched_tcb.user_gs_base = 0;
+        (*thread_ptr)
+            .tls_gs_base
+            .store(params.tls_base, Ordering::Release);
 
         // Afficité CPU.
         if params.attr.cpu_affinity >= 0 {

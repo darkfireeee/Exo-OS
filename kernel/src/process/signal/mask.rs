@@ -25,6 +25,14 @@ pub const SIG_SETMASK: i32 = 2;
 /// SIGKILL = bit 8, SIGSTOP = bit 18.
 const NON_BLOCKABLE: u64 =
     (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
+const _: () = assert!(
+    NON_BLOCKABLE & (1u64 << (Signal::SIGKILL as u8 - 1)) != 0,
+    "[ASSERT-SIG01] SIGKILL missing from NON_BLOCKABLE"
+);
+const _: () = assert!(
+    NON_BLOCKABLE & (1u64 << (Signal::SIGSTOP as u8 - 1)) != 0,
+    "[ASSERT-SIG02] SIGSTOP missing from NON_BLOCKABLE"
+);
 const VALID_SIGNAL_MASK: u64 = (1u64 << Signal::SIGRTMAX) - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────

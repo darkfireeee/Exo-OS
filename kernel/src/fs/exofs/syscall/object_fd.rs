@@ -7,10 +7,11 @@
 //! OOM-02   : pas d'allocation en hot path (tableau statique).
 //! ARITH-02 : saturating_*/wrapping_*.
 //!
-//! Capacité : 65 532 descripteurs simultanés (fd 4 … 65535).
+//! Capacité : 4 096 descripteurs simultanés (fd 4 … 4099).
 
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::scheduler::sync::spinlock::SpinLock;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -37,12 +38,18 @@ fn owner_matches(entry: ObjectFdEntry, owner_pid: u64) -> bool {
 
 /// Fd réservés : 0 (stdin), 1 (stdout), 2 (stderr), 3 (exofs-ctrl).
 pub const FD_RESERVED: u32 = 4;
+/// Nombre de slots réellement alloués dans la table statique.
+pub const MAX_FDS: usize = 4096;
 /// Fd maximum inclusif.
-pub const FD_MAX: u32 = 65_535;
-/// Nombre de slots (fd 4…65535 → index 0…65531).
-pub const MAX_FDS: usize = (FD_MAX - FD_RESERVED + 1) as usize;
+pub const FD_MAX: u32 = FD_RESERVED + MAX_FDS as u32 - 1;
 /// Marqueur de slot libre.
 const SLOT_FREE: u32 = u32::MAX;
+
+/// Verrou de cycle de vie objet.
+///
+/// Il sérialise les chemins `open/create-delete` qui testent l'existence,
+/// consultent la table FD, puis mutent le cache ou le catalogue disque.
+pub static OBJECT_LIFECYCLE_LOCK: SpinLock<()> = SpinLock::new(());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flags d'ouverture
@@ -734,6 +741,25 @@ impl ObjectFdTable {
         }
         self.release();
         count
+    }
+
+    /// Retourne une entrée ouverte portant ce BlobId, si elle existe.
+    pub fn entry_for_blob(&self, id: &BlobId) -> Option<ObjectFdEntry> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let inner = unsafe { &*self.inner.get() };
+        let mut found = None;
+        let mut i = 0usize;
+        while i < MAX_FDS {
+            let entry = inner.slots[i];
+            if !entry.is_free() && entry.blob_id == *id {
+                found = Some(entry);
+                break;
+            }
+            i = i.wrapping_add(1);
+        }
+        self.release();
+        found
     }
 }
 

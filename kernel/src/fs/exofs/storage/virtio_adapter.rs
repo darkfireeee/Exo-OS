@@ -1,9 +1,11 @@
 extern crate alloc;
 
+use crate::fs::exofs::core::DiskOffset;
 use crate::fs::exofs::core::ExofsError;
 use crate::fs::exofs::core::ExofsResult;
 use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use exo_virtio_blk::ExoVirtioBlkDevice;
 use spin::Mutex;
 
@@ -58,6 +60,7 @@ pub fn register_global_disk(device: Arc<dyn BlockDevice>) -> bool {
         return false;
     }
     *disk = Some(device);
+    crate::fs::exofs::epoch::epoch_barriers::register_nvme_flush_fn(flush_global_disk);
     true
 }
 
@@ -90,6 +93,71 @@ where
 
 pub fn flush_global_disk() -> ExofsResult<()> {
     with_global_disk(|device| device.flush())
+}
+
+pub fn write_at_offset(offset: DiskOffset, data: &[u8]) -> ExofsResult<usize> {
+    if data.is_empty() {
+        return Ok(0);
+    }
+    with_global_disk(|device| {
+        let block_size = device.block_size() as usize;
+        if block_size == 0 {
+            return Err(ExofsError::InvalidSize);
+        }
+        let start_lba = offset.0 / block_size as u64;
+        let block_off = (offset.0 % block_size as u64) as usize;
+        let mut written = 0usize;
+        let mut lba = start_lba;
+        let mut block = Vec::new();
+        block
+            .try_reserve_exact(block_size)
+            .map_err(|_| ExofsError::NoMemory)?;
+        block.resize(block_size, 0);
+
+        while written < data.len() {
+            device.read_block(lba, &mut block)?;
+            let off = if written == 0 { block_off } else { 0 };
+            let chunk = core::cmp::min(block_size.saturating_sub(off), data.len() - written);
+            block[off..off + chunk].copy_from_slice(&data[written..written + chunk]);
+            device.write_block(lba, &block)?;
+            written = written.saturating_add(chunk);
+            lba = lba.saturating_add(1);
+        }
+        Ok(written)
+    })
+}
+
+pub fn read_at_offset(offset: DiskOffset, len: usize) -> ExofsResult<Vec<u8>> {
+    let mut out = Vec::new();
+    if len == 0 {
+        return Ok(out);
+    }
+    with_global_disk(|device| {
+        let block_size = device.block_size() as usize;
+        if block_size == 0 {
+            return Err(ExofsError::InvalidSize);
+        }
+        out.try_reserve(len).map_err(|_| ExofsError::NoMemory)?;
+        let start_lba = offset.0 / block_size as u64;
+        let block_off = (offset.0 % block_size as u64) as usize;
+        let mut read = 0usize;
+        let mut lba = start_lba;
+        let mut block = Vec::new();
+        block
+            .try_reserve_exact(block_size)
+            .map_err(|_| ExofsError::NoMemory)?;
+        block.resize(block_size, 0);
+
+        while read < len {
+            device.read_block(lba, &mut block)?;
+            let off = if read == 0 { block_off } else { 0 };
+            let chunk = core::cmp::min(block_size.saturating_sub(off), len - read);
+            out.extend_from_slice(&block[off..off + chunk]);
+            read = read.saturating_add(chunk);
+            lba = lba.saturating_add(1);
+        }
+        Ok(out)
+    })
 }
 
 pub fn default_global_disk_size_bytes() -> u64 {

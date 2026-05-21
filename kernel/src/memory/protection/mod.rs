@@ -1,12 +1,13 @@
 // kernel/src/memory/protection/mod.rs
 //
-// Module protection — NX / SMEP / SMAP / PKU.
+// Module protection — NX / SMEP / SMAP / UMIP / PKU.
 //
 // Ordre d'initialisation sur chaque CPU :
 //   1. nx::init()     — EFER.NXE
 //   2. smep::init()   — CR4.SMEP
 //   3. smap::init()   — CR4.SMAP + CLAC initial
-//   4. pku::init()    — CR4.PKE + PKRU initial
+//   4. umip::init()   — CR4.UMIP
+//   5. pku::init()    — CR4.PKE + PKRU initial
 //
 // Couche 0 : aucun import scheduler/process/ipc/fs.
 
@@ -14,6 +15,7 @@ pub mod nx;
 pub mod pku;
 pub mod smap;
 pub mod smep;
+pub mod umip;
 
 // Re-exports NX
 pub use nx::{
@@ -34,6 +36,9 @@ pub use smap::{
     CR4_SMAP_BIT, RFLAGS_AC_BIT, SMAP_STATS,
 };
 
+// Re-exports UMIP
+pub use umip::{enable_umip, umip_active, umip_supported, UmipStats, CR4_UMIP_BIT, UMIP_STATS};
+
 // Re-exports PKU
 pub use pku::{
     enable_pku, pkru_ad_bit, pkru_wd_bit, pku_alloc_key, pku_allow_key, pku_deny_key, pku_free_key,
@@ -53,5 +58,6 @@ pub unsafe fn init() {
     nx::init();
     smep::init();
     smap::init();
+    umip::init();
     pku::init();
 }

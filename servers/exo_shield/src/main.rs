@@ -120,6 +120,18 @@ static MAINTENANCE_TICKS: AtomicU64 = AtomicU64::new(0);
 
 static GLOBAL_TICK: AtomicU64 = AtomicU64::new(0);
 
+#[inline]
+fn boot_log(bytes: &[u8]) {
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
+
 fn current_tick() -> u64 {
     GLOBAL_TICK.load(Ordering::Relaxed)
 }
@@ -1348,24 +1360,31 @@ fn perform_maintenance() {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // ── 0. Initialize all engine sub-modules ────────────────────────────────
+    boot_log(b"exo_shield: boot\n");
     ipc_gate::policy_init();
     ipc_gate::audit_init();
+    boot_log(b"exo_shield: ipc gate ready\n");
     engine::engine_init();
+    boot_log(b"exo_shield: engine ready\n");
     signatures::signatures_init();
+    boot_log(b"exo_shield: signatures ready\n");
     behavioral::behavioral_init();
+    boot_log(b"exo_shield: behavioral ready\n");
     hooks::exec_hooks_init();
     hooks::net_hooks_init();
     hooks::mem_hooks_init();
     hooks::syscall_hooks_init();
+    boot_log(b"exo_shield: hooks ready\n");
     sandbox::sandbox_init();
     network::firewall_init();
     forensics::memory_dump_init();
     forensics::timeline_init();
     forensics::report_init();
+    boot_log(b"exo_shield: containment ready\n");
 
     // ── 1. Register public exo_shield endpoint ─────────────────────────────
     let name = b"exo_shield";
-    let _ = unsafe {
+    let register_rc = unsafe {
         syscall::syscall3(
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
@@ -1373,6 +1392,15 @@ pub extern "C" fn _start() -> ! {
             EXO_SHIELD_ENDPOINT,
         )
     };
+    if register_rc < 0 {
+        boot_log(b"exo_shield: register failed\n");
+        loop {
+            unsafe {
+                core::arch::asm!("hlt", options(nostack, nomem));
+            }
+        }
+    }
+    boot_log(b"exo_shield: registered\n");
 
     // ── 2. Main IPC receive loop ────────────────────────────────────────────
     let mut req = ShieldRequest {

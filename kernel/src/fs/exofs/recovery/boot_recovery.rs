@@ -16,6 +16,8 @@ use super::fsck::FsckOptions;
 use super::recovery_audit::RECOVERY_AUDIT;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::{EpochId, ExofsError, ExofsResult};
+use crate::fs::exofs::storage::virtio_adapter;
+use crate::fs::exofs::syscall::{epoch_commit, object_store};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 // ── Trait périphérique bloc ───────────────────────────────────────────────────
@@ -362,18 +364,70 @@ impl BootRecovery {
 
 // ── Point d'entrée simplifié (init ExoFS) ─────────────────────────────────────
 
-/// Point d'entrée simplifié appellé par `exofs/mod.rs` lors de l'init.
-///
-/// Sans handle device concret à ce stade, enregistre les événements boot
-/// minimaux et retourne `Ok(())`.
-pub fn boot_recovery_sequence(_disk_size_bytes: u64) -> ExofsResult<()> {
+struct SharedBlockDevice<'a> {
+    inner: &'a dyn BlockDevice,
+}
+
+impl BlockDevice for SharedBlockDevice<'_> {
+    fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
+        self.inner.read_block(lba, buf)
+    }
+
+    fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
+        self.inner.write_block(lba, buf)
+    }
+
+    fn block_size(&self) -> u32 {
+        self.inner.block_size()
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.inner.total_blocks()
+    }
+
+    fn flush(&self) -> ExofsResult<()> {
+        self.inner.flush()
+    }
+}
+
+fn minimal_recovery_log(epoch: EpochId) {
     RECOVERY_LOG.log_boot_start();
-    RECOVERY_AUDIT.record_recovery_started(EpochId(0));
-    // Le fsck complet nécessite un handle BlockDevice fourni par le storage
-    // driver. Voir BootRecovery::run() pour la séquence complète.
+    RECOVERY_AUDIT.record_recovery_started(epoch);
     RECOVERY_LOG.log_boot_done();
-    RECOVERY_AUDIT.record_recovery_completed(EpochId(0), 0);
-    Ok(())
+    RECOVERY_AUDIT.record_recovery_completed(epoch, 0);
+}
+
+/// Point d'entrée appelé par `exofs/mod.rs` lors de l'init.
+///
+/// Si un block device global est disponible, exécute la récupération complète
+/// (sélection slot, replay, fsck conditionnel). Sans disque ou sur disque vierge,
+/// garde le chemin minimal afin de ne pas casser le premier formatage.
+pub fn boot_recovery_sequence(disk_size_bytes: u64) -> ExofsResult<()> {
+    match virtio_adapter::with_global_disk(|device| {
+        let device_size = device
+            .total_blocks()
+            .saturating_mul(device.block_size() as u64);
+        if disk_size_bytes != 0 && disk_size_bytes > device_size {
+            return Err(ExofsError::InvalidSize);
+        }
+        let mut shared = SharedBlockDevice { inner: device };
+        let result = BootRecovery::run(&mut shared, &BootRecoveryOptions::default())?;
+        epoch_commit::set_current_epoch(result.recovered_epoch.0);
+        let _ = object_store::load_catalog_from_global_disk()?;
+        Ok(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(ExofsError::Resource) => {
+            minimal_recovery_log(EpochId(0));
+            Ok(())
+        }
+        Err(ExofsError::InvalidMagic) | Err(ExofsError::BadMagic) => {
+            minimal_recovery_log(EpochId(0));
+            let _ = object_store::load_catalog_from_global_disk();
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 // ── Rapport de santé ──────────────────────────────────────────────────────────

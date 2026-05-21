@@ -32,7 +32,7 @@ pub const FORMAT_VERSION_MAJOR: u16 = 1;
 /// Version mineure du format
 pub const FORMAT_VERSION_MINOR: u16 = 0;
 
-/// Taille de la structure superblock sur disque (multiple de BLOCK_SIZE : 512B)
+/// Taille de la structure superblock sur disque : 512 octets (1/8 de BLOCK_SIZE).
 pub const SUPERBLOCK_DISK_SIZE: usize = 512;
 
 /// Nombre de miroirs du superblock (BACKUP-01)
@@ -180,6 +180,10 @@ impl ExoSuperblockDisk {
         if diff != 0 {
             STORAGE_STATS.inc_checksum_error();
             return Err(ExofsError::ChecksumMismatch);
+        }
+        let missing_required = incompat_flags::REQUIRED & !self.incompat_flags;
+        if missing_required != 0 {
+            return Err(ExofsError::IncompatibleVersion);
         }
         STORAGE_STATS.inc_checksum_ok();
         Ok(())
@@ -718,6 +722,14 @@ mod tests {
         let mut sb = ExoSuperblockDisk::new_volume(TEST_DISK, b"Test", [0u8; 16], 0);
         sb.epoch_current = 42; // modifie un champ SANS recalculer le checksum
         assert!(matches!(sb.verify(), Err(ExofsError::ChecksumMismatch)));
+    }
+
+    #[test]
+    fn missing_required_incompat_flags_rejected() {
+        let mut sb = ExoSuperblockDisk::new_volume(TEST_DISK, b"Flags", [0u8; 16], 0);
+        sb.incompat_flags &= !incompat_flags::EXO_DELAYED;
+        sb.finalize();
+        assert!(matches!(sb.verify(), Err(ExofsError::IncompatibleVersion)));
     }
 
     #[test]

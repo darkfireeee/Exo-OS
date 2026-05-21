@@ -7,7 +7,9 @@
 //! RÈGLE BUG-09  : block_all_except_kill() durant exec pour éviter signal inter-exec.
 
 use crate::syscall::errno::{EAGAIN, ECHILD, EFAULT, EINTR, EINVAL, ENOMEM, ENOSYS};
-use crate::syscall::validation::{copy_to_user, read_user_path, write_user_typed, USER_ADDR_MAX};
+use crate::syscall::validation::{
+    copy_to_user, read_user_path, read_user_typed, write_user_typed, USER_ADDR_MAX,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fork() — Ring3 → kernel CoW
@@ -267,23 +269,35 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `clone(flags, stack, ptid, ctid, tls)` → TID ou errno.
-pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u64) -> i64 {
+pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: u64) -> i64 {
+    const CLONE_SETTLS: u64 = 0x0008_0000;
+
     if ptid != 0 && ptid >= USER_ADDR_MAX {
         return EFAULT;
     }
     if ctid != 0 && ctid >= USER_ADDR_MAX {
         return EFAULT;
     }
-    // Point d'entrée : tls en priorité (pthread_create) puis ctid.
-    let start_func = if tls != 0 { tls } else { ctid };
+    let start_func = if entry != 0 {
+        entry
+    } else if flags & CLONE_SETTLS == 0 && tls != 0 {
+        tls
+    } else {
+        ctid
+    };
     if start_func == 0 {
         return EINVAL;
     }
-    let stack_addr = if stack != 0 {
-        stack.saturating_sub(16)
+
+    let arg = if entry != 0 && stack != 0 {
+        match read_user_typed::<u64>(stack) {
+            Ok(value) => value,
+            Err(e) => return e.to_errno(),
+        }
     } else {
         0
     };
+    let stack_addr = stack;
     let stack_size = if stack != 0 { 0u64 } else { 8 * 1024 * 1024u64 };
     let detached = (flags & 0x0040_0000) != 0;
     // Lecture PID courant depuis TCB per-CPU
@@ -316,7 +330,9 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, _a6: u6
         pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
         attr,
         start_func,
-        arg: 0,
+        arg,
+        initial_rsp: stack,
+        tls_base: if flags & CLONE_SETTLS != 0 { tls } else { 0 },
         target_cpu: 0,
         pthread_out: ptid,
     };

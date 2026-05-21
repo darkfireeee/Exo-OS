@@ -2,6 +2,7 @@ use super::{dependency, log, service_manager, service_table, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
 const BOOT_PHASE_TIMEOUT_MS: u64 = 120_000;
+const READY_TIMEOUT_GRACE_MS: u64 = 1_000;
 const CLOCK_MONOTONIC: u64 = 1;
 const POLL_YIELD_ROUNDS: usize = 4;
 const POLL_SPIN_ROUNDS: usize = 256;
@@ -68,6 +69,59 @@ fn endpoint_registered(service_name: &str) -> bool {
 }
 
 #[inline]
+fn service_ready(service_name: &str, pid: u32) -> bool {
+    pid_alive(pid) && endpoint_registered(service_name)
+}
+
+#[inline]
+pub unsafe fn ipc_ready_now(service_name: &str, pid: u32) -> bool {
+    service_ready(service_name, pid)
+}
+
+fn poll_until(pid: u32, timeout_ms: u64, mut predicate: impl FnMut() -> bool) -> bool {
+    let start_ms = monotonic_ms();
+    let mut waited_ms = 0u64;
+    loop {
+        if predicate() {
+            return true;
+        }
+
+        if !pid_alive(pid) {
+            return false;
+        }
+
+        let now_ms = monotonic_ms();
+        if start_ms != 0 && now_ms != 0 {
+            if now_ms.saturating_sub(start_ms) >= timeout_ms {
+                return false;
+            }
+        } else if waited_ms >= timeout_ms {
+            return false;
+        }
+
+        service_poll_delay();
+        waited_ms = waited_ms.saturating_add(POLL_INTERVAL_MS);
+    }
+}
+
+#[inline]
+fn wait_for_late_ipc_ready(service_name: &str, pid: u32) -> bool {
+    poll_until(pid, READY_TIMEOUT_GRACE_MS, || {
+        service_ready(service_name, pid)
+    })
+}
+
+/// Demande l'arrêt d'un service dont la readiness a expiré.
+///
+/// Le PID reste supervisé tant que l'arrêt n'est pas réellement observable.
+/// Sans cette barrière, un endpoint enregistré tardivement peut coexister avec
+/// un respawn immédiat du même service.
+pub unsafe fn terminate_timed_out_pid(pid: u32) -> bool {
+    let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
+    poll_until(pid, READY_TIMEOUT_GRACE_MS, || !pid_alive(pid))
+}
+
+#[inline]
 fn owns_interactive_console(service_name: &str) -> bool {
     service_name == "exosh"
 }
@@ -119,17 +173,17 @@ pub unsafe fn wait_for_ipc_ready(service_name: &str, pid: u32, timeout_ms: u64) 
     let start_ms = monotonic_ms();
     let mut waited_ms = 0u64;
     loop {
-        if pid_alive(pid) && endpoint_registered(service_name) {
+        if service_ready(service_name, pid) {
             return true;
         }
 
         let now_ms = monotonic_ms();
         if start_ms != 0 && now_ms != 0 {
             if now_ms.saturating_sub(start_ms) >= timeout_ms {
-                return false;
+                return wait_for_late_ipc_ready(service_name, pid);
             }
         } else if waited_ms >= timeout_ms {
-            return false;
+            return wait_for_late_ipc_ready(service_name, pid);
         }
 
         service_poll_delay();
@@ -196,18 +250,26 @@ fn graph_timeout_expired(boot_start: u64) -> bool {
     boot_start != 0 && now.saturating_sub(boot_start) >= BOOT_PHASE_TIMEOUT_MS
 }
 
+#[inline]
+fn note_graph_progress(last_progress_ms: &mut u64) {
+    let now = monotonic_ms();
+    if now != 0 {
+        *last_progress_ms = now;
+    }
+}
+
 /// Démarre la chaîne Ring1 canonique V4 par vagues de dépendances.
 ///
 /// Tous les services dont les dépendances déjà prêtes sont satisfaites sont
 /// lancés ensemble. La readiness de la vague est ensuite pollée en groupe afin
 /// d'éviter de payer un timeout séquentiel par service.
 pub unsafe fn boot_services(services: &[Service]) -> usize {
-    let boot_start = monotonic_ms();
+    let mut last_progress_ms = monotonic_ms();
     let mut ready_mask = 0u64;
     let mut fallback_wait_ms = [0u64; service_table::SERVICE_COUNT];
 
     loop {
-        if graph_timeout_expired(boot_start) {
+        if graph_timeout_expired(last_progress_ms) {
             log_service_graph_timeout(services);
             break;
         }
@@ -239,6 +301,7 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
             if idx < fallback_wait_ms.len() {
                 fallback_wait_ms[idx] = 0;
             }
+            note_graph_progress(&mut last_progress_ms);
             launched = true;
             idx += 1;
         }
@@ -246,7 +309,7 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
         let mut pending;
         let mut readiness_changed = false;
         loop {
-            if graph_timeout_expired(boot_start) {
+            if graph_timeout_expired(last_progress_ms) {
                 log_service_graph_timeout(services);
                 return service_manager::running_count(services);
             }
@@ -267,8 +330,9 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                     continue;
                 }
 
-                if pid_alive(pid) && endpoint_registered(service.name) {
+                if service_ready(service.name, pid) {
                     ready_mask |= 1u64 << idx;
+                    service.mark_ready();
                     if owns_interactive_console(service.name) {
                         log::set_console_quiet(true);
                     } else {
@@ -276,6 +340,7 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                     }
                     settled = true;
                     readiness_changed = true;
+                    note_graph_progress(&mut last_progress_ms);
                     idx += 1;
                     continue;
                 }
@@ -291,11 +356,30 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                     idx < fallback_wait_ms.len() && fallback_wait_ms[idx] >= timeout_ms
                 };
                 if timed_out {
+                    if wait_for_late_ipc_ready(service.name, pid) {
+                        ready_mask |= 1u64 << idx;
+                        service.mark_ready();
+                        if owns_interactive_console(service.name) {
+                            log::set_console_quiet(true);
+                        } else {
+                            log::service_pid(b"init: ready ", service.name, pid);
+                        }
+                        settled = true;
+                        readiness_changed = true;
+                        note_graph_progress(&mut last_progress_ms);
+                        idx += 1;
+                        continue;
+                    }
+
                     log::service_status(b"init: timeout ", service.name, b"\n");
-                    let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
-                    service.mark_dead();
-                    settled = true;
-                    readiness_changed = true;
+                    if terminate_timed_out_pid(pid) {
+                        service.mark_dead();
+                        settled = true;
+                        readiness_changed = true;
+                        note_graph_progress(&mut last_progress_ms);
+                    } else {
+                        pending = true;
+                    }
                     idx += 1;
                     continue;
                 }

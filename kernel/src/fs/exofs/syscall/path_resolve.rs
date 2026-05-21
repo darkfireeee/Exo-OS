@@ -12,8 +12,10 @@ use super::validation::{
     exofs_err_to_errno, read_user_path_heap, verify_cap, write_user_struct, CapabilityType, EFAULT,
     ERANGE, EXOFS_NAME_MAX, EXOFS_PATH_MAX,
 };
-use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::path::path_index::PATH_INDEX_MAGIC;
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +152,7 @@ impl<'a> PathComponents<'a> {
 /// Ici elle produit un BlobId cohérent à partir du chemin.
 pub(crate) fn resolve_path_to_blob(
     path_bytes: &[u8],
-    _flags: u32,
+    flags: u32,
 ) -> ExofsResult<PathResolveResult> {
     let comps = PathComponents::parse(path_bytes)?;
     if comps.count == 0 && !comps.absolute {
@@ -195,25 +197,46 @@ pub(crate) fn resolve_path_to_blob(
 
     // BlobId = Blake3(chemin canonique) — utilise l'implémentation kernel.
     let blob_id = BlobId::from_bytes_blake3(&canonical);
-
-    // ObjectId = Blake3(BlobId bytes XOR 0xA5) — identifiant logique distinct.
-    let mut obj_bytes = [0u8; 32];
+    let object_id = object_id_from_blob_id(&blob_id);
     let bid_bytes = blob_id.as_bytes();
-    let mut i = 0usize;
-    while i < 32 {
-        obj_bytes[i] = bid_bytes[i] ^ 0xA5;
-        i = i.wrapping_add(1);
+    let cached_len = BLOB_CACHE.len(&blob_id).map(|len| len as u64);
+    let persisted_len = super::object_store::persisted_size(&blob_id);
+    let entry = super::object_fd::OBJECT_TABLE.entry_for_blob(&blob_id);
+    let exists = cached_len.is_some() || persisted_len.is_some() || entry.is_some();
+    if !exists && flags & resolve_flags::CREATE_IF_ABSENT == 0 {
+        // Le resolve reste déterministe pour les chemins inconnus, mais expose
+        // link_count=0 au lieu d'inventer une métadonnée de fichier existant.
     }
+    let size_bytes = cached_len
+        .or(persisted_len)
+        .or_else(|| entry.map(|e| e.size))
+        .unwrap_or(0);
+    let epoch_id = entry.map(|e| e.epoch_id).unwrap_or(0);
+    let access_flags = entry.map(|e| e.flags).unwrap_or(0);
+    let object_kind = if let Some(data) = BLOB_CACHE.get(&blob_id) {
+        if data.len() >= 4 {
+            let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            if magic == PATH_INDEX_MAGIC {
+                1
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
 
     Ok(PathResolveResult {
         blob_id: *bid_bytes,
-        object_id: obj_bytes,
-        object_kind: 0, // Fichier régulier par défaut.
+        object_id: object_id.0,
+        object_kind,
         _pad: [0u8; 7],
-        size_bytes: 0,
-        epoch_id: 0,
-        link_count: 1,
-        flags: 0,
+        size_bytes,
+        epoch_id,
+        link_count: if exists { 1 } else { 0 },
+        flags: access_flags,
         _reserved: [0u8; 8],
     })
 }

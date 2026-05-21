@@ -28,6 +28,7 @@ use crate::fs::exofs::gc::gc_metrics::GC_METRICS;
 use crate::fs::exofs::gc::gc_state::GC_STATE;
 use crate::fs::exofs::gc::tricolor::TricolorWorkspace;
 use crate::scheduler::sync::spinlock::SpinLock;
+use alloc::vec::Vec as AllocVec;
 
 // ==============================================================================
 // Constantes
@@ -38,6 +39,25 @@ pub const MAX_SWEEP_PER_PASS: usize = 131_072;
 
 /// Taille d'un batch de balayage (GC-05 : non bloquant).
 pub const SWEEP_BATCH_SIZE: usize = 512;
+
+const IMMUTABLE_META_KEY: &[u8] = b"immutable";
+
+fn immutable_value_enabled(value: &[u8]) -> bool {
+    !value.is_empty() && value[0] != 0 && value != b"0" && value != b"false"
+}
+
+fn is_immutable_blob(blob_id: BlobId) -> ExofsResult<bool> {
+    let mut value: AllocVec<u8> = AllocVec::new();
+    match crate::fs::exofs::syscall::object_set_meta::meta_get(
+        blob_id,
+        IMMUTABLE_META_KEY,
+        &mut value,
+    ) {
+        Ok(_) => Ok(immutable_value_enabled(&value)),
+        Err(ExofsError::ObjectNotFound) | Err(ExofsError::BlobNotFound) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
 
 // ==============================================================================
 // SweeperResult — resultat complet de la phase de balayage
@@ -263,6 +283,10 @@ impl Sweeper {
 
             // GC-07 : ne pas supprimer si epoch pinnee.
             if is_epoch_pinned(create_epoch) {
+                br.pinned_skipped = br.pinned_skipped.saturating_add(1);
+                continue;
+            }
+            if is_immutable_blob(blob_id)? {
                 br.pinned_skipped = br.pinned_skipped.saturating_add(1);
                 continue;
             }

@@ -68,6 +68,7 @@ struct Service {
     spawn_time_ms: AtomicU64,
     disabled: AtomicBool,
     dead: AtomicBool,
+    ready: AtomicBool,
 }
 
 impl Service {
@@ -80,6 +81,7 @@ impl Service {
             spawn_time_ms: AtomicU64::new(0),
             disabled: AtomicBool::new(false),
             dead: AtomicBool::new(false),
+            ready: AtomicBool::new(false),
         }
     }
 
@@ -95,11 +97,22 @@ impl Service {
         self.dead.load(Ordering::Acquire)
     }
 
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
+    }
+
     fn set_pid(&self, pid: u32) {
         self.pid.store(pid, Ordering::Release);
         self.disabled.store(false, Ordering::Release);
         self.dead.store(false, Ordering::Release);
+        self.ready.store(false, Ordering::Release);
         self.spawn_time_ms.store(monotonic_ms(), Ordering::Release);
+    }
+
+    fn mark_ready(&self) {
+        if self.current_pid() != 0 {
+            self.ready.store(true, Ordering::Release);
+        }
     }
 
     fn enable(&self) {
@@ -110,6 +123,7 @@ impl Service {
     fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
         self.dead.store(true, Ordering::Release);
+        self.ready.store(false, Ordering::Release);
         self.pid.store(0, Ordering::Release);
         self.spawn_time_ms.store(0, Ordering::Release);
         self.restart_delay_ticks.store(1, Ordering::Relaxed);
@@ -120,6 +134,7 @@ impl Service {
         let spawn = self.spawn_time_ms.load(Ordering::Acquire);
         self.pid.store(0, Ordering::Release);
         self.dead.store(true, Ordering::Release);
+        self.ready.store(false, Ordering::Release);
         self.spawn_time_ms.store(0, Ordering::Release);
         if spawn != 0 && now.saturating_sub(spawn) >= SERVICE_STABLE_MS {
             self.restart_delay_ticks.store(1, Ordering::Relaxed);
@@ -222,11 +237,13 @@ fn start_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
             dependency::ready_timeout_ms(service.name),
         )
     } {
+        service.mark_ready();
         pid as i64
     } else {
-        kill_service(pid, 15);
-        service.mark_dead();
-        service_watchdog.observe_stop(idx);
+        if unsafe { boot_sequence::terminate_timed_out_pid(pid) } {
+            service.mark_dead();
+            service_watchdog.observe_stop(idx);
+        }
         syscall::ETIMEDOUT
     }
 }
@@ -244,6 +261,16 @@ fn stop_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
 fn restart_service(idx: usize, service_watchdog: &mut ServiceWatchdog) -> i64 {
     let _ = stop_service(idx, service_watchdog);
     start_service(idx, service_watchdog)
+}
+
+fn refresh_service_readiness(idx: usize) {
+    let service = &SERVICES[idx];
+    let pid = service.current_pid();
+    if pid != 0 && !service.is_ready() && unsafe { boot_sequence::ipc_ready_now(service.name, pid) }
+    {
+        service.mark_ready();
+        log::service_pid(b"init: ready ", service.name, pid);
+    }
 }
 
 fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
@@ -412,6 +439,7 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
 
         let mut check_idx = 0usize;
         while check_idx < SERVICES.len() {
+            refresh_service_readiness(check_idx);
             if !service_watchdog.check(check_idx, &SERVICES[check_idx]) {
                 SERVICES[check_idx].mark_dead();
                 service_watchdog.observe_stop(check_idx);

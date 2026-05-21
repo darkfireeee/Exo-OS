@@ -8,6 +8,7 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::object_store;
+use super::quota_query::{check_quota, quota_add_usage, quota_sub_usage};
 use super::validation::{
     exofs_err_to_errno, read_user_buf, validate_count, validate_fd, validate_offset, verify_cap,
     CapabilityType, EFAULT,
@@ -127,12 +128,19 @@ fn audit_immutable_write_denied(blob_id: BlobId) {
     });
 }
 
-fn reject_if_immutable(blob_id: BlobId) -> ExofsResult<()> {
+pub(super) fn reject_if_immutable(blob_id: BlobId) -> ExofsResult<()> {
     if is_immutable(blob_id)? {
         audit_immutable_write_denied(blob_id);
         return Err(ExofsError::PermissionDenied);
     }
     Ok(())
+}
+
+fn owner_for_blob(blob_id: BlobId) -> u64 {
+    OBJECT_TABLE
+        .entry_for_blob(&blob_id)
+        .map(|entry| entry.owner_uid)
+        .unwrap_or(0)
 }
 
 /// Écrit `data` dans le blob `blob_id` à l'offset `offset`.
@@ -153,6 +161,11 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     ensure_blob_cached(blob_id)?;
     let existing_size = BLOB_CACHE.len(&blob_id).unwrap_or(0) as u64;
     let new_size = write_end.max(existing_size);
+    let growth = new_size.saturating_sub(existing_size);
+    let owner_uid = owner_for_blob(blob_id);
+    if growth > 0 {
+        check_quota(owner_uid, growth, 0)?;
+    }
 
     let new_size_usize = new_size as usize;
     if new_size_usize > WRITE_MAX_BYTES {
@@ -163,6 +176,9 @@ fn write_blob(blob_id: BlobId, offset: u64, data: &[u8]) -> ExofsResult<WriteRes
     let dlen = data.len();
     BLOB_CACHE.write_at(blob_id, start, data)?;
     persist_cached_blob_if_disk(blob_id)?;
+    if growth > 0 {
+        quota_add_usage(owner_uid, growth, 0)?;
+    }
 
     Ok(WriteResult {
         bytes_written: dlen,
@@ -484,9 +500,13 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
 
     ensure_blob_cached(blob_id)?;
     let current_size = BLOB_CACHE.len(&blob_id).unwrap_or(0);
+    let owner_uid = owner_for_blob(blob_id);
 
     if new_size == current_size {
         return Ok(());
+    }
+    if new_size > current_size {
+        check_quota(owner_uid, (new_size - current_size) as u64, 0)?;
     }
 
     if !BLOB_CACHE.contains(&blob_id) {
@@ -494,6 +514,11 @@ pub fn truncate_blob(blob_id: BlobId, new_size: usize) -> ExofsResult<()> {
     }
     BLOB_CACHE.resize(blob_id, new_size)?;
     persist_cached_blob_if_disk(blob_id)?;
+    if new_size > current_size {
+        quota_add_usage(owner_uid, (new_size - current_size) as u64, 0)?;
+    } else {
+        quota_sub_usage(owner_uid, (current_size - new_size) as u64, 0)?;
+    }
 
     Ok(())
 }

@@ -70,7 +70,7 @@ impl TlsBlock {
         })
     }
 
-    /// Pointeur vers les données (pour écriture de GS.base).
+    /// Pointeur vers les données (pour écriture de FS.base).
     #[inline(always)]
     pub fn as_ptr(&self) -> *const u8 {
         self.data.as_ptr()

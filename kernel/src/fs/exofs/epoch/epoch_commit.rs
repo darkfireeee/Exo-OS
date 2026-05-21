@@ -92,6 +92,8 @@ pub struct CommitInput<'a> {
     pub root_disk_offset: DiskOffset,
     /// Offset disque du slot cible pour l'EpochRecord (A, B ou C).
     pub slot_offset: DiskOffset,
+    /// Offset disque du slot précédent validé (0 si aucun).
+    pub prev_slot_offset: DiskOffset,
     /// Flags additionnels à fusionner dans l'EpochRecord.
     pub extra_flags: EpochFlags,
 }
@@ -174,7 +176,7 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
         tsc_now,
         root_oid,
         input.root_disk_offset,
-        DiskOffset(0), // prev_slot : rempli par le slot selector avant cet appel
+        input.prev_slot_offset,
     );
 
     // Sérialise l'EpochRecord en tableau de 104 octets.
