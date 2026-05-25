@@ -291,6 +291,18 @@ mod tests {
     }
 
     #[test]
+    fn network_server_has_bidirectional_driver_control_path() {
+        let network = with_service(54, ServiceClass::NetworkServer);
+        let driver = with_service(55, ServiceClass::VirtioDriver);
+
+        assert_eq!(check_direct_ipc(network, driver), IpcPolicyResult::Allowed);
+        assert_eq!(check_direct_ipc(driver, network), IpcPolicyResult::Allowed);
+
+        let _ = unregister_service(network);
+        let _ = unregister_service(driver);
+    }
+
+    #[test]
     fn unknown_dynamic_pid_is_not_treated_as_a_service() {
         assert_eq!(
             check_direct_ipc(Pid(INIT_SERVER_PID), Pid(9000)),

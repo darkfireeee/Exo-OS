@@ -107,6 +107,11 @@ fn md_is_ram_region(base: PhysAddr, size: usize) -> bool {
     }
 }
 
+fn pci_bar_claim_contains(bdf: Option<PciBdf>, base: PhysAddr, size: usize) -> bool {
+    bdf.map(|bdf| super::pci_cfg::pci_mmio_bar_contains(bdf, base, size))
+        .unwrap_or(false)
+}
+
 fn get_process_generation(pid: Pid) -> u64 {
     PROCESS_REGISTRY
         .find_by_pid(pid)
@@ -135,7 +140,8 @@ pub fn sys_pci_claim(
     let mut claims = DEVICE_CLAIMS.write();
 
     // Toutes les vérifications SOUS le lock
-    if !md_mmio_whitelist_contains(phys_base, size) {
+    if !md_mmio_whitelist_contains(phys_base, size) && !pci_bar_claim_contains(bdf, phys_base, size)
+    {
         return Err(ClaimError::NotInHardwareRegion);
     }
 
@@ -147,9 +153,12 @@ pub fn sys_pci_claim(
         return Err(ClaimError::AlreadyClaimed);
     }
 
-    // CORR-32 : Vérifier unicité BDF
+    // One owner may map several BARs of the same PCI function.
     if let Some(b) = bdf {
-        if claims.iter().any(|c| c.bdf == Some(b)) {
+        if claims
+            .iter()
+            .any(|c| c.bdf == Some(b) && c.owner_pid != d_pid)
+        {
             return Err(ClaimError::AlreadyClaimed);
         }
     }

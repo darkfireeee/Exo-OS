@@ -395,9 +395,8 @@ fn blob_write_empty_payload_rejected_by_design() {
     let next_off = RefCell::new(4096u64);
     let cfg = BlobWriterConfig::new(EpochId(3));
 
-    // ExoFS refuse intentionnellement les blobs vides — un blob doit contenir
-    // au moins un octet pour avoir un BlobId valide (Blake3 sur données vides
-    // crée un id non-déterministe par rapport au contenu réel).
+    // ExoFS refuse intentionnellement les blobs disque vides : les objets
+    // vides sont représentés sans passer par le pipeline blob chiffré.
     let result = BlobWriter::write_blob(
         &[],
         &cfg,

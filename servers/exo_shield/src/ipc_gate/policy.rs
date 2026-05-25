@@ -559,11 +559,15 @@ pub fn enumerate_policies(out: &mut [PolicyRule]) -> usize {
 /// Resets the policy subsystem and installs default rules.
 pub fn policy_init() {
     let mut table = POLICY_TABLE.lock();
-    *table = [PolicyRule::default(); MAX_POLICY_ENTRIES];
+    for rule in table.iter_mut() {
+        *rule = PolicyRule::empty();
+    }
     drop(table);
 
     let mut rate_table = RATE_LIMIT_TABLE.lock();
-    *rate_table = [RateLimitEntry::new(); 32];
+    for entry in rate_table.iter_mut() {
+        *entry = RateLimitEntry::new();
+    }
     drop(rate_table);
 
     POLICY_COUNT.store(0, Ordering::Release);

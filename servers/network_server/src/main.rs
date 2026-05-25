@@ -13,26 +13,34 @@ use core::panic::PanicInfo;
 use spin::Mutex;
 
 mod buf_pool;
+mod dhcp;
 mod driver_link;
+mod icmp;
 mod isolation;
 mod protocol;
+mod routing;
 mod smoltcp_iface;
 mod socket_table;
+mod stats;
 mod tcp_store;
 mod virtio_device;
 
-use buf_pool::{NetBufPool, VIRTIO_NET_HDR_SIZE_LEGACY};
+use buf_pool::{NetBufPool, VIRTIO_NET_HDR_SIZE_MODERN};
 use driver_link::DriverLink;
 use isolation::IsolationState;
 use protocol::{
-    parse_net_msg, parse_raw_call, recv_raw, register_endpoint, send_rpc_reply, NetMsg, NetReply,
-    NET_OP_ACCEPT, NET_OP_BIND, NET_OP_CLOSE, NET_OP_CONNECT, NET_OP_GETPEERNAME,
-    NET_OP_GETSOCKNAME, NET_OP_GETSOCKOPT, NET_OP_LISTEN, NET_OP_OPEN, NET_OP_RECVFROM,
-    NET_OP_RECVMSG, NET_OP_SENDMSG, NET_OP_SENDTO, NET_OP_SETSOCKOPT, NET_OP_SHUTDOWN,
-    NET_OP_SOCKETPAIR, RAW_MSG_SIZE,
+    parse_driver_ctrl, parse_net_msg, parse_raw_call, recv_raw, register_endpoint, send_rpc_reply,
+    send_rpc_reply_with_data, DriverCtrlMsg, MacReplyMsg, NetMsg, NetReply, RxReadyMsg,
+    TxCompleteMsg, NET_CTRL_MAC_REPLY, NET_CTRL_RX_READY, NET_CTRL_TX_COMPLETE,
+    NET_INLINE_DATA_MAX, NET_OP_ACCEPT, NET_OP_BIND, NET_OP_CLOSE, NET_OP_CONNECT,
+    NET_OP_GETPEERNAME, NET_OP_GETSOCKNAME, NET_OP_GETSOCKOPT, NET_OP_LISTEN, NET_OP_OPEN,
+    NET_OP_RECVFROM, NET_OP_RECVMSG, NET_OP_SENDMSG, NET_OP_SENDTO, NET_OP_SETSOCKOPT,
+    NET_OP_SHUTDOWN, NET_OP_SOCKETPAIR, RAW_MSG_SIZE,
 };
-use smoltcp_iface::SmoltcpIface;
+use routing::RouteTable;
+use smoltcp_iface::{SmoltcpIface, TcpConnectStatus};
 use socket_table::{SocketKind, SocketTable};
+use stats::NetStats;
 use tcp_store::TcpStateStore;
 use virtio_device::ExoNetDevice;
 
@@ -45,10 +53,15 @@ struct NetworkService {
     driver: DriverLink,
     device: ExoNetDevice,
     iface: SmoltcpIface,
+    routes: RouteTable,
+    dhcp: dhcp::DhcpClient,
+    stats: NetStats,
     tcp_store: TcpStateStore,
     isolation: IsolationState,
     bootstrapped: bool,
+    ticks: u64,
     unsupported_msg_ops: u64,
+    reported_no_hardware_route: bool,
 }
 
 impl NetworkService {
@@ -59,10 +72,15 @@ impl NetworkService {
             driver: DriverLink::empty(),
             device: ExoNetDevice::new(),
             iface: SmoltcpIface::empty(),
+            routes: RouteTable::new(),
+            dhcp: dhcp::DhcpClient::new(),
+            stats: NetStats::new(),
             tcp_store: TcpStateStore::new_empty(),
             isolation: IsolationState::new(),
             bootstrapped: false,
+            ticks: 0,
             unsupported_msg_ops: 0,
+            reported_no_hardware_route: false,
         }
     }
 
@@ -70,10 +88,24 @@ impl NetworkService {
         if self.bootstrapped {
             return;
         }
-        self.pool =
-            NetBufPool::init(VIRTIO_NET_HDR_SIZE_LEGACY).unwrap_or_else(|_| NetBufPool::empty());
-        self.driver = DriverLink::connect_virtio_net(&self.pool);
+        self.pool = match NetBufPool::init(VIRTIO_NET_HDR_SIZE_MODERN) {
+            Ok(pool) => {
+                debug_write(b"network_server: pool ready\n");
+                pool
+            }
+            Err(err) => {
+                debug_errno(b"network_server: pool dma errno ", err);
+                NetBufPool::empty()
+            }
+        };
+        self.driver = DriverLink::connect_net_driver(&self.pool);
         let (ip, prefix_len) = configured_ipv4();
+        self.routes.clear();
+        let on_link = ip & routing::mask(prefix_len);
+        let _ = self.routes.add(on_link, prefix_len, 0, 0);
+        let _ = self.routes.add(0, 0, 0x0a00_0202, 10);
+        self.dhcp.configure_mac(self.driver.mac());
+        self.dhcp.start(ip);
         self.iface = SmoltcpIface::init(self.driver.mac(), ip, prefix_len);
         let phoenix =
             unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_EXO_PHOENIX_STATE_GET) };
@@ -84,9 +116,83 @@ impl NetworkService {
     }
 
     fn tick(&mut self) {
-        self.iface.poll_one(&mut self.device, &self.pool);
+        self.ticks = self.ticks.saturating_add(1);
+        self.driver.ensure_connected(&self.pool);
+        if !self.driver.hardware_ready() {
+            self.driver.flush_released(&mut self.device);
+            let _ = self.dhcp.poll(self.ticks);
+            return;
+        }
+        let mut polls = 0usize;
+        while self.iface.poll_one(&mut self.device, &self.pool) {
+            polls += 1;
+            if polls >= 32 {
+                break;
+            }
+        }
         self.iface.poll_egress(&mut self.device, &self.pool);
+        self.driver.flush_tx(&mut self.device, &self.pool);
         self.driver.flush_released(&mut self.device);
+        let _ = self.dhcp.poll(self.ticks);
+    }
+
+    fn flush_released(&mut self) {
+        self.driver.flush_released(&mut self.device);
+    }
+
+    fn handle_driver_ctrl(&mut self, ctrl: DriverCtrlMsg) {
+        match ctrl.msg_type {
+            NET_CTRL_MAC_REPLY => {
+                if ctrl.payload.len() >= core::mem::size_of::<MacReplyMsg>() {
+                    let msg = unsafe {
+                        core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const MacReplyMsg)
+                    };
+                    if msg.opcode == NET_CTRL_MAC_REPLY {
+                        self.driver.set_mac(msg.mac);
+                        self.dhcp.configure_mac(msg.mac);
+                        self.iface.set_mac(msg.mac);
+                        debug_write(b"network_server: mac ready\n");
+                    }
+                }
+            }
+            NET_CTRL_RX_READY => {
+                if ctrl.payload.len() >= core::mem::size_of::<RxReadyMsg>() {
+                    let msg = unsafe {
+                        core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const RxReadyMsg)
+                    };
+                    if msg.opcode == NET_CTRL_RX_READY {
+                        let count = (msg.count as usize).min(msg.entries.len());
+                        let mut idx = 0usize;
+                        while idx < count {
+                            let entry = msg.entries[idx];
+                            if self.device.push_rx_from_driver(entry.pool_idx, entry.len) {
+                                self.stats.note_rx(entry.len as u64);
+                            } else {
+                                self.stats.note_rx_drop();
+                            }
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            NET_CTRL_TX_COMPLETE => {
+                if ctrl.payload.len() >= core::mem::size_of::<TxCompleteMsg>() {
+                    let msg = unsafe {
+                        core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const TxCompleteMsg)
+                    };
+                    if msg.opcode == NET_CTRL_TX_COMPLETE {
+                        let count = (msg.count as usize).min(msg.pool_idx.len());
+                        let mut idx = 0usize;
+                        while idx < count {
+                            self.pool.tx_free(msg.pool_idx[idx]);
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.tick();
     }
 
     fn dispatch(&mut self, msg: NetMsg) -> NetReply {
@@ -116,9 +222,55 @@ impl NetworkService {
         reply
     }
 
+    fn dispatch_raw_call(
+        &mut self,
+        payload: &[u8],
+    ) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
+        let Some(msg) = parse_net_msg(payload) else {
+            return (
+                NetReply::error(exo_syscall_abi::EINVAL),
+                [0; NET_INLINE_DATA_MAX],
+                0,
+            );
+        };
+        let data = if payload.len() > core::mem::size_of::<NetMsg>() {
+            &payload[core::mem::size_of::<NetMsg>()..]
+        } else {
+            &[]
+        };
+        match msg.opcode {
+            NET_OP_SENDTO => {
+                let reply = self.handle_sendto_data(msg, data);
+                self.tick();
+                (reply, [0; NET_INLINE_DATA_MAX], 0)
+            }
+            NET_OP_RECVFROM => {
+                self.tick();
+                let result = self.handle_recvfrom_data(msg);
+                self.tick();
+                result
+            }
+            _ => (self.dispatch_and_tick(msg), [0; NET_INLINE_DATA_MAX], 0),
+        }
+    }
+
     fn unsupported_msg_reply(&mut self) -> NetReply {
         self.unsupported_msg_ops = self.unsupported_msg_ops.saturating_add(1);
         NetReply::error(exo_syscall_abi::EOPNOTSUPP)
+    }
+
+    fn require_hardware_route(&mut self, remote_addr: u32) -> Result<(), i64> {
+        if remote_addr == 0 {
+            return Ok(());
+        }
+        if self.driver.probe_hardware_now(&self.pool) {
+            return Ok(());
+        }
+        if !self.reported_no_hardware_route {
+            debug_write(b"network_server: no hardware route\n");
+            self.reported_no_hardware_route = true;
+        }
+        Err(exo_syscall_abi::ENETDOWN)
     }
 
     fn handle_open(&mut self, msg: NetMsg) -> NetReply {
@@ -152,13 +304,43 @@ impl NetworkService {
     }
 
     fn handle_connect(&mut self, msg: NetMsg) -> NetReply {
+        if let Err(err) = self.require_hardware_route(msg.arg1 as u32) {
+            return NetReply::error(err);
+        }
         match self
             .sockets
             .connect(msg.sender_pid, msg.fd, msg.arg1 as u32, msg.arg2 as u16)
         {
             Ok(snapshot) => {
-                self.iface.apply_socket_state(&snapshot);
-                socket_reply(0, &snapshot)
+                if snapshot.kind != SocketKind::Tcp {
+                    self.iface.apply_socket_state(&snapshot);
+                    return socket_reply(0, &snapshot);
+                }
+                match self.iface.tcp_connect_status(&snapshot) {
+                    TcpConnectStatus::Failed => {
+                        self.iface.poll_egress(&mut self.device, &self.pool);
+                        self.iface.apply_socket_state(&snapshot);
+                        match self.iface.tcp_connect_status(&snapshot) {
+                            TcpConnectStatus::Established => {
+                                match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
+                                    Ok(connected) => socket_reply(0, &connected),
+                                    Err(err) => NetReply::error(err),
+                                }
+                            }
+                            _ => NetReply::error(exo_syscall_abi::EAGAIN),
+                        }
+                    }
+                    TcpConnectStatus::Established => {
+                        match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
+                            Ok(connected) => socket_reply(0, &connected),
+                            Err(err) => NetReply::error(err),
+                        }
+                    }
+                    TcpConnectStatus::Pending => {
+                        self.iface.poll_egress(&mut self.device, &self.pool);
+                        NetReply::error(exo_syscall_abi::EAGAIN)
+                    }
+                }
             }
             Err(err) => NetReply::error(err),
         }
@@ -182,7 +364,25 @@ impl NetworkService {
     }
 
     fn handle_sendto(&mut self, msg: NetMsg) -> NetReply {
+        self.handle_sendto_data(msg, &[])
+    }
+
+    fn handle_sendto_data(&mut self, msg: NetMsg, data: &[u8]) -> NetReply {
         let len = msg.arg1.min(u32::MAX as u64) as u32;
+        if !data.is_empty() && data.len() != len as usize {
+            return NetReply::error(exo_syscall_abi::EINVAL);
+        }
+        let target_addr = if msg.arg2 != 0 {
+            msg.arg2 as u32
+        } else {
+            match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
+                Ok(snapshot) => snapshot.remote_addr,
+                Err(err) => return NetReply::error(err),
+            }
+        };
+        if let Err(err) = self.require_hardware_route(target_addr) {
+            return NetReply::error(err);
+        }
         let snapshot = match self.sockets.send_to(
             msg.sender_pid,
             msg.fd,
@@ -193,23 +393,52 @@ impl NetworkService {
             Ok(snapshot) => snapshot,
             Err(err) => return NetReply::error(err),
         };
-        if self.pool.ready() {
-            let _ = self.device.submit_tx(&self.pool, len as usize);
+        self.iface.apply_socket_state(&snapshot);
+        if !data.is_empty() {
+            match self.iface.send_socket_data(&snapshot, data) {
+                Ok(sent) if sent == data.len() => self.stats.note_tx(sent as u64),
+                Ok(_) => return NetReply::error(exo_syscall_abi::EAGAIN),
+                Err(err) => return NetReply::error(err),
+            }
         }
         socket_reply(len as i64, &snapshot)
     }
 
     fn handle_recvfrom(&mut self, msg: NetMsg) -> NetReply {
+        let (reply, _, _) = self.handle_recvfrom_data(msg);
+        reply
+    }
+
+    fn handle_recvfrom_data(
+        &mut self,
+        msg: NetMsg,
+    ) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
+        let mut data = [0u8; NET_INLINE_DATA_MAX];
         let before = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
             Ok(snapshot) => snapshot,
-            Err(err) => return NetReply::error(err),
+            Err(err) => return (NetReply::error(err), data, 0),
         };
-        let budget = msg.arg1.min(u32::MAX as u64) as u32;
-        let delivered = before.pending_rx.min(budget.max(1));
-        match self.sockets.recv_from(msg.sender_pid, msg.fd, budget) {
-            Ok(snapshot) => socket_reply(delivered as i64, &snapshot),
-            Err(err) => NetReply::error(err),
+        let budget = (msg.arg1 as usize).min(data.len());
+        if budget == 0 {
+            return (socket_reply(0, &before), data, 0);
         }
+        let (delivered, peer_addr, peer_port) =
+            match self.iface.recv_socket_data(&before, &mut data[..budget]) {
+                Ok(result) => result,
+                Err(err) => return (NetReply::error(err), data, 0),
+            };
+        let snapshot = match self
+            .sockets
+            .record_recv(msg.sender_pid, msg.fd, delivered as u32)
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => return (NetReply::error(err), data, 0),
+        };
+        let mut reply = socket_reply(delivered as i64, &snapshot);
+        if peer_addr != 0 {
+            reply = reply.with_u32(8, peer_addr).with_u16(12, peer_port);
+        }
+        (reply, data, delivered)
     }
 
     fn handle_shutdown(&mut self, msg: NetMsg) -> NetReply {
@@ -228,7 +457,12 @@ impl NetworkService {
 
     fn handle_getpeername(&mut self, msg: NetMsg) -> NetReply {
         match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
-            Ok(snapshot) if snapshot.remote_port != 0 => socket_reply(0, &snapshot),
+            Ok(snapshot)
+                if snapshot.remote_addr != 0
+                    && (snapshot.remote_port != 0 || snapshot.kind == SocketKind::Raw) =>
+            {
+                socket_reply(0, &snapshot)
+            }
             Ok(_) => NetReply::error(exo_syscall_abi::ENOTCONN),
             Err(err) => NetReply::error(err),
         }
@@ -276,7 +510,9 @@ pub extern "C" fn _start() -> ! {
         let n = match recv_raw(&mut raw) {
             Ok(n) => n,
             Err(_) => {
-                NETWORK_SERVICE.lock().tick();
+                let mut service = NETWORK_SERVICE.lock();
+                service.tick();
+                service.flush_released();
                 continue;
             }
         };
@@ -286,11 +522,17 @@ pub extern "C" fn _start() -> ! {
         }
 
         if let Some(call) = parse_raw_call(&raw[..n]) {
-            let reply = match parse_net_msg(call.payload) {
-                Some(msg) => NETWORK_SERVICE.lock().dispatch_and_tick(msg),
-                None => NetReply::error(exo_syscall_abi::EINVAL),
+            let (reply, data, data_len) = {
+                let mut service = NETWORK_SERVICE.lock();
+                service.dispatch_raw_call(call.payload)
             };
-            let _ = send_rpc_reply(call.reply_ep, call.cookie, &reply);
+            let _ = if data_len == 0 {
+                send_rpc_reply(call.reply_ep, call.cookie, &reply)
+            } else {
+                send_rpc_reply_with_data(call.reply_ep, call.cookie, &reply, &data[..data_len])
+            };
+        } else if let Some(ctrl) = parse_driver_ctrl(&raw[..n]) {
+            NETWORK_SERVICE.lock().handle_driver_ctrl(ctrl);
         } else {
             NETWORK_SERVICE.lock().tick();
         }
@@ -414,6 +656,7 @@ fn socket_reply(status: i64, snapshot: &socket_table::SocketSnapshot) -> NetRepl
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    debug_write(b"network_server: panic\n");
     let _ = unsafe {
         exo_syscall_abi::syscall1(
             exo_syscall_abi::SYS_EXO_PHOENIX_STATE_SET,
@@ -425,4 +668,42 @@ fn panic(_info: &PanicInfo) -> ! {
             core::arch::asm!("hlt", options(nostack, nomem));
         }
     }
+}
+
+fn debug_write(bytes: &[u8]) {
+    for &byte in bytes {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = byte;
+    }
+}
+
+fn debug_errno(prefix: &[u8], err: i64) {
+    debug_write(prefix);
+    let negative = err < 0;
+    let mut value = if negative {
+        err.wrapping_neg() as u64
+    } else {
+        err as u64
+    };
+    if negative {
+        debug_write(b"-");
+    }
+    let mut digits = [0u8; 20];
+    let mut pos = digits.len();
+    if value == 0 {
+        pos -= 1;
+        digits[pos] = b'0';
+    } else {
+        while value != 0 {
+            pos -= 1;
+            digits[pos] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+    }
+    debug_write(&digits[pos..]);
+    debug_write(b"\n");
 }

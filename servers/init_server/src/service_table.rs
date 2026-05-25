@@ -1,6 +1,6 @@
 use super::Service;
 
-pub const SERVICE_COUNT: usize = 12;
+pub const SERVICE_COUNT: usize = 15;
 
 pub struct ServiceMetadata {
     pub name: &'static str,
@@ -18,8 +18,10 @@ const DEPS_VFS: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_CRYPTO: &[&str] = &["ipc_router", "vfs_server"];
 const DEPS_DEVICE: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_VIRTIO: &[&str] = &["ipc_router", "device_server"];
+const DEPS_NET_DRIVER: &[&str] = &["ipc_router", "device_server"];
+const DEPS_LOOPBACK: &[&str] = &["ipc_router"];
 const DEPS_NETWORK: &[&str] = &["ipc_router", "vfs_server", "device_server"];
-const OPT_DEPS_NETWORK: &[&str] = &["virtio_drivers"];
+const OPT_DEPS_NETWORK: &[&str] = &["e1000_driver", "virtio_net_driver", "loopback_driver"];
 const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
 const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "vfs_server"];
@@ -41,6 +43,9 @@ pub static VFS_SERVER_BIN: &[u8] = b"/sbin/exo-vfs-server\0";
 pub static CRYPTO_SERVER_BIN: &[u8] = b"/sbin/exo-crypto-server\0";
 pub static DEVICE_SERVER_BIN: &[u8] = b"/sbin/exo-device-server\0";
 pub static VIRTIO_DRIVERS_BIN: &[u8] = b"/sbin/exo-virtio-drivers\0";
+pub static E1000_DRIVER_BIN: &[u8] = b"/sbin/exo-e1000-driver\0";
+pub static VIRTIO_NET_DRIVER_BIN: &[u8] = b"/sbin/exo-virtio-net-driver\0";
+pub static LOOPBACK_DRIVER_BIN: &[u8] = b"/sbin/exo-loopback-driver\0";
 pub static NETWORK_SERVER_BIN: &[u8] = b"/sbin/exo-network-server\0";
 pub static SCHEDULER_SERVER_BIN: &[u8] = b"/sbin/exo-scheduler-server\0";
 pub static INPUT_SERVER_BIN: &[u8] = b"/sbin/exo-input-server\0";
@@ -93,6 +98,30 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "virtio_drivers",
         bin_path: VIRTIO_DRIVERS_BIN,
         requires: DEPS_VIRTIO,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 5_000,
+        critical: false,
+    },
+    ServiceMetadata {
+        name: "e1000_driver",
+        bin_path: E1000_DRIVER_BIN,
+        requires: DEPS_NET_DRIVER,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 8_000,
+        critical: false,
+    },
+    ServiceMetadata {
+        name: "virtio_net_driver",
+        bin_path: VIRTIO_NET_DRIVER_BIN,
+        requires: DEPS_NET_DRIVER,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 8_000,
+        critical: false,
+    },
+    ServiceMetadata {
+        name: "loopback_driver",
+        bin_path: LOOPBACK_DRIVER_BIN,
+        requires: DEPS_LOOPBACK,
         requires_optional: NO_DEPS,
         ready_timeout_ms: 5_000,
         critical: false,

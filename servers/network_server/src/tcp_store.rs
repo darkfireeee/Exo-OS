@@ -1,4 +1,5 @@
 use crate::socket_table::MAX_SOCKETS;
+use core::cell::UnsafeCell;
 
 pub const TCP_SOCKET_STATE_SIZE: usize = 6176;
 pub const STORE_SERIALIZED_SIZE: usize = MAX_SOCKETS * TCP_SOCKET_STATE_SIZE;
@@ -45,25 +46,56 @@ impl TcpSocketState {
 
 const _: () = assert!(core::mem::size_of::<TcpSocketState>() == TCP_SOCKET_STATE_SIZE);
 
+struct TcpStateSlots(UnsafeCell<[TcpSocketState; MAX_SOCKETS]>);
+
+// SAFETY: network_server manipule l'état Phoenix sous son mutex global.
+unsafe impl Sync for TcpStateSlots {}
+
+static TCP_STATE_SLOTS: TcpStateSlots =
+    TcpStateSlots(UnsafeCell::new([TcpSocketState::empty(); MAX_SOCKETS]));
+
 pub struct TcpStateStore {
-    slots: [Option<TcpSocketState>; MAX_SOCKETS],
+    occupied: [bool; MAX_SOCKETS],
     count: usize,
 }
 
 impl TcpStateStore {
     pub const fn new_empty() -> Self {
         Self {
-            slots: [const { None }; MAX_SOCKETS],
+            occupied: [false; MAX_SOCKETS],
             count: 0,
         }
     }
 
     pub fn clear(&mut self) {
-        self.slots = [const { None }; MAX_SOCKETS];
+        self.occupied = [false; MAX_SOCKETS];
         self.count = 0;
     }
 
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    pub fn save(&mut self, slot: usize, state: TcpSocketState) -> bool {
+        if slot >= MAX_SOCKETS {
+            return false;
+        }
+        // SAFETY: le serveur réseau sérialise l'accès au store pendant le drain.
+        unsafe {
+            (*TCP_STATE_SLOTS.0.get())[slot] = state;
+        }
+        if !self.occupied[slot] {
+            self.occupied[slot] = true;
+            self.count = self.count.saturating_add(1);
+        }
+        true
+    }
+
+    pub fn load(&self, slot: usize) -> Option<TcpSocketState> {
+        if slot >= MAX_SOCKETS || !self.occupied[slot] {
+            return None;
+        }
+        // SAFETY: la lecture est sérialisée par le même mutex du service.
+        Some(unsafe { (*TCP_STATE_SLOTS.0.get())[slot] })
     }
 }

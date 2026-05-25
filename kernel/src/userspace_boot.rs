@@ -83,6 +83,12 @@ boot_payload!(DEVICE_SERVER_BYTES, "exo-device-server");
 #[cfg(exo_boot_payloads)]
 boot_payload!(VIRTIO_DRIVERS_BYTES, "exo-virtio-drivers");
 #[cfg(exo_boot_payloads)]
+boot_payload!(E1000_DRIVER_BYTES, "exo-e1000-driver");
+#[cfg(exo_boot_payloads)]
+boot_payload!(VIRTIO_NET_DRIVER_BYTES, "exo-virtio-net-driver");
+#[cfg(exo_boot_payloads)]
+boot_payload!(LOOPBACK_DRIVER_BYTES, "exo-loopback-driver");
+#[cfg(exo_boot_payloads)]
 boot_payload!(NETWORK_SERVER_BYTES, "exo-network-server");
 #[cfg(exo_boot_payloads)]
 boot_payload!(SCHEDULER_SERVER_BYTES, "exo-scheduler-server");
@@ -126,6 +132,18 @@ static EMBEDDED_PAYLOADS: &[EmbeddedPayload] = &[
     EmbeddedPayload {
         path: "/sbin/exo-virtio-drivers",
         bytes: &VIRTIO_DRIVERS_BYTES,
+    },
+    EmbeddedPayload {
+        path: "/sbin/exo-e1000-driver",
+        bytes: &E1000_DRIVER_BYTES,
+    },
+    EmbeddedPayload {
+        path: "/sbin/exo-virtio-net-driver",
+        bytes: &VIRTIO_NET_DRIVER_BYTES,
+    },
+    EmbeddedPayload {
+        path: "/sbin/exo-loopback-driver",
+        bytes: &LOOPBACK_DRIVER_BYTES,
     },
     EmbeddedPayload {
         path: "/sbin/exo-network-server",

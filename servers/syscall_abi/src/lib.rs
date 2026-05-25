@@ -709,6 +709,38 @@ pub const SYS_MSI_ALLOC: u64 = 543;
 pub const SYS_MSI_CONFIG: u64 = 544;
 pub const SYS_MSI_FREE: u64 = 545;
 pub const SYS_PCI_SET_TOPOLOGY: u64 = 546;
+pub const SYS_PCI_FIND_DEVICE: u64 = 547;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PciBarInfo {
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    pub phys: u64,
+    pub size: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PciDeviceInfo {
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub segment: u16,
+    pub bus: u8,
+    pub device: u8,
+    pub function: u8,
+    pub class_code: u8,
+    pub subclass: u8,
+    pub prog_if: u8,
+    pub revision: u8,
+    pub irq_line: u8,
+    pub irq_pin: u8,
+    pub bar0_kind: u8,
+    pub _pad0: u8,
+    pub bar0_phys: u64,
+    pub bar0_size: u64,
+    pub bars: [PciBarInfo; 6],
+}
 
 pub const O_RDONLY: u64 = 0;
 pub const O_WRONLY: u64 = 1;

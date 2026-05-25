@@ -22,8 +22,8 @@ use crate::memory::virt::{
     TlbFlushType, UserAddressSpace, VmaBacking, VmaDescriptor, VmaFlags,
 };
 use crate::memory::{
-    alloc_page, alloc_pages, free_page, free_pages, phys_to_virt, AllocFlags, Frame, PageFlags,
-    PhysAddr, VirtAddr,
+    alloc_page, alloc_pages, free_page, free_pages, AllocFlags, Frame, PageFlags, PhysAddr,
+    VirtAddr,
 };
 use crate::process::core::pid::Pid;
 use crate::process::PROCESS_REGISTRY;
@@ -389,6 +389,7 @@ impl DmaAllocTable {
         for slot in &mut self.records {
             if matches!(slot, Some(record) if record.pid == pid) {
                 if let Some(record) = slot.take() {
+                    unmap_dma_alloc_record(&record);
                     let _ = IOVA_ALLOCATOR.unmap(record.iova, record.domain);
                     let _ = free_pages(record.frame, record.order);
                     released += 1;
@@ -423,11 +424,67 @@ fn mmio_vma_flags() -> VmaFlags {
     VmaFlags::READ | VmaFlags::WRITE | VmaFlags::IO | VmaFlags::DONTCOPY | VmaFlags::DONTEXPAND
 }
 
+fn dma_alloc_page_flags() -> PageFlags {
+    PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE
+}
+
+fn dma_alloc_vma_flags() -> VmaFlags {
+    VmaFlags::READ | VmaFlags::WRITE | VmaFlags::LOCKED | VmaFlags::DONTCOPY | VmaFlags::DONTEXPAND
+}
+
 fn rollback_mmio_pages(user_as: &UserAddressSpace, map_base: VirtAddr, mapped_pages: usize) {
     for page_idx in 0..mapped_pages {
         let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
         let _ = unsafe { user_as.unmap_page(virt) };
     }
+}
+
+fn map_dma_alloc_into_user(pid: u32, frame: Frame, size: usize) -> Result<(u64, usize), DmaError> {
+    let user_as = user_as_for_pid(pid).ok_or(DmaError::InvalidParams)?;
+    let map_size = align_up(size);
+    let Some(map_base) = user_as.find_free_gap(map_size, None) else {
+        return Err(DmaError::OutOfMemory);
+    };
+
+    let page_flags = dma_alloc_page_flags();
+    let alloc = UserFaultAllocator { user_as };
+    let mapped_pages = map_size / PAGE_SIZE;
+
+    for page_idx in 0..mapped_pages {
+        let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
+        let phys = PhysAddr::new(frame.start_address().as_u64() + (page_idx * PAGE_SIZE) as u64);
+        if unsafe { user_as.map_page(virt, Frame::containing(phys), page_flags, &alloc) }.is_err() {
+            rollback_mmio_pages(user_as, map_base, page_idx);
+            return Err(DmaError::OutOfMemory);
+        }
+    }
+
+    let vma = Box::new(VmaDescriptor::new(
+        map_base,
+        VirtAddr::new(map_base.as_u64() + map_size as u64),
+        dma_alloc_vma_flags(),
+        page_flags,
+        VmaBacking::Direct,
+    ));
+    let vma_ptr = Box::into_raw(vma);
+    if !unsafe { user_as.insert_vma(vma_ptr) } {
+        rollback_mmio_pages(user_as, map_base, mapped_pages);
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+        return Err(DmaError::OutOfMemory);
+    }
+
+    Ok((map_base.as_u64(), map_size))
+}
+
+fn unmap_dma_alloc_record(record: &DmaAllocRecord) {
+    let Some(user_as) = user_as_for_pid(record.pid) else {
+        return;
+    };
+    let map_base = VirtAddr::new(record.virt);
+    if let Some(vma_ptr) = user_as.remove_vma(map_base) {
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+    }
+    rollback_mmio_pages(user_as, map_base, align_up(record.size) / PAGE_SIZE);
 }
 
 fn unmap_mmio_record(record: MmioRecord) {
@@ -657,7 +714,13 @@ pub fn sys_dma_alloc_for_pid(
     let frame =
         alloc_pages(order, alloc_flags_from_dma_flags(flags)).map_err(|_| DmaError::OutOfMemory)?;
     let phys = frame.start_address();
-    let virt = phys_to_virt(phys).as_u64();
+    let (virt, _) = match map_dma_alloc_into_user(pid, frame, size) {
+        Ok(mapping) => mapping,
+        Err(err) => {
+            let _ = free_pages(frame, order);
+            return Err(err);
+        }
+    };
 
     match IOVA_ALLOCATOR.map(phys, size, direction, flags, domain) {
         Ok(iova) => {
@@ -671,6 +734,7 @@ pub fn sys_dma_alloc_for_pid(
                 order,
             };
             if let Err(err) = DMA_ALLOC_TABLE.write().insert(record) {
+                unmap_dma_alloc_record(&record);
                 let _ = IOVA_ALLOCATOR.unmap(iova, domain);
                 let _ = free_pages(frame, order);
                 return Err(err);
@@ -678,6 +742,16 @@ pub fn sys_dma_alloc_for_pid(
             Ok((virt, iova))
         }
         Err(err) => {
+            let record = DmaAllocRecord {
+                pid,
+                domain,
+                iova: IovaAddr::zero(),
+                virt,
+                size,
+                frame,
+                order,
+            };
+            unmap_dma_alloc_record(&record);
             let _ = free_pages(frame, order);
             Err(err)
         }
@@ -693,6 +767,7 @@ pub fn sys_dma_free_for_pid(
         return Err(DmaError::InvalidParams);
     };
 
+    unmap_dma_alloc_record(&record);
     IOVA_ALLOCATOR.unmap(record.iova, record.domain)?;
     let _ = free_pages(record.frame, record.order);
     Ok(())

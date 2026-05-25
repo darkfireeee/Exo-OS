@@ -13,6 +13,11 @@ INTLOG=${EXOOS_SHELL_INTLOG:-/tmp/exoos-shell-int.log}
 STDOUT=${EXOOS_SHELL_STDOUT:-/tmp/exoos-shell-qemu.log}
 SCREEN=${EXOOS_SHELL_SCREEN:-/tmp/exoos-shell-screen.ppm}
 PIDFILE=${EXOOS_SHELL_PIDFILE:-/tmp/exoos-shell-qemu.pid}
+QEMU_TRACE_ARGS=()
+
+if [[ "${EXOOS_SHELL_INT_TRACE:-0}" != "0" ]]; then
+  QEMU_TRACE_ARGS=(-d int,cpu_reset -D "$INTLOG")
+fi
 
 mkdir -p "$(dirname "$QMP")" "$(dirname "$SERIAL")" "$(dirname "$E9")" \
   "$(dirname "$INTLOG")" "$(dirname "$STDOUT")" "$(dirname "$SCREEN")" \
@@ -31,7 +36,7 @@ qemu-system-x86_64 \
   -no-shutdown \
   -monitor none \
   -display none \
-  -d int,cpu_reset -D "$INTLOG" \
+  "${QEMU_TRACE_ARGS[@]}" \
   -debugcon file:"$E9" \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   -qmp unix:"$QMP",server=on,wait=off \
@@ -78,6 +83,13 @@ def hmp(command):
     }) + "\r\n").encode())
     return sock.recv(65536)
 
+def qmp_command(command, arguments=None):
+    request = {"execute": command}
+    if arguments is not None:
+        request["arguments"] = arguments
+    sock.sendall((json.dumps(request) + "\r\n").encode())
+    return sock.recv(65536)
+
 def e9_bytes():
     try:
         return e9.read_bytes()
@@ -94,44 +106,72 @@ def wait_for_e9(needle, timeout):
     raise TimeoutError(needle.decode("ascii", "replace"))
 
 def prompt_count(data):
-    return data.count(b"\nexosh:") + data.count(b"\x0cexosh:")
+    return data.count(b"\nexosh:") + data.count(b"\rexosh:") + data.count(b"\x0cexosh:")
+
+def input_prompt_ready(data):
+    prompt_start = max(
+        data.rfind(b"\nexosh:"),
+        data.rfind(b"\rexosh:"),
+        data.rfind(b"\x0cexosh:"),
+    )
+    return prompt_start >= 0 and b"\x1b[7m" in data[prompt_start:]
 
 def wait_for_prompt_count(target, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
         data = e9_bytes()
-        if prompt_count(data) >= target:
+        if prompt_count(data) >= target and input_prompt_ready(data):
             return data
         time.sleep(0.25)
-    raise TimeoutError(f"shell prompt count stayed below {target}")
+    raise TimeoutError(f"shell input prompt count stayed below {target}")
 
 KEYS = {
-    "\n": "ret",
-    " ": "spc",
-    "/": "slash",
-    "=": "equal",
-    ">": "shift-dot",
-    ".": "dot",
-    "-": "minus",
-    "_": "shift-minus",
-    "*": "shift-8",
+    "\n": ["ret"],
+    " ": ["spc"],
+    "/": ["slash"],
+    "=": ["equal"],
+    ">": ["shift", "dot"],
+    ".": ["dot"],
+    "-": ["minus"],
+    "_": ["shift", "minus"],
+    "*": ["shift", "8"],
 }
+key_hold_ms = int(os.environ.get("EXOOS_SHELL_KEY_HOLD_MS", "20"))
+key_delay = float(os.environ.get("EXOOS_SHELL_KEY_DELAY", "0.12"))
+key_echo_timeout = float(os.environ.get("EXOOS_SHELL_KEY_ECHO_TIMEOUT", "2.0"))
+
+def send_key(keys):
+    if isinstance(keys, str):
+        keys = [keys]
+    qmp_command("send-key", {
+        "keys": [{"type": "qcode", "data": key} for key in keys],
+        "hold-time": key_hold_ms,
+    })
+
+def wait_for_key_echo(ch, start, timeout):
+    needle = ch.encode("ascii")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = e9_bytes()
+        if needle in data[start:]:
+            return
+        time.sleep(0.01)
+    raise TimeoutError(f"shell key echo did not include {needle!r}")
 
 def send_text(text):
     for ch in text:
-        key = KEYS.get(ch, ch)
-        hmp("sendkey " + key)
-        time.sleep(0.05)
+        echo_start = len(e9_bytes())
+        send_key(KEYS.get(ch, ch))
+        if ch != "\n":
+            wait_for_key_echo(ch, echo_start, key_echo_timeout)
+        time.sleep(key_delay)
 
-for _ in range(30):
-    if e9_bytes():
-        break
-    hmp("sendkey ret")
-    time.sleep(0.25)
 ready_timeout = int(os.environ.get("EXOOS_SHELL_READY_TIMEOUT", "600"))
 wait_for_e9(b"Exo-OS userspace console ready", ready_timeout)
-data = wait_for_e9(b"exosh:/", 30)
+prompt_timeout = int(os.environ.get("EXOOS_SHELL_PROMPT_TIMEOUT", "120"))
+data = wait_for_e9(b"exosh:/", prompt_timeout)
 seen_prompts = prompt_count(data)
+data = wait_for_prompt_count(seen_prompts, prompt_timeout)
 command_timeout = int(os.environ.get("EXOOS_SHELL_COMMAND_TIMEOUT", "120"))
 
 commands = [
@@ -185,31 +225,31 @@ for text in commands:
     seen_prompts += 1
     wait_for_prompt_count(seen_prompts, command_timeout)
     if text == "clear\n":
-        hmp("sendkey ctrl-l")
+        send_key(["ctrl", "l"])
         time.sleep(0.1)
 
 send_text("echo first\n")
 seen_prompts += 1
 wait_for_prompt_count(seen_prompts, command_timeout)
 
-hmp("sendkey up")
+send_key("up")
 time.sleep(0.2)
-hmp("sendkey ret")
+send_key("ret")
 seen_prompts += 1
 wait_for_prompt_count(seen_prompts, command_timeout)
 
 send_text("echo ab")
-hmp("sendkey left")
+send_key("left")
 time.sleep(0.1)
-hmp("sendkey right")
+send_key("right")
 time.sleep(0.1)
 send_text("c\n")
 seen_prompts += 1
 wait_for_prompt_count(seen_prompts, command_timeout)
 
-hmp("sendkey up")
+send_key("up")
 time.sleep(0.1)
-hmp("sendkey down")
+send_key("down")
 time.sleep(0.1)
 send_text("echo arrows\n")
 seen_prompts += 1

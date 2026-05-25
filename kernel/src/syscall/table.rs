@@ -370,6 +370,10 @@ pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 /// `close(fd)` → 0 ou errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLOSE);
+    use crate::syscall::net_bridge;
+    if let Some(socket_fd) = net_bridge::socket_handle_from_raw(fd) {
+        return net_bridge::bridge_result(net_bridge::net_close(socket_fd));
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -2599,7 +2603,9 @@ fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::Servi
         b"vfs_server" => Some(crate::security::ServiceClass::VfsServer),
         b"crypto_server" => Some(crate::security::ServiceClass::CryptoServer),
         b"device_server" => Some(crate::security::ServiceClass::DeviceServer),
-        b"virtio_drivers" => Some(crate::security::ServiceClass::VirtioDriver),
+        b"virtio_drivers" | b"e1000_driver" | b"virtio_net_driver" | b"loopback_driver" => {
+            Some(crate::security::ServiceClass::VirtioDriver)
+        }
         b"network_server" => Some(crate::security::ServiceClass::NetworkServer),
         b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
         b"input_server" => Some(crate::security::ServiceClass::InputServer),
@@ -2607,6 +2613,27 @@ fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::Servi
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
         b"exosh" => Some(crate::security::ServiceClass::Exosh),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod ipc_service_endpoint_class_tests {
+    use super::*;
+    use crate::security::ServiceClass;
+
+    #[test]
+    fn network_driver_service_endpoints_register_driver_class() {
+        for name in [
+            b"virtio_drivers".as_slice(),
+            b"e1000_driver".as_slice(),
+            b"virtio_net_driver".as_slice(),
+            b"loopback_driver".as_slice(),
+        ] {
+            assert_eq!(
+                service_class_for_endpoint_name(name),
+                Some(ServiceClass::VirtioDriver)
+            );
+        }
     }
 }
 
@@ -4481,6 +4508,52 @@ pub fn sys_pci_set_topology(
     }
 }
 
+/// ABI GI-03 : `sys_pci_find_device(vendor, device, class, subclass, index, out_ptr)`.
+///
+/// `vendor`/`device` à 0 signifient wildcard. `class`/`subclass` à une valeur
+/// supérieure à 255 signifient wildcard. Le résultat est écrit dans
+/// `PciDeviceInfo` côté userspace et contient le BDF, IRQ et BAR0.
+pub fn sys_pci_find_device(
+    vendor_filter: u64,
+    device_filter: u64,
+    class_filter: u64,
+    subclass_filter: u64,
+    index: u64,
+    out_ptr: u64,
+) -> i64 {
+    stat_inc(SYS_PCI_FIND_DEVICE);
+
+    if vendor_filter > u16::MAX as u64
+        || device_filter > u16::MAX as u64
+        || class_filter > u16::MAX as u64
+        || subclass_filter > u16::MAX as u64
+        || index > u32::MAX as u64
+        || out_ptr == 0
+    {
+        return EINVAL;
+    }
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+
+    let Some(info) = crate::drivers::find_pci_device(
+        vendor_filter as u16,
+        device_filter as u16,
+        class_filter as u16,
+        subclass_filter as u16,
+        index as u32,
+    ) else {
+        return ENOENT;
+    };
+
+    match write_user_typed::<crate::drivers::PciDeviceInfo>(out_ptr, info) {
+        Ok(()) => 0,
+        Err(err) => err.to_errno(),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Construction de la table
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4709,6 +4782,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_MSI_CONFIG => sys_msi_config,
         SYS_MSI_FREE => sys_msi_free,
         SYS_PCI_SET_TOPOLOGY => sys_pci_set_topology,
+        SYS_PCI_FIND_DEVICE => sys_pci_find_device,
         // ── Catch-all ──────────────────────────────────────────────────────
         _ => sys_enosys,
     }

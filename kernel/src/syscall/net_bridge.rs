@@ -33,13 +33,21 @@ const AF_UNIX: i32 = 1;
 const AF_INET: u16 = 2;
 const SOCKADDR_IN_LEN: usize = 16;
 const IOV_MAX: u64 = 1024;
+const NET_HANDLE_TAG: u32 = 0x4000_0000;
+const NET_HANDLE_TAG_MASK: u32 = 0xf000_0000;
+const NET_INLINE_DATA_MAX: usize = 128;
+const NET_REPLY_DATA_OFFSET: usize = core::mem::size_of::<NetReply>();
 
+const EAGAIN: i64 = -11;
 const EBADF: i64 = -9;
 const EFAULT: i64 = -14;
 const EINVAL: i64 = -22;
 const ENOSYS: i64 = -38;
 const ENOTSUP: i64 = -95;
 const ENETDOWN: i64 = -100;
+const ETIMEDOUT: i64 = -110;
+const CONNECT_TIMEOUT_NS: u64 = 10_000_000_000;
+const CONNECT_RETRY_NAP_NS: u64 = 10_000_000;
 
 static NET_READY: AtomicBool = AtomicBool::new(false);
 static NETWORK_ENDPOINT: AtomicU64 = AtomicU64::new(0);
@@ -153,25 +161,34 @@ fn ipc_errno(err: IpcError) -> i64 {
 }
 
 fn call_network(msg: &NetMsg) -> Result<NetReply, i64> {
+    let mut reply_buf = [0u8; core::mem::size_of::<NetReply>()];
+    let n = call_network_raw(msg, &[], &mut reply_buf)?;
+    if n < core::mem::size_of::<NetReply>() {
+        return Err(EINVAL);
+    }
+    Ok(unsafe { core::ptr::read_unaligned(reply_buf.as_ptr() as *const NetReply) })
+}
+
+fn call_network_raw(msg: &NetMsg, data: &[u8], reply_buf: &mut [u8]) -> Result<usize, i64> {
+    if data.len() > NET_INLINE_DATA_MAX {
+        return Err(EMSGSIZE);
+    }
     let endpoint = network_endpoint()?;
-    let request = unsafe {
+    let mut request = [0u8; core::mem::size_of::<NetMsg>() + NET_INLINE_DATA_MAX];
+    request[..core::mem::size_of::<NetMsg>()].copy_from_slice(unsafe {
         core::slice::from_raw_parts(
             msg as *const NetMsg as *const u8,
             core::mem::size_of::<NetMsg>(),
         )
-    };
-    let mut reply = NetReply {
-        status: ENETDOWN,
-        payload: [0; 40],
-    };
-    let reply_buf = unsafe {
-        core::slice::from_raw_parts_mut(
-            &mut reply as *mut NetReply as *mut u8,
-            core::mem::size_of::<NetReply>(),
-        )
-    };
-    match crate::ipc::rpc::call_raw(endpoint, request, reply_buf) {
-        Ok(n) if n >= core::mem::size_of::<NetReply>() => Ok(reply),
+    });
+    request[core::mem::size_of::<NetMsg>()..core::mem::size_of::<NetMsg>() + data.len()]
+        .copy_from_slice(data);
+    match crate::ipc::rpc::call_raw(
+        endpoint,
+        &request[..core::mem::size_of::<NetMsg>() + data.len()],
+        reply_buf,
+    ) {
+        Ok(n) if n >= core::mem::size_of::<NetReply>() => Ok(n),
         Ok(_) => Err(EINVAL),
         Err(err) => Err(ipc_errno(err)),
     }
@@ -185,7 +202,17 @@ fn dispatch(
     arg3: u32,
     arg4: u32,
 ) -> Result<NetReply, i64> {
-    let msg = NetMsg {
+    let msg = make_msg(opcode, fd, arg1, arg2, arg3, arg4);
+    let reply = call_network(&msg)?;
+    if reply.status < 0 {
+        Err(reply.status)
+    } else {
+        Ok(reply)
+    }
+}
+
+fn make_msg(opcode: u32, fd: u32, arg1: u64, arg2: u64, arg3: u32, arg4: u32) -> NetMsg {
+    NetMsg {
         opcode,
         sender_pid: current_pid(),
         fd,
@@ -195,12 +222,6 @@ fn dispatch(
         arg3,
         arg4,
         _reserved: [0; 8],
-    };
-    let reply = call_network(&msg)?;
-    if reply.status < 0 {
-        Err(reply.status)
-    } else {
-        Ok(reply)
     }
 }
 
@@ -264,25 +285,6 @@ fn reply_u16(reply: &NetReply, offset: usize) -> u16 {
     u16::from_le_bytes(bytes)
 }
 
-fn zero_user_buffer(buf_ptr: u64, len: usize) -> Result<(), i64> {
-    if len == 0 {
-        return Ok(());
-    }
-    if buf_ptr == 0 {
-        return Err(EFAULT);
-    }
-    static ZEROES: [u8; 64] = [0; 64];
-    let mut done = 0usize;
-    while done < len {
-        let chunk = (len - done).min(ZEROES.len());
-        if copy_to_user((buf_ptr + done as u64) as *mut u8, ZEROES.as_ptr(), chunk).is_err() {
-            return Err(EFAULT);
-        }
-        done += chunk;
-    }
-    Ok(())
-}
-
 fn msghdr_total_iov_len(msg: &LinuxMsghdr) -> Result<usize, i64> {
     if msg.msg_iovlen > IOV_MAX {
         return Err(EINVAL);
@@ -311,19 +313,68 @@ fn msghdr_total_iov_len(msg: &LinuxMsghdr) -> Result<usize, i64> {
     Ok(total)
 }
 
-fn zero_msghdr_iov(msg: &LinuxMsghdr, len: usize) -> Result<(), i64> {
-    let mut remaining = len;
+fn copy_msghdr_iov_to_inline(msg: &LinuxMsghdr, out: &mut [u8]) -> Result<usize, i64> {
+    let mut written = 0usize;
     let mut idx = 0u64;
-    while idx < msg.msg_iovlen && remaining != 0 {
+    while idx < msg.msg_iovlen {
         let ptr = msg
             .msg_iov
             .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
             .ok_or(EFAULT)?;
         let iov = read_user_typed::<LinuxIovec>(ptr).map_err(|_| EFAULT)?;
-        let chunk = remaining.min(iov.iov_len as usize);
-        zero_user_buffer(iov.iov_base, chunk)?;
-        remaining -= chunk;
+        if iov.iov_len > out.len().saturating_sub(written) as u64 {
+            return Err(EMSGSIZE);
+        }
+        let chunk = iov.iov_len as usize;
+        if chunk != 0 {
+            if iov.iov_base == 0 {
+                return Err(EFAULT);
+            }
+            if copy_from_user(
+                out[written..].as_mut_ptr(),
+                iov.iov_base as *const u8,
+                chunk,
+            )
+            .is_err()
+            {
+                return Err(EFAULT);
+            }
+            written += chunk;
+        }
         idx += 1;
+    }
+    Ok(written)
+}
+
+fn copy_inline_to_msghdr_iov(msg: &LinuxMsghdr, data: &[u8]) -> Result<(), i64> {
+    let mut copied = 0usize;
+    let mut idx = 0u64;
+    while idx < msg.msg_iovlen && copied < data.len() {
+        let ptr = msg
+            .msg_iov
+            .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
+            .ok_or(EFAULT)?;
+        let iov = read_user_typed::<LinuxIovec>(ptr).map_err(|_| EFAULT)?;
+        let chunk = (data.len() - copied).min(iov.iov_len as usize);
+        if chunk != 0 {
+            if iov.iov_base == 0 {
+                return Err(EFAULT);
+            }
+            if copy_to_user(
+                iov.iov_base as *mut u8,
+                data[copied..copied + chunk].as_ptr(),
+                chunk,
+            )
+            .is_err()
+            {
+                return Err(EFAULT);
+            }
+            copied += chunk;
+        }
+        idx += 1;
+    }
+    if copied != data.len() {
+        return Err(EFAULT);
     }
     Ok(())
 }
@@ -347,6 +398,22 @@ pub fn net_socket(domain: i32, ty: i32, protocol: i32) -> Result<i64, i64> {
     Ok(reply_u64(&reply, 0) as i64)
 }
 
+pub fn socket_handle_from_raw(raw: u64) -> Option<i32> {
+    if raw > i32::MAX as u64 {
+        return None;
+    }
+    let fd = raw as u32;
+    (fd & NET_HANDLE_TAG_MASK == NET_HANDLE_TAG).then_some(fd as i32)
+}
+
+pub fn net_close(fd: i32) -> Result<i64, i64> {
+    if fd < 0 {
+        return Err(EBADF);
+    }
+    dispatch(NET_OP_CLOSE, fd as u32, 0, 0, 0, 0)?;
+    Ok(0)
+}
+
 pub fn net_bind(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
@@ -368,15 +435,29 @@ pub fn net_connect(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
         return Err(EBADF);
     }
     let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
-    dispatch(
-        NET_OP_CONNECT,
-        fd as u32,
-        addr as u64,
-        port as u64,
-        addr_len as u32,
-        0,
-    )?;
-    Ok(0)
+    let deadline =
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(CONNECT_TIMEOUT_NS);
+    loop {
+        match dispatch(
+            NET_OP_CONNECT,
+            fd as u32,
+            addr as u64,
+            port as u64,
+            addr_len as u32,
+            0,
+        ) {
+            Ok(_) => return Ok(0),
+            Err(EAGAIN) => {
+                if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    return Err(ETIMEDOUT);
+                }
+                if !crate::scheduler::timer::sleep_ns(CONNECT_RETRY_NAP_NS) {
+                    crate::syscall::fast_path::sys_sched_yield();
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 pub fn net_listen(fd: i32, backlog: i32) -> Result<i64, i64> {
@@ -417,14 +498,27 @@ pub fn net_sendto(
     } else {
         (0, 0)
     };
-    let reply = dispatch(
+    if len > NET_INLINE_DATA_MAX {
+        return Err(EMSGSIZE);
+    }
+    let mut data = [0u8; NET_INLINE_DATA_MAX];
+    if len != 0 && copy_from_user(data.as_mut_ptr(), buf_ptr as *const u8, len).is_err() {
+        return Err(EFAULT);
+    }
+    let msg = make_msg(
         NET_OP_SENDTO,
         fd as u32,
         len as u64,
         addr as u64,
         port as u32,
         flags,
-    )?;
+    );
+    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+    let _ = call_network_raw(&msg, &data[..len], &mut reply_raw)?;
+    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+    if reply.status < 0 {
+        return Err(reply.status);
+    }
     Ok(reply.status)
 }
 
@@ -439,9 +533,30 @@ pub fn net_recvfrom(
     if fd < 0 {
         return Err(EBADF);
     }
-    let reply = dispatch(NET_OP_RECVFROM, fd as u32, len as u64, 0, flags, 0)?;
+    let request_len = len.min(NET_INLINE_DATA_MAX);
+    let msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
+    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+    let n_raw = call_network_raw(&msg, &[], &mut reply_raw)?;
+    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+    if reply.status < 0 {
+        return Err(reply.status);
+    }
     let n = reply.status.max(0) as usize;
-    zero_user_buffer(buf_ptr, n.min(len))?;
+    let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
+    if data_len != 0 {
+        if buf_ptr == 0 {
+            return Err(EFAULT);
+        }
+        if copy_to_user(
+            buf_ptr as *mut u8,
+            reply_raw[NET_REPLY_DATA_OFFSET..].as_ptr(),
+            data_len,
+        )
+        .is_err()
+        {
+            return Err(EFAULT);
+        }
+    }
     let peer_addr = reply_u32(&reply, 8);
     let peer_port = reply_u16(&reply, 12);
     write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
@@ -458,14 +573,25 @@ pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     let msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
     let len = msghdr_total_iov_len(&msg)?;
     let (addr, port) = msghdr_peer(&msg)?;
-    let reply = dispatch(
+    if len > NET_INLINE_DATA_MAX {
+        return Err(EMSGSIZE);
+    }
+    let mut data = [0u8; NET_INLINE_DATA_MAX];
+    let copied = copy_msghdr_iov_to_inline(&msg, &mut data)?;
+    let net_msg = make_msg(
         NET_OP_SENDTO,
         fd as u32,
-        len as u64,
+        copied as u64,
         addr as u64,
         port as u32,
         flags,
-    )?;
+    );
+    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+    let _ = call_network_raw(&net_msg, &data[..copied], &mut reply_raw)?;
+    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+    if reply.status < 0 {
+        return Err(reply.status);
+    }
     Ok(reply.status)
 }
 
@@ -478,9 +604,20 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     }
     let mut msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
     let len = msghdr_total_iov_len(&msg)?;
-    let reply = dispatch(NET_OP_RECVFROM, fd as u32, len as u64, 0, flags, 0)?;
+    let request_len = len.min(NET_INLINE_DATA_MAX);
+    let net_msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
+    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+    let n_raw = call_network_raw(&net_msg, &[], &mut reply_raw)?;
+    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+    if reply.status < 0 {
+        return Err(reply.status);
+    }
     let n = reply.status.max(0) as usize;
-    zero_msghdr_iov(&msg, n.min(len))?;
+    let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
+    copy_inline_to_msghdr_iov(
+        &msg,
+        &reply_raw[NET_REPLY_DATA_OFFSET..NET_REPLY_DATA_OFFSET + data_len],
+    )?;
     if msg.msg_name != 0 {
         let peer_addr = reply_u32(&reply, 8);
         let peer_port = reply_u16(&reply, 12);

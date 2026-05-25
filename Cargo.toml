@@ -16,6 +16,8 @@ members = [
     "drivers/tty",
     "drivers/display/vga",
     "drivers/display/framebuffer",
+    "drivers/network/common",
+    "drivers/network/e1000",
     "drivers/network/loopback",
     "drivers/network/virtio_net",
     "drivers/storage/virtio_blk",
@@ -44,6 +46,7 @@ version   = "0.1.0"
 edition   = "2021"
 authors   = ["Exo-OS Team"]
 license   = "MIT OR Apache-2.0"
+publish   = false
 
 # Dépendances communes (no_std) partagées entre kernel et drivers.
 [workspace.dependencies]
@@ -88,7 +91,7 @@ xmas-elf = { version = "0.10", default-features = false }
 
 # IPC
 postcard = { version = "1", default-features = false, features = ["alloc"] }
-smoltcp = { path = "libs/vendors/smoltcp-upstream", default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp"] }
+smoltcp = { path = "libs/vendors/smoltcp-upstream", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-icmp", "socket-raw", "socket-tcp", "socket-udp"] }
 
 # Logging
 log = { path = "libs/vendors/log-upstream", default-features = false }

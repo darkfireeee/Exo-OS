@@ -199,23 +199,20 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     // 3. Lire TSC de départ (avec barrière)
     let tsc_start = read_tsc_begin();
 
-    // 4. Attendre que le PIT expire (OUTPUT bit 5 du port 0x61 = 0 → 1)
-    //
-    // Timeout conservateur : 10 000 itérations max.
-    // Justification : sur bare-metal à 1GHz+, CPUID 0x15/16 fonctionne déjà
-    //   et on n'arrive pas ici. Sur QEMU TCG, inb() est lente (225µs/iter) donc
-    //   10K iters = 2.25s max. Si PIT ne répond pas dans ce délai, c'est QEMU.
+    // 4. Attendre que le PIT expire (OUTPUT bit 5 du port 0x61 = 0 -> 1).
+    // Une limite par nombre de lectures I/O est instable: 10K inb peuvent
+    // couvrir plusieurs secondes sous TCG et moins que la fenetre PIT sous KVM
+    // ou bare-metal. La borne TSC garde une marge >=20 ms meme si la frequence
+    // initiale du TSC vient encore du fallback avant calibration.
     let mut pit_ok = false;
-    let mut counter: u32 = 0;
-    const MAX_ITER: u32 = 10_000;
+    let timeout_cycles = tsc_ms_to_cycles(20).max(200_000_000);
     loop {
         let val = unsafe { inb(PIT_GATE) };
         if val & 0x20 != 0 {
             pit_ok = true;
             break;
         }
-        counter = counter.wrapping_add(1);
-        if counter >= MAX_ITER {
+        if read_tsc().wrapping_sub(tsc_start) >= timeout_cycles {
             break;
         }
         core::hint::spin_loop();

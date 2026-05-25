@@ -12,8 +12,8 @@
 //! - [442..499] : réservés pour usage futur
 //! - [500..520] : ExoFS syscalls natifs
 //! - [521..529] : réservés pour usage futur
-//! - [530..546] : GI-03 drivers syscalls
-//! - 547        : SYSCALL_TABLE_SIZE (taille totale de la table)
+//! - [530..547] : GI-03 drivers syscalls
+//! - 548        : SYSCALL_TABLE_SIZE (taille totale de la table)
 //!
 //! ## Règle architecturale
 //! Les numéros Linux sont repris à l'identique pour permettre une libc
@@ -34,8 +34,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille de la table syscall (un slot par numéro possible).
-/// 547 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–546).
-pub const SYSCALL_TABLE_SIZE: usize = 547;
+/// 548 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–547).
+pub const SYSCALL_TABLE_SIZE: usize = 548;
 
 /// Numéro invalide (retourne -ENOSYS)
 pub const SYSCALL_INVALID: u64 = u64::MAX;
@@ -451,6 +451,8 @@ pub const SYS_MSI_CONFIG: u64 = 544;
 pub const SYS_MSI_FREE: u64 = 545;
 /// GI-03 : association topologie PCI (owner/parenting).
 pub const SYS_PCI_SET_TOPOLOGY: u64 = 546;
+/// GI-03 : découverte contrôlée d'un périphérique PCI par vendor/device/class.
+pub const SYS_PCI_FIND_DEVICE: u64 = 547;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX BUG-03 : Aliases process pour exo-rt

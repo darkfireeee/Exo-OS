@@ -17,6 +17,8 @@ use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::scheduler::core::preempt::PreemptGuard;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SpinLock<T> — verrou tournant simple
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,6 +41,7 @@ impl<T> SpinLock<T> {
 
     /// Acquiert le verrou (boucle active).
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
+        let preempt = PreemptGuard::new();
         loop {
             // Essai optimiste (non-serialisant) avant le LOCK CMPXCHG.
             if !self.locked.load(Ordering::Relaxed) {
@@ -54,17 +57,20 @@ impl<T> SpinLock<T> {
         }
         SpinLockGuard {
             lock: self,
+            _preempt: preempt,
             _pd: PhantomData,
         }
     }
 
     /// Essai sans blocage. Retourne `None` si le verrou est déjà pris.
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
+        let preempt = PreemptGuard::new();
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .ok()
             .map(|_| SpinLockGuard {
                 lock: self,
+                _preempt: preempt,
                 _pd: PhantomData,
             })
     }
@@ -77,6 +83,7 @@ impl<T> SpinLock<T> {
 
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
+    _preempt: PreemptGuard,
     _pd: PhantomData<*mut ()>, // !Send
 }
 

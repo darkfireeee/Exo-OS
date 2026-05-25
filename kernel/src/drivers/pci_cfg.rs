@@ -7,6 +7,7 @@ use core::hint::spin_loop;
 use spin::Mutex;
 
 use crate::arch::x86_64::{inl, irq_save, outl};
+use crate::memory::core::PhysAddr;
 use crate::scheduler::timer::clock::monotonic_ns;
 
 use super::device_claims::{self, PciBdf};
@@ -23,7 +24,11 @@ const PCI_HEADER_TYPE_OFFSET: u16 = 0x0E;
 const PCI_CAPABILITY_LIST_OFFSET: u16 = 0x34;
 const PCI_BRIDGE_CONTROL_OFFSET: u16 = 0x3E;
 const PCI_BAR0_OFFSET: u16 = 0x10;
+const PCI_INTERRUPT_LINE_OFFSET: u16 = 0x3C;
+const PCI_INTERRUPT_PIN_OFFSET: u16 = 0x3D;
 
+const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
+const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
 const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
 const PCI_BRIDGE_CTL_BUS_RESET: u16 = 1 << 6;
@@ -38,6 +43,37 @@ const PCI_DEVICE_VIRTIO_BLK_LEGACY: u16 = 0x1001;
 const PCI_DEVICE_VIRTIO_BLK_MODERN: u16 = 0x1042;
 
 static PCI_CFG_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct PciBarInfo {
+    pub kind: u8,
+    pub _pad: [u8; 7],
+    pub phys: u64,
+    pub size: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct PciDeviceInfo {
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub segment: u16,
+    pub bus: u8,
+    pub device: u8,
+    pub function: u8,
+    pub class_code: u8,
+    pub subclass: u8,
+    pub prog_if: u8,
+    pub revision: u8,
+    pub irq_line: u8,
+    pub irq_pin: u8,
+    pub bar0_kind: u8,
+    pub _pad0: u8,
+    pub bar0_phys: u64,
+    pub bar0_size: u64,
+    pub bars: [PciBarInfo; 6],
+}
 
 #[inline]
 fn now_ms() -> u64 {
@@ -151,6 +187,189 @@ fn pci_mmio_bar_base(bdf: PciBdf, bar_offset: u16) -> Option<u64> {
     } else {
         Some(base)
     }
+}
+
+fn pci_bar_base_and_kind(bdf: PciBdf, bar_offset: u16) -> Option<(u64, u8)> {
+    let raw = pci_cfg_read32(bdf, bar_offset);
+    if raw == 0 || raw == u32::MAX {
+        return None;
+    }
+
+    if raw & 1 != 0 {
+        let base = (raw & 0xFFFF_FFFC) as u64;
+        return (base != 0).then_some((base, 1));
+    }
+
+    let mem_type = (raw >> 1) & 0x3;
+    if mem_type == 0x1 {
+        return None;
+    }
+
+    let low = (raw & 0xFFFF_FFF0) as u64;
+    let base = if mem_type == 0x2 {
+        let high = pci_cfg_read32(bdf, bar_offset + 4) as u64;
+        (high << 32) | low
+    } else {
+        low
+    };
+
+    (base != 0).then_some((base, 0))
+}
+
+fn pci_bar_size(bdf: PciBdf, bar_offset: u16) -> u64 {
+    let raw = pci_cfg_read32(bdf, bar_offset);
+    if raw == 0 || raw == u32::MAX {
+        return 0;
+    }
+
+    let command = pci_cfg_read16(bdf, PCI_COMMAND_OFFSET);
+    pci_cfg_write16(
+        bdf,
+        PCI_COMMAND_OFFSET,
+        command & !(PCI_COMMAND_IO_SPACE | PCI_COMMAND_MEMORY_SPACE),
+    );
+
+    pci_cfg_write32(bdf, bar_offset, u32::MAX);
+    let size_raw = pci_cfg_read32(bdf, bar_offset);
+    pci_cfg_write32(bdf, bar_offset, raw);
+    pci_cfg_write16(bdf, PCI_COMMAND_OFFSET, command);
+
+    if raw & 1 != 0 {
+        let mask = size_raw & 0xFFFF_FFFC;
+        if mask == 0 {
+            return 0;
+        }
+        (!(mask as u64)).wrapping_add(1) & 0xFFFF_FFFF
+    } else {
+        let mask = size_raw & 0xFFFF_FFF0;
+        if mask == 0 {
+            return 0;
+        }
+        (!(mask as u64)).wrapping_add(1) & 0xFFFF_FFFF
+    }
+}
+
+fn pci_bars(bdf: PciBdf, header_type: u8) -> [PciBarInfo; 6] {
+    let bar_slots = if header_type & 0x7F == 0x01 { 2 } else { 6 };
+    let mut bars = [PciBarInfo::default(); 6];
+    let mut bar_idx = 0u16;
+    while bar_idx < bar_slots {
+        let offset = PCI_BAR0_OFFSET + bar_idx * 4;
+        let raw = pci_cfg_read32(bdf, offset);
+        if let Some((phys, kind)) = pci_bar_base_and_kind(bdf, offset) {
+            bars[bar_idx as usize] = PciBarInfo {
+                kind,
+                _pad: [0; 7],
+                phys,
+                size: pci_bar_size(bdf, offset),
+            };
+        }
+
+        let is_64_bit_mem_bar = raw & 1 == 0 && ((raw >> 1) & 0x3) == 0x2;
+        bar_idx += if is_64_bit_mem_bar { 2 } else { 1 };
+    }
+    bars
+}
+
+/// Returns true when the requested range stays inside a PCI MMIO BAR for `bdf`.
+///
+/// PCI MMIO apertures are not guaranteed to appear as `Reserved` in the boot
+/// memory map. A claim carrying a BDF can use this hardware-authored range as
+/// the allow-list instead of trusting an arbitrary userspace physical range.
+pub(super) fn pci_mmio_bar_contains(bdf: PciBdf, phys_base: PhysAddr, size: usize) -> bool {
+    let Some(request_end) = phys_base.as_u64().checked_add(size as u64) else {
+        return false;
+    };
+    let header_type = pci_cfg_read8(bdf, PCI_HEADER_TYPE_OFFSET);
+    pci_bars(bdf, header_type).iter().any(|bar| {
+        if bar.kind != 0 || bar.phys == 0 || bar.size == 0 {
+            return false;
+        }
+        let Some(bar_end) = bar.phys.checked_add(bar.size) else {
+            return false;
+        };
+        phys_base.as_u64() >= bar.phys && request_end <= bar_end
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn find_pci_device(
+    vendor_filter: u16,
+    device_filter: u16,
+    class_filter: u16,
+    subclass_filter: u16,
+    index: u32,
+) -> Option<PciDeviceInfo> {
+    let mut seen = 0u32;
+    for bus in 0u16..=255 {
+        let bus = bus as u8;
+        for dev in 0u8..32 {
+            let bdf0 = PciBdf { bus, dev, func: 0 };
+            if pci_cfg_read16(bdf0, 0x00) == u16::MAX {
+                continue;
+            }
+
+            let header_type = pci_cfg_read8(bdf0, PCI_HEADER_TYPE_OFFSET);
+            let function_count = if header_type & 0x80 != 0 { 8 } else { 1 };
+
+            for func in 0u8..function_count {
+                let bdf = PciBdf { bus, dev, func };
+                let id = pci_cfg_read32(bdf, 0x00);
+                let vendor_id = (id & 0xFFFF) as u16;
+                if vendor_id == u16::MAX {
+                    continue;
+                }
+                let device_id = (id >> 16) as u16;
+                let class_reg = pci_cfg_read32(bdf, PCI_CLASS_REV_OFFSET);
+                let revision = (class_reg & 0xFF) as u8;
+                let prog_if = ((class_reg >> 8) & 0xFF) as u8;
+                let subclass = ((class_reg >> 16) & 0xFF) as u8;
+                let class_code = ((class_reg >> 24) & 0xFF) as u8;
+
+                if vendor_filter != 0 && vendor_id != vendor_filter {
+                    continue;
+                }
+                if device_filter != 0 && device_id != device_filter {
+                    continue;
+                }
+                if class_filter <= u8::MAX as u16 && class_code != class_filter as u8 {
+                    continue;
+                }
+                if subclass_filter <= u8::MAX as u16 && subclass != subclass_filter as u8 {
+                    continue;
+                }
+
+                if seen != index {
+                    seen = seen.saturating_add(1);
+                    continue;
+                }
+
+                let bars = pci_bars(bdf, header_type);
+                let bar0 = bars[0];
+                return Some(PciDeviceInfo {
+                    vendor_id,
+                    device_id,
+                    segment: 0,
+                    bus,
+                    device: dev,
+                    function: func,
+                    class_code,
+                    subclass,
+                    prog_if,
+                    revision,
+                    irq_line: pci_cfg_read8(bdf, PCI_INTERRUPT_LINE_OFFSET),
+                    irq_pin: pci_cfg_read8(bdf, PCI_INTERRUPT_PIN_OFFSET),
+                    bar0_kind: bar0.kind,
+                    _pad0: 0,
+                    bar0_phys: bar0.phys,
+                    bar0_size: bar0.size,
+                    bars,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 fn find_capability(bdf: PciBdf, cap_id: u8) -> Option<u16> {

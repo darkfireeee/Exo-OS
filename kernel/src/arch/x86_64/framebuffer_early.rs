@@ -567,7 +567,6 @@ fn terminal_put_printable_locked(state: &mut ConsoleState, byte: u8) {
     } else {
         (normal_fg, normal_bg)
     };
-    fb.fill_rect(x, y, char_w, char_h, bg);
     fb.draw_glyph_scaled(x, y, byte, TERM_SCALE, fg, bg);
     state.term_col = state.term_col.saturating_add(1);
     if state.term_col >= cols {
@@ -612,7 +611,7 @@ fn map_framebuffer_window(info: &BootInfo) -> Option<u64> {
     let flags = PageFlags::PRESENT
         | PageFlags::WRITABLE
         | PageFlags::NO_EXECUTE
-        | PageFlags::NO_CACHE
+        | PageFlags::WRITE_COMBINING
         | PageFlags::GLOBAL;
 
     for idx in 0..pages {

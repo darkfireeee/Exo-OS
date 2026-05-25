@@ -361,6 +361,16 @@ impl RollbackSnapshot {
             valid: false,
         }
     }
+
+    fn reset(&mut self) {
+        for entry in self.entries.iter_mut() {
+            *entry = database::SignatureEntry::empty();
+        }
+        self.count = 0;
+        self.version = UpdateVersion::zero();
+        self.timestamp_tsc = 0;
+        self.valid = false;
+    }
 }
 
 // ── Mise à jour signée ───────────────────────────────────────────────────────
@@ -641,11 +651,9 @@ fn create_snapshot(version: UpdateVersion) -> bool {
     let mut mgr = UPDATE_MANAGER.lock();
 
     if mgr.rollback_depth >= MAX_ROLLBACK_DEPTH {
-        // Décaler la pile (FIFO : supprimer le plus ancien)
-        for i in 0..MAX_ROLLBACK_DEPTH - 1 {
-            mgr.rollback_stack[i] =
-                core::mem::replace(&mut mgr.rollback_stack[i + 1], RollbackSnapshot::empty());
-        }
+        // Décaler la pile (FIFO : supprimer le plus ancien).
+        mgr.rollback_stack.copy_within(1..MAX_ROLLBACK_DEPTH, 0);
+        mgr.rollback_stack[MAX_ROLLBACK_DEPTH - 1].reset();
         mgr.rollback_depth = MAX_ROLLBACK_DEPTH - 1;
     }
 
@@ -788,8 +796,7 @@ pub fn rollback() -> bool {
 
     mgr.rollback_depth -= 1;
     let snapshot_idx = mgr.rollback_depth;
-    let snapshot = mgr.rollback_stack[snapshot_idx];
-
+    let snapshot = &mgr.rollback_stack[snapshot_idx];
     if !snapshot.valid {
         mgr.rollback_depth += 1;
         return false;
@@ -797,12 +804,13 @@ pub fn rollback() -> bool {
 
     // Restaurer les signatures
     let restored = database::restore(&snapshot.entries[..snapshot.count]);
-    mgr.current_version = snapshot.version;
+    let snapshot_version = snapshot.version;
+    mgr.current_version = snapshot_version;
 
     // Invalider le snapshot
     mgr.rollback_stack[snapshot_idx].valid = false;
 
-    CURRENT_VERSION.store(snapshot.version.to_u64(), Ordering::Release);
+    CURRENT_VERSION.store(snapshot_version.to_u64(), Ordering::Release);
     LAST_UPDATE_TSC.store(read_tsc(), Ordering::Release);
     UPDATE_STATUS.store(UpdateStatus::RolledBack as u8, Ordering::Release);
 
@@ -886,7 +894,7 @@ pub fn update_init() {
     mgr.rollback_depth = 0;
     mgr.trusted_key_count = 0;
     for i in 0..MAX_ROLLBACK_DEPTH {
-        mgr.rollback_stack[i] = RollbackSnapshot::empty();
+        mgr.rollback_stack[i].reset();
     }
     for i in 0..4 {
         mgr.trusted_keys[i] = [0u8; ED25519_PUBLIC_KEY_SIZE];

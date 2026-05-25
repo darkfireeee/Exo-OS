@@ -378,7 +378,11 @@ impl BlobWriter {
         DedupFn: FnOnce(&BlobId) -> Option<DiskOffset>,
     {
         // ── 1. Validation ─────────────────────────────────────────────
-        // Empty payloads are allowed (tests expect write of empty blob to succeed).
+        // Empty objects are represented without a disk blob. Do not let the
+        // encrypted blob pipeline manufacture an incidental zero-length blob.
+        if data.is_empty() {
+            return Err(ExofsError::InvalidArgument);
+        }
         if data.len() > BLOB_MAX_SIZE {
             return Err(ExofsError::InvalidSize);
         }

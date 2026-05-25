@@ -1,13 +1,15 @@
 use exo_syscall_abi as syscall;
 
 pub const MAX_SOCKETS: usize = 64;
-const HANDLE_BASE: u32 = 0x4E00_0000;
+const HANDLE_TAG: u32 = 0x4000_0000;
+const HANDLE_TAG_MASK: u32 = 0xf000_0000;
+const HANDLE_GENERATION_MASK: u32 = 0x0fff;
+const HANDLE_INDEX_MASK: u32 = 0xffff;
 const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
 const SOCK_TYPE_MASK: u32 = 0x0f;
-const LOOPBACK: u32 = 0x7f00_0001;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SocketKind {
@@ -17,14 +19,15 @@ pub enum SocketKind {
 }
 
 impl SocketKind {
-    pub fn from_domain_type(domain: u32, ty: u32, _protocol: u32) -> Result<Self, i64> {
+    pub fn from_domain_type(domain: u32, ty: u32, protocol: u32) -> Result<Self, i64> {
         if domain != AF_INET {
             return Err(syscall::EAFNOSUPPORT);
         }
         match ty & SOCK_TYPE_MASK {
             SOCK_STREAM => Ok(Self::Tcp),
             SOCK_DGRAM => Ok(Self::Udp),
-            SOCK_RAW => Ok(Self::Raw),
+            SOCK_RAW if protocol == 0 || protocol == 1 => Ok(Self::Raw),
+            SOCK_RAW => Err(syscall::EOPNOTSUPP),
             _ => Err(syscall::EINVAL),
         }
     }
@@ -36,6 +39,7 @@ pub enum SocketState {
     Open,
     Bound,
     Listening,
+    Connecting,
     Connected,
     Shutdown,
 }
@@ -172,16 +176,47 @@ impl SocketTable {
         remote_addr: u32,
         remote_port: u16,
     ) -> Result<SocketSnapshot, i64> {
-        if remote_addr == 0 || remote_port == 0 {
+        let idx = self.lookup_owned(owner_pid, handle)?;
+        let raw = self.sockets[idx].kind == SocketKind::Raw;
+        if remote_addr == 0 || (remote_port == 0 && !raw) {
             return Err(syscall::EINVAL);
         }
-        let idx = self.lookup_owned(owner_pid, handle)?;
+        if matches!(
+            self.sockets[idx].state,
+            SocketState::Connecting | SocketState::Connected
+        ) && (self.sockets[idx].remote_addr != remote_addr
+            || self.sockets[idx].remote_port != remote_port)
+        {
+            return Err(syscall::EINVAL);
+        }
         if self.sockets[idx].local_port == 0 {
-            self.sockets[idx].local_addr = LOOPBACK;
+            self.sockets[idx].local_addr = 0;
             self.sockets[idx].local_port = self.alloc_ephemeral();
         }
         self.sockets[idx].remote_addr = remote_addr;
         self.sockets[idx].remote_port = remote_port;
+        self.sockets[idx].state = if self.sockets[idx].kind == SocketKind::Tcp {
+            SocketState::Connecting
+        } else {
+            SocketState::Connected
+        };
+        Ok(self.snapshot(idx))
+    }
+
+    pub fn complete_tcp_connect(
+        &mut self,
+        owner_pid: u32,
+        handle: u32,
+    ) -> Result<SocketSnapshot, i64> {
+        let idx = self.lookup_owned(owner_pid, handle)?;
+        if self.sockets[idx].kind != SocketKind::Tcp
+            || !matches!(
+                self.sockets[idx].state,
+                SocketState::Connecting | SocketState::Connected
+            )
+        {
+            return Err(syscall::EINVAL);
+        }
         self.sockets[idx].state = SocketState::Connected;
         Ok(self.snapshot(idx))
     }
@@ -197,15 +232,19 @@ impl SocketTable {
         let idx = self.lookup_owned(owner_pid, handle)?;
         if matches!(
             self.sockets[idx].state,
-            SocketState::Shutdown | SocketState::Closed
+            SocketState::Connecting | SocketState::Shutdown | SocketState::Closed
         ) {
-            return Err(syscall::ENOTCONN);
+            return Err(if self.sockets[idx].state == SocketState::Connecting {
+                syscall::EAGAIN
+            } else {
+                syscall::ENOTCONN
+            });
         }
-        if addr != 0 && port != 0 {
+        if addr != 0 && (port != 0 || self.sockets[idx].kind == SocketKind::Raw) {
             self.sockets[idx].remote_addr = addr;
             self.sockets[idx].remote_port = port;
             if self.sockets[idx].local_port == 0 {
-                self.sockets[idx].local_addr = LOOPBACK;
+                self.sockets[idx].local_addr = 0;
                 self.sockets[idx].local_port = self.alloc_ephemeral();
             }
             self.sockets[idx].state = SocketState::Connected;
@@ -214,22 +253,17 @@ impl SocketTable {
             return Err(syscall::ENOTCONN);
         }
         self.sockets[idx].tx_bytes = self.sockets[idx].tx_bytes.saturating_add(len as u64);
-        self.sockets[idx].pending_rx = self.sockets[idx].pending_rx.saturating_add(len);
         Ok(self.snapshot(idx))
     }
 
-    pub fn recv_from(
+    pub fn record_recv(
         &mut self,
         owner_pid: u32,
         handle: u32,
-        budget: u32,
+        delivered: u32,
     ) -> Result<SocketSnapshot, i64> {
         let idx = self.lookup_owned(owner_pid, handle)?;
-        if self.sockets[idx].pending_rx == 0 {
-            return Err(syscall::EAGAIN);
-        }
-        let delivered = self.sockets[idx].pending_rx.min(budget.max(1));
-        self.sockets[idx].pending_rx -= delivered;
+        self.sockets[idx].pending_rx = self.sockets[idx].pending_rx.saturating_sub(delivered);
         self.sockets[idx].rx_bytes = self.sockets[idx].rx_bytes.saturating_add(delivered as u64);
         Ok(self.snapshot(idx))
     }
@@ -282,11 +316,14 @@ impl SocketTable {
     }
 
     fn lookup_owned(&self, owner_pid: u32, handle: u32) -> Result<usize, i64> {
-        let idx = (handle & 0xffff) as usize;
+        if handle & HANDLE_TAG_MASK != HANDLE_TAG {
+            return Err(syscall::EBADF);
+        }
+        let idx = (handle & HANDLE_INDEX_MASK) as usize;
         if idx >= MAX_SOCKETS {
             return Err(syscall::EBADF);
         }
-        let generation = ((handle >> 16) & 0x0fff) as u16;
+        let generation = ((handle >> 16) & HANDLE_GENERATION_MASK) as u16;
         let s = self.sockets[idx];
         if !s.active || s.generation != generation {
             return Err(syscall::EBADF);
@@ -319,5 +356,5 @@ impl SocketTable {
 }
 
 const fn handle_for(idx: usize, generation: u16) -> u32 {
-    HANDLE_BASE | (((generation as u32) & 0x0fff) << 16) | (idx as u32)
+    HANDLE_TAG | (((generation as u32) & HANDLE_GENERATION_MASK) << 16) | (idx as u32)
 }

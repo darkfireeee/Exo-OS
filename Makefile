@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-boot-payloads release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
+.PHONY: all build build-boot-payloads release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -40,6 +40,9 @@ BOOT_SERVER_PACKAGES = \
 	-p exo-crypto-server \
 	-p exo-device-server \
 	-p exo-virtio-drivers \
+	-p exo-e1000-driver \
+	-p exo-virtio-net-driver \
+	-p exo-loopback-driver \
 	-p exo-network-server \
 	-p exo-scheduler-server \
 	-p exo-input-server \
@@ -56,6 +59,9 @@ BOOT_PAYLOAD_BINS = \
 	exo-crypto-server \
 	exo-device-server \
 	exo-virtio-drivers \
+	exo-e1000-driver \
+	exo-virtio-net-driver \
+	exo-loopback-driver \
 	exo-network-server \
 	exo-scheduler-server \
 	exo-input-server \
@@ -89,6 +95,12 @@ QEMU_SAFE_E9_LOG     ?= /tmp/exoos-e9.log
 QEMU_EXOFS_DISK      ?= target/qemu/exofs-root.img
 QEMU_EXOFS_DISK_SIZE ?= 512M
 QEMU_EXOFS_DRIVE_FLAGS = -drive if=none,file=$(QEMU_EXOFS_DISK),format=raw,id=exofs0,cache=writeback -device virtio-blk-pci,drive=exofs0
+QEMU_E1000_NET_FLAGS    = -netdev user,id=exonet0 -device e1000,netdev=exonet0,mac=02:45:58:4f:00:01
+QEMU_VIRTIO_NET_FLAGS   = -netdev user,id=exonet0 -device virtio-net-pci-non-transitional,netdev=exonet0,mac=02:45:58:4f:00:01
+QEMU_NET_FLAGS          ?= $(QEMU_VIRTIO_NET_FLAGS)
+ifeq ($(strip $(QEMU_NET_FLAGS)),)
+override QEMU_NET_FLAGS := $(QEMU_VIRTIO_NET_FLAGS)
+endif
 QEMU_HEADLESS_SAFE_FLAGS  = -machine q35
 QEMU_HEADLESS_SAFE_FLAGS += -m 256M
 QEMU_HEADLESS_SAFE_FLAGS += -boot d
@@ -187,19 +199,36 @@ _make_iso:
 # ── Lancement QEMU ────────────────────────────────────────────────────────────
 ## 4. Lancer Exo-OS dans QEMU (depuis l'ISO debug)
 qemu: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU — Ctrl+C pour quitter$(NC)"
+	@echo "$(CYAN)Lancement QEMU VirtIO-net — Ctrl+C pour quitter$(NC)"
 	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT)
+	@echo "$(BLUE)Net flags : $(QEMU_NET_FLAGS)$(NC)"
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+
+## 4a. Lancer QEMU avec le transport reseau Intel e1000
+qemu-e1000: iso $(QEMU_EXOFS_DISK)
+	@echo "$(CYAN)Lancement QEMU e1000 — Ctrl+C pour quitter$(NC)"
+	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_E1000_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+
+## 4a. Lancer QEMU avec le transport reseau VirtIO PCI
+qemu-virtio-net: iso $(QEMU_EXOFS_DISK)
+	@echo "$(CYAN)Lancement QEMU VirtIO-net — Ctrl+C pour quitter$(NC)"
+	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4b. Lancer en mode release
 qemu-release: iso-release $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU (release)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT)
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4c. Lancer QEMU sans fenêtre graphique (serveur headless)
 qemu-nographic: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU headless (sortie texte)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+
+qemu-nographic-virtio-net: iso $(QEMU_EXOFS_DISK)
+	@echo "$(CYAN)Lancement QEMU VirtIO-net headless (sortie texte)$(NC)"
+	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
 
 ## 4d. Lancer QEMU headless "zéro surprise" (logs fichiers dédiés)
 qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
@@ -207,7 +236,14 @@ qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
 	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
 	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) -cdrom $(ISO_OUTPUT) -display none
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -display none
+
+qemu-headless-safe-virtio-net: iso $(QEMU_EXOFS_DISK)
+	@echo "$(CYAN)Lancement QEMU VirtIO-net headless sûr (logs fichiers, sans stdio partagé)$(NC)"
+	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
+	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
+	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT) -display none
 
 ## 4e. Lancer le test de résurrection ExoPhoenix en QEMU headless
 qemu-phoenix-resurrection: iso-phoenix-resurrection
@@ -306,7 +342,9 @@ help:
 	@echo "$(GREEN)  make release$(NC)       Compiler le kernel (release optimisé)"
 	@echo "$(GREEN)  make iso$(NC)           Construire exo-os.iso (debug)"
 	@echo "$(GREEN)  make iso-release$(NC)   Construire exo-os.iso (release)"
-	@echo "$(GREEN)  make qemu$(NC)          Lancer Exo-OS dans QEMU (debug)"
+	@echo "$(GREEN)  make qemu$(NC)          Lancer Exo-OS dans QEMU VirtIO-net (debug)"
+	@echo "$(GREEN)  make qemu-e1000$(NC)    Lancer Exo-OS dans QEMU e1000 (debug)"
+	@echo "$(GREEN)  make qemu-virtio-net$(NC) Lancer Exo-OS dans QEMU VirtIO-net (debug)"
 	@echo "$(GREEN)  make qemu-release$(NC)  Lancer Exo-OS dans QEMU (release)"
 	@echo "$(GREEN)  make qemu-nographic$(NC)Lancer sans interface graphique"
 	@echo "$(GREEN)  make qemu-headless-safe$(NC) Lancer headless avec logs dédiés"
@@ -318,7 +356,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Testing:$(NC)"
 	@echo "  make bootimage  - Créer une image bootable"
-	@echo "  make qemu       - Lancer avec QEMU"
+	@echo "  make qemu       - Lancer avec QEMU VirtIO-net"
 	@echo "  make test-ps    - Test avec PowerShell script"
 	@echo ""
 	@echo "$(GREEN)Qualité du code:$(NC)"

@@ -38,18 +38,33 @@ pub const N_SAMPLES: usize = 10;
 const MAX_SYNC_ITERS: u32 = 20;
 
 /// Limite max d'itérations MMIO dans la boucle principale de mesure.
-/// Sécurité contre HPET trop lent (QEMU TCG coûteux) : si en N_MAX_POLL_MMIO reads
-/// on n'a pas atteint target_ticks, c'est que le HPET est inutilisable → None.
-/// 2000 reads × max 1ms/read (QEMU TCG lent) = 2s max par sample.
-const N_MAX_POLL_MMIO: u64 = 2_000;
+/// La fenêtre HPET mesure 1 ms réel : sur des lectures rapides elle peut exiger
+/// des dizaines de milliers de polls avant d'atteindre `target_ticks`. Le TSC
+/// timeout reste la vraie garde temporelle ; cette borne évite seulement une
+/// boucle non bornée si le compteur évolue sans jamais atteindre la fenêtre.
+const N_MAX_POLL_MMIO: u64 = 200_000;
 
-/// Timeout TSC pour la boucle de mesure : 3ms à ~1 GHz minimum.
-/// = 3_000_000 cycles à 1 GHz = 3ms | à 3 GHz = 1ms.
-/// Sur QEMU TCG (~100-500 MHz simulé), 3_000_000 cycles = 6-30ms.
-/// Choisir une valeur sûre pour bare-metal ET QEMU TCG.
+/// Timeout TSC de secours si `cpu::tsc` n'a pas encore de fréquence usable.
+/// Le chemin normal dérive la garde de `tsc_hz()`. Avant la première
+/// calibration, la borne doit couvrir 100 ms même au plafond validé de 10 GHz;
+/// sinon QEMU peut abandonner une fenêtre HPET valide après quelques lectures
+/// MMIO lentes seulement.
 /// RDTSC est toujours rapide (pas de MMIO) — le garde ne ralentit pas la boucle.
 /// NOTE : si le timeout déclenche, on retourne None immédiatement → fallback chain.
-const SAMPLE_TSC_TIMEOUT_CYCLES: u64 = 3_000_000;
+const SAMPLE_TSC_TIMEOUT_FALLBACK_CYCLES: u64 = 1_000_000_000;
+const SAMPLE_TSC_TIMEOUT_MS: u64 = 100;
+
+#[inline]
+fn sample_tsc_timeout_cycles() -> u64 {
+    let hz = crate::arch::x86_64::cpu::tsc::tsc_hz();
+    if hz == 0 {
+        SAMPLE_TSC_TIMEOUT_FALLBACK_CYCLES
+    } else {
+        hz.saturating_mul(SAMPLE_TSC_TIMEOUT_MS)
+            .saturating_div(1_000)
+            .max(SAMPLE_TSC_TIMEOUT_FALLBACK_CYCLES)
+    }
+}
 
 // ── Calibration via HPET ─────────────────────────────────────────────────────
 
@@ -66,12 +81,14 @@ const SAMPLE_TSC_TIMEOUT_CYCLES: u64 = 3_000_000;
 /// Retourne `None` si HPET indisponible ou mesure hors plage.
 pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
     if hpet_freq_hz == 0 {
+        hpet_fail_tag(b"NO-FREQ");
         return None;
     }
 
     // 1ms de ticks HPET.
     let target_ticks: u64 = hpet_freq_hz / 1_000;
     if target_ticks == 0 {
+        hpet_fail_tag(b"NO-TICKS");
         return None;
     }
 
@@ -91,6 +108,7 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
             core::hint::spin_loop();
         }
         if !synced {
+            hpet_fail_tag(b"SYNC");
             return None;
         }
 
@@ -115,7 +133,7 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
         //   1. Ticks HPET : condition de sortie normale (TIME-02)
         //   2. N_MAX_POLL_MMIO : limite le nombre de reads MMIO coûteux sur QEMU TCG
         //   3. TSC timeout : garde finale si TSC disponible
-        let tsc_deadline = tsc_start.wrapping_add(SAMPLE_TSC_TIMEOUT_CYCLES);
+        let tsc_deadline = tsc_start.wrapping_add(sample_tsc_timeout_cycles());
         let mut poll_count: u64 = 0;
         loop {
             let hpet_now = hpet_src::read();
@@ -126,11 +144,13 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
             }
             // GARDE MMIO : max N_MAX_POLL_MMIO lectures (protège contre HPET très lent).
             if poll_count >= N_MAX_POLL_MMIO {
+                hpet_fail_tag(b"POLL");
                 return None;
             }
             // GARDE TSC : abandonne si TSC a avancé au-delà du timeout.
             let elapsed = rdtsc_begin().wrapping_sub(tsc_start);
             if elapsed >= tsc_deadline.wrapping_sub(tsc_start) {
+                hpet_fail_tag(b"TSC");
                 return None;
             }
             core::hint::spin_loop();
@@ -153,7 +173,11 @@ pub fn calibrate_tsc_via_hpet(hpet_freq_hz: u64) -> Option<u64> {
     samples.sort_unstable();
     let tsc_hz = iqr_mean(&samples);
 
-    super::validation::cross_check(tsc_hz)
+    let checked = super::validation::cross_check(tsc_hz);
+    if checked.is_none() {
+        hpet_fail_tag(b"VALID");
+    }
+    checked
 }
 
 // ── Calibration via PM Timer ──────────────────────────────────────────────────
@@ -211,7 +235,7 @@ pub fn calibrate_tsc_via_pm_timer() -> Option<u64> {
 
         // ✅ FIX TIME-02 : condition de sortie = PM Timer delta ticks.
         // DOUBLE GARDE : N_MAX_POLL_MMIO et TSC timeout.
-        let tsc_deadline = tsc_start.wrapping_add(SAMPLE_TSC_TIMEOUT_CYCLES);
+        let tsc_deadline = tsc_start.wrapping_add(sample_tsc_timeout_cycles());
         let mut poll_count: u64 = 0;
         loop {
             let pm_now = pm_src::read();
@@ -502,6 +526,23 @@ fn isqrt64(n: u64) -> u64 {
         y = (x + n / x) / 2;
     }
     x
+}
+
+#[inline]
+fn hpet_fail_tag(reason: &[u8]) {
+    #[inline(always)]
+    unsafe fn out(b: u8) {
+        core::arch::asm!("out 0xe9, al", in("al") b, options(nomem, nostack, preserves_flags));
+    }
+    unsafe {
+        for &b in b"[HPET:" {
+            out(b);
+        }
+        for &b in reason {
+            out(b);
+        }
+        out(b']');
+    }
 }
 
 // ── Port I/O helpers (PIT) ────────────────────────────────────────────────────

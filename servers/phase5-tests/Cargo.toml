@@ -2,6 +2,8 @@
 name    = "phase5-tests"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
+publish.workspace = true
 # Crate de test autonome — hors workspace, utilise std.
 # Teste la logique pure Phase 5 (servers Ring 1) d'Exo-OS en re-implémentant
 # les parties testables sans dépendances hardware ni IPC kernel.

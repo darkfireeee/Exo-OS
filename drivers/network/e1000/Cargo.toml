@@ -1,0 +1,16 @@
+[package]
+name = "exo-e1000-driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "exo-e1000-driver"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }

@@ -35,6 +35,7 @@ impl PageTableEntry {
     pub const FLAG_ACCESSED: u64 = 1 << 5;
     pub const FLAG_DIRTY: u64 = 1 << 6;
     pub const FLAG_HUGE_PAGE: u64 = 1 << 7; // PSE bit dans PD/PDPT
+    pub const FLAG_PAT_L1: u64 = 1 << 7; // PAT bit dans une feuille PT 4 KiB
     pub const FLAG_GLOBAL: u64 = 1 << 8;
     pub const FLAG_COW: u64 = 1 << 9; // Disponible OS
     pub const FLAG_PINNED: u64 = 1 << 10; // Disponible OS
@@ -148,6 +149,10 @@ impl PageTableEntry {
         if flags.contains(PageFlags::NO_CACHE) {
             raw |= Self::FLAG_NO_CACHE;
         }
+        if flags.contains(PageFlags::WRITE_COMBINING) {
+            // PAT index 7 = PAT|PCD|PWT; `configure_pat()` makes index 7 WC.
+            raw |= Self::FLAG_PAT_L1 | Self::FLAG_NO_CACHE | Self::FLAG_WRITE_THROUGH;
+        }
         if flags.contains(PageFlags::GLOBAL) {
             raw |= Self::FLAG_GLOBAL;
         }
@@ -183,6 +188,11 @@ impl PageTableEntry {
         }
         if self.0 & Self::FLAG_NO_CACHE != 0 {
             f = f.set(PageFlags::NO_CACHE);
+        }
+        if self.0 & (Self::FLAG_PAT_L1 | Self::FLAG_NO_CACHE | Self::FLAG_WRITE_THROUGH)
+            == (Self::FLAG_PAT_L1 | Self::FLAG_NO_CACHE | Self::FLAG_WRITE_THROUGH)
+        {
+            f = f.set(PageFlags::WRITE_COMBINING);
         }
         if self.0 & Self::FLAG_ACCESSED != 0 {
             f = f.set(PageFlags::ACCESSED);

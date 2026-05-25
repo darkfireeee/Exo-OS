@@ -139,6 +139,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         crate::arch::x86_64::terminal::debug_write(b"early_init: SYSCALL requis\n");
         crate::arch::x86_64::halt_cpu();
     }
+    super::super::cpu::msr::configure_pat();
 
     // ── Étape 2 : GDT per-CPU BSP ────────────────────────────────────────────
     probe!(b'2');

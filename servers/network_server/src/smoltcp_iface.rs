@@ -1,23 +1,32 @@
 use crate::buf_pool::{NetBufPool, PAGE_SIZE};
-use crate::socket_table::{SocketKind, SocketSnapshot, SocketState};
+use crate::socket_table::{SocketKind, SocketSnapshot, SocketState, MAX_SOCKETS};
 use crate::virtio_device::{ExoNetDevice, NetBufRef};
 use core::cell::RefCell;
 use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicBool, Ordering};
 use exo_syscall_abi as syscall;
 use smoltcp::iface::{
     Config, Interface, PollIngressSingleResult, SocketHandle, SocketSet, SocketStorage,
 };
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::{tcp, udp};
+use smoltcp::socket::{icmp, tcp, udp};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint};
+use smoltcp::wire::{
+    EthernetAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
+};
 
-const SOCKET_STORAGE_LEN: usize = 8;
+const SOCKET_STORAGE_LEN: usize = MAX_SOCKETS;
 const ETHERNET_MTU_WITH_HEADER: usize = 1514;
 const CLOCK_MONOTONIC: u64 = 1;
 const TCP_BUFFER_SIZE: usize = 2048;
 const UDP_BUFFER_SIZE: usize = 2048;
 const UDP_PACKET_METADATA_LEN: usize = 4;
+const ICMP_BUFFER_SIZE: usize = 256;
+const ICMP_PACKET_METADATA_LEN: usize = 4;
+
+static LOGGED_STACK_RX: AtomicBool = AtomicBool::new(false);
+static LOGGED_STACK_TX: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Default)]
@@ -26,14 +35,18 @@ struct Timespec {
     tv_nsec: i64,
 }
 
-struct PersistentSocketStorage(UnsafeCell<[SocketStorage<'static>; SOCKET_STORAGE_LEN]>);
+struct PersistentSocketStorage {
+    slots: UnsafeCell<[MaybeUninit<SocketStorage<'static>>; SOCKET_STORAGE_LEN]>,
+    initialized: UnsafeCell<bool>,
+}
 
 // SAFETY: network_server sérialise l'accès à SmoltcpIface sous NETWORK_SERVICE.
 unsafe impl Sync for PersistentSocketStorage {}
 
-static SOCKET_STORAGE: PersistentSocketStorage = PersistentSocketStorage(UnsafeCell::new(
-    [const { SocketStorage::EMPTY }; SOCKET_STORAGE_LEN],
-));
+static SOCKET_STORAGE: PersistentSocketStorage = PersistentSocketStorage {
+    slots: UnsafeCell::new([const { MaybeUninit::uninit() }; SOCKET_STORAGE_LEN]),
+    initialized: UnsafeCell::new(false),
+};
 
 struct TcpBuffers {
     rx: UnsafeCell<[[u8; TCP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]>,
@@ -41,15 +54,27 @@ struct TcpBuffers {
 }
 
 struct UdpBuffers {
-    rx_meta: UnsafeCell<[[udp::PacketMetadata; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN]>,
-    tx_meta: UnsafeCell<[[udp::PacketMetadata; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN]>,
+    rx_meta: UnsafeCell<
+        [[MaybeUninit<udp::PacketMetadata>; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+    >,
+    tx_meta: UnsafeCell<
+        [[MaybeUninit<udp::PacketMetadata>; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+    >,
     rx_payload: UnsafeCell<[[u8; UDP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]>,
     tx_payload: UnsafeCell<[[u8; UDP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]>,
+}
+
+struct IcmpBuffers {
+    rx_meta: UnsafeCell<[[icmp::PacketMetadata; ICMP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN]>,
+    tx_meta: UnsafeCell<[[icmp::PacketMetadata; ICMP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN]>,
+    rx_payload: UnsafeCell<[[u8; ICMP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]>,
+    tx_payload: UnsafeCell<[[u8; ICMP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]>,
 }
 
 // SAFETY: les buffers sont uniquement empruntés sous le mutex du service réseau.
 unsafe impl Sync for TcpBuffers {}
 unsafe impl Sync for UdpBuffers {}
+unsafe impl Sync for IcmpBuffers {}
 
 static TCP_BUFFERS: TcpBuffers = TcpBuffers {
     rx: UnsafeCell::new([[0u8; TCP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]),
@@ -58,21 +83,43 @@ static TCP_BUFFERS: TcpBuffers = TcpBuffers {
 
 static UDP_BUFFERS: UdpBuffers = UdpBuffers {
     rx_meta: UnsafeCell::new(
-        [[const { udp::PacketMetadata::EMPTY }; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+        [[const { MaybeUninit::uninit() }; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
     ),
     tx_meta: UnsafeCell::new(
-        [[const { udp::PacketMetadata::EMPTY }; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+        [[const { MaybeUninit::uninit() }; UDP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
     ),
     rx_payload: UnsafeCell::new([[0u8; UDP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]),
     tx_payload: UnsafeCell::new([[0u8; UDP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]),
 };
 
+static ICMP_BUFFERS: IcmpBuffers = IcmpBuffers {
+    rx_meta: UnsafeCell::new(
+        [[const { icmp::PacketMetadata::EMPTY }; ICMP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+    ),
+    tx_meta: UnsafeCell::new(
+        [[const { icmp::PacketMetadata::EMPTY }; ICMP_PACKET_METADATA_LEN]; SOCKET_STORAGE_LEN],
+    ),
+    rx_payload: UnsafeCell::new([[0u8; ICMP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]),
+    tx_payload: UnsafeCell::new([[0u8; ICMP_BUFFER_SIZE]; SOCKET_STORAGE_LEN]),
+};
+
 fn socket_set() -> SocketSet<'static> {
     // SAFETY: un seul thread de service utilise ce stockage, sous le mutex global.
     unsafe {
-        let storage: &'static mut [SocketStorage<'static>; SOCKET_STORAGE_LEN] =
-            &mut *SOCKET_STORAGE.0.get();
-        SocketSet::new(&mut storage[..])
+        let slots = &mut *SOCKET_STORAGE.slots.get();
+        if !*SOCKET_STORAGE.initialized.get() {
+            let mut idx = 0usize;
+            while idx < SOCKET_STORAGE_LEN {
+                slots[idx].write(SocketStorage::EMPTY);
+                idx += 1;
+            }
+            *SOCKET_STORAGE.initialized.get() = true;
+        }
+        let storage = core::slice::from_raw_parts_mut(
+            slots.as_mut_ptr() as *mut SocketStorage<'static>,
+            SOCKET_STORAGE_LEN,
+        );
+        SocketSet::new(storage)
     }
 }
 
@@ -106,6 +153,12 @@ pub struct SmoltcpIface {
     socket_exo_handles: [u32; SOCKET_STORAGE_LEN],
 }
 
+pub enum TcpConnectStatus {
+    Pending,
+    Established,
+    Failed,
+}
+
 impl SmoltcpIface {
     pub const fn empty() -> Self {
         Self {
@@ -134,22 +187,20 @@ impl SmoltcpIface {
     }
 
     pub fn register_socket(&mut self, exo_handle: u32, kind: SocketKind) -> Result<(), i64> {
-        if matches!(kind, SocketKind::Raw) {
+        if self.socket_slot_by_exo_handle(exo_handle).is_some() {
             return Ok(());
         }
-        let slot = socket_slot(exo_handle).ok_or(syscall::ENOBUFS)?;
-        if self.socket_handles[slot].is_some() {
-            return Ok(());
-        }
-        if self.socket_handles.iter().all(Option::is_some) {
-            return Err(syscall::ENOBUFS);
-        }
+        let slot = self
+            .socket_handles
+            .iter()
+            .position(Option::is_none)
+            .ok_or(syscall::ENOBUFS)?;
 
         let mut sockets = socket_set();
         let handle = match kind {
             SocketKind::Tcp => sockets.add(make_tcp_socket(slot)),
             SocketKind::Udp => sockets.add(make_udp_socket(slot)),
-            SocketKind::Raw => return Ok(()),
+            SocketKind::Raw => sockets.add(make_icmp_socket(slot)),
         };
         self.socket_handles[slot] = Some(handle);
         self.socket_exo_handles[slot] = exo_handle;
@@ -178,7 +229,7 @@ impl SmoltcpIface {
         match snapshot.kind {
             SocketKind::Tcp => self.apply_tcp_state(handle, &mut sockets, snapshot),
             SocketKind::Udp => self.apply_udp_state(handle, &mut sockets, snapshot),
-            SocketKind::Raw => {}
+            SocketKind::Raw => self.apply_icmp_state(handle, &mut sockets, snapshot),
         }
     }
 
@@ -209,9 +260,9 @@ impl SmoltcpIface {
             let _ = iface.poll_egress(now, &mut smol_device, &mut socket_set);
         }
 
-        while let Some(tx) = device.pop_tx_for_driver() {
-            pool.tx_free(tx.pool_idx);
-        }
+        // TX buffers are consumed by DriverLink::flush_tx() after smoltcp has
+        // queued the egress frame. Freeing them here would drop packets before
+        // the hardware driver can submit them.
     }
 
     pub fn drain_bounded(
@@ -235,6 +286,100 @@ impl SmoltcpIface {
         let _ = self.drain_bounded(device, pool, usize::MAX);
     }
 
+    pub fn send_socket_data(
+        &mut self,
+        snapshot: &SocketSnapshot,
+        data: &[u8],
+    ) -> Result<usize, i64> {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        let Some(slot) = self.socket_slot_by_exo_handle(snapshot.handle) else {
+            return Err(syscall::EBADF);
+        };
+        let Some(handle) = self.socket_handles[slot] else {
+            return Err(syscall::EBADF);
+        };
+        if snapshot.remote_addr == 0
+            || (snapshot.remote_port == 0 && snapshot.kind != SocketKind::Raw)
+        {
+            return Err(syscall::ENOTCONN);
+        }
+
+        let mut sockets = socket_set();
+        match snapshot.kind {
+            SocketKind::Udp => {
+                let socket = sockets.get_mut::<udp::Socket>(handle);
+                if !socket.is_open() && snapshot.local_port != 0 {
+                    let _ = socket.bind(IpListenEndpoint {
+                        addr: ip_listen_addr(snapshot.local_addr),
+                        port: snapshot.local_port,
+                    });
+                }
+                socket
+                    .send_slice(
+                        data,
+                        IpEndpoint::new(ip_addr(snapshot.remote_addr), snapshot.remote_port),
+                    )
+                    .map_err(|_| syscall::EAGAIN)?;
+                Ok(data.len())
+            }
+            SocketKind::Tcp => {
+                let socket = sockets.get_mut::<tcp::Socket>(handle);
+                socket.send_slice(data).map_err(|_| syscall::EAGAIN)
+            }
+            SocketKind::Raw => {
+                let socket = sockets.get_mut::<icmp::Socket>(handle);
+                if !socket.is_open() && snapshot.local_port != 0 {
+                    socket
+                        .bind(icmp::Endpoint::Ident(snapshot.local_port))
+                        .map_err(|_| syscall::EINVAL)?;
+                }
+                socket
+                    .send_slice(data, ip_addr(snapshot.remote_addr))
+                    .map_err(|_| syscall::EAGAIN)?;
+                Ok(data.len())
+            }
+        }
+    }
+
+    pub fn recv_socket_data(
+        &mut self,
+        snapshot: &SocketSnapshot,
+        out: &mut [u8],
+    ) -> Result<(usize, u32, u16), i64> {
+        if out.is_empty() {
+            return Ok((0, snapshot.remote_addr, snapshot.remote_port));
+        }
+        let Some(slot) = self.socket_slot_by_exo_handle(snapshot.handle) else {
+            return Err(syscall::EBADF);
+        };
+        let Some(handle) = self.socket_handles[slot] else {
+            return Err(syscall::EBADF);
+        };
+
+        let mut sockets = socket_set();
+        match snapshot.kind {
+            SocketKind::Udp => {
+                let socket = sockets.get_mut::<udp::Socket>(handle);
+                let (n, meta) = socket.recv_slice(out).map_err(|_| syscall::EAGAIN)?;
+                let (addr, port) = endpoint_to_v4(meta.endpoint)
+                    .unwrap_or((snapshot.remote_addr, snapshot.remote_port));
+                Ok((n, addr, port))
+            }
+            SocketKind::Tcp => {
+                let socket = sockets.get_mut::<tcp::Socket>(handle);
+                let n = socket.recv_slice(out).map_err(|_| syscall::EAGAIN)?;
+                Ok((n, snapshot.remote_addr, snapshot.remote_port))
+            }
+            SocketKind::Raw => {
+                let socket = sockets.get_mut::<icmp::Socket>(handle);
+                let (n, addr) = socket.recv_slice(out).map_err(|_| syscall::EAGAIN)?;
+                Ok((n, ip_address_to_v4(addr).unwrap_or(snapshot.remote_addr), 0))
+            }
+        }
+    }
+
     pub const fn ip(&self) -> u32 {
         self.ip
     }
@@ -243,8 +388,34 @@ impl SmoltcpIface {
         self.mac
     }
 
+    pub fn set_mac(&mut self, mac: [u8; 6]) {
+        if mac == [0; 6] || mac == self.mac {
+            return;
+        }
+        self.mac = mac;
+        if let Some(iface) = self.iface.as_mut() {
+            iface.set_hardware_addr(EthernetAddress(mac).into());
+        }
+    }
+
     pub const fn prefix_len(&self) -> u8 {
         self.prefix_len
+    }
+
+    pub fn tcp_connect_status(&self, snapshot: &SocketSnapshot) -> TcpConnectStatus {
+        let Some(slot) = self.socket_slot_by_exo_handle(snapshot.handle) else {
+            return TcpConnectStatus::Failed;
+        };
+        let Some(handle) = self.socket_handles[slot] else {
+            return TcpConnectStatus::Failed;
+        };
+        let sockets = socket_set();
+        let socket = sockets.get::<tcp::Socket>(handle);
+        match socket.state() {
+            tcp::State::Established | tcp::State::CloseWait => TcpConnectStatus::Established,
+            tcp::State::Closed | tcp::State::TimeWait => TcpConnectStatus::Failed,
+            _ => TcpConnectStatus::Pending,
+        }
     }
 
     fn ensure_iface(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool, now: Instant) {
@@ -261,6 +432,9 @@ impl SmoltcpIface {
             addrs.clear();
             let _ = addrs.push(ip);
         });
+        let _ = iface
+            .routes_mut()
+            .add_default_ipv4_route(Ipv4Address::new(10, 0, 2, 2));
         self.iface = Some(iface);
     }
 
@@ -292,16 +466,20 @@ impl SmoltcpIface {
                     port: snapshot.local_port,
                 });
             }
-            SocketState::Connected if snapshot.remote_port != 0 && snapshot.local_port != 0 => {
-                if let Some(iface) = self.iface.as_mut() {
-                    let _ = socket.connect(
-                        iface.context(),
-                        IpEndpoint::new(ip_addr(snapshot.remote_addr), snapshot.remote_port),
-                        IpListenEndpoint {
-                            addr: ip_listen_addr(snapshot.local_addr),
-                            port: snapshot.local_port,
-                        },
-                    );
+            SocketState::Connecting | SocketState::Connected
+                if snapshot.remote_port != 0 && snapshot.local_port != 0 =>
+            {
+                if socket.state() == tcp::State::Closed {
+                    if let Some(iface) = self.iface.as_mut() {
+                        let _ = socket.connect(
+                            iface.context(),
+                            IpEndpoint::new(ip_addr(snapshot.remote_addr), snapshot.remote_port),
+                            IpListenEndpoint {
+                                addr: ip_listen_addr(snapshot.local_addr),
+                                port: snapshot.local_port,
+                            },
+                        );
+                    }
                 }
             }
             SocketState::Shutdown | SocketState::Closed => socket.abort(),
@@ -326,11 +504,21 @@ impl SmoltcpIface {
             });
         }
     }
-}
 
-fn socket_slot(exo_handle: u32) -> Option<usize> {
-    let slot = (exo_handle & 0xffff) as usize;
-    (slot < SOCKET_STORAGE_LEN).then_some(slot)
+    fn apply_icmp_state(
+        &mut self,
+        handle: SocketHandle,
+        sockets: &mut SocketSet<'static>,
+        snapshot: &SocketSnapshot,
+    ) {
+        if snapshot.local_port == 0 {
+            return;
+        }
+        let socket = sockets.get_mut::<icmp::Socket>(handle);
+        if !socket.is_open() {
+            let _ = socket.bind(icmp::Endpoint::Ident(snapshot.local_port));
+        }
+    }
 }
 
 fn ip_addr(ip: u32) -> IpAddress {
@@ -344,6 +532,26 @@ fn ip_addr(ip: u32) -> IpAddress {
 
 fn ip_listen_addr(ip: u32) -> Option<IpAddress> {
     (ip != 0).then_some(ip_addr(ip))
+}
+
+fn endpoint_to_v4(endpoint: IpEndpoint) -> Option<(u32, u16)> {
+    ip_address_to_v4(endpoint.addr).map(|addr| (addr, endpoint.port))
+}
+
+fn ip_address_to_v4(addr: IpAddress) -> Option<u32> {
+    match addr {
+        IpAddress::Ipv4(addr) => {
+            let octets = addr.octets();
+            Some(
+                ((octets[0] as u32) << 24)
+                    | ((octets[1] as u32) << 16)
+                    | ((octets[2] as u32) << 8)
+                    | octets[3] as u32,
+            )
+        }
+        #[allow(unreachable_patterns)]
+        _ => None,
+    }
 }
 
 fn make_tcp_socket(slot: usize) -> tcp::Socket<'static> {
@@ -361,10 +569,20 @@ fn make_tcp_socket(slot: usize) -> tcp::Socket<'static> {
 fn make_udp_socket(slot: usize) -> udp::Socket<'static> {
     // SAFETY: chaque slot est alloué une seule fois tant que le socket est actif.
     unsafe {
+        let rx_meta_slots = &mut (*UDP_BUFFERS.rx_meta.get())[slot];
+        let tx_meta_slots = &mut (*UDP_BUFFERS.tx_meta.get())[slot];
+        let mut idx = 0usize;
+        while idx < UDP_PACKET_METADATA_LEN {
+            rx_meta_slots[idx].write(udp::PacketMetadata::EMPTY);
+            tx_meta_slots[idx].write(udp::PacketMetadata::EMPTY);
+            idx += 1;
+        }
         let rx_meta: &'static mut [udp::PacketMetadata; UDP_PACKET_METADATA_LEN] =
-            &mut (*UDP_BUFFERS.rx_meta.get())[slot];
+            &mut *(rx_meta_slots.as_mut_ptr()
+                as *mut [udp::PacketMetadata; UDP_PACKET_METADATA_LEN]);
         let tx_meta: &'static mut [udp::PacketMetadata; UDP_PACKET_METADATA_LEN] =
-            &mut (*UDP_BUFFERS.tx_meta.get())[slot];
+            &mut *(tx_meta_slots.as_mut_ptr()
+                as *mut [udp::PacketMetadata; UDP_PACKET_METADATA_LEN]);
         let rx_payload: &'static mut [u8; UDP_BUFFER_SIZE] =
             &mut (*UDP_BUFFERS.rx_payload.get())[slot];
         let tx_payload: &'static mut [u8; UDP_BUFFER_SIZE] =
@@ -372,6 +590,24 @@ fn make_udp_socket(slot: usize) -> udp::Socket<'static> {
         udp::Socket::new(
             udp::PacketBuffer::new(&mut rx_meta[..], &mut rx_payload[..]),
             udp::PacketBuffer::new(&mut tx_meta[..], &mut tx_payload[..]),
+        )
+    }
+}
+
+fn make_icmp_socket(slot: usize) -> icmp::Socket<'static> {
+    // SAFETY: chaque slot est alloué une seule fois tant que le socket est actif.
+    unsafe {
+        let rx_meta: &'static mut [icmp::PacketMetadata; ICMP_PACKET_METADATA_LEN] =
+            &mut (*ICMP_BUFFERS.rx_meta.get())[slot];
+        let tx_meta: &'static mut [icmp::PacketMetadata; ICMP_PACKET_METADATA_LEN] =
+            &mut (*ICMP_BUFFERS.tx_meta.get())[slot];
+        let rx_payload: &'static mut [u8; ICMP_BUFFER_SIZE] =
+            &mut (*ICMP_BUFFERS.rx_payload.get())[slot];
+        let tx_payload: &'static mut [u8; ICMP_BUFFER_SIZE] =
+            &mut (*ICMP_BUFFERS.tx_payload.get())[slot];
+        icmp::Socket::new(
+            icmp::PacketBuffer::new(&mut rx_meta[..], &mut rx_payload[..]),
+            icmp::PacketBuffer::new(&mut tx_meta[..], &mut tx_payload[..]),
         )
     }
 }
@@ -467,6 +703,11 @@ impl RxToken for ExoRxToken<'_, '_> {
                 len,
             )
         };
+        log_first_frame(
+            &LOGGED_STACK_RX,
+            b"network_server: first stack rx ",
+            payload,
+        );
         let result = f(payload);
         self.device.borrow_mut().release_rx(self.rx.pool_idx);
         result
@@ -501,6 +742,11 @@ impl TxToken for ExoTxToken<'_, '_> {
                 )
             };
             let result = f(payload);
+            log_first_frame(
+                &LOGGED_STACK_TX,
+                b"network_server: first stack tx ",
+                payload,
+            );
             let queued = self.device.borrow_mut().queue_tx_idx(pool_idx, len);
             if queued.is_err() {
                 self.pool.tx_free(pool_idx);
@@ -514,5 +760,44 @@ impl TxToken for ExoTxToken<'_, '_> {
         let mut device = self.device.borrow_mut();
         device.dropped_rx_tx_token = device.dropped_rx_tx_token.saturating_add(1);
         result
+    }
+}
+
+fn log_first_frame(flag: &AtomicBool, prefix: &[u8], frame: &[u8]) {
+    if flag.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    debug_write(prefix);
+    if frame.len() < 14 {
+        debug_write(b"short\n");
+        return;
+    }
+    match u16::from_be_bytes([frame[12], frame[13]]) {
+        0x0806 => debug_write(b"arp\n"),
+        0x0800 => {
+            if frame.len() >= 24 {
+                match frame[23] {
+                    1 => debug_write(b"ipv4 icmp\n"),
+                    6 => debug_write(b"ipv4 tcp\n"),
+                    17 => debug_write(b"ipv4 udp\n"),
+                    _ => debug_write(b"ipv4 other\n"),
+                }
+            } else {
+                debug_write(b"ipv4 short\n");
+            }
+        }
+        0x86dd => debug_write(b"ipv6\n"),
+        _ => debug_write(b"other\n"),
+    }
+}
+
+fn debug_write(bytes: &[u8]) {
+    for &byte in bytes {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = byte;
     }
 }

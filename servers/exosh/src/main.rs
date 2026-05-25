@@ -32,8 +32,14 @@ const SIGTERM: u64 = 15;
 const SIGKILL: u64 = 9;
 const AF_INET: u16 = 2;
 const SOCK_STREAM: u64 = 1;
-const SOCK_DGRAM: u64 = 2;
+const SOCK_RAW: u64 = 3;
+const IPPROTO_ICMP: u64 = 1;
+const EAGAIN: i64 = -11;
+const PING_IDENT: u16 = 0x4558;
+const ICMP_ECHO_HEADER_LEN: usize = 8;
 const PING_PAYLOAD: &[u8] = b"exoos-ping";
+const PING_PACKET_LEN: usize = ICMP_ECHO_HEADER_LEN + PING_PAYLOAD.len();
+const PING_RECV_ATTEMPTS: usize = 1000;
 
 struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
 
@@ -155,7 +161,6 @@ pub extern "C" fn _start(_boot_info_virt: usize) -> ! {
     write_all(b"Services launched by init_server. Type 'help' for commands.\n\n");
 
     loop {
-        prompt(&state);
         let mut line = [0u8; LINE_MAX];
         let len = read_line(&mut line, &mut state);
         let command = trim(&line[..len]);
@@ -373,11 +378,23 @@ fn cmd_mkdir(rest: &[u8], state: &ShellState) {
 }
 
 fn cmd_touch(rest: &[u8], state: &ShellState) {
-    let (arg, _) = next_arg(rest);
-    if arg.is_empty() {
+    let mut args = rest;
+    if trim(args).is_empty() {
         write_all(b"touch: missing path\n");
         return;
     }
+
+    loop {
+        let (arg, tail) = next_arg(args);
+        if arg.is_empty() {
+            break;
+        }
+        touch_one_arg(arg, state);
+        args = tail;
+    }
+}
+
+fn touch_one_arg(arg: &[u8], state: &ShellState) {
     let mut path = [0u8; PATH_MAX];
     if absolute_path(state.cwd(), arg, &mut path).is_none() {
         write_all(b"touch: path too long\n");
@@ -1106,21 +1123,14 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
     let mut history_offset: Option<usize> = None;
     let mut visible_len = 0usize;
     let mut cursor_visible = true;
-    let mut blink_ms = 0u64;
     render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
 
     loop {
         let Some(byte) = read_byte_poll() else {
             sleep_ms(25);
-            blink_ms += 25;
-            if blink_ms >= 500 {
-                blink_ms = 0;
-                cursor_visible = !cursor_visible;
-                render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
-            }
             continue;
         };
-        blink_ms = 0;
+        let had_visible_cursor = cursor_visible;
         cursor_visible = true;
         let mut redraw = true;
         match byte {
@@ -1154,15 +1164,27 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
                 }
             }
             b'\t' => {
+                let append_tail = had_visible_cursor && cursor == len;
                 if insert_input_byte(line, &mut len, &mut cursor, b' ') {
                     history_offset = None;
+                    if append_tail {
+                        render_input_append(b' ');
+                        visible_len = len.saturating_add(1);
+                        redraw = false;
+                    }
                 } else {
                     redraw = false;
                 }
             }
             b if b.is_ascii_graphic() || b == b' ' => {
+                let append_tail = had_visible_cursor && cursor == len;
                 if insert_input_byte(line, &mut len, &mut cursor, b) {
                     history_offset = None;
+                    if append_tail {
+                        render_input_append(b);
+                        visible_len = len.saturating_add(1);
+                        redraw = false;
+                    }
                 } else {
                     redraw = false;
                 }
@@ -1192,13 +1214,39 @@ fn cmd_ping(rest: &[u8]) {
         parse_u64(count_arg).unwrap_or(4).min(32)
     };
 
-    let fd = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_DGRAM, 0) };
+    let mut fd = -1i64;
+    let mut attempts = 0usize;
+    while attempts < 3 {
+        fd = unsafe {
+            syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_RAW, IPPROTO_ICMP)
+        };
+        if fd >= 0 {
+            break;
+        }
+        sleep_ms(50);
+        attempts += 1;
+    }
     if fd < 0 {
         print_errno(b"ping socket", fd);
         return;
     }
 
-    let sockaddr = sockaddr_in(addr, 7);
+    let bind_addr = sockaddr_in([0, 0, 0, 0], PING_IDENT);
+    let bind_rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_BIND,
+            fd as u64,
+            bind_addr.as_ptr() as u64,
+            bind_addr.len() as u64,
+        )
+    };
+    if bind_rc < 0 {
+        print_errno(b"ping bind", bind_rc);
+        let _ = close_fd(fd);
+        return;
+    }
+
+    let sockaddr = sockaddr_in(addr, 0);
     let rc = unsafe {
         syscall::syscall3(
             syscall::SYS_CONNECT,
@@ -1224,12 +1272,13 @@ fn cmd_ping(rest: &[u8]) {
             break;
         };
 
+        let packet = icmp_echo_request(seq as u16);
         let send_rc = unsafe {
             syscall::syscall6(
                 syscall::SYS_SENDTO,
                 fd as u64,
-                PING_PAYLOAD.as_ptr() as u64,
-                PING_PAYLOAD.len() as u64,
+                packet.as_ptr() as u64,
+                packet.len() as u64,
                 0,
                 0,
                 0,
@@ -1242,21 +1291,38 @@ fn cmd_ping(rest: &[u8]) {
 
         let mut recv_buf = [0u8; 64];
         let mut from = [0u8; 16];
-        let mut from_len = from.len() as u32;
-        let recv_rc = unsafe {
-            syscall::syscall6(
-                syscall::SYS_RECVFROM,
-                fd as u64,
-                recv_buf.as_mut_ptr() as u64,
-                recv_buf.len() as u64,
-                0,
-                from.as_mut_ptr() as u64,
-                &mut from_len as *mut u32 as u64,
-            )
-        };
+        let mut recv_rc = EAGAIN;
+        let mut attempts = 0usize;
+        while attempts < PING_RECV_ATTEMPTS {
+            let mut from_len = from.len() as u32;
+            recv_rc = unsafe {
+                syscall::syscall6(
+                    syscall::SYS_RECVFROM,
+                    fd as u64,
+                    recv_buf.as_mut_ptr() as u64,
+                    recv_buf.len() as u64,
+                    0,
+                    from.as_mut_ptr() as u64,
+                    &mut from_len as *mut u32 as u64,
+                )
+            };
+            if recv_rc != EAGAIN {
+                break;
+            }
+            sleep_ms(10);
+            attempts += 1;
+        }
         let elapsed = monotonic_ns().unwrap_or(start).saturating_sub(start);
+        if recv_rc == EAGAIN {
+            write_all(b"ping: timeout waiting for ICMP echo reply\n");
+            break;
+        }
         if recv_rc < 0 {
             print_errno(b"ping recvfrom", recv_rc);
+            break;
+        }
+        if !icmp_echo_reply_matches(&recv_buf[..recv_rc as usize], seq as u16) {
+            write_all(b"ping: unexpected ICMP packet\n");
             break;
         }
 
@@ -1276,6 +1342,42 @@ fn cmd_ping(rest: &[u8]) {
     }
 
     let _ = close_fd(fd);
+}
+
+fn icmp_echo_request(seq: u16) -> [u8; PING_PACKET_LEN] {
+    let mut packet = [0u8; PING_PACKET_LEN];
+    packet[0] = 8;
+    packet[4..6].copy_from_slice(&PING_IDENT.to_be_bytes());
+    packet[6..8].copy_from_slice(&seq.to_be_bytes());
+    packet[ICMP_ECHO_HEADER_LEN..].copy_from_slice(PING_PAYLOAD);
+    let checksum = internet_checksum(&packet);
+    packet[2..4].copy_from_slice(&checksum.to_be_bytes());
+    packet
+}
+
+fn icmp_echo_reply_matches(packet: &[u8], seq: u16) -> bool {
+    packet.len() >= ICMP_ECHO_HEADER_LEN
+        && packet[0] == 0
+        && packet[1] == 0
+        && u16::from_be_bytes([packet[4], packet[5]]) == PING_IDENT
+        && u16::from_be_bytes([packet[6], packet[7]]) == seq
+        && internet_checksum(packet) == 0
+}
+
+fn internet_checksum(bytes: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    let mut idx = 0usize;
+    while idx + 1 < bytes.len() {
+        sum = sum.wrapping_add(u16::from_be_bytes([bytes[idx], bytes[idx + 1]]) as u32);
+        idx += 2;
+    }
+    if idx < bytes.len() {
+        sum = sum.wrapping_add((bytes[idx] as u32) << 8);
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
 }
 
 fn cmd_tcping(rest: &[u8]) {
@@ -1303,7 +1405,16 @@ fn cmd_tcping(rest: &[u8]) {
         parsed as u16
     };
 
-    let fd = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_STREAM, 0) };
+    let mut fd = -1i64;
+    let mut attempts = 0usize;
+    while attempts < 3 {
+        fd = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, SOCK_STREAM, 0) };
+        if fd >= 0 {
+            break;
+        }
+        sleep_ms(50);
+        attempts += 1;
+    }
     if fd < 0 {
         print_errno(b"tcping socket", fd);
         return;
@@ -1325,7 +1436,14 @@ fn cmd_tcping(rest: &[u8]) {
     };
     let elapsed = monotonic_ns().unwrap_or(start).saturating_sub(start);
     if rc < 0 {
-        print_errno(b"tcping connect", rc);
+        write_all(b"tcping ");
+        write_ipv4(addr);
+        write_all(b":");
+        write_u64(port as u64);
+        write_all(b" failed after ");
+        write_u64(elapsed / 1_000);
+        write_all(b"us");
+        print_errno(b" connect", rc);
         let _ = close_fd(fd);
         return;
     }
@@ -1487,6 +1605,14 @@ fn render_input_line(
         }
     }
     *visible_len = next_visible_len;
+}
+
+fn render_input_append(byte: u8) {
+    write_all(b"\x08");
+    write_byte(byte);
+    write_all(ANSI_REVERSE);
+    write_all(b" ");
+    write_all(ANSI_RESET);
 }
 
 fn read_byte_poll() -> Option<u8> {

@@ -302,6 +302,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-e1000-driver"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+]
+
+[[package]]
 name = "exo-exosh"
 version = "0.1.0"
 dependencies = [
@@ -354,6 +361,10 @@ dependencies = [
  "exo-syscall-abi",
  "spin",
 ]
+
+[[package]]
+name = "exo-network-common"
+version = "0.1.0"
 
 [[package]]
 name = "exo-network-server"

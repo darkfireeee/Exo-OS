@@ -29,6 +29,7 @@ pub use dma::{
 pub use iommu::{
     domain_of_pid, ensure_domain_for_pid, iommu_init, pid_of_domain, release_domain_for_pid,
 };
+pub use pci_cfg::PciDeviceInfo;
 pub use pci_topology::PciError as TopoError;
 
 pub fn init() {
@@ -132,6 +133,22 @@ pub fn sys_pci_cfg_read_for_pid(pid: u32, offset: u16) -> Result<u32, PciCfgErro
 
 pub fn find_virtio_blk_mmio_bar() -> Option<usize> {
     pci_cfg::find_virtio_blk_mmio_bar()
+}
+
+pub fn find_pci_device(
+    vendor_filter: u16,
+    device_filter: u16,
+    class_filter: u16,
+    subclass_filter: u16,
+    index: u32,
+) -> Option<PciDeviceInfo> {
+    pci_cfg::find_pci_device(
+        vendor_filter,
+        device_filter,
+        class_filter,
+        subclass_filter,
+        index,
+    )
 }
 
 pub fn sys_pci_cfg_write_for_pid(pid: u32, offset: u16, value: u32) -> Result<(), PciCfgError> {

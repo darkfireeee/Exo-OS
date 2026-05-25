@@ -596,6 +596,8 @@ impl PageFlags {
     pub const DMA: PageFlags = PageFlags(1 << 52);
     /// Bit logiciel 53 : frame DMA — pas de Write-Combining.
     pub const DMA_NO_WC: PageFlags = PageFlags(1 << 53);
+    /// Bit logiciel 54 : feuille 4 KiB à mapper via l'entrée PAT write-combining.
+    pub const WRITE_COMBINING: PageFlags = PageFlags(1 << 54);
 
     // ── Combinaisons courantes ─────────────────────────────────────────────
 
@@ -751,6 +753,8 @@ impl fmt::Debug for PageFlags {
             (Self::PINNED, "PINNED"),
             (Self::SHARED, "SHARED"),
             (Self::DMA, "DMA"),
+            (Self::DMA_NO_WC, "DMA_NO_WC"),
+            (Self::WRITE_COMBINING, "WC"),
         ];
         for (flag, name) in &flags {
             if self.contains(*flag) {

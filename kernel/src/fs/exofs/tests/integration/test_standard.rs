@@ -405,7 +405,7 @@ fn blob_tampered_data_fails_verification() {
 }
 
 #[test]
-fn blob_write_empty_payload() {
+fn blob_write_empty_payload_rejected_by_design() {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -413,7 +413,7 @@ fn blob_write_empty_payload() {
     let next_off = RefCell::new(4096u64);
     let cfg = BlobWriterConfig::new(EpochId(3));
 
-    let result = ok(BlobWriter::write_blob(
+    let result = BlobWriter::write_blob(
         &[],
         &cfg,
         |blocks| {
@@ -427,27 +427,12 @@ fn blob_write_empty_payload() {
             Ok(buf.len())
         },
         |_| None,
-    ));
+    );
 
-    let read = ok(BlobReader::read_blob(
-        result.offset,
-        |off, len| {
-            disk.borrow()
-                .get(&off.0)
-                .cloned()
-                .ok_or(ExofsError::IoError)
-                .and_then(|b| {
-                    if b.len() >= len {
-                        Ok(b[..len].to_vec())
-                    } else {
-                        Err(ExofsError::IoError)
-                    }
-                })
-        },
-        BlobVerifyMode::Full,
-    ));
-
-    assert!(read.data.is_empty(), "payload vide doit se lire vide");
+    assert!(
+        matches!(result, Err(ExofsError::InvalidArgument)),
+        "BlobWriter doit rejeter un payload vide avec InvalidArgument, got: {result:?}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

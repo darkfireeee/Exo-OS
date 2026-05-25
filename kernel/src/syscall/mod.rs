@@ -159,6 +159,7 @@ pub use numbers::{
     SYS_PCI_CFG_READ,
     SYS_PCI_CFG_WRITE,
     SYS_PCI_CLAIM,
+    SYS_PCI_FIND_DEVICE,
     SYS_PCI_SET_TOPOLOGY,
     SYS_POLL,
     SYS_PREAD64,

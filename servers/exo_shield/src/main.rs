@@ -1361,12 +1361,21 @@ fn perform_maintenance() {
 pub extern "C" fn _start() -> ! {
     // ── 0. Initialize all engine sub-modules ────────────────────────────────
     boot_log(b"exo_shield: boot\n");
+    boot_log(b"exo_shield: policy init\n");
     ipc_gate::policy_init();
+    boot_log(b"exo_shield: policy ready\n");
+    boot_log(b"exo_shield: ipc audit init\n");
     ipc_gate::audit_init();
+    boot_log(b"exo_shield: ipc audit ready\n");
     boot_log(b"exo_shield: ipc gate ready\n");
     engine::engine_init();
     boot_log(b"exo_shield: engine ready\n");
-    signatures::signatures_init();
+    signatures::database::database_init();
+    boot_log(b"exo_shield: signature database ready\n");
+    signatures::yara::yara_init();
+    boot_log(b"exo_shield: yara ready\n");
+    signatures::update::update_init();
+    boot_log(b"exo_shield: signature update ready\n");
     boot_log(b"exo_shield: signatures ready\n");
     behavioral::behavioral_init();
     boot_log(b"exo_shield: behavioral ready\n");

@@ -25,7 +25,12 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install semgrep
-          semgrep --config tools/semgrep-rules/exoos.yaml --error kernel/src servers
+          semgrep --config tools/semgrep-rules/exoos.yaml --error --timeout 30 \
+            exo-boot/src \
+            loader/src \
+            kernel/src \
+            servers \
+            userspace
 
   cargo-deny:
     runs-on: ubuntu-latest
@@ -42,8 +47,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
+          targets: x86_64-unknown-none,x86_64-unknown-uefi
       - run: |
+          cargo check --manifest-path exo-boot/Cargo.toml \
+            --target x86_64-unknown-uefi \
+            --features "uefi-boot,dev-skip-sig"
+          cargo check --manifest-path loader/Cargo.toml --all-targets
           cargo check -p exo-os-kernel \
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
             --target x86_64-unknown-none
+          for manifest in servers/*/Cargo.toml; do
+            cargo check --manifest-path "$manifest"
+          done
+          cargo check --manifest-path userspace/Cargo.toml --workspace --all-targets

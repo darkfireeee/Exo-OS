@@ -2,7 +2,9 @@ use exo_syscall_abi as syscall;
 
 pub const SERVER_ENDPOINT_ID: u64 = 7;
 pub const RAW_MSG_SIZE: usize = syscall::IPC_ENVELOPE_SIZE;
-pub const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+// The timeout value is encoded in the same ABI word as IPC_FLAG_TIMEOUT, so it
+// must stay even: `IPC_FLAG_TIMEOUT | 2` decodes to a real 2 ms timeout.
+pub const IPC_RECV_TIMEOUT_MS: u64 = 2;
 
 const _: () = assert!(RAW_MSG_SIZE == syscall::IPC_ENVELOPE_SIZE);
 
@@ -27,6 +29,9 @@ pub const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
 pub const NET_CTRL_RX_RELEASE: u32 = 0x4F01;
 pub const NET_CTRL_MAC_QUERY: u32 = 0x4F02;
 pub const NET_CTRL_MAC_REPLY: u32 = 0x4F03;
+pub const NET_CTRL_RX_READY: u32 = 0x4F04;
+pub const NET_CTRL_TX_SUBMIT: u32 = 0x4F05;
+pub const NET_CTRL_TX_COMPLETE: u32 = 0x4F06;
 
 pub const CALL_MAGIC: u32 = 0x4558_4F43;
 
@@ -111,6 +116,64 @@ const _: () = assert!(core::mem::size_of::<RxReleaseMsg>() == 48);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct RxPacketRef {
+    pub pool_idx: u16,
+    pub len: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RxReadyMsg {
+    pub opcode: u32,
+    pub count: u32,
+    pub entries: [RxPacketRef; 20],
+}
+
+const _: () = assert!(core::mem::size_of::<RxReadyMsg>() == 88);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TxSubmitMsg {
+    pub opcode: u32,
+    pub pool_idx: u16,
+    pub len: u16,
+}
+
+const _: () = assert!(core::mem::size_of::<TxSubmitMsg>() == 8);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TxCompleteMsg {
+    pub opcode: u32,
+    pub count: u32,
+    pub pool_idx: [u16; 20],
+}
+
+const _: () = assert!(core::mem::size_of::<TxCompleteMsg>() == 48);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MacReplyMsg {
+    pub opcode: u32,
+    pub mac: [u8; 6],
+    pub _pad: [u8; 2],
+}
+
+const _: () = assert!(core::mem::size_of::<MacReplyMsg>() == 12);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DriverCtrlMsg {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
+}
+
+const _: () = assert!(core::mem::size_of::<DriverCtrlMsg>() == syscall::IPC_ENVELOPE_SIZE);
+const _: () = assert!(core::mem::offset_of!(DriverCtrlMsg, payload) == syscall::IPC_HEADER_SIZE);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct RawCallHeader {
     pub magic: u32,
     pub payload_len: u32,
@@ -119,6 +182,8 @@ pub struct RawCallHeader {
 }
 
 pub const RAW_CALL_HEADER_SIZE: usize = core::mem::size_of::<RawCallHeader>();
+pub const NET_INLINE_DATA_MAX: usize =
+    RAW_MSG_SIZE - RAW_CALL_HEADER_SIZE - core::mem::size_of::<NetMsg>();
 
 pub struct RawCall<'a> {
     pub payload: &'a [u8],
@@ -153,6 +218,17 @@ pub fn parse_net_msg(payload: &[u8]) -> Option<NetMsg> {
     Some(unsafe { core::ptr::read_unaligned(payload.as_ptr() as *const NetMsg) })
 }
 
+pub fn parse_driver_ctrl(buf: &[u8]) -> Option<DriverCtrlMsg> {
+    if buf.len() < core::mem::size_of::<DriverCtrlMsg>() {
+        return None;
+    }
+    let ctrl = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const DriverCtrlMsg) };
+    match ctrl.msg_type {
+        NET_CTRL_MAC_REPLY | NET_CTRL_RX_READY | NET_CTRL_TX_COMPLETE => Some(ctrl),
+        _ => None,
+    }
+}
+
 pub fn register_endpoint() {
     let name = b"network_server";
     unsafe {
@@ -185,33 +261,43 @@ pub fn recv_raw(buf: &mut [u8; RAW_MSG_SIZE]) -> Result<usize, i64> {
 }
 
 pub fn send_rpc_reply(reply_ep: u64, cookie: u64, reply: &NetReply) -> i64 {
+    send_rpc_reply_with_data(reply_ep, cookie, reply, &[])
+}
+
+pub fn send_rpc_reply_with_data(reply_ep: u64, cookie: u64, reply: &NetReply, data: &[u8]) -> i64 {
     if reply_ep == 0 {
         return syscall::EINVAL;
+    }
+    if data.len() > NET_INLINE_DATA_MAX {
+        return syscall::EMSGSIZE;
     }
 
     let hdr = RawCallHeader {
         magic: CALL_MAGIC,
-        payload_len: core::mem::size_of::<NetReply>() as u32,
+        payload_len: (core::mem::size_of::<NetReply>() + data.len()) as u32,
         cookie,
         reply_ep,
     };
-    let mut out = [0u8; RAW_CALL_HEADER_SIZE + core::mem::size_of::<NetReply>()];
+    let mut out = [0u8; RAW_MSG_SIZE];
     unsafe {
         core::ptr::write_unaligned(out.as_mut_ptr() as *mut RawCallHeader, hdr);
     }
-    out[RAW_CALL_HEADER_SIZE..].copy_from_slice(unsafe {
+    let reply_start = RAW_CALL_HEADER_SIZE;
+    let reply_end = reply_start + core::mem::size_of::<NetReply>();
+    out[reply_start..reply_end].copy_from_slice(unsafe {
         core::slice::from_raw_parts(
             reply as *const NetReply as *const u8,
             core::mem::size_of::<NetReply>(),
         )
     });
+    out[reply_end..reply_end + data.len()].copy_from_slice(data);
 
     unsafe {
         syscall::syscall6(
             syscall::SYS_IPC_SEND,
             reply_ep,
             out.as_ptr() as u64,
-            out.len() as u64,
+            (RAW_CALL_HEADER_SIZE + core::mem::size_of::<NetReply>() + data.len()) as u64,
             0,
             0,
             0,

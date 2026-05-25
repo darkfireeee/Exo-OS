@@ -184,18 +184,25 @@ impl IovaAllocator {
             return Ok(iova);
         }
 
-        // Mode IOMMU : alloue une plage IOVA.
+        // Mode IOMMU : alloue une plage IOVA, sauf demande explicite
+        // d'adresse DMA physique pour un périphérique encore attaché en
+        // passthrough.
         let mut inner = self.inner.lock();
         if inner.count >= MAX_DMA_MAPPINGS {
             return Err(DmaError::OutOfMemory);
         }
 
-        let iova = IovaAddr::new(inner.next);
-        inner.next = inner.next.wrapping_add(size_aligned as u64);
-        if inner.next >= IOVA_BASE + IOVA_SIZE {
-            // Wrap-around : on ne supporte pas encore la réutilisation.
-            return Err(DmaError::OutOfMemory);
-        }
+        let iova = if flags.contains(DmaMapFlags::BYPASS_IOMMU) {
+            IovaAddr::new(phys.as_u64())
+        } else {
+            let iova = IovaAddr::new(inner.next);
+            inner.next = inner.next.wrapping_add(size_aligned as u64);
+            if inner.next >= IOVA_BASE + IOVA_SIZE {
+                // Wrap-around : on ne supporte pas encore la réutilisation.
+                return Err(DmaError::OutOfMemory);
+            }
+            iova
+        };
 
         // Insère dans le premier slot libre.
         let slot = inner

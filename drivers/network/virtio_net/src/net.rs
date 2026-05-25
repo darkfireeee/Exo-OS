@@ -170,6 +170,14 @@ impl VirtioNet {
         self.tx_from_network.push(NetBufRef { pool_idx, len })
     }
 
+    pub fn pop_rx_ready(&mut self) -> Option<NetBufRef> {
+        self.rx_to_network.pop()
+    }
+
+    pub fn pop_tx_pending(&mut self) -> Option<NetBufRef> {
+        self.tx_from_network.pop()
+    }
+
     pub fn flush_tx(&mut self) -> usize {
         let mut flushed = 0usize;
         while self.tx_from_network.pop().is_some() {
@@ -195,6 +203,6 @@ pub const fn negotiate_hdr_size(features: u64) -> usize {
     if features & VIRTIO_NET_F_MRG_RXBUF != 0 {
         12
     } else {
-        10
+        12
     }
 }

@@ -9,15 +9,12 @@ use crate::scheduler::sync::wait_queue::WaitQueue;
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
-use super::{boot_display, inb, outb};
+use super::{boot_display, inb};
 
 const KEYBOARD_MODE_UNKNOWN: u8 = 0;
 const KEYBOARD_MODE_SET1: u8 = 1;
 const KEYBOARD_MODE_SET2: u8 = 2;
 const I8042_STATUS_OUTPUT_FULL: u8 = 1 << 0;
-const I8042_STATUS_INPUT_FULL: u8 = 1 << 1;
-const I8042_CMD_READ_CONFIG: u8 = 0x20;
-const I8042_CONFIG_TRANSLATION: u8 = 1 << 6;
 const KEYBOARD_BUFFER_LEN: usize = 128;
 const KEYBOARD_DRAIN_LIMIT: usize = 64;
 
@@ -222,11 +219,7 @@ pub fn keyboard_irq_drain() {
 }
 
 fn poll_byte_locked(state: &mut KeyboardState, mode: u8) -> Option<u8> {
-    if let Some(byte) = state.pop_byte() {
-        return Some(byte);
-    }
-
-    let mut first = None;
+    let mut first = state.pop_byte();
     let mut drained = 0usize;
     while drained < KEYBOARD_DRAIN_LIMIT {
         let status = unsafe { inb(0x64) };
@@ -264,42 +257,14 @@ fn keyboard_mode() -> u8 {
 }
 
 fn detect_keyboard_mode() -> u8 {
-    if !wait_i8042_input_empty() {
-        return KEYBOARD_MODE_SET1;
-    }
-
-    unsafe {
-        outb(0x64, I8042_CMD_READ_CONFIG);
-    }
-    if !wait_i8042_output_full() {
-        return KEYBOARD_MODE_SET1;
-    }
-    let config = unsafe { inb(0x60) };
-    if config & I8042_CONFIG_TRANSLATION != 0 {
-        KEYBOARD_MODE_SET1
-    } else {
-        KEYBOARD_MODE_SET2
-    }
-}
-
-fn wait_i8042_input_empty() -> bool {
-    for _ in 0..10_000 {
-        if unsafe { inb(0x64) } & I8042_STATUS_INPUT_FULL == 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
-}
-
-fn wait_i8042_output_full() -> bool {
-    for _ in 0..10_000 {
-        if unsafe { inb(0x64) } & I8042_STATUS_OUTPUT_FULL != 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
+    // QEMU HMP/GUI keyboard injection feeds translated set-1 bytes even when
+    // the controller config read reports translation disabled. Starting from
+    // set-2 in that case turns a set-1 Enter make code (0x1C) into "a".
+    //
+    // Keep the boot path conservative: decode set-1 until the live stream
+    // proves it is set-2 by emitting the 0xF0 break prefix. `decode_scancode`
+    // already records that prefix and promotes KEYBOARD_MODE to set-2.
+    KEYBOARD_MODE_SET1
 }
 
 fn decode_scancode(state: &mut KeyboardState, scancode: u8, mode: u8) -> Option<u8> {

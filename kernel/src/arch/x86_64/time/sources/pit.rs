@@ -74,9 +74,9 @@ const PIT_OCW_CH2_LATCH: u8 = 0x80;
 pub const PIT_FREQ_HZ: u64 = 1_193_182;
 /// Ticks PIT pour ≈10ms de mesure (PIT_FREQ_HZ / 100 = 11931).
 const PIT_COUNT_10MS: u16 = 11_931;
-/// Timeout max pour attendre la fin du one-shot (iterations spin_loop).
-#[allow(dead_code)]
-const PIT_MAX_ITER: u32 = 200_000_000;
+/// Borne TSC de secours pour attendre la fin d'un one-shot de 10 ms.
+/// 200 M cycles couvrent au moins 20 ms jusque 10 GHz meme avant calibration.
+const PIT_WAIT_TIMEOUT_FALLBACK_CYCLES: u64 = 200_000_000;
 
 // ── État PIT ──────────────────────────────────────────────────────────────────
 
@@ -194,7 +194,8 @@ pub fn setup_ch2_oneshot(count: u16) {
 ///
 /// Timeout : fenêtre temporelle bornée à ~20 ms via le TSC.
 pub fn wait_ch2_done() -> bool {
-    let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000).max(20_000_000);
+    let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000)
+        .max(PIT_WAIT_TIMEOUT_FALLBACK_CYCLES);
     let start_tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
 
     loop {

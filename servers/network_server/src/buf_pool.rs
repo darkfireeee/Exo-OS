@@ -7,10 +7,13 @@ pub const RX_POOL_SIZE: usize = 256;
 pub const TX_POOL_SIZE: usize = 256;
 pub const VIRTIO_NET_HDR_SIZE_LEGACY: usize = 10;
 pub const VIRTIO_NET_HDR_SIZE_MRGBUF: usize = 12;
+pub const VIRTIO_NET_HDR_SIZE_MODERN: usize = 12;
 
 const DMA_DIR_FROM_DEVICE: u64 = 1;
 const DMA_DIR_TO_DEVICE: u64 = 2;
-const DMA_PINNED: u64 = 1;
+// e1000/virtio descriptors consume DMA-visible physical addresses until the
+// kernel wires real IOMMU table programming for translated IOVAs.
+const DMA_MAP_FLAGS_BYPASS_IOMMU: u64 = 1 << 4;
 
 pub struct NetBufPool {
     rx_base_virt: u64,
@@ -29,7 +32,7 @@ impl NetBufPool {
             rx_base_iova: 0,
             tx_base_virt: 0,
             tx_base_iova: 0,
-            hdr_size: VIRTIO_NET_HDR_SIZE_LEGACY,
+            hdr_size: VIRTIO_NET_HDR_SIZE_MODERN,
             ready: false,
             tx_alloc: [const { AtomicBool::new(false) }; TX_POOL_SIZE],
         }
@@ -43,7 +46,7 @@ impl NetBufPool {
                 (RX_POOL_SIZE * PAGE_SIZE) as u64,
                 DMA_DIR_FROM_DEVICE,
                 &mut rx_virt as *mut u64 as u64,
-                DMA_PINNED,
+                DMA_MAP_FLAGS_BYPASS_IOMMU,
                 0,
             )
         };
@@ -58,7 +61,7 @@ impl NetBufPool {
                 (TX_POOL_SIZE * PAGE_SIZE) as u64,
                 DMA_DIR_TO_DEVICE,
                 &mut tx_virt as *mut u64 as u64,
-                DMA_PINNED,
+                DMA_MAP_FLAGS_BYPASS_IOMMU,
                 0,
             )
         };

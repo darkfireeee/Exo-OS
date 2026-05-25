@@ -20,7 +20,6 @@
 
 #![no_std]
 #![no_main]
-#![feature(allocator_api)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::missing_safety_doc)]
 
