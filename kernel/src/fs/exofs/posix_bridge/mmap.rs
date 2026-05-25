@@ -222,6 +222,9 @@ impl MmapTable {
         if prot & !known_prot != 0 {
             return Err(ExofsError::InvalidArgument);
         }
+        if prot_has_write_exec(prot) {
+            return Err(ExofsError::PermissionDenied);
+        }
         if flags & !known_flags != 0 {
             return Err(ExofsError::InvalidArgument);
         }
@@ -393,6 +396,9 @@ impl MmapTable {
         if prot & !known_prot != 0 {
             return Err(ExofsError::InvalidArgument);
         }
+        if prot_has_write_exec(prot) {
+            return Err(ExofsError::PermissionDenied);
+        }
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
@@ -537,6 +543,10 @@ pub fn validate_page_aligned(offset: u64) -> ExofsResult<()> {
     }
 }
 
+fn prot_has_write_exec(prot: u32) -> bool {
+    prot & map_prot::PROT_WRITE != 0 && prot & map_prot::PROT_EXEC != 0
+}
+
 /// Calcule le nombre de pages nécessaires.
 pub fn pages_for(length: u64) -> u64 {
     align_up(length, MMAP_PAGE_SIZE) / MMAP_PAGE_SIZE
@@ -652,6 +662,32 @@ mod tests {
         assert!(matches!(
             t.mprotect(va, 0xFF),
             Err(ExofsError::InvalidArgument)
+        ));
+    }
+
+    #[test]
+    fn test_mmap_rejects_write_exec() {
+        let t = make_table();
+        assert!(matches!(
+            t.mmap(
+                12,
+                0,
+                4096,
+                PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_PRIVATE,
+                1
+            ),
+            Err(ExofsError::PermissionDenied)
+        ));
+    }
+
+    #[test]
+    fn test_mprotect_rejects_write_exec() {
+        let t = make_table();
+        let va = t.mmap(13, 0, 4096, PROT_READ, MAP_PRIVATE, 1).test_unwrap();
+        assert!(matches!(
+            t.mprotect(va, PROT_WRITE | PROT_EXEC),
+            Err(ExofsError::PermissionDenied)
         ));
     }
 

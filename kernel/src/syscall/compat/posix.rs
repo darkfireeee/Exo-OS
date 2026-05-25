@@ -178,6 +178,9 @@ pub fn validate_prot(prot: u32) -> Result<u32, SyscallError> {
     if prot & !known != 0 {
         return Err(SyscallError::Invalid);
     }
+    if prot & PROT_WRITE != 0 && prot & PROT_EXEC != 0 {
+        return Err(SyscallError::Access);
+    }
     Ok(prot)
 }
 

@@ -135,6 +135,10 @@ pub fn find_virtio_blk_mmio_bar() -> Option<usize> {
     pci_cfg::find_virtio_blk_mmio_bar()
 }
 
+pub fn find_virtio_blk_legacy_io_port() -> Option<u16> {
+    pci_cfg::find_virtio_blk_legacy_io_port()
+}
+
 pub fn find_pci_device(
     vendor_filter: u16,
     device_filter: u16,

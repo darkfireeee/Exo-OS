@@ -216,6 +216,20 @@ fn pci_bar_base_and_kind(bdf: PciBdf, bar_offset: u16) -> Option<(u64, u8)> {
     (base != 0).then_some((base, 0))
 }
 
+fn pci_io_bar_base(bdf: PciBdf, bar_offset: u16) -> Option<u16> {
+    let raw = pci_cfg_read32(bdf, bar_offset);
+    if raw == 0 || raw == u32::MAX || raw & 1 == 0 {
+        return None;
+    }
+
+    let base = raw & 0xFFFF_FFFC;
+    if base == 0 || base > u16::MAX as u32 {
+        None
+    } else {
+        Some(base as u16)
+    }
+}
+
 fn pci_bar_size(bdf: PciBdf, bar_offset: u16) -> u64 {
     let raw = pci_cfg_read32(bdf, bar_offset);
     if raw == 0 || raw == u32::MAX {
@@ -444,6 +458,45 @@ pub fn find_virtio_blk_mmio_bar() -> Option<usize> {
                     let is_64_bit_mem_bar = raw & 1 == 0 && ((raw >> 1) & 0x3) == 0x2;
                     bar_idx += if is_64_bit_mem_bar { 2 } else { 1 };
                 }
+            }
+        }
+    }
+
+    None
+}
+
+pub fn find_virtio_blk_legacy_io_port() -> Option<u16> {
+    for bus in 0u16..=255 {
+        let bus = bus as u8;
+        for dev in 0u8..32 {
+            let bdf0 = PciBdf { bus, dev, func: 0 };
+            if pci_cfg_read16(bdf0, 0x00) == u16::MAX {
+                continue;
+            }
+
+            let header_type = pci_cfg_read8(bdf0, PCI_HEADER_TYPE_OFFSET);
+            let function_count = if header_type & 0x80 != 0 { 8 } else { 1 };
+
+            for func in 0u8..function_count {
+                let bdf = PciBdf { bus, dev, func };
+                let id = pci_cfg_read32(bdf, 0x00);
+                let vendor_id = (id & 0xFFFF) as u16;
+                if vendor_id == u16::MAX {
+                    continue;
+                }
+                let device_id = (id >> 16) as u16;
+                if vendor_id != PCI_VENDOR_VIRTIO || device_id != PCI_DEVICE_VIRTIO_BLK_LEGACY {
+                    continue;
+                }
+
+                let Some(io_base) = pci_io_bar_base(bdf, PCI_BAR0_OFFSET) else {
+                    continue;
+                };
+
+                let mut command = pci_cfg_read16(bdf, PCI_COMMAND_OFFSET);
+                command |= PCI_COMMAND_IO_SPACE | PCI_COMMAND_BUS_MASTER;
+                pci_cfg_write16(bdf, PCI_COMMAND_OFFSET, command);
+                return Some(io_base);
             }
         }
     }

@@ -11,6 +11,7 @@ use super::validation::{
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{DiskOffset, EpochFlags, EpochId, ExofsError, ExofsResult};
+use crate::fs::exofs::crypto::key_storage;
 use crate::fs::exofs::epoch::epoch_commit as durable_epoch_commit;
 use crate::fs::exofs::epoch::epoch_root::{EpochRootEntry, EpochRootInMemory};
 use crate::fs::exofs::epoch::epoch_root_chain::{
@@ -514,6 +515,10 @@ fn do_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
         }
     }
     if let Err(e) = flush_dirty_blobs(&entries) {
+        COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
+        return Err(e);
+    }
+    if let Err(e) = key_storage::persist_global_if_master_present() {
         COMMIT_STATE.store(STATE_IDLE, Ordering::Release);
         return Err(e);
     }

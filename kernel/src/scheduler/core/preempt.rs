@@ -54,7 +54,11 @@ static PREEMPT_DISABLE_TOTAL: AtomicI32 = AtomicI32::new(0);
 fn current_cpu_id() -> usize {
     // SAFETY: lecture d'une variable per-CPU via l'ABI noyau.
     // La valeur est toujours dans [0, MAX_CPUS).
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(test)]
+    {
+        0
+    }
+    #[cfg(all(target_arch = "x86_64", not(test)))]
     {
         // Lecture du champ cpu_id dans le per-CPU data (GS:0).
         // En l'absence du mécanisme complet, on retourne 0.
@@ -66,7 +70,7 @@ fn current_cpu_id() -> usize {
         let id = unsafe { arch_current_cpu() } as usize;
         id.min(MAX_CPUS - 1)
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(not(target_arch = "x86_64"), not(test)))]
     {
         0
     }
@@ -106,14 +110,14 @@ fn preempt_enable_raw() {
 
 #[inline(always)]
 fn publish_preempt_shadow(depth: i32) {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(test)))]
     unsafe {
         extern "C" {
             fn arch_set_preempt_count_shadow(depth: i32);
         }
         arch_set_preempt_count_shadow(depth);
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(any(not(target_arch = "x86_64"), test))]
     {
         let _ = depth;
     }

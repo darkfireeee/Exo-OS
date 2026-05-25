@@ -88,7 +88,7 @@ fn ensure_blob_cached(blob_id: BlobId) -> ExofsResult<()> {
     Ok(())
 }
 
-fn persist_cached_blob_if_disk(blob_id: BlobId) -> ExofsResult<()> {
+pub(crate) fn persist_cached_blob_if_disk(blob_id: BlobId) -> ExofsResult<()> {
     if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
         return Ok(());
     }
@@ -128,7 +128,7 @@ fn audit_immutable_write_denied(blob_id: BlobId) {
     });
 }
 
-pub(super) fn reject_if_immutable(blob_id: BlobId) -> ExofsResult<()> {
+pub(crate) fn reject_if_immutable(blob_id: BlobId) -> ExofsResult<()> {
     if is_immutable(blob_id)? {
         audit_immutable_write_denied(blob_id);
         return Err(ExofsError::PermissionDenied);

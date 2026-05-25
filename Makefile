@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-boot-payloads release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
+.PHONY: all build build-rootfs-binaries rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -17,10 +17,11 @@ ISO_OUTPUT     = exo-os.iso
 BAREMETAL_TARGET ?= x86_64-unknown-none
 USERSPACE_TARGET_JSON ?= $(abspath x86_64-exo-userspace.json)
 USERSPACE_TARGET_DIR  ?= x86_64-exo-userspace
+LOADER_TARGET_JSON    ?= $(abspath x86_64-exo-loader.json)
+LOADER_TARGET_DIR     ?= x86_64-exo-loader
 CARGO_TEST_FLAGS = -Z panic-abort-tests
 CARGO_BAREMETAL_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 CARGO_USERSPACE_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem -Z json-target-spec
-KERNEL_PAYLOAD_CFG = --config 'target.x86_64-unknown-none.rustflags=["--cfg","exo_boot_payloads"]'
 HOST_TEST_TARGET ?= x86_64-unknown-linux-gnu
 HOST_TEST_OVERRIDES = --target $(HOST_TEST_TARGET)
 
@@ -29,10 +30,11 @@ KERNEL_BIN_DBG  = target/x86_64-unknown-none/debug/exo-os-kernel
 KERNEL_BIN_REL  = target/x86_64-unknown-none/release/exo-os-kernel
 KERNEL_A_DBG    = target/exophoenix/kernel-a-debug.elf
 KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
-BOOT_PAYLOAD_RAW_DIR = target/$(USERSPACE_TARGET_DIR)/debug
-BOOT_PAYLOAD_DIR = target/boot-payloads-stripped
+ROOTFS_RAW_DIR = target/$(USERSPACE_TARGET_DIR)/debug
+ROOTFS_LOADER_RAW_DIR = target/$(LOADER_TARGET_DIR)/debug
+ROOTFS_STAGING_DIR = target/exofs-rootfs
 STRIP_TOOL ?= $(shell command -v llvm-strip 2>/dev/null || command -v strip 2>/dev/null || echo :)
-BOOT_SERVER_PACKAGES = \
+ROOTFS_SERVER_PACKAGES = \
 	-p exo-init-server \
 	-p exo-ipc-router \
 	-p exo-memory-server \
@@ -48,10 +50,8 @@ BOOT_SERVER_PACKAGES = \
 	-p exo-input-server \
 	-p exo-tty-server \
 	-p exo-exosh \
-	-p exo-shield \
-	-p exo-loader
-BOOT_PAYLOAD_FEATURES = --features exo-loader/dynamic_linking
-BOOT_PAYLOAD_BINS = \
+	-p exo-shield
+ROOTFS_SBIN_BINS = \
 	exo-init-server \
 	exo-ipc-router \
 	exo-memory-server \
@@ -66,9 +66,7 @@ BOOT_PAYLOAD_BINS = \
 	exo-scheduler-server \
 	exo-input-server \
 	exo-tty-server \
-	exosh \
-	exo-shield \
-	exo-loader
+	exo-shield
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
@@ -94,7 +92,7 @@ QEMU_SAFE_INT_LOG    ?= /tmp/exoos-qemu-int.log
 QEMU_SAFE_E9_LOG     ?= /tmp/exoos-e9.log
 QEMU_EXOFS_DISK      ?= target/qemu/exofs-root.img
 QEMU_EXOFS_DISK_SIZE ?= 512M
-QEMU_EXOFS_DRIVE_FLAGS = -drive if=none,file=$(QEMU_EXOFS_DISK),format=raw,id=exofs0,cache=writeback -device virtio-blk-pci,drive=exofs0
+QEMU_EXOFS_DRIVE_FLAGS = -drive if=none,file=$(QEMU_EXOFS_DISK),format=raw,id=exofs0,cache=writeback -device virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16
 QEMU_E1000_NET_FLAGS    = -netdev user,id=exonet0 -device e1000,netdev=exonet0,mac=02:45:58:4f:00:01
 QEMU_VIRTIO_NET_FLAGS   = -netdev user,id=exonet0 -device virtio-net-pci-non-transitional,netdev=exonet0,mac=02:45:58:4f:00:01
 QEMU_NET_FLAGS          ?= $(QEMU_VIRTIO_NET_FLAGS)
@@ -112,12 +110,7 @@ QEMU_HEADLESS_SAFE_FLAGS += -d int,cpu_reset -D $(QEMU_SAFE_INT_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -debugcon file:$(QEMU_SAFE_E9_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
-$(QEMU_EXOFS_DISK):
-	@mkdir -p $(dir $(QEMU_EXOFS_DISK))
-	@if [ ! -f "$(QEMU_EXOFS_DISK)" ]; then \
-	    echo "$(BLUE)Creation disque ExoFS QEMU : $(QEMU_EXOFS_DISK) ($(QEMU_EXOFS_DISK_SIZE))$(NC)"; \
-	    truncate -s $(QEMU_EXOFS_DISK_SIZE) "$(QEMU_EXOFS_DISK)"; \
-	fi
+$(QEMU_EXOFS_DISK): rootfs-image
 
 # Couleurs
 BLUE   = \033[0;34m
@@ -131,48 +124,58 @@ NC     = \033[0m
 
 all: iso
 
-## 1a. Build des payloads Ring1 embarques dans le rootfs ExoFS de boot
-build-boot-payloads:
-	@echo "$(BLUE)[payloads] Compilation serveurs Ring1 pour l'injection /sbin...$(NC)"
-	@$(CARGO) build $(BOOT_SERVER_PACKAGES) $(BOOT_PAYLOAD_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@rm -rf "$(BOOT_PAYLOAD_DIR)"
-	@mkdir -p "$(BOOT_PAYLOAD_DIR)"
-	@for bin in $(BOOT_PAYLOAD_BINS); do \
-		cp "$(BOOT_PAYLOAD_RAW_DIR)/$$bin" "$(BOOT_PAYLOAD_DIR)/$$bin"; \
-		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(BOOT_PAYLOAD_DIR)/$$bin" 2>/dev/null || true; fi; \
+## 1a. Build des binaires Ring1 installes dans l'image ExoFS racine
+build-rootfs-binaries:
+	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
+	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@rm -rf "$(ROOTFS_STAGING_DIR)"
+	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib"
+	@for bin in $(ROOTFS_SBIN_BINS); do \
+		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/sbin/$$bin"; \
+		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/$$bin" 2>/dev/null || true; fi; \
 	done
-	@echo "$(GREEN)[OK] Payloads /sbin prets : $(BOOT_PAYLOAD_DIR)$(NC)"
+	@cp "$(ROOTFS_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
+	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true; fi
+	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"
+	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi
+	@echo "$(GREEN)[OK] Rootfs staging pret : $(ROOTFS_STAGING_DIR)$(NC)"
+
+rootfs-image: build-rootfs-binaries
+	@echo "$(BLUE)[rootfs] Creation image ExoFS : $(QEMU_EXOFS_DISK) ($(QEMU_EXOFS_DISK_SIZE))$(NC)"
+	@mkdir -p $(dir $(QEMU_EXOFS_DISK))
+	@$(CARGO) run -p exofs-mkroot -- --image "$(QEMU_EXOFS_DISK)" --size "$(QEMU_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
 
 ## 1. Build debug du kernel (rapide, symboles complets)
-build: build-boot-payloads
+build:
 	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, image de résurrection)...$(NC)"
 	@mkdir -p target/exophoenix
 	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@cp $(KERNEL_BIN_REL) $(KERNEL_A_DBG)
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXO_BOOT_PAYLOAD_DIR="$(abspath $(BOOT_PAYLOAD_DIR))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build $(KERNEL_PAYLOAD_CFG) --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 
 ## 2. Build release du kernel (optimisé, LTO, plus petit)
-release: build-boot-payloads
+release:
 	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release)...$(NC)"
 	@mkdir -p target/exophoenix
 	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@cp $(KERNEL_BIN_REL) $(KERNEL_A_REL)
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXO_BOOT_PAYLOAD_DIR="$(abspath $(BOOT_PAYLOAD_DIR))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build $(KERNEL_PAYLOAD_CFG) --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 
 # ── Cible ISO (debug) ─────────────────────────────────────────────────────────
 ## 3. Construire l'image ISO bootable avec GRUB 2 (Multiboot2)
-iso: build
+iso: build rootfs-image
 	@echo "$(BLUE)[2/2] Construction ISO GRUB 2 (Multiboot2)...$(NC)"
 	@$(MAKE) --no-print-directory _make_iso KERNEL_BIN=$(KERNEL_BIN_DBG)
 	@echo "$(GREEN)[OK] ISO créée : $(ISO_OUTPUT)$(NC)"
 	@ls -lh $(ISO_OUTPUT)
 
 ## 3b. Construire l'image ISO en mode release
-iso-release: release
+iso-release: release rootfs-image
 	@echo "$(BLUE)[2/2] Construction ISO release...$(NC)"
 	@$(MAKE) --no-print-directory _make_iso KERNEL_BIN=$(KERNEL_BIN_REL)
 	@echo "$(GREEN)[OK] ISO release créée : $(ISO_OUTPUT)$(NC)"

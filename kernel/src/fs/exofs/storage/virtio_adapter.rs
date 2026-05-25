@@ -4,8 +4,13 @@ use crate::fs::exofs::core::DiskOffset;
 use crate::fs::exofs::core::ExofsError;
 use crate::fs::exofs::core::ExofsResult;
 use crate::fs::exofs::recovery::boot_recovery::BlockDevice;
+use crate::memory::core::{Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE};
+use crate::memory::physical::allocator::{alloc_pages, free_pages};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicBool, Ordering};
+use exo_virtio_blk::hal::{install_hal_ops, ExoHalOps};
 use exo_virtio_blk::ExoVirtioBlkDevice;
 use spin::Mutex;
 
@@ -16,22 +21,24 @@ pub struct VirtioBlockAdapter {
 }
 
 impl VirtioBlockAdapter {
-    pub fn new(base_address: usize, capacity: usize) -> Self {
-        Self {
-            device: Mutex::new(ExoVirtioBlkDevice::new(base_address, capacity)),
-        }
+    pub fn new_legacy_pci(io_base: u16) -> ExofsResult<Self> {
+        let device =
+            ExoVirtioBlkDevice::new_legacy_pci(io_base).map_err(|_| ExofsError::IoError)?;
+        Ok(Self {
+            device: Mutex::new(device),
+        })
     }
 }
 
 impl BlockDevice for VirtioBlockAdapter {
     fn read_block(&self, lba: u64, buf: &mut [u8]) -> ExofsResult<()> {
-        let dev = self.device.lock();
+        let mut dev = self.device.lock();
         dev.read_block(lba, buf)
             .map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
     }
 
     fn write_block(&self, lba: u64, buf: &[u8]) -> ExofsResult<()> {
-        let dev = self.device.lock();
+        let mut dev = self.device.lock();
         dev.write_block(lba, buf)
             .map_err(|_| crate::fs::exofs::core::error::ExofsError::IoError)
     }
@@ -64,18 +71,100 @@ pub fn register_global_disk(device: Arc<dyn BlockDevice>) -> bool {
     true
 }
 
-pub fn init_global_disk_with_mmio(base_address: usize, capacity_bytes: usize) {
-    let _ = register_global_disk(Arc::new(VirtioBlockAdapter::new(
-        base_address,
-        capacity_bytes,
-    )));
+static VIRTIO_HAL_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+fn pages_to_order(pages: usize) -> Option<usize> {
+    if pages == 0 {
+        return None;
+    }
+    let mut order = 0usize;
+    let mut covered = 1usize;
+    while covered < pages {
+        covered = covered.checked_shl(1)?;
+        order = order.checked_add(1)?;
+    }
+    Some(order)
+}
+
+fn kernel_dma_alloc(pages: usize) -> Option<(usize, NonNull<u8>)> {
+    let order = pages_to_order(pages)?;
+    let frame = alloc_pages(
+        order,
+        crate::memory::core::AllocFlags::DMA32
+            | crate::memory::core::AllocFlags::ZEROED
+            | crate::memory::core::AllocFlags::PIN,
+    )
+    .ok()?;
+    let phys = frame.start_address();
+    let virt = crate::memory::core::phys_to_virt(phys);
+    Some((
+        phys.as_u64() as usize,
+        NonNull::new(virt.as_u64() as *mut u8)?,
+    ))
+}
+
+unsafe fn kernel_dma_dealloc(paddr: usize, _vaddr: NonNull<u8>, pages: usize) -> bool {
+    let Some(order) = pages_to_order(pages) else {
+        return false;
+    };
+    let frame = Frame::containing(PhysAddr::new(paddr as u64));
+    free_pages(frame, order).is_ok()
+}
+
+unsafe fn kernel_mmio_phys_to_virt(paddr: usize, size: usize) -> Option<NonNull<u8>> {
+    use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
+    use crate::memory::virt::address_space::kernel::KERNEL_AS;
+
+    if size == 0 {
+        return None;
+    }
+    let page_mask = PAGE_SIZE as u64 - 1;
+    let phys = PhysAddr::new(paddr as u64);
+    let page_phys = PhysAddr::new(phys.as_u64() & !page_mask);
+    let page_off = (phys.as_u64() & page_mask) as usize;
+    let map_size = page_off.checked_add(size)?;
+    let pages = map_size.checked_add(PAGE_SIZE - 1)? / PAGE_SIZE;
+    let virt_base = KERNEL_AS.reserve_vmalloc_pages(pages).ok()?;
+    let flags = PageFlags::KERNEL_DMA | PageFlags::WRITE_THROUGH;
+
+    for page_idx in 0..pages {
+        let virt = VirtAddr::new(virt_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
+        let frame = Frame::containing(PhysAddr::new(
+            page_phys.as_u64() + (page_idx * PAGE_SIZE) as u64,
+        ));
+        if unsafe { KERNEL_AS.map(virt, frame, flags, &KERNEL_FAULT_ALLOC) }.is_err() {
+            return None;
+        }
+    }
+
+    let virt = virt_base.as_u64().checked_add(page_off as u64)?;
+    NonNull::new(virt as *mut u8)
+}
+
+fn install_kernel_hal_once() {
+    if VIRTIO_HAL_INSTALLED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        install_hal_ops(ExoHalOps {
+            dma_alloc: kernel_dma_alloc,
+            dma_dealloc: kernel_dma_dealloc,
+            mmio_phys_to_virt: kernel_mmio_phys_to_virt,
+        });
+    }
+}
+
+pub fn init_global_disk_with_legacy_pci(io_base: u16) -> ExofsResult<bool> {
+    install_kernel_hal_once();
+    let adapter = VirtioBlockAdapter::new_legacy_pci(io_base)?;
+    Ok(register_global_disk(Arc::new(adapter)))
 }
 
 pub fn init_global_disk() {
-    let Some(base_address) = crate::drivers::find_virtio_blk_mmio_bar() else {
+    let Some(io_base) = crate::drivers::find_virtio_blk_legacy_io_port() else {
         return;
     };
-    init_global_disk_with_mmio(base_address, DEFAULT_VIRTIO_BLK_CAPACITY_BYTES);
+    let _ = init_global_disk_with_legacy_pci(io_base);
 }
 
 pub fn has_global_disk() -> bool {

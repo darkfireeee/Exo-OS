@@ -13,6 +13,7 @@
 use crate::arch::constants::USER_ELF_BASE_MIN;
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
+use crate::fs::exofs::syscall::object_store;
 use crate::fs::exofs::syscall::path_resolve::resolve_path_to_blob;
 use crate::memory::core::layout::{
     USER_END, USER_STACK_BOOTSTRAP_PAGES, USER_STACK_BOOTSTRAP_SIZE, USER_STACK_TOP,
@@ -29,7 +30,6 @@ use crate::memory::{phys_to_virt, AllocFlags, Frame, PhysAddr, VirtAddr, PAGE_SI
 use crate::process::lifecycle::exec::{ElfLoadError, ElfLoadResult, ElfLoader};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
@@ -41,10 +41,15 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
 const PT_PHDR: u32 = 6;
+const PF_X: u32 = 0x1;
+const PF_W: u32 = 0x2;
+const PF_R: u32 = 0x4;
 const PHDR_SIZE: usize = 56;
 const DYNAMIC_LOADER_HANDOFF_MAGIC: u64 = 0x5845_4f4c_4459_4e01; // "XEOLDYN\1"
 const DYNAMIC_LOADER_HANDOFF_VERSION: u32 = 1;
 const DYNAMIC_LOADER_PATH_MAX: usize = 128;
+const DYNAMIC_LOADER_HANDOFF_STACK_GAP: u64 = 16 * 1024;
+const DEFAULT_DYNAMIC_LOADER_PATH: &[u8] = b"/lib/ld-exo.so";
 const ELF_BLOB_REGISTRY_CAP: usize = 1024;
 const ELF_MAX_SEGMENTS_PER_BLOB: usize = 8;
 
@@ -146,6 +151,7 @@ struct DynamicLoaderHandoff {
     interpreter_base: u64,
     interpreter_entry: u64,
     page_size: u64,
+    executable_stack_top: u64,
     executable_path_len: u32,
     interpreter_path_len: u32,
     executable_path: [u8; DYNAMIC_LOADER_PATH_MAX],
@@ -171,6 +177,18 @@ struct InterpreterPath {
 }
 
 impl InterpreterPath {
+    fn from_bytes(bytes: &[u8]) -> Result<Self, ElfLoadError> {
+        if bytes.is_empty() || bytes.len() >= DYNAMIC_LOADER_PATH_MAX {
+            return Err(ElfLoadError::InvalidElf);
+        }
+        let mut out = [0u8; DYNAMIC_LOADER_PATH_MAX];
+        out[..bytes.len()].copy_from_slice(bytes);
+        Ok(Self {
+            bytes: out,
+            len: bytes.len(),
+        })
+    }
+
     fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
@@ -344,7 +362,10 @@ impl ElfLoader for ExoFsElfLoader {
 
         // ── 3. Valider l'en-tête ELF et détecter PT_INTERP ───────────────────
         validate_elf_header(&elf_data)?;
-        let interp_path = read_interpreter_path(&elf_data)?;
+        let interp_path = match read_interpreter_path(&elf_data)? {
+            Some(interp) => Some(interp),
+            None => default_interpreter_path(path)?,
+        };
 
         // ── 5. Créer le nouvel espace d'adressage ────────────────────────────
         let alloc = ElfWalkAllocator;
@@ -366,7 +387,13 @@ impl ElfLoader for ExoFsElfLoader {
         let mut interp_image = None;
 
         if let Some(interp) = interp_path {
-            let interp_blob = resolve_blob_id(interp.as_bytes())?;
+            let interp_blob = resolve_blob_id(interp.as_bytes()).map_err(|err| {
+                if err == ElfLoadError::NotFound {
+                    ElfLoadError::InterpreterNotFound
+                } else {
+                    err
+                }
+            })?;
             let interp_file_id = register_elf_blob(interp_blob).ok_or(ElfLoadError::OutOfMemory)?;
             clear_elf_segments(interp_file_id);
             let interp_data = read_blob_from_cache(&interp_blob)?;
@@ -389,8 +416,10 @@ impl ElfLoader for ExoFsElfLoader {
 
         let stack_frames = map_stack_pages(&mut builder, &alloc, stack_base, stack_size)?;
         install_stack_vma(&child_as, stack_base, stack_size)?;
+        let executable_stack_top = STACK_TOP - 8;
         if let Some((interp, image)) = interp_image {
-            let handoff = build_dynamic_handoff(path, &interp, &main_image, &image);
+            let handoff =
+                build_dynamic_handoff(path, &interp, &main_image, &image, executable_stack_top);
             let handoff_bytes = unsafe {
                 core::slice::from_raw_parts(
                     &handoff as *const DynamicLoaderHandoff as *const u8,
@@ -398,7 +427,7 @@ impl ElfLoader for ExoFsElfLoader {
                 )
             };
             let handoff_vaddr = (STACK_TOP
-                .saturating_sub(8)
+                .saturating_sub(DYNAMIC_LOADER_HANDOFF_STACK_GAP)
                 .saturating_sub(handoff_bytes.len() as u64))
                 & !15u64;
             write_stack_bytes(&stack_frames, stack_base, handoff_vaddr, handoff_bytes)?;
@@ -422,7 +451,7 @@ impl ElfLoader for ExoFsElfLoader {
             // adresse de retour pushée par `call`. L'ABI SysV veut donc
             // RSP % 16 == 8 à l'entrée pour que les frames internes restent
             // alignées 16 B avant les appels et les `movaps`.
-            initial_stack_top: STACK_TOP - 8,
+            initial_stack_top: executable_stack_top,
             entry_arg0,
             tls_base: 0,
             tls_size: 0,
@@ -443,17 +472,14 @@ impl FileFaultProvider for ExoFsElfLoader {
     ) -> Result<(), AllocError> {
         let blob_id = lookup_elf_blob(file_id).ok_or(AllocError::InvalidParams)?;
         let cached_data = BLOB_CACHE.get(&blob_id);
-        let embedded_data = if cached_data.is_none() {
-            crate::userspace_boot::embedded_payload_by_blob(blob_id)
-        } else {
-            None
-        };
+        let disk_data;
         let data = if let Some(ref cached) = cached_data {
             &cached[..]
-        } else if let Some(embedded) = embedded_data {
-            embedded
         } else {
-            return Err(AllocError::InvalidParams);
+            disk_data = object_store::load_blob_data_if_available(&blob_id)
+                .map_err(|_| AllocError::InvalidParams)?
+                .ok_or(AllocError::InvalidParams)?;
+            &disk_data[..]
         };
         let dst_virt = phys_to_virt(dest_frame.start_address());
         let dst =
@@ -522,10 +548,7 @@ fn resolve_blob_id(path_bytes: &[u8]) -> Result<BlobId, ElfLoadError> {
         })
 }
 
-/// Lit le contenu complet d'un blob depuis BLOB_CACHE.
-/// Retombe sur les payloads de boot embarqués si le cache ExoFS ne contient pas
-/// encore l'entrée. Les binaires critiques du démarrage ne doivent pas dépendre
-/// d'un état cache mutable pour `execve()`.
+/// Lit le contenu complet d'un blob depuis le cache, puis depuis le disque ExoFS.
 fn read_blob_from_cache(blob_id: &BlobId) -> Result<Arc<[u8]>, ElfLoadError> {
     if let Some(data) = BLOB_CACHE.get(blob_id) {
         trace_blob(b"elf: cache hit ", blob_id);
@@ -533,13 +556,18 @@ fn read_blob_from_cache(blob_id: &BlobId) -> Result<Arc<[u8]>, ElfLoadError> {
     }
 
     trace_blob(b"elf: cache miss ", blob_id);
-    if let Some(bytes) = crate::userspace_boot::embedded_payload_by_blob(*blob_id) {
-        trace_blob(b"elf: embedded hit ", blob_id);
-        let mut data = Vec::new();
-        data.try_reserve_exact(bytes.len())
-            .map_err(|_| ElfLoadError::OutOfMemory)?;
-        data.extend_from_slice(bytes);
-        return Ok(Arc::from(data.into_boxed_slice()));
+    let Some(data) =
+        object_store::load_blob_data_if_available(blob_id).map_err(|_| ElfLoadError::NotFound)?
+    else {
+        return Err(ElfLoadError::NotFound);
+    };
+
+    BLOB_CACHE
+        .insert(*blob_id, data)
+        .map_err(|_| ElfLoadError::OutOfMemory)?;
+    if let Some(data) = BLOB_CACHE.get(blob_id) {
+        trace_blob(b"elf: disk hit ", blob_id);
+        return Ok(data);
     }
 
     Err(ElfLoadError::NotFound)
@@ -648,6 +676,13 @@ fn read_interpreter_path(data: &[u8]) -> Result<Option<InterpreterPath>, ElfLoad
     Ok(None)
 }
 
+fn default_interpreter_path(path: &str) -> Result<Option<InterpreterPath>, ElfLoadError> {
+    if path.as_bytes() == DEFAULT_DYNAMIC_LOADER_PATH {
+        return Ok(None);
+    }
+    InterpreterPath::from_bytes(DEFAULT_DYNAMIC_LOADER_PATH).map(Some)
+}
+
 fn install_elf_image(
     elf_data: &[u8],
     file_id: u64,
@@ -687,6 +722,7 @@ fn install_elf_image(
             i += 1;
             continue;
         }
+        validate_load_segment_flags(p_flags)?;
         if p_filesz > p_memsz || p_offset.saturating_add(p_filesz) > elf_data.len() {
             return Err(ElfLoadError::InvalidElf);
         }
@@ -730,6 +766,7 @@ fn build_dynamic_handoff(
     interpreter_path: &InterpreterPath,
     executable: &LoadedElfImage,
     interpreter: &LoadedElfImage,
+    executable_stack_top: u64,
 ) -> DynamicLoaderHandoff {
     let mut handoff = DynamicLoaderHandoff {
         magic: DYNAMIC_LOADER_HANDOFF_MAGIC,
@@ -745,6 +782,7 @@ fn build_dynamic_handoff(
         interpreter_base: interpreter.base,
         interpreter_entry: interpreter.entry_point,
         page_size: PAGE_SIZE as u64,
+        executable_stack_top,
         executable_path_len: 0,
         interpreter_path_len: interpreter_path.len as u32,
         executable_path: [0; DYNAMIC_LOADER_PATH_MAX],
@@ -778,12 +816,21 @@ fn validate_user_segment_range(p_vaddr: u64, p_memsz: usize) -> Result<(), ElfLo
     Ok(())
 }
 
+fn validate_load_segment_flags(p_flags: u32) -> Result<(), ElfLoadError> {
+    if (p_flags & (PF_W | PF_X)) == (PF_W | PF_X) {
+        return Err(ElfLoadError::PermissionDenied);
+    }
+    Ok(())
+}
+
 fn elf_page_flags(p_flags: u32) -> PageFlags {
-    let exec = (p_flags & 0x1) != 0;
-    let write = (p_flags & 0x2) != 0;
+    debug_assert!(validate_load_segment_flags(p_flags).is_ok());
+
+    let exec = (p_flags & PF_X) != 0;
+    let write = (p_flags & PF_W) != 0;
 
     match (exec, write) {
-        (true, true) => PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER,
+        (true, true) => PageFlags::USER_DATA,
         (true, false) => PageFlags::USER_CODE,
         (false, true) => PageFlags::USER_DATA,
         (false, false) => PageFlags::PRESENT | PageFlags::USER | PageFlags::NO_EXECUTE,
@@ -791,14 +838,16 @@ fn elf_page_flags(p_flags: u32) -> PageFlags {
 }
 
 fn elf_vma_flags(p_flags: u32) -> VmaFlags {
+    debug_assert!(validate_load_segment_flags(p_flags).is_ok());
+
     let mut flags = VmaFlags::NONE;
-    if (p_flags & 0x4) != 0 {
+    if (p_flags & PF_R) != 0 {
         flags |= VmaFlags::READ;
     }
-    if (p_flags & 0x2) != 0 {
+    if (p_flags & PF_W) != 0 {
         flags |= VmaFlags::WRITE;
     }
-    if (p_flags & 0x1) != 0 {
+    if (p_flags & PF_X) != 0 {
         flags |= VmaFlags::EXEC;
     }
     flags
@@ -917,3 +966,23 @@ fn write_stack_bytes(
 
 /// Instance statique du chargeur ELF.
 pub static EXO_ELF_LOADER: ExoFsElfLoader = ExoFsElfLoader;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_load_segment_flags_rejects_write_exec() {
+        assert_eq!(
+            validate_load_segment_flags(PF_R | PF_W | PF_X),
+            Err(ElfLoadError::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn test_validate_load_segment_flags_allows_standard_segments() {
+        assert_eq!(validate_load_segment_flags(PF_R | PF_X), Ok(()));
+        assert_eq!(validate_load_segment_flags(PF_R | PF_W), Ok(()));
+        assert_eq!(validate_load_segment_flags(PF_R), Ok(()));
+    }
+}

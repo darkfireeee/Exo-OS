@@ -13,6 +13,8 @@ use crate::fs::exofs::posix_bridge::inode_emulation::{
     inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
 };
 use crate::fs::exofs::syscall::object_store;
+use crate::fs::exofs::syscall::object_write::{persist_cached_blob_if_disk, reject_if_immutable};
+use crate::fs::exofs::syscall::quota_query::{check_quota, quota_add_usage, quota_sub_usage};
 use alloc::collections::btree_map::Entry;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -661,6 +663,7 @@ pub fn vfs_create(
     if INODE_EMULATION.contains_oid(oid) {
         return Err(ExofsError::ObjectAlreadyExists);
     }
+    check_quota(uid, 0, 1)?;
     let flags = if mode & file_mode::S_IFMT == file_mode::S_IFDIR {
         inode_flags::DIRECTORY
     } else {
@@ -668,6 +671,11 @@ pub fn vfs_create(
     };
     let ino = INODE_EMULATION.get_or_alloc_flags(oid, flags, 0, uid)?;
     if let Err(err) = DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(flags)) {
+        INODE_EMULATION.release_ino(ino);
+        return Err(err);
+    }
+    if let Err(err) = quota_add_usage(uid, 0, 1) {
+        let _ = DIRECTORY_REGISTRY.remove(parent_ino, name);
         INODE_EMULATION.release_ino(ino);
         return Err(err);
     }
@@ -747,6 +755,7 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     }
     let written = count.min(buf.len());
     let blob_id = ensure_inode_blob_cached(&entry)?;
+    reject_if_immutable(blob_id)?;
     let current_len = BLOB_CACHE.len(&blob_id).unwrap_or(0);
     let start_offset = if desc.flags & open_flags::O_APPEND != 0 {
         current_len
@@ -756,10 +765,18 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     let end_offset = start_offset
         .checked_add(written)
         .ok_or(ExofsError::OffsetOverflow)?;
+    let new_size = current_len.max(end_offset) as u64;
+    let growth = new_size.saturating_sub(current_len as u64);
+    if growth > 0 {
+        check_quota(entry.uid, growth, 0)?;
+    }
     BLOB_CACHE.write_at(blob_id, start_offset, &buf[..written])?;
+    persist_cached_blob_if_disk(blob_id)?;
+    if growth > 0 {
+        quota_add_usage(entry.uid, growth, 0)?;
+    }
     let new_offset = end_offset as u64;
     FD_TABLE.update_offset(fd, new_offset);
-    let new_size = (current_len.max(end_offset)) as u64;
     if new_size != entry.size {
         INODE_EMULATION.update_size(desc.ino, new_size)?;
     }
@@ -798,17 +815,26 @@ pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
         return Err(ExofsError::InvalidArgument);
     }
     let record = DIRECTORY_REGISTRY
-        .remove(parent_ino, name)
+        .lookup(parent_ino, name)
         .ok_or(ExofsError::ObjectNotFound)?;
     let entry = INODE_EMULATION
         .get_entry(record.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
     // Ne peut pas unlink un répertoire.
     if entry.flags & inode_flags::DIRECTORY != 0 {
-        let _ = DIRECTORY_REGISTRY.insert(parent_ino, record.ino, &record.name, record.kind);
         return Err(ExofsError::NotADirectory);
     }
-    BLOB_CACHE.invalidate(&blob_id_for_object(entry.object_id));
+    let blob_id = blob_id_for_object(entry.object_id);
+    reject_if_immutable(blob_id)?;
+    let removed = DIRECTORY_REGISTRY
+        .remove(parent_ino, name)
+        .ok_or(ExofsError::ObjectNotFound)?;
+    if let Err(err) = object_store::free_blob_mapping(&blob_id) {
+        let _ = DIRECTORY_REGISTRY.insert(parent_ino, removed.ino, &removed.name, removed.kind);
+        return Err(err);
+    }
+    BLOB_CACHE.invalidate(&blob_id);
+    quota_sub_usage(entry.uid, entry.size, 1)?;
     INODE_EMULATION.release_ino(record.ino);
     Ok(())
 }
@@ -983,7 +1009,18 @@ fn ensure_inode_blob_cached(entry: &InodeEntry) -> ExofsResult<BlobId> {
 
 fn resize_inode_data(entry: &InodeEntry, new_len: usize) -> ExofsResult<()> {
     let blob_id = ensure_inode_blob_cached(entry)?;
+    reject_if_immutable(blob_id)?;
+    let current_len = BLOB_CACHE.len(&blob_id).unwrap_or(0);
+    if new_len > current_len {
+        check_quota(entry.uid, (new_len - current_len) as u64, 0)?;
+    }
     BLOB_CACHE.resize(blob_id, new_len)?;
+    persist_cached_blob_if_disk(blob_id)?;
+    if new_len > current_len {
+        quota_add_usage(entry.uid, (new_len - current_len) as u64, 0)?;
+    } else if current_len > new_len {
+        quota_sub_usage(entry.uid, (current_len - new_len) as u64, 0)?;
+    }
     Ok(())
 }
 

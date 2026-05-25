@@ -27,6 +27,7 @@ pub struct DynamicLoaderHandoff {
     pub interpreter_base: u64,
     pub interpreter_entry: u64,
     pub page_size: u64,
+    pub executable_stack_top: u64,
     pub executable_path_len: u32,
     pub interpreter_path_len: u32,
     pub executable_path: [u8; DYNAMIC_LOADER_PATH_MAX],
@@ -37,6 +38,7 @@ pub struct DynamicLoaderHandoff {
 pub struct UserJump {
     pub entry: u64,
     pub arg0: u64,
+    pub stack_top: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,8 +80,8 @@ pub unsafe fn runtime_entry(handoff: *const DynamicLoaderHandoff) -> Result<User
     if handoff.is_null() {
         return Err(LoaderError::NullHandoff);
     }
-    let handoff = &*handoff;
-    validate_handoff(handoff)?;
+    let handoff = *handoff;
+    validate_handoff(&handoff)?;
 
     let dynamic = parse_dynamic_table(
         handoff.executable_dynamic,
@@ -91,6 +93,7 @@ pub unsafe fn runtime_entry(handoff: *const DynamicLoaderHandoff) -> Result<User
     Ok(UserJump {
         entry: handoff.executable_entry,
         arg0: 0,
+        stack_top: handoff.executable_stack_top,
     })
 }
 
@@ -102,6 +105,9 @@ fn validate_handoff(handoff: &DynamicLoaderHandoff) -> Result<(), LoaderError> {
         return Err(LoaderError::UnsupportedVersion);
     }
     if handoff.executable_entry == 0 {
+        return Err(LoaderError::EmptyEntry);
+    }
+    if handoff.executable_stack_top == 0 {
         return Err(LoaderError::EmptyEntry);
     }
     Ok(())

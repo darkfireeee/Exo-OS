@@ -5,7 +5,12 @@
 //!
 //! OOM-02 / ARITH-02 / RECUR-01 respectés.
 
+use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
+use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
+use crate::fs::exofs::storage::virtio_adapter;
+use crate::fs::exofs::syscall::object_store;
+use crate::fs::exofs::{crypto::secret_reader::SecretReader, crypto::secret_writer::SecretWriter};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -165,6 +170,23 @@ impl StorageTable {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PersistentKeyEntry {
+    slot: KeySlotId,
+    key: [u8; 32],
+    kind: KeyKind,
+    state: SlotState,
+    accesses: u64,
+}
+
+const KEY_STORAGE_MAGIC: [u8; 4] = *b"EXKS";
+const KEY_STORAGE_VERSION: u16 = 1;
+const KEY_STORAGE_HEADER_SIZE: usize = 24;
+const KEY_STORAGE_ENTRY_SIZE: usize = 56;
+const KEY_STORAGE_BLOB_LABEL: &[u8] = b"ExoFS-KeyStorage-Persistent-v1";
+const KEY_STORAGE_AAD: &[u8] = b"ExoFS-KeyStorage-AEAD-v1";
+const MAX_PERSISTED_KEYS: usize = 4096;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // KeyStorage (thread-safe via spinlock simulé en no_std)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,6 +318,280 @@ impl KeyStorage {
     pub fn total_count(&self) -> u64 {
         self.total_keys.load(Ordering::Relaxed)
     }
+
+    fn snapshot_persistent_entries(&self) -> ExofsResult<Vec<PersistentKeyEntry>> {
+        let mut out = Vec::new();
+        self.acquire();
+        let tbl = unsafe { &*self.table.get() };
+        out.try_reserve(tbl.entries.len()).map_err(|_| {
+            self.release();
+            ExofsError::NoMemory
+        })?;
+        for (&slot, entry) in tbl.entries.iter() {
+            if !key_kind_is_persistent(entry.kind) {
+                continue;
+            }
+            out.push(PersistentKeyEntry {
+                slot,
+                key: entry.key,
+                kind: entry.kind,
+                state: entry.state,
+                accesses: entry.accesses,
+            });
+        }
+        self.release();
+        Ok(out)
+    }
+
+    fn serialize_persistent_plaintext(&self) -> ExofsResult<Vec<u8>> {
+        let entries = self.snapshot_persistent_entries()?;
+        if entries.len() > MAX_PERSISTED_KEYS {
+            return Err(ExofsError::InvalidSize);
+        }
+        let body = entries
+            .len()
+            .checked_mul(KEY_STORAGE_ENTRY_SIZE)
+            .ok_or(ExofsError::OffsetOverflow)?;
+        let total = KEY_STORAGE_HEADER_SIZE
+            .checked_add(body)
+            .ok_or(ExofsError::OffsetOverflow)?;
+        let mut out = Vec::new();
+        out.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+        out.extend_from_slice(&KEY_STORAGE_MAGIC);
+        out.extend_from_slice(&KEY_STORAGE_VERSION.to_le_bytes());
+        out.extend_from_slice(&(KEY_STORAGE_ENTRY_SIZE as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.next_slot.load(Ordering::Acquire).to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]);
+        for entry in entries.iter() {
+            out.extend_from_slice(&entry.slot.0.to_le_bytes());
+            out.push(key_kind_to_u8(entry.kind));
+            out.push(slot_state_to_u8(entry.state));
+            out.extend_from_slice(&[0u8; 6]);
+            out.extend_from_slice(&entry.accesses.to_le_bytes());
+            out.extend_from_slice(&entry.key);
+        }
+        Ok(out)
+    }
+
+    fn replace_from_persistent_plaintext(&self, data: &[u8]) -> ExofsResult<()> {
+        if data.len() < KEY_STORAGE_HEADER_SIZE {
+            return Err(ExofsError::CorruptedStructure);
+        }
+        if data[0..4] != KEY_STORAGE_MAGIC {
+            return Err(ExofsError::InvalidMagic);
+        }
+        let version = u16::from_le_bytes([data[4], data[5]]);
+        if version != KEY_STORAGE_VERSION {
+            return Err(ExofsError::IncompatibleVersion);
+        }
+        let entry_size = u16::from_le_bytes([data[6], data[7]]) as usize;
+        if entry_size != KEY_STORAGE_ENTRY_SIZE {
+            return Err(ExofsError::InvalidSize);
+        }
+        let count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        if count > MAX_PERSISTED_KEYS {
+            return Err(ExofsError::InvalidSize);
+        }
+        let mut next_bytes = [0u8; 8];
+        next_bytes.copy_from_slice(&data[12..20]);
+        let stored_next_slot = u64::from_le_bytes(next_bytes);
+        let expected_len = KEY_STORAGE_HEADER_SIZE
+            .checked_add(
+                count
+                    .checked_mul(KEY_STORAGE_ENTRY_SIZE)
+                    .ok_or(ExofsError::OffsetOverflow)?,
+            )
+            .ok_or(ExofsError::OffsetOverflow)?;
+        if data.len() != expected_len {
+            return Err(ExofsError::CorruptedStructure);
+        }
+
+        let mut table = StorageTable {
+            entries: BTreeMap::new(),
+        };
+        let mut max_slot = 0u64;
+        let mut off = KEY_STORAGE_HEADER_SIZE;
+        let mut i = 0usize;
+        while i < count {
+            let mut slot_bytes = [0u8; 8];
+            slot_bytes.copy_from_slice(&data[off..off + 8]);
+            let slot = KeySlotId(u64::from_le_bytes(slot_bytes));
+            let kind = key_kind_from_u8(data[off + 8])?;
+            let state = slot_state_from_u8(data[off + 9])?;
+            if !key_kind_is_persistent(kind) {
+                return Err(ExofsError::InvalidArgument);
+            }
+            let mut access_bytes = [0u8; 8];
+            access_bytes.copy_from_slice(&data[off + 16..off + 24]);
+            let accesses = u64::from_le_bytes(access_bytes);
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&data[off + 24..off + 56]);
+            if table
+                .entries
+                .insert(
+                    slot,
+                    KeyEntry {
+                        key,
+                        kind,
+                        state,
+                        accesses,
+                    },
+                )
+                .is_some()
+            {
+                return Err(ExofsError::CorruptedStructure);
+            }
+            max_slot = max_slot.max(slot.0);
+            off = off.saturating_add(KEY_STORAGE_ENTRY_SIZE);
+            i = i.wrapping_add(1);
+        }
+
+        let next_slot = stored_next_slot.max(max_slot.saturating_add(1)).max(1);
+        self.acquire();
+        unsafe { *self.table.get() = table };
+        self.total_keys.store(count as u64, Ordering::Release);
+        self.next_slot.store(next_slot, Ordering::Release);
+        self.release();
+        Ok(())
+    }
+
+    /// Exporte les slots persistants chiffrés avec la clé maître fournie.
+    pub fn export_encrypted(&self, master_key: &[u8; 32]) -> ExofsResult<Vec<u8>> {
+        let mut plain = self.serialize_persistent_plaintext()?;
+        let writer = SecretWriter::new(master_key);
+        let encrypted = writer.encrypt_with_aad(&plain, KEY_STORAGE_AAD);
+        zeroize_slice(&mut plain);
+        encrypted
+    }
+
+    /// Remplace la table par un snapshot chiffré précédemment exporté.
+    pub fn import_encrypted(&self, master_key: &[u8; 32], payload: &[u8]) -> ExofsResult<()> {
+        let reader = SecretReader::new(master_key);
+        let mut plain = reader.decrypt_with_aad(payload, KEY_STORAGE_AAD)?;
+        let result = self.replace_from_persistent_plaintext(&plain);
+        zeroize_slice(&mut plain);
+        result
+    }
+
+    /// Persiste le stockage de clés global sur le disque ExoFS si un block device est monté.
+    pub fn persist_to_global_disk(&self, master_key: &[u8; 32]) -> ExofsResult<bool> {
+        if !virtio_adapter::has_global_disk() {
+            return Ok(false);
+        }
+        let bid = key_storage_blob_id();
+        let encrypted = self.export_encrypted(master_key)?;
+        let wrote = object_store::persist_blob_data_if_disk(bid, &encrypted, true)?;
+        if wrote {
+            BLOB_CACHE
+                .insert(bid, encrypted)
+                .map_err(|_| ExofsError::NoSpace)?;
+            let _ = BLOB_CACHE.mark_clean(&bid);
+        }
+        Ok(wrote)
+    }
+
+    /// Restaure le stockage de clés depuis le disque ExoFS si le snapshot existe.
+    pub fn restore_from_global_disk(&self, master_key: &[u8; 32]) -> ExofsResult<bool> {
+        if !virtio_adapter::has_global_disk() {
+            return Ok(false);
+        }
+        let bid = key_storage_blob_id();
+        if let Some(cached) = BLOB_CACHE.get(&bid) {
+            self.import_encrypted(master_key, cached.as_ref())?;
+            return Ok(true);
+        }
+        let Some(payload) = object_store::load_blob_data_if_available(&bid)? else {
+            return Ok(false);
+        };
+        self.import_encrypted(master_key, &payload)?;
+        BLOB_CACHE
+            .insert(bid, payload)
+            .map_err(|_| ExofsError::NoSpace)?;
+        let _ = BLOB_CACHE.mark_clean(&bid);
+        Ok(true)
+    }
+}
+
+pub fn key_storage_blob_id() -> BlobId {
+    BlobId::from_bytes_blake3(KEY_STORAGE_BLOB_LABEL)
+}
+
+pub fn persist_global_with_master_slot(slot: KeySlotId) -> ExofsResult<bool> {
+    let mut key = KEY_STORAGE.load_key_256(slot)?;
+    let result = KEY_STORAGE.persist_to_global_disk(&key);
+    zeroize_array(&mut key);
+    result
+}
+
+pub fn restore_global_with_master_slot(slot: KeySlotId) -> ExofsResult<bool> {
+    let mut key = KEY_STORAGE.load_key_256(slot)?;
+    let result = KEY_STORAGE.restore_from_global_disk(&key);
+    zeroize_array(&mut key);
+    result
+}
+
+pub fn persist_global_if_master_present() -> ExofsResult<bool> {
+    let slots = KEY_STORAGE.list_by_kind(KeyKind::Master)?;
+    let Some(slot) = slots.first().copied() else {
+        return Ok(false);
+    };
+    persist_global_with_master_slot(slot)
+}
+
+fn key_kind_is_persistent(kind: KeyKind) -> bool {
+    !matches!(kind, KeyKind::Master | KeyKind::Session)
+}
+
+fn key_kind_to_u8(kind: KeyKind) -> u8 {
+    match kind {
+        KeyKind::Master => 1,
+        KeyKind::Volume => 2,
+        KeyKind::Object => 3,
+        KeyKind::Derived => 4,
+        KeyKind::Session => 5,
+    }
+}
+
+fn key_kind_from_u8(raw: u8) -> ExofsResult<KeyKind> {
+    match raw {
+        1 => Ok(KeyKind::Master),
+        2 => Ok(KeyKind::Volume),
+        3 => Ok(KeyKind::Object),
+        4 => Ok(KeyKind::Derived),
+        5 => Ok(KeyKind::Session),
+        _ => Err(ExofsError::InvalidArgument),
+    }
+}
+
+fn slot_state_to_u8(state: SlotState) -> u8 {
+    match state {
+        SlotState::Active => 1,
+        SlotState::Revoked => 2,
+        SlotState::Expired => 3,
+    }
+}
+
+fn slot_state_from_u8(raw: u8) -> ExofsResult<SlotState> {
+    match raw {
+        1 => Ok(SlotState::Active),
+        2 => Ok(SlotState::Revoked),
+        3 => Ok(SlotState::Expired),
+        _ => Err(ExofsError::InvalidArgument),
+    }
+}
+
+fn zeroize_slice(buf: &mut [u8]) {
+    for byte in buf.iter_mut() {
+        unsafe {
+            core::ptr::write_volatile(byte, 0);
+        }
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+fn zeroize_array(buf: &mut [u8; 32]) {
+    zeroize_slice(buf);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +673,42 @@ mod tests {
         let ks = ks();
         ok(ks.store_key_256(&[0u8; 32], KeyKind::Derived));
         assert!(ks.total_count() >= 1);
+    }
+
+    #[test]
+    fn test_export_import_encrypted_roundtrip() {
+        let source = ks();
+        let master_key = [0xA5u8; 32];
+        let volume_key = [0x42u8; 32];
+        let session_key = [0x24u8; 32];
+        let master_slot = ok(source.store_key_256(&master_key, KeyKind::Master));
+        let volume_slot = ok(source.store_key_256(&volume_key, KeyKind::Volume));
+        let session_slot = ok(source.store_key_256(&session_key, KeyKind::Session));
+
+        let payload = ok(source.export_encrypted(&master_key));
+        let restored = ks();
+        ok(restored.import_encrypted(&master_key, &payload));
+
+        assert!(restored.load_key_256(master_slot).is_err());
+        assert_eq!(ok(restored.load_key_256(volume_slot)), volume_key);
+        assert!(restored.load_key_256(session_slot).is_err());
+        assert_eq!(restored.total_count(), 1);
+        let next_slot = ok(restored.store_key_256(&[0x7Fu8; 32], KeyKind::Derived));
+        assert_eq!(next_slot.0, 4);
+    }
+
+    #[test]
+    fn test_import_tampered_payload_fails() {
+        let source = ks();
+        let master_key = [0xA5u8; 32];
+        ok(source.store_key_256(&[0x42u8; 32], KeyKind::Object));
+        let mut payload = ok(source.export_encrypted(&master_key));
+        let last = payload.len() - 1;
+        payload[last] ^= 0x55;
+
+        let restored = ks();
+        assert!(restored.import_encrypted(&master_key, &payload).is_err());
+        assert_eq!(restored.total_count(), 0);
     }
 
     #[test]
@@ -580,5 +912,49 @@ mod extended_tests {
         ok(ks.load_key_256(sid));
         ok(ks.load_key_256(sid));
         assert_eq!(ok(ks.access_count(sid)), 2);
+    }
+}
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    #[kani::proof]
+    fn key_kind_wire_roundtrip() {
+        let raw: u8 = kani::any();
+        kani::assume((1..=5).contains(&raw));
+
+        let kind = key_kind_from_u8(raw).expect("assumed valid key kind wire value");
+        assert_eq!(key_kind_to_u8(kind), raw);
+    }
+
+    #[kani::proof]
+    fn key_kind_rejects_invalid_wire_values() {
+        let raw: u8 = kani::any();
+        kani::assume(raw == 0 || raw > 5);
+
+        assert!(key_kind_from_u8(raw).is_err());
+    }
+
+    #[kani::proof]
+    fn slot_state_wire_roundtrip() {
+        let raw: u8 = kani::any();
+        kani::assume((1..=3).contains(&raw));
+
+        let state = slot_state_from_u8(raw).expect("assumed valid slot state wire value");
+        assert_eq!(slot_state_to_u8(state), raw);
+    }
+
+    #[kani::proof]
+    fn key_storage_persistence_policy_excludes_ephemeral_material() {
+        let raw: u8 = kani::any();
+        kani::assume((1..=5).contains(&raw));
+
+        let kind = key_kind_from_u8(raw).expect("assumed valid key kind wire value");
+        let persistent = key_kind_is_persistent(kind);
+        assert_eq!(
+            persistent,
+            !matches!(kind, KeyKind::Master | KeyKind::Session)
+        );
     }
 }

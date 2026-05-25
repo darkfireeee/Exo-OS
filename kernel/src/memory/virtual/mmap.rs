@@ -106,6 +106,7 @@ const PROT_READ: u32 = 1;
 const PROT_WRITE: u32 = 2;
 /// Protection en exécution (PROT_EXEC).
 const PROT_EXEC: u32 = 4;
+const KNOWN_PROT: u32 = PROT_READ | PROT_WRITE | PROT_EXEC;
 
 /// Mapping partagé (MAP_SHARED).
 const MAP_SHARED: u32 = 0x01;
@@ -158,6 +159,17 @@ fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
     f
 }
 
+#[inline]
+fn validate_prot(prot: u32) -> Result<(), MmapError> {
+    if prot & !KNOWN_PROT != 0 {
+        return Err(MmapError::InvalidAddress);
+    }
+    if prot & PROT_WRITE != 0 && prot & PROT_EXEC != 0 {
+        return Err(MmapError::PermissionDenied);
+    }
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // do_mmap
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,6 +209,7 @@ pub fn do_mmap_in_as(
     if len == 0 {
         return Err(MmapError::InvalidLength);
     }
+    validate_prot(prot)?;
 
     // Alignement sur PAGE_SIZE
     let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
@@ -377,6 +390,7 @@ pub fn do_mprotect_in_as(
     if len == 0 {
         return Err(MmapError::InvalidLength);
     }
+    validate_prot(prot)?;
 
     let vma_const_ptr = user_as
         .find_vma(VirtAddr::new(addr))

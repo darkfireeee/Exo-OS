@@ -4,6 +4,7 @@
 //! RECUR-01 / OOM-02 / ARITH-02.
 
 use super::object_fd::OBJECT_TABLE;
+use super::object_store;
 use super::validation::{
     copy_struct_from_user, exofs_err_to_errno, verify_cap, write_user_struct, CapabilityType,
     EFAULT,
@@ -176,21 +177,17 @@ fn blob_size(blob_id: &BlobId) -> u64 {
 
 /// Vérifie que l'epoch d'un blob dépasse le seuil.
 fn blob_epoch(blob_id: &BlobId) -> u64 {
-    let data = match BLOB_CACHE.get(blob_id) {
-        Some(d) => d,
-        None => return 0,
-    };
-    if data.len() < 8 {
-        return 0;
-    }
-    u64::from_le_bytes([
-        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
-    ])
+    OBJECT_TABLE
+        .entry_for_blob(blob_id)
+        .map(|entry| entry.epoch_id)
+        .unwrap_or(0)
 }
 
-/// Supprime un blob du cache et l'invalide.
-fn delete_blob(blob_id: &BlobId) {
+/// Supprime un blob du cache, libère son mapping disque et l'invalide.
+fn delete_blob(blob_id: &BlobId) -> ExofsResult<()> {
+    let _ = object_store::free_blob_mapping(blob_id)?;
     BLOB_CACHE.invalidate(blob_id);
+    Ok(())
 }
 
 /// Collecte tous les BlobIds candidats au GC depuis le cache.
@@ -259,7 +256,7 @@ fn run_gc(args: &GcArgs) -> ExofsResult<GcResult> {
             res.orphans_found = res.orphans_found.saturating_add(1);
             let sz = blob_size(bid);
             if !dry {
-                delete_blob(bid);
+                delete_blob(bid)?;
                 res.bytes_freed = res.bytes_freed.saturating_add(sz);
                 res.blobs_deleted = res.blobs_deleted.saturating_add(1);
             }
@@ -356,7 +353,7 @@ pub fn collect_one(blob_id: &BlobId) -> ExofsResult<bool> {
     if !gc_lock_acquire() {
         return Err(ExofsError::GcQueueFull);
     }
-    delete_blob(blob_id);
+    delete_blob(blob_id)?;
     gc_lock_release();
     Ok(true)
 }
@@ -387,7 +384,7 @@ pub fn purge_old_epochs(min_epoch: u64) -> ExofsResult<u64> {
         let ep = blob_epoch(&all[i]);
         if ep > 0 && ep < min_epoch && is_orphan_with_reachable(&all[i], &reachable) {
             freed = freed.saturating_add(blob_size(&all[i]));
-            delete_blob(&all[i]);
+            delete_blob(&all[i])?;
         }
         i = i.wrapping_add(1);
     }
@@ -677,7 +674,7 @@ pub fn collect_n_orphans(n: usize) -> ExofsResult<Vec<BlobId>> {
     }
     let mut i = 0usize;
     while i < limit {
-        delete_blob(&orphans[i]);
+        delete_blob(&orphans[i])?;
         removed.push(orphans[i]);
         i = i.wrapping_add(1);
     }
@@ -717,7 +714,7 @@ pub fn purge_tombstones() -> ExofsResult<usize> {
     let mut i = 0usize;
     while i < all.len() {
         if is_tombstone(&all[i]) {
-            delete_blob(&all[i]);
+            delete_blob(&all[i])?;
             count = count.saturating_add(1);
         }
         i = i.wrapping_add(1);

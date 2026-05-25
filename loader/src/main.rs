@@ -61,9 +61,11 @@ fn exit(code: u64) -> ! {
 unsafe fn jump_to_user(jump: UserJump) -> ! {
     unsafe {
         core::arch::asm!(
+            "mov rsp, rsi",
             "xor rbp, rbp",
             "jmp rax",
             in("rax") jump.entry,
+            in("rsi") jump.stack_top,
             in("rdi") jump.arg0,
             options(noreturn),
         );

@@ -389,6 +389,7 @@ dependencies = [
  "exo-virtio-blk",
  "hashbrown",
  "hkdf",
+ "hmac",
  "intrusive-collections",
  "log 0.4.29",
  "lz4_flex",
@@ -490,6 +491,13 @@ name = "exo-virtio-net-driver"
 version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",
+]
+
+[[package]]
+name = "exofs-mkroot"
+version = "0.1.0"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]

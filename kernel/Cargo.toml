@@ -81,6 +81,7 @@ subtle           = { workspace = true }          # constant-time comparisons (ex
 hkdf             = { workspace = true }          # security/crypto/kdf.rs (RFC 5869)
 sha2             = { version = "0.10", default-features = false, features = ["force-soft"] }
   # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
+hmac             = { workspace = true }
 argon2           = { workspace = true }          # exofs/crypto/key_derivation.rs
 x25519-dalek     = { workspace = true }          # security/crypto/x25519.rs
 ed25519-dalek    = { workspace = true }          # security/crypto/ed25519.rs + code_signing.rs

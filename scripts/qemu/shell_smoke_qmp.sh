@@ -41,7 +41,7 @@ qemu-system-x86_64 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   -qmp unix:"$QMP",server=on,wait=off \
   -drive if=none,file="$DISK_IMAGE",format=raw,id=exofs0,cache=writeback \
-  -device virtio-blk-pci,drive=exofs0 \
+  -device virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16 \
   -cdrom exo-os.iso \
   >"$STDOUT" 2>&1 &
 echo $! >"$PIDFILE"

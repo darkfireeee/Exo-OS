@@ -249,9 +249,7 @@ fn main() {
     println!("cargo:rerun-if-changed={dir}/src/ipc/core/fastcall_asm.s");
     println!("cargo:rerun-if-env-changed=EXOPHOENIX_BUILD_ROLE");
     println!("cargo:rerun-if-env-changed=EXOPHOENIX_RESCUE_TEST");
-    println!("cargo:rerun-if-env-changed=EXO_BOOT_PAYLOAD_DIR");
     println!("cargo:rustc-check-cfg=cfg(exophoenix_resurrection_test)");
-    println!("cargo:rustc-check-cfg=cfg(exo_boot_payloads)");
     println!("cargo:rustc-check-cfg=cfg(exo_kernel_trace)");
 
     if matches!(std::env::var("EXOPHOENIX_RESCUE_TEST").as_deref(), Ok("1")) {
