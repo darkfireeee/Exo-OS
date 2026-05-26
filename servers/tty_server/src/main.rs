@@ -6,34 +6,24 @@ use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 use exo_tty::{LineDiscipline, LineEvent, Signal};
 
-pub const TTY_MSG_INPUT_BYTE: u32 = 0x130;
-pub const TTY_MSG_READ_LINE: u32 = 0x131;
-pub const TTY_MSG_WRITE: u32 = 0x132;
-pub const TTY_MSG_IOCTL: u32 = 0x133;
-const LINE_OUT_MAX: usize = 216;
-
-#[repr(C)]
-struct TtyRequest {
-    sender_pid: u32,
-    msg_type: u32,
-    a: u64,
-    b: u64,
-    data: [u8; LINE_OUT_MAX],
-}
-
-#[repr(C)]
-struct TtyReply {
-    status: i64,
-    signal: u32,
-    len: u32,
-    data: [u8; LINE_OUT_MAX],
-}
-
-const _: () = assert!(core::mem::size_of::<TtyRequest>() <= 240);
-const _: () = assert!(core::mem::size_of::<TtyReply>() <= 240);
+const LINE_OUT_MAX: usize = syscall::TTY_LINE_MAX;
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_WRITE,
+            1,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+        );
+    }
+}
+
+fn console_write(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
@@ -86,7 +76,7 @@ fn tty_mut() -> &'static mut TtyState {
     unsafe { &mut *TTY.0.get() }
 }
 
-fn handle_input(byte: u8) -> TtyReply {
+fn handle_input(byte: u8) -> syscall::TtyReply {
     let state = tty_mut();
     let event = state.line.input_byte(byte);
     match event {
@@ -96,17 +86,30 @@ fn handle_input(byte: u8) -> TtyReply {
             let n = core::cmp::min(copied, core::cmp::min(len, LINE_OUT_MAX));
             state.ready[..n].copy_from_slice(&tmp[..n]);
             state.ready_len = n;
+            console_write(b"\n");
             reply(0, 0, &[])
         }
-        Some(LineEvent::Signal(Signal::Interrupt)) => reply(0, 2, &[]),
-        Some(LineEvent::Signal(Signal::EndOfFile)) => reply(0, 4, &[]),
-        Some(LineEvent::Echo(byte)) => reply(0, 0, &[byte]),
-        Some(LineEvent::Backspace) => reply(0, 0, b"\x08 \x08"),
+        Some(LineEvent::Signal(Signal::Interrupt)) => {
+            console_write(b"^C\n");
+            reply(0, 2, &[])
+        }
+        Some(LineEvent::Signal(Signal::EndOfFile)) => {
+            console_write(b"^D\n");
+            reply(0, 4, &[])
+        }
+        Some(LineEvent::Echo(byte)) => {
+            console_write(&[byte]);
+            reply(0, 0, &[byte])
+        }
+        Some(LineEvent::Backspace) => {
+            console_write(b"\x08 \x08");
+            reply(0, 0, b"\x08 \x08")
+        }
         None => reply(0, 0, &[]),
     }
 }
 
-fn handle_read_line() -> TtyReply {
+fn handle_read_line() -> syscall::TtyReply {
     let state = tty_mut();
     let n = state.ready_len;
     if n == 0 {
@@ -115,7 +118,7 @@ fn handle_read_line() -> TtyReply {
     let mut data = [0u8; LINE_OUT_MAX];
     data[..n].copy_from_slice(&state.ready[..n]);
     state.ready_len = 0;
-    TtyReply {
+    syscall::TtyReply {
         status: 0,
         signal: 0,
         len: n as u32,
@@ -123,11 +126,11 @@ fn handle_read_line() -> TtyReply {
     }
 }
 
-fn reply(status: i64, signal: u32, data: &[u8]) -> TtyReply {
+fn reply(status: i64, signal: u32, data: &[u8]) -> syscall::TtyReply {
     let mut out = [0u8; LINE_OUT_MAX];
     let n = core::cmp::min(data.len(), LINE_OUT_MAX);
     out[..n].copy_from_slice(&data[..n]);
-    TtyReply {
+    syscall::TtyReply {
         status,
         signal,
         len: n as u32,
@@ -135,16 +138,16 @@ fn reply(status: i64, signal: u32, data: &[u8]) -> TtyReply {
     }
 }
 
-fn handle(req: &TtyRequest) -> TtyReply {
+fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
     match req.msg_type {
-        TTY_MSG_INPUT_BYTE => handle_input(req.a as u8),
-        TTY_MSG_READ_LINE => handle_read_line(),
-        TTY_MSG_WRITE => reply(
-            0,
-            0,
-            &req.data[..core::cmp::min(req.a as usize, LINE_OUT_MAX)],
-        ),
-        TTY_MSG_IOCTL => reply(0, 0, &[]),
+        syscall::TTY_MSG_INPUT_BYTE => handle_input(req.a as u8),
+        syscall::TTY_MSG_READ_LINE => handle_read_line(),
+        syscall::TTY_MSG_WRITE => {
+            let n = core::cmp::min(req.a as usize, LINE_OUT_MAX);
+            console_write(&req.data[..n]);
+            reply(0, 0, &req.data[..n])
+        }
+        syscall::TTY_MSG_IOCTL => reply(0, 0, &[]),
         _ => reply(syscall::EINVAL, 0, &[]),
     }
 }
@@ -158,7 +161,7 @@ pub extern "C" fn _start() -> ! {
             syscall::SYS_IPC_REGISTER,
             name.as_ptr() as u64,
             name.len() as u64,
-            12,
+            syscall::TTY_SERVER_ENDPOINT,
         )
     };
     if register_rc < 0 {
@@ -166,20 +169,14 @@ pub extern "C" fn _start() -> ! {
         exit_failed();
     }
     boot_log(b"tty_server: registered\n");
-    let mut req = TtyRequest {
-        sender_pid: 0,
-        msg_type: 0,
-        a: 0,
-        b: 0,
-        data: [0; LINE_OUT_MAX],
-    };
+    let mut req = syscall::TtyRequest::zeroed();
     loop {
         let rc = unsafe {
             syscall::syscall4(
                 syscall::SYS_IPC_RECV,
-                12,
-                &mut req as *mut TtyRequest as u64,
-                core::mem::size_of::<TtyRequest>() as u64,
+                syscall::TTY_SERVER_ENDPOINT,
+                &mut req as *mut syscall::TtyRequest as u64,
+                core::mem::size_of::<syscall::TtyRequest>() as u64,
                 syscall::IPC_FLAG_TIMEOUT | 5_000,
             )
         };
@@ -187,17 +184,24 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         let response = handle(&req);
-        let _ = unsafe {
-            syscall::syscall6(
-                syscall::SYS_IPC_SEND,
-                req.sender_pid as u64,
-                &response as *const TtyReply as u64,
-                core::mem::size_of::<TtyReply>() as u64,
-                0,
-                0,
-                0,
-            )
+        let reply_endpoint = if req.reply_endpoint != 0 {
+            req.reply_endpoint
+        } else {
+            req.sender_pid as u64
         };
+        if reply_endpoint != 0 {
+            let _ = unsafe {
+                syscall::syscall6(
+                    syscall::SYS_IPC_SEND,
+                    reply_endpoint,
+                    &response as *const syscall::TtyReply as u64,
+                    core::mem::size_of::<syscall::TtyReply>() as u64,
+                    0,
+                    0,
+                    0,
+                )
+            };
+        }
     }
 }
 

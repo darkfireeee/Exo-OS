@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
+#![allow(dead_code)]
 
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicU64, Ordering};
 use exo_syscall_abi as syscall;
 
 const STDIN: u64 = 0;
@@ -19,6 +21,8 @@ const DT_DIR: u8 = 4;
 const TREE_MAX_DEPTH: usize = 4;
 const RM_MAX_DEPTH: usize = 8;
 const HISTORY_MAX: usize = 16;
+const EXEC_MAX_ARGS: usize = 32;
+const EXEC_ARG_MAX: usize = 160;
 const CLOCK_MONOTONIC: u64 = 1;
 const DD_DEFAULT_BS: u64 = 512;
 const S_IFMT: u32 = 0o170000;
@@ -40,12 +44,14 @@ const ICMP_ECHO_HEADER_LEN: usize = 8;
 const PING_PAYLOAD: &[u8] = b"exoos-ping";
 const PING_PACKET_LEN: usize = ICMP_ECHO_HEADER_LEN + PING_PAYLOAD.len();
 const PING_RECV_ATTEMPTS: usize = 1000;
+const EXOSH_TTY_REPLY_CHANNEL: u64 = 0x5454_5901;
 
 struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
 
 unsafe impl Sync for DdIoBuffer {}
 
 static DD_IO_BUFFER: DdIoBuffer = DdIoBuffer(UnsafeCell::new([0; DD_IO_BUF]));
+static TTY_REPLY_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -72,6 +78,26 @@ struct LinuxStat {
     st_mtim: Timespec,
     st_ctim: Timespec,
     __unused: [i64; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LinuxSysInfo {
+    uptime: i64,
+    loads: [u64; 3],
+    totalram: u64,
+    freeram: u64,
+    sharedram: u64,
+    bufferram: u64,
+    totalswap: u64,
+    freeswap: u64,
+    procs: u16,
+    pad: u16,
+    _pad2: u32,
+    totalhigh: u64,
+    freehigh: u64,
+    mem_unit: u32,
+    _pad3: [u8; 8],
 }
 
 #[derive(Clone, Copy, Default)]
@@ -210,38 +236,51 @@ fn run_command(line: &[u8], state: &mut ShellState) {
     if bytes_eq(cmd, b"help") {
         cmd_help();
     } else if bytes_eq(cmd, b"pwd") {
-        write_bytes(state.cwd());
-        write_all(b"\n");
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"cd") {
         cmd_cd(rest, state);
     } else if bytes_eq(cmd, b"ls") {
-        cmd_ls(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"mkdir") {
-        cmd_mkdir(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"touch") {
-        cmd_touch(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"cat") {
-        cmd_cat(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"echo") {
-        cmd_echo(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"rm") {
-        cmd_rm(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"cp") {
-        cmd_cp(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"mv") {
-        cmd_mv(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"rmdir") {
-        cmd_rmdir(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"tree") {
-        cmd_tree(rest, state);
+        run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"stat") {
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"history") {
         cmd_history(state);
     } else if bytes_eq(cmd, b"time") {
         cmd_time(rest, state);
+    } else if bytes_eq(cmd, b"sleep") {
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"dd") {
-        cmd_dd(rest, state);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"sync") {
-        cmd_sync();
+        run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"meminfo") {
+        run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"syscall-stat") {
+        run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"ipc-stat") {
+        run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"shutdown") || bytes_eq(cmd, b"poweroff") {
+        cmd_shutdown();
+    } else if bytes_eq(cmd, b"reboot") {
+        cmd_reboot();
     } else if bytes_eq(cmd, b"ping") {
         cmd_ping(rest);
     } else if bytes_eq(cmd, b"tcping") {
@@ -249,27 +288,179 @@ fn run_command(line: &[u8], state: &mut ShellState) {
     } else if bytes_eq(cmd, b"bench") {
         cmd_bench(rest);
     } else if bytes_eq(cmd, b"top") || bytes_eq(cmd, b"ps") {
-        cmd_top();
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"kill") {
-        cmd_kill(rest);
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"clear") {
-        write_all(b"\x0c");
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"exit") {
         write_all(b"exosh: exit requested; init_server may restart the shell\n");
         unsafe {
             let _ = syscall::syscall1(syscall::SYS_EXIT, 0);
         }
     } else {
-        write_all(b"exosh: unknown command: ");
+        run_external_or_report(line, state);
+    }
+}
+
+fn run_external_or_report(line: &[u8], state: &ShellState) {
+    if let Err(()) = run_external(line, state) {
+        let (cmd, _) = first_token(line);
+        write_all(b"exosh: command not found: ");
         write_bytes(cmd);
         write_all(b"\n");
     }
 }
 
+fn run_external(line: &[u8], state: &ShellState) -> Result<(), ()> {
+    let mut arg_storage = [[0u8; EXEC_ARG_MAX]; EXEC_MAX_ARGS];
+    let mut argv = [0u64; EXEC_MAX_ARGS + 1];
+    let mut argc = 0usize;
+    let mut rest = line;
+    loop {
+        let (arg, tail) = next_arg(rest);
+        if arg.is_empty() {
+            break;
+        }
+        if argc == EXEC_MAX_ARGS {
+            write_all(b"exosh: too many arguments\n");
+            return Ok(());
+        }
+        let n = arg.len().min(EXEC_ARG_MAX - 1);
+        arg_storage[argc][..n].copy_from_slice(&arg[..n]);
+        arg_storage[argc][n] = 0;
+        argv[argc] = arg_storage[argc].as_ptr() as u64;
+        argc += 1;
+        rest = tail;
+    }
+    if argc == 0 {
+        return Ok(());
+    }
+
+    let mut exec_path = [0u8; PATH_MAX];
+    let mut fallback_path = [0u8; PATH_MAX];
+    let Some(exec_len) =
+        external_command_path(&arg_storage[0], state, &mut exec_path, &mut fallback_path)
+    else {
+        return Err(());
+    };
+
+    let mut pwd_env = [0u8; PATH_MAX + 5];
+    pwd_env[..4].copy_from_slice(b"PWD=");
+    let cwd = state.cwd();
+    let cwd_len = cwd.len().min(PATH_MAX);
+    pwd_env[4..4 + cwd_len].copy_from_slice(&cwd[..cwd_len]);
+    pwd_env[4 + cwd_len] = 0;
+    let envp = [pwd_env.as_ptr() as u64, 0u64];
+
+    let child = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    if child < 0 {
+        print_errno(b"fork", child);
+        return Ok(());
+    }
+    if child == 0 {
+        let mut rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_EXECVE,
+                exec_path.as_ptr() as u64,
+                argv.as_ptr() as u64,
+                envp.as_ptr() as u64,
+            )
+        };
+        if rc < 0 && fallback_path[0] != 0 {
+            rc = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_EXECVE,
+                    fallback_path.as_ptr() as u64,
+                    argv.as_ptr() as u64,
+                    envp.as_ptr() as u64,
+                )
+            };
+        }
+        write_all(b"execve: ");
+        write_bytes(&exec_path[..exec_len]);
+        write_all(b": errno ");
+        write_i64(rc);
+        write_all(b"\n");
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_EXIT, 127);
+            let _ = syscall::syscall1(syscall::SYS_EXIT_GROUP, 127);
+        }
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    let mut status = 0i32;
+    let wait_rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_WAIT4,
+            child as u64,
+            &mut status as *mut i32 as u64,
+            0,
+            0,
+        )
+    };
+    if wait_rc < 0 {
+        print_errno(b"wait4", wait_rc);
+    }
+    Ok(())
+}
+
+fn external_command_path(
+    raw_cmd: &[u8; EXEC_ARG_MAX],
+    state: &ShellState,
+    out: &mut [u8; PATH_MAX],
+    fallback: &mut [u8; PATH_MAX],
+) -> Option<usize> {
+    let cmd = cstr_prefix(raw_cmd);
+    if cmd_contains_slash(cmd) {
+        return absolute_path(state.cwd(), cmd, out);
+    }
+    let bin_len = build_prefixed_command_path(b"/bin/", cmd, out)?;
+    let _ = build_prefixed_command_path(b"/sbin/", cmd, fallback);
+    Some(bin_len)
+}
+
+fn cstr_prefix(buf: &[u8]) -> &[u8] {
+    let mut len = 0usize;
+    while len < buf.len() && buf[len] != 0 {
+        len += 1;
+    }
+    &buf[..len]
+}
+
+fn cmd_contains_slash(cmd: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < cmd.len() {
+        if cmd[i] == b'/' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn build_prefixed_command_path(
+    prefix: &[u8],
+    cmd: &[u8],
+    out: &mut [u8; PATH_MAX],
+) -> Option<usize> {
+    if cmd.is_empty() || prefix.len() + cmd.len() >= PATH_MAX {
+        return None;
+    }
+    out[..prefix.len()].copy_from_slice(prefix);
+    out[prefix.len()..prefix.len() + cmd.len()].copy_from_slice(cmd);
+    let len = prefix.len() + cmd.len();
+    out[len] = 0;
+    Some(len)
+}
+
 fn cmd_help() {
     write_all(b"Commands:\n");
+    write_all(b"  help cd history time shutdown reboot ping tcping bench exit\n");
     write_all(
-        b"  help clear pwd cd ls mkdir touch cat echo rm cp mv rmdir tree top ps kill history time dd sync ping tcping bench exit\n",
+        b"  /bin: basename cat clear cp dd dirname echo false ipc-stat kill ls meminfo mkdir mv ps pwd rm rmdir sleep stat sync syscall-stat top touch tree true uname uptime wc whoami\n",
     );
     write_all(b"Examples:\n");
     write_all(b"  ls -lah /tmp ; rm -rf /tmp/t ; history\n");
@@ -739,6 +930,49 @@ fn tree_walk(path: &[u8; PATH_MAX], path_len: usize, depth: usize) {
     let _ = close_fd(fd);
 }
 
+fn cmd_stat(rest: &[u8], state: &ShellState) {
+    let (arg, _) = next_arg(rest);
+    if arg.is_empty() {
+        write_all(b"stat: usage: stat <path>\n");
+        return;
+    }
+    let mut path = [0u8; PATH_MAX];
+    let Some(path_len) = absolute_path(state.cwd(), arg, &mut path) else {
+        write_all(b"stat: path too long\n");
+        return;
+    };
+    let Some(stat) = stat_path(&path) else {
+        print_errno(b"stat", syscall::ENOENT);
+        return;
+    };
+
+    write_all(b"  File: ");
+    write_bytes(&path[..path_len]);
+    write_all(b"\n  Size: ");
+    write_i64(stat.st_size);
+    write_all(b"\tBlocks: ");
+    write_i64(stat.st_blocks);
+    write_all(b"\tIO Block: ");
+    write_i64(stat.st_blksize);
+    write_all(b"\n  Type: ");
+    if is_dir_mode(stat.st_mode) {
+        write_all(b"directory");
+    } else if is_regular_mode(stat.st_mode) {
+        write_all(b"regular file");
+    } else {
+        write_all(b"special");
+    }
+    write_all(b"\n  Inode: ");
+    write_u64(stat.st_ino);
+    write_all(b"\tLinks: ");
+    write_u64(stat.st_nlink);
+    write_all(b"\n  Mode: ");
+    write_mode(stat.st_mode);
+    write_all(b" (");
+    write_octal_mode(stat.st_mode & 0o7777);
+    write_all(b")\n");
+}
+
 fn cmd_top() {
     write_all(b"PID  NAME              STATE\n");
     let mut entries = [syscall::ExoProcessInfo::zeroed(); 64];
@@ -817,6 +1051,19 @@ fn cmd_time(rest: &[u8], state: &mut ShellState) {
         }
         _ => write_all(b"real unavailable\n"),
     }
+}
+
+fn cmd_sleep(rest: &[u8]) {
+    let (arg, _) = next_arg(rest);
+    if arg.is_empty() {
+        write_all(b"sleep: usage: sleep <ms>\n");
+        return;
+    }
+    let Some(ms) = parse_u64(arg) else {
+        write_all(b"sleep: invalid milliseconds\n");
+        return;
+    };
+    sleep_ms(ms);
 }
 
 fn cmd_dd(rest: &[u8], state: &ShellState) {
@@ -1126,6 +1373,12 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
     render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
 
     loop {
+        if let Some(tty_len) = tty_read_line_poll(line) {
+            render_input_line(line, tty_len, tty_len, state, &mut visible_len, false);
+            write_all(b"\n");
+            return tty_len;
+        }
+
         let Some(byte) = read_byte_poll() else {
             sleep_ms(25);
             continue;
@@ -1630,6 +1883,76 @@ fn read_byte_poll() -> Option<u8> {
     } else {
         None
     }
+}
+
+fn tty_reply_endpoint() -> Option<u64> {
+    let cached = TTY_REPLY_ENDPOINT.load(Ordering::Acquire);
+    if cached != 0 {
+        return Some(cached);
+    }
+
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid <= 0 {
+        return None;
+    }
+    let endpoint = ((pid as u64) << 32) | EXOSH_TTY_REPLY_CHANNEL;
+    let name = b"exosh_tty_reply";
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_REGISTER,
+            name.as_ptr() as u64,
+            name.len() as u64,
+            endpoint,
+        )
+    };
+    if rc < 0 {
+        return None;
+    }
+    TTY_REPLY_ENDPOINT.store(endpoint, Ordering::Release);
+    Some(endpoint)
+}
+
+fn tty_read_line_poll(line: &mut [u8; LINE_MAX]) -> Option<usize> {
+    let reply_endpoint = tty_reply_endpoint()?;
+    let mut req = syscall::TtyRequest::zeroed();
+    req.msg_type = syscall::TTY_MSG_READ_LINE;
+    req.reply_endpoint = reply_endpoint;
+
+    let send_rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::TTY_SERVER_ENDPOINT,
+            &req as *const syscall::TtyRequest as u64,
+            core::mem::size_of::<syscall::TtyRequest>() as u64,
+            0,
+            0,
+            0,
+        )
+    };
+    if send_rc < 0 {
+        return None;
+    }
+
+    let mut reply = syscall::TtyReply::zeroed();
+    let recv_rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_IPC_RECV,
+            reply_endpoint,
+            &mut reply as *mut syscall::TtyReply as u64,
+            core::mem::size_of::<syscall::TtyReply>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | 1,
+        )
+    };
+    if recv_rc < 0 || reply.status != 0 || reply.len == 0 {
+        return None;
+    }
+    let n = (reply.len as usize).min(LINE_MAX - 1).min(reply.data.len());
+    line[..n].copy_from_slice(&reply.data[..n]);
+    Some(if n > 0 && line[n - 1] == b'\n' {
+        n - 1
+    } else {
+        n
+    })
 }
 
 fn read_byte_wait_ms(ms: u64) -> Option<u8> {
@@ -2417,6 +2740,15 @@ fn write_mode(mode: u32) {
     write_bytes(&out);
 }
 
+fn write_octal_mode(mode: u32) {
+    let mut shift = 9i32;
+    while shift >= 0 {
+        let digit = ((mode >> shift) & 0x7) as u8;
+        write_byte(b'0' + digit);
+        shift -= 3;
+    }
+}
+
 fn write_human_size(size: i64) {
     if size < 0 {
         write_i64(size);
@@ -2424,6 +2756,17 @@ fn write_human_size(size: i64) {
     }
     let mut value = size as u64;
     let units = [b'B', b'K', b'M', b'G'];
+    let mut unit = 0usize;
+    while value >= 1024 && unit + 1 < units.len() {
+        value = value.saturating_add(512) / 1024;
+        unit += 1;
+    }
+    write_u64(value);
+    write_bytes(&[units[unit]]);
+}
+
+fn write_human_u64(mut value: u64) {
+    let units = [b'B', b'K', b'M', b'G', b'T'];
     let mut unit = 0usize;
     while value >= 1024 && unit + 1 < units.len() {
         value = value.saturating_add(512) / 1024;
@@ -2576,6 +2919,140 @@ fn cmd_sync() {
     if rc < 0 {
         print_errno(b"sync", rc);
     }
+}
+
+fn cmd_meminfo() {
+    let mut info = LinuxSysInfo::default();
+    let rc =
+        unsafe { syscall::syscall1(syscall::SYS_SYSINFO, &mut info as *mut LinuxSysInfo as u64) };
+    if rc < 0 {
+        print_errno(b"meminfo", rc);
+        return;
+    }
+
+    let unit = if info.mem_unit == 0 {
+        1
+    } else {
+        info.mem_unit as u64
+    };
+    let total = info.totalram.saturating_mul(unit);
+    let free = info.freeram.saturating_mul(unit);
+    let used = total.saturating_sub(free);
+
+    write_all(b"MemTotal: ");
+    write_human_u64(total);
+    write_all(b"\nMemFree:  ");
+    write_human_u64(free);
+    write_all(b"\nMemUsed:  ");
+    write_human_u64(used);
+    write_all(b"\nUptime:   ");
+    write_i64(info.uptime);
+    write_all(b"s\nProcs:    ");
+    write_u64(info.procs as u64);
+    write_all(b"\n");
+}
+
+fn perf_read(metric: u64, index: u64) -> Option<u64> {
+    let rc = unsafe { syscall::syscall2(syscall::SYS_EXO_PERF_READ, metric, index) };
+    if rc < 0 {
+        None
+    } else {
+        Some(rc as u64)
+    }
+}
+
+fn cmd_syscall_stat() {
+    let rows = [
+        (b"read".as_slice(), syscall::SYS_READ),
+        (b"write".as_slice(), syscall::SYS_WRITE),
+        (b"open".as_slice(), syscall::SYS_OPEN),
+        (b"close".as_slice(), syscall::SYS_CLOSE),
+        (b"ipc_send".as_slice(), syscall::SYS_IPC_SEND),
+        (b"ipc_recv".as_slice(), syscall::SYS_IPC_RECV),
+        (b"sync".as_slice(), syscall::SYS_SYNC),
+        (b"reboot".as_slice(), syscall::SYS_REBOOT),
+        (b"ioport_read".as_slice(), syscall::SYS_IOPORT_READ),
+        (b"ioport_write".as_slice(), syscall::SYS_IOPORT_WRITE),
+    ];
+
+    write_all(b"SYSCALL          COUNT\n");
+    let mut i = 0usize;
+    while i < rows.len() {
+        let (name, nr) = rows[i];
+        write_padded(name, 16);
+        match perf_read(syscall::EXO_PERF_SYSCALL_COUNT, nr) {
+            Some(count) => write_u64(count),
+            None => write_all(b"unavailable"),
+        }
+        write_all(b"\n");
+        i += 1;
+    }
+}
+
+fn cmd_ipc_stat() {
+    let rows = [
+        (
+            b"messages_sent".as_slice(),
+            syscall::EXO_PERF_IPC_MESSAGES_SENT,
+        ),
+        (
+            b"messages_recv".as_slice(),
+            syscall::EXO_PERF_IPC_MESSAGES_RECEIVED,
+        ),
+        (
+            b"messages_drop".as_slice(),
+            syscall::EXO_PERF_IPC_MESSAGES_DROPPED,
+        ),
+        (b"rpc_calls".as_slice(), syscall::EXO_PERF_IPC_RPC_CALLS),
+        (
+            b"rpc_timeouts".as_slice(),
+            syscall::EXO_PERF_IPC_RPC_TIMEOUTS,
+        ),
+        (b"futex_waits".as_slice(), syscall::EXO_PERF_IPC_FUTEX_WAITS),
+        (b"futex_wakes".as_slice(), syscall::EXO_PERF_IPC_FUTEX_WAKES),
+    ];
+
+    write_all(b"IPC_COUNTER      COUNT\n");
+    let mut i = 0usize;
+    while i < rows.len() {
+        let (name, metric) = rows[i];
+        write_padded(name, 16);
+        match perf_read(metric, 0) {
+            Some(count) => write_u64(count),
+            None => write_all(b"unavailable"),
+        }
+        write_all(b"\n");
+        i += 1;
+    }
+}
+
+fn reboot_with_cmd(label: &[u8], cmd: u64) {
+    let sync_rc = unsafe { syscall::syscall0(syscall::SYS_SYNC) };
+    if sync_rc < 0 {
+        print_errno(b"sync", sync_rc);
+        return;
+    }
+
+    let rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_REBOOT,
+            syscall::LINUX_REBOOT_MAGIC1,
+            syscall::LINUX_REBOOT_MAGIC2,
+            cmd,
+            0,
+        )
+    };
+    if rc < 0 {
+        print_errno(label, rc);
+    }
+}
+
+fn cmd_shutdown() {
+    reboot_with_cmd(b"shutdown", syscall::RB_POWER_OFF);
+}
+
+fn cmd_reboot() {
+    reboot_with_cmd(b"reboot", syscall::RB_AUTOBOOT);
 }
 
 fn cmd_bench(rest: &[u8]) {

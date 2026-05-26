@@ -12,8 +12,8 @@
 //! - [442..499] : réservés pour usage futur
 //! - [500..520] : ExoFS syscalls natifs
 //! - [521..529] : réservés pour usage futur
-//! - [530..547] : GI-03 drivers syscalls
-//! - 548        : SYSCALL_TABLE_SIZE (taille totale de la table)
+//! - [530..549] : GI-03 drivers syscalls
+//! - 550        : SYSCALL_TABLE_SIZE (taille totale de la table)
 //!
 //! ## Règle architecturale
 //! Les numéros Linux sont repris à l'identique pour permettre une libc
@@ -34,8 +34,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille de la table syscall (un slot par numéro possible).
-/// 548 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–547).
-pub const SYSCALL_TABLE_SIZE: usize = 548;
+/// 550 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–549).
+pub const SYSCALL_TABLE_SIZE: usize = 550;
 
 /// Numéro invalide (retourne -ENOSYS)
 pub const SYSCALL_INVALID: u64 = u64::MAX;
@@ -339,6 +339,19 @@ pub const SYS_EXO_PERF_READ: u64 = 330;
 pub const SYS_EXO_PERF_ENABLE: u64 = 331;
 /// Désactiver les événements de performance
 pub const SYS_EXO_PERF_DISABLE: u64 = 332;
+
+pub const EXO_PERF_SYSCALL_COUNT: u64 = 1;
+pub const EXO_PERF_IPC_MESSAGES_SENT: u64 = 2;
+pub const EXO_PERF_IPC_MESSAGES_RECEIVED: u64 = 3;
+pub const EXO_PERF_IPC_MESSAGES_DROPPED: u64 = 4;
+pub const EXO_PERF_IPC_RPC_CALLS: u64 = 5;
+pub const EXO_PERF_IPC_RPC_TIMEOUTS: u64 = 6;
+pub const EXO_PERF_IPC_FUTEX_WAITS: u64 = 7;
+pub const EXO_PERF_IPC_FUTEX_WAKES: u64 = 8;
+pub const EXO_PERF_DISPATCH_TOTAL: u64 = 9;
+pub const EXO_PERF_DISPATCH_FAST_PATH: u64 = 10;
+pub const EXO_PERF_DISPATCH_SLOW_PATH: u64 = 11;
+pub const EXO_PERF_DISPATCH_ENOSYS: u64 = 12;
 /// Activer/désactiver le mode debug d'un processus (Ring 0 uniquement)
 pub const SYS_EXO_DEBUG_ATTACH: u64 = 340;
 /// Lire les registres d'un processus en debug
@@ -414,7 +427,7 @@ pub const SYS_EXOFS_OPEN_BY_PATH: u64 = 519;
 pub const SYS_EXOFS_READDIR: u64 = 520;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 530–546 : GI-03 Drivers (IRQ / DMA / PCI / IOMMU)
+// Bloc 530–549 : GI-03 Drivers (IRQ / DMA / PCI / IOMMU / I/O ports)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// GI-03 : enregistrement d'un routage IRQ canonique.
@@ -453,6 +466,10 @@ pub const SYS_MSI_FREE: u64 = 545;
 pub const SYS_PCI_SET_TOPOLOGY: u64 = 546;
 /// GI-03 : découverte contrôlée d'un périphérique PCI par vendor/device/class.
 pub const SYS_PCI_FIND_DEVICE: u64 = 547;
+/// GI-03 : lecture bornée d'un port I/O pour drivers Ring1 autorisés.
+pub const SYS_IOPORT_READ: u64 = 548;
+/// GI-03 : écriture bornée d'un port I/O pour drivers Ring1 autorisés.
+pub const SYS_IOPORT_WRITE: u64 = 549;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FIX BUG-03 : Aliases process pour exo-rt

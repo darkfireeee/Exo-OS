@@ -21,6 +21,7 @@ pub enum ServiceClass {
     SchedulerServer,
     InputServer,
     TtyServer,
+    Ps2Driver,
     VirtioDriver,
     ExoShield,
     Exosh,
@@ -61,6 +62,10 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::VirtioDriver, ServiceClass::DeviceServer),
     (ServiceClass::DeviceServer, ServiceClass::InputServer),
     (ServiceClass::InputServer, ServiceClass::DeviceServer),
+    (ServiceClass::DeviceServer, ServiceClass::Ps2Driver),
+    (ServiceClass::Ps2Driver, ServiceClass::DeviceServer),
+    (ServiceClass::Ps2Driver, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::Ps2Driver),
     (ServiceClass::InputServer, ServiceClass::TtyServer),
     (ServiceClass::TtyServer, ServiceClass::InputServer),
     (ServiceClass::TtyServer, ServiceClass::VfsServer),
@@ -85,7 +90,7 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
 ];
 
 const _: () = assert!(
-    POLICY.len() == 41,
+    POLICY.len() == 45,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -117,6 +122,7 @@ fn is_ring1_trusted_class(class: ServiceClass) -> bool {
             | ServiceClass::SchedulerServer
             | ServiceClass::InputServer
             | ServiceClass::TtyServer
+            | ServiceClass::Ps2Driver
             | ServiceClass::VirtioDriver
             | ServiceClass::ExoShield
     )
@@ -205,6 +211,10 @@ fn class_of(pid: Pid) -> ServiceClass {
                 .unwrap_or(ServiceClass::Unknown)
         }
     }
+}
+
+pub fn service_class_of(pid: Pid) -> ServiceClass {
+    class_of(pid)
 }
 
 pub fn can_inject_src_pid(pid: Pid) -> bool {

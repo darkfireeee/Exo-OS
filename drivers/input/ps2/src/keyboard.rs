@@ -11,7 +11,15 @@ pub const KEY_LEFT_CTRL: u16 = 0x00e0;
 pub const KEY_LEFT_ALT: u16 = 0x00e2;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ScancodeSet {
+    Set1,
+    #[default]
+    Set2,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Ps2Keyboard {
+    scancode_set: ScancodeSet,
     release_next: bool,
     extended_next: bool,
     modifiers: InputModifiers,
@@ -20,6 +28,21 @@ pub struct Ps2Keyboard {
 impl Ps2Keyboard {
     pub const fn new() -> Self {
         Self {
+            scancode_set: ScancodeSet::Set2,
+            release_next: false,
+            extended_next: false,
+            modifiers: InputModifiers {
+                shift: false,
+                ctrl: false,
+                alt: false,
+                meta: false,
+            },
+        }
+    }
+
+    pub const fn new_set1() -> Self {
+        Self {
+            scancode_set: ScancodeSet::Set1,
             release_next: false,
             extended_next: false,
             modifiers: InputModifiers {
@@ -38,16 +61,23 @@ impl Ps2Keyboard {
                 None
             }
             0xF0 => {
+                self.scancode_set = ScancodeSet::Set2;
                 self.release_next = true;
                 None
             }
             _ => {
-                let released = self.release_next;
+                let mut released = self.release_next;
                 let extended = self.extended_next;
                 self.release_next = false;
                 self.extended_next = false;
 
-                let code = map_set2_to_hid(byte, extended)?;
+                let code = match self.scancode_set {
+                    ScancodeSet::Set1 => {
+                        released |= byte & 0x80 != 0;
+                        map_set1_to_hid(byte & 0x7f, extended)?
+                    }
+                    ScancodeSet::Set2 => map_set2_to_hid(byte, extended)?,
+                };
                 let state = if released {
                     KeyState::Released
                 } else {
@@ -72,6 +102,86 @@ impl Ps2Keyboard {
             KEY_LEFT_ALT => self.modifiers.alt = pressed,
             _ => {}
         }
+    }
+}
+
+pub fn map_set1_to_hid(scancode: u8, extended: bool) -> Option<u16> {
+    if extended {
+        return match scancode {
+            0x1d => Some(KEY_LEFT_CTRL),
+            0x38 => Some(KEY_LEFT_ALT),
+            0x48 => Some(0x0052), // up
+            0x50 => Some(0x0051), // down
+            0x4b => Some(0x0050), // left
+            0x4d => Some(0x004f), // right
+            0x53 => Some(0x004c), // delete
+            0x52 => Some(0x004a), // insert
+            0x47 => Some(0x004a), // home
+            0x4f => Some(0x004d), // end
+            0x49 => Some(0x004b), // page up
+            0x51 => Some(0x004e), // page down
+            _ => None,
+        };
+    }
+
+    match scancode {
+        0x1e => Some(0x0004),
+        0x30 => Some(0x0005),
+        0x2e => Some(0x0006),
+        0x20 => Some(0x0007),
+        0x12 => Some(0x0008),
+        0x21 => Some(0x0009),
+        0x22 => Some(0x000a),
+        0x23 => Some(0x000b),
+        0x17 => Some(0x000c),
+        0x24 => Some(0x000d),
+        0x25 => Some(0x000e),
+        0x26 => Some(0x000f),
+        0x32 => Some(0x0010),
+        0x31 => Some(0x0011),
+        0x18 => Some(0x0012),
+        0x19 => Some(0x0013),
+        0x10 => Some(0x0014),
+        0x13 => Some(0x0015),
+        0x1f => Some(0x0016),
+        0x14 => Some(0x0017),
+        0x16 => Some(0x0018),
+        0x2f => Some(0x0019),
+        0x11 => Some(0x001a),
+        0x2d => Some(0x001b),
+        0x15 => Some(0x001c),
+        0x2c => Some(0x001d),
+        0x02 => Some(0x001e),
+        0x03 => Some(0x001f),
+        0x04 => Some(0x0020),
+        0x05 => Some(0x0021),
+        0x06 => Some(0x0022),
+        0x07 => Some(0x0023),
+        0x08 => Some(0x0024),
+        0x09 => Some(0x0025),
+        0x0a => Some(0x0026),
+        0x0b => Some(0x0027),
+        0x1c => Some(KEY_ENTER),
+        0x01 => Some(KEY_ESCAPE),
+        0x0e => Some(KEY_BACKSPACE),
+        0x0f => Some(KEY_TAB),
+        0x39 => Some(KEY_SPACE),
+        0x0c => Some(0x002d),
+        0x0d => Some(0x002e),
+        0x1a => Some(0x002f),
+        0x1b => Some(0x0030),
+        0x2b => Some(0x0031),
+        0x27 => Some(0x0033),
+        0x28 => Some(0x0034),
+        0x29 => Some(0x0035),
+        0x33 => Some(0x0036),
+        0x34 => Some(0x0037),
+        0x35 => Some(0x0038),
+        0x2a => Some(KEY_LEFT_SHIFT),
+        0x36 => Some(KEY_RIGHT_SHIFT),
+        0x1d => Some(KEY_LEFT_CTRL),
+        0x38 => Some(KEY_LEFT_ALT),
+        _ => None,
     }
 }
 
@@ -353,5 +463,16 @@ mod tests {
         let mut kb = Ps2Keyboard::new();
         assert_eq!(kb.feed(0x14).unwrap().code, KEY_LEFT_CTRL);
         assert_eq!(kb.feed(0x21).unwrap().ascii, 3);
+    }
+
+    #[test]
+    fn decodes_translated_set1_key() {
+        let mut kb = Ps2Keyboard::new_set1();
+        let press = kb.feed(0x1e).unwrap();
+        assert_eq!(press.ascii, b'a');
+        assert_eq!(press.value, 1);
+        let release = kb.feed(0x9e).unwrap();
+        assert_eq!(release.code, 0x0004);
+        assert_eq!(release.value, 0);
     }
 }

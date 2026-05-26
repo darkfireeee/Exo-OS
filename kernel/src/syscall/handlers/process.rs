@@ -89,11 +89,9 @@ pub fn sys_execve(
 // exit() / exit_group()
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `exit(status)` — marque le thread Dead et cède le CPU.
+/// `exit(status)` — marque le processus zombie, réveille le parent, puis cède le CPU.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let exit_code = (status & 0xFF) as u32;
-    // Délègue → process::lifecycle::exit::do_exit()
-    // do_exit() stocke exit_code dans PCB, met état → Zombie, appelle schedule_block().
     // SAFETY: appelé uniquement depuis le contexte syscall — GS kernel actif.
     unsafe {
         let tcb_ptr: u64;
@@ -102,9 +100,19 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
             let pid = crate::process::core::pid::Pid(tcb.pid.0);
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
+                let ppid = pcb.ppid();
+                pcb.set_exiting();
                 pcb.exit_code
                     .store(exit_code, core::sync::atomic::Ordering::Release);
                 pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
+                if ppid.0 != 0 {
+                    let _ = crate::process::signal::delivery::send_signal_to_pid(
+                        ppid,
+                        crate::process::signal::default::Signal::SIGCHLD,
+                    );
+                }
+                crate::process::lifecycle::wait::wake_waiting_parents(pcb.pid, ppid);
+                crate::process::lifecycle::fork::notify_vfork_completion(pid);
             }
             tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
             let cpu_id = tcb.current_cpu();

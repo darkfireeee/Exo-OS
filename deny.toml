@@ -15,10 +15,7 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "MIT",
-    "MPL-2.0",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
 ]
 
@@ -26,6 +23,9 @@ allow = [
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+skip = [
+    { name = "bitflags", version = "1.3.2", reason = "smoltcp 0.12 still depends on bitflags 1.x; keep the duplicate explicit until smoltcp is upgraded" },
+]
 deny = [
     { name = "libsodium-sys", reason = "FFI C dependency is not allowed in the Exo-OS kernel/server base; use RustCrypto or an audited no_std path" },
     { name = "libsodium", reason = "Use the audited ExoOS/RustCrypto path instead" },

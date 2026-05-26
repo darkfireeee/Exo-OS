@@ -115,8 +115,39 @@ pub fn sys_sysinfo(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     if info_ptr == 0 || info_ptr >= USER_ADDR_MAX {
         return EFAULT;
     }
-    let _ = info_ptr;
-    ENOSYS
+    #[repr(C)]
+    #[derive(Copy, Clone, Default)]
+    struct SysInfo {
+        uptime: i64,
+        loads: [u64; 3],
+        totalram: u64,
+        freeram: u64,
+        sharedram: u64,
+        bufferram: u64,
+        totalswap: u64,
+        freeswap: u64,
+        procs: u16,
+        pad: u16,
+        _pad2: u32,
+        totalhigh: u64,
+        freehigh: u64,
+        mem_unit: u32,
+        _pad3: [u8; 8],
+    }
+
+    let uptime_ns = crate::scheduler::timer::clock::monotonic_ns();
+    let info = SysInfo {
+        uptime: (uptime_ns / 1_000_000_000) as i64,
+        totalram: crate::memory::physical::stats::total_pages() as u64,
+        freeram: crate::memory::physical::stats::free_pages() as u64,
+        procs: crate::process::core::registry::PROCESS_REGISTRY.count() as u16,
+        mem_unit: 4096,
+        ..SysInfo::default()
+    };
+    match crate::syscall::validation::write_user_typed(info_ptr, info) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno(),
+    }
 }
 
 /// `arch_prctl(code, addr)` → 0 ou errno.

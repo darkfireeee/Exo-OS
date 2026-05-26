@@ -33,6 +33,7 @@ KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
 ROOTFS_RAW_DIR = target/$(USERSPACE_TARGET_DIR)/debug
 ROOTFS_LOADER_RAW_DIR = target/$(LOADER_TARGET_DIR)/debug
 ROOTFS_STAGING_DIR = target/exofs-rootfs
+COREUTILS_MANIFEST = userspace/apps/coreutils/Cargo.toml
 STRIP_TOOL ?= $(shell command -v llvm-strip 2>/dev/null || command -v strip 2>/dev/null || echo :)
 ROOTFS_SERVER_PACKAGES = \
 	-p exo-init-server \
@@ -49,6 +50,7 @@ ROOTFS_SERVER_PACKAGES = \
 	-p exo-scheduler-server \
 	-p exo-input-server \
 	-p exo-tty-server \
+	-p exo-ps2-input \
 	-p exo-exosh \
 	-p exo-shield
 ROOTFS_SBIN_BINS = \
@@ -66,7 +68,39 @@ ROOTFS_SBIN_BINS = \
 	exo-scheduler-server \
 	exo-input-server \
 	exo-tty-server \
+	exo-ps2-input \
 	exo-shield
+ROOTFS_BIN_BINS = \
+	basename \
+	cat \
+	clear \
+	cp \
+	dd \
+	dirname \
+	echo \
+	false \
+	ipc-stat \
+	kill \
+	ls \
+	meminfo \
+	mkdir \
+	mv \
+	ps \
+	pwd \
+	rm \
+	rmdir \
+	sleep \
+	stat \
+	sync \
+	syscall-stat \
+	top \
+	touch \
+	tree \
+	true \
+	uname \
+	uptime \
+	wc \
+	whoami
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
 # Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
@@ -93,11 +127,12 @@ QEMU_SAFE_E9_LOG     ?= /tmp/exoos-e9.log
 QEMU_EXOFS_DISK      ?= target/qemu/exofs-root.img
 QEMU_EXOFS_DISK_SIZE ?= 512M
 QEMU_EXOFS_DRIVE_FLAGS = -drive if=none,file=$(QEMU_EXOFS_DISK),format=raw,id=exofs0,cache=writeback -device virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16
-QEMU_E1000_NET_FLAGS    = -netdev user,id=exonet0 -device e1000,netdev=exonet0,mac=02:45:58:4f:00:01
-QEMU_VIRTIO_NET_FLAGS   = -netdev user,id=exonet0 -device virtio-net-pci-non-transitional,netdev=exonet0,mac=02:45:58:4f:00:01
-QEMU_NET_FLAGS          ?= $(QEMU_VIRTIO_NET_FLAGS)
+QEMU_E1000_NET_FLAGS    = -netdev user,id=exoe1000 -device e1000,netdev=exoe1000,mac=02:45:58:4f:00:02
+QEMU_VIRTIO_NET_FLAGS   = -netdev user,id=exovirtio -device virtio-net-pci-non-transitional,netdev=exovirtio,mac=02:45:58:4f:00:01
+QEMU_CANONICAL_NET_FLAGS = $(QEMU_VIRTIO_NET_FLAGS) $(QEMU_E1000_NET_FLAGS)
+QEMU_NET_FLAGS          ?= $(QEMU_CANONICAL_NET_FLAGS)
 ifeq ($(strip $(QEMU_NET_FLAGS)),)
-override QEMU_NET_FLAGS := $(QEMU_VIRTIO_NET_FLAGS)
+override QEMU_NET_FLAGS := $(QEMU_CANONICAL_NET_FLAGS)
 endif
 QEMU_HEADLESS_SAFE_FLAGS  = -machine q35
 QEMU_HEADLESS_SAFE_FLAGS += -m 256M
@@ -128,6 +163,7 @@ all: iso
 build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
 	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)"
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib"
@@ -137,6 +173,10 @@ build-rootfs-binaries:
 	done
 	@cp "$(ROOTFS_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true; fi
+	@for bin in $(ROOTFS_BIN_BINS); do \
+		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
+		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; fi; \
+	done
 	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi
 	@echo "$(GREEN)[OK] Rootfs staging pret : $(ROOTFS_STAGING_DIR)$(NC)"
@@ -202,22 +242,16 @@ _make_iso:
 # ── Lancement QEMU ────────────────────────────────────────────────────────────
 ## 4. Lancer Exo-OS dans QEMU (depuis l'ISO debug)
 qemu: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU VirtIO-net — Ctrl+C pour quitter$(NC)"
+	@echo "$(CYAN)Lancement QEMU canonique (ExoFS persistant + VirtIO-net + e1000) — Ctrl+C pour quitter$(NC)"
 	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
 	@echo "$(BLUE)Net flags : $(QEMU_NET_FLAGS)$(NC)"
 	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4a. Lancer QEMU avec le transport reseau Intel e1000
-qemu-e1000: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU e1000 — Ctrl+C pour quitter$(NC)"
-	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_E1000_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+qemu-e1000: qemu
 
 ## 4a. Lancer QEMU avec le transport reseau VirtIO PCI
-qemu-virtio-net: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU VirtIO-net — Ctrl+C pour quitter$(NC)"
-	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+qemu-virtio-net: qemu
 
 ## 4b. Lancer en mode release
 qemu-release: iso-release $(QEMU_EXOFS_DISK)
@@ -229,9 +263,7 @@ qemu-nographic: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU headless (sortie texte)$(NC)"
 	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
 
-qemu-nographic-virtio-net: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU VirtIO-net headless (sortie texte)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+qemu-nographic-virtio-net: qemu-nographic
 
 ## 4d. Lancer QEMU headless "zéro surprise" (logs fichiers dédiés)
 qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
@@ -241,28 +273,23 @@ qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
 	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -display none
 
-qemu-headless-safe-virtio-net: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU VirtIO-net headless sûr (logs fichiers, sans stdio partagé)$(NC)"
-	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
-	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
-	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_VIRTIO_NET_FLAGS) -cdrom $(ISO_OUTPUT) -display none
+qemu-headless-safe-virtio-net: qemu-headless-safe
 
 ## 4e. Lancer le test de résurrection ExoPhoenix en QEMU headless
-qemu-phoenix-resurrection: iso-phoenix-resurrection
+qemu-phoenix-resurrection: iso-phoenix-resurrection $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU test ExoPhoenix résurrection$(NC)"
 	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
 	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom exo-os-phoenix.iso -display none
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom exo-os-phoenix.iso -display none
 
 ## 4f. Lancer le test de résurrection ExoPhoenix en release headless
-qemu-release-phoenix-resurrection: iso-release-phoenix-resurrection
+qemu-release-phoenix-resurrection: iso-release-phoenix-resurrection $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU test ExoPhoenix résurrection (release)$(NC)"
 	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
 	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) -cdrom exo-os-phoenix-release.iso -display none
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom exo-os-phoenix-release.iso -display none
 
 run: qemu
 
@@ -345,9 +372,9 @@ help:
 	@echo "$(GREEN)  make release$(NC)       Compiler le kernel (release optimisé)"
 	@echo "$(GREEN)  make iso$(NC)           Construire exo-os.iso (debug)"
 	@echo "$(GREEN)  make iso-release$(NC)   Construire exo-os.iso (release)"
-	@echo "$(GREEN)  make qemu$(NC)          Lancer Exo-OS dans QEMU VirtIO-net (debug)"
-	@echo "$(GREEN)  make qemu-e1000$(NC)    Lancer Exo-OS dans QEMU e1000 (debug)"
-	@echo "$(GREEN)  make qemu-virtio-net$(NC) Lancer Exo-OS dans QEMU VirtIO-net (debug)"
+	@echo "$(GREEN)  make qemu$(NC)          Lancer Exo-OS avec ExoFS persistant + VirtIO-net + e1000"
+	@echo "$(GREEN)  make qemu-e1000$(NC)    Alias compatibilité vers make qemu"
+	@echo "$(GREEN)  make qemu-virtio-net$(NC) Alias compatibilité vers make qemu"
 	@echo "$(GREEN)  make qemu-release$(NC)  Lancer Exo-OS dans QEMU (release)"
 	@echo "$(GREEN)  make qemu-nographic$(NC)Lancer sans interface graphique"
 	@echo "$(GREEN)  make qemu-headless-safe$(NC) Lancer headless avec logs dédiés"
@@ -359,7 +386,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Testing:$(NC)"
 	@echo "  make bootimage  - Créer une image bootable"
-	@echo "  make qemu       - Lancer avec QEMU VirtIO-net"
+	@echo "  make qemu       - Lancer avec disque ExoFS persistant + réseau canonique"
 	@echo "  make test-ps    - Test avec PowerShell script"
 	@echo ""
 	@echo "$(GREEN)Qualité du code:$(NC)"

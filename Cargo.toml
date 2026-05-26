@@ -104,6 +104,9 @@ static_assertions = { version = "1" }
 # Requis pour proptest en no_std (float samplers via feature libm)
 num-traits        = { version = "0.2", default-features = false, features = ["libm"] }
 
+[patch.crates-io]
+log = { path = "libs/vendors/log-upstream" }
+
 [profile.dev]
 opt-level     = 0
 debug         = true

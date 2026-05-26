@@ -30,6 +30,7 @@ use crate::memory::{phys_to_virt, AllocFlags, Frame, PhysAddr, VirtAddr, PAGE_SI
 use crate::process::lifecycle::exec::{ElfLoadError, ElfLoadResult, ElfLoader};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
@@ -346,8 +347,8 @@ impl ElfLoader for ExoFsElfLoader {
     fn load_elf(
         &self,
         path: &str,
-        _argv: &[&str],
-        _envp: &[&str],
+        argv: &[&str],
+        envp: &[&str],
         _cr3_in: u64,
     ) -> Result<ElfLoadResult, ElfLoadError> {
         // ── 1. Résoudre le chemin ExoFS → BlobId ────────────────────────────
@@ -416,7 +417,8 @@ impl ElfLoader for ExoFsElfLoader {
 
         let stack_frames = map_stack_pages(&mut builder, &alloc, stack_base, stack_size)?;
         install_stack_vma(&child_as, stack_base, stack_size)?;
-        let executable_stack_top = STACK_TOP - 8;
+        let executable_stack_top =
+            build_initial_process_stack(&stack_frames, stack_base, STACK_TOP, argv, envp)?;
         if let Some((interp, image)) = interp_image {
             let handoff =
                 build_dynamic_handoff(path, &interp, &main_image, &image, executable_stack_top);
@@ -426,7 +428,7 @@ impl ElfLoader for ExoFsElfLoader {
                     core::mem::size_of::<DynamicLoaderHandoff>(),
                 )
             };
-            let handoff_vaddr = (STACK_TOP
+            let handoff_vaddr = (executable_stack_top
                 .saturating_sub(DYNAMIC_LOADER_HANDOFF_STACK_GAP)
                 .saturating_sub(handoff_bytes.len() as u64))
                 & !15u64;
@@ -962,6 +964,101 @@ fn write_stack_bytes(
         copied += n;
     }
     Ok(())
+}
+
+fn write_stack_u64(
+    stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
+    stack_base: u64,
+    user_vaddr: u64,
+    value: u64,
+) -> Result<(), ElfLoadError> {
+    write_stack_bytes(stack_frames, stack_base, user_vaddr, &value.to_ne_bytes())
+}
+
+fn push_stack_bytes(
+    stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
+    stack_base: u64,
+    sp: &mut u64,
+    bytes: &[u8],
+) -> Result<u64, ElfLoadError> {
+    let len = bytes.len().checked_add(1).ok_or(ElfLoadError::InvalidElf)? as u64;
+    *sp = sp.checked_sub(len).ok_or(ElfLoadError::InvalidElf)?;
+    write_stack_bytes(stack_frames, stack_base, *sp, bytes)?;
+    write_stack_bytes(stack_frames, stack_base, *sp + bytes.len() as u64, &[0])?;
+    Ok(*sp)
+}
+
+fn push_stack_u64(
+    stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
+    stack_base: u64,
+    sp: &mut u64,
+    value: u64,
+) -> Result<(), ElfLoadError> {
+    *sp = sp.checked_sub(8).ok_or(ElfLoadError::InvalidElf)?;
+    write_stack_u64(stack_frames, stack_base, *sp, value)
+}
+
+fn build_initial_process_stack(
+    stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
+    stack_base: u64,
+    stack_top: u64,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<u64, ElfLoadError> {
+    let mut sp = stack_top;
+    let mut argv_ptrs: Vec<u64> = Vec::new();
+    let mut envp_ptrs: Vec<u64> = Vec::new();
+    argv_ptrs
+        .try_reserve(argv.len())
+        .map_err(|_| ElfLoadError::OutOfMemory)?;
+    envp_ptrs
+        .try_reserve(envp.len())
+        .map_err(|_| ElfLoadError::OutOfMemory)?;
+
+    for arg in argv {
+        argv_ptrs.push(push_stack_bytes(
+            stack_frames,
+            stack_base,
+            &mut sp,
+            arg.as_bytes(),
+        )?);
+    }
+    for env in envp {
+        envp_ptrs.push(push_stack_bytes(
+            stack_frames,
+            stack_base,
+            &mut sp,
+            env.as_bytes(),
+        )?);
+    }
+
+    sp &= !15u64;
+
+    // AT_NULL, puis envp/argv, puis argc. Les binaires no_std Exo-OS lisent
+    // argc/argv/envp directement depuis ce contrat de pile. Le slot de padding
+    // conserve RSP % 16 == 8 sans déplacer argc hors de [RSP].
+    let pointer_slots = argv_ptrs.len() + envp_ptrs.len() + 5;
+    if pointer_slots & 1 == 0 {
+        push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
+    }
+    push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
+    push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
+
+    push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
+    let mut idx = envp_ptrs.len();
+    while idx != 0 {
+        idx -= 1;
+        push_stack_u64(stack_frames, stack_base, &mut sp, envp_ptrs[idx])?;
+    }
+
+    push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
+    idx = argv_ptrs.len();
+    while idx != 0 {
+        idx -= 1;
+        push_stack_u64(stack_frames, stack_base, &mut sp, argv_ptrs[idx])?;
+    }
+    push_stack_u64(stack_frames, stack_base, &mut sp, argv.len() as u64)?;
+    Ok(sp)
 }
 
 /// Instance statique du chargeur ELF.

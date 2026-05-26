@@ -140,8 +140,10 @@ pub use numbers::{
     SYS_GETTID,
     SYS_GETUID,
     SYS_IOCTL,
+    SYS_IOPORT_READ,
+    SYS_IOPORT_WRITE,
     SYS_IRQ_ACK,
-    // GI-03 Drivers 530-546
+    // GI-03 Drivers 530-549
     SYS_IRQ_REGISTER,
     SYS_KILL,
     SYS_LSTAT,

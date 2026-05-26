@@ -39,6 +39,9 @@ fn syscall_contract_standard_exofs_and_core_numbers() {
 
     assert_eq!(abi::SYS_IRQ_REGISTER, 530);
     assert_eq!(abi::SYS_PCI_SET_TOPOLOGY, 546);
+    assert_eq!(abi::SYS_PCI_FIND_DEVICE, 547);
+    assert_eq!(abi::SYS_IOPORT_READ, 548);
+    assert_eq!(abi::SYS_IOPORT_WRITE, 549);
 
     assert_eq!(abi::SYS_IPC_REGISTER, abi::SYS_EXO_IPC_CREATE);
     assert_eq!(abi::SYS_PROC_CLONE, abi::SYS_FORK);
@@ -50,6 +53,10 @@ fn syscall_contract_standard_exofs_layouts_and_rights() {
     assert_eq!(core::mem::size_of::<abi::ExofsPathResolveResult>(), 104);
     assert_eq!(core::mem::size_of::<abi::ExofsOpenArgs>(), 48);
     assert_eq!(core::mem::size_of::<abi::ExoProcessInfo>(), 48);
+    assert!(core::mem::size_of::<abi::InputRequest>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
+    assert!(core::mem::size_of::<abi::InputReply>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
+    assert!(core::mem::size_of::<abi::TtyRequest>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
+    assert!(core::mem::size_of::<abi::TtyReply>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
 
     let mut resolved = abi::ExofsPathResolveResult::default();
     resolved.blob_id[..8].copy_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());

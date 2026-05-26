@@ -1,7 +1,10 @@
+#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_os = "none", no_main)]
+
+#[cfg(target_os = "none")]
+exo_coreutils::exo_command!(exo_coreutils::bare::cmd_echo);
+
+#[cfg(not(target_os = "none"))]
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(err) = exo_coreutils::echo(&args, &mut std::io::stdout()) {
-        eprintln!("echo: {err}");
-        std::process::exit(1);
-    }
+    std::process::exit(exo_coreutils::host::host_main("echo"));
 }

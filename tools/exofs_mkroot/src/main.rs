@@ -1,6 +1,5 @@
-use std::env;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
-use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +18,13 @@ const OBJECT_INDEX_VERSION: u16 = 1;
 const OBJECT_INDEX_HEADER_SIZE: usize = 32;
 const OBJECT_INDEX_ENTRY_SIZE: usize = 64;
 const EXOFS_MAGIC: u32 = 0x4558_4F46;
+const PATH_INDEX_MAGIC: u32 = 0x5049_4458;
+const PATH_INDEX_VERSION: u16 = 1;
+const PATH_INDEX_HEADER_SIZE: usize = 148;
+const PATH_INDEX_ENTRY_SIZE: usize = 44;
+const PATH_INDEX_SPLIT_THRESHOLD: u32 = 192;
+const PATH_INDEX_KIND_DIR: u8 = 0;
+const PATH_INDEX_KIND_FILE: u8 = 1;
 const INCOMPAT_REQUIRED: u64 = (1 << 3) | (1 << 4) | (1 << 5);
 const SUPERBLOCK_SIZE: usize = 512;
 const DEFAULT_VOLUME_NAME: &[u8] = b"ExoOS-root";
@@ -27,7 +33,6 @@ const DEFAULT_VOLUME_NAME: &[u8] = b"ExoOS-root";
 struct InputFile {
     image_path: String,
     host_path: PathBuf,
-    size: u64,
 }
 
 struct Mapping {
@@ -35,6 +40,26 @@ struct Mapping {
     base_lba: u64,
     allocated_blocks: u64,
     size_bytes: u64,
+}
+
+struct PayloadBlob {
+    image_path: String,
+    data: Vec<u8>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    Directory,
+    File,
+}
+
+impl NodeKind {
+    fn path_index_kind(self) -> u8 {
+        match self {
+            Self::Directory => PATH_INDEX_KIND_DIR,
+            Self::File => PATH_INDEX_KIND_FILE,
+        }
+    }
 }
 
 struct Args {
@@ -63,6 +88,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     if files.is_empty() {
         return Err(format!("no regular files found under {}", args.root.display()).into());
     }
+    let payloads = build_payload_blobs(&files)?;
 
     if let Some(parent) = args.image.parent() {
         fs::create_dir_all(parent)?;
@@ -71,63 +97,54 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut image = File::create(&args.image)?;
     image.set_len(args.size)?;
 
-    let mappings = write_payload_files(&mut image, args.size, &files)?;
+    let mappings = write_payload_blobs(&mut image, args.size, &payloads)?;
     write_object_catalog(&mut image, &mappings, args.size)?;
     write_superblocks(&mut image, args.size, mappings.len() as u64)?;
     image.sync_all()?;
 
     println!(
-        "ExoFS root image {}: {} files, {} bytes",
+        "ExoFS root image {}: {} blobs, {} bytes",
         args.image.display(),
-        files.len(),
-        files.iter().map(|file| file.size).sum::<u64>()
+        payloads.len(),
+        payloads
+            .iter()
+            .map(|payload| payload.data.len() as u64)
+            .sum::<u64>()
     );
     Ok(())
 }
 
 fn parse_args() -> Result<Args, Box<dyn Error>> {
-    let mut image = None;
-    let mut root = None;
-    let mut size = None;
-    let mut it = env::args_os().skip(1);
+    let mut args = pico_args::Arguments::from_env();
+    if args.contains(["-h", "--help"]) {
+        println!("usage: exofs-mkroot --image PATH --size 512M --root DIR");
+        std::process::exit(0);
+    }
 
-    while let Some(arg) = it.next() {
-        match arg.to_str() {
-            Some("--image") => image = Some(PathBuf::from(next_arg_value(&mut it, "--image")?)),
-            Some("--root") => root = Some(PathBuf::from(next_arg_value(&mut it, "--root")?)),
-            Some("--size") => {
-                let raw = next_arg_value(&mut it, "--size")?;
-                let raw = raw.to_str().ok_or("--size must be valid UTF-8")?;
-                size = Some(parse_size(raw)?);
-            }
-            Some("--help" | "-h") => {
-                println!("usage: exofs-mkroot --image PATH --size 512M --root DIR");
-                std::process::exit(0);
-            }
-            Some(other) => return Err(format!("unknown argument: {other}").into()),
-            None => {
-                return Err(format!(
-                    "argument name must be valid UTF-8: {}",
-                    arg.to_string_lossy()
-                )
-                .into());
-            }
-        }
+    let image = args
+        .opt_value_from_os_str("--image", |value| {
+            Ok::<_, &'static str>(PathBuf::from(value))
+        })?
+        .ok_or("--image is required")?;
+    let root = args
+        .opt_value_from_os_str("--root", |value| {
+            Ok::<_, &'static str>(PathBuf::from(value))
+        })?
+        .ok_or("--root is required")?;
+    let raw_size = args
+        .opt_value_from_str::<_, String>("--size")?
+        .ok_or("--size is required")?;
+
+    let remaining = args.finish();
+    if !remaining.is_empty() {
+        return Err(format!("unknown argument: {}", remaining[0].to_string_lossy()).into());
     }
 
     Ok(Args {
-        image: image.ok_or("--image is required")?,
-        root: root.ok_or("--root is required")?,
-        size: size.ok_or("--size is required")?,
+        image,
+        root,
+        size: parse_size(&raw_size)?,
     })
-}
-
-fn next_arg_value(
-    it: &mut impl Iterator<Item = OsString>,
-    name: &'static str,
-) -> Result<OsString, Box<dyn Error>> {
-    it.next()
-        .ok_or_else(|| format!("{name} requires a value").into())
 }
 
 fn parse_size(raw: &str) -> Result<u64, Box<dyn Error>> {
@@ -167,11 +184,9 @@ fn collect_files_inner(
         } else if ty.is_file() {
             let rel = path.strip_prefix(root)?;
             let image_path = image_path_for(rel)?;
-            let size = entry.metadata()?.len();
             out.push(InputFile {
                 image_path,
                 host_path: path,
-                size,
             });
         }
     }
@@ -206,35 +221,204 @@ fn image_path_for(rel: &Path) -> Result<String, Box<dyn Error>> {
     Ok(out)
 }
 
-fn write_payload_files(
+fn build_payload_blobs(files: &[InputFile]) -> Result<Vec<PayloadBlob>, Box<dyn Error>> {
+    let mut dirs: BTreeSet<String> = BTreeSet::new();
+    let mut entries: BTreeMap<String, BTreeMap<String, NodeKind>> = BTreeMap::new();
+    dirs.insert("/".to_string());
+    entries.entry("/".to_string()).or_default();
+
+    for file in files {
+        let components = path_components(&file.image_path)?;
+        if components.is_empty() {
+            return Err("rootfs file path resolved to /".into());
+        }
+
+        let mut parent = "/".to_string();
+        for (idx, component) in components.iter().enumerate() {
+            let is_last = idx + 1 == components.len();
+            let kind = if is_last {
+                NodeKind::File
+            } else {
+                NodeKind::Directory
+            };
+            insert_dir_entry(&mut entries, &parent, component, kind)?;
+            if !is_last {
+                let child_dir = child_path(&parent, component);
+                dirs.insert(child_dir.clone());
+                entries.entry(child_dir.clone()).or_default();
+                parent = child_dir;
+            }
+        }
+    }
+
+    for dir in &dirs {
+        entries.entry(dir.clone()).or_default();
+    }
+
+    let mut payloads = Vec::new();
+    payloads.try_reserve(entries.len() + files.len())?;
+    for (dir, children) in &entries {
+        payloads.push(PayloadBlob {
+            image_path: dir.clone(),
+            data: serialize_path_index(dir, children)?,
+        });
+    }
+    for file in files {
+        payloads.push(PayloadBlob {
+            image_path: file.image_path.clone(),
+            data: fs::read(&file.host_path)?,
+        });
+    }
+    payloads.sort_by(|a, b| a.image_path.cmp(&b.image_path));
+    Ok(payloads)
+}
+
+fn path_components(path: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    if !path.starts_with('/') {
+        return Err(format!("rootfs path must be absolute: {path}").into());
+    }
+    let mut out = Vec::new();
+    for raw in path.split('/').filter(|part| !part.is_empty()) {
+        validate_component(raw.as_bytes())?;
+        out.push(raw.to_string());
+    }
+    Ok(out)
+}
+
+fn child_path(parent: &str, child: &str) -> String {
+    if parent == "/" {
+        format!("/{child}")
+    } else {
+        format!("{parent}/{child}")
+    }
+}
+
+fn insert_dir_entry(
+    entries: &mut BTreeMap<String, BTreeMap<String, NodeKind>>,
+    parent: &str,
+    name: &str,
+    kind: NodeKind,
+) -> Result<(), Box<dyn Error>> {
+    validate_component(name.as_bytes())?;
+    let siblings = entries.entry(parent.to_string()).or_default();
+    match siblings.get(name).copied() {
+        Some(existing) if existing != kind => {
+            Err(format!("rootfs path kind conflict at {parent}/{name}").into())
+        }
+        Some(_) => Ok(()),
+        None => {
+            siblings.insert(name.to_string(), kind);
+            Ok(())
+        }
+    }
+}
+
+fn serialize_path_index(
+    dir_path: &str,
+    entries: &BTreeMap<String, NodeKind>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut out = Vec::new();
+    let names_len = entries.keys().map(|name| name.len()).sum::<usize>();
+    let total = PATH_INDEX_HEADER_SIZE
+        .checked_add(
+            entries
+                .len()
+                .checked_mul(PATH_INDEX_ENTRY_SIZE)
+                .ok_or("path index size overflow")?,
+        )
+        .and_then(|value| value.checked_add(names_len))
+        .ok_or("path index size overflow")?;
+    out.try_reserve(total)?;
+
+    push_u32(&mut out, PATH_INDEX_MAGIC);
+    push_u16(&mut out, PATH_INDEX_VERSION);
+    push_u16(&mut out, 0);
+    out.extend_from_slice(&parent_oid_for_dir(dir_path));
+    push_u32(&mut out, entries.len() as u32);
+    out.extend_from_slice(&[0u8; 32]);
+    out.extend_from_slice(&[0u8; 32]);
+    push_u32(&mut out, PATH_INDEX_SPLIT_THRESHOLD);
+    push_u32(&mut out, 0);
+    out.extend_from_slice(&[0u8; 32]);
+
+    for (name, kind) in entries {
+        validate_component(name.as_bytes())?;
+        push_u64(&mut out, fnv1a_hash(name.as_bytes()));
+        out.extend_from_slice(&blake3_hash(child_path(dir_path, name).as_bytes()));
+        push_u16(&mut out, name.len() as u16);
+        out.push(kind.path_index_kind());
+        out.push(0);
+        out.extend_from_slice(name.as_bytes());
+    }
+
+    debug_assert_eq!(out.len(), total);
+    Ok(out)
+}
+
+fn parent_oid_for_dir(dir_path: &str) -> [u8; 32] {
+    if dir_path == "/" {
+        [0u8; 32]
+    } else {
+        blake3_hash(parent_path(dir_path).as_bytes())
+    }
+}
+
+fn parent_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(idx) => trimmed[..idx].to_string(),
+    }
+}
+
+fn validate_component(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    if bytes.is_empty() || bytes.len() > 255 {
+        return Err("invalid rootfs path component length".into());
+    }
+    if bytes.iter().any(|&byte| byte == b'/' || byte == 0) {
+        return Err("invalid rootfs path component byte".into());
+    }
+    std::str::from_utf8(bytes)?;
+    Ok(())
+}
+
+fn fnv1a_hash(data: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn write_payload_blobs(
     image: &mut File,
     image_size: u64,
-    files: &[InputFile],
+    payloads: &[PayloadBlob],
 ) -> Result<Vec<Mapping>, Box<dyn Error>> {
     let total_blocks = image_size / DEVICE_BLOCK_SIZE;
     let mut next_lba = data_lba_start(total_blocks);
-    let mut mappings = Vec::with_capacity(files.len());
+    let mut mappings = Vec::with_capacity(payloads.len());
 
-    for file in files {
-        let data = fs::read(&file.host_path)?;
-        let blocks = blocks_for(data.len() as u64);
+    for payload in payloads {
+        let blocks = blocks_for(payload.data.len() as u64);
         let end_lba = next_lba
             .checked_add(blocks)
             .ok_or("LBA overflow while writing rootfs")?;
         if end_lba > total_blocks {
-            return Err(format!("rootfs image is too small for {}", file.image_path).into());
+            return Err(format!("rootfs image is too small for {}", payload.image_path).into());
         }
 
         let offset = next_lba
             .checked_mul(DEVICE_BLOCK_SIZE)
             .ok_or("byte offset overflow while writing rootfs")?;
-        write_padded(image, offset, &data, blocks * DEVICE_BLOCK_SIZE)?;
+        write_padded(image, offset, &payload.data, blocks * DEVICE_BLOCK_SIZE)?;
 
         mappings.push(Mapping {
-            blob_id: blake3_hash(file.image_path.as_bytes()),
+            blob_id: blake3_hash(payload.image_path.as_bytes()),
             base_lba: next_lba,
             allocated_blocks: blocks,
-            size_bytes: data.len() as u64,
+            size_bytes: payload.data.len() as u64,
         });
         next_lba = end_lba;
     }

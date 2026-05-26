@@ -1503,6 +1503,73 @@ pub fn sys_sync(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
     fs_bridge::bridge_result(fs_bridge::fs_sync(pid))
 }
 
+const LINUX_REBOOT_MAGIC1: u64 = 0xfee1_dead;
+const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;
+const LINUX_REBOOT_CMD_RESTART: u64 = 0x0123_4567;
+const LINUX_REBOOT_CMD_POWER_OFF: u64 = 0x4321_fedc;
+const QEMU_DEBUG_EXIT_PORT: u16 = 0x00f4;
+const QEMU_DEBUG_EXIT_SUCCESS: u32 = 0x10;
+const PS2_CONTROLLER_PORT: u16 = 0x0064;
+const PS2_RESET_COMMAND: u8 = 0xfe;
+
+#[inline(never)]
+fn halt_after_reboot_request() -> ! {
+    crate::arch::halt_cpu()
+}
+
+#[inline(never)]
+#[cfg(target_arch = "x86_64")]
+fn platform_poweroff() -> ! {
+    // SAFETY: SYS_REBOOT runs in ring 0. Port 0xf4 is the configured
+    // QEMU isa-debug-exit device in the project boot commands.
+    unsafe {
+        crate::arch::x86_64::outl(QEMU_DEBUG_EXIT_PORT, QEMU_DEBUG_EXIT_SUCCESS);
+    }
+    halt_after_reboot_request()
+}
+
+#[inline(never)]
+#[cfg(not(target_arch = "x86_64"))]
+fn platform_poweroff() -> ! {
+    halt_after_reboot_request()
+}
+
+#[inline(never)]
+#[cfg(target_arch = "x86_64")]
+fn platform_restart() -> ! {
+    // SAFETY: SYS_REBOOT runs in ring 0. 0x64/0xfe is the legacy PS/2
+    // controller CPU reset command supported by QEMU and many PCs.
+    unsafe {
+        crate::arch::x86_64::outb(PS2_CONTROLLER_PORT, PS2_RESET_COMMAND);
+    }
+    halt_after_reboot_request()
+}
+
+#[inline(never)]
+#[cfg(not(target_arch = "x86_64"))]
+fn platform_restart() -> ! {
+    halt_after_reboot_request()
+}
+
+/// `reboot(magic1, magic2, cmd, arg)` compatible Linux/musl.
+pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, _arg: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_REBOOT);
+    if magic1 != LINUX_REBOOT_MAGIC1 || magic2 != LINUX_REBOOT_MAGIC2 {
+        return EINVAL;
+    }
+
+    use crate::syscall::fs_bridge;
+    if let Err(err) = fs_bridge::fs_sync(current_pid_u32()) {
+        return err.to_errno();
+    }
+
+    match cmd {
+        LINUX_REBOOT_CMD_POWER_OFF => platform_poweroff(),
+        LINUX_REBOOT_CMD_RESTART => platform_restart(),
+        _ => EINVAL,
+    }
+}
+
 /// `sync_file_range(fd, offset, nbytes, flags)`.
 pub fn sys_sync_file_range(
     fd: u64,
@@ -2232,16 +2299,9 @@ pub fn sys_execve(
     ENOSYS
 }
 
-/// `exit(status)` — marque le thread Dead et cède le CPU via schedule_block.
-///
-/// Cette implémentation minimale est fonctionnelle : le thread ne sera plus
-/// jamais choisi par pick_next_task (état Dead ignoré par la runqueue).
-/// La libération complète des ressources (fds, PCB) requiert process/ pleinement
-/// intégré et est réalisée de manière asynchrone par le reaper kthread.
+/// `exit(status)` — marque le processus zombie, réveille le parent, puis cède le CPU.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT);
-    // BUG-1 FIX: exit_code était calculé mais jamais stocké dans le PCB.
-    // waitpid() obtenait toujours 0 quel que soit le code de sortie réel.
     let exit_code = (status & 0xFF) as u32;
     // SAFETY: GS:[0x20] est le TCB du thread courant initialisé par context_switch.
     // L'appel est valide depuis le contexte syscall (kernel GS actif après SWAPGS).
@@ -2256,12 +2316,21 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
             let pid = crate::process::core::pid::Pid(tcb.pid.0);
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
                 use core::sync::atomic::Ordering;
+                let ppid = pcb.ppid();
+                pcb.set_exiting();
                 pcb.exit_code.store(exit_code, Ordering::Release);
                 pcb.flags.fetch_or(
                     crate::process::core::pcb::process_flags::VFORK_DONE,
                     Ordering::Release,
                 );
                 pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
+                if ppid.0 != 0 {
+                    let _ = crate::process::signal::delivery::send_signal_to_pid(
+                        ppid,
+                        crate::process::signal::default::Signal::SIGCHLD,
+                    );
+                }
+                crate::process::lifecycle::wait::wake_waiting_parents(pcb.pid, ppid);
                 crate::process::lifecycle::fork::notify_vfork_completion(pid);
             }
 
@@ -2606,6 +2675,7 @@ fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::Servi
         b"virtio_drivers" | b"e1000_driver" | b"virtio_net_driver" | b"loopback_driver" => {
             Some(crate::security::ServiceClass::VirtioDriver)
         }
+        b"ps2_driver" => Some(crate::security::ServiceClass::Ps2Driver),
         b"network_server" => Some(crate::security::ServiceClass::NetworkServer),
         b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
         b"input_server" => Some(crate::security::ServiceClass::InputServer),
@@ -3884,6 +3954,51 @@ pub fn sys_exo_process_list(
     }
 }
 
+#[inline]
+fn perf_value(value: u64) -> i64 {
+    core::cmp::min(value, i64::MAX as u64) as i64
+}
+
+/// `exo_perf_read(metric, index)` — lecture de compteurs kernel bornés.
+pub fn sys_exo_perf_read(metric: u64, index: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_PERF_READ);
+    match metric {
+        EXO_PERF_SYSCALL_COUNT => {
+            if index >= SYSCALL_TABLE_SIZE as u64 {
+                EINVAL
+            } else {
+                perf_value(syscall_table_stat(index as usize))
+            }
+        }
+        EXO_PERF_DISPATCH_TOTAL => perf_value(crate::syscall::dispatch_stats().total),
+        EXO_PERF_DISPATCH_FAST_PATH => perf_value(crate::syscall::dispatch_stats().fast_path),
+        EXO_PERF_DISPATCH_SLOW_PATH => perf_value(crate::syscall::dispatch_stats().slow_path),
+        EXO_PERF_DISPATCH_ENOSYS => perf_value(crate::syscall::dispatch_stats().enosys),
+        EXO_PERF_IPC_MESSAGES_SENT => perf_value(crate::ipc::ipc_stats_snapshot().messages_sent()),
+        EXO_PERF_IPC_MESSAGES_RECEIVED => {
+            perf_value(crate::ipc::ipc_stats_snapshot().messages_received())
+        }
+        EXO_PERF_IPC_MESSAGES_DROPPED => {
+            perf_value(crate::ipc::ipc_stats_snapshot().messages_dropped())
+        }
+        EXO_PERF_IPC_RPC_CALLS => perf_value(crate::ipc::ipc_stats_snapshot().rpc_calls()),
+        EXO_PERF_IPC_RPC_TIMEOUTS => perf_value(crate::ipc::ipc_stats_snapshot().rpc_timeouts()),
+        EXO_PERF_IPC_FUTEX_WAITS => perf_value(crate::ipc::ipc_stats_snapshot().futex_waits()),
+        EXO_PERF_IPC_FUTEX_WAKES => perf_value(crate::ipc::ipc_stats_snapshot().futex_wakes()),
+        _ => EINVAL,
+    }
+}
+
+pub fn sys_exo_perf_enable(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_PERF_ENABLE);
+    0
+}
+
+pub fn sys_exo_perf_disable(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_EXO_PERF_DISABLE);
+    0
+}
+
 /// `exo_phoenix_state_set(state)` — synchronise une transition Phoenix root.
 pub fn sys_exo_phoenix_state_set(
     state: u64,
@@ -3934,7 +4049,7 @@ pub fn sys_exo_phoenix_state_get(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers GI-03 Drivers (530–546)
+// Handlers GI-03 Drivers (530–549)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3969,6 +4084,46 @@ fn parse_ipc_endpoint_packed(lo: u64, hi: u64) -> IpcEndpoint {
         generation: hi as u32,
         _pad: (hi >> 32) as u32,
     }
+}
+
+#[inline]
+fn normalize_driver_irq(
+    raw_irq: u64,
+    source_kind: crate::arch::x86_64::irq::IrqSourceKind,
+) -> Result<IrqVector, i64> {
+    if raw_irq > u8::MAX as u64 {
+        return Err(EINVAL);
+    }
+    let raw = raw_irq as u8;
+    let vector = if source_kind.needs_ioapic_mask() && raw < IrqVector::VECTOR_IRQ_BASE {
+        raw.saturating_add(IrqVector::VECTOR_IRQ_BASE)
+    } else {
+        raw
+    };
+    let vector = IrqVector(vector);
+    if vector.is_valid() {
+        Ok(vector)
+    } else {
+        Err(EINVAL)
+    }
+}
+
+#[inline]
+fn caller_is_ps2_driver(caller_pid: u32) -> bool {
+    matches!(
+        crate::security::service_class_of(Pid(caller_pid)),
+        crate::security::ServiceClass::Ps2Driver
+    )
+}
+
+#[inline]
+fn ps2_ioport_allowed(port: u64, width: u64) -> bool {
+    width == 1 && matches!(port, 0x60 | 0x64)
+}
+
+#[inline]
+fn ps2_keyboard_vector() -> u8 {
+    IrqVector::VECTOR_IRQ_BASE + 1
 }
 
 /// Encode/decode ABI simplifié BDF sur 32 bits :
@@ -4063,23 +4218,18 @@ pub fn sys_irq_register(
 ) -> i64 {
     stat_inc(SYS_IRQ_REGISTER);
 
-    if irq > u8::MAX as u64 {
-        return EINVAL;
-    }
-
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
         return EACCES;
     }
 
-    let vector = IrqVector(irq as u8);
-    if !vector.is_valid() {
-        return EINVAL;
-    }
-
     let source_kind = match parse_irq_source_kind(source_kind) {
         Some(kind) => kind,
         None => return EINVAL,
+    };
+    let vector = match normalize_driver_irq(irq, source_kind) {
+        Ok(vector) => vector,
+        Err(errno) => return errno,
     };
 
     let mut endpoint = parse_ipc_endpoint_packed(endpoint_lo, endpoint_hi);
@@ -4088,7 +4238,12 @@ pub fn sys_irq_register(
     let bdf = if has_bdf != 0 { Some(bdf_raw) } else { None };
 
     match crate::arch::x86_64::irq::sys_irq_register(vector, endpoint, source_kind, bdf) {
-        Ok(reg_id) => reg_id as i64,
+        Ok(reg_id) => {
+            if vector.as_u8() == ps2_keyboard_vector() && caller_is_ps2_driver(caller_pid) {
+                crate::arch::x86_64::terminal::handoff_keyboard_to_ring1();
+            }
+            reg_id as i64
+        }
         Err(err) => irq_error_to_errno(err),
     }
 }
@@ -4134,6 +4289,42 @@ pub fn sys_irq_ack(
         Ok(()) => 0,
         Err(err) => irq_error_to_errno(err),
     }
+}
+
+/// ABI GI-03 : `sys_ioport_read(port, width)`.
+///
+/// Transition terminal v0.2.0: seul le driver Ring1 `ps2_driver` peut accéder
+/// aux ports i8042 clavier (0x60/0x64), en octets.
+pub fn sys_ioport_read(port: u64, width: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_IOPORT_READ);
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 || !caller_is_ps2_driver(caller_pid) {
+        return EACCES;
+    }
+    if !ps2_ioport_allowed(port, width) {
+        return EINVAL;
+    }
+
+    unsafe { crate::arch::x86_64::inb(port as u16) as i64 }
+}
+
+/// ABI GI-03 : `sys_ioport_write(port, value, width)`.
+pub fn sys_ioport_write(port: u64, value: u64, width: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_IOPORT_WRITE);
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 || !caller_is_ps2_driver(caller_pid) {
+        return EACCES;
+    }
+    if !ps2_ioport_allowed(port, width) || value > u8::MAX as u64 {
+        return EINVAL;
+    }
+
+    unsafe {
+        crate::arch::x86_64::outb(port as u16, value as u8);
+    }
+    0
 }
 
 /// ABI GI-03 : `sys_mmio_map(phys_addr, size)` pour le PID appelant.
@@ -4687,6 +4878,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXECVE => sys_execve,
         SYS_EXIT => sys_exit,
         SYS_EXIT_GROUP => sys_exit_group,
+        SYS_REBOOT => sys_reboot,
         SYS_WAIT4 => sys_wait4,
         SYS_WAITID => sys_waitid,
         SYS_GETPID => crate::syscall::handlers::misc::sys_getpid,
@@ -4737,6 +4929,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_CAP_CHECK => sys_exo_cap_check,
+        SYS_EXO_PERF_READ => sys_exo_perf_read,
+        SYS_EXO_PERF_ENABLE => sys_exo_perf_enable,
         SYS_EXO_LOG => sys_exo_log,
         SYS_EXO_PROCESS_LIST => sys_exo_process_list,
         SYS_EXO_PHOENIX_STATE_SET => sys_exo_phoenix_state_set,
@@ -4764,9 +4958,11 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── ExoFS extensions (519–520) — FIX BUG-01 + BUG-02 ───────────────
         SYS_EXOFS_OPEN_BY_PATH => sys_exofs_open_by_path,
         SYS_EXOFS_READDIR => sys_exofs_readdir,
-        // ── GI-03 Drivers (530–546) ──────────────────────────────────────────
+        // ── GI-03 Drivers (530–549) ──────────────────────────────────────────
         SYS_IRQ_REGISTER => sys_irq_register,
         SYS_IRQ_ACK => sys_irq_ack,
+        SYS_IOPORT_READ => sys_ioport_read,
+        SYS_IOPORT_WRITE => sys_ioport_write,
         SYS_MMIO_MAP => sys_mmio_map,
         SYS_MMIO_UNMAP => sys_mmio_unmap,
         SYS_DMA_ALLOC => sys_dma_alloc,

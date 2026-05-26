@@ -47,8 +47,6 @@ postcard              = { workspace = true }
 # ── Architecture  arch/x86_64/ ───────────────────────────────────────────────
 # arch/x86_64/boot/multiboot2.rs
 multiboot2 = { workspace = true }
-# arch/x86_64/boot/uefi.rs — types UEFI (Memory map)
-uefi-raw   = { version = "0.6", default-features = false }
 # arch/x86_64/cpu/features.rs — CPUID
 raw-cpuid  = { workspace = true }
 # arch/x86_64/acpi/

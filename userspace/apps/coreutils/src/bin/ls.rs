@@ -1,9 +1,10 @@
-use std::path::Path;
+#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_os = "none", no_main)]
 
+#[cfg(target_os = "none")]
+exo_coreutils::exo_command!(exo_coreutils::bare::cmd_ls);
+
+#[cfg(not(target_os = "none"))]
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| ".".into());
-    if let Err(err) = exo_coreutils::ls(Path::new(&path), &mut std::io::stdout()) {
-        eprintln!("ls: {err}");
-        std::process::exit(1);
-    }
+    std::process::exit(exo_coreutils::host::host_main("ls"));
 }

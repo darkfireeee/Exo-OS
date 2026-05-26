@@ -7,3 +7,4 @@ publish.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+pico-args = "0.5"

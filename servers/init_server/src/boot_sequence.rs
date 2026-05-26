@@ -1,8 +1,8 @@
 use super::{dependency, log, service_manager, service_table, syscall, Service};
 
 const POLL_INTERVAL_MS: u64 = 5;
-const BOOT_PHASE_TIMEOUT_MS: u64 = 120_000;
-const READY_TIMEOUT_GRACE_MS: u64 = 1_000;
+const BOOT_PHASE_TIMEOUT_MS: u64 = 300_000;
+const READY_TIMEOUT_GRACE_MS: u64 = 5_000;
 const CLOCK_MONOTONIC: u64 = 1;
 const POLL_YIELD_ROUNDS: usize = 4;
 const POLL_SPIN_ROUNDS: usize = 256;

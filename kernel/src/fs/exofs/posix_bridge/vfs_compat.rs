@@ -10,7 +10,7 @@ use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use crate::fs::exofs::posix_bridge::inode_emulation::{
-    inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
+    decode_inode_entry, encode_inode_entry, inode_flags, InodeEntry, ObjectIno, INODE_EMULATION,
 };
 use crate::fs::exofs::syscall::object_store;
 use crate::fs::exofs::syscall::object_write::{persist_cached_blob_if_disk, reject_if_immutable};
@@ -34,6 +34,11 @@ pub const VFS_READDIR_BATCH: usize = 64;
 /// Il est volontairement distinct du magic superblock ExoFS (`0x4558_4F46`).
 pub const VFS_MAGIC: u32 = 0x5654_4654; // "VTFT"
 pub const VFS_VERSION: u8 = 1;
+const VFS_NAMESPACE_MAGIC: u32 = 0x5646_534E; // "VFSN"
+const VFS_NAMESPACE_VERSION: u16 = 1;
+const VFS_NAMESPACE_HEADER_SIZE: usize = 32;
+const VFS_NAMESPACE_DIRENT_HEADER_SIZE: usize = 24;
+const VFS_NAMESPACE_BLOB_TAG: &[u8] = b"exo:posix-vfs-namespace:v1";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Modes et types de fichiers
@@ -578,6 +583,60 @@ impl DirectoryRegistry {
         self.lock_release();
     }
 
+    fn snapshot_records(&self) -> ExofsResult<Vec<(ObjectIno, DirRecord)>> {
+        self.lock_acquire();
+        let map = self.map();
+        let mut total = 0usize;
+        for records in map.values() {
+            total = total.saturating_add(records.len());
+        }
+        let mut out = Vec::new();
+        out.try_reserve(total).map_err(|_| {
+            self.lock_release();
+            ExofsError::NoMemory
+        })?;
+        for (parent, records) in map.iter() {
+            let mut i = 0usize;
+            while i < records.len() {
+                out.push((*parent, records[i].clone()));
+                i = i.wrapping_add(1);
+            }
+        }
+        self.lock_release();
+        Ok(out)
+    }
+
+    fn replace_records(&self, records: &[(ObjectIno, DirRecord)]) -> ExofsResult<()> {
+        self.lock_acquire();
+        let map = self.map();
+        map.clear();
+        map.insert(VFS_ROOT_INO, Vec::new());
+        let mut i = 0usize;
+        while i < records.len() {
+            let (parent, record) = &records[i];
+            if let Entry::Vacant(entry) = map.entry(*parent) {
+                entry.insert(Vec::new());
+            }
+            let Some(parent_records) = map.get_mut(parent) else {
+                self.lock_release();
+                return Err(ExofsError::InternalError);
+            };
+            parent_records.try_reserve(1).map_err(|_| {
+                self.lock_release();
+                ExofsError::NoMemory
+            })?;
+            parent_records.push(record.clone());
+            if record.kind == inode_kind(inode_flags::DIRECTORY)
+                && matches!(map.entry(record.ino), Entry::Vacant(_))
+            {
+                map.insert(record.ino, Vec::new());
+            }
+            i = i.wrapping_add(1);
+        }
+        self.lock_release();
+        Ok(())
+    }
+
     #[cfg(test)]
     fn reset_all(&self) {
         self.lock_acquire();
@@ -600,6 +659,7 @@ pub fn register_exofs_vfs_ops() -> ExofsResult<()> {
     }
     INODE_EMULATION.ensure_root()?;
     DIRECTORY_REGISTRY.ensure_dir(VFS_ROOT_INO)?;
+    let _ = load_vfs_namespace_if_disk()?;
     Ok(())
 }
 
@@ -611,6 +671,200 @@ pub fn vfs_is_registered() -> bool {
 /// Retourne le numéro d'inode de la racine du FS.
 pub fn root_inode() -> ObjectIno {
     VFS_ROOT_INO
+}
+
+fn vfs_namespace_blob_id() -> BlobId {
+    BlobId::from_bytes_blake3(VFS_NAMESPACE_BLOB_TAG)
+}
+
+fn push_u16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn read_u16(buf: &[u8], off: usize) -> ExofsResult<u16> {
+    if off.saturating_add(2) > buf.len() {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    Ok(u16::from_le_bytes([buf[off], buf[off + 1]]))
+}
+
+fn read_u32(buf: &[u8], off: usize) -> ExofsResult<u32> {
+    if off.saturating_add(4) > buf.len() {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    Ok(u32::from_le_bytes([
+        buf[off],
+        buf[off + 1],
+        buf[off + 2],
+        buf[off + 3],
+    ]))
+}
+
+fn read_u64(buf: &[u8], off: usize) -> ExofsResult<u64> {
+    if off.saturating_add(8) > buf.len() {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    Ok(u64::from_le_bytes([
+        buf[off],
+        buf[off + 1],
+        buf[off + 2],
+        buf[off + 3],
+        buf[off + 4],
+        buf[off + 5],
+        buf[off + 6],
+        buf[off + 7],
+    ]))
+}
+
+fn serialize_vfs_namespace() -> ExofsResult<Vec<u8>> {
+    let (inodes, next_ino) = INODE_EMULATION.snapshot_entries()?;
+    let records = DIRECTORY_REGISTRY.snapshot_records()?;
+    let inode_bytes = inodes
+        .len()
+        .checked_mul(core::mem::size_of::<InodeEntry>())
+        .ok_or(ExofsError::OffsetOverflow)?;
+    let mut dir_bytes = 0usize;
+    let mut i = 0usize;
+    while i < records.len() {
+        let name_len = records[i].1.name.len();
+        if name_len == 0 || name_len > VFS_NAME_MAX {
+            return Err(ExofsError::InvalidPathComponent);
+        }
+        dir_bytes = dir_bytes
+            .checked_add(VFS_NAMESPACE_DIRENT_HEADER_SIZE)
+            .and_then(|n| n.checked_add(name_len))
+            .ok_or(ExofsError::OffsetOverflow)?;
+        i = i.wrapping_add(1);
+    }
+    let total = VFS_NAMESPACE_HEADER_SIZE
+        .checked_add(inode_bytes)
+        .and_then(|n| n.checked_add(dir_bytes))
+        .ok_or(ExofsError::OffsetOverflow)?;
+    let mut out = Vec::new();
+    out.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+
+    push_u32(&mut out, VFS_NAMESPACE_MAGIC);
+    push_u16(&mut out, VFS_NAMESPACE_VERSION);
+    push_u16(&mut out, 0);
+    push_u64(&mut out, next_ino);
+    push_u32(&mut out, inodes.len() as u32);
+    push_u32(&mut out, records.len() as u32);
+    push_u64(&mut out, 0);
+
+    let mut inode_idx = 0usize;
+    while inode_idx < inodes.len() {
+        out.extend_from_slice(&encode_inode_entry(&inodes[inode_idx]));
+        inode_idx = inode_idx.wrapping_add(1);
+    }
+
+    let mut record_idx = 0usize;
+    while record_idx < records.len() {
+        let (parent, record) = &records[record_idx];
+        push_u64(&mut out, *parent);
+        push_u64(&mut out, record.ino);
+        out.push(record.kind);
+        out.push(record.name.len() as u8);
+        push_u16(&mut out, 0);
+        push_u32(&mut out, 0);
+        out.extend_from_slice(&record.name);
+        record_idx = record_idx.wrapping_add(1);
+    }
+    Ok(out)
+}
+
+fn deserialize_vfs_namespace(
+    buf: &[u8],
+) -> ExofsResult<(Vec<InodeEntry>, ObjectIno, Vec<(ObjectIno, DirRecord)>)> {
+    if buf.len() < VFS_NAMESPACE_HEADER_SIZE {
+        return Err(ExofsError::CorruptedStructure);
+    }
+    if read_u32(buf, 0)? != VFS_NAMESPACE_MAGIC {
+        return Err(ExofsError::InvalidMagic);
+    }
+    if read_u16(buf, 4)? != VFS_NAMESPACE_VERSION {
+        return Err(ExofsError::IncompatibleVersion);
+    }
+    let next_ino = read_u64(buf, 8)?;
+    let inode_count = read_u32(buf, 16)? as usize;
+    let record_count = read_u32(buf, 20)? as usize;
+    let inode_bytes = inode_count
+        .checked_mul(core::mem::size_of::<InodeEntry>())
+        .ok_or(ExofsError::OffsetOverflow)?;
+    let mut off = VFS_NAMESPACE_HEADER_SIZE;
+    if off.saturating_add(inode_bytes) > buf.len() {
+        return Err(ExofsError::CorruptedStructure);
+    }
+
+    let mut inodes = Vec::new();
+    inodes
+        .try_reserve(inode_count)
+        .map_err(|_| ExofsError::NoMemory)?;
+    let mut has_root = false;
+    let mut i = 0usize;
+    while i < inode_count {
+        let end = off.saturating_add(core::mem::size_of::<InodeEntry>());
+        let entry = decode_inode_entry(&buf[off..end]).ok_or(ExofsError::CorruptedStructure)?;
+        if entry.ino == VFS_ROOT_INO && entry.flags & inode_flags::DIRECTORY != 0 {
+            has_root = true;
+        }
+        inodes.push(entry);
+        off = end;
+        i = i.wrapping_add(1);
+    }
+    if !has_root {
+        return Err(ExofsError::CorruptedStructure);
+    }
+
+    let mut records = Vec::new();
+    records
+        .try_reserve(record_count)
+        .map_err(|_| ExofsError::NoMemory)?;
+    let mut j = 0usize;
+    while j < record_count {
+        if off.saturating_add(VFS_NAMESPACE_DIRENT_HEADER_SIZE) > buf.len() {
+            return Err(ExofsError::CorruptedStructure);
+        }
+        let parent = read_u64(buf, off)?;
+        let ino = read_u64(buf, off + 8)?;
+        let kind = buf[off + 16];
+        let name_len = buf[off + 17] as usize;
+        off = off.saturating_add(VFS_NAMESPACE_DIRENT_HEADER_SIZE);
+        if name_len == 0 || name_len > VFS_NAME_MAX || off.saturating_add(name_len) > buf.len() {
+            return Err(ExofsError::CorruptedStructure);
+        }
+        validate_name(&buf[off..off + name_len])?;
+        let mut name = Vec::new();
+        name.try_reserve(name_len)
+            .map_err(|_| ExofsError::NoMemory)?;
+        name.extend_from_slice(&buf[off..off + name_len]);
+        records.push((parent, DirRecord { ino, kind, name }));
+        off = off.saturating_add(name_len);
+        j = j.wrapping_add(1);
+    }
+    Ok((inodes, next_ino, records))
+}
+
+fn load_vfs_namespace_if_disk() -> ExofsResult<bool> {
+    let Some(data) = object_store::load_blob_data_if_available(&vfs_namespace_blob_id())? else {
+        return Ok(false);
+    };
+    let (inodes, next_ino, records) = deserialize_vfs_namespace(&data)?;
+    INODE_EMULATION.replace_entries(&inodes, next_ino)?;
+    DIRECTORY_REGISTRY.replace_records(&records)?;
+    Ok(true)
+}
+
+fn persist_vfs_namespace_if_disk() -> ExofsResult<bool> {
+    let data = serialize_vfs_namespace()?;
+    object_store::persist_blob_data_if_disk(vfs_namespace_blob_id(), &data, true)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -679,6 +933,12 @@ pub fn vfs_create(
         INODE_EMULATION.release_ino(ino);
         return Err(err);
     }
+    if let Err(err) = persist_vfs_namespace_if_disk() {
+        let _ = DIRECTORY_REGISTRY.remove(parent_ino, name);
+        INODE_EMULATION.release_ino(ino);
+        let _ = quota_sub_usage(uid, 0, 1);
+        return Err(err);
+    }
     Ok(ino)
 }
 
@@ -698,6 +958,7 @@ pub fn vfs_open(ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
         }
         resize_inode_data(&entry, 0)?;
         INODE_EMULATION.update_size(ino, 0)?;
+        let _ = persist_vfs_namespace_if_disk()?;
     }
     FD_TABLE.open_fd(ino, flags, pid)
 }
@@ -779,6 +1040,7 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     FD_TABLE.update_offset(fd, new_offset);
     if new_size != entry.size {
         INODE_EMULATION.update_size(desc.ino, new_size)?;
+        let _ = persist_vfs_namespace_if_disk()?;
     }
     Ok(written)
 }
@@ -836,6 +1098,7 @@ pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     BLOB_CACHE.invalidate(&blob_id);
     quota_sub_usage(entry.uid, entry.size, 1)?;
     INODE_EMULATION.release_ino(record.ino);
+    let _ = persist_vfs_namespace_if_disk()?;
     Ok(())
 }
 
@@ -861,6 +1124,7 @@ pub fn vfs_rmdir(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
         .ok_or(ExofsError::ObjectNotFound)?;
     DIRECTORY_REGISTRY.remove_dir(record.ino);
     INODE_EMULATION.release_ino(record.ino);
+    let _ = persist_vfs_namespace_if_disk()?;
     Ok(())
 }
 
@@ -897,6 +1161,7 @@ pub fn vfs_rename(
         .ok_or(ExofsError::ObjectNotFound)?;
     let _ = DIRECTORY_REGISTRY.rename(old_parent, old_name, new_parent, new_name)?;
     let _ = (op, np, src);
+    let _ = persist_vfs_namespace_if_disk()?;
     Ok(())
 }
 
@@ -940,7 +1205,9 @@ pub fn vfs_truncate(ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
     }
     let new_len = new_size as usize;
     resize_inode_data(&e, new_len)?;
-    INODE_EMULATION.update_size(ino, new_size)
+    INODE_EMULATION.update_size(ino, new_size)?;
+    let _ = persist_vfs_namespace_if_disk()?;
+    Ok(())
 }
 
 /// Crée un lien symbolique.
@@ -960,6 +1227,11 @@ pub fn vfs_symlink(parent_ino: ObjectIno, name: &[u8], uid: u64) -> ExofsResult<
     if let Err(err) =
         DIRECTORY_REGISTRY.insert(parent_ino, ino, name, inode_kind(inode_flags::SYMLINK))
     {
+        INODE_EMULATION.release_ino(ino);
+        return Err(err);
+    }
+    if let Err(err) = persist_vfs_namespace_if_disk() {
+        let _ = DIRECTORY_REGISTRY.remove(parent_ino, name);
         INODE_EMULATION.release_ino(ino);
         return Err(err);
     }

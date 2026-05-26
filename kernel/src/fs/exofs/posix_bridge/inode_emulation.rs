@@ -362,6 +362,54 @@ impl InodeEmulation {
         Ok(out)
     }
 
+    /// Copie stable de la table pour persistance du namespace POSIX.
+    pub fn snapshot_entries(&self) -> ExofsResult<(Vec<InodeEntry>, ObjectIno)> {
+        self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let table = unsafe { &*self.fwd.get() };
+        let mut out = Vec::new();
+        out.try_reserve(table.len()).map_err(|_| {
+            self.lock_release();
+            ExofsError::NoMemory
+        })?;
+        let mut i = 0usize;
+        while i < table.len() {
+            out.push(table[i]);
+            i = i.wrapping_add(1);
+        }
+        let next = self.next_ino.load(Ordering::Relaxed);
+        self.lock_release();
+        Ok((out, next))
+    }
+
+    /// Remplace la table depuis un snapshot persistant vérifié.
+    pub fn replace_entries(&self, entries: &[InodeEntry], next_ino: ObjectIno) -> ExofsResult<()> {
+        let mut max_ino = INO_RESERVED;
+        let mut i = 0usize;
+        while i < entries.len() {
+            max_ino = max_ino.max(entries[i].ino.saturating_add(1));
+            i = i.wrapping_add(1);
+        }
+
+        self.lock_acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let table = unsafe { &mut *self.fwd.get() };
+        table.clear();
+        table.try_reserve(entries.len()).map_err(|_| {
+            self.lock_release();
+            ExofsError::NoMemory
+        })?;
+        let mut j = 0usize;
+        while j < entries.len() {
+            table.push(entries[j]);
+            j = j.wrapping_add(1);
+        }
+        self.next_ino
+            .store(next_ino.max(max_ino).max(INO_RESERVED), Ordering::Release);
+        self.lock_release();
+        Ok(())
+    }
+
     /// Alias pour la racine.
     pub fn root_ino() -> ObjectIno {
         INO_ROOT

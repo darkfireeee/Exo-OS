@@ -12,8 +12,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 virtio-drivers = { version = "0.7.2", default-features = false }
-spin = { version = "0.9.8", default-features = false, features = ["spin_mutex", "once"] }
-log = { version = "0.4" }
+spin = { workspace = true }
+log = { workspace = true }
 
 [features]
 default = []

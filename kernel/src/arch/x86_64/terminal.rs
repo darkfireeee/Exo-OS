@@ -6,7 +6,7 @@
 //! path guarantees PID1 and the first shell have a usable controlling console.
 
 use crate::scheduler::sync::wait_queue::WaitQueue;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
 
 use super::{boot_display, inb};
@@ -67,6 +67,7 @@ static KEYBOARD: Mutex<KeyboardState> = Mutex::new(KeyboardState::new());
 static KEYBOARD_WAIT: WaitQueue = WaitQueue::new();
 static FOREGROUND_PGID: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_MODE: AtomicU32 = AtomicU32::new(KEYBOARD_MODE_UNKNOWN as u32);
+static RING1_KEYBOARD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn debug_byte(byte: u8) {
@@ -160,7 +161,11 @@ pub fn poll_byte() -> Option<u8> {
     let flags = super::irq_save();
     let result = {
         let mut state = KEYBOARD.lock();
-        poll_byte_locked(&mut state, mode)
+        if RING1_KEYBOARD_ACTIVE.load(Ordering::Acquire) {
+            state.pop_byte()
+        } else {
+            poll_byte_locked(&mut state, mode)
+        }
     };
     super::irq_restore(flags);
     result
@@ -192,6 +197,9 @@ pub fn read_byte_for_process(pid: u32, pgid: u32) -> Result<Option<u8>, ()> {
 
 /// IRQ1 path: drain PS/2 scancodes into the shared keyboard buffer and wake readers.
 pub fn keyboard_irq_drain() {
+    if RING1_KEYBOARD_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
     let mode = match KEYBOARD_MODE.load(Ordering::Acquire) as u8 {
         KEYBOARD_MODE_UNKNOWN => KEYBOARD_MODE_SET1,
         mode => mode,
@@ -216,6 +224,11 @@ pub fn keyboard_irq_drain() {
     if produced {
         KEYBOARD_WAIT.notify_all();
     }
+}
+
+pub fn handoff_keyboard_to_ring1() {
+    RING1_KEYBOARD_ACTIVE.store(true, Ordering::Release);
+    KEYBOARD_WAIT.notify_all();
 }
 
 fn poll_byte_locked(state: &mut KeyboardState, mode: u8) -> Option<u8> {

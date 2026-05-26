@@ -16,3 +16,6 @@ bench = false
 
 [features]
 default = []
+
+[dependencies]
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }

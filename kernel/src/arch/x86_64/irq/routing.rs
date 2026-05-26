@@ -78,7 +78,11 @@ pub fn sys_irq_register_canonical(
 ) -> Result<u64, IrqError> {
     let owner_pid = IrqOwnerPid(endpoint.pid);
     let gsi = if source_kind.needs_ioapic_mask() {
-        Some(irq_vector.as_u8() as u32)
+        Some(
+            irq_vector
+                .as_u8()
+                .saturating_sub(IrqVector::VECTOR_IRQ_BASE) as u32,
+        )
     } else {
         None
     };
@@ -203,18 +207,27 @@ fn sys_irq_register_common(
     }
 
     // Configuration de l'IOAPIC matérielle selon le type
-    if let Some(reg_params) = ioapic_route.filter(|_| route.source_kind.needs_ioapic_mask()) {
-        if !io_apic::route_irq(
-            reg_params.gsi,
-            irq_vector.as_u8(),
-            reg_params.dest_apic,
-            reg_params.active_low,
-            reg_params.level,
-        ) {
-            return Err(IrqError::RouteFailed);
-        }
+    if route.source_kind.needs_ioapic_mask() {
+        if let Some(reg_params) = ioapic_route {
+            if !io_apic::route_irq(
+                reg_params.gsi,
+                irq_vector.as_u8(),
+                reg_params.dest_apic,
+                reg_params.active_low,
+                reg_params.level,
+            ) {
+                return Err(IrqError::RouteFailed);
+            }
 
-        io_apic::unmask_irq(reg_params.gsi);
+            io_apic::unmask_irq(reg_params.gsi);
+        } else if let Some(gsi) = route.gsi {
+            let dest_apic = local_apic::lapic_id().min(u8::MAX as u32) as u8;
+            let level = route.source_kind == IrqSourceKind::IoApicLevel;
+            if !io_apic::route_irq(gsi, irq_vector.as_u8(), dest_apic, level, level) {
+                return Err(IrqError::RouteFailed);
+            }
+            io_apic::unmask_irq(gsi);
+        }
     }
 
     Ok(reg_id)

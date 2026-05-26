@@ -602,10 +602,20 @@ fn ensure_blob_exists(blob_id: BlobId) -> Result<(), FsBridgeError> {
 
 #[inline]
 fn snapshot_blob(blob_id: &BlobId) -> Result<Vec<u8>, FsBridgeError> {
-    match BLOB_CACHE.get(blob_id) {
-        Some(data) => Ok(data.to_vec()),
-        None => Err(FsBridgeError::NotFound),
+    if let Some(data) = BLOB_CACHE.get(blob_id) {
+        return Ok(data.to_vec());
     }
+
+    if let Some(data) =
+        object_store::load_blob_data_if_available(blob_id).map_err(exofs_to_bridge_error)?
+    {
+        BLOB_CACHE
+            .insert(*blob_id, data.clone())
+            .map_err(exofs_to_bridge_error)?;
+        return Ok(data);
+    }
+
+    Err(FsBridgeError::NotFound)
 }
 
 #[inline]
@@ -980,6 +990,17 @@ fn ensure_root_directory() -> Result<(), FsBridgeError> {
         return Ok(());
     }
 
+    if let Some(data) =
+        object_store::load_blob_data_if_available(&root_blob).map_err(exofs_to_bridge_error)?
+    {
+        if !blob_is_directory(&data) {
+            return Err(FsBridgeError::NotDir);
+        }
+        return BLOB_CACHE
+            .insert(root_blob, data)
+            .map_err(exofs_to_bridge_error);
+    }
+
     let dir_index = PathIndex::new_with_key(ObjectId::default(), directory_mount_key());
     let bytes = dir_index.serialize().map_err(exofs_to_bridge_error)?;
     BLOB_CACHE
@@ -1161,10 +1182,10 @@ fn blob_is_directory(data: &[u8]) -> bool {
 
 #[inline]
 fn blob_is_directory_by_id(blob_id: &BlobId) -> bool {
-    BLOB_CACHE
-        .read_at(blob_id, 0, size_of::<PathIndexHeader>())
+    snapshot_blob(blob_id)
         .ok()
-        .and_then(|data| path_index_entry_count(&data))
+        .as_deref()
+        .and_then(path_index_entry_count)
         .is_some()
 }
 
@@ -1716,6 +1737,9 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         upsert_mode(blob_id, effective_mode);
         upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_FILE)?;
     }
+    if exists {
+        ensure_blob_exists(blob_id)?;
+    }
     if fd_flags & open_flags::O_TRUNC != 0 {
         if !open_flags::can_write(fd_flags) {
             return Err(FsBridgeError::Invalid);
@@ -1820,13 +1844,9 @@ pub fn fs_stat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErro
     }
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let stat = linux_stat_for_blob_meta(
-        blob_id,
-        blob_len(&blob_id) as u64,
-        pid,
-        kind,
-        blob_is_directory_by_id(&blob_id),
-    );
+    let size = blob_len(&blob_id) as u64;
+    let is_dir = blob_is_directory_by_id(&blob_id);
+    let stat = linux_stat_for_blob_meta(blob_id, size, pid, kind, is_dir);
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }

@@ -8,6 +8,7 @@ OUT_PPM="$OUTPUT_DIR/exoos-qemu-detached.ppm"
 OUT_PNG="$OUTPUT_DIR/exoos-qemu-detached.png"
 mkdir -p "$OUTPUT_DIR"
 cd "$REPO_ROOT"
+DISK_IMAGE=${EXOOS_DISK_IMAGE:-target/qemu/exofs-root.img}
 pkill -f "qemu-system-x86_64.*exo-os.iso" 2>/dev/null || true
 rm -f /tmp/exoos-qmp.sock /tmp/exoos-qemu.pid /tmp/exoos-serial.log /tmp/exoos-e9.log /tmp/exoos-qemu-int.log /tmp/exoos-screen.ppm /tmp/exoos-screen.png /tmp/exoos-qemu-stdout.log /tmp/exoos-make.log "$OUT_PPM" "$OUT_PNG"
 if ! make iso >/tmp/exoos-make.log 2>&1; then
@@ -26,6 +27,12 @@ nohup qemu-system-x86_64 \
   -d int,cpu_reset -D /tmp/exoos-qemu-int.log \
   -debugcon file:/tmp/exoos-e9.log \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+  -drive if=none,file="$DISK_IMAGE",format=raw,id=exofs0,cache=writeback \
+  -device virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16 \
+  -netdev user,id=exovirtio \
+  -device virtio-net-pci-non-transitional,netdev=exovirtio,mac=02:45:58:4f:00:01 \
+  -netdev user,id=exoe1000 \
+  -device e1000,netdev=exoe1000,mac=02:45:58:4f:00:02 \
   -qmp unix:/tmp/exoos-qmp.sock,server=on,wait=off \
   -cdrom exo-os.iso \
   >/tmp/exoos-qemu-stdout.log 2>&1 </dev/null &

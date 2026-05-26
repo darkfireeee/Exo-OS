@@ -224,6 +224,10 @@ pub const SYS_UMOUNT2: u64 = 166;
 pub const SYS_SWAPON: u64 = 167;
 pub const SYS_SWAPOFF: u64 = 168;
 pub const SYS_REBOOT: u64 = 169;
+pub const LINUX_REBOOT_MAGIC1: u64 = 0xfee1_dead;
+pub const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;
+pub const RB_AUTOBOOT: u64 = 0x0123_4567;
+pub const RB_POWER_OFF: u64 = 0x4321_fedc;
 pub const SYS_SETHOSTNAME: u64 = 170;
 pub const SYS_SETDOMAINNAME: u64 = 171;
 pub const SYS_IOPL: u64 = 172;
@@ -320,6 +324,19 @@ pub const SYS_EXO_CAP_CHECK: u64 = 323;
 pub const SYS_EXO_PERF_READ: u64 = 330;
 pub const SYS_EXO_PERF_ENABLE: u64 = 331;
 pub const SYS_EXO_PERF_DISABLE: u64 = 332;
+
+pub const EXO_PERF_SYSCALL_COUNT: u64 = 1;
+pub const EXO_PERF_IPC_MESSAGES_SENT: u64 = 2;
+pub const EXO_PERF_IPC_MESSAGES_RECEIVED: u64 = 3;
+pub const EXO_PERF_IPC_MESSAGES_DROPPED: u64 = 4;
+pub const EXO_PERF_IPC_RPC_CALLS: u64 = 5;
+pub const EXO_PERF_IPC_RPC_TIMEOUTS: u64 = 6;
+pub const EXO_PERF_IPC_FUTEX_WAITS: u64 = 7;
+pub const EXO_PERF_IPC_FUTEX_WAKES: u64 = 8;
+pub const EXO_PERF_DISPATCH_TOTAL: u64 = 9;
+pub const EXO_PERF_DISPATCH_FAST_PATH: u64 = 10;
+pub const EXO_PERF_DISPATCH_SLOW_PATH: u64 = 11;
+pub const EXO_PERF_DISPATCH_ENOSYS: u64 = 12;
 pub const SYS_EXO_DEBUG_ATTACH: u64 = 340;
 pub const SYS_EXO_DEBUG_REGS: u64 = 341;
 pub const SYS_EXO_LOG: u64 = 350;
@@ -710,6 +727,113 @@ pub const SYS_MSI_CONFIG: u64 = 544;
 pub const SYS_MSI_FREE: u64 = 545;
 pub const SYS_PCI_SET_TOPOLOGY: u64 = 546;
 pub const SYS_PCI_FIND_DEVICE: u64 = 547;
+pub const SYS_IOPORT_READ: u64 = 548;
+pub const SYS_IOPORT_WRITE: u64 = 549;
+
+pub const INPUT_SERVER_ENDPOINT: u64 = 11;
+pub const TTY_SERVER_ENDPOINT: u64 = 12;
+pub const PS2_DRIVER_IRQ_CHANNEL: u64 = 17;
+
+pub const INPUT_MSG_PUSH: u32 = 0x120;
+pub const INPUT_MSG_POLL: u32 = 0x121;
+pub const INPUT_MSG_HEARTBEAT: u32 = 0x122;
+
+pub const TTY_MSG_INPUT_BYTE: u32 = 0x130;
+pub const TTY_MSG_READ_LINE: u32 = 0x131;
+pub const TTY_MSG_WRITE: u32 = 0x132;
+pub const TTY_MSG_IOCTL: u32 = 0x133;
+
+pub const INPUT_DEVICE_KEYBOARD: u8 = 1;
+pub const INPUT_DEVICE_MOUSE: u8 = 2;
+pub const INPUT_KEY_RELEASED: u8 = 0;
+pub const INPUT_KEY_PRESSED: u8 = 1;
+pub const INPUT_MOD_SHIFT: u8 = 1 << 0;
+pub const INPUT_MOD_CTRL: u8 = 1 << 1;
+pub const INPUT_MOD_ALT: u8 = 1 << 2;
+pub const INPUT_MOD_META: u8 = 1 << 3;
+
+pub const TTY_LINE_MAX: usize = 208;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct InputEventWire {
+    pub device: u8,
+    pub state: u8,
+    pub code: u16,
+    pub value: i16,
+    pub ascii: u8,
+    pub modifiers: u8,
+    pub _pad: [u8; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct InputRequest {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub reply_endpoint: u64,
+    pub event: InputEventWire,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct InputReply {
+    pub status: i64,
+    pub event: InputEventWire,
+    pub queue_depth: u32,
+    pub _pad: [u8; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TtyRequest {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub reply_endpoint: u64,
+    pub a: u64,
+    pub b: u64,
+    pub data: [u8; TTY_LINE_MAX],
+}
+
+impl TtyRequest {
+    #[inline(always)]
+    pub const fn zeroed() -> Self {
+        Self {
+            sender_pid: 0,
+            msg_type: 0,
+            reply_endpoint: 0,
+            a: 0,
+            b: 0,
+            data: [0; TTY_LINE_MAX],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TtyReply {
+    pub status: i64,
+    pub signal: u32,
+    pub len: u32,
+    pub data: [u8; TTY_LINE_MAX],
+}
+
+impl TtyReply {
+    #[inline(always)]
+    pub const fn zeroed() -> Self {
+        Self {
+            status: 0,
+            signal: 0,
+            len: 0,
+            data: [0; TTY_LINE_MAX],
+        }
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<InputRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);
+const _: () = assert!(core::mem::size_of::<InputReply>() <= IPC_KERNEL_MAX_MSG_SIZE);
+const _: () = assert!(core::mem::size_of::<TtyRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);
+const _: () = assert!(core::mem::size_of::<TtyReply>() <= IPC_KERNEL_MAX_MSG_SIZE);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
