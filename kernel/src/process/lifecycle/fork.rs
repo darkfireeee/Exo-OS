@@ -28,10 +28,11 @@ use crate::scheduler::core::task::ThreadControlBlock;
 use crate::scheduler::core::task::{CpuId, ThreadId};
 use crate::scheduler::sync::wait_queue::WaitQueue;
 use alloc::boxed::Box;
-#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
-use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use spin::Once;
+
+#[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+use core::sync::atomic::AtomicUsize;
 
 pub use crate::memory::virt::address_space::fork_impl::{
     AddrSpaceCloneError, AddressSpaceCloner, ClonedAddressSpace,

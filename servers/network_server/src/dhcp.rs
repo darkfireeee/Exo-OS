@@ -1,4 +1,6 @@
+#[allow(dead_code)]
 pub const DHCP_CLIENT_PORT: u16 = 68;
+#[allow(dead_code)]
 pub const DHCP_SERVER_PORT: u16 = 67;
 pub const DHCP_FIXED_LEN: usize = 236;
 pub const DHCP_MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];

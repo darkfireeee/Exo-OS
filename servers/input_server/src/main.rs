@@ -3,7 +3,7 @@
 
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use exo_syscall_abi as syscall;
 
 const INPUT_QUEUE_LEN: usize = 128;
@@ -60,6 +60,7 @@ unsafe impl Sync for QueueCell {}
 
 static QUEUE: QueueCell = QueueCell(UnsafeCell::new(InputQueue::new()));
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
+static SUBSCRIBER_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
@@ -93,41 +94,43 @@ fn queue_mut() -> &'static mut InputQueue {
     unsafe { &mut *QUEUE.0.get() }
 }
 
-fn forward_to_tty(event: syscall::InputEventWire) {
-    if event.device != syscall::INPUT_DEVICE_KEYBOARD
-        || event.state != syscall::INPUT_KEY_PRESSED
-        || event.ascii == 0
-    {
-        return;
+fn deliver_to_subscriber(event: syscall::InputEventWire, queue_depth: u32) -> bool {
+    let endpoint = SUBSCRIBER_ENDPOINT.load(Ordering::Acquire);
+    if endpoint == 0 {
+        return false;
     }
-
-    let mut req = syscall::TtyRequest::zeroed();
-    req.msg_type = syscall::TTY_MSG_INPUT_BYTE;
-    req.a = event.ascii as u64;
-    let _ = unsafe {
+    let reply = syscall::InputReply {
+        status: 0,
+        event,
+        queue_depth,
+        _pad: [0; 4],
+    };
+    let rc = unsafe {
         syscall::syscall6(
             syscall::SYS_IPC_SEND,
-            syscall::TTY_SERVER_ENDPOINT,
-            &req as *const syscall::TtyRequest as u64,
-            core::mem::size_of::<syscall::TtyRequest>() as u64,
-            0,
+            endpoint,
+            &reply as *const syscall::InputReply as u64,
+            core::mem::size_of::<syscall::InputReply>() as u64,
+            syscall::IPC_FLAG_TIMEOUT,
             0,
             0,
         )
     };
+    rc >= 0
 }
 
 fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
     match req.msg_type {
         syscall::INPUT_MSG_PUSH => {
-            let status = match queue_mut().push(req.event) {
-                Ok(()) => {
-                    forward_to_tty(req.event);
-                    0
-                }
-                Err(err) => {
-                    DROPPED.fetch_add(1, Ordering::Relaxed);
-                    err
+            let status = if queue_mut().len == 0 && deliver_to_subscriber(req.event, 0) {
+                0
+            } else {
+                match queue_mut().push(req.event) {
+                    Ok(()) => 0,
+                    Err(err) => {
+                        DROPPED.fetch_add(1, Ordering::Relaxed);
+                        err
+                    }
                 }
             };
             syscall::InputReply {
@@ -152,6 +155,15 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             queue_depth: queue_mut().len as u32,
             _pad: [0; 4],
         },
+        syscall::INPUT_MSG_ATTACH => {
+            SUBSCRIBER_ENDPOINT.store(req.reply_endpoint, Ordering::Release);
+            syscall::InputReply {
+                status: 0,
+                event: syscall::InputEventWire::default(),
+                queue_depth: queue_mut().len as u32,
+                _pad: [0; 4],
+            }
+        }
         _ => syscall::InputReply {
             status: syscall::EINVAL,
             event: syscall::InputEventWire::default(),
@@ -198,7 +210,9 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         let reply = handle(&req);
-        let reply_endpoint = if req.reply_endpoint != 0 {
+        let reply_endpoint = if req.msg_type == syscall::INPUT_MSG_ATTACH {
+            0
+        } else if req.reply_endpoint != 0 {
             req.reply_endpoint
         } else {
             req.sender_pid as u64

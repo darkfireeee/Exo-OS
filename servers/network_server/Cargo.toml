@@ -15,7 +15,7 @@ bench = false
 required-features = ["baremetal-bin"]
 
 [features]
-default = ["baremetal-bin"]
+default = []
 baremetal-bin = []
 
 [dependencies]

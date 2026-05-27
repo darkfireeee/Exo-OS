@@ -108,6 +108,7 @@ impl Ps2Keyboard {
 pub fn map_set1_to_hid(scancode: u8, extended: bool) -> Option<u16> {
     if extended {
         return match scancode {
+            0x1c => Some(KEY_ENTER),
             0x1d => Some(KEY_LEFT_CTRL),
             0x38 => Some(KEY_LEFT_ALT),
             0x48 => Some(0x0052), // up
@@ -188,6 +189,7 @@ pub fn map_set1_to_hid(scancode: u8, extended: bool) -> Option<u16> {
 pub fn map_set2_to_hid(scancode: u8, extended: bool) -> Option<u16> {
     if extended {
         return match scancode {
+            0x5a => Some(KEY_ENTER),
             0x14 => Some(KEY_LEFT_CTRL),
             0x11 => Some(KEY_LEFT_ALT),
             0x75 => Some(0x0052), // up

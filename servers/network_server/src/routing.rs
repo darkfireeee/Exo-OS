@@ -42,6 +42,7 @@ impl RouteTable {
         }
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.entries = [RouteEntry::empty(); MAX_ROUTES];
         self.count = 0;
@@ -125,6 +126,7 @@ impl RouteTable {
         best.and_then(|route| (route.gateway != 0).then_some(route.gateway))
     }
 
+    #[allow(dead_code)]
     pub const fn len(&self) -> usize {
         self.count
     }

@@ -357,7 +357,6 @@ impl VirtioHardware {
             self.tx_pool_for_head[head as usize] = pool_idx;
             if !self.saw_tx {
                 self.saw_tx = true;
-                debug_write(b"virtio_net_driver: first tx\n");
             }
             Virtqueue::notify(self.tx_notify, TX_QUEUE);
         }
@@ -398,7 +397,6 @@ impl VirtioHardware {
             if pool_idx != INVALID_POOL && state.handle_rx_used(pool_idx, total_len) {
                 if !self.saw_rx {
                     self.saw_rx = true;
-                    debug_write(b"virtio_net_driver: first rx\n");
                 }
                 while let Some(pkt) = state.pop_rx_ready() {
                     if ready.count as usize == ready.entries.len() {
@@ -440,7 +438,6 @@ impl VirtioHardware {
             if pool_idx != INVALID_POOL {
                 if !self.saw_tx_complete {
                     self.saw_tx_complete = true;
-                    debug_write(b"virtio_net_driver: first tx complete\n");
                 }
                 complete.pool_idx[complete.count as usize] = pool_idx;
                 complete.count += 1;

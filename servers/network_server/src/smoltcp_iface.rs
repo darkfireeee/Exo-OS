@@ -4,7 +4,7 @@ use crate::virtio_device::{ExoNetDevice, NetBufRef};
 use core::cell::RefCell;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 use exo_syscall_abi as syscall;
 use smoltcp::iface::{
     Config, Interface, PollIngressSingleResult, SocketHandle, SocketSet, SocketStorage,
@@ -764,31 +764,7 @@ impl TxToken for ExoTxToken<'_, '_> {
 }
 
 fn log_first_frame(flag: &AtomicBool, prefix: &[u8], frame: &[u8]) {
-    if flag.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    debug_write(prefix);
-    if frame.len() < 14 {
-        debug_write(b"short\n");
-        return;
-    }
-    match u16::from_be_bytes([frame[12], frame[13]]) {
-        0x0806 => debug_write(b"arp\n"),
-        0x0800 => {
-            if frame.len() >= 24 {
-                match frame[23] {
-                    1 => debug_write(b"ipv4 icmp\n"),
-                    6 => debug_write(b"ipv4 tcp\n"),
-                    17 => debug_write(b"ipv4 udp\n"),
-                    _ => debug_write(b"ipv4 other\n"),
-                }
-            } else {
-                debug_write(b"ipv4 short\n");
-            }
-        }
-        0x86dd => debug_write(b"ipv6\n"),
-        _ => debug_write(b"other\n"),
-    }
+    let _ = (flag, prefix, frame);
 }
 
 fn debug_write(bytes: &[u8]) {

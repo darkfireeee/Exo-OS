@@ -737,6 +737,7 @@ pub const PS2_DRIVER_IRQ_CHANNEL: u64 = 17;
 pub const INPUT_MSG_PUSH: u32 = 0x120;
 pub const INPUT_MSG_POLL: u32 = 0x121;
 pub const INPUT_MSG_HEARTBEAT: u32 = 0x122;
+pub const INPUT_MSG_ATTACH: u32 = 0x123;
 
 pub const TTY_MSG_INPUT_BYTE: u32 = 0x130;
 pub const TTY_MSG_READ_LINE: u32 = 0x131;

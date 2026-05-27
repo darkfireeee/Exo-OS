@@ -13,13 +13,9 @@ const SYS_EXIT: u64 = 60;
 #[cfg(all(target_os = "none", feature = "dynamic_linking"))]
 #[no_mangle]
 pub extern "C" fn _start(handoff: *const DynamicLoaderHandoff) -> ! {
-    debug_write(b"LD:entry\n");
     let result = unsafe { runtime_entry(handoff) };
     match result {
-        Ok(jump) => {
-            debug_write(b"LD:jump\n");
-            unsafe { jump_to_user(jump) }
-        }
+        Ok(jump) => unsafe { jump_to_user(jump) },
         Err(err) => {
             debug_write(b"LD:error ");
             debug_error(err);

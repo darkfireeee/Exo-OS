@@ -580,7 +580,10 @@ fn blob_id_for_path(path: &[u8]) -> Result<BlobId, FsBridgeError> {
 
 #[inline]
 fn blob_len(blob_id: &BlobId) -> usize {
-    BLOB_CACHE.len(blob_id).unwrap_or(0)
+    BLOB_CACHE
+        .len(blob_id)
+        .or_else(|| object_store::persisted_size(blob_id).map(|len| len as usize))
+        .unwrap_or(0)
 }
 
 #[inline]
@@ -1744,7 +1747,10 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         if !open_flags::can_write(fd_flags) {
             return Err(FsBridgeError::Invalid);
         }
-        if blob_is_directory_by_id(&blob_id) {
+        if existing_entry
+            .map(|(_, kind)| kind == PATH_INDEX_KIND_DIR)
+            .unwrap_or(false)
+        {
             return Err(FsBridgeError::IsDir);
         }
         BLOB_CACHE
@@ -1845,7 +1851,7 @@ pub fn fs_stat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErro
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
     let size = blob_len(&blob_id) as u64;
-    let is_dir = blob_is_directory_by_id(&blob_id);
+    let is_dir = kind == PATH_INDEX_KIND_DIR;
     let stat = linux_stat_for_blob_meta(blob_id, size, pid, kind, is_dir);
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
@@ -1867,7 +1873,7 @@ pub fn fs_lstat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErr
         blob_len(&blob_id) as u64,
         pid,
         kind,
-        blob_is_directory_by_id(&blob_id),
+        kind == PATH_INDEX_KIND_DIR,
     );
     write_user_typed(stat_ptr, stat).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
@@ -2513,9 +2519,8 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
         return Ok(0);
     }
 
-    let mut out = Vec::new();
-    out.try_reserve(count).map_err(|_| FsBridgeError::NoSpace)?;
     let mut cursor = start_idx;
+    let mut written = 0usize;
     while cursor < entries.len() {
         let entry_ref = &entries[cursor];
         let name = entry_ref.name_bytes();
@@ -2524,7 +2529,7 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
             .and_then(|v| v.checked_add(1))
             .ok_or(FsBridgeError::NoSpace)?;
         let reclen = (raw_size + 7) & !7usize;
-        if out.len().saturating_add(reclen) > count {
+        if written.saturating_add(reclen) > count {
             break;
         }
 
@@ -2543,24 +2548,46 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
             )
         };
 
-        out.extend_from_slice(header_bytes);
-        out.extend_from_slice(name);
-        out.push(0);
-        while out.len() % 8 != 0 {
-            out.push(0);
+        let base = dirp.saturating_add(written as u64);
+        copy_to_user(base as *mut u8, header_bytes.as_ptr(), header_bytes.len())
+            .map_err(|_| FsBridgeError::Fault)?;
+        copy_to_user(
+            base.saturating_add(DIRENT64_HEADER_SIZE as u64) as *mut u8,
+            name.as_ptr(),
+            name.len(),
+        )
+        .map_err(|_| FsBridgeError::Fault)?;
+
+        let zero = [0u8; 8];
+        copy_to_user(
+            base.saturating_add((DIRENT64_HEADER_SIZE + name.len()) as u64) as *mut u8,
+            zero.as_ptr(),
+            1,
+        )
+        .map_err(|_| FsBridgeError::Fault)?;
+
+        let pad = reclen.saturating_sub(raw_size);
+        if pad != 0 {
+            copy_to_user(
+                base.saturating_add(raw_size as u64) as *mut u8,
+                zero.as_ptr(),
+                pad,
+            )
+            .map_err(|_| FsBridgeError::Fault)?;
         }
+
+        written = written.saturating_add(reclen);
         cursor += 1;
     }
 
-    if out.is_empty() {
+    if written == 0 {
         return Ok(0);
     }
 
-    copy_to_user(dirp as *mut u8, out.as_ptr(), out.len()).map_err(|_| FsBridgeError::Fault)?;
     OBJECT_TABLE
         .set_cursor(obj_fd, cursor as u64)
         .map_err(exofs_to_bridge_error)?;
-    Ok(out.len() as i64)
+    Ok(written as i64)
 }
 
 /// `readlink(path, buf, bufsize)`.
@@ -2723,7 +2750,7 @@ pub fn fs_chmod(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     let _ = pid;
     let normalized_path = resolve_path_with_symlinks(path, false, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
-    let is_dir = blob_is_directory_by_id(&blob_id);
+    let is_dir = kind == PATH_INDEX_KIND_DIR;
     let type_bits = default_stat_mode_for_kind(kind, is_dir) & S_IFMT;
     upsert_mode(blob_id, type_bits | (mode & 0o7777));
     Ok(0)
@@ -3677,7 +3704,7 @@ pub fn fs_statx(
         blob_len(&blob_id) as u64,
         pid,
         kind,
-        blob_is_directory_by_id(&blob_id),
+        kind == PATH_INDEX_KIND_DIR,
     );
     write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
@@ -3709,8 +3736,8 @@ pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     }
     let _ = pid;
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
-    let (blob_id, kind) = path_entry(&normalized_path)?;
-    if kind != PATH_INDEX_KIND_DIR && !blob_is_directory_by_id(&blob_id) {
+    let (_, kind) = path_entry(&normalized_path)?;
+    if kind != PATH_INDEX_KIND_DIR {
         return Err(FsBridgeError::NotDir);
     }
     Ok(0)

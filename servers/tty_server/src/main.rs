@@ -10,30 +10,31 @@ const LINE_OUT_MAX: usize = syscall::TTY_LINE_MAX;
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_WRITE,
-            1,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-        );
-    }
+    write_console_all(bytes);
 }
 
 fn console_write(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_WRITE,
-            1,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-        );
+    write_console_all(bytes);
+}
+
+fn write_console_all(bytes: &[u8]) {
+    let mut done = 0usize;
+    while done < bytes.len() {
+        let rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_WRITE,
+                1,
+                bytes[done..].as_ptr() as u64,
+                (bytes.len() - done) as u64,
+            )
+        };
+        if rc <= 0 {
+            return;
+        }
+        done += rc as usize;
     }
 }
 

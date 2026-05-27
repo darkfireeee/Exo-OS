@@ -26,7 +26,7 @@ const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
 const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "vfs_server"];
 const DEPS_PS2: &[&str] = &["ipc_router", "device_server", "input_server", "tty_server"];
-const DEPS_EXOSH: &[&str] = &["ipc_router", "tty_server", "vfs_server", "exo_shield"];
+const DEPS_EXOSH: &[&str] = &["ipc_router", "input_server", "tty_server", "vfs_server", "exo_shield"];
 const DEPS_EXO_SHIELD: &[&str] = &[
     "ipc_router",
     "memory_server",

@@ -113,6 +113,13 @@ pub mod bare {
     const S_IFMT: u32 = 0o170000;
     const S_IFDIR: u32 = 0o040000;
     const SIGTERM: u64 = 15;
+    const CLOCK_MONOTONIC: u64 = 1;
+    const RM_MAX_DEPTH: usize = 8;
+    const EXDEV: i64 = -18;
+    const EISDIR: i64 = -21;
+    const ANSI_RESET: &[u8] = b"\x1b[0m";
+    const ANSI_DIR: &[u8] = b"\x1b[1;34m";
+    const ANSI_EXEC: &[u8] = b"\x1b[1;32m";
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -360,6 +367,37 @@ pub mod bare {
         parse_u64(input).and_then(|v| i32::try_from(v).ok())
     }
 
+    fn strip_prefix<'a>(input: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
+        if input.len() < prefix.len() {
+            return None;
+        }
+        (&input[..prefix.len()] == prefix).then_some(&input[prefix.len()..])
+    }
+
+    fn parse_size(input: &[u8]) -> Option<u64> {
+        if input.is_empty() {
+            return None;
+        }
+        let mut number_end = 0usize;
+        while number_end < input.len() && input[number_end].is_ascii_digit() {
+            number_end += 1;
+        }
+        let base = parse_u64(&input[..number_end])?;
+        let suffix = &input[number_end..];
+        let multiplier = if suffix.is_empty() {
+            1
+        } else if eq(suffix, b"K") || eq(suffix, b"k") {
+            1024
+        } else if eq(suffix, b"M") || eq(suffix, b"m") {
+            1024 * 1024
+        } else if eq(suffix, b"G") || eq(suffix, b"g") {
+            1024 * 1024 * 1024
+        } else {
+            return None;
+        };
+        base.checked_mul(multiplier)
+    }
+
     fn copy_component(out: &mut [u8; PATH_MAX], len: &mut usize, comp: &[u8]) -> bool {
         if *len > 1 {
             if *len + 1 >= PATH_MAX {
@@ -504,6 +542,44 @@ pub mod bare {
         }
     }
 
+    fn write_fd_all(fd: u64, bytes: &[u8]) -> i64 {
+        let mut done = 0usize;
+        while done < bytes.len() {
+            let n = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_WRITE,
+                    fd,
+                    bytes[done..].as_ptr() as u64,
+                    (bytes.len() - done) as u64,
+                )
+            };
+            if n <= 0 {
+                return if n == 0 { -5 } else { n };
+            }
+            done += n as usize;
+        }
+        bytes.len() as i64
+    }
+
+    fn ftruncate_fd(fd: i64, len: u64) -> i64 {
+        unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, fd as u64, len) }
+    }
+
+    fn monotonic_ns() -> Option<u64> {
+        let mut ts = LinuxTimespec::default();
+        let rc = unsafe {
+            syscall::syscall2(
+                syscall::SYS_CLOCK_GETTIME,
+                CLOCK_MONOTONIC,
+                &mut ts as *mut LinuxTimespec as u64,
+            )
+        };
+        if rc < 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+            return None;
+        }
+        Some((ts.tv_sec as u64).saturating_mul(1_000_000_000) + ts.tv_nsec as u64)
+    }
+
     fn stat_path(path: &[u8; PATH_MAX]) -> Option<LinuxStat> {
         let mut st = LinuxStat::default();
         let rc = unsafe {
@@ -522,6 +598,194 @@ pub mod bare {
 
     fn is_dir_mode(mode: u32) -> bool {
         mode & S_IFMT == S_IFDIR
+    }
+
+    fn path_len(path: &[u8; PATH_MAX]) -> usize {
+        let mut len = 0usize;
+        while len < PATH_MAX && path[len] != 0 {
+            len += 1;
+        }
+        len
+    }
+
+    fn append_path_component(
+        parent: &[u8; PATH_MAX],
+        name: &[u8],
+        out: &mut [u8; PATH_MAX],
+    ) -> Option<usize> {
+        if name.is_empty() || name.contains(&b'/') {
+            return None;
+        }
+        let mut len = path_len(parent);
+        out[..len].copy_from_slice(&parent[..len]);
+        if len == 0 {
+            out[0] = b'/';
+            len = 1;
+        }
+        if len > 1 && out[len - 1] != b'/' {
+            if len + 1 >= PATH_MAX {
+                return None;
+            }
+            out[len] = b'/';
+            len += 1;
+        }
+        if len + name.len() >= PATH_MAX {
+            return None;
+        }
+        out[len..len + name.len()].copy_from_slice(name);
+        len += name.len();
+        out[len] = 0;
+        Some(len)
+    }
+
+    fn remove_path(path: &[u8; PATH_MAX], recursive: bool, force: bool, depth: usize) -> i32 {
+        let Some(st) = stat_path(path) else {
+            return if force { 0 } else { print_errno(b"rm", -2) };
+        };
+
+        if !is_dir_mode(st.st_mode) {
+            let rc = unsafe { syscall::syscall1(syscall::SYS_UNLINK, path.as_ptr() as u64) };
+            if rc < 0 && !force {
+                return print_errno(b"rm", rc);
+            }
+            return 0;
+        }
+
+        if !recursive {
+            return if force { 0 } else { print_errno(b"rm", EISDIR) };
+        }
+        if depth >= RM_MAX_DEPTH {
+            return if force { 0 } else { print_errno(b"rm", -36) };
+        }
+
+        let fd = open_path(path, syscall::O_RDONLY, 0);
+        if fd < 0 {
+            return if force { 0 } else { print_errno(b"rm", fd) };
+        }
+
+        let mut rc = 0i32;
+        let mut buf = [0u8; IO_BUF];
+        loop {
+            let n = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_GETDENTS64,
+                    fd as u64,
+                    buf.as_mut_ptr() as u64,
+                    buf.len() as u64,
+                )
+            };
+            if n == 0 {
+                break;
+            }
+            if n < 0 {
+                close(fd);
+                return if force { 0 } else { print_errno(b"rm", n) };
+            }
+
+            let mut off = 0usize;
+            while off + DIRENT64_HEADER_SIZE <= n as usize {
+                let reclen = u16::from_le_bytes([buf[off + 16], buf[off + 17]]) as usize;
+                if reclen == 0 || off + reclen > n as usize {
+                    break;
+                }
+                let start = off + DIRENT64_HEADER_SIZE;
+                let mut end = start;
+                while end < off + reclen && buf[end] != 0 {
+                    end += 1;
+                }
+                let name = &buf[start..end];
+                if !name.is_empty() && !eq(name, b".") && !eq(name, b"..") {
+                    let mut child = [0u8; PATH_MAX];
+                    if append_path_component(path, name, &mut child).is_none() {
+                        if !force {
+                            rc = print_errno(b"rm", -36);
+                        }
+                    } else {
+                        let child_rc = remove_path(&child, recursive, force, depth + 1);
+                        if child_rc != 0 && rc == 0 {
+                            rc = child_rc;
+                        }
+                    }
+                }
+                off += reclen;
+            }
+        }
+        close(fd);
+
+        let rmdir_rc = unsafe { syscall::syscall1(syscall::SYS_RMDIR, path.as_ptr() as u64) };
+        if rmdir_rc < 0 && !force {
+            return print_errno(b"rm", rmdir_rc);
+        }
+        rc
+    }
+
+    fn remove_star(args: &Args, arg: &[u8], recursive: bool, force: bool) -> i32 {
+        let parent_arg = if eq(arg, b"*") {
+            b"." as &[u8]
+        } else if arg.len() > 2 && arg[arg.len() - 2] == b'/' && arg[arg.len() - 1] == b'*' {
+            &arg[..arg.len() - 2]
+        } else {
+            return print_errno(b"rm", -22);
+        };
+
+        let mut parent = [0u8; PATH_MAX];
+        if path_arg(args, parent_arg, &mut parent).is_none() {
+            return if force { 0 } else { print_errno(b"rm", -36) };
+        }
+        let fd = open_path(&parent, syscall::O_RDONLY, 0);
+        if fd < 0 {
+            return if force { 0 } else { print_errno(b"rm", fd) };
+        }
+
+        let mut rc = 0i32;
+        let mut buf = [0u8; IO_BUF];
+        loop {
+            let n = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_GETDENTS64,
+                    fd as u64,
+                    buf.as_mut_ptr() as u64,
+                    buf.len() as u64,
+                )
+            };
+            if n == 0 {
+                break;
+            }
+            if n < 0 {
+                close(fd);
+                return if force { 0 } else { print_errno(b"rm", n) };
+            }
+
+            let mut off = 0usize;
+            while off + DIRENT64_HEADER_SIZE <= n as usize {
+                let reclen = u16::from_le_bytes([buf[off + 16], buf[off + 17]]) as usize;
+                if reclen == 0 || off + reclen > n as usize {
+                    break;
+                }
+                let start = off + DIRENT64_HEADER_SIZE;
+                let mut end = start;
+                while end < off + reclen && buf[end] != 0 {
+                    end += 1;
+                }
+                let name = &buf[start..end];
+                if !name.is_empty() && name[0] != b'.' && !eq(name, b".") && !eq(name, b"..") {
+                    let mut child = [0u8; PATH_MAX];
+                    if append_path_component(&parent, name, &mut child).is_none() {
+                        if !force {
+                            rc = print_errno(b"rm", -36);
+                        }
+                    } else {
+                        let child_rc = remove_path(&child, recursive, force, 1);
+                        if child_rc != 0 && rc == 0 {
+                            rc = child_rc;
+                        }
+                    }
+                }
+                off += reclen;
+            }
+        }
+        close(fd);
+        rc
     }
 
     fn write_mode(mode: u32) {
@@ -546,6 +810,111 @@ pub mod bare {
             i += 1;
         }
         write_all(STDOUT, &out);
+    }
+
+    fn write_human_size(size: i64) {
+        if size < 0 {
+            write_i64(STDOUT, size);
+            return;
+        }
+        let mut value = size as u64;
+        let units = [b'B', b'K', b'M', b'G', b'T'];
+        let mut unit = 0usize;
+        while value >= 1024 && unit + 1 < units.len() {
+            value = value.saturating_add(512) / 1024;
+            unit += 1;
+        }
+        write_u64(STDOUT, value);
+        write_byte(STDOUT, units[unit]);
+    }
+
+    fn write_fixed_2(fd: u64, centi_units: u64) {
+        let whole = centi_units / 100;
+        let frac = centi_units % 100;
+        write_u64(fd, whole);
+        write_byte(fd, b'.');
+        write_byte(fd, b'0' + (frac / 10) as u8);
+        write_byte(fd, b'0' + (frac % 10) as u8);
+    }
+
+    fn write_duration_ms(fd: u64, ns: u64) {
+        write_u64(fd, ns / 1_000_000);
+        write_all(fd, b"ms");
+    }
+
+    fn write_mib_per_sec(fd: u64, bytes: u64, ns: u64) {
+        if ns == 0 {
+            write_all(fd, b"0.00");
+            return;
+        }
+        let centi_mib_per_sec = (bytes as u128)
+            .saturating_mul(100)
+            .saturating_mul(1_000_000_000)
+            .checked_div(1024u128 * 1024u128)
+            .unwrap_or(0)
+            .checked_div(ns as u128)
+            .unwrap_or(0)
+            .min(u64::MAX as u128) as u64;
+        write_fixed_2(fd, centi_mib_per_sec);
+    }
+
+    fn write_colored_name(name: &[u8], mode: u32, append_slash: bool) {
+        if is_dir_mode(mode) {
+            write_all(STDOUT, ANSI_DIR);
+            write_all(STDOUT, name);
+            if append_slash {
+                write_byte(STDOUT, b'/');
+            }
+            write_all(STDOUT, ANSI_RESET);
+        } else if mode & 0o111 != 0 {
+            write_all(STDOUT, ANSI_EXEC);
+            write_all(STDOUT, name);
+            write_all(STDOUT, ANSI_RESET);
+        } else {
+            write_all(STDOUT, name);
+        }
+    }
+
+    fn print_long_entry(
+        path: &[u8; PATH_MAX],
+        display_name: &[u8],
+        human: bool,
+        append_slash: bool,
+    ) {
+        let Some(stat) = stat_path(path) else {
+            write_all(STDOUT, b"?????????? ? ? ? ");
+            write_all(STDOUT, display_name);
+            write_byte(STDOUT, b'\n');
+            return;
+        };
+        write_mode(stat.st_mode);
+        write_byte(STDOUT, b' ');
+        write_u64(STDOUT, stat.st_nlink);
+        write_byte(STDOUT, b' ');
+        write_u64(STDOUT, stat.st_uid as u64);
+        write_byte(STDOUT, b' ');
+        write_u64(STDOUT, stat.st_gid as u64);
+        write_byte(STDOUT, b' ');
+        if human {
+            write_human_size(stat.st_size);
+        } else {
+            write_i64(STDOUT, stat.st_size);
+        }
+        write_byte(STDOUT, b' ');
+        write_colored_name(display_name, stat.st_mode, append_slash);
+        write_byte(STDOUT, b'\n');
+    }
+
+    fn is_dev_zero(path: &[u8]) -> bool {
+        eq(path, b"/dev/zero")
+    }
+
+    fn is_dev_null(path: &[u8]) -> bool {
+        eq(path, b"/dev/null")
+    }
+
+    fn is_dev_urandom(path: &[u8]) -> bool {
+        eq(path, b"/dev/urandom") || eq(path, b"/dev/random")
     }
 
     fn read_file_to_fd(path: &[u8; PATH_MAX], out_fd: u64) -> i32 {
@@ -579,6 +948,7 @@ pub mod bare {
     pub fn cmd_ls(args: &Args) -> i32 {
         let mut all = false;
         let mut long = false;
+        let mut human = false;
         let mut target = b"." as &[u8];
         let mut i = 1usize;
         while i < args.len() {
@@ -590,6 +960,8 @@ pub mod bare {
                         all = true;
                     } else if arg[j] == b'l' {
                         long = true;
+                    } else if arg[j] == b'h' {
+                        human = true;
                     }
                     j += 1;
                 }
@@ -606,13 +978,11 @@ pub mod bare {
         if fd < 0 {
             if let Some(st) = stat_path(&path) {
                 if long {
-                    write_mode(st.st_mode);
-                    write_all(STDOUT, b" ");
-                    write_i64(STDOUT, st.st_size);
-                    write_all(STDOUT, b" ");
+                    print_long_entry(&path, basename(target), human, is_dir_mode(st.st_mode));
+                } else {
+                    write_colored_name(basename(target), st.st_mode, is_dir_mode(st.st_mode));
+                    write_byte(STDOUT, b'\n');
                 }
-                write_all(STDOUT, basename(target));
-                write_byte(STDOUT, b'\n');
                 return 0;
             }
             return print_errno(b"ls", fd);
@@ -650,17 +1020,37 @@ pub mod bare {
                 let name = &buf[start..end];
                 if !name.is_empty() && (all || name[0] != b'.') {
                     if long {
-                        if dtype == DT_DIR {
-                            write_all(STDOUT, b"drwxr-xr-x ");
+                        let mut child = [0u8; PATH_MAX];
+                        let mode = if append_path_component(&path, name, &mut child).is_some() {
+                            stat_path(&child).map(|st| st.st_mode).unwrap_or_else(|| {
+                                if dtype == DT_DIR {
+                                    S_IFDIR | 0o755
+                                } else {
+                                    0o644
+                                }
+                            })
+                        } else if dtype == DT_DIR {
+                            S_IFDIR | 0o755
                         } else {
-                            write_all(STDOUT, b"-rw-r--r-- ");
+                            0o644
+                        };
+                        if append_path_component(&path, name, &mut child).is_some() {
+                            print_long_entry(&child, name, human, is_dir_mode(mode));
+                        } else {
+                            write_mode(mode);
+                            write_all(STDOUT, b" ? ? ? ");
+                            write_colored_name(name, mode, is_dir_mode(mode));
+                            write_byte(STDOUT, b'\n');
                         }
                     } else if printed {
                         write_all(STDOUT, b"  ");
                     }
-                    write_all(STDOUT, name);
-                    if long {
-                        write_byte(STDOUT, b'\n');
+                    if !long {
+                        if dtype == DT_DIR {
+                            write_colored_name(name, S_IFDIR | 0o755, true);
+                        } else {
+                            write_colored_name(name, 0o100000 | 0o644, false);
+                        }
                     }
                     printed = true;
                 }
@@ -787,22 +1177,37 @@ pub mod bare {
         if args.len() < 2 {
             return print_errno(b"rm", -22);
         }
+        let mut force = false;
+        let mut recursive = false;
         let mut rc = 0;
         let mut i = 1usize;
         while i < args.len() {
             let arg = args.get(i);
             if arg.starts_with(b"-") {
+                let mut j = 1usize;
+                while j < arg.len() {
+                    match arg[j] {
+                        b'f' => force = true,
+                        b'r' | b'R' => recursive = true,
+                        _ => {}
+                    }
+                    j += 1;
+                }
                 i += 1;
                 continue;
             }
-            let mut path = [0u8; PATH_MAX];
-            if path_arg(args, arg, &mut path).is_none() {
-                rc = print_errno(b"rm", -36);
+            let current = if eq(arg, b"*") || (arg.len() > 2 && arg[arg.len() - 2] == b'/' && arg[arg.len() - 1] == b'*') {
+                remove_star(args, arg, recursive, force)
             } else {
-                let r = unsafe { syscall::syscall1(syscall::SYS_UNLINK, path.as_ptr() as u64) };
-                if r < 0 {
-                    rc = print_errno(b"rm", r);
+                let mut path = [0u8; PATH_MAX];
+                if path_arg(args, arg, &mut path).is_none() {
+                    if force { 0 } else { print_errno(b"rm", -36) }
+                } else {
+                    remove_path(&path, recursive, force, 0)
                 }
+            };
+            if current != 0 && rc == 0 {
+                rc = current;
             }
             i += 1;
         }
@@ -933,6 +1338,13 @@ pub mod bare {
         {
             return print_errno(b"mv", -36);
         }
+        if stat_path(&dst).map(|st| is_dir_mode(st.st_mode)).unwrap_or(false) {
+            let mut full = [0u8; PATH_MAX];
+            if append_path_component(&dst, basename(args.get(1)), &mut full).is_none() {
+                return print_errno(b"mv", -36);
+            }
+            dst = full;
+        }
         let rc = unsafe {
             syscall::syscall2(
                 syscall::SYS_RENAME,
@@ -940,6 +1352,29 @@ pub mod bare {
                 dst.as_ptr() as u64,
             )
         };
+        if (rc == EISDIR || rc == EXDEV) && stat_path(&src).map(|st| !is_dir_mode(st.st_mode)).unwrap_or(false) {
+            let inf = open_path(&src, syscall::O_RDONLY, 0);
+            if inf < 0 {
+                return print_errno(b"mv", inf);
+            }
+            let outf = open_path(&dst, syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC, 0o644);
+            if outf < 0 {
+                close(inf);
+                return print_errno(b"mv", outf);
+            }
+            let copy_rc = copy_stream(inf, outf);
+            close(inf);
+            close(outf);
+            if copy_rc != 0 {
+                let _ = unsafe { syscall::syscall1(syscall::SYS_UNLINK, dst.as_ptr() as u64) };
+                return copy_rc;
+            }
+            let unlink_rc = unsafe { syscall::syscall1(syscall::SYS_UNLINK, src.as_ptr() as u64) };
+            if unlink_rc < 0 {
+                return print_errno(b"mv", unlink_rc);
+            }
+            return 0;
+        }
         if rc < 0 {
             print_errno(b"mv", rc)
         } else {
@@ -1193,27 +1628,42 @@ pub mod bare {
     }
 
     pub fn cmd_dd(args: &Args) -> i32 {
-        let mut input = b"/dev/zero" as &[u8];
-        let mut output = b"/dev/null" as &[u8];
-        let mut bs = 512usize;
-        let mut count = 1usize;
+        let mut input = b"" as &[u8];
+        let mut output = b"" as &[u8];
+        let mut bs = 512u64;
+        let mut count: Option<u64> = None;
         let mut i = 1usize;
         while i < args.len() {
             let arg = args.get(i);
-            if arg.starts_with(b"if=") {
-                input = &arg[3..];
-            } else if arg.starts_with(b"of=") {
-                output = &arg[3..];
-            } else if arg.starts_with(b"bs=") {
-                bs = parse_u64(&arg[3..]).unwrap_or(512) as usize;
-            } else if arg.starts_with(b"count=") {
-                count = parse_u64(&arg[6..]).unwrap_or(1) as usize;
+            if let Some(value) = strip_prefix(arg, b"if=") {
+                input = value;
+            } else if let Some(value) = strip_prefix(arg, b"of=") {
+                output = value;
+            } else if let Some(value) = strip_prefix(arg, b"bs=") {
+                let Some(parsed) = parse_size(value) else {
+                    return print_errno(b"dd", -22);
+                };
+                bs = parsed.max(1);
+            } else if let Some(value) = strip_prefix(arg, b"count=") {
+                let Some(parsed) = parse_u64(value) else {
+                    return print_errno(b"dd", -22);
+                };
+                count = Some(parsed);
             }
             i += 1;
         }
+        if input.is_empty() || output.is_empty() {
+            return print_errno(b"dd", -22);
+        }
         let mut in_path = [0u8; PATH_MAX];
         let mut out_path = [0u8; PATH_MAX];
-        let inf = if eq(input, b"/dev/zero") {
+        let input_zero = is_dev_zero(input);
+        let input_random = is_dev_urandom(input);
+        let output_null = is_dev_null(output);
+        if (input_zero || input_random) && count.is_none() {
+            return print_errno(b"dd", -22);
+        }
+        let inf = if input_zero || input_random {
             -1
         } else {
             if path_arg(args, input, &mut in_path).is_none() {
@@ -1225,7 +1675,7 @@ pub mod bare {
             }
             fd
         };
-        let outf = if eq(output, b"/dev/null") {
+        let outf = if output_null {
             -1
         } else {
             if path_arg(args, output, &mut out_path).is_none() {
@@ -1239,36 +1689,116 @@ pub mod bare {
             }
             fd
         };
-        let mut buf = [0u8; IO_BUF];
-        let chunk = bs.min(buf.len());
-        let mut total = 0u64;
-        let mut nblocks = 0usize;
-        while nblocks < count {
-            let n = if inf < 0 {
-                chunk as i64
-            } else {
-                unsafe {
-                    syscall::syscall3(
-                        syscall::SYS_READ,
-                        inf as u64,
-                        buf.as_mut_ptr() as u64,
-                        chunk as u64,
-                    )
-                }
+        let start = monotonic_ns();
+        if input_zero && !output_null {
+            let Some(block_count) = count else {
+                close(outf);
+                return print_errno(b"dd", -22);
             };
-            if n <= 0 {
+            let Some(total_bytes) = bs.checked_mul(block_count) else {
+                close(outf);
+                return print_errno(b"dd", -75);
+            };
+            let rc = ftruncate_fd(outf, total_bytes);
+            close(outf);
+            if rc < 0 {
+                return print_errno(b"dd", rc);
+            }
+            let elapsed = match (start, monotonic_ns()) {
+                (Some(a), Some(b)) if b >= a => b - a,
+                _ => 0,
+            };
+            write_u64(STDOUT, total_bytes);
+            write_all(STDOUT, b" bytes copied in ");
+            write_duration_ms(STDOUT, elapsed);
+            write_all(STDOUT, b" -> ");
+            write_mib_per_sec(STDOUT, total_bytes, elapsed);
+            write_all(STDOUT, b" MiB/s\n");
+            return 0;
+        }
+
+        let mut buf = [0u8; IO_BUF];
+        let mut total = 0u64;
+        let mut blocks = 0u64;
+        let mut eof = false;
+        loop {
+            if let Some(max_blocks) = count {
+                if blocks >= max_blocks {
+                    break;
+                }
+            }
+
+            let mut remaining = bs;
+            let mut copied_any = false;
+            while remaining > 0 {
+                let chunk = remaining.min(buf.len() as u64) as usize;
+                let n = if input_zero {
+                    buf[..chunk].fill(0);
+                    chunk as i64
+                } else if input_random {
+                    unsafe {
+                        syscall::syscall3(
+                            syscall::SYS_GETRANDOM,
+                            buf.as_mut_ptr() as u64,
+                            chunk as u64,
+                            0,
+                        )
+                    }
+                } else {
+                    unsafe {
+                        syscall::syscall3(
+                            syscall::SYS_READ,
+                            inf as u64,
+                            buf.as_mut_ptr() as u64,
+                            chunk as u64,
+                        )
+                    }
+                };
+                if n < 0 {
+                    close(inf);
+                    close(outf);
+                    return print_errno(b"dd", n);
+                }
+                if n == 0 {
+                    eof = true;
+                    break;
+                }
+                if outf >= 0 {
+                    let rc = write_fd_all(outf as u64, &buf[..n as usize]);
+                    if rc < 0 {
+                        close(inf);
+                        close(outf);
+                        return print_errno(b"dd", rc);
+                    }
+                }
+                total = total.saturating_add(n as u64);
+                remaining = remaining.saturating_sub(n as u64);
+                copied_any = true;
+                if !input_zero && !input_random && (n as usize) < chunk {
+                    eof = true;
+                    break;
+                }
+            }
+
+            if copied_any {
+                blocks = blocks.saturating_add(1);
+            }
+            if eof || (!copied_any && count.is_none()) {
                 break;
             }
-            if outf >= 0 {
-                write_all(outf as u64, &buf[..n as usize]);
-            }
-            total = total.saturating_add(n as u64);
-            nblocks += 1;
         }
         close(inf);
         close(outf);
         write_u64(STDOUT, total);
-        write_all(STDOUT, b" bytes copied\n");
+        write_all(STDOUT, b" bytes copied in ");
+        let elapsed = match (start, monotonic_ns()) {
+            (Some(a), Some(b)) if b >= a => b - a,
+            _ => 0,
+        };
+        write_duration_ms(STDOUT, elapsed);
+        write_all(STDOUT, b" -> ");
+        write_mib_per_sec(STDOUT, total, elapsed);
+        write_all(STDOUT, b" MiB/s\n");
         0
     }
 

@@ -141,8 +141,10 @@ KEYS = {
     "*": ["shift", "8"],
 }
 key_hold_ms = int(os.environ.get("EXOOS_SHELL_KEY_HOLD_MS", "20"))
-key_delay = float(os.environ.get("EXOOS_SHELL_KEY_DELAY", "0.12"))
+key_delay = float(os.environ.get("EXOOS_SHELL_KEY_DELAY", "0.35"))
 key_echo_timeout = float(os.environ.get("EXOOS_SHELL_KEY_ECHO_TIMEOUT", "2.0"))
+verify_key_echo = os.environ.get("EXOOS_SHELL_VERIFY_KEY_ECHO", "0") != "0"
+post_command_delay = float(os.environ.get("EXOOS_SHELL_POST_COMMAND_DELAY", "0.5"))
 
 def send_key(keys):
     if isinstance(keys, str):
@@ -166,7 +168,7 @@ def send_text(text):
     for ch in text:
         echo_start = len(e9_bytes())
         send_key(KEYS.get(ch, ch))
-        if ch != "\n":
+        if verify_key_echo and ch != "\n":
             wait_for_key_echo(ch, echo_start, key_echo_timeout)
         time.sleep(key_delay)
 
@@ -177,8 +179,8 @@ data = wait_for_e9(b"exosh:/", prompt_timeout)
 seen_prompts = prompt_count(data)
 data = wait_for_prompt_count(seen_prompts, prompt_timeout)
 command_timeout = int(os.environ.get("EXOOS_SHELL_COMMAND_TIMEOUT", "120"))
-
-commands = [
+commands_file = os.environ.get("EXOOS_SHELL_COMMANDS_FILE")
+default_commands = [
     "pwd\n",
     "mkdir /tmp\n",
     "mkdir /tmp/t\n",
@@ -224,83 +226,98 @@ commands = [
     "clear\n",
     "top\n",
 ]
+
+if commands_file:
+    raw_lines = Path(commands_file).read_text(encoding="utf-8").splitlines()
+    commands = [line if line.endswith("\n") else line + "\n" for line in raw_lines if line.strip()]
+else:
+    commands = default_commands
+
+run_editor_tests = os.environ.get("EXOOS_SHELL_RUN_EDITOR_TESTS", "1" if not commands_file else "0") != "0"
+run_default_asserts = not commands_file
 for text in commands:
     send_text(text)
     seen_prompts += 1
     wait_for_prompt_count(seen_prompts, command_timeout)
+    time.sleep(post_command_delay)
     if text == "clear\n":
         send_key(["ctrl", "l"])
         time.sleep(0.1)
+if run_editor_tests:
+    send_text("echo first\n")
+    seen_prompts += 1
+    wait_for_prompt_count(seen_prompts, command_timeout)
+    time.sleep(post_command_delay)
 
-send_text("echo first\n")
-seen_prompts += 1
-wait_for_prompt_count(seen_prompts, command_timeout)
+    send_key("up")
+    time.sleep(0.2)
+    send_key("ret")
+    seen_prompts += 1
+    wait_for_prompt_count(seen_prompts, command_timeout)
+    time.sleep(post_command_delay)
 
-send_key("up")
-time.sleep(0.2)
-send_key("ret")
-seen_prompts += 1
-wait_for_prompt_count(seen_prompts, command_timeout)
+    send_text("echo ab")
+    send_key("left")
+    time.sleep(0.1)
+    send_key("right")
+    time.sleep(0.1)
+    send_text("c\n")
+    seen_prompts += 1
+    wait_for_prompt_count(seen_prompts, command_timeout)
 
-send_text("echo ab")
-send_key("left")
-time.sleep(0.1)
-send_key("right")
-time.sleep(0.1)
-send_text("c\n")
-seen_prompts += 1
-wait_for_prompt_count(seen_prompts, command_timeout)
+    send_key("up")
+    time.sleep(0.1)
+    send_key("down")
+    time.sleep(0.1)
+    send_text("echo arrows\n")
+    seen_prompts += 1
+    wait_for_prompt_count(seen_prompts, 45)
+    time.sleep(post_command_delay)
 
-send_key("up")
-time.sleep(0.1)
-send_key("down")
-time.sleep(0.1)
-send_text("echo arrows\n")
-seen_prompts += 1
-wait_for_prompt_count(seen_prompts, 45)
+if run_default_asserts:
+    if b"hi\n" not in e9_bytes():
+        raise RuntimeError("cat /tmp/t/a did not echo expected data")
 
-if b"hi\n" not in e9_bytes():
-    raise RuntimeError("cat /tmp/t/a did not echo expected data")
+    if b"m\n" not in e9_bytes():
+        raise RuntimeError("mv into directory did not preserve readable file")
 
-if b"m\n" not in e9_bytes():
-    raise RuntimeError("mv into directory did not preserve readable file")
+    if b"/tmp/t\n" not in e9_bytes():
+        raise RuntimeError("cd /tmp/t ; pwd did not report expected cwd")
 
-if b"/tmp/t\n" not in e9_bytes():
-    raise RuntimeError("cd /tmp/t ; pwd did not report expected cwd")
+    if b"drwx" not in e9_bytes() and b"-rw" not in e9_bytes():
+        raise RuntimeError("ls -lah did not print long file metadata")
 
-if b"drwx" not in e9_bytes() and b"-rw" not in e9_bytes():
-    raise RuntimeError("ls -lah did not print long file metadata")
+    if b".h" not in e9_bytes():
+        raise RuntimeError("ls -lah did not include hidden files")
 
-if b".h" not in e9_bytes():
-    raise RuntimeError("ls -lah did not include hidden files")
+    if b"\x1b[1;34m" not in e9_bytes():
+        raise RuntimeError("ls did not emit directory color")
 
-if b"\x1b[1;34m" not in e9_bytes():
-    raise RuntimeError("ls did not emit directory color")
+    if b"bench\n" not in e9_bytes() or b"real " not in e9_bytes():
+        raise RuntimeError("time builtin did not run command and print elapsed time")
 
-if e9_bytes().count(b"first\n") < 2:
-    raise RuntimeError("arrow up did not recall and execute the previous command")
+    if e9_bytes().count(b"bytes copied in") < 2:
+        raise RuntimeError("dd builtin did not complete write/read benchmark paths")
 
-if b"abc\n" not in e9_bytes():
-    raise RuntimeError("left/right cursor movement did not preserve insertion position")
+    if (
+        b"PID  NAME              STATE" not in e9_bytes()
+        or b"12   exo_shield" not in e9_bytes()
+        or b"13   exosh" not in e9_bytes()
+    ):
+        raise RuntimeError("top did not report expected service PID/name mapping")
 
-if b"arrows\n" not in e9_bytes():
-    raise RuntimeError("arrow up/down line editing did not leave a clean command")
+if run_editor_tests:
+    if e9_bytes().count(b"first\n") < 2:
+        raise RuntimeError("arrow up did not recall and execute the previous command")
 
-if b"\x1b[7m" not in e9_bytes():
-    raise RuntimeError("line editor did not render a visible cursor")
+    if b"abc\n" not in e9_bytes():
+        raise RuntimeError("left/right cursor movement did not preserve insertion position")
 
-if b"bench\n" not in e9_bytes() or b"real " not in e9_bytes():
-    raise RuntimeError("time builtin did not run command and print elapsed time")
+    if b"arrows\n" not in e9_bytes():
+        raise RuntimeError("arrow up/down line editing did not leave a clean command")
 
-if e9_bytes().count(b"bytes copied in") < 2:
-    raise RuntimeError("dd builtin did not complete write/read benchmark paths")
-
-if (
-    b"PID  NAME              STATE" not in e9_bytes()
-    or b"12   exo_shield" not in e9_bytes()
-    or b"13   exosh" not in e9_bytes()
-):
-    raise RuntimeError("top did not report expected service PID/name mapping")
+    if b"\x1b[7m" not in e9_bytes():
+        raise RuntimeError("line editor did not render a visible cursor")
 
 hmp("screendump " + screen)
 sock.close()

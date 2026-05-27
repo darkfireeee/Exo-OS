@@ -39,11 +39,23 @@ const SOCK_STREAM: u64 = 1;
 const SOCK_RAW: u64 = 3;
 const IPPROTO_ICMP: u64 = 1;
 const EAGAIN: i64 = -11;
+const EXDEV: i64 = -18;
+const EISDIR: i64 = -21;
 const PING_IDENT: u16 = 0x4558;
 const ICMP_ECHO_HEADER_LEN: usize = 8;
 const PING_PAYLOAD: &[u8] = b"exoos-ping";
 const PING_PACKET_LEN: usize = ICMP_ECHO_HEADER_LEN + PING_PAYLOAD.len();
 const PING_RECV_ATTEMPTS: usize = 1000;
+const INPUT_REPLY_DRAIN_LIMIT: usize = 32;
+const INPUT_REPLY_DRAIN_TIMEOUT_MS: u64 = 1;
+const INPUT_REPLY_WAIT_TIMEOUT_MS: u64 = 10;
+const HID_KEY_END: u16 = 0x004d;
+const HID_KEY_DELETE: u16 = 0x004c;
+const HID_KEY_LEFT: u16 = 0x0050;
+const HID_KEY_RIGHT: u16 = 0x004f;
+const HID_KEY_UP: u16 = 0x0052;
+const HID_KEY_DOWN: u16 = 0x0051;
+const EXOSH_INPUT_REPLY_CHANNEL: u64 = 0x494E_5001;
 const EXOSH_TTY_REPLY_CHANNEL: u64 = 0x5454_5901;
 
 struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
@@ -51,6 +63,8 @@ struct DdIoBuffer(UnsafeCell<[u8; DD_IO_BUF]>);
 unsafe impl Sync for DdIoBuffer {}
 
 static DD_IO_BUFFER: DdIoBuffer = DdIoBuffer(UnsafeCell::new([0; DD_IO_BUF]));
+static INPUT_ATTACHED_ENDPOINT: AtomicU64 = AtomicU64::new(0);
+static INPUT_REPLY_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 static TTY_REPLY_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
@@ -176,6 +190,23 @@ impl ShellState {
         let idx = (self.history_next + HISTORY_MAX - 1 - offset) % HISTORY_MAX;
         Some(&self.history[idx][..self.history_len[idx]])
     }
+}
+
+#[derive(Clone, Copy)]
+enum ShellKey {
+    Enter,
+    Interrupt,
+    EndOfFile,
+    ClearScreen,
+    Backspace,
+    Delete,
+    Tab,
+    Char(u8),
+    HistoryPrev,
+    HistoryNext,
+    CursorLeft,
+    CursorRight,
+    CursorEnd,
 }
 
 #[no_mangle]
@@ -681,18 +712,9 @@ fn cmd_echo(rest: &[u8], state: &ShellState) {
             print_errno(b"echo", fd);
             return;
         }
-        let rc = unsafe {
-            syscall::syscall3(
-                syscall::SYS_WRITE,
-                fd as u64,
-                text.as_ptr() as u64,
-                text.len() as u64,
-            )
-        };
+        let rc = write_fd_all(fd, text);
         if rc >= 0 {
-            let nl = [b'\n'];
-            let _ =
-                unsafe { syscall::syscall3(syscall::SYS_WRITE, fd as u64, nl.as_ptr() as u64, 1) };
+            let _ = write_fd_all(fd, b"\n");
         } else {
             print_errno(b"echo", rc);
         }
@@ -820,10 +842,10 @@ fn cmd_mv(rest: &[u8], state: &ShellState) {
     }
 
     let mut src = [0u8; PATH_MAX];
-    if absolute_path(state.cwd(), src_arg, &mut src).is_none() {
+    let Some(src_len) = absolute_path(state.cwd(), src_arg, &mut src) else {
         write_all(b"mv: source path too long\n");
         return;
-    }
+    };
     let mut dst = [0u8; PATH_MAX];
     let Some(mut dst_len) = absolute_path(state.cwd(), dst_arg, &mut dst) else {
         write_all(b"mv: destination path too long\n");
@@ -831,7 +853,7 @@ fn cmd_mv(rest: &[u8], state: &ShellState) {
     };
     if is_dir_path(&dst) {
         let mut full_dst = [0u8; PATH_MAX];
-        let Some(len) = append_path_component(&dst, dst_len, basename(&src_arg), &mut full_dst)
+        let Some(len) = append_path_component(&dst, dst_len, basename(&src[..src_len]), &mut full_dst)
         else {
             write_all(b"mv: destination path too long\n");
             return;
@@ -848,6 +870,23 @@ fn cmd_mv(rest: &[u8], state: &ShellState) {
             dst.as_ptr() as u64,
         )
     };
+    if (rc == EXDEV || rc == EISDIR)
+        && stat_path(&src)
+            .map(|stat| is_regular_mode(stat.st_mode))
+            .unwrap_or(false)
+    {
+        let copy_rc = copy_file_path(&src, &dst);
+        if copy_rc < 0 {
+            print_errno(b"mv", copy_rc);
+            return;
+        }
+        let unlink_rc = unsafe { syscall::syscall1(syscall::SYS_UNLINK, src.as_ptr() as u64) };
+        if unlink_rc < 0 {
+            print_errno(b"mv", unlink_rc);
+            return;
+        }
+        return;
+    }
     if rc < 0 {
         print_errno(b"mv", rc);
     }
@@ -1373,50 +1412,77 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
     render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
 
     loop {
-        if let Some(tty_len) = tty_read_line_poll(line) {
-            render_input_line(line, tty_len, tty_len, state, &mut visible_len, false);
-            write_all(b"\n");
-            return tty_len;
-        }
-
-        let Some(byte) = read_byte_poll() else {
-            sleep_ms(25);
+        let Some(key) = read_shell_key_poll() else {
+            sleep_ms(5);
             continue;
         };
         let had_visible_cursor = cursor_visible;
         cursor_visible = true;
         let mut redraw = true;
-        match byte {
-            b'\n' | b'\r' => {
+        match key {
+            ShellKey::Enter => {
                 render_input_line(line, len, cursor, state, &mut visible_len, false);
                 write_all(b"\n");
                 return len;
             }
-            0x03 => {
+            ShellKey::Interrupt => {
                 render_input_line(line, len, cursor, state, &mut visible_len, false);
                 write_all(b"^C\n");
                 return 0;
             }
-            0x04 => {
+            ShellKey::EndOfFile => {
                 render_input_line(line, len, cursor, state, &mut visible_len, false);
                 write_all(b"^D\n");
                 return 0;
             }
-            0x0C => {
+            ShellKey::ClearScreen => {
                 write_all(b"\x0c");
                 visible_len = 0;
             }
-            0x1B => {
-                handle_escape_sequence(line, &mut len, &mut cursor, &mut history_offset, state);
+            ShellKey::HistoryPrev => {
+                apply_history_prev(line, &mut len, &mut cursor, &mut history_offset, state);
             }
-            0x08 | 0x7F => {
+            ShellKey::HistoryNext => {
+                apply_history_next(line, &mut len, &mut cursor, &mut history_offset, state);
+            }
+            ShellKey::CursorLeft => {
                 if cursor > 0 {
-                    delete_before_cursor(line, &mut len, &mut cursor);
+                    cursor -= 1;
                 } else {
                     redraw = false;
                 }
             }
-            b'\t' => {
+            ShellKey::CursorRight => {
+                if cursor < len {
+                    cursor += 1;
+                } else {
+                    redraw = false;
+                }
+            }
+            ShellKey::CursorEnd => {
+                if cursor < len {
+                    cursor = len;
+                } else {
+                    redraw = false;
+                }
+            }
+            ShellKey::Delete => {
+                if cursor < len {
+                    delete_at_cursor(line, &mut len, cursor);
+                    history_offset = None;
+                } else {
+                    redraw = false;
+                }
+            }
+            ShellKey::Backspace => {
+                if cursor > 0 {
+                    delete_before_cursor(line, &mut len, &mut cursor);
+                    history_offset = None;
+                } else {
+                    redraw = false;
+                }
+            }
+            ShellKey::Tab => {
                 let append_tail = had_visible_cursor && cursor == len;
                 if insert_input_byte(line, &mut len, &mut cursor, b' ') {
                     history_offset = None;
@@ -1429,12 +1495,12 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
                     redraw = false;
                 }
             }
-            b if b.is_ascii_graphic() || b == b' ' => {
+            ShellKey::Char(byte) => {
                 let append_tail = had_visible_cursor && cursor == len;
-                if insert_input_byte(line, &mut len, &mut cursor, b) {
+                if insert_input_byte(line, &mut len, &mut cursor, byte) {
                     history_offset = None;
                     if append_tail {
-                        render_input_append(b);
+                        render_input_append(byte);
                         visible_len = len.saturating_add(1);
                         redraw = false;
                     }
@@ -1442,7 +1508,6 @@ fn read_line(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
                     redraw = false;
                 }
             }
-            _ => redraw = false,
         }
         if redraw {
             render_input_line(line, len, cursor, state, &mut visible_len, cursor_visible);
@@ -1712,63 +1777,47 @@ fn cmd_tcping(rest: &[u8]) {
     let _ = close_fd(fd);
 }
 
-fn handle_escape_sequence(
+fn apply_history_prev(
     line: &mut [u8; LINE_MAX],
     len: &mut usize,
     cursor: &mut usize,
     history_offset: &mut Option<usize>,
     state: &ShellState,
 ) {
-    let Some(second) = read_byte_wait_ms(25) else {
-        return;
-    };
-    if second != b'[' {
+    if state.history_count == 0 {
         return;
     }
-    let Some(third) = read_byte_wait_ms(25) else {
-        return;
+    let next = match *history_offset {
+        Some(offset) if offset + 1 < state.history_count => offset + 1,
+        Some(offset) => offset,
+        None => 0,
     };
+    *history_offset = Some(next);
+    if let Some(history) = state.history_at_offset(next) {
+        replace_input_line(line, len, cursor, history);
+    }
+}
 
-    match third {
-        b'A' => {
-            if state.history_count == 0 {
-                return;
-            }
-            let next = match *history_offset {
-                Some(offset) if offset + 1 < state.history_count => offset + 1,
-                Some(offset) => offset,
-                None => 0,
-            };
+fn apply_history_next(
+    line: &mut [u8; LINE_MAX],
+    len: &mut usize,
+    cursor: &mut usize,
+    history_offset: &mut Option<usize>,
+    state: &ShellState,
+) {
+    match *history_offset {
+        Some(offset) if offset > 0 => {
+            let next = offset - 1;
             *history_offset = Some(next);
             if let Some(history) = state.history_at_offset(next) {
                 replace_input_line(line, len, cursor, history);
             }
         }
-        b'B' => match *history_offset {
-            Some(offset) if offset > 0 => {
-                let next = offset - 1;
-                *history_offset = Some(next);
-                if let Some(history) = state.history_at_offset(next) {
-                    replace_input_line(line, len, cursor, history);
-                }
-            }
-            Some(_) => {
-                *history_offset = None;
-                replace_input_line(line, len, cursor, b"");
-            }
-            None => {}
-        },
-        b'C' => {
-            if *cursor < *len {
-                *cursor += 1;
-            }
+        Some(_) => {
+            *history_offset = None;
+            replace_input_line(line, len, cursor, b"");
         }
-        b'D' => {
-            if *cursor > 0 {
-                *cursor -= 1;
-            }
-        }
-        _ => {}
+        None => {}
     }
 }
 
@@ -1816,6 +1865,18 @@ fn delete_before_cursor(line: &mut [u8; LINE_MAX], len: &mut usize, cursor: &mut
     }
     *len -= 1;
     *cursor -= 1;
+}
+
+fn delete_at_cursor(line: &mut [u8; LINE_MAX], len: &mut usize, cursor: usize) {
+    if cursor >= *len {
+        return;
+    }
+    let mut i = cursor;
+    while i + 1 < *len {
+        line[i] = line[i + 1];
+        i += 1;
+    }
+    *len -= 1;
 }
 
 fn render_input_line(
@@ -1885,6 +1946,210 @@ fn read_byte_poll() -> Option<u8> {
     }
 }
 
+fn input_reply_endpoint() -> Option<u64> {
+    let cached = INPUT_REPLY_ENDPOINT.load(Ordering::Acquire);
+    if cached != 0 {
+        let _ = ensure_input_stream_attached(cached);
+        return Some(cached);
+    }
+
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid <= 0 {
+        return None;
+    }
+    let endpoint = ((pid as u64) << 32) | EXOSH_INPUT_REPLY_CHANNEL;
+    let name = b"exosh_input_reply";
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_REGISTER,
+            name.as_ptr() as u64,
+            name.len() as u64,
+            endpoint,
+        )
+    };
+    if rc < 0 {
+        return None;
+    }
+    INPUT_REPLY_ENDPOINT.store(endpoint, Ordering::Release);
+    let _ = ensure_input_stream_attached(endpoint);
+    Some(endpoint)
+}
+
+fn ensure_input_stream_attached(reply_endpoint: u64) -> bool {
+    let cached = INPUT_ATTACHED_ENDPOINT.load(Ordering::Acquire);
+    if cached == reply_endpoint {
+        return true;
+    }
+    let req = syscall::InputRequest {
+        sender_pid: 0,
+        msg_type: syscall::INPUT_MSG_ATTACH,
+        reply_endpoint,
+        event: syscall::InputEventWire::default(),
+    };
+    let rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::INPUT_SERVER_ENDPOINT,
+            &req as *const syscall::InputRequest as u64,
+            core::mem::size_of::<syscall::InputRequest>() as u64,
+            0,
+            0,
+            0,
+        )
+    };
+    if rc < 0 {
+        return false;
+    }
+    INPUT_ATTACHED_ENDPOINT.store(reply_endpoint, Ordering::Release);
+    true
+}
+
+fn recv_input_reply(reply_endpoint: u64, timeout_ms: u64) -> Option<syscall::InputReply> {
+    let mut reply = syscall::InputReply::default();
+    let recv_rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_IPC_RECV,
+            reply_endpoint,
+            &mut reply as *mut syscall::InputReply as u64,
+            core::mem::size_of::<syscall::InputReply>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | timeout_ms,
+        )
+    };
+    if recv_rc < 0 {
+        return None;
+    }
+    Some(reply)
+}
+
+fn input_poll_event() -> Option<syscall::InputEventWire> {
+    let reply_endpoint = input_reply_endpoint()?;
+    if ensure_input_stream_attached(reply_endpoint) {
+        if let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_WAIT_TIMEOUT_MS) {
+            if reply.status == 0 {
+                return Some(reply.event);
+            }
+        }
+    }
+
+    for _ in 0..INPUT_REPLY_DRAIN_LIMIT {
+        let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_DRAIN_TIMEOUT_MS) else {
+            break;
+        };
+        if reply.status == 0 {
+            return Some(reply.event);
+        }
+    }
+
+    let req = syscall::InputRequest {
+        sender_pid: 0,
+        msg_type: syscall::INPUT_MSG_POLL,
+        reply_endpoint,
+        event: syscall::InputEventWire::default(),
+    };
+
+    let send_rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::INPUT_SERVER_ENDPOINT,
+            &req as *const syscall::InputRequest as u64,
+            core::mem::size_of::<syscall::InputRequest>() as u64,
+            0,
+            0,
+            0,
+        )
+    };
+    if send_rc < 0 {
+        return None;
+    }
+
+    for _ in 0..INPUT_REPLY_DRAIN_LIMIT {
+        let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_WAIT_TIMEOUT_MS) else {
+            return None;
+        };
+        if reply.status == 0 {
+            return Some(reply.event);
+        }
+    }
+    None
+}
+
+fn map_input_event_to_shell_key(event: syscall::InputEventWire) -> Option<ShellKey> {
+    if event.device != syscall::INPUT_DEVICE_KEYBOARD
+        || event.state != syscall::INPUT_KEY_PRESSED
+    {
+        return None;
+    }
+    match event.code {
+        HID_KEY_UP => return Some(ShellKey::HistoryPrev),
+        HID_KEY_DOWN => return Some(ShellKey::HistoryNext),
+        HID_KEY_LEFT => return Some(ShellKey::CursorLeft),
+        HID_KEY_RIGHT => return Some(ShellKey::CursorRight),
+        HID_KEY_DELETE => return Some(ShellKey::Delete),
+        HID_KEY_END => return Some(ShellKey::CursorEnd),
+        _ => {}
+    }
+
+    match event.ascii {
+        b'\n' | b'\r' => Some(ShellKey::Enter),
+        0x03 => Some(ShellKey::Interrupt),
+        0x04 => Some(ShellKey::EndOfFile),
+        0x08 | 0x7F => Some(ShellKey::Backspace),
+        0x0C => Some(ShellKey::ClearScreen),
+        b'\t' => Some(ShellKey::Tab),
+        b if b.is_ascii_graphic() || b == b' ' => Some(ShellKey::Char(b)),
+        _ => None,
+    }
+}
+
+fn read_shell_key_poll() -> Option<ShellKey> {
+    let mut skipped = 0usize;
+    while skipped < INPUT_REPLY_DRAIN_LIMIT {
+        let Some(event) = input_poll_event() else {
+            break;
+        };
+        if let Some(key) = map_input_event_to_shell_key(event) {
+            return Some(key);
+        }
+        skipped += 1;
+    }
+
+    let byte = read_byte_poll()?;
+    match byte {
+        b'\n' | b'\r' => Some(ShellKey::Enter),
+        0x03 => Some(ShellKey::Interrupt),
+        0x04 => Some(ShellKey::EndOfFile),
+        0x08 | 0x7F => Some(ShellKey::Backspace),
+        0x0C => Some(ShellKey::ClearScreen),
+        b'\t' => Some(ShellKey::Tab),
+        0x1B => read_ansi_escape_key(),
+        b if b.is_ascii_graphic() || b == b' ' => Some(ShellKey::Char(b)),
+        _ => None,
+    }
+}
+
+fn read_ansi_escape_key() -> Option<ShellKey> {
+    let second = read_byte_wait_ms(25)?;
+    if second != b'[' {
+        return None;
+    }
+    let third = read_byte_wait_ms(25)?;
+    match third {
+        b'A' => Some(ShellKey::HistoryPrev),
+        b'B' => Some(ShellKey::HistoryNext),
+        b'C' => Some(ShellKey::CursorRight),
+        b'D' => Some(ShellKey::CursorLeft),
+        b'F' => Some(ShellKey::CursorEnd),
+        b'3' => {
+            if read_byte_wait_ms(25) == Some(b'~') {
+                Some(ShellKey::Delete)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn tty_reply_endpoint() -> Option<u64> {
     let cached = TTY_REPLY_ENDPOINT.load(Ordering::Acquire);
     if cached != 0 {
@@ -1912,47 +2177,68 @@ fn tty_reply_endpoint() -> Option<u64> {
     Some(endpoint)
 }
 
-fn tty_read_line_poll(line: &mut [u8; LINE_MAX]) -> Option<usize> {
+fn tty_read_line(line: &mut [u8; LINE_MAX], state: &ShellState) -> Option<usize> {
     let reply_endpoint = tty_reply_endpoint()?;
-    let mut req = syscall::TtyRequest::zeroed();
-    req.msg_type = syscall::TTY_MSG_READ_LINE;
-    req.reply_endpoint = reply_endpoint;
+    let mut prompted = false;
 
-    let send_rc = unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            syscall::TTY_SERVER_ENDPOINT,
-            &req as *const syscall::TtyRequest as u64,
-            core::mem::size_of::<syscall::TtyRequest>() as u64,
-            0,
-            0,
-            0,
-        )
-    };
-    if send_rc < 0 {
-        return None;
-    }
+    loop {
+        let mut req = syscall::TtyRequest::zeroed();
+        req.msg_type = syscall::TTY_MSG_READ_LINE;
+        req.reply_endpoint = reply_endpoint;
 
-    let mut reply = syscall::TtyReply::zeroed();
-    let recv_rc = unsafe {
-        syscall::syscall4(
-            syscall::SYS_IPC_RECV,
-            reply_endpoint,
-            &mut reply as *mut syscall::TtyReply as u64,
-            core::mem::size_of::<syscall::TtyReply>() as u64,
-            syscall::IPC_FLAG_TIMEOUT | 1,
-        )
-    };
-    if recv_rc < 0 || reply.status != 0 || reply.len == 0 {
-        return None;
+        let send_rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                syscall::TTY_SERVER_ENDPOINT,
+                &req as *const syscall::TtyRequest as u64,
+                core::mem::size_of::<syscall::TtyRequest>() as u64,
+                0,
+                0,
+                0,
+            )
+        };
+        if send_rc < 0 {
+            return None;
+        }
+        if !prompted {
+            prompt(state);
+            prompted = true;
+        }
+
+        let mut reply = syscall::TtyReply::zeroed();
+        let recv_rc = unsafe {
+            syscall::syscall4(
+                syscall::SYS_IPC_RECV,
+                reply_endpoint,
+                &mut reply as *mut syscall::TtyReply as u64,
+                core::mem::size_of::<syscall::TtyReply>() as u64,
+                syscall::IPC_FLAG_TIMEOUT | 50,
+            )
+        };
+        if recv_rc == syscall::ETIMEDOUT {
+            continue;
+        }
+        if recv_rc < 0 {
+            return None;
+        }
+        if reply.signal != 0 {
+            return Some(0);
+        }
+        if reply.status == syscall::EAGAIN || reply.len == 0 {
+            sleep_ms(10);
+            continue;
+        }
+        if reply.status != 0 {
+            return None;
+        }
+        let n = (reply.len as usize).min(LINE_MAX - 1).min(reply.data.len());
+        line[..n].copy_from_slice(&reply.data[..n]);
+        return Some(if n > 0 && line[n - 1] == b'\n' {
+            n - 1
+        } else {
+            n
+        });
     }
-    let n = (reply.len as usize).min(LINE_MAX - 1).min(reply.data.len());
-    line[..n].copy_from_slice(&reply.data[..n]);
-    Some(if n > 0 && line[n - 1] == b'\n' {
-        n - 1
-    } else {
-        n
-    })
 }
 
 fn read_byte_wait_ms(ms: u64) -> Option<u8> {
@@ -2196,6 +2482,67 @@ fn stat_path(path: &[u8; PATH_MAX]) -> Option<LinuxStat> {
     } else {
         None
     }
+}
+
+fn copy_file_path(src: &[u8; PATH_MAX], dst: &[u8; PATH_MAX]) -> i64 {
+    let in_fd = unsafe {
+        syscall::syscall4(
+            syscall::SYS_OPENAT,
+            AT_FDCWD,
+            src.as_ptr() as u64,
+            syscall::O_RDONLY,
+            0,
+        )
+    };
+    if in_fd < 0 {
+        return in_fd;
+    }
+
+    let out_fd = unsafe {
+        syscall::syscall4(
+            syscall::SYS_OPENAT,
+            AT_FDCWD,
+            dst.as_ptr() as u64,
+            syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC,
+            0o644,
+        )
+    };
+    if out_fd < 0 {
+        let _ = close_fd(in_fd);
+        return out_fd;
+    }
+
+    let mut buf = [0u8; 512];
+    let mut status = 0i64;
+    loop {
+        let n = unsafe {
+            syscall::syscall3(
+                syscall::SYS_READ,
+                in_fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+            )
+        };
+        if n == 0 {
+            break;
+        }
+        if n < 0 {
+            status = n;
+            break;
+        }
+        let rc = write_fd_all(out_fd, &buf[..n as usize]);
+        if rc < 0 {
+            status = rc;
+            break;
+        }
+    }
+
+    let _ = close_fd(out_fd);
+    let _ = close_fd(in_fd);
+    if status < 0 {
+        let _ = unsafe { syscall::syscall1(syscall::SYS_UNLINK, dst.as_ptr() as u64) };
+    }
+    status
 }
 
 fn is_dir_path(path: &[u8; PATH_MAX]) -> bool {
@@ -2848,14 +3195,7 @@ fn write_bytes(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    let _ = unsafe {
-        syscall::syscall3(
-            syscall::SYS_WRITE,
-            STDOUT,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-        )
-    };
+    let _ = write_fd_all(STDOUT as i64, bytes);
 }
 
 fn write_fd_all(fd: i64, bytes: &[u8]) -> i64 {

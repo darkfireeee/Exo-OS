@@ -223,19 +223,19 @@ fn push_input_event(event: InputEvent) {
 
 #[cfg(target_os = "none")]
 fn drain_controller(controller: &mut I8042<SyscallPorts>, keyboard: &mut Ps2Keyboard) -> bool {
-    let mut produced = false;
+    let mut drained_any = false;
     let mut drained = 0usize;
     while drained < IRQ_DRAIN_LIMIT {
         let Some(byte) = controller.poll_byte() else {
             break;
         };
+        drained_any = true;
         if let Some(event) = keyboard.feed(byte) {
             push_input_event(event);
-            produced = true;
         }
         drained += 1;
     }
-    produced
+    drained_any
 }
 
 #[cfg(target_os = "none")]
@@ -269,11 +269,13 @@ pub extern "C" fn _start() -> ! {
     let mut irq_buf = [0u8; 9];
     loop {
         let wave = recv_irq_notification(endpoint, &mut irq_buf);
-        let produced = drain_controller(&mut controller, &mut keyboard);
-        if let (Some(wave_gen), true) = (wave, irq_reg_id >= 0) {
-            ack_keyboard_irq(irq_reg_id as u64, wave_gen);
+        let drained = drain_controller(&mut controller, &mut keyboard);
+        if let Some(wave_gen) = wave {
+            if irq_reg_id >= 0 {
+                ack_keyboard_irq(irq_reg_id as u64, wave_gen);
+            }
         }
-        if !produced {
+        if wave.is_none() && !drained {
             sleep_ms(1);
         }
     }

@@ -316,10 +316,10 @@ impl NetworkService {
                     self.iface.apply_socket_state(&snapshot);
                     return socket_reply(0, &snapshot);
                 }
+                self.iface.apply_socket_state(&snapshot);
                 match self.iface.tcp_connect_status(&snapshot) {
                     TcpConnectStatus::Failed => {
                         self.iface.poll_egress(&mut self.device, &self.pool);
-                        self.iface.apply_socket_state(&snapshot);
                         match self.iface.tcp_connect_status(&snapshot) {
                             TcpConnectStatus::Established => {
                                 match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
@@ -327,7 +327,8 @@ impl NetworkService {
                                     Err(err) => NetReply::error(err),
                                 }
                             }
-                            _ => NetReply::error(exo_syscall_abi::EAGAIN),
+                            TcpConnectStatus::Pending => NetReply::error(exo_syscall_abi::EAGAIN),
+                            TcpConnectStatus::Failed => NetReply::error(exo_syscall_abi::EAGAIN),
                         }
                     }
                     TcpConnectStatus::Established => {

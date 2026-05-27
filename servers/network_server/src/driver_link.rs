@@ -10,6 +10,8 @@ use crate::virtio_device::ExoNetDevice;
 const DRIVER_RETRY_TICKS: u16 = 32;
 const HARDWARE_BOOT_WAIT_MS: u64 = 3_000;
 const HARDWARE_BOOT_POLL_MS: u64 = 10;
+const DRIVER_SEND_TIMEOUT_MS: u64 = 10;
+const DRIVER_SEND_RETRIES: usize = 32;
 
 pub struct DriverLink {
     endpoint: u64,
@@ -202,7 +204,9 @@ impl DriverLink {
 }
 
 fn lookup_hardware_endpoint() -> Option<u64> {
-    lookup_endpoint(b"e1000_net").or_else(|| lookup_endpoint(b"virtio_net"))
+    // Under QEMU the virtio path is the most predictable transport; keep e1000
+    // as a fallback so both devices remain usable.
+    lookup_endpoint(b"virtio_net").or_else(|| lookup_endpoint(b"e1000_net"))
 }
 
 fn wait_hardware_endpoint(timeout_ms: u64) -> Option<u64> {
@@ -262,16 +266,32 @@ fn send(endpoint: u64, msg_type: u32, payload: &[u8]) -> i64 {
     };
     let n = payload.len().min(request.payload.len());
     request.payload[..n].copy_from_slice(&payload[..n]);
-    unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            endpoint,
-            &request as *const DriverRequest as u64,
-            core::mem::size_of::<DriverRequest>() as u64,
-            syscall::IPC_FLAG_INJECT_SRC_PID,
-            0,
-            0,
-        )
+    let mut attempts = 0usize;
+    loop {
+        let rc = unsafe {
+            syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                endpoint,
+                &request as *const DriverRequest as u64,
+                core::mem::size_of::<DriverRequest>() as u64,
+                syscall::IPC_FLAG_INJECT_SRC_PID
+                    | syscall::IPC_FLAG_TIMEOUT
+                    | DRIVER_SEND_TIMEOUT_MS,
+                0,
+                0,
+            )
+        };
+        if rc >= 0 {
+            return rc;
+        }
+        if rc != syscall::EAGAIN && rc != syscall::ETIMEDOUT && rc != syscall::ENOBUFS {
+            return rc;
+        }
+        attempts = attempts.saturating_add(1);
+        if attempts >= DRIVER_SEND_RETRIES {
+            return rc;
+        }
+        let _ = unsafe { syscall::syscall0(syscall::SYS_SCHED_YIELD) };
     }
 }
 

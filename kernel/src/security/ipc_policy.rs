@@ -79,6 +79,8 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::Exosh, ServiceClass::IpcBroker),
     (ServiceClass::Exosh, ServiceClass::CryptoServer),
     (ServiceClass::CryptoServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::TtyServer),
     (ServiceClass::TtyServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::ExoShield),
@@ -90,7 +92,7 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
 ];
 
 const _: () = assert!(
-    POLICY.len() == 45,
+    POLICY.len() == 47,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 

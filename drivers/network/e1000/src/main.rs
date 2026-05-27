@@ -324,7 +324,6 @@ impl E1000Driver {
             if let Some(desc_idx) = self.tx.prepare(addr, msg.len) {
                 if !self.saw_tx {
                     self.saw_tx = true;
-                    debug_write(b"e1000_driver: first tx\n");
                 }
                 write32(self.mmio, regs::TDT, self.tx.tail as u32);
                 let mut spins = 0usize;
@@ -361,7 +360,6 @@ impl E1000Driver {
             };
             if !self.saw_rx {
                 self.saw_rx = true;
-                debug_write(b"e1000_driver: first rx\n");
             }
             let slot = ready.count as usize;
             if slot == ready.entries.len() {

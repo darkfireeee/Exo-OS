@@ -53,6 +53,7 @@ ROOTFS_SERVER_PACKAGES = \
 	-p exo-ps2-input \
 	-p exo-exosh \
 	-p exo-shield
+ROOTFS_SERVER_FEATURES = -F exo-network-server/baremetal-bin
 ROOTFS_SBIN_BINS = \
 	exo-init-server \
 	exo-ipc-router \
@@ -162,7 +163,7 @@ all: iso
 ## 1a. Build des binaires Ring1 installes dans l'image ExoFS racine
 build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
-	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)"
