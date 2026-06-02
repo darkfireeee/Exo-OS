@@ -36,6 +36,7 @@ fn syscall_contract_standard_exofs_and_core_numbers() {
     assert_eq!(abi::SYS_EXOFS_READDIR, 520);
     assert_eq!(abi::SYS_EXOFS_LAST, 520);
     assert_eq!(abi::SYS_EXOFS_COUNT, 21);
+    assert_eq!(abi::SYS_FRAMEBUFFER_INFO, 521);
 
     assert_eq!(abi::SYS_IRQ_REGISTER, 530);
     assert_eq!(abi::SYS_PCI_SET_TOPOLOGY, 546);
@@ -57,6 +58,8 @@ fn syscall_contract_standard_exofs_layouts_and_rights() {
     assert!(core::mem::size_of::<abi::InputReply>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
     assert!(core::mem::size_of::<abi::TtyRequest>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
     assert!(core::mem::size_of::<abi::TtyReply>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
+    assert!(core::mem::size_of::<abi::FbRequest>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
+    assert!(core::mem::size_of::<abi::FbReply>() <= abi::IPC_KERNEL_MAX_MSG_SIZE);
 
     let mut resolved = abi::ExofsPathResolveResult::default();
     resolved.blob_id[..8].copy_from_slice(&0x0123_4567_89AB_CDEFu64.to_le_bytes());

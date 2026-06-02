@@ -32,16 +32,10 @@ const BODY_SCALE: u32 = 1;
 const STAGE_START_Y: u32 = 252;
 const STAGE_ROW_HEIGHT: u32 = 23;
 const STAGE_PANEL_WIDTH: u32 = 720;
-const TERM_MARGIN_X: u32 = 24;
-const TERM_HEADER_H: u32 = 54;
-const TERM_MARGIN_BOTTOM: u32 = 18;
-const TERM_SCALE: u32 = 1;
-const ANSI_GROUND: u8 = 0;
-const ANSI_ESC: u8 = 1;
-const ANSI_CSI: u8 = 2;
 
 #[derive(Debug, Clone, Copy)]
 struct Framebuffer {
+    phys_addr: u64,
     virt_addr: u64,
     width: u32,
     height: u32,
@@ -54,6 +48,7 @@ struct Framebuffer {
 impl Framebuffer {
     const fn absent() -> Self {
         Self {
+            phys_addr: 0,
             virt_addr: 0,
             width: 0,
             height: 0,
@@ -115,33 +110,6 @@ impl Framebuffer {
         }
     }
 
-    fn read_pixel(&self, x: u32, y: u32) -> u32 {
-        if !self.is_present() || x >= self.width || y >= self.height {
-            return 0;
-        }
-
-        let bpp = self.bytes_per_pixel();
-        let offset = (y as usize)
-            .saturating_mul(self.stride as usize)
-            .saturating_add(x as usize)
-            .saturating_mul(bpp);
-        let addr = (self.virt_addr as usize).saturating_add(offset);
-
-        // SAFETY: same bounds and mapping invariant as `put_pixel`.
-        unsafe {
-            match bpp {
-                4 => core::ptr::read_volatile(addr as *const u32),
-                3 => {
-                    let b0 = core::ptr::read_volatile(addr as *const u8);
-                    let b1 = core::ptr::read_volatile((addr + 1) as *const u8);
-                    let b2 = core::ptr::read_volatile((addr + 2) as *const u8);
-                    u32::from_le_bytes([b0, b1, b2, 0])
-                }
-                _ => 0,
-            }
-        }
-    }
-
     fn fill_rect(&self, x: u32, y: u32, w: u32, h: u32, pixel: u32) {
         if !self.is_present() || w == 0 || h == 0 {
             return;
@@ -154,33 +122,6 @@ impl Framebuffer {
                 self.put_pixel(col, row, pixel);
             }
         }
-    }
-
-    fn scroll_rect_up(&self, x: u32, y: u32, w: u32, h: u32, dy: u32, fill: u32) {
-        if !self.is_present() || w == 0 || h == 0 || dy == 0 || dy >= h {
-            return;
-        }
-
-        let x_end = x.saturating_add(w).min(self.width);
-        let y_end = y.saturating_add(h).min(self.height);
-        let copy_start = y.saturating_add(dy);
-        let mut row = copy_start;
-        while row < y_end {
-            let mut col = x;
-            while col < x_end {
-                let pixel = self.read_pixel(col, row);
-                self.put_pixel(col, row - dy, pixel);
-                col = col.saturating_add(1);
-            }
-            row = row.saturating_add(1);
-        }
-        self.fill_rect(
-            x,
-            y_end.saturating_sub(dy),
-            x_end.saturating_sub(x),
-            dy,
-            fill,
-        );
     }
 
     fn draw_line(&self, mut x0: i32, mut y0: i32, x1: i32, y1: i32, pixel: u32) {
@@ -260,30 +201,16 @@ impl Framebuffer {
 
 struct ConsoleState {
     fb: Framebuffer,
+    ring1_owner: bool,
     stage_count: u32,
-    terminal_mode: bool,
-    term_col: u32,
-    term_row: u32,
-    term_fg_code: u8,
-    term_bold: bool,
-    term_reverse: bool,
-    ansi_state: u8,
-    ansi_code: u16,
 }
 
 impl ConsoleState {
     const fn new() -> Self {
         Self {
             fb: Framebuffer::absent(),
+            ring1_owner: false,
             stage_count: 0,
-            terminal_mode: false,
-            term_col: 0,
-            term_row: 0,
-            term_fg_code: 39,
-            term_bold: false,
-            term_reverse: false,
-            ansi_state: ANSI_GROUND,
-            ansi_code: 0,
         }
     }
 }
@@ -323,280 +250,6 @@ fn text_color(fb: &Framebuffer) -> u32 {
 #[inline]
 fn muted_text_color(fb: &Framebuffer) -> u32 {
     fb.encode_rgb(143, 177, 194)
-}
-
-#[inline]
-fn ansi_color(fb: &Framebuffer, code: u8, bold: bool) -> u32 {
-    match (code, bold) {
-        (30, _) => fb.encode_rgb(85, 95, 104),
-        (31, false) => fb.encode_rgb(226, 86, 86),
-        (31, true) | (91, _) => fb.encode_rgb(255, 112, 112),
-        (32, false) => fb.encode_rgb(70, 196, 112),
-        (32, true) | (92, _) => fb.encode_rgb(105, 224, 145),
-        (33, false) => fb.encode_rgb(220, 190, 85),
-        (33, true) | (93, _) => fb.encode_rgb(255, 221, 105),
-        (34, false) => fb.encode_rgb(82, 160, 255),
-        (34, true) | (94, _) => fb.encode_rgb(116, 188, 255),
-        (35, false) => fb.encode_rgb(197, 120, 220),
-        (35, true) | (95, _) => fb.encode_rgb(224, 150, 248),
-        (36, false) => fb.encode_rgb(45, 196, 215),
-        (36, true) | (96, _) => fb.encode_rgb(90, 221, 235),
-        (37, false) => fb.encode_rgb(214, 225, 232),
-        (37, true) | (97, _) => fb.encode_rgb(248, 252, 255),
-        (90, _) => fb.encode_rgb(125, 139, 148),
-        _ => text_color(fb),
-    }
-}
-
-#[inline]
-fn terminal_fg_color(fb: &Framebuffer, state: &ConsoleState) -> u32 {
-    ansi_color(fb, state.term_fg_code, state.term_bold)
-}
-
-#[inline]
-fn term_bg_color(fb: &Framebuffer) -> u32 {
-    fb.encode_rgb(2, 10, 16)
-}
-
-#[inline]
-fn term_header_color(fb: &Framebuffer) -> u32 {
-    fb.encode_rgb(8, 27, 39)
-}
-
-#[inline]
-fn term_cols(fb: &Framebuffer) -> u32 {
-    let char_w = FONT_GLYPH_WIDTH as u32 * TERM_SCALE;
-    fb.width
-        .saturating_sub(TERM_MARGIN_X.saturating_mul(2))
-        .saturating_div(char_w.max(1))
-        .max(1)
-}
-
-#[inline]
-fn term_rows(fb: &Framebuffer) -> u32 {
-    let char_h = FONT_GLYPH_HEIGHT as u32 * TERM_SCALE;
-    fb.height
-        .saturating_sub(TERM_HEADER_H)
-        .saturating_sub(TERM_MARGIN_BOTTOM)
-        .saturating_div(char_h.max(1))
-        .max(1)
-}
-
-#[inline]
-fn term_origin_y() -> u32 {
-    TERM_HEADER_H
-}
-
-fn render_terminal_shell(state: &mut ConsoleState) {
-    let fb = state.fb;
-    if !fb.is_present() {
-        return;
-    }
-
-    let bg = term_bg_color(&fb);
-    let header = term_header_color(&fb);
-    let accent = accent_color(&fb);
-    let fg = text_color(&fb);
-    let muted = muted_text_color(&fb);
-
-    fb.fill_rect(0, 0, fb.width, fb.height, bg);
-    fb.fill_rect(0, 0, fb.width, TERM_HEADER_H, header);
-    fb.fill_rect(0, TERM_HEADER_H.saturating_sub(2), fb.width, 2, accent);
-    fb.draw_text_scaled(TERM_MARGIN_X, 14, "EXO-OS", BODY_SCALE, accent, header);
-    fb.draw_text_scaled(
-        TERM_MARGIN_X + 88,
-        14,
-        "userspace console",
-        BODY_SCALE,
-        fg,
-        header,
-    );
-    fb.draw_text_scaled(
-        TERM_MARGIN_X,
-        34,
-        "init_server services ready - exosh interactive session",
-        BODY_SCALE,
-        muted,
-        header,
-    );
-
-    state.terminal_mode = true;
-    state.term_col = 0;
-    state.term_row = 0;
-}
-
-fn terminal_clear_locked(state: &mut ConsoleState) {
-    let fb = state.fb;
-    if !fb.is_present() {
-        return;
-    }
-    reset_terminal_attrs(state);
-    if !state.terminal_mode {
-        render_terminal_shell(state);
-        return;
-    }
-    fb.fill_rect(
-        0,
-        TERM_HEADER_H,
-        fb.width,
-        fb.height.saturating_sub(TERM_HEADER_H),
-        term_bg_color(&fb),
-    );
-    state.term_col = 0;
-    state.term_row = 0;
-}
-
-fn reset_terminal_attrs(state: &mut ConsoleState) {
-    state.term_fg_code = 39;
-    state.term_bold = false;
-    state.term_reverse = false;
-    state.ansi_state = ANSI_GROUND;
-    state.ansi_code = 0;
-}
-
-fn apply_sgr_code(state: &mut ConsoleState, code: u16) {
-    match code {
-        0 => reset_terminal_attrs(state),
-        1 => state.term_bold = true,
-        7 => state.term_reverse = true,
-        22 => state.term_bold = false,
-        27 => state.term_reverse = false,
-        30..=37 | 90..=97 => state.term_fg_code = code as u8,
-        39 => state.term_fg_code = 39,
-        _ => {}
-    }
-}
-
-fn terminal_consume_ansi_locked(state: &mut ConsoleState, byte: u8) -> bool {
-    match state.ansi_state {
-        ANSI_GROUND => {
-            if byte == 0x1b {
-                state.ansi_state = ANSI_ESC;
-                state.ansi_code = 0;
-                true
-            } else {
-                false
-            }
-        }
-        ANSI_ESC => {
-            if byte == b'[' {
-                state.ansi_state = ANSI_CSI;
-                state.ansi_code = 0;
-            } else {
-                state.ansi_state = ANSI_GROUND;
-            }
-            true
-        }
-        ANSI_CSI => {
-            match byte {
-                b'0'..=b'9' => {
-                    state.ansi_code = state
-                        .ansi_code
-                        .saturating_mul(10)
-                        .saturating_add((byte - b'0') as u16);
-                }
-                b';' => {
-                    apply_sgr_code(state, state.ansi_code);
-                    state.ansi_code = 0;
-                }
-                b'm' => {
-                    apply_sgr_code(state, state.ansi_code);
-                    state.ansi_code = 0;
-                    state.ansi_state = ANSI_GROUND;
-                }
-                _ => {
-                    state.ansi_code = 0;
-                    state.ansi_state = ANSI_GROUND;
-                }
-            }
-            true
-        }
-        _ => {
-            state.ansi_state = ANSI_GROUND;
-            false
-        }
-    }
-}
-
-fn terminal_newline_locked(state: &mut ConsoleState) {
-    let fb = state.fb;
-    let rows = term_rows(&fb);
-    state.term_col = 0;
-    state.term_row = state.term_row.saturating_add(1);
-    if state.term_row >= rows {
-        let char_h = FONT_GLYPH_HEIGHT as u32 * TERM_SCALE;
-        let y = term_origin_y();
-        let h = fb
-            .height
-            .saturating_sub(y)
-            .saturating_sub(TERM_MARGIN_BOTTOM);
-        fb.scroll_rect_up(0, y, fb.width, h, char_h, term_bg_color(&fb));
-        state.term_row = rows.saturating_sub(1);
-    }
-}
-
-fn terminal_backspace_locked(state: &mut ConsoleState) {
-    let fb = state.fb;
-    if state.term_col == 0 {
-        return;
-    }
-
-    state.term_col = state.term_col.saturating_sub(1);
-    let char_w = FONT_GLYPH_WIDTH as u32 * TERM_SCALE;
-    let char_h = FONT_GLYPH_HEIGHT as u32 * TERM_SCALE;
-    let x = TERM_MARGIN_X.saturating_add(state.term_col.saturating_mul(char_w));
-    let y = term_origin_y().saturating_add(state.term_row.saturating_mul(char_h));
-    fb.fill_rect(x, y, char_w, char_h, term_bg_color(&fb));
-}
-
-fn terminal_put_printable_locked(state: &mut ConsoleState, byte: u8) {
-    let fb = state.fb;
-    let cols = term_cols(&fb);
-    if state.term_col >= cols {
-        terminal_newline_locked(state);
-    }
-
-    let char_w = FONT_GLYPH_WIDTH as u32 * TERM_SCALE;
-    let char_h = FONT_GLYPH_HEIGHT as u32 * TERM_SCALE;
-    let x = TERM_MARGIN_X.saturating_add(state.term_col.saturating_mul(char_w));
-    let y = term_origin_y().saturating_add(state.term_row.saturating_mul(char_h));
-    let normal_bg = term_bg_color(&fb);
-    let normal_fg = terminal_fg_color(&fb, state);
-    let (fg, bg) = if state.term_reverse {
-        (normal_bg, normal_fg)
-    } else {
-        (normal_fg, normal_bg)
-    };
-    fb.draw_glyph_scaled(x, y, byte, TERM_SCALE, fg, bg);
-    state.term_col = state.term_col.saturating_add(1);
-    if state.term_col >= cols {
-        terminal_newline_locked(state);
-    }
-}
-
-fn terminal_write_byte_locked(state: &mut ConsoleState, byte: u8) {
-    if !state.terminal_mode {
-        render_terminal_shell(state);
-    }
-    if terminal_consume_ansi_locked(state, byte) {
-        return;
-    }
-
-    match byte {
-        0x0c => terminal_clear_locked(state),
-        0x08 | 0x7f => terminal_backspace_locked(state),
-        b'\n' => terminal_newline_locked(state),
-        b'\r' => state.term_col = 0,
-        b'\t' => {
-            let mut n = 0;
-            while n < 4 {
-                terminal_put_printable_locked(state, b' ');
-                n += 1;
-            }
-        }
-        0x20..=0x7e => terminal_put_printable_locked(state, byte),
-        _ => {}
-    }
 }
 
 fn map_framebuffer_window(info: &BootInfo) -> Option<u64> {
@@ -751,6 +404,7 @@ pub fn init_from_boot_info(info: &BootInfo) -> bool {
 
     let mut state = CONSOLE.lock();
     state.fb = Framebuffer {
+        phys_addr: info.framebuffer_phys_addr,
         virt_addr,
         width: info.framebuffer_width,
         height: info.framebuffer_height,
@@ -760,24 +414,65 @@ pub fn init_from_boot_info(info: &BootInfo) -> bool {
         size_bytes: info.framebuffer_size_bytes,
     };
     state.stage_count = 0;
-    state.terminal_mode = false;
-    state.term_col = 0;
-    state.term_row = 0;
-    reset_terminal_attrs(&mut state);
+    state.ring1_owner = false;
     render_screen(&state);
     true
 }
 
 /// `true` si la console framebuffer est active.
 pub fn is_active() -> bool {
-    CONSOLE.lock().fb.is_present()
+    let state = CONSOLE.lock();
+    state.fb.is_present() && !state.ring1_owner
+}
+
+/// Stop using the early framebuffer after the Ring1 framebuffer server is ready.
+pub fn deactivate_for_userspace() {
+    CONSOLE.lock().ring1_owner = true;
+}
+
+/// Informations stables du framebuffer de boot pour le serveur Ring1.
+pub fn user_framebuffer_info() -> Option<(u64, u32, u32, u32, u32, u32, u64)> {
+    let state = CONSOLE.lock();
+    let fb = state.fb;
+    if !fb.is_present() || fb.phys_addr == 0 {
+        return None;
+    }
+    Some((
+        fb.phys_addr,
+        fb.width,
+        fb.height,
+        fb.stride,
+        fb.bpp,
+        fb.format as u32,
+        fb.size_bytes,
+    ))
+}
+
+/// `true` si la plage physique demandée reste dans le framebuffer de boot.
+pub fn user_framebuffer_contains(phys_addr: u64, size: u64) -> bool {
+    if size == 0 {
+        return false;
+    }
+    let Some(request_end) = phys_addr.checked_add(size) else {
+        return false;
+    };
+
+    let state = CONSOLE.lock();
+    let fb = state.fb;
+    if !fb.is_present() || fb.phys_addr == 0 {
+        return false;
+    }
+    let Some(fb_end) = fb.phys_addr.checked_add(fb.size_bytes) else {
+        return false;
+    };
+    phys_addr >= fb.phys_addr && request_end <= fb_end
 }
 
 /// Affiche un message de progression dans la liste des modules.
 pub fn stage_ok(label: &str) {
     let mut state = CONSOLE.lock();
     let fb = state.fb;
-    if !fb.is_present() {
+    if !fb.is_present() || state.ring1_owner {
         return;
     }
 
@@ -789,7 +484,7 @@ pub fn stage_ok(label: &str) {
 pub fn boot_complete() {
     let state = CONSOLE.lock();
     let fb = state.fb;
-    if !fb.is_present() {
+    if !fb.is_present() || state.ring1_owner {
         return;
     }
 
@@ -807,7 +502,7 @@ pub fn boot_complete() {
 pub fn userspace_status(title: &str, detail: &str, hint: &str) {
     let state = CONSOLE.lock();
     let fb = state.fb;
-    if !fb.is_present() {
+    if !fb.is_present() || state.ring1_owner {
         return;
     }
 
@@ -827,50 +522,29 @@ pub fn userspace_status(title: &str, detail: &str, hint: &str) {
     fb.draw_text_centered(y + 44, detail, BODY_SCALE, fg, panel);
     fb.draw_text_centered(y + 62, hint, BODY_SCALE, muted, panel);
 
-    let terminal_y = y.saturating_add(96);
+    let console_y = y.saturating_add(96);
     let footer_guard = 54u32;
-    if terminal_y.saturating_add(70) < fb.height.saturating_sub(footer_guard) {
-        let term_bg = fb.encode_rgb(3, 13, 20);
-        let term_border = accent_dark(&fb);
-        fb.fill_rect(x, terminal_y, 860, 72, term_bg);
-        fb.fill_rect(x, terminal_y, 860, 2, term_border);
+    if console_y.saturating_add(70) < fb.height.saturating_sub(footer_guard) {
+        let console_bg = fb.encode_rgb(3, 13, 20);
+        let console_border = accent_dark(&fb);
+        fb.fill_rect(x, console_y, 860, 72, console_bg);
+        fb.fill_rect(x, console_y, 860, 2, console_border);
         fb.draw_text_scaled(
             x + 14,
-            terminal_y + 12,
+            console_y + 12,
             "TTY/SHELL SURFACE",
             BODY_SCALE,
             accent_color(&fb),
-            term_bg,
+            console_bg,
         );
         fb.draw_text_scaled(
             x + 14,
-            terminal_y + 36,
+            console_y + 36,
             "exosh: waiting for tty_server readiness and /dev/tty attach",
             BODY_SCALE,
             muted,
-            term_bg,
+            console_bg,
         );
-    }
-}
-
-/// Efface et prepare la surface de terminal framebuffer.
-pub fn terminal_clear() {
-    let mut state = CONSOLE.lock();
-    if !state.fb.is_present() {
-        return;
-    }
-    terminal_clear_locked(&mut state);
-}
-
-/// Ecrit des octets sur la console interactive framebuffer avec scrolling.
-pub fn terminal_write_bytes(bytes: &[u8]) {
-    let mut state = CONSOLE.lock();
-    if !state.fb.is_present() {
-        return;
-    }
-
-    for &byte in bytes {
-        terminal_write_byte_locked(&mut state, byte);
     }
 }
 
@@ -881,6 +555,7 @@ mod tests {
     #[test]
     fn encode_rgb_tracks_pixel_order() {
         let rgb = super::Framebuffer {
+            phys_addr: 1,
             virt_addr: 1,
             width: 1,
             height: 1,

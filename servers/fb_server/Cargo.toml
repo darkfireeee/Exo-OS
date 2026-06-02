@@ -1,0 +1,17 @@
+[package]
+name = "exo-fb-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Exo-OS Ring1 framebuffer server"
+
+[[bin]]
+name = "exo-fb-server"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../syscall_abi" }

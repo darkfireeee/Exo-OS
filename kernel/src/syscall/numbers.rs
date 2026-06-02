@@ -11,7 +11,8 @@
 //! - [441]      : SYS_EPOLL_PWAIT2 (Linux compat)
 //! - [442..499] : réservés pour usage futur
 //! - [500..520] : ExoFS syscalls natifs
-//! - [521..529] : réservés pour usage futur
+//! - [521]      : informations framebuffer de boot pour fb_server Ring1
+//! - [522..529] : réservés pour usage futur
 //! - [530..549] : GI-03 drivers syscalls
 //! - 550        : SYSCALL_TABLE_SIZE (taille totale de la table)
 //!
@@ -34,7 +35,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Taille de la table syscall (un slot par numéro possible).
-/// 550 = couvre POSIX (0–499) + ExoFS (500–520) + GI-03 drivers (530–549).
+/// 550 = couvre POSIX (0–499) + ExoFS (500–520) + framebuffer (521)
+/// + GI-03 drivers (530–549).
 pub const SYSCALL_TABLE_SIZE: usize = 550;
 
 /// Numéro invalide (retourne -ENOSYS)
@@ -425,6 +427,10 @@ pub const SYS_EXOFS_OPEN_BY_PATH: u64 = 519;
 /// Utilisé par ls, find, opendir(). Sans ce syscall : ls/find/opendir() impossibles.
 /// Signature : (fd, buf_ptr, buf_len) → octets remplis
 pub const SYS_EXOFS_READDIR: u64 = 520;
+
+/// Terminal v0.2 : expose les infos framebuffer de boot au serveur Ring1.
+/// Signature : (out_ptr: *mut FramebufferInfoWire) -> 0
+pub const SYS_FRAMEBUFFER_INFO: u64 = 521;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bloc 530–549 : GI-03 Drivers (IRQ / DMA / PCI / IOMMU / I/O ports)

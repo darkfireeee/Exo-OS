@@ -391,10 +391,10 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
         Ordering::Release,
     );
     {
-        const BOOT_TTY_HANDLE: u64 = 1;
+        const TTY_HANDLE: u64 = crate::syscall::fs_bridge::TTY_PTS0_HANDLE as u64;
         pcb.files
             .lock()
-            .install_std_fds(BOOT_TTY_HANDLE, BOOT_TTY_HANDLE, BOOT_TTY_HANDLE);
+            .install_std_fds(TTY_HANDLE, TTY_HANDLE, TTY_HANDLE);
     }
     pcb.set_state(ProcessState::Running);
 

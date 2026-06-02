@@ -144,6 +144,28 @@ impl UserAddressSpace {
         Ok(())
     }
 
+    /// Mappe `virt` -> `frame` sans invalider le TLB.
+    ///
+    /// SAFETY: a utiliser uniquement pour une plage userspace fraichement
+    /// reservee, avant publication de la VMA et avant tout acces utilisateur a
+    /// cette plage. Les chemins qui remplacent ou demappent une page doivent
+    /// continuer a utiliser `map_page()` ou faire leur propre invalidation.
+    pub unsafe fn map_page_unflushed<A: FrameAllocatorForWalk>(
+        &self,
+        virt: VirtAddr,
+        frame: Frame,
+        flags: PageFlags,
+        alloc: &A,
+    ) -> Result<(), AllocError> {
+        debug_assert!(
+            virt.as_u64() < USER_END.as_u64(),
+            "map_page_unflushed : adresse hors user"
+        );
+        let mut walker = PageTableWalker::new(self.pml4_phys);
+        walker.map(virt, frame, flags, alloc)?;
+        Ok(())
+    }
+
     /// Démappe `virt` (sans VMA).
     pub unsafe fn unmap_page(&self, virt: VirtAddr) -> Option<Frame> {
         let mut walker = PageTableWalker::new(self.pml4_phys);

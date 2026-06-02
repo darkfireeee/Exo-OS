@@ -98,10 +98,10 @@ static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 fn debug_write(bytes: &[u8]) {
     let _ = unsafe {
         syscall::syscall3(
-            syscall::SYS_WRITE,
-            2,
+            syscall::SYS_EXO_LOG,
             bytes.as_ptr() as u64,
             bytes.len() as u64,
+            1,
         )
     };
 }

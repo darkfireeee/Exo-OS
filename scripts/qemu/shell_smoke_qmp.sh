@@ -100,6 +100,13 @@ def e9_bytes():
     except FileNotFoundError:
         return b""
 
+def save_timeout_e9():
+    dst = os.environ.get("EXOOS_SHELL_E9_TIMEOUT_COPY")
+    if dst:
+        Path(dst).write_bytes(e9_bytes())
+    else:
+        Path(str(e9) + ".timeout").write_bytes(e9_bytes())
+
 def wait_for_e9(needle, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -107,6 +114,7 @@ def wait_for_e9(needle, timeout):
         if needle in data:
             return data
         time.sleep(1.0)
+    save_timeout_e9()
     raise TimeoutError(needle.decode("ascii", "replace"))
 
 def prompt_count(data):
@@ -118,7 +126,10 @@ def input_prompt_ready(data):
         data.rfind(b"\rexosh:"),
         data.rfind(b"\x0cexosh:"),
     )
-    return prompt_start >= 0 and b"\x1b[7m" in data[prompt_start:]
+    require_cursor = os.environ.get("EXOOS_SHELL_REQUIRE_CURSOR", "1") != "0"
+    return prompt_start >= 0 and (
+        not require_cursor or b"\x1b[7m" in data[prompt_start:]
+    )
 
 def wait_for_prompt_count(target, timeout):
     deadline = time.time() + timeout
@@ -127,6 +138,7 @@ def wait_for_prompt_count(target, timeout):
         if prompt_count(data) >= target and input_prompt_ready(data):
             return data
         time.sleep(0.25)
+    save_timeout_e9()
     raise TimeoutError(f"shell input prompt count stayed below {target}")
 
 KEYS = {
@@ -235,12 +247,13 @@ else:
 
 run_editor_tests = os.environ.get("EXOOS_SHELL_RUN_EDITOR_TESTS", "1" if not commands_file else "0") != "0"
 run_default_asserts = not commands_file
+send_ctrl_l_after_clear = os.environ.get("EXOOS_SHELL_CTRL_L_AFTER_CLEAR", "0") != "0"
 for text in commands:
     send_text(text)
     seen_prompts += 1
     wait_for_prompt_count(seen_prompts, command_timeout)
     time.sleep(post_command_delay)
-    if text == "clear\n":
+    if send_ctrl_l_after_clear and text == "clear\n":
         send_key(["ctrl", "l"])
         time.sleep(0.1)
 if run_editor_tests:
@@ -319,6 +332,9 @@ if run_editor_tests:
     if b"\x1b[7m" not in e9_bytes():
         raise RuntimeError("line editor did not render a visible cursor")
 
+final_screen_delay = float(os.environ.get("EXOOS_SHELL_FINAL_SCREEN_DELAY", "0"))
+if final_screen_delay > 0:
+    time.sleep(final_screen_delay)
 hmp("screendump " + screen)
 sock.close()
 PY

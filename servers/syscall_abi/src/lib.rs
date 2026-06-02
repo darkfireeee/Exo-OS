@@ -387,6 +387,7 @@ pub const SYS_EXOFS_IMPORT_OBJECT: u64 = 517;
 pub const SYS_EXOFS_EPOCH_COMMIT: u64 = 518;
 pub const SYS_EXOFS_OPEN_BY_PATH: u64 = 519;
 pub const SYS_EXOFS_READDIR: u64 = 520;
+pub const SYS_FRAMEBUFFER_INFO: u64 = 521;
 pub const SYS_EXOFS_FIRST: u64 = SYS_EXOFS_PATH_RESOLVE;
 pub const SYS_EXOFS_LAST: u64 = SYS_EXOFS_READDIR;
 pub const SYS_EXOFS_COUNT: u64 = SYS_EXOFS_LAST - SYS_EXOFS_FIRST + 1;
@@ -732,6 +733,7 @@ pub const SYS_IOPORT_WRITE: u64 = 549;
 
 pub const INPUT_SERVER_ENDPOINT: u64 = 11;
 pub const TTY_SERVER_ENDPOINT: u64 = 12;
+pub const FB_SERVER_ENDPOINT: u64 = 20;
 pub const PS2_DRIVER_IRQ_CHANNEL: u64 = 17;
 
 pub const INPUT_MSG_PUSH: u32 = 0x120;
@@ -744,6 +746,11 @@ pub const TTY_MSG_READ_LINE: u32 = 0x131;
 pub const TTY_MSG_WRITE: u32 = 0x132;
 pub const TTY_MSG_IOCTL: u32 = 0x133;
 
+pub const FB_MSG_WRITE: u32 = 0x140;
+pub const FB_MSG_CLEAR: u32 = 0x141;
+pub const FB_MSG_SCROLL: u32 = 0x142;
+pub const FB_MSG_SET_CURSOR: u32 = 0x143;
+
 pub const INPUT_DEVICE_KEYBOARD: u8 = 1;
 pub const INPUT_DEVICE_MOUSE: u8 = 2;
 pub const INPUT_KEY_RELEASED: u8 = 0;
@@ -753,7 +760,21 @@ pub const INPUT_MOD_CTRL: u8 = 1 << 1;
 pub const INPUT_MOD_ALT: u8 = 1 << 2;
 pub const INPUT_MOD_META: u8 = 1 << 3;
 
-pub const TTY_LINE_MAX: usize = 208;
+pub const TTY_LINE_MAX: usize = 184;
+pub const FB_TEXT_MAX: usize = 208;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FramebufferInfoWire {
+    pub phys_addr: u64,
+    pub width: u32,
+    pub height: u32,
+    pub stride_pixels: u32,
+    pub bpp: u32,
+    pub format: u32,
+    pub _pad: u32,
+    pub size_bytes: u64,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -829,6 +850,39 @@ impl TtyReply {
             data: [0; TTY_LINE_MAX],
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FbRequest {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub reply_endpoint: u64,
+    pub a: u64,
+    pub b: u64,
+    pub data: [u8; FB_TEXT_MAX],
+}
+
+impl FbRequest {
+    #[inline(always)]
+    pub const fn zeroed() -> Self {
+        Self {
+            sender_pid: 0,
+            msg_type: 0,
+            reply_endpoint: 0,
+            a: 0,
+            b: 0,
+            data: [0; FB_TEXT_MAX],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbReply {
+    pub status: i64,
+    pub len: u32,
+    pub _pad: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<InputRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);

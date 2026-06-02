@@ -69,10 +69,10 @@ fn boot_log(bytes: &[u8]) {
     }
     unsafe {
         let _ = syscall::syscall3(
-            syscall::SYS_WRITE,
-            1,
+            syscall::SYS_EXO_LOG,
             bytes.as_ptr() as u64,
             bytes.len() as u64,
+            1,
         );
     }
 }
@@ -85,13 +85,6 @@ fn exit_failed() -> ! {
     loop {
         core::hint::spin_loop();
     }
-}
-
-#[inline]
-fn queue_mut() -> &'static mut InputQueue {
-    // SAFETY: input_server is a single-threaded event loop; all queue access is
-    // serialized in `_start` before a reply is sent.
-    unsafe { &mut *QUEUE.0.get() }
 }
 
 fn deliver_to_subscriber(event: syscall::InputEventWire, queue_depth: u32) -> bool {
@@ -111,7 +104,7 @@ fn deliver_to_subscriber(event: syscall::InputEventWire, queue_depth: u32) -> bo
             endpoint,
             &reply as *const syscall::InputReply as u64,
             core::mem::size_of::<syscall::InputReply>() as u64,
-            syscall::IPC_FLAG_TIMEOUT,
+            0,
             0,
             0,
         )
@@ -119,10 +112,17 @@ fn deliver_to_subscriber(event: syscall::InputEventWire, queue_depth: u32) -> bo
     rc >= 0
 }
 
+#[inline]
+fn queue_mut() -> &'static mut InputQueue {
+    // SAFETY: input_server is a single-threaded event loop; all queue access is
+    // serialized in `_start` before a reply is sent.
+    unsafe { &mut *QUEUE.0.get() }
+}
+
 fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
     match req.msg_type {
         syscall::INPUT_MSG_PUSH => {
-            let status = if queue_mut().len == 0 && deliver_to_subscriber(req.event, 0) {
+            let status = if deliver_to_subscriber(req.event, queue_mut().len as u32) {
                 0
             } else {
                 match queue_mut().push(req.event) {

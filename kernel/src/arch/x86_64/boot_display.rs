@@ -6,7 +6,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::boot::early_init::BootInfo;
-use super::{framebuffer_early, vga_early};
+use super::{framebuffer_early, terminal, vga_early};
 
 static VGA_STAGE_ROW: AtomicUsize = AtomicUsize::new(9);
 
@@ -20,6 +20,12 @@ fn text_attr() -> u8 {
 
 fn accent_attr() -> u8 {
     vga_early::attr(vga_early::LIGHT_CYAN, vga_early::BLACK)
+}
+
+fn debug_line(prefix: &[u8], text: &str) {
+    terminal::debug_write(prefix);
+    terminal::debug_write(text.as_bytes());
+    terminal::debug_write(b"\n");
 }
 
 fn draw_vga_shell() {
@@ -55,16 +61,24 @@ fn draw_vga_shell() {
 
 /// Affiche l'écran de boot initial.
 pub fn boot_screen() {
+    terminal::debug_write(b"boot_display: boot screen\n");
     draw_vga_shell();
 }
 
 /// Attache la console framebuffer si le bootloader en fournit une.
 pub fn attach_framebuffer(boot_info: &BootInfo) -> bool {
-    framebuffer_early::init_from_boot_info(boot_info)
+    let attached = framebuffer_early::init_from_boot_info(boot_info);
+    if attached {
+        terminal::debug_write(b"boot_display: framebuffer attached\n");
+    } else {
+        terminal::debug_write(b"boot_display: framebuffer unavailable\n");
+    }
+    attached
 }
 
 /// Affiche l'avancement d'un module réellement initialisé.
 pub fn stage_ok(label: &str) {
+    debug_line(b"boot_display: stage ok ", label);
     let row = VGA_STAGE_ROW.fetch_add(1, Ordering::AcqRel);
     vga_early::set_cursor(2, row.min(22));
     vga_early::write_str(label, text_attr());
@@ -77,6 +91,7 @@ pub fn stage_ok(label: &str) {
 
 /// Clôt l'affichage de boot.
 pub fn boot_complete() {
+    terminal::debug_write(b"boot_display: boot complete\n");
     vga_early::set_cursor(0, 23);
     vga_early::write_hline(vga_early::attr(vga_early::DARK_GRAY, vga_early::BLACK));
     vga_early::write_centered("[ Exo-OS boot complete ]", stage_attr());
@@ -85,6 +100,9 @@ pub fn boot_complete() {
 
 /// Affiche un statut explicite pour le passage kernel -> userspace.
 pub fn userspace_status(title: &str, detail: &str, hint: &str) {
+    debug_line(b"boot_display: userspace ", title);
+    debug_line(b"boot_display: detail ", detail);
+    debug_line(b"boot_display: hint ", hint);
     let warn_attr = vga_early::attr(vga_early::YELLOW, vga_early::BLACK);
     let text = text_attr();
     let accent = accent_attr();
@@ -99,32 +117,4 @@ pub fn userspace_status(title: &str, detail: &str, hint: &str) {
     vga_early::write_str(hint, accent);
 
     framebuffer_early::userspace_status(title, detail, hint);
-}
-
-/// Bascule l'ecran de boot en console texte interactive et ecrit des octets.
-pub fn terminal_write_bytes(bytes: &[u8]) {
-    if framebuffer_early::is_active() {
-        framebuffer_early::terminal_write_bytes(bytes);
-        return;
-    }
-
-    let attr = vga_early::attr(vga_early::LIGHT_GRAY, vga_early::BLACK);
-    for &byte in bytes {
-        match byte {
-            0x0c => vga_early::clear(vga_early::BLACK),
-            0x08 => {
-                vga_early::write_char(0x08, attr);
-            }
-            _ => vga_early::write_char(byte, attr),
-        }
-    }
-}
-
-/// Efface la console interactive sans repasser par l'ecran de progression.
-pub fn terminal_clear() {
-    if framebuffer_early::is_active() {
-        framebuffer_early::terminal_clear();
-    } else {
-        vga_early::clear(vga_early::BLACK);
-    }
 }

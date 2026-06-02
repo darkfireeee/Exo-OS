@@ -8,11 +8,24 @@ pub fn set_console_quiet(quiet: bool) {
 }
 
 #[inline]
+fn kernel_log(bytes: &[u8]) {
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_EXO_LOG,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+            1,
+        );
+    }
+}
+
+#[inline]
 pub fn write_all(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
     if CONSOLE_QUIET.load(Ordering::Acquire) {
+        kernel_log(bytes);
         return;
     }
     unsafe {

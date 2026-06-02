@@ -2643,6 +2643,62 @@ pub fn sys_getrandom(buf_ptr: u64, len: u64, flags: u64, _a4: u64, _a5: u64, _a6
     written as i64
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FramebufferInfoWire {
+    phys_addr: u64,
+    width: u32,
+    height: u32,
+    stride_pixels: u32,
+    bpp: u32,
+    format: u32,
+    _pad: u32,
+    size_bytes: u64,
+}
+
+/// `framebuffer_info(out)` -> infos du framebuffer de boot pour fb_server Ring1.
+pub fn sys_framebuffer_info(out_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_FRAMEBUFFER_INFO);
+    if out_ptr == 0 {
+        return EFAULT;
+    }
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+    let Some((phys_addr, width, height, stride_pixels, bpp, format, size_bytes)) =
+        crate::arch::x86_64::framebuffer_early::user_framebuffer_info()
+    else {
+        return ENOENT;
+    };
+    if size_bytes == 0 || size_bytes > usize::MAX as u64 {
+        return EINVAL;
+    }
+
+    if let Err(err) = crate::drivers::device_claims::claim_trusted_mmio_for_pid(
+        PhysAddr::new(phys_addr),
+        size_bytes as usize,
+        caller_pid,
+    ) {
+        return claim_error_to_errno(err);
+    }
+
+    let info = FramebufferInfoWire {
+        phys_addr,
+        width,
+        height,
+        stride_pixels,
+        bpp,
+        format,
+        _pad: 0,
+        size_bytes,
+    };
+    match write_user_typed(out_ptr, info) {
+        Ok(()) => 0,
+        Err(_) => EFAULT,
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers IPC natifs Exo-OS (bloc 300+)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2680,6 +2736,7 @@ fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::security::Servi
         b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
         b"input_server" => Some(crate::security::ServiceClass::InputServer),
         b"tty_server" => Some(crate::security::ServiceClass::TtyServer),
+        b"fb_server" => Some(crate::security::ServiceClass::FbServer),
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
         b"exosh" => Some(crate::security::ServiceClass::Exosh),
         _ => None,
@@ -3009,6 +3066,9 @@ pub fn sys_exo_ipc_create(
         }
         if let Some(class) = service_class_for_endpoint_name(&name) {
             let _ = crate::security::register_service_class(Pid(caller_pid), class);
+        }
+        if name.as_slice() == b"fb_server" {
+            crate::arch::x86_64::framebuffer_early::deactivate_for_userspace();
         }
         0
     } else {
@@ -3873,9 +3933,8 @@ pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: 
     if let Err(e) = buf.read_into(&mut kbuf[..log_len]) {
         return e.to_errno();
     }
-    // Écriture via serial jusqu'à activation de log_ring dans arch/.
+    crate::arch::x86_64::terminal::debug_write(&kbuf[..log_len]);
     let _ = level;
-    // Les octets sont déjà dans kbuf — ils seront consommés par le prochain lecteur.
     0
 }
 
@@ -4559,6 +4618,28 @@ pub fn sys_pci_claim(
         None
     };
 
+    if bdf.is_none()
+        && owner_pid == caller_pid
+        && crate::security::service_class_of(Pid(caller_pid))
+            == crate::security::ServiceClass::FbServer
+        && crate::arch::x86_64::framebuffer_early::user_framebuffer_contains(phys_addr, size)
+    {
+        return match crate::drivers::device_claims::claim_trusted_mmio_for_pid(
+            PhysAddr::new(phys_addr),
+            size as usize,
+            owner_pid,
+        ) {
+            Ok(()) => {
+                if crate::drivers::iommu::ensure_domain_for_pid(owner_pid).is_err() {
+                    let _ = crate::drivers::release_claim_for_owner(owner_pid);
+                    return EAGAIN;
+                }
+                0
+            }
+            Err(err) => claim_error_to_errno(err),
+        };
+    }
+
     match crate::drivers::sys_pci_claim(
         PhysAddr::new(phys_addr),
         size as usize,
@@ -4958,6 +5039,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         // ── ExoFS extensions (519–520) — FIX BUG-01 + BUG-02 ───────────────
         SYS_EXOFS_OPEN_BY_PATH => sys_exofs_open_by_path,
         SYS_EXOFS_READDIR => sys_exofs_readdir,
+        SYS_FRAMEBUFFER_INFO => sys_framebuffer_info,
         // ── GI-03 Drivers (530–549) ──────────────────────────────────────────
         SYS_IRQ_REGISTER => sys_irq_register,
         SYS_IRQ_ACK => sys_irq_ack,

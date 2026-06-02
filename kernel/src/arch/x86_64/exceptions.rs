@@ -1030,10 +1030,6 @@ fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
     let frame = unsafe { &mut *frame };
     super::idt::irq_counter_inc(vector);
 
-    if vector == 33 {
-        crate::arch::x86_64::terminal::keyboard_irq_drain();
-    }
-
     // Routage vers l'architecture GI-03
     crate::arch::x86_64::irq::routing::dispatch_irq(vector, None);
 

@@ -31,6 +31,7 @@ use crate::fs::exofs::path::symlink::{
 };
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
 use crate::fs::exofs::syscall::object_store;
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 use spin::Mutex;
 
@@ -171,7 +172,12 @@ const EXOFS_STATFS_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const STAT_MODE_DIR: u32 = 0o040000 | 0o755;
 const STAT_MODE_FILE: u32 = 0o100000 | 0o644;
 const STAT_MODE_SYMLINK: u32 = 0o120000 | 0o777;
-const BOOT_TTY_HANDLE: u64 = 1;
+pub const TTY_PTS0_HANDLE: u32 = 0xffff_ff01;
+const TTY_SERVER_ENDPOINT_NAME: &[u8] = b"tty_server";
+const TTY_MSG_READ_LINE: u32 = 0x131;
+const TTY_MSG_WRITE: u32 = 0x132;
+const TTY_LINE_MAX: usize = 184;
+const TTY_SEND_TIMEOUT_NS: u64 = 5_000_000_000;
 const PATH_INDEX_KIND_DIR: u8 = 0;
 const PATH_INDEX_KIND_FILE: u8 = 1;
 const PATH_INDEX_KIND_SYMLINK: u8 = 2;
@@ -194,6 +200,81 @@ const STAT_MODE_MASK: u32 = 0o170000;
 
 static NEXT_PSEUDO_ID: AtomicU64 = AtomicU64::new(1);
 static POSIX_UMASK: AtomicU32 = AtomicU32::new(0o022);
+static TTY_ENDPOINT_CACHE: AtomicU64 = AtomicU64::new(0);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TtyRequestWire {
+    sender_pid: u32,
+    msg_type: u32,
+    reply_endpoint: u64,
+    a: u64,
+    b: u64,
+    data: [u8; TTY_LINE_MAX],
+}
+
+impl TtyRequestWire {
+    const fn zeroed() -> Self {
+        Self {
+            sender_pid: 0,
+            msg_type: 0,
+            reply_endpoint: 0,
+            a: 0,
+            b: 0,
+            data: [0; TTY_LINE_MAX],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TtyReplyWire {
+    status: i64,
+    signal: u32,
+    len: u32,
+    data: [u8; TTY_LINE_MAX],
+}
+
+const _: () = assert!(size_of::<TtyRequestWire>() == 216);
+const _: () = assert!(size_of::<TtyReplyWire>() == 200);
+
+struct TtyInputBuffer {
+    data: [u8; TTY_LINE_MAX],
+    head: usize,
+    len: usize,
+}
+
+impl TtyInputBuffer {
+    const fn new() -> Self {
+        Self {
+            data: [0; TTY_LINE_MAX],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push_slice(&mut self, bytes: &[u8]) {
+        self.head = 0;
+        self.len = bytes.len().min(TTY_LINE_MAX);
+        self.data[..self.len].copy_from_slice(&bytes[..self.len]);
+    }
+
+    fn pop_into(&mut self, out: &mut [u8]) -> usize {
+        let n = out.len().min(self.len);
+        if n == 0 {
+            return 0;
+        }
+        out[..n].copy_from_slice(&self.data[self.head..self.head + n]);
+        self.head += n;
+        self.len -= n;
+        if self.len == 0 {
+            self.head = 0;
+        }
+        n
+    }
+}
+
+static TTY_STDIN: Mutex<TtyInputBuffer> = Mutex::new(TtyInputBuffer::new());
 
 #[derive(Clone, Copy)]
 struct ResolvedFd {
@@ -211,6 +292,167 @@ fn fd_can_read_flags(flags: u32) -> bool {
 fn fd_can_write_flags(flags: u32) -> bool {
     let rw = flags & 0x3;
     rw == open_flags::O_WRONLY || rw == open_flags::O_RDWR
+}
+
+#[inline]
+fn is_tty_handle(handle: u32) -> bool {
+    handle == TTY_PTS0_HANDLE
+}
+
+#[inline]
+fn is_tty_handle_u64(handle: u64) -> bool {
+    handle == TTY_PTS0_HANDLE as u64
+}
+
+#[inline]
+fn is_tty_path(path: &[u8]) -> bool {
+    path == b"/dev/pts/0" || path == b"/dev/tty"
+}
+
+fn tty_endpoint() -> Result<EndpointId, FsBridgeError> {
+    let cached = TTY_ENDPOINT_CACHE.load(Ordering::Acquire);
+    if cached != 0 {
+        if let Some(endpoint) = EndpointId::new(cached) {
+            return Ok(endpoint);
+        }
+        TTY_ENDPOINT_CACHE.store(0, Ordering::Release);
+    }
+
+    let endpoint = crate::ipc::endpoint::lookup_endpoint(TTY_SERVER_ENDPOINT_NAME)
+        .ok_or(FsBridgeError::NotReady)?;
+    TTY_ENDPOINT_CACHE.store(endpoint.get(), Ordering::Release);
+    Ok(endpoint)
+}
+
+fn ipc_to_fs_error(err: IpcError) -> FsBridgeError {
+    match err {
+        IpcError::WouldBlock | IpcError::QueueEmpty | IpcError::QueueFull | IpcError::Full => {
+            FsBridgeError::WouldBlock
+        }
+        IpcError::Timeout => FsBridgeError::WouldBlock,
+        IpcError::OutOfResources | IpcError::ResourceExhausted | IpcError::ShmPoolFull => {
+            FsBridgeError::NoMemory
+        }
+        IpcError::NotFound
+        | IpcError::EndpointNotFound
+        | IpcError::ChannelClosed
+        | IpcError::Closed
+        | IpcError::ConnRefused => {
+            TTY_ENDPOINT_CACHE.store(0, Ordering::Release);
+            FsBridgeError::NotReady
+        }
+        IpcError::PermissionDenied => FsBridgeError::PermDenied,
+        IpcError::MessageTooLarge => FsBridgeError::Invalid,
+        _ => FsBridgeError::Invalid,
+    }
+}
+
+fn errno_to_fs_error(errno: i64) -> FsBridgeError {
+    match errno {
+        -4 => FsBridgeError::Interrupted,
+        -9 => FsBridgeError::BadFd,
+        -11 => FsBridgeError::WouldBlock,
+        -12 => FsBridgeError::NoMemory,
+        -13 => FsBridgeError::PermDenied,
+        -14 => FsBridgeError::Fault,
+        -22 => FsBridgeError::Invalid,
+        -32 => FsBridgeError::BrokenPipe,
+        _ => FsBridgeError::Io,
+    }
+}
+
+fn tty_call(req: &TtyRequestWire) -> Result<TtyReplyWire, FsBridgeError> {
+    let endpoint = tty_endpoint()?;
+    let request = unsafe {
+        core::slice::from_raw_parts(
+            req as *const TtyRequestWire as *const u8,
+            size_of::<TtyRequestWire>(),
+        )
+    };
+    let mut reply_buf = [0u8; size_of::<TtyReplyWire>()];
+    match crate::ipc::rpc::call_raw(endpoint, request, &mut reply_buf) {
+        Ok(n) if n >= size_of::<TtyReplyWire>() => {
+            Ok(unsafe { core::ptr::read_unaligned(reply_buf.as_ptr() as *const TtyReplyWire) })
+        }
+        Ok(_) => Err(FsBridgeError::Invalid),
+        Err(err) => Err(ipc_to_fs_error(err)),
+    }
+}
+
+fn tty_send(req: &TtyRequestWire) -> Result<(), FsBridgeError> {
+    let endpoint = tty_endpoint()?;
+    let request = unsafe {
+        core::slice::from_raw_parts(
+            req as *const TtyRequestWire as *const u8,
+            size_of::<TtyRequestWire>(),
+        )
+    };
+    let deadline =
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(TTY_SEND_TIMEOUT_NS);
+
+    loop {
+        match crate::ipc::channel::raw::try_send_raw_nowait(endpoint, request) {
+            Ok(_) => return Ok(()),
+            Err(IpcError::WouldBlock) | Err(IpcError::QueueFull) | Err(IpcError::Full) => {
+                if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    return Err(FsBridgeError::WouldBlock);
+                }
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+            Err(err) => return Err(ipc_to_fs_error(err)),
+        }
+    }
+}
+
+fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        let n = (bytes.len() - written).min(TTY_LINE_MAX);
+        let mut req = TtyRequestWire::zeroed();
+        req.sender_pid = pid;
+        req.msg_type = TTY_MSG_WRITE;
+        req.a = n as u64;
+        req.data[..n].copy_from_slice(&bytes[written..written + n]);
+        tty_send(&req)?;
+        written += n;
+    }
+    Ok(bytes.len() as i64)
+}
+
+fn tty_refill_stdin(pid: u32) -> Result<(), FsBridgeError> {
+    let mut req = TtyRequestWire::zeroed();
+    req.sender_pid = pid;
+    req.msg_type = TTY_MSG_READ_LINE;
+    let reply = tty_call(&req)?;
+    if reply.status < 0 {
+        return Err(errno_to_fs_error(reply.status));
+    }
+    let n = (reply.len as usize).min(TTY_LINE_MAX);
+    if n == 0 {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    TTY_STDIN.lock().push_slice(&reply.data[..n]);
+    Ok(())
+}
+
+fn tty_read_bytes(buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
+    let mut out = [0u8; TTY_LINE_MAX];
+    let mut copied = TTY_STDIN
+        .lock()
+        .pop_into(&mut out[..count.min(TTY_LINE_MAX)]);
+    if copied == 0 {
+        tty_refill_stdin(pid)?;
+        copied = TTY_STDIN
+            .lock()
+            .pop_into(&mut out[..count.min(TTY_LINE_MAX)]);
+    }
+    if copied == 0 {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    copy_to_user(buf_ptr as *mut u8, out.as_ptr(), copied).map_err(|_| FsBridgeError::Fault)?;
+    Ok(copied as i64)
 }
 
 #[inline]
@@ -246,13 +488,13 @@ fn resolve_fd(pid: u32, fd: u32) -> Result<ResolvedFd, FsBridgeError> {
         });
     }
 
-    let flags = match fd {
-        0 => open_flags::O_RDONLY,
-        1 | 2 => open_flags::O_WRONLY,
-        _ => open_flags::O_RDWR,
-    };
-    let handle = if fd <= 2 { BOOT_TTY_HANDLE as u32 } else { fd };
-    Ok(ResolvedFd { handle, flags })
+    if fd <= 2 {
+        return Err(FsBridgeError::BadFd);
+    }
+    Ok(ResolvedFd {
+        handle: fd,
+        flags: open_flags::O_RDWR,
+    })
 }
 
 #[inline]
@@ -344,14 +586,6 @@ fn stored_mode(blob_id: &BlobId) -> Option<u32> {
         .iter()
         .find(|record| record.blob_id == *blob_id)
         .map(|record| record.mode)
-}
-
-#[inline]
-fn process_pgid(pid: u32) -> u32 {
-    crate::process::core::registry::PROCESS_REGISTRY
-        .find_by_pid(crate::process::core::pid::Pid(pid))
-        .map(|pcb| pcb.pgroup_id())
-        .unwrap_or(pid)
 }
 
 #[repr(C)]
@@ -888,7 +1122,7 @@ fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeErr
 #[inline]
 fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
     let resolved = resolve_fd(pid, fd)?;
-    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+    if is_tty_handle(resolved.handle) {
         return Ok((
             fd_can_read_flags(resolved.flags),
             fd_can_write_flags(resolved.flags),
@@ -1384,18 +1618,11 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
         return Ok(0);
     }
     let resolved = resolve_fd(pid, fd)?;
-    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+    if is_tty_handle(resolved.handle) {
         if !fd_can_read_flags(resolved.flags) {
             return Err(FsBridgeError::BadFd);
         }
-        let Some(byte) =
-            crate::arch::x86_64::terminal::poll_byte_for_process(pid, process_pgid(pid))
-        else {
-            return Err(FsBridgeError::WouldBlock);
-        };
-        copy_to_user(buf_ptr as *mut u8, &byte as *const u8, 1)
-            .map_err(|_| FsBridgeError::Fault)?;
-        return Ok(1);
+        return tty_read_bytes(buf_ptr, count, pid);
     }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
@@ -1486,13 +1713,12 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         return Ok(0);
     }
     let resolved = resolve_fd(pid, fd)?;
-    if resolved.handle as u64 == BOOT_TTY_HANDLE {
+    if is_tty_handle(resolved.handle) {
         if !fd_can_write_flags(resolved.flags) {
             return Err(FsBridgeError::BadFd);
         }
         let input = read_user_bytes(buf_ptr, count)?;
-        crate::arch::x86_64::terminal::write_from_process(pid, process_pgid(pid), &input);
-        return Ok(count as i64);
+        return tty_write_bytes(pid, &input);
     }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
@@ -1701,6 +1927,13 @@ pub fn fs_pwritev(
 /// `open(path, flags, mode)` → fd.
 #[inline]
 pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if is_tty_path(path) {
+        let fd_flags = fd_table_flags(flags, open_flags::O_RDWR);
+        if let Some(logical_fd) = install_process_fd(pid, TTY_PTS0_HANDLE as u64, fd_flags) {
+            return Ok(logical_fd as i64);
+        }
+        return Ok(TTY_PTS0_HANDLE as i64);
+    }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
@@ -1778,13 +2011,13 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
 /// `close(fd)`.
 #[inline]
 pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
-    if !is_fs_ready() {
-        return Err(FsBridgeError::NotReady);
-    }
     let resolved = resolve_fd(pid, fd)?;
     let handle = close_process_fd(pid, fd).unwrap_or(resolved.handle as u64);
-    if handle == BOOT_TTY_HANDLE {
+    if is_tty_handle_u64(handle) {
         return Ok(0);
+    }
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
     if handle > u32::MAX as u64 {
         return Err(FsBridgeError::BadFd);
@@ -1804,7 +2037,7 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
 /// Close the opaque handles removed from a PCB by execve(O_CLOEXEC).
 pub fn close_exec_handles_for_pid(pid: u32, handles: &[u64]) {
     for &handle in handles {
-        if handle == BOOT_TTY_HANDLE {
+        if is_tty_handle_u64(handle) {
             continue;
         }
         if handle <= u32::MAX as u64 {
@@ -1989,8 +2222,8 @@ pub fn fs_dup(oldfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
         return Err(FsBridgeError::NotReady);
     }
     let resolved = resolve_fd(pid, oldfd)?;
-    if resolved.handle as u64 == BOOT_TTY_HANDLE {
-        if let Some(fd) = install_process_fd(pid, BOOT_TTY_HANDLE, resolved.flags) {
+    if is_tty_handle(resolved.handle) {
+        if let Some(fd) = install_process_fd(pid, TTY_PTS0_HANDLE as u64, resolved.flags) {
             return Ok(fd as i64);
         }
         return Err(FsBridgeError::NoMemory);
@@ -2017,12 +2250,12 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
     let resolved = resolve_fd(pid, oldfd)?;
     if let Some(old_handle) = close_process_fd(pid, newfd) {
-        if old_handle != BOOT_TTY_HANDLE && old_handle <= u32::MAX as u64 {
+        if !is_tty_handle_u64(old_handle) && old_handle <= u32::MAX as u64 {
             let _ = OBJECT_TABLE.close(old_handle as u32);
         }
     }
-    if resolved.handle as u64 == BOOT_TTY_HANDLE {
-        if install_process_fd_at(pid, newfd, BOOT_TTY_HANDLE, resolved.flags) {
+    if is_tty_handle(resolved.handle) {
+        if install_process_fd_at(pid, newfd, TTY_PTS0_HANDLE as u64, resolved.flags) {
             return Ok(newfd as i64);
         }
         return Err(FsBridgeError::NoMemory);
@@ -2053,7 +2286,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
                 return Err(FsBridgeError::Invalid);
             }
             let min_fd = arg as i32;
-            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+            if is_tty_handle(resolved.handle) {
                 if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
                     .find_by_pid(crate::process::core::pid::Pid(pid))
                 {
@@ -2061,7 +2294,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
                     let mut candidate = min_fd.max(0);
                     while candidate < 65536 {
                         if files.get(candidate).is_none() {
-                            if files.install_at(candidate, BOOT_TTY_HANDLE, resolved.flags) {
+                            if files.install_at(candidate, TTY_PTS0_HANDLE as u64, resolved.flags) {
                                 return Ok(candidate as i64);
                             }
                             return Err(FsBridgeError::NoMemory);
@@ -2127,7 +2360,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
         }
         F_GETFL => {
             let resolved = resolve_fd(pid, fd)?;
-            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+            if is_tty_handle(resolved.handle) {
                 Ok(resolved.flags as i64)
             } else {
                 OBJECT_TABLE
@@ -2142,7 +2375,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
                 return Err(FsBridgeError::Invalid);
             }
             let resolved = resolve_fd(pid, fd)?;
-            if resolved.handle as u64 == BOOT_TTY_HANDLE {
+            if is_tty_handle(resolved.handle) {
                 let access = resolved.flags & 0x3;
                 let flags = access | ((arg as u32) & O_NONBLOCK);
                 let _ = set_process_fd_flags(pid, fd, flags);
@@ -2932,7 +3165,7 @@ pub fn fs_epoll_ctl(
     }
     let ep_obj = resolve_fd(pid, epfd)?.handle;
     let target_obj = resolve_fd(pid, fd)?.handle;
-    if ep_obj as u64 == BOOT_TTY_HANDLE || target_obj as u64 == BOOT_TTY_HANDLE {
+    if is_tty_handle(ep_obj) || is_tty_handle(target_obj) {
         return Err(FsBridgeError::Invalid);
     }
     let ep_entry = OBJECT_TABLE.get(ep_obj).map_err(exofs_to_bridge_error)?;
@@ -2976,7 +3209,7 @@ pub fn fs_epoll_wait(
         return Err(FsBridgeError::Invalid);
     }
     let ep_obj = resolve_fd(pid, epfd)?.handle;
-    if ep_obj as u64 == BOOT_TTY_HANDLE {
+    if is_tty_handle(ep_obj) {
         return Err(FsBridgeError::Invalid);
     }
     let ep_entry = OBJECT_TABLE.get(ep_obj).map_err(exofs_to_bridge_error)?;

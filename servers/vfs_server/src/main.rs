@@ -102,10 +102,10 @@ fn boot_log(bytes: &[u8]) {
     }
     unsafe {
         let _ = syscall::syscall3(
-            syscall::SYS_WRITE,
-            1,
+            syscall::SYS_EXO_LOG,
             bytes.as_ptr() as u64,
             bytes.len() as u64,
+            1,
         );
     }
 }

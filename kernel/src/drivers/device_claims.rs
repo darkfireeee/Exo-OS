@@ -175,6 +175,43 @@ pub fn sys_pci_claim(
     Ok(())
 }
 
+pub fn claim_trusted_mmio_for_pid(
+    phys_base: PhysAddr,
+    size: usize,
+    driver_pid: u32,
+) -> Result<(), ClaimError> {
+    if size == 0 || driver_pid == 0 {
+        return Err(ClaimError::PermissionDenied);
+    }
+
+    let d_pid = Pid(driver_pid);
+    let _irq = irq_save();
+    let mut claims = DEVICE_CLAIMS.write();
+
+    if claims.iter().any(|claim| {
+        claim.owner_pid == d_pid
+            && claim.phys_base.as_u64() == phys_base.as_u64()
+            && claim.size == size
+    }) {
+        return Ok(());
+    }
+
+    if claims.iter().any(|claim| claim.overlaps(phys_base, size)) {
+        return Err(ClaimError::AlreadyClaimed);
+    }
+
+    let gen = get_process_generation(d_pid);
+    claims.push(DeviceClaim {
+        phys_base,
+        size,
+        owner_pid: d_pid,
+        generation: gen,
+        bdf: None,
+    });
+
+    Ok(())
+}
+
 pub fn revoke_claims_for_pid(pid: u32) {
     let _irq = irq_save();
     let mut claims = DEVICE_CLAIMS.write();

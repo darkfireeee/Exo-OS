@@ -23,7 +23,7 @@ use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{EndpointId, IpcError};
 
 const RAW_NOWAIT: u32 = 0x0001;
-const CALL_TIMEOUT_NS: u64 = 5_000_000_000;
+const CALL_TIMEOUT_NS: u64 = 300_000_000_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteur de cookies — unique par appel, jamais réutilisé dans la session.

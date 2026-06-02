@@ -849,10 +849,19 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
             map_phys_base.as_u64() + (page_idx * PAGE_SIZE) as u64,
         ));
 
-        if unsafe { user_as.map_page(virt, phys_page, page_flags, &alloc) }.is_err() {
+        // `map_base` vient d'un gap VMA libre; aucune traduction utilisateur
+        // valide ne peut encore exister pour cette plage. Eviter un INVLPG par
+        // page rend le mapping du framebuffer de boot (plusieurs MiB) praticable.
+        if unsafe { user_as.map_page_unflushed(virt, phys_page, page_flags, &alloc) }.is_err() {
             rollback_mmio_pages(user_as, map_base, page_idx);
             return Err(MmioError::OutOfMemory);
         }
+    }
+    // Les PTE viennent d'etre creees en masse dans l'espace courant. Un flush
+    // local unique evite les entrees TLB negatives stale sans retomber sur un
+    // INVLPG par page.
+    unsafe {
+        crate::memory::virt::flush_all();
     }
 
     let vma = Box::new(VmaDescriptor::new(

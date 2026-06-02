@@ -10,6 +10,7 @@ pub enum Signal {
 pub enum LineEvent {
     Echo(u8),
     Backspace,
+    ClearScreen,
     LineReady { len: usize },
     Signal(Signal),
 }
@@ -85,6 +86,7 @@ impl LineDiscipline {
                     None
                 }
             }
+            0x0c if self.canonical => Some(LineEvent::ClearScreen),
             byte => {
                 if self.len < LINE_MAX {
                     self.buf[self.len] = byte;
@@ -136,5 +138,13 @@ mod tests {
         let _ = ld.input_byte(b'a');
         assert_eq!(ld.input_byte(3), Some(LineEvent::Signal(Signal::Interrupt)));
         assert_eq!(ld.line(), b"");
+    }
+
+    #[test]
+    fn ctrl_l_clears_without_entering_line() {
+        let mut ld = LineDiscipline::new();
+        let _ = ld.input_byte(b'p');
+        assert_eq!(ld.input_byte(0x0c), Some(LineEvent::ClearScreen));
+        assert_eq!(ld.line(), b"p");
     }
 }

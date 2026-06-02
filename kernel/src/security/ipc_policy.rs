@@ -21,6 +21,7 @@ pub enum ServiceClass {
     SchedulerServer,
     InputServer,
     TtyServer,
+    FbServer,
     Ps2Driver,
     VirtioDriver,
     ExoShield,
@@ -68,6 +69,10 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::InputServer, ServiceClass::Ps2Driver),
     (ServiceClass::InputServer, ServiceClass::TtyServer),
     (ServiceClass::TtyServer, ServiceClass::InputServer),
+    (ServiceClass::TtyServer, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::TtyServer),
+    (ServiceClass::DeviceServer, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::DeviceServer),
     (ServiceClass::TtyServer, ServiceClass::VfsServer),
     (ServiceClass::VfsServer, ServiceClass::TtyServer),
     (ServiceClass::ExoShield, ServiceClass::CryptoServer),
@@ -92,7 +97,7 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
 ];
 
 const _: () = assert!(
-    POLICY.len() == 47,
+    POLICY.len() == 51,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -124,6 +129,7 @@ fn is_ring1_trusted_class(class: ServiceClass) -> bool {
             | ServiceClass::SchedulerServer
             | ServiceClass::InputServer
             | ServiceClass::TtyServer
+            | ServiceClass::FbServer
             | ServiceClass::Ps2Driver
             | ServiceClass::VirtioDriver
             | ServiceClass::ExoShield

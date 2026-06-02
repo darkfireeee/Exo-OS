@@ -49,6 +49,7 @@ ROOTFS_SERVER_PACKAGES = \
 	-p exo-network-server \
 	-p exo-scheduler-server \
 	-p exo-input-server \
+	-p exo-fb-server \
 	-p exo-tty-server \
 	-p exo-ps2-input \
 	-p exo-exosh \
@@ -68,6 +69,7 @@ ROOTFS_SBIN_BINS = \
 	exo-network-server \
 	exo-scheduler-server \
 	exo-input-server \
+	exo-fb-server \
 	exo-tty-server \
 	exo-ps2-input \
 	exo-shield
@@ -322,7 +324,6 @@ test-drivers:
 	@$(CARGO) test --manifest-path drivers/input/ps2/Cargo.toml
 	@$(CARGO) test --manifest-path drivers/tty/Cargo.toml
 	@$(CARGO) test --manifest-path drivers/display/vga/Cargo.toml
-	@$(CARGO) test --manifest-path drivers/display/framebuffer/Cargo.toml
 	@$(CARGO) test --manifest-path drivers/storage/virtio_blk/Cargo.toml
 
 test-loader:

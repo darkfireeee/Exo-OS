@@ -126,6 +126,11 @@ fn owns_interactive_console(service_name: &str) -> bool {
     service_name == "exosh"
 }
 
+#[inline]
+fn should_quiet_console_after_ready(service_name: &str) -> bool {
+    service_name == "tty_server" || owns_interactive_console(service_name)
+}
+
 /// Démarre un serveur Ring1 via fork + execve.
 ///
 /// Retourne le PID du fils, ou `0` si le lancement échoue.
@@ -333,11 +338,10 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                 if service_ready(service.name, pid) {
                     ready_mask |= 1u64 << idx;
                     service.mark_ready();
-                    if owns_interactive_console(service.name) {
+                    if should_quiet_console_after_ready(service.name) {
                         log::set_console_quiet(true);
-                    } else {
-                        log::service_pid(b"init: ready ", service.name, pid);
                     }
+                    log::service_pid(b"init: ready ", service.name, pid);
                     settled = true;
                     readiness_changed = true;
                     note_graph_progress(&mut last_progress_ms);
@@ -359,11 +363,10 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                     if wait_for_late_ipc_ready(service.name, pid) {
                         ready_mask |= 1u64 << idx;
                         service.mark_ready();
-                        if owns_interactive_console(service.name) {
+                        if should_quiet_console_after_ready(service.name) {
                             log::set_console_quiet(true);
-                        } else {
-                            log::service_pid(b"init: ready ", service.name, pid);
                         }
+                        log::service_pid(b"init: ready ", service.name, pid);
                         settled = true;
                         readiness_changed = true;
                         note_graph_progress(&mut last_progress_ms);

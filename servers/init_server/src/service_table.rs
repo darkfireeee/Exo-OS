@@ -1,6 +1,6 @@
 use super::Service;
 
-pub const SERVICE_COUNT: usize = 16;
+pub const SERVICE_COUNT: usize = 17;
 
 pub struct ServiceMetadata {
     pub name: &'static str,
@@ -24,9 +24,10 @@ const DEPS_NETWORK: &[&str] = &["ipc_router", "vfs_server", "device_server"];
 const OPT_DEPS_NETWORK: &[&str] = &["e1000_driver", "virtio_net_driver", "loopback_driver"];
 const DEPS_SCHEDULER: &[&str] = &["ipc_router", "memory_server"];
 const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
-const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "vfs_server"];
+const DEPS_FB: &[&str] = &["ipc_router", "device_server"];
+const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "fb_server", "vfs_server"];
 const DEPS_PS2: &[&str] = &["ipc_router", "device_server", "input_server", "tty_server"];
-const DEPS_EXOSH: &[&str] = &["ipc_router", "input_server", "tty_server", "vfs_server", "exo_shield"];
+const DEPS_EXOSH: &[&str] = &["ipc_router", "tty_server", "ps2_driver", "vfs_server"];
 const DEPS_EXO_SHIELD: &[&str] = &[
     "ipc_router",
     "memory_server",
@@ -34,8 +35,10 @@ const DEPS_EXO_SHIELD: &[&str] = &[
     "crypto_server",
     "device_server",
     "input_server",
+    "fb_server",
     "tty_server",
     "ps2_driver",
+    "exosh",
 ];
 const OPT_DEPS_EXO_SHIELD: &[&str] = &["virtio_drivers", "network_server", "scheduler_server"];
 
@@ -51,6 +54,7 @@ pub static LOOPBACK_DRIVER_BIN: &[u8] = b"/sbin/exo-loopback-driver\0";
 pub static NETWORK_SERVER_BIN: &[u8] = b"/sbin/exo-network-server\0";
 pub static SCHEDULER_SERVER_BIN: &[u8] = b"/sbin/exo-scheduler-server\0";
 pub static INPUT_SERVER_BIN: &[u8] = b"/sbin/exo-input-server\0";
+pub static FB_SERVER_BIN: &[u8] = b"/sbin/exo-fb-server\0";
 pub static TTY_SERVER_BIN: &[u8] = b"/sbin/exo-tty-server\0";
 pub static PS2_DRIVER_BIN: &[u8] = b"/sbin/exo-ps2-input\0";
 pub static EXOSH_BIN: &[u8] = b"/bin/exosh\0";
@@ -82,19 +86,59 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         critical: true,
     },
     ServiceMetadata {
-        name: "crypto_server",
-        bin_path: CRYPTO_SERVER_BIN,
-        requires: DEPS_CRYPTO,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 90_000,
-        critical: true,
-    },
-    ServiceMetadata {
         name: "device_server",
         bin_path: DEVICE_SERVER_BIN,
         requires: DEPS_DEVICE,
         requires_optional: NO_DEPS,
         ready_timeout_ms: 20_000,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "input_server",
+        bin_path: INPUT_SERVER_BIN,
+        requires: DEPS_INPUT,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 20_000,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "fb_server",
+        bin_path: FB_SERVER_BIN,
+        requires: DEPS_FB,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 20_000,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "tty_server",
+        bin_path: TTY_SERVER_BIN,
+        requires: DEPS_TTY,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 30_000,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "ps2_driver",
+        bin_path: PS2_DRIVER_BIN,
+        requires: DEPS_PS2,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 20_000,
+        critical: true,
+    },
+    ServiceMetadata {
+        name: "exosh",
+        bin_path: EXOSH_BIN,
+        requires: DEPS_EXOSH,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 30_000,
+        critical: false,
+    },
+    ServiceMetadata {
+        name: "crypto_server",
+        bin_path: CRYPTO_SERVER_BIN,
+        requires: DEPS_CRYPTO,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 90_000,
         critical: true,
     },
     ServiceMetadata {
@@ -146,44 +190,12 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         critical: false,
     },
     ServiceMetadata {
-        name: "input_server",
-        bin_path: INPUT_SERVER_BIN,
-        requires: DEPS_INPUT,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 20_000,
-        critical: true,
-    },
-    ServiceMetadata {
-        name: "tty_server",
-        bin_path: TTY_SERVER_BIN,
-        requires: DEPS_TTY,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 30_000,
-        critical: true,
-    },
-    ServiceMetadata {
-        name: "ps2_driver",
-        bin_path: PS2_DRIVER_BIN,
-        requires: DEPS_PS2,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 20_000,
-        critical: true,
-    },
-    ServiceMetadata {
         name: "exo_shield",
         bin_path: EXO_SHIELD_BIN,
         requires: DEPS_EXO_SHIELD,
         requires_optional: OPT_DEPS_EXO_SHIELD,
         ready_timeout_ms: 90_000,
         critical: true,
-    },
-    ServiceMetadata {
-        name: "exosh",
-        bin_path: EXOSH_BIN,
-        requires: DEPS_EXOSH,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 30_000,
-        critical: false,
     },
 ];
 
