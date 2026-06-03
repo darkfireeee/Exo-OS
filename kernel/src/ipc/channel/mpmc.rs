@@ -8,7 +8,9 @@
 //   - N émetteurs simultanés — CAS lock-free sur la tête de file
 //   - M récepteurs simultanés — CAS lock-free sur la queue
 //   - Politique d'overflow : DROP_OLDEST, DROP_NEWEST, BLOCK
-//   - Capacité configurable jusqu'à RING_SIZE (4096 slots)
+//   - Capacite effective : RING_SIZE = 16 slots (puissance de 2).
+//     PATCH-IPC-01: la doc precedente indiquait "4096 slots" par erreur.
+//     Pour changer la capacite, modifier RING_SIZE dans ipc/core/constants.rs.
 //   - Statistiques temps-réel (AtomicU64, pas de mutex)
 
 use core::mem::MaybeUninit;
@@ -115,7 +117,8 @@ pub struct MpmcStatsSnapshot {
 
 /// Canal MPMC utilisant le ring CAS lock-free de Vyukov.
 ///
-/// La capacité effective est `MPMC_RING_SIZE` (= `RING_SIZE`, 16 slots par défaut).
+/// La capacite effective est `MPMC_RING_SIZE` (= `RING_SIZE` = 16 slots).
+/// PATCH-IPC-01: reference canonique -> ipc/core/constants.rs::RING_SIZE.
 /// Plusieurs producteurs et consommateurs peuvent opérer simultanément
 /// sans mutex.
 #[repr(C, align(64))]

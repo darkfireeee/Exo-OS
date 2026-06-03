@@ -9,6 +9,9 @@ use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 
 #[cfg(target_os = "none")]
+// PATCH-FB-02: chemin relatif fragile vers la police partagee avec exo-boot.
+// TODO: externaliser dans un crate exo-font independant pour eviter
+// une rupture silencieuse si l'un des repertoires est deplace.
 #[path = "../../../exo-boot/src/display/font.rs"]
 mod shared_font;
 
@@ -598,6 +601,11 @@ struct ConsoleCell(UnsafeCell<Console>);
 unsafe impl Sync for ConsoleCell {}
 
 #[cfg(target_os = "none")]
+// SAFETY (PATCH-FB-01): ConsoleCell utilise UnsafeCell sans mutex.
+// INVARIANT OBLIGATOIRE: fb_server est strictement mono-thread.
+// Un seul thread execute la boucle IPC ; aucun autre thread ne peut
+// appeler console_mut() concurremment. Si un second thread est ajoute
+// dans une version future, remplacer par SpinMutex<Console>.
 static CONSOLE: ConsoleCell = ConsoleCell(UnsafeCell::new(Console::new()));
 
 #[cfg(target_os = "none")]

@@ -2657,7 +2657,27 @@ struct FramebufferInfoWire {
 }
 
 /// `framebuffer_info(out)` -> infos du framebuffer de boot pour fb_server Ring1.
+/// SYS_FRAMEBUFFER_INFO — exposé uniquement aux processus Ring1 de confiance.
+///
+/// SECURITY: Ce syscall retourne l'adresse physique du framebuffer.
+/// Seul le premier appelant (fb_server) est autorise ; tout autre PID
+/// recoit EACCES. L'autorisation est stockee dans FB_INFO_AUTHORIZED_PID.
+static FB_INFO_AUTHORIZED_PID: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
 pub fn sys_framebuffer_info(out_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    use core::sync::atomic::Ordering;
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    // Autoriser uniquement le premier appelant (fb_server au boot).
+    // Tout PID different est rejete avec EACCES.
+    let prev = FB_INFO_AUTHORIZED_PID.compare_exchange(
+        0, caller_pid, Ordering::AcqRel, Ordering::Acquire
+    );
+    match prev {
+        Ok(_) => {}                           // premier appelant autorise
+        Err(authorized) if authorized == caller_pid => {} // rappel idempotent
+        Err(_) => return -(crate::syscall::errno::EACCES as i64), // PID non autorise
+    }
     stat_inc(SYS_FRAMEBUFFER_INFO);
     if out_ptr == 0 {
         return EFAULT;

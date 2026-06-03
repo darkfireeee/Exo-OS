@@ -157,9 +157,12 @@ impl UserAddressSpace {
         flags: PageFlags,
         alloc: &A,
     ) -> Result<(), AllocError> {
-        debug_assert!(
+        // PATCH-MEM-01: assert dur (pas debug_assert) — en release la corruption
+        // serait silencieuse si virt >= USER_END (ecrase l'espace noyau).
+        assert!(
             virt.as_u64() < USER_END.as_u64(),
-            "map_page_unflushed : adresse hors user"
+            "map_page_unflushed: adresse hors espace utilisateur: {:#x} >= USER_END {:#x}",
+            virt.as_u64(), USER_END.as_u64()
         );
         let mut walker = PageTableWalker::new(self.pml4_phys);
         walker.map(virt, frame, flags, alloc)?;

@@ -27,7 +27,15 @@ const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
 const DEPS_FB: &[&str] = &["ipc_router", "device_server"];
 const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "fb_server", "vfs_server"];
 const DEPS_PS2: &[&str] = &["ipc_router", "device_server", "input_server", "tty_server"];
-const DEPS_EXOSH: &[&str] = &["ipc_router", "tty_server", "ps2_driver", "vfs_server"];
+// STRATA-SEC-01: exosh DOIT attendre exo_shield (vague 5 -> vague 6).
+// exosh ne peut pas etre interactif avant que la surveillance NGAV soit active.
+const DEPS_EXOSH: &[&str] = &[
+    "ipc_router",
+    "tty_server",
+    "ps2_driver",
+    "vfs_server",
+    "exo_shield", // REQUIS : exosh demarre apres SHIELD_READY (vague 6)
+];
 const DEPS_EXO_SHIELD: &[&str] = &[
     "ipc_router",
     "memory_server",
@@ -38,7 +46,7 @@ const DEPS_EXO_SHIELD: &[&str] = &[
     "fb_server",
     "tty_server",
     "ps2_driver",
-    "exosh",
+    // "exosh" RETIRE: exo_shield precede exosh (invariant Strata vague 5)
 ];
 const OPT_DEPS_EXO_SHIELD: &[&str] = &["virtio_drivers", "network_server", "scheduler_server"];
 
@@ -125,13 +133,14 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         ready_timeout_ms: 20_000,
         critical: true,
     },
+    // STRATA-SEC-01: vague 5 — dernier serveur Ring1, scan initial.
     ServiceMetadata {
-        name: "exosh",
-        bin_path: EXOSH_BIN,
-        requires: DEPS_EXOSH,
-        requires_optional: NO_DEPS,
-        ready_timeout_ms: 30_000,
-        critical: false,
+        name: "exo_shield",
+        bin_path: EXO_SHIELD_BIN,
+        requires: DEPS_EXO_SHIELD,
+        requires_optional: OPT_DEPS_EXO_SHIELD,
+        ready_timeout_ms: 90_000,
+        critical: true,
     },
     ServiceMetadata {
         name: "crypto_server",
@@ -189,13 +198,14 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         ready_timeout_ms: 20_000,
         critical: false,
     },
+    // STRATA-SEC-01: vague 6 — shell apres SHIELD_READY.
     ServiceMetadata {
-        name: "exo_shield",
-        bin_path: EXO_SHIELD_BIN,
-        requires: DEPS_EXO_SHIELD,
-        requires_optional: OPT_DEPS_EXO_SHIELD,
-        ready_timeout_ms: 90_000,
-        critical: true,
+        name: "exosh",
+        bin_path: EXOSH_BIN,
+        requires: DEPS_EXOSH,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 30_000,
+        critical: false,
     },
 ];
 

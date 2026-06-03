@@ -177,7 +177,10 @@ const TTY_SERVER_ENDPOINT_NAME: &[u8] = b"tty_server";
 const TTY_MSG_READ_LINE: u32 = 0x131;
 const TTY_MSG_WRITE: u32 = 0x132;
 const TTY_LINE_MAX: usize = 184;
-const TTY_SEND_TIMEOUT_NS: u64 = 5_000_000_000;
+// PATCH-TTY-01: timeout reduit de 5 s a 500 ms.
+// Un write() utilisateur qui attend 5 s sur un tty_server lent gele le shell.
+// 500 ms est suffisant pour absorber une contention IPC normale.
+const TTY_SEND_TIMEOUT_NS: u64 = 500_000_000;
 const PATH_INDEX_KIND_DIR: u8 = 0;
 const PATH_INDEX_KIND_FILE: u8 = 1;
 const PATH_INDEX_KIND_SYMLINK: u8 = 2;
