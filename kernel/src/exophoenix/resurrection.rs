@@ -90,7 +90,15 @@ pub fn try_recover_exception(reason: &str, frame: &mut ExceptionFrame) -> bool {
     if !frame.from_kernel() {
         return false;
     }
-    if !TEST_ARMED.swap(false, Ordering::AcqRel) {
+    // PATCH-P0-PHOENIX: en production, déclencher la récupération dès que
+    // ExoPhoenix est en état Normal (complètement opérationnel).
+    // En mode test (cfg exophoenix_resurrection_test), TEST_ARMED suffit aussi.
+    // Avant ce patch, la garde TEST_ARMED était toujours false en production,
+    // rendant la récupération d'exception impossible hors tests contrôlés.
+    let phoenix_ready = PHOENIX_STATE.load(Ordering::Acquire) == PhoenixState::Normal as u8;
+    let test_triggered = TEST_ARMED.swap(false, Ordering::AcqRel);
+
+    if !phoenix_ready && !test_triggered {
         return false;
     }
     recover_kernel_a(reason, frame)

@@ -5,7 +5,7 @@ edition = "2021"
 license.workspace = true
 publish.workspace = true
 
-# Crate de type bibliothèque — re-exports publics + kernel_init()
+# Crate de type bibliotheque  re-exports publics + kernel_init()
 [lib]
 name    = "exo_os_kernel"
 path    = "src/lib.rs"
@@ -15,24 +15,24 @@ crate-type = ["staticlib", "rlib"]
 # actifs via `cargo test --lib`.
 doctest = false
 
-# Binaire d'entrée — _start (ASM) → kernel_main() + panic/OOM handlers
+# Binaire d'entree  _start (ASM)  kernel_main() + panic/OOM handlers
 [[bin]]
 name = "exo-os-kernel"
 path = "src/main.rs"
-# Le binaire noyau no_std définit ses propres handlers panic/alloc.
-# Désactiver le harness de test/bench sur ce bin évite les conflits
+# Le binaire noyau no_std definit ses propres handlers panic/alloc.
+# Desactiver le harness de test/bench sur ce bin evite les conflits
 # (`panic_impl` / `alloc_error_handler`) lors d'un `cargo test` accidentel.
 test = false
 bench = false
 
-# ── Dépendances (no_std uniquement) ─────────────────────────────────────────
+#  Dependances (no_std uniquement) 
 
 [dependencies]
 exo-types        = { path = "../libs/exo_types" }
 exo-phoenix-ssr  = { path = "../libs/exo-phoenix-ssr" }
 exo-virtio-blk = { path = "../drivers/storage/virtio_blk" }
 
-# ── Workspace partagé ────────────────────────────────────────────────────────
+#  Workspace partage 
 spin                  = { workspace = true }
 bitflags              = { workspace = true }
 zerocopy              = { workspace = true }
@@ -44,41 +44,41 @@ lz4_flex              = { workspace = true }
 xmas-elf              = { workspace = true }
 postcard              = { workspace = true }
 
-# ── Architecture  arch/x86_64/ ───────────────────────────────────────────────
+#  Architecture  arch/x86_64/ 
 # arch/x86_64/boot/multiboot2.rs
 multiboot2 = { workspace = true }
-# arch/x86_64/cpu/features.rs — CPUID
+# arch/x86_64/cpu/features.rs  CPUID
 raw-cpuid  = { workspace = true }
 # arch/x86_64/acpi/
 acpi       = { workspace = true }
-# arch/x86_64/apic/ + memory/dma/ — registres MMIO
+# arch/x86_64/apic/ + memory/dma/  registres MMIO
 volatile   = { workspace = true }
 
-# PCI no_std (rust-osdev) — types PCI canoniques (PciAddress, DeviceFunction...)
+# PCI no_std (rust-osdev)  types PCI canoniques (PciAddress, DeviceFunction...)
 pci_types  = { version = "0.10.1", default-features = false }
 
-# ── Crypto no_std (RustCrypto — vecteurs IETF, pas d'implémentation from scratch)
-# RÈGLE CRYPTO-CRATES  : JAMAIS d'implémentation maison. Toutes les primitives
-# crypto via crates RustCrypto validées IETF (doc ExoOS_Dependencies_Complete.md).
-# INTERDIT : libsodium (requiert std+libc), ring (trop de deps système)
+#  Crypto no_std (RustCrypto  vecteurs IETF, pas d'implementation from scratch)
+# REGLE CRYPTO-CRATES  : JAMAIS d'implementation maison. Toutes les primitives
+# crypto via crates RustCrypto validees IETF (doc ExoOS_Dependencies_Complete.md).
+# INTERDIT : libsodium (requiert std+libc), ring (trop de deps systeme)
 #
 # CONTRAINTE TARGET x86_64-unknown-none (-sse2 dans target JSON) :
-#   poly1305  → LLVM ERROR: Do not know how to split (128-bit ops sans SSE2)
-#   polyval   → même erreur (dep transitif de ghash/aes-gcm)
-#   Conséquence : chacha20poly1305 ET aes-gcm NE COMPILENT PAS pour ce target.
+#   poly1305   LLVM ERROR: Do not know how to split (128-bit ops sans SSE2)
+#   polyval    meme erreur (dep transitif de ghash/aes-gcm)
+#   Consequence : chacha20poly1305 ET aes-gcm NE COMPILENT PAS pour ce target.
 #   Alternative : chacha20 (stream) + blake3_mac pour l'authentification kernel.
-#   Les AEAD complets (chacha20poly1305, aes-gcm) sont réservés aux serveurs
-#   userspace (ring 3) où SSE2 est disponible et l'état FPU est sauvegardé.
+#   Les AEAD complets (chacha20poly1305, aes-gcm) sont reserves aux serveurs
+#   userspace (ring 3) ou SSE2 est disponible et l'etat FPU est sauvegarde.
 blake3           = { workspace = true }          # security/crypto/blake3.rs + exofs/core/blob_id.rs
 subtle           = { workspace = true }          # constant-time comparisons (exokairos, blake3, aes_gcm)
-# chacha20 crate INCOMPATIBLE : déclenche LLVM ERROR split 128-bit sur x86_64-unknown-none
-#   → xchacha20.rs utilise l'algorithme RFC 8439 en arithmétique u32 pure (ChaCha20 keystream)
-#   + blake3 (ci-dessus) comme MAC AEAD — zéro dépendance SIMD/SSE2.
+# chacha20 crate INCOMPATIBLE : declenche LLVM ERROR split 128-bit sur x86_64-unknown-none
+#    xchacha20.rs utilise l'algorithme RFC 8439 en arithmetique u32 pure (ChaCha20 keystream)
+#   + blake3 (ci-dessus) comme MAC AEAD  zero dependance SIMD/SSE2.
 # chacha20poly1305 : INCOMPATIBLE kernel (poly1305 LLVM ERROR: split 128-bit)
 # aes-gcm          : INCOMPATIBLE kernel (polyval LLVM ERROR: split 128-bit)
 hkdf             = { workspace = true }          # security/crypto/kdf.rs (RFC 5869)
 sha2             = { version = "0.10", default-features = false, features = ["force-soft"] }
-  # requis par hkdf — force-soft évite SHA-NI (LLVM crash x86_64-unknown-none)
+  # requis par hkdf  force-soft evite SHA-NI (LLVM crash x86_64-unknown-none)
 hmac             = { workspace = true }
 argon2           = { workspace = true }          # exofs/crypto/key_derivation.rs
 x25519-dalek     = { workspace = true }          # security/crypto/x25519.rs
@@ -93,9 +93,14 @@ num-traits        = { workspace = true }
 blake3 = { workspace = true }
 
 [features]
-default = []
+# PATCH-P2-BOOT: multiboot2_compat DEPRECIE - active par defaut (workflow QEMU/GRUB actuel).
+# Phase 8 (exo-boot UEFI GPT) non complete. Sera retire apres migration UEFI-only.
+# Dev  QEMU/GRUB (defaut) : cargo build
+# Prod UEFI-only          : cargo build --release --no-default-features
+default = ["multiboot2_compat"]
+multiboot2_compat = []
 dev_no_vmm = []
 
-# ── Cible par défaut (peut être surchargée en ligne de commande) ─────────────
+#  Cible par defaut (peut etre surchargee en ligne de commande) 
 
 # Utiliser : cargo build --target ../x86_64-exo-os.json -Z build-std=core,alloc

@@ -180,7 +180,7 @@ pub fn cpuid_cet_available() -> (bool, bool) {
 /// Seuls les offsets ExoShield documentés sont autorisés.
 #[inline(always)]
 unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u64) {
-    debug_assert!(offset + 8 <= 88, "TCB _cold_reserve write out of bounds");
+    assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
     core::ptr::write_volatile(base.add(offset) as *mut u64, val);
 }
@@ -188,7 +188,7 @@ unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u
 /// Lit un u64 depuis _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
 unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
-    debug_assert!(offset + 8 <= 88, "TCB _cold_reserve read out of bounds");
+    assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
     core::ptr::read_volatile(base.add(offset) as *const u64)
 }
@@ -196,7 +196,7 @@ unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
 /// Écrit un u8 dans _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
 unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8) {
-    debug_assert!(offset < 88, "TCB _cold_reserve write out of bounds");
+    assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
     core::ptr::write_volatile(base.add(offset), val);
 }
@@ -204,7 +204,7 @@ unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8
 /// Lit un u8 depuis _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
 unsafe fn tcb_read_cold_u8(tcb: &ThreadControlBlock, offset: usize) -> u8 {
-    debug_assert!(offset < 88, "TCB _cold_reserve read out of bounds");
+    assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
     core::ptr::read_volatile(base.add(offset))
 }

@@ -2147,15 +2147,27 @@ fn sync_current_pcb_brk(new_brk: u64) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `fork()` → PID fils dans le parent, 0 dans le fils, ou errno.
-/// do_fork(ForkContext) requiert le PCB + TCB courants — câblé lors de l'intégration process/.
+///
+/// # PATCH-P0-FORK-STUB
+/// Ce handler est du **code mort** pour SYS_FORK.
+/// Le dispatch.rs intercepte SYS_FORK à l'étape [5b] via `handle_fork_like_inplace()`
+/// AVANT d'atteindre la slow-path table. `do_fork()` dans process/lifecycle/fork.rs
+/// est l'implémentation réelle. Ce stub ne sera jamais appelé en production.
+/// Il est conservé ici comme filet de sécurité explicite.
 pub fn sys_fork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FORK);
+    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
+    // Si atteint, c'est un bug dans le dispatch — retourner ENOSYS explicitement.
     ENOSYS
 }
 
-/// `vfork()` — câblé via do_fork(ForkFlags::VFORK) lors de l'intégration.
+/// `vfork()` — intercepté par dispatch.rs [5b] via `handle_fork_like_inplace(ForkFlags::VFORK)`.
+///
+/// # PATCH-P0-FORK-STUB
+/// Code mort identique à sys_fork. Voir commentaire ci-dessus.
 pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_VFORK);
+    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
     ENOSYS
 }
 
@@ -2280,7 +2292,13 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
     }
 }
 
-/// `execve(path, argv, envp)`.
+/// `execve(path, argv, envp)` — intercepté par dispatch.rs [5c] via `handle_execve_inplace()`.
+///
+/// # PATCH-P0-FORK-STUB
+/// Ce handler est du **code mort** pour SYS_EXECVE.
+/// Le dispatch.rs intercepte SYS_EXECVE à l'étape [5c] AVANT d'atteindre la table.
+/// `do_execve()` dans process/lifecycle/exec.rs est l'implémentation réelle.
+/// Ce stub ne sera jamais appelé en production.
 pub fn sys_execve(
     path_ptr: u64,
     argv_ptr: u64,
@@ -2290,12 +2308,13 @@ pub fn sys_execve(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXECVE);
-    let path = match read_user_path(path_ptr) {
+    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
+    // La lecture du path est conservée pour éviter un avertissement unused_variable.
+    let _ = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    // do_execve requiert &mut ProcessThread + &ProcessControlBlock — câblé lors de l'intégration.
-    let _ = (path, argv_ptr, envp_ptr);
+    let _ = (argv_ptr, envp_ptr);
     ENOSYS
 }
 
