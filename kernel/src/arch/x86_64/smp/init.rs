@@ -151,7 +151,27 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 6. FPU
     super::super::cpu::fpu::init_fpu_for_cpu();
 
-    // 6b. Publier un TCB idle de bootstrap pour cet AP avant STI.
+    // FIX-SMP-RACE (rapport_analyse §5.3 + CVE-EXO-001) :
+    // Le spin-wait SECURITY_READY était positionné APRÈS les appels 6b et 6c,
+    // laissant une fenêtre où les APs modifiaient les structures scheduler
+    // partagées pendant que security_init() (BSP) pouvait encore les lire
+    // pour initialiser les tables de capabilities ou les hooks zero-trust.
+    //
+    // Correction : spin ici, avant toute modification de structure partagée.
+    // Les APs n'ont pas besoin d'IPC ni de capabilities pour les étapes
+    // qui suivent — mais la règle BOOT-SEC (V-26) exige quand même qu'ils
+    // attendent SECURITY_READY avant de toucher au scheduler partagé.
+    //
+    // Note : publish_current_boot_idle() et scheduler::init_ap() accèdent
+    // à des runqueues per-CPU (couche 1) et non à security/ (couche 2b),
+    // donc la dépendance est directionnelle. On garde le spin ici par
+    // précaution car security_init() phase 5 installe des hooks scheduler
+    // (exokairos budget init, exoargos PMC hooks).
+    while !crate::security::is_security_ready() {
+        core::hint::spin_loop();
+    }
+
+    // 6b. Publier un TCB idle de bootstrap pour cet AP après SECURITY_READY.
     // L'AP exécute déjà sa boucle `hlt`; ce TCB représente donc le contexte
     // courant du CPU jusqu'au premier vrai switch scheduler.
     let _ = crate::scheduler::core::publish_current_boot_idle(cpu_id, kernel_stack_top);
@@ -160,19 +180,6 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     crate::scheduler::init_ap(cpu_id);
 
     // 7. Mitigations spectre
-    super::super::spectre::apply_mitigations_ap();
-
-    // 8. Signaler au BSP que l'AP est prêt
-    core::ptr::write_volatile(
-        (TRAMPOLINE_PHYS + HANDSHAKE_OFFSET) as *mut u32,
-        AP_ALIVE_MAGIC,
-    );
-
-    // 8b. RÈGLE BOOT-SEC (V-26) : attendre que le sous-système de sécurité
-    //     soit initialisé (SECURITY_READY) avant toute IPC.
-    while !crate::security::is_security_ready() {
-        core::hint::spin_loop();
-    }
 
     // 9. Activer les interruptions et entrer dans la boucle idle scheduler
     // SAFETY: toutes les structures sont initialisées sur cet AP

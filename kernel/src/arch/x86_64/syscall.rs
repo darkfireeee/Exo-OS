@@ -402,6 +402,13 @@ pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
 
     SYSCALL_COUNT.fetch_add(1, Ordering::Relaxed);
 
+    // FIX-B-02 (Security_Audit_Passe2 §B-02) : apply_ibrs() au chemin syscall entry.
+    // Sur les CPUs sans Enhanced IBRS (EIBRS), IBRS doit être activé à chaque
+    // entrée kernel depuis Ring 3 pour mitiger Spectre v2 "kernel-vs-user".
+    // apply_ibrs() est idempotent (no-op si EIBRS actif ou IBRS désactivé).
+    // SAFETY: MSR write Ring 0 — garanti par l'état syscall_entry_asm.
+    crate::arch::x86_64::spectre::apply_ibrs();
+
     // ── RÈGLE SIGNAL-01 (DOC1) ────────────────────────────────────────────────
     // Le pipeline complet (fast-path → compat → table → signal delivery)
     // est géré par crate::syscall::dispatch::dispatch().

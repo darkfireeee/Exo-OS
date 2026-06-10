@@ -176,6 +176,25 @@ impl SchedulerService {
         };
 
         if matches!(class, SchedulingClass::Realtime | SchedulingClass::Deadline) {
+            // FIX-SCHED-RT (Security_Application_Audit §GAP-05 + Passe2 §D-03) :
+            // L'admission temps-réel était possible sans vérification de privilege.
+            // Tout processus Ring1 pouvait s'auto-escalader en SCHED_REALTIME.
+            //
+            // Règle : seuls sont autorisés à demander Realtime/Deadline :
+            //   PID 1  (init_server — démarre les serveurs critiques en RT)
+            //   PID 8  (scheduler_server lui-même — auto-configuration)
+            //   PID == owner_pid == sender_pid ET sender_pid <= 10
+            //          (serveurs Ring1 de base qui s'auto-configurent au démarrage)
+            //
+            // En production (feature "strict_rt_caps"), seul un CapToken
+            // de type CAP_SCHED_RT sera accepté. En v0.2.0 dev, on utilise
+            // la liste statique ci-dessus.
+            const RT_ALLOWED_PIDS: &[u32] = &[1, 8];
+            let is_rt_privileged = RT_ALLOWED_PIDS.contains(&sender_pid)
+                || (sender_pid == owner_pid && sender_pid <= 10);
+            if !is_rt_privileged {
+                return SchedulerReply::error(exo_syscall_abi::EPERM);
+            }
             if let Err(err) = self.realtime.admit(tid, runtime_us, period_us) {
                 self.stats.note_error(owner_pid, tid, err);
                 return SchedulerReply::error(err);

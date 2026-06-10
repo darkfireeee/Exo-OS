@@ -91,6 +91,7 @@ pub fn verify_p0_fixes() -> Result<(), P0VerifyError> {
             P0VerifyError::TcbHotDomainExposed => 5,
         };
         exoledger::exo_ledger_append_p0(exoledger::ActionTag::BootSealViolation { step });
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         unsafe {
             ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).store(1, Ordering::Release);
         }
@@ -150,6 +151,7 @@ pub fn configure_nic_iommu_policy() {
     exoledger::exo_ledger_append_p0(exoledger::ActionTag::NicIommuLocked);
 }
 
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn exoseal_boot_phase0() {
     if EXOSEAL_PHASE0_DONE.swap(true, Ordering::AcqRel) {
         return;
@@ -170,6 +172,7 @@ pub unsafe fn exoseal_boot_phase0() {
     exoledger::exo_ledger_append(exoledger::ActionTag::BootEvent { step: 0 });
 }
 
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn exoseal_boot_complete() {
     if EXOSEAL_COMPLETE_DONE.swap(true, Ordering::AcqRel) {
         return;

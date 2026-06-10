@@ -277,6 +277,7 @@ fn aes256_encrypt_block_sw(round_keys: &Aes256RoundKeys, block: &mut [u8; 16]) {
 /// - `block` doit pointer vers 16 octets accessibles en lecture/écriture
 /// - `round_keys` doit pointer vers 240 octets (15 × 16) lisibles
 #[cfg(target_arch = "x86_64")]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
     // Encode les instructions AES-NI en .byte pour éviter LLVM.
     //
@@ -399,6 +400,7 @@ unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn aes256_encrypt_block_ni(_block: *mut u8, _round_keys: *const u8) {
     // Pas d'AES-NI sur une architecture non-x86_64
     unreachable!()
@@ -432,6 +434,7 @@ impl Aes256GcmCipher {
     /// Chiffre un bloc 16 octets (dispatch software / AES-NI).
     fn encrypt_block(&self, block: &mut [u8; 16]) {
         if self.has_aesni {
+            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
             unsafe {
                 aes256_encrypt_block_ni(block.as_mut_ptr(), self.round_keys.keys[0].as_ptr());
             }
@@ -652,6 +655,7 @@ pub fn aes_gcm_open(
     let expected_tag = compute_gcm_tag(&cipher, h, j0, aad, ciphertext);
     if !bool::from(expected_tag.ct_eq(tag)) {
         for byte in &mut h_block {
+            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
             unsafe {
                 core::ptr::write_volatile(byte, 0);
             }

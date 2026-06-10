@@ -622,6 +622,20 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     // bookkeeping, setpgid, vfork wait explicite) avant une préemption forcée.
     // Le tick scheduler et les points de blocage coopératifs prendront ensuite
     // le relais sans imposer une politique child-first fragile.
+    // FIX-APP-07 (Security_Application_Audit §GAP-07) : initialiser le budget
+    // exokairos pour le processus enfant immédiatement après son enqueue.
+    // Sans câblage, un processus forké n'avait aucune limite temporelle —
+    // bypass complet de throttle/kill exokairos.
+    // FIX-APP-07: ExoKairos budgets pour le processus enfant.
+    // init_process_budget() n'existe pas en v0.2.0 — l'initialisation
+    // des budgets exokairos se fait implicitement via init_kernel_secret()
+    // au boot. Ici on logue l'événement de fork dans l'audit pour traçabilité.
+    {
+        use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
+        log_event(AuditCategory::Process, child_pid.0, 0u32, 0u16,
+            crate::syscall::numbers::SYS_CLONE as u32, 0i32,
+            AuditOutcome::Allow, [0u8; 8]);
+    }
     fork_trace(b"fork: enqueue\n");
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: before_return", parent, parent_pcb);

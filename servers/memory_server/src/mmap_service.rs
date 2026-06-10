@@ -372,7 +372,7 @@ impl MemoryService {
         }
     }
 
-    pub fn attach_shared_region(&mut self, _sender_pid: u32, payload: &[u8]) -> MemoryReply {
+    pub fn attach_shared_region(&mut self, sender_pid: u32, payload: &[u8]) -> MemoryReply {
         let handle = match payload_u64(payload, 0) {
             Ok(value) => value,
             Err(err) => return MemoryReply::error(err),
@@ -383,6 +383,24 @@ impl MemoryService {
         let region = &mut self.regions[idx];
         if region.kind != RegionKind::Shared {
             return MemoryReply::error(syscall::EINVAL);
+        }
+
+        // FIX-SHM-ATTACH (Security_Audit_Passe2 §D-02) : l'ancienne implémentation
+        // ignorait _sender_pid, permettant à tout processus connaissant un handle u64
+        // d'attacher la région partagée d'un autre PID sans autorisation.
+        //
+        // Règle : attacher est autorisé si :
+        //   1. sender_pid == owner_pid (propriétaire attache sa propre région)
+        //   2. sender_pid == 1 (init_server, supervision système)
+        //   3. share_count > 0 (propriétaire a publié la région via IPC)
+        //
+        // Un handle jamais transmis (share_count == 0, owner != sender)
+        // ne peut pas être attaché par un tiers.
+        let is_owner     = region.owner_pid == sender_pid;
+        let is_init      = sender_pid == 1;
+        let is_published = region.share_count > 0;
+        if !is_owner && !is_init && !is_published {
+            return MemoryReply::error(syscall::EACCES);
         }
 
         region.share_count = region.share_count.saturating_add(1);

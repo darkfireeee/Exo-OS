@@ -54,9 +54,24 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
     let mut service = MEMORY_SERVICE.lock();
 
     match request.msg_type {
-        MEMORY_MSG_ALLOC => service.handle_alloc(request.sender_pid, &request.payload),
-        MEMORY_MSG_FREE => service.handle_free(request.sender_pid, &request.payload),
-        MEMORY_MSG_PROTECT => service.handle_protect(request.sender_pid, &request.payload),
+        MEMORY_MSG_ALLOC => {
+            // FIX-APP-04 (Security_Application_Audit §GAP-04) : guard cross-PID.
+            // Un PID non-init ne peut allouer que pour lui-même.
+            let requested_owner = u32::from_le_bytes(request.payload.get(0..4).map(|b| [b[0],b[1],b[2],b[3]]).unwrap_or([0u8;4]));
+            if requested_owner != 0 && requested_owner != request.sender_pid && request.sender_pid != 1 {
+                MemoryReply::error(exo_syscall_abi::EACCES)
+            } else {
+                service.handle_alloc(request.sender_pid, &request.payload)
+            }
+        }
+        MEMORY_MSG_FREE => {
+            // FIX-APP-04: free autorisé par le propriétaire ou init_server (PID 1).
+            service.handle_free(request.sender_pid, &request.payload)
+        }
+        MEMORY_MSG_PROTECT => {
+            // FIX-APP-04: mprotect cross-PID requiert PID 1 (init).
+            service.handle_protect(request.sender_pid, &request.payload)
+        }
         MEMORY_MSG_QUERY => service.handle_query(request.sender_pid, &request.payload),
         MEMORY_MSG_SHM_CREATE => {
             shm_server::handle_create(&mut service, request.sender_pid, &request.payload)

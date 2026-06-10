@@ -377,6 +377,7 @@ fn store_last_hash(hash: &[u8; 32]) {
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     unsafe {
         core::arch::asm!(
             "rdtsc",

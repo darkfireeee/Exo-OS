@@ -862,6 +862,14 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
     reply
 }
 
+// FIX-SRV-M7 (ANALYSE_SERVERS §M7) : NOTE architecturale importante.
+// crypto_server s'enregistre avec ENDPOINT_ID=4 (SYS_IPC_CREATE) mais son PID
+// assigné par init_server est dynamique (typiquement 5, après ipc_broker=2+memory=3+vfs=4).
+// Cette divergence endpoint(4)/PID(5) peut causer de la confusion dans exocordon.rs
+// où ServiceId::Crypto=5 et dans ipc_policy.rs où le check porte sur les PIDs.
+// RÉSOLUTION : utiliser SYS_GETPID() pour obtenir le vrai PID au runtime,
+// et SYS_IPC_REGISTER() pour associer le nom "crypto_server" à l'endpoint réel.
+// L'endpoint ID (4) est la constante d'interface publique ; le PID est interne.
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     boot_log(b"crypto_server: boot\n");

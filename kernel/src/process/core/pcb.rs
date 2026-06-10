@@ -23,6 +23,8 @@ use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+// FIX-P2-A03 (Security_Audit_Passe2 §A-03): import CapTable pour intégration PCB.
+use crate::security::capability::table::CapTable;
 
 fn try_box_new<T>(value: T) -> Option<Box<T>> {
     let layout = Layout::new::<T>();
@@ -510,6 +512,18 @@ pub struct ProcessControlBlock {
     pub uts_ns: u32,
     /// Index dans la table de user namespaces.
     pub user_ns: u32,
+
+    // ── Capabilities (FIX-P2-A03) ─────────────────────────────────────────
+    /// Table de capabilities propre au processus.
+    ///
+    /// FIX-P2-A03 (Security_Audit_Passe2 §A-03) : CapTable absente du PCB.
+    /// Sans ce champ, les vérifications de capability utilisaient une table
+    /// globale partagée (KERNEL_CAP_TABLE), rendant impossible l'isolation
+    /// par processus et la révocation ciblée de capabilities.
+    ///
+    /// Héritée du parent lors de fork() via CapTable::inherit_from().
+    /// Les capabilities accordées après fork() n'affectent pas le parent.
+    pub cap_table: Box<CapTable>,
 }
 
 impl ProcessControlBlock {
@@ -583,6 +597,11 @@ impl ProcessControlBlock {
             net_ns: 0,
             uts_ns: 0,
             user_ns: 0,
+            // FIX-P2-A03: allouer une CapTable vide pour ce processus.
+            // try_box_new() peut retourner None (OOM) — on utilise Box::new
+            // car CapTable ne contient que des types stack-compatible (pas
+            // d'allocation interne propre). L'allocation est faite dans la Box.
+            cap_table: Box::new(CapTable::new()),
         })
     }
 

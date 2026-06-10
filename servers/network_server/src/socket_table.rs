@@ -11,6 +11,15 @@ const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
 const SOCK_TYPE_MASK: u32 = 0x0f;
 
+/// PID du résolveur DNS interne — seul service Ring1 autorisé à créer des sockets raw.
+/// FIX-SOCK-RAW : liste des PIDs autorisés à SOCK_RAW (équivalent CAP_NET_RAW Linux).
+/// En v0.2.0 : seul init_server (PID 1) et network_server lui-même peuvent créer
+/// des sockets raw. Tout autre PID reçoit EPERM.
+const RAW_SOCKET_ALLOWED_PIDS: &[u32] = &[
+    1,  // init_server — supervision réseau
+    7,  // network_server lui-même (auto-référence pour ICMP interne)
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SocketKind {
     Tcp,
@@ -19,17 +28,39 @@ pub enum SocketKind {
 }
 
 impl SocketKind {
-    pub fn from_domain_type(domain: u32, ty: u32, protocol: u32) -> Result<Self, i64> {
+    /// FIX-SOCK-RAW (Security_Audit_Passe2 §D-01) : SOCK_RAW requiert désormais
+    /// un sender_pid dans RAW_SOCKET_ALLOWED_PIDS (équivalent CAP_NET_RAW).
+    /// Sur Linux, SOCK_RAW sans CAP_NET_RAW retourne EPERM.
+    /// L'ancienne implémentation acceptait SOCK_RAW pour n'importe quel PID Ring1,
+    /// permettant de forger des paquets IP arbitraires (spoofing, ICMP redirect).
+    pub fn from_domain_type_privileged(
+        domain: u32,
+        ty: u32,
+        protocol: u32,
+        sender_pid: u32,
+    ) -> Result<Self, i64> {
         if domain != AF_INET {
             return Err(syscall::EAFNOSUPPORT);
         }
         match ty & SOCK_TYPE_MASK {
             SOCK_STREAM => Ok(Self::Tcp),
-            SOCK_DGRAM => Ok(Self::Udp),
-            SOCK_RAW if protocol == 0 || protocol == 1 => Ok(Self::Raw),
+            SOCK_DGRAM  => Ok(Self::Udp),
+            SOCK_RAW if protocol == 0 || protocol == 1 => {
+                // Vérification de privilège : seuls les PIDs autorisés peuvent créer SOCK_RAW.
+                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) {
+                    Ok(Self::Raw)
+                } else {
+                    Err(syscall::EPERM) // EPERM = pas de privilege CAP_NET_RAW
+                }
+            }
             SOCK_RAW => Err(syscall::EOPNOTSUPP),
             _ => Err(syscall::EINVAL),
         }
+    }
+
+    /// Compatibilité interne (sans vérification de privilege) pour les appels kernel.
+    pub fn from_domain_type(domain: u32, ty: u32, protocol: u32) -> Result<Self, i64> {
+        Self::from_domain_type_privileged(domain, ty, protocol, 1)
     }
 }
 

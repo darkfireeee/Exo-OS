@@ -87,6 +87,11 @@ pub mod userspace_boot;
 // Seuls les symboles nécessaires aux crates externes (tests, outils) sont exportés.
 // Le binaire kernel_main utilise ces modules directement via `exo_os_kernel::`.
 
+// FIX-LIB-CFG: ajout du guard #[cfg(target_arch = "x86_64")] manquant.
+// Sans ce guard, la suppression accidentelle du compile_error! de la ligne 30
+// produirait des erreurs de résolution de symboles cryptiques sur AArch64
+// plutôt qu'un message clair.
+#[cfg(target_arch = "x86_64")]
 pub use arch::x86_64::{
     // Informations d'architecture
     arch_info,
@@ -257,6 +262,21 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     }
     kdb(b'8'); // futex seed done
     crate::arch::x86_64::boot_display::stage_ok("SECURITY");
+
+    // ── Phase 5b : ExoPhoenix Stage0 (domaine IOMMU de blocage) ─────────────
+    // FIX-STAGE0 (rapport_analyse_kernel_exo_os.md §4.1) :
+    // stage0_init_all_steps() n'était jamais appelé, laissant
+    // IOMMU_BLOCKED_DOMAIN_ID = 0 (domaine identité VT-d par défaut).
+    // Lors d'un handoff ExoPhoenix, stage_soft_revoke_iommu() flushait
+    // le domaine 0 au lieu du domaine de blocage dédié → isolation silencieusement inopérante.
+    //
+    // Doit être après security_init() (PhasePhoenix nécessite le sous-système
+    // de sécurité pour les capabilities IOMMU) et avant ipc_init() (Phase 6).
+    //
+    // SAFETY: appelé une seule fois depuis le BSP, après security_init().
+    let _stage0_summary = crate::exophoenix::stage0::stage0_init_all_steps();
+    kdb(b'S'); // Stage0 ExoPhoenix done
+    crate::arch::x86_64::boot_display::stage_ok("STAGE0");
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     ipc::ring::spsc::init_spsc_rings();

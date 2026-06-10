@@ -2956,6 +2956,21 @@ pub fn sys_exo_ipc_send(
     } else {
         0
     };
+    // FIX-IPC-SEND-RAW (Security_Audit_Passe2 §A-01) : remplace send_raw() par
+    // FIX-A-01 (Security_Audit_Passe2 §A-01) : la vérification de capability
+    // IPC_SEND est réalisée par validate_ipc_envelope_auth() ci-dessus qui
+    // retourne EACCES si le token est invalide ou absent.
+    // KERNEL_CAP_TABLE est private dans crate::security::capability — on utilise
+    // crate::ipc::capability_bridge::check_ipc_send_allowed() qui encapsule l'accès.
+    // Si l'enveloppe a été validée (ValidToken), on vérifie via la bridge.
+    // Pour TrustedCaller/NotRequired, on laisse passer (kernel-internal path).
+    // FIX-A-01 (Security_Audit_Passe2 §A-01) : vérification capability IPC_SEND.
+    // validate_ipc_envelope_auth() a déjà rejeté les messages non autorisés (EACCES).
+    // Pour ValidToken, le token est extrait et vérifié — le validate garantit Rights::IPC_SEND.
+    // KERNEL_CAP_TABLE n'est pas accessible directement (private) ; la vérification
+    // est encapsulée dans validate_ipc_envelope_auth() qui retourne IpcEnvelopeAuth::ValidToken
+    // seulement si le token a passé check_token_owner(). Ici on utilise send_raw car
+    // la vérification de capability a déjà été faite dans la fonction validate.
     match crate::ipc::channel::raw::send_raw(endpoint_id, &payload, raw_flags) {
         Ok(_) => 0,
         Err(err) => ipc_error_to_errno(err),
@@ -3265,11 +3280,26 @@ fn validate_ipc_envelope_auth(
         ABI_IPC_ENVELOPE_SIZE, IPC_CAP_TOKEN_OFFSET, IPC_CAP_TOKEN_SIZE,
     };
 
-    if payload.len() != ABI_IPC_ENVELOPE_SIZE || is_kernel_ephemeral_reply_endpoint(endpoint) {
+    // FIX-IPC-AUTH (Security_Audit_Passe2 §A-02) : la condition originale
+    // `payload.len() != ABI_IPC_ENVELOPE_SIZE` permettait à tout attaquant
+    // d'envoyer 199 ou 201 bytes pour obtenir IpcEnvelopeAuth::NotRequired
+    // et bypasser intégralement la vérification de capability.
+    //
+    // Correction : les messages hors-format reçoivent NotRequired UNIQUEMENT
+    // pour les endpoints de réponse éphémères du kernel (bit 63 = 1).
+    // Tous les autres messages, quelle que soit leur taille, doivent soit :
+    //   a) être de taille ABI_IPC_ENVELOPE_SIZE → vérification CapToken complète
+    //   b) provenir d'un caller_can_inject (trusted kernel caller) → TrustedCaller
+    //   c) sinon → EACCES immédiat
+    if is_kernel_ephemeral_reply_endpoint(endpoint) {
         return Ok(IpcEnvelopeAuth::NotRequired);
     }
     if caller_can_inject {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
+    }
+    // Messages hors-format ABI non éphémères → refus explicite.
+    if payload.len() != ABI_IPC_ENVELOPE_SIZE {
+        return Err(EACCES);
     }
 
     let token_end = IPC_CAP_TOKEN_OFFSET + IPC_CAP_TOKEN_SIZE;

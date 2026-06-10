@@ -181,6 +181,41 @@ impl CapTable {
         }
     }
 
+    /// FIX-P2-A03 (Security_Audit_Passe2 §A-03): crée une CapTable héritée
+    /// du parent pour fork(). Copie toutes les entrées non-libres.
+    ///
+    /// Utilise les champs réels de CapEntry: object_id, rights, generation, type_tag.
+    /// Un slot est libre si object_id == SLOT_FREE (u64::MAX).
+    pub fn inherit_from(parent: &CapTable) -> Self {
+        let child = Self::new();
+        let _guard = parent.write_lock.lock();
+        let mut inherited = 0u32;
+        for i in 0..CAP_TABLE_CAPACITY {
+            let oid = parent.entries[i].object_id.load(Ordering::Acquire);
+            // SLOT_FREE = u64::MAX signifie slot vide — ne pas copier.
+            if oid != u64::MAX {
+                // Copier tous les champs atomiquement (sous write_lock du parent).
+                // SAFETY: write_lock est tenu, pas de concurrent writer sur parent.
+                child.entries[i].object_id.store(oid, Ordering::Relaxed);
+                child.entries[i].rights.store(
+                    parent.entries[i].rights.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
+                child.entries[i].generation.store(
+                    parent.entries[i].generation.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
+                child.entries[i].type_tag.store(
+                    parent.entries[i].type_tag.load(Ordering::Relaxed),
+                    Ordering::Release,
+                );
+                inherited += 1;
+            }
+        }
+        child.count.store(inherited, Ordering::Release);
+        child
+    }
+
     // ── Hachage ObjectId → index ─────────────────────────────────────────────
 
     /// Hache un ObjectId en index de départ dans le tableau.

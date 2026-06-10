@@ -99,7 +99,31 @@ impl ProcessRegistry {
     /// Appelé une seule fois depuis le BSP durant l'init.
     pub unsafe fn init(&self, capacity: usize) {
         use alloc::alloc::{alloc_zeroed, Layout};
-        let layout = Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
+        // FIX-KRN-10: layout calculé après capacité finale déterminée ci-dessus.
+        // Sera recalculé ci-dessous avec final_capacity.
+        let _layout_orig = Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
+        // FIX-KRN-10 (rapport_analyse §6.3) : vérification de la mémoire disponible
+        // avant l'allocation statique de 512Ko (32768 × 16B).
+        // Sur QEMU -m 256M, cette allocation représente 0.2% de la RAM — acceptable.
+        // Mais sans garde, un boot sur machine avec peu de RAM panique sans message clair.
+        //
+        // Vérification : si le buddy allocator a moins de 2 × REGISTRY_SIZE en frames libres,
+        // log d'avertissement et réduction de la capacité au maximum disponible.
+        // FIX-KRN-10: utiliser l'API réelle de mémoire physique disponible.
+        let available_bytes = crate::memory::physical::stats::free_bytes();
+        let registry_bytes = capacity * core::mem::size_of::<RegistrySlot>();
+        let final_capacity = if available_bytes < registry_bytes * 2 {
+            // Fallback : allouer au maximum la moitié de la RAM disponible pour le registry
+            let safe_cap = (available_bytes / 2) / core::mem::size_of::<RegistrySlot>();
+            crate::arch::x86_64::terminal::debug_write(
+                b"process_registry: WARNING reducing capacity due to low memory\n"
+            );
+            safe_cap.max(64) // minimum 64 slots pour les serveurs Ring1
+        } else {
+            capacity
+        };
+        let layout = core::alloc::Layout::array::<RegistrySlot>(final_capacity)
+            .expect("ProcessRegistry: layout invalide");
         let ptr = alloc_zeroed(layout) as *mut RegistrySlot;
         assert!(!ptr.is_null(), "ProcessRegistry::init : allocation échouée");
         // Initialiser chaque slot à l'état vide.

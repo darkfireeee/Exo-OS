@@ -12,6 +12,10 @@ use exo_syscall_abi as syscall;
 // PATCH-FB-02: chemin relatif fragile vers la police partagee avec exo-boot.
 // TODO: externaliser dans un crate exo-font independant pour eviter
 // une rupture silencieuse si l'un des repertoires est deplace.
+// FIX-SRV-M2 (ANALYSE_SERVERS §M2) : ce #[path] relatif vers exo-boot
+// est fragile — si la structure du dépôt change, fb_server ne compile plus.
+// TODO v0.3.0 : extraire les types partagés dans une crate dédiée exo-boot-types
+// et la référencer via Cargo.toml au lieu de ce #[path].
 #[path = "../../../exo-boot/src/display/font.rs"]
 mod shared_font;
 

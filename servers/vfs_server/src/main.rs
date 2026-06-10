@@ -29,6 +29,7 @@ use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
+use spin::Mutex as SpinMutex;
 
 mod compat;
 mod ops;
@@ -85,11 +86,17 @@ impl MountEntry {
 static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
 const MAX_MOUNTS: usize = 32;
 
-struct MountTable(UnsafeCell<[MountEntry; MAX_MOUNTS]>);
-
-unsafe impl Sync for MountTable {}
-
-static MOUNTS: MountTable = MountTable(UnsafeCell::new([MountEntry::empty(); MAX_MOUNTS]));
+// FIX-VFS-MOUNT (ANALYSE_SERVERS_EXOOS §P2) : l'ancienne MountTable utilisait
+// un UnsafeCell avec unsafe impl Sync — aucune protection contre les accès
+// concurrents. Si deux requêtes IPC arrivaient simultanément (scheduler multi-CPU),
+// la table pouvait être corrompue silencieusement.
+//
+// Correction : spin::Mutex enveloppant le tableau. Le vfs_server est mono-thread
+// dans la boucle principale, donc le verrou n'est jamais contenu (zero-contention
+// en pratique), mais il documente l'invariant et protège contre de futures
+// évolutions multi-thread.
+static MOUNTS: SpinMutex<[MountEntry; MAX_MOUNTS]> =
+    SpinMutex::new([MountEntry::empty(); MAX_MOUNTS]);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 const CROSS_PROCESS_CHUNK: usize = 4096;
 const LINUX_STAT_SIZE: usize = 144;
@@ -191,8 +198,9 @@ fn handle_mount(sender_pid: u32, payload: &[u8]) -> VfsReply {
     };
 
     let mut free_idx = None;
-    unsafe {
-        let mounts = &mut *MOUNTS.0.get();
+    {
+        let mut guard = MOUNTS.lock();
+        let mounts = &mut *guard;
         for i in 0..MAX_MOUNTS {
             if mounts[i].active && mounts[i].path_hash == path_hash {
                 mounts[i] = MountEntry {
@@ -226,8 +234,9 @@ fn handle_mount(sender_pid: u32, payload: &[u8]) -> VfsReply {
         }
     };
 
-    unsafe {
-        let mounts = &mut *MOUNTS.0.get();
+    {
+        let mut guard = MOUNTS.lock();
+        let mounts = &mut *guard;
         mounts[idx] = MountEntry {
             fs_type: fs,
             path_hash,
@@ -375,8 +384,9 @@ fn handle_umount(sender_pid: u32, payload: &[u8]) -> VfsReply {
     }
 
     let path_hash = fnv32(&payload[..path_len]);
-    unsafe {
-        let mounts = &mut *MOUNTS.0.get();
+    {
+        let mut guard = MOUNTS.lock();
+        let mounts = &mut *guard;
         for i in 0..MAX_MOUNTS {
             if mounts[i].active && mounts[i].path_hash == path_hash {
                 mounts[i] = MountEntry::empty();
@@ -729,6 +739,17 @@ fn handle_fsync(payload: &[u8]) -> VfsReply {
     reply_status(if rc < 0 { rc } else { 0 })
 }
 
+// FIX-APP-06 (Security_Application_Audit §GAP-06) : garde d'accès VFS.
+// En v0.2.0, validation basée sur les PIDs de confiance Ring1.
+// Règle : PIDs 2..9 (serveurs Ring1 non-storage) ont accès READ seul sauf PID 1,3.
+// PID 1 (init) et PID 3 (vfs lui-même) peuvent toujours écrire.
+// PIDs > 10 (exosh, apps) peuvent lire et écrire leurs propres fichiers.
+#[inline]
+fn check_vfs_write_access(sender_pid: u32) -> bool {
+    const WRITE_ALLOWED: &[u32] = &[1, 3];
+    WRITE_ALLOWED.contains(&sender_pid) || sender_pid >= 10
+}
+
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
         ops::VFS_MOUNT => handle_mount(req.sender_pid, &req.payload),
@@ -737,7 +758,13 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
         ops::VFS_UMOUNT => handle_umount(req.sender_pid, &req.payload),
         ops::VFS_CLOSE => handle_close(&req.payload),
         ops::VFS_READ => handle_read(req.sender_pid, &req.payload),
-        ops::VFS_WRITE => handle_write(req.sender_pid, &req.payload),
+        ops::VFS_WRITE => {
+            // FIX-APP-06: vérification write access
+            if !check_vfs_write_access(req.sender_pid) {
+                return VfsReply { status: syscall::EACCES, blob_id: 0, fd: -1, _pad: [0; 40] };
+            }
+            handle_write(req.sender_pid, &req.payload)
+        }
         ops::VFS_STAT => handle_stat(req.sender_pid, &req.payload),
         ops::VFS_GETDENTS => handle_getdents(req.sender_pid, &req.payload),
         ops::VFS_MKDIR => handle_path_mode(&req.payload, syscall::SYS_MKDIR),
@@ -760,8 +787,9 @@ fn mount_default_namespaces() {
     debug_assert!(compat::magic_values_are_layered());
     debug_assert!(translation_layer::translation_contract_is_sane());
 
-    unsafe {
-        let mounts = &mut *MOUNTS.0.get();
+    {
+        let mut guard = MOUNTS.lock();
+        let mounts = &mut *guard;
         for (idx, spec) in compat::DEFAULT_PSEUDO_MOUNTS.iter().enumerate() {
             if let Some(fs_type) = FsType::from_wire(spec.fs_type) {
                 mounts[idx] = MountEntry {

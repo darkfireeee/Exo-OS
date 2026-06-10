@@ -27,58 +27,38 @@ use exo_ipc_router::security_gate;
 use exo_syscall_abi as syscall;
 
 /// Registre d'endpoints : max 64 services simultanés.
-/// Chaque entrée = (nom hash 32-bit, endpoint_id 32-bit).
+///
+/// FIX-FNV64 (ANALYSE_SERVERS_EXOOS §P1) : l'ancienne implémentation utilisait
+/// FNV-32 dont l'espace de 2³² valeurs produit des collisions pratiques.
+/// Un attaquant peut forger un nom collisionant pour hijacker un endpoint enregistré.
+/// Remplacé par FNV-64a (espace 2⁶⁴) — probabilité de collision négligeable.
+///
+/// Chaque entrée = (nom hash 64-bit, endpoint_id 32-bit).
 struct Registry {
-    names: [u32; 64],
+    names:     [u64; 64],
     endpoints: [u32; 64],
-    count: AtomicU32,
+    count:     AtomicU32,
 }
 
 impl Registry {
     const fn new() -> Self {
         Self {
-            names: [0u32; 64],
+            names:     [0u64; 64],
             endpoints: [0u32; 64],
-            count: AtomicU32::new(0),
+            count:     AtomicU32::new(0),
         }
-    }
-
-    /// Hash FNV-32 du nom du service.
-    fn hash_name(name: &[u8]) -> u32 {
-        let mut h: u32 = 2166136261;
-        let mut i = 0usize;
-        while i < name.len() {
-            h = h.wrapping_mul(16777619).wrapping_add(name[i] as u32);
-            i += 1;
-        }
-        h
     }
 
     /// Enregistre un endpoint. Retourne false si la table est pleine.
-    fn register_hash(&mut self, h: u32, endpoint: u32) -> bool {
+    fn register_hash(&mut self, h: u64, endpoint: u32) -> bool {
         let n = self.count.load(Ordering::Relaxed) as usize;
         if n >= 64 {
             return false;
         }
-        self.names[n] = h;
+        self.names[n]     = h;
         self.endpoints[n] = endpoint;
         self.count.store((n + 1) as u32, Ordering::Release);
         true
-    }
-
-    /// Résout un nom → endpoint_id. Retourne None si inconnu.
-    #[allow(dead_code)]
-    fn resolve(&self, name: &[u8]) -> Option<u32> {
-        let h = Self::hash_name(name);
-        let n = self.count.load(Ordering::Acquire) as usize;
-        let mut i = 0usize;
-        while i < n {
-            if self.names[i] == h {
-                return Some(self.endpoints[i]);
-            }
-            i += 1;
-        }
-        None
     }
 }
 
@@ -143,16 +123,18 @@ fn hash_payload(
     start: usize,
     len: usize,
     payload_len: usize,
-) -> Option<u32> {
+) -> Option<u64> {
+    // FIX-FNV64: retourne u64 avec FNV-64a (cohérent avec Registry::hash_name).
     if start > payload_len || len > payload_len - start || payload_len > IPC_PAYLOAD_SIZE {
         return None;
     }
-    let mut h: u32 = 2166136261;
+    const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV64_PRIME:  u64 = 0x0000_0100_0000_01b3;
+    let mut h = FNV64_OFFSET;
     let mut i = 0usize;
     while i < len {
-        h = h
-            .wrapping_mul(16777619)
-            .wrapping_add(payload_byte(msg, start + i) as u32);
+        h ^= payload_byte(msg, start + i) as u64;
+        h = h.wrapping_mul(FNV64_PRIME);
         i += 1;
     }
     Some(h)

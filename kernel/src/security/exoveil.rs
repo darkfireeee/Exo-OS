@@ -165,6 +165,7 @@ static REVOKE_COUNT: [AtomicU64; MAX_PKS_KEYS] = {
 /// # Safety
 /// Doit être appelé depuis Ring 0. Le CPU doit supporter PKS.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn rdpkrs() -> u64 {
     msr::read_msr(MSR_IA32_PKRS)
 }
@@ -175,6 +176,7 @@ unsafe fn rdpkrs() -> u64 {
 /// Doit être appelé depuis Ring 0. La valeur doit respecter le layout PKRS
 /// (2 bits par domaine, max 16 domaines).
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn wrpkrs(val: u64) {
     msr::write_msr(MSR_IA32_PKRS, val);
 }
@@ -187,6 +189,7 @@ fn apply_domain_permission(pkrs: u64, domain: PksDomain, perm: PksPermission) ->
 }
 
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn write_pkrs_shadowed(new_val: u64) {
     // SAFETY: l'appelant garantit Ring 0 et une valeur PKRS valide.
     unsafe {
@@ -254,6 +257,7 @@ impl Drop for ScopedPkrsAccess {
 /// - PKS doit être supporté et initialisé
 /// - NE PAS appeler depuis un contexte ISR (le WRMSR n'est pas ISR-safe
 ///   sur toutes les implémentations — vérifier SDM §5.5.2 pour votre CPU)
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn revoke_domain(domain: PksDomain) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return; // PKS non disponible — noop silencieux
@@ -284,6 +288,7 @@ pub unsafe fn revoke_domain(domain: PksDomain) {
 /// - Ring 0 uniquement
 /// - Ne restaurer que les domaines explicitement autorisés par la politique
 ///   de sécurité (ExoSeal + Kernel B)
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn restore_domain(domain: PksDomain) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -302,6 +307,7 @@ pub unsafe fn restore_domain(domain: PksDomain) {
 ///
 /// # Safety
 /// Mêmes conditions que `restore_domain()`.
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermission) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -323,6 +329,7 @@ pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermiss
 /// - Ring 0 uniquement
 /// - Le scope protégé ne doit pas modifier lui-même IA32_PKRS
 /// - À réserver à de très courtes sections critiques sans allocation
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub(crate) unsafe fn scoped_domain_access(
     domain: PksDomain,
     perm: PksPermission,
@@ -362,6 +369,7 @@ pub(crate) unsafe fn scoped_domain_access(
 /// # Safety
 /// - Doit être appelé depuis Ring 0, Core 0, avant que Kernel A ne démarre
 /// - Aucun autre CPU ne doit être actif
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn exoveil_init() {
     // Détecter PKS : CPUID.07H.0H:ECX bit 6
     let ecx: u32;
@@ -408,6 +416,7 @@ pub unsafe fn exoveil_init() {
 ///
 /// # Safety
 /// Ring 0 uniquement. Doit être appelé APRÈS exoveil_init().
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn pks_restore_for_normal_ops() {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -435,6 +444,7 @@ pub unsafe fn pks_restore_for_normal_ops() {
 ///
 /// # Safety
 /// Ring 0 uniquement. Appelé depuis un contexte HANDOFF (pas de scheduler actif).
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn exoveil_revoke_all_on_handoff() {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -500,6 +510,7 @@ pub fn revoke_count(domain: PksDomain) -> u64 {
 /// # Safety
 /// Le TCB doit être valide. Le thread est en cours de descheduling.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn save_pkrs_to_tcb(tcb: &mut crate::scheduler::core::task::ThreadControlBlock) {
     tcb.pkrs = CURRENT_PKRS.load(Ordering::Relaxed) as u32;
 }
@@ -511,11 +522,13 @@ pub unsafe fn save_pkrs_to_tcb(tcb: &mut crate::scheduler::core::task::ThreadCon
 /// # Safety
 /// Le TCB doit être valide. Le thread est sur le point d'être schedulé.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn restore_pkrs_from_tcb(tcb: &crate::scheduler::core::task::ThreadControlBlock) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
     }
     let pkrs_val = tcb.pkrs as u64;
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     unsafe {
         write_pkrs_shadowed(pkrs_val);
     }

@@ -590,3 +590,32 @@ pub const FAST_PATH_SYSCALLS: &[u64] = &[
     SYS_GETCPU,
     SYS_SCHED_YIELD,
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX-KRN-11 (rapport_analyse §6.4) : macro syscall_stub! pour distinguer les
+// syscalls non-implémentés (ENOSYS réel) des stubs prévus (à implémenter).
+//
+// Usage dans table.rs :
+//   syscall_stub!(sys_sendfile,   "sendfile pas encore implémenté");
+//   syscall_stub!(sys_splice,     "splice pas encore implémenté");
+//
+// Sans cette macro, tous les ENOSYS étaient indistinguables dans les métriques
+// et impossible de savoir si c'était un oubli ou une décision architecturale.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Génère un handler syscall qui retourne ENOSYS avec un commentaire documenté.
+/// Le commentaire apparaît dans cargo doc et dans les rapports d'audit ENOSYS.
+#[macro_export]
+macro_rules! syscall_stub {
+    ($name:ident, $reason:expr) => {
+        #[allow(non_snake_case)]
+        pub fn $name(
+            _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64,
+        ) -> i64 {
+            // STUB: $reason
+            // Ce syscall est intentionnellement non-implémenté en v0.2.0.
+            // Utiliser syscall_stub! pour documenter pourquoi (vs silencieux).
+            crate::syscall::numbers::ENOSYS
+        }
+    };
+}

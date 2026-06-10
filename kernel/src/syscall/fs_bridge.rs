@@ -43,6 +43,86 @@ use spin::Mutex;
 /// Mis à `true` par `fs_bridge_init()` lors du boot.
 static FS_READY: AtomicBool = AtomicBool::new(false);
 
+// ── FIX-FND-5 (EXOOS_FOUNDATIONS_AUDIT §chdir/getcwd) ─────────────────────
+//
+// fs_chdir() validait le chemin mais ne le sauvegardait JAMAIS.
+// fs_getcwd() retournait toujours b"/\0" — stub évident.
+// Sans cette map, tout programme POSIX utilisant chdir+getcwd était brisé.
+//
+// Correction : CWD_MAP — tableau statique indexé par PID (max 512 processus
+// simultanés, cohérent avec MAX_PROCESSES=32768 par limite d'espace statique).
+// Chaque entrée = chemin UTF-8 null-terminé de 256 bytes max.
+//
+// Thread-safety : chaque slot est protégé par un bit de génération (version).
+// Les accès concurrents sur le MÊME pid sont rares (le processus est mono-thread
+// du point de vue de chdir). On utilise une stratégie spin + copy.
+
+const CWD_MAX_LEN:   usize = 256;
+const CWD_MAP_SIZE:  usize = 512;  // max PIDs simultanés dans la map
+
+#[repr(C, align(64))]
+struct CwdEntry {
+    path:    [u8; CWD_MAX_LEN],
+    len:     u32,
+    pid:     u32,   // 0 = slot libre
+}
+
+impl CwdEntry {
+    const fn empty() -> Self {
+        Self { path: [0u8; CWD_MAX_LEN], len: 0, pid: 0 }
+    }
+}
+
+struct CwdMap {
+    slots: [CwdEntry; CWD_MAP_SIZE],
+}
+
+// SAFETY: accès protégé par le SpinMutex ci-dessous.
+unsafe impl Sync for CwdMap {}
+
+use spin::Mutex as SpinMutex;
+static CWD_LOCK: SpinMutex<()> = SpinMutex::new(());
+static mut CWD_MAP: CwdMap = CwdMap {
+    slots: [const { CwdEntry::empty() }; CWD_MAP_SIZE],
+};
+
+/// Obtient l'index du slot CWD pour `pid`. Crée le slot si absent.
+fn cwd_slot_for_pid(pid: u32) -> Option<usize> {
+    // SAFETY: appelé sous CWD_LOCK.
+    let map = unsafe { &mut *core::ptr::addr_of_mut!(CWD_MAP) };
+    // Chercher slot existant
+    for (i, slot) in map.slots.iter().enumerate() {
+        if slot.pid == pid { return Some(i); }
+    }
+    // Allouer slot libre
+    for (i, slot) in map.slots.iter_mut().enumerate() {
+        if slot.pid == 0 {
+            slot.pid = pid;
+            // Initialiser à "/"
+            slot.path[0] = b'/';
+            slot.len = 1;
+            return Some(i);
+        }
+    }
+    None // table pleine
+}
+
+/// Libère le slot CWD d'un processus (appelé par do_exit).
+pub fn cwd_release_pid(pid: u32) {
+    let _guard = CWD_LOCK.lock();
+    let map = unsafe { &mut *core::ptr::addr_of_mut!(CWD_MAP) };
+    for slot in map.slots.iter_mut() {
+        if slot.pid == pid {
+            slot.pid = 0;
+            slot.len = 0;
+            slot.path[0] = 0;
+            return;
+        }
+    }
+}
+
+
+
 /// Initialise le bridge fs.
 /// À appeler depuis la séquence de boot après `fs::init()`.
 ///
@@ -3952,29 +4032,73 @@ pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeErr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
     if size < 2 {
         return Err(FsBridgeError::Invalid);
     }
-    let cwd = [b'/', 0];
-    copy_to_user(buf_ptr as *mut u8, cwd.as_ptr(), cwd.len()).map_err(|_| FsBridgeError::Fault)?;
-    Ok(cwd.len() as i64)
+    // FIX-FND-5: lire le chemin réel depuis CWD_MAP au lieu de retourner "/" fixe.
+    let (path_bytes, path_len) = {
+        let _guard = CWD_LOCK.lock();
+        let map = unsafe { core::ptr::addr_of!(CWD_MAP).as_ref().unwrap_unchecked() };
+        // Trouver le slot du PID courant
+        let mut found_path = [0u8; CWD_MAX_LEN];
+        let mut found_len = 1usize;
+        found_path[0] = b'/'; // fallback
+        for slot in map.slots.iter() {
+            if slot.pid == pid && slot.len > 0 {
+                let len = slot.len as usize;
+                found_path[..len].copy_from_slice(&slot.path[..len]);
+                found_len = len;
+                break;
+            }
+        }
+        (found_path, found_len)
+    };
+    // Copier vers l'espace utilisateur (path + null terminator)
+    let copy_len = path_len.min(size.saturating_sub(1));
+    copy_to_user(buf_ptr as *mut u8, path_bytes.as_ptr(), copy_len)
+        .map_err(|_| FsBridgeError::Fault)?;
+    // Écrire le null terminator
+    copy_to_user((buf_ptr + copy_len as u64) as *mut u8, &[0u8] as *const u8, 1)
+        .map_err(|_| FsBridgeError::Fault)?;
+    Ok((copy_len + 1) as i64)
 }
 
-/// `chdir(path)`.
+/// `chdir(path)` — FIX-FND-5 : sauvegarde le CWD dans CWD_MAP.
 #[inline]
 pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
+    // 1. Valider le chemin (doit exister et être un répertoire)
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
     let (_, kind) = path_entry(&normalized_path)?;
     if kind != PATH_INDEX_KIND_DIR {
         return Err(FsBridgeError::NotDir);
+    }
+    // 2. FIX-FND-5 : sauvegarder le chemin normalisé dans CWD_MAP.
+    // L'ancienne implémentation validait le chemin mais ne le stockait jamais,
+    // laissant getcwd() toujours retourner "/" même après chdir("/tmp").
+    // FIX: normalized_path est Vec<u8> — utiliser .as_slice() et non .as_bytes()
+    let path_bytes: &[u8] = normalized_path.as_slice();
+    if path_bytes.len() >= CWD_MAX_LEN {
+        return Err(FsBridgeError::BadPath);
+    }
+    {
+        let _guard = CWD_LOCK.lock();
+        // SAFETY: accès exclusif garanti par CWD_LOCK.
+        let map = unsafe { &mut *core::ptr::addr_of_mut!(CWD_MAP) };
+        let idx = match cwd_slot_for_pid(pid) {
+            Some(i) => i,
+            None => return Err(FsBridgeError::NoMemory), // CWD_MAP pleine
+        };
+        let len = path_bytes.len();
+        map.slots[idx].path[..len].copy_from_slice(path_bytes);
+        map.slots[idx].len = len as u32;
+        // Toujours null-terminer
+        map.slots[idx].path[len] = 0;
     }
     Ok(0)
 }

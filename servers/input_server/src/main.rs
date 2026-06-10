@@ -60,7 +60,84 @@ unsafe impl Sync for QueueCell {}
 
 static QUEUE: QueueCell = QueueCell(UnsafeCell::new(InputQueue::new()));
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
-static SUBSCRIBER_ENDPOINT: AtomicU64 = AtomicU64::new(0);
+
+// FIX-INPUT-MULTI (ANALYSE_SERVERS_EXOOS §R4) : l'ancienne implémentation
+// n'utilisait qu'un seul AtomicU64 SUBSCRIBER_ENDPOINT. Si tty_server et
+// exosh s'attachaient tous les deux, le second écrasait le premier silencieusement.
+// Multi-applications clavier (ex: futur Wayland) impossible.
+//
+// Correction : table statique de MAX_SUBSCRIBERS abonnés.
+// Chaque slot est un AtomicU64 (0 = slot vide).
+// INPUT_MSG_ATTACH enregistre dans le premier slot libre.
+// deliver_to_subscribers diffuse à tous les slots actifs.
+const MAX_SUBSCRIBERS: usize = 4;
+struct SubscriberTable {
+    endpoints: [AtomicU64; MAX_SUBSCRIBERS],
+}
+impl SubscriberTable {
+    const fn new() -> Self {
+        Self {
+            endpoints: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
+        }
+    }
+    fn attach(&self, endpoint: u64) -> bool {
+        for slot in &self.endpoints {
+            if slot.load(Ordering::Acquire) == 0 {
+                // CAS : si encore vide, on prend le slot
+                if slot.compare_exchange(0, endpoint, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                    return true;
+                }
+            }
+            // Si ce slot a déjà cet endpoint enregistré, pas de doublon
+            if slot.load(Ordering::Acquire) == endpoint {
+                return true;
+            }
+        }
+        false // table pleine
+    }
+    fn detach(&self, endpoint: u64) {
+        for slot in &self.endpoints {
+            let _ = slot.compare_exchange(endpoint, 0, Ordering::AcqRel, Ordering::Acquire);
+        }
+    }
+    fn deliver_all(&self, event: syscall::InputEventWire, queue_depth: u32) -> bool {
+        let mut delivered = false;
+        let reply = syscall::InputReply {
+            status: 0,
+            event,
+            queue_depth,
+            _pad: [0; 4],
+        };
+        for slot in &self.endpoints {
+            let ep = slot.load(Ordering::Acquire);
+            if ep == 0 {
+                continue;
+            }
+            let rc = unsafe {
+                syscall::syscall6(
+                    syscall::SYS_IPC_SEND,
+                    ep,
+                    &reply as *const syscall::InputReply as u64,
+                    core::mem::size_of::<syscall::InputReply>() as u64,
+                    0, 0, 0,
+                )
+            };
+            if rc >= 0 {
+                delivered = true;
+            } else {
+                // Endpoint mort → retirer le slot pour libérer la place
+                let _ = slot.compare_exchange(ep, 0, Ordering::AcqRel, Ordering::Acquire);
+            }
+        }
+        delivered
+    }
+}
+static SUBSCRIBERS: SubscriberTable = SubscriberTable::new();
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
@@ -88,28 +165,8 @@ fn exit_failed() -> ! {
 }
 
 fn deliver_to_subscriber(event: syscall::InputEventWire, queue_depth: u32) -> bool {
-    let endpoint = SUBSCRIBER_ENDPOINT.load(Ordering::Acquire);
-    if endpoint == 0 {
-        return false;
-    }
-    let reply = syscall::InputReply {
-        status: 0,
-        event,
-        queue_depth,
-        _pad: [0; 4],
-    };
-    let rc = unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            endpoint,
-            &reply as *const syscall::InputReply as u64,
-            core::mem::size_of::<syscall::InputReply>() as u64,
-            0,
-            0,
-            0,
-        )
-    };
-    rc >= 0
+    // FIX-INPUT-MULTI: diffusion à tous les abonnés enregistrés.
+    SUBSCRIBERS.deliver_all(event, queue_depth)
 }
 
 #[inline]
@@ -156,7 +213,18 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             _pad: [0; 4],
         },
         syscall::INPUT_MSG_ATTACH => {
-            SUBSCRIBER_ENDPOINT.store(req.reply_endpoint, Ordering::Release);
+            // FIX-INPUT-MULTI: enregistrement dans la table multi-abonnés.
+            let ok = SUBSCRIBERS.attach(req.reply_endpoint);
+            syscall::InputReply {
+                status: if ok { 0 } else { syscall::ENOMEM },
+                event: syscall::InputEventWire::default(),
+                queue_depth: queue_mut().len as u32,
+                _pad: [0; 4],
+            }
+        }
+        syscall::INPUT_MSG_DETACH => {
+            // FIX-INPUT-MULTI: support du détachement (nouveau type de message).
+            SUBSCRIBERS.detach(req.reply_endpoint);
             syscall::InputReply {
                 status: 0,
                 event: syscall::InputEventWire::default(),

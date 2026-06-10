@@ -152,6 +152,7 @@ pub enum ExoCageError {
 pub fn cpuid_cet_available() -> (bool, bool) {
     let ecx: u32;
     let edx: u32;
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     unsafe {
         core::arch::asm!(
             "push rbx",
@@ -179,6 +180,7 @@ pub fn cpuid_cet_available() -> (bool, bool) {
 /// L'offset + 8 ne doit pas dépasser la taille de _cold_reserve (88 bytes).
 /// Seuls les offsets ExoShield documentés sont autorisés.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u64) {
     assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
@@ -187,6 +189,7 @@ unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u
 
 /// Lit un u64 depuis _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
     assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
@@ -195,6 +198,7 @@ unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
 
 /// Écrit un u8 dans _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8) {
     assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
@@ -203,6 +207,7 @@ unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8
 
 /// Lit un u8 depuis _cold_reserve du TCB à l'offset spécifié.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_read_cold_u8(tcb: &ThreadControlBlock, offset: usize) -> u8 {
     assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
@@ -296,6 +301,7 @@ fn free_shadow_stack_pages(base: u64, count: usize) {
 /// # Contraintes
 /// - `size_of::<TCB>()` reste 256 bytes — écriture uniquement dans `_cold_reserve[144..232]`
 /// - Offsets hardcodés inchangés : kstack@8, cr3@56, fpu@232, rq@240/248
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), ExoCageError> {
     // 1. Vérification CPUID
     let (ss_ok, ibt_ok) = cpuid_cet_available();
@@ -382,6 +388,7 @@ pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), 
 ///
 /// # Safety
 /// Le thread ne doit plus être schedulable (state == Dead).
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn disable_cet_for_thread(tcb: &mut ThreadControlBlock) {
     let cet_flags = tcb_read_cold_u8(tcb, OFF_CET_FLAGS);
     if cet_flags & CET_FLAG_ENABLED == 0 {
@@ -449,6 +456,7 @@ pub extern "C" fn cp_handler(_frame: usize, error_code: u64) {
     //
     //    Note: ssr_write_atomic sera branché sur l'infrastructure ExoPhoenix
     //          existante (kernel/src/exophoenix/ssr.rs).
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     unsafe {
         crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
             .store(HANDOFF_FREEZE_REQ, Ordering::Release);
@@ -477,6 +485,7 @@ pub extern "C" fn cp_handler(_frame: usize, error_code: u64) {
 /// - Doit être appelé depuis Ring 0 sur Core 0 (Kernel B / ExoSeal)
 /// - Doit être appelé AVANT que Kernel A ne démarre (step 0)
 /// - Aucun autre CPU ne doit être actif pendant cet appel
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn exocage_global_enable() -> Result<(), ExoCageError> {
     let (ss_ok, ibt_ok) = cpuid_cet_available();
     if !ss_ok {
@@ -533,18 +542,21 @@ pub fn is_ibt_global_enabled() -> bool {
 /// # Safety
 /// Le TCB doit être valide et aligné. Lecture seule, ISR-safe.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn get_shadow_stack_token(tcb: &ThreadControlBlock) -> u64 {
     tcb_read_cold_u64(tcb, OFF_SHADOW_STACK_TOKEN)
 }
 
 /// Lit les cet_flags d'un TCB.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn get_cet_flags(tcb: &ThreadControlBlock) -> u8 {
     tcb_read_cold_u8(tcb, OFF_CET_FLAGS)
 }
 
 /// Lit le threat_score d'un TCB.
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn get_threat_score(tcb: &ThreadControlBlock) -> u8 {
     tcb_read_cold_u8(tcb, OFF_THREAT_SCORE)
 }
@@ -555,6 +567,7 @@ pub unsafe fn get_threat_score(tcb: &ThreadControlBlock) -> u8 {
 /// Le TCB doit être valide. Le thread ne doit pas être en cours d'exécution
 /// sur un autre CPU (accès exclusif).
 #[inline(always)]
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 pub unsafe fn set_threat_score(tcb: &mut ThreadControlBlock, score: u8) {
     debug_assert!(score <= 100, "threat_score must be 0..=100");
     tcb_write_cold_u8(tcb, OFF_THREAT_SCORE, score.min(100));

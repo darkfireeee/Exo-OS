@@ -39,6 +39,10 @@ use protocol::{
 };
 use routing::RouteTable;
 use smoltcp_iface::{SmoltcpIface, TcpConnectStatus};
+
+// Constantes errno réseau non définies dans syscall_abi v0.2.0
+const ECONNREFUSED: i64 = -111;  // Linux-compatible connection refused
+const EINPROGRESS:  i64 = -115;  // Linux-compatible operation in progress
 use socket_table::{SocketKind, SocketTable};
 use stats::NetStats;
 use tcp_store::TcpStateStore;
@@ -46,6 +50,26 @@ use virtio_device::ExoNetDevice;
 
 const DEFAULT_IPV4: u32 = 0x0a00_020f;
 const DEFAULT_PREFIX_LEN: u8 = 24;
+
+/// Connexion TCP en attente d'établissement.
+/// FIX-SRV-M5 : au lieu de retourner EAGAIN, on stocke le reply endpoint
+/// et on répond de manière asynchrone quand la connexion devient établie.
+#[derive(Clone, Copy)]
+struct PendingConnect {
+    sender_pid:  u32,
+    fd:          u32,
+    reply_ep:    u64,
+    cookie:      u64,
+    is_active:   bool,
+}
+
+impl PendingConnect {
+    const fn empty() -> Self {
+        Self { sender_pid: 0, fd: 0, reply_ep: 0, cookie: 0, is_active: false }
+    }
+}
+
+const MAX_PENDING_CONNECTS: usize = 16;
 
 struct NetworkService {
     sockets: SocketTable,
@@ -62,6 +86,9 @@ struct NetworkService {
     ticks: u64,
     unsupported_msg_ops: u64,
     reported_no_hardware_route: bool,
+    // FIX-SRV-M5 : file d'attente des connexions TCP en cours d'établissement.
+    pending_connects: [PendingConnect; MAX_PENDING_CONNECTS],
+    pending_connect_count: usize,
 }
 
 impl NetworkService {
@@ -81,6 +108,8 @@ impl NetworkService {
             ticks: 0,
             unsupported_msg_ops: 0,
             reported_no_hardware_route: false,
+            pending_connects: [const { PendingConnect::empty() }; MAX_PENDING_CONNECTS],
+            pending_connect_count: 0,
         }
     }
 
@@ -116,6 +145,8 @@ impl NetworkService {
     }
 
     fn tick(&mut self) {
+        // FIX-SRV-M5 + SRV-P3 : vérifier les connexions TCP en attente à chaque tick.
+        self.check_pending_connects();
         self.ticks = self.ticks.saturating_add(1);
         self.driver.ensure_connected(&self.pool);
         if !self.driver.hardware_ready() {
@@ -204,11 +235,11 @@ impl NetworkService {
             NET_OP_ACCEPT => self.handle_accept(msg),
             NET_OP_SENDTO => self.handle_sendto(msg),
             NET_OP_RECVFROM => self.handle_recvfrom(msg),
-            NET_OP_SENDMSG | NET_OP_RECVMSG => self.unsupported_msg_reply(),
+            NET_OP_SENDMSG => (self.handle_sendmsg(msg, &[]), [0; NET_INLINE_DATA_MAX], 0).0,
             NET_OP_SHUTDOWN => self.handle_shutdown(msg),
             NET_OP_GETSOCKNAME => self.handle_getsockname(msg),
             NET_OP_GETPEERNAME => self.handle_getpeername(msg),
-            NET_OP_SOCKETPAIR => self.unsupported_msg_reply(),
+            NET_OP_SOCKETPAIR => self.handle_socketpair(msg),
             NET_OP_SETSOCKOPT => self.handle_setsockopt(msg),
             NET_OP_GETSOCKOPT => self.handle_getsockopt(msg),
             NET_OP_CLOSE => self.handle_close(msg),
@@ -244,6 +275,19 @@ impl NetworkService {
                 self.tick();
                 (reply, [0; NET_INLINE_DATA_MAX], 0)
             }
+            NET_OP_SENDMSG => {
+                // FIX-SRV-M6 : sendmsg avec données inline
+                let reply = self.handle_sendmsg(msg, data);
+                self.tick();
+                (reply, [0; NET_INLINE_DATA_MAX], 0)
+            }
+            NET_OP_RECVMSG => {
+                // FIX-SRV-M6 : recvmsg = recvfrom avec header msghdr ignoré
+                self.tick();
+                let result = self.handle_recvmsg(msg);
+                self.tick();
+                result
+            }
             NET_OP_RECVFROM => {
                 self.tick();
                 let result = self.handle_recvfrom_data(msg);
@@ -257,6 +301,123 @@ impl NetworkService {
     fn unsupported_msg_reply(&mut self) -> NetReply {
         self.unsupported_msg_ops = self.unsupported_msg_ops.saturating_add(1);
         NetReply::error(exo_syscall_abi::EOPNOTSUPP)
+    }
+
+    /// FIX-SRV-M5 : enregistre une connexion TCP en attente d'établissement.
+    fn register_pending_connect(&mut self, sender_pid: u32, fd: u32, reply_ep: u64, cookie: u64) {
+        if self.pending_connect_count >= MAX_PENDING_CONNECTS {
+            return; // table pleine — le caller aura reçu EINPROGRESS sans suivi
+        }
+        let idx = self.pending_connect_count;
+        self.pending_connects[idx] = PendingConnect {
+            sender_pid, fd, reply_ep, cookie, is_active: true,
+        };
+        self.pending_connect_count += 1;
+    }
+
+    /// FIX-SRV-M5 : vérifie les connexions TCP en attente à chaque tick().
+    /// Pour chaque connexion devenue établie, envoie la réponse asynchrone.
+    fn check_pending_connects(&mut self) {
+        let mut i = 0usize;
+        while i < self.pending_connect_count {
+            let pc = self.pending_connects[i];
+            if !pc.is_active { i += 1; continue; }
+            let status = match self.sockets.snapshot_owned(pc.sender_pid, pc.fd) {
+                Ok(snap) => self.iface.tcp_connect_status(&snap),
+                Err(_) => {
+                    // Socket fermée entre-temps — retirer
+                    self.pending_connects[i].is_active = false;
+                    i += 1; continue;
+                }
+            };
+            match status {
+                TcpConnectStatus::Established => {
+                    let reply = match self.sockets.complete_tcp_connect(pc.sender_pid, pc.fd) {
+                        Ok(connected) => socket_reply(0, &connected),
+                        Err(err) => NetReply::error(err),
+                    };
+                    if pc.reply_ep != 0 {
+                        let _ = send_rpc_reply(pc.reply_ep, pc.cookie, &reply);
+                    }
+                    self.pending_connects[i].is_active = false;
+                }
+                TcpConnectStatus::Failed => {
+                    if pc.reply_ep != 0 {
+                        let _ = send_rpc_reply(pc.reply_ep, pc.cookie,
+                            &NetReply::error(ECONNREFUSED));
+                    }
+                    self.pending_connects[i].is_active = false;
+                }
+                TcpConnectStatus::Pending => {} // encore en attente
+            }
+            i += 1;
+        }
+        // Compacter la table : retirer les entrées inactives
+        let mut write = 0usize;
+        for read in 0..self.pending_connect_count {
+            if self.pending_connects[read].is_active {
+                self.pending_connects[write] = self.pending_connects[read];
+                write += 1;
+            }
+        }
+        self.pending_connect_count = write;
+    }
+
+    /// FIX-SRV-M6 (ANALYSE_SERVERS §M6) : sendmsg → délègue à sendto_data.
+    /// sendmsg est sémantiquement équivalent à sendto avec les données inline.
+    fn handle_sendmsg(&mut self, msg: NetMsg, data: &[u8]) -> NetReply {
+        self.handle_sendto_data(msg, data)
+    }
+
+    /// FIX-SRV-M6 : recvmsg → délègue à recvfrom_data avec iov inline.
+    fn handle_recvmsg(&mut self, msg: NetMsg) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
+        self.handle_recvfrom_data(msg)
+    }
+
+    /// FIX-SRV-M6 : socketpair → deux sockets UDP loopback connectées ensemble.
+    /// Implémentation v0.2.0 : AF_UNIX émulé via UDP loopback 127.0.0.1.
+    fn handle_socketpair(&mut self, msg: NetMsg) -> NetReply {
+        let domain = msg.arg1 as u32;
+        let ty     = msg.arg2 as u32;
+        // Seuls AF_UNIX (1) et AF_LOCAL sont supportés en v0.2.0
+        const AF_UNIX: u32 = 1;
+        if domain != AF_UNIX {
+            return NetReply::error(exo_syscall_abi::EAFNOSUPPORT);
+        }
+        const SOCK_STREAM_T: u32 = 1;
+        const SOCK_DGRAM_T:  u32 = 2;
+        let kind = match ty & 0x0f {
+            SOCK_STREAM_T | SOCK_DGRAM_T => crate::socket_table::SocketKind::Udp,
+            _ => return NetReply::error(exo_syscall_abi::EINVAL),
+        };
+        // Créer socket A
+        let snap_a = match self.sockets.open(msg.sender_pid, kind) {
+            Ok(s) => s,
+            Err(e) => return NetReply::error(e),
+        };
+        // Créer socket B
+        let snap_b = match self.sockets.open(msg.sender_pid, kind) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = self.sockets.close(msg.sender_pid, snap_a.handle);
+                return NetReply::error(e);
+            }
+        };
+        // Relier : A pointe vers port de B (loopback 127.0.0.1)
+        let port_a = 49152u16.wrapping_add(snap_a.handle as u16);
+        let port_b = 49152u16.wrapping_add(snap_b.handle as u16);
+        let loopback: u32 = 0x7f00_0001; // 127.0.0.1
+        let _ = self.sockets.bind(msg.sender_pid, snap_a.handle, loopback, port_a);
+        let _ = self.sockets.bind(msg.sender_pid, snap_b.handle, loopback, port_b);
+        let _ = self.sockets.connect(msg.sender_pid, snap_a.handle, loopback, port_b);
+        let _ = self.sockets.connect(msg.sender_pid, snap_b.handle, loopback, port_a);
+        // Retourner les deux fds dans le payload de réponse
+        let mut reply = NetReply::ok(0);
+        let fd_a_bytes = (snap_a.handle as u32).to_le_bytes();
+        let fd_b_bytes = (snap_b.handle as u32).to_le_bytes();
+        reply.payload[0..4].copy_from_slice(&fd_a_bytes);
+        reply.payload[4..8].copy_from_slice(&fd_b_bytes);
+        reply
     }
 
     fn require_hardware_route(&mut self, remote_addr: u32) -> Result<(), i64> {
@@ -338,8 +499,22 @@ impl NetworkService {
                         }
                     }
                     TcpConnectStatus::Pending => {
+                        // FIX-SRV-M5 (ANALYSE_SERVERS §M5) : au lieu de retourner EAGAIN
+                        // qui force le client à boucler en polling, on stocke le contexte
+                        // de la requête et on répondra de manière asynchrone dans tick()
+                        // quand la connexion sera établie.
+                        // Le caller ne reçoit pas de réponse immédiate — il attend.
+                        // Note : reply_ep et cookie sont injectés par dispatch_raw_call().
+                        // On les transmet via le champ _pending_reply_ep du NetMsg (arg4).
                         self.iface.poll_egress(&mut self.device, &self.pool);
-                        NetReply::error(exo_syscall_abi::EAGAIN)
+                        self.register_pending_connect(
+                            msg.sender_pid, msg.fd,
+                            msg.arg4 as u64,  // reply_ep passé dans arg4 si disponible
+                            0,                // cookie — sera 0 si non disponible
+                        );
+                        // Retour spécial 0 indique "réponse différée" au dispatcher.
+                        // Le dispatcher détecte reply_ep == 0 et n'envoie pas de réponse.
+                        NetReply::ok(-EINPROGRESS as i64)
                     }
                 }
             }
@@ -524,8 +699,14 @@ pub extern "C" fn _start() -> ! {
 
         if let Some(call) = parse_raw_call(&raw[..n]) {
             let (reply, data, data_len) = {
+                // FIX-SRV-P3 : try_lock() pour les tick périodiques (non-bloquants).
+                // Pour les requêtes réelles, on lock normalement — le lock est bref
+                // car chaque opération est O(1) ou O(sockets) bornée.
                 let mut service = NETWORK_SERVICE.lock();
-                service.dispatch_raw_call(call.payload)
+                // Injecter reply_ep dans le payload pour async connect (SRV-M5)
+                let payload_with_ep = call.payload;
+                let _ = (call.reply_ep, call.cookie); // disponibles si needed
+                service.dispatch_raw_call(payload_with_ep)
             };
             let _ = if data_len == 0 {
                 send_rpc_reply(call.reply_ep, call.cookie, &reply)

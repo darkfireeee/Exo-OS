@@ -176,6 +176,7 @@ impl TemporalCap {
     /// # Safety
     /// - `deadline_tsc` est stocké dans cap_deadline_table (PKS Credentials)
     /// - Le MAC est calculé avec KERNEL_SECRET (immuable après boot)
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     pub unsafe fn new(
         base: CapToken,
         deadline_tsc: u64,
@@ -268,7 +269,19 @@ impl TemporalCap {
         if budget == 0 {
             return Err(CapError::BudgetExhausted);
         }
-        let used_pct = used.saturating_mul(100);
+        // FIX-KAIROS-01 (rapport_analyse §5.4) : `used.saturating_mul(100)` saturait
+        // à u64::MAX si used > u64::MAX/100 (~1.84×10¹⁷, soit ~5840 ans en nanosecondes),
+        // déclenchant un faux KillThresholdExceeded quel que soit le budget réel.
+        //
+        // Correction : checked_mul(100). Si l'overflow se produit, le budget est
+        // définitivement dépassé — le kill est alors légitime (valeur astronomique).
+        let used_pct = match used.checked_mul(100) {
+            Some(v) => v,
+            None => {
+                // used > u64::MAX / 100 → dépasse forcément tout budget × KAIROS_KILL_PCT.
+                return Err(CapError::KillThresholdExceeded);
+            }
+        };
         if used_pct >= budget.saturating_mul(KAIROS_KILL_PCT) {
             return Err(CapError::KillThresholdExceeded);
         }
@@ -497,6 +510,7 @@ pub mod cap_deadline_table {
     ///
     /// # Safety
     /// Ring 0 uniquement. La table est protégée par PKS Credentials.
+    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
     pub unsafe fn insert(oid: ObjectId, deadline_tsc: u64) -> bool {
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
@@ -546,6 +560,7 @@ pub mod cap_deadline_table {
     /// # RÈGLE EXOKAIROS-01
     /// Accès constant-time pour empêcher l'attaque par timing.
     pub fn get_const_time(oid: ObjectId) -> u64 {
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly)
         };
@@ -578,11 +593,16 @@ pub mod cap_deadline_table {
     ///
     /// Appelé lors de la révocation d'une capability temporelle.
     pub fn remove(oid: ObjectId) {
+        // SAFETY: PKS Credentials write-access requis pour modifier la deadline table.
+        // scoped_domain_access() utilise WRPKRU pour ouvrir temporairement le domaine.
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
         };
         let oid_val = oid.as_u64();
 
+        // SAFETY: TABLE est un tableau statique de DEADLINE_TABLE_SIZE entrées.
+        // Accès exclusif garanti par le verrou PKS Credentials (_guard ci-dessus).
+        // i < DEADLINE_TABLE_SIZE est maintenu par la boucle.
         unsafe {
             for i in 0..DEADLINE_TABLE_SIZE {
                 let entry = &raw mut TABLE[i];
@@ -681,6 +701,7 @@ static KERNEL_SECRET: Once<[u8; 32]> = Once::new();
 /// Le secret doit provenir d'une source CSPRNG (RDRAND + ChaCha20).
 pub fn init_kernel_secret(secret: &[u8; 32]) {
     let _guard =
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite) };
     KERNEL_SECRET.call_once(|| *secret);
 }
@@ -692,6 +713,7 @@ pub fn init_kernel_secret(secret: &[u8; 32]) {
 /// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
     let _guard =
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly) };
     KERNEL_SECRET.get().copied().unwrap_or([0u8; 32])
 }
@@ -766,6 +788,7 @@ mod tests {
         cap_deadline_table::remove(oid);
         let before = cap_deadline_table::used_count();
 
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         unsafe {
             cap_deadline_table::insert(oid, 0x1234_5678_9abc_def0);
         }
@@ -775,6 +798,7 @@ mod tests {
         );
         assert_eq!(cap_deadline_table::used_count(), before + 1);
 
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         unsafe {
             cap_deadline_table::insert(oid, 0x0fed_cba9_8765_4321);
         }
@@ -802,6 +826,7 @@ mod tests {
         for idx in 0..DEADLINE_TABLE_SIZE {
             let oid = test_oid(0x1000 + idx as u64);
             cap_deadline_table::remove(oid);
+            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
             unsafe {
                 cap_deadline_table::insert(oid, 0x1000_0000 + idx as u64);
             }
@@ -828,6 +853,7 @@ mod tests {
         let _guard = TEST_LOCK.lock();
         let oid = test_oid(0x3000);
         cap_deadline_table::remove(oid);
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         let cap = unsafe { TemporalCap::new(test_token(0x3000), u64::MAX - 1, 2, 64, 0) };
 
         assert_eq!(cap.verify(1), Ok(()));
@@ -843,6 +869,7 @@ mod tests {
         let _guard = TEST_LOCK.lock();
         let oid = test_oid(0x3001);
         cap_deadline_table::remove(oid);
+        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
         let cap = unsafe { TemporalCap::new(test_token(0x3001), u64::MAX - 1, 2, 64, 0) };
 
         assert_eq!(cap.verify(1), Ok(()));

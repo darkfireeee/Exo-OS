@@ -199,7 +199,13 @@ pub const IPC_MAX_CHANNELS: usize = MAX_CHANNELS;
 pub const IPC_MAX_ENDPOINTS: usize = MAX_ENDPOINTS;
 
 /// Nombre maximal de processus pouvant détenir des ressources IPC.
-pub const IPC_MAX_PROCESSES: usize = 65_536;
+///
+/// FIX-IPC-PROCS (rapport_analyse §4.3, incohérence #3) :
+/// IPC_MAX_PROCESSES était 65 536 alors que la table de processus (MAX_PROCESSES)
+/// est limitée à 32 768. IPC ne peut pas suivre plus de processus que le kernel
+/// n'en peut héberger — les deux constantes doivent rester synchronisées.
+/// Aligné sur arch::constants::MAX_PROCESSES via re-export.
+pub use crate::arch::constants::MAX_PROCESSES as IPC_MAX_PROCESSES;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes de messages (header)

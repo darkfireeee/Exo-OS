@@ -296,6 +296,16 @@ fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
 
 #[cfg(not(exophoenix_resurrection_test))]
 fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
+    // FIX-MERKLE-DEGRADE (Security_Audit_Passe2 §C-02) :
+    // Si A_MERKLE_ROOT est tout-zéros (build non configuré),
+    // retourner Err explicitement au lieu de laisser la vérification
+    // silencieusement réussir — bypass Merkle total sinon.
+    if kernel_a_hash_is_zero() {
+        // SAFETY: port 0xE9 debug QEMU, ignoré sur bare metal sans QEMU.
+        #[cfg(target_arch = "x86_64")]
+        unsafe { core::arch::asm!("out 0xe9, al", in("al") b'M', options(nomem, nostack)); }
+        return Err(ForgeError::MerkleVerifyFailed);
+    }
     // Hash Blake3 de .text ++ .rodata comparé à A_MERKLE_ROOT
     // [ADAPT] : utiliser le blake3 existant du codebase
     // Pattern attendu :

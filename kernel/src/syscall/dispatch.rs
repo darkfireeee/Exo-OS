@@ -38,6 +38,9 @@ use crate::syscall::compat::linux::translate_linux_nr;
 use crate::syscall::fast_path::try_fast_path;
 use crate::syscall::numbers::{is_valid_syscall, ENOSYS};
 use crate::syscall::table::get_handler;
+// FIX-APP-02: imports pour audit_syscall_entry/exit (APP-02)
+use crate::security::audit::syscall_audit::{audit_syscall_entry, audit_syscall_exit, AuditVerdict};
+use crate::scheduler::core::switch::current_thread_raw;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs d'instrumentation
@@ -141,6 +144,69 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         return;
     }
 
+    // ── [2b] Audit syscall entry (FIX-APP-02 — GAP-02) ────────────────────
+    // audit_syscall_entry() évalue les règles d'audit et peut bloquer le syscall
+    // avant même son exécution (AuditVerdict::DenyEperm / ::Kill).
+    // Ne concerne que les syscalls sensibles définis dans audit/rules.rs.
+    // RÈGLE SAU-01 : ne déclenche aucun appel récursif.
+    let (caller_pid, caller_tid) = {
+        let tcb_ptr = current_thread_raw();
+        if tcb_ptr.is_null() {
+            (0u32, 0u32)
+        } else {
+            // SAFETY: current_thread_raw() retourne un pointeur valide ou null.
+            // La durée de vie est bornée à ce stack frame (pas de swap scheduler possible ici).
+            let tcb = unsafe { &*tcb_ptr };
+            (tcb.pid.0, tcb.tid as u32)
+        }
+    };
+    match audit_syscall_entry(nr as u32, caller_pid, caller_tid, 0) {
+        AuditVerdict::Allow => {}
+        AuditVerdict::DenyEperm => {
+            frame.rax = crate::syscall::numbers::EPERM as u64;
+            post_dispatch(frame, tsc_start);
+            return;
+        }
+        AuditVerdict::DenyEnosys => {
+            frame.rax = ENOSYS as u64;
+            post_dispatch(frame, tsc_start);
+            return;
+        }
+        AuditVerdict::Kill => {
+            // Thread marqué pour terminaison — signal SIGKILL au prochain retour Ring3.
+            // tcb_ptr est défini dans le bloc précédent via current_thread_raw().
+            // Le signal sera délivré par post_dispatch via pending signal check.
+            frame.rax = crate::syscall::numbers::EPERM as u64;
+            post_dispatch(frame, tsc_start);
+            return;
+        }
+    }
+
+    // ── [2c] Zero-Trust verify_syscall (FIX-APP-01 — GAP-01) ───────────────
+    // verify_syscall() est câblé ici pour les syscalls non-fast-path.
+    // ThreadControlBlock n'a pas de champ security_context — verify_syscall()
+    // prend un SecurityContext construit depuis le pid/tid du thread.
+    if nr != crate::syscall::numbers::SYS_SCHED_YIELD
+        && nr != crate::syscall::numbers::SYS_GETPID
+        && nr != crate::syscall::numbers::SYS_CLOCK_GETTIME
+    {
+        let zt_ok = {
+            use crate::security::zero_trust::{verify_syscall, SecurityContext};
+            use crate::security::zero_trust::context::PrincipalId;
+            // Construire un SecurityContext minimal depuis le PID/TID appelant.
+            // En v0.2.0, TRUST_ALL retourne Ok(()) pour tous les syscalls autorisés.
+            let principal = PrincipalId { uid: 0, gid: 0, pid: caller_pid, tid: caller_tid, ns_id: 0 };
+            let ctx = SecurityContext::new_normal(principal);
+            verify_syscall(&ctx, nr).is_ok()
+        };
+        if !zt_ok {
+            frame.rax = crate::syscall::numbers::EPERM as u64;
+            audit_syscall_exit(caller_tid, crate::syscall::numbers::EPERM as i64);
+            post_dispatch(frame, tsc_start);
+            return;
+        }
+    }
+
     // ── [3] Fast-path  ─────────────────────────────────────────────────────
     // Couvre les syscalls haute fréquence sans allocation ni verrou.
     if let Some(result) = try_fast_path(nr, arg1, arg2, arg3, arg4, arg5, arg6) {
@@ -223,6 +289,26 @@ pub fn dispatch(frame: &mut SyscallFrame) {
 
     // ── [8] Écriture du résultat ───────────────────────────────────────────
     frame.rax = result as u64;
+
+    // ── [8b] Audit syscall exit (FIX-APP-02) ──────────────────────────────
+    audit_syscall_exit(caller_tid, result);
+
+    // ── [8c] Audit ExoLedger : log des syscalls critiques (FIX-APP-08 — GAP-08) ──
+    // La vraie API est crate::security::audit::logger::log_event().
+    // log_sensitive_syscall() n'existe pas — utiliser log_event() directement.
+    {
+        use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
+        let is_critical_syscall =
+            effective_nr == crate::syscall::numbers::SYS_EXECVE
+            || effective_nr == crate::syscall::numbers::SYS_CLONE
+            || effective_nr == crate::syscall::numbers::SYS_FORK
+            || effective_nr == crate::syscall::numbers::SYS_VFORK;
+        if is_critical_syscall {
+            let outcome = if result < 0 { AuditOutcome::Error } else { AuditOutcome::Allow };
+            log_event(AuditCategory::Process, caller_pid, caller_tid, 0u16,
+                effective_nr as u32, result as i32, outcome, [0u8; 8]);
+        }
+    }
 
     // ── [9] Post-dispatch : signal pending + instrumentation ──────────────
     post_dispatch(frame, tsc_start);

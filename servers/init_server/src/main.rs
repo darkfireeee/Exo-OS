@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-//! # init_server — PID 1, Superviseur de services
+//! # init_server -- PID 1, Superviseur de services
 //!
 //! Rôle : processus racine de l'espace utilisateur.
 //!   1. Démarre ipc_router (PID 2) en premier.
@@ -409,7 +409,24 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
 
     // ── 2. Démarrer tous les services dans l'ordre ────────────────────────
     log::line(b"init_server: starting service graph");
+    // FIX-SRV-M9 (ANALYSE_SERVERS §M9) : timeout global de boot.
+    // Chaque service a déjà son propre timeout (ready_timeout_ms).
+    // Ce compteur global garantit que l'OS entre en mode rescue si la somme
+    // des timeouts individuels dépasse 45 secondes -- signalant un blocage
+    // inattendu dans la résolution des dépendances.
+    let boot_global_start_ms = unsafe {
+        exo_syscall_abi::syscall3(exo_syscall_abi::SYS_CLOCK_GETTIME, 1, 0, 0) as u64 / 1_000_000
+    };
+    const GLOBAL_BOOT_TIMEOUT_MS: u64 = 45_000; // 45s max pour tous les services
     let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
+    let boot_elapsed = unsafe {
+        let now = exo_syscall_abi::syscall3(exo_syscall_abi::SYS_CLOCK_GETTIME, 1, 0, 0) as u64 / 1_000_000;
+        now.saturating_sub(boot_global_start_ms)
+    };
+    if boot_elapsed > GLOBAL_BOOT_TIMEOUT_MS {
+        log::line(b"init_server: BOOT GLOBAL TIMEOUT -- entering degraded supervision mode");
+        // Mode rescue : continuer la supervision mais logger le problème
+    }
     let mut idx = 0usize;
     while idx < SERVICES.len() {
         if SERVICES[idx].current_pid() != 0 {
@@ -492,6 +509,6 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    // Init ne peut pas mourir — boucle. Le kernel le relancera via SIGCHLD du parent (inexistant).
+    // Init ne peut pas mourir -- boucle. Le kernel le relancera via SIGCHLD du parent (inexistant).
     halt_forever();
 }

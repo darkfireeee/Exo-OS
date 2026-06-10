@@ -285,6 +285,25 @@ fn main() {
     let require_hashes = env_flag("EXOPHOENIX_REQUIRE_HASHES");
     let warn_degraded = env_flag("EXOPHOENIX_WARN_DEGRADED");
 
+    // FIX-KRN-2 (rapport_analyse §4.2) : si aucune variable de configuration
+    // n'est définie, le contrat ExoPhoenix sera nul (ZERO_HASH). Émettre un
+    // warning Cargo visible dans les logs de build pour éviter les silences.
+    //
+    // En production, configurer KERNEL_A_IMAGE_PATH ou KERNEL_A_IMAGE_HASH.
+    // EXOPHOENIX_REQUIRE_HASHES=1 transforme l'avertissement en erreur de build.
+    let has_legacy_hash = std::env::var_os("KERNEL_A_IMAGE_HASH").is_some()
+        || std::env::var_os("KERNEL_A_MERKLE_ROOT").is_some();
+    if !has_legacy_hash {
+        if require_hashes {
+            panic!(
+                "EXOPHOENIX_REQUIRE_HASHES=1 but no KERNEL_A_IMAGE_PATH or KERNEL_A_IMAGE_HASH set.                  ExoPhoenix contract will be null — Merkle verification will fail at runtime."
+            );
+        }
+        println!(
+            "cargo:warning=ExoPhoenix: KERNEL_A_IMAGE_PATH not set —              building with ZERO_HASH (kernel_a_hash_is_zero()=true).              verify_merkle() will fail. Set KERNEL_A_IMAGE_PATH for production builds."
+        );
+    }
+
     // Compatibilité ancienne pipeline: hashes fournis explicitement mais pas
     // d'image embarquée. Le mode check/dev reste silencieux; les builds qui
     // exigent ce contrat peuvent activer EXOPHOENIX_REQUIRE_HASHES=1.

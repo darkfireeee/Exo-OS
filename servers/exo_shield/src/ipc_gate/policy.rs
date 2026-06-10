@@ -37,7 +37,10 @@ const DEFAULT_RATE_LIMIT: u32 = 1000;
 const KERNEL_PID: u32 = 0;
 const INIT_SERVER_PID: u32 = 1;
 const IPC_ROUTER_PID: u32 = 2;
-const EXO_SHIELD_PID: u32 = 12;
+// FIX-SHIELD-PID: EXO_SHIELD_PID était 12, soit la valeur de TTY_SERVER_ENDPOINT.
+// Les règles de filtrage IPC d'ExoShield étaient donc appliquées sur tty_server
+// au lieu d'exo_shield. Corrigé à 10 = valeur réelle de EXO_SHIELD_ENDPOINT.
+const EXO_SHIELD_PID: u32 = 10;
 
 const SCAN_REQUEST: u32 = 0;
 const EVENT_REPORT: u32 = 1;

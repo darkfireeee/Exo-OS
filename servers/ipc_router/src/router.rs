@@ -5,10 +5,15 @@
 //!
 //! ## Règles
 //! - IPC-01 : toutes les routes doivent respecter le DAG ExoCordon
-//! - IPC-04 : pas de payload inline > 48 octets (utiliser SHM)
+//! - IPC-04 : pas de payload inline > MAX_INLINE_PAYLOAD (utiliser SHM au delà)
 //! - NS-01 : uniquement core::sync::atomic + spin
+//!
+//! ## Corrections
+//! - FIX-ROUTER-01 : le numéro de syscall était hardcodé à 302 (SYS_EXO_IPC_RECV_NB)
+//!   au lieu de SYS_IPC_SEND (300). Tous les forwards échouaient silencieusement.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use exo_syscall_abi as syscall_abi;
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -288,9 +293,11 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
     match policy {
         RoutePolicy::Direct | RoutePolicy::Forwarded => {
             let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
+            // FIX-ROUTER-01: utiliser la constante ABI au lieu du numéro hardcodé.
+            // 302 = SYS_EXO_IPC_RECV_NB (réception non-bloquante) ≠ SYS_IPC_SEND (300).
             let result = unsafe {
                 crate::syscall::syscall6(
-                    302, // SYS_IPC_SEND
+                    syscall_abi::SYS_IPC_SEND,
                     dest as u64,
                     payload.as_ptr() as u64,
                     payload_len as u64,
@@ -328,9 +335,10 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
                     } else {
                         table[i].dest_service_id
                     };
+                    // FIX-ROUTER-01: constante ABI — même correction que Direct/Forwarded.
                     let result = unsafe {
                         crate::syscall::syscall6(
-                            302,
+                            syscall_abi::SYS_IPC_SEND,
                             dest as u64,
                             payload.as_ptr() as u64,
                             payload_len as u64,

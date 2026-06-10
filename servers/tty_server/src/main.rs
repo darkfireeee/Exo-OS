@@ -180,7 +180,11 @@ struct TtyState {
     line: LineDiscipline,
     ready: [u8; LINE_OUT_MAX],
     ready_len: usize,
-    pending_read: Option<RawCallHeader>,
+    // FIX-SRV-M4 (ANALYSE_SERVERS §M4) : queue de 4 lectures en attente
+    // (au lieu de 1) pour gérer les appels concurrent de exosh + scripts.
+    // Si la queue est pleine, EAGAIN est retourné immédiatement.
+    pending_reads: [Option<RawCallHeader>; 4],
+    pending_reads_count: usize,
 }
 
 impl TtyState {
@@ -189,7 +193,8 @@ impl TtyState {
             line: LineDiscipline::new(),
             ready: [0; LINE_OUT_MAX],
             ready_len: 0,
-            pending_read: None,
+            pending_reads: [None, None, None, None],
+            pending_reads_count: 0,
         }
     }
 }
@@ -311,11 +316,27 @@ fn take_ready_line() -> Option<syscall::TtyReply> {
 }
 
 fn complete_pending_read() {
-    let Some(header) = tty_mut().pending_read.take() else {
+    // FIX-SRV-M4 : dépiler le premier reader en attente.
+    let state = tty_mut();
+    let header = if state.pending_reads_count == 0 {
+        return;
+    } else {
+        let h = state.pending_reads[0].take().unwrap();
+        // Shift down
+        for i in 0..3 { state.pending_reads[i] = state.pending_reads[i+1].take(); }
+        state.pending_reads_count -= 1;
+        h
+    };
+    let Some(_dummy) = Some(header) else {
         return;
     };
     let Some(response) = take_ready_line() else {
-        tty_mut().pending_read = Some(header);
+        // FIX: pending_read renommé en pending_reads (queue de 4 slots)
+        let state = tty_mut();
+        if state.pending_reads_count < 4 {
+            state.pending_reads[state.pending_reads_count] = Some(header);
+            state.pending_reads_count += 1;
+        }
         return;
     };
     send_raw_call_reply(header.reply_ep, header.cookie, &response);
@@ -436,8 +457,10 @@ fn dispatch_message(bytes: &[u8]) {
                     response
                 } else {
                     let state = tty_mut();
-                    if state.pending_read.is_none() {
-                        state.pending_read = Some(header);
+                    if state.pending_reads_count < 4 {
+                        // FIX-SRV-M4 : enqueue dans la queue circulaire
+                        state.pending_reads[state.pending_reads_count] = Some(header);
+                        state.pending_reads_count += 1;
                         return;
                     }
                     reply(syscall::EAGAIN, 0, &[])

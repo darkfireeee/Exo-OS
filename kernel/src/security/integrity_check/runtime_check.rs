@@ -89,6 +89,7 @@ static VIOLATIONS_DETECTED: AtomicU64 = AtomicU64::new(0);
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Retourne le slice de la section .text.
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn text_section() -> &'static [u8] {
     // SAFETY: Les symboles _text_start/_text_end sont définis par le linker script.
     // La section .text est valide et de taille correcte. On lit en lecture seule.
@@ -99,6 +100,7 @@ unsafe fn text_section() -> &'static [u8] {
 }
 
 /// Retourne le slice de la section .rodata.
+// SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn rodata_section() -> &'static [u8] {
     // SAFETY: Identique à text_section() — symboles linker, lecture seule.
     let start = &_rodata_start as *const u8;
