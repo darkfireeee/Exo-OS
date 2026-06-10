@@ -207,6 +207,8 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     let mut pit_ok = false;
     let timeout_cycles = tsc_ms_to_cycles(20).max(200_000_000);
     loop {
+        // SAFETY: lecture du port I/O PIT gate (0x61) en Ring 0 ; inb est une
+        // opération matérielle sans effet mémoire, port fixe documenté (8254).
         let val = unsafe { inb(PIT_GATE) };
         if val & 0x20 != 0 {
             pit_ok = true;

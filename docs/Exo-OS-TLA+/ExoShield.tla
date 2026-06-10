@@ -61,6 +61,28 @@ SendIpc(src, dst) ==
        /\ IpcQuotas' = IF hasQuota THEN [IpcQuotas EXCEPT ![<<src, dst>>] = @ - 1] ELSE IpcQuotas
     /\ UNCHANGED <<WatchdogMissed, HandoffFlag, LedgerP0Entries, ControlFlowViolations, IommuNicWhitelist, NicDmaRequests>>
 
+\* ── FIX-IPC-SENDER-AUTH (Security_Application_Audit GAP-04/05) ───────────────
+\* Modélise le renforcement kernel `sys_exo_ipc_send` : un appelant NON privilégié
+\* (non TRUSTED) qui tente d'usurper le champ `src` de l'enveloppe (claimedSrc) voit
+\* ce champ réécrit par le kernel à son identité réelle (realSrc) AVANT le contrôle
+\* ExoCordon. Un spoof ne peut donc jamais ouvrir un chemin que le DAG refuse pour la
+\* source réelle. Les services TRUSTED (init, ipc_router) gardent le droit de relayer
+\* avec un src d'origine (caller_can_inject) — non modélisé comme spoof ici.
+TRUSTED == {"Init"}
+
+AdversarySpoofSendIpc(realSrc, claimedSrc, dst) ==
+    /\ HandoffFlag = 0
+    /\ realSrc /= claimedSrc
+    /\ realSrc \notin TRUSTED          \* un service trusted n'est pas un attaquant ici
+    /\ LET effectiveSrc == realSrc      \* kernel force src := caller_pid (réel)
+           isAuth == <<effectiveSrc, dst>> \in AUTHORIZED_GRAPH
+           hasQuota == isAuth /\ IpcQuotas[<<effectiveSrc, dst>>] > 0
+       IN
+       /\ IpcMessages' = IpcMessages \cup {[src |-> effectiveSrc, dst |-> dst,
+                                            status |-> IF hasQuota THEN "ALLOWED" ELSE "REJECTED"]}
+       /\ IpcQuotas' = IF hasQuota THEN [IpcQuotas EXCEPT ![<<effectiveSrc, dst>>] = @ - 1] ELSE IpcQuotas
+    /\ UNCHANGED <<WatchdogMissed, HandoffFlag, LedgerP0Entries, ControlFlowViolations, IommuNicWhitelist, NicDmaRequests>>
+
 PhoenixFreeze ==
     /\ HandoffFlag = 1
     /\ UNCHANGED vars

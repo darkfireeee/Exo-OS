@@ -168,8 +168,8 @@ pub use exoledger::{
 };
 
 pub use exokairos::{
-    exokairos_stats, init_kernel_secret, ttl_for_right, CapError as TemporalCapError,
-    ExoKairosStats, TemporalCap, MAX_DELEGATION_DEPTH,
+    exokairos_stats, init_kernel_secret, register_ttl_for_cap, ttl_for_right,
+    CapError as TemporalCapError, ExoKairosStats, TemporalCap, MAX_DELEGATION_DEPTH,
 };
 
 pub use exoseal::{

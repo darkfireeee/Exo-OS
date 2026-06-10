@@ -136,6 +136,9 @@ fn user_as_for_pid(pid: u32) -> Option<&'static UserAddressSpace> {
         return None;
     }
 
+    // SAFETY: ptr non-null (vérifié), publié par lifecycle/create comme
+    // UserAddressSpace 'static lié au PCB ; le PCB reste vivant dans
+    // PROCESS_REGISTRY pour la durée du syscall appelant.
     Some(unsafe { &*ptr })
 }
 
@@ -198,6 +201,9 @@ impl FaultAllocator for UserFaultAllocator<'_> {
         frame: Frame,
         flags: PageFlags,
     ) -> Result<(), crate::memory::AllocError> {
+        // SAFETY: self.user_as est un UserAddressSpace valide (emprunté pour la
+        // durée de l'allocateur) ; map_page insère une PTE 4 KiB pour `frame`
+        // dans ses tables, en utilisant `self` comme allocateur de tables.
         unsafe { self.user_as.map_page(virt, frame, flags, self) }
     }
 
@@ -239,6 +245,9 @@ mod page_tables {
         let vma_ptr = user_as
             .find_vma(page_addr)
             .ok_or(CowError::InvalidAddress)?;
+        // SAFETY: vma_ptr provient de find_vma() de cet espace d'adressage ;
+        // il pointe vers un VmaDescriptor vivant tant que l'AS n'est pas détruit
+        // (l'AS reste emprunté ici via user_as).
         let vma = unsafe { &*vma_ptr };
 
         let cause = if prot.requires_write() {
@@ -278,6 +287,8 @@ mod page_tables {
             }
             WalkResult::NotMapped => {
                 let vma_ptr = user_as.find_vma(page_addr)?;
+                // SAFETY: vma_ptr provient de find_vma() de `user_as` ; VMA vivant
+                // tant que l'AS emprunté ici existe.
                 let vma = unsafe { &*vma_ptr };
                 Some(PageProtection {
                     writable: vma.flags.contains(VmaFlags::WRITE)
@@ -435,6 +446,8 @@ fn dma_alloc_vma_flags() -> VmaFlags {
 fn rollback_mmio_pages(user_as: &UserAddressSpace, map_base: VirtAddr, mapped_pages: usize) {
     for page_idx in 0..mapped_pages {
         let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
+        // SAFETY: rollback — `virt` est une page précédemment mappée par cette
+        // routine dans `user_as` ; unmap_page retire la PTE correspondante.
         let _ = unsafe { user_as.unmap_page(virt) };
     }
 }
@@ -453,6 +466,8 @@ fn map_dma_alloc_into_user(pid: u32, frame: Frame, size: usize) -> Result<(u64, 
     for page_idx in 0..mapped_pages {
         let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
         let phys = PhysAddr::new(frame.start_address().as_u64() + (page_idx * PAGE_SIZE) as u64);
+        // SAFETY: `virt` est dans un gap VMA libre réservé (find_free_gap) ; `phys`
+        // appartient au frame DMA alloué. map_page insère la PTE via `alloc`.
         if unsafe { user_as.map_page(virt, Frame::containing(phys), page_flags, &alloc) }.is_err() {
             rollback_mmio_pages(user_as, map_base, page_idx);
             return Err(DmaError::OutOfMemory);
@@ -467,8 +482,12 @@ fn map_dma_alloc_into_user(pid: u32, frame: Frame, size: usize) -> Result<(u64, 
         VmaBacking::Direct,
     ));
     let vma_ptr = Box::into_raw(vma);
+    // SAFETY: vma_ptr est une Box::into_raw fraîche (unique, valide). insert_vma
+    // prend possession du pointeur en cas de succès.
     if !unsafe { user_as.insert_vma(vma_ptr) } {
         rollback_mmio_pages(user_as, map_base, mapped_pages);
+        // SAFETY: insert_vma a échoué et n'a pas pris possession de vma_ptr ;
+        // on reprend l'ownership pour le libérer (pas de double-free).
         let _ = unsafe { Box::from_raw(vma_ptr) };
         return Err(DmaError::OutOfMemory);
     }
@@ -482,6 +501,8 @@ fn unmap_dma_alloc_record(record: &DmaAllocRecord) {
     };
     let map_base = VirtAddr::new(record.virt);
     if let Some(vma_ptr) = user_as.remove_vma(map_base) {
+        // SAFETY: remove_vma a retiré ce vma_ptr de l'AS et nous en transfère la
+        // possession ; il provenait de Box::into_raw — on le libère une seule fois.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
     rollback_mmio_pages(user_as, map_base, align_up(record.size) / PAGE_SIZE);
@@ -493,15 +514,21 @@ fn unmap_mmio_record(record: MmioRecord) {
     };
 
     if let Some(vma_ptr) = user_as.remove_vma(VirtAddr::new(record.map_base)) {
+        // SAFETY: remove_vma nous transfère la possession du vma_ptr (issu de
+        // Box::into_raw) ; libération unique.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
 
     for page_idx in 0..(record.map_size / PAGE_SIZE) {
         let virt = VirtAddr::new(record.map_base + (page_idx * PAGE_SIZE) as u64);
+        // SAFETY: `virt` est une page MMIO précédemment mappée par ce record ;
+        // unmap_page retire la PTE de l'AS du processus.
         let _ = unsafe { user_as.unmap_page(virt) };
     }
 
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
+    // SAFETY: shootdown_sync émet un TLB shootdown IPI sur les `cpu_count` cœurs
+    // actifs pour la plage MMIO démappée ; Ring 0, plage virtuelle valide.
     unsafe {
         shootdown_sync(
             TlbFlushType::Range {
@@ -852,6 +879,9 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
         // `map_base` vient d'un gap VMA libre; aucune traduction utilisateur
         // valide ne peut encore exister pour cette plage. Eviter un INVLPG par
         // page rend le mapping du framebuffer de boot (plusieurs MiB) praticable.
+        // SAFETY: `virt` est dans un gap VMA libre fraîchement réservé (aucune
+        // traduction user existante), `phys_page` est la page MMIO device cible.
+        // map_page_unflushed insère la PTE sans INVLPG (flush groupé après boucle).
         if unsafe { user_as.map_page_unflushed(virt, phys_page, page_flags, &alloc) }.is_err() {
             rollback_mmio_pages(user_as, map_base, page_idx);
             return Err(MmioError::OutOfMemory);
@@ -860,6 +890,8 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
     // Les PTE viennent d'etre creees en masse dans l'espace courant. Un flush
     // local unique evite les entrees TLB negatives stale sans retomber sur un
     // INVLPG par page.
+    // SAFETY: flush_all() recharge CR3 pour purger le TLB local après le mapping
+    // de masse des PTE MMIO. Ring 0, aucune invariant mémoire violée.
     unsafe {
         crate::memory::virt::flush_all();
     }
@@ -872,8 +904,12 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
         VmaBacking::Device,
     ));
     let vma_ptr = Box::into_raw(vma);
+    // SAFETY: vma_ptr est une Box::into_raw fraîche, unique ; insert_vma en prend
+    // possession en cas de succès.
     if !unsafe { user_as.insert_vma(vma_ptr) } {
         rollback_mmio_pages(user_as, map_base, mapped_pages);
+        // SAFETY: insert_vma a échoué sans prendre possession ; on reprend
+        // l'ownership pour libérer (pas de double-free).
         let _ = unsafe { Box::from_raw(vma_ptr) };
         return Err(MmioError::AlreadyMapped);
     }

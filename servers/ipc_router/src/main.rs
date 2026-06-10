@@ -156,6 +156,11 @@ pub extern "C" fn _start() -> ! {
     };
     debug_write(b"ipc_router: registered\n");
 
+    // FIX-ROUTER-02 : initialiser la porte de sécurité et la table de routage
+    // (modules désormais compilés — routes statiques Ring1 + compteurs à zéro).
+    exo_ipc_router::security_gate::security_gate_init();
+    exo_ipc_router::router::router_init();
+
     // ── 2. Boucle principale : receive → dispatch ──────────────────────────
     let mut registry = Registry::new();
 
@@ -201,7 +206,51 @@ pub extern "C" fn _start() -> ! {
                     let name_len = (payload_byte(&msg, 4) as usize).min(max_name_len);
                     if name_len != 0 {
                         if let Some(name_hash) = hash_payload(&msg, 5, name_len, payload_len) {
-                            registry.register_hash(name_hash, ep);
+                            // FIX-REGISTRY-SYNC (exoos_ipc_incoherences.md §5) :
+                            // le registre kernel (SYS_IPC_LOOKUP) est la source de
+                            // vérité unique. Une registration locale n'est acceptée
+                            // que si le nom est déjà connu du kernel (enregistré via
+                            // SYS_IPC_CREATE), et c'est l'endpoint kernel qui est
+                            // stocké — pas celui fourni par le client. Élimine la
+                            // désynchronisation des deux registres et le hijack
+                            // d'endpoint par registration mensongère.
+                            let mut name_buf = [0u8; 128];
+                            let n = name_len.min(name_buf.len());
+                            let mut i = 0usize;
+                            while i < n {
+                                name_buf[i] = payload_byte(&msg, 5 + i);
+                                i += 1;
+                            }
+                            let looked_up = unsafe {
+                                syscall::syscall3(
+                                    syscall::SYS_IPC_LOOKUP,
+                                    name_buf.as_ptr() as u64,
+                                    n as u64,
+                                    0,
+                                )
+                            };
+                            // Endpoints > u32::MAX (éphémères pid<<32|tag) ne sont
+                            // pas routables par la table locale (slots u32) : ignorés.
+                            if looked_up > 0 && looked_up <= u32::MAX as i64 {
+                                let kernel_ep = looked_up as u32;
+                                if kernel_ep != ep {
+                                    debug_write(b"ipc_router: register ep mismatch, kernel wins\n");
+                                }
+                                registry.register_hash(name_hash, kernel_ep);
+                                // FIX-EXOCORDON-03 : classifier le PID runtime de
+                                // l'expéditeur pour le DAG (les PIDs Ring1 sont
+                                // dynamiques, la table statique ne suffit pas).
+                                if let Some(sid) =
+                                    exo_ipc_router::exocordon::service_id_for_name(&name_buf[..n])
+                                {
+                                    let _ = exo_ipc_router::exocordon::register_pid(
+                                        msg.sender_pid,
+                                        sid,
+                                    );
+                                }
+                            } else {
+                                debug_write(b"ipc_router: register rejected (unknown to kernel)\n");
+                            }
                         }
                     }
                 }
@@ -221,6 +270,27 @@ pub extern "C" fn _start() -> ! {
                         route_payload_len,
                     );
                     if sg_verdict != security_gate::SecurityVerdict::Allow {
+                        // FIX-AUDIT-IPC (exoos_ipc_incoherences.md §7) : notifier
+                        // exo_shield de la violation (EVENT_REPORT non-bloquant).
+                        // check_message() a déjà comptabilisé localement.
+                        let reason = match sg_verdict {
+                            security_gate::SecurityVerdict::DenyPayloadTooLarge => {
+                                security_gate::DenyReason::PayloadTooLarge
+                            }
+                            security_gate::SecurityVerdict::DenyQuotaExhausted => {
+                                security_gate::DenyReason::QuotaExhausted
+                            }
+                            security_gate::SecurityVerdict::DenyUnknownService => {
+                                security_gate::DenyReason::UnknownService
+                            }
+                            _ => security_gate::DenyReason::UnauthorizedPath,
+                        };
+                        security_gate::audit_log_violation(
+                            msg.sender_pid,
+                            dest,
+                            sg_verdict,
+                            reason,
+                        );
                         continue;
                     }
                     // Forward via SYS_IPC_SEND vers l'endpoint de destination.

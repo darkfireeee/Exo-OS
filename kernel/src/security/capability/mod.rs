@@ -268,6 +268,11 @@ pub fn create(
         return Err(err);
     }
 
+    // FIX-P1-KAIROS (Security_Application_Audit §GAP-07) : associer une deadline
+    // temporelle au token via ExoKairos (TTL fonction des droits). Best-effort —
+    // sans régression si l'horloge n'est pas calibrée ou la table pleine.
+    crate::security::exokairos::register_ttl_for_cap(oid, rights_val);
+
     Ok(token)
 }
 

@@ -439,7 +439,7 @@ fn set_circuit_state(pid: u32, new_state: CircuitState) {
 
     // Créer un nouveau circuit si nécessaire
     if new_state == CircuitState::Open {
-        for circuit in circuits.iter() {
+        for circuit in circuits.iter_mut() {
             if circuit.active.load(Ordering::Acquire) == 0 {
                 circuit.pid = pid;
                 circuit.failure_count.store(CIRCUIT_FAILURE_THRESHOLD, Ordering::Release);
@@ -486,7 +486,7 @@ pub fn record_failure(pid: u32) {
     }
 
     // Créer un circuit pour ce PID
-    for circuit in circuits.iter() {
+    for circuit in circuits.iter_mut() {
         if circuit.active.load(Ordering::Acquire) == 0 {
             circuit.pid = pid;
             circuit.failure_count.store(1, Ordering::Release);
@@ -500,7 +500,7 @@ pub fn record_failure(pid: u32) {
 
 /// Enregistre un succès pour une instance (circuit breaker).
 pub fn record_success(pid: u32) {
-    let mut circuits = CIRCUITS.lock();
+    let circuits = CIRCUITS.lock();
 
     for circuit in circuits.iter() {
         if circuit.active.load(Ordering::Acquire) != 0 && circuit.pid == pid {
@@ -610,7 +610,7 @@ pub fn register_instance(service_id: u32, pid: u32, weight: u32, priority: u8) -
 
 /// Retire une instance d'un pool.
 pub fn unregister_instance(service_id: u32, pid: u32) -> bool {
-    let mut pools = POOLS.lock();
+    let pools = POOLS.lock();
 
     for i in 0..MAX_POOLS {
         if pools[i].active.load(Ordering::Acquire) != 0 && pools[i].service_id == service_id {

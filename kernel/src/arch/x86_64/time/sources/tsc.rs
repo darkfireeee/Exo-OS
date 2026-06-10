@@ -266,10 +266,14 @@ pub fn rdtscp_read() -> u64 {
 pub fn read_ordered_with_cpu() -> (u64, u32) {
     loop {
         let cpu_before = crate::arch::x86_64::smp::percpu::current_cpu_id();
+        // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
+        // disponible en x86_64 (SSE2 baseline).
         unsafe {
             core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
         }
         let tsc = rdtsc_read();
+        // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
+        // disponible en x86_64 (SSE2 baseline).
         unsafe {
             core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
         }
@@ -284,10 +288,14 @@ pub fn read_ordered_with_cpu() -> (u64, u32) {
 /// Lecture avec LFENCE pré/post pour sérialisation totale (mesure précise).
 #[inline]
 pub fn rdtsc_serialized() -> u64 {
+    // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
+    // disponible en x86_64 (SSE2 baseline).
     unsafe {
         core::arch::asm!("lfence", options(nostack, nomem));
     }
     let t = rdtsc_read();
+    // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
+    // disponible en x86_64 (SSE2 baseline).
     unsafe {
         core::arch::asm!("lfence", options(nostack, nomem));
     }
@@ -300,6 +308,8 @@ pub fn rdtsc_serialized() -> u64 {
 /// TSC invariant = rate constant à travers tous les C-states et Turbo Boost.
 pub fn check_tsc_invariant() -> bool {
     let edx: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -318,6 +328,8 @@ pub fn check_tsc_invariant() -> bool {
 /// Vérifie si RDTSCP est disponible (CPUID 0x80000001 EDX bit 27).
 pub fn check_rdtscp() -> bool {
     let max_ext: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -334,6 +346,8 @@ pub fn check_rdtscp() -> bool {
         return false;
     }
     let edx: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -352,6 +366,8 @@ pub fn check_rdtscp() -> bool {
 /// Vérifie si TSC_DEADLINE est disponible (CPUID 0x1 ECX bit 24).
 pub fn check_tsc_deadline() -> bool {
     let ecx: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -372,6 +388,8 @@ pub fn check_tsc_deadline() -> bool {
 pub fn detect_hypervisor() -> (bool, HypervisorType) {
     // Bit 31 de ECX de CPUID 0x1 = Hypervisor Present.
     let ecx: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -390,6 +408,8 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
 
     // Lire la signature hyperviseur depuis la feuille 0x40000000.
     let (ebx, ecx_leaf, edx): (u32, u32, u32);
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -409,6 +429,9 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
     // Hyper-V : "Microsoft Hv"
     // VMware  : "VMwareVMware"
     let sig = [ebx, ecx_leaf, edx];
+    // SAFETY: `sig` est un [u32; 3] = 12 octets contigus sur la pile ; on le
+    // réinterprète comme &[u8; 12] pour comparer la signature hyperviseur. La
+    // durée de vie du slice est bornée à celle de `sig` (même scope).
     let sig_bytes = unsafe { core::slice::from_raw_parts(sig.as_ptr() as *const u8, 12) };
 
     if sig_bytes.starts_with(b"KVMKVM") {
@@ -459,6 +482,7 @@ pub fn write_tsc_adjust_msr(value: i64) {
     let raw = value as u64;
     let lo = raw as u32;
     let hi = (raw >> 32) as u32;
+    // SAFETY: lecture matérielle x86_64 sans effet mémoire (Ring 0).
     unsafe {
         core::arch::asm!(
             "wrmsr",
@@ -473,6 +497,8 @@ pub fn write_tsc_adjust_msr(value: i64) {
 /// Vérifie si IA32_TSC_ADJUST est supporté (CPUID 0x7.0 EBX bit 1).
 pub fn cpuid_tsc_adjust_supported() -> bool {
     let max_leaf: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -489,6 +515,8 @@ pub fn cpuid_tsc_adjust_supported() -> bool {
         return false;
     }
     let ebx: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -511,6 +539,8 @@ pub fn cpuid_tsc_adjust_supported() -> bool {
 /// Vérifie si CPUID leaf 0x15 est disponible pour la calibration nominale.
 pub fn cpuid_tsc_available() -> bool {
     let max_leaf: u32;
+    // SAFETY: CPUID est une instruction non privilégiée et sans effet
+    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",

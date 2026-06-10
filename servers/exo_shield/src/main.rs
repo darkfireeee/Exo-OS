@@ -104,8 +104,25 @@ const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
 const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 const EXO_SHIELD_ENDPOINT: u64 = 10;
-const EXO_SHIELD_PID: u64 = 12;
+// FIX-SHIELD-PID (exoos_ipc_incoherences.md §3) : l'identité de politique IPC
+// d'exo_shield est 10 (= EXO_SHIELD_ENDPOINT). L'ancienne valeur 12 entrait en
+// collision avec TTY_SERVER_ENDPOINT et, après la correction de policy.rs,
+// faisait tomber toutes les requêtes dans le défaut Deny (aucune règle dst=12).
+// La valeur est importée de ipc_gate::policy pour interdire toute divergence.
+const EXO_SHIELD_POLICY_ID: u32 = ipc_gate::policy::EXO_SHIELD_PID;
+const _: () = assert!(EXO_SHIELD_POLICY_ID as u64 == EXO_SHIELD_ENDPOINT);
 const _: () = assert!(syscall::EXO_CAP_TOKEN_WIRE_SIZE == ipc_gate::EXO_SHIELD_CAP_TOKEN_LEN);
+
+/// PID runtime réel d'exo_shield, lu via SYS_GETPID au boot.
+/// Requis par exo_cap_check : le kernel exige caller_pid == target_pid, donc la
+/// cible du contrôle de capability doit être notre PID effectif (pas un PID
+/// statique de convention qui peut diverger de l'ordre de spawn réel).
+static RUNTIME_PID: AtomicU32 = AtomicU32::new(0);
+
+#[inline]
+fn runtime_pid() -> u32 {
+    RUNTIME_PID.load(Ordering::Relaxed)
+}
 
 // ── Global Statistics ───────────────────────────────────────────────────────
 
@@ -578,7 +595,7 @@ fn extract_service_cap_token(req: &ShieldRequest) -> syscall::ExoCapTokenWire {
 fn record_request_audit(req: &ShieldRequest, action: u8, rule_id: u32, result: u8) {
     ipc_gate::record_audit(AuditEntry {
         src_pid: req.sender_pid,
-        dst_pid: EXO_SHIELD_PID as u32,
+        dst_pid: EXO_SHIELD_POLICY_ID,
         msg_type: req.msg_type,
         action,
         rule_id,
@@ -590,7 +607,7 @@ fn record_request_audit(req: &ShieldRequest, action: u8, rule_id: u32, result: u
 }
 
 fn authorize_request(req: &ShieldRequest) -> Result<(), ShieldReply> {
-    let eval = ipc_gate::evaluate_policy(req.sender_pid, EXO_SHIELD_PID as u32, req.msg_type);
+    let eval = ipc_gate::evaluate_policy(req.sender_pid, EXO_SHIELD_POLICY_ID, req.msg_type);
     let action = PolicyAction::from_u8(eval.action);
 
     if eval.rate_limit > 0 && action == PolicyAction::Deny {
@@ -611,12 +628,14 @@ fn authorize_request(req: &ShieldRequest) -> Result<(), ShieldReply> {
         }
         ServiceCapRequirement::Required => {
             let token = extract_service_cap_token(req);
+            // exo_cap_check exige target_pid == PID de l'appelant (nous-mêmes) :
+            // on passe donc notre PID runtime, pas une constante de convention.
             let cap_ok = !token.is_empty()
                 && unsafe {
                     syscall::exo_cap_check(
                         &token,
                         syscall::EXO_CAP_RIGHT_IPC_SEND,
-                        EXO_SHIELD_PID as u32,
+                        runtime_pid(),
                         syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
                     )
                 } == 0;
@@ -1354,6 +1373,11 @@ fn perform_maintenance() {
 pub extern "C" fn _start() -> ! {
     // ── 0. Initialize all engine sub-modules ────────────────────────────────
     boot_log(b"exo_shield: boot\n");
+    // PID runtime pour exo_cap_check (le kernel exige caller == target).
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid > 0 {
+        RUNTIME_PID.store(pid as u32, Ordering::Relaxed);
+    }
     boot_log(b"exo_shield: policy init\n");
     ipc_gate::policy_init();
     boot_log(b"exo_shield: policy ready\n");

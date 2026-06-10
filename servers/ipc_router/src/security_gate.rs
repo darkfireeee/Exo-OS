@@ -214,7 +214,11 @@ pub fn audit_log_violation(
     _verdict: SecurityVerdict,
     reason: DenyReason,
 ) {
-    record_violation(src_pid, reason as u8);
+    // NOTE: pas de record_violation() ici — check_message() a déjà comptabilisé
+    // la violation localement. Cette fonction ne fait que la notification
+    // exo_shield (appelée par main.rs après un verdict de refus) ; un double
+    // appel gonflerait artificiellement le seuil SOFT_QUARANTINE_THRESHOLD.
+    let _ = reason;
 
     // FIX-AUDIT-IPC : envoi non-bloquant EVENT_REPORT vers exo_shield (endpoint 10).
     // Layout : [event_type u32][src_pid u32][dst_pid u32][reason u8][pad 3B]

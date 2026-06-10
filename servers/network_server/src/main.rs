@@ -435,7 +435,16 @@ impl NetworkService {
     }
 
     fn handle_open(&mut self, msg: NetMsg) -> NetReply {
-        let kind = match SocketKind::from_domain_type(msg.arg1 as u32, msg.arg2 as u32, msg.arg3) {
+        // FIX-SOCK-RAW (Security_Audit_Passe2 §D-01) : chemin client — la
+        // vérification de privilège SOCK_RAW doit recevoir le PID réel de
+        // l'expéditeur. L'ancien appel à from_domain_type() (wrapper compat
+        // pid=1 implicite) court-circuitait entièrement le contrôle.
+        let kind = match SocketKind::from_domain_type_privileged(
+            msg.arg1 as u32,
+            msg.arg2 as u32,
+            msg.arg3,
+            msg.sender_pid,
+        ) {
             Ok(kind) => kind,
             Err(err) => return NetReply::error(err),
         };

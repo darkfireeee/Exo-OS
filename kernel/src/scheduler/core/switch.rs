@@ -88,6 +88,9 @@ pub fn current_thread_raw() -> *mut ThreadControlBlock {
     // nul alors que la publication canonique cross-CPU a déjà eu lieu.
     // On retombe alors sur CURRENT_THREAD_PER_CPU[cpu] pour éviter un faux null
     // pendant la couture BSP/AP.
+    // SAFETY: read_current_tcb() lit le pointeur TCB depuis gs:[0x20] du CPU
+    // courant via un accès MSR/segment Ring 0. Aucune déréférence ici — on ne
+    // fait que convertir le pointeur publié en usize pour tester sa nullité.
     let gs_tcb = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() as usize };
     if gs_tcb != 0 {
         return gs_tcb as *mut ThreadControlBlock;
@@ -136,6 +139,9 @@ pub unsafe fn block_current_thread() {
         let rq = run_queue(cpu_id);
         match tcb.state() {
             TaskState::Runnable => {
+                // SAFETY: tcb provient de current_thread_raw() (non-null vérifié)
+                // et rq est la run-queue du CPU possédant ce thread. La préemption
+                // est désactivée par le contrat de block_current_thread() (unsafe fn).
                 unsafe {
                     finish_preblock_wake(rq, tcb);
                 }
@@ -265,6 +271,9 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         fpu::save_restore::xsave_current(prev);
     }
     prev.set_fpu_loaded(false);
+    // SAFETY: Ring 0, préemption désactivée (contrat de context_switch, unsafe fn).
+    // cr0_clear_ts() efface CR0.TS pour autoriser SSE/AVX ; xrstor_for(next)
+    // restaure l'état FPU de `next` depuis sa zone XSAVE par-thread alignée.
     unsafe {
         fpu::lazy::cr0_clear_ts();
         if next.is_kthread() {
@@ -307,6 +316,10 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 
     let hook = CONTEXT_SWITCH_OUT_HOOK.load(Ordering::Acquire);
     if hook != 0 {
+        // SAFETY: hook != 0 garantit qu'un pointeur de fonction valide a été
+        // publié via register_context_switch_out_hook() (signature
+        // ContextSwitchOutHook). La transmutation usize→fn pointer est correcte
+        // car l'adresse provient d'un `fn` du même ABI stockée atomiquement.
         let hook_fn: ContextSwitchOutHook = unsafe { core::mem::transmute(hook) };
         hook_fn(prev);
     }
@@ -331,6 +344,9 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     let now_tsc = tsc::read_tsc();
     let cpu_idx = percpu::current_cpu_id() as usize;
     if cpu_idx < MAX_CPUS {
+        // SAFETY: cpu_idx < MAX_CPUS borne l'accès au tableau per-CPU statique ;
+        // chaque cœur n'écrit que son propre slot (pas de partage mutable), donc
+        // la &mut est exclusive sur ce CPU. Préemption désactivée.
         let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         let last = cpu_data.last_switch_tsc;
         if last != 0 {
@@ -359,6 +375,10 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         let mut user_cr3 = next.kpti_user_cr3();
         if user_cr3 == 0 && next.pid.0 != 0 && next.cr3_phys != 0 {
             let trampoline_phys = PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
+            // SAFETY: construit la PML4 shadow KPTI pour `next` à partir de son
+            // CR3 kernel (non-nul, pid != 0 vérifiés ci-dessus), du trampoline
+            // SMP physique et du sommet de pile kernel valide. Ring 0, mappings
+            // contrôlés par le walker de tables ; échec → halt CPU.
             user_cr3 = unsafe {
                 match build_user_shadow_pml4(
                     PhysAddr::new(next.cr3_phys),
@@ -401,6 +421,10 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
+    // SAFETY: next_kstack_top est le sommet de la pile kernel de `next` (alloué
+    // au spawn). On publie ce RSP0 dans l'état per-CPU et la TSS du cœur courant
+    // (cpu_idx < MAX_CPUS) pour que la prochaine entrée Ring3→Ring0 utilise la
+    // bonne pile. Ring 0, préemption désactivée.
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
         tss::update_rsp0(cpu_idx, next_kstack_top);
@@ -417,6 +441,8 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     percpu::set_current_tcb(next as *mut ThreadControlBlock);
 
     if cpu_idx < MAX_CPUS {
+        // SAFETY: cpu_idx < MAX_CPUS ; accès exclusif au slot per-CPU du cœur
+        // courant (pas de partage mutable cross-CPU). Ring 0, préemption off.
         let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
         cpu_data.last_switch_tsc = tsc::read_tsc();
@@ -520,11 +546,15 @@ pub unsafe fn schedule_yield(
     let next_ref = &mut *next.as_ptr();
     if !core::ptr::eq(current, next_ref) {
         context_switch(current, next_ref);
+        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
+        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
         true
     } else {
+        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
+        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
@@ -641,6 +671,8 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     let current = &mut *current_nn.as_ptr();
     idle_sched_trace(b"idle_sched: switch\n");
     context_switch(current, &mut *next.as_ptr());
+    // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
+    // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }
@@ -762,6 +794,8 @@ pub unsafe fn schedule_block(
         current.state(),
         TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
     ) {
+        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
+        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
@@ -770,6 +804,8 @@ pub unsafe fn schedule_block(
 
     // SAFETY: next provient de la run queue ou du TCB idle publié pour ce CPU.
     context_switch(current, &mut *next.as_ptr());
+    // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
+    // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }

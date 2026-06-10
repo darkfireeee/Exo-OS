@@ -36,6 +36,55 @@ pub enum ServiceId {
     Ps2            = 15,  // ps2_driver    — driver clavier/souris PS/2
 }
 
+impl ServiceId {
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1  => Some(Self::Init),
+            2  => Some(Self::IpcBroker),
+            3  => Some(Self::Memory),
+            4  => Some(Self::Vfs),
+            5  => Some(Self::Crypto),
+            6  => Some(Self::Device),
+            7  => Some(Self::Network),
+            8  => Some(Self::Scheduler),
+            9  => Some(Self::VirtioDrivers),
+            10 => Some(Self::ExoShield),
+            11 => Some(Self::Input),
+            12 => Some(Self::Tty),
+            13 => Some(Self::Fb),
+            14 => Some(Self::Exosh),
+            15 => Some(Self::Ps2),
+            _  => None,
+        }
+    }
+}
+
+/// Résout un nom de service canonique vers son ServiceId.
+///
+/// FIX-EXOCORDON-03 : même table que le kernel
+/// (`kernel/src/syscall/table.rs::service_class_for_endpoint_name`) pour que
+/// la classification routeur/kernel reste identique.
+pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
+    match name {
+        b"memory_server" => Some(ServiceId::Memory),
+        b"vfs_server" => Some(ServiceId::Vfs),
+        b"crypto_server" => Some(ServiceId::Crypto),
+        b"device_server" => Some(ServiceId::Device),
+        b"virtio_drivers" | b"e1000_driver" | b"virtio_net_driver" | b"loopback_driver" => {
+            Some(ServiceId::VirtioDrivers)
+        }
+        b"ps2_driver" => Some(ServiceId::Ps2),
+        b"network_server" => Some(ServiceId::Network),
+        b"scheduler_server" => Some(ServiceId::Scheduler),
+        b"input_server" => Some(ServiceId::Input),
+        b"tty_server" => Some(ServiceId::Tty),
+        b"fb_server" => Some(ServiceId::Fb),
+        b"exo_shield" => Some(ServiceId::ExoShield),
+        b"exosh" => Some(ServiceId::Exosh),
+        _ => None,
+    }
+}
+
 #[repr(C)]
 pub struct AuthEdge {
     pub src: ServiceId,
@@ -76,66 +125,97 @@ impl AuthEdge {
     }
 }
 
-/// DAG ExoCordon — miroir de `kernel/src/security/ipc_policy.rs`.
+/// DAG ExoCordon — miroir EXACT de `kernel/src/security/ipc_policy.rs::POLICY`.
 ///
-/// FIX-EXOCORDON-01 : le DAG original ne contenait que 5 arêtes sur les 92 paires
-/// autorisées par la politique kernel, bloquant silencieusement 46/51 chemins
-/// (pipeline affichage, chaîne d'entrée, exosh↔services).
+/// FIX-EXOCORDON-01 : le DAG original ne contenait que 5 arêtes, bloquant
+/// silencieusement 46/51 chemins (pipeline affichage, chaîne d'entrée,
+/// exosh↔services).
 ///
-/// Conventions quota :
+/// FIX-EXOCORDON-02 (exoos_ipc_incoherences.md §1, Security_Application_Audit
+/// GAP-03) : alignement strict sur les 51 paires de la politique kernel.
+/// Règle IPC-01 : le DAG est une SUR-COUCHE de la politique kernel, pas un
+/// remplacement — il ne doit ni ouvrir un chemin que le kernel refuse en direct
+/// (le routeur, étant IpcBroker, blanchirait le chemin), ni en fermer un que le
+/// kernel autorise. Les 9 arêtes hors-politique (Init→Network/Input/Tty/Fb/Exosh,
+/// ExoShield→Memory/Vfs/Device, Exosh→Vfs) ont été retirées et les 16 paires
+/// kernel manquantes ajoutées. L'arête IpcBroker→ExoShield (audit violations)
+/// est couverte par le wildcard src==IpcBroker de check_ipc(), identique au
+/// comportement kernel (check_direct_ipc).
+///
+/// Conventions quota (QoS local routeur, sans équivalent kernel) :
 ///   10_000   — services critiques (init, sécurité)
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
-///   500_000  — drivers et shell
-static AUTHORIZED_GRAPH: [AuthEdge; 35] = [
-    // ── Arêtes originales (conservées) ───────────────────────────────────────
-    AuthEdge::new(ServiceId::Init,    ServiceId::Memory,        4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Vfs,           4, 10_000),
-    AuthEdge::new(ServiceId::Vfs,     ServiceId::Crypto,        2, 50_000),
-    AuthEdge::new(ServiceId::Network, ServiceId::Vfs,           2, 100_000),
-    AuthEdge::new(ServiceId::Device,  ServiceId::VirtioDrivers, 1, 1_000_000),
+///   500_000+ — drivers et shell (haut débit)
+static AUTHORIZED_GRAPH: [AuthEdge; 51] = [
+    // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
+    AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
+    AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Vfs,           4, 10_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Crypto,        4, 10_000),
+    AuthEdge::new(ServiceId::Crypto,    ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Device,        4, 10_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Scheduler,     4, 10_000),
+    AuthEdge::new(ServiceId::Scheduler, ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::ExoShield,     4, 10_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Init,          2, 10_000),
 
-    // ── Init → tous les services (démarrage + supervision) ───────────────────
-    AuthEdge::new(ServiceId::Init,    ServiceId::Crypto,        4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Device,        4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Scheduler,     4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::ExoShield,     4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Network,       4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Input,         4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Tty,           4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Fb,            4, 10_000),
-    AuthEdge::new(ServiceId::Init,    ServiceId::Exosh,         4, 10_000),
+    // ── Infrastructure fs/crypto/réseau ──────────────────────────────────────
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Crypto,        2, 50_000),
+    AuthEdge::new(ServiceId::Crypto,    ServiceId::Vfs,           2, 50_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Network,       2, 50_000),
+    AuthEdge::new(ServiceId::Network,   ServiceId::Vfs,           2, 100_000),
 
-    // ── Réponses → Init (replies des services) ────────────────────────────────
-    AuthEdge::new(ServiceId::Memory,    ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::Vfs,       ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::Crypto,    ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::Device,    ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::Scheduler, ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::Network,   ServiceId::Init,        2, 50_000),
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Init,        2, 10_000),
+    // ── Device ↔ drivers et périphériques ────────────────────────────────────
+    AuthEdge::new(ServiceId::Device,    ServiceId::VirtioDrivers, 1, 1_000_000),
+    AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Device,    1, 1_000_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Input,         2, 100_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Device,        2, 100_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Ps2,           2, 100_000),
+    AuthEdge::new(ServiceId::Ps2,       ServiceId::Device,        2, 100_000),
 
-    // ── ExoShield → services surveillés ──────────────────────────────────────
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Crypto,      2, 50_000),
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Memory,      2, 50_000),
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Tty,         2, 100_000),
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Vfs,         2, 50_000),
-    AuthEdge::new(ServiceId::ExoShield, ServiceId::Device,      2, 50_000),
+    // ── Chaîne d'entrée : Ps2 ↔ Input ↔ Tty ─────────────────────────────────
+    AuthEdge::new(ServiceId::Ps2,       ServiceId::Input,         4, 500_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Ps2,           2, 100_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Tty,           4, 100_000),
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Input,         2, 100_000),
 
-    // ── Pipeline d'affichage : Input → Tty → Fb ──────────────────────────────
-    AuthEdge::new(ServiceId::Input, ServiceId::Tty,             4, 100_000),
-    AuthEdge::new(ServiceId::Tty,   ServiceId::Fb,              4, 500_000),
-    AuthEdge::new(ServiceId::Tty,   ServiceId::Input,           2, 100_000),
+    // ── Pipeline d'affichage : Tty ↔ Fb, Device ↔ Fb ─────────────────────────
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Fb,            4, 500_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::Tty,           2, 100_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Fb,            2, 100_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::Device,        2, 100_000),
 
-    // ── Shell exosh → services requis ────────────────────────────────────────
-    AuthEdge::new(ServiceId::Exosh, ServiceId::Tty,             4, 500_000),
-    AuthEdge::new(ServiceId::Exosh, ServiceId::Vfs,             4, 500_000),
-    AuthEdge::new(ServiceId::Exosh, ServiceId::Crypto,          2, 100_000),
-    AuthEdge::new(ServiceId::Exosh, ServiceId::ExoShield,       2, 50_000),
+    // ── Tty ↔ Vfs (journal de session, périphériques fichiers) ──────────────
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Vfs,           2, 100_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Tty,           2, 100_000),
 
-    // ── Réseau → device + IpcBroker → ExoShield (audit violations) ───────────
-    AuthEdge::new(ServiceId::Network,   ServiceId::Device,      2, 100_000),
-    AuthEdge::new(ServiceId::IpcBroker, ServiceId::ExoShield,   4, 50_000),
+    // ── ExoShield ↔ services surveillés ──────────────────────────────────────
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Crypto,        2, 50_000),
+    AuthEdge::new(ServiceId::Crypto,    ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Input,         2, 100_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::ExoShield,     2, 100_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Tty,           2, 100_000),
+    AuthEdge::new(ServiceId::Tty,       ServiceId::ExoShield,     2, 100_000),
+
+    // ── Shell exosh ↔ services autorisés ─────────────────────────────────────
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::IpcBroker,     4, 500_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Crypto,        2, 100_000),
+    AuthEdge::new(ServiceId::Crypto,    ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Input,         2, 100_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Tty,           4, 500_000),
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Exosh,         4, 500_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Exosh,         2, 50_000),
+
+    // ── Réseau ↔ device/drivers ──────────────────────────────────────────────
+    AuthEdge::new(ServiceId::Network,   ServiceId::Device,        2, 100_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Network,       2, 100_000),
+    AuthEdge::new(ServiceId::Network,   ServiceId::VirtioDrivers, 1, 1_000_000),
+    AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Network,   1, 1_000_000),
 ];
 
 const _: () = assert!(
@@ -143,16 +223,79 @@ const _: () = assert!(
     "ExoShield doit rester à l'identifiant 10 (invariant Strata vague 5)"
 );
 
-// Vérification de non-régression : les 5 arêtes originales doivent rester présentes.
-const _: () = assert!(AUTHORIZED_GRAPH.len() >= 5, "DAG ne peut pas régresser sous 5 arêtes");
+// FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 51` ; toute
+// évolution de la politique kernel doit être répercutée ici (et inversement).
+const _: () = assert!(
+    AUTHORIZED_GRAPH.len() == 51,
+    "DAG ExoCordon doit rester le miroir exact des 51 paires de ipc_policy.rs"
+);
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
 const REFILL_INTERVAL_TSC: u64 = 3_000_000_000;
 
-/// Résout un PID vers un ServiceId.
+/// Table dynamique PID→ServiceId (FIX-EXOCORDON-03).
 ///
-/// FIX-EXOCORDON-01 : ajout des mappings pour PIDs 11–15 (Input, Tty, Fb, Exosh, Ps2).
+/// Les PIDs Ring1 sont assignés dynamiquement par init_server selon l'ordre
+/// réel des vagues Strata — la table statique ci-dessous ne peut donc pas
+/// classifier correctement un expéditeur runtime. Comme le kernel
+/// (SERVICE_REGISTRY peuplé à SYS_IPC_CREATE), le routeur enregistre le couple
+/// pid→service quand un service s'annonce via IPC_MSG_REGISTER (après
+/// validation contre le registre kernel, cf. FIX-REGISTRY-SYNC).
+///
+/// Encodage lock-free : slot AtomicU64 = pid (bits 0..32) | service_id (bits 32..40).
+/// 0 = slot libre.
+const MAX_DYNAMIC_SERVICES: usize = 32;
+static DYNAMIC_PIDS: [AtomicU64; MAX_DYNAMIC_SERVICES] = {
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; MAX_DYNAMIC_SERVICES]
+};
+
+/// Associe un PID runtime à un ServiceId. Retourne false si la table est pleine
+/// ou si le PID/classe est réservé (Init=1 et IpcBroker=2 restent statiques).
+pub fn register_pid(pid: Pid, id: ServiceId) -> bool {
+    if pid <= 2 || id == ServiceId::Init || id == ServiceId::IpcBroker {
+        return false;
+    }
+    let packed = (pid as u64) | ((id as u8 as u64) << 32);
+    for slot in DYNAMIC_PIDS.iter() {
+        let cur = slot.load(Ordering::Acquire);
+        if cur != 0 && cur as u32 == pid {
+            slot.store(packed, Ordering::Release);
+            return true;
+        }
+    }
+    for slot in DYNAMIC_PIDS.iter() {
+        if slot
+            .compare_exchange(0, packed, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn dynamic_service_id_of(pid: Pid) -> Option<ServiceId> {
+    for slot in DYNAMIC_PIDS.iter() {
+        let cur = slot.load(Ordering::Acquire);
+        if cur != 0 && cur as u32 == pid {
+            return ServiceId::from_u8((cur >> 32) as u8);
+        }
+    }
+    None
+}
+
+/// Résout un PID (ou endpoint fixe) vers un ServiceId.
+///
+/// FIX-EXOCORDON-01 : ajout des mappings 11–15 (Input, Tty, Fb, Exosh, Ps2).
+/// FIX-EXOCORDON-03 : la table dynamique (peuplée par IPC_MSG_REGISTER) prime
+/// sur la convention statique ; ajout de l'endpoint fixe 20 (FB_SERVER_ENDPOINT)
+/// pour la résolution des destinations adressées par endpoint.
 pub fn service_id_of(raw: Pid) -> Option<ServiceId> {
+    if let Some(id) = dynamic_service_id_of(raw) {
+        return Some(id);
+    }
     match raw {
         1  => Some(ServiceId::Init),
         2  => Some(ServiceId::IpcBroker),
@@ -169,6 +312,7 @@ pub fn service_id_of(raw: Pid) -> Option<ServiceId> {
         13 => Some(ServiceId::Fb),
         14 => Some(ServiceId::Exosh),
         15 => Some(ServiceId::Ps2),
+        20 => Some(ServiceId::Fb), // FB_SERVER_ENDPOINT (syscall_abi)
         _  => None,
     }
 }

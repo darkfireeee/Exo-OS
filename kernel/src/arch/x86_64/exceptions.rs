@@ -342,6 +342,8 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
     // Les IRQ timer/IPI ne font que poser NEED_RESCHED. Le retour Ring3 est le
     // point stable où l'on peut basculer vers un autre thread, en conservant la
     // frame d'exception sur la pile kernel du thread préempté.
+    // SAFETY: appelé au retour d'IRQ, point de préemption stable ; la frame
+    // d'exception reste sur la pile kernel du thread préempté pendant le switch.
     unsafe {
         let _ = crate::scheduler::core::switch::schedule_current_if_needed();
     }
@@ -357,6 +359,8 @@ fn sync_kpti_user_fault_mapping(fault_addr: u64, source_cr3: u64) {
     if tcb_raw == 0 {
         return;
     }
+    // SAFETY: tcb_raw != 0 vérifié ; pointe vers le TCB du thread courant publié
+    // par le scheduler pour ce CPU, vivant pendant le handler.
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let user_cr3 = tcb.kpti_user_cr3();
     let kernel_cr3 = if source_cr3 != 0 {
@@ -368,6 +372,8 @@ fn sync_kpti_user_fault_mapping(fault_addr: u64, source_cr3: u64) {
         return;
     }
 
+    // SAFETY: kernel_cr3/user_cr3 non-nuls (vérifiés) ; synchronise l'entrée PML4
+    // user KPTI pour fault_addr. Ring 0, tables possédées par ce processus.
     let _ = unsafe {
         crate::memory::virt::page_table::kpti_split::sync_user_pml4_entry(
             crate::memory::core::PhysAddr::new(kernel_cr3),
@@ -383,6 +389,8 @@ fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     if tcb_raw == 0 {
         return;
     }
+    // SAFETY: tcb_raw != 0 vérifié ; pointe vers le TCB du thread courant publié
+    // par le scheduler pour ce CPU, vivant pendant le handler.
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let pid = crate::process::core::pid::Pid(tcb.pid.0);
     let _ = crate::process::signal::delivery::send_signal_to_pid(pid, sig);
@@ -407,6 +415,7 @@ fn debug_hex64(value: u64) {
 #[cfg(all(debug_assertions, exo_kernel_trace))]
 fn debug_read_cr3() -> u64 {
     let cr3: u64;
+    // SAFETY: lecture de CR3 en Ring 0, instruction sans effet mémoire.
     unsafe {
         core::arch::asm!(
             "mov {v}, cr3",
@@ -433,6 +442,8 @@ fn debug_user_page_fault(
     let mut pid = 0u64;
     let mut tcb_cr3 = 0u64;
     if tcb_ptr != 0 {
+        // SAFETY: tcb_ptr != 0 vérifié ; pointe vers le TCB du thread courant
+        // publié par le scheduler pour ce CPU (chemin debug uniquement).
         unsafe {
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
             pid = tcb.pid.0 as u64;
@@ -454,6 +465,8 @@ fn debug_user_page_fault(
     }
 
     let walk_cr3 = if !user_as_for_fault.is_null() {
+        // SAFETY: pointeur non-null (vérifié), désigne l'UserAddressSpace du
+        // processus en faute, vivant le temps du handler (chemin debug).
         let user_as = unsafe { &*user_as_for_fault };
         user_as.pml4_phys().as_u64()
     } else {
@@ -487,6 +500,8 @@ fn debug_user_page_fault(
         frame.rip < crate::memory::core::layout::USER_END.as_u64() && (rip_pte & 1) != 0;
     if rip_bytes_valid {
         for i in 0..8u64 {
+            // SAFETY: rip_bytes_valid garantit frame.rip < USER_END et PTE présente
+            // (rip_pte & 1) ; lecture volatile d'octets user mappés (chemin debug).
             let byte = unsafe { core::ptr::read_volatile((frame.rip + i) as *const u8) };
             rip_bytes |= (byte as u64) << (i * 8);
         }
@@ -580,6 +595,8 @@ extern "C" fn do_debug(frame: *mut ExceptionFrame) {
 /// NE PAS appeler de code qui pourrait provoquer une exception.
 #[no_mangle]
 extern "C" fn do_nmi(frame: *mut ExceptionFrame) {
+    // SAFETY: `frame` est fourni par le stub d'interruption NMI sur IST2, pointe
+    // vers une ExceptionFrame valide construite par le CPU à l'entrée du handler.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[2].fetch_add(1, Ordering::Relaxed);
     NMI_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -682,6 +699,8 @@ extern "C" fn do_double_fault(frame: *mut ExceptionFrame) {
     EXC_COUNTERS[8].fetch_add(1, Ordering::Relaxed);
     df_debug_write(b"\n[#DF] double fault");
     if !frame.is_null() {
+        // SAFETY: frame non-null (vérifié) ; ExceptionFrame construite par le CPU
+        // sur la pile IST du #DF, valide pour lecture pendant le handler.
         let frame = unsafe { &*frame };
         df_debug_field(b" rip=0x", frame.rip);
         df_debug_field(b" cs=0x", frame.cs);
@@ -839,6 +858,8 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     if fault_addr.is_user() {
         let tcb_raw = current_tcb_raw_checked();
         if tcb_raw != 0 {
+            // SAFETY: tcb_raw != 0 vérifié ; TCB du thread courant publié par le
+            // scheduler pour ce CPU, vivant pendant le handler de #PF.
             let tcb =
                 unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
@@ -846,6 +867,9 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             {
                 let as_ptr = pcb.address_space_ptr();
                 if !as_ptr.is_null() {
+                    // SAFETY: as_ptr non-null (vérifié), publié par lifecycle/create
+                    // comme UserAddressSpace du PCB trouvé ; le PCB est vivant dans
+                    // PROCESS_REGISTRY pendant le handler.
                     let user_as = unsafe { &*(as_ptr as *const UserAddressSpace) };
                     user_as_for_fault = user_as as *const UserAddressSpace;
                     user_as.record_fault();
@@ -883,6 +907,8 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     }
 
     let result = if resolve_as_user {
+        // SAFETY: resolve_as_user implique user_as_for_fault non-null ; pointe vers
+        // l'UserAddressSpace du processus en faute, vivant pendant le handler.
         let user_as = unsafe { &*user_as_for_fault };
         let user_alloc = UserFaultAllocator::new(user_as);
         crate::memory::virt::fault::handler::handle_page_fault(&ctx, &user_alloc)
@@ -894,6 +920,8 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         FaultResult::Handled => {
             if resolve_as_user {
                 let source_cr3 = if !user_as_for_fault.is_null() {
+                    // SAFETY: pointeur non-null (vérifié) ; UserAddressSpace du
+                    // processus en faute, vivant pendant le handler.
                     unsafe { (&*user_as_for_fault).pml4_phys().as_u64() }
                 } else {
                     0
@@ -1205,18 +1233,21 @@ extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
 #[no_mangle]
 extern "C" fn do_exophoenix_freeze(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_FREEZE);
+    // SAFETY: handler d'IPI ExoPhoenix FREEZE en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
 }
 
 #[no_mangle]
 extern "C" fn do_exophoenix_pmc(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_PMC);
+    // SAFETY: handler d'IPI ExoPhoenix PMC snapshot en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_pmc_snapshot_ipi() };
 }
 
 #[no_mangle]
 extern "C" fn do_exophoenix_tlb(_frame: *mut ExceptionFrame) {
     super::idt::irq_counter_inc(super::idt::VEC_EXOPHOENIX_TLB);
+    // SAFETY: handler d'IPI ExoPhoenix TLB flush en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_tlb_flush_ipi() };
 }
 

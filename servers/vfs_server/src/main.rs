@@ -767,6 +767,15 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
         }
         ops::VFS_STAT => handle_stat(req.sender_pid, &req.payload),
         ops::VFS_GETDENTS => handle_getdents(req.sender_pid, &req.payload),
+        // FIX-APP-06 (complément) : mkdir/unlink/rmdir/rename/truncate sont des
+        // mutations au même titre que write — la garde d'accès ne couvrait que
+        // VFS_WRITE, laissant les services read-only détruire des fichiers.
+        ops::VFS_MKDIR | ops::VFS_UNLINK | ops::VFS_RMDIR | ops::VFS_RENAME
+        | ops::VFS_TRUNCATE
+            if !check_vfs_write_access(req.sender_pid) =>
+        {
+            VfsReply { status: syscall::EACCES, blob_id: 0, fd: -1, _pad: [0; 40] }
+        }
         ops::VFS_MKDIR => handle_path_mode(&req.payload, syscall::SYS_MKDIR),
         ops::VFS_UNLINK => handle_path_only(&req.payload, syscall::SYS_UNLINK),
         ops::VFS_RMDIR => handle_path_only(&req.payload, syscall::SYS_RMDIR),

@@ -69,6 +69,22 @@ fn mark_exit(
 
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
+        // FIX-APP-08 (Security_Application_Audit §GAP-08) : tracer la terminaison
+        // du processus dans ExoLedger. process spawn/exit n'étaient pas audités.
+        // ActionTag::Custom { tag = 0x4558_4954 "EXIT", data = pid|status<<32 }.
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::Custom {
+                tag: 0x4558_4954, // "EXIT"
+                data: (pcb.pid.0 as u64) | ((exit_status as u64) << 32),
+            },
+        );
+        // FIX-P1-VEIL (Security_Application_Audit §GAP-07) : la révocation des
+        // capabilities du processus est portée par `pcb.cap_table` (Box détenue
+        // par le PCB), libérée au reap — les capabilities par-processus meurent
+        // donc avec le PCB sans appel explicite. `exoveil::revoke_domain()` n'est
+        // PAS utilisé ici : c'est une primitive de lockdown PKS GLOBAL (décision
+        // Kernel B), pas un cleanup per-process — l'invoquer à chaque exit
+        // verrouillerait les tables de capabilities de tout le système.
         let ppid = pcb.ppid();
         if ppid.0 != 0 {
             let _ = send_signal_to_pid(ppid, Signal::SIGCHLD);

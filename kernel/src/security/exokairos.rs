@@ -722,6 +722,32 @@ fn get_kernel_secret() -> [u8; 32] {
 // TTL Lookup — Détermine le TTL pour un droit donné
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Enregistre une deadline temporelle pour une capability fraîchement créée.
+///
+/// FIX-P1-KAIROS (Security_Application_Audit §GAP-07) : `ttl_for_right()` n'avait
+/// aucun appelant externe — les tokens IPC n'expiraient jamais. Cette fonction
+/// est appelée depuis `capability::create()` pour associer chaque token émis à
+/// une deadline = maintenant + TTL(droits). La base de temps est `monotonic_ns()`
+/// (la même que `verify()` via `current_window_ns`), de sorte que `TemporalCap::
+/// verify(monotonic_ns())` détectera l'expiration.
+///
+/// Best-effort : si l'horloge n'est pas encore calibrée (monotonic_ns == 0) ou si
+/// la table est pleine, l'enregistrement est ignoré (le token reste non-temporel,
+/// comportement identique à l'existant — aucune régression).
+pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, rights: Rights) {
+    let now_ns = crate::scheduler::timer::clock::monotonic_ns();
+    if now_ns == 0 {
+        return;
+    }
+    let ttl_s = ttl_for_right(rights);
+    let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
+    // SAFETY: Ring 0, table protégée par PKS Credentials via scoped_domain_access
+    // interne à insert(). L'ObjectId provient de la table kernel (create()).
+    unsafe {
+        let _ = cap_deadline_table::insert(oid, deadline_ns);
+    }
+}
+
 /// Retourne le TTL en secondes pour un droit spécifique.
 ///
 /// Utilisé lors de la création d'une TemporalCap pour calculer la deadline.

@@ -2948,6 +2948,19 @@ pub fn sys_exo_ipc_send(
         }
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
+    // FIX-IPC-SENDER-AUTH (Security_Application_Audit §GAP-04/05) : pour un
+    // appelant non-trusted, le champ sender_pid de l'enveloppe ABI (octets 0..4)
+    // est TOUJOURS forcé à caller_pid, flag INJECT ou non. Sans cela, un
+    // processus pouvait forger sender_pid=1 (init) dans l'enveloppe et obtenir
+    // des opérations privilégiées des serveurs Ring 1 (memory/scheduler/vfs),
+    // qui font confiance à ce champ pour leurs contrôles d'accès.
+    // Les services Ring 1 trusted (can_inject) restent libres : l'ipc_router
+    // doit pouvoir relayer un message en préservant le PID d'origine.
+    if !caller_can_inject
+        && payload.len() == crate::ipc::core::constants::ABI_IPC_ENVELOPE_SIZE
+    {
+        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    }
     if is_reserved_kernel_ipc(endpoint, &payload) {
         return EACCES;
     }

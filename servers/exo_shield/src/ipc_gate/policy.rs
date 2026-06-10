@@ -40,7 +40,10 @@ const IPC_ROUTER_PID: u32 = 2;
 // FIX-SHIELD-PID: EXO_SHIELD_PID était 12, soit la valeur de TTY_SERVER_ENDPOINT.
 // Les règles de filtrage IPC d'ExoShield étaient donc appliquées sur tty_server
 // au lieu d'exo_shield. Corrigé à 10 = valeur réelle de EXO_SHIELD_ENDPOINT.
-const EXO_SHIELD_PID: u32 = 10;
+// Exporté (pub) pour que main.rs évalue la politique avec la même identité que
+// celle des règles installées par policy_init() — sinon le défaut Deny s'applique
+// à toutes les requêtes (dst ne matchant aucune règle).
+pub const EXO_SHIELD_PID: u32 = 10;
 
 const SCAN_REQUEST: u32 = 0;
 const EVENT_REPORT: u32 = 1;

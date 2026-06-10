@@ -218,7 +218,7 @@ pub fn add_route(
 
 /// Retire une route de la table.
 pub fn remove_route(dest_service_id: u32) -> bool {
-    let mut table = ROUTE_TABLE.lock();
+    let table = ROUTE_TABLE.lock();
     let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
 
     for i in 0..count.min(MAX_ROUTES) {
@@ -295,14 +295,16 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
             let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
             // FIX-ROUTER-01: utiliser la constante ABI au lieu du numéro hardcodé.
             // 302 = SYS_EXO_IPC_RECV_NB (réception non-bloquante) ≠ SYS_IPC_SEND (300).
+            // FIX-ROUTER-02: l'argument 4 de SYS_IPC_SEND est `flags`, pas src_pid.
+            // Passer src_pid ici activait des bits arbitraires (0x1 = TIMEOUT,
+            // 0x2 = INJECT_SRC_PID) selon la valeur du PID. flags = 0 comme main.rs.
             let result = unsafe {
-                crate::syscall::syscall6(
+                syscall_abi::syscall6(
                     syscall_abi::SYS_IPC_SEND,
                     dest as u64,
                     payload.as_ptr() as u64,
                     payload_len as u64,
-                    src_pid as u64,
-                    0, 0,
+                    0, 0, 0,
                 )
             };
 
@@ -335,15 +337,15 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
                     } else {
                         table[i].dest_service_id
                     };
-                    // FIX-ROUTER-01: constante ABI — même correction que Direct/Forwarded.
+                    // FIX-ROUTER-01/02: constante ABI + flags=0 — même correction
+                    // que le chemin Direct/Forwarded.
                     let result = unsafe {
-                        crate::syscall::syscall6(
+                        syscall_abi::syscall6(
                             syscall_abi::SYS_IPC_SEND,
                             dest as u64,
                             payload.as_ptr() as u64,
                             payload_len as u64,
-                            src_pid as u64,
-                            0, 0,
+                            0, 0, 0,
                         )
                     };
                     if result >= 0 {
@@ -355,9 +357,21 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
             sent > 0
         }
         RoutePolicy::LoadBalanced => {
-            // Déléguer au load_balancer pour choisir l'instance
-            // Pour le moment, fallback vers direct
-            forward_message(src_pid, dst_pid, payload, payload_len)
+            // FIX-ROUTER-02: l'ancien fallback rappelait forward_message() qui
+            // re-résolvait la même politique LoadBalanced → récursion infinie.
+            // Envoi direct vers l'instance résolue (sélection multi-instance via
+            // load_balancer à brancher quand les pools seront peuplés).
+            let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
+            let result = unsafe {
+                syscall_abi::syscall6(
+                    syscall_abi::SYS_IPC_SEND,
+                    dest as u64,
+                    payload.as_ptr() as u64,
+                    payload_len as u64,
+                    0, 0, 0,
+                )
+            };
+            result >= 0
         }
     }
 }
@@ -425,7 +439,7 @@ pub fn record_missed_heartbeat(service_id: u32) {
 pub fn check_dead_routes() -> u32 {
     let now = read_tsc();
     let mut dead_count = 0u32;
-    let mut table = ROUTE_TABLE.lock();
+    let table = ROUTE_TABLE.lock();
     let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
 
     for i in 0..count.min(MAX_ROUTES) {

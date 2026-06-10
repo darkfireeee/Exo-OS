@@ -517,6 +517,9 @@ impl SchedNodePool {
         if ptr.is_null() {
             return;
         }
+        // SAFETY: self.blocks est un UnsafeCell<[RawBlock64; N]> statique du pool ;
+        // on lit seulement l'adresse de base du tableau (pas de déréférence de
+        // contenu) pour la vérification de borne ci-dessous. Accès Ring 0.
         let blocks_base = unsafe { (*self.blocks.get()).as_ptr() as usize };
         let ptr_addr = ptr as usize;
         // Vérification de borne (défensif)
