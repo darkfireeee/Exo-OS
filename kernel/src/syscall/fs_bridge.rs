@@ -2998,12 +2998,17 @@ pub fn fs_access(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError>
 }
 
 /// `fsync(fd)` / `fdatasync(fd)`.
+///
+/// FIX-EXOFS-ROB-4 (AUDIT-EXOFS §3) : `fsync` durabilise désormais données ET
+/// métadonnées (POSIX exige les deux). Pour `fdatasync` (`data_only == true`),
+/// seules les données du blob sont forcées sur disque (pas de commit d'epoch des
+/// métadonnées), conformément à la sémantique POSIX. L'ancien code persistait le
+/// blob mais ignorait `data_only` et ne committait jamais d'epoch.
 #[inline]
 pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = data_only;
     let entry = OBJECT_TABLE
         .get(resolve_fd(pid, fd)?.handle)
         .map_err(exofs_to_bridge_error)?;
@@ -3012,11 +3017,22 @@ pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError
         return Ok(0);
     }
 
+    // Forcer les données du blob sur le disque.
     if let Some(data) = BLOB_CACHE.get(&entry.blob_id) {
         match object_store::persist_blob_data_if_disk(entry.blob_id, &data, true) {
             Ok(_) => {
                 let _ = BLOB_CACHE.mark_clean(&entry.blob_id);
             }
+            Err(err) => return Err(exofs_to_bridge_error(err)),
+        }
+    }
+
+    // fsync (≠ fdatasync) : sceller un epoch pour durabiliser les métadonnées
+    // (PathIndex, taille, table d'objets) en plus des données. fdatasync s'arrête
+    // après la persistance des données.
+    if !data_only {
+        match crate::fs::exofs::syscall::epoch_commit::commit_current_epoch() {
+            Ok(_) | Err(ExofsError::CommitInProgress) => {}
             Err(err) => return Err(exofs_to_bridge_error(err)),
         }
     }
@@ -3906,31 +3922,18 @@ pub fn fs_sync(pid: u32) -> Result<i64, FsBridgeError> {
     }
     let _ = pid;
 
-    let dirty = BLOB_CACHE.collect_dirty();
-    if dirty.is_empty() {
+    if BLOB_CACHE.collect_dirty().is_empty() {
         return Ok(0);
     }
 
-    let mut io_err = false;
-    let mut i = 0usize;
-    while i < dirty.len() {
-        let (blob_id, ref data) = dirty[i];
-        match object_store::persist_blob_data_if_disk(blob_id, data, true) {
-            Ok(_) => {
-                let _ = BLOB_CACHE.mark_clean(&blob_id);
-            }
-            Err(_) => {
-                io_err = true;
-            }
-        }
-        i = i.wrapping_add(1);
+    // FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2) : `sync()` déclenche un commit d'epoch
+    // transactionnel (durabilité atomique données + métadonnées) au lieu d'une
+    // persistance brute blob par blob. Le commit flush lui-même tous les blobs
+    // dirty puis scelle l'epoch (journal + EpochRoot/Record + barrières NVMe).
+    match crate::fs::exofs::syscall::epoch_commit::commit_current_epoch() {
+        Ok(_) | Err(ExofsError::CommitInProgress) => Ok(0),
+        Err(_) => Err(FsBridgeError::Io),
     }
-
-    if io_err {
-        return Err(FsBridgeError::Io);
-    }
-
-    Ok(0)
 }
 
 /// `posix_fadvise/fadvise64`.

@@ -696,6 +696,9 @@ extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
 /// NE PAS allouer, NE PAS prendre de verrous.
 #[no_mangle]
 extern "C" fn do_double_fault(frame: *mut ExceptionFrame) {
+    // DIAG: marqueur brut inconditionnel à l'entrée (#DF sur IST1).
+    // SAFETY: port E9, sans effet mémoire.
+    unsafe { core::arch::asm!("out 0xE9, al", in("al") b'D', options(nomem, nostack)) };
     EXC_COUNTERS[8].fetch_add(1, Ordering::Relaxed);
     df_debug_write(b"\n[#DF] double fault");
     if !frame.is_null() {
@@ -783,8 +786,12 @@ extern "C" fn do_stack_fault(frame: *mut ExceptionFrame) {
 /// Handler #GP — General Protection Fault
 #[no_mangle]
 extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
+    // DIAG: marqueur brut inconditionnel à l'entrée.
+    // SAFETY: port E9, sans effet mémoire.
+    unsafe { core::arch::asm!("out 0xE9, al", in("al") b'G', options(nomem, nostack)) };
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
+    diag_fault_e9(b"#GP", super::read_cr2(), frame.rip);
     EXC_COUNTERS[13].fetch_add(1, Ordering::Relaxed);
     GP_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -794,6 +801,54 @@ extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
     } else {
         kernel_panic_exception("#GP kernel", frame);
     }
+}
+
+/// DIAG-FAULT (temporaire) : armé par exofs_init pour ne dumper que les faults
+/// survenant pendant l'init FS (filtre le bruit de demand-paging du boot précoce).
+pub static FS_REACHED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// DIAG-FAULT (temporaire) : dump E9 "tag cr2=.. rip=.." au premier fault, capé
+/// pour ne pas inonder. À retirer après diagnostic du triple fault virtio.
+fn diag_fault_e9(tag: &[u8], cr2: u64, rip: u64) {
+    use core::sync::atomic::{AtomicU32, Ordering as O};
+    static N: AtomicU32 = AtomicU32::new(0);
+    // Ne dumper que les ~30 DERNIERS faults avant le crash : on garde un anneau
+    // implicite via le compteur, mais ici on imprime tout après le seuil FS pour
+    // capter le fault virtio même si demand-paging a généré du bruit avant.
+    let n = N.fetch_add(1, O::Relaxed);
+    if n >= 5000 {
+        return;
+    }
+    // Marqueur "post-FS" : on n'imprime que si exofs_init a commencé (V0 émis).
+    if !FS_REACHED.load(O::Relaxed) {
+        return;
+    }
+    #[inline(always)]
+    fn e9(b: u8) {
+        // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire.
+        unsafe { core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack)) };
+    }
+    fn e9hex(v: u64) {
+        let mut i = 60i32;
+        while i >= 0 {
+            let nib = ((v >> i) & 0xf) as u8;
+            e9(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 });
+            i -= 4;
+        }
+    }
+    for &b in tag {
+        e9(b);
+    }
+    for &b in b" cr2=" {
+        e9(b);
+    }
+    e9hex(cr2);
+    for &b in b" rip=" {
+        e9(b);
+    }
+    e9hex(rip);
+    e9(b'\n');
 }
 
 /// Handler #PF — Page Fault
@@ -814,9 +869,13 @@ extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
 /// du processus courant. Pour l'instant, `KernelFaultAllocator` est utilisé.
 #[no_mangle]
 extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
+    // DIAG: marqueur brut inconditionnel à l'entrée (avant tout accès mémoire).
+    // SAFETY: port E9, sans effet mémoire.
+    unsafe { core::arch::asm!("out 0xE9, al", in("al") b'P', options(nomem, nostack)) };
     // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
     // unique pour ce contexte d'exception.
     let frame = unsafe { &mut *frame };
+    diag_fault_e9(b"#PF", super::read_cr2(), frame.rip);
     EXC_COUNTERS[14].fetch_add(1, Ordering::Relaxed);
     super::paging::inc_page_fault();
 

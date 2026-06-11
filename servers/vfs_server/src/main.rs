@@ -18,7 +18,18 @@
 //! - VFS_UMOUNT   (1) : démonter un point de montage
 //! - VFS_RESOLVE  (2) : résoudre un chemin -> blob_id bas 64 bits
 //! - VFS_OPEN     (3) : ouvrir un chemin -> fd dans le namespace appelant
-//! - VFS_CLOSE..FSYNC (4..14) : operations POSIX de base, deleguees au kernel
+//! - VFS_CLOSE..FSYNC (4..14) : opérations POSIX servies par `handle_request`
+//!   comme handlers IPC qui relaient vers les syscalls ExoFS du kernel.
+//!
+//! ## Architecture hybride (Ring0 + Ring1) — VOULUE
+//! FIX-AUDIT-FS-F1 : l'ancien commentaire prétendait que les ops 4..14 étaient
+//! « déléguées au kernel » (sous-entendu : non implémentées ici). En réalité
+//! `handle_request` implémente bien ces ops comme front-end IPC. Le kernel
+//! (`syscall/fs_bridge.rs`) sert AUSSI ces opérations en direct pour le chemin
+//! rapide Ring0 — ExoFS tourne en Ring0 par conception (cf. spec §1.1 et
+//! AUDIT-EXOFS : « ExoOS est hybride volontairement »). vfs_server reste le
+//! point d'entrée IPC pour les clients qui passent par le namespace VFS et le
+//! détenteur de la table de montages ; ce n'est pas du code mort.
 //!
 //! ## Syscalls utilisés
 //! - SYS_EXOFS_PATH_RESOLVE = 500 (path, len, flags, out, _, rights)

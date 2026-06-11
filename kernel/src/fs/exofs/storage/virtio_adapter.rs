@@ -154,17 +154,37 @@ fn install_kernel_hal_once() {
     }
 }
 
+/// DIAG-VIRTIO (temporaire) : marqueur E9 préfixe 'V'. À retirer après diagnostic.
+#[inline(always)]
+fn vdbg(tag: u8) {
+    // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire.
+    unsafe {
+        ::core::arch::asm!("out 0xE9, al", in("al") b'V', options(nomem, nostack));
+        ::core::arch::asm!("out 0xE9, al", in("al") tag, options(nomem, nostack));
+    }
+}
+
 pub fn init_global_disk_with_legacy_pci(io_base: u16) -> ExofsResult<bool> {
+    vdbg(b'a');
     install_kernel_hal_once();
+    vdbg(b'b');
     let adapter = VirtioBlockAdapter::new_legacy_pci(io_base)?;
-    Ok(register_global_disk(Arc::new(adapter)))
+    vdbg(b'c');
+    let r = register_global_disk(Arc::new(adapter));
+    vdbg(b'd');
+    Ok(r)
 }
 
 pub fn init_global_disk() {
+    crate::arch::x86_64::exceptions::FS_REACHED.store(true, Ordering::Release);
+    vdbg(b'0');
     let Some(io_base) = crate::drivers::find_virtio_blk_legacy_io_port() else {
+        vdbg(b'X'); // pas de port virtio legacy trouvé
         return;
     };
+    vdbg(b'1');
     let _ = init_global_disk_with_legacy_pci(io_base);
+    vdbg(b'2');
 }
 
 pub fn has_global_disk() -> bool {

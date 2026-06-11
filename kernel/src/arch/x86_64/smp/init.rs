@@ -179,7 +179,14 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 6c. Initialisation locale scheduler AP (lazy FPU + compteurs tick).
     crate::scheduler::init_ap(cpu_id);
 
-    // 7. Mitigations spectre
+    // 7. Mitigations spectre (IBRS/STIBP/SSBD + KPTI) sur cet AP.
+    // FIX-AUDIT-V020-P0-1 : la section était vide — seul le BSP appliquait les
+    // mitigations (early_init.rs). Les APs exécutaient donc du code Ring 0 sans
+    // IBRS/SSBD ni KPTI, exposant le kernel à Spectre v2/v4 cross-process via les
+    // cœurs secondaires. apply_mitigations_ap() effectue les écritures MSR/CR4
+    // per-CPU (IA32_SPEC_CTRL, SMEP/SMAP) et construit la shadow PML4 KPTI propre
+    // à ce cœur (kpti::init_kpti → register_cpu(cpu_id, ...)).
+    crate::arch::x86_64::spectre::apply_mitigations_ap();
 
     // 9. Activer les interruptions et entrer dans la boucle idle scheduler
     // SAFETY: toutes les structures sont initialisées sur cet AP

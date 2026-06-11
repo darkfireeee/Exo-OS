@@ -403,6 +403,13 @@ fn minimal_recovery_log(epoch: EpochId) {
 /// (sélection slot, replay, fsck conditionnel). Sans disque ou sur disque vierge,
 /// garde le chemin minimal afin de ne pas casser le premier formatage.
 pub fn boot_recovery_sequence(disk_size_bytes: u64) -> ExofsResult<()> {
+    // DIAGNOSTIC-BOOT-FS (temporaire) : bypass des lectures disque de recovery
+    // pour isoler le triple fault dans le read bloc virtio. À retirer une fois la
+    // cause virtio identifiée. FS démarre alors en mode vierge (sans recovery).
+    if option_env!("EXO_SKIP_RECOVERY").is_some() {
+        minimal_recovery_log(EpochId(0));
+        return Ok(());
+    }
     match virtio_adapter::with_global_disk(|device| {
         let device_size = device
             .total_blocks()

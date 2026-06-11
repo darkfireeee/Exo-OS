@@ -81,7 +81,35 @@ fn efi_main(
     ).expect("Impossible de charger le kernel depuis l'ESP");
     boot_println!("Kernel: {} bytes", kernel_data.len());
     kernel_loader::verify::verify_kernel_or_panic(kernel_data.as_bytes());
-    boot_println!("Signature OK");
+
+    // FIX-AUDIT-V020-P1-3 : appliquer la politique Secure Boot.
+    // enforce_secure_boot_policy() existait mais n'était JAMAIS appelée — la
+    // promesse de config/defaults.rs (« secure_boot_required=true et pas de
+    // Secure Boot → refus ») n'était donc pas tenue. On combine ici l'état UEFI
+    // Secure Boot réel, le verdict de signature et le flag de config. En dev
+    // (secure_boot_required=false + UEFI SB inactif), un kernel non signé passe
+    // avec avertissement ; en prod (flag=true OU UEFI SB enforcing), refus.
+    {
+        let sb_status = uefi::secure_boot::query_secure_boot_status(&system_table);
+        let kernel_sig_valid =
+            kernel_loader::verify::verify_kernel_signature(kernel_data.as_bytes());
+        match uefi::secure_boot::enforce_secure_boot_policy(
+            &sb_status,
+            kernel_sig_valid,
+            cfg.secure_boot_required,
+        ) {
+            Ok(()) => {
+                if !kernel_sig_valid {
+                    boot_println!(
+                        "AVERTISSEMENT: kernel non signé accepté (mode dev permissif)"
+                    );
+                } else {
+                    boot_println!("Signature OK");
+                }
+            }
+            Err(e) => panic!("{}", e),
+        }
+    }
 
     // Étape 6 : Entropie (RÈGLE BOOT-05 : 64 bytes)
     let entropy = uefi::protocols::rng::collect_entropy(boot_services, 64)

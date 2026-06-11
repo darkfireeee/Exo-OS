@@ -509,6 +509,16 @@ fn try_forge_reconstruct_with_policy() -> Result<(), &'static str> {
 
 /// Démarrage isolation coopérative (Phase 1).
 pub fn begin_isolation_soft() -> Result<(), &'static str> {
+    // FIX-AUDIT-V020-P1-2 : précondition fail-safe — ne JAMAIS diffuser un IPI
+    // freeze (qui gèle tous les autres cœurs) si les vecteurs de récupération
+    // ExoPhoenix ne sont pas armés. stage0_init_all_steps() (lib.rs, chemin BSP
+    // commun) arme les vecteurs en fin de stage0, donc le sentinel — qui appelle
+    // cette fonction bien plus tard — les voit toujours actifs en exploitation
+    // normale. Si le flag est faux, c'est une mauvaise configuration du boot :
+    // geler les cœurs sans pouvoir les relancer serait pire que de refuser.
+    if !crate::exophoenix::stage0::exophoenix_vectors_active() {
+        return Err("exophoenix_vectors_not_armed");
+    }
     let _ = handoff_flag_acquire();
     let self_slot = current_slot();
 

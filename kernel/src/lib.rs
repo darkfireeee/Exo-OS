@@ -274,7 +274,9 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     // de sécurité pour les capabilities IOMMU) et avant ipc_init() (Phase 6).
     //
     // SAFETY: appelé une seule fois depuis le BSP, après security_init().
-    let _stage0_summary = crate::exophoenix::stage0::stage0_init_all_steps();
+    // FIX-BOOT-STAGE0-HANG : kernel_a_boot=true ⇒ saute les étapes Kernel-B qui
+    // clobbent l'état CPU du BSP (TSS/IDT/timer APIC), cause du hang après SECURITY.
+    let _stage0_summary = crate::exophoenix::stage0::stage0_init_all_steps(true);
     kdb(b'S'); // Stage0 ExoPhoenix done
     crate::arch::x86_64::boot_display::stage_ok("STAGE0");
 
@@ -313,9 +315,11 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     )
     .is_ok();
 
+    kdb(b'R'); // exofs_init retourné (post-#6)
     if exofs_ready {
         let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
     }
+    kdb(b'T'); // seed_kernel_a_image_blob fait
 
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
     {

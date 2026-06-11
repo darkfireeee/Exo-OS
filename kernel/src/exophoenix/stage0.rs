@@ -998,7 +998,19 @@ pub fn arm_apic_watchdog(ms: u64) -> u64 {
 }
 
 /// Orchestrateur strict des étapes 1a→12.
-pub fn stage0_init_all_steps() -> Stage0Summary {
+/// Exécute les étapes stage0 ExoPhoenix.
+///
+/// FIX-BOOT-STAGE0-HANG : `kernel_a_boot = true` quand la fonction est appelée
+/// INLINE sur le boot du noyau principal (Kernel A, lib.rs Phase 5b). Dans ce
+/// cas, on SAUTE les étapes qui reconfigurent l'état CPU live du BSP de Kernel A
+/// (pile/TSS/IDT/timer APIC/watchdog), car elles appartiennent à Kernel B et
+/// clobbent l'état de Kernel A — en particulier `init_b_tss()` rechargeait le TR
+/// du BSP (`ltr` sur un TSS déjà busy ⇒ #GP, RSP0 détourné vers la pile B), ce
+/// qui crashait le boot juste après « SECURITY ». On conserve les étapes sûres /
+/// utiles (SSR, ACPI/PCI read-only, domaine IOMMU de blocage — no-op sans VT-d).
+/// `kernel_a_boot = false` (point d'entrée dédié `stage0_init`, sur le cœur de
+/// Kernel B) exécute la séquence complète.
+pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
     // SAFETY: Stage0 s'exécute sur Kernel B avant la prise de contrôle normale
     // de Kernel A ; ExoSeal phase 0 est idempotent.
     unsafe {
@@ -1016,60 +1028,125 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
             super::ssr::SSR_LAYOUT_MINOR,
             exo_phoenix_ssr::SSR_MAGIC
         );
+        // FIX-BOOT-STAGE0-HANG : NE PAS halter ici. `stage0_init_all_steps()` est
+        // appelé inline sur le chemin de boot de KERNEL A (lib.rs Phase 5b), AVANT
+        // IPC et FS. L'ancien `loop { hlt }` bloquait donc tout le boot (arrêt après
+        // « SECURITY », jamais de STAGE0/IPC/FS/shell) dès que la SSR ExoPhoenix
+        // n'était pas valide sur l'environnement courant (QEMU sans région SSR
+        // conforme). La SSR ne sert qu'à la résurrection ExoPhoenix (Kernel A↔B) ;
+        // les étapes suivantes (IOMMU, APIC, watchdog) n'en dépendent pas. On passe
+        // donc en mode dégradé et on CONTINUE le boot. Le point d'entrée dédié de
+        // Kernel B (`stage0_init`) garde, lui, ses propres gardes d'arrêt.
         PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
-        loop {
-            unsafe {
-                core::arch::asm!("hlt", options(nostack, nomem));
-            }
+    }
+
+    // FIX-BOOT-STAGE0-HANG : marqueurs de diagnostic E9 (préfixe '@') pour
+    // pinpointer l'étape fautive si le boot s'arrête encore dans stage0. Émis
+    // sur le port debug QEMU 0xE9 (visibles dans /tmp/e9k.txt). À retirer une
+    // fois le boot stage0 validé.
+    #[inline(always)]
+    fn s0dbg(tag: u8) {
+        // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire, dispo dès le reset.
+        unsafe {
+            core::arch::asm!("out 0xE9, al", in("al") b'@', options(nomem, nostack));
+            core::arch::asm!("out 0xE9, al", in("al") tag, options(nomem, nostack));
         }
     }
+    s0dbg(b'1'); // SSR ok/dégradé
 
     // 1b) Probe CPUID global (HPET faux jusqu'au parse ACPI)
     init_feature_probe(false);
+    s0dbg(b'2');
 
-    // 2) Stack B + guard page
-    let b_stack_top = setup_b_stack_with_guard_page();
+    // ── Étapes 2/3/4 : état CPU de Kernel B (pile + TSS + IDT) ────────────────
+    // FIX-BOOT-STAGE0-HANG : sautées sur le boot de Kernel A. setup_b_stack
+    // démappe une guard page dans l'AS de Kernel A ; init_b_tss recharge le TR du
+    // BSP (#GP sur TSS busy + RSP0 détourné) ; setup_b_idt recharge l'IDT. Tout
+    // cela appartient au cœur de Kernel B.
+    let b_stack_top = if kernel_a_boot {
+        B_STACK_TOP.load(Ordering::Acquire)
+    } else {
+        // 2) Stack B + guard page
+        let top = setup_b_stack_with_guard_page();
+        s0dbg(b'3');
+        // 3) TSS/IST B
+        init_b_tss(top);
+        s0dbg(b'4');
+        // 4) IDT stubs
+        setup_b_idt_with_stubs();
+        top
+    };
+    s0dbg(b'5');
 
-    // 3) TSS/IST B
-    init_b_tss(b_stack_top);
-
-    // 4) IDT stubs
-    setup_b_idt_with_stubs();
-
-    // 5) ACPI (MADT/FADT/FACS)
+    // 5) ACPI (MADT/FADT/FACS) — lecture seule
     let acpi = parse_stage0_acpi();
+    s0dbg(b'6');
 
-    // 5b) PCI + taille pool R3
+    // 5b) PCI + taille pool R3 — lecture seule (config space)
     let pci_device_count = enumerate_pci_devices();
+    s0dbg(b'7');
     const POOL_R3_MIN_SIZE: u64 = 8 * 1024 * 1024;
     let pool_r3_size = POOL_R3_SIZE_BYTES
         .load(Ordering::Acquire)
         .max(POOL_R3_MIN_SIZE);
     POOL_R3_SIZE_BYTES.store(pool_r3_size, Ordering::Release);
 
-    // 6) APIC->slot depuis MADT réel
+    // 6) APIC->slot depuis MADT réel — lecture seule
     let apic_slots_mapped = build_apic_to_slot_from_real_madt(acpi.madt_phys);
+    s0dbg(b'8');
 
-    // 7) APIC timer via PIT ch2
-    let ticks_per_us = calibrate_and_store_ticks_per_us();
+    // ── Étapes 7/8 : timer APIC de Kernel B ───────────────────────────────────
+    // FIX-BOOT-STAGE0-HANG : la calibration PIT/APIC et init_local_apic_dispatch
+    // reconfigurent le timer APIC du BSP — sur le boot de Kernel A cela écraserait
+    // le timer du scheduler de Kernel A. Sautées sur le boot de Kernel A.
+    let ticks_per_us = if kernel_a_boot {
+        TICKS_PER_US.load(Ordering::Acquire)
+    } else {
+        // 7) APIC timer via PIT ch2
+        let t = calibrate_and_store_ticks_per_us();
+        s0dbg(b'9');
+        // 8) APIC local dispatch + VMXOFF défensif
+        init_local_apic_dispatch();
+        vmxoff_if_active();
+        t
+    };
+    s0dbg(b'a');
 
-    // 8) APIC local dispatch + VMXOFF défensif
-    init_local_apic_dispatch();
-    vmxoff_if_active();
-
-    // 9) IOMMU + ACS root-ports + IOTLB flush
+    // 9) IOMMU + ACS root-ports + IOTLB flush (no-op sans VT-d / domain_count==0)
     setup_iommu_stage0(pool_r3_size);
     crate::security::exoseal::configure_nic_iommu_policy();
+    s0dbg(b'b');
 
     // 10) FACS en RO + hash MADT
     let _ = mark_facs_ro_in_a_pts(acpi.facs_phys);
     let _ = hash_and_store_madt(acpi.madt_phys);
+    s0dbg(b'c');
 
     // 11) Pool R3
     let _ = init_pool_r3_from_stage0_size(pool_r3_size);
+    s0dbg(b'd');
 
-    // 12) Watchdog APIC (5000ms par défaut)
-    let _ = arm_apic_watchdog(WATCHDOG_DEFAULT_MS);
+    // 12) Watchdog APIC — arme un timer APIC ; sauté sur le boot de Kernel A
+    // (n'appartient qu'au sentinel de Kernel B).
+    if !kernel_a_boot {
+        let _ = arm_apic_watchdog(WATCHDOG_DEFAULT_MS);
+    }
+    s0dbg(b'e');
+
+    // 13) Armer les vecteurs de récupération ExoPhoenix (0xF1/0xF2/0xF3).
+    // FIX-AUDIT-V020-P1-2 : activate_exophoenix_vectors() n'était JAMAIS appelée
+    // (seul deactivate l'était à l'étape 4, IDT stubs). Le flag restait donc
+    // `false` en permanence et exophoenix_vectors_active() n'était jamais lu :
+    // garde logicielle morte des deux côtés. Les stubs IDT freeze/pmc/tlb sont
+    // posés à l'étape 4 ; ils ne doivent être considérés « armés » qu'une fois
+    // tout le stage0 prêt (watchdog, IOMMU, SSR, pool R3).
+    // FIX-BOOT-STAGE0-HANG : n'armer les vecteurs QUE si la SSR est valide (boot
+    // non dégradé). Une SSR invalide ⇒ la résurrection ne peut pas aboutir ; armer
+    // les vecteurs ferait passer la garde de begin_isolation_soft() pour ensuite
+    // échouer en plein handoff. En dégradé, on laisse les vecteurs désarmés.
+    if PHOENIX_STATE.load(Ordering::Acquire) != PhoenixState::Degraded as u8 {
+        activate_exophoenix_vectors();
+    }
 
     Stage0Summary {
         b_cr3,
@@ -1084,7 +1161,8 @@ pub fn stage0_init_all_steps() -> Stage0Summary {
 
 /// Stage0 complet (1→13): bascule Normal, SIPI one-shot, puis boucle sentinelle.
 pub fn stage0_init() -> ! {
-    let _summary = stage0_init_all_steps();
+    // Point d'entrée dédié du cœur de Kernel B : séquence complète (kernel_a_boot=false).
+    let _summary = stage0_init_all_steps(false);
 
     if !crate::exophoenix::forge::kernel_a_image_provisioned() {
         log::error!("FORGE: image Kernel A absente — ExoPhoenix désactivé (degraded)");

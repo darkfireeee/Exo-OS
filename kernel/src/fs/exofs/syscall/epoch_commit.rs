@@ -442,6 +442,15 @@ fn commit_durable_epoch_if_disk(
     if !virtio_adapter::has_global_disk() || flags & epoch_flags::NO_ADVANCE != 0 {
         return Ok(None);
     }
+    // FIX-EXOFS-ROB-1 (AUDIT-EXOFS §3) : EPOCH-02 — un commit durable sans hook
+    // de flush NVMe enregistré exécuterait ses 3 barrières en no-op (fausse
+    // durabilité, corruption certaine au prochain crash). Un disque est présent
+    // (has_global_disk) mais le block layer n'a pas enregistré son flush : on
+    // refuse le commit au lieu de prétendre l'avoir durabilisé. Le chemin
+    // dev-sans-disque est déjà court-circuité ci-dessus (has_global_disk()==false).
+    if !crate::fs::exofs::epoch::epoch_barriers::is_nvme_flush_registered() {
+        return Err(ExofsError::NvmeFlushFailed);
+    }
     let root = build_epoch_root(epoch_to_commit, entries)?;
     let root_blob = save_epoch_root_blob(epoch_to_commit, &root)?;
     let root_disk_offset =
@@ -571,6 +580,28 @@ fn do_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
 /// `exofs_shutdown()` sans frame syscall.
 pub fn do_shutdown_commit(args: &EpochCommitArgs) -> ExofsResult<EpochCommitResult> {
     do_commit(args)
+}
+
+/// Commit kernel-internal de l'epoch courante (chemin chaud writeback/fsync/sync).
+///
+/// FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2) : `commit_epoch` n'était déclenché qu'au
+/// démontage ⇒ les écritures atteignaient le disque en blobs bruts isolés, sans
+/// EpochRecord pour les valider/annuler (pas d'atomicité, recovery sans objet).
+/// Ce point d'entrée déclenche le commit transactionnel complet (flush des blobs
+/// dirty → journal → EpochRoot → EpochRecord + 3 barrières NVMe) via le même
+/// `do_commit` que le shutdown, sur le chemin chaud.
+///
+/// `CommitInProgress` est renvoyé si un commit concourant est déjà en cours :
+/// l'appelant (writeback périodique / sync) peut l'ignorer, le travail sera fait.
+pub fn commit_current_epoch() -> ExofsResult<EpochCommitResult> {
+    let args = EpochCommitArgs {
+        flags: 0, // commit normal de l'epoch courante (pas de FORCE)
+        _pad: 0,
+        epoch_id: 0, // 0 = epoch courante
+        checksum: 0,
+        hints: 0,
+    };
+    do_commit(&args)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

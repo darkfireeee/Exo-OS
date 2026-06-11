@@ -175,11 +175,11 @@ impl PendingWriteBuffer {
 
     /// Extrait toutes les entrées et les retourne (RECUR-01 : while).
     pub fn drain_all(&mut self) -> Vec<WriteEntry> {
-        let mut out = Vec::with_capacity(self.entries.len());
-        let mut i = 0;
-        while i < self.entries.len() {
-            i = i.wrapping_add(1);
-        }
+        // FIX-EXOFS-ROB-3 : l'allocation `Vec::with_capacity(len)` était aussitôt
+        // écrasée par `mem::swap` ci-dessous — allocation infaillible gaspillée
+        // (OOM-04). `Vec::new()` ne réserve rien ; le swap transfère le buffer
+        // existant de `self.entries` sans nouvelle allocation.
+        let mut out = Vec::new();
         core::mem::swap(&mut out, &mut self.entries);
         self.total_bytes_pending = 0;
         out

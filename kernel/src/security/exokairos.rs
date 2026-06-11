@@ -735,16 +735,25 @@ fn get_kernel_secret() -> [u8; 32] {
 /// la table est pleine, l'enregistrement est ignoré (le token reste non-temporel,
 /// comportement identique à l'existant — aucune régression).
 pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, rights: Rights) {
-    let now_ns = crate::scheduler::timer::clock::monotonic_ns();
-    if now_ns == 0 {
-        return;
+    // En test hôte, l'horloge kernel n'existe pas — même convention que
+    // TemporalCap::current_window_ns (variante #[cfg(test)]) : no-op déterministe.
+    #[cfg(test)]
+    {
+        let _ = (oid, rights);
     }
+    #[cfg(not(test))]
+    {
+        let now_ns = crate::scheduler::timer::clock::monotonic_ns();
+        if now_ns == 0 {
+            return;
+        }
     let ttl_s = ttl_for_right(rights);
     let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
     // SAFETY: Ring 0, table protégée par PKS Credentials via scoped_domain_access
     // interne à insert(). L'ObjectId provient de la table kernel (create()).
     unsafe {
         let _ = cap_deadline_table::insert(oid, deadline_ns);
+    }
     }
 }
 

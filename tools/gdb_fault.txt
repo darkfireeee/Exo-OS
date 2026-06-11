@@ -1,0 +1,17 @@
+set pagination off
+set confirm off
+file target/x86_64-unknown-none/debug/exo-os-kernel
+target remote localhost:1234
+break do_page_fault
+break do_general_protection
+break do_double_fault
+continue
+printf "=== FAULT HANDLER HIT ===\n"
+printf "CR2 = 0x%lx\n", $cr2
+printf "frame ptr (rdi) = 0x%lx\n", $rdi
+printf "--- frame dump (rip/cs/rflags/rsp/ss at CPU-pushed region) ---\n"
+x/40gx $rdi
+printf "--- backtrace ---\n"
+bt
+detach
+quit

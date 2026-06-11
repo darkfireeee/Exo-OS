@@ -15,8 +15,15 @@ pub const EXOFS_MAGIC: u32 = 0x45584F46;
 /// Magic EpochRoot on-disk : "EPOC" en little-endian u32.
 pub const EPOCH_ROOT_MAGIC: u32 = 0x45504F43;
 
-/// Magic ObjectHeader on-disk : "OBJE" en little-endian u32.
-pub const OBJECT_HEADER_MAGIC: u32 = 0x4F424A45;
+/// Magic ObjectHeader on-disk.
+///
+/// FIX-AUDIT-V020-P2-1 : cette constante divergeait du writer/reader réels
+/// (`storage/object_writer.rs:32` = `0x4558_4F42`), qui sont la source de vérité
+/// du format on-disk — `object_reader.rs` importe `OBJECT_HEADER_MAGIC` DEPUIS
+/// `object_writer`, jamais depuis ce module (cette valeur n'était consommée par
+/// aucun lecteur, seulement re-exportée). Ancienne valeur stale `0x4F424A45`
+/// alignée sur la valeur canonique du writer pour éliminer le footgun.
+pub const OBJECT_HEADER_MAGIC: u32 = 0x4558_4F42;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Layout disque — offsets FIXES (immuables pour la compatibilité)
@@ -117,8 +124,15 @@ pub const FORMAT_VERSION_MINOR: u16 = 0;
 /// Magic d'un SnapshotRecord on-disk : "SNAP".
 pub const SNAPSHOT_RECORD_MAGIC: u32 = 0x534E4150;
 
-/// Magic d'un BlobHeader on-disk : "BLOB".
-pub const BLOB_HEADER_MAGIC: u32 = 0x424C4F42;
+/// Magic d'un BlobHeader on-disk.
+///
+/// FIX-AUDIT-V020-P2-1 : idem OBJECT_HEADER_MAGIC — la valeur réelle du format
+/// est celle du writer (`storage/blob_writer.rs:32` = `0x4558_424C`), importée
+/// par `blob_reader.rs` DEPUIS `blob_writer`. Cette définition n'était consommée
+/// par aucun lecteur. Ancienne valeur stale `0x424C4F42` alignée sur la canonique.
+/// NB : `recovery/fsck_phase2.rs` utilise un magic u64 distinct ("EXOBLHDR") pour
+/// une structure on-disk différente — ce n'est pas une divergence du même champ.
+pub const BLOB_HEADER_MAGIC: u32 = 0x4558_424C;
 
 /// Magic d'un RelationRecord on-disk : "RELA".
 pub const RELATION_RECORD_MAGIC: u32 = 0x52454C41;

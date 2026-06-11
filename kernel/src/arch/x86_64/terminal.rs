@@ -11,6 +11,14 @@ static RING1_KEYBOARD_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn debug_byte(byte: u8) {
+    // En test hôte (cargo test Linux), `out` est une instruction privilégiée :
+    // l'émettre tue le process en SIGSEGV. Le port 0xE9 n'existe que sous QEMU.
+    #[cfg(test)]
+    {
+        let _ = byte;
+    }
+    #[cfg(not(test))]
+    // SAFETY: écriture sur le port debugcon QEMU 0xE9 en Ring 0, sans effet mémoire.
     unsafe {
         core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
     }

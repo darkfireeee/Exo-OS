@@ -36,3 +36,6 @@ tla2tools.jar
 
 # Linux
 .fuse_hidden*
+.devcontainer
+.githooks
+.github/workflows

@@ -18,7 +18,9 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::gdt::GDT_KERNEL_CS;
-use super::tss::{IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI};
+use super::tss::{
+    IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI, IST_PAGE_FAULT,
+};
 
 // ── Vecteurs d'exception ──────────────────────────────────────────────────────
 
@@ -383,10 +385,15 @@ pub fn init_idt() {
         0,
         IdtEntryFlags::TRAP_GATE,
     );
+    // FIX-PF-IST : #PF utilise sa pile IST dédiée (IST_PAGE_FAULT, déjà allouée
+    // dans init_tss_for_cpu via tss.ist[IST_PAGE_FAULT]). Sans IST, un #PF survenant
+    // sur une pile kernel débordée (stack overflow) ne pouvait pas empiler sa frame
+    // → cascade #DF → triple fault bypassant tous les handlers. Avec l'IST, le #PF
+    // bascule sur une pile fraîche de 16 KiB et est traité (ou dumpé) proprement.
     idt.set_handler(
         EXC_PAGE_FAULT,
         exc_page_fault_handler as *const () as u64,
-        0,
+        IST_PAGE_FAULT as u8 + 1,
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(

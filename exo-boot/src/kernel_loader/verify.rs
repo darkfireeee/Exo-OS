@@ -189,5 +189,16 @@ pub fn verify_kernel_or_panic(image: &[u8]) {
     }
 }
 
+/// Vérifie la signature du kernel sans paniquer et retourne sa validité.
+///
+/// FIX-AUDIT-V020-P1-3 : `enforce_secure_boot_policy()` a besoin de l'état
+/// `kernel_sig_valid` pour décider — combiné à l'état UEFI Secure Boot et au
+/// flag `secure_boot_required` de la config. `verify_kernel_or_panic()` ne
+/// renvoie rien (panique ou non) ; cette variante expose le verdict booléen
+/// nécessaire à la couche de politique sans dupliquer la logique crypto.
+pub fn verify_kernel_signature(image: &[u8]) -> bool {
+    secure_impl::verify_full(image).is_ok()
+}
+
 
 

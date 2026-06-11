@@ -93,6 +93,8 @@ Next ==
     \/ \E t \in THREADS : TriggerCp(t)
     \/ \E addr \in {"0xAAAA", "0xCCCC"} : RequestDma(addr)
     \/ \E src \in {"Net", "Vfs", "Crypto"}, dst \in {"Net", "Vfs", "Crypto"} : SendIpc(src, dst)
+    \/ \E realSrc \in {"Net", "Vfs", "Crypto"}, claimedSrc \in {"Net", "Vfs", "Crypto", "Init"},
+         dst \in {"Net", "Vfs", "Crypto"} : AdversarySpoofSendIpc(realSrc, claimedSrc, dst)
     \/ PhoenixFreeze
 
 Spec == Init /\ [][Next]_vars
@@ -100,6 +102,24 @@ Spec == Init /\ [][Next]_vars
 S33_CordonEnforced ==
     \A msg \in IpcMessages :
         (<<msg.src, msg.dst>> \notin AUTHORIZED_GRAPH) => (msg.status = "REJECTED")
+
+\* FIX-IPC-SENDER-AUTH (GAP-04/05) : un envoi usurpé ne peut JAMAIS produire un
+\* message ALLOWED dont la source réelle (msg.src après réécriture kernel) ne
+\* serait pas autorisée par le DAG. Comme AdversarySpoofSendIpc force msg.src à la
+\* source réelle avant le contrôle de cordon, tout message ALLOWED a forcément une
+\* arête (src,dst) légitime — le spoofing n'ouvre aucun chemin interdit.
+S33b_SpoofCannotEscalate ==
+    \A msg \in IpcMessages :
+        (msg.status = "ALLOWED") => (<<msg.src, msg.dst>> \in AUTHORIZED_GRAPH)
+
+\* FIX-IPC-SENDER-AUTH : duale de S33 — tout message ALLOWED porte une arête
+\* autorisée pour la SOURCE RÉELLE. Comme AdversarySpoofSendIpc enregistre le
+\* message avec effectiveSrc = realSrc (réécriture kernel), aucun spoof du champ
+\* src de l'enveloppe ne peut produire un ALLOWED sur un chemin interdit au
+\* processus réel.
+S33b_SenderAuthEnforced ==
+    \A msg \in IpcMessages :
+        (msg.status = "ALLOWED") => (<<msg.src, msg.dst>> \in AUTHORIZED_GRAPH)
 
 S36_NmiThreeStrikes ==
     WatchdogMissed >= 3 => HandoffFlag = 1

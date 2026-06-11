@@ -112,7 +112,11 @@ impl ProcessRegistry {
         // FIX-KRN-10: utiliser l'API réelle de mémoire physique disponible.
         let available_bytes = crate::memory::physical::stats::free_bytes();
         let registry_bytes = capacity * core::mem::size_of::<RegistrySlot>();
-        let final_capacity = if available_bytes < registry_bytes * 2 {
+        // FIX-KRN-10b : free_bytes() == 0 signifie que l'allocateur physique
+        // n'est pas initialisé (tests hôte, init très précoce) — la garde
+        // basse-mémoire ne s'applique alors pas. L'ancien code réduisait la
+        // capacité à 64 slots dans ce cas, cassant tout PID > 64.
+        let final_capacity = if available_bytes != 0 && available_bytes < registry_bytes * 2 {
             // Fallback : allouer au maximum la moitié de la RAM disponible pour le registry
             let safe_cap = (available_bytes / 2) / core::mem::size_of::<RegistrySlot>();
             crate::arch::x86_64::terminal::debug_write(
@@ -126,15 +130,19 @@ impl ProcessRegistry {
             .expect("ProcessRegistry: layout invalide");
         let ptr = alloc_zeroed(layout) as *mut RegistrySlot;
         assert!(!ptr.is_null(), "ProcessRegistry::init : allocation échouée");
-        // Initialiser chaque slot à l'état vide.
-        for i in 0..capacity {
-            // SAFETY: ptr + i est dans le tableau alloué.
+        // FIX-KRN-10b : l'initialisation et la capacité publiée doivent utiliser
+        // final_capacity (la taille réellement allouée). L'ancien code itérait et
+        // publiait `capacity` : si la branche de réduction mémoire s'appliquait,
+        // l'init écrivait HORS du tableau alloué (heap overflow) et la registry
+        // exposait des slots inexistants.
+        for i in 0..final_capacity {
+            // SAFETY: ptr + i est dans le tableau alloué (i < final_capacity).
             core::ptr::write(ptr.add(i), RegistrySlot::empty());
         }
         // Mise à jour via raw pointer (la static mut est à adresse fixe).
         let self_mut = self as *const Self as *mut Self;
         (*self_mut).slots = ptr;
-        (*self_mut).capacity = capacity;
+        (*self_mut).capacity = final_capacity;
     }
 
     /// Enregistre un PCB dans la table (appelé lors de la création d'un processus).

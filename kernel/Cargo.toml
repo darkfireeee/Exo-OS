@@ -101,6 +101,16 @@ default = ["multiboot2_compat"]
 multiboot2_compat = []
 dev_no_vmm = []
 
+# FIX-AUDIT-V020-P1-1 : feature de durcissement de l'exécution.
+# Sans cette déclaration, le `#[cfg(feature = "strict_exec_signatures")]` de
+# process/lifecycle/exec.rs:do_execve() n'était JAMAIS compilé : la branche
+# `not(feature)` (warning seulement) restait active même en build « production »,
+# rendant la vérification de chaîne de confiance ED25519 purement cosmétique.
+# Activée → un binaire dont check_chain_of_trust() échoue est REFUSÉ
+# (ExecError::SignatureVerificationFailed) au lieu d'un simple avertissement.
+# Build durci : cargo build --release --features strict_exec_signatures
+strict_exec_signatures = []
+
 #  Cible par defaut (peut etre surchargee en ligne de commande) 
 
 # Utiliser : cargo build --target ../x86_64-exo-os.json -Z build-std=core,alloc

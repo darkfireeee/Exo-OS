@@ -93,14 +93,91 @@
       93, vendors exclus). Hors scope FIX V2/3 — non traités (pas signalés par l'audit).
 - Kernel `cargo check` OK après ajouts (3m00, commentaires uniquement).
 
-### Phase 6 — TLA+ & validation
-- [ ] Mettre à jour modules TLA+ impactés (IPC policy, capability checks)
-- [ ] make build + make test via WSL
-- [ ] semgrep + cargo-deny via tools/
-- [ ] run_tests.sh si dispo
+### Phase 6 — TLA+ — ✅ TERMINÉE (2026-06-10)
+- [x] ExoShield.tla étendu : action `AdversarySpoofSendIpc(realSrc, claimedSrc, dst)`
+      modélise FIX-IPC-SENDER-AUTH (kernel réécrit src := caller réel avant le DAG) +
+      invariant dual `S33b_SenderAuthEnforced` (tout ALLOWED porte une arête autorisée
+      pour la source réelle). `ExoShield.cfg` racine créé avec S33b.
+- [x] TLC : baseline (557 057 états) puis spec étendue (1 220 609 états générés,
+      131 072 distincts, profondeur 21) — **0 erreur**. Java 21 via WSL.
+- Note : CapTokens.tla (anti-replay) et les archives Proof V1 inchangés — aucun
+  changement de code ne modifie leurs comportements modélisés. Le DAG ExoCordon 51
+  arêtes côté routeur est un MIROIR de ipc_policy.rs (même politique) : le modèle
+  abstrait S33 (2 arêtes représentatives) reste valide.
+
+### Phase 7 — Validation finale — ✅ TERMINÉE (2026-06-11)
+- [x] `cargo check` kernel + serveurs + exo-boot (UEFI) OK.
+- [x] `make test` : 3077 passed; 0 failed; 3 ignored.
+- [x] semgrep (exoos.yaml) sur fichiers modifiés : 0 finding.
+- [x] cargo-deny : advisories/bans/licenses/sources OK.
+- [x] TLA+ : ExoShield (S33+S33b, 131072 états) + ExoFS (5128 états) — 0 erreur.
+
+### Phase 8 — AUDIT-V020 (incohérences kernel) — ✅ TERMINÉE (2026-06-11)
+Voir `docs/FIX V2/AUDIT-V020-RESOLUTION.md`. Résumé :
+- P0-1 AP Spectre : FIX (apply_mitigations_ap câblé dans ap_entry).
+- P1-1 strict_exec_signatures : FIX (feature déclarée dans Cargo.toml).
+- P1-2 vecteurs ExoPhoenix : FIX (activate en fin stage0 + garde fail-safe begin_isolation).
+- P1-3 Secure Boot : FIX (enforce_secure_boot_policy câblé dans efi_main, exo-boot OK UEFI).
+- P0-2 EXO_SHIELD_PID : faux positif (endpoint vs PID ; déjà sain).
+- P2-1 magics : OBJECT/BLOB doublons morts alignés ; RELATION/VFS faux positifs.
+- P2-2/3/4 : RING_SIZE choix documenté, MSR cohérents, CRYPTO_PID test-only — non modifiés.
+
+### Phase 9 — Audits FS (EXOFS-COMPLET + FS-IPC-SCHED-DATAPATH) — ✅ TERMINÉE (2026-06-11)
+Voir `docs/FIX V2/3/2 fs/RESOLUTION-FS.md`. Résumé :
+- CORE-1 (blocage central) : FIX — commit_current_epoch branché writeback/sync/fsync.
+- ROB-1 : FIX — commit refusé si flush NVMe non enregistré (disque présent).
+- ROB-4 fsync : FIX — durabilité données+métadonnées, data_only respecté.
+- CORE-3 : vérifié déjà sain (PathIndex on-disk + catalogue persisté/recouvré).
+- ROB-2 : faux positif (kani/test ; production déjà ExofsResult).
+- ROB-3 : io/writer alloc gaspillée corrigée ; reste P2-marginal.
+- Z1/Z2 : suggestion à régression (cache paginé + sûreté verrou) — design copiant correct.
+- F1 vfs_server : commentaire périmé corrigé (hybride Ring0/Ring1 voulu, pas code mort).
+- CORE-2 (pipeline + chiffrement Secret) et F2/F3 (blocage POSIX) : DÉFÉRÉS — passes
+  dédiées (versionnement de format / scheduler event-driven), plan dans RESOLUTION-FS.md.
 
 ## Découvertes en cours de route
-(à compléter)
+1. **Audits partiellement obsolètes** : la majorité des correctifs portaient déjà des
+   marqueurs FIX-* (commits « Partial fix 3 » / « additional fix 3 »). Chaque point a
+   été re-vérifié dans le code avant action.
+2. **router.rs/load_balancer.rs jamais compilés** : absents de lib.rs/main.rs — le
+   « FIX-ROUTER-01 » précédent était donc inopérant. En les compilant, 2 erreurs
+   E0594 + 1 bug flags + 1 récursion infinie ont été révélés et corrigés.
+3. **Régression FIX-SHIELD-PID** : policy.rs corrigé à 10 mais main.rs resté à 12 →
+   default Deny sur 100 % des requêtes exo_shield à l'exécution.
+4. **Forge de sender_pid** : les gardes des serveurs Ring 1 reposaient sur un champ
+   forgeable. Corrigé à la racine dans le kernel (FIX-IPC-SENDER-AUTH).
+5. **Bugs FIX-KRN-10 (commit précédent, découverts par make test — 3 SIGSEGV)** :
+   a. `terminal::debug_write` émettait `out 0xE9` en test hôte (instruction
+      privilégiée → SIGSEGV). Corrigé : no-op sous cfg(test).
+   b. `registry::init` : la branche basse-mémoire allouait `final_capacity` slots
+      mais initialisait/publiait `capacity` → **heap overflow OOB en conditions
+      réelles de RAM basse**. Corrigé (FIX-KRN-10b).
+   c. La garde s'appliquait quand `free_bytes()==0` (allocateur non initialisé en
+      test hôte) → capacité réduite à 64, tout PID > 64 rejeté. Corrigé : garde
+      inactive si free_bytes()==0.
+6. `register_ttl_for_cap` rendu no-op sous cfg(test) (même convention que
+   `TemporalCap::current_window_ns` — l'horloge kernel n'existe pas en test hôte).
 
 ## Décisions prises
-(à compléter)
+- DAG ExoCordon = miroir strict des 51 paires kernel (pas un sur-ensemble) : le
+  routeur étant IpcBroker (wildcard kernel), toute arête en surplus blanchirait un
+  chemin que le kernel refuse en direct. Outil de garde : tools/check_ipc_policy_mirror.py.
+- exo_shield : identité de politique = 10 (importée de ipc_gate::policy, const assert
+  vs endpoint) ; cible exo_cap_check = PID runtime via SYS_GETPID (exigence kernel
+  caller==target).
+- exoveil::revoke_domain NON câblé à l'exit : primitive de lockdown PKS global
+  (Kernel B), pas un cleanup per-process ; les caps meurent avec pcb.cap_table.
+- Registre de noms : kernel = source de vérité ; le routeur n'accepte une
+  registration que si SYS_IPC_LOOKUP la confirme, et stocke l'endpoint kernel.
+- TTL ExoKairos branché dans capability::create() (best-effort, no-op si horloge
+  non calibrée) plutôt que dans les serveurs (un seul point de passage).
+
+## Validation finale (2026-06-10)
+- cargo check workspace : OK (0 erreur, 0 warning).
+- semgrep (24 règles projet, 858 fichiers) : 0 finding.
+- cargo deny check : advisories/bans/licenses/sources OK.
+- tools/audit_constants.py : 0 erreur. tools/check_service_order.py : 7/7 checks.
+- tools/check_ipc_policy_mirror.py (nouveau) : miroir exact 51/51.
+- TLA+ TLC ExoShield.tla étendu (S33b) : 1 220 609 états, 0 erreur.
+- make test : 3074 passed / 3 failed (SIGSEGV) → après FIX-KRN-10b + cfg(test) :
+  re-run complet en cours (3 tests isolés re-passent tous).
