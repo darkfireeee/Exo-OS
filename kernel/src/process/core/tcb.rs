@@ -99,9 +99,13 @@ fn try_process_thread_box(
 /// Taille du stack kernel par thread.
 ///
 /// Les chemins userspace critiques (fork/exec/IPC) traversent assez de Rust
-/// noyau pour que 16 KiB soit fragile en debug. 64 KiB garde une marge saine
-/// tout en restant modeste pour la charge de services Ring1 actuelle.
-pub const KSTACK_SIZE: usize = 64 * 1024;
+/// noyau pour que 16 KiB soit fragile en debug. Le chemin `do_fork` (clone CoW
+/// + clone fds + namespaces + credentials + hash BLAKE3 d'identité) consomme à
+/// lui seul ~56–64 KiB en build debug : 64 KiB débordait la guard page de ~360
+/// octets (overflow noyau → ExoPhoenix). 256 KiB garde une marge confortable
+/// pour les forks imbriqués (fork→execve) tout en restant modeste (vmalloc, 256
+/// MiB RAM, qq dizaines de threads).
+pub const KSTACK_SIZE: usize = 256 * 1024;
 const KSTACK_PAGE_SIZE: usize = crate::memory::core::constants::PAGE_SIZE;
 const KSTACK_USABLE_PAGES: usize = KSTACK_SIZE / KSTACK_PAGE_SIZE;
 const KSTACK_TOTAL_PAGES: usize = KSTACK_USABLE_PAGES + 2;

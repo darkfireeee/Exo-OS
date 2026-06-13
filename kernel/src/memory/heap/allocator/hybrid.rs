@@ -62,6 +62,62 @@ pub fn is_heap_ready() -> bool {
     HYBRID_ENABLED.load(Ordering::Acquire)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DIAG REDZONE (KASAN-lite) — détecte les débordements de buffer heap.
+// Chaque allocation réserve REDZONE octets de canari APRÈS la zone utilisable
+// `size`. Un débordement écrit dans le canari : détecté au free (la taille de
+// l'alloc fautive identifie la structure), et souvent absorbé (le boot passe).
+// ─────────────────────────────────────────────────────────────────────────────
+const REDZONE: usize = 32;
+const REDZ_BYTE: u8 = 0xA5;
+
+#[inline]
+unsafe fn redzone_write(ptr: *mut u8, user_size: usize) {
+    let mut i = 0usize;
+    while i < REDZONE {
+        core::ptr::write(ptr.add(user_size + i), REDZ_BYTE);
+        i += 1;
+    }
+}
+
+/// Vérifie le canari ; retourne false si débordé. Logue (E9, capé) la taille
+/// de l'alloc fautive pour identifier la structure qui déborde.
+#[inline]
+unsafe fn redzone_check(ptr: *const u8, user_size: usize) -> bool {
+    let mut ok = true;
+    let mut i = 0usize;
+    while i < REDZONE {
+        if core::ptr::read(ptr.add(user_size + i)) != REDZ_BYTE {
+            ok = false;
+            break;
+        }
+        i += 1;
+    }
+    if !ok {
+        use core::sync::atomic::AtomicUsize;
+        static N: AtomicUsize = AtomicUsize::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 8 {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            out(b"\n<REDZ overflow user_size=");
+            let mut s = user_size as u64;
+            let mut buf = [0u8; 20];
+            let mut k = buf.len();
+            if s == 0 {
+                k -= 1;
+                buf[k] = b'0';
+            }
+            while s != 0 && k > 0 {
+                k -= 1;
+                buf[k] = b'0' + (s % 10) as u8;
+                s /= 10;
+            }
+            out(&buf[k..]);
+            out(b">");
+        }
+    }
+    ok
+}
+
 /// Alloue `size` octets avec `align` minimum.
 ///
 /// - Si size <= 2048 : utilise SLUB.
@@ -71,7 +127,9 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
         return Err(AllocError::NotInitialized);
     }
 
-    let real_size = if size == 0 { 8 } else { size };
+    let user_size = if size == 0 { 8 } else { size };
+    // DIAG REDZONE : réserver REDZONE octets de canari après la zone utilisable.
+    let real_size = user_size.saturating_add(REDZONE);
 
     if real_size <= HEAP_LARGE_THRESHOLD {
         // Petite allocation via SLUB
@@ -79,6 +137,7 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
         match SLUB_CACHES[slab_idx].alloc(flags) {
             Ok(ptr) => {
+                unsafe { redzone_write(ptr.as_ptr(), user_size) };
                 HEAP_STATS.small_allocs.fetch_add(1, Ordering::Relaxed);
                 HEAP_STATS
                     .current_inuse
@@ -91,6 +150,7 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
                 // précoce durant le boot.
                 match crate::memory::heap::large::vmalloc::kalloc(real_size, flags) {
                     Ok(ptr) => {
+                        unsafe { redzone_write(ptr.as_ptr(), user_size) };
                         HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
                         HEAP_STATS
                             .current_inuse
@@ -108,6 +168,7 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
         // Grande allocation via le large allocator
         match crate::memory::heap::large::vmalloc::kalloc(real_size, flags) {
             Ok(ptr) => {
+                unsafe { redzone_write(ptr.as_ptr(), user_size) };
                 HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
                 HEAP_STATS
                     .current_inuse
@@ -127,7 +188,12 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
 /// SAFETY: `ptr` doit avoir été alloué par `alloc()` avec la même `size`.
 ///         Ne plus être utilisé après cet appel.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
-    let real_size = if size == 0 { 8 } else { size };
+    let user_size = if size == 0 { 8 } else { size };
+    // DIAG REDZONE : vérifier le canari avant de libérer (détecte un débordement
+    // d'une allocation adjacente OU de celle-ci). La taille logguée identifie la
+    // structure fautive.
+    let _ = redzone_check(ptr.as_ptr(), user_size);
+    let real_size = user_size.saturating_add(REDZONE);
 
     // Si le pointeur correspond à un bloc vmalloc (incluant fallback small->large),
     // il doit être libéré via kfree indépendamment de la taille demandée.

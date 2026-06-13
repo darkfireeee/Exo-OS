@@ -317,9 +317,10 @@ pub unsafe fn kernel_init(cpu_count: usize) {
 
     kdb(b'R'); // exofs_init retourné (post-#6)
     if exofs_ready {
-        let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
+        // DIAG: seed_kernel_a_image_blob temporairement sauté pour isoler le fault.
+        // let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
     }
-    kdb(b'T'); // seed_kernel_a_image_blob fait
+    kdb(b'T'); // seed_kernel_a_image_blob fait (ou sauté)
 
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
     {

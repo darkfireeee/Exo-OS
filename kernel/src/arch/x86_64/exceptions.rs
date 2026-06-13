@@ -656,7 +656,13 @@ extern "C" fn do_invalid_opcode(frame: *mut ExceptionFrame) {
     EXC_COUNTERS[6].fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
-        // SIGILL
+        // FIX-UD-SIGILL : livrer réellement SIGILL. Sans ça, on retournait au RIP
+        // fautif tel quel → l'instruction invalide (typiquement `ud2` d'un panic
+        // Rust côté serveur) re-déclenche immédiatement #UD → livelock noyau
+        // (boucle do_invalid_opcode → iretq → même opcode) gelant tout le système.
+        // Comme #PF/#GP, on met SIGILL en attente puis on repasse en Ring 3 : le
+        // signal est délivré (handler ou terminaison) au lieu de boucler.
+        queue_signal_for_current(crate::process::signal::Signal::SIGILL);
         exception_return_to_user(frame);
     } else {
         // Vérifier si c'est une instruction XTEST (TSX) — retpoline parfois génère #UD
@@ -869,13 +875,12 @@ fn diag_fault_e9(tag: &[u8], cr2: u64, rip: u64) {
 /// du processus courant. Pour l'instant, `KernelFaultAllocator` est utilisé.
 #[no_mangle]
 extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
-    // DIAG: marqueur brut inconditionnel à l'entrée (avant tout accès mémoire).
-    // SAFETY: port E9, sans effet mémoire.
-    unsafe { core::arch::asm!("out 0xE9, al", in("al") b'P', options(nomem, nostack)) };
+    // DIAG: dump #PF E9 silencié temporairement (les fautes demand-paging du boot
+    // sont comprises ; on garde l'E9 propre pour les marqueurs fork/execve).
     // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
     // unique pour ce contexte d'exception.
     let frame = unsafe { &mut *frame };
-    diag_fault_e9(b"#PF", super::read_cr2(), frame.rip);
+    let _ = &diag_fault_e9;
     EXC_COUNTERS[14].fetch_add(1, Ordering::Relaxed);
     super::paging::inc_page_fault();
 
@@ -965,6 +970,55 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         ctx.from_kernel = false;
     }
 
+    // DIAG-PF (temporaire) : tracer les fautes userspace (pid, cr2, cause).
+    {
+        use core::sync::atomic::{AtomicUsize, Ordering as O2};
+        static NPF: AtomicUsize = AtomicUsize::new(0);
+        if frame.from_userspace() && NPF.fetch_add(1, O2::Relaxed) < 80 {
+            let tcbr = current_tcb_raw_checked();
+            let pid = if tcbr != 0 {
+                unsafe {
+                    (*(tcbr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
+                }
+            } else {
+                0
+            };
+            let out = crate::arch::x86_64::terminal::debug_write;
+            out(b"<PF p");
+            let hexd = b"0123456789abcdef";
+            let mut p = pid;
+            let mut pb = [0u8; 10];
+            let mut pi = pb.len();
+            if p == 0 {
+                pi -= 1;
+                pb[pi] = b'0';
+            }
+            while p != 0 && pi > 0 {
+                pi -= 1;
+                pb[pi] = b'0' + (p % 10) as u8;
+                p /= 10;
+            }
+            out(&pb[pi..]);
+            out(b" a=");
+            let mut a = fault_addr_raw;
+            let mut ab = [0u8; 16];
+            let mut k = 0;
+            while k < 16 {
+                ab[k] = hexd[((a >> ((15 - k) * 4)) & 0xf) as usize];
+                k += 1;
+            }
+            let _ = &mut a;
+            out(&ab);
+            out(if is_instr_fetch {
+                b" X>"
+            } else if is_write {
+                b" W>"
+            } else {
+                b" R>"
+            });
+        }
+    }
+
     let result = if resolve_as_user {
         // SAFETY: resolve_as_user implique user_as_for_fault non-null ; pointe vers
         // l'UserAddressSpace du processus en faute, vivant pendant le handler.
@@ -974,6 +1028,15 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     } else {
         crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC)
     };
+    // DIAG-PF : marquer les fautes NON résolues (segfault/oom) userspace.
+    if frame.from_userspace() {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        match result {
+            FaultResult::Segfault { .. } => out(b"<SEGV>"),
+            FaultResult::Oom { .. } => out(b"<POOM>"),
+            _ => {}
+        }
+    }
 
     match result {
         FaultResult::Handled => {

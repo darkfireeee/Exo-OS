@@ -263,6 +263,63 @@ impl BlobEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DIAG-MAP (temporaire) — dump brut de l'état interne du BTreeMap
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[inline(never)]
+unsafe fn diag_dump_btree(map: &BTreeMap<BlobId, BlobEntry>, size: u64) {
+    use core::sync::atomic::{AtomicUsize, Ordering as O};
+    static DN: AtomicUsize = AtomicUsize::new(0);
+    let n = DN.fetch_add(1, O::Relaxed);
+    if n >= 8 {
+        return;
+    }
+    let out = crate::arch::x86_64::terminal::debug_write;
+    fn hx(out: fn(&[u8]), label: &[u8], v: u64) {
+        out(label);
+        let hexd = b"0123456789abcdef";
+        let mut buf = [0u8; 16];
+        let mut i = 0;
+        while i < 16 {
+            buf[i] = hexd[((v >> ((15 - i) * 4)) & 0xf) as usize];
+            i += 1;
+        }
+        out(&buf);
+    }
+    out(b"\n<MAP#");
+    hx(out, b"", n as u64);
+    hx(out, b" sz=", size);
+    // Les 4 premiers mots du struct BTreeMap (root.height/node + length selon layout).
+    let w = map as *const BTreeMap<BlobId, BlobEntry> as *const u64;
+    let w0 = core::ptr::read(w);
+    let w1 = core::ptr::read(w.add(1));
+    let w2 = core::ptr::read(w.add(2));
+    hx(out, b" w0=", w0);
+    hx(out, b" w1=", w1);
+    hx(out, b" w2=", w2);
+    // root.node = w0 (pointeur SLUB en physmap 0xffff8000.., ou heap bas).
+    let node = w0;
+    let plausible = node > 0x1000
+        && (node >= 0xffff_8000_0000_0000 || node < 0x1000_0000)
+        && node & 0x7 == 0;
+    if plausible {
+        // En-tête LeafNode : on dump les 3 premiers u64 pour localiser len(u16).
+        let np = node as *const u8;
+        let len8 = core::ptr::read(np.add(8) as *const u16);
+        let len10 = core::ptr::read(np.add(10) as *const u16);
+        hx(out, b" L8=", len8 as u64);
+        hx(out, b" L10=", len10 as u64);
+        let nw0 = core::ptr::read(node as *const u64);
+        let nw1 = core::ptr::read((node as *const u64).add(1));
+        let nw2 = core::ptr::read((node as *const u64).add(2));
+        hx(out, b" nw0=", nw0);
+        hx(out, b" nw1=", nw1);
+        hx(out, b" nw2=", nw2);
+    }
+    out(b">");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // BlobCacheInner
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -418,11 +475,30 @@ impl BlobCache {
     // ── Écriture ─────────────────────────────────────────────────────────────
 
     /// Insère ou met à jour un blob dans le cache.
+    #[track_caller]
     pub fn insert(&self, id: BlobId, data: Vec<u8>) -> ExofsResult<()> {
+        // DIAG : après N inserts (boucle de spin), imprime le module appelant exact.
+        {
+            use core::sync::atomic::{AtomicUsize, Ordering as O2};
+            static N: AtomicUsize = AtomicUsize::new(0);
+            if N.fetch_add(1, O2::Relaxed) < 250 {
+                let loc = core::panic::Location::caller();
+                crate::arch::x86_64::terminal::debug_write(b"<INS ");
+                crate::arch::x86_64::terminal::debug_write(loc.file().as_bytes());
+                crate::arch::x86_64::terminal::debug_write(b">");
+            }
+        }
         let size = data.len() as u64;
         let now = crate::arch::time::read_ticks();
         let max = self.max_bytes;
         let mut inner = self.inner.lock();
+
+        // DIAG-MAP (temporaire) : dump l'état brut du BTreeMap + nœud racine
+        // AVANT toute mutation, pour capturer la corruption (count=0x80000000)
+        // avant que le memmove géant ne détruise la mémoire.
+        unsafe {
+            diag_dump_btree(&inner.map, size);
+        }
 
         // Si déjà présent, mettre à jour.
         if inner.map.contains_key(&id) {
@@ -443,6 +519,11 @@ impl BlobCache {
         inner.evict_to_fit(size, max)?;
 
         let entry = BlobEntry::new(data, now)?;
+        // DIAG-MAP : re-dump APRÈS BlobEntry::new (qui alloue ~50 pages vmalloc).
+        // Si le nœud racine est corrompu ici, c'est une collision d'allocation.
+        unsafe {
+            diag_dump_btree(&inner.map, 0xDEAD);
+        }
         inner.map.insert(id, entry);
         inner.eviction.insert(id, size)?;
         inner.used = inner.used.saturating_add(size);
@@ -451,7 +532,19 @@ impl BlobCache {
     }
 
     /// Ecrit un intervalle dans un blob sans cloner tout le blob existant.
+    #[track_caller]
     pub fn write_at(&self, id: BlobId, offset: usize, bytes: &[u8]) -> ExofsResult<usize> {
+        // DIAG : tracer le caller de write_at (autre chemin inner.map.insert).
+        {
+            use core::sync::atomic::{AtomicUsize, Ordering as O2};
+            static NW: AtomicUsize = AtomicUsize::new(0);
+            if NW.fetch_add(1, O2::Relaxed) < 250 {
+                let loc = core::panic::Location::caller();
+                crate::arch::x86_64::terminal::debug_write(b"<WR ");
+                crate::arch::x86_64::terminal::debug_write(loc.file().as_bytes());
+                crate::arch::x86_64::terminal::debug_write(b">");
+            }
+        }
         if bytes.is_empty() {
             return Ok(0);
         }

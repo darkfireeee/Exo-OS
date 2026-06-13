@@ -444,6 +444,7 @@ impl BuddyZone {
                     }
                 }
                 let frame = Frame::containing(phys);
+                watch_page_event(b'A', phys, order, flags.bits() as u64);
                 // V-05 / MEM-05 : poser DMA_PINNED sur tous les frames DMA jusqu'à
                 // wait_dma_complete() — protège contre reclaim et swap.
                 if flags.contains(AllocFlags::DMA) || flags.contains(AllocFlags::DMA32) {
@@ -561,6 +562,7 @@ impl BuddyZone {
         }
 
         let phys = frame.start_address();
+        watch_page_event(b'F', phys, order, 0);
         if !self.contains_block(phys, order) {
             self.fail_count.fetch_add(1, Ordering::Relaxed);
             return Err(AllocError::InvalidParams);
@@ -1057,6 +1059,33 @@ impl GlobalBuddyAllocator {
 
 /// Allocateur buddy global.
 pub static BUDDY: GlobalBuddyAllocator = GlobalBuddyAllocator::new();
+
+/// DIAG-PAGE (temporaire) : trace toute (dé)allocation buddy dont la plage
+/// couvre la page 0xff33000 (slab SLUB du nœud racine BlobCache, déterministe).
+/// Une 2e allocation de cette page sans free intermédiaire = double-allocation.
+#[inline(always)]
+fn watch_page_event(tag: u8, phys: PhysAddr, order: usize, flagbits: u64) {
+    const TARGET: u64 = 0xff33000;
+    let start = phys.as_u64();
+    let end = start + ((PAGE_SIZE as u64) << order);
+    if start <= TARGET && TARGET < end {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        let hexd = b"0123456789abcdef";
+        out(b"\n<BPG ");
+        out(&[tag]);
+        out(b" o=");
+        out(&[hexd[(order & 0xf)]]);
+        out(b" fl=");
+        let mut fb = [0u8; 4];
+        let mut j = 0;
+        while j < 4 {
+            fb[j] = hexd[((flagbits >> ((3 - j) * 4)) & 0xf) as usize];
+            j += 1;
+        }
+        out(&fb);
+        out(b">");
+    }
+}
 
 /// Alloue `2^order` pages physiques contiguës.
 #[inline(always)]

@@ -490,6 +490,9 @@ fn tty_send(req: &TtyRequestWire) -> Result<(), FsBridgeError> {
 }
 
 fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
+    // DIAG-CONSOLE (temporaire) : miroir E9 de toute sortie console userspace
+    // (logs init, prompt et sortie du shell) pour vérifier l'affichage en headless.
+    crate::arch::x86_64::terminal::debug_write(bytes);
     let mut written = 0usize;
     while written < bytes.len() {
         let n = (bytes.len() - written).min(TTY_LINE_MAX);

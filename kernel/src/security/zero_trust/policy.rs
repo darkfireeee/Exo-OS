@@ -151,22 +151,35 @@ impl ZeroTrustPolicy {
         }
 
         // ── 3. Vérification MLS ───────────────────────────────────────────────
-        let subject_label = req.subject.label();
-        let mls_ok = if req.is_write {
-            subject_label.can_write(req.object_label)
-        } else {
-            subject_label.can_read(req.object_label)
-        };
+        // FIX-ZT-SYSCALL : l'INVOCATION d'un syscall n'est PAS un flux de données
+        // Bell-LaPadula. L'autorisation d'un syscall est déléguée à
+        // `check_restrictions` / sandbox (capabilities, seccomp) — cf. la branche
+        // `ResourceKind::Syscall` de `check_restrictions` qui renvoie Allow.
+        // Appliquer le no-read-up contre le label `kernel()` (TopSecret/Critical)
+        // ici refuserait *tous* les syscalls d'un thread `user_default()`
+        // (Internal ne domine pas TopSecret), rendant l'espace utilisateur
+        // entièrement inopérant (PID 1 ne peut ni write, ni fork, ni faire d'IPC).
+        // Le MLS ne s'applique donc qu'aux accès aux ressources de DONNÉES
+        // (fichiers, IPC, mémoire, devices), pas à l'acte d'appeler un syscall.
+        let mls_applies = !matches!(req.resource_kind, ResourceKind::Syscall);
+        if mls_applies {
+            let subject_label = req.subject.label();
+            let mls_ok = if req.is_write {
+                subject_label.can_write(req.object_label)
+            } else {
+                subject_label.can_read(req.object_label)
+            };
 
-        if !mls_ok {
-            self.denials.fetch_add(1, Ordering::Relaxed);
-            req.subject.record_deny();
-            // Violation MLS : potentiellement un exploit → alerte
-            if req.object_label.confidentiality >= super::labels::ConfidentialityLevel::Secret {
-                self.alerts.fetch_add(1, Ordering::Relaxed);
-                return PolicyAction::DenyAndAlert;
+            if !mls_ok {
+                self.denials.fetch_add(1, Ordering::Relaxed);
+                req.subject.record_deny();
+                // Violation MLS : potentiellement un exploit → alerte
+                if req.object_label.confidentiality >= super::labels::ConfidentialityLevel::Secret {
+                    self.alerts.fetch_add(1, Ordering::Relaxed);
+                    return PolicyAction::DenyAndAlert;
+                }
+                return PolicyAction::DenyAndAudit;
             }
-            return PolicyAction::DenyAndAudit;
         }
 
         // ── 4. Règles spécifiques aux ressources ──────────────────────────────

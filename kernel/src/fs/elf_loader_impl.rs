@@ -362,11 +362,16 @@ impl ElfLoader for ExoFsElfLoader {
         let elf_data = read_blob_from_cache(&blob_id)?;
 
         // ── 3. Valider l'en-tête ELF et détecter PT_INTERP ───────────────────
+        // FIX-LOADER-STATIC : ne charger /lib/ld-exo.so QUE si le binaire déclare
+        // réellement un PT_INTERP. Les serveurs Exo-OS sont des EXEC statiques
+        // (aucune section dynamique) : leur forcer un interpréteur chargeait un
+        // second gros ELF (le linker dynamique complet) à CHAQUE exec, doublait le
+        // demand-paging et compliquait le chemin de chargement sans aucun bénéfice
+        // (runtime_entry est un no-op pour un EXEC sans relocations). Un binaire
+        // dynamique (vrai PT_INTERP) continue d'utiliser son interpréteur.
         validate_elf_header(&elf_data)?;
-        let interp_path = match read_interpreter_path(&elf_data)? {
-            Some(interp) => Some(interp),
-            None => default_interpreter_path(path)?,
-        };
+        let interp_path = read_interpreter_path(&elf_data)?;
+        let _ = default_interpreter_path; // conservé pour usage dynamique futur
 
         // ── 5. Créer le nouvel espace d'adressage ────────────────────────────
         let alloc = ElfWalkAllocator;
@@ -564,15 +569,14 @@ fn read_blob_from_cache(blob_id: &BlobId) -> Result<Arc<[u8]>, ElfLoadError> {
         return Err(ElfLoadError::NotFound);
     };
 
-    BLOB_CACHE
-        .insert(*blob_id, data)
-        .map_err(|_| ElfLoadError::OutOfMemory)?;
-    if let Some(data) = BLOB_CACHE.get(blob_id) {
-        trace_blob(b"elf: disk hit ", blob_id);
-        return Ok(data);
-    }
-
-    Err(ElfLoadError::NotFound)
+    // Le chargeur ELF lit chaque blob UNE seule fois : l'aller-retour
+    // insert()+get() dans BLOB_CACHE est du travail redondant (double stockage,
+    // matérialisation Arc) et — surtout — il place un nœud BTreeMap durable sur
+    // la page heap réutilisée comme tampon DMA virtio (collision DMA/heap qui
+    // corrompt le nœud → memmove géant). On renvoie donc directement les octets
+    // disque sans passer par le cache pour ce chemin.
+    trace_blob(b"elf: disk direct ", blob_id);
+    Ok(Arc::from(data.into_boxed_slice()))
 }
 
 /// Valide magic, classe ELF et architecture.

@@ -31,6 +31,11 @@ pub const SUPERBLOCK_VERSION: u8 = 1;
 
 /// Taille du superbloc on-disk.
 pub const SUPERBLOCK_SIZE: usize = 256;
+/// Taille max d'un bloc disque supportée pour la lecture du superbloc.
+/// `read_block` écrit `block_size` octets (contrat BlockDevice) ; le buffer doit
+/// donc faire au moins `block_size` (512/4096) et non SUPERBLOCK_SIZE — sinon
+/// débordement de pile. Cf. FIX-FSCK-OOB.
+pub const SB_READ_BUF: usize = 4096;
 
 /// Magic de la table d'allocation : "EXOBLKAT".
 pub const ALLOC_TABLE_MAGIC: u64 = 0x54414B4C424F5845; // "EXOBLKAT"
@@ -299,8 +304,21 @@ impl FsckPhase1 {
         let mut lbas_checked: u64 = 0;
 
         // ── Étape 1 : lecture du superbloc ─────────────────────────────────
+        // FIX-FSCK-OOB : read_block écrit block_size octets (≠ SUPERBLOCK_SIZE=256).
+        // Lire un BLOC COMPLET dans un buffer dimensionné, puis copier les
+        // SUPERBLOCK_SIZE premiers octets — sinon débordement de pile.
+        let sb_blk = (device.block_size() as usize).min(SB_READ_BUF);
+        let mut sb_block = [0u8; SB_READ_BUF];
         let mut sb_buf = [0u8; SUPERBLOCK_SIZE];
-        match device.read_block(sb_lba, &mut sb_buf) {
+        let sb_read = if sb_blk < SUPERBLOCK_SIZE {
+            Err(ExofsError::InvalidState)
+        } else {
+            device.read_block(sb_lba, &mut sb_block[..sb_blk])
+        };
+        match sb_read {
+            Ok(()) => {
+                sb_buf.copy_from_slice(&sb_block[..SUPERBLOCK_SIZE]);
+            }
             Err(_) => {
                 errors.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 errors.push(Phase1Error {
@@ -321,7 +339,6 @@ impl FsckPhase1 {
                 RECOVERY_LOG.log_phase_done(1, 1);
                 return Ok(report);
             }
-            Ok(()) => {}
         }
         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
 

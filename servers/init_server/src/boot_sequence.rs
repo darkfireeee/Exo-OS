@@ -311,6 +311,7 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
             idx += 1;
         }
 
+        super::log::line(b"init: wave-done, entering readiness poll");
         let mut pending;
         let mut readiness_changed = false;
         loop {
@@ -335,6 +336,7 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                     continue;
                 }
 
+                super::log::service_status(b"init: chk ", service.name, b"\n");
                 if service_ready(service.name, pid) {
                     ready_mask |= 1u64 << idx;
                     service.mark_ready();

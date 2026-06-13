@@ -62,6 +62,8 @@ impl Blake3Hasher {
     /// Ajoute des données au hasher. Retourne `&mut Self` pour le chaînage.
     #[inline]
     pub fn update(&mut self, input: &[u8]) -> &mut Self {
+        #[cfg(target_arch = "x86_64")]
+        blake3_diag_big(b"<BLAKE3upd len=", input.len());
         self.0.update(input);
         self
     }
@@ -103,10 +105,36 @@ impl Default for Blake3Hasher {
 // Fonctions utilitaires publiques
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// DIAG: signale un input blake3 anormalement grand (longueur corrompue probable)
+/// avant la récursion de compress_subtree_wide qui déborderait la pile noyau.
+#[cfg(target_arch = "x86_64")]
+fn blake3_diag_big(tag: &[u8], len: usize) {
+    if len <= 4096 {
+        return;
+    }
+    crate::arch::x86_64::terminal::debug_write(tag);
+    let mut n = len;
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    if n == 0 {
+        crate::arch::x86_64::terminal::debug_write(b"0");
+    } else {
+        while n != 0 && i > 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+        crate::arch::x86_64::terminal::debug_write(&buf[i..]);
+    }
+    crate::arch::x86_64::terminal::debug_write(b">");
+}
+
 /// Hash BLAKE3 d'un message — retourne 32 bytes.
 /// Utilise `blake3::hash` (implémentation pure Rust validée IETF).
 #[inline]
 pub fn blake3_hash(input: &[u8]) -> [u8; 32] {
+    #[cfg(target_arch = "x86_64")]
+    blake3_diag_big(b"<BLAKE3hash len=", input.len());
     *blake3::hash(input).as_bytes()
 }
 
@@ -114,6 +142,8 @@ pub fn blake3_hash(input: &[u8]) -> [u8; 32] {
 /// Utilise `blake3::keyed_hash`.
 #[inline]
 pub fn blake3_mac(key: &[u8; 32], input: &[u8]) -> [u8; 32] {
+    #[cfg(target_arch = "x86_64")]
+    blake3_diag_big(b"<BLAKE3mac len=", input.len());
     *blake3::keyed_hash(key, input).as_bytes()
 }
 

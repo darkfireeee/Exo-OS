@@ -35,6 +35,10 @@ pub const SNAPSHOT_HDR_MAGIC: u64 = 0x44414548504E4153;
 pub const SNAPSHOT_HDR_VERSION: u8 = 1;
 /// Taille exacte de l en-tête on-disk.
 pub const SNAPSHOT_HDR_SIZE: usize = 256;
+/// Taille max d'un bloc disque supportée pour la lecture des en-têtes snapshot.
+/// Le buffer de scan doit faire AU MOINS `block_size` octets (contrat BlockDevice)
+/// pour ne pas déborder la pile — cf. FIX-FSCK-OOB.
+pub const SNAPSHOT_BLOCK_BUF: usize = 4096;
 /// LBA de départ de la région snapshot dans le volume.
 pub const SNAPSHOT_REGION_LBA: u64 = 0x4000;
 /// Nombre maximal de snapshots analysés par phase 3.
@@ -465,21 +469,34 @@ impl FsckPhase3 {
                 .and_then(|o| opts.region_lba.checked_add(o))
                 .ok_or(ExofsError::OffsetOverflow)?;
 
-            let mut buf = [0u8; SNAPSHOT_HDR_SIZE];
-            match device.read_block(lba, &mut buf) {
+            // FIX-FSCK-OOB : `read_block` écrit `block_size` octets (cf. contrat
+            // BlockDevice : buf.len() == block_size). Un buffer de SNAPSHOT_HDR_SIZE
+            // (256) débordait la PILE dès que block_size > 256 (512/4096), écrasant
+            // la variable adjacente `ctx` (Phase3Context → BTreeMap `seen`) : le
+            // pointeur/len du map devenait garbage → boucle infinie split_leaf_data
+            // au `seen.insert` suivant. On lit donc un BLOC COMPLET puis on parse
+            // les SNAPSHOT_HDR_SIZE premiers octets comme en-tête.
+            let blk = block_size as usize;
+            if blk > SNAPSHOT_BLOCK_BUF || blk < SNAPSHOT_HDR_SIZE {
+                break 'scan; // bloc hors plage supportée — arrêt sûr (pas de débordement).
+            }
+            let mut buf = [0u8; SNAPSHOT_BLOCK_BUF];
+            match device.read_block(lba, &mut buf[..blk]) {
                 Ok(()) => {}
                 Err(_) => break 'scan,
             }
+            let mut hdr_buf = [0u8; SNAPSHOT_HDR_SIZE];
+            hdr_buf.copy_from_slice(&buf[..SNAPSHOT_HDR_SIZE]);
 
             // Heuristique : slot nul → fin de région allouée.
-            if buf.iter().all(|&b| b == 0) {
+            if hdr_buf.iter().all(|&b| b == 0) {
                 break 'scan;
             }
 
             snapshots_checked = snapshots_checked.checked_add(1).unwrap_or(u64::MAX);
 
             // ── HDR-03 ───────────────────────────────────────────────────────
-            let hdr = match SnapshotHeaderDisk::from_bytes(&buf) {
+            let hdr = match SnapshotHeaderDisk::from_bytes(&hdr_buf) {
                 Ok(h) => h,
                 Err(ExofsError::InvalidMagic) => {
                     RECOVERY_AUDIT.record_invalid_magic(lba, 0);

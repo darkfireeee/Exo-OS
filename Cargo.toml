@@ -69,7 +69,12 @@ acpi       = { version = "5",   default-features = false }
 volatile   = { version = "0.5", default-features = false }
 
 # Cryptographie (partagée kernel + exofs, versionnée une seule fois)
-blake3           = { version = "1",    default-features = false, features = ["pure"] }
+# FIX-BLAKE3-AVX : le noyau tourne avec CR4.OSXSAVE=0 (état AVX/YMM non activé,
+# seul SSE via OSFXSR l'est). blake3 fait du dispatch SIMD runtime (cpuid brut,
+# y compris en no_std) et choisit sinon AVX2/AVX512 → les instructions YMM gèlent
+# le noyau (boucle dans blake3::avx2::hash8). On force donc blake3 à se limiter à
+# SSE4.1/SSE2 (XMM, fonctionnels) via no_avx2 + no_avx512.
+blake3           = { version = "1",    default-features = false, features = ["pure", "no_avx2", "no_avx512"] }
 aes              = { version = "0.8",  default-features = false }
 subtle           = { version = "2.5",  default-features = false }
 # chacha20 (stream cipher seul) : compatible x86_64-unknown-none, pas de poly1305/SIMD

@@ -86,8 +86,75 @@ fn pages_to_order(pages: usize) -> Option<usize> {
     Some(order)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MEM-DMA-ISO — pool dédié de pages bounce DMA (isolation DMA/heap).
+//
+// RÈGLE : une page ayant servi de tampon DMA virtio ne doit JAMAIS retourner au
+// free-list général du buddy. Sinon SLUB peut la réattribuer à un objet heap
+// durable (ex. nœud BTreeMap de BLOB_CACHE) qu'une écriture DMA TARDIVE du
+// périphérique vient écraser → corruption silencieuse (cause racine du spin
+// BlobCache : memmove 2^31). On retient donc les pages DMA dans ce pool par
+// ordre ; elles restent « DMA-only » à vie (marquées allouées dans le bitmap
+// buddy, jamais libérées) et cyclent uniquement entre allocations DMA.
+//
+// Le pool ne déborde pas pour virtio-blk synchrone (≤ quelques tampons
+// concurrents + l'anneau persistant). En cas de débordement improbable, on rend
+// la page au buddy (le risque résiduel n'existe que sous une rafale DMA).
+// ─────────────────────────────────────────────────────────────────────────────
+const DMA_POOL_MAX_ORDER: usize = 8;
+const DMA_POOL_CAP_PER_ORDER: usize = 16;
+
+struct DmaBouncePool {
+    free: [[u64; DMA_POOL_CAP_PER_ORDER]; DMA_POOL_MAX_ORDER],
+    count: [usize; DMA_POOL_MAX_ORDER],
+}
+
+impl DmaBouncePool {
+    const fn new() -> Self {
+        Self {
+            free: [[0u64; DMA_POOL_CAP_PER_ORDER]; DMA_POOL_MAX_ORDER],
+            count: [0usize; DMA_POOL_MAX_ORDER],
+        }
+    }
+
+    fn pop(&mut self, order: usize) -> Option<u64> {
+        if order >= DMA_POOL_MAX_ORDER || self.count[order] == 0 {
+            return None;
+        }
+        self.count[order] -= 1;
+        Some(self.free[order][self.count[order]])
+    }
+
+    fn push(&mut self, order: usize, phys: u64) -> bool {
+        if order >= DMA_POOL_MAX_ORDER || self.count[order] >= DMA_POOL_CAP_PER_ORDER {
+            return false;
+        }
+        self.free[order][self.count[order]] = phys;
+        self.count[order] += 1;
+        true
+    }
+}
+
+static DMA_BOUNCE_POOL: Mutex<DmaBouncePool> = Mutex::new(DmaBouncePool::new());
+
 fn kernel_dma_alloc(pages: usize) -> Option<(usize, NonNull<u8>)> {
     let order = pages_to_order(pages)?;
+
+    // 1. Réutiliser une page DMA déjà isolée (jamais cédée à SLUB).
+    let reused = DMA_BOUNCE_POOL.lock().pop(order);
+    if let Some(phys) = reused {
+        let pa = PhysAddr::new(phys);
+        let virt = crate::memory::core::phys_to_virt(pa);
+        let ptr = NonNull::new(virt.as_u64() as *mut u8)?;
+        // Re-zéroter : le périphérique a pu écrire dans cette page au cycle précédent.
+        // SAFETY: page DMA valide, taille = 2^order pages, propriété exclusive ici.
+        unsafe {
+            core::ptr::write_bytes(ptr.as_ptr(), 0, (1usize << order) * PAGE_SIZE);
+        }
+        return Some((phys as usize, ptr));
+    }
+
+    // 2. Sinon allouer depuis le buddy (la page devient DMA-only après son 1er free).
     let frame = alloc_pages(
         order,
         crate::memory::core::AllocFlags::DMA32
@@ -107,6 +174,11 @@ unsafe fn kernel_dma_dealloc(paddr: usize, _vaddr: NonNull<u8>, pages: usize) ->
     let Some(order) = pages_to_order(pages) else {
         return false;
     };
+    // Retenir la page dans le pool DMA isolé plutôt que la rendre au buddy.
+    if DMA_BOUNCE_POOL.lock().push(order, paddr as u64) {
+        return true;
+    }
+    // Pool plein (improbable pour virtio-blk) : restitution au buddy.
     let frame = Frame::containing(PhysAddr::new(paddr as u64));
     free_pages(frame, order).is_ok()
 }
