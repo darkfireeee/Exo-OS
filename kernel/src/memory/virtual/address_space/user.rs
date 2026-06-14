@@ -140,6 +140,12 @@ impl UserAddressSpace {
         );
         let mut walker = PageTableWalker::new(self.pml4_phys);
         walker.map(virt, frame, flags, alloc)?;
+        // DIAG-STKWATCH (temporaire) : surveiller les frames de la région pile.
+        if virt.as_u64() >= 0x7fff_0000_0000 {
+            crate::memory::physical::allocator::buddy::stk_watch_record(
+                frame.start_address().as_u64(),
+            );
+        }
         flush_single(virt);
         Ok(())
     }
@@ -166,6 +172,12 @@ impl UserAddressSpace {
         );
         let mut walker = PageTableWalker::new(self.pml4_phys);
         walker.map(virt, frame, flags, alloc)?;
+        // DIAG-STKWATCH (temporaire) : couvrir aussi le setup initial de pile.
+        if virt.as_u64() >= 0x7fff_0000_0000 {
+            crate::memory::physical::allocator::buddy::stk_watch_record(
+                frame.start_address().as_u64(),
+            );
+        }
         Ok(())
     }
 

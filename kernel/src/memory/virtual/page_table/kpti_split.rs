@@ -185,6 +185,34 @@ pub unsafe fn sync_user_pml4_entry(
     Ok(())
 }
 
+/// Synchronise TOUTES les entrées PML4 de la moitié user (0..255) depuis la PML4
+/// du processus vers la shadow KPTI per-CPU.
+///
+/// La shadow user étant PARTAGÉE par tous les processus d'un CPU, ses entrées
+/// user doivent refléter le processus courant à chaque changement de CR3. Sans
+/// cette resynchronisation au switch, une page demand-paged pour un processus A
+/// disparaît de la shadow dès qu'un processus B s'exécute puis rend la main à A
+/// → boucle de #PF (cf. bootstrap init après fork).
+///
+/// # Safety
+/// `source_pml4_phys` et `user_pml4_phys` pointent vers des PML4 valides (ring0).
+#[inline]
+pub unsafe fn sync_user_region_to_shadow(source_pml4_phys: PhysAddr, user_pml4_phys: PhysAddr) {
+    if source_pml4_phys.as_u64() == 0 || user_pml4_phys.as_u64() == 0 {
+        return;
+    }
+    if source_pml4_phys.as_u64() == user_pml4_phys.as_u64() {
+        return;
+    }
+    let source_pml4 = phys_to_table_ref(source_pml4_phys);
+    let user_pml4 = phys_to_table_mut(user_pml4_phys);
+    let mut i = 0usize;
+    while i < 256 {
+        user_pml4[i] = source_pml4[i];
+        i += 1;
+    }
+}
+
 /// Construit une PML4 user shadow à partir de la PML4 source du thread.
 ///
 /// La table user conserve:

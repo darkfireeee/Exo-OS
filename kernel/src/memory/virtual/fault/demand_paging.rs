@@ -224,6 +224,31 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                             .fetch_add(1, Ordering::Relaxed);
                         match alloc.map_page(page_addr, frame, vma.page_flags) {
                             Ok(_) => {
+                                // DIAG-DPM (temporaire) : la PTE persiste-t-elle
+                                // juste après map_page ? + frame alloué (collision
+                                // avec l'AS d'un autre process ?).
+                                {
+                                    use core::sync::atomic::{AtomicUsize, Ordering as OD};
+                                    static ND: AtomicUsize = AtomicUsize::new(0);
+                                    if ND.fetch_add(1, OD::Relaxed) < 20 {
+                                        let pte = alloc.read_pte_raw(page_addr);
+                                        let out = crate::arch::x86_64::terminal::debug_write;
+                                        let hx = |v: u64| {
+                                            let hexd = b"0123456789abcdef";
+                                            let mut b = [0u8; 9];
+                                            let mut i = 0;
+                                            while i < 9 {
+                                                b[i] = hexd[((v >> ((8 - i) * 4)) & 0xf) as usize];
+                                                i += 1;
+                                            }
+                                            out(&b);
+                                        };
+                                        out(b"<DPM ");
+                                        out(if pte & 1 != 0 { b"P1 f=" } else { b"P0 f=" });
+                                        hx(frame.start_address().as_u64());
+                                        out(b">");
+                                    }
+                                }
                                 vma.record_fault();
                                 FaultResult::Handled
                             }

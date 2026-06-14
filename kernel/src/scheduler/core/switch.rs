@@ -333,8 +333,16 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
 
     // ── Étape 7 : préparer CR3 + runtime, puis Étape 8 : ASM context switch ─
-    // CR3 switch uniquement si les espaces d'adressage diffèrent (KPTI-aware).
-    let new_cr3 = if prev.cr3_phys != next.cr3_phys {
+    // FIX-CR3-RESYNC : on recharge TOUJOURS le CR3 du thread cible (s'il en a un,
+    // i.e. thread user). L'ancienne optim « skip si prev.cr3 == next.cr3 »
+    // supposait que le CR3 matériel valait déjà prev.cr3_phys — faux dès qu'un
+    // chemin (execve/handoff/fork-trampoline) change le CR3 matériel sans repasser
+    // par ce switch. Résultat observé : init (PID 1) s'exécutait sur un CR3 ≠ de
+    // son `tcb.cr3_phys`, donc le demand-paging mappait dans la mauvaise table →
+    // boucle de #PF instruction-fetch. `tcb.cr3_phys` est la source de vérité
+    // (mise à jour par execve) ; le matériel doit la suivre à chaque switch.
+    // new_cr3 == 0 ⇒ l'ASM ne recharge pas (threads kernel sans espace user).
+    let new_cr3 = if next.cr3_phys != 0 {
         next.cr3_phys
     } else {
         0
@@ -458,6 +466,36 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
     if next.pid.0 == 1 && next.cr3_phys != 0 {
         idle_sched_trace(b"context_switch: ->init-user\n");
+    }
+    // DIAG-SW (temporaire) : tracer les transitions CR3 du scheduler (prev/next
+    // pid + cr3 + cr3 réellement chargé) pour diagnostiquer le mismatch CR3 init.
+    {
+        use core::sync::atomic::{AtomicUsize, Ordering as O4};
+        static NS: AtomicUsize = AtomicUsize::new(0);
+        if NS.fetch_add(1, O4::Relaxed) < 40 {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            let hx = |v: u64| {
+                let hexd = b"0123456789abcdef";
+                let mut b = [0u8; 8];
+                let mut i = 0;
+                while i < 8 {
+                    b[i] = hexd[((v >> ((7 - i) * 4)) & 0xf) as usize];
+                    i += 1;
+                }
+                out(&b);
+            };
+            out(b"<SW p");
+            hx(prev.pid.0 as u64);
+            out(b"c");
+            hx(prev.cr3_phys);
+            out(b" ->p");
+            hx(next.pid.0 as u64);
+            out(b"c");
+            hx(next.cr3_phys);
+            out(b" ld");
+            hx(new_cr3);
+            out(b">");
+        }
     }
     context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
 }

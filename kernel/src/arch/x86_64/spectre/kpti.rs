@@ -74,6 +74,44 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     slot.kernel.store(cr3_kernel, Ordering::Release);
     slot.user.store(cr3_user, Ordering::Release);
     percpu::set_kpti_cr3_slots(cr3_kernel & !CR3_PCID_MASK, cr3_user & !CR3_PCID_MASK);
+
+    // FIX-KPTI-SHADOW-SYNC : la shadow user KPTI est PARTAGÉE par CPU ; sa moitié
+    // user doit refléter le processus courant à chaque switch, sinon une page
+    // demand-paged pour le processus A disparaît dès que B s'exécute puis rend la
+    // main à A → boucle de #PF (bootstrap init après fork).
+    //
+    // Cible = la shadow per-CPU RÉELLE utilisée par le trampoline d'entrée
+    // (kpti_split::user_cr3_for_cpu) ; `cr3_user` du TCB peut être 0 (PID 1).
+    const PML4_PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+    let k = cr3_kernel & PML4_PHYS_MASK;
+    let cpu_id = percpu::current_cpu_id() as usize;
+    let shadow = crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu(cpu_id)
+        .unwrap_or(0)
+        & PML4_PHYS_MASK;
+    let candidates = [cr3_user & PML4_PHYS_MASK, shadow];
+    let mut synced: u64 = 0;
+    for u in candidates {
+        if k != 0 && u != 0 && k != u && u != synced {
+            synced = u;
+            // SAFETY: k/u référencent des PML4 valides (process / shadow per-CPU).
+            unsafe {
+                crate::memory::virt::page_table::kpti_split::sync_user_region_to_shadow(
+                    crate::memory::core::PhysAddr::new(k),
+                    crate::memory::core::PhysAddr::new(u),
+                );
+            }
+        }
+    }
+}
+
+/// Retourne le CR3 user (shadow KPTI) actuellement publié pour CE CPU, soit
+/// celui sur lequel le thread courant s'exécute réellement en Ring 3.
+///
+/// Utilisé comme source de vérité par la synchronisation de fautes quand le TCB
+/// ne porte pas (encore) son `kpti_user_cr3` — ex. PID 1 créé par le handoff.
+#[inline]
+pub fn current_user_cr3() -> u64 {
+    current_cpu_slot().user.load(Ordering::Acquire) & !CR3_PCID_MASK
 }
 
 // ── Switch Kernel → User CR3 ─────────────────────────────────────────────────

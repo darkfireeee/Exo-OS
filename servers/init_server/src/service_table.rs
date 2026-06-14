@@ -209,11 +209,24 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
     },
 ];
 
-#[inline]
+#[inline(never)]
 pub fn metadata(name: &str) -> Option<&'static ServiceMetadata> {
-    CANONICAL_SERVICES
-        .iter()
-        .find(|service| service.name == name)
+    let mut i = 0usize;
+    while i < CANONICAL_SERVICES.len() {
+        crate::log::line(b"init: mdI\n");
+        let sn = CANONICAL_SERVICES[i].name;
+        crate::log::line(b"init: mdN\n");
+        if sn.len() == name.len() {
+            crate::log::line(b"init: mdL\n");
+            if sn == name {
+                crate::log::line(b"init: mdF\n");
+                return Some(&CANONICAL_SERVICES[i]);
+            }
+            crate::log::line(b"init: mdX\n");
+        }
+        i += 1;
+    }
+    None
 }
 
 #[inline]

@@ -224,12 +224,21 @@ fn dependency_ready_in_wave(services: &[Service], ready_mask: u64, dep: &str) ->
         .unwrap_or(false)
 }
 
-#[inline]
+#[inline(never)]
 fn can_start_in_wave(services: &[Service], name: &str, ready_mask: u64) -> bool {
+    log::line(b"init: cs1\n");
     let optional = dependency::optional_dependencies(name);
-    dependency::dependencies_satisfied(name, |dep| {
-        dependency_ready_in_wave(services, ready_mask, dep) || optional.contains(&dep)
-    })
+    log::line(b"init: cs2\n");
+    let r = dependency::dependencies_satisfied(name, |dep| {
+        log::line(b"init: cs3\n");
+        let a = dependency_ready_in_wave(services, ready_mask, dep);
+        log::line(b"init: cs4\n");
+        let b = a || optional.contains(&dep);
+        log::line(b"init: cs5\n");
+        b
+    });
+    log::line(b"init: cs6\n");
+    r
 }
 
 fn log_service_graph_timeout(services: &[Service]) {
@@ -291,12 +300,23 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                 idx += 1;
                 continue;
             }
+            // DIAG-WAVE (temporaire) : tracer chaque service examiné dans la vague
+            // pour localiser le saut NULL d'init (entre "spawned ipc_router" et wave-done).
+            {
+                use core::sync::atomic::{AtomicU32, Ordering};
+                static CW: AtomicU32 = AtomicU32::new(0);
+                if CW.fetch_add(1, Ordering::Relaxed) < 10 {
+                    super::log::service_status(b"init: cwave ", service.name, b"\n");
+                }
+            }
             if !can_start_in_wave(services, service.name, ready_mask) {
                 idx += 1;
                 continue;
             }
+            super::log::service_status(b"init: canstart ", service.name, b"\n");
 
             let pid = spawn_service(service.name, service.bin_path);
+            super::log::service_pid(b"init: spawnret ", service.name, pid);
             if pid == 0 {
                 idx += 1;
                 continue;

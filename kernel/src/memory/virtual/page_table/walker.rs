@@ -137,6 +137,36 @@ impl PageTableWalker {
         let idx = virt.p1_index();
         let entry = &mut pt[idx];
         let new_entry = PageTableEntry::from_page_flags(frame, flags);
+        // DIAG-STKDBLMAP (temporaire) : un frame connu comme pile (≥0x7fff...) est-il
+        // mappé ici sur une adresse NON-pile ? = double-mapping → l'autre AS écrit la
+        // pile d'init (corruption → saut NULL). Couvre TOUS les chemins de map.
+        if virt.as_u64() < 0x7fff_0000_0000
+            && crate::memory::physical::allocator::buddy::stk_watch_is_watched(
+                frame.start_address().as_u64(),
+            )
+        {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            out(b"<STKDBLMAP va=");
+            let hexd = b"0123456789abcdef";
+            let mut b = [0u8; 12];
+            let v = virt.as_u64();
+            let mut i = 0;
+            while i < 12 {
+                b[i] = hexd[((v >> ((11 - i) * 4)) & 0xf) as usize];
+                i += 1;
+            }
+            out(&b);
+            out(b" f=");
+            let f = frame.start_address().as_u64();
+            let mut b2 = [0u8; 9];
+            let mut j = 0;
+            while j < 9 {
+                b2[j] = hexd[((f >> ((8 - j) * 4)) & 0xf) as usize];
+                j += 1;
+            }
+            out(&b2);
+            out(b">");
+        }
         *entry = new_entry;
         Ok(())
     }
@@ -283,6 +313,28 @@ impl PageTableWalker {
     ) -> Result<bool, AllocError> {
         if src.as_u64() == dst.as_u64() {
             return Ok(true);
+        }
+
+        // DIAG-MVLEAF (temporaire) : un move_leaf (mremap zéro-copie / read zéro-copie)
+        // qui vise la région pile (≥0x7fff...) REMAPPE une page de pile vers un autre
+        // frame → écrase les return addresses → saut NULL.
+        if dst.as_u64() >= 0x7fff_0000_0000 || src.as_u64() >= 0x7fff_0000_0000 {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            let hexd = b"0123456789abcdef";
+            let hx = |v: u64| {
+                let mut b = [0u8; 12];
+                let mut i = 0;
+                while i < 12 {
+                    b[i] = hexd[((v >> ((11 - i) * 4)) & 0xf) as usize];
+                    i += 1;
+                }
+                out(&b);
+            };
+            out(b"<MVLEAF src=");
+            hx(src.as_u64());
+            out(b" dst=");
+            hx(dst.as_u64());
+            out(b">");
         }
 
         let Some(src_entry_ptr) = self.leaf_entry_ptr(src) else {

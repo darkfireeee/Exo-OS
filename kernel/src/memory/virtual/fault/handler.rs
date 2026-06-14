@@ -136,6 +136,38 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
         }
     };
 
+    // DIAG-XF (temporaire) : tracer les fautes d'exécution (present / vma EXEC /
+    // page_flags NX) pour diagnostiquer le livelock instruction-fetch post-fork.
+    if ctx.cause == FaultCause::Execute {
+        use core::sync::atomic::{AtomicUsize, Ordering as O2};
+        static NX: AtomicUsize = AtomicUsize::new(0);
+        if NX.fetch_add(1, O2::Relaxed) < 12 {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            out(b"<XF ");
+            out(if ctx.present { b"P1" } else { b"P0" });
+            out(if vma.flags.contains(VmaFlags::EXEC) {
+                b" vE"
+            } else {
+                b" v-"
+            });
+            out(if vma.page_flags.contains(PageFlags::NO_EXECUTE) {
+                b" pNX b="
+            } else {
+                b" pX b="
+            });
+            let hexd = b"0123456789abcdef";
+            let raw = vma.page_flags.bits();
+            let mut bb = [0u8; 16];
+            let mut i = 0;
+            while i < 16 {
+                bb[i] = hexd[((raw >> ((15 - i) * 4)) & 0xf) as usize];
+                i += 1;
+            }
+            out(&bb);
+            out(b">");
+        }
+    }
+
     // Vérifier les permissions de la VMA.
     match ctx.cause {
         FaultCause::Write => {
