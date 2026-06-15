@@ -234,11 +234,9 @@ pub fn sys_exofs_readdir(
         Err(e) => return e,
     };
 
-    if cap_rights != 0 {
-        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsReaddir) {
-            return e;
-        }
-    }
+    // FIX-SEC-T0.4 : faux verify_cap conditionnel retiré (bypassable avec cap_rights=0) ;
+    // listing de répertoire, gaté en TIER 1 (politique default-deny).
+    let _ = cap_rights;
 
     // Calculer le nombre max d'entrées (borné par EXOFS_LIST_MAX)
     let buf_limit = (buf_len as usize).min(EXOFS_LIST_MAX);

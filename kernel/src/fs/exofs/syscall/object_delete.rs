@@ -168,10 +168,10 @@ pub fn sys_exofs_object_delete(
         Err(e) => return e,
     };
 
-    // Phase 2 (TOCTOU-safe): verify_cap sur copie noyau du chemin.
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectDelete) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : le faux `verify_cap` (bitmask auto-déclaré = théâtre) est retiré.
+    // delete-par-chemin sera gaté par la **politique default-deny du TIER 1** (gater
+    // ici sans la politique casserait `rm` POSIX, qui n'ouvre pas avant unlink).
+    let _ = cap_rights;
 
     let result = match delete_object_by_path(&path_buf, actual_len, flags as u32) {
         Ok(r) => r,

@@ -341,13 +341,13 @@ pub fn sys_exofs_quota_query(
     if args.flags & !quota_flags::VALID_MASK != 0 {
         return exofs_err_to_errno(ExofsError::InvalidArgument);
     }
-    let cap = if args.flags & quota_flags::SET != 0 {
-        CapabilityType::ExoFsQuotaSet
-    } else {
-        CapabilityType::ExoFsQuotaQuery
-    };
-    if let Err(e) = verify_cap(cap_rights, cap) {
-        return e;
+    // FIX-SEC-T0.4 : QuotaSet = admin → gate RÉEL (cap FS_ROOT ADMIN ; après le moindre
+    // privilège T1.0, seul init la détient). QuotaQuery = lecture → permissif (gaté T1).
+    let _ = cap_rights;
+    if args.flags & quota_flags::SET != 0 {
+        if let Err(e) = super::captable::check_root(CapabilityType::ExoFsQuotaSet) {
+            return e;
+        }
     }
     if args.flags & quota_flags::SET != 0 {
         // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.

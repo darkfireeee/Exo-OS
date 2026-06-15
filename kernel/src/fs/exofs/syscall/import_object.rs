@@ -178,7 +178,9 @@ pub fn sys_exofs_import_object(
         return EFAULT;
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsImportObject) {
+    // FIX-SEC-T0.4 : import = écriture privilégiée → cap IMPORT sur l'objet racine FS.
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_root(CapabilityType::ExoFsImportObject) {
         return e;
     }
 

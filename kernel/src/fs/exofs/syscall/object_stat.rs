@@ -195,11 +195,14 @@ pub fn sys_exofs_object_stat(
         return EINVAL;
     }
 
+    // FIX-SEC-T0.4 : l'arg `cap_rights` bidon est ignoré ; l'autorité vient de la cap.
+    let _ = cap_rights;
     let result = if f & stat_flags::USE_FD != 0 {
-        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
+        let fd = fd_or_path as u32;
+        // cap STAT requise sur l'objet du fd (toujours présente après un open).
+        if let Err(e) = super::captable::check_fd(fd, CapabilityType::ExoFsObjectStat) {
             return e;
         }
-        let fd = fd_or_path as u32;
         match stat_by_fd(fd, f) {
             Ok(s) => s,
             Err(e) => return exofs_err_to_errno(e),
@@ -213,9 +216,8 @@ pub fn sys_exofs_object_stat(
             Ok(l) => l,
             Err(e) => return e,
         };
-        if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectStat) {
-            return e;
-        }
+        // FIX-SEC-T0.4 : stat-par-chemin = query métadonnée, permissif en TIER 0
+        // (durci en TIER 1 : politique « qui peut stat quel chemin »).
         match stat_by_path(&path_buf, actual_len, f) {
             Ok(s) => s,
             Err(e) => return exofs_err_to_errno(e),

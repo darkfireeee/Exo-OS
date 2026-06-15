@@ -137,7 +137,7 @@ pub enum CapabilityType {
 }
 
 #[inline]
-const fn required_right_for(cap: CapabilityType) -> u32 {
+pub const fn required_right_for(cap: CapabilityType) -> u32 {
     match cap {
         CapabilityType::ExoFsPathResolve => RIGHT_READ,
         CapabilityType::ExoFsOpenRead => RIGHT_READ,

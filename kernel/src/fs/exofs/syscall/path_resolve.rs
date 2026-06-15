@@ -277,10 +277,8 @@ pub fn sys_exofs_path_resolve(
         Err(e) => return e,
     };
 
-    // Phase 2 (TOCTOU-safe): verify_cap après copie immuable du chemin.
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsPathResolve) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : faux verify_cap retiré ; résolution de chemin, gatée en TIER 1.
+    let _ = cap_rights;
 
     // 3. Résoudre le chemin.
     let result = match resolve_path_to_blob(&path_buf[..path_len_actual], flags as u32) {

@@ -8,8 +8,7 @@
 use super::object_fd::{open_flags, OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
 use super::object_store;
 use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, validate_open_flags, verify_cap, CapabilityType,
-    EFAULT,
+    exofs_err_to_errno, read_user_path_heap, validate_open_flags, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
@@ -226,21 +225,29 @@ pub fn sys_exofs_object_open(
         return e;
     }
 
-    // Phase 2: verify_cap sur paramètres déjà copiés en noyau.
-    let cap_type = if open_flags::can_write(open_args.flags) {
-        CapabilityType::ExoFsOpenWrite
-    } else {
-        CapabilityType::ExoFsOpenRead
-    };
-    if let Err(e) = verify_cap(cap_rights, cap_type) {
-        return e;
-    }
+    // FIX-SEC-T0.3 : l'arg `cap_rights` (bitmask auto-déclaré) n'est plus une preuve
+    // d'autorité — on l'ignore. L'autorité réelle = la capability MINTÉE ci-dessous,
+    // stockée dans la cap_table du process et vérifiée à chaque opération suivante.
+    let _ = cap_rights;
 
     // 5. Ouvrir l'objet.
     let fd = match open_object(&path_buf, actual_len, &open_args) {
         Ok(fd) => fd,
         Err(e) => return exofs_err_to_errno(e),
     };
+
+    // FIX-SEC-T0.3 : mint d'une capability RÉELLE sur l'objet ouvert, droits dérivés
+    // des flags (RDONLY→READ|STAT|LIST ; RDWR→+WRITE|CREATE|DELETE|SETMETA). Le process
+    // détiendra cette cap ; object_read/write/stat/… la vérifieront via check_object_cap.
+    if let Ok(bid) = OBJECT_TABLE.blob_id_of(fd) {
+        let oid = super::captable::object_id_of_blob(&bid);
+        if let Err(e) =
+            super::captable::grant_object_cap(oid, super::captable::rights_from_open_flags(open_args.flags))
+        {
+            OBJECT_TABLE.close(fd);
+            return e;
+        }
+    }
 
     // 6. Écrire le fd vers userspace si demandé.
     if out_fd_ptr != 0 {

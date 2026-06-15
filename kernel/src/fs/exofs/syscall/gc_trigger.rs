@@ -287,7 +287,10 @@ pub fn sys_exofs_gc_trigger(
         Ok(a) => a,
         Err(_) => return EFAULT,
     };
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsGcTrigger) {
+    // FIX-SEC-T0.4 : op globale → cap GC_TRIGGER sur l'objet racine FS (cap admin
+    // détenue par init, héritée par les serveurs). Remplace le faux verify_cap.
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_root(CapabilityType::ExoFsGcTrigger) {
         return e;
     }
     let res = match run_gc(&args) {

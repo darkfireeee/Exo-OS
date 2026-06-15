@@ -323,9 +323,8 @@ pub fn sys_exofs_relation_create(
             }
         }
     }
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsRelationCreate) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : faux verify_cap retiré ; relation par chemin, gatée en TIER 1.
+    let _ = cap_rights;
     let rel = match create_relation(
         &args.source_id,
         &args.target_id,

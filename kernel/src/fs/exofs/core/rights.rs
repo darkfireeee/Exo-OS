@@ -52,10 +52,19 @@ pub const RIGHT_IMPORT: u32 = 1 << 15;
 /// Droit d'administration — accès privilégié complet (format, reconfiguration).
 pub const RIGHT_ADMIN: u32 = 1 << 16;
 
-/// Masque de tous les droits ExoFS définis.
-pub const ALL_RIGHTS: u32 = 0x0000_FFFF;
-/// Masque des droits restreints (nécessitent élévation de privilèges).
-pub const PRIVILEGED_RIGHTS: u32 = RIGHT_GC_TRIGGER | RIGHT_IMPORT | RIGHT_SNAPSHOT_CREATE;
+/// Masque de tous les droits ExoFS définis (bits 0-16, **RIGHT_ADMIN inclus**).
+///
+/// FIX-SEC-T0.1 : auparavant `0x0000_FFFF` (bits 0-15) excluait `RIGHT_ADMIN`
+/// (bit 16). Conséquence : `from_bits`/`add`/`validate_external_mask` strippaient
+/// admin et `verify_cap` le masquait avant de le tester → `RIGHT_ADMIN` était
+/// **inconstructible et invérifiable** (toute opération exigeant admin renvoyait
+/// EPERM à 100 %). Le masque couvre désormais exactement les 17 droits définis.
+pub const ALL_RIGHTS: u32 = 0x0001_FFFF;
+/// Masque des droits restreints (nécessitent élévation de privilèges, non
+/// délégables aux enfants). `RIGHT_ADMIN` y est inclus : c'est le droit le plus
+/// privilégié et il ne doit jamais se propager par délégation.
+pub const PRIVILEGED_RIGHTS: u32 =
+    RIGHT_GC_TRIGGER | RIGHT_IMPORT | RIGHT_SNAPSHOT_CREATE | RIGHT_ADMIN;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RightsMask — wrapper typé autour du bitmask u32
@@ -600,4 +609,48 @@ pub fn detect_escalation(current: RightsMask, new_mask: RightsMask) -> Result<()
         return Err(RightsError::EscalationDenied);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tier0_admin_tests {
+    use super::*;
+
+    /// FIX-SEC-T0.1 : RIGHT_ADMIN doit être un droit défini, valide et constructible.
+    #[test]
+    fn admin_is_within_all_rights() {
+        assert_eq!(ALL_RIGHTS & RIGHT_ADMIN, RIGHT_ADMIN, "ADMIN doit être dans ALL_RIGHTS");
+        // Les 17 droits définis = bits 0..=16, exactement.
+        assert_eq!(ALL_RIGHTS, 0x0001_FFFF);
+    }
+
+    /// `from_bits` ne doit plus stripper admin.
+    #[test]
+    fn from_bits_preserves_admin() {
+        let m = RightsMask::from_bits(RIGHT_ADMIN);
+        assert!(m.has(RIGHT_ADMIN), "from_bits doit conserver RIGHT_ADMIN");
+    }
+
+    /// Un masque externe contenant admin est désormais valide.
+    #[test]
+    fn external_mask_with_admin_is_valid() {
+        assert!(RightsValidator::validate_external_mask(RIGHT_ADMIN).is_ok());
+        // Un bit non défini (17) reste invalide.
+        assert!(RightsValidator::validate_external_mask(1 << 17).is_err());
+    }
+
+    /// Admin est privilégié et non délégable aux enfants.
+    #[test]
+    fn admin_is_privileged_and_not_inherited() {
+        assert_eq!(PRIVILEGED_RIGHTS & RIGHT_ADMIN, RIGHT_ADMIN);
+        let parent = RightsMask::from_bits(RIGHT_READ | RIGHT_ADMIN);
+        let inherited = inherit_rights(parent, RightsMask::ALL);
+        assert!(!inherited.has(RIGHT_ADMIN), "admin ne doit pas s'hériter");
+        assert!(inherited.has(RIGHT_READ), "les droits normaux s'héritent");
+    }
+
+    /// RightsMask::ADMIN contient effectivement RIGHT_ADMIN (était faux avant le fix).
+    #[test]
+    fn admin_rightsmask_contains_admin() {
+        assert!(RightsMask::ADMIN.has(RIGHT_ADMIN));
+    }
 }

@@ -164,9 +164,8 @@ pub fn sys_exofs_get_content_hash(
         return EINVAL;
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsGetContentHash) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : faux verify_cap retiré ; query par chemin, gatée en TIER 1.
+    let _ = cap_rights;
 
     let result = if f & hash_flags::VERIFY != 0 && expected_ptr != 0 {
         match verify_fd_hash(fd as u32, expected_ptr) {

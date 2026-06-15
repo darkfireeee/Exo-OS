@@ -361,10 +361,10 @@ pub fn sys_exofs_object_set_meta(args_ptr: u64, cap_token: u64) -> i64 {
         Err(e) => return exofs_err_to_errno(e),
     };
 
+    // FIX-SEC-T0.4 : faux verify_cap retiré (théâtre) ; set_meta sera gaté par la
+    // politique default-deny du TIER 1 (cap SETMETA, clé cohérente via blob_id résolu).
+    let _ = cap_token;
     if f & meta_flags::CLEAR_ALL != 0 {
-        if let Err(e) = verify_cap(cap_token, CapabilityType::ExoFsObjectSetMeta) {
-            return e;
-        }
         return match meta_clear(blob_id) {
             Ok(_) => 0,
             Err(e) => exofs_err_to_errno(e),
@@ -406,9 +406,6 @@ pub fn sys_exofs_object_set_meta(args_ptr: u64, cap_token: u64) -> i64 {
                     i = i.wrapping_add(1);
                 }
             }
-        }
-        if let Err(e) = verify_cap(cap_token, CapabilityType::ExoFsObjectSetMeta) {
-            return e;
         }
         return match meta_set(blob_id, &kbuf, &vbuf) {
             Ok(_) => 0,

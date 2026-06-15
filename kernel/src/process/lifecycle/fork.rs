@@ -565,6 +565,26 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     child_pcb.set_pgroup_id(parent_pcb.pgroup_id());
     child_pcb.set_session_id(parent_pcb.session_id());
 
+    // FIX-SEC-T0.2 : l'enfant HÉRITE la table de capabilities du parent (les caps =
+    // objets ExoFS ouverts + droits délégués). Sans ça, un fork perdrait tous les
+    // accès et `check_object_cap` refuserait toute opération post-fork. inherit_from
+    // copie tous les slots non-libres sous write_lock (révocation par génération
+    // préservée). RÈGLE SEC-CAP-02.
+    // FIX-SEC-T1.0 : héritage à MOINDRE PRIVILÈGE — l'enfant hérite les droits
+    // opérationnels (read/write/…) mais PAS les droits FS privilégiés
+    // (gc/import/snapshot/admin = PRIVILEGED_RIGHTS) : ceux-ci ne se propagent qu'au
+    // travers d'un grant/délégation explicites. Empêche que tout fork (shell, app)
+    // hérite l'admin FS d'init.
+    child_pcb.cap_table = alloc::boxed::Box::new(
+        crate::security::capability::CapTable::inherit_from_masked(
+            &parent_pcb.cap_table,
+            crate::security::capability::Rights::from_bits_truncate(
+                crate::fs::exofs::core::rights::PRIVILEGED_RIGHTS,
+            ),
+            crate::security::capability::CapObjectType::FileInode,
+        ),
+    );
+
     // Marquer FORKED.
     child_pcb
         .flags

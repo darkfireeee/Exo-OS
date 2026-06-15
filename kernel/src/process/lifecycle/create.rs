@@ -398,6 +398,20 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
     }
     pcb.set_state(ProcessState::Running);
 
+    // FIX-SEC-T0.2/E : init (PID1) = racine de confiance du FS. On lui accorde une
+    // capability admin sur l'objet racine ExoFS (FS_ROOT_OBJECT_ID) → autorise les
+    // opérations globales (gc/quota/snapshot/import) et l'admin. Les serveurs
+    // obtiennent leurs caps par héritage au fork (inherit_from) ou délégation.
+    {
+        use crate::fs::exofs::core::rights::{ALL_RIGHTS, RIGHT_ADMIN};
+        use crate::security::capability::{CapObjectType, ObjectId, Rights};
+        let _ = pcb.cap_table.grant(
+            ObjectId::from_raw(crate::fs::exofs::syscall::captable::FS_ROOT_OBJECT_ID),
+            Rights::from_bits_truncate(ALL_RIGHTS | RIGHT_ADMIN),
+            CapObjectType::FileInode,
+        );
+    }
+
     PROCESS_REGISTRY.insert(pcb).map_err(|_| {
         unsafe {
             drop(Box::from_raw(thread_ptr));

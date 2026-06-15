@@ -264,7 +264,9 @@ pub fn sys_exofs_snapshot_list(
         return EINVAL;
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotList) {
+    // FIX-SEC-T0.4 : op globale → cap SNAPSHOT_LIST sur l'objet racine FS.
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_root(CapabilityType::ExoFsSnapshotList) {
         return e;
     }
 

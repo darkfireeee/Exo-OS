@@ -239,7 +239,10 @@ pub fn sys_exofs_object_read(
         return 0;
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectRead) {
+    // FIX-SEC-T0.4 : vérif capability RÉELLE (le process doit détenir une cap READ sur
+    // l'objet du fd — obtenue à l'open). Remplace le faux verify_cap (bitmask).
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_fd(fd_u32, CapabilityType::ExoFsObjectRead) {
         return e;
     }
 

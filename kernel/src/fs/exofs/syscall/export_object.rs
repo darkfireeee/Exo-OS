@@ -227,9 +227,8 @@ pub fn sys_exofs_export_object(
         return EFAULT;
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsExportObject) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : faux verify_cap retiré ; export par chemin, gaté en TIER 1.
+    let _ = cap_rights;
 
     let payload = if args.flags & export_flags::BY_FD != 0 {
         match export_by_fd(args.fd, args.flags) {

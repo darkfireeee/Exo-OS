@@ -318,14 +318,34 @@ pub fn sys_exofs_object_create(
         a
     };
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectCreate) {
-        return e;
-    }
+    // FIX-SEC-T0.3 : l'arg `cap_rights` bidon est ignoré. Politique TIER 0 permissive
+    // à la création (durcie en TIER 1) ; le MÉCANISME est réel : le créateur reçoit
+    // ci-dessous une capability RÉELLE sur le nouvel objet.
+    let _ = cap_rights;
 
     let result = match create_object(&path_buf, actual_len, &create_args) {
         Ok(r) => r,
         Err(e) => return exofs_err_to_errno(e),
     };
+
+    // FIX-SEC-T0.3 : le créateur obtient une cap pleine (owner) sur le nouvel objet —
+    // lecture/écriture/suppression/méta. object_read/write/… la vérifieront ensuite.
+    if let Ok(bid) = OBJECT_TABLE.blob_id_of(result.fd) {
+        use crate::fs::exofs::core::rights::{
+            RIGHT_CREATE, RIGHT_DELETE, RIGHT_INSPECT_CONTENT, RIGHT_LIST, RIGHT_READ,
+            RIGHT_SETMETA, RIGHT_STAT, RIGHT_WRITE,
+        };
+        let owner = RIGHT_READ
+            | RIGHT_WRITE
+            | RIGHT_CREATE
+            | RIGHT_DELETE
+            | RIGHT_STAT
+            | RIGHT_SETMETA
+            | RIGHT_LIST
+            | RIGHT_INSPECT_CONTENT;
+        let oid = super::captable::object_id_of_blob(&bid);
+        let _ = super::captable::grant_object_cap(oid, owner);
+    }
 
     // Écrire le résultat vers userspace si demandé.
     if out_ptr != 0 {

@@ -8,6 +8,7 @@
 // Déclarations de modules
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod captable;
 pub mod epoch_commit;
 pub mod export_object;
 pub mod gc_trigger;

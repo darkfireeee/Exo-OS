@@ -266,8 +266,10 @@ pub fn sys_exofs_object_write(
         return e;
     }
 
-    // Phase 2 (TOCTOU-safe): vérification capability sur paramètres déjà copiés.
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsObjectWrite) {
+    // FIX-SEC-T0.4 : vérif capability RÉELLE — le process doit détenir une cap WRITE
+    // sur l'objet du fd (donc l'avoir ouvert en écriture). Un fd RDONLY n'a pas WRITE.
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_fd(fd_u32, CapabilityType::ExoFsObjectWrite) {
         return e;
     }
 

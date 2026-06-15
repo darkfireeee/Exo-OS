@@ -232,9 +232,8 @@ pub fn sys_exofs_relation_query(
             Err(_) => return EFAULT,
         };
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsRelationQuery) {
-        return e;
-    }
+    // FIX-SEC-T0.4 : faux verify_cap retiré ; query relation, gatée en TIER 1.
+    let _ = cap_rights;
 
     let rels = match query_relations(&args) {
         Ok(v) => v,

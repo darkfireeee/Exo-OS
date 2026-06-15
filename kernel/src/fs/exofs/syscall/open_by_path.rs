@@ -125,14 +125,25 @@ pub fn sys_exofs_open_by_path(
     } else {
         CapabilityType::ExoFsOpenByPathRead
     };
-    if cap_rights != 0 {
-        if let Err(e) = verify_cap(cap_rights, cap) {
-            return e;
-        }
-    }
+    // FIX-SEC-T0.3 : open permissif (durci TIER 1) ; la cap RÉELLE est mintée après
+    // ouverture (le faux verify_cap conditionnel était bypassable avec cap_rights=0).
+    let _ = cap_rights;
+    let _ = cap;
 
     match open_by_path_inner(&path_bytes, actual_len, flags32, mode32) {
-        Ok(fd) => fd as i64,
+        Ok(fd) => {
+            if let Ok(bid) = super::object_fd::OBJECT_TABLE.blob_id_of(fd) {
+                let oid = super::captable::object_id_of_blob(&bid);
+                if let Err(e) = super::captable::grant_object_cap(
+                    oid,
+                    super::captable::rights_from_open_flags(flags32),
+                ) {
+                    super::object_fd::OBJECT_TABLE.close(fd);
+                    return e;
+                }
+            }
+            fd as i64
+        }
         Err(e) => exofs_err_to_errno(e),
     }
 }

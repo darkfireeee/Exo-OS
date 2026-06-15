@@ -216,6 +216,44 @@ impl CapTable {
         child
     }
 
+    /// FIX-SEC-T1.0 : héritage fork avec **moindre privilège**. Comme `inherit_from`,
+    /// mais retire les bits `strip_rights` des droits de toute cap dont
+    /// `type_tag == strip_type`. Empêche la propagation automatique des droits FS
+    /// privilégiés (gc/import/snapshot/admin) aux enfants : seuls un `grant` ou une
+    /// délégation explicites les rétablissent. Les droits opérationnels (read/write/…)
+    /// sont conservés. Les autres types de caps sont copiés tels quels.
+    pub fn inherit_from_masked(
+        parent: &CapTable,
+        strip_rights: Rights,
+        strip_type: CapObjectType,
+    ) -> Self {
+        let child = Self::new();
+        let _guard = parent.write_lock.lock();
+        let mut inherited = 0u32;
+        let strip = strip_rights.bits();
+        let strip_tt = strip_type as u32;
+        for i in 0..CAP_TABLE_CAPACITY {
+            let oid = parent.entries[i].object_id.load(Ordering::Acquire);
+            if oid != u64::MAX {
+                let tt = parent.entries[i].type_tag.load(Ordering::Relaxed);
+                let mut r = parent.entries[i].rights.load(Ordering::Relaxed);
+                if tt == strip_tt {
+                    r &= !strip;
+                }
+                child.entries[i].object_id.store(oid, Ordering::Relaxed);
+                child.entries[i].rights.store(r, Ordering::Relaxed);
+                child.entries[i].generation.store(
+                    parent.entries[i].generation.load(Ordering::Relaxed),
+                    Ordering::Relaxed,
+                );
+                child.entries[i].type_tag.store(tt, Ordering::Release);
+                inherited += 1;
+            }
+        }
+        child.count.store(inherited, Ordering::Release);
+        child
+    }
+
     // ── Hachage ObjectId → index ─────────────────────────────────────────────
 
     /// Hache un ObjectId en index de départ dans le tableau.
@@ -379,6 +417,18 @@ impl CapTable {
         self.find_slot(object_id).is_some()
     }
 
+    /// FIX-SEC-T0 : point d'entrée PUBLIC d'enforcement — vérifie (lecture atomique)
+    /// qu'une capability existe pour `object_id`, du type `ty`, couvrant **au moins**
+    /// les droits `required`. Évite d'exposer `get()` (réservé au module). Utilisé par
+    /// l'enforcement ExoFS ([fs/exofs/syscall/captable.rs]).
+    #[inline]
+    pub fn check_object(&self, object_id: ObjectId, required: Rights, ty: CapObjectType) -> bool {
+        match self.get(object_id) {
+            Some(v) => v.type_tag == ty && v.rights.contains(required),
+            None => false,
+        }
+    }
+
     /// Retourne un snapshot de stats.
     pub fn stats(&self) -> CapTableSnapshot {
         CapTableSnapshot {
@@ -419,4 +469,68 @@ pub struct CapEntryView {
     pub rights: Rights,
     pub generation: u32,
     pub type_tag: CapObjectType,
+}
+
+#[cfg(test)]
+mod tier_sec_tests {
+    use super::*;
+
+    // Bits ExoFS locaux (évite la dépendance au crate fs/exofs dans le test).
+    const R_READ: u32 = 1 << 0;
+    const R_WRITE: u32 = 1 << 1;
+    const R_GC: u32 = 1 << 13; // RIGHT_GC_TRIGGER (privilégié)
+    const R_ADMIN: u32 = 1 << 16; // RIGHT_ADMIN (privilégié)
+    const PRIV: u32 = R_GC | R_ADMIN;
+
+    fn oid(v: u64) -> ObjectId {
+        ObjectId::from_raw(v)
+    }
+    fn r(bits: u32) -> Rights {
+        Rights::from_bits_truncate(bits)
+    }
+
+    /// FIX-SEC-T0 : `check_object` enforce réellement droits + type (pas un bitmask
+    /// auto-déclaré). C'est la preuve que l'enforcement ExoFS n'est plus du théâtre.
+    #[test]
+    fn check_object_enforces_rights_and_type() {
+        let t = CapTable::new();
+        t.grant(oid(42), r(R_READ), CapObjectType::FileInode).unwrap();
+        assert!(t.check_object(oid(42), r(R_READ), CapObjectType::FileInode));
+        assert!(!t.check_object(oid(42), r(R_WRITE), CapObjectType::FileInode)); // pas de WRITE
+        assert!(!t.check_object(oid(42), r(R_READ), CapObjectType::IpcEndpoint)); // mauvais type
+        assert!(!t.check_object(oid(99), r(R_READ), CapObjectType::FileInode)); // objet inconnu
+    }
+
+    /// La révocation (remove) invalide la cap → check refuse.
+    #[test]
+    fn revoke_then_check_denies() {
+        let t = CapTable::new();
+        t.grant(oid(7), r(R_READ | R_WRITE), CapObjectType::FileInode)
+            .unwrap();
+        assert!(t.check_object(oid(7), r(R_WRITE), CapObjectType::FileInode));
+        t.remove(oid(7)).unwrap();
+        assert!(!t.check_object(oid(7), r(R_READ), CapObjectType::FileInode));
+    }
+
+    /// FIX-SEC-T1.0 : l'héritage fork à moindre privilège retire les droits FS
+    /// privilégiés (gc/admin) à l'enfant mais conserve read/write ; le parent (init)
+    /// garde tout.
+    #[test]
+    fn fork_inherit_masked_strips_privileged_fs_rights() {
+        let parent = CapTable::new();
+        parent
+            .grant(
+                oid(0),
+                r(R_READ | R_WRITE | R_GC | R_ADMIN),
+                CapObjectType::FileInode,
+            )
+            .unwrap();
+        let child =
+            CapTable::inherit_from_masked(&parent, r(PRIV), CapObjectType::FileInode);
+        assert!(child.check_object(oid(0), r(R_READ | R_WRITE), CapObjectType::FileInode));
+        assert!(!child.check_object(oid(0), r(R_GC), CapObjectType::FileInode));
+        assert!(!child.check_object(oid(0), r(R_ADMIN), CapObjectType::FileInode));
+        // init conserve l'intégralité de ses droits.
+        assert!(parent.check_object(oid(0), r(R_ADMIN), CapObjectType::FileInode));
+    }
 }

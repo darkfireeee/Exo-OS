@@ -624,8 +624,10 @@ pub fn sys_exofs_epoch_commit(
         Ok(a) => a,
         Err(_) => return EFAULT,
     };
-    // Phase 2 (TOCTOU-safe): verify_cap après copie immuable des args.
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsEpochCommit) {
+    // FIX-SEC-T0.4 : commit d'epoch = op FS globale → cap EPOCH_COMMIT sur l'objet
+    // racine FS (cap admin d'init, héritée par les serveurs).
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_root(CapabilityType::ExoFsEpochCommit) {
         return e;
     }
     let res = match do_commit(&args) {

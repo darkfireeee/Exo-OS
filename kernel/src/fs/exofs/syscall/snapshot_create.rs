@@ -250,7 +250,9 @@ pub fn sys_exofs_snapshot_create(
         }
     }
 
-    if let Err(e) = verify_cap(cap_rights, CapabilityType::ExoFsSnapshotCreate) {
+    // FIX-SEC-T0.4 : op globale → cap SNAPSHOT_CREATE sur l'objet racine FS.
+    let _ = cap_rights;
+    if let Err(e) = super::captable::check_root(CapabilityType::ExoFsSnapshotCreate) {
         return e;
     }
 
