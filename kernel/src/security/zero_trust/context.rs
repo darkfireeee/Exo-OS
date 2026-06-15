@@ -163,6 +163,32 @@ impl SecurityContext {
         }
     }
 
+    /// Construit un contexte pour un processus à partir de son niveau de confiance
+    /// **authentifié** et de ses **restrictions persistées** (état zero-trust
+    /// per-process — cf. [`super::process_state`]).
+    ///
+    /// TIER 1.1 : remplace le `new_normal` inerte (restrictions=0, trust figé)
+    /// précédemment câblé dans le dispatch. Le niveau est fixé à la création
+    /// (RÈGLE ZT-02 : il ne pourra ensuite que diminuer). Le label dérive du
+    /// niveau (Trusted+ = kernel-label ; en deçà = user_default) — sans incidence
+    /// sur le chemin syscall (le MLS ne s'applique pas à l'acte d'appeler un
+    /// syscall, cf. `policy::evaluate`).
+    pub fn for_process(principal: PrincipalId, trust: TrustLevel, restrictions: u64) -> Self {
+        let label = if (trust as u8) >= (TrustLevel::Trusted as u8) {
+            SecurityLabel::kernel()
+        } else {
+            SecurityLabel::user_default()
+        };
+        Self {
+            principal,
+            trust_level: AtomicU32::new(trust as u32),
+            label,
+            restrictions: AtomicU64::new(restrictions),
+            denied_count: AtomicU64::new(0),
+            allowed_count: AtomicU64::new(0),
+        }
+    }
+
     /// Retourne le niveau de confiance courant.
     #[inline(always)]
     pub fn trust_level(&self) -> TrustLevel {

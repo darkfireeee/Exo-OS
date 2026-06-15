@@ -83,6 +83,24 @@ fn halt_forever() -> ! {
     }
 }
 
+/// Entropie cryptographique RÉELLE via le CSPRNG kernel (`getrandom` → RNG durci
+/// RDSEED/RDRAND + conditionnement Blake3 + ChaCha20). Retourne `false` en cas
+/// d'échec — l'appelant DOIT alors abandonner (jamais de clé d'une source faible).
+///
+/// FIX-SEC-2C : remplace les générateurs faibles (LCG seedé TSC, clé racine PKI
+/// tout-zéros) par la seule source d'aléa cryptographique du système.
+pub(crate) fn secure_random(buf: &mut [u8]) -> bool {
+    let r = unsafe {
+        syscall::syscall3(
+            syscall::SYS_GETRANDOM,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+            0,
+        )
+    };
+    r >= 0 && (r as usize) == buf.len()
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct CryptoRequest {

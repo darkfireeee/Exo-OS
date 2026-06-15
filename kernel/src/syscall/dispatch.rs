@@ -191,12 +191,14 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         && nr != crate::syscall::numbers::SYS_CLOCK_GETTIME
     {
         let zt_ok = {
-            use crate::security::zero_trust::{verify_syscall, SecurityContext};
-            use crate::security::zero_trust::context::PrincipalId;
-            // Construire un SecurityContext minimal depuis le PID/TID appelant.
-            // En v0.2.0, TRUST_ALL retourne Ok(()) pour tous les syscalls autorisés.
-            let principal = PrincipalId { uid: 0, gid: 0, pid: caller_pid, tid: caller_tid, ns_id: 0 };
-            let ctx = SecurityContext::new_normal(principal);
+            use crate::security::zero_trust::{context_for_caller, verify_syscall};
+            // TIER 1.1 : SecurityContext RÉEL du process appelant — niveau de
+            // confiance dérivé de l'état système (init/Ring 1/normal) + restrictions
+            // sandbox/pledge persistées. Remplace l'ancien `new_normal` inerte
+            // (restrictions=0) qui rendait la vérification TRUST_ALL de fait.
+            // Process non restreint → aucune restriction → Ok (boot-safe) ; un
+            // process ayant opt-in à un sandbox voit ses syscalls interdits refusés.
+            let ctx = context_for_caller(caller_pid, caller_tid);
             verify_syscall(&ctx, nr).is_ok()
         };
         if !zt_ok {

@@ -585,6 +585,11 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         ),
     );
 
+    // FIX-SEC-T1.1 : l'enfant hérite AU MOINS les restrictions zero-trust
+    // (sandbox/pledge) du parent — un process sandboxé ne peut pas s'en échapper
+    // par fork (RÈGLE ZT-03 / SAND-03). No-op si le parent n'est pas restreint.
+    crate::security::zero_trust::inherit_restrictions(parent_pcb.pid.0, child_pid.0);
+
     // Marquer FORKED.
     child_pcb
         .flags

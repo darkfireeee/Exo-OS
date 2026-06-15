@@ -651,6 +651,19 @@ fn read_tsc() -> u64 {
 /// Certificat racine auto-signé.
 static ROOT_CERTIFICATE: spin::Once<Certificate> = spin::Once::new();
 
+/// Clé privée Root CA — générée par CSPRNG au boot, **jamais exportée** hors du
+/// crypto_server (réside en mémoire isolée du service). Sert à signer les certs
+/// intermédiaires. FIX-SEC-2C-PKI : remplace l'ancienne clé racine `[0u8;32]`
+/// (tout-zéros = reconstructible par quiconque → forge de tout certificat).
+static ROOT_PRIVATE_KEY: spin::Once<[u8; 32]> = spin::Once::new();
+
+/// Signe un message avec la clé privée Root CA (intermédiaires). Retourne `None`
+/// si la PKI n'est pas initialisée (clé racine absente).
+pub fn root_sign(message: &[u8]) -> Option<[u8; SIGNATURE_SIZE]> {
+    let key = ROOT_PRIVATE_KEY.get()?;
+    Some(sign_data(key, message))
+}
+
 // ── Registre de certificats ──────────────────────────────────────────────────
 
 /// Registre de certificats validés (cache).
@@ -939,12 +952,21 @@ pub fn pki_init() {
         return;
     }
 
+    // FIX-SEC-2C-PKI : clé privée racine = CSPRNG kernel (jamais [0u8;32]).
+    // Échec d'entropie → on N'INITIALISE PAS la PKI (fail-closed : toute
+    // vérification de cert d'émetteur non-root échouera, plutôt que d'établir
+    // une racine faible).
+    let mut root_priv = [0u8; 32];
+    if !crate::secure_random(&mut root_priv) {
+        return;
+    }
+    let root_signing_key = SigningKey::from_bytes(&root_priv);
+
     // Créer le certificat racine auto-signé
     let mut root_cert = Certificate::empty();
     root_cert.cert_id = [0u8; CERT_ID_SIZE]; // ID zéro = Root
     root_cert.issuer_id = [0u8; CERT_ID_SIZE]; // Auto-signé
     root_cert.subject_id = [0u8; CERT_ID_SIZE];
-    let root_signing_key = SigningKey::from_bytes(&[0u8; 32]);
     root_cert.public_key = root_signing_key.verifying_key().to_bytes();
     root_cert.not_before_tsc = read_tsc();
     root_cert.not_after_tsc = root_cert.not_before_tsc + INTERMEDIATE_CERT_LIFETIME_TSC * 12; // ~12 ans
@@ -954,7 +976,15 @@ pub fn pki_init() {
 
     let mut msg = [0u8; 256];
     let msg_len = certificate_message(&root_cert, &mut msg);
-    root_cert.signature = sign_data(&[0u8; 32], &msg[..msg_len]);
+    root_cert.signature = sign_data(&root_priv, &msg[..msg_len]);
+
+    // Conserver la clé privée racine (mémoire isolée du service), puis effacer
+    // la copie locale sur la pile.
+    ROOT_PRIVATE_KEY.call_once(|| root_priv);
+    for b in root_priv.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
 
     ROOT_CERTIFICATE.call_once(|| root_cert);
     if register_certificate(&root_cert) {

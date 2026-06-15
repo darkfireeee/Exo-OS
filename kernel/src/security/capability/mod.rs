@@ -461,4 +461,56 @@ mod tests {
         unregister_test_service(CRYPTO_PID);
         unregister_test_service(NETWORK_PID);
     }
+
+    /// TIER 0.6 — la **révocation** d'un token de service IPC est effective : après
+    /// `revoke_handle`, le même token est rejeté par `check_token` (génération bumpée
+    /// dans KERNEL_CAP_TABLE + meta retirée). Complète le scénario e2e capability côté
+    /// IPC (refusé avant émission → autorisé avec token → refusé après révocation).
+    #[test]
+    fn service_token_revocation_is_effective() {
+        ensure_capability_init();
+        const OWNER_PID: u32 = 1131; // ExoShield (route autorisée vers CryptoServer)
+        const TARGET_PID: u32 = 1132; // CryptoServer
+
+        register_test_service(OWNER_PID, ServiceClass::ExoShield);
+        register_test_service(TARGET_PID, ServiceClass::CryptoServer);
+
+        let token = create(
+            CapObjectType::IpcEndpoint as u32,
+            Rights::IPC_SEND.bits(),
+            TARGET_PID,
+            OWNER_PID,
+        )
+        .expect("mint service token");
+
+        // Avant révocation : le token est accepté.
+        assert!(
+            check_token(
+                token,
+                Rights::IPC_SEND.bits(),
+                TARGET_PID,
+                CapObjectType::IpcEndpoint as u32,
+            )
+            .is_ok(),
+            "un token fraîchement émis doit être accepté"
+        );
+
+        // Révocation par handle (32 bits bas de l'ObjectId).
+        revoke_handle(token.object_id().as_u64() as u32).expect("revoke");
+
+        // Après révocation : le MÊME token est rejeté (pas de bypass).
+        assert!(
+            check_token(
+                token,
+                Rights::IPC_SEND.bits(),
+                TARGET_PID,
+                CapObjectType::IpcEndpoint as u32,
+            )
+            .is_err(),
+            "après révocation, le token doit être rejeté"
+        );
+
+        unregister_test_service(OWNER_PID);
+        unregister_test_service(TARGET_PID);
+    }
 }

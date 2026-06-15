@@ -321,4 +321,36 @@ mod tests {
 
         unregister_ring1_pid(43);
     }
+
+    /// TIER 1.1 — `verify_syscall` enforce RÉELLEMENT les restrictions du contexte :
+    /// un process portant `NO_FORK` se voit refuser `fork`, mais garde les syscalls
+    /// bénins ; un process non restreint passe (boot-safe).
+    #[test]
+    fn syscall_restriction_is_enforced() {
+        use super::super::context::{restriction_flags, TrustLevel};
+        use crate::syscall::numbers::{SYS_FORK, SYS_READ};
+
+        // Process restreint NO_FORK.
+        let restricted = SecurityContext::for_process(
+            principal(60),
+            TrustLevel::Normal,
+            restriction_flags::NO_FORK,
+        );
+        assert_eq!(
+            verify_syscall(&restricted, SYS_FORK),
+            Err(AccessError::Denied),
+            "fork doit être refusé sous NO_FORK"
+        );
+        assert!(
+            verify_syscall(&restricted, SYS_READ).is_ok(),
+            "un syscall bénin reste autorisé"
+        );
+
+        // Process non restreint : fork autorisé.
+        let free = SecurityContext::for_process(principal(61), TrustLevel::Normal, 0);
+        assert!(
+            verify_syscall(&free, SYS_FORK).is_ok(),
+            "sans restriction, fork passe (boot-safe)"
+        );
+    }
 }

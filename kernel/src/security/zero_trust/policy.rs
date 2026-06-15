@@ -213,7 +213,15 @@ impl ZeroTrustPolicy {
                 PolicyAction::Allow
             }
             ResourceKind::Syscall => {
-                // Vérifié par sandbox.rs
+                // TIER 1.1 : enforce les restrictions sandbox/pledge RÉELLES du
+                // process appelant. `context_data` porte le numéro de syscall ;
+                // si l'appelant détient une restriction qui interdit ce syscall
+                // (NO_FORK/NO_EXEC/NO_NETWORK/NO_PROCESS_CREATE), on refuse + audit.
+                // Défaut (process non restreint) → masque 0 → Allow (boot-safe).
+                let forbidding = super::process_state::syscall_restriction_mask(req.context_data);
+                if forbidding != 0 && req.subject.has_restriction(forbidding) {
+                    return PolicyAction::DenyAndAudit;
+                }
                 PolicyAction::Allow
             }
             ResourceKind::Device => {

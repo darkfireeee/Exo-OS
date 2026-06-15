@@ -215,6 +215,10 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
             .free_addr_space(addr_space_ptr);
     }
+    // FIX-SEC-T1.1 : remettre à zéro l'état de restriction zero-trust AVANT de
+    // recycler le PID — un futur process réutilisant ce numéro doit repartir sans
+    // restriction héritée du défunt.
+    crate::security::zero_trust::clear_process_restrictions(candidate.pid.0);
     PID_ALLOCATOR.free(candidate.pid.0);
     Some(WaitResult::exited(candidate.pid, candidate.code as u8))
 }

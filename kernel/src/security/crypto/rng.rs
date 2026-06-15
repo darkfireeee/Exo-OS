@@ -88,6 +88,45 @@ fn rdrand64() -> Result<u64, RngError> {
     Err(RngError::RdrandExhausted)
 }
 
+/// Tente de lire une valeur 64 bits depuis RDSEED.
+///
+/// RDSEED expose la source d'entropie MATÉRIELLE brute (vs RDRAND = CSPRNG
+/// matériel reseedé), donc une qualité d'entropie supérieure pour le seeding.
+/// Retourne `Err` si non supporté ou CF=0 après 10 tentatives.
+#[inline]
+fn rdseed64() -> Result<u64, RngError> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !cpu_features_or_none().map_or(false, |features| features.has_rdseed()) {
+            return Err(RngError::RdrandExhausted);
+        }
+        let mut val: u64 = 0;
+        let mut success: u8;
+        for _ in 0..10 {
+            // SAFETY: rdseed peut échouer légitimement (CF=0) ; val=0 si échec, retry.
+            unsafe {
+                core::arch::asm!(
+                    "rdseed {val}",
+                    "setc {ok}",
+                    val = out(reg) val,
+                    ok  = out(reg_byte) success,
+                    options(nostack, nomem),
+                );
+            }
+            if success != 0 {
+                return Ok(val);
+            }
+            // SAFETY: PAUSE = hint CPU, aucun effet de bord.
+            unsafe {
+                core::arch::asm!("pause", options(nostack, nomem));
+            }
+        }
+        Err(RngError::RdrandExhausted)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    Err(RngError::RdrandExhausted)
+}
+
 /// Lit n bytes depuis RDRAND dans un buffer.
 pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
     let mut pos = 0;
@@ -143,28 +182,70 @@ fn read_sp() -> u64 {
     0
 }
 
-/// Remplit un buffer de 32 octets avec de l'entropie fallback (TSC + stack).
-fn fallback_entropy(out: &mut [u8; 32]) {
-    let tsc = read_tsc();
-    let sp = read_sp();
-    out[0..8].copy_from_slice(&tsc.to_le_bytes());
-    out[8..16].copy_from_slice(&sp.to_le_bytes());
-    // Diffusion : XOR-shift pour étaler les bits sur les 16 octets restants
-    let mut a = tsc;
-    let mut b = sp;
-    for i in 0..2 {
-        a = a.wrapping_add(b ^ (a >> 17));
-        b = b.wrapping_add(a ^ (b >> 31));
-        out[16 + i * 8..24 + i * 8]
-            .copy_from_slice(&a.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes());
+/// Rassemble de l'entropie de **toutes** les sources disponibles dans un pool,
+/// puis la **conditionne par Blake3** → seed 32 octets. Retourne `true` si au
+/// moins une source MATÉRIELLE (RDSEED/RDRAND) a contribué.
+///
+/// Robustesse (RÈGLE RNG-03 durcie) : l'ancien seed fallback dérivait UNIQUEMENT
+/// de TSC+SP par un mélange ad-hoc (prédictible, non-whitené). Ici :
+///   1. RDSEED (entropie matérielle vraie) ×4, puis RDRAND ×6 ;
+///   2. **jitter TSC** — lectures répétées entrecoupées de PAUSE ; les bits de
+///      poids faible varient (jitter d'horloge) = vraie source d'aléa temporel ;
+///   3. pointeur de pile (entropie d'adressage / KASLR) ;
+///   4. **conditionnement Blake3** du pool entier → 32 octets whitened.
+/// Même sans RDRAND, le seed est conditionné cryptographiquement et agrège
+/// plusieurs sources (plancher d'entropie relevé vs TSC brut).
+fn gather_seed(out: &mut [u8; 32]) -> bool {
+    fn push(pool: &mut [u8; 160], off: &mut usize, v: u64) {
+        if *off + 8 <= pool.len() {
+            pool[*off..*off + 8].copy_from_slice(&v.to_le_bytes());
+            *off += 8;
+        }
     }
-    // Passe de mélange final — chaque octet reçoit une contribution de TSC + SP
-    for i in 0..32 {
-        out[i] = out[i].wrapping_add(
-            (tsc.wrapping_shr((i as u32) & 63) as u8)
-                .wrapping_add(sp.wrapping_shr(((i as u32) + 3) & 63) as u8),
-        );
+
+    let mut pool = [0u8; 160];
+    let mut off = 0usize;
+    let mut hw = false;
+
+    // 1. RDSEED — entropie matérielle « vraie ».
+    for _ in 0..4 {
+        if let Ok(v) = rdseed64() {
+            push(&mut pool, &mut off, v);
+            hw = true;
+        }
     }
+    // 2. RDRAND — CSPRNG matériel.
+    for _ in 0..6 {
+        if let Ok(v) = rdrand64() {
+            push(&mut pool, &mut off, v);
+            hw = true;
+        }
+    }
+    // 3. Jitter TSC (aléa temporel) + 4. pointeur de pile.
+    for _ in 0..8 {
+        push(&mut pool, &mut off, read_tsc());
+        // SAFETY: PAUSE = hint CPU, aucun effet de bord ; espace les lectures TSC.
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!("pause", options(nostack, nomem));
+        }
+    }
+    push(&mut pool, &mut off, read_sp());
+
+    // 5. Conditionnement Blake3 → 32 octets whitened.
+    let conditioned = super::blake3::blake3_hash(&pool[..off]);
+    out.copy_from_slice(&conditioned);
+
+    // Effacer le pool (peut contenir de l'entropie résiduelle sensible).
+    for b in pool.iter_mut() {
+        // SAFETY: write_volatile empêche l'élision de l'effacement.
+        unsafe {
+            core::ptr::write_volatile(b, 0);
+        }
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
+
+    hw
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -275,6 +356,9 @@ impl ChaCha20Csprng {
 struct KernelRng {
     prng: ChaCha20Csprng,
     initialized: bool,
+    /// Vrai si le seed (initial ou reseed) a reçu de l'entropie MATÉRIELLE
+    /// (RDSEED/RDRAND). Faux = seed conditionné mais d'entropie dégradée.
+    hw_seeded: bool,
     bytes_generated: u64,
     reseed_count: u64,
 }
@@ -284,6 +368,7 @@ impl KernelRng {
         Self {
             prng: ChaCha20Csprng::new(),
             initialized: false,
+            hw_seeded: false,
             bytes_generated: 0,
             reseed_count: 0,
         }
@@ -291,14 +376,17 @@ impl KernelRng {
 
     fn init(&mut self) {
         let mut seed = [0u8; 32];
-        // Combiner RDRAND + TSC pour le seed initial
-        if rdrand_fill(&mut seed).is_err() {
-            // Fallback : utiliser TSC + adresse de pile comme entropie minimale
-            fallback_entropy(&mut seed);
-        }
+        // Seed = pool multi-sources (RDSEED+RDRAND+jitter TSC+SP) conditionné Blake3.
+        self.hw_seeded = gather_seed(&mut seed);
         self.prng.seed(&seed);
-        // Zéroïser le seed de la pile
-        let _ = seed;
+        // Zéroïser le seed sur la pile (write_volatile pour empêcher l'élision).
+        for b in seed.iter_mut() {
+            // SAFETY: effacement borné d'un buffer local.
+            unsafe {
+                core::ptr::write_volatile(b, 0);
+            }
+        }
+        core::sync::atomic::fence(Ordering::SeqCst);
         self.initialized = true;
     }
 
@@ -307,16 +395,20 @@ impl KernelRng {
             return Err(RngError::NotInitialized);
         }
 
-        // Reseed depuis RDRAND toutes les RESEED_INTERVAL_BLOCKS blocs
+        // Reseed toutes les RESEED_INTERVAL_BLOCKS blocs — même pool multi-sources
+        // conditionné Blake3 (jamais de fallback faible non-whitené).
         if self.prng.blocks_since_reseed() >= RESEED_INTERVAL_BLOCKS {
             let mut extra = [0u8; 32];
-            if rdrand_fill(&mut extra).is_ok() {
-                self.prng.reseed(&extra);
-            } else {
-                // Fallback : TSC + stack
-                fallback_entropy(&mut extra);
-                self.prng.reseed(&extra);
+            let hw = gather_seed(&mut extra);
+            self.prng.reseed(&extra);
+            self.hw_seeded = self.hw_seeded || hw;
+            for b in extra.iter_mut() {
+                // SAFETY: effacement borné d'un buffer local.
+                unsafe {
+                    core::ptr::write_volatile(b, 0);
+                }
             }
+            core::sync::atomic::fence(Ordering::SeqCst);
             self.reseed_count += 1;
         }
 
@@ -381,11 +473,22 @@ pub fn rng_is_ready() -> bool {
     RNG_INIT.load(Ordering::Acquire) && KERNEL_RNG.lock().initialized
 }
 
+/// Retourne vrai si le RNG a été seedé avec de l'entropie MATÉRIELLE
+/// (RDSEED/RDRAND). Faux = seed conditionné Blake3 mais sans source matérielle
+/// (entropie dégradée — un appelant générant une clé long-terme critique peut
+/// choisir de différer/alerter sur cette base).
+#[inline(always)]
+pub fn rng_hw_seeded() -> bool {
+    KERNEL_RNG.lock().hw_seeded
+}
+
 /// Statistiques RNG.
 #[derive(Debug, Clone, Copy)]
 pub struct RngStats {
     pub bytes_generated: u64,
     pub reseed_count: u64,
+    /// Entropie matérielle obtenue au seeding (RDSEED/RDRAND).
+    pub hw_seeded: bool,
 }
 
 pub fn rng_stats() -> RngStats {
@@ -393,5 +496,35 @@ pub fn rng_stats() -> RngStats {
     RngStats {
         bytes_generated: rng.bytes_generated,
         reseed_count: rng.reseed_count,
+        hw_seeded: rng.hw_seeded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Le seed est conditionné Blake3 (jamais tout-zéro) et varie entre deux
+    /// appels (jitter TSC + sources matérielles) — pas de seed faible constant.
+    #[test]
+    fn gather_seed_is_conditioned_and_varies() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        let _ = gather_seed(&mut a);
+        let _ = gather_seed(&mut b);
+        assert_ne!(a, [0u8; 32], "seed conditionné ne doit pas être tout-zéro");
+        assert_ne!(a, b, "deux seeds successifs doivent différer (TSC/HW)");
+    }
+
+    /// Après init, le CSPRNG produit un flux non-nul qui varie d'un tirage à l'autre.
+    #[test]
+    fn rng_fill_is_nonzero_and_varies() {
+        rng_init();
+        let mut x = [0u8; 32];
+        let mut y = [0u8; 32];
+        rng_fill(&mut x).expect("rng ready");
+        rng_fill(&mut y).expect("rng ready");
+        assert_ne!(x, [0u8; 32]);
+        assert_ne!(x, y);
     }
 }

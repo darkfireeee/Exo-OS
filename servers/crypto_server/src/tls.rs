@@ -67,17 +67,16 @@ fn read_tsc() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-#[inline(always)]
-fn rdrand_u64() -> u64 {
-    let r: u64;
-    unsafe {
-        core::arch::asm!(
-            "rdrand {0}",
-            out(reg) r,
-            options(nostack, nomem),
-        );
-        r
-    }
+/// Remplit `buf` avec de l'entropie cryptographique RÉELLE via le CSPRNG kernel
+/// (syscall `getrandom` → RNG durci RDSEED/RDRAND + conditionnement Blake3 +
+/// ChaCha20). Retourne `false` en cas d'échec — l'appelant DOIT alors abandonner
+/// (jamais de clé dérivée d'une source faible).
+///
+/// FIX-SEC-2C-TLS : remplace l'ancien `rdrand_u64()` (lecture RDRAND SANS contrôle
+/// du CF → pouvait renvoyer 0/garbage) + LCG de génération de clé X25519 (clé de
+/// 256 bits réduite à ≤64 bits d'entropie, LCG inversible → forward secrecy nulle).
+fn fill_random(buf: &mut [u8]) -> bool {
+    crate::secure_random(buf)
 }
 
 // ── Suite cryptographique ────────────────────────────────────────────────────
@@ -341,25 +340,19 @@ fn x25519_dh(private_key: &[u8; 32], public_key: &[u8; 32]) -> [u8; 32] {
     secret.diffie_hellman(&public).to_bytes()
 }
 
-/// Génère une paire de clés X25519 éphémère.
-fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
+/// Génère une paire de clés X25519 éphémère à partir du CSPRNG kernel.
+///
+/// Retourne `None` si l'entropie n'a pas pu être obtenue — l'appelant DOIT
+/// abandonner le handshake (jamais de clé éphémère faible). Le clamping X25519
+/// est appliqué par `StaticSecret::from` (x25519-dalek).
+fn generate_x25519_keypair() -> Option<([u8; 32], [u8; 32])> {
     let mut private = [0u8; 32];
-    let tsc = read_tsc();
-    let rand = rdrand_u64();
-
-    // Remplir la clé privée avec de l'entropie
-    let mut seed = tsc ^ rand;
-    for i in 0..4 {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        private[i * 8..i * 8 + 8].copy_from_slice(&seed.to_le_bytes());
+    if !fill_random(&mut private) {
+        return None;
     }
-
     let secret = StaticSecret::from(private);
     let public = PublicKey::from(&secret).to_bytes();
-
-    (private, public)
+    Some((private, public))
 }
 
 // ── API publique ─────────────────────────────────────────────────────────────
@@ -383,17 +376,16 @@ pub fn tls_handshake_initiate(peer_pid: u32) -> (u32, [u8; 67]) {
         if session.state == TlsState::Closed as u8 {
             session_handle = (idx + 1) as u32;
 
-            // Générer les randoms
-            let tsc = read_tsc();
-            let rand = rdrand_u64();
-            let mut seed = tsc ^ rand;
-            for i in 0..4 {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                session.client_random[i * 8..i * 8 + 8].copy_from_slice(&seed.to_le_bytes());
+            // client_random + paire X25519 éphémère via le CSPRNG kernel.
+            // Échec d'entropie → abandon (la session reste Closed, handle = 0 ;
+            // ACTIVE_SESSION_COUNT pas encore incrémenté à ce point).
+            if !fill_random(&mut session.client_random) {
+                return (0, hello);
             }
-
-            // Générer la paire X25519 éphémère
-            let (private_key, public_key) = generate_x25519_keypair();
+            let (private_key, public_key) = match generate_x25519_keypair() {
+                Some(kp) => kp,
+                None => return (0, hello),
+            };
 
             // Stocker la clé privée temporairement dans server_random (sera écrasé)
             // Note : en production, ceci sera dans un slot sécurisé du keystore
@@ -532,17 +524,15 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
                 pk
             };
 
-            // Générer server_random
-            let tsc = read_tsc();
-            let rand = rdrand_u64();
-            let mut seed = tsc ^ rand ^ 0xDEAD_BEEF_CAFE_BABE;
-            for i in 0..4 {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                session.server_random[i * 8..i * 8 + 8].copy_from_slice(&seed.to_le_bytes());
+            // server_random + paire X25519 éphémère via le CSPRNG kernel.
+            // Échec d'entropie → abandon (session reste Closed, handle = 0).
+            if !fill_random(&mut session.server_random) {
+                return (0, server_hello);
             }
-
-            // Générer la paire X25519 éphémère
-            let (private_key, public_key) = generate_x25519_keypair();
+            let (private_key, public_key) = match generate_x25519_keypair() {
+                Some(kp) => kp,
+                None => return (0, server_hello),
+            };
 
             // Calculer le secret partagé
             session.shared_secret = x25519_dh(&private_key, &client_public);

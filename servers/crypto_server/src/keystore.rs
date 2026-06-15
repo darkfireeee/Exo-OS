@@ -436,45 +436,34 @@ pub fn rotate_key(handle: u32, caller_principal: u64) -> u32 {
     }
 
     // Sauvegarder l'ancienne clé
-    let old_key = entry.key;
+    let mut old_key = entry.key;
 
     // Générer l'entropie fraîche
     let tsc_entropy = read_tsc();
     let usage = entry.usage_count.load(Ordering::Acquire);
     let gen = entry.generation.load(Ordering::Acquire);
 
-    // Dérivation simplifiée : XOR + mélange (Blake3 complet dans kdf.rs)
-    // Ici on utilise un mélange FNV amélioré car on n'a pas accès au crate blake3
-    let mut new_key = [0u8; KEY_SIZE];
+    // FIX-SEC-2C.4 : dérivation par **HKDF-Blake3 réel** (pas de chemin fallback
+    // faible). L'ancienne dérivation « XOR + FNV » prétendait à tort ne pas avoir
+    // accès au crate blake3 (le crate l'importe pourtant via `extern crate blake3`
+    // et l'utilise dans `derive_key_hkdf`). On reproduit ce schéma keyed ici :
+    //   PRK = Blake3-keyed(old_key, info)   ; OKM = Blake3-derive_key(ctx, PRK)
+    // → résistance préimage/collision cryptographique, sans matériel faible.
+    let mut info = [0u8; 8 * 4];
+    info[0..8].copy_from_slice(&tsc_entropy.to_le_bytes());
+    info[8..16].copy_from_slice(&(usage as u64).to_le_bytes());
+    info[16..24].copy_from_slice(&(gen as u64).to_le_bytes());
+    info[24..32].copy_from_slice(&(handle as u64).to_le_bytes());
 
-    // Phase 1 : copie de l'ancienne clé
-    new_key.copy_from_slice(&old_key);
+    let prk = blake3::keyed_hash(&old_key, &info);
+    let mut new_key = blake3::derive_key("Exo-OS SRV-04 key-rotation v1", prk.as_bytes());
 
-    // Phase 2 : mélange avec entropie
-    let entropy_bytes = [
-        tsc_entropy.to_le_bytes(),
-        (usage as u64).to_le_bytes(),
-        (gen as u64).to_le_bytes(),
-        (handle as u64).to_le_bytes(),
-    ];
-    for (i, chunk) in entropy_bytes.iter().enumerate() {
-        for (j, &b) in chunk.iter().enumerate() {
-            let pos = (i * 8 + j) % KEY_SIZE;
-            new_key[pos] = new_key[pos]
-                .wrapping_add(b)
-                .wrapping_mul(0x9E)
-                .wrapping_add(0x37);
-        }
+    // Effacer immédiatement le matériel intermédiaire et l'ancienne clé locale.
+    crypto_shred(&mut old_key);
+    for b in info.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
     }
-
-    // Phase 3 : diffusion (3 passes de mélange)
-    for _ in 0..3 {
-        for i in 0..KEY_SIZE {
-            new_key[i] = new_key[i]
-                .wrapping_add(new_key[(i + 7) % KEY_SIZE])
-                .rotate_left(3);
-        }
-    }
+    core::sync::atomic::fence(Ordering::SeqCst);
 
     // Shredder l'ancienne clé dans l'entrée (même si on va écraser)
     crypto_shred(&mut entry.key);
