@@ -206,28 +206,6 @@ fn fork_trace(message: &[u8]) {
 #[inline]
 fn fork_trace(_message: &[u8]) {}
 
-/// DIAG-FK (temporaire) : trace ungated d'un (label, u64) pour suivre le CR3 du
-/// parent à travers le fork (capturer si init.tcb.cr3_phys est corrompu).
-#[inline(never)]
-fn fork_mark(label: &[u8], value: u64) {
-    use core::sync::atomic::{AtomicUsize, Ordering as O5};
-    static NM: AtomicUsize = AtomicUsize::new(0);
-    if NM.fetch_add(1, O5::Relaxed) >= 16 {
-        return;
-    }
-    let out = crate::arch::x86_64::terminal::debug_write;
-    out(label);
-    let hexd = b"0123456789abcdef";
-    let mut b = [0u8; 8];
-    let mut i = 0;
-    while i < 8 {
-        b[i] = hexd[((value >> ((7 - i) * 4)) & 0xf) as usize];
-        i += 1;
-    }
-    out(&b);
-    out(b">");
-}
-
 #[inline]
 fn sync_child_kernel_half(cr3: u64) {
     if cr3 == 0 {
@@ -369,8 +347,6 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     })?;
 
     let parent_cr3 = parent.sched_tcb.cr3_phys;
-    fork_mark(b"<FK0 ppid=", parent_pcb.pid.0 as u64);
-    fork_mark(b"<FK0 pcr3=", parent_cr3);
     let parent_space_ptr = parent_pcb.address_space.load(Ordering::Acquire);
 
     let shares_address_space = vfork_shares_address_space(ctx.flags);
@@ -579,16 +555,6 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     }
     child_pcb.set_name_bytes(&parent_pcb.name_snapshot());
     child_pcb.set_main_thread_ptr(child_thread_ptr);
-    fork_mark(b"<FKE child_cr3=", cloned_as.cr3);
-    fork_mark(b"<FKE parent_cr3_now=", parent.sched_tcb.cr3_phys);
-    {
-        let hw: u64;
-        // SAFETY: lecture CR3, ring0.
-        unsafe {
-            core::arch::asm!("mov {}, cr3", out(reg) hw, options(nostack, nomem));
-        }
-        fork_mark(b"<FKE hw_cr3=", hw & 0x000F_FFFF_FFFF_F000);
-    }
 
     // Copier les namespaces.
     child_pcb.pid_ns.clone_from(&parent_pcb.pid_ns);

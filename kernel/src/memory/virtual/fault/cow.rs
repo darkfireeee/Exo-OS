@@ -27,10 +27,6 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             Some(phys) => crate::memory::core::Frame::containing(phys),
             None => {
                 // Page pas encore mappée + flag COW → demand paging d'abord.
-                // DIAG-CDP (temporaire) : ce fallback ZÉRO-REMPLIT une page COW
-                // non-présente. Si l'adresse est dans la pile d'un process vivant,
-                // c'est la corruption (return addresses → 0).
-                cdp_mark(b"<CDP1 a=", ctx.fault_addr.as_u64());
                 return super::demand_paging::handle_demand_paging(ctx, vma, alloc);
             }
         },
@@ -119,29 +115,8 @@ pub fn handle_cow_fault<A: FaultAllocator>(
                 }
                 FaultResult::Handled
             } else {
-                cdp_mark(b"<CDP2 a=", ctx.fault_addr.as_u64());
                 super::demand_paging::handle_demand_paging(ctx, vma, alloc)
             }
         }
-    }
-}
-
-// DIAG-CDP (temporaire) : trace un fallback CoW→demand-paging (zéro-fill).
-#[inline]
-fn cdp_mark(tag: &[u8], addr: u64) {
-    use core::sync::atomic::{AtomicUsize, Ordering};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    if N.fetch_add(1, Ordering::Relaxed) < 12 {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        out(tag);
-        let hexd = b"0123456789abcdef";
-        let mut b = [0u8; 12];
-        let mut i = 0;
-        while i < 12 {
-            b[i] = hexd[((addr >> ((11 - i) * 4)) & 0xf) as usize];
-            i += 1;
-        }
-        out(&b);
-        out(b">");
     }
 }

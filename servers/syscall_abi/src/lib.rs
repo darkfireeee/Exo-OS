@@ -982,6 +982,32 @@ pub const IPC_FLAG_TIMEOUT: u64 = 0x0001;
 pub const IPC_FLAG_INJECT_SRC_PID: u64 = 0x0002;
 pub const WNOHANG: u64 = 1;
 pub const SA_RESTART: u64 = 0x10000000;
+/// SA_RESTORER : le champ `sa_restorer` de la sigaction est fourni (obligatoire
+/// pour un programme sans libc — sinon le `ret` du handler saute à une adresse
+/// nulle. Le noyau utilise `sa_restorer` comme adresse de retour du handler).
+pub const SA_RESTORER: u64 = 0x0400_0000;
+
+// Trampoline `sigreturn` : le handler de signal y retourne (via `ret`), il
+// invoque `rt_sigreturn` pour restaurer le contexte interrompu. À fournir comme
+// `sa_restorer` dans toute sigaction installant un handler.
+core::arch::global_asm!(
+    ".global __exo_sigreturn_trampoline",
+    ".type __exo_sigreturn_trampoline, @function",
+    "__exo_sigreturn_trampoline:",
+    "mov rax, 15", // SYS_RT_SIGRETURN
+    "syscall",
+    "ud2",
+);
+
+extern "C" {
+    fn __exo_sigreturn_trampoline();
+}
+
+/// Adresse du trampoline `sigreturn`, à placer dans `sigaction.sa_restorer`.
+#[inline]
+pub fn sigreturn_trampoline() -> u64 {
+    __exo_sigreturn_trampoline as *const () as u64
+}
 pub const EPERM: i64 = -1;
 pub const ENOENT: i64 = -2;
 pub const EINTR: i64 = -4;

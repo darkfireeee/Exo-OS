@@ -72,34 +72,6 @@ fn exec_trace(message: &[u8]) {
 #[inline]
 fn exec_trace(_message: &[u8]) {}
 
-/// DIAG: imprime un entier non-signé en décimal sur E9 (debugcon).
-fn dbg_dec(mut n: u64) {
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    if n == 0 {
-        crate::arch::x86_64::terminal::debug_write(b"0");
-        return;
-    }
-    while n != 0 && i > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    crate::arch::x86_64::terminal::debug_write(&buf[i..]);
-}
-
-/// DIAG: trace capée des numéros de syscall émis par PID 1 et 2 (init + ipc_router).
-fn dbg_trace_pid1_syscall(caller_pid: u32, nr: u64) {
-    use core::sync::atomic::{AtomicUsize, Ordering as O2};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    if (caller_pid == 1 || caller_pid == 2) && N.fetch_add(1, O2::Relaxed) < 400 {
-        crate::arch::x86_64::terminal::debug_write(b" p");
-        dbg_dec(caller_pid as u64);
-        crate::arch::x86_64::terminal::debug_write(b"s");
-        dbg_dec(nr);
-    }
-}
-
 /// Snapshot des compteurs de dispatch.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DispatchStats {
@@ -188,17 +160,14 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             (tcb.pid.0, tcb.tid as u32)
         }
     };
-    dbg_trace_pid1_syscall(caller_pid, nr);
     match audit_syscall_entry(nr as u32, caller_pid, caller_tid, 0) {
         AuditVerdict::Allow => {}
         AuditVerdict::DenyEperm => {
-            if caller_pid == 1 { crate::arch::x86_64::terminal::debug_write(b"<AUDITeperm nr="); dbg_dec(nr); crate::arch::x86_64::terminal::debug_write(b">"); }
             frame.rax = crate::syscall::numbers::EPERM as u64;
             post_dispatch(frame, tsc_start);
             return;
         }
         AuditVerdict::DenyEnosys => {
-            if caller_pid == 1 { crate::arch::x86_64::terminal::debug_write(b"<AUDITenosys nr="); dbg_dec(nr); crate::arch::x86_64::terminal::debug_write(b">"); }
             frame.rax = ENOSYS as u64;
             post_dispatch(frame, tsc_start);
             return;
@@ -231,7 +200,6 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             verify_syscall(&ctx, nr).is_ok()
         };
         if !zt_ok {
-            if caller_pid == 1 { crate::arch::x86_64::terminal::debug_write(b"<ZTDENY nr="); dbg_dec(nr); crate::arch::x86_64::terminal::debug_write(b">"); }
             frame.rax = crate::syscall::numbers::EPERM as u64;
             audit_syscall_exit(caller_tid, crate::syscall::numbers::EPERM as i64);
             post_dispatch(frame, tsc_start);
@@ -271,18 +239,9 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [5b] Cas spécial fork/vfork — besoin de frame.rcx (child RIP) et frame.rsp ──
     if effective_nr == crate::syscall::numbers::SYS_FORK {
         syscall_trace(b"sys_fork: dispatch\n");
-        // DIAG E9: print étiqueté fork (greppable, non-pollué).
-        crate::arch::x86_64::terminal::debug_write(b"\n<FORK p=");
-        crate::arch::x86_64::terminal::debug_write(&[b'0' + (caller_pid % 10) as u8]);
-        crate::arch::x86_64::terminal::debug_write(b">");
         let result =
             handle_fork_like_inplace(frame, crate::process::lifecycle::fork::ForkFlags::default());
         syscall_trace(b"sys_fork: result\n");
-        crate::arch::x86_64::terminal::debug_write(if result < 0 {
-            b"=ER\n" as &[u8]
-        } else {
-            b"=OK c=\n"
-        });
         frame.rax = result as u64;
         // Fork publie un nouveau runnable, mais le parent doit retourner une
         // fois en Ring3 avant une préemption forcée: init_server dépend de ce
@@ -306,17 +265,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
 
     // ── [5c] Cas spécial execve — modifie frame pour sauter au nouveau binaire ──
     if effective_nr == crate::syscall::numbers::SYS_EXECVE {
-        // DIAG E9: 'X' = execve dispatché, suivi du PID appelant (chiffre).
-        unsafe {
-            core::arch::asm!("out 0xE9, al", in("al") b'X', options(nomem, nostack));
-            core::arch::asm!("out 0xE9, al", in("al") b'0' + (caller_pid % 10) as u8, options(nomem, nostack));
-        }
         handle_execve_inplace(frame);
-        // DIAG E9: 'Y' = execve OK (saut nouvelle image), 'Z' = execve échec (non-hexa).
-        unsafe {
-            let b = if (frame.rax as i64) < 0 { b'Z' } else { b'Y' };
-            core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
-        }
         // Pas de post_dispatch apres execve reussi (nouvelle image). En cas
         // d'echec, le processus continue dans l'ancienne image et doit livrer
         // ses signaux pendants avant le retour userspace.
@@ -327,14 +276,6 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     }
 
     // ── [6] Slow-path : lookup dans la table ───────────────────────────────
-    // DIAG: fork/execve de PID1 ne DOIT jamais atteindre le slow-path (handlers morts).
-    if caller_pid == 1 && (nr == 57 || nr == 59 || nr == 58) {
-        crate::arch::x86_64::terminal::debug_write(b"<SLOWPATH nr=");
-        dbg_dec(nr);
-        crate::arch::x86_64::terminal::debug_write(b" eff=");
-        dbg_dec(effective_nr);
-        crate::arch::x86_64::terminal::debug_write(b">");
-    }
     DISPATCH_SLOW_PATH.fetch_add(1, Ordering::Relaxed);
     let handler = get_handler(effective_nr);
 

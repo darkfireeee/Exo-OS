@@ -467,36 +467,6 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     if next.pid.0 == 1 && next.cr3_phys != 0 {
         idle_sched_trace(b"context_switch: ->init-user\n");
     }
-    // DIAG-SW (temporaire) : tracer les transitions CR3 du scheduler (prev/next
-    // pid + cr3 + cr3 réellement chargé) pour diagnostiquer le mismatch CR3 init.
-    {
-        use core::sync::atomic::{AtomicUsize, Ordering as O4};
-        static NS: AtomicUsize = AtomicUsize::new(0);
-        if NS.fetch_add(1, O4::Relaxed) < 40 {
-            let out = crate::arch::x86_64::terminal::debug_write;
-            let hx = |v: u64| {
-                let hexd = b"0123456789abcdef";
-                let mut b = [0u8; 8];
-                let mut i = 0;
-                while i < 8 {
-                    b[i] = hexd[((v >> ((7 - i) * 4)) & 0xf) as usize];
-                    i += 1;
-                }
-                out(&b);
-            };
-            out(b"<SW p");
-            hx(prev.pid.0 as u64);
-            out(b"c");
-            hx(prev.cr3_phys);
-            out(b" ->p");
-            hx(next.pid.0 as u64);
-            out(b"c");
-            hx(next.cr3_phys);
-            out(b" ld");
-            hx(new_cr3);
-            out(b">");
-        }
-    }
     context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
 }
 

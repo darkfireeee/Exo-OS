@@ -25,9 +25,6 @@ rustflags = [
   "-C", "relocation-model=static",
   "-C", "code-model=kernel",
   "-C", "debuginfo=1",
-  # DIAG-FP (temporaire) : force les frame pointers pour un backtrace gdb fiable
-  # au point du spin (ICF + opt omettent sinon les FP). À retirer après diagnostic.
-  "-C", "force-frame-pointers=yes",
   # Désactive les extensions CPU non disponibles en contexte kernel bare-metal.
   # sha / aes : SHA-NI et AES-NI génèrent du code SIMD que LLVM ne peut pas baisser
   # pour x86_64-unknown-none (LLVM ERROR: Do not know how to split the operator).

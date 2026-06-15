@@ -805,12 +805,8 @@ extern "C" fn do_stack_fault(frame: *mut ExceptionFrame) {
 /// Handler #GP — General Protection Fault
 #[no_mangle]
 extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
-    // DIAG: marqueur brut inconditionnel à l'entrée.
-    // SAFETY: port E9, sans effet mémoire.
-    unsafe { core::arch::asm!("out 0xE9, al", in("al") b'G', options(nomem, nostack)) };
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
-    diag_fault_e9(b"#GP", super::read_cr2(), frame.rip);
     EXC_COUNTERS[13].fetch_add(1, Ordering::Relaxed);
     GP_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -820,54 +816,6 @@ extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
     } else {
         kernel_panic_exception("#GP kernel", frame);
     }
-}
-
-/// DIAG-FAULT (temporaire) : armé par exofs_init pour ne dumper que les faults
-/// survenant pendant l'init FS (filtre le bruit de demand-paging du boot précoce).
-pub static FS_REACHED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-/// DIAG-FAULT (temporaire) : dump E9 "tag cr2=.. rip=.." au premier fault, capé
-/// pour ne pas inonder. À retirer après diagnostic du triple fault virtio.
-fn diag_fault_e9(tag: &[u8], cr2: u64, rip: u64) {
-    use core::sync::atomic::{AtomicU32, Ordering as O};
-    static N: AtomicU32 = AtomicU32::new(0);
-    // Ne dumper que les ~30 DERNIERS faults avant le crash : on garde un anneau
-    // implicite via le compteur, mais ici on imprime tout après le seuil FS pour
-    // capter le fault virtio même si demand-paging a généré du bruit avant.
-    let n = N.fetch_add(1, O::Relaxed);
-    if n >= 5000 {
-        return;
-    }
-    // Marqueur "post-FS" : on n'imprime que si exofs_init a commencé (V0 émis).
-    if !FS_REACHED.load(O::Relaxed) {
-        return;
-    }
-    #[inline(always)]
-    fn e9(b: u8) {
-        // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire.
-        unsafe { core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack)) };
-    }
-    fn e9hex(v: u64) {
-        let mut i = 60i32;
-        while i >= 0 {
-            let nib = ((v >> i) & 0xf) as u8;
-            e9(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 });
-            i -= 4;
-        }
-    }
-    for &b in tag {
-        e9(b);
-    }
-    for &b in b" cr2=" {
-        e9(b);
-    }
-    e9hex(cr2);
-    for &b in b" rip=" {
-        e9(b);
-    }
-    e9hex(rip);
-    e9(b'\n');
 }
 
 /// Handler #PF — Page Fault
@@ -888,12 +836,9 @@ fn diag_fault_e9(tag: &[u8], cr2: u64, rip: u64) {
 /// du processus courant. Pour l'instant, `KernelFaultAllocator` est utilisé.
 #[no_mangle]
 extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
-    // DIAG: dump #PF E9 silencié temporairement (les fautes demand-paging du boot
-    // sont comprises ; on garde l'E9 propre pour les marqueurs fork/execve).
     // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
     // unique pour ce contexte d'exception.
     let frame = unsafe { &mut *frame };
-    let _ = &diag_fault_e9;
     EXC_COUNTERS[14].fetch_add(1, Ordering::Relaxed);
     super::paging::inc_page_fault();
 
@@ -972,132 +917,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     let user_as = unsafe { &*(as_ptr as *const UserAddressSpace) };
                     user_as_for_fault = user_as as *const UserAddressSpace;
                     user_as.record_fault();
-                    // DIAG-STK (temporaire) : faute exec @0 = saut NULL (ret sur
-                    // adresse corrompue). Dumper RSP/RBP + pile d'init pour voir la
-                    // corruption (return address zéroée ? toute la zone garbage ?).
-                    if fault_addr.as_u64() == 0 && cause == FaultCause::Execute {
-                        use core::sync::atomic::{AtomicUsize, Ordering as O5};
-                        static NS: AtomicUsize = AtomicUsize::new(0);
-                        if NS.fetch_add(1, O5::Relaxed) < 3 {
-                            let out = crate::arch::x86_64::terminal::debug_write;
-                            let hx = |v: u64| {
-                                let hexd = b"0123456789abcdef";
-                                let mut b = [0u8; 16];
-                                let mut i = 0;
-                                while i < 16 {
-                                    b[i] = hexd[((v >> ((15 - i) * 4)) & 0xf) as usize];
-                                    i += 1;
-                                }
-                                out(&b);
-                            };
-                            out(b"<STK rsp=");
-                            hx(frame.rsp);
-                            out(b" rbp=");
-                            hx(frame.rbp);
-                            out(b" spf=");
-                            match user_as.translate(VirtAddr::new(frame.rsp & !0xfff)) {
-                                Some(ph) => hx(ph.as_u64()),
-                                None => out(b"UNMAPPED--------"),
-                            }
-                            out(b" |");
-                            let sp = frame.rsp;
-                            let mut k: i64 = -2;
-                            while k < 6 {
-                                let va = (sp as i64 + k * 8) as u64;
-                                out(b" ");
-                                match user_as.translate(VirtAddr::new(va)) {
-                                    Some(ph) => {
-                                        let p = (crate::memory::core::layout::PHYS_MAP_BASE
-                                            .as_u64()
-                                            + ph.as_u64())
-                                            as *const u64;
-                                        // SAFETY: phys mappé dans la physmap kernel.
-                                        let w = unsafe { core::ptr::read_volatile(p) };
-                                        hx(w);
-                                    }
-                                    None => out(b"------UNMAPPED---"),
-                                }
-                                k += 1;
-                            }
-                            out(b">");
-                        }
-                    }
-                    // DIAG-CR3 (temporaire) : pour les fautes exec, comparer l'AS où
-                    // le handler mappe (user_as.pml4) aux CR3 du thread (kernel/KPTI).
-                    if cause == FaultCause::Execute {
-                        use core::sync::atomic::{AtomicUsize, Ordering as O3};
-                        static NC: AtomicUsize = AtomicUsize::new(0);
-                        if NC.fetch_add(1, O3::Relaxed) < 60 {
-                            let out = crate::arch::x86_64::terminal::debug_write;
-                            let hx = |v: u64| {
-                                let hexd = b"0123456789abcdef";
-                                let mut b = [0u8; 8];
-                                let mut i = 0;
-                                while i < 8 {
-                                    b[i] = hexd[((v >> ((7 - i) * 4)) & 0xf) as usize];
-                                    i += 1;
-                                }
-                                out(&b);
-                            };
-                            out(b"<CR3 as=");
-                            hx(user_as.pml4_phys().as_u64());
-                            out(b" tk=");
-                            hx(tcb.cr3_phys);
-                            out(b" tu=");
-                            hx(tcb.kpti_user_cr3());
-                            out(b" ks=");
-                            {
-                                let cpu = crate::arch::x86_64::cpu::topology::current_cpu_id().0
-                                    as usize;
-                                hx(crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu(
-                                    cpu,
-                                )
-                                .unwrap_or(0));
-                            }
-                            out(b" cr=");
-                            {
-                                let cr3v: u64;
-                                unsafe {
-                                    core::arch::asm!("mov {}, cr3", out(reg) cr3v, options(nostack, nomem));
-                                }
-                                hx(cr3v);
-                            }
-                            out(b" ke=");
-                            out(if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-                                b"1"
-                            } else {
-                                b"0"
-                            });
-                            out(b" pr=");
-                            out(if ctx.present { b"1>" } else { b"0>" });
-                        }
-                    }
-                    // DIAG-PTE (temporaire) : la page fautive est-elle RÉELLEMENT
-                    // mappée dans l'AS du PCB ? present=Some → page mappée mais le
-                    // CPU faute = problème TLB/CR3 ; None → qqc la démappe vraiment.
-                    if cause == FaultCause::Execute {
-                        use core::sync::atomic::{AtomicUsize, Ordering as O4};
-                        static NP: AtomicUsize = AtomicUsize::new(0);
-                        if NP.fetch_add(1, O4::Relaxed) < 30 {
-                            let out = crate::arch::x86_64::terminal::debug_write;
-                            match user_as.translate(fault_addr) {
-                                Some(p) => {
-                                    out(b"<PTE M ");
-                                    let hexd = b"0123456789abcdef";
-                                    let v = p.as_u64();
-                                    let mut b = [0u8; 9];
-                                    let mut i = 0;
-                                    while i < 9 {
-                                        b[i] = hexd[((v >> ((8 - i) * 4)) & 0xf) as usize];
-                                        i += 1;
-                                    }
-                                    out(&b);
-                                    out(b">");
-                                }
-                                None => out(b"<PTE UNMAP>"),
-                            }
-                        }
-                    }
                     if let Some(vma) = user_as.find_vma(fault_addr) {
                         ctx = ctx.with_vma(vma);
                         user_vma_found = true;
@@ -1131,55 +950,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         ctx.from_kernel = false;
     }
 
-    // DIAG-PF (temporaire) : tracer les fautes userspace (pid, cr2, cause).
-    {
-        use core::sync::atomic::{AtomicUsize, Ordering as O2};
-        static NPF: AtomicUsize = AtomicUsize::new(0);
-        if frame.from_userspace() && NPF.fetch_add(1, O2::Relaxed) < 80 {
-            let tcbr = current_tcb_raw_checked();
-            let pid = if tcbr != 0 {
-                unsafe {
-                    (*(tcbr as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0
-                }
-            } else {
-                0
-            };
-            let out = crate::arch::x86_64::terminal::debug_write;
-            out(b"<PF p");
-            let hexd = b"0123456789abcdef";
-            let mut p = pid;
-            let mut pb = [0u8; 10];
-            let mut pi = pb.len();
-            if p == 0 {
-                pi -= 1;
-                pb[pi] = b'0';
-            }
-            while p != 0 && pi > 0 {
-                pi -= 1;
-                pb[pi] = b'0' + (p % 10) as u8;
-                p /= 10;
-            }
-            out(&pb[pi..]);
-            out(b" a=");
-            let mut a = fault_addr_raw;
-            let mut ab = [0u8; 16];
-            let mut k = 0;
-            while k < 16 {
-                ab[k] = hexd[((a >> ((15 - k) * 4)) & 0xf) as usize];
-                k += 1;
-            }
-            let _ = &mut a;
-            out(&ab);
-            out(if is_instr_fetch {
-                b" X>"
-            } else if is_write {
-                b" W>"
-            } else {
-                b" R>"
-            });
-        }
-    }
-
     let result = if resolve_as_user {
         // SAFETY: resolve_as_user implique user_as_for_fault non-null ; pointe vers
         // l'UserAddressSpace du processus en faute, vivant pendant le handler.
@@ -1189,16 +959,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     } else {
         crate::memory::virt::fault::handler::handle_page_fault(&ctx, &KERNEL_FAULT_ALLOC)
     };
-    // DIAG-PF : marquer les fautes NON résolues (segfault/oom) userspace.
-    if frame.from_userspace() {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        match result {
-            FaultResult::Segfault { .. } => out(b"<SEGV>"),
-            FaultResult::Oom { .. } => out(b"<POOM>"),
-            _ => {}
-        }
-    }
-
     match result {
         FaultResult::Handled => {
             if resolve_as_user {

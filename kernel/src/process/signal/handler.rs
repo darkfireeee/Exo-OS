@@ -273,35 +273,6 @@ pub fn setup_signal_frame(
     let frame_size = core::mem::size_of::<SignalFrame>() as u64;
     let sig_rsp = (target_rsp - frame_size) & !0xFu64;
 
-    // DIAG-SIGF (temporaire) : signal livré → handler + restorer (pretcode). Un
-    // restorer NULL ⇒ le `ret` du handler saute à 0 (SEGV NULL d'init).
-    {
-        use core::sync::atomic::{AtomicUsize, Ordering as OS};
-        static NSF: AtomicUsize = AtomicUsize::new(0);
-        if NSF.fetch_add(1, OS::Relaxed) < 12 {
-            let out = crate::arch::x86_64::terminal::debug_write;
-            let hx = |v: u64| {
-                let hexd = b"0123456789abcdef";
-                let mut b = [0u8; 12];
-                let mut i = 0;
-                while i < 12 {
-                    b[i] = hexd[((v >> ((11 - i) * 4)) & 0xf) as usize];
-                    i += 1;
-                }
-                out(&b);
-            };
-            out(b"<SIGF s=");
-            hx(sig_n as u64);
-            out(b" h=");
-            hx(action.handler);
-            out(b" restorer=");
-            hx(action.restorer);
-            out(b" ursp=");
-            hx(target_rsp);
-            out(b">");
-        }
-    }
-
     // Construire le contenu du frame dans un buffer temporaire.
     // Assurer que sig_rsp est une adresse utilisateur valide (< USER_SPACE_TOP).
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;

@@ -1,0 +1,30 @@
+XKboot_display: boot screen
+123456789abcdefgjk<BLAKE3hash len=2653416><BLAKE3hash len=12180992>lmnopqrstuvwxyhiAPboot_display: framebuffer attached
+Vboot_display: stage ok ARCH
+W23boot_display: stage ok MEMORY
+[CAL:HPET hz=2337394222][TIME-INIT hz=2337400000]
+4boot_display: stage ok TIME
+Dboot_display: stage ok DRIVERS
+Cboot_display: stage ok EXOSEAL0
+c56Fboot_display: stage ok SCHEDULER
+aRrPboot_display: stage ok PROCESS
+78boot_display: stage ok SECURITY
+@1@2@5@6@7@8@a@b@c@d@eSboot_display: stage ok STAGE0
+9boot_display: stage ok IPC
+#0V0V1VaVbVcVdV2#1#2#3#4#5#6RTE@boot_display: stage ok FS
+IuLCDboot_display: boot complete
+boot_display: userspace USERSPACE HANDOFF: INIT PID 1
+boot_display: detail /sbin/exo-init-server charge depuis le disque ExoFS racine.
+boot_display: hint /lib/ld-exo.so assure le handoff avant les services Ring1.
+U
+OK
+Winit_server: PID1 online
+init_server: registering control endpoint
+init_server: starting service graph
+init: start ipc_router
+<F1 a=fefaa8 tk=00ff5b as=00ff5b>init: spawned ipc_router pid=2
+<F1 a=023478 tk=00ff5b as=00ff5b><S0>2>
+<EXEC /sbin/exo-ipc-router>=OK
+K<S2>0><S0>2>ipc_router: boot
+<S2>0><S0>1><S1>0><S0>1><S1>0><S0>1><S1>0><S0>2>ipc_router: registered
+<S2>0><S0>2><S2>0><S0>2><S2>0><S0>2><S2>0><S0>1><S1>0><S0>1><S1>0><S0>1><S1>0><S0>2><S2>0><S0>2><S2>0><S0>2><S2>0><S0>2><S2>0><S0>1><S1>0><S0>1><S1>0><S0>1><S1>0><S0>2><S2>0><S0>2><S2>0><S0>1><S1>0><S0>2><S2>0><S0>1><S1>0><S0>2><S2>0><S0>1><F1 a=023478 tk=00ff5b as=00ff5b><S1>0><S0>2><S2>0><S0>1><S1>0><S0>2><S2>0><S0>1><S1>0>

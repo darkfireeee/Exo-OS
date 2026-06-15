@@ -364,26 +364,6 @@ fn repoint_table_entry(src_entry: PageTableEntry, new_phys: PhysAddr) -> PageTab
 }
 
 unsafe fn free_userspace_tables(root_pml4_phys: PhysAddr) {
-    // DIAG-FREEAS (temporaire) : quel root PML4 est libéré ? Si une AS encore
-    // utilisée (ex. init 0xff43000) est libérée → démappage des pages d'un process vivant.
-    {
-        use core::sync::atomic::{AtomicUsize, Ordering as OF};
-        static NF: AtomicUsize = AtomicUsize::new(0);
-        if NF.fetch_add(1, OF::Relaxed) < 16 {
-            let out = crate::arch::x86_64::terminal::debug_write;
-            let hexd = b"0123456789abcdef";
-            let v = root_pml4_phys.as_u64();
-            let mut b = [0u8; 9];
-            let mut i = 0;
-            while i < 9 {
-                b[i] = hexd[((v >> ((8 - i) * 4)) & 0xf) as usize];
-                i += 1;
-            }
-            out(b"<FREEAS root=");
-            out(&b);
-            out(b">");
-        }
-    }
     let pml4 = phys_to_table_ref(root_pml4_phys);
     for l4_idx in 0..256 {
         let entry = pml4[l4_idx];

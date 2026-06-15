@@ -259,26 +259,6 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 
     if signum == 0 {
         let found = PROCESS_REGISTRY.find_by_pid(Pid(real_pid)).is_some();
-        // DIAG-KILL0 (temporaire) : tracer le check d'existence (init pid_alive).
-        {
-            let out = crate::arch::x86_64::terminal::debug_write;
-            out(b"<K0 ");
-            let hexd = b"0123456789";
-            let mut p = real_pid;
-            let mut buf = [0u8; 10];
-            let mut i = buf.len();
-            if p == 0 {
-                i -= 1;
-                buf[i] = b'0';
-            }
-            while p != 0 && i > 0 {
-                i -= 1;
-                buf[i] = hexd[(p % 10) as usize];
-                p /= 10;
-            }
-            out(&buf[i..]);
-            out(if found { b" Y>" } else { b" N>" });
-        }
         return if found { 0 } else { ESRCH };
     }
 

@@ -3125,14 +3125,10 @@ pub fn sys_exo_ipc_create(
         crate::ipc::channel::raw::mailbox_close(ep);
     }
 
-    let dbg = crate::arch::x86_64::terminal::debug_write;
     if crate::ipc::channel::raw::mailbox_open(ep) {
         if let Err(err) = crate::ipc::endpoint::register_endpoint(&name, ep) {
             crate::ipc::channel::raw::mailbox_close(ep);
             let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
-            dbg(b"<CRT ");
-            dbg(&name);
-            dbg(b" REGERR>");
             return ipc_error_to_errno(err);
         }
         if let Some(class) = service_class_for_endpoint_name(&name) {
@@ -3141,15 +3137,9 @@ pub fn sys_exo_ipc_create(
         if name.as_slice() == b"fb_server" {
             crate::arch::x86_64::framebuffer_early::deactivate_for_userspace();
         }
-        dbg(b"<CRT ");
-        dbg(&name);
-        dbg(b" OK>");
         0
     } else {
         let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
-        dbg(b"<CRT ");
-        dbg(&name);
-        dbg(b" MBOXFAIL>");
         ENOMEM
     }
 }
@@ -3210,18 +3200,10 @@ pub fn sys_exo_ipc_lookup(
         return EFAULT;
     }
 
-    let r = match crate::ipc::endpoint::lookup_endpoint(&name) {
+    match crate::ipc::endpoint::lookup_endpoint(&name) {
         Some(endpoint) => endpoint.get() as i64,
         None => ENOENT,
-    };
-    // DIAG-IPC (temporaire) : tracer les lookups (readiness init).
-    {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        out(b"<LKP ");
-        out(&name);
-        out(if r > 0 { b" OK>" } else { b" NF>" });
     }
-    r
 }
 
 #[inline(always)]

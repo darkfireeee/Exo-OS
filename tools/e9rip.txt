@@ -1,0 +1,14 @@
+XKboot_display: boot screen
+123456789abcdefgjk<BLAKE3hash len=2587275><BLAKE3hash len=12161792>lmnopqrstuvwxyhiAPboot_display: framebuffer attached
+Vboot_display: stage ok ARCH
+W23boot_display: stage ok MEMORY
+[CAL:HPET hz=2529542857][TIME-INIT hz=2529500000]
+4boot_display: stage ok TIME
+Dboot_display: stage ok DRIVERS
+Cboot_display: stage ok EXOSEAL0
+c56Fboot_display: stage ok SCHEDULER
+aRrPboot_display: stage ok PROCESS
+78boot_display: stage ok SECURITY
+@1@2@5@6@7@8@a@b@c@d@eSboot_display: stage ok STAGE0
+9boot_display: stage ok IPC
+#0V0V1VaVbVcVdV2#1#2

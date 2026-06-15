@@ -143,23 +143,6 @@ fn kernel_dma_alloc(pages: usize) -> Option<(usize, NonNull<u8>)> {
     // 1. Réutiliser une page DMA déjà isolée (jamais cédée à SLUB).
     let reused = DMA_BOUNCE_POOL.lock().pop(order);
     if let Some(phys) = reused {
-        // DIAG-DMAZERO (temporaire) : la frame DMA réutilisée est-elle AUSSI la pile
-        // d'un process vivant ? Si oui → le re-zéro (write_bytes) écrase sa pile
-        // (= corruption pile d'init → saut NULL). Chemin physmap invisible aux
-        // détecteurs page-table.
-        if crate::memory::physical::allocator::buddy::stk_watch_is_watched(phys) {
-            let out = crate::arch::x86_64::terminal::debug_write;
-            out(b"<DMAZERO f=");
-            let hexd = b"0123456789abcdef";
-            let mut b = [0u8; 9];
-            let mut i = 0;
-            while i < 9 {
-                b[i] = hexd[((phys >> ((8 - i) * 4)) & 0xf) as usize];
-                i += 1;
-            }
-            out(&b);
-            out(b">");
-        }
         let pa = PhysAddr::new(phys);
         let virt = crate::memory::core::phys_to_virt(pa);
         let ptr = NonNull::new(virt.as_u64() as *mut u8)?;
@@ -265,7 +248,6 @@ pub fn init_global_disk_with_legacy_pci(io_base: u16) -> ExofsResult<bool> {
 }
 
 pub fn init_global_disk() {
-    crate::arch::x86_64::exceptions::FS_REACHED.store(true, Ordering::Release);
     vdbg(b'0');
     let Some(io_base) = crate::drivers::find_virtio_blk_legacy_io_port() else {
         vdbg(b'X'); // pas de port virtio legacy trouvé

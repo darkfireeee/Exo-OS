@@ -444,7 +444,6 @@ impl BuddyZone {
                     }
                 }
                 let frame = Frame::containing(phys);
-                watch_page_event(b'A', phys, order, flags.bits() as u64);
                 // V-05 / MEM-05 : poser DMA_PINNED sur tous les frames DMA jusqu'à
                 // wait_dma_complete() — protège contre reclaim et swap.
                 if flags.contains(AllocFlags::DMA) || flags.contains(AllocFlags::DMA32) {
@@ -562,7 +561,6 @@ impl BuddyZone {
         }
 
         let phys = frame.start_address();
-        watch_page_event(b'F', phys, order, 0);
         if !self.contains_block(phys, order) {
             self.fail_count.fetch_add(1, Ordering::Relaxed);
             return Err(AllocError::InvalidParams);
@@ -1060,149 +1058,15 @@ impl GlobalBuddyAllocator {
 /// Allocateur buddy global.
 pub static BUDDY: GlobalBuddyAllocator = GlobalBuddyAllocator::new();
 
-/// DIAG-PAGE (temporaire) : trace toute (dé)allocation buddy dont la plage
-/// couvre la page 0xff33000 (slab SLUB du nœud racine BlobCache, déterministe).
-/// Une 2e allocation de cette page sans free intermédiaire = double-allocation.
-#[inline(always)]
-fn watch_page_event(tag: u8, phys: PhysAddr, order: usize, flagbits: u64) {
-    const TARGET: u64 = 0xff33000;
-    let start = phys.as_u64();
-    let end = start + ((PAGE_SIZE as u64) << order);
-    if start <= TARGET && TARGET < end {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        let hexd = b"0123456789abcdef";
-        out(b"\n<BPG ");
-        out(&[tag]);
-        out(b" o=");
-        out(&[hexd[(order & 0xf)]]);
-        out(b" fl=");
-        let mut fb = [0u8; 4];
-        let mut j = 0;
-        while j < 4 {
-            fb[j] = hexd[((flagbits >> ((3 - j) * 4)) & 0xf) as usize];
-            j += 1;
-        }
-        out(&fb);
-        out(b">");
-    }
-}
-
-// DIAG-DBLALLOC (temporaire) : détecte si le buddy rend un frame DÉJÀ alloué
-// (non libéré) dans la plage chaude où atterrissent les frames d'init/ipc-router.
-// Confirme l'hypothèse "fork alloue une table sur la pile vivante d'init".
-const DA_BASE: u64 = 0x0500_0000;
-const DA_END: u64 = 0x0600_0000;
-static DA_BITMAP: [core::sync::atomic::AtomicU64; 64] =
-    [const { core::sync::atomic::AtomicU64::new(0) }; 64];
-
-#[inline]
-fn da_hex(pa: u64) {
-    let out = crate::arch::x86_64::terminal::debug_write;
-    let hexd = b"0123456789abcdef";
-    let mut b = [0u8; 9];
-    let mut i = 0;
-    while i < 9 {
-        b[i] = hexd[((pa >> ((8 - i) * 4)) & 0xf) as usize];
-        i += 1;
-    }
-    out(&b);
-}
-
-#[inline]
-fn da_mark(frame: Frame, order: usize, alloc: bool) {
-    use core::sync::atomic::Ordering;
-    let n = 1usize << order;
-    let base = frame.start_address().as_u64();
-    let mut i = 0usize;
-    while i < n {
-        let pa = base + (i as u64) * 4096;
-        if pa >= DA_BASE && pa < DA_END {
-            let idx = ((pa - DA_BASE) / 4096) as usize;
-            let w = idx / 64;
-            let bit = 1u64 << (idx % 64);
-            if alloc {
-                let prev = DA_BITMAP[w].fetch_or(bit, Ordering::Relaxed);
-                if prev & bit != 0 {
-                    let out = crate::arch::x86_64::terminal::debug_write;
-                    out(b"<DBLALLOC ");
-                    da_hex(pa);
-                    out(b">");
-                }
-            } else {
-                DA_BITMAP[w].fetch_and(!bit, Ordering::Relaxed);
-            }
-        }
-        i += 1;
-    }
-}
-
-// DIAG-STKWATCH (temporaire) : enregistre les frames mappés dans la région pile
-// userspace (≥ 0x7fff_0000_0000). Si le buddy en libère un, c'est un use-after-free
-// de la pile d'un process vivant (= corruption pile d'init → saut NULL).
-const STK_WATCH_N: usize = 512;
-pub static STK_WATCH: [core::sync::atomic::AtomicU64; STK_WATCH_N] =
-    [const { core::sync::atomic::AtomicU64::new(0) }; STK_WATCH_N];
-static STK_WATCH_IDX: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-
-pub fn stk_watch_record(frame_pa: u64) {
-    use core::sync::atomic::Ordering;
-    let i = STK_WATCH_IDX.fetch_add(1, Ordering::Relaxed) % STK_WATCH_N;
-    STK_WATCH[i].store(frame_pa, Ordering::Relaxed);
-}
-
-pub fn stk_watch_is_watched(frame_pa: u64) -> bool {
-    use core::sync::atomic::Ordering;
-    if frame_pa == 0 {
-        return false;
-    }
-    let mut i = 0usize;
-    while i < STK_WATCH_N {
-        if STK_WATCH[i].load(Ordering::Relaxed) == frame_pa {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-#[inline]
-fn stk_watch_check(frame: Frame, order: usize) {
-    use core::sync::atomic::Ordering;
-    let n = 1usize << order;
-    let base = frame.start_address().as_u64();
-    let mut k = 0usize;
-    while k < n {
-        let pa = base + (k as u64) * 4096;
-        let mut i = 0usize;
-        while i < STK_WATCH_N {
-            if STK_WATCH[i].load(Ordering::Relaxed) == pa && pa != 0 {
-                let out = crate::arch::x86_64::terminal::debug_write;
-                out(b"<STKFREE f=");
-                da_hex(pa);
-                out(b">");
-                STK_WATCH[i].store(0, Ordering::Relaxed);
-            }
-            i += 1;
-        }
-        k += 1;
-    }
-}
-
 /// Alloue `2^order` pages physiques contiguës.
 #[inline(always)]
 pub fn alloc_pages(order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
-    let r = BUDDY.alloc_pages(order, flags);
-    if let Ok(frame) = r {
-        da_mark(frame, order, true);
-    }
-    r
+    BUDDY.alloc_pages(order, flags)
 }
 
 /// Libère un bloc de `2^order` pages.
 #[inline(always)]
 pub fn free_pages(frame: Frame, order: usize) -> Result<(), AllocError> {
-    da_mark(frame, order, false);
-    stk_watch_check(frame, order);
     BUDDY.free_pages(frame, order)
 }
 
