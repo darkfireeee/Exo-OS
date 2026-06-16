@@ -41,9 +41,12 @@ const CRYPTO_TLS_INIT: u32 = 7;
 const CRYPTO_TLS_HANDSHAKE: u32 = 8;
 const CRYPTO_TLS_CLOSE: u32 = 9;
 const CRYPTO_KEY_REVOKE: u32 = 10;
+
 const CRYPTO_KEY_ROTATE: u32 = 11;
 const CRYPTO_KEY_REVOKE_OWNER: u32 = 12;
 const CRYPTO_KEY_STATS: u32 = 13;
+const CRYPTO_TLS_ENCRYPT: u32 = 14;
+const CRYPTO_TLS_DECRYPT: u32 = 15;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
 const KERNEL_EPHEMERAL_REPLY_BIT: u64 = 1u64 << 63;
 
@@ -479,6 +482,57 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
     }
 }
 
+fn tls_encrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
+    let Some(session_handle) = read_u32_le(payload, 0) else {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    };
+    let Some(data_len) = read_u16_le(payload, 4) else {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    };
+    let data_len = data_len as usize;
+    if 6 + data_len > payload.len() || data_len + 24 + TAG_SIZE > CRYPTO_REPLY_DATA_SIZE {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    }
+    let data = &payload[6..6 + data_len];
+    let mut output = [0u8; CRYPTO_REPLY_DATA_SIZE];
+    if tls::tls_encrypt_record(session_handle, data, &mut output) {
+        reply.status = CRYPTO_OK;
+        reply.key_handle = session_handle;
+        reply.write_data(&output[..24 + data_len + TAG_SIZE]);
+    } else {
+        reply.status = CRYPTO_ERR_AUTH;
+    }
+}
+
+fn tls_decrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
+    let Some(session_handle) = read_u32_le(payload, 0) else {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    };
+    let Some(input_len) = read_u16_le(payload, 4) else {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    };
+    let input_len = input_len as usize;
+    if 6 + input_len > payload.len() || input_len < 24 + TAG_SIZE {
+        reply.status = CRYPTO_ERR_ARGS;
+        return;
+    }
+    let input = &payload[6..6 + input_len];
+    let mut plaintext = [0u8; CRYPTO_REPLY_DATA_SIZE];
+    if tls::tls_decrypt_record(session_handle, input, &mut plaintext) {
+        let pt_len = input_len - 24 - TAG_SIZE;
+        reply.status = CRYPTO_OK;
+        reply.key_handle = session_handle;
+        reply.write_data(&plaintext[..pt_len]);
+    } else {
+        reply.status = CRYPTO_ERR_AUTH;
+    }
+}
+
 fn tls_close_reply(payload: &[u8], reply: &mut CryptoReply) {
     let Some(session_handle) = read_u32_le(payload, 0) else {
         reply.status = CRYPTO_ERR_ARGS;
@@ -798,6 +852,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
         }
         CRYPTO_TLS_CLOSE => {
             tls_close_reply(payload, &mut reply);
+        }
+        CRYPTO_TLS_ENCRYPT => {
+            tls_encrypt_reply(payload, &mut reply);
+        }
+        CRYPTO_TLS_DECRYPT => {
+            tls_decrypt_reply(payload, &mut reply);
         }
         CRYPTO_KEY_REVOKE => {
             let Some(key_handle) = read_u32_le(payload, 0) else {

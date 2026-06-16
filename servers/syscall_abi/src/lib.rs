@@ -321,6 +321,10 @@ pub const SYS_EXO_CAP_CREATE: u64 = 320;
 pub const SYS_EXO_CAP_DELEGATE: u64 = 321;
 pub const SYS_EXO_CAP_REVOKE: u64 = 322;
 pub const SYS_EXO_CAP_CHECK: u64 = 323;
+/// Sandbox pledge() OpenBSD-like (TIER 2.10).
+pub const SYS_EXO_PLEDGE: u64 = 324;
+/// Drain du feed d'événements de sécurité kernel→exo_shield (TIER 3.1).
+pub const SYS_EXO_SHIELD_DRAIN: u64 = 325;
 pub const SYS_EXO_PERF_READ: u64 = 330;
 pub const SYS_EXO_PERF_ENABLE: u64 = 331;
 pub const SYS_EXO_PERF_DISABLE: u64 = 332;

@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use super::context::{PrincipalId, SecurityContext};
 use super::labels::SecurityLabel;
 use super::policy::{global_policy, AccessRequest, PolicyAction, ResourceKind};
-use crate::security::audit;
+use crate::security::{audit, shield_feed};
 
 /// Bitmask des PIDs Ring1 de confiance. La forme compacte couvre les PIDs
 /// précoces des serveurs canoniques; les PIDs >= 64 prennent le slow path.
@@ -90,6 +90,16 @@ impl core::fmt::Display for AccessError {
 // verify_access — point d'entrée principal
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[inline(always)]
+fn kind_to_feed_type(kind: ResourceKind) -> u8 {
+    match kind {
+        ResourceKind::Syscall => shield_feed::event_type::SYSCALL,
+        ResourceKind::IpcEndpoint => shield_feed::event_type::IPC,
+        ResourceKind::DmaChannel | ResourceKind::MemoryRegion => shield_feed::event_type::MEMORY,
+        _ => shield_feed::event_type::CAPABILITY,
+    }
+}
+
 /// Vérifie un accès à une ressource selon la politique Zero-Trust.
 ///
 /// # Paramètres
@@ -131,6 +141,14 @@ pub fn verify_access(
                 1,
                 context_data.to_le_bytes(),
             );
+            shield_feed::push_event(
+                subject.principal.pid,
+                kind_to_feed_type(resource_kind),
+                shield_feed::severity::MEDIUM,
+                resource_kind as u32,
+                context_data,
+                is_write as u64,
+            );
             Err(AccessError::Denied)
         }
         PolicyAction::DenyAndAudit => {
@@ -140,6 +158,14 @@ pub fn verify_access(
                 0,
                 1,
                 context_data.to_le_bytes(),
+            );
+            shield_feed::push_event(
+                subject.principal.pid,
+                kind_to_feed_type(resource_kind),
+                shield_feed::severity::HIGH,
+                resource_kind as u32,
+                context_data,
+                is_write as u64,
             );
             Err(AccessError::Denied)
         }
@@ -151,7 +177,14 @@ pub fn verify_access(
                 1,
                 context_data.to_le_bytes(),
             );
-            // Dans une implémentation complète : notify_security_monitor()
+            shield_feed::push_event(
+                subject.principal.pid,
+                kind_to_feed_type(resource_kind),
+                shield_feed::severity::CRITICAL,
+                resource_kind as u32,
+                context_data,
+                is_write as u64,
+            );
             Err(AccessError::DeniedAlert)
         }
     }

@@ -44,6 +44,7 @@ pub mod exploit_mitigations;
 pub mod integrity_check;
 pub mod ipc_policy;
 pub mod isolation;
+pub mod shield_feed;
 pub mod zero_trust;
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -116,8 +117,8 @@ pub use isolation::{DomainContext, NamespaceSet, PledgeSet, SandboxPolicy, Secur
 
 pub use integrity_check::{
     assert_kernel_integrity, check_chain_of_trust, check_kernel_integrity, integrity_init,
-    is_chain_verified, verify_module_signature, CodeSignError, IntegrityError, ModuleHeader,
-    SecureBootError,
+    is_chain_verified, security_periodic_check_observe, start_integrity_monitor,
+    verify_module_signature, CodeSignError, IntegrityError, ModuleHeader, SecureBootError,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

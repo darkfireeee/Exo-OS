@@ -981,6 +981,26 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             // Violation d'accès mémoire.
             let _ = addr;
             if frame.from_userspace() {
+                // Notify ExoShield NGAV of the memory access violation.
+                let tcb_seg = current_tcb_raw_checked();
+                let seg_pid = if tcb_seg != 0 {
+                    // SAFETY: tcb_seg != 0 checked; pointer published by scheduler for this CPU.
+                    unsafe {
+                        (*(tcb_seg as *const crate::scheduler::core::task::ThreadControlBlock))
+                            .pid
+                            .0
+                    }
+                } else {
+                    0u32
+                };
+                crate::security::shield_feed::push_event(
+                    seg_pid,
+                    crate::security::shield_feed::event_type::MEMORY,
+                    crate::security::shield_feed::severity::CRITICAL,
+                    0xDE, // pseudo-opcode: SIGSEGV
+                    fault_addr_raw,
+                    0,
+                );
                 queue_signal_for_current(crate::process::signal::Signal::SIGSEGV);
                 exception_return_to_user(frame);
             } else {

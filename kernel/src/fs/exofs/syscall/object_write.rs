@@ -273,6 +273,22 @@ pub fn sys_exofs_object_write(
         return e;
     }
 
+    // Zero-Trust : vérification MLS par processus (labels + trust state).
+    {
+        let tcb = crate::scheduler::core::switch::current_thread_raw();
+        let pid = if !tcb.is_null() { unsafe { (*tcb).pid.0 } } else { 0u32 };
+        let ctx = crate::security::zero_trust::context_for_caller(pid, 0);
+        if crate::security::zero_trust::verify_file_write(
+            &ctx,
+            crate::security::zero_trust::SecurityLabel::user_default(),
+            fd_u32 as u64,
+        )
+        .is_err()
+        {
+            return crate::syscall::errno::EACCES;
+        }
+    }
+
     match write_fd(fd_u32, effective_offset, &data_buf, use_cursor, sync) {
         Ok(r) => r.bytes_written as i64,
         Err(e) => exofs_err_to_errno(e),

@@ -1558,6 +1558,21 @@ pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, _arg: u64, _a5: u64, _a6: 
         return EINVAL;
     }
 
+    // Only PID 0 (kernel boot context) or PID 1 (init) may reboot the system.
+    // Any other process knowing the magic constants could otherwise DoS the system.
+    let caller = current_pid_u32();
+    if caller > 1 {
+        crate::security::shield_feed::push_event(
+            caller,
+            crate::security::shield_feed::event_type::SYSCALL,
+            crate::security::shield_feed::severity::CRITICAL,
+            crate::syscall::numbers::SYS_REBOOT as u32,
+            magic1,
+            cmd,
+        );
+        return EPERM;
+    }
+
     use crate::syscall::fs_bridge;
     if let Err(err) = fs_bridge::fs_sync(current_pid_u32()) {
         return err.to_errno();
@@ -3812,6 +3827,15 @@ fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
                     dst_pid,
                 },
             );
+            // TIER 3.1 : forwarder au feed NGAV exo_shield (Ipc, High).
+            crate::security::shield_feed::push_event(
+                caller_pid,
+                crate::security::shield_feed::event_type::IPC,
+                crate::security::shield_feed::severity::HIGH,
+                0,
+                dst_pid as u64,
+                0,
+            );
             Err(EACCES)
         }
     }
@@ -3965,6 +3989,90 @@ pub fn sys_exo_cap_check(
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
+}
+
+/// `exo_pledge(promises, flags, …)` — restreint **irréversiblement** le process
+/// courant (sandbox style pledge() OpenBSD, TIER 2.10). `promises` = bitmask de
+/// `pledge_flags` ; les capacités NON promises deviennent des restrictions
+/// zero-trust enforced au bord syscall (cf. `syscall_restriction_mask` / TIER 1.1).
+/// **Monotone** : ne fait que durcir (RÈGLE PLEDGE-01) — un re-pledge ajoute des
+/// restrictions, n'en retire jamais. Init (PID 1) ne peut pas pledge (PLEDGE-03).
+///
+/// Retour : `0` si appliqué (ou rien à restreindre), `EPERM` si init / PID hors-plage.
+pub fn sys_exo_pledge(
+    promises: u64,
+    _flags: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_PLEDGE);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EPERM;
+    }
+    let restrictions = crate::security::zero_trust::pledge_promises_to_restrictions(promises);
+    if restrictions == 0 {
+        // Toutes les capacités enforced sont promises → rien à restreindre (succès).
+        return 0;
+    }
+    // restrict_process est monotone et refuse init (PID 1) / PID hors-plage.
+    if crate::security::zero_trust::restrict_process(caller_pid, restrictions) {
+        0
+    } else {
+        EPERM
+    }
+}
+
+/// `exo_shield_drain(buf_ptr, count, …)` — draine le feed d'événements de sécurité
+/// kernel→exo_shield (TIER 3.1). **Réservé au serveur exo_shield** (gaté sur sa
+/// classe de service) pour éviter toute fuite d'événements vers un process
+/// arbitraire. Copie au plus `min(count, 64)` `ShieldEvent` dans `buf_ptr` ;
+/// retourne le nombre drainé (≥ 0) ou un errno négatif.
+pub fn sys_exo_shield_drain(
+    buf_ptr: u64,
+    count: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_SHIELD_DRAIN);
+    use crate::security::shield_feed::{ShieldEvent, SHIELD_EVENT_SIZE};
+
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EPERM;
+    }
+    // Seul exo_shield draine le feed.
+    if crate::security::ipc_policy::service_class_of(crate::process::core::pid::Pid(caller_pid))
+        != crate::security::ipc_policy::ServiceClass::ExoShield
+    {
+        return EACCES;
+    }
+
+    let count = count as usize;
+    if count == 0 {
+        return 0;
+    }
+    // Au plus 64 événements / appel (≈ 2.5 KiB) — borne la copie + le lock.
+    let n = count.min(64);
+    let bytes = n * SHIELD_EVENT_SIZE;
+    if UserBuf::validate(buf_ptr, bytes, 64 * SHIELD_EVENT_SIZE).is_err() {
+        return EFAULT;
+    }
+
+    let mut events = [ShieldEvent::zero(); 64];
+    let drained = crate::security::shield_feed::drain(&mut events[..n]);
+    if drained == 0 {
+        return 0;
+    }
+    let copy_bytes = drained * SHIELD_EVENT_SIZE;
+    if copy_to_user(buf_ptr as *mut u8, events.as_ptr() as *const u8, copy_bytes).is_err() {
+        return EFAULT;
+    }
+    drained as i64
 }
 
 #[cfg(test)]
@@ -5092,6 +5200,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_CAP_CREATE => sys_exo_cap_create,
         SYS_EXO_CAP_REVOKE => sys_exo_cap_revoke,
         SYS_EXO_CAP_CHECK => sys_exo_cap_check,
+        SYS_EXO_PLEDGE => sys_exo_pledge,
+        SYS_EXO_SHIELD_DRAIN => sys_exo_shield_drain,
         SYS_EXO_PERF_READ => sys_exo_perf_read,
         SYS_EXO_PERF_ENABLE => sys_exo_perf_enable,
         SYS_EXO_LOG => sys_exo_log,

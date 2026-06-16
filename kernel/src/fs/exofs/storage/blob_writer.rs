@@ -500,11 +500,16 @@ impl BlobWriter {
     }
 
     fn derive_blob_payload_key(blob_id: &BlobId) -> ExofsResult<[u8; 32]> {
-        let dk = KeyDerivation::derive_key(
-            &blob_id.0,
-            b"exofs-blob-payload-salt-v1",
-            b"exofs-blob-payload-key-v1",
-        )?;
+        // FIX-F2 : la clé DOIT incorporer un secret de volume PERSISTANT, pas
+        // seulement le BlobId public (sinon la clé est calculable par quiconque
+        // connaît le contenu/chemin). Sans clé de volume installée, on REFUSE de
+        // chiffrer — pas de fausse sécurité.
+        let vk = crate::fs::exofs::crypto::volume_secret::volume_key()
+            .ok_or(ExofsError::PermissionDenied)?;
+        // HKDF-BLAKE3 : ikm = clé de volume (secret), salt = blob_id (unicité par
+        // blob), contexte = domain separation. L'attaquant sans `vk` ne peut pas
+        // reconstruire la clé même en connaissant le BlobId.
+        let dk = KeyDerivation::derive_key(&vk, &blob_id.0, b"exofs-blob-payload-key-v2")?;
         Ok(*dk.as_bytes())
     }
 

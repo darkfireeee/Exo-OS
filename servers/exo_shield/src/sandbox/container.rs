@@ -637,9 +637,9 @@ mod tests {
         let mut mgr = ContainerManager::new();
         let bm = SyscallBitmap::deny_all();
         let id = mgr.create(1, b"/jail", b"ns", bm);
-        mgr.start(id).unwrap();
+        assert!(mgr.start(id));
         assert!(!mgr.destroy(id)); // running — must stop first
-        mgr.stop(id).unwrap();
+        assert!(mgr.stop(id));
         assert!(mgr.destroy(id));
     }
 

@@ -335,6 +335,14 @@ pub const SYS_EXO_CAP_DELEGATE: u64 = 321;
 pub const SYS_EXO_CAP_REVOKE: u64 = 322;
 /// Vérifier si une capability est valide
 pub const SYS_EXO_CAP_CHECK: u64 = 323;
+/// Restreindre irréversiblement le process courant (sandbox pledge OpenBSD-like).
+/// `promises` = bitmask de `pledge_flags` ; les capacités NON promises deviennent
+/// des restrictions zero-trust enforced au bord syscall (TIER 2.10).
+pub const SYS_EXO_PLEDGE: u64 = 324;
+/// Drainer le feed d'événements de sécurité kernel→exo_shield (TIER 3.1).
+/// Réservé au serveur exo_shield (gaté sur sa classe de service). Copie jusqu'à
+/// `count` `ShieldEvent` dans `buf` ; retourne le nombre d'événements drainés.
+pub const SYS_EXO_SHIELD_DRAIN: u64 = 325;
 /// Lire un compteur de performance kernel
 pub const SYS_EXO_PERF_READ: u64 = 330;
 /// Activer les événements de performance

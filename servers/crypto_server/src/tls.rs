@@ -239,6 +239,9 @@ impl TlsSession {
         for b in self.handshake_hash.iter_mut() {
             unsafe { core::ptr::write_volatile(b, 0) };
         }
+        for b in self.server_random.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
         core::sync::atomic::fence(Ordering::SeqCst);
     }
 }
@@ -440,7 +443,7 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
 
     // Récupérer notre clé privée avant d'écraser le stockage temporaire par
     // le vrai server_random reçu.
-    let private_key: [u8; 32] = {
+    let mut private_key: [u8; 32] = {
         let mut pk = [0u8; 32];
         pk.copy_from_slice(&session.server_random[..32]);
         pk
@@ -471,6 +474,10 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
 
     // Calculer le secret partagé
     session.shared_secret = x25519_dh(&private_key, &server_public);
+    for b in private_key.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+    core::sync::atomic::fence(Ordering::SeqCst);
 
     // Dériver les clés de trafic
     derive_traffic_keys(session);
@@ -481,9 +488,6 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
     session
         .last_activity_tsc
         .store(read_tsc(), Ordering::Release);
-
-    // Shredder la clé privée
-    // (on ne peut pas shred server_random car on l'a déjà écrasé avec le vrai server_random)
 
     true
 }
@@ -529,13 +533,17 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
             if !fill_random(&mut session.server_random) {
                 return (0, server_hello);
             }
-            let (private_key, public_key) = match generate_x25519_keypair() {
+            let (mut private_key, public_key) = match generate_x25519_keypair() {
                 Some(kp) => kp,
                 None => return (0, server_hello),
             };
 
             // Calculer le secret partagé
             session.shared_secret = x25519_dh(&private_key, &client_public);
+            for b in private_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+            core::sync::atomic::fence(Ordering::SeqCst);
 
             // Dériver les clés de trafic
             derive_traffic_keys(session);

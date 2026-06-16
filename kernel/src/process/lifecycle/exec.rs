@@ -446,6 +446,11 @@ pub fn do_execve(
 
     // Transition vers Running.
     pcb.set_state(ProcessState::Running);
+    // ExoLedger : trace immuable de chaque chargement de binaire (changement d'identité).
+    crate::security::exoledger::exo_ledger_append(crate::security::exoledger::ActionTag::Custom {
+        tag: 0x6578_6563, // b"exec"
+        data: pcb.pid.0 as u64,
+    });
     notify_vfork_completion(pcb.pid);
 
     Ok(())

@@ -660,6 +660,13 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         log_event(AuditCategory::Process, child_pid.0, 0u32, 0u16,
             crate::syscall::numbers::SYS_CLONE as u32, 0i32,
             AuditOutcome::Allow, [0u8; 8]);
+        // ExoLedger : trace immuable en plus du ring buffer d'audit.
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::Custom {
+                tag: 0x666F_726B, // b"fork"
+                data: child_pid.0 as u64,
+            },
+        );
     }
     fork_trace(b"fork: enqueue\n");
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]

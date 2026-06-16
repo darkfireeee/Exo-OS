@@ -38,7 +38,7 @@ pub use blake3::{blake3_derive_key, blake3_hash, blake3_mac, constant_time_eq, B
 
 /// XChaCha20-Poly1305
 pub use xchacha20_poly1305::{
-    xchacha20_poly1305_open, xchacha20_poly1305_seal, KEY_LEN as XCHACHA20_KEY_SIZE,
+    xchacha20_poly1305_open, xchacha20_poly1305_seal, xchacha20_xor, KEY_LEN as XCHACHA20_KEY_SIZE,
     TAG_LEN as XCHACHA20_TAG_SIZE, XCHACHA20_NONCE_LEN as XCHACHA20_NONCE_SIZE,
 };
 

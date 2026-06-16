@@ -17,8 +17,8 @@ pub use policy::{
     global_policy, AccessRequest, PolicyAction, PolicyStats, ResourceKind, ZeroTrustPolicy,
 };
 pub use process_state::{
-    clear_process_restrictions, context_for_caller, inherit_restrictions, process_restrictions,
-    restrict_process, trust_for_pid,
+    clear_process_restrictions, context_for_caller, inherit_restrictions,
+    pledge_promises_to_restrictions, process_restrictions, restrict_process, trust_for_pid,
 };
 pub use verify::{
     register_ring1_pid, ring1_pair_trusted, ring1_trusted_mask, unregister_ring1_pid,

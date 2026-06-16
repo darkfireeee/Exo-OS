@@ -17,7 +17,7 @@ pub use code_signing::{
 
 pub use runtime_check::{
     assert_kernel_integrity, check_kernel_integrity, init_runtime_integrity, integrity_stats,
-    IntegrityError,
+    security_periodic_check_observe, IntegrityError,
 };
 
 pub use secure_boot::{
@@ -31,4 +31,43 @@ pub use secure_boot::{
 /// (les sections .text/.rodata doivent être intactes).
 pub fn integrity_init() {
     init_runtime_integrity();
+}
+
+/// Intervalle entre deux vérifications d'intégrité runtime (15 s). Le hash
+/// Blake3 de `.text/.rodata` est une opération lourde → basse fréquence
+/// suffisante pour détecter une altération persistante sans charge inutile.
+const INTEGRITY_CHECK_INTERVAL_NS: u64 = 15_000_000_000;
+
+/// Boucle du kthread moniteur d'intégrité (TIER 2.1-a). Dort, puis — une fois le
+/// boot sécurité terminé (`is_security_ready`, donc `.text/.rodata` stables) —
+/// lance une vérification en **mode observe** (log/ledger, jamais de panic).
+fn integrity_monitor_loop(_arg: usize) -> ! {
+    loop {
+        if !crate::scheduler::timer::sleep_ns(INTEGRITY_CHECK_INTERVAL_NS) {
+            // Sommeil indisponible (très tôt) → céder le CPU et réessayer.
+            // SAFETY: cooperative_reschedule cède proprement depuis un kthread.
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+            continue;
+        }
+        if crate::security::is_security_ready() {
+            security_periodic_check_observe();
+        }
+    }
+}
+
+/// Démarre le kthread moniteur d'intégrité runtime. Best-effort : si la création
+/// du kthread échoue, le boot continue (l'intégrité reste vérifiable à la demande
+/// via `check_kernel_integrity`). À appeler une fois après `security_init`.
+pub fn start_integrity_monitor() {
+    use crate::process::lifecycle::create::{create_kthread, KthreadParams};
+    use crate::scheduler::core::task::Priority;
+    let _ = create_kthread(&KthreadParams {
+        name: "integrity-mon",
+        entry: integrity_monitor_loop,
+        arg: 0,
+        target_cpu: 0,
+        priority: Priority::NORMAL_DEFAULT,
+    });
 }

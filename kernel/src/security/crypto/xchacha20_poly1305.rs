@@ -71,6 +71,21 @@ pub fn xchacha20_poly1305_open(
     Ok(())
 }
 
+/// FIX-F1 : chiffrement de flux XChaCha20 **longueur-préservante** (XOR keystream).
+///
+/// `encrypt == decrypt` (involution XOR). Destiné au chiffrement-at-rest ExoFS au
+/// niveau bloc, où une expansion de longueur (tag AEAD) casserait le layout disque.
+///
+/// SÉCURITÉ : sûr UNIQUEMENT si la paire `(key, nonce)` ne chiffre qu'un seul
+/// plaintext (sinon fuite du XOR des clairs). C'est garanti dans ExoFS car les
+/// blobs sont **immuables et adressés par contenu** (BlobId = hash) : un BlobId
+/// donné ne change jamais. L'intégrité est fournie par le checksum BLAKE3 de blob
+/// existant (le chiffrement de flux seul n'authentifie pas).
+#[inline]
+pub fn xchacha20_xor(key: &[u8; KEY_LEN], nonce: &[u8; XCHACHA20_NONCE_LEN], data: &mut [u8]) {
+    xchacha20_apply(key, nonce, data);
+}
+
 fn compute_tag(
     key: &[u8; KEY_LEN],
     nonce: &[u8; XCHACHA20_NONCE_LEN],

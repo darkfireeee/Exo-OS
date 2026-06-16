@@ -16,6 +16,7 @@
 // Déclarations de sous-modules
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub mod at_rest;
 pub mod crypto_audit;
 pub mod crypto_shredding;
 pub mod entropy;
@@ -27,6 +28,7 @@ pub mod object_key;
 pub mod secret_reader;
 pub mod secret_writer;
 pub mod volume_key;
+pub mod volume_secret;
 pub mod xchacha20;
 
 // ─────────────────────────────────────────────────────────────────────────────

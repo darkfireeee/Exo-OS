@@ -332,14 +332,30 @@ fn behaviour_data_for_event(
     data
 }
 
+/// Mappe un engine::EventType vers la catégorie behavioral Markov (0..8).
+/// Correspondance : behavioral::sequence::EventType (Syscall=0, MemAccess=1, …)
+fn engine_event_to_markov_cat(et: engine::EventType) -> u8 {
+    match et {
+        engine::EventType::Syscall    => 0, // behavioral::Syscall
+        engine::EventType::Memory     => 1, // behavioral::MemAccess
+        engine::EventType::Network    => 2, // behavioral::NetConnect
+        engine::EventType::Ipc        => 3, // behavioral::IpcCall
+        engine::EventType::Capability => 5, // behavioral::PrivChange
+        engine::EventType::Process    => 6, // behavioral::ProcessCreate
+        _                             => 8, // behavioral::Custom
+    }
+}
+
+/// Classifie un événement via l'ensemble ML persistant (MLP+IF+Markov).
+/// Remplace l'ancienne version qui recréait un modèle vierge à chaque appel.
 fn classify_event_ml(
     event: &engine::MonitoredEvent,
     hook_result: &HookPipelineResult,
 ) -> ml::Classification {
-    let model = ml::ModelWeights::new_seeded(0xE50_5002, ml::ActivationFn::Relu);
-    let inference = ml::InferenceEngine::new(model);
     let data = behaviour_data_for_event(event, hook_result);
-    inference.infer_from_behaviour(&data).classification()
+    let fv = ml::FeatureExtractor::extract(&data);
+    let et_raw = engine_event_to_markov_cat(event.event_type);
+    ml::ensemble_classify(event.pid, et_raw, &fv).classification
 }
 
 fn apply_containment(pid: u32, tick: u64) -> bool {
@@ -1316,12 +1332,116 @@ fn handle_request(req: &ShieldRequest) -> ShieldReply {
     reply
 }
 
+// ── Kernel Security Feed (TIER 3.1) ─────────────────────────────────────────
+
+/// Miroir de `kernel::security::shield_feed::ShieldEvent` (40 octets, ABI stable
+/// du syscall `SYS_EXO_SHIELD_DRAIN`). Le kernel pousse les événements de sécurité
+/// (refus IPC/syscall, …) ici ; on les draine et on les injecte dans le moteur.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KShieldEvent {
+    pid: u32,
+    event_type: u8,
+    severity: u8,
+    _pad: [u8; 2],
+    opcode: u32,
+    _pad2: u32,
+    arg0: u64,
+    arg1: u64,
+    seq: u64,
+}
+
+impl KShieldEvent {
+    const fn zero() -> Self {
+        Self {
+            pid: 0,
+            event_type: 0,
+            severity: 0,
+            _pad: [0; 2],
+            opcode: 0,
+            _pad2: 0,
+            arg0: 0,
+            arg1: 0,
+            seq: 0,
+        }
+    }
+}
+
+const SHIELD_FEED_BATCH: usize = 64;
+
+/// Mappe la catégorie d'événement du feed kernel vers `engine::EventType`
+/// (valeurs différentes — cf. shield_feed::event_type côté kernel).
+fn map_kernel_event_type(et: u8) -> engine::EventType {
+    match et {
+        0 => engine::EventType::Process,    // kernel PROCESS
+        1 => engine::EventType::Syscall,    // kernel SYSCALL
+        2 => engine::EventType::Memory,     // kernel MEMORY
+        3 => engine::EventType::Network,    // kernel NETWORK
+        4 => engine::EventType::Ipc,        // kernel IPC
+        5 => engine::EventType::Capability, // kernel CAPABILITY
+        other => engine::EventType::Custom(other),
+    }
+}
+
+/// Draine le feed d'événements de sécurité kernel→shield et injecte chaque
+/// événement dans le pipeline NGAV (hooks + moteur + confinement auto). C'est le
+/// FEED réel qui rend le NGAV non-aveugle (TIER 3.1).
+fn drain_shield_feed() {
+    let mut buf = [KShieldEvent::zero(); SHIELD_FEED_BATCH];
+    let n = unsafe {
+        syscall::syscall3(
+            syscall::SYS_EXO_SHIELD_DRAIN,
+            buf.as_mut_ptr() as u64,
+            SHIELD_FEED_BATCH as u64,
+            0,
+        )
+    };
+    if n <= 0 {
+        return;
+    }
+    let count = (n as usize).min(SHIELD_FEED_BATCH);
+    let tick = current_tick();
+    let empty_payload = [0u8; syscall::IPC_INLINE_PAYLOAD_SIZE];
+
+    for ev in &buf[..count] {
+        if ev.pid == 0 {
+            continue;
+        }
+        let event = engine::MonitoredEvent {
+            pid: ev.pid,
+            event_type: map_kernel_event_type(ev.event_type),
+            opcode: ev.opcode,
+            arg0: ev.arg0,
+            arg1: ev.arg1,
+            timestamp: tick,
+            severity: engine::ThreatLevel::from_u8(ev.severity),
+        };
+        // Pipeline NGAV : hooks + ML ensemble + soumission moteur.
+        let hook_result = process_security_hooks(&event, &empty_payload);
+        let data = behaviour_data_for_event(&event, &hook_result);
+        let fv = ml::FeatureExtractor::extract(&data);
+        let et_raw = engine_event_to_markov_cat(event.event_type);
+        let ml_result = ml::ensemble_classify(event.pid, et_raw, &fv);
+        let _ = engine::submit_event(&event, tick);
+        // Confinement auto sur menace critique OU ML malicious.
+        if hook_result.level >= engine::ThreatLevel::Critical
+            || ml_result.classification == ml::Classification::Malicious
+        {
+            apply_containment(event.pid, tick);
+        }
+    }
+}
+
 // ── Periodic Maintenance ────────────────────────────────────────────────────
 
 /// Called on IPC timeout to perform periodic maintenance tasks.
 fn perform_maintenance() {
     MAINTENANCE_TICKS.fetch_add(1, Ordering::Relaxed);
     let tick = current_tick();
+
+    // TIER 3.1 : drainer le feed d'événements de sécurité du kernel et les
+    // injecter dans le moteur NGAV (le shield n'est plus aveugle).
+    drain_shield_feed();
 
     // Run periodic scan scheduler — enqueue scans that are due
     let enqueued = engine::periodic_scan_tick(tick);
@@ -1407,6 +1527,8 @@ pub extern "C" fn _start() -> ! {
     forensics::timeline_init();
     forensics::report_init();
     boot_log(b"exo_shield: containment ready\n");
+    ml::ensemble_init(0xE505_C117);
+    boot_log(b"exo_shield: ml ensemble ready\n");
 
     // ── 1. Register public exo_shield endpoint ─────────────────────────────
     let name = b"exo_shield";

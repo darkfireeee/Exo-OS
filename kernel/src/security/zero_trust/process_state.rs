@@ -145,6 +145,35 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
     }
 }
 
+/// Traduit un bitmask de **promesses pledge** (OpenBSD-like, `pledge_flags`) en
+/// **restrictions zero-trust** : toute capacité NON promise devient une restriction
+/// enforced au bord syscall (cf. `syscall_restriction_mask`). TIER 2.10 — pont
+/// entre l'API `pledge()` userspace et l'enforcement TIER 1.1.
+///
+/// Mapping (promesse absente → restriction) :
+///   - `PROC` (création de process) absent → `NO_FORK | NO_PROCESS_CREATE`
+///   - `EXEC` absent                       → `NO_EXEC`
+///   - `INET` (réseau) absent              → `NO_NETWORK`
+///
+/// Seules les capacités réellement enforced sont mappées (fork/exec/réseau) ;
+/// les autres pledges (rpath/wpath/…) seront ajoutées quand l'enforcement FS/IO
+/// par-syscall existera. Conservatif : ne restreint jamais plus que les flags connus.
+pub fn pledge_promises_to_restrictions(promises: u64) -> u64 {
+    use crate::security::isolation::pledge::pledge_flags;
+    use restriction_flags::*;
+    let mut r = 0u64;
+    if promises & pledge_flags::PROC == 0 {
+        r |= NO_FORK | NO_PROCESS_CREATE;
+    }
+    if promises & pledge_flags::EXEC == 0 {
+        r |= NO_EXEC;
+    }
+    if promises & pledge_flags::INET == 0 {
+        r |= NO_NETWORK;
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +256,30 @@ mod tests {
     fn trust_derivation_init_and_default() {
         assert_eq!(trust_for_pid(INIT_PID), TrustLevel::System);
         assert_eq!(trust_for_pid(P_A), TrustLevel::Normal);
+    }
+
+    /// TIER 2.10 — `pledge()` : une promesse absente devient une restriction
+    /// enforced ; toutes les promesses → rien à restreindre.
+    #[test]
+    fn pledge_maps_absent_promises_to_restrictions() {
+        use crate::security::isolation::pledge::pledge_flags;
+        use restriction_flags::*;
+
+        // STDIO seul (pas PROC/EXEC/INET) → fork+exec+réseau restreints.
+        let r = pledge_promises_to_restrictions(pledge_flags::STDIO);
+        assert!(r & NO_FORK != 0 && r & NO_PROCESS_CREATE != 0);
+        assert!(r & NO_EXEC != 0);
+        assert!(r & NO_NETWORK != 0);
+
+        // PROC|EXEC|INET promis → aucune restriction (sur les flags enforced).
+        let none = pledge_promises_to_restrictions(
+            pledge_flags::PROC | pledge_flags::EXEC | pledge_flags::INET,
+        );
+        assert_eq!(none, 0);
+
+        // INET seul → réseau autorisé, fork/exec restreints.
+        let net_only = pledge_promises_to_restrictions(pledge_flags::INET);
+        assert_eq!(net_only & NO_NETWORK, 0);
+        assert!(net_only & NO_FORK != 0 && net_only & NO_EXEC != 0);
     }
 }

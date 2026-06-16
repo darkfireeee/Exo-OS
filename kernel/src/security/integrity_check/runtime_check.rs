@@ -200,6 +200,36 @@ pub fn assert_kernel_integrity() {
     }
 }
 
+/// Vérification périodique en **MODE OBSERVE** (TIER 2.1-a) : recalcule les hashes
+/// `.text/.rodata` et, en cas de divergence, **journalise dans ExoLedger** (zone P0
+/// tamper-evident) + incrémente le compteur `VIOLATIONS_DETECTED` — **SANS panic**.
+///
+/// Boot-safe : un faux-positif (p. ex. patch `.text` tardif) ne fait que produire
+/// une entrée d'audit, jamais un halt sur un boot fragile. Le mode FATAL
+/// (`assert_kernel_integrity` → panic + handoff ExoPhoenix) reste réservé à la
+/// production, derrière flag. No-op tant que les hashes de référence ne sont pas
+/// posés (`init_runtime_integrity`).
+pub fn security_periodic_check_observe() {
+    if !INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+    if let Err(e) = check_kernel_integrity() {
+        let code = match e {
+            IntegrityError::TextSectionCorrupted => 1,
+            IntegrityError::RodataSectionCorrupted => 2,
+            IntegrityError::StackGuardCorrupted => 3,
+            IntegrityError::NotInitialized => 0,
+        };
+        // 0x494E_5445_4752_5459 = b"INTEGRTY" — tag custom d'audit intégrité.
+        crate::security::exoledger::exo_ledger_append_p0(
+            crate::security::exoledger::ActionTag::Custom {
+                tag: 0x494E_5445_4752_5459,
+                data: code,
+            },
+        );
+    }
+}
+
 /// Retourne vrai si le système d'intégrité est initialisé.
 pub fn is_initialized() -> bool {
     INITIALIZED.load(Ordering::Acquire)

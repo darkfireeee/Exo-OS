@@ -194,6 +194,35 @@ impl ExoSuperblockDisk {
         self.checksum = self.compute_checksum();
     }
 
+    /// FIX-F1 : vrai si le volume est chiffré (flag incompat ENCRYPTION).
+    #[inline]
+    pub fn is_encrypted(&self) -> bool {
+        self.incompat_flags & incompat_flags::ENCRYPTION != 0
+    }
+
+    /// FIX-F1 : stocke la clé de volume **wrappée** dans la zone réservée `_pad1`
+    /// (incluse dans le checksum) et active le flag ENCRYPTION. Appelé par mkfs.
+    /// `finalize()` doit être rappelé ensuite pour recalculer le checksum.
+    pub fn set_wrapped_volume_key(
+        &mut self,
+        wrapped: &[u8; crate::fs::exofs::crypto::at_rest::WRAPPED_VK_LEN],
+    ) {
+        self._pad1[..wrapped.len()].copy_from_slice(wrapped);
+        self.incompat_flags |= incompat_flags::ENCRYPTION;
+    }
+
+    /// FIX-F1 : lit la clé de volume wrappée si le volume est chiffré.
+    pub fn wrapped_volume_key(
+        &self,
+    ) -> Option<[u8; crate::fs::exofs::crypto::at_rest::WRAPPED_VK_LEN]> {
+        if !self.is_encrypted() {
+            return None;
+        }
+        let mut out = [0u8; crate::fs::exofs::crypto::at_rest::WRAPPED_VK_LEN];
+        out.copy_from_slice(&self._pad1[..out.len()]);
+        Some(out)
+    }
+
     /// Crée un superblock initialisé pour un nouveau volume
     pub fn new_volume(
         disk_size_bytes: u64,
@@ -730,6 +759,34 @@ mod tests {
         sb.incompat_flags &= !incompat_flags::EXO_DELAYED;
         sb.finalize();
         assert!(matches!(sb.verify(), Err(ExofsError::IncompatibleVersion)));
+    }
+
+    /// FIX-F1 : la clé de volume wrappée survit à la sérialisation du superblock,
+    /// le checksum reste valide (la clé est dans la zone checksummée `_pad1`), et
+    /// elle se déwrappe avec la bonne passphrase uniquement.
+    #[test]
+    fn encrypted_volume_key_storage_roundtrip() {
+        use crate::fs::exofs::crypto::at_rest::{unwrap_volume_key, wrap_volume_key, KekSource};
+        let vk = [0x5Au8; 32];
+        let wrapped = wrap_volume_key(&vk, KekSource::Passphrase, b"boot-pw").test_unwrap();
+
+        let mut sb = ExoSuperblockDisk::new_volume(TEST_DISK, b"Enc", [0u8; 16], 0);
+        assert!(!sb.is_encrypted());
+        sb.set_wrapped_volume_key(&wrapped);
+        sb.finalize();
+
+        // Persistance : sérialise puis désérialise.
+        let bytes = sb.as_bytes();
+        let sb2 = ExoSuperblockDisk::from_bytes(&bytes).test_unwrap();
+        sb2.verify().test_unwrap(); // checksum + flags OK malgré la clé wrappée
+        assert!(sb2.is_encrypted());
+
+        // La clé wrappée relue se déwrappe avec la bonne passphrase → VK d'origine.
+        let w = sb2.wrapped_volume_key().expect("clé wrappée présente");
+        let got = unwrap_volume_key(&w, b"boot-pw").test_unwrap();
+        assert_eq!(got, vk);
+        // Mauvaise passphrase → échec.
+        assert!(unwrap_volume_key(&w, b"wrong").is_err());
     }
 
     #[test]

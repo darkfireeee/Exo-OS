@@ -263,6 +263,11 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     kdb(b'8'); // futex seed done
     crate::arch::x86_64::boot_display::stage_ok("SECURITY");
 
+    // TIER 2.1-a : kthread moniteur d'intégrité runtime (mode observe). Vérifie
+    // périodiquement `.text/.rodata` une fois le boot sécurité terminé ; journalise
+    // toute divergence dans ExoLedger sans paniquer (boot-safe). Best-effort.
+    crate::security::start_integrity_monitor();
+
     // ── Phase 5b : ExoPhoenix Stage0 (domaine IOMMU de blocage) ─────────────
     // FIX-STAGE0 (rapport_analyse_kernel_exo_os.md §4.1) :
     // stage0_init_all_steps() n'était jamais appelé, laissant

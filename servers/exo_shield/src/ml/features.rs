@@ -467,9 +467,11 @@ mod tests {
 
     #[test]
     fn anomaly_score_higher_with_suspicious() {
+        // Les valeurs doivent être des entiers bruts homogènes (pas Q16.16).
+        // cpu_usage = 25 (≈ 25 % en unités brutes) comme les autres champs.
         let mut benign = ProcessBehaviourData::zero();
         benign.syscall_rate = 10;
-        benign.cpu_usage = 0x4000;
+        benign.cpu_usage = 25;
 
         let mut suspicious = ProcessBehaviourData::zero();
         suspicious.ptrace_use = 5;

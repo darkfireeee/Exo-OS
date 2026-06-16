@@ -202,6 +202,15 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             verify_syscall(&ctx, nr).is_ok()
         };
         if !zt_ok {
+            // TIER 3.1 : forwarder le refus syscall au feed NGAV exo_shield.
+            crate::security::shield_feed::push_event(
+                caller_pid,
+                crate::security::shield_feed::event_type::SYSCALL,
+                crate::security::shield_feed::severity::HIGH,
+                nr as u32,
+                0,
+                0,
+            );
             frame.rax = crate::syscall::numbers::EPERM as u64;
             audit_syscall_exit(caller_tid, crate::syscall::numbers::EPERM as i64);
             post_dispatch(frame, tsc_start);

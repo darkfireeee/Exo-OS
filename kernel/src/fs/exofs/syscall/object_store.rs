@@ -546,6 +546,11 @@ pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> Ex
     }
     ensure_catalog_loaded()?;
 
+    // FIX-F1 : chiffrement-at-rest GATED. `None` si aucun volume chiffré n'est
+    // monté → chemin en clair inchangé (zéro régression sur volumes non chiffrés).
+    // `Some(clé)` → chaque bloc est chiffré (XChaCha20 flux, longueur-préservant).
+    let at_rest_key = crate::fs::exofs::crypto::at_rest::blob_at_rest_key(&blob_id);
+
     let wrote = virtio_adapter::with_global_disk(|device| {
         let block_size = device.block_size();
         let block_size_usize = block_size as usize;
@@ -571,6 +576,10 @@ pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> Ex
             let chunk = core::cmp::min(block_size_usize, data.len().saturating_sub(pos));
             block.fill(0);
             block[..chunk].copy_from_slice(&data[pos..pos + chunk]);
+            // FIX-F1 : chiffrer le bloc complet à son offset logique avant écriture.
+            if let Some(k) = at_rest_key.as_ref() {
+                crate::fs::exofs::crypto::at_rest::xor_block(k, &blob_id, pos as u64, &mut block);
+            }
             device.write_block(lba, &block)?;
             lba = lba.saturating_add(1);
             pos = pos.saturating_add(chunk);
@@ -602,6 +611,9 @@ pub fn load_blob_data_if_available(blob_id: &BlobId) -> ExofsResult<Option<Vec<u
         return Ok(None);
     }
 
+    // FIX-F1 : déchiffrement-at-rest GATED (symétrique au persist). None → en clair.
+    let at_rest_key = crate::fs::exofs::crypto::at_rest::blob_at_rest_key(blob_id);
+
     virtio_adapter::with_global_disk(|device| {
         if device.block_size() != mapping.block_size {
             return Err(ExofsError::InvalidState);
@@ -614,6 +626,7 @@ pub fn load_blob_data_if_available(blob_id: &BlobId) -> ExofsResult<Option<Vec<u
         let block_size = mapping.block_size as usize;
         let mut remaining = mapping.size_bytes as usize;
         let mut lba = mapping.base_lba;
+        let mut logical_off = 0u64;
         let mut block = Vec::new();
         block
             .try_reserve_exact(block_size)
@@ -621,10 +634,15 @@ pub fn load_blob_data_if_available(blob_id: &BlobId) -> ExofsResult<Option<Vec<u
         block.resize(block_size, 0);
         while remaining > 0 {
             device.read_block(lba, &mut block)?;
+            // FIX-F1 : déchiffrer le bloc complet à son offset logique (même nonce qu'au persist).
+            if let Some(k) = at_rest_key.as_ref() {
+                crate::fs::exofs::crypto::at_rest::xor_block(k, blob_id, logical_off, &mut block);
+            }
             let take = core::cmp::min(remaining, block_size);
             out.extend_from_slice(&block[..take]);
             lba = lba.saturating_add(1);
             remaining = remaining.saturating_sub(take);
+            logical_off = logical_off.saturating_add(block_size as u64);
         }
 
         Ok(Some(out))
