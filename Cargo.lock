@@ -281,6 +281,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-ahci"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "spin",
+]
+
+[[package]]
 name = "exo-crypto-server"
 version = "0.1.0"
 dependencies = [
@@ -375,6 +383,14 @@ version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",
  "smoltcp",
+ "spin",
+]
+
+[[package]]
+name = "exo-nvme"
+version = "0.1.0"
+dependencies = [
+ "log",
  "spin",
 ]
 

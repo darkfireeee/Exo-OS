@@ -20,6 +20,8 @@ members = [
     "drivers/network/loopback",
     "drivers/network/virtio_net",
     "drivers/storage/virtio_blk",
+    "drivers/storage/nvme",
+    "drivers/storage/ahci",
     "loader",
     "servers/crypto_server",
     "servers/device_server",
