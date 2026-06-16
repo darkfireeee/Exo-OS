@@ -51,6 +51,7 @@
 | R9 | F3 — loader MLP authentifié (checksum FNV-1a + version monotone) | `servers/exo_shield/src/ml/mlp.rs` |
 | R10 | F4 — Isolation Forest entraîné (seuils fittés) + loader | `servers/exo_shield/src/ml/iforest.rs` |
 | R11 | F2 — clé blob dérivée d'un secret de volume (refus si absent) + module volume_secret | `fs/exofs/crypto/volume_secret.rs`, `fs/exofs/storage/blob_writer.rs` |
+| R12 | F1 — chiffrement-at-rest : provider KEK + wrap/unwrap VK + cipher de bloc + câblage persist/load gated + stockage superblock + déverrouillage montage (testé e2e) | `fs/exofs/crypto/at_rest.rs`, `fs/exofs/syscall/object_store.rs`, `fs/exofs/storage/superblock.rs`, `security/crypto/xchacha20_poly1305.rs` |
 
 ---
 
@@ -429,11 +430,37 @@ Pour être juste — beaucoup est réel et bien câblé :
 | **F4 — MLP+IF entraînés** (recall malicious 1.0, FP 0.0) | 52 tests ML PASS |
 | F3 — loader MLP authentifié (checksum+version) | test e2e PASS (checksum Python↔Rust concordant) |
 | F2 — clé blob = secret de volume requis | 15 tests blob storage PASS (round-trip OK) |
+| **F1 — chiffrement-at-rest** (mécanisme complet) | 10 tests at_rest + `persist_then_reload_roundtrip` AVEC chiffrement + `encrypted_volume_key_storage_roundtrip` PASS |
 | Dispatch syscall zero-trust | revue de code (dispatch.rs:185-219) |
+
+### F1 — activation déploiement restante (hors chemin par défaut)
+
+Le **mécanisme** de chiffrement-at-rest est implémenté + testé. Pour l'**activer**
+sur un volume (n'affecte AUCUN volume existant) :
+1. `mkfs` (exofs-mkroot, outil hôte) : `wrap_volume_key` + `set_wrapped_volume_key`.
+2. Boot : passer la passphrase (cmdline `exofs.key=` / scellé TPM futur) à
+   `install_volume_key_from_wrapped` au montage si `superblock.is_encrypted()`.
+3. Vérif end-to-end sous QEMU une fois le boot réparé (#25).
 
 ### Reportés — pour raisons d'ingénierie HONNÊTES (pas par négligence)
 
 | Item | Pourquoi reporté |
 |------|------------------|
-| **F1** — câblage chiffrement live | Bloqué sur (a) décision KEK (passphrase/TPM) et (b) vérif end-to-end impossible tant que le boot n'atteint pas le shell (#25). Risque de **casser la persistance FS**. Dérivation (F2) déjà corrigée + infra `volume_secret` prête. |
-| **F6** — enforcement prod | Concerne le **déploiement**, pas un bug de code. Checklist prod documentée (§F6). Warning boot non ajouté : le ch
+| **F6** — enforcement prod | Concerne le **déploiement**, pas un bug de code. Checklist prod documentée (§F6). Warning boot non ajouté : le chemin de boot est fragile (#25), risque > valeur pour un item MEDIUM. |
+| **F7** — wrap clé XOR→AEAD | **Déjà sûr** (KEK pleine longueur, unique par wrap, HMAC). Le changer impose une **migration du format disque** ; durcissement non urgent. |
+| **F8** — PKI Root CA persistante | Nécessite un stockage scellé persistant (infra absente). |
+
+### Principe directeur respecté
+
+Aucune « fausse sécurité » n'a été ajoutée. Là où un correctif complet exigeait
+une décision d'architecture (KEK) ou une vérification impossible (boot #25), on a
+**corrigé ce qui est sûr et vérifiable**, **construit l'infrastructure**, et
+**documenté honnêtement** le reste — plutôt que de livrer du chiffrement-théâtre ou
+du code de persistance non vérifié susceptible de corrompre le FS.
+
+> **Décision KEK — TRANCHÉE** : provider abstrait (`KekSource`) plutôt qu'un TPM
+> figé. Backend `Passphrase` (Argon2id) implémenté ; `TpmSealed`/`SecureBootSealed`
+> sont des points d'extension prêts (modèle LUKS2/clevis) — on branchera un vrai TPM
+> quand un pilote TIS existera, sans rien casser. Le mécanisme complet est codé et
+> testé ; il ne reste que l'activation déploiement (mkfs + passphrase au boot) et la
+> vérif QEMU une fois #25 résolu.

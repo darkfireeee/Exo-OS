@@ -12,6 +12,7 @@ Cargo.lock
 build/exo_os.iso
 build/exo_os_new.iso
 build/kernel_stripped.elf
+tools/ml_training/
 
 # Editor files
 .vscode/

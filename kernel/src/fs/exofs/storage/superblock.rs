@@ -218,8 +218,9 @@ impl ExoSuperblockDisk {
         if !self.is_encrypted() {
             return None;
         }
-        let mut out = [0u8; crate::fs::exofs::crypto::at_rest::WRAPPED_VK_LEN];
-        out.copy_from_slice(&self._pad1[..out.len()]);
+        const N: usize = crate::fs::exofs::crypto::at_rest::WRAPPED_VK_LEN;
+        let mut out = [0u8; N];
+        out.copy_from_slice(&self._pad1[..N]);
         Some(out)
     }
 
