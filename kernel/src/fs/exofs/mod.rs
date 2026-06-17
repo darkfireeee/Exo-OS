@@ -50,6 +50,42 @@ macro_rules! log_kernel {
 /// État global du module ExoFS — initialisé une seule fois au boot
 static EXOFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+/// FIX-F1 : déverrouille le volume ExoFS s'il est chiffré, en installant la clé
+/// de volume dérivée de `passphrase`. À appeler au **montage** (après
+/// `boot_recovery_sequence`) une fois qu'une passphrase est disponible.
+///
+/// - `Ok(true)`  : volume chiffré déverrouillé (chiffrement-at-rest actif).
+/// - `Ok(false)` : volume NON chiffré → no-op (chemin en clair, aucune régression).
+/// - `Err(..)`   : passphrase incorrecte / superblock corrompu.
+///
+/// ⚠️ La **source** de la passphrase (paramètre de boot `exofs.key=` / clé scellée
+/// TPM) est une décision de déploiement — délibérément NON câblée par défaut, pour
+/// ne pas embarquer une passphrase en dur (= fausse sécurité). Voir
+/// `docs/SECURITE/AUDIT-100-PERCENT.md` (F1). Lecture+déchiffrement du volume sont
+/// déjà entièrement implémentés (`crypto::at_rest`, partagé avec mkfs via `exo-fscrypt`).
+pub fn unlock_encrypted_volume(passphrase: &[u8]) -> Result<bool, ExofsError> {
+    use crate::fs::exofs::crypto::at_rest;
+    use crate::fs::exofs::storage::superblock::{ExoSuperblockDisk, SUPERBLOCK_DISK_SIZE};
+    use crate::fs::exofs::storage::virtio_adapter;
+
+    if !virtio_adapter::has_global_disk() {
+        return Ok(false);
+    }
+    let block_size = virtio_adapter::with_global_disk(|d| Ok(d.block_size()))? as usize;
+    let read_len = block_size.max(SUPERBLOCK_DISK_SIZE);
+    let mut block = alloc::vec![0u8; read_len];
+    virtio_adapter::with_global_disk(|d| d.read_block(0, &mut block[..block_size]))?;
+    let sb = ExoSuperblockDisk::from_bytes(&block[..SUPERBLOCK_DISK_SIZE])?;
+    if !sb.is_encrypted() {
+        return Ok(false);
+    }
+    let wrapped = sb
+        .wrapped_volume_key()
+        .ok_or(ExofsError::CorruptedStructure)?;
+    at_rest::install_volume_key_from_wrapped(&wrapped, passphrase)?;
+    Ok(true)
+}
+
 /// Initialise ExoFS au boot du kernel.
 /// Appelée par le VFS dispatcher après montage de la racine.
 ///

@@ -122,6 +122,98 @@ pub use integrity_check::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FIX-F6 — Rapport de durcissement production
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// État des protections critiques attendues en **production**. Distingue ce qui
+/// est *réellement actif* de ce qui est désactivé en dev, pour éviter qu'un build
+/// de production parte sans durcissement (cf. AUDIT-100-PERCENT.md F6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductionSecurityStatus {
+    /// Feature `strict_exec_signatures` → exec refuse les binaires non signés.
+    pub strict_exec_signatures: bool,
+    /// Enforcement Secure Boot actif → chaîne de confiance obligatoire.
+    pub secure_boot_enforced: bool,
+    /// Hashes de référence Kernel-A embarqués (≠ ZERO_HASH de dev).
+    pub reference_hashes_embedded: bool,
+}
+
+impl ProductionSecurityStatus {
+    /// Vrai si TOUTES les protections de production sont actives.
+    pub fn is_hardened(&self) -> bool {
+        self.strict_exec_signatures && self.secure_boot_enforced && self.reference_hashes_embedded
+    }
+}
+
+/// Calcule l'état de durcissement production (fonction pure, testable).
+pub fn production_security_status() -> ProductionSecurityStatus {
+    ProductionSecurityStatus {
+        strict_exec_signatures: cfg!(feature = "strict_exec_signatures"),
+        secure_boot_enforced: integrity_check::secure_boot::enforcement_enabled(),
+        reference_hashes_embedded: !crate::exophoenix::forge::kernel_a_hash_is_zero(),
+    }
+}
+
+/// Émet un avertissement bruyant si la configuration n'est PAS durcie pour la
+/// production. À appeler une fois en fin d'init sécurité.
+pub fn warn_if_not_production_hardened() {
+    let st = production_security_status();
+    if st.is_hardened() {
+        return;
+    }
+    #[cfg(target_os = "none")]
+    {
+        use crate::arch::x86_64::terminal::debug_write;
+        debug_write(b"[SECURITE] AVERTISSEMENT : build NON durci pour la production\n");
+        if !st.strict_exec_signatures {
+            debug_write(b"  - strict_exec_signatures DESACTIVE (binaires non signes acceptes)\n");
+        }
+        if !st.secure_boot_enforced {
+            debug_write(b"  - Secure Boot enforcement DESACTIVE\n");
+        }
+        if !st.reference_hashes_embedded {
+            debug_write(b"  - hashes Kernel-A non embarques (ZERO_HASH dev)\n");
+        }
+    }
+}
+
+#[cfg(test)]
+mod production_status_tests {
+    use super::*;
+
+    #[test]
+    fn status_reflects_strict_exec_feature_flag() {
+        let st = production_security_status();
+        assert_eq!(
+            st.strict_exec_signatures,
+            cfg!(feature = "strict_exec_signatures")
+        );
+    }
+
+    #[test]
+    fn hardened_requires_all_three_protections() {
+        let all_on = ProductionSecurityStatus {
+            strict_exec_signatures: true,
+            secure_boot_enforced: true,
+            reference_hashes_embedded: true,
+        };
+        assert!(all_on.is_hardened());
+
+        let none_on = ProductionSecurityStatus {
+            strict_exec_signatures: false,
+            secure_boot_enforced: false,
+            reference_hashes_embedded: false,
+        };
+        assert!(!none_on.is_hardened());
+
+        // Une seule protection manquante suffit à invalider le durcissement.
+        let mut one_missing = all_on;
+        one_missing.secure_boot_enforced = false;
+        assert!(!one_missing.is_hardened());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Re-exports — exploit_mitigations
 // ─────────────────────────────────────────────────────────────────────────────
 

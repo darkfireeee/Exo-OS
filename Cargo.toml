@@ -22,6 +22,8 @@ members = [
     "drivers/storage/virtio_blk",
     "drivers/storage/nvme",
     "drivers/storage/ahci",
+    "drivers/storage/fscrypt",
+    "drivers/storage/partition",
     "loader",
     "servers/crypto_server",
     "servers/device_server",

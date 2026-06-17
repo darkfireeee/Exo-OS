@@ -15,11 +15,9 @@
 
 use super::entropy::ENTROPY_POOL;
 use super::key_derivation::KeyDerivation;
+use super::xchacha20::{Nonce, Tag, XChaCha20Key, XChaCha20Poly1305};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::security::crypto::kdf;
 use alloc::vec::Vec;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -32,9 +30,10 @@ pub const MASTER_KEY_LEN: usize = 32;
 /// Taille de la structure WrappedMasterKey sérialisée.
 pub const WRAPPED_MASTER_KEY_SIZE: usize = 4   // magic
   + 8   // key_id
-  + 32  // sel
-  + 32  // ciphertext (XOR-key)
-  + 32; // HMAC-SHA256 d'intégrité
+  + 32  // sel (Argon2id)
+  + 24  // nonce XChaCha20
+  + 32  // ciphertext (XChaCha20-Poly1305)
+  + 16; // tag AEAD (128 bits)
 
 /// Version du protocole d'enveloppe.
 pub const WRAPPING_VERSION: u8 = 1;
@@ -90,12 +89,14 @@ pub struct WrappedMasterKey {
     pub magic: u32,
     /// Identifiant de la clé emballée.
     pub key_id: MasterKeyId,
-    /// Sel aléatoire utilisé pour la dérivation de la KEK.
+    /// Sel aléatoire pour la dérivation Argon2id de la KEK.
     pub salt: [u8; 32],
-    /// Texte chiffré (XOR avec la KEK, simple en no_std).
+    /// Nonce XChaCha20 (192 bits), aléatoire par wrap.
+    pub nonce: [u8; 24],
+    /// Texte chiffré par XChaCha20-Poly1305 (AEAD).
     pub ciphertext: [u8; MASTER_KEY_LEN],
-    /// Tag HMAC-SHA256 sur magic || key_id || salt || ciphertext.
-    pub mac: [u8; 32],
+    /// Tag d'authentification AEAD (128 bits) sur magic||key_id (AAD) + ct.
+    pub tag: [u8; 16],
 }
 
 /// Métadonnées publiques d'une clé maître (sans le matériel secret).
@@ -189,35 +190,46 @@ impl MasterKey {
 
     // ── Wrapping / Unwrapping ─────────────────────────────────────────────────
 
-    /// Enveloppe la clé maître avec une passphrase (KEK dérivée HKDF).
+    /// Enveloppe la clé maître avec une passphrase.
     ///
-    /// L'enveloppe contient : magic, key_id, salt, ciphertext, HMAC.
+    /// FIX-F7 : KEK = Argon2id(passphrase, salt) ; chiffrement **AEAD
+    /// XChaCha20-Poly1305** (site crypto unique audité) — remplace l'ancien
+    /// XOR+HMAC bespoke. AAD = magic || key_id (lie les métadonnées au chiffré).
     pub fn wrap_with_passphrase(&self, passphrase: &[u8]) -> ExofsResult<WrappedMasterKey> {
+        if passphrase.is_empty() {
+            return Err(ExofsError::InvalidArgument);
+        }
         let salt_raw = ENTROPY_POOL.random_bytes(32)?;
         let mut salt = [0u8; 32];
         salt.copy_from_slice(&salt_raw);
+        let nonce_raw = ENTROPY_POOL.random_bytes(24)?;
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&nonce_raw);
 
-        let (enc_key, mac_key) = derive_wrap_keys(passphrase, &salt)?;
-
-        // Chiffrement XOR (simple en no_std ; à remplacer par AES-256-KW en production).
-        let mut ciphertext = [0u8; MASTER_KEY_LEN];
-        for i in 0..MASTER_KEY_LEN {
-            ciphertext[i] = self.key[i] ^ enc_key[i];
+        let kek = KeyDerivation::derive_from_passphrase_default(passphrase, &salt)?;
+        let key = XChaCha20Key(*kek.as_bytes());
+        let aad = wrap_aad(MASTER_KEY_MAGIC, self.id);
+        let (ct_vec, tag) = XChaCha20Poly1305::encrypt(&key, &Nonce(nonce), &aad, &self.key)?;
+        if ct_vec.len() != MASTER_KEY_LEN {
+            return Err(ExofsError::InternalError);
         }
-
-        // HMAC-SHA256 sur magic || key_id || salt || ciphertext.
-        let mac = compute_wrap_mac(MASTER_KEY_MAGIC, self.id, &salt, &ciphertext, &mac_key)?;
+        let mut ciphertext = [0u8; MASTER_KEY_LEN];
+        ciphertext.copy_from_slice(&ct_vec);
 
         Ok(WrappedMasterKey {
             magic: MASTER_KEY_MAGIC,
             key_id: self.id,
             salt,
+            nonce,
             ciphertext,
-            mac,
+            tag: tag.0,
         })
     }
 
     /// Déenveloppe une clé maître depuis une passphrase.
+    ///
+    /// L'authentification AEAD échoue (`CorruptedStructure`) si la passphrase est
+    /// fausse ou si l'enveloppe a été altérée.
     pub fn unwrap_from_passphrase(
         wrapped: &WrappedMasterKey,
         passphrase: &[u8],
@@ -225,28 +237,24 @@ impl MasterKey {
         if wrapped.magic != MASTER_KEY_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
-
-        let (enc_key, mac_key) = derive_wrap_keys(passphrase, &wrapped.salt)?;
-
-        // Vérification du MAC.
-        let expected_mac = compute_wrap_mac(
-            wrapped.magic,
-            wrapped.key_id,
-            &wrapped.salt,
+        let kek = KeyDerivation::derive_from_passphrase_default(passphrase, &wrapped.salt)?;
+        let key = XChaCha20Key(*kek.as_bytes());
+        let aad = wrap_aad(wrapped.magic, wrapped.key_id);
+        let plain = XChaCha20Poly1305::decrypt(
+            &key,
+            &Nonce(wrapped.nonce),
+            &aad,
             &wrapped.ciphertext,
-            &mac_key,
-        )?;
-        if !constant_time_eq_32(&expected_mac, &wrapped.mac) {
+            &Tag(wrapped.tag),
+        )
+        .map_err(|_| ExofsError::CorruptedStructure)?;
+        if plain.len() != MASTER_KEY_LEN {
             return Err(ExofsError::CorruptedStructure);
         }
-
-        // Déchiffrement.
-        let mut key = [0u8; MASTER_KEY_LEN];
-        for i in 0..MASTER_KEY_LEN {
-            key[i] = wrapped.ciphertext[i] ^ enc_key[i];
-        }
+        let mut key_bytes = [0u8; MASTER_KEY_LEN];
+        key_bytes.copy_from_slice(&plain);
         Ok(Self {
-            key,
+            key: key_bytes,
             id: wrapped.key_id,
         })
     }
@@ -256,48 +264,13 @@ impl MasterKey {
 // Helpers internes
 // ─────────────────────────────────────────────────────────────────────────────
 
-type HmacSha256 = Hmac<Sha256>;
-
-fn derive_wrap_keys(passphrase: &[u8], salt: &[u8; 32]) -> ExofsResult<([u8; 32], [u8; 32])> {
-    if passphrase.is_empty() {
-        return Err(ExofsError::InvalidArgument);
-    }
-    let stretched = KeyDerivation::derive_from_passphrase_default(passphrase, salt)?;
-    let (enc, mac) =
-        kdf::derive_enc_mac_keys(stretched.as_bytes(), Some(b"ExoFS-master-key-wrap-v1"))
-            .map_err(|_| ExofsError::InvalidArgument)?;
-    Ok((*enc.as_bytes(), *mac.as_bytes()))
-}
-
-fn compute_wrap_mac(
-    magic: u32,
-    key_id: MasterKeyId,
-    salt: &[u8; 32],
-    ciphertext: &[u8; 32],
-    mac_key: &[u8; 32],
-) -> ExofsResult<[u8; 32]> {
-    let mut data: Vec<u8> = Vec::new();
-    data.try_reserve(4 + 8 + 32 + 32)
-        .map_err(|_| ExofsError::NoMemory)?;
-    data.extend_from_slice(&magic.to_le_bytes());
-    data.extend_from_slice(&key_id.0.to_le_bytes());
-    data.extend_from_slice(salt);
-    data.extend_from_slice(ciphertext);
-
-    let mut mac = HmacSha256::new_from_slice(mac_key).map_err(|_| ExofsError::InvalidArgument)?;
-    mac.update(&data);
-    let tag = mac.finalize().into_bytes();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&tag);
-    Ok(out)
-}
-
-fn constant_time_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut d = 0u8;
-    for i in 0..32 {
-        d |= a[i] ^ b[i];
-    }
-    d == 0
+/// AAD du wrap : magic (4) || key_id (8). Lie les métadonnées publiques au
+/// chiffré (empêche le rejeu/échange d'enveloppes).
+fn wrap_aad(magic: u32, key_id: MasterKeyId) -> [u8; 12] {
+    let mut aad = [0u8; 12];
+    aad[..4].copy_from_slice(&magic.to_le_bytes());
+    aad[4..12].copy_from_slice(&key_id.0.to_le_bytes());
+    aad
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,9 +318,15 @@ mod tests {
     }
 
     #[test]
-    fn test_wrap_uses_separate_enc_and_mac_keys() {
-        let (enc, mac) = derive_wrap_keys(b"passphrase", &[0x5Au8; 32]).test_unwrap();
-        assert_ne!(enc, mac);
+    fn test_wrap_uses_fresh_salt_and_nonce_per_call() {
+        // FIX-F7 : chaque wrap tire un salt + nonce aléatoires → deux wraps de la
+        // MÊME clé produisent des enveloppes différentes (pas de réutilisation).
+        let mk = MasterKey::generate().test_unwrap();
+        let w1 = mk.wrap_with_passphrase(b"pw").test_unwrap();
+        let w2 = mk.wrap_with_passphrase(b"pw").test_unwrap();
+        assert_ne!(w1.salt, w2.salt);
+        assert_ne!(w1.nonce, w2.nonce);
+        assert_ne!(w1.ciphertext, w2.ciphertext);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 use super::entropy::ENTROPY_POOL;
 use super::key_derivation::KeyDerivation;
 use super::master_key::MasterKey;
+use super::xchacha20::{Nonce, Tag, XChaCha20Key, XChaCha20Poly1305};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
@@ -21,7 +22,7 @@ pub const VOLUME_KEY_MAGIC: u32 = 0xEF_56_4B_59; // "EFVKY"
 /// Taille d'une clé de volume en octets.
 pub const VOLUME_KEY_LEN: usize = 32;
 /// Taille sérialisée d'une `WrappedVolumeKey`.
-pub const WRAPPED_VK_SIZE: usize = 4 + 8 + 32 + 32 + 32; // magic+vol_id+salt+ct+mac
+pub const WRAPPED_VK_SIZE: usize = 4 + 8 + 32 + 24 + 32 + 16; // magic+vol_id+salt+nonce+ct+tag
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -70,10 +71,12 @@ pub struct WrappedVolumeKey {
     pub volume_id: VolumeId,
     /// Sel de dérivation du KEK.
     pub salt: [u8; 32],
-    /// Texte chiffré XOR.
+    /// Nonce XChaCha20 (192 bits), aléatoire par wrap.
+    pub nonce: [u8; 24],
+    /// Texte chiffré par XChaCha20-Poly1305 (AEAD).
     pub ct: [u8; VOLUME_KEY_LEN],
-    /// MAC d'intégrité.
-    pub mac: [u8; 32],
+    /// Tag d'authentification AEAD (128 bits).
+    pub tag: [u8; 16],
 }
 
 impl WrappedVolumeKey {
@@ -83,8 +86,9 @@ impl WrappedVolumeKey {
         out[..4].copy_from_slice(&self.magic.to_le_bytes());
         out[4..12].copy_from_slice(&self.volume_id.0.to_le_bytes());
         out[12..44].copy_from_slice(&self.salt);
-        out[44..76].copy_from_slice(&self.ct);
-        out[76..108].copy_from_slice(&self.mac);
+        out[44..68].copy_from_slice(&self.nonce);
+        out[68..100].copy_from_slice(&self.ct);
+        out[100..116].copy_from_slice(&self.tag);
         out
     }
 
@@ -105,16 +109,19 @@ impl WrappedVolumeKey {
         ));
         let mut salt = [0u8; 32];
         salt.copy_from_slice(&bytes[12..44]);
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&bytes[44..68]);
         let mut ct = [0u8; 32];
-        ct.copy_from_slice(&bytes[44..76]);
-        let mut mac = [0u8; 32];
-        mac.copy_from_slice(&bytes[76..108]);
+        ct.copy_from_slice(&bytes[68..100]);
+        let mut tag = [0u8; 16];
+        tag.copy_from_slice(&bytes[100..116]);
         Ok(Self {
             magic,
             volume_id,
             salt,
+            nonce,
             ct,
-            mac,
+            tag,
         })
     }
 }
@@ -187,25 +194,28 @@ impl VolumeKey {
         let salt_raw = ENTROPY_POOL.random_bytes(32)?;
         let mut salt = [0u8; 32];
         salt.copy_from_slice(&salt_raw);
+        let nonce_raw = ENTROPY_POOL.random_bytes(24)?;
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&nonce_raw);
 
-        // KEK = HKDF(master_key, salt, "exofs-wrap-vk")
+        // FIX-F7 : KEK = HKDF-BLAKE3(master_key, salt) ; chiffrement AEAD
+        // XChaCha20-Poly1305 (site crypto unique audité) — remplace XOR + HMAC.
         let kek_dk = KeyDerivation::derive_key(master.raw_bytes(), &salt, b"exofs-wrap-vk")?;
-        let kek = kek_dk.as_bytes();
-
-        // Chiffrement XOR.
-        let mut ct = [0u8; VOLUME_KEY_LEN];
-        for i in 0..VOLUME_KEY_LEN {
-            ct[i] = self.key[i] ^ kek[i];
+        let key = XChaCha20Key(*kek_dk.as_bytes());
+        let aad = vk_aad(VOLUME_KEY_MAGIC, self.volume_id);
+        let (ct_vec, tag) = XChaCha20Poly1305::encrypt(&key, &Nonce(nonce), &aad, &self.key)?;
+        if ct_vec.len() != VOLUME_KEY_LEN {
+            return Err(ExofsError::InternalError);
         }
-
-        // MAC.
-        let mac = vk_mac(VOLUME_KEY_MAGIC, self.volume_id, &salt, &ct, kek);
+        let mut ct = [0u8; VOLUME_KEY_LEN];
+        ct.copy_from_slice(&ct_vec);
         Ok(WrappedVolumeKey {
             magic: VOLUME_KEY_MAGIC,
             volume_id: self.volume_id,
             salt,
+            nonce,
             ct,
-            mac,
+            tag: tag.0,
         })
     }
 
@@ -216,23 +226,23 @@ impl VolumeKey {
         }
         let kek_dk =
             KeyDerivation::derive_key(master.raw_bytes(), &wrapped.salt, b"exofs-wrap-vk")?;
-        let kek = kek_dk.as_bytes();
-        let expected = vk_mac(
-            wrapped.magic,
-            wrapped.volume_id,
-            &wrapped.salt,
+        let key = XChaCha20Key(*kek_dk.as_bytes());
+        let aad = vk_aad(wrapped.magic, wrapped.volume_id);
+        let plain = XChaCha20Poly1305::decrypt(
+            &key,
+            &Nonce(wrapped.nonce),
+            &aad,
             &wrapped.ct,
-            kek,
-        );
-        if !ct_eq_32(&expected, &wrapped.mac) {
+            &Tag(wrapped.tag),
+        )
+        .map_err(|_| ExofsError::CorruptedStructure)?;
+        if plain.len() != VOLUME_KEY_LEN {
             return Err(ExofsError::CorruptedStructure);
         }
-        let mut key = [0u8; VOLUME_KEY_LEN];
-        for i in 0..VOLUME_KEY_LEN {
-            key[i] = wrapped.ct[i] ^ kek[i];
-        }
+        let mut key_bytes = [0u8; VOLUME_KEY_LEN];
+        key_bytes.copy_from_slice(&plain);
         Ok(Self {
-            key,
+            key: key_bytes,
             volume_id: wrapped.volume_id,
         })
     }
@@ -242,124 +252,18 @@ impl VolumeKey {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn vk_mac(magic: u32, vid: VolumeId, salt: &[u8; 32], ct: &[u8; 32], mk: &[u8; 32]) -> [u8; 32] {
-    let mut d: Vec<u8> = Vec::new();
-    let _ = d.try_reserve(4 + 8 + 32 + 32);
-    d.extend_from_slice(&magic.to_le_bytes());
-    d.extend_from_slice(&vid.0.to_le_bytes());
-    d.extend_from_slice(salt);
-    d.extend_from_slice(ct);
-    hmac_sha256_simple(mk, &d)
+/// AAD du wrap : magic (4) || volume_id (8). Lie les métadonnées publiques au
+/// chiffré (empêche le rejeu/échange d'enveloppes).
+fn vk_aad(magic: u32, vid: VolumeId) -> [u8; 12] {
+    let mut aad = [0u8; 12];
+    aad[..4].copy_from_slice(&magic.to_le_bytes());
+    aad[4..12].copy_from_slice(&vid.0.to_le_bytes());
+    aad
 }
 
-fn hmac_sha256_simple(key: &[u8], msg: &[u8]) -> [u8; 32] {
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        let h = sha256_simple(key);
-        k[..32].copy_from_slice(&h);
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let mut ip = [0x36u8; 64];
-    let mut op = [0x5cu8; 64];
-    for i in 0..64 {
-        ip[i] ^= k[i];
-        op[i] ^= k[i];
-    }
-    let mut inn = Vec::new();
-    let _ = inn.try_reserve(64 + msg.len());
-    inn.extend_from_slice(&ip);
-    inn.extend_from_slice(msg);
-    let ih = sha256_simple(&inn);
-    let mut out2 = Vec::new();
-    let _ = out2.try_reserve(96);
-    out2.extend_from_slice(&op);
-    out2.extend_from_slice(&ih);
-    sha256_simple(&out2)
-}
-
-fn sha256_simple(msg: &[u8]) -> [u8; 32] {
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
-    let mut h: [u32; 8] = [
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-        0x5be0cd19,
-    ];
-    let bl = (msg.len() as u64).wrapping_mul(8);
-    let mut p = msg.to_vec();
-    p.push(0x80);
-    while p.len() % 64 != 56 {
-        p.push(0);
-    }
-    p.extend_from_slice(&bl.to_be_bytes());
-    for ch in p.chunks_exact(64) {
-        let mut w = [0u32; 64];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes(ch[i * 4..i * 4 + 4].try_into().unwrap_or([0; 4]));
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] =
-            [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]];
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch2 = (e & f) ^ ((!e) & g);
-            let t1 = hh
-                .wrapping_add(s1)
-                .wrapping_add(ch2)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        h[0] = h[0].wrapping_add(a);
-        h[1] = h[1].wrapping_add(b);
-        h[2] = h[2].wrapping_add(c);
-        h[3] = h[3].wrapping_add(d);
-        h[4] = h[4].wrapping_add(e);
-        h[5] = h[5].wrapping_add(f);
-        h[6] = h[6].wrapping_add(g);
-        h[7] = h[7].wrapping_add(hh);
-    }
-    let mut out = [0u8; 32];
-    for (i, &v) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
-    }
-    out
-}
-
-fn ct_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut d = 0u8;
-    for i in 0..32 {
-        d |= a[i] ^ b[i];
-    }
-    d == 0
-}
+// FIX-F7 : SHA-256 + HMAC bespoke supprimés — le wrap utilise désormais l'AEAD
+// XChaCha20-Poly1305 du site crypto unique (security::crypto). Plus aucune
+// primitive cryptographique réimplémentée à la main dans ce module.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests

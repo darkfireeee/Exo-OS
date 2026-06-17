@@ -83,6 +83,9 @@ hmac             = { workspace = true }
 argon2           = { workspace = true }          # exofs/crypto/key_derivation.rs
 x25519-dalek     = { workspace = true }          # security/crypto/x25519.rs
 ed25519-dalek    = { workspace = true }          # security/crypto/ed25519.rs + code_signing.rs
+# Crypto de chiffrement-at-rest ExoFS, source UNIQUE partagée avec exofs-mkroot
+# (XChaCha20 u32 pur + MAC BLAKE3 + Argon2id — compatible bare-metal, pas de chacha20 crate).
+exo-fscrypt      = { path = "../drivers/storage/fscrypt" }
 
 [dev-dependencies]
 proptest          = { workspace = true }

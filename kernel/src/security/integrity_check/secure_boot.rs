@@ -215,6 +215,12 @@ pub fn disable_enforcement() {
     SECBOOT_ENFORCE.store(false, Ordering::SeqCst);
 }
 
+/// FIX-F6 : vrai si l'enforcement du Secure Boot est actif (refus des binaires
+/// non vérifiés). Exposé pour le rapport de durcissement production.
+pub fn enforcement_enabled() -> bool {
+    SECBOOT_ENFORCE.load(Ordering::Acquire)
+}
+
 /// Retourne le nonce de boot (entropie supplémentaire pour le RNG).
 pub fn boot_nonce() -> Option<[u8; 16]> {
     let state = SECBOOT_STATE.lock();

@@ -30,13 +30,22 @@
 //!   inchangé) — zéro régression sur les volumes non chiffrés.
 
 use super::entropy::ENTROPY_POOL;
-use super::key_derivation::KeyDerivation;
 use super::volume_secret;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use crate::security::crypto::{
-    blake3_hash, xchacha20_poly1305_open, xchacha20_poly1305_seal, xchacha20_xor,
-};
+
+// FIX-F1 : toute la crypto est déléguée au crate **partagé** `exo-fscrypt`
+// (source unique de vérité kernel↔mkfs). Plus aucune primitive crypto locale ici.
+
+/// Mappe une erreur `exo-fscrypt` vers `ExofsError`.
+fn map_fscrypt(e: exo_fscrypt::FsCryptError) -> ExofsError {
+    match e {
+        exo_fscrypt::FsCryptError::EmptyPassphrase => ExofsError::InvalidArgument,
+        exo_fscrypt::FsCryptError::KdfFailure => ExofsError::InternalError,
+        exo_fscrypt::FsCryptError::BadFormat => ExofsError::InvalidMagic,
+        exo_fscrypt::FsCryptError::AuthFailed => ExofsError::PermissionDenied,
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider de KEK
@@ -72,13 +81,7 @@ impl KekSource {
 ///   pilote TPM / mécanisme de scellé n'est câblé (échec honnête).
 pub fn derive_kek(source: KekSource, material: &[u8], salt: &[u8; 32]) -> ExofsResult<[u8; 32]> {
     match source {
-        KekSource::Passphrase => {
-            if material.is_empty() {
-                return Err(ExofsError::InvalidArgument);
-            }
-            let dk = KeyDerivation::derive_from_passphrase_default(material, salt)?;
-            Ok(*dk.as_bytes())
-        }
+        KekSource::Passphrase => exo_fscrypt::derive_kek(material, salt).map_err(map_fscrypt),
         KekSource::TpmSealed | KekSource::SecureBootSealed => {
             // SEAM : brancher ici le descellement TPM (PCR policy) ou la dérivation
             // depuis une mesure Secure Boot. Aucun pilote disponible → REFUS.
@@ -91,70 +94,33 @@ pub fn derive_kek(source: KekSource, material: &[u8], salt: &[u8; 32]) -> ExofsR
 // Wrap / unwrap de la clé de volume (AEAD authentifié — stocké dans le superblock)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VK_WRAP_MAGIC: [u8; 4] = *b"EXVK";
-const VK_WRAP_VERSION: u8 = 1;
-const VK_WRAP_AAD: &[u8] = b"exofs-volume-key-wrap-v1";
+/// Taille sérialisée d'une clé de volume wrappée (format `exo-fscrypt`, 110 o),
+/// destinée au superblock (`_pad1[272]`).
+pub const WRAPPED_VK_LEN: usize = exo_fscrypt::WRAPPED_VK_LEN;
 
-/// Taille sérialisée d'une clé de volume wrappée :
-/// magic(4) + version(1) + source(1) + salt(32) + nonce(24) + ct(32) + tag(16).
-pub const WRAPPED_VK_LEN: usize = 4 + 1 + 1 + 32 + 24 + 32 + 16; // = 110
-
-/// Wrappe une clé de volume `vk` avec une KEK dérivée de `source`/`material`.
-/// Le résultat (110 octets) est destiné au superblock (`_pad1[272]`).
+/// Wrappe une clé de volume `vk` (délègue à `exo-fscrypt`). Le salt et le nonce
+/// sont tirés de l'entropie kernel. `TpmSealed`/`SecureBootSealed` → `NotSupported`.
 pub fn wrap_volume_key(
     vk: &[u8; 32],
     source: KekSource,
     material: &[u8],
 ) -> ExofsResult<[u8; WRAPPED_VK_LEN]> {
-    let salt = ENTROPY_POOL.random_32();
-    let nonce_full = ENTROPY_POOL.random_32();
-    let mut nonce = [0u8; 24];
-    nonce.copy_from_slice(&nonce_full[..24]);
-
-    let kek = derive_kek(source, material, &salt)?;
-
-    let mut ct = *vk;
-    let mut tag = [0u8; 16];
-    xchacha20_poly1305_seal(&kek, &nonce, &mut ct, VK_WRAP_AAD, &mut tag)
-        .map_err(|_| ExofsError::InternalError)?;
-
-    let mut out = [0u8; WRAPPED_VK_LEN];
-    out[0..4].copy_from_slice(&VK_WRAP_MAGIC);
-    out[4] = VK_WRAP_VERSION;
-    out[5] = source as u8;
-    out[6..38].copy_from_slice(&salt);
-    out[38..62].copy_from_slice(&nonce);
-    out[62..94].copy_from_slice(&ct);
-    out[94..110].copy_from_slice(&tag);
-    Ok(out)
+    match source {
+        KekSource::Passphrase => {
+            let salt = ENTROPY_POOL.random_32();
+            let nonce_full = ENTROPY_POOL.random_32();
+            let mut nonce = [0u8; 24];
+            nonce.copy_from_slice(&nonce_full[..24]);
+            exo_fscrypt::wrap_volume_key(vk, material, &salt, &nonce).map_err(map_fscrypt)
+        }
+        KekSource::TpmSealed | KekSource::SecureBootSealed => Err(ExofsError::NotSupported),
+    }
 }
 
-/// Déwrappe une clé de volume depuis sa forme sérialisée + le `material` de la KEK.
-/// Échoue (auth AEAD) si la passphrase/KEK est incorrecte ou les données altérées.
+/// Déwrappe une clé de volume (délègue à `exo-fscrypt`). Échoue (auth AEAD) si la
+/// passphrase est incorrecte ou les données altérées.
 pub fn unwrap_volume_key(wrapped: &[u8], material: &[u8]) -> ExofsResult<[u8; 32]> {
-    if wrapped.len() < WRAPPED_VK_LEN {
-        return Err(ExofsError::InvalidSize);
-    }
-    if wrapped[0..4] != VK_WRAP_MAGIC {
-        return Err(ExofsError::InvalidMagic);
-    }
-    if wrapped[4] != VK_WRAP_VERSION {
-        return Err(ExofsError::NotSupported);
-    }
-    let source = KekSource::from_u8(wrapped[5]).ok_or(ExofsError::InvalidArgument)?;
-    let mut salt = [0u8; 32];
-    salt.copy_from_slice(&wrapped[6..38]);
-    let mut nonce = [0u8; 24];
-    nonce.copy_from_slice(&wrapped[38..62]);
-    let mut ct = [0u8; 32];
-    ct.copy_from_slice(&wrapped[62..94]);
-    let mut tag = [0u8; 16];
-    tag.copy_from_slice(&wrapped[94..110]);
-
-    let kek = derive_kek(source, material, &salt)?;
-    xchacha20_poly1305_open(&kek, &nonce, &mut ct, VK_WRAP_AAD, &tag)
-        .map_err(|_| ExofsError::PermissionDenied)?; // auth fail = mauvaise passphrase
-    Ok(ct)
+    exo_fscrypt::unwrap_volume_key(wrapped, material).map_err(map_fscrypt)
 }
 
 /// FIX-F1 : point d'entrée de **déverrouillage au montage**. Déwrappe la clé de
@@ -186,29 +152,15 @@ pub fn install_volume_key_from_wrapped(wrapped: &[u8], passphrase: &[u8]) -> Exo
 /// sécurité). C'est le **point de gating** du chiffrement-at-rest.
 pub fn blob_at_rest_key(blob_id: &BlobId) -> Option<[u8; 32]> {
     let vk = volume_secret::volume_key()?;
-    let dk = KeyDerivation::derive_key(&vk, &blob_id.0, b"exofs-atrest-key-v1").ok()?;
-    Some(*dk.as_bytes())
+    Some(exo_fscrypt::blob_key(&vk, &blob_id.0))
 }
 
-/// Nonce déterministe par (blob, offset disque). Unique car le BlobId est immuable
-/// et chaque offset n'est écrit qu'une fois pour un contenu donné.
-#[inline]
-fn block_nonce(blob_id: &BlobId, disk_offset: u64) -> [u8; 24] {
-    let mut material = [0u8; 40];
-    material[..32].copy_from_slice(&blob_id.0);
-    material[32..40].copy_from_slice(&disk_offset.to_le_bytes());
-    let h = blake3_hash(&material);
-    let mut nonce = [0u8; 24];
-    nonce.copy_from_slice(&h[..24]);
-    nonce
-}
-
-/// Chiffre/déchiffre `buf` en place (involution XOR) pour le blob à `disk_offset`.
-/// `key` provient de [`blob_at_rest_key`]. Longueur inchangée.
+/// Chiffre/déchiffre `buf` en place (involution) pour le blob à `disk_offset`.
+/// `key` provient de [`blob_at_rest_key`]. Longueur inchangée. Délègue à
+/// `exo-fscrypt` (même code que mkfs → cohérence par construction).
 #[inline]
 pub fn xor_block(key: &[u8; 32], blob_id: &BlobId, disk_offset: u64, buf: &mut [u8]) {
-    let nonce = block_nonce(blob_id, disk_offset);
-    xchacha20_xor(key, &nonce, buf);
+    exo_fscrypt::xor_block(key, &blob_id.0, disk_offset, buf);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

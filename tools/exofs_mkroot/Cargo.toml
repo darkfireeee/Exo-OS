@@ -8,3 +8,6 @@ publish.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 pico-args = "0.5"
+# Crypto de chiffrement-at-rest partagée avec le kernel (source unique) → garantit
+# que les volumes chiffrés produits ici sont lisibles par le kernel.
+exo-fscrypt = { path = "../../drivers/storage/fscrypt" }

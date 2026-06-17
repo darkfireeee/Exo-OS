@@ -66,7 +66,14 @@ struct Args {
     image: PathBuf,
     root: PathBuf,
     size: u64,
+    /// FIX-F1 : crée un volume CHIFFRÉ (blobs chiffrés + clé de volume wrappée
+    /// dans le superblock). Requiert `--passphrase`.
+    encrypt: bool,
+    passphrase: Option<String>,
 }
+
+/// Flag incompat ENCRYPTION (doit matcher `incompat_flags::ENCRYPTION` du kernel).
+const INCOMPAT_ENCRYPTION: u64 = 1 << 2;
 
 fn main() {
     if let Err(err) = run() {
@@ -97,29 +104,63 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut image = File::create(&args.image)?;
     image.set_len(args.size)?;
 
-    let mappings = write_payload_blobs(&mut image, args.size, &payloads)?;
+    // FIX-F1 : volume chiffré → générer la clé de volume (VK) et la wrapper
+    // (Argon2id + AEAD via exo-fscrypt) pour stockage dans le superblock.
+    let mut wrapped_vk: Option<[u8; exo_fscrypt::WRAPPED_VK_LEN]> = None;
+    let mut volume_key: Option<[u8; 32]> = None;
+    if args.encrypt {
+        let pw = args.passphrase.as_deref().unwrap_or("");
+        let mut vk = [0u8; 32];
+        vk.copy_from_slice(&random_bytes(32)?);
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&random_bytes(32)?);
+        let mut nonce = [0u8; 24];
+        nonce.copy_from_slice(&random_bytes(24)?);
+        let w = exo_fscrypt::wrap_volume_key(&vk, pw.as_bytes(), &salt, &nonce)
+            .map_err(|e| format!("volume-key wrap failed: {e:?}"))?;
+        wrapped_vk = Some(w);
+        volume_key = Some(vk);
+    }
+
+    let mappings = write_payload_blobs(&mut image, args.size, &payloads, volume_key.as_ref())?;
     write_object_catalog(&mut image, &mappings, args.size)?;
-    write_superblocks(&mut image, args.size, mappings.len() as u64)?;
+    write_superblocks(&mut image, args.size, mappings.len() as u64, wrapped_vk.as_ref())?;
     image.sync_all()?;
 
     println!(
-        "ExoFS root image {}: {} blobs, {} bytes",
+        "ExoFS root image {}: {} blobs, {} bytes{}",
         args.image.display(),
         payloads.len(),
         payloads
             .iter()
             .map(|payload| payload.data.len() as u64)
-            .sum::<u64>()
+            .sum::<u64>(),
+        if args.encrypt { " [CHIFFRÉ]" } else { "" }
     );
     Ok(())
+}
+
+/// Lit `n` octets aléatoires depuis /dev/urandom (environnement de build Linux/WSL).
+fn random_bytes(n: usize) -> Result<Vec<u8>, Box<dyn Error>> {
+    use std::io::Read;
+    let mut f = File::open("/dev/urandom")?;
+    let mut buf = vec![0u8; n];
+    f.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut args = pico_args::Arguments::from_env();
     if args.contains(["-h", "--help"]) {
-        println!("usage: exofs-mkroot --image PATH --size 512M --root DIR");
+        println!(
+            "usage: exofs-mkroot --image PATH --size 512M --root DIR \
+             [--encrypt --passphrase PW]"
+        );
         std::process::exit(0);
     }
+
+    let encrypt = args.contains("--encrypt");
+    let passphrase = args.opt_value_from_str::<_, String>("--passphrase")?;
 
     let image = args
         .opt_value_from_os_str("--image", |value| {
@@ -140,10 +181,16 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
         return Err(format!("unknown argument: {}", remaining[0].to_string_lossy()).into());
     }
 
+    if encrypt && passphrase.is_none() {
+        return Err("--encrypt requires --passphrase".into());
+    }
+
     Ok(Args {
         image,
         root,
         size: parse_size(&raw_size)?,
+        encrypt,
+        passphrase,
     })
 }
 
@@ -395,6 +442,7 @@ fn write_payload_blobs(
     image: &mut File,
     image_size: u64,
     payloads: &[PayloadBlob],
+    enc_vk: Option<&[u8; 32]>,
 ) -> Result<Vec<Mapping>, Box<dyn Error>> {
     let total_blocks = image_size / DEVICE_BLOCK_SIZE;
     let mut next_lba = data_lba_start(total_blocks);
@@ -412,10 +460,30 @@ fn write_payload_blobs(
         let offset = next_lba
             .checked_mul(DEVICE_BLOCK_SIZE)
             .ok_or("byte offset overflow while writing rootfs")?;
-        write_padded(image, offset, &payload.data, blocks * DEVICE_BLOCK_SIZE)?;
+        // BlobId = blake3(chemin) — identique à la convention kernel.
+        let blob_id = blake3_hash(payload.image_path.as_bytes());
+
+        if let Some(vk) = enc_vk {
+            // FIX-F1 : chiffrer chaque bloc de 4096 à son offset logique, EXACTEMENT
+            // comme le chemin de lecture kernel (exo-fscrypt, cohérence garantie).
+            let key = exo_fscrypt::blob_key(vk, &blob_id);
+            let padded = (blocks * DEVICE_BLOCK_SIZE) as usize;
+            let mut buf = vec![0u8; padded];
+            buf[..payload.data.len()].copy_from_slice(&payload.data);
+            let mut pos = 0usize;
+            while pos < padded {
+                let end = (pos + DEVICE_BLOCK_SIZE as usize).min(padded);
+                exo_fscrypt::xor_block(&key, &blob_id, pos as u64, &mut buf[pos..end]);
+                pos = end;
+            }
+            image.seek(SeekFrom::Start(offset))?;
+            image.write_all(&buf)?;
+        } else {
+            write_padded(image, offset, &payload.data, blocks * DEVICE_BLOCK_SIZE)?;
+        }
 
         mappings.push(Mapping {
-            blob_id: blake3_hash(payload.image_path.as_bytes()),
+            blob_id,
             base_lba: next_lba,
             allocated_blocks: blocks,
             size_bytes: payload.data.len() as u64,
@@ -516,8 +584,9 @@ fn write_superblocks(
     image: &mut File,
     image_size: u64,
     object_count: u64,
+    wrapped_vk: Option<&[u8; exo_fscrypt::WRAPPED_VK_LEN]>,
 ) -> Result<(), Box<dyn Error>> {
-    let sb = build_superblock(image_size, object_count)?;
+    let sb = build_superblock(image_size, object_count, wrapped_vk)?;
     for offset in [0, 3 * EXOFS_BLOCK_SIZE, image_size - EXOFS_BLOCK_SIZE] {
         image.seek(SeekFrom::Start(offset))?;
         image.write_all(&sb)?;
@@ -528,6 +597,7 @@ fn write_superblocks(
 fn build_superblock(
     image_size: u64,
     object_count: u64,
+    wrapped_vk: Option<&[u8; exo_fscrypt::WRAPPED_VK_LEN]>,
 ) -> Result<[u8; SUPERBLOCK_SIZE], Box<dyn Error>> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let heap_end = image_size - 2 * EXOFS_BLOCK_SIZE;
@@ -544,10 +614,15 @@ fn build_superblock(
 
     let mut out = [0u8; SUPERBLOCK_SIZE];
     let mut off = 0usize;
+    let incompat = if wrapped_vk.is_some() {
+        INCOMPAT_REQUIRED | INCOMPAT_ENCRYPTION
+    } else {
+        INCOMPAT_REQUIRED
+    };
     put_u32(&mut out, &mut off, EXOFS_MAGIC);
     put_u16(&mut out, &mut off, 1);
     put_u16(&mut out, &mut off, 0);
-    put_u64(&mut out, &mut off, INCOMPAT_REQUIRED);
+    put_u64(&mut out, &mut off, incompat);
     put_u64(&mut out, &mut off, 0);
     put_u64(&mut out, &mut off, image_size);
     put_u64(&mut out, &mut off, HEAP_START_OFFSET);
@@ -570,7 +645,13 @@ fn build_superblock(
     put_u64(&mut out, &mut off, 1);
     put_u64(&mut out, &mut off, 0);
     put_u64(&mut out, &mut off, now);
-    put_bytes(&mut out, &mut off, &[0; 272]);
+    // FIX-F1 : _pad1[272] — les 110 premiers octets contiennent la clé de volume
+    // wrappée (format exo-fscrypt) si le volume est chiffré ; le reste est réservé.
+    let mut pad1 = [0u8; 272];
+    if let Some(w) = wrapped_vk {
+        pad1[..w.len()].copy_from_slice(w);
+    }
+    put_bytes(&mut out, &mut off, &pad1);
     debug_assert_eq!(off, SUPERBLOCK_SIZE - 32);
     let checksum = blake3_hash(&out[..SUPERBLOCK_SIZE - 32]);
     out[SUPERBLOCK_SIZE - 32..].copy_from_slice(&checksum);

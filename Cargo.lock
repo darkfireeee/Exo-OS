@@ -331,6 +331,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-fscrypt"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "blake3",
+]
+
+[[package]]
 name = "exo-init-server"
 version = "0.1.0"
 dependencies = [
@@ -403,6 +411,7 @@ dependencies = [
  "bitflags 2.11.0",
  "blake3",
  "ed25519-dalek",
+ "exo-fscrypt",
  "exo-phoenix-ssr",
  "exo-types",
  "exo-virtio-blk",
@@ -428,6 +437,10 @@ dependencies = [
  "xmas-elf",
  "zerocopy 0.7.35",
 ]
+
+[[package]]
+name = "exo-partition"
+version = "0.1.0"
 
 [[package]]
 name = "exo-phoenix-ssr"
@@ -519,6 +532,7 @@ name = "exofs-mkroot"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "exo-fscrypt",
  "pico-args",
 ]
 

@@ -25,14 +25,14 @@
 
 | ID | Sévérité | Sujet | Fichier | État |
 |----|----------|-------|---------|------|
-| F1 | CRITICAL | Chiffrement-at-rest ExoFS NON câblé sur le chemin réel | `fs/exofs/syscall/object_store.rs:543` | **RESOLVED (mécanisme)** — chiffrement gated + testé e2e ; activation = mkfs+passphrase |
+| F1 | CRITICAL | Chiffrement-at-rest ExoFS NON câblé sur le chemin réel | `fs/exofs/syscall/object_store.rs:543` | **RESOLVED (mécanisme + outillage)** — kernel lit/déchiffre, `mkfs --encrypt` crée des volumes chiffrés, `unlock_encrypted_volume()` ; reste auto-unlock boot (source passphrase) + QEMU #25 |
 | F2 | HIGH | Clé de chiffrement blob dérivée du BlobId **public** | `fs/exofs/storage/blob_writer.rs:502` | **RESOLVED** (requiert secret de volume) |
 | F3 | HIGH | Loader de poids du MLP profond **non authentifié** | `servers/exo_shield/src/ml/mlp.rs:215` | **RESOLVED** (checksum+version) |
 | F4 | HIGH | Modèles ML **non entraînés** (poids LCG seedés) | `servers/exo_shield/src/ml/{mlp,iforest}.rs` | **RESOLVED** (poids entraînés) |
 | F10 | **CRITICAL** | MLP **inerte** : features brutes [0,99] interprétées comme ~0 en Q16.16 | `servers/exo_shield/src/ml/{mlp,ensemble}.rs` | **RESOLVED** (normalisation) |
 | F5 | HIGH | Clés Ed25519 = test vectors RFC 8032 (privées publiques) | `security/integrity_check/code_signing.rs:32` | **RESOLVED** (paire dev réelle) |
-| F6 | MEDIUM | Secure Boot désactivable + exec non-bloquant en dev | `security/integrity_check/secure_boot.rs:214` | À DURCIR (checklist prod) |
-| F7 | LOW | Wrapping clé maître/volume = XOR+HMAC (pas AES-KW) | `fs/exofs/crypto/master_key.rs:202` | DURCISSEMENT |
+| F6 | MEDIUM | Secure Boot désactivable + exec non-bloquant en dev | `security/integrity_check/secure_boot.rs:214` | **RESOLVED** (gate + report testable) |
+| F7 | LOW | Wrapping clé maître/volume = XOR+HMAC (pas AES-KW) | `fs/exofs/crypto/master_key.rs:202` | **RESOLVED** (XChaCha20-Poly1305 AEAD) |
 | F8 | INFO | PKI Root CA éphémère (clé régénérée chaque boot) | `servers/crypto_server/src/pki.rs:658` | DIFFÉRÉ (persistance) |
 | F9 | INFO | KERNEL_SECRET per-boot (OK pour MAC, INTERDIT pour at-rest) | `security/exokairos.rs:695` | NOTE D'ARCHITECTURE |
 
@@ -52,6 +52,9 @@
 | R10 | F4 — Isolation Forest entraîné (seuils fittés) + loader | `servers/exo_shield/src/ml/iforest.rs` |
 | R11 | F2 — clé blob dérivée d'un secret de volume (refus si absent) + module volume_secret | `fs/exofs/crypto/volume_secret.rs`, `fs/exofs/storage/blob_writer.rs` |
 | R12 | F1 — chiffrement-at-rest : provider KEK + wrap/unwrap VK + cipher de bloc + câblage persist/load gated + stockage superblock + déverrouillage montage (testé e2e) | `fs/exofs/crypto/at_rest.rs`, `fs/exofs/syscall/object_store.rs`, `fs/exofs/storage/superblock.rs`, `security/crypto/xchacha20_poly1305.rs` |
+| R13 | F7 — wrap clé maître/volume migré XOR+HMAC → XChaCha20-Poly1305 AEAD ; **SHA-256/HMAC bespoke supprimés** (~115 lignes) | `fs/exofs/crypto/master_key.rs`, `fs/exofs/crypto/volume_key.rs` |
+| R14 | F6 — `production_security_status()` + `warn_if_not_production_hardened()` + `secure_boot::enforcement_enabled()` (testable) | `security/mod.rs`, `security/integrity_check/secure_boot.rs` |
+| R15 | F1-activation — crate partagé **exo-fscrypt** (source unique kernel↔mkfs, XChaCha20 u32 + AEAD BLAKE3 + Argon2id, testé RFC+roundtrip) ; kernel `at_rest` y délègue ; **`exofs-mkroot --encrypt --passphrase`** crée des volumes chiffrés (vérifié : flag ENCRYPTION + clé wrappée + plaintext absent du disque) ; `exofs::unlock_encrypted_volume(passphrase)` (hook montage) | `drivers/storage/fscrypt/`, `fs/exofs/crypto/at_rest.rs`, `tools/exofs_mkroot/`, `fs/exofs/mod.rs` |
 
 ---
 
@@ -431,6 +434,8 @@ Pour être juste — beaucoup est réel et bien câblé :
 | F3 — loader MLP authentifié (checksum+version) | test e2e PASS (checksum Python↔Rust concordant) |
 | F2 — clé blob = secret de volume requis | 15 tests blob storage PASS (round-trip OK) |
 | **F1 — chiffrement-at-rest** (mécanisme complet) | 10 tests at_rest + `persist_then_reload_roundtrip` AVEC chiffrement + `encrypted_volume_key_storage_roundtrip` PASS |
+| **F7 — wrap clé → AEAD** (SHA-256/HMAC bespoke supprimés) | 212 tests crypto PASS (serialise_roundtrip nouveau format, tampered, wrong-passphrase) |
+| **F6 — gate sécurité production** | 81 tests security PASS (2 nouveaux : feature-flag + is_hardened) |
 | Dispatch syscall zero-trust | revue de code (dispatch.rs:185-219) |
 
 ### F1 — activation déploiement restante (hors chemin par défaut)
@@ -446,9 +451,8 @@ sur un volume (n'affecte AUCUN volume existant) :
 
 | Item | Pourquoi reporté |
 |------|------------------|
-| **F6** — enforcement prod | Concerne le **déploiement**, pas un bug de code. Checklist prod documentée (§F6). Warning boot non ajouté : le chemin de boot est fragile (#25), risque > valeur pour un item MEDIUM. |
-| **F7** — wrap clé XOR→AEAD | **Déjà sûr** (KEK pleine longueur, unique par wrap, HMAC). Le changer impose une **migration du format disque** ; durcissement non urgent. |
-| **F8** — PKI Root CA persistante | Nécessite un stockage scellé persistant (infra absente). |
+| **F1 — auto-unlock au boot** | Tout est codé+testé : crate partagé exo-fscrypt (R15), kernel lit/déchiffre, `exofs-mkroot --encrypt` crée des volumes chiffrés, `unlock_encrypted_volume()` déverrouille. Restent UNIQUEMENT : (a) la **source de la passphrase** (param boot `exofs.key=`/TPM — décision déploiement, pas câblée pour éviter une passphrase en dur) ; (b) l'appel auto dans `exofs_init` ; (c) la **vérif QEMU** bloquée par #25. |
+| **F8** — PKI Root CA persistante | Nécessite un **stockage scellé persistant** (le crypto_server devrait écrire sa clé racine wrappée via ExoFS et la relire au boot). Brique de wrap dispo (exo-fscrypt R15) ; reste l'intégration serveur↔FS + #25. |
 
 ### Principe directeur respecté
 

@@ -1,0 +1,17 @@
+[package]
+name = "exo-partition"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish.workspace = true
+
+# Parsing GPT/MBR réel (équivalent de redox-os partitionlib), partagé entre le
+# bootloader (exo-boot) et le kernel/runtime. no_std + alloc, aucune dépendance
+# externe : tout est en Rust pur (CRC32, GUID, structures on-disk).
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[features]
+default = []
