@@ -71,6 +71,26 @@ pub fn register_global_disk(device: Arc<dyn BlockDevice>) -> bool {
     true
 }
 
+/// Clone le handle du disque global actuellement enregistré (le cas échéant).
+///
+/// Utilisé par `partition_scan` pour scanner la table de partitions du disque
+/// brut avant d'éventuellement l'envelopper dans une vue partition.
+pub fn current_global_disk() -> Option<Arc<dyn BlockDevice>> {
+    GLOBAL_DISK.lock().as_ref().map(Arc::clone)
+}
+
+/// Remplace **inconditionnellement** le disque global (contrairement à
+/// `register_global_disk` qui refuse si déjà présent).
+///
+/// Réservé à `partition_scan::resolve_exofs_partition` : enveloppe le disque
+/// déjà enregistré dans une vue partition (`PartitionOffsetDevice`) qui décale
+/// toute l'I/O vers le début de la partition ExoFS ROOT. La fonction de flush
+/// reste enregistrée (elle passe par `with_global_disk`, donc suit le nouveau
+/// device transparemment).
+pub fn replace_global_disk(device: Arc<dyn BlockDevice>) {
+    *GLOBAL_DISK.lock() = Some(device);
+}
+
 static VIRTIO_HAL_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 fn pages_to_order(pages: usize) -> Option<usize> {

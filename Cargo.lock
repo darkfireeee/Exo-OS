@@ -412,6 +412,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "exo-fscrypt",
+ "exo-partition",
  "exo-phoenix-ssr",
  "exo-types",
  "exo-virtio-blk",

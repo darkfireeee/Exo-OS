@@ -93,7 +93,7 @@ pub fn unlock_encrypted_volume(passphrase: &[u8]) -> Result<bool, ExofsError> {
 /// - `ExofsError::AlreadyMounted` si appelée deux fois
 /// - `ExofsError::CorruptSuperblock` si le superblock disque est invalide
 /// - `ExofsError::RecoveryFailed` si la séquence de recovery échoue
-pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
+pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     if EXOFS_INITIALIZED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -117,6 +117,23 @@ pub fn exofs_init(disk_size_bytes: u64) -> Result<(), ExofsError> {
     // Phase de montage du driver block virtio
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
     fsdbg(b'1');
+
+    // FIX-GPT : si le disque est partitionné GPT, localiser la partition ExoFS
+    // ROOT par son type-GUID et décaler toute l'I/O ExoFS vers son LBA de début
+    // (parseur partagé `exo-partition`). ADDITIF : disque brut / MBR legacy / GPT
+    // sans partition ROOT → aucun décalage, le superblock reste lu au LBA 0
+    // (comportement des images mkfs actuelles, zéro régression). Toute erreur de
+    // parsing (CRC/signature) retombe sur LBA 0.
+    if let Some(rp) = crate::fs::exofs::storage::partition_scan::resolve_exofs_partition() {
+        // Le volume ExoFS = partition ROOT : la taille effective (utilisée par le
+        // boot recovery pour borner ses lectures) devient celle de la partition.
+        let bs = crate::fs::exofs::storage::virtio_adapter::current_global_disk()
+            .map(|d| d.block_size() as u64)
+            .unwrap_or(512);
+        disk_size_bytes = rp.sectors.saturating_mul(bs);
+    }
+    fsdbg(b'g');
+
     register_storage_flush_barrier();
     fsdbg(b'2');
 

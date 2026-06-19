@@ -123,6 +123,10 @@ pub mod object_reader;
 pub mod storage_stats;
 pub mod virtio_adapter;
 
+/// Résolution réelle de la partition ExoFS via GPT (parseur partagé `exo-partition`).
+/// Remplace l'hypothèse « disque entier = volume » par une localisation par type-GUID.
+pub mod partition_scan;
+
 // ─────────────────────────────────────────────────────────────
 // Re-exports principaux
 // ─────────────────────────────────────────────────────────────

@@ -20,7 +20,10 @@ panic         = "abort"
 # ─── FEATURES ─────────────────────────────────────────────────────────────────
 [features]
 default      = ["uefi-boot"]
-uefi-boot    = []
+# uefi-boot tire le parseur GPT/MBR partagé (exo-partition) : le chemin UEFI a un
+# allocateur (uefi-services) et un accès Block I/O réel. Le chemin BIOS lit depuis
+# le shadow stage2 (pas d'I/O disque vivante en mode long), donc n'en a pas besoin.
+uefi-boot    = ["dep:exo-partition"]
 bios-boot    = []
 kaslr        = []        # Active KASLR (randomisation adresse kernel)
 secure-boot  = ["dep:ed25519-dalek", "dep:sha2"]  # Active la vérification Ed25519 + SHA-512
@@ -46,6 +49,10 @@ sha2          = { version = "0.10", default-features = false, features = ["force
 
 # Configuration formatage minimal sans std
 arrayvec = { version = "0.7", default-features = false }
+
+# Parseur GPT/MBR réel PARTAGÉ avec le kernel (source unique, équiv. redox
+# partitionlib). no_std + alloc, aucune dépendance externe. Activé par uefi-boot.
+exo-partition = { path = "../drivers/storage/partition", optional = true }
 
 # ─── DÉPENDANCES BUILD ────────────────────────────────────────────────────────
 [build-dependencies]

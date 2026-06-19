@@ -84,3 +84,72 @@ AHCI :
 - NVM Express Base Specification 1.4 (registres CAP/CC/CSTS/AQA, doorbells, PRP).
 - Serial ATA AHCI Specification 1.3.1 (HBA/port, command list, FIS, PRDT).
 - OSDev Wiki (NVMe, AHCI) — schémas d'init de référence.
+
+---
+
+# Table de partitions GPT/MBR — `exo-partition`
+
+> Date : 2026-06-19. Comble le **gros trou** : avant, ExoOS n'avait **aucun**
+> parseur de table de partitions — le LBA de début du volume était **codé en dur**
+> (`KERNEL_PARTITION_LBA_START = 2048` côté bootloader, superblock supposé au LBA 0
+> côté kernel). Équivalent de `redox-os/drivers/storage/partitionlib`.
+
+## Crate `drivers/storage/partition` (`exo-partition`)
+
+`no_std` + `alloc`, **aucune dépendance externe** (CRC-32, GUID, structures
+on-disk en Rust pur). **Source UNIQUE** partagée par le bootloader (`exo-boot`)
+**et** le kernel → impossible que les deux divergent.
+
+| Module | Rôle | Tests |
+|--------|------|-------|
+| `guid.rs` | GUID mixed-endian on-disk + `parse_str` canonique + `Display` ; type-GUIDs ESP / ExoFS ROOT / ExoFS DATA | 3 |
+| `crc32.rs` | CRC-32 IEEE (poly `0xEDB88320`) — validation header + table | 3 |
+| `gpt.rs` | `GptHeader::parse` (signature `EFI PART` + **CRC header**), `validate_table_crc`, `GptPartitionEntry` | 4 |
+| `mbr.rs` | `Mbr::parse` (4 entrées, signature `0xAA55`), détection **MBR protecteur GPT** (`0xEE`) | 3 |
+| `lib.rs` | trait `BlockReader`, `scan()` (GPT primaire → **fallback backup** → MBR legacy), résolution ESP/ROOT/DATA par type-GUID, garde anti-OOM `MAX_GPT_ENTRIES=256` | 4 |
+
+**17 tests** (host) — disque GPT synthétique avec CRC réels, fallback header de
+backup, MBR legacy, rejet signature/CRC corrompus.
+
+## Câblage kernel — `fs/exofs/storage/partition_scan.rs`
+
+Le kernel ne suppose **plus** « disque entier = volume ». Au montage
+(`exofs_init`, après `init_global_disk`, avant le boot recovery) :
+
+1. `scan_root()` enveloppe le `BlockDevice` global dans un `BlockReader` et lance
+   `exo_partition::scan`.
+2. Si — et seulement si — un **GPT valide** contient une partition **ExoFS ROOT**
+   (par type-GUID), le disque global est enveloppé dans un `PartitionOffsetDevice`
+   qui **décale tout l'I/O ExoFS** vers le LBA de début de la partition et **borne**
+   la capacité à la taille de la partition. Le superblock est alors lu au début de
+   la partition, pas au LBA 0 du disque.
+3. **Additif — zéro régression** : disque brut (images mkfs actuelles, superblock
+   au LBA 0), MBR legacy, GPT sans partition ROOT, ou **toute** erreur de parsing
+   (CRC/signature) → **aucun décalage**, comportement LBA 0 inchangé.
+
+**5 tests** (host) : détection ROOT sur GPT, `None` sur disque brut / MBR legacy,
+translation de LBA, write round-trip à travers l'offset.
+
+## Câblage bootloader — `exo-boot/src/disk/gpt.rs` (UEFI)
+
+Adaptateur `BlockReader` sur `EFI_BLOCK_IO_PROTOCOL` (lecture seule, non
+exclusive → pas de conflit avec le driver FAT du firmware). `scan_boot_disk()`
+énumère les disques physiques (Block I/O non-partition) et localise les
+partitions ExoFS par type-GUID. Diagnostic **non fatal** loggé au boot (le kernel
+re-scanne de toute façon). Le chemin UEFI charge le kernel via le protocole
+fichier FAT de l'ESP — le firmware gère déjà le partitionnement pour CE besoin ;
+ce module sert à tracer/valider la table et préparer le passage des LBA ExoFS.
+
+## Vérification GPT
+- `exo-partition` : **17 tests** host (✅).
+- `partition_scan` (kernel) : **5 tests** host + suite storage **190 tests** (✅,
+  zéro régression).
+- Build **bare-metal kernel** `x86_64-unknown-none` (✅) et **exo-boot UEFI**
+  `x86_64-unknown-uefi` (✅).
+- ⚠️ Bout-en-bout QEMU avec disque réellement partitionné GPT : à faire une fois
+  le boot-to-shell réparé (#25). En l'état, les images QEMU sont des volumes ExoFS
+  bruts (pas de GPT) → le chemin LBA 0 reste actif (comportement inchangé).
+
+## Sources spec GPT
+- UEFI Specification 2.x §5.3 (GPT : header, partition entry array, CRC-32).
+- `redox-os/drivers/storage/partitionlib` (référence d'architecture).

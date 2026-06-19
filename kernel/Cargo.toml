@@ -86,6 +86,10 @@ ed25519-dalek    = { workspace = true }          # security/crypto/ed25519.rs + 
 # Crypto de chiffrement-at-rest ExoFS, source UNIQUE partagée avec exofs-mkroot
 # (XChaCha20 u32 pur + MAC BLAKE3 + Argon2id — compatible bare-metal, pas de chacha20 crate).
 exo-fscrypt      = { path = "../drivers/storage/fscrypt" }
+# Parseur GPT/MBR réel (équiv. redox partitionlib), source UNIQUE partagée avec
+# le bootloader — no_std + alloc, aucune dépendance externe. Localise la partition
+# ExoFS ROOT par type-GUID au lieu d'un LBA codé en dur. Cf. storage/partition_scan.rs.
+exo-partition    = { path = "../drivers/storage/partition" }
 
 [dev-dependencies]
 proptest          = { workspace = true }

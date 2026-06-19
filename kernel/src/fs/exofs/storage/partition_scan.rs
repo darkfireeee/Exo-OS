@@ -319,7 +319,8 @@ mod tests {
 
     #[test]
     fn offset_device_translates_lba() {
-        let disk = MemDisk::new(4096);
+        // Disque assez grand pour contenir la partition (base 4096 + 2048 secteurs).
+        let disk = MemDisk::new(8192);
         // Marqueur au LBA physique 4096 (= LBA 0 de la partition).
         disk.put(4096, 0, b"EXOFS-SUPERBLOCK-AT-PARTITION-START");
         let inner: Arc<dyn BlockDevice> = Arc::new(disk);

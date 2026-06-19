@@ -28,6 +28,10 @@
 pub mod bios;
 pub mod config;
 pub mod display;
+// Parsing GPT/MBR réel (parseur partagé `exo-partition`) — chemin UEFI uniquement
+// (Block I/O réel + allocateur). Localise les partitions ExoFS par type-GUID.
+#[cfg(feature = "uefi-boot")]
+pub mod disk;
 pub mod kernel_loader;
 pub mod memory;
 // Le panic handler : en mode UEFI, uefi_services le fournit.
@@ -69,6 +73,22 @@ fn efi_main(
         framebuffer.stride, framebuffer.format, framebuffer.size_bytes,
     );
     boot_println!("Exo-Boot v0.1.0  UEFI {}x{}", framebuffer.width, framebuffer.height);
+
+    // Étape 3b : Diagnostic GPT (NON fatal). Localise les partitions ExoFS par
+    // type-GUID via le parseur PARTAGÉ `exo-partition` (même code que le kernel),
+    // sur EFI_BLOCK_IO en lecture seule. Le kernel re-scanne lui-même au montage
+    // (storage::partition_scan), donc ceci sert à valider la table au boot et à
+    // tracer la disposition réelle — aucune dépendance du flux de boot dessus.
+    match disk::gpt::scan_boot_disk(boot_services, image_handle) {
+        Some(layout) => boot_println!(
+            "GPT: ESP@{:?} ExoFS-ROOT@{:?} ({} sect) ExoFS-DATA@{:?}",
+            layout.esp_lba,
+            layout.root_lba,
+            layout.root_sectors,
+            layout.data_lba
+        ),
+        None => boot_println!("GPT: pas de partition ExoFS reconnue (boot via ESP/FAT)"),
+    }
 
     // Étape 4 : Carte mémoire UEFI
     let uefi_memmap = memory::map::collect_uefi_memory_map(boot_services)
