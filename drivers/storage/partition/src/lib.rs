@@ -9,7 +9,16 @@
 //! Flux : `scan(reader)` lit LBA 0 → si MBR protecteur GPT, parse la GPT (header
 //! primaire, fallback header de **backup** en cas de corruption) ; sinon parse la
 //! table MBR legacy.
+//!
+//! ## Feature `alloc` (activée par défaut)
+//! Les **primitives** de parsing (`crc32`, `guid`, `gpt::GptHeader`/
+//! `GptPartitionEntry`, `mbr::Mbr`) sont **sans allocation** et toujours
+//! disponibles — utilisables dans un contexte no_std **sans allocateur** (ex.
+//! bootloader BIOS). L'**orchestrateur** `scan()` + le trait `BlockReader` +
+//! `PartitionTable` accumulent des `Vec` et sont donc derrière la feature
+//! `alloc` (activée par le kernel et le chemin UEFI). Même parseur partout.
 
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
 pub mod crc32;
@@ -17,18 +26,25 @@ pub mod gpt;
 pub mod guid;
 pub mod mbr;
 
+#[cfg(feature = "alloc")]
 use alloc::vec;
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+#[cfg(feature = "alloc")]
 use gpt::{GptError, GptHeader, GptPartitionEntry};
+#[cfg(feature = "alloc")]
 use guid::{Guid, PartitionType};
+#[cfg(feature = "alloc")]
 use mbr::{Mbr, MbrError};
 
 pub use guid::{GUID_ESP, GUID_EXOOS_DATA, GUID_EXOOS_ROOT};
 
 /// Nombre maximal d'entrées GPT qu'on accepte de lire (garde-fou anti-OOM sur un
 /// header corrompu annonçant des millions d'entrées).
+#[cfg(feature = "alloc")]
 const MAX_GPT_ENTRIES: u32 = 256;
 
+#[cfg(feature = "alloc")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartError {
     Io,
@@ -37,6 +53,7 @@ pub enum PartError {
     TooManyEntries,
 }
 
+#[cfg(feature = "alloc")]
 impl From<GptError> for PartError {
     fn from(e: GptError) -> Self {
         PartError::Gpt(e)
@@ -45,6 +62,7 @@ impl From<GptError> for PartError {
 
 /// Lecteur de blocs abstrait : le bootloader l'implémente sur INT 13h / EFI
 /// BlockIo, le kernel sur le driver block (virtio/NVMe/AHCI).
+#[cfg(feature = "alloc")]
 pub trait BlockReader {
     /// Taille d'un secteur logique (512 ou 4096).
     fn block_size(&self) -> usize;
@@ -55,6 +73,7 @@ pub trait BlockReader {
 }
 
 /// Schéma de partitionnement détecté.
+#[cfg(feature = "alloc")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scheme {
     Gpt,
@@ -62,6 +81,7 @@ pub enum Scheme {
 }
 
 /// Une partition résolue (unifie GPT et MBR).
+#[cfg(feature = "alloc")]
 #[derive(Clone, Copy, Debug)]
 pub struct Partition {
     pub index: usize,
@@ -73,6 +93,7 @@ pub struct Partition {
     pub mbr_type: Option<u8>,
 }
 
+#[cfg(feature = "alloc")]
 impl Partition {
     /// Catégorie ExoOS résolue (GPT uniquement).
     pub fn part_type(&self) -> PartitionType {
@@ -88,12 +109,14 @@ impl Partition {
 }
 
 /// Résultat d'un scan : schéma + partitions utilisées.
+#[cfg(feature = "alloc")]
 pub struct PartitionTable {
     pub scheme: Scheme,
     pub disk_guid: Option<Guid>,
     pub partitions: Vec<Partition>,
 }
 
+#[cfg(feature = "alloc")]
 impl PartitionTable {
     /// Première partition d'une catégorie ExoOS donnée.
     pub fn find(&self, ty: PartitionType) -> Option<&Partition> {
@@ -111,6 +134,7 @@ impl PartitionTable {
 }
 
 /// Lit + valide un header GPT à un LBA donné.
+#[cfg(feature = "alloc")]
 fn read_gpt_header<R: BlockReader>(r: &mut R, lba: u64, bs: usize) -> Result<GptHeader, PartError> {
     let mut block = vec![0u8; bs];
     r.read_lba(lba, &mut block)?;
@@ -118,6 +142,7 @@ fn read_gpt_header<R: BlockReader>(r: &mut R, lba: u64, bs: usize) -> Result<Gpt
 }
 
 /// Lit la table d'entrées + valide son CRC + parse les entrées utilisées.
+#[cfg(feature = "alloc")]
 fn read_gpt_entries<R: BlockReader>(
     r: &mut R,
     h: &GptHeader,
@@ -163,6 +188,7 @@ fn read_gpt_entries<R: BlockReader>(
 }
 
 /// Scanne la table de partitions. GPT (avec fallback backup) sinon MBR legacy.
+#[cfg(feature = "alloc")]
 pub fn scan<R: BlockReader>(r: &mut R) -> Result<PartitionTable, PartError> {
     let bs = r.block_size();
     if bs < 512 {
@@ -218,7 +244,8 @@ pub fn scan<R: BlockReader>(r: &mut R) -> Result<PartitionTable, PartError> {
     })
 }
 
-#[cfg(test)]
+// Tests d'intégration du scanner (utilisent `scan`/`Vec`) → requièrent `alloc`.
+#[cfg(all(test, feature = "alloc"))]
 mod tests {
     use super::*;
     use crate::crc32::crc32;

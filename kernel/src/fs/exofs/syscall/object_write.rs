@@ -10,7 +10,7 @@ use super::object_fd::OBJECT_TABLE;
 use super::object_store;
 use super::quota_query::{check_quota, quota_add_usage, quota_sub_usage};
 use super::validation::{
-    exofs_err_to_errno, read_user_buf, validate_count, validate_fd, validate_offset, verify_cap,
+    exofs_err_to_errno, read_user_buf, validate_count, validate_fd, validate_offset,
     CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;

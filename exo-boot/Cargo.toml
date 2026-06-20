@@ -20,14 +20,18 @@ panic         = "abort"
 # ─── FEATURES ─────────────────────────────────────────────────────────────────
 [features]
 default      = ["uefi-boot"]
-# uefi-boot tire le parseur GPT/MBR partagé (exo-partition) : le chemin UEFI a un
-# allocateur (uefi-services) et un accès Block I/O réel. Le chemin BIOS lit depuis
-# le shadow stage2 (pas d'I/O disque vivante en mode long), donc n'en a pas besoin.
-uefi-boot    = ["dep:exo-partition"]
+# Le parseur GPT/MBR partagé (exo-partition) est TOUJOURS lié : ses primitives
+# (crc32/guid/gpt/mbr) sont sans allocateur → utilisables sur le chemin BIOS
+# (no_std sans heap). uefi-boot active en plus `exo-partition/alloc` (scan() +
+# BlockReader), car le chemin UEFI a un allocateur (uefi-services) + Block I/O.
+uefi-boot    = ["exo-partition/alloc"]
 bios-boot    = []
 kaslr        = []        # Active KASLR (randomisation adresse kernel)
-secure-boot  = ["dep:ed25519-dalek", "dep:sha2"]  # Active la vérification Ed25519 + SHA-512
-dev-skip-sig = []        # Développement uniquement : ignore la signature kernel
+# NOTE : il n'y a PLUS de feature `secure-boot`/`dev-skip-sig`. La vérification
+# Ed25519+SHA-512 (exo-verity) est TOUJOURS compilée et exécutée — elle ne peut
+# pas être « éteinte ». Seule la POLITIQUE (refuser vs avertir un kernel non
+# signé) est configurable, via `secure_boot_required` (exo-boot.cfg) et l'état
+# UEFI Secure Boot. Une image ALTÉRÉE est refusée dans tous les cas.
 
 # ─── DÉPENDANCES UEFI ─────────────────────────────────────────────────────────
 [dependencies]
@@ -43,16 +47,18 @@ x86_64 = { version = "0.15", default-features = false, features = ["instructions
 # Spinlock no_std pour les sections critiques
 spinning_top = { version = "0.3", default-features = false }
 
-# Vérification signature Ed25519 (kernel signing) — actif seulement avec `secure-boot`
-ed25519-dalek = { version = "2", default-features = false, features = ["digest"], optional = true }
-sha2          = { version = "0.10", default-features = false, features = ["force-soft"], optional = true }
+# Vérification de boot Ed25519+SHA-512 PARTAGÉE avec l'outil de signature
+# (tools/kernel_signer) — source UNIQUE du format + de la logique. TOUJOURS liée :
+# la crypto de secure-boot n'est plus optionnelle (fini la « fausse sécurité »).
+exo-verity = { path = "../drivers/security/verity", default-features = false }
 
 # Configuration formatage minimal sans std
 arrayvec = { version = "0.7", default-features = false }
 
 # Parseur GPT/MBR réel PARTAGÉ avec le kernel (source unique, équiv. redox
-# partitionlib). no_std + alloc, aucune dépendance externe. Activé par uefi-boot.
-exo-partition = { path = "../drivers/storage/partition", optional = true }
+# partitionlib). no_std, aucune dépendance externe. Primitives sans allocateur
+# (BIOS) ; `alloc` (scan/BlockReader) activé via la feature uefi-boot.
+exo-partition = { path = "../drivers/storage/partition", default-features = false }
 
 # ─── DÉPENDANCES BUILD ────────────────────────────────────────────────────────
 [build-dependencies]

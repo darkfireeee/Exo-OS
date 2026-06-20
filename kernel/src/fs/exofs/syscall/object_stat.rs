@@ -5,8 +5,7 @@
 use super::object_fd::OBJECT_TABLE;
 use super::object_store;
 use super::validation::{
-    copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap,
-    verify_cap, write_user_struct, CapabilityType, EFAULT, EINVAL,
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap, write_user_struct, CapabilityType, EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};

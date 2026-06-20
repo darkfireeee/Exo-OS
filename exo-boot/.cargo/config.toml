@@ -5,6 +5,10 @@
 #         LLVM "Do not know how to split the result of this operator!" avec les
 #         crates crypto (sha2 / curve25519-dalek) sur ce target non-OS.
 # BIOS : x86_64-unknown-none (cible bare-metal custom)
+#
+# IMPORTANT (exo-verity / ed25519-dalek) : sur nightly 64-bit, curve25519-dalek
+# choisit AUTOMATIQUEMENT le backend `simd` (AVX2), incompatible avec nos cibles
+# sans AVX → erreur LLVM. On FORCE le backend `serial` (u64 pur), comme le kernel.
 
 [target.x86_64-unknown-uefi]
 rustflags = [
@@ -13,6 +17,16 @@ rustflags = [
     "-C", "target-feature=-avx2,-avx,-sse4.2,-sse4.1,-ssse3",
     # Désactive la zone rouge pour les fonctions non-leaf (requis UEFI)
     "-C", "no-redzone=yes",
+    # Force le backend scalaire de curve25519-dalek (pas de SIMD/AVX2).
+    "--cfg", "curve25519_dalek_backend=\"serial\"",
+]
+
+[target.x86_64-unknown-none]
+rustflags = [
+    # Mêmes contraintes pour le chemin BIOS (compile aussi ed25519/curve25519).
+    "-C", "target-feature=-avx2,-avx,-sse4.2,-sse4.1,-ssse3",
+    "-C", "no-redzone=yes",
+    "--cfg", "curve25519_dalek_backend=\"serial\"",
 ]
 
 [build]

@@ -6,8 +6,7 @@ use super::object_fd::{OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
 use super::object_store;
 use super::quota_query::quota_sub_usage;
 use super::validation::{
-    exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap, verify_cap, write_user_struct,
-    CapabilityType, EFAULT,
+    exofs_err_to_errno, kernel_struct_to_bytes, read_user_path_heap, write_user_struct, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;

@@ -94,59 +94,10 @@ pub fn query_secure_boot_status(st: &SystemTable<Boot>) -> SecureBootStatus {
     status
 }
 
-/// Enforce la politique Secure Boot pour exo-boot.
-///
-/// Si `secure_boot_required = true` dans la config :
-///   → Vérifie que le kernel est signé QUEL QUE SOIT l'état UEFI Secure Boot.
-///
-/// Si `secure_boot_required = false` MAIS UEFI Secure Boot est actif en mode enforcing :
-///   → Avertit l'utilisateur mais ne bloque pas (defensive security).
-///
-/// RÈGLE BOOT-02 : la vérification Ed25519 est implémentée dans `kernel_loader/verify.rs`.
-/// Ce module n'en refait pas une copie — délégation stricte.
-pub fn enforce_secure_boot_policy(
-    sb_status:              &SecureBootStatus,
-    kernel_sig_valid:       bool,
-    config_requires_signed: bool,
-) -> Result<(), SecureBootError> {
-    match (sb_status.is_enforcing(), kernel_sig_valid, config_requires_signed) {
-        // Cas 1 : Signature valide — toujours OK
-        (_, true, _) => Ok(()),
-
-        // Cas 2 : Signature invalide + Secure Boot enforcing → BLOCAGE
-        (true, false, _) => Err(SecureBootError::KernelSignatureInvalidSecureBootActive),
-
-        // Cas 3 : Signature invalide + config force vérification → BLOCAGE
-        (false, false, true) => Err(SecureBootError::KernelSignatureInvalidConfigRequired),
-
-        // Cas 4 : Signature invalide + Secure Boot inactif + config permissive → WARNING seul
-        (false, false, false) => {
-            // On ne retourne pas d'erreur mais le caller doit logger l'avertissement
-            Ok(())
-        }
-    }
-}
-
-/// Erreurs Secure Boot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecureBootError {
-    /// Signature kernel invalide alors que UEFI Secure Boot est en mode enforcing.
-    KernelSignatureInvalidSecureBootActive,
-    /// Signature kernel invalide alors que la config exo-boot.cfg requiert une signature valide.
-    KernelSignatureInvalidConfigRequired,
-}
-
-impl core::fmt::Display for SecureBootError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::KernelSignatureInvalidSecureBootActive =>
-                write!(f,
-                    "BOOT-02 VIOLATION : Kernel non signé/signature invalide, \
-                     UEFI Secure Boot actif en mode enforcing — DÉMARRAGE REFUSÉ"),
-            Self::KernelSignatureInvalidConfigRequired =>
-                write!(f,
-                    "BOOT-02 VIOLATION : Kernel non signé/signature invalide, \
-                     secure_boot_required=true dans exo-boot.cfg — DÉMARRAGE REFUSÉ"),
-        }
-    }
-}
+// La POLITIQUE d'enforcement (refuser vs avertir selon le verdict de signature,
+// l'état UEFI Secure Boot et `secure_boot_required`) vit désormais dans
+// `kernel_loader::verify::decide` — partagée par les chemins UEFI ET BIOS, et
+// pilotée par un verdict de signature HONNÊTE (exo-verity), pas par un booléen
+// qui pouvait valoir « valide » sans rien vérifier. Ce module n'expose plus que
+// la LECTURE de l'état UEFI Secure Boot (`query_secure_boot_status`), consommée
+// pour calculer `uefi_sb_enforcing`.

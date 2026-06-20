@@ -20,7 +20,7 @@
 //   • Attestation TCB (Trusted Computing Base)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 /// Paire de clés Ed25519.
 ///
@@ -108,9 +108,20 @@ pub fn ed25519_sign(keypair: &Ed25519KeyPair, message: &[u8]) -> Result<[u8; 64]
     Ok(sig.to_bytes())
 }
 
-/// Vérifie une signature Ed25519.
+/// Vérifie une signature Ed25519 en mode **strict** (RFC 8032 + durcissements).
 ///
 /// Retourne `Ok(())` si la signature est valide, `Err(Ed25519Error::InvalidSignature)` sinon.
+///
+/// # SÉCURITÉ — `verify_strict`, pas `verify`
+/// On utilise **délibérément** `VerifyingKey::verify_strict` et non `verify` :
+/// - **Rejet des clés publiques faibles** (low-order / torsion) : avec une clé
+///   faible, un attaquant peut forger une signature valide pour *n'importe quel*
+///   message. `verify` les accepte ; `verify_strict` les refuse.
+/// - **Anti-malléabilité** : `verify_strict` impose l'encodage canonique de R et
+///   rejette les composantes de torsion (cofacteur 8 de Curve25519). Deux
+///   signatures distinctes ne peuvent donc pas valider le même message.
+/// Pour de la vérification de code/secure-boot (forge = exécution de code non
+/// autorisé), c'est le seul choix correct. Cf. doc ed25519-dalek `verify_strict`.
 pub fn ed25519_verify(
     public_key: &[u8; 32],
     message: &[u8],
@@ -119,7 +130,7 @@ pub fn ed25519_verify(
     let vk = VerifyingKey::from_bytes(public_key).map_err(|_| Ed25519Error::InvalidKey)?;
     let sig = Signature::from_bytes(signature);
 
-    vk.verify(message, &sig)
+    vk.verify_strict(message, &sig)
         .map_err(|_| Ed25519Error::InvalidSignature)
 }
 

@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-rootfs-binaries rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection
+.PHONY: all build build-rootfs-binaries rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -24,6 +24,11 @@ CARGO_BAREMETAL_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-f
 CARGO_USERSPACE_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem -Z json-target-spec
 HOST_TEST_TARGET ?= x86_64-unknown-linux-gnu
 HOST_TEST_OVERRIDES = --target $(HOST_TEST_TARGET)
+
+# Signature kernel (verified boot exo-verity / exo-boot). La clé privée vit dans
+# .secrets/ (gitignored) ; la publique est embarquée dans le bootloader.
+KERNEL_SIGNER_SEED ?= .secrets/kernel_signing.seed
+KERNEL_SIGNER      = $(CARGO) run -q -p exo-kernel-signer --
 
 # Kernel buildé par cargo (dans le workspace target/)
 KERNEL_BIN_DBG  = target/x86_64-unknown-none/debug/exo-os-kernel
@@ -198,6 +203,7 @@ build:
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug)...$(NC)"
 	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
+	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_DBG)
 
 ## 2. Build release du kernel (optimisé, LTO, plus petit)
 release:
@@ -208,6 +214,30 @@ release:
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release)...$(NC)"
 	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
+	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_REL)
+
+# ── Signature kernel (verified boot — exo-verity / exo-boot) ──────────────────
+## Génère la paire de clés de signature kernel (privée → .secrets/, gitignored).
+keygen-kernel:
+	@$(KERNEL_SIGNER) keygen
+
+## Signe l'ELF kernel debug existant (footer EXOSIG01 = Ed25519 sur SHA-512).
+sign-kernel:
+	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_DBG)
+
+## Vérifie la signature de l'ELF kernel debug (retour ≠ 0 si pas Verified).
+verify-kernel:
+	@$(KERNEL_SIGNER) verify $(KERNEL_BIN_DBG)
+
+# Interne : signe $(KERNEL_BIN) si la clé privée existe, sinon avertit (dev permissif).
+_sign_kernel:
+	@if [ -f "$(KERNEL_SIGNER_SEED)" ]; then \
+		echo "$(BLUE)[sign] Signature Ed25519 du kernel : $(KERNEL_BIN)$(NC)"; \
+		$(KERNEL_SIGNER) sign "$(KERNEL_BIN)" || exit 1; \
+	else \
+		echo "$(YELLOW)[sign] Clé absente ($(KERNEL_SIGNER_SEED)) — kernel NON signé (dev permissif).$(NC)"; \
+		echo "$(YELLOW)        Générez-la : make keygen-kernel$(NC)"; \
+	fi
 
 # ── Cible ISO (debug) ─────────────────────────────────────────────────────────
 ## 3. Construire l'image ISO bootable avec GRUB 2 (Multiboot2)

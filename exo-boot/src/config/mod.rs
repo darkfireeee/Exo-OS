@@ -14,6 +14,7 @@ pub use defaults::{BootConfig, ConfigError};
 // ─── Chargement UEFI ─────────────────────────────────────────────────────────
 
 /// Chemin du fichier de configuration sur l'ESP UEFI.
+#[cfg(feature = "uefi-boot")]
 const UEFI_CONFIG_PATH: &str = "\\EFI\\exo-os\\exo-boot.cfg";
 
 /// Charge la configuration depuis l'ESP UEFI.

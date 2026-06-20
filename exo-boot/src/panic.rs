@@ -40,67 +40,32 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     }
     PANIC_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // ── Collecte des informations de panique ───────────────────────────────────
-    let location = info.location();
-    let message  = info.message();
-
-    // ── Tentative d'affichage ──────────────────────────────────────────────────
-    // On tente d'abord UEFI ConOut (disponible avant ExitBootServices),
-    // puis le framebuffer GOP (toujours disponible),
-    // enfin VGA 80×25 en dernier recours.
-    #[cfg(feature = "uefi-boot")]
+    // ── Affichage VGA 80×25 (BIOS legacy) ──────────────────────────────────────
+    // SAFETY : bootloader BIOS mono-cœur pré-kernel — aucun lock tenu, MMIO valide.
     unsafe {
-        try_display_panic_uefi(message, location);
-    }
-
-    #[cfg(feature = "bios-boot")]
-    unsafe {
-        try_display_panic_bios(message, location);
+        try_display_panic_bios(info);
     }
 
     halt_forever()
 }
 
-// ─── Affichage UEFI (utilisé uniquement dans le chemin BIOS via cfg) ─────────
-
-/// Tente d'afficher la panique via les mécanismes UEFI disponibles.
-///
-/// SAFETY : Appelé depuis le panic handler — aucun lock ne peut être tenu.
-/// On accède aux globaux UEFI en mode "best effort" sans verrouillage.
-#[cfg(not(feature = "uefi-boot"))]
-unsafe fn try_display_panic_uefi(
-    message: core::fmt::Arguments<'_>,
-    location: Option<&core::panic::Location<'_>>,
-) {
-    // Écriture via le framebuffer GOP (toujours disponible même après ExitBootServices)
-    if let Some(_fb) = crate::display::framebuffer::try_get_framebuffer() {
-        let mut writer = crate::display::framebuffer::PanicWriter;
-        panic_format_header(&mut writer);
-        let _ = core::fmt::write(&mut writer, message);
-        if let Some(loc) = location {
-            panic_format_location(&mut writer, loc);
-        }
-        panic_format_footer(&mut writer);
-    }
-}
-
 // ─── Affichage BIOS ───────────────────────────────────────────────────────────
 
-/// Affichage via VGA 80×25 en mode texte (BIOS legacy).
+/// Affiche la panique via VGA 80×25 en mode texte (BIOS legacy).
 ///
-/// SAFETY : Accès direct à l'adresse MMIO VGA 0xB8000.
-#[cfg(feature = "bios-boot")]
-unsafe fn try_display_panic_bios(
-    message: core::fmt::Arguments<'_>,
-    location: Option<&core::panic::Location<'_>>,
-) {
-    use crate::bios::vga::{VgaWriter, Color};
+/// `PanicInfo` implémente `Display` (message + localisation), donc un seul
+/// `write!` suffit — pas besoin d'extraire `message()`/`location()` séparément
+/// (l'API `message()` ne renvoie plus `core::fmt::Arguments`).
+///
+/// SAFETY : Accès direct au framebuffer VGA texte (0xB8000) — Ring 0, mono-cœur.
+#[cfg(not(feature = "uefi-boot"))]
+unsafe fn try_display_panic_bios(info: &PanicInfo<'_>) {
+    use crate::bios::vga::{Color, VgaWriter};
+    use core::fmt::Write as _;
     let mut vga = VgaWriter::new_at_row(0, Color::LightRed, Color::Black);
-    let _ = vga.write_str("[EXOBOOT PANIC] ");
-    let _ = core::fmt::write(&mut vga, message);
-    if let Some(loc) = location {
-        let _ = write!(vga, " @ {}:{}", loc.file(), loc.line());
-    }
+    panic_format_header(&mut vga);
+    let _ = write!(vga, "[EXOBOOT PANIC] {}", info);
+    panic_format_footer(&mut vga);
 }
 
 // ─── Helpers formatage ────────────────────────────────────────────────────────
@@ -111,15 +76,6 @@ fn panic_format_header(w: &mut impl core::fmt::Write) {
         "══════════════════════════════════════════════════\n\
          ██  EXO-BOOT PANIC — SYSTÈME HALTÉ               ██\n\
          ══════════════════════════════════════════════════\n",
-    );
-}
-
-#[cfg(not(feature = "uefi-boot"))]
-fn panic_format_location(w: &mut impl core::fmt::Write, loc: &core::panic::Location<'_>) {
-    let _ = write!(
-        w,
-        "\nLocalisation : {}:{}:{}\n",
-        loc.file(), loc.line(), loc.column()
     );
 }
 

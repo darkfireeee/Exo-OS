@@ -5,7 +5,7 @@
 
 use super::relation_create::{encode_relations, Relation, RELATION_MAGIC, RELATION_MAX};
 use super::validation::{
-    copy_kernel_bytes_to_struct, exofs_err_to_errno, verify_cap, write_user_buf, CapabilityType,
+    copy_kernel_bytes_to_struct, exofs_err_to_errno, write_user_buf,
     EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;

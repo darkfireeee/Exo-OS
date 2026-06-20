@@ -100,34 +100,22 @@ fn efi_main(
         boot_services, image_handle, cfg.kernel_path.as_str(),
     ).expect("Impossible de charger le kernel depuis l'ESP");
     boot_println!("Kernel: {} bytes", kernel_data.len());
-    kernel_loader::verify::verify_kernel_or_panic(kernel_data.as_bytes());
 
-    // FIX-AUDIT-V020-P1-3 : appliquer la politique Secure Boot.
-    // enforce_secure_boot_policy() existait mais n'était JAMAIS appelée — la
-    // promesse de config/defaults.rs (« secure_boot_required=true et pas de
-    // Secure Boot → refus ») n'était donc pas tenue. On combine ici l'état UEFI
-    // Secure Boot réel, le verdict de signature et le flag de config. En dev
-    // (secure_boot_required=false + UEFI SB inactif), un kernel non signé passe
-    // avec avertissement ; en prod (flag=true OU UEFI SB enforcing), refus.
+    // RÈGLE BOOT-02 — vérification de signature kernel FAIL-CLOSED (exo-verity).
+    // Politique = secure_boot_required (config) OU UEFI Secure Boot enforcing.
+    //   Verified   → OK ; Tampered → refus TOUJOURS ; Unsigned/NoVerifierKey →
+    //   refus si strict, sinon avertissement (dev). La vérif crypto Ed25519 +
+    //   verify_strict tourne TOUJOURS (plus de stub fail-open).
     {
-        let sb_status = uefi::secure_boot::query_secure_boot_status(&system_table);
-        let kernel_sig_valid =
-            kernel_loader::verify::verify_kernel_signature(kernel_data.as_bytes());
-        match uefi::secure_boot::enforce_secure_boot_policy(
-            &sb_status,
-            kernel_sig_valid,
+        let uefi_sb_enforcing =
+            uefi::secure_boot::query_secure_boot_status(&system_table).is_enforcing();
+        match kernel_loader::verify::enforce_or_panic(
+            kernel_data.as_bytes(),
             cfg.secure_boot_required,
+            uefi_sb_enforcing,
         ) {
-            Ok(()) => {
-                if !kernel_sig_valid {
-                    boot_println!(
-                        "AVERTISSEMENT: kernel non signé accepté (mode dev permissif)"
-                    );
-                } else {
-                    boot_println!("Signature OK");
-                }
-            }
-            Err(e) => panic!("{}", e),
+            None => boot_println!("Signature kernel: verifiee (Ed25519)"),
+            Some(warn) => boot_println!("AVERTISSEMENT: {}", warn),
         }
     }
 
@@ -239,6 +227,9 @@ pub unsafe extern "C" fn exoboot_main_bios(
     e820_buffer_addr: u64,
     e820_entry_count: u32,
 ) -> ! {
+    // `write_str` / `write!` sur VgaWriter requièrent le trait fmt::Write en scope.
+    use core::fmt::Write as _;
+
     let cfg = config::load_config_bios();
 
     let mut vga = bios::vga::VgaWriter::new(bios::vga::Color::White, bios::vga::Color::Black);
@@ -256,7 +247,19 @@ pub unsafe extern "C" fn exoboot_main_bios(
         core::slice::from_raw_parts(STAGE2_DISK_SHADOW_BASE as *const u8, KERNEL_MAX_BYTES)
     };
 
-    kernel_loader::verify::verify_kernel_or_panic(kernel_data);
+    // RÈGLE BOOT-02 — vérification de signature kernel FAIL-CLOSED (exo-verity).
+    // Pas d'UEFI Secure Boot en BIOS → enforcing piloté par secure_boot_required.
+    // Tampered → refus TOUJOURS ; Unsigned → refus si requis, sinon avertissement.
+    match kernel_loader::verify::enforce_or_panic(kernel_data, cfg.secure_boot_required, false) {
+        None => {
+            let _ = vga.write_str("Signature kernel: verifiee (Ed25519)\n");
+        }
+        Some(warn) => {
+            let _ = vga.write_str("AVERTISSEMENT: ");
+            let _ = vga.write_str(warn);
+            let _ = vga.write_str("\n");
+        }
+    }
 
     let entropy = bios::collect_entropy_bios();
 
@@ -278,11 +281,17 @@ pub unsafe extern "C" fn exoboot_main_bios(
 
     static mut BOOT_INFO_BIOS: kernel_loader::handoff::BootInfo =
         kernel_loader::handoff::BootInfo::ZEROED;
-    let boot_info_ref = unsafe { &mut BOOT_INFO_BIOS };
-    *boot_info_ref = kernel_loader::handoff::BootInfo::new();
+    // SAFETY : bootloader BIOS mono-cœur ; BOOT_INFO_BIOS n'est écrit qu'ici. On
+    // passe par un pointeur brut (addr_of_mut!) pour ne pas créer de référence
+    // `&mut` directement sur un `static mut` (lint static_mut_refs).
+    let boot_info_ref = unsafe {
+        let ptr = core::ptr::addr_of_mut!(BOOT_INFO_BIOS);
+        ptr.write(kernel_loader::handoff::BootInfo::new());
+        &mut *ptr
+    };
     boot_info_ref.set_memory_regions(mem_map.regions_slice());
     boot_info_ref.framebuffer          = kernel_loader::handoff::FramebufferInfo::absent();
-    boot_info_ref.acpi_rsdp            = memory::regions::find_acpi_rsdp_bios();
+    boot_info_ref.acpi_rsdp            = memory::regions::find_acpi_rsdp_bios().unwrap_or(0);
     boot_info_ref.entropy              = entropy;
     boot_info_ref.kernel_physical_base = load_result.phys_base;
     boot_info_ref.kernel_entry_offset  = load_result.entry_offset;
@@ -290,6 +299,30 @@ pub unsafe extern "C" fn exoboot_main_bios(
     boot_info_ref.kernel_elf_size      = KERNEL_MAX_BYTES as u64;
     boot_info_ref.boot_flags           = 0;
     boot_info_ref.record_tsc();
+
+    // Validation GPT (cohérence) : parse RÉELLEMENT la table de partitions du
+    // disque (scratch chargé par stage2.asm) avec le parseur PARTAGÉ exo-partition
+    // — mêmes structures que le kernel et le chemin UEFI. La partition ExoFS ROOT
+    // doit commencer au LBA conventionnel utilisé par stage2 pour charger le
+    // kernel. Non fatal : informe seulement.
+    {
+        let layout = bios::disk::scan_partition_table_bios();
+        if layout.gpt_present {
+            match layout.exofs_root_lba {
+                Some(lba) if lba == bios::disk::KERNEL_PARTITION_LBA_START => {
+                    let _ = vga.write_str("GPT: ExoFS ROOT au LBA conventionnel (coherent)\n");
+                }
+                Some(_) => {
+                    let _ = vga.write_str("GPT: AVERTISSEMENT ExoFS ROOT a un LBA != convention stage2\n");
+                }
+                None => {
+                    let _ = vga.write_str("GPT: valide mais sans partition ExoFS ROOT\n");
+                }
+            }
+        } else {
+            let _ = vga.write_str("GPT: absent (MBR legacy ou disque brut) — convention stage2\n");
+        }
+    }
 
     let _ = vga.write_str("Handoff kernel...\n");
 

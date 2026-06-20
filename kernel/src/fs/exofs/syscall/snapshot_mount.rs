@@ -9,7 +9,7 @@ use super::snapshot_create::{
     check_snapshot_magic, snapshot_epoch_from_blob, snapshot_source_size_from_blob,
 };
 use super::validation::{
-    exofs_err_to_errno, kernel_struct_to_bytes, verify_cap, write_user_struct, CapabilityType,
+    exofs_err_to_errno, kernel_struct_to_bytes, write_user_struct, CapabilityType,
     EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;

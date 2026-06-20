@@ -350,7 +350,7 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
 }
 
 #[inline]
-fn sync_kpti_user_fault_mapping(fault_addr: u64, source_cr3: u64) {
+fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
     if !crate::arch::x86_64::spectre::kpti::kpti_enabled() {
         return;
     }

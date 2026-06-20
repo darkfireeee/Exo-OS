@@ -1,0 +1,28 @@
+[package]
+name = "exo-verity"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish.workspace = true
+
+# exo-verity — vérification de boot (verified boot) PARTAGÉE entre le bootloader
+# (exo-boot, no_std) et l'outil de signature (host, std). Source UNIQUE du format
+# de signature kernel et de la logique de vérification → impossible que le
+# signataire et le vérificateur divergent (la classe de bug « clé de test d'un
+# côté, vraie clé de l'autre » ne peut plus exister).
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+# Ed25519 RFC 8032 (mêmes contraintes que le kernel : default-features=false,
+# backend serial via cfg du workspace consommateur pour les cibles sans AVX).
+ed25519-dalek = { version = "2", default-features = false }
+# SHA-512 logiciel (force-soft) : pas de SHA-NI sur x86_64-unknown-none/uefi.
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+
+[features]
+default = []
+# `std` : signature + dérivation de clé publique (outil host de signature kernel).
+std = ["ed25519-dalek/std", "sha2/std"]

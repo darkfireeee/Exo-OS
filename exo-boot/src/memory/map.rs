@@ -26,6 +26,13 @@ use arrayvec::ArrayVec;
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryKind {
+    /// Emplacement **vide / non initialisé** (discriminant 0). Présent pour que
+    /// le zéro-init de `BootInfo` (`new()` via `zeroed`, et la const `ZEROED`)
+    /// produise un `MemoryKind` **valide** — sans cette variante, un tag 0 est une
+    /// valeur d'enum invalide (UB au runtime, et erreur de const-eval E0080).
+    /// Jamais une région exploitable : le kernel ne lit que les
+    /// `memory_region_count` premières entrées, qui ne sont jamais `Empty`.
+    Empty           = 0,
     /// RAM libre — donnée au buddy allocator du kernel.
     Usable          = 1,
     /// Code et données du kernel chargés par le bootloader.
@@ -238,6 +245,7 @@ pub fn collect_uefi_memory_map(
 
 /// Mappe un type mémoire UEFI (EFI_MEMORY_TYPE) vers un MemoryKind Exo-OS.
 /// Basé sur la spec UEFI 2.10 § 7.2 Memory Allocation Services.
+#[cfg(feature = "uefi-boot")]
 fn uefi_type_to_exo_kind(uefi_type: u32) -> MemoryKind {
     match uefi_type {
         0  => MemoryKind::Reserved,          // EfiReservedMemoryType

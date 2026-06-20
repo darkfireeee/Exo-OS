@@ -4,8 +4,7 @@
 //! RECUR-01 / OOM-02 / ARITH-02.
 
 use super::validation::{
-    copy_kernel_bytes_to_struct, copy_struct_from_user, exofs_err_to_errno, kernel_struct_to_bytes,
-    verify_cap, write_user_struct, CapabilityType, EFAULT,
+    copy_kernel_bytes_to_struct, copy_struct_from_user, exofs_err_to_errno, kernel_struct_to_bytes, write_user_struct, CapabilityType, EFAULT,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;

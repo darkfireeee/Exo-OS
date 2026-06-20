@@ -130,25 +130,60 @@ Le kernel ne suppose **plus** « disque entier = volume ». Au montage
 **5 tests** (host) : détection ROOT sur GPT, `None` sur disque brut / MBR legacy,
 translation de LBA, write round-trip à travers l'offset.
 
-## Câblage bootloader — `exo-boot/src/disk/gpt.rs` (UEFI)
+## Feature `alloc` — un parseur, deux mondes (avec/sans heap)
+
+`exo-partition` expose une feature `alloc` (par défaut activée) :
+- **Primitives sans allocation** (`crc32`, `guid`, `gpt::GptHeader`/
+  `GptPartitionEntry`, `mbr::Mbr`) → **toujours** disponibles, utilisables dans un
+  contexte no_std **sans allocateur** (chemin BIOS).
+- **Orchestrateur** `scan()` + trait `BlockReader` + `PartitionTable` (qui
+  accumulent des `Vec`) → derrière `alloc` (kernel + chemin UEFI).
+
+→ **Le même code** parse le GPT/MBR dans le kernel, le bootloader UEFI **et** le
+bootloader BIOS. Aucune divergence possible.
+
+## Câblage bootloader UEFI — `exo-boot/src/disk/gpt.rs`
 
 Adaptateur `BlockReader` sur `EFI_BLOCK_IO_PROTOCOL` (lecture seule, non
 exclusive → pas de conflit avec le driver FAT du firmware). `scan_boot_disk()`
 énumère les disques physiques (Block I/O non-partition) et localise les
-partitions ExoFS par type-GUID. Diagnostic **non fatal** loggé au boot (le kernel
-re-scanne de toute façon). Le chemin UEFI charge le kernel via le protocole
-fichier FAT de l'ESP — le firmware gère déjà le partitionnement pour CE besoin ;
-ce module sert à tracer/valider la table et préparer le passage des LBA ExoFS.
+partitions ExoFS par type-GUID (via `scan()`, allocateur uefi-services).
+Diagnostic **non fatal** loggé au boot. Le firmware gère déjà le partitionnement
+pour charger le kernel (FAT/ESP) ; ce module trace/valide la table.
+
+## Câblage bootloader BIOS — `exo-boot/src/bios/disk.rs` (`scan_partition_table_bios`)
+
+Le chemin BIOS n'a **pas de heap** → il utilise les **primitives sans allocation**
+d'exo-partition (mêmes structures). `stage2.asm` charge LBA 0..33 (MBR + GPT) dans
+un buffer scratch (`GPT_SCRATCH_BASE = 0x60000`, étape 3b) avant le mode long.
+`scan_partition_table_bios()` valide **réellement** signature `EFI PART` + CRC
+header + CRC table, puis localise ExoFS ROOT par type-GUID. Le boot logue la
+cohérence (la partition ROOT doit débuter au LBA conventionnel de stage2).
+
+### Correctif de robustesse (soundness) du contrat BootInfo
+`MemoryKind` (`#[repr(u32)]`, `exo-boot/src/memory/map.rs`) commençait à
+`Usable = 1` **sans variante 0** : le zéro-init de `BootInfo` (`new()` via
+`zeroed`, const `ZEROED`) produisait un tag d'enum **invalide** → UB au runtime
+(BIOS **et** UEFI) + erreur de const-eval E0080 (bloquait la compilation BIOS).
+Ajout d'une sentinelle `Empty = 0` (emplacement de région vide, jamais une région
+exploitable) → zéro-init **valide**, UB corrigée sur les deux chemins.
 
 ## Vérification GPT
-- `exo-partition` : **17 tests** host (✅).
-- `partition_scan` (kernel) : **5 tests** host + suite storage **190 tests** (✅,
-  zéro régression).
-- Build **bare-metal kernel** `x86_64-unknown-none` (✅) et **exo-boot UEFI**
-  `x86_64-unknown-uefi` (✅).
+- `exo-partition` : **17 tests** host, build **avec** et **sans** `alloc` (✅).
+- `partition_scan` (kernel) : **5 tests** + suite storage **190 tests** (✅).
+- Builds propres, **0 warning** : kernel `x86_64-unknown-none`, **exo-boot UEFI**
+  `x86_64-unknown-uefi`, **exo-boot BIOS** `x86_64-unknown-none` (`bios-boot`). Les
+  deux chemins bootloader **compilent réellement** (7 erreurs BIOS pré-existantes
+  corrigées : panic handler, mismatch `acpi_rsdp`, lint `static_mut`, soundness
+  `MemoryKind`).
 - ⚠️ Bout-en-bout QEMU avec disque réellement partitionné GPT : à faire une fois
-  le boot-to-shell réparé (#25). En l'état, les images QEMU sont des volumes ExoFS
-  bruts (pas de GPT) → le chemin LBA 0 reste actif (comportement inchangé).
+  le boot-to-shell réparé (#25). Les images QEMU actuelles sont des volumes ExoFS
+  bruts (pas de GPT) → chemin LBA 0 inchangé.
+- ⚠️ 40 tests d'intégration `fs::exofs::tests::{test_standard,test_stress,
+  integration}` **segfaultent (signal 11) en host** — **pré-existant** (vérifié au
+  commit `5c652dd6` sans les changements de cette session) : chemins simulés
+  DMA/pointeurs incompatibles avec le harness host, lié à #25. **Non causé** par le
+  travail GPT/exo-boot.
 
 ## Sources spec GPT
 - UEFI Specification 2.x §5.3 (GPT : header, partition entry array, CRC-32).

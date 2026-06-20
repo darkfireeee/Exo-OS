@@ -16,13 +16,15 @@
 pub mod elf;
 pub mod handoff;
 pub mod relocations;
+/// Clé publique de signature kernel — GÉNÉRÉE par `tools/kernel_signer keygen`.
+pub mod signing_key;
 pub mod verify;
 
 pub use elf::{ElfKernel, ElfError};
 pub use handoff::{BootInfo, FramebufferInfo, PixelFormat, BOOT_INFO_MAGIC, BOOT_INFO_VERSION,
                   EXOBOOT_MAGIC_U32};
 pub use relocations::{apply_pie_relocations, compute_kaslr_base};
-pub use verify::verify_kernel_or_panic;
+pub use verify::{decide, enforce_or_panic, verify_kernel, BootDecision, KernelVerdict};
 
 
 
@@ -76,8 +78,11 @@ pub unsafe fn load_kernel(
     params:    &KernelLoadParams<'_>,
     phys_dest: u64,
 ) -> Result<KernelLoadResult, KernelLoadError> {
-    // ── 1. Vérification signature ──────────────────────────────────────────
-    verify_kernel_or_panic(params.elf_data);
+    // ── 1. Défense en profondeur : une image ALTÉRÉE n'est jamais chargée ───
+    // La politique complète (refus si non signé en prod, etc.) est appliquée par
+    // l'appelant via `verify::enforce_or_panic` AVANT cet appel ; ici on refait
+    // un contrôle minimal fail-closed contre l'altération (signature invalide).
+    verify::refuse_if_tampered(params.elf_data);
 
     // ── 2. Parse l'ELF ────────────────────────────────────────────────────
     let elf = ElfKernel::parse(params.elf_data)

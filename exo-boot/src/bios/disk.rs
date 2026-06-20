@@ -206,3 +206,108 @@ impl core::fmt::Display for DiskError {
         }
     }
 }
+
+// ─── Parsing GPT/MBR (chemin BIOS, sans allocateur) ───────────────────────────
+//
+// Le chemin BIOS n'a pas de heap : on n'utilise donc PAS `exo_partition::scan`
+// (qui accumule des `Vec`), mais les **primitives** sans allocation
+// (`GptHeader::parse`, `GptPartitionEntry::parse`, `Mbr::parse`) — exactement les
+// mêmes structures que le kernel et le chemin UEFI (source unique exo-partition).
+// stage2.asm charge LBA 0..33 (MBR + GPT) dans GPT_SCRATCH_BASE avant le mode long.
+
+/// Base physique du scratch GPT/MBR rempli par stage2.asm (LBA 0..33).
+/// DOIT correspondre à `GPT_SCRATCH_BASE` dans stage2.asm.
+#[cfg(feature = "bios-boot")]
+pub const GPT_SCRATCH_BASE: usize = 0x0006_0000;
+
+/// Nombre de secteurs chargés dans le scratch (MBR + header GPT + 32 d'entrées).
+#[cfg(feature = "bios-boot")]
+pub const GPT_SCRATCH_SECTORS: usize = 34;
+
+/// Disposition ExoFS découverte sur le disque de boot BIOS.
+#[cfg(feature = "bios-boot")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BiosExofsLayout {
+    /// Vrai si un GPT valide (signature + CRC header + CRC table) a été trouvé.
+    pub gpt_present: bool,
+    /// LBA de début de la partition ExoFS ROOT (si présente dans le GPT).
+    pub exofs_root_lba: Option<u64>,
+    /// Nombre de secteurs de la partition ExoFS ROOT.
+    pub exofs_root_sectors: u64,
+}
+
+/// Parse la table de partitions du disque de boot depuis le scratch chargé par
+/// stage2.asm — **réellement** (signature `EFI PART` + CRC header + CRC table
+/// validés), **sans allocation**. Retourne la partition ExoFS ROOT si le disque
+/// est GPT et la contient.
+///
+/// Sert à **valider la cohérence** du layout : la partition kernel/ExoFS ROOT doit
+/// commencer au LBA conventionnel [`KERNEL_PARTITION_LBA_START`]. Non fatal : un
+/// disque non-GPT, une signature absente ou un CRC invalide retourne simplement
+/// `gpt_present = false` (le boot continue via la convention stage2).
+#[cfg(feature = "bios-boot")]
+pub fn scan_partition_table_bios() -> BiosExofsLayout {
+    use exo_partition::gpt::{GptHeader, GptPartitionEntry};
+    use exo_partition::guid::PartitionType;
+    use exo_partition::mbr::Mbr;
+
+    let mut out = BiosExofsLayout::default();
+
+    // SAFETY : zone scratch remplie par stage2.asm (LBA 0..33) avant le mode long.
+    let scratch: &[u8] = unsafe {
+        core::slice::from_raw_parts(
+            GPT_SCRATCH_BASE as *const u8,
+            GPT_SCRATCH_SECTORS * SECTOR_SIZE,
+        )
+    };
+
+    // LBA 0 : on exige un MBR protecteur GPT (type 0xEE) pour parser la GPT.
+    let mbr = match Mbr::parse(&scratch[0..SECTOR_SIZE]) {
+        Ok(m) => m,
+        Err(_) => return out,
+    };
+    if !mbr.is_protective_gpt() {
+        return out;
+    }
+
+    // LBA 1 : header GPT (signature + CRC header validés par parse()).
+    let header = match GptHeader::parse(&scratch[SECTOR_SIZE..2 * SECTOR_SIZE]) {
+        Ok(h) => h,
+        Err(_) => return out,
+    };
+
+    // Table d'entrées : à partir de `partition_entry_lba` (typiquement LBA 2).
+    let entry_size = header.sizeof_partition_entry as usize;
+    let num = header.num_partition_entries as usize;
+    if entry_size < 128 || num == 0 || num > 256 {
+        return out;
+    }
+    let table_off = (header.partition_entry_lba as usize) * SECTOR_SIZE;
+    let table_len = num.saturating_mul(entry_size);
+    let table_end = table_off.saturating_add(table_len);
+    if table_end > scratch.len() {
+        return out; // table hors du scratch chargé → abandon prudent.
+    }
+    let table = &scratch[table_off..table_end];
+
+    // Validation CRC RÉELLE de la table (intégrité, pas un checksum optimiste).
+    if header.validate_table_crc(table).is_err() {
+        return out;
+    }
+    out.gpt_present = true;
+
+    // Localise la partition ExoFS ROOT par type-GUID.
+    let mut idx = 0usize;
+    while idx < num {
+        let off = idx * entry_size;
+        if let Ok(e) = GptPartitionEntry::parse(&table[off..off + 128]) {
+            if e.is_used() && e.type_guid.partition_type() == PartitionType::ExoFsRoot {
+                out.exofs_root_lba = Some(e.start_lba);
+                out.exofs_root_sectors = e.sectors();
+                break;
+            }
+        }
+        idx += 1;
+    }
+    out
+}

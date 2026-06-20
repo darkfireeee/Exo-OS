@@ -1,204 +1,179 @@
-//! verify.rs — Vérification de signature Ed25519 du kernel.
+//! verify.rs — Vérification de signature kernel (Ed25519) **fail-closed**.
 //!
-//! RÈGLE BOOT-02 (DOC10) :
-//!   "Signature Ed25519 vérifiée AVANT tout chargement du kernel.
-//!    Clé publique intégrée dans le binaire du bootloader."
+//! RÈGLE BOOT-02 : signature vérifiée AVANT tout chargement.
 //!
-//! Processus de vérification :
-//!   1. La signature est stockée dans les 256 derniers bytes de l'image ELF.
-//!   2. Le message signé = SHA-512(image ELF sans signature).
-//!   3. Vérification avec ed25519-dalek.
+//! Ce module est un **adaptateur mince** sur la crate partagée [`exo_verity`] :
+//! le format de signature et la logique de vérification sont définis une seule
+//! fois et utilisés à l'identique par l'outil de signature (`tools/kernel_signer`)
+//! et par le bootloader → aucune divergence possible.
 //!
-//! Si la vérification échoue : PANIC immédiat (BOOT-02 est bloquant).
-//!
-//! COMPILATION :
-//!   - Feature `secure-boot`  : vérification complète Ed25519 + SHA-512.
-//!   - Feature `dev-skip-sig` : vérification tentée mais non-bloquante.
-//!   - Ni l'un ni l'autre     : vérification structurelle uniquement (marqueur).
-//!
-//! CLÉS : La clé publique est intégrée via `include_bytes!()`.
-//!   Pour le développement, une clé de test est utilisée.
+//! # Ce qui a changé (FIX-DEEP-CRYPTO) vs l'ancien code
+//! - **Plus de stub fail-open** : l'ancien chemin « sans secure-boot » renvoyait
+//!   `Ok`/`true` pour n'importe quel kernel → « signature valide » était un
+//!   mensonge. Désormais le verdict est honnête ([`KernelVerdict`]).
+//! - **Crypto toujours compilée** : Ed25519+SHA-512 ne sont plus derrière une
+//!   feature qui les éteint. Seule la *politique* (refuser vs avertir) est
+//!   configurable.
+//! - **Vraie clé** : la clé publique embarquée est générée par `kernel_signer`
+//!   (`signing_key.rs`), pas un vecteur de test. Garde de compilation ci-dessous.
+//! - **`verify_strict`** (dans `exo_verity`) : anti-clé-faible + anti-malléabilité.
+//! - **Altéré ≠ non signé** : une image *altérée* est refusée **même en dev**.
 
-// ─── Constantes de signature (toujours compilées) ────────────────────────────
+use super::signing_key::KERNEL_SIGNING_PUBLIC_KEY;
+pub use exo_verity::KernelVerdict;
 
-/// Taille d'une signature Ed25519 en bytes.
-pub const SIGNATURE_SIZE: usize = 64;
-
-/// Marqueur de début de section signature (8 bytes, vérifié par le loader).
-pub const SIGNATURE_MARKER: [u8; 8] = *b"EXOSIG01";
-
-/// Taille totale de la structure KernelSignature (fixe, ABI stable).
-pub const KERNEL_SIG_STRUCT_SIZE: usize = 256;
-
-// ─── Structure de signature (toujours compilée — layout ABI) ─────────────────
-
-/// Signature attachée à une image kernel.
-/// Placée à la fin de l'image ELF, dans la section `.kernel_sig`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct KernelSignature {
-    /// Marqueur d'identification de la section signature.
-    pub marker:    [u8; 8],
-    /// Signature Ed25519 (64 bytes).
-    pub signature: [u8; SIGNATURE_SIZE],
-    /// Hash SHA-512 du kernel (pour vérification rapide sans re-hash).
-    pub sha512:    [u8; 64],
-    /// Padding pour alignement à 256 bytes.
-    pub _pad:      [u8; 120],
-}
-
+/// Garde de COMPILATION : le bootloader ne compile pas si la clé embarquée est
+/// nulle ou un vecteur de test connu. La « fausse sécurité » ne peut pas revenir.
 const _: () = assert!(
-    core::mem::size_of::<KernelSignature>() == KERNEL_SIG_STRUCT_SIZE,
-    "KernelSignature doit faire 256 bytes"
+    exo_verity::key_is_usable(&KERNEL_SIGNING_PUBLIC_KEY),
+    "KERNEL_SIGNING_PUBLIC_KEY inexploitable (nulle/vecteur de test) — \
+     régénérez : cargo run -p exo-kernel-signer -- keygen --force"
 );
 
-// ─── Erreurs (toujours compilées) ─────────────────────────────────────────────
-
-#[derive(Debug)]
-pub enum VerifyError {
-    /// Clé publique invalide dans le binaire bootloader.
-    InvalidPublicKey,
-    /// Image trop petite pour contenir une signature.
-    ImageTooSmall { size: usize },
-    /// Pas de section signature dans l'image.
-    MissingSignature { found_marker: [u8; 8] },
-    /// Hash SHA-512 ne correspond pas.
-    HashMismatch,
-    /// Signature Ed25519 invalide.
-    SignatureMismatch,
-    /// Vérification non disponible (secure-boot feature inactive).
-    Unavailable,
-}
-
-impl core::fmt::Display for VerifyError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::InvalidPublicKey    => write!(f, "Clé publique intégrée invalide"),
-            Self::ImageTooSmall { size } => write!(f, "Image trop petite : {} bytes", size),
-            Self::MissingSignature { found_marker } =>
-                write!(f, "Section signature absente (marqueur: {:02X?})", found_marker),
-            Self::HashMismatch        => write!(f, "Hash SHA-512 du kernel incorrect"),
-            Self::SignatureMismatch   => write!(f, "Signature Ed25519 invalide"),
-            Self::Unavailable         => write!(f, "Feature secure-boot inactive"),
-        }
-    }
-}
-
-// ─── Implémentation avec vérification complète (feature = "secure-boot") ─────
-
-#[cfg(feature = "secure-boot")]
-mod secure_impl {
-    use super::*;
-    use ed25519_dalek::{Signature, VerifyingKey, Verifier};
-    use sha2::{Sha512, Digest};
-
-    /// Clé publique Ed25519 pour la vérification du kernel.
-    /// PRODUCTION : Remplacer par include_bytes!("../../../keys/kernel_signing_pub.raw")
-    static KERNEL_SIGNING_PUBLIC_KEY: &[u8; 32] = &[
-        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
-        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0x44,
-        0xda, 0xe8, 0x86, 0x0d, 0x30, 0x68, 0xd4, 0x96,
-        0x97, 0xf4, 0x3d, 0xfb, 0x7f, 0xed, 0xce, 0x08,
-    ];
-
-    pub fn verify_full(image: &[u8]) -> Result<(), VerifyError> {
-        if image.len() < KERNEL_SIG_STRUCT_SIZE {
-            return Err(VerifyError::ImageTooSmall { size: image.len() });
-        }
-
-        let sig_offset  = image.len() - KERNEL_SIG_STRUCT_SIZE;
-        let kernel_data = &image[..sig_offset];
-        let sig_bytes   = &image[sig_offset..];
-
-        let kernel_sig: KernelSignature = unsafe {
-            core::ptr::read_unaligned(sig_bytes.as_ptr() as *const KernelSignature)
-        };
-
-        if kernel_sig.marker != SIGNATURE_MARKER {
-            return Err(VerifyError::MissingSignature { found_marker: kernel_sig.marker });
-        }
-
-        let mut hasher = Sha512::new();
-        hasher.update(kernel_data);
-        let digest = hasher.finalize();
-
-        if digest.as_slice() != &kernel_sig.sha512 {
-            return Err(VerifyError::HashMismatch);
-        }
-
-        let key = VerifyingKey::from_bytes(KERNEL_SIGNING_PUBLIC_KEY)
-            .map_err(|_| VerifyError::InvalidPublicKey)?;
-        let sig = Signature::from_bytes(&kernel_sig.signature);
-        key.verify(digest.as_slice(), &sig).map_err(|_| VerifyError::SignatureMismatch)
-    }
-}
-
-// ─── Implémentation légère sans crypto (feature = "secure-boot" inactive) ────
-
-#[cfg(not(feature = "secure-boot"))]
-mod secure_impl {
-    use super::*;
-
-    /// Vérification structurelle uniquement : présence du marqueur.
-    pub fn verify_full(image: &[u8]) -> Result<(), VerifyError> {
-        if image.len() < KERNEL_SIG_STRUCT_SIZE {
-            return Err(VerifyError::ImageTooSmall { size: image.len() });
-        }
-        let sig_offset = image.len() - KERNEL_SIG_STRUCT_SIZE;
-        let sig_bytes  = &image[sig_offset..];
-
-        let kernel_sig: KernelSignature = unsafe {
-            core::ptr::read_unaligned(sig_bytes.as_ptr() as *const KernelSignature)
-        };
-
-        if kernel_sig.marker != SIGNATURE_MARKER {
-            // Sans secure-boot : acceptable (kernel non signé = dev mode)
-            return Ok(());
-        }
-
-        // Marqueur présent mais pas de vérification crypto → Ok en dev
-        Ok(())
-    }
-}
-
-// ─── Point d'entrée public ────────────────────────────────────────────────────
-
-/// Vérifie le kernel et PANIC en cas d'échec.
+/// Vérifie l'image kernel contre la clé embarquée. Ne panique pas, n'alloue pas.
 ///
-/// RÈGLE BOOT-02 : Appelé AVANT tout chargement.
-/// - Avec `secure-boot` : vérification complète Ed25519 + SHA-512 (bloquante).
-/// - Avec `dev-skip-sig` : vérification tentée, kernel non-signé accepté.
-/// - Sans les deux : vérification de marqueur uniquement.
-pub fn verify_kernel_or_panic(image: &[u8]) {
-    match secure_impl::verify_full(image) {
-        Ok(()) => { /* OK */ }
-
-        #[cfg(feature = "dev-skip-sig")]
-        Err(VerifyError::MissingSignature { .. }) => {
-            // Dev : kernel non signé accepté
+/// Fonctionne pour les deux chemins :
+/// - **UEFI** : `image` = le fichier signé exact (footer en toute fin) → vérif
+///   directe.
+/// - **BIOS** : `image` = la fenêtre shadow (64 MiB, footer PAS en fin de
+///   tampon) → on localise le footer juste après la fin réelle du fichier ELF
+///   (calculée depuis les en-têtes), puis on vérifie la tranche correspondante.
+pub fn verify_kernel(image: &[u8]) -> KernelVerdict {
+    // 1. Cas exact (image == fichier signé) : footer aux 256 derniers octets.
+    let v = exo_verity::verify_image(image, &KERNEL_SIGNING_PUBLIC_KEY);
+    // Verified / Tampered / NoVerifierKey sont définitifs ; seul Unsigned (pas de
+    // marqueur à la fin du tampon) justifie de chercher plus loin (cas BIOS).
+    if v != KernelVerdict::Unsigned {
+        return v;
+    }
+    // 2. Cas tampon large (BIOS) : footer juste après la fin du fichier ELF.
+    if let Some(signed_end) = elf_signed_end(image) {
+        if signed_end <= image.len() {
+            return exo_verity::verify_image(&image[..signed_end], &KERNEL_SIGNING_PUBLIC_KEY);
         }
+    }
+    KernelVerdict::Unsigned
+}
 
-        Err(e) => {
-            #[cfg(feature = "secure-boot")]
-            panic!("BOOT-02: Vérification signature kernel ÉCHOUÉE : {}\n\
-                    Le kernel peut avoir été compromis. Boot annulé.", e);
+/// Fin du fichier signé dans un tampon = fin réelle de l'ELF64 + footer (256 o).
+/// Lit les en-têtes ELF64 (programme + sections) pour déterminer l'octet de fin
+/// du fichier. Bornes vérifiées ; `None` si l'en-tête ELF est invalide/tronqué.
+fn elf_signed_end(buf: &[u8]) -> Option<usize> {
+    elf_file_end(buf)?.checked_add(exo_verity::SIG_FOOTER_SIZE)
+}
 
-            #[cfg(not(feature = "secure-boot"))]
-            let _ = e; // En dev sans secure-boot, ne pas bloquer
+fn rd_u16(b: &[u8], off: usize) -> Option<u16> {
+    Some(u16::from_le_bytes([*b.get(off)?, *b.get(off + 1)?]))
+}
+fn rd_u64(b: &[u8], off: usize) -> Option<u64> {
+    let s = b.get(off..off + 8)?;
+    Some(u64::from_le_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
+}
+
+/// Octet de fin du fichier ELF64 (max des fins de tables/segments).
+fn elf_file_end(b: &[u8]) -> Option<usize> {
+    // En-tête ELF64 minimal (64 octets) + magic.
+    if b.len() < 64 || &b[0..4] != b"\x7FELF" || b[4] != 2 {
+        return None; // pas un ELF64
+    }
+    let phoff = rd_u64(b, 0x20)?;
+    let shoff = rd_u64(b, 0x28)?;
+    let phentsize = rd_u16(b, 0x36)? as u64;
+    let phnum = rd_u16(b, 0x38)? as u64;
+    let shentsize = rd_u16(b, 0x3A)? as u64;
+    let shnum = rd_u16(b, 0x3C)? as u64;
+
+    let mut end: u64 = 64; // au moins l'en-tête ELF
+    end = end.max(phoff.checked_add(phnum.checked_mul(phentsize)?)?);
+    end = end.max(shoff.checked_add(shnum.checked_mul(shentsize)?)?);
+
+    // Fin de chaque segment de programme (p_offset + p_filesz), borné par phnum.
+    let phnum_capped = phnum.min(256); // garde-fou anti-en-tête corrompu
+    let mut i = 0u64;
+    while i < phnum_capped {
+        let ph = (phoff + i * phentsize) as usize;
+        let p_offset = rd_u64(b, ph + 0x08)?;
+        let p_filesz = rd_u64(b, ph + 0x20)?;
+        end = end.max(p_offset.checked_add(p_filesz)?);
+        i += 1;
+    }
+    usize::try_from(end).ok()
+}
+
+/// Décision de boot dérivée d'un verdict + de la politique d'enforcement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootDecision {
+    /// Image vérifiée — continuer.
+    Proceed,
+    /// Continuer mais avertir (mode dev permissif). Le message est à logger.
+    ProceedWithWarning(&'static str),
+    /// Refuser le démarrage (fail-closed). Le message explique pourquoi.
+    Refuse(&'static str),
+}
+
+/// Applique la politique de boot à un verdict.
+///
+/// - `require_signed`     : `secure_boot_required` de la config exo-boot.cfg.
+/// - `uefi_sb_enforcing`  : UEFI Secure Boot actif en mode enforcing (false en BIOS).
+///
+/// Règles (fail-closed) :
+/// - **Verified**       → toujours OK.
+/// - **Tampered**       → **toujours refusé** (signal d'attaque, même en dev).
+/// - **NoVerifierKey**  → refusé si signature requise/SB enforcing ; sinon averti.
+/// - **Unsigned**       → refusé si signature requise/SB enforcing ; sinon averti.
+pub fn decide(verdict: KernelVerdict, require_signed: bool, uefi_sb_enforcing: bool) -> BootDecision {
+    let strict = require_signed || uefi_sb_enforcing;
+    match verdict {
+        KernelVerdict::Verified => BootDecision::Proceed,
+        KernelVerdict::Tampered => {
+            BootDecision::Refuse("image kernel ALTEREE (signature presente mais invalide)")
+        }
+        KernelVerdict::NoVerifierKey => {
+            if strict {
+                BootDecision::Refuse("aucune cle de verification exploitable")
+            } else {
+                BootDecision::ProceedWithWarning(
+                    "AUCUNE cle de verification — kernel NON verifie (dev)",
+                )
+            }
+        }
+        KernelVerdict::Unsigned => {
+            if strict {
+                BootDecision::Refuse("kernel NON signe alors qu'une signature est requise")
+            } else {
+                BootDecision::ProceedWithWarning("kernel NON signe accepte (mode dev permissif)")
+            }
         }
     }
 }
 
-/// Vérifie la signature du kernel sans paniquer et retourne sa validité.
+/// Vérifie + applique la politique. Panique (fail-closed) si refusé. Retourne
+/// `Some(avertissement)` à logger en mode dev permissif, `None` si vérifié.
 ///
-/// FIX-AUDIT-V020-P1-3 : `enforce_secure_boot_policy()` a besoin de l'état
-/// `kernel_sig_valid` pour décider — combiné à l'état UEFI Secure Boot et au
-/// flag `secure_boot_required` de la config. `verify_kernel_or_panic()` ne
-/// renvoie rien (panique ou non) ; cette variante expose le verdict booléen
-/// nécessaire à la couche de politique sans dupliquer la logique crypto.
-pub fn verify_kernel_signature(image: &[u8]) -> bool {
-    secure_impl::verify_full(image).is_ok()
+/// RÈGLE BOOT-02 : appelé AVANT le chargement, sur les deux chemins (UEFI/BIOS).
+#[must_use = "logger l'avertissement de boot le cas échéant"]
+pub fn enforce_or_panic(
+    image: &[u8],
+    require_signed: bool,
+    uefi_sb_enforcing: bool,
+) -> Option<&'static str> {
+    match decide(verify_kernel(image), require_signed, uefi_sb_enforcing) {
+        BootDecision::Proceed => None,
+        BootDecision::ProceedWithWarning(w) => Some(w),
+        BootDecision::Refuse(why) => panic!("BOOT-02 : {why} — demarrage REFUSE"),
+    }
 }
 
-
-
+/// Défense en profondeur : panique **uniquement** si l'image est altérée
+/// (signature présente mais invalide). À appeler juste avant de charger les
+/// segments — garantit qu'une image altérée n'est JAMAIS chargée, même si une
+/// couche supérieure a mal appliqué la politique. Le cas « non signé » est laissé
+/// à la politique de `enforce_or_panic` (déjà appliquée en amont).
+#[inline]
+pub fn refuse_if_tampered(image: &[u8]) {
+    if verify_kernel(image).is_tampered() {
+        panic!("BOOT-02 : image kernel ALTEREE detectee au chargement — REFUSE");
+    }
+}

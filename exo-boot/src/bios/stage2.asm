@@ -44,6 +44,13 @@ KERNEL_SHADOW_BASE      equ 0x00200000  ; Shadow buffer kernel (2 MB physique)
 KERNEL_SHADOW_LBA_START equ 2048        ; LBA début partition kernel
 KERNEL_SECTOR_COUNT     equ 131072      ; 64 MB max en secteurs (131072 × 512)
 
+; Scratch table de partitions (MBR protecteur + header GPT + table d'entrées).
+; Chargé en LBA 0..33 pour parsing par exoboot_main_bios (exo-partition, no_std,
+; SANS allocateur). Zone 384 KB, libre (entre E820 @0x50000 et page tables @0x70000).
+; DOIT correspondre à GPT_SCRATCH_BASE / GPT_SCRATCH_SECTORS dans bios/disk.rs.
+GPT_SCRATCH_BASE        equ 0x00060000  ; Scratch MBR+GPT (384 KB physique)
+GPT_SCRATCH_SECTORS     equ 34          ; MBR(1) + GPT header(1) + table(32)
+
 ; GDT Segments (mode protégé 32-bit)
 GDT_CODE32_SEL  equ 0x08
 GDT_DATA32_SEL  equ 0x10
@@ -74,6 +81,9 @@ stage2_entry:
 
     ; ── Étape 3 : Chargement kernel shadow ──────────────────────────────────
     call load_kernel_shadow
+
+    ; ── Étape 3b : Chargement scratch table de partitions (MBR + GPT) ────────
+    call load_gpt_scratch
 
     ; ── Étape 4 : Passage en mode protégé ───────────────────────────────────
     lgdt [gdt_descriptor_32]
@@ -253,6 +263,27 @@ load_kernel_shadow:
     add  edx, 63
     add  edi, 63 * 512
     loop .shadow_loop
+    ret
+
+; ─── Chargement scratch GPT/MBR (LBA 0..33) via INT 13h EDD ───────────────────
+; Charge la table de partitions (MBR protecteur + header GPT + 32 secteurs
+; d'entrées) dans GPT_SCRATCH_BASE. Lue ensuite par exoboot_main_bios via les
+; primitives no-alloc d'exo-partition (mêmes structures que kernel + UEFI).
+; 34 secteurs (< 127) → une seule lecture EDD suffit.
+load_gpt_scratch:
+    sub  sp, 16
+    mov  si, sp
+    mov  byte  [si + 0], 0x10                        ; taille du DAP (EDD 3.0)
+    mov  byte  [si + 1], 0x00                         ; réservé
+    mov  word  [si + 2], GPT_SCRATCH_SECTORS         ; nombre de secteurs
+    mov  word  [si + 4], (GPT_SCRATCH_BASE & 0xFFFF) ; offset destination
+    mov  word  [si + 6], (GPT_SCRATCH_BASE >> 4)     ; segment destination
+    mov  dword [si + 8], 0                            ; LBA low = 0 (MBR)
+    mov  dword [si + 12], 0                           ; LBA high
+    mov  ah, 0x42
+    mov  dl, [boot_drive]
+    int  0x13
+    add  sp, 16
     ret
 
 ; ─── print16 : Affiche chaîne ASCIIZ en mode réel ────────────────────────────

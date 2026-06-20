@@ -1,0 +1,20 @@
+[package]
+name = "exo-kernel-signer"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+
+# Outil host de signature kernel Exo-OS. Génère la paire Ed25519 de signature
+# (privée → .secrets/, gitignorée ; publique → fichier Rust embarqué par le
+# bootloader) et signe l'ELF kernel (footer EXOSIG01) via la crate PARTAGÉE
+# exo-verity — donc le signataire et le vérificateur (bootloader) ne peuvent pas
+# diverger.
+
+[[bin]]
+name = "kernel-signer"
+path = "src/main.rs"
+
+[dependencies]
+exo-verity = { path = "../../drivers/security/verity", features = ["std"] }
+getrandom = "0.2"

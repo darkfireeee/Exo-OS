@@ -2,7 +2,7 @@
 target/
 Cargo.lock
 
-# Secrets — clés privées Ed25519 ExoSeal (dev). NE JAMAIS committer.
+# Secrets — clés privées Ed25519 ExoSeal (dev). JAMAIS committer.
 .secrets/
 
 # OS artifacts

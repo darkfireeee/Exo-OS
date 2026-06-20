@@ -17,7 +17,6 @@ use super::entropy::ENTROPY_POOL;
 use super::key_derivation::KeyDerivation;
 use super::xchacha20::{Nonce, Tag, XChaCha20Key, XChaCha20Poly1305};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
-use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constantes

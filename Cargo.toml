@@ -24,6 +24,7 @@ members = [
     "drivers/storage/ahci",
     "drivers/storage/fscrypt",
     "drivers/storage/partition",
+    "drivers/security/verity",
     "loader",
     "servers/crypto_server",
     "servers/device_server",
@@ -42,6 +43,7 @@ members = [
     "servers/virtio_drivers",
     "servers/vfs_server",
     "tools/exofs_mkroot",
+    "tools/kernel_signer",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
 exclude = ["libs"]

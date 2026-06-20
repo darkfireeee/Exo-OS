@@ -14,4 +14,8 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [features]
-default = []
+# `alloc` active l'orchestrateur `scan()` + `BlockReader` + `PartitionTable`
+# (qui accumulent des `Vec`). Les primitives de parsing (crc32/guid/gpt/mbr)
+# restent disponibles SANS allocateur (chemin BIOS no_std sans heap).
+default = ["alloc"]
+alloc = []

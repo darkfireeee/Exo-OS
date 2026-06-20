@@ -9,7 +9,7 @@
 use super::object_fd::OBJECT_TABLE;
 use super::object_store;
 use super::validation::{
-    exofs_err_to_errno, validate_count, validate_fd, validate_offset, verify_cap, write_user_buf,
+    exofs_err_to_errno, validate_count, validate_fd, validate_offset, write_user_buf,
     CapabilityType, EFAULT, ENOMEM,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;

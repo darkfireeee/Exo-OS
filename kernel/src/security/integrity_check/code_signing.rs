@@ -45,6 +45,66 @@ static UPDATE_PUBLIC_KEY: [u8; 32] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FIX-DEEP-CRYPTO : garde structurelle anti-« fausse sécurité »
+//
+// Une clé de vérification NULLE ou égale à un vecteur de test public connu rend
+// la signature forgeable trivialement (la privée correspondante est publique).
+// C'est exactement le bug corrigé par F5. On l'empêche désormais de RÉ-APPARAÎTRE
+// au niveau du compilateur : si une de ces clés redevient un vecteur de test, le
+// kernel **ne compile plus**. La sécurité ne peut plus régresser silencieusement.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Vrai si `k` est nulle ou un vecteur de test Ed25519 connu (INTERDIT en ROM).
+const fn key_is_forbidden(k: &[u8; 32]) -> bool {
+    let mut all_zero = true;
+    let mut i = 0;
+    while i < 32 {
+        if k[i] != 0 {
+            all_zero = false;
+        }
+        i += 1;
+    }
+    if all_zero {
+        return true;
+    }
+    // RFC 8032 Test 1 : clé publique, ET la graine (mal) utilisée comme clé
+    // publique (le bug historique du bootloader).
+    const RFC8032_PUB: [u8; 32] = [
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07,
+        0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07,
+        0x51, 0x1a,
+    ];
+    const RFC8032_SEED_AS_PUB: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c,
+        0x44, 0xda, 0xe8, 0x86, 0x0d, 0x30, 0x68, 0xd4, 0x96, 0x97, 0xf4, 0x3d, 0xfb, 0x7f, 0xed,
+        0xce, 0x08,
+    ];
+    arrays_eq_32(k, &RFC8032_PUB) || arrays_eq_32(k, &RFC8032_SEED_AS_PUB)
+}
+
+const fn arrays_eq_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut i = 0;
+    while i < 32 {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = {
+    assert!(
+        !key_is_forbidden(&MASTER_PUBLIC_KEY),
+        "MASTER_PUBLIC_KEY est une clé de test/nulle — INTERDIT (fausse sécurité)"
+    );
+    assert!(
+        !key_is_forbidden(&UPDATE_PUBLIC_KEY),
+        "UPDATE_PUBLIC_KEY est une clé de test/nulle — INTERDIT (fausse sécurité)"
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Erreurs de code signing
 // ─────────────────────────────────────────────────────────────────────────────
 
