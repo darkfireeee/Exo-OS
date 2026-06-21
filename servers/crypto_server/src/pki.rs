@@ -19,7 +19,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 // ── Constantes ───────────────────────────────────────────────────────────────
 
@@ -687,7 +687,10 @@ pub fn verify_signature(
         return false;
     };
     let sig = Signature::from_bytes(signature);
-    vk.verify(message, &sig).is_ok()
+    // FIX-DEEP-CRYPTO : verify_strict — anti clé-faible + anti-malléabilité.
+    // Vérification de chaîne PKI : une malléabilité accepterait deux signatures
+    // distinctes pour un même certificat. Strict obligatoire.
+    vk.verify_strict(message, &sig).is_ok()
 }
 
 /// Signe un message avec Ed25519.

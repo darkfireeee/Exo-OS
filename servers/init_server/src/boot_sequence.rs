@@ -70,7 +70,25 @@ fn endpoint_registered(service_name: &str) -> bool {
 
 #[inline]
 fn service_ready(service_name: &str, pid: u32) -> bool {
-    pid_alive(pid) && endpoint_registered(service_name)
+    let alive = pid_alive(pid);
+    let ep = endpoint_registered(service_name);
+    // DIAG-25 : tracer pourquoi ipc_router n'est pas vu "ready" (a=pid_alive,
+    // e=endpoint_registered). Throttlé pour ne pas saturer la console E9.
+    if service_name == "ipc_router" {
+        use core::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) % 64 == 0 {
+            let mut buf = *b"<SR a=0 e=0>\n";
+            if alive {
+                buf[6] = b'1';
+            }
+            if ep {
+                buf[10] = b'1';
+            }
+            log::write_all(&buf);
+        }
+    }
+    alive && ep
 }
 
 #[inline]

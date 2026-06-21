@@ -457,33 +457,38 @@ impl Aes256GcmCipher {
 /// Constante de réduction : 0xE100_0000_0000_0000 (dans le mot [0]).
 ///
 /// Algorithme : shift-and-XOR (schoolbook), 128 itérations.
+///
+/// SÉCURITÉ — **temps constant** : aucune branche ne dépend des données. Pendant
+/// le calcul du tag, `b` contient la sous-clé de hachage `H = AES_K(0)` ; un
+/// branchement sur ses bits (`if bit_set`) fuiterait `H` par canal temporel, ce
+/// qui permet la forge de tags GCM. On remplace donc les branches data-dépendantes
+/// par des **masques** (`0 - bit` = tout-à-un si bit=1, tout-à-zéro sinon). Le seul
+/// `if i < 64` porte sur l'indice de boucle (public) → identique à chaque appel.
 fn gf128_mul(a: [u64; 2], b: [u64; 2]) -> [u64; 2] {
     let mut z = [0u64, 0u64];
     let mut v = [a[0], a[1]];
 
     for i in 0..128 {
-        // Vérifier le bit i de b (MSB en premier, convention GCM)
-        let bit_set = if i < 64 {
+        // Bit i de b (MSB en premier, convention GCM). Décalage par `i` (public).
+        let bit = if i < 64 {
             (b[0] >> (63 - i)) & 1
         } else {
             (b[1] >> (127 - i)) & 1
         };
+        // Masque temps-constant : 0xFFFF…FFFF si bit==1, 0 sinon (pas de branche).
+        let bit_mask = 0u64.wrapping_sub(bit);
+        z[0] ^= v[0] & bit_mask;
+        z[1] ^= v[1] & bit_mask;
 
-        if bit_set != 0 {
-            z[0] ^= v[0];
-            z[1] ^= v[1];
-        }
-
-        // Multiplier v par x : décaler à droite de 1 bit
+        // Multiplier v par x : décaler à droite de 1 bit.
         let lsb = v[1] & 1;
         let carry = v[0] & 1;
         v[0] >>= 1;
         v[1] = (v[1] >> 1) | (carry << 63);
 
-        // Réduction si le bit x^127 était positionné
-        if lsb != 0 {
-            v[0] ^= 0xE100_0000_0000_0000;
-        }
+        // Réduction conditionnelle (temps constant) si le bit x^127 était positionné.
+        let lsb_mask = 0u64.wrapping_sub(lsb);
+        v[0] ^= 0xE100_0000_0000_0000 & lsb_mask;
     }
 
     z

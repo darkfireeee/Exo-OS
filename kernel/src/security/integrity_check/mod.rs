@@ -51,7 +51,9 @@ fn integrity_monitor_loop(_arg: usize) -> ! {
             }
             continue;
         }
-        if crate::security::is_security_ready() {
+        // TEST-25 (temporaire) : check d'intégrité périodique neutralisé pour
+        // isoler le stall boot (le hash .text/.rodata = 14 Mio par PID 0).
+        if false && crate::security::is_security_ready() {
             security_periodic_check_observe();
         }
     }

@@ -470,6 +470,73 @@ impl ElfLoader for ExoFsElfLoader {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX-25-DEMANDPAGE : cache de blobs ELF pour le demand paging
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Sans cache, `load_file_page` relisait + re-hashait TOUT le blob exécutable
+// (jusqu'à ~12 Mio) à CHAQUE faute de page de 4 Kio → mettre un seul binaire en
+// page coûtait O(pages × taille_blob) ≈ des milliers de relectures+hash du même
+// blob = boot **apparemment figé** (cause réelle de #25 dans son état actuel : le
+// demand paging était CORRECT — chaque page se mappait — mais pathologiquement
+// lent). On garde quelques blobs récents : les fautes consécutives d'un même
+// exécutable (et de son linker `ld-exo.so`) réutilisent les octets déjà lus+
+// vérifiés → O(taille_blob) au total.
+//
+// Sécurité (≠ collision DMA résolue de BLOB_CACHE) : pas de BTreeMap, donc aucun
+// nœud heap durable plaçable sur une page tampon DMA virtio ; les octets sont
+// épinglés par l'`Arc` (jamais rendus au buddy → jamais réutilisés en DMA).
+const ELF_BLOB_CACHE_SLOTS: usize = 4;
+
+struct ElfBlobCache {
+    slots: [Option<(BlobId, Arc<[u8]>)>; ELF_BLOB_CACHE_SLOTS],
+    next: usize,
+}
+
+static ELF_BLOB_CACHE: Mutex<ElfBlobCache> = Mutex::new(ElfBlobCache {
+    slots: [None, None, None, None],
+    next: 0,
+});
+
+/// Octets d'un blob ELF : cache ELF dédié → BLOB_CACHE partagé → disque (lu +
+/// hashé UNE seule fois, puis réutilisé pour toutes les fautes de page suivantes).
+fn load_blob_cached(blob_id: &BlobId) -> Result<Arc<[u8]>, AllocError> {
+    // 1. Hit dans le cache ELF.
+    {
+        let cache = ELF_BLOB_CACHE.lock();
+        for slot in cache.slots.iter() {
+            if let Some((id, arc)) = slot.as_ref() {
+                if id == blob_id {
+                    return Ok(Arc::clone(arc));
+                }
+            }
+        }
+    }
+    // 2. Miss : BLOB_CACHE partagé (lecture seule) puis disque.
+    let arc: Arc<[u8]> = if let Some(cached) = BLOB_CACHE.get(blob_id) {
+        cached
+    } else {
+        let data = object_store::load_blob_data_if_available(blob_id)
+            .map_err(|_| AllocError::InvalidParams)?
+            .ok_or(AllocError::InvalidParams)?;
+        Arc::from(data.into_boxed_slice())
+    };
+    // 3. Insertion round-robin (re-vérifie l'absence pour éviter un doublon).
+    {
+        let mut cache = ELF_BLOB_CACHE.lock();
+        let already = cache
+            .slots
+            .iter()
+            .any(|s| s.as_ref().map_or(false, |(id, _)| id == blob_id));
+        if !already {
+            let idx = cache.next % ELF_BLOB_CACHE_SLOTS;
+            cache.next = cache.next.wrapping_add(1);
+            cache.slots[idx] = Some((blob_id.clone(), Arc::clone(&arc)));
+        }
+    }
+    Ok(arc)
+}
+
 impl FileFaultProvider for ExoFsElfLoader {
     fn load_file_page(
         &self,
@@ -478,16 +545,9 @@ impl FileFaultProvider for ExoFsElfLoader {
         dest_frame: Frame,
     ) -> Result<(), AllocError> {
         let blob_id = lookup_elf_blob(file_id).ok_or(AllocError::InvalidParams)?;
-        let cached_data = BLOB_CACHE.get(&blob_id);
-        let disk_data;
-        let data = if let Some(ref cached) = cached_data {
-            &cached[..]
-        } else {
-            disk_data = object_store::load_blob_data_if_available(&blob_id)
-                .map_err(|_| AllocError::InvalidParams)?
-                .ok_or(AllocError::InvalidParams)?;
-            &disk_data[..]
-        };
+        // FIX-25 : octets via cache (plus de relecture+rehash intégral par faute).
+        let data_arc = load_blob_cached(&blob_id)?;
+        let data = &data_arc[..];
         let dst_virt = phys_to_virt(dest_frame.start_address());
         let dst =
             unsafe { core::slice::from_raw_parts_mut(dst_virt.as_u64() as *mut u8, PAGE_SIZE) };

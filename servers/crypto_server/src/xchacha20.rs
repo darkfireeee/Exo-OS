@@ -46,38 +46,50 @@ static NONCE_SALT_LO: AtomicU64 = AtomicU64::new(0);
 static NONCE_SALT_HI: AtomicU64 = AtomicU64::new(0);
 static XCHACHA_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Lit 8 octets aléatoires via SYS_GETRANDOM (Linux-compatible).
+/// Lit 8 octets aléatoires via SYS_GETRANDOM (CSPRNG de l'OS — source primaire).
+///
+/// SÉCURITÉ : SYS_GETRANDOM est réessayé (échec transitoire rare) AVANT toute
+/// dégradation. Le repli n'est PAS une « source aléatoire » présentée comme telle
+/// (ce serait de la fausse sécurité) : c'est un mélange dégradé explicite de
+/// plusieurs lectures TSC espacées + adresse de pile, utilisé uniquement comme
+/// **sel de nonce**. L'unicité des nonces INTRA-session est de toute façon garantie
+/// par le compteur monotone `NONCE_COUNTER` (ce sel n'ajoute que de l'unicité
+/// inter-sessions). Aucune clé/secret n'est dérivé de cette valeur.
 fn getrandom_u64() -> u64 {
-    let mut buf = [0u8; 8];
-    let ret: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax")  syscall::SYS_GETRANDOM,
-            in("rdi")  buf.as_mut_ptr() as u64,
-            in("rsi")  8u64,
-            in("rdx")  0u64,             // flags = 0 (GRND_DEFAULT)
-            lateout("rax") ret,
-            out("rcx") _, out("r11") _,
-            options(nostack),
-        );
-    }
-    if ret == 8 {
-        return u64::from_le_bytes(buf);
+    for _ in 0..16 {
+        let mut buf = [0u8; 8];
+        let ret: i64;
+        unsafe {
+            core::arch::asm!(
+                "syscall",
+                in("rax")  syscall::SYS_GETRANDOM,
+                in("rdi")  buf.as_mut_ptr() as u64,
+                in("rsi")  8u64,
+                in("rdx")  0u64,             // flags = 0 (GRND_DEFAULT)
+                lateout("rax") ret,
+                out("rcx") _, out("r11") _,
+                options(nostack),
+            );
+        }
+        if ret == 8 {
+            return u64::from_le_bytes(buf);
+        }
     }
 
-    let lo: u32;
-    let hi: u32;
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack, nomem),
-        );
+    // Repli DÉGRADÉ (ne devrait jamais arriver) : plusieurs lectures TSC espacées
+    // par PAUSE (jitter d'horloge) mixées + adresse de pile.
+    let mut acc: u64 = 0;
+    let mut probe = [0u8; 8];
+    for _ in 0..8 {
+        let lo: u32;
+        let hi: u32;
+        unsafe {
+            core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
+            core::arch::asm!("pause", options(nostack, nomem));
+        }
+        acc = acc.rotate_left(13) ^ (((hi as u64) << 32) | lo as u64);
     }
-    let tsc = ((hi as u64) << 32) | lo as u64;
-    tsc ^ ((&buf as *const [u8; 8] as usize) as u64).rotate_left(17)
+    acc ^ ((&mut probe as *mut [u8; 8] as usize) as u64).rotate_left(17)
 }
 
 /// Initialise le sous-système XChaCha20-Poly1305.

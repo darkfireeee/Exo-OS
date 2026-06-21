@@ -12,7 +12,7 @@ extern crate blake3;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use exo_syscall_abi as syscall;
 use keystore::{KeyType, KEY_SIZE};
 use xchacha20::{NONCE_SIZE, TAG_SIZE};
@@ -337,7 +337,11 @@ fn finalize_verify_context(ctx_handle: u32, owner_principal: u64) -> Option<bool
         .ok()
         .map(|vk| {
             let sig = Signature::from_bytes(&ctx.signature);
-            vk.verify(&ctx.message[..ctx.total_len as usize], &sig)
+            // FIX-DEEP-CRYPTO : verify_strict (PAS verify) — rejette les clés
+            // faibles (low-order) et la malléabilité de signature. C'est la
+            // vérification Ed25519 CENTRALE du système (exo_shield et tous les
+            // serveurs y délèguent) : elle doit être stricte comme le kernel.
+            vk.verify_strict(&ctx.message[..ctx.total_len as usize], &sig)
                 .is_ok()
         })
         .unwrap_or(false);

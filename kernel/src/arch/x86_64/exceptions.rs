@@ -362,10 +362,6 @@ fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
     // SAFETY: tcb_raw != 0 vérifié ; pointe vers le TCB du thread courant publié
     // par le scheduler pour ce CPU, vivant pendant le handler.
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
-    // FIX-KPTI-FAULT-SYNC : la shadow user réellement active est la PML4 shadow
-    // per-CPU de kpti_split (utilisée par le trampoline d'entrée). Le `kpti_user_cr3`
-    // du TCB et le slot kpti.rs peuvent valoir 0 (PID 1 issu du handoff). Sans sync
-    // vers la VRAIE shadow, une page demand-paged n'y apparaît jamais → boucle #PF.
     let mut user_cr3 = tcb.kpti_user_cr3();
     if user_cr3 == 0 {
         user_cr3 = crate::arch::x86_64::spectre::kpti::current_user_cr3();
@@ -386,9 +382,7 @@ fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
     if k == 0 || u == 0 || k == u {
         return;
     }
-
-    // Resync COMPLET de la moitié user (robuste face à la shadow per-CPU partagée
-    // et obsoletée par les autres threads). SAFETY: k/u = PML4 valides (ring0).
+    // SAFETY: k/u = PML4 valides (ring0).
     unsafe {
         crate::memory::virt::page_table::kpti_split::sync_user_region_to_shadow(
             crate::memory::core::PhysAddr::new(k),
@@ -993,6 +987,42 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                 } else {
                     0u32
                 };
+                // DIAG-25 : tracer le segfault userspace (PID + CR2 + RIP) pour
+                // confirmer/localiser le crash post-fork d'ipc_router (#25).
+                {
+                    let out = crate::arch::x86_64::terminal::debug_write;
+                    out(b"<SEGV pid=");
+                    let mut v = seg_pid as u64;
+                    if v == 0 {
+                        out(b"0");
+                    } else {
+                        let mut d = [0u8; 20];
+                        let mut i = d.len();
+                        while v != 0 && i > 0 {
+                            i -= 1;
+                            d[i] = b'0' + (v % 10) as u8;
+                            v /= 10;
+                        }
+                        out(&d[i..]);
+                    }
+                    let hex = |val: u64| {
+                        let lut = b"0123456789abcdef";
+                        let mut hb = [0u8; 16];
+                        let mut x = val;
+                        let mut k = 16;
+                        while k > 0 {
+                            k -= 1;
+                            hb[k] = lut[(x & 0xf) as usize];
+                            x >>= 4;
+                        }
+                        hb
+                    };
+                    out(b" cr2=");
+                    out(&hex(fault_addr_raw));
+                    out(b" rip=");
+                    out(&hex(frame.rip));
+                    out(b">\n");
+                }
                 crate::security::shield_feed::push_event(
                     seg_pid,
                     crate::security::shield_feed::event_type::MEMORY,
