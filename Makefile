@@ -267,6 +267,14 @@ _make_iso:
 	@rm -rf $(ISO_WORKDIR)
 	@mkdir -p $(ISO_WORKDIR)/boot/grub
 	@cp $(KERNEL_BIN) $(ISO_WORKDIR)/boot/exo-os-kernel
+	@# FIX-BOOT-LEGACY : strip le kernel embarqué dans l'ISO. Le kernel debug (~53 Mo,
+	@# dont ~38 Mo de sections .debug non-allouables) repousse les segments de
+	@# programme à des offsets fichier élevés ; le BIOS legacy (SeaBIOS IDE, Bochs)
+	@# échoue à les lire via INT 13h → reset en phase BIOS, kernel jamais chargé
+	@# (q35/AHCI y arrivait, masquant le bug). Le strip (~allocatable seul) ramène les
+	@# segments en début de fichier → bootable sur PC legacy. Les symboles restent
+	@# dans $(KERNEL_BIN) (target/, NON strippé) pour gdb (mêmes adresses).
+	@$(STRIP_TOOL) --strip-all $(ISO_WORKDIR)/boot/exo-os-kernel 2>/dev/null || true
 	@cp bootloader/grub.cfg $(ISO_WORKDIR)/boot/grub/grub.cfg
 	@grub-mkrescue -o $(ISO_OUTPUT) $(ISO_WORKDIR) \
 	    --compress=xz 2>&1 | grep -v "^$$" || true

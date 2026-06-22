@@ -1061,13 +1061,192 @@ pub static BUDDY: GlobalBuddyAllocator = GlobalBuddyAllocator::new();
 /// Alloue `2^order` pages physiques contiguës.
 #[inline(always)]
 pub fn alloc_pages(order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
-    BUDDY.alloc_pages(order, flags)
+    let r = BUDDY.alloc_pages(order, flags);
+    #[cfg(target_arch = "x86_64")]
+    if let Ok(f) = r {
+        diag25_on_alloc(f, order);
+    }
+    r
 }
 
 /// Libère un bloc de `2^order` pages.
 #[inline(always)]
 pub fn free_pages(frame: Frame, order: usize) -> Result<(), AllocError> {
+    #[cfg(target_arch = "x86_64")]
+    diag25_on_free(frame, order);
     BUDDY.free_pages(frame, order)
+}
+
+// ── DIAG #25 : détecteur de DOUBLE-ALLOCATION générique (auto-calibré) ──────────
+//
+// Bitmap 1 bit/frame (256 Mo = 65536 frames = 1024 u64). À chaque alloc on marque
+// les frames ; si une frame est allouée alors qu'elle l'est DÉJÀ (sans free
+// intermédiaire) → double-alloc = bug #25 (réutilisation d'une frame vivante,
+// p.ex. la pile d'init). Émet la frame + la chaîne d'appel (balayage de pile) du
+// coupable. Robuste au déplacement des frames entre builds (rien codé en dur).
+#[cfg(target_arch = "x86_64")]
+static DIAG25_ALLOC_BITMAP: [core::sync::atomic::AtomicU64; 1024] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 1024];
+
+// Bitmap des frames ayant DÉJÀ servi de tampon DMA (« DMA-tainted »). Si une telle
+// frame est ré-allouée par le buddy pour un usage non-DMA (p.ex. la pile CoW d'init),
+// une écriture DMA tardive du périphérique la corrompt → bug #25.
+#[cfg(target_arch = "x86_64")]
+static DIAG25_DMA_TAINT: [core::sync::atomic::AtomicU64; 1024] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 1024];
+
+/// DIAG #25 : frame de pile USER d'init à surveiller (F'), capturé au moment du
+/// CoW-break dans `cow.rs`. Tout `free` de ce frame APRÈS sa capture = libération
+/// erronée du frame VIVANT d'init = cause racine de #25 (le buddy le recycle
+/// ensuite pour une alloc ZEROED de l'execve enfant qui l'écrase à 0). 0 = désarmé.
+#[cfg(target_arch = "x86_64")]
+pub static DIAG25_WATCH_FRAME: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Marque les frames d'un tampon DMA comme « tainted » (appelé par le HAL virtio).
+#[cfg(target_arch = "x86_64")]
+pub fn diag25_taint_dma(phys: u64, count: u64) {
+    use core::sync::atomic::Ordering;
+    let base = phys / 4096;
+    let mut k = 0u64;
+    while k < count {
+        let idx = base + k;
+        if idx >= 65536 {
+            return;
+        }
+        let word = (idx / 64) as usize;
+        DIAG25_DMA_TAINT[word].fetch_or(1u64 << (idx % 64), Ordering::Relaxed);
+        k += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn diag25_on_alloc(frame: Frame, order: usize) {
+    use core::sync::atomic::Ordering;
+    let base = frame.phys_addr().as_u64() / 4096;
+    let count = 1u64 << order;
+    let mut dbl = false;
+    let mut k = 0u64;
+    while k < count {
+        let idx = base + k;
+        if idx >= 65536 {
+            return;
+        }
+        let word = (idx / 64) as usize;
+        let mask = 1u64 << (idx % 64);
+        let prev = DIAG25_ALLOC_BITMAP[word].fetch_or(mask, Ordering::Relaxed);
+        if prev & mask != 0 {
+            dbl = true;
+        }
+        k += 1;
+    }
+    if dbl {
+        diag25_report(b"DBL", frame, order);
+    }
+    // Une frame ré-allouée alors qu'elle a déjà servi au DMA = candidate à la
+    // corruption par écriture DMA tardive (#25). La chaîne d'appel révèle l'usage.
+    let mut tainted = false;
+    let mut k = 0u64;
+    while k < count {
+        let idx = base + k;
+        if idx >= 65536 {
+            break;
+        }
+        let word = (idx / 64) as usize;
+        if DIAG25_DMA_TAINT[word].load(Ordering::Relaxed) & (1u64 << (idx % 64)) != 0 {
+            tainted = true;
+        }
+        k += 1;
+    }
+    if tainted {
+        diag25_report(b"TAINT", frame, order);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn diag25_on_free(frame: Frame, order: usize) {
+    use core::sync::atomic::Ordering;
+    let base = frame.phys_addr().as_u64() / 4096;
+    let count = 1u64 << order;
+    // #25 : qui libère le frame VIVANT de la pile d'init (F') ? La chaîne d'appel
+    // (return addresses balayées) révèle le chemin fautif (teardown execve, etc.).
+    let wf = DIAG25_WATCH_FRAME.load(Ordering::Relaxed);
+    if wf != 0 && frame.phys_addr().as_u64() == wf {
+        diag25_report(b"FREEF", frame, order);
+    }
+    let mut k = 0u64;
+    while k < count {
+        let idx = base + k;
+        if idx >= 65536 {
+            return;
+        }
+        let word = (idx / 64) as usize;
+        let mask = 1u64 << (idx % 64);
+        DIAG25_ALLOC_BITMAP[word].fetch_and(!mask, Ordering::Relaxed);
+        k += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+fn diag25_report(tag: &[u8], frame: Frame, order: usize) {
+    use crate::arch::x86_64::terminal::debug_write;
+    debug_write(b"<25");
+    debug_write(tag);
+    debug_write(b" f=");
+    diag25_hex(frame.phys_addr().as_u64());
+    debug_write(b" ord=");
+    diag25_dec(order as u64);
+    debug_write(b" chain=");
+    // Balaye la pile courante pour les adresses de retour (plage code kernel).
+    let mut rsp: u64;
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack));
+    }
+    let mut i = 0u64;
+    while i < 64 {
+        // SAFETY: lecture dans la pile noyau courante (déjà allouée).
+        let v = unsafe { *((rsp + i * 8) as *const u64) };
+        if (0x100000..0x500000).contains(&v) {
+            debug_write(b" ");
+            diag25_hex(v);
+        }
+        i += 1;
+    }
+    debug_write(b">\n");
+}
+
+#[cfg(target_arch = "x86_64")]
+fn diag25_hex(mut v: u64) {
+    use crate::arch::x86_64::terminal::debug_write;
+    let mut buf = [0u8; 16];
+    let mut i = 16usize;
+    while i > 0 {
+        i -= 1;
+        let nib = (v & 0xf) as u8;
+        buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+        v >>= 4;
+    }
+    debug_write(&buf);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn diag25_dec(mut v: u64) {
+    use crate::arch::x86_64::terminal::debug_write;
+    let mut buf = [0u8; 20];
+    let mut pos = 20usize;
+    if v == 0 {
+        pos -= 1;
+        buf[pos] = b'0';
+    }
+    while v > 0 && pos > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    debug_write(&buf[pos..]);
 }
 
 /// Alloue exactement 1 page physique (ordre 0).

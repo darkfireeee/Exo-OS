@@ -146,7 +146,18 @@ fn rollback_child_allocations(
 
 #[inline]
 fn vfork_shares_address_space(flags: ForkFlags) -> bool {
-    flags.has(ForkFlags::VFORK) || flags.has(ForkFlags::CLONE_VM)
+    // FIX #25 : VFORK ne PARTAGE PLUS l'espace d'adressage. On le traite comme un
+    // « fork bloquant » : clone CoW séparé (comme fork) + parent suspendu jusqu'à
+    // l'execve de l'enfant (`wait_for_vfork_completion`, déclenché par le flag
+    // VFORK dans dispatch.rs, indépendant de ce choix de partage).
+    //
+    // Raison : le partage d'AS exposait la mémoire vivante du parent (init) à
+    // l'execve de l'enfant — la course de co-planification #25 corrompait alors
+    // directement l'AS d'init. Avec un clone CoW séparé + parent bloqué, l'AS
+    // d'init est protégée par le CoW ET init ne s'exécute pas pendant l'execve,
+    // fermant la fenêtre de course de façon fiable (couvre tout execve, contrairement
+    // à un sleep fixe). Seul CLONE_VM (threads) partage encore l'AS.
+    flags.has(ForkFlags::CLONE_VM)
 }
 
 #[inline]

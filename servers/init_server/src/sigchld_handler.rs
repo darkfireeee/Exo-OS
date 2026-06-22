@@ -38,6 +38,12 @@ pub unsafe fn install_handlers() {
         mask: 0,
     };
 
+    // NOTE #25 : le noyau exige sigsetsize==8 ([signal.rs] sys_rt_sigaction) ; cet
+    // appel à 3 args laisse sigsetsize=0 → EINVAL → handlers PAS installés. C'est un
+    // VRAI bug (init ne reape pas ses enfants), MAIS le corriger EXPOSE la course
+    // #25 via la frame de signal (pretcode pile-user zéroé par la course → retour
+    // handler RIP=0 → mort d'init PID1 → panic noyau/ExoPhoenix, PIRE que le SEGV
+    // userspace tardif). À corriger (syscall4 ..., 8) UNE FOIS la course #25 réglée.
     let _ = syscall::syscall3(
         syscall::SYS_RT_SIGACTION,
         17,

@@ -1021,6 +1021,45 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(fault_addr_raw));
                     out(b" rip=");
                     out(&hex(frame.rip));
+                    out(b" rsp=");
+                    out(&hex(frame.rsp));
+                    out(b" err=");
+                    out(&hex(error_code));
+                    // DIAG-25 : octets in-memory à RIP (la page RIP est présente —
+                    // l'instruction a été fetchée avant la faute data). Comparer au
+                    // binaire statique → détecte une corruption du .text d'init.
+                    out(b" ripb=");
+                    let mut rb = 0u64;
+                    // SAFETY: page RIP présente (fetch réussi) ; KPTI off → mappée
+                    // dans le CR3 courant ; lecture volatile de 8 octets user.
+                    for bi in 0..8u64 {
+                        let byte =
+                            unsafe { core::ptr::read_volatile((frame.rip + bi) as *const u8) };
+                        rb |= (byte as u64) << (bi * 8);
+                    }
+                    out(&hex(rb));
+                    // DIAG-25 : contexte GP complet — révèle si les registres d'init
+                    // sont corrompus (zéro / stale / décalés) au resume post-fork.
+                    out(b" rax=");
+                    out(&hex(frame.rax));
+                    out(b" rbx=");
+                    out(&hex(frame.rbx));
+                    out(b" rcx=");
+                    out(&hex(frame.rcx));
+                    out(b" rdx=");
+                    out(&hex(frame.rdx));
+                    out(b" rsi=");
+                    out(&hex(frame.rsi));
+                    out(b" rdi=");
+                    out(&hex(frame.rdi));
+                    out(b" rbp=");
+                    out(&hex(frame.rbp));
+                    out(b" cs=");
+                    out(&hex(frame.cs));
+                    out(b" ss=");
+                    out(&hex(frame.ss));
+                    out(b" rfl=");
+                    out(&hex(frame.rflags));
                     out(b">\n");
                 }
                 crate::security::shield_feed::push_event(

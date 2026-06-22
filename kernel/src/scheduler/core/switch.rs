@@ -33,7 +33,49 @@ use crate::arch::x86_64::{
 use crate::memory::core::PhysAddr;
 use crate::memory::virt::page_table::kpti_split::{build_user_shadow_pml4, user_cr3_for_cpu};
 use crate::scheduler::fpu;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+// DIAG-25 : détecteur de corruption de la frame Ring3/syscall sauvegardée d'un
+// thread pendant qu'il est commuté hors-CPU. Empreinte FNV des 256 octets sous le
+// sommet de pile kernel (où réside la frame d'entrée Ring3). Si l'empreinte change
+// entre le switch-out et le switch-in d'init (PID 1), sa frame a été écrasée par un
+// tiers → cause de #25. Voir [[exoos-blobcache-dma-spin]].
+const DIAG25_SLOTS: usize = 64;
+static DIAG25_FRAME_CRC: [AtomicU64; DIAG25_SLOTS] = {
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; DIAG25_SLOTS]
+};
+
+#[inline(never)]
+fn diag25_frame_crc(top: u64) -> u64 {
+    if top < 0x1000 {
+        return 0;
+    }
+    let base = top - 256;
+    let mut crc = 0xcbf2_9ce4_8422_2325u64;
+    for i in 0..32u64 {
+        // SAFETY: `top` = sommet d'une pile kernel mappée (256 KiB) ; lire 256
+        // octets sous le sommet reste dans la pile. Lecture volatile uniquement.
+        let v = unsafe { core::ptr::read_volatile((base + i * 8) as *const u64) };
+        crc ^= v;
+        crc = crc.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    crc
+}
+
+fn diag25_emit_hex(v: u64) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    let lut = b"0123456789abcdef";
+    let mut hb = [0u8; 16];
+    let mut x = v;
+    let mut k = 16;
+    while k > 0 {
+        k -= 1;
+        hb[k] = lut[(x & 0xf) as usize];
+        x >>= 4;
+    }
+    out(&hb);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pointeur "thread courant" par CPU — mis à jour à chaque context switch
@@ -467,7 +509,33 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     if next.pid.0 == 1 && next.cr3_phys != 0 {
         idle_sched_trace(b"context_switch: ->init-user\n");
     }
+
+    // DIAG-25 : empreinte de la frame dormante de prev AVANT de le commuter dehors.
+    let diag25_top = prev.kstack_top();
+    let diag25_pid = prev.pid.0;
+    let diag25_tid = diag25_pid as usize;
+    if diag25_tid < DIAG25_SLOTS {
+        DIAG25_FRAME_CRC[diag25_tid].store(diag25_frame_crc(diag25_top), Ordering::Relaxed);
+    }
+
     context_switch_asm(&mut prev.kstack_ptr as *mut u64, next.kstack_ptr, new_cr3);
+
+    // DIAG-25 : prev est de retour sur le CPU. Si sa frame Ring3 dormante a changé
+    // pendant la commutation, un tiers l'a écrasée (cause #25). On ne logge que PID 1.
+    if diag25_pid == 1 && diag25_tid < DIAG25_SLOTS {
+        let stored = DIAG25_FRAME_CRC[diag25_tid].load(Ordering::Relaxed);
+        let now = diag25_frame_crc(diag25_top);
+        if stored != 0 && now != stored {
+            let out = crate::arch::x86_64::terminal::debug_write;
+            out(b"<FRMCRPT pid=1 top=");
+            diag25_emit_hex(diag25_top);
+            out(b" before=");
+            diag25_emit_hex(stored);
+            out(b" after=");
+            diag25_emit_hex(now);
+            out(b">\n");
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

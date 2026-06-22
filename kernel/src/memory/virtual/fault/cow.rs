@@ -103,6 +103,27 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             unsafe {
                 flush_single(page_addr);
             }
+            // DIAG #25 (Bochs watchpoint) : émet le frame physique (F') des pages
+            // de pile USER cassées-CoW, pour poser un watchpoint physique Bochs sur
+            // F'+0xae8 (slot return-address corrompu). Plage pile user uniquement.
+            #[cfg(target_arch = "x86_64")]
+            if page_addr.as_u64() >= 0x7fff_0000_0000 {
+                use crate::arch::x86_64::terminal::debug_write;
+                debug_write(b"<F25 p=");
+                diag_f25_hex(page_addr.as_u64());
+                debug_write(b" f=");
+                diag_f25_hex(new_frame.start_address().as_u64());
+                debug_write(b">");
+                // #25 : armer le détecteur de free sur le frame F' de CETTE page de
+                // pile d'init (celle qui contient le slot 0xae8 corrompu). Si ce
+                // frame VIVANT est libéré ensuite → cause racine (diag25 « FREEF »).
+                if page_addr.as_u64() == 0x7fff_fffe_f000 {
+                    crate::memory::physical::allocator::buddy::DIAG25_WATCH_FRAME.store(
+                        new_frame.start_address().as_u64(),
+                        core::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+            }
             FaultResult::Handled
         }
         Err(actual_raw) => {
@@ -119,4 +140,19 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             }
         }
     }
+}
+
+/// DIAG #25 : émission hex 16 digits sur le port debug E9 (Bochs/QEMU).
+#[cfg(target_arch = "x86_64")]
+fn diag_f25_hex(mut v: u64) {
+    use crate::arch::x86_64::terminal::debug_write;
+    let mut buf = [0u8; 16];
+    let mut i = 16usize;
+    while i > 0 {
+        i -= 1;
+        let nib = (v & 0xf) as u8;
+        buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+        v >>= 4;
+    }
+    debug_write(&buf);
 }

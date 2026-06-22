@@ -149,7 +149,18 @@ fn should_quiet_console_after_ready(service_name: &str) -> bool {
     service_name == "tty_server" || owns_interactive_console(service_name)
 }
 
-/// Démarre un serveur Ring1 via fork + execve.
+/// Démarre un serveur Ring1 via vfork + execve.
+///
+/// On utilise **vfork** (et non fork) pour le bug #25. Dans CE noyau, vfork est un
+/// « fork bloquant » : clone CoW SÉPARÉ de l'AS (comme fork) MAIS le parent (init)
+/// est SUSPENDU jusqu'à l'execve de l'enfant (`wait_for_vfork_completion`).
+/// Cela supprime toute fenêtre de CO-PLANIFICATION init↔enfant pendant l'execve —
+/// c'est précisément cette co-planification qui déclenchait une écriture sauvage
+/// dans la mémoire utilisateur d'init (RIP/registres zéroés → SIGSEGV PID1). L'AS
+/// d'init reste protégée par le CoW (pas de partage), donc l'execve de l'enfant ne
+/// peut pas muter directement l'AS vivante d'init.
+/// Contrat respecté : l'enfant ne fait que setpgid + execve (ou _exit) et ne
+/// retourne jamais de cette fonction.
 ///
 /// Retourne le PID du fils, ou `0` si le lancement échoue.
 pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
@@ -157,9 +168,9 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
     let envp: [u64; 1] = [0];
 
     log::service_status(b"init: start ", service_name, b"\n");
-    let child_pid = syscall::syscall0(syscall::SYS_FORK);
+    let child_pid = syscall::syscall0(syscall::SYS_VFORK);
     if child_pid < 0 {
-        log::service_error(b"init: fork failed ", service_name, child_pid);
+        log::service_error(b"init: vfork failed ", service_name, child_pid);
         return 0;
     }
 

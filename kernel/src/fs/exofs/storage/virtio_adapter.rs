@@ -171,6 +171,7 @@ fn kernel_dma_alloc(pages: usize) -> Option<(usize, NonNull<u8>)> {
         unsafe {
             core::ptr::write_bytes(ptr.as_ptr(), 0, (1usize << order) * PAGE_SIZE);
         }
+        crate::memory::physical::allocator::buddy::diag25_taint_dma(phys, 1u64 << order);
         return Some((phys as usize, ptr));
     }
 
@@ -184,6 +185,7 @@ fn kernel_dma_alloc(pages: usize) -> Option<(usize, NonNull<u8>)> {
     .ok()?;
     let phys = frame.start_address();
     let virt = crate::memory::core::phys_to_virt(phys);
+    crate::memory::physical::allocator::buddy::diag25_taint_dma(phys.as_u64(), 1u64 << order);
     Some((
         phys.as_u64() as usize,
         NonNull::new(virt.as_u64() as *mut u8)?,

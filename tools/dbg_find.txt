@@ -1,0 +1,6 @@
+lb 0x2979a0
+c
+page 0x00007ffffffefae8
+page 0x00007ffffffef000
+creg
+q

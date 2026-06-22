@@ -118,6 +118,16 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
     fsdbg(b'1');
 
+    // Repli ATA/IDE (PIO, 0x1F0 maître) si virtio-blk absent — Bochs (qui n'émule
+    // ni virtio ni AHCI/NVMe) ou QEMU machine `pc`. Permet de lire le rootfs ExoFS
+    // depuis un disque IDE legacy pour le diagnostic #25 sous Bochs.
+    if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
+        fsdbg(b'I');
+        if crate::fs::exofs::storage::ata_pio::init_global_disk_ata() {
+            fsdbg(b'i');
+        }
+    }
+
     // FIX-GPT : si le disque est partitionné GPT, localiser la partition ExoFS
     // ROOT par son type-GUID et décaler toute l'I/O ExoFS vers son LBA de début
     // (parseur partagé `exo-partition`). ADDITIF : disque brut / MBR legacy / GPT
@@ -196,17 +206,14 @@ fn exofs_gc_kthread(_arg: usize) -> ! {
     gc_backoff();
 
     loop {
-        // TEST-25 (temporaire) : GC neutralisée pour isoler le stall boot (#25 :
-        // un kthread PID 0 re-hashe les blobs en boucle après ipc_router).
-        let _ = crate::scheduler::timer::sleep_ns(30_000_000_000);
-        if false {
-            let current_epoch = crate::fs::exofs::syscall::epoch_commit::current_epoch();
-            if current_epoch > 2 {
-                let epoch_threshold = current_epoch - 2;
-                let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
-            }
-            gc_backoff();
+        let current_epoch = crate::fs::exofs::syscall::epoch_commit::current_epoch();
+        if current_epoch > 2 {
+            // Lance un cycle GC complet (scan + collect) pour les epochs âgées de > 2.
+            let epoch_threshold = current_epoch - 2;
+            let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
         }
+
+        gc_backoff();
     }
 }
 
@@ -214,13 +221,9 @@ fn exofs_writeback_kthread(_arg: usize) -> ! {
     gc_backoff();
 
     loop {
-        // TEST-25 (temporaire) : writeback/commit neutralisé pour isoler le stall.
-        let _ = crate::scheduler::timer::sleep_ns(30_000_000_000);
-        if false {
-            let _ = exofs_writeback_dirty();
-            if !crate::scheduler::timer::sleep_ns(EXOFS_WRITEBACK_INTERVAL_NS) {
-                gc_backoff();
-            }
+        let _ = exofs_writeback_dirty();
+        if !crate::scheduler::timer::sleep_ns(EXOFS_WRITEBACK_INTERVAL_NS) {
+            gc_backoff();
         }
     }
 }

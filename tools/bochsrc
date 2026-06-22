@@ -1,0 +1,19 @@
+megs: 256
+romimage: file=/usr/share/bochs/BIOS-bochs-legacy, options=fastboot
+vgaromimage: file=/usr/share/bochs/VGABIOS-lgpl-latest
+boot: cdrom
+# rootfs ExoFS sur IDE primaire maître (0x1F0) — lu par ata_pio. CD de boot sur
+# le canal secondaire (ata1) pour libérer 0x1F0 maître.
+ata0-master: type=disk, path="/mnt/c/Users/xavie/Desktop/Exo-OS/target/qemu/exofs-root.img", mode=flat, cylinders=1040, heads=16, spt=63
+ata1-master: type=cdrom, path="/mnt/c/Users/xavie/Desktop/Exo-OS/exo-os.iso", status=inserted
+pci: enabled=1, chipset=i440fx, advopts=noacpi
+display_library: x
+port_e9_hack: enabled=1
+cpu: model=core2_penryn_t9600, count=1, ips=50000000, reset_on_triple_fault=1, ignore_bad_msrs=1
+cpu: cpuid_limit_winnt=0
+clock: sync=none
+log: /tmp/bochs.log
+panic: action=report
+error: action=report
+info: action=report
+debug: action=ignore

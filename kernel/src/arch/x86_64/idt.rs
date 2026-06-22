@@ -18,9 +18,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::gdt::GDT_KERNEL_CS;
-use super::tss::{
-    IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI, IST_PAGE_FAULT,
-};
+use super::tss::{IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI};
 
 // ── Vecteurs d'exception ──────────────────────────────────────────────────────
 
@@ -385,15 +383,29 @@ pub fn init_idt() {
         0,
         IdtEntryFlags::TRAP_GATE,
     );
-    // FIX-PF-IST : #PF utilise sa pile IST dédiée (IST_PAGE_FAULT, déjà allouée
-    // dans init_tss_for_cpu via tss.ist[IST_PAGE_FAULT]). Sans IST, un #PF survenant
-    // sur une pile kernel débordée (stack overflow) ne pouvait pas empiler sa frame
-    // → cascade #DF → triple fault bypassant tous les handlers. Avec l'IST, le #PF
-    // bascule sur une pile fraîche de 16 KiB et est traité (ou dumpé) proprement.
+    // FIX-25 (CRITIQUE) : #PF utilise la pile kernel du thread courant (rsp0),
+    // PAS une IST partagée.
+    //
+    // L'ancien FIX-PF-IST (#PF → IST_PAGE_FAULT) introduisait une corruption
+    // inter-thread = cause racine de #25 (init crash post-fork) : une IST est
+    // PAR-CPU, NON par-thread et NON ré-entrante. Le CPU recharge rsp = sommet de
+    // l'IST à CHAQUE #PF, indépendamment du rsp courant. Donc :
+    //   • un #PF imbriqué (le handler touche de la mémoire user — livraison de
+    //     signal sur la pile user, copy_from_user — qui faute) écrase la frame du
+    //     #PF externe ; et
+    //   • si le handler #PF se replanifie / est co-planifié (init + enfant fork
+    //     démon-pageant en parallèle au boot), le #PF de l'autre thread réutilise
+    //     la MÊME pile IST depuis son sommet et écrase la frame de faute sauvegardée
+    //     du premier → IRETQ restaure un RIP/RSP/registres garbage → SIGSEGV à des
+    //     sites variables (symptôme exact de #25, reproduit 2026-06-21).
+    // Les ISTs sont réservées à #DF/#NMI/#MCE. Avec rsp0, le #PF est ré-entrant
+    // (empile sur la pile du thread, qui descend). Le risque historique (#PF sur
+    // pile kernel débordée → #DF) reste couvert : #DF a SA PROPRE IST
+    // (IST_DOUBLE_FAULT) → traité, jamais de triple fault.
     idt.set_handler(
         EXC_PAGE_FAULT,
         exc_page_fault_handler as *const () as u64,
-        IST_PAGE_FAULT as u8 + 1,
+        0,
         IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
