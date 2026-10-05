@@ -119,10 +119,10 @@ pub mod object_writer;
 /// Pipeline complet de lecture d'objets
 pub mod object_reader;
 
+pub mod ata_pio;
 /// Statistiques globales du module storage
 pub mod storage_stats;
-pub mod virtio_adapter;
-pub mod ata_pio; // pilote ATA/IDE PIO (repli quand virtio absent : Bochs / QEMU pc)
+pub mod virtio_adapter; // pilote ATA/IDE PIO (repli quand virtio absent : Bochs / QEMU pc)
 
 /// Résolution réelle de la partition ExoFS via GPT (parseur partagé `exo-partition`).
 /// Remplace l'hypothèse « disque entier = volume » par une localisation par type-GUID.

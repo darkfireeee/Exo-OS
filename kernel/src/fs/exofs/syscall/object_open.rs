@@ -7,9 +7,7 @@
 
 use super::object_fd::{open_flags, OBJECT_LIFECYCLE_LOCK, OBJECT_TABLE};
 use super::object_store;
-use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, validate_open_flags, EFAULT,
-};
+use super::validation::{exofs_err_to_errno, read_user_path_heap, validate_open_flags, EFAULT};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
@@ -241,9 +239,10 @@ pub fn sys_exofs_object_open(
     // détiendra cette cap ; object_read/write/stat/… la vérifieront via check_object_cap.
     if let Ok(bid) = OBJECT_TABLE.blob_id_of(fd) {
         let oid = super::captable::object_id_of_blob(&bid);
-        if let Err(e) =
-            super::captable::grant_object_cap(oid, super::captable::rights_from_open_flags(open_args.flags))
-        {
+        if let Err(e) = super::captable::grant_object_cap(
+            oid,
+            super::captable::rights_from_open_flags(open_args.flags),
+        ) {
             OBJECT_TABLE.close(fd);
             return e;
         }

@@ -162,7 +162,8 @@ impl UserAddressSpace {
         assert!(
             virt.as_u64() < USER_END.as_u64(),
             "map_page_unflushed: adresse hors espace utilisateur: {:#x} >= USER_END {:#x}",
-            virt.as_u64(), USER_END.as_u64()
+            virt.as_u64(),
+            USER_END.as_u64()
         );
         let mut walker = PageTableWalker::new(self.pml4_phys);
         walker.map(virt, frame, flags, alloc)?;

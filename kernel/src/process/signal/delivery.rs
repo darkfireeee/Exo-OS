@@ -41,6 +41,54 @@ pub enum SendError {
 // Envoi de signal depuis noyau (kill(2), raise, SIGCHLD...)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// FIX-SIGWAKE (bisect hang boot) : réveille un thread endormi qui reçoit un
+/// signal.
+///
+/// Avant ce correctif, `raise_signal_pending()` ne posait que le bit
+/// `signal_pending` + NEED_RESCHED sur le TCB **cible**. Si la cible est
+/// endormie (nanosleep, futex, wait IPC), ce NEED_RESCHED est invisible :
+/// personne ne le consulte tant que le thread ne tourne pas. Le signal
+/// restait donc en attente indéfiniment et un `nanosleep` interrompu ne
+/// revenait jamais (lost wake). Linux fait l'équivalent via
+/// `signal_wake_up()` → `wake_up_state(TASK_INTERRUPTIBLE)`.
+///
+/// Ici : transition Sleeping → Runnable + enqueue dans la runqueue du CPU du
+/// thread. Pas de double-enqueue possible (enqueue vérifie try_mark_queued).
+fn wake_thread_for_signal(sched: &ThreadControlBlock) {
+    use crate::scheduler::core::preempt::{IrqGuard, MAX_CPUS};
+    use crate::scheduler::core::runqueue::run_queue;
+    use crate::scheduler::core::task::{CpuId, TaskState};
+    use core::ptr::NonNull;
+
+    let cpu_raw = sched.cpu_id.load(Ordering::Relaxed) as usize;
+    if cpu_raw >= MAX_CPUS {
+        return;
+    }
+    let _irq = IrqGuard::new();
+    if !sched.try_transition(TaskState::Sleeping, TaskState::Runnable) {
+        // Déjà Runnable/Running (le signal sera livré au prochain retour
+        // syscall) — rien à faire.
+        return;
+    }
+    // SAFETY: cpu_raw est borné par MAX_CPUS et provient du CPU assigné au TCB;
+    // les IRQ et la préemption sont désactivées par IrqGuard pendant l'accès.
+    let rq = unsafe { run_queue(CpuId(cpu_raw as u32)) };
+    // `sched` est le TCB d'un thread vivant du registre de processus ; le TCB
+    // vit dans le pool statique et n'est pas libéré pendant l'appel.
+    let nn = NonNull::from(sched);
+    rq.enqueue(nn);
+    // Préempter le courant si même CPU pour une livraison rapide (même logique
+    // que sleep_timer_wake).
+    let current = crate::scheduler::core::switch::current_thread_raw();
+    if !current.is_null() {
+        // SAFETY: TCB courant valide publié par le scheduler.
+        let cur = unsafe { &*current };
+        if cur.current_cpu().0 as usize == cpu_raw {
+            cur.request_preemption();
+        }
+    }
+}
+
 /// Envoie un signal à un processus cible par PID.
 /// Appelé par do_exit() (SIGCHLD), kill(2), etc.
 ///
@@ -93,6 +141,9 @@ pub fn send_signal_number_to_pid(pid: Pid, sig_n: u8) -> Result<(), SendError> {
 
     // Notifier le scheduler : signal_pending = true (PROC-04 via raise_signal_pending).
     thread.raise_signal_pending();
+    // FIX-SIGWAKE : réveiller la cible si elle dort, sinon le signal n'est
+    // jamais vu (le thread endormi ne repasse pas par un retour syscall).
+    wake_thread_for_signal(&thread.sched_tcb);
     Ok(())
 }
 
@@ -112,6 +163,8 @@ pub fn send_signal_to_tcb(
         thread.rt_sig_queue.enqueue(sig, info);
     }
     thread.raise_signal_pending();
+    // FIX-SIGWAKE : réveiller la cible endormie (cf. send_signal_number_to_pid).
+    wake_thread_for_signal(&thread.sched_tcb);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,6 +220,34 @@ pub fn handle_pending_signals(
 
     let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
     let pid = Pid(thread.sched_tcb.pid.0);
+
+    // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : has_signal_pending()
+    // vient de passer, donc un signal EST en attente côté scheduler — ce print
+    // montre le masque et les bitmaps bruts au moment précis de la décision de
+    // livraison. Si `std=0 rt=0` malgré `pending=true`, la queue elle-même est
+    // vide/désynchronisée du flag ; si un bit std correspond à SIGSEGV (1<<10)
+    // dans `mask`, c'est le signal qui est bloqué, pas absent.
+    #[cfg(target_arch = "x86_64")]
+    {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        let hex64 = |v: u64| {
+            let mut buf = [0u8; 16];
+            let mut x = v;
+            for i in (0..16).rev() {
+                let nib = (x & 0xf) as u8;
+                buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+                x >>= 4;
+            }
+            buf
+        };
+        out(b"<V14PEND mask=0x");
+        out(&hex64(mask));
+        out(b" std=0x");
+        out(&hex64(thread.sig_queue.pending.load(Ordering::Acquire)));
+        out(b" rt=0x");
+        out(&hex64(thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u64));
+        out(b">");
+    }
 
     // Lire la table des handlers depuis le PCB.
     let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
@@ -252,6 +333,51 @@ fn deliver_one(
 ) {
     use super::handler::setup_signal_frame;
     use crate::process::lifecycle::exit::do_exit;
+
+    // DIAG-SG (bisect mort d'init) : chaque signal livré (rare au boot — pas de
+    // flood). k = U(ser handler) / I(gnore) / T(erm) / C(ore) / S(top) / c(ont).
+    #[cfg(target_arch = "x86_64")]
+    {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        out(b"<SG pid=");
+        let mut v = thread.sched_tcb.pid.0 as u64;
+        if v == 0 {
+            out(b"0");
+        } else {
+            let mut d = [0u8; 20];
+            let mut i = d.len();
+            while v != 0 && i > 0 {
+                i -= 1;
+                d[i] = b'0' + (v % 10) as u8;
+                v /= 10;
+            }
+            out(&d[i..]);
+        }
+        out(b" sig=");
+        let mut s = sig_n as u64;
+        if s == 0 {
+            out(b"0");
+        } else {
+            let mut d = [0u8; 20];
+            let mut i = d.len();
+            while s != 0 && i > 0 {
+                i -= 1;
+                d[i] = b'0' + (s % 10) as u8;
+                s /= 10;
+            }
+            out(&d[i..]);
+        }
+        out(b" k=");
+        out(match action.kind {
+            SigActionKind::User => b"U",
+            SigActionKind::Ignore => b"I",
+            SigActionKind::Term => b"T",
+            SigActionKind::Core => b"C",
+            SigActionKind::Stop => b"S",
+            SigActionKind::Cont => b"c",
+        });
+        out(b">\n");
+    }
 
     match action.kind {
         SigActionKind::Ignore => {

@@ -617,9 +617,7 @@ pub const FAST_PATH_SYSCALLS: &[u64] = &[
 macro_rules! syscall_stub {
     ($name:ident, $reason:expr) => {
         #[allow(non_snake_case)]
-        pub fn $name(
-            _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64,
-        ) -> i64 {
+        pub fn $name(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
             // STUB: $reason
             // Ce syscall est intentionnellement non-implémenté en v0.2.0.
             // Utiliser syscall_stub! pour documenter pourquoi (vs silencieux).

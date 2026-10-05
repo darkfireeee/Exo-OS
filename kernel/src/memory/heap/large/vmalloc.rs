@@ -257,8 +257,8 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
         let pa = phys_base.as_u64();
         let end = pa.saturating_add((size as u64).saturating_add(64));
         for i in 0..24usize {
-            let f = crate::memory::physical::allocator::buddy::DIAG25_INITF[i]
-                .load(Ordering::Relaxed);
+            let f =
+                crate::memory::physical::allocator::buddy::DIAG25_INITF[i].load(Ordering::Relaxed);
             if f != 0 && f >= pa && f < end {
                 use crate::arch::x86_64::terminal::debug_write;
                 use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};

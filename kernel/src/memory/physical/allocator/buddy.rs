@@ -252,12 +252,44 @@ impl BuddyZoneInner {
     }
 }
 
+// FIX-V6 (OOM post-Phoenix, bisect run 7) : compteur global de frames épinglées
+// (PINNED+RESERVED). Croît à chaque reserve_frame_descriptor, décroît à chaque
+// unreserve_frame_descriptor. Permet à diag_ff_log d'imprimer `<tag tot=.. free=.. pin=..>`
+// à NS1/NS2 pour observer la dynamique du pool : si pin croît sans jamais décroître,
+// chaque fork leak des frames → OOM après N forks.
+#[cfg(target_arch = "x86_64")]
+static DIAG_PIN_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 #[inline(always)]
 fn reserve_frame_descriptor(frame: Frame) {
     let desc = FRAME_DESCRIPTORS.get(frame);
+    // FIX-V6 : ne compter QUE les transitions RESERVED 0→1 pour que DIAG_PIN_COUNT
+    // reflète exactement le nombre de frames non-libérables (un reserve double sur
+    // la même frame n'incrémente pas).
+    let was_reserved = desc.flags().contains(FrameFlags::RESERVED);
     desc.set_flag(FrameFlags::PINNED);
     desc.set_flag(FrameFlags::RESERVED);
     desc.clear_flag(FrameFlags::FREE);
+    if !was_reserved {
+        #[cfg(target_arch = "x86_64")]
+        DIAG_PIN_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// FIX-V6 (OOM post-Phoenix) : Dual de `reserve_frame_descriptor` — clear PINNED+RESERVED
+/// sur le descripteur du frame, décrémente DIAG_PIN_COUNT. À appeler AVANT un
+/// `free_pages` légitime d'un frame anciennement épinglé, sans quoi `free_pages`
+/// émet `<25RSVD-REFUSE>` et le frame reste leaké (cause raciale de l'OOM du run 7).
+#[inline(always)]
+fn unreserve_frame_descriptor(frame: Frame) {
+    let desc = FRAME_DESCRIPTORS.get(frame);
+    let was_reserved = desc.flags().contains(FrameFlags::RESERVED);
+    desc.clear_flag(FrameFlags::PINNED);
+    desc.clear_flag(FrameFlags::RESERVED);
+    if was_reserved {
+        #[cfg(target_arch = "x86_64")]
+        DIAG_PIN_COUNT.fetch_sub(1, core::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl BuddyZone {
@@ -498,7 +530,8 @@ impl BuddyZone {
                             continue;
                         }
                         let popped_pfn = self.phys_to_pfn(phys);
-                        if self.descriptors_range_has_reserved(popped_pfn, 1usize << current_order) {
+                        if self.descriptors_range_has_reserved(popped_pfn, 1usize << current_order)
+                        {
                             self.fail_count.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
@@ -620,6 +653,21 @@ impl BuddyZone {
             let mut inner = self.inner.lock();
             let pfn = self.phys_to_pfn(phys);
             if unsafe { !inner.bitmap_range_is_allocated(pfn, 1usize << order) } {
+                // FIX-V9 (visibilité double-free) : ce refus silencieux masquait
+                // la signature du bug corruption runs 4→10 — une frame déjà
+                // libre (double free / free d'une frame jamais allouée par ce
+                // chemin) corrompt les free-lists si on laissait passer. On
+                // journalise désormais chaque occurrence : un <V9DBL-FREE> au
+                // boot = la piste du voleur de frames.
+                #[cfg(target_arch = "x86_64")]
+                {
+                    use crate::arch::x86_64::terminal::debug_write;
+                    debug_write(b"<V9DBL-FREE f=");
+                    diag25_hex(phys.as_u64());
+                    debug_write(b" ord=");
+                    diag25_dec(order as u64);
+                    debug_write(b">\n");
+                }
                 self.fail_count.fetch_add(1, Ordering::Relaxed);
                 return Err(AllocError::InvalidParams);
             }
@@ -942,6 +990,42 @@ impl GlobalBuddyAllocator {
                     return r;
                 }
             }
+        }
+
+        // DIAG-V11-ALLOCFAIL (bisect OOM run 11/12 — <V10OOM cpu=0 pid=1
+        // rip=0x388fdb addr=0x10000007000>) : consigner order + pid + etat du
+        // pool ICI, au point exact ou l'allocation echoue definitivement
+        // (toutes zones et fallbacks epuises) — avant que l'appelant (souvent
+        // un #PF demand-paging) ne remonte vers kernel_panic_exception /
+        // ExoPhoenix, qui efface tout contexte (cf. <V10OOM> deja en place
+        // dans exceptions.rs). V10OOM dit QUI a subi l'echec cote fault
+        // handler (pid/cpu/rip/addr) ; V11FAIL dit COMBIEN etait demande
+        // (order — un seul page ? un bloc contigu enorme ?) et QUOI restait
+        // reellement dans le pool a cet instant precis, cote allocateur.
+        if result.is_err() {
+            use crate::arch::x86_64::terminal::debug_write;
+            // SAFETY: lecture du TCB courant depuis le stockage per-CPU
+            // publie par le scheduler ; meme primitive que
+            // fork_impl.rs::release_leaf_frame et exceptions.rs (V10OOM).
+            let tcb_raw =
+                unsafe { crate::arch::x86_64::smp::percpu::try_read_current_tcb() }
+                    .unwrap_or(0);
+            let cur_pid = if tcb_raw != 0 {
+                // SAFETY: TCB courant publié par le scheduler pour ce CPU.
+                unsafe {
+                    (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
+                        .pid
+                        .0
+                }
+            } else {
+                0
+            };
+            debug_write(b"<V11FAIL order=");
+            diag25_dec(order as u64);
+            debug_write(b" pid=");
+            diag25_dec(cur_pid as u64);
+            debug_write(b">");
+            diag_ff_log(b"<V11FAIL-FF");
         }
 
         result
@@ -1419,7 +1503,11 @@ pub fn diag25_hex(mut v: u64) {
     while i > 0 {
         i -= 1;
         let nib = (v & 0xf) as u8;
-        buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+        buf[i] = if nib < 10 {
+            b'0' + nib
+        } else {
+            b'a' + nib - 10
+        };
         v >>= 4;
     }
     debug_write(&buf);
@@ -1471,6 +1559,57 @@ pub fn reserve_frames(frames: &[Frame]) {
     }
 }
 
+/// FIX-V6 (OOM post-Phoenix, bisect run 7) : Désépingle un frame physique —
+/// clear PINNED+RESERVED, décrémente DIAG_PIN_COUNT.
+///
+/// À appeler :
+///   1. AVANT `free_pages` d'un frame anciennement épinglé — sinon `free_pages`
+///      émet `<25RSVD-REFUSE>` (ligne 598) et refuse de libérer → leak permanent.
+///   2. Au réveil d'init (NS2) sur les frames DIAG25_INITF[] — la protection
+///      n'a de sens que pendant la fenêtre du nanosleep.
+#[inline(always)]
+pub fn unreserve_frame(frame: Frame) {
+    unreserve_frame_descriptor(frame);
+}
+
+/// FIX-V6 : Désépingle une série de frames.
+#[inline(always)]
+pub fn unreserve_frames(frames: &[Frame]) {
+    for &frame in frames {
+        unreserve_frame_descriptor(frame);
+    }
+}
+
+/// FIX-V6 : Statistiques agrégées du buddy pour diagnostic OOM.
+/// Émet `<tag tot=.. free=.. pin=..>` sur le port E9 — appelé à NS1/NS2 et aux forks
+/// pour observer la dynamique du pool. Si `pin` croît sans jamais décroître entre
+/// deux NS2, chaque fork leak des frames → OOM après N forks.
+#[cfg(target_arch = "x86_64")]
+pub fn diag_ff_log(tag: &[u8]) {
+    use crate::arch::x86_64::terminal::debug_write;
+    use core::sync::atomic::Ordering;
+    let mut total: u64 = 0;
+    let mut free: u64 = 0;
+    for zone in &BUDDY.zones {
+        if zone.is_initialized() {
+            total = total.saturating_add(zone.total_frames_count() as u64);
+            free = free.saturating_add(zone.free_frames() as u64);
+        }
+    }
+    let pin = DIAG_PIN_COUNT.load(Ordering::Relaxed);
+    debug_write(tag);
+    debug_write(b" tot=");
+    diag25_dec(total);
+    debug_write(b" free=");
+    diag25_dec(free);
+    debug_write(b" pin=");
+    diag25_dec(pin);
+    debug_write(b">\n");
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub fn diag_ff_log(_tag: &[u8]) {}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // UTILITAIRES INTERNES (bridge physmap temporaire)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1516,6 +1655,38 @@ unsafe fn zero_pages(phys: PhysAddr, order: usize) {
                 break;
             }
             j += 1;
+        }
+        // FIX-V9 (SEGV rip=0 run 10) : le watch DIAG25_INITF ne couvre que les
+        // 24 frames de pile capturées au fork. La corruption du run 10 a touché
+        // une page .text VIVANTE d'init (boot_services décodé en garbage →
+        // call/jmp → rip=0). Si le buddy remet ne serait-ce qu'UNE page du
+        // bloc zéroé en circulation alors qu'elle est encore mappée dans PID 1
+        // (et que le zéroage n'est pas demandé par init lui-même), zéroer =
+        // détruire du code/des données vivants. On capture le coupable sur le
+        // fait plutôt que de laisser mourir init d'un SEGV rip=0 différé.
+        {
+            // SAFETY: lecture du TCB courant depuis le stockage per-CPU publié
+            // par le scheduler pendant l'opération d'allocation.
+            let tcb_raw = unsafe {
+                crate::arch::x86_64::smp::percpu::try_read_current_tcb()
+            }
+            .unwrap_or(0);
+            let cur_pid = if tcb_raw != 0 {
+                // SAFETY: TCB courant publié par le scheduler, vivant ici.
+                unsafe {
+                    (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
+                        .pid
+                        .0
+                }
+            } else {
+                0
+            };
+            if cur_pid != 1 && crate::syscall::table::diag_pid1_frame_mapped(lo) {
+                panic!(
+                    "#V9 CAUGHT zero_pages: frame {:#x} encore mappée dans PID 1 (zero par pid {})",
+                    lo, cur_pid
+                );
+            }
         }
     }
     let virt = phys_to_virt_buddy(phys) as *mut u8;

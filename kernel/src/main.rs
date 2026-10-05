@@ -374,7 +374,14 @@ pub unsafe extern "C" fn kernel_main(
     // Debug : kernel_init termine ('I' = 0x49)
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
 
+    // DIAG-V10 : baseline du pool buddy juste après kernel_init, avant tout
+    // chargement ELF userspace.
+    kernel::memory::physical::allocator::buddy::diag_ff_log(b"<BOOT-FF");
+
     let userspace_status = kernel::userspace_boot::boot_userspace();
+
+    // DIAG-V10 : coût du chargement ELF et de la création de PID 1.
+    kernel::memory::physical::allocator::buddy::diag_ff_log(b"<INIT-FF");
 
     // Mise a jour ecran VGA/framebuffer : noyau initialise, scheduler vivant.
     kernel::arch::x86_64::boot_display::boot_complete();

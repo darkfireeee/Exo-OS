@@ -4,9 +4,7 @@
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
 use super::object_fd::OBJECT_TABLE;
-use super::validation::{
-    exofs_err_to_errno, write_user_struct, EFAULT, EINVAL,
-};
+use super::validation::{exofs_err_to_errno, write_user_struct, EFAULT, EINVAL};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

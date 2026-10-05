@@ -5,8 +5,7 @@
 
 use super::object_fd::OBJECT_TABLE;
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, EFAULT, EINVAL,
-    EXOFS_META_MAX,
+    copy_struct_from_user, exofs_err_to_errno, EFAULT, EINVAL, EXOFS_META_MAX,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;

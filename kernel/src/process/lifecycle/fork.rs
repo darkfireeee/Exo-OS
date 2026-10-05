@@ -371,7 +371,12 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     };
     fork_trace(b"fork: clone-as done\n");
     #[cfg(target_arch = "x86_64")]
-    if ctx.flags.has(ForkFlags::VFORK) {
+    {
+        // FIX-#25 (généralisation boot-hang) : ce bloc était réservé à VFORK ;
+        // init_server utilise désormais fork() simple — sans cette généralisation,
+        // DIAG25_INITF restait vide et TOUS les gardes #25 (write_stack_bytes,
+        // handle_cow_fault, release_leaf_frame <25GUARD-LEAK>, watch free/zero)
+        // étaient inactifs pour le chemin de boot réel.
         crate::memory::physical::allocator::buddy::diag25_hex_always(
             b"<25VF share=",
             shares_address_space as u64,
@@ -384,9 +389,16 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         // sauvage qui corrompt la pile VIVANTE d'init (#25).
         if parent_space_ptr != 0 {
             // SAFETY: parent_space_ptr publié par le PCB du parent, vivant ici.
-            let pas = unsafe {
-                &*(parent_space_ptr as *const crate::memory::virt::UserAddressSpace)
-            };
+            let pas =
+                unsafe { &*(parent_space_ptr as *const crate::memory::virt::UserAddressSpace) };
+            let mut old_set = [0u64; 24];
+            let mut k = 0usize;
+            while k < 24 {
+                old_set[k] = crate::memory::physical::allocator::buddy::DIAG25_INITF[k]
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                k += 1;
+            }
+            let mut new_set = [0u64; 24];
             let mut k = 0u64;
             while k < 24 {
                 let va = 0x7fff_ffff_0000u64.wrapping_sub(k * 0x1000);
@@ -394,9 +406,33 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
                     .translate(crate::memory::core::VirtAddr::new(va))
                     .map(|p| p.as_u64() & !0xfffu64)
                     .unwrap_or(0);
+                new_set[k as usize] = f;
                 crate::memory::physical::allocator::buddy::DIAG25_INITF[k as usize]
                     .store(f, core::sync::atomic::Ordering::Relaxed);
                 k += 1;
+            }
+            let mut i = 0usize;
+            while i < 24 {
+                let old = old_set[i];
+                if old != 0 {
+                    let mut still_present = false;
+                    let mut j = 0usize;
+                    while j < 24 {
+                        if new_set[j] == old {
+                            still_present = true;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if !still_present {
+                        crate::memory::physical::allocator::buddy::unreserve_frame(
+                            crate::memory::core::Frame::containing(
+                                crate::memory::core::PhysAddr::new(old),
+                            ),
+                        );
+                    }
+                }
+                i += 1;
             }
             let mut k = 0usize;
             while k < 24 {
@@ -404,9 +440,9 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
                     .load(core::sync::atomic::Ordering::Relaxed);
                 if f != 0 {
                     crate::memory::physical::allocator::buddy::reserve_frame(
-                        crate::memory::core::Frame::containing(
-                            crate::memory::core::PhysAddr::new(f),
-                        ),
+                        crate::memory::core::Frame::containing(crate::memory::core::PhysAddr::new(
+                            f,
+                        )),
                     );
                 }
                 k += 1;
@@ -646,15 +682,14 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     // (gc/import/snapshot/admin = PRIVILEGED_RIGHTS) : ceux-ci ne se propagent qu'au
     // travers d'un grant/délégation explicites. Empêche que tout fork (shell, app)
     // hérite l'admin FS d'init.
-    child_pcb.cap_table = alloc::boxed::Box::new(
-        crate::security::capability::CapTable::inherit_from_masked(
+    child_pcb.cap_table =
+        alloc::boxed::Box::new(crate::security::capability::CapTable::inherit_from_masked(
             &parent_pcb.cap_table,
             crate::security::capability::Rights::from_bits_truncate(
                 crate::fs::exofs::core::rights::PRIVILEGED_RIGHTS,
             ),
             crate::security::capability::CapObjectType::FileInode,
-        ),
-    );
+        ));
 
     // FIX-SEC-T1.1 : l'enfant hérite AU MOINS les restrictions zero-trust
     // (sandbox/pledge) du parent — un process sandboxé ne peut pas s'en échapper
@@ -728,9 +763,16 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     // au boot. Ici on logue l'événement de fork dans l'audit pour traçabilité.
     {
         use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
-        log_event(AuditCategory::Process, child_pid.0, 0u32, 0u16,
-            crate::syscall::numbers::SYS_CLONE as u32, 0i32,
-            AuditOutcome::Allow, [0u8; 8]);
+        log_event(
+            AuditCategory::Process,
+            child_pid.0,
+            0u32,
+            0u16,
+            crate::syscall::numbers::SYS_CLONE as u32,
+            0i32,
+            AuditOutcome::Allow,
+            [0u8; 8],
+        );
         // ExoLedger : trace immuable en plus du ring buffer d'audit.
         crate::security::exoledger::exo_ledger_append(
             crate::security::exoledger::ActionTag::Custom {

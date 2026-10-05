@@ -16,7 +16,9 @@ pub fn read_ticks() -> u64 {
         let count: u64;
         // SAFETY: CNTVCT_EL0 est lisible depuis EL0 quand CNTKCTL_EL1.EL0VCTEN=1.
         // En kernel (EL1/EL2), l'accès est toujours autorisé.
-        unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) count, options(nostack, nomem)); }
+        unsafe {
+            core::arch::asm!("mrs {}, cntvct_el0", out(reg) count, options(nostack, nomem));
+        }
         count
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]

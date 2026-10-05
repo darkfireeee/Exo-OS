@@ -101,7 +101,8 @@ impl ProcessRegistry {
         use alloc::alloc::{alloc_zeroed, Layout};
         // FIX-KRN-10: layout calculé après capacité finale déterminée ci-dessus.
         // Sera recalculé ci-dessous avec final_capacity.
-        let _layout_orig = Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
+        let _layout_orig =
+            Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
         // FIX-KRN-10 (rapport_analyse §6.3) : vérification de la mémoire disponible
         // avant l'allocation statique de 512Ko (32768 × 16B).
         // Sur QEMU -m 256M, cette allocation représente 0.2% de la RAM — acceptable.
@@ -120,7 +121,7 @@ impl ProcessRegistry {
             // Fallback : allouer au maximum la moitié de la RAM disponible pour le registry
             let safe_cap = (available_bytes / 2) / core::mem::size_of::<RegistrySlot>();
             crate::arch::x86_64::terminal::debug_write(
-                b"process_registry: WARNING reducing capacity due to low memory\n"
+                b"process_registry: WARNING reducing capacity due to low memory\n",
             );
             safe_cap.max(64) // minimum 64 slots pour les serveurs Ring1
         } else {

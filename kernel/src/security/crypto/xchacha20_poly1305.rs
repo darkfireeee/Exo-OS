@@ -289,6 +289,9 @@ mod tests {
             0xcb, 0xd0, 0x83, 0xe8, 0xa2, 0x50, 0x3c, 0x4e,
         ];
         let block = chacha20_block(&key, &nonce, counter);
-        assert_eq!(block, expected, "ChaCha20 block non conforme RFC 8439 §2.3.2");
+        assert_eq!(
+            block, expected,
+            "ChaCha20 block non conforme RFC 8439 §2.3.2"
+        );
     }
 }

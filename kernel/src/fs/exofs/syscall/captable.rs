@@ -47,8 +47,7 @@ fn caller_pid() -> Option<u32> {
         return None;
     }
     // SAFETY: tcb_raw != 0 ; pointe vers le TCB vivant du thread courant.
-    let tcb =
-        unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+    let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     Some(tcb.pid.0)
 }
 
@@ -176,11 +175,11 @@ pub fn revoke_object_cap(object_id: u64) {
 /// correspondant aux flags). Le durcissement « qui peut ouvrir quoi » est le TIER 1.
 /// Le MÉCANISME (mint + vérif + révocation) est néanmoins réel dès maintenant.
 pub fn rights_from_open_flags(flags: u32) -> u32 {
+    use super::object_fd::open_flags;
     use crate::fs::exofs::core::rights::{
         RIGHT_CREATE, RIGHT_DELETE, RIGHT_INSPECT_CONTENT, RIGHT_LIST, RIGHT_READ, RIGHT_SETMETA,
         RIGHT_STAT, RIGHT_WRITE,
     };
-    use super::object_fd::open_flags;
     let mut r = RIGHT_STAT | RIGHT_LIST;
     if open_flags::can_read(flags) {
         r |= RIGHT_READ | RIGHT_INSPECT_CONTENT;

@@ -55,7 +55,7 @@ pub mod thread;
 use self::signal::default::Signal;
 use self::signal::delivery::send_signal_to_pid;
 use crate::memory::OomKillCandidate;
-use ::core::sync::atomic::Ordering;
+use crate::rust_core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Re-exports principaux

@@ -47,6 +47,28 @@ fn mark_exit(
     exit_status: u32,
     join_result: u64,
 ) {
+    // DIAG-X1 (bisect hang boot) : détecter une mort silencieuse d'init (PID 1)
+    // ou d'ipc_router (PID 2) pendant le boot — sans ce marqueur, un exit
+    // prématuré d'init laisse le système vivant mais figé (plus aucun log
+    // userspace, seuls les kthreads tournent encore).
+    #[cfg(target_arch = "x86_64")]
+    if pcb.pid.0 <= 2 {
+        crate::arch::x86_64::terminal::debug_write(b"<X1 pid=");
+        let digit = b'0' + (pcb.pid.0 as u8).min(9);
+        crate::arch::x86_64::terminal::debug_write(&[digit]);
+        crate::arch::x86_64::terminal::debug_write(b" code=0x");
+        let mut v = exit_status as u64;
+        let mut buf = [0u8; 8];
+        let mut i = 8usize;
+        while i > 0 {
+            i -= 1;
+            let nib = (v & 0xf) as u8;
+            buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+            v >>= 4;
+        }
+        crate::arch::x86_64::terminal::debug_write(&buf);
+        crate::arch::x86_64::terminal::debug_write(b">\n");
+    }
     pcb.set_exiting();
     pcb.exit_code.store(exit_status, Ordering::Release);
     pcb.flags

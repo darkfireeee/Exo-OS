@@ -34,6 +34,7 @@ tla2tools.jar
 /states/
 /.codex-audit-kernel-protocol-pre-v0.2-worklog.md
 /.codex-fs-completion-worklog.md
+/.codex-audit-bug-25-worklog.md
 
 # macOS
 .DS_Store

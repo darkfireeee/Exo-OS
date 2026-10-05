@@ -16,17 +16,16 @@ pub mod memory_map;
 // Conserve pour compatibilite QEMU/dev. Par defaut actif (default feature).
 // Production UEFI-only: cargo build --no-default-features
 // DEPRECIE - sera retire quand Phase 8 (exo-boot UEFI GPT) sera complete.
-#[cfg_attr(not(feature = "multiboot2_compat"),
-    allow(dead_code, unused_imports))]
+#[cfg_attr(not(feature = "multiboot2_compat"), allow(dead_code, unused_imports))]
 pub mod multiboot2;
 pub mod trampoline_asm;
 pub mod uefi;
 
 pub use early_init::arch_boot_init;
 pub use memory_map::{
-    init_memory_subsystem_exoboot, init_memory_subsystem_uefi,
-    MemoryRegion, MemoryRegionType, EXOBOOT_BOOT_INFO_MAGIC, EXOBOOT_MAGIC_U32, MEMORY_MAP,
-    MEMORY_REGION_COUNT, PHYS_MEMORY_MAX, PHYS_MEMORY_START,
+    init_memory_subsystem_exoboot, init_memory_subsystem_uefi, MemoryRegion, MemoryRegionType,
+    EXOBOOT_BOOT_INFO_MAGIC, EXOBOOT_MAGIC_U32, MEMORY_MAP, MEMORY_REGION_COUNT, PHYS_MEMORY_MAX,
+    PHYS_MEMORY_START,
 };
 // PATCH-P2-BOOT: exports multiboot2 gates.
 // DEPRECIE - actif par defaut (default feature). Desactiver: --no-default-features

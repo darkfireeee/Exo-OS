@@ -138,7 +138,9 @@ pub fn push(mut ev: ShieldEvent) {
 /// Raccourci de push (évite de construire un `ShieldEvent` au site d'appel).
 #[inline]
 pub fn push_event(pid: u32, event_type: u8, severity: u8, opcode: u32, arg0: u64, arg1: u64) {
-    push(ShieldEvent::new(pid, event_type, severity, opcode, arg0, arg1));
+    push(ShieldEvent::new(
+        pid, event_type, severity, opcode, arg0, arg1,
+    ));
 }
 
 /// Draine jusqu'à `out.len()` événements dans `out`. Retourne le nombre copié.

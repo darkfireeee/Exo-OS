@@ -5,7 +5,7 @@
 //
 // Corrections appliquées (FIX-4) :
 //   - resolve_blob_id : appelle resolve_path_to_blob() au lieu de toujours retourner NotFound
-//   - Lecture cache   : BLOB_CACHE.get(&BlobId) — API correcte (plus get_blob_data)
+//   - Lecture cache   : cache ELF dédié, sans accès à `BLOB_CACHE` sur le chemin execve
 //   - PT_LOAD         : demand paging pur via VMA File-backed + FileFaultProvider
 //   - map_stack_pages : alloc frames ZEROED + map_page() via PageTableBuilder
 //   - ElfLoadError    : InvalidElf/UnsupportedArch (variants qui existent dans l'enum)

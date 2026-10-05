@@ -249,7 +249,11 @@ pub fn sys_exofs_object_read(
     // Zero-Trust : vérification MLS par processus (labels + trust state).
     {
         let tcb = crate::scheduler::core::switch::current_thread_raw();
-        let pid = if !tcb.is_null() { unsafe { (*tcb).pid.0 } } else { 0u32 };
+        let pid = if !tcb.is_null() {
+            unsafe { (*tcb).pid.0 }
+        } else {
+            0u32
+        };
         let ctx = crate::security::zero_trust::context_for_caller(pid, 0);
         if crate::security::zero_trust::verify_file_read(
             &ctx,

@@ -210,7 +210,10 @@ mod tests {
         assert_eq!(process_restrictions(INIT_PID), 0);
 
         // PID hors plage → non traçable.
-        assert!(!restrict_process(MAX_TRACKED_PIDS as u32, restriction_flags::NO_FORK));
+        assert!(!restrict_process(
+            MAX_TRACKED_PIDS as u32,
+            restriction_flags::NO_FORK
+        ));
         assert_eq!(process_restrictions(MAX_TRACKED_PIDS as u32 + 5), 0);
 
         reset(&[P_A]);

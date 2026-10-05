@@ -326,7 +326,7 @@ fn current_cpu_id_checked() -> u32 {
 /// Point d'orchestration des signaux après préemption ou exception.
 /// Vérifie `signal_pending` dans le TCB et orchestre la livraison.
 /// La livraison effective est déléguée à `process::signal::delivery`.
-fn exception_return_to_user(frame: &mut ExceptionFrame) {
+fn exception_return_to_user_inner(frame: &mut ExceptionFrame, allow_resched: bool) {
     let tcb_ptr = current_tcb_raw_checked();
     if tcb_ptr == 0 {
         return;
@@ -339,14 +339,35 @@ fn exception_return_to_user(frame: &mut ExceptionFrame) {
         );
     }
 
-    // Les IRQ timer/IPI ne font que poser NEED_RESCHED. Le retour Ring3 est le
-    // point stable où l'on peut basculer vers un autre thread, en conservant la
-    // frame d'exception sur la pile kernel du thread préempté.
-    // SAFETY: appelé au retour d'IRQ, point de préemption stable ; la frame
-    // d'exception reste sur la pile kernel du thread préempté pendant le switch.
-    unsafe {
-        let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+    if allow_resched {
+        // Les IRQ timer/IPI ne font que poser NEED_RESCHED. Le retour Ring3 est le
+        // point stable où l'on peut basculer vers un autre thread, en conservant la
+        // frame d'exception sur la pile kernel du thread préempté.
+        // SAFETY: appelé au retour d'IRQ, point de préemption stable ; la frame
+        // d'exception reste sur la pile kernel du thread préempté pendant le switch.
+        unsafe {
+            let _ = crate::scheduler::core::switch::schedule_current_if_needed();
+        }
     }
+}
+
+/// Retour normal depuis une exception Ring 3.
+#[inline]
+fn exception_return_to_user(frame: &mut ExceptionFrame) {
+    exception_return_to_user_inner(frame, true);
+}
+
+/// Retourne d'une faute récupérée sans commuter de thread entre la réparation
+/// de PTE et le rejeu de l'instruction fautive.
+///
+/// Une écriture de pile CoW peut avoir fauté au milieu d'un `call`. Replanifier
+/// ici laisse l'enfant progresser pendant que le parent possède encore la frame
+/// d'exception qui doit rejouer ce `call`; le retour d'adresse restait alors nul
+/// dans le dump #25. Les signaux continuent à être délivrés, seule la préemption
+/// est différée jusqu'au prochain point d'entrée noyau sûr.
+#[inline]
+fn exception_return_to_user_after_recovered_fault(frame: &mut ExceptionFrame) {
+    exception_return_to_user_inner(frame, false);
 }
 
 #[inline]
@@ -393,6 +414,20 @@ fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
 
 fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     let tcb_raw = current_tcb_raw_checked();
+    // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : le #GP1 identique
+    // bit-pour-bit d'un run à l'autre, sans jamais un seul <SG pid=... k=...>
+    // (imprimé par deliver_one avant toute action), prouve que la livraison
+    // n'atteint jamais deliver_one — donc jamais setup_signal_frame (V13),
+    // ce qui explique pourquoi ce patch n'a rien changé. Ce marqueur dit si
+    // c'est déjà ICI que ça casse (tcb introuvable → queue_signal_for_current
+    // ne fait RIEN, silencieusement).
+    #[cfg(target_arch = "x86_64")]
+    {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        out(b"<V14QSIG tcb=");
+        if tcb_raw == 0 { out(b"0"); } else { out(b"nz"); }
+        out(b">");
+    }
     if tcb_raw == 0 {
         return;
     }
@@ -401,6 +436,249 @@ fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let pid = crate::process::core::pid::Pid(tcb.pid.0);
     let _ = crate::process::signal::delivery::send_signal_to_pid(pid, sig);
+}
+
+/// DIAG-PFK (bisect run 5) : pour chaque #PF userspace de PID 1, compare la
+/// frame obtenue en marchant la PML4 RÉELLE d'init (pcb.address_space) avec la
+/// frame obtenue en marchant la table sur laquelle l'utilisateur EXÉCUTAIT
+/// réellement (gs:[0x48] — CR3 user préservée par le stub d'exception).
+///
+/// Motivation : run 5 — init se réveille avec sa pile validée propre (CKP
+/// lit la PML4 réelle) puis SEGV rip=0 avec une pile contenant des données
+/// plausibles d'un autre binaire. Si gs:[0x48] ≠ table d'init au moment de la
+/// faute, init exécutait sur l'AS d'un AUTRE processus : c'est la preuve de la
+/// désync KPTI (et le FIX-KPTI-RESYNC du nanosleep l'éliminera).
+#[cfg(target_arch = "x86_64")]
+fn diag_pfk_pid1(frame: &ExceptionFrame, fault_addr_raw: u64) {
+    use crate::memory::core::{PhysAddr, VirtAddr};
+    use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
+
+    let tcb_raw = current_tcb_raw_checked();
+    if tcb_raw == 0 {
+        return;
+    }
+    // SAFETY: TCB courant publié par le scheduler pour ce CPU.
+    let pid = unsafe {
+        (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
+            .pid
+            .0
+    };
+    if pid != 1 {
+        return;
+    }
+
+    // CR3 user au moment de la faute (le stub ne modifie pas gs:[0x48]).
+    let user_cr3: u64;
+    // SAFETY: lecture du slot per-CPU (GS kernel actif dans le handler).
+    unsafe {
+        core::arch::asm!(
+            "mov {v}, gs:[0x48]",
+            v = out(reg) user_cr3,
+            options(nostack, preserves_flags),
+        );
+    }
+    if user_cr3 == 0 {
+        return; // KPTI désactivé — pas de table d'exécution séparée
+    }
+
+    // PML4 réelle d'init via le PCB.
+    let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(1))
+    else {
+        return;
+    };
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return;
+    }
+    // SAFETY: AS de PID 1 vivant pendant le handler.
+    let real_pml4 = unsafe {
+        (*(as_ptr as *const crate::memory::virt::UserAddressSpace))
+            .pml4_phys()
+            .as_u64()
+    };
+    if real_pml4 == 0 {
+        return;
+    }
+
+    let walk_leaf = |pml4: u64, va: u64| -> u64 {
+        let walker = PageTableWalker::new(PhysAddr::new(pml4 & !0xfffu64));
+        match walker.walk_read(VirtAddr::new(va)) {
+            WalkResult::Leaf { entry, .. } | WalkResult::HugePage { entry, .. } => {
+                entry.phys_addr().as_u64() & !0xfffu64
+            }
+            _ => u64::MAX,
+        }
+    };
+
+    let rsp = frame.rsp;
+    let rip = frame.rip;
+    let f_rsp_real = walk_leaf(real_pml4, rsp);
+    let f_rsp_user = walk_leaf(user_cr3, rsp);
+    let f_rip_real = walk_leaf(real_pml4, rip);
+    let f_rip_user = walk_leaf(user_cr3, rip);
+
+    let out = crate::arch::x86_64::terminal::debug_write;
+    let hex = |val: u64| {
+        let lut = b"0123456789abcdef";
+        let mut hb = [0u8; 16];
+        let mut x = val;
+        let mut k = 16;
+        while k > 0 {
+            k -= 1;
+            hb[k] = lut[(x & 0xf) as usize];
+            x >>= 4;
+        }
+        hb
+    };
+
+    if f_rsp_real != f_rsp_user || f_rip_real != f_rip_user {
+        // DÉSYNC PROUVÉE : l'utilisateur exécutait sur une AUTRE table que
+        // la PML4 réelle d'init. u48 = CR3 au moment de la faute.
+        out(b"<PFK! u48=0x");
+        out(&hex(user_cr3));
+        out(b" real=0x");
+        out(&hex(real_pml4));
+        out(b" rspR=0x");
+        out(&hex(f_rsp_real));
+        out(b" rspU=0x");
+        out(&hex(f_rsp_user));
+        out(b" ripR=0x");
+        out(&hex(f_rip_real));
+        out(b" ripU=0x");
+        out(&hex(f_rip_user));
+        out(b">\n");
+    } else {
+        out(b"<PFK ok u48=0x");
+        out(&hex(user_cr3));
+        out(b" rspF=0x");
+        out(&hex(f_rsp_real));
+        out(b">\n");
+    }
+    let _ = fault_addr_raw;
+}
+
+/// DIAG-UD1/GP1 (bisect mort d'init) : dump complet d'une exception fatale
+/// userspace — même format que le marqueur <SEGV> DIAG-25 de do_page_fault :
+/// pid, rip, rsp, ripb (8 octets IN-MÉMOIRE à RIP : `0f 0b` en tête = vrai
+/// `ud2` compilé ; octets aléatoires = saut indirect corrompu #25), registres
+/// clés et 8 mots de pile user (chaîne de return addresses).
+///
+/// Lectures volatiles guardées : uniquement si l'adresse est une plage user
+/// plausible — une lecture non gardée re-fauterait en kernel et détruirait le
+/// dump.
+fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    let hex = |val: u64| {
+        let lut = b"0123456789abcdef";
+        let mut hb = [0u8; 16];
+        let mut x = val;
+        let mut k = 16;
+        while k > 0 {
+            k -= 1;
+            hb[k] = lut[(x & 0xf) as usize];
+            x >>= 4;
+        }
+        hb
+    };
+
+    out(tag);
+    // PID décimal du thread courant.
+    let tcb_raw = current_tcb_raw_checked();
+    let mut v = if tcb_raw != 0 {
+        // SAFETY: tcb_raw != 0 vérifié ; TCB courant publié par le scheduler.
+        unsafe {
+            (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
+                .pid
+                .0 as u64
+        }
+    } else {
+        0
+    };
+    if v == 0 {
+        out(b"0");
+    } else {
+        let mut d = [0u8; 20];
+        let mut i = d.len();
+        while v != 0 && i > 0 {
+            i -= 1;
+            d[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        out(&d[i..]);
+    }
+
+    out(b" rip=");
+    out(&hex(frame.rip));
+    out(b" rsp=");
+    out(&hex(frame.rsp));
+    // Octets à RIP : le fetch a réussi (l'instruction a été décodée) donc la
+    // page RIP est présente et lisible.
+    // SAFETY: lecture guardée sur plage user plausible uniquement.
+    let mut rb = 0u64;
+    if frame.rip >= 0x1000 && frame.rip < 0x0000_8000_0000_0000 {
+        for bi in 0..8u64 {
+            let byte = unsafe { core::ptr::read_volatile((frame.rip + bi) as *const u8) };
+            rb |= (byte as u64) << (bi * 8);
+        }
+    }
+    out(b" ripb=");
+    out(&hex(rb));
+    out(b" rax=");
+    out(&hex(frame.rax));
+    out(b" rcx=");
+    out(&hex(frame.rcx));
+    out(b" rdx=");
+    out(&hex(frame.rdx));
+    out(b" rsi=");
+    out(&hex(frame.rsi));
+    out(b" rdi=");
+    out(&hex(frame.rdi));
+    out(b" rbp=");
+    out(&hex(frame.rbp));
+    // DIAG-V8 (SEGV run 9) : r8-r15 étaient absents du dump — le registre
+    // BASE de l'instruction fautive ([rbx-0x82]/[rbp-0x82]/[r8..15+disp]) est
+    // probablement parmi eux. Sans eux, impossible de trancher entre « retour
+    // syscall -11 déréférencé » et « pointeur rechargé d'une pile zéroée ».
+    out(b" r8=");
+    out(&hex(frame.r8));
+    out(b" r9=");
+    out(&hex(frame.r9));
+    out(b" r10=");
+    out(&hex(frame.r10));
+    out(b" r11=");
+    out(&hex(frame.r11));
+    out(b" r12=");
+    out(&hex(frame.r12));
+    out(b" r13=");
+    out(&hex(frame.r13));
+    out(b" r14=");
+    out(&hex(frame.r14));
+    out(b" r15=");
+    out(&hex(frame.r15));
+    // 8 mots de pile user à RSP : la chaîne de return addresses — révèle
+    // d'où provient le saut vers le RIP fautif (corruption #25).
+    out(b" stk=");
+    if frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
+        for wi in 0..8u64 {
+            // SAFETY: RSP user plausible ; lecture volatile.
+            let w = unsafe { core::ptr::read_volatile((frame.rsp + wi * 8) as *const u64) };
+            out(&hex(w));
+            out(b" ");
+        }
+    }
+    // DIAG-UD1/SEGV étendu (run 5) : 16 octets à RDI — identifie l'argument
+    // du call null (souvent un pointeur .rodata : la chaîne de caractères).
+    out(b" rdib=");
+    if frame.rdi >= 0x1000 && frame.rdi < 0x0000_8000_0000_0000 {
+        for bi in 0..16u64 {
+            // SAFETY: RDI user plausible ; lecture volatile.
+            let byte = unsafe { core::ptr::read_volatile((frame.rdi + bi) as *const u8) };
+            let lut = b"0123456789abcdef";
+            out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+        }
+    }
+    out(b">\n");
 }
 
 #[cfg(all(debug_assertions, exo_kernel_trace))]
@@ -663,6 +941,10 @@ extern "C" fn do_invalid_opcode(frame: *mut ExceptionFrame) {
     EXC_COUNTERS[6].fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
+        // DIAG-UD1 (bisect mort d'init) : dump complet AVANT de livrer SIGILL —
+        // rip + ripb (octets in-memory : `0f 0b` = ud2 compilé, octets aléatoires
+        // = saut corrompu #25) + pile (chaîne de return addresses).
+        diag_user_exception_dump(b"<UD1 ", frame);
         // FIX-UD-SIGILL : livrer réellement SIGILL. Sans ça, on retournait au RIP
         // fautif tel quel → l'instruction invalide (typiquement `ud2` d'un panic
         // Rust côté serveur) re-déclenche immédiatement #UD → livelock noyau
@@ -805,7 +1087,12 @@ extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
     GP_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
-        // SIGSEGV
+        // DIAG-GP1 (bisect mort d'init) : dump complet du #GP userspace.
+        diag_user_exception_dump(b"<GP1 ", frame);
+        // FIX-GP-SIGSEGV : un #GP Ring 3 doit livrer SIGSEGV. L'ancien code ne
+        // posait AUCUN signal et retournait à la même instruction → #GP en
+        // boucle (livelock silencieux). Même traitement que #PF/#UD.
+        queue_signal_for_current(crate::process::signal::Signal::SIGSEGV);
         exception_return_to_user(frame);
     } else {
         kernel_panic_exception("#GP kernel", frame);
@@ -930,6 +1217,14 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         );
     }
 
+    // DIAG-PFK (bisect run 5) : pour chaque #PF user de PID 1, comparer la
+    // table d'exécution réelle (gs:[0x48]) avec la PML4 d'init — détecte une
+    // désync KPTI (init exécutant sur l'AS d'un autre processus).
+    #[cfg(target_arch = "x86_64")]
+    if frame.from_userspace() {
+        diag_pfk_pid1(frame, fault_addr_raw);
+    }
+
     // Dispatcher vers le sous-système memory/
     //
     // Une faute sur une adresse userspace peut arriver avec CS=kernel pendant
@@ -967,7 +1262,7 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             }
             // Fault résolu (demand paging, CoW, swap-in) — reprendre l'exécution.
             if frame.from_userspace() {
-                exception_return_to_user(frame);
+                exception_return_to_user_after_recovered_fault(frame);
             }
             // En mode kernel : retour direct via IRETQ (stub ASM)
         }
@@ -1057,17 +1352,79 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(frame.rdi));
                     out(b" rbp=");
                     out(&hex(frame.rbp));
+                    // DIAG-V8 (SEGV run 9) : r8-r15 absents du dump — le
+                    // registre BASE de l'instruction fautive est probablement
+                    // parmi eux (ex: mov rax,[rbx-0x82] avec rbx rechargé à 0
+                    // depuis une page de pile volée/vidée).
+                    out(b" r8=");
+                    out(&hex(frame.r8));
+                    out(b" r9=");
+                    out(&hex(frame.r9));
+                    out(b" r10=");
+                    out(&hex(frame.r10));
+                    out(b" r11=");
+                    out(&hex(frame.r11));
+                    out(b" r12=");
+                    out(&hex(frame.r12));
+                    out(b" r13=");
+                    out(&hex(frame.r13));
+                    out(b" r14=");
+                    out(&hex(frame.r14));
+                    out(b" r15=");
+                    out(&hex(frame.r15));
                     out(b" cs=");
                     out(&hex(frame.cs));
                     out(b" ss=");
                     out(&hex(frame.ss));
                     out(b" rfl=");
                     out(&hex(frame.rflags));
+                    // DIAG-V9 (SEGV run 10 — console lossy) : le dump du run 10 a
+                    // PERDU sa queue (mots 8-15 de stk + ret0= + cs16=) car la
+                    // console E9 boude en fin de ligne longue. ret0 est LA donnée
+                    // décisive (adresse de retour du call/jmp vers NULL, directement
+                    // addr2line-able) → on l'imprime DÈS MAINTENANT, avant les 16
+                    // mots de pile, pour qu'elle survive à toute troncature.
+                    if frame.rip == 0 && frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
+                        // SAFETY: RSP user plausible ; lecture volatile.
+                        let ret0 = unsafe {
+                            core::ptr::read_volatile(frame.rsp as *const u64)
+                        };
+                        out(b" ret0=");
+                        out(&hex(ret0));
+                        if ret0 >= 0x1000_0000_0000 && ret0 < 0x1001_0000_0000 {
+                            out(b" cs16=");
+                            let base = ret0.saturating_sub(16);
+                            for bi in 0..16u64 {
+                                // SAFETY: ret0 dans la plage binaire user (mappée,
+                                // exécutée juste avant le call).
+                                let byte = unsafe {
+                                    core::ptr::read_volatile((base + bi) as *const u8)
+                                };
+                                let lut = b"0123456789abcdef";
+                                out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                            }
+                        }
+                    }
+                    // DIAG-V9 : rdx du run 10 = 0x1000001ce5b (adresse .text) —
+                    // si rdx pointe dans le binaire, dumper 8 octets à rdx : le
+                    // décodage de ces octets identifie si le flux d'instructions
+                    // était déjà corrompu (garbage) au moment du saut vers 0.
+                    if frame.rdx >= 0x1000_0000_0000 && frame.rdx < 0x1001_0000_0000 {
+                        out(b" rdx8=");
+                        for bi in 0..8u64 {
+                            // SAFETY: rdx dans la plage binaire user (mappée).
+                            let byte = unsafe {
+                                core::ptr::read_volatile((frame.rdx + bi) as *const u8)
+                            };
+                            let lut = b"0123456789abcdef";
+                            out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                        }
+                    }
                     // DIAG-25 : 8 mots de la pile user à RSP — révèle la chaîne de
                     // retour (d'où provient le saut vers le RIP corrompu).
                     out(b" stk=");
                     if frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
-                        for wi in 0..8u64 {
+                        for wi in 0..16u64 {
                             // SAFETY: RSP user plausible ; KPTI off ; lecture volatile.
                             let w = unsafe {
                                 core::ptr::read_volatile((frame.rsp + wi * 8) as *const u64)
@@ -1076,6 +1433,9 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                             out(b" ");
                         }
                     }
+                    // (DIAG-NULLCALL bisect run 6 — ret0/cs16 déplacés EN TÊTE du
+                    // dump par FIX-V9 ci-dessus pour survivre à la troncature de la
+                    // console lossy ; l'ancien bloc tail est retiré.)
                     out(b">\n");
                 }
                 crate::security::shield_feed::push_event(
@@ -1093,12 +1453,42 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             }
         }
         FaultResult::Oom { addr } => {
-            // Out of memory — OOM killer notifié.
-            let _ = addr;
             if frame.from_userspace() {
+                // Out of memory — OOM killer notifié côté userspace.
+                let _ = addr;
                 queue_signal_for_current(crate::process::signal::Signal::SIGKILL);
                 exception_return_to_user(frame);
             } else {
+                // DIAG-V10-OOMCTX : journaliser le contexte avant la récupération
+                // ExoPhoenix, qui efface le contexte de l'exception.
+                use crate::arch::x86_64::terminal::debug_write;
+                use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
+                let cpu_id = crate::arch::x86_64::cpu::topology::current_cpu_id().0;
+                // SAFETY: TCB courant publié dans le stockage per-CPU pendant
+                // le traitement de l'exception.
+                let tcb_raw = unsafe {
+                    crate::arch::x86_64::smp::percpu::try_read_current_tcb()
+                }
+                .unwrap_or(0);
+                let cur_pid = if tcb_raw != 0 {
+                    // SAFETY: TCB courant valide pendant cette exception.
+                    unsafe {
+                        (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
+                            .pid
+                            .0
+                    }
+                } else {
+                    0
+                };
+                debug_write(b"<V10OOM cpu=");
+                diag25_dec(cpu_id as u64);
+                debug_write(b" pid=");
+                diag25_dec(cur_pid as u64);
+                debug_write(b" rip=0x");
+                diag25_hex(frame.rip);
+                debug_write(b" addr=0x");
+                diag25_hex(addr.as_u64());
+                debug_write(b">\n");
                 kernel_panic_exception("#PF kernel : OOM", frame);
             }
         }

@@ -182,7 +182,11 @@ pub fn cpuid_cet_available() -> (bool, bool) {
 #[inline(always)]
 // SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u64) {
-    assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
+    assert!(
+        offset + 8 <= 88,
+        "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}",
+        offset
+    ); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
     core::ptr::write_volatile(base.add(offset) as *mut u64, val);
 }
@@ -191,7 +195,11 @@ unsafe fn tcb_write_cold_u64(tcb: &mut ThreadControlBlock, offset: usize, val: u
 #[inline(always)]
 // SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
-    assert!(offset + 8 <= 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
+    assert!(
+        offset + 8 <= 88,
+        "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}",
+        offset
+    ); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
     core::ptr::read_volatile(base.add(offset) as *const u64)
 }
@@ -200,7 +208,11 @@ unsafe fn tcb_read_cold_u64(tcb: &ThreadControlBlock, offset: usize) -> u64 {
 #[inline(always)]
 // SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8) {
-    assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
+    assert!(
+        offset < 88,
+        "PATCH-P1-DEBUG: TCB _cold_reserve write out of bounds: offset={}",
+        offset
+    ); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8 as *mut u8;
     core::ptr::write_volatile(base.add(offset), val);
 }
@@ -209,7 +221,11 @@ unsafe fn tcb_write_cold_u8(tcb: &mut ThreadControlBlock, offset: usize, val: u8
 #[inline(always)]
 // SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn tcb_read_cold_u8(tcb: &ThreadControlBlock, offset: usize) -> u8 {
-    assert!(offset < 88, "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}", offset); // promis debug_assert → assert (release visible)
+    assert!(
+        offset < 88,
+        "PATCH-P1-DEBUG: TCB _cold_reserve read out of bounds: offset={}",
+        offset
+    ); // promis debug_assert → assert (release visible)
     let base = tcb._cold_reserve.as_ptr() as *const u8;
     core::ptr::read_volatile(base.add(offset))
 }

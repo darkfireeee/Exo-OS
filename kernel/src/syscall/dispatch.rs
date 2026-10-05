@@ -39,8 +39,10 @@ use crate::syscall::fast_path::try_fast_path;
 use crate::syscall::numbers::{is_valid_syscall, ENOSYS};
 use crate::syscall::table::get_handler;
 // FIX-APP-02: imports pour audit_syscall_entry/exit (APP-02)
-use crate::security::audit::syscall_audit::{audit_syscall_entry, audit_syscall_exit, AuditVerdict};
 use crate::scheduler::core::switch::current_thread_raw;
+use crate::security::audit::syscall_audit::{
+    audit_syscall_entry, audit_syscall_exit, AuditVerdict,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compteurs d'instrumentation
@@ -309,15 +311,26 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // log_sensitive_syscall() n'existe pas — utiliser log_event() directement.
     {
         use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
-        let is_critical_syscall =
-            effective_nr == crate::syscall::numbers::SYS_EXECVE
+        let is_critical_syscall = effective_nr == crate::syscall::numbers::SYS_EXECVE
             || effective_nr == crate::syscall::numbers::SYS_CLONE
             || effective_nr == crate::syscall::numbers::SYS_FORK
             || effective_nr == crate::syscall::numbers::SYS_VFORK;
         if is_critical_syscall {
-            let outcome = if result < 0 { AuditOutcome::Error } else { AuditOutcome::Allow };
-            log_event(AuditCategory::Process, caller_pid, caller_tid, 0u16,
-                effective_nr as u32, result as i32, outcome, [0u8; 8]);
+            let outcome = if result < 0 {
+                AuditOutcome::Error
+            } else {
+                AuditOutcome::Allow
+            };
+            log_event(
+                AuditCategory::Process,
+                caller_pid,
+                caller_tid,
+                0u16,
+                effective_nr as u32,
+                result as i32,
+                outcome,
+                [0u8; 8],
+            );
         }
     }
 
@@ -725,9 +738,15 @@ fn handle_fork_like_inplace(
                         b"<25SFpost rcx=",
                         frame.rcx,
                     );
-                    crate::memory::physical::allocator::buddy::diag25_hex_always(b" rsp=", frame.rsp);
-                    crate::memory::physical::allocator::buddy::diag25_hex_always(b" rbp=", frame.rbp);
-                    crate::memory::physical::allocator::buddy::diag25_hex_always(b" rbx=", frame.rbx);
+                    crate::memory::physical::allocator::buddy::diag25_hex_always(
+                        b" rsp=", frame.rsp,
+                    );
+                    crate::memory::physical::allocator::buddy::diag25_hex_always(
+                        b" rbp=", frame.rbp,
+                    );
+                    crate::memory::physical::allocator::buddy::diag25_hex_always(
+                        b" rbx=", frame.rbx,
+                    );
                 }
             }
             result.child_pid.0 as i64

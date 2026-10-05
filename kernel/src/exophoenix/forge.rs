@@ -303,7 +303,9 @@ fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
     if kernel_a_hash_is_zero() {
         // SAFETY: port 0xE9 debug QEMU, ignoré sur bare metal sans QEMU.
         #[cfg(target_arch = "x86_64")]
-        unsafe { core::arch::asm!("out 0xe9, al", in("al") b'M', options(nomem, nostack)); }
+        unsafe {
+            core::arch::asm!("out 0xe9, al", in("al") b'M', options(nomem, nostack));
+        }
         return Err(ForgeError::MerkleVerifyFailed);
     }
     // Hash Blake3 de .text ++ .rodata comparé à A_MERKLE_ROOT

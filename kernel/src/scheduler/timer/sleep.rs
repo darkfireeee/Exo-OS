@@ -160,8 +160,49 @@ unsafe fn sleep_timer_wake(_id: u32, data: u64) {
         return;
     }
 
+    // DIAG-W1 (bisect hang boot) : réveil timer pour PID 1 — état avant
+    // transition (st=N) et résultat (t=1 ok / W1F!st=N perdu).
+    #[cfg(target_arch = "x86_64")]
+    if tcb_ref.pid.0 == 1 {
+        crate::arch::x86_64::terminal::debug_write(b"<W1 p=1 st=");
+        let digit = b'0' + (tcb_ref.state() as u8);
+        crate::arch::x86_64::terminal::debug_write(&[digit]);
+        crate::arch::x86_64::terminal::debug_write(b" cpu=");
+        let d2 = b'0' + (cpu_raw as u8).min(9);
+        crate::arch::x86_64::terminal::debug_write(&[d2]);
+    }
+
     if !tcb_ref.try_transition(TaskState::Sleeping, TaskState::Runnable) {
+        // DIAG-W1F : le réveil est PERDU — l'état n'était plus Sleeping au
+        // moment où le timer a expiré (réveil concurrent sans enqueue, ou
+        // corruption d'état).
+        #[cfg(target_arch = "x86_64")]
+        if tcb_ref.pid.0 == 1 {
+            crate::arch::x86_64::terminal::debug_write(b" W1F!st=");
+            let digit = b'0' + (tcb_ref.state() as u8);
+            crate::arch::x86_64::terminal::debug_write(&[digit]);
+            crate::arch::x86_64::terminal::debug_write(b">\n");
+        }
+        // HARDENING lost-wake : si le thread est Runnable mais PAS dans la
+        // file (réveillé par un chemin qui a transitionné sans enfil er — p.ex.
+        // raise_signal_pending), on l'enfile maintenant. Pas de double-enqueue
+        // possible : enqueue() vérifie try_mark_queued().
+        if tcb_ref.state() == TaskState::Runnable && !tcb_ref.is_queued() {
+            let rq = run_queue(CpuId(cpu_raw as u32));
+            rq.enqueue(tcb_nn);
+            let current = current_thread_raw();
+            if !current.is_null() {
+                let current_ref = &*current;
+                if current_ref.current_cpu().0 as usize == cpu_raw {
+                    current_ref.request_preemption();
+                }
+            }
+        }
         return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if tcb_ref.pid.0 == 1 {
+        crate::arch::x86_64::terminal::debug_write(b" t=1>\n");
     }
 
     let rq = run_queue(CpuId(cpu_raw as u32));
@@ -175,6 +216,29 @@ unsafe fn sleep_timer_wake(_id: u32, data: u64) {
     }
 }
 
+/// DIAG-SB (bisect hang boot) : marqueurs E9 du blocage nanosleep pour PID 1.
+/// `<SB1 st=N>` juste avant block_current_thread(), `<SB2 st=N>` juste après
+/// reprise, `<SB3>` retour immédiat (deadline déjà passée). Gated PID 1 :
+/// ipc_router fait un sleep_ns(2ms) par boucle recv — il ne doit pas tracer.
+#[cfg(target_arch = "x86_64")]
+fn diag_sb_pid1(prefix: &[u8], state: Option<TaskState>) {
+    let tcb = current_thread_raw();
+    if tcb.is_null() {
+        return;
+    }
+    // SAFETY: TCB courant publié par le scheduler, vivant pendant l'appel.
+    let pid = unsafe { (*tcb).pid.0 };
+    if pid != 1 {
+        return;
+    }
+    crate::arch::x86_64::terminal::debug_write(prefix);
+    if let Some(st) = state {
+        let digit = b'0' + (st as u8);
+        crate::arch::x86_64::terminal::debug_write(&[digit]);
+    }
+    crate::arch::x86_64::terminal::debug_write(b">\n");
+}
+
 /// Sleep until `target_ns` in the scheduler monotonic clock.
 ///
 /// Returns `false` when the current thread is interrupted by a pending signal or
@@ -182,6 +246,8 @@ unsafe fn sleep_timer_wake(_id: u32, data: u64) {
 pub fn sleep_until_ns(target_ns: u64) -> bool {
     let now = monotonic_ns();
     if now >= target_ns {
+        #[cfg(target_arch = "x86_64")]
+        diag_sb_pid1(b"<SB3 deadline-passee", None);
         return true;
     }
 
@@ -217,7 +283,24 @@ pub fn sleep_until_ns(target_ns: u64) -> bool {
             return !tcb_ref.has_signal_pending();
         }
 
+        #[cfg(target_arch = "x86_64")]
+        diag_sb_pid1(b"<SB1 st=", Some(tcb_ref.state()));
         block_current_thread();
+        #[cfg(target_arch = "x86_64")]
+        diag_sb_pid1(b"<SB2 st=", Some(tcb_ref.state()));
+        // DIAG-V15-DRAINBISECT (bisect OOM run 12-15, free 496640→0 entre
+        // <NS1-FF> et l'échec d'alloc suivant, sans <GP1> ni marqueur V9/V11
+        // intermédiaire) : ce point est EXACTEMENT la reprise d'exécution
+        // d'init juste après block_current_thread() — donc juste après le
+        // créneau où le CPU a pu exécuter autre chose (ipc_router entre
+        // autres). Si <SB2-FF> montre déjà free proche de 0 ICI, le drain a
+        // eu lieu PENDANT ce créneau (côté ipc_router ou le switch
+        // lui-même) ; s'il montre encore ~496640, le drain se produit APRÈS,
+        // plus loin dans cette même fonction ou au retour vers le syscall.
+        #[cfg(target_arch = "x86_64")]
+        if tcb_ref.pid.0 == 1 {
+            crate::memory::physical::allocator::buddy::diag_ff_log(b"<SB2-FF");
+        }
         if tcb_ref.state() == TaskState::Runnable {
             let rq = run_queue(CpuId(cpu_raw as u32));
             finish_preblock_wake(rq, tcb_ref);

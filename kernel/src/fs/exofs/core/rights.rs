@@ -618,7 +618,11 @@ mod tier0_admin_tests {
     /// FIX-SEC-T0.1 : RIGHT_ADMIN doit être un droit défini, valide et constructible.
     #[test]
     fn admin_is_within_all_rights() {
-        assert_eq!(ALL_RIGHTS & RIGHT_ADMIN, RIGHT_ADMIN, "ADMIN doit être dans ALL_RIGHTS");
+        assert_eq!(
+            ALL_RIGHTS & RIGHT_ADMIN,
+            RIGHT_ADMIN,
+            "ADMIN doit être dans ALL_RIGHTS"
+        );
         // Les 17 droits définis = bits 0..=16, exactement.
         assert_eq!(ALL_RIGHTS, 0x0001_FFFF);
     }

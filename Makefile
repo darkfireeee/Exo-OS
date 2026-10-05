@@ -4,7 +4,7 @@
 # Flux de build complet :
 #   make build   → compile le kernel ELF (cargo, x86_64-unknown-none)
 #   make iso     → construit exo-os.iso (GRUB 2 Multiboot2, grub-mkrescue)
-#   make qemu    → lance QEMU depuis l'ISO (x86_64, 256M RAM, sortie série stdio)
+#   make qemu    → lance QEMU depuis l'ISO (x86_64, 4Go RAM, sortie série stdio)
 #   make run     → alias de qemu
 
 .PHONY: all build build-rootfs-binaries rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
@@ -111,10 +111,10 @@ ROOTFS_BIN_BINS = \
 	whoami
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
-# Paramètres QEMU communs (machine Q35 moderne, 256 MiB, VGA standard)
+# Paramètres QEMU communs (machine Q35 moderne, 256 4GiB, VGA standard)
 QEMU = qemu-system-x86_64
 QEMU_FLAGS  = -machine q35
-QEMU_FLAGS += -m 256M
+QEMU_FLAGS += -m 4G
 QEMU_FLAGS += -boot d
 QEMU_FLAGS += -vga std
 QEMU_FLAGS += -serial stdio
@@ -143,7 +143,7 @@ ifeq ($(strip $(QEMU_NET_FLAGS)),)
 override QEMU_NET_FLAGS := $(QEMU_CANONICAL_NET_FLAGS)
 endif
 QEMU_HEADLESS_SAFE_FLAGS  = -machine q35
-QEMU_HEADLESS_SAFE_FLAGS += -m 256M
+QEMU_HEADLESS_SAFE_FLAGS += -m 4G
 QEMU_HEADLESS_SAFE_FLAGS += -boot d
 QEMU_HEADLESS_SAFE_FLAGS += -vga std
 QEMU_HEADLESS_SAFE_FLAGS += -serial file:$(QEMU_SAFE_SERIAL_LOG)

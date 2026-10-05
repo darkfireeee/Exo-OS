@@ -9,6 +9,7 @@
 
 extern crate blake3;
 
+use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};

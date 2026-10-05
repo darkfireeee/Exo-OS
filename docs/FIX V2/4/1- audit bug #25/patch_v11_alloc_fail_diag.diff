@@ -1,0 +1,46 @@
+diff -ruN pristine2/kernel/src/memory/physical/allocator/buddy.rs patchdir2/kernel/src/memory/physical/allocator/buddy.rs
+--- pristine2/kernel/src/memory/physical/allocator/buddy.rs	2026-08-27 18:08:56.190566458 +0000
++++ patchdir2/kernel/src/memory/physical/allocator/buddy.rs	2026-08-27 18:09:12.054387108 +0000
+@@ -992,6 +992,42 @@
+             }
+         }
+ 
++        // DIAG-V11-ALLOCFAIL (bisect OOM run 11/12 — <V10OOM cpu=0 pid=1
++        // rip=0x388fdb addr=0x10000007000>) : consigner order + pid + etat du
++        // pool ICI, au point exact ou l'allocation echoue definitivement
++        // (toutes zones et fallbacks epuises) — avant que l'appelant (souvent
++        // un #PF demand-paging) ne remonte vers kernel_panic_exception /
++        // ExoPhoenix, qui efface tout contexte (cf. <V10OOM> deja en place
++        // dans exceptions.rs). V10OOM dit QUI a subi l'echec cote fault
++        // handler (pid/cpu/rip/addr) ; V11FAIL dit COMBIEN etait demande
++        // (order — un seul page ? un bloc contigu enorme ?) et QUOI restait
++        // reellement dans le pool a cet instant precis, cote allocateur.
++        if result.is_err() {
++            use crate::arch::x86_64::terminal::debug_write;
++            // SAFETY: lecture du TCB courant depuis le stockage per-CPU
++            // publie par le scheduler ; meme primitive que
++            // fork_impl.rs::release_leaf_frame et exceptions.rs (V10OOM).
++            let tcb_raw =
++                unsafe { crate::arch::x86_64::smp::percpu::try_read_current_tcb() }
++                    .unwrap_or(0);
++            let cur_pid = if tcb_raw != 0 {
++                // SAFETY: TCB courant publié par le scheduler pour ce CPU.
++                unsafe {
++                    (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
++                        .pid
++                        .0
++                }
++            } else {
++                0
++            };
++            debug_write(b"<V11FAIL order=");
++            diag25_dec(order as u64);
++            debug_write(b" pid=");
++            diag25_dec(cur_pid as u64);
++            debug_write(b">");
++            diag_ff_log(b"<V11FAIL-FF");
++        }
++
+         result
+     }
+ 

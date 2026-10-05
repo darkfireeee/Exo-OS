@@ -38,23 +38,34 @@ pub unsafe fn install_handlers() {
         mask: 0,
     };
 
-    // NOTE #25 : le noyau exige sigsetsize==8 ([signal.rs] sys_rt_sigaction) ; cet
-    // appel à 3 args laisse sigsetsize=0 → EINVAL → handlers PAS installés. C'est un
-    // VRAI bug (init ne reape pas ses enfants), MAIS le corriger EXPOSE la course
-    // #25 via la frame de signal (pretcode pile-user zéroé par la course → retour
-    // handler RIP=0 → mort d'init PID1 → panic noyau/ExoPhoenix, PIRE que le SEGV
-    // userspace tardif). À corriger (syscall4 ..., 8) UNE FOIS la course #25 réglée.
-    let _ = syscall::syscall3(
+    // FIX-SIGACTION-25 : la course #25 a ete partiellement adressee par les correctifs
+    // precedents (vfork -> fork + CoW reserve aux pages vraiment inscriptibles +
+    // liberation de la derniere reference CoW). On retablit maintenant sigsetsize = 8
+    // (4eme argument de rt_sigaction) pour que SIGCHLD soit effectivement livre au
+    // handler userspace et qu'init_server puisse reap ses enfants via wait4(WNOHANG).
+    //
+    // Sans cette correction, sys_rt_sigaction() retourne EINVAL car sigsetsize == 0,
+    // les handlers ne sont PAS installes, et SIGCHLD tombe sur l'action par defaut
+    // (Ignore). Init_server ne peut alors plus collecter les zombies, et la table
+    // de services se desynchronise : c'est un pre-requis pour que la supervision
+    // fonctionne et pour que le shell `exosh` soit atteint.
+    //
+    // Le noyau exige rigoureusement sigsetsize == 8 (cf. syscall/handlers/signal.rs
+    // ligne 77 : `if sigsetsize != 8 { return EINVAL; }`), et l'ABI Linux x86_64
+    // rt_sigaction(2) prend bien 4 arguments (signum, act, oldact, sigsetsize).
+    let _ = syscall::syscall4(
         syscall::SYS_RT_SIGACTION,
         17,
         &chld_sa as *const Sigaction as u64,
         0,
+        8, // sigsetsize — taille du champ sa_mask en bytes (1 * sizeof(u64) = 8)
     );
-    let _ = syscall::syscall3(
+    let _ = syscall::syscall4(
         syscall::SYS_RT_SIGACTION,
         15,
         &term_sa as *const Sigaction as u64,
         0,
+        8, // sigsetsize
     );
 }
 

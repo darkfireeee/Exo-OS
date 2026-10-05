@@ -30,14 +30,14 @@ pub mod test_support;
 #[cfg(test)]
 pub mod tests;
 
+use crate::fs::exofs::cache::BLOB_CACHE;
 use crate::fs::exofs::core::error::ExofsError;
 use crate::fs::exofs::recovery::boot_recovery::boot_recovery_sequence;
 use crate::fs::exofs::syscall::epoch_commit::{do_shutdown_commit, epoch_flags, EpochCommitArgs};
-use crate::fs::exofs::cache::BLOB_CACHE;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
 use crate::scheduler::core::task::Priority;
 
-use ::core::sync::atomic::{AtomicBool, Ordering};
+use crate::rust_core::sync::atomic::{AtomicBool, Ordering};
 
 const EXOFS_WRITEBACK_INTERVAL_NS: u64 = 5_000_000_000;
 

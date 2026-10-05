@@ -43,6 +43,10 @@ use spin::Mutex;
 /// Mis à `true` par `fs_bridge_init()` lors du boot.
 static FS_READY: AtomicBool = AtomicBool::new(false);
 
+/// FIX-V8 : journalise une seule fois le mode console E9 avant tty_server.
+#[cfg(target_arch = "x86_64")]
+static TTY_E9ONLY_LOGGED: AtomicBool = AtomicBool::new(false);
+
 // ── FIX-FND-5 (EXOOS_FOUNDATIONS_AUDIT §chdir/getcwd) ─────────────────────
 //
 // fs_chdir() validait le chemin mais ne le sauvegardait JAMAIS.
@@ -57,19 +61,23 @@ static FS_READY: AtomicBool = AtomicBool::new(false);
 // Les accès concurrents sur le MÊME pid sont rares (le processus est mono-thread
 // du point de vue de chdir). On utilise une stratégie spin + copy.
 
-const CWD_MAX_LEN:   usize = 256;
-const CWD_MAP_SIZE:  usize = 512;  // max PIDs simultanés dans la map
+const CWD_MAX_LEN: usize = 256;
+const CWD_MAP_SIZE: usize = 512; // max PIDs simultanés dans la map
 
 #[repr(C, align(64))]
 struct CwdEntry {
-    path:    [u8; CWD_MAX_LEN],
-    len:     u32,
-    pid:     u32,   // 0 = slot libre
+    path: [u8; CWD_MAX_LEN],
+    len: u32,
+    pid: u32, // 0 = slot libre
 }
 
 impl CwdEntry {
     const fn empty() -> Self {
-        Self { path: [0u8; CWD_MAX_LEN], len: 0, pid: 0 }
+        Self {
+            path: [0u8; CWD_MAX_LEN],
+            len: 0,
+            pid: 0,
+        }
     }
 }
 
@@ -92,7 +100,9 @@ fn cwd_slot_for_pid(pid: u32) -> Option<usize> {
     let map = unsafe { &mut *core::ptr::addr_of_mut!(CWD_MAP) };
     // Chercher slot existant
     for (i, slot) in map.slots.iter().enumerate() {
-        if slot.pid == pid { return Some(i); }
+        if slot.pid == pid {
+            return Some(i);
+        }
     }
     // Allouer slot libre
     for (i, slot) in map.slots.iter_mut().enumerate() {
@@ -120,8 +130,6 @@ pub fn cwd_release_pid(pid: u32) {
         }
     }
 }
-
-
 
 /// Initialise le bridge fs.
 /// À appeler depuis la séquence de boot après `fs::init()`.
@@ -501,7 +509,17 @@ fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
         req.msg_type = TTY_MSG_WRITE;
         req.a = n as u64;
         req.data[..n].copy_from_slice(&bytes[written..written + n]);
-        tty_send(&req)?;
+        match tty_send(&req) {
+            Ok(()) => {}
+            Err(FsBridgeError::NotReady) => {
+                #[cfg(target_arch = "x86_64")]
+                if !TTY_E9ONLY_LOGGED.swap(true, Ordering::AcqRel) {
+                    crate::arch::x86_64::terminal::debug_write(b"<TTY-E9ONLY>\n");
+                }
+                return Ok(bytes.len() as i64);
+            }
+            Err(e) => return Err(e),
+        }
         written += n;
     }
     Ok(bytes.len() as i64)
@@ -4067,8 +4085,12 @@ pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeErr
     copy_to_user(buf_ptr as *mut u8, path_bytes.as_ptr(), copy_len)
         .map_err(|_| FsBridgeError::Fault)?;
     // Écrire le null terminator
-    copy_to_user((buf_ptr + copy_len as u64) as *mut u8, &[0u8] as *const u8, 1)
-        .map_err(|_| FsBridgeError::Fault)?;
+    copy_to_user(
+        (buf_ptr + copy_len as u64) as *mut u8,
+        &[0u8] as *const u8,
+        1,
+    )
+    .map_err(|_| FsBridgeError::Fault)?;
     Ok((copy_len + 1) as i64)
 }
 

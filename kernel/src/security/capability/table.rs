@@ -494,7 +494,8 @@ mod tier_sec_tests {
     #[test]
     fn check_object_enforces_rights_and_type() {
         let t = CapTable::new();
-        t.grant(oid(42), r(R_READ), CapObjectType::FileInode).unwrap();
+        t.grant(oid(42), r(R_READ), CapObjectType::FileInode)
+            .unwrap();
         assert!(t.check_object(oid(42), r(R_READ), CapObjectType::FileInode));
         assert!(!t.check_object(oid(42), r(R_WRITE), CapObjectType::FileInode)); // pas de WRITE
         assert!(!t.check_object(oid(42), r(R_READ), CapObjectType::IpcEndpoint)); // mauvais type
@@ -525,8 +526,7 @@ mod tier_sec_tests {
                 CapObjectType::FileInode,
             )
             .unwrap();
-        let child =
-            CapTable::inherit_from_masked(&parent, r(PRIV), CapObjectType::FileInode);
+        let child = CapTable::inherit_from_masked(&parent, r(PRIV), CapObjectType::FileInode);
         assert!(child.check_object(oid(0), r(R_READ | R_WRITE), CapObjectType::FileInode));
         assert!(!child.check_object(oid(0), r(R_GC), CapObjectType::FileInode));
         assert!(!child.check_object(oid(0), r(R_ADMIN), CapObjectType::FileInode));

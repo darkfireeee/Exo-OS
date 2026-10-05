@@ -286,7 +286,10 @@ pub fn do_execve(
             }
             #[cfg(feature = "strict_exec_signatures")]
             {
-                thread.sched_tcb.signal_mask.store(saved_signal_mask, Ordering::Release);
+                thread
+                    .sched_tcb
+                    .signal_mask
+                    .store(saved_signal_mask, Ordering::Release);
                 return Err(ExecError::SignatureVerificationFailed);
             }
         }
@@ -369,9 +372,9 @@ pub fn do_execve(
             // `build_user_shadow_pml4` (lui-même `buddy::alloc_page(ZEROED)`).
             // Elle n'est plus référencée nulle part après ce point.
             let _ = crate::memory::physical::allocator::buddy::free_pages(
-                crate::memory::core::Frame::containing(
-                    crate::memory::core::PhysAddr::new(old_kpti_cr3),
-                ),
+                crate::memory::core::Frame::containing(crate::memory::core::PhysAddr::new(
+                    old_kpti_cr3,
+                )),
                 0,
             );
         }

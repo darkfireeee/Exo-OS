@@ -205,7 +205,27 @@ pub unsafe fn block_current(tid: u64) {
         }
     }
 
-    if let Some(block_fn) = *BLOCK_HOOK.lock() {
+    // FIX-BLOCKHOOK (deadlock IPC) : copier la fonction de blocage et relâcher
+    // le verrou BLOCK_HOOK AVANT de bloquer.
+    //
+    // L'ancien code `if let Some(block_fn) = *BLOCK_HOOK.lock() { block_fn() }`
+    // gardait le SpinLockGuard vivant pendant TOUT le corps du `if let` — donc
+    // À TRAVERS le context switch effectué par block_fn(). Conséquences :
+    //   1. Tout autre thread appelant block_current() (ou hooks_installed())
+    //      pendant ce temps spinne à l'infini → deadlock dès que DEUX threads
+    //      dorment en IPC (vfs_server + tty_server au boot du shell).
+    //   2. Le PreemptGuard porté par le guard violait le contrat
+    //      `PreemptGuard::depth() == 0` de block_current_thread() (panic en
+    //      build debug).
+    let block_fn_opt = {
+        let guard = BLOCK_HOOK.lock();
+        match *guard {
+            Some(f) => Some(f),
+            None => None,
+        }
+    }; // ← guard BLOCK_HOOK relâché ici, AVANT le blocage.
+
+    if let Some(block_fn) = block_fn_opt {
         block_fn();
         // Après réveil : désenregistrer si pas encore fait par wake_thread.
         if !tcb_ptr.is_null() {

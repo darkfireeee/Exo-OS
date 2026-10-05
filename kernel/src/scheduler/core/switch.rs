@@ -23,8 +23,10 @@ use super::task::{CpuId, SchedPolicy, TaskState, ThreadControlBlock};
 use crate::arch::x86_64::{
     cpu::{
         features::cpu_features_or_none,
-        msr::{self, MSR_FS_BASE, MSR_IA32_PL0_SSP, MSR_KERNEL_GS_BASE,
-               MSR_IA32_PRED_CMD, PRED_CMD_IBPB},
+        msr::{
+            self, MSR_FS_BASE, MSR_IA32_PL0_SSP, MSR_IA32_PRED_CMD, MSR_KERNEL_GS_BASE,
+            PRED_CMD_IBPB,
+        },
         tsc,
     },
     smp::percpu,
@@ -286,7 +288,7 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// Elle ne fait que lire `signal_pending` via `check_signal_pending()`.
 pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
     let features = cpu_features_or_none();
-    let has_pks    = features.map_or(false, |cpu| cpu.has_pks());
+    let has_pks = features.map_or(false, |cpu| cpu.has_pks());
     let has_cet_ss = features.map_or(false, |cpu| cpu.has_cet_ss());
     // FIX-IBPB (Security_Audit_Passe2 §B-01) : IBPB (Indirect Branch Predictor Barrier)
     // doit être émis lors d'un context-switch cross-processus pour prévenir Spectre v2.
@@ -295,9 +297,8 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     //   2. Changement de processus (prev.pid ≠ next.pid) — les switch intra-process
     //      (threads du même processus) n'ont pas besoin d'IBPB.
     //   3. Processus Ring3 uniquement (pid != 0 ; les kthreads partagent Ring0 BTB).
-    let ibpb_needed = features.map_or(false, |cpu| cpu.has_ibpb())
-        && prev.pid != next.pid
-        && next.pid.0 != 0;
+    let ibpb_needed =
+        features.map_or(false, |cpu| cpu.has_ibpb()) && prev.pid != next.pid && next.pid.0 != 0;
     if ibpb_needed {
         // SAFETY: MSR_IA32_PRED_CMD (0x49) est garanti présent par has_ibpb().
         // L'écriture est atomique et visible sur le CPU local uniquement.
@@ -384,11 +385,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // boucle de #PF instruction-fetch. `tcb.cr3_phys` est la source de vérité
     // (mise à jour par execve) ; le matériel doit la suivre à chaque switch.
     // new_cr3 == 0 ⇒ l'ASM ne recharge pas (threads kernel sans espace user).
-    let new_cr3 = if next.cr3_phys != 0 {
-        next.cr3_phys
-    } else {
-        0
-    };
+    let new_cr3 = if next.cr3_phys != 0 { next.cr3_phys } else { 0 };
 
     // Comptabiliser le temps réellement passé en Running par `prev`.
     let now_tsc = tsc::read_tsc();
@@ -507,7 +504,18 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         idle_sched_trace(b"context_switch: ->kthread\n");
     }
     if next.pid.0 == 1 && next.cr3_phys != 0 {
-        idle_sched_trace(b"context_switch: ->init-user\n");
+        // DIAG-SW1 (bisect hang boot) : switch vers init (PID 1). L'ancien
+        // idle_sched_trace était désactivé (`if false && ...`) — on émet un
+        // marqueur E9 direct, plafonné à 16 impressions pour ne pas flooder
+        // une fois le boot débloqué (init est switché souvent par la suite).
+        #[cfg(target_arch = "x86_64")]
+        {
+            static SW1_COUNT: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(0);
+            if SW1_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed) < 16 {
+                crate::arch::x86_64::terminal::debug_write(b"<SW1 ->init>\n");
+            }
+        }
     }
 
     // DIAG-25 : empreinte de la frame dormante de prev AVANT de le commuter dehors.

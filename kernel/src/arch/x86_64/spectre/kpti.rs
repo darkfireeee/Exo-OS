@@ -85,8 +85,7 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     const PML4_PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
     let k = cr3_kernel & PML4_PHYS_MASK;
     let cpu_id = percpu::current_cpu_id() as usize;
-    let shadow = crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu(cpu_id)
-        .unwrap_or(0)
+    let shadow = crate::memory::virt::page_table::kpti_split::user_cr3_for_cpu(cpu_id).unwrap_or(0)
         & PML4_PHYS_MASK;
     let candidates = [cr3_user & PML4_PHYS_MASK, shadow];
     let mut synced: u64 = 0;

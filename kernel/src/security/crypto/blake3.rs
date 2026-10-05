@@ -139,7 +139,9 @@ fn blake3_diag_big(tag: &[u8], len: usize) {
     let pid = unsafe {
         let tcb = crate::arch::x86_64::smp::percpu::try_read_current_tcb().unwrap_or(0);
         if tcb != 0 {
-            (*(tcb as *const crate::scheduler::core::task::ThreadControlBlock)).pid.0 as u64
+            (*(tcb as *const crate::scheduler::core::task::ThreadControlBlock))
+                .pid
+                .0 as u64
         } else {
             9999
         }

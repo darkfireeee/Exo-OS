@@ -48,7 +48,7 @@ pub mod sync;
 // Re-exports principaux pour usage externe depuis kernel/
 // ---------------------------------------------------------------------------
 
-use ::core::sync::atomic::{AtomicU8, Ordering};
+use crate::rust_core::sync::atomic::{AtomicU8, Ordering};
 use exo_types::IpcEndpoint;
 
 // core/ — types fondamentaux

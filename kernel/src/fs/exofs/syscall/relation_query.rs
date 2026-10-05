@@ -4,10 +4,7 @@
 //! RÈGLE 9/10/RECUR-01/OOM-02/ARITH-02.
 
 use super::relation_create::{encode_relations, Relation, RELATION_MAGIC, RELATION_MAX};
-use super::validation::{
-    copy_kernel_bytes_to_struct, exofs_err_to_errno, write_user_buf,
-    EFAULT,
-};
+use super::validation::{copy_kernel_bytes_to_struct, exofs_err_to_errno, write_user_buf, EFAULT};
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};

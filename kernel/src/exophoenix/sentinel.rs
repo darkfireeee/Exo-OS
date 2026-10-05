@@ -95,12 +95,7 @@ fn b_region_phys_end() -> u64 {
         return cached;
     }
     let computed = KERNEL_LOAD_PHYS_ADDR + real_kernel_image_size() as u64;
-    let _ = B_REGION_PHYS_END.compare_exchange(
-        0,
-        computed,
-        Ordering::Release,
-        Ordering::Relaxed,
-    );
+    let _ = B_REGION_PHYS_END.compare_exchange(0, computed, Ordering::Release, Ordering::Relaxed);
     B_REGION_PHYS_END.load(Ordering::Acquire)
 }
 

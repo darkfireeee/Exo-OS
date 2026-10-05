@@ -189,7 +189,18 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
     // CORRECTION P0-04 : câbler vers fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
-    fs_bridge::bridge_result(fs_bridge::fs_write(fd as u32, buf_ptr, len, pid))
+    #[cfg(target_arch = "x86_64")]
+    let wrckp_armed = if pid == 1 {
+        diag_wrckp_snapshot()
+    } else {
+        false
+    };
+    let write_result = fs_bridge::bridge_result(fs_bridge::fs_write(fd as u32, buf_ptr, len, pid));
+    #[cfg(target_arch = "x86_64")]
+    if wrckp_armed {
+        diag_wrckp_verify();
+    }
+    write_result
 }
 
 /// `pread64(fd, buf, count, offset)` → read without changing fd cursor.
@@ -2333,10 +2344,42 @@ pub fn sys_execve(
     ENOSYS
 }
 
+/// DIAG-E1 (bisect mort d'init) : marque les exits VOLONTAIRES (sys_exit /
+/// exit_group) — distingue un exit(4) explicite d'une terminaison par signal
+/// (SIGILL=4 via <X1>, cf. deliver_one Term|Core → do_exit(sig)).
+#[cfg(target_arch = "x86_64")]
+fn diag_e1_exit(kind: &[u8], code: u32) {
+    let out = crate::arch::x86_64::terminal::debug_write;
+    out(kind);
+    let pid = crate::syscall::fast_path::syscall_current_pid();
+    let mut v = pid as u64;
+    if v == 0 {
+        out(b"0");
+    } else {
+        let mut d = [0u8; 20];
+        let mut i = d.len();
+        while v != 0 && i > 0 {
+            i -= 1;
+            d[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        out(&d[i..]);
+    }
+    out(b" code=0x");
+    let lut = b"0123456789abcdef";
+    let mut hb = [0u8; 2];
+    hb[0] = lut[((code >> 4) & 0xf) as usize];
+    hb[1] = lut[(code & 0xf) as usize];
+    out(&hb);
+    out(b">\n");
+}
+
 /// `exit(status)` — marque le processus zombie, réveille le parent, puis cède le CPU.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT);
     let exit_code = (status & 0xFF) as u32;
+    #[cfg(target_arch = "x86_64")]
+    diag_e1_exit(b"<E1 exit pid=", exit_code);
     // SAFETY: GS:[0x20] est le TCB du thread courant initialisé par context_switch.
     // L'appel est valide depuis le contexte syscall (kernel GS actif après SWAPGS).
     unsafe {
@@ -2392,6 +2435,8 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT_GROUP);
     let exit_code = (status & 0xFF) as u32;
+    #[cfg(target_arch = "x86_64")]
+    diag_e1_exit(b"<E1 exitgrp pid=", exit_code);
 
     // SAFETY: GS:[0x20] est le TCB courant pendant le syscall.
     unsafe {
@@ -2551,6 +2596,594 @@ pub fn sys_sigaltstack(
 // Handlers Scheduler (delay, nanosleep, futex)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// DIAG-NS (bisect hang boot) : marqueurs E9 du nanosleep de PID 1 (init).
+/// `<NS1 ns=0x...>` à l'entrée, `<NS2 ok=0x...>` au retour du sleep.
+/// Réservé à PID 1 : ipc_router appelle sleep_ns() directement depuis le noyau
+/// (recv 2 ms), il ne passe jamais par ce syscall — pas de risque de flood.
+#[cfg(target_arch = "x86_64")]
+fn diag_ns_pid1(tag: &[u8], val: u64) {
+    if crate::syscall::fast_path::syscall_current_pid() != 1 {
+        return;
+    }
+    crate::arch::x86_64::terminal::debug_write(tag);
+    let mut buf = [0u8; 16];
+    let mut v = val;
+    let mut i = 16usize;
+    while i > 0 {
+        i -= 1;
+        let nib = (v & 0xf) as u8;
+        buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+        v >>= 4;
+    }
+    crate::arch::x86_64::terminal::debug_write(&buf);
+    crate::arch::x86_64::terminal::debug_write(b">\n");
+}
+
+/// DIAG-CKP (bisect #25) : tampon de snapshot de la page de pile user d'init.
+/// Réservé PID 1 sur le chemin de sys_nanosleep : seul le thread courant
+/// d'init y accède (mono-CPU) — aucun accès concurrent possible.
+#[cfg(target_arch = "x86_64")]
+static mut DIAG_CKP_PAGE_BUF: [u8; 4096] = [0u8; 4096];
+
+/// DIAG-CKP v2 : PTE de la page de pile d'init au moment du snapshot (avant
+/// sommeil). Comparée au réveil : si elle diffère → la PTE a été REMAPPÉE
+/// pendant le sommeil (hypothèse H1) ; si elle est identique mais le contenu
+/// diffère → la frame physique elle-même a été réécrite (hypothèse H2).
+#[cfg(target_arch = "x86_64")]
+static mut DIAG_CKP_PTE_OLD: u64 = 0;
+
+/// DIAG-CKT (bisect #25) : sentinelle sur la page .text d'init contenant le
+/// RIP du <UD1> (0x10000007748 → page 0x10000007000). Le dump <UD1> y a lu
+/// `FF FF C6 44 24 2F 06 E9` — soit du code d'ipc_router écrasé sur le .text
+/// d'init (H2-texte), soit init ayant sauté au milieu d'une instruction via
+/// une return-address pourrie. Le checksum avant/après sommeil tranche.
+#[cfg(target_arch = "x86_64")]
+static mut DIAG_CKT_SUM_OLD: u64 = 0;
+#[cfg(target_arch = "x86_64")]
+static mut DIAG_CKT_PTE_OLD: u64 = 0;
+#[cfg(target_arch = "x86_64")]
+const DIAG_CKT_PAGE: u64 = 0x0000_0100_0000_7000;
+
+/// DIAG-CKP v2 : lit la PTE brute (feuille) d'une page de l'AS de PID 1 via
+/// le walker physmap — indépendant du CR3 matériel courant.
+#[cfg(target_arch = "x86_64")]
+fn diag_pid1_read_pte(page_va: u64) -> u64 {
+    let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(1))
+    else {
+        return 0;
+    };
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return 0;
+    }
+    // SAFETY: AS de PID 1 publié par son PCB, vivant pendant le syscall courant.
+    let user_as = unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) };
+    let walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
+    walker.read_pte_raw(crate::memory::core::VirtAddr::new(page_va))
+}
+
+/// FIX-V8 : vérifie si une frame physique est encore mappée dans l'AS de PID 1.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn diag_pid1_frame_mapped(frame_phys: u64) -> bool {
+    use crate::memory::virt::page_table::x86_64::phys_to_table_ref;
+
+    let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(1)) else {
+        return false;
+    };
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return false;
+    }
+    // SAFETY: AS de PID 1 publié par son PCB, vivant pendant l'appel.
+    let pml4_phys = unsafe {
+        (*(as_ptr as *const crate::memory::virt::UserAddressSpace))
+            .pml4_phys()
+            .as_u64()
+    };
+    if pml4_phys == 0 {
+        return false;
+    }
+    // SAFETY: PML4 et tables user de PID 1 restent valides pendant l'appel.
+    let pml4 = unsafe { phys_to_table_ref(PhysAddr::new(pml4_phys)) };
+    for l4 in 0..256usize {
+        let e4 = pml4[l4];
+        if !e4.is_present() || !e4.is_user() || e4.is_huge() {
+            continue;
+        }
+        // SAFETY: entrée présente non-huge, donc PDPT valide.
+        let pdpt = unsafe { phys_to_table_ref(e4.phys_addr()) };
+        for l3 in 0..512usize {
+            let e3 = pdpt[l3];
+            if !e3.is_present() || !e3.is_user() || e3.is_huge() {
+                continue;
+            }
+            // SAFETY: entrée présente non-huge, donc PD valide.
+            let pd = unsafe { phys_to_table_ref(e3.phys_addr()) };
+            for l2 in 0..512usize {
+                let e2 = pd[l2];
+                if !e2.is_present() || !e2.is_user() || e2.is_huge() {
+                    continue;
+                }
+                // SAFETY: entrée présente non-huge, donc PT valide.
+                let pt = unsafe { phys_to_table_ref(e2.phys_addr()) };
+                for l1 in 0..512usize {
+                    let e1 = pt[l1];
+                    if e1.is_present() && e1.is_user() && e1.phys_addr().as_u64() == frame_phys {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(target_arch = "x86_64")]
+static mut DIAG_WR_HASH: [u64; 24] = [0; 24];
+
+#[cfg(target_arch = "x86_64")]
+fn diag_wrckp_snapshot() -> bool {
+    use core::sync::atomic::Ordering;
+    let mut armed = false;
+    // SAFETY: réservé au syscall de PID 1, mono-CPU.
+    unsafe {
+        for j in 0..24usize {
+            let fp = crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
+                .load(Ordering::Relaxed);
+            let hash = if fp != 0 {
+                armed = true;
+                diag_cka_page_hash(fp)
+            } else {
+                0
+            };
+            *core::ptr::addr_of_mut!(DIAG_WR_HASH[j]) = hash;
+        }
+    }
+    armed
+}
+
+#[cfg(target_arch = "x86_64")]
+fn diag_wrckp_verify() {
+    use crate::arch::x86_64::terminal::debug_write;
+    use core::sync::atomic::Ordering;
+    let mut logged = 0usize;
+    for j in 0..24usize {
+        let fp = crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
+            .load(Ordering::Relaxed);
+        if fp == 0 {
+            continue;
+        }
+        // SAFETY: slot rempli par le snapshot du syscall courant.
+        let old = unsafe { *core::ptr::addr_of!(DIAG_WR_HASH[j]) };
+        if old == 0 {
+            continue;
+        }
+        let now = diag_cka_page_hash(fp);
+        if now != old && logged < 2 {
+            debug_write(b"<WR-CKP! j=");
+            diag_ns_dec(j as u64);
+            debug_write(b" f=0x");
+            diag_ns_hex(fp);
+            debug_write(b">\n");
+            logged += 1;
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn diag_ns_dec(mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut end = digits.len();
+    if value == 0 {
+        crate::arch::x86_64::terminal::debug_write(b"0");
+        return;
+    }
+    while value != 0 && end > 0 {
+        end -= 1;
+        digits[end] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    crate::arch::x86_64::terminal::debug_write(&digits[end..]);
+}
+
+/// DIAG-CKT : checksum simple (byte par byte, volatile) de la page sentinelle
+/// .text d'init, lue via son VA — valide car le CR3 courant pendant le syscall
+/// d'init est la PML4 réelle d'init (qui mappe sa moitié user).
+#[cfg(target_arch = "x86_64")]
+fn diag_pid1_text_checksum() -> u64 {
+    let mut sum: u64 = 0;
+    let mut i = 0usize;
+    while i < 4096 {
+        // SAFETY: page .text d'init présente (exécutée avant le sommeil) ;
+        // lecture volatile via le CR3 courant (PML4 réelle d'init).
+        let b = unsafe { core::ptr::read_volatile((DIAG_CKT_PAGE + i as u64) as *const u8) };
+        sum = sum.wrapping_mul(31).wrapping_add(b as u64);
+        i += 1;
+    }
+    sum
+}
+
+/// DIAG : écrit un u64 en hex 16 chiffres sur E9.
+#[cfg(target_arch = "x86_64")]
+fn diag_ns_hex(val: u64) {
+    let lut = b"0123456789abcdef";
+    let mut hb = [0u8; 16];
+    let mut x = val;
+    let mut k = 16;
+    while k > 0 {
+        k -= 1;
+        hb[k] = lut[(x & 0xf) as usize];
+        x >>= 4;
+    }
+    crate::arch::x86_64::terminal::debug_write(&hb);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DIAG-CKA (bisect #25 run 5) : checksum GLOBAL de l'espace user de PID 1.
+//
+// Le CKP ne surveille que la page de pile top. Le SEGV run 5 (rip=0, pile
+// valide, rdi=.rodata) suggère une corruption HORS pile (.text/.data/.rodata)
+// ou une désync de table d'exécution. Le CKA photographie les 512 premières
+// pages user présentes de l'AS d'init (VA, PTE brute, hash FNV du contenu via
+// PHYSMAP — indépendant du CR3 courant) avant le sommeil, et les re-vérifie au
+// réveil : toute page modifiée (contenu OU PTE) est logguée <CKApg>/<CKApte>.
+// Les 512 premières pages couvrent le bas de l'AS = .text/.rodata/.data du
+// binaire — exactement les pages d'un appel de fn-ptr/vtable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+const DIAG_CKA_MAX_PAGES: usize = 512;
+
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+static mut DIAG_CKA_VA: [u64; DIAG_CKA_MAX_PAGES] = [0; DIAG_CKA_MAX_PAGES];
+
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+static mut DIAG_CKA_PTE: [u64; DIAG_CKA_MAX_PAGES] = [0; DIAG_CKA_MAX_PAGES];
+
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+static mut DIAG_CKA_HASH: [u64; DIAG_CKA_MAX_PAGES] = [0; DIAG_CKA_MAX_PAGES];
+
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+static mut DIAG_CKA_COUNT: usize = 0;
+
+/// Hash FNV-1a d'une page physique via le physmap.
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+fn diag_cka_page_hash(frame_phys: u64) -> u64 {
+    use crate::memory::core::phys_to_virt;
+    let base = phys_to_virt(crate::memory::core::PhysAddr::new(frame_phys)).as_u64();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut i = 0usize;
+    while i < 4096 {
+        // SAFETY: frame physique valide mappée dans le physmap kernel.
+        let b = unsafe { core::ptr::read_volatile((base + i as u64) as *const u8) };
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        i += 16; // échantillon 1 octet / 16 — rapide, détecte quand même tout
+                 // changement de page (une page réécrite change ~tous les 16e octets)
+    }
+    h
+}
+
+/// Marche les tables de PID 1 (PML4 réelle) et photographie/compare les
+/// premières pages feuilles user présentes. `store=true` → snapshot ;
+/// `store=false` → comparaison + logs des différences.
+#[cfg(target_arch = "x86_64")]
+#[allow(dead_code)]
+fn diag_cka_pid1(store: bool) {
+    use crate::memory::virt::page_table::x86_64::phys_to_table_ref;
+
+    let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(1))
+    else {
+        return;
+    };
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return;
+    }
+    // SAFETY: AS de PID 1 publié par son PCB, vivant pendant le syscall courant.
+    let pml4_phys = unsafe {
+        (*(as_ptr as *const crate::memory::virt::UserAddressSpace))
+            .pml4_phys()
+            .as_u64()
+    };
+    if pml4_phys == 0 {
+        return;
+    }
+
+    if store {
+        // SAFETY: réservé au thread PID 1 (mono-CPU) — accès exclusif.
+        unsafe { *core::ptr::addr_of_mut!(DIAG_CKA_COUNT) = 0 };
+    }
+    let mut logged = 0usize;
+
+    // Marche L4 → L3 → L2 → L1 sur la moitié user.
+    // SAFETY: PML4 valide de PID 1 ; tables intermédiaires valides tant que
+    // l'AS vit (il vit : PID 1 est le thread courant qui dort).
+    let pml4 = unsafe { phys_to_table_ref(crate::memory::core::PhysAddr::new(pml4_phys)) };
+    let mut slot = 0usize;
+    'l4: for l4 in 0..256 {
+        let e4 = pml4[l4];
+        if !e4.is_present() || !e4.is_user() || e4.is_huge() {
+            continue;
+        }
+        // SAFETY: entrée présente non-huge → PDPT valide.
+        let pdpt = unsafe { phys_to_table_ref(e4.phys_addr()) };
+        for l3 in 0..512 {
+            let e3 = pdpt[l3];
+            if !e3.is_present() || !e3.is_user() || e3.is_huge() {
+                continue;
+            }
+            // SAFETY: entrée présente non-huge → PD valide.
+            let pd = unsafe { phys_to_table_ref(e3.phys_addr()) };
+            for l2 in 0..512 {
+                let e2 = pd[l2];
+                if !e2.is_present() || !e2.is_user() || e2.is_huge() {
+                    continue;
+                }
+                // SAFETY: entrée présente non-huge → PT valide.
+                let pt = unsafe { phys_to_table_ref(e2.phys_addr()) };
+                for l1 in 0..512 {
+                    let e1 = pt[l1];
+                    if !e1.is_present() || !e1.is_user() {
+                        continue;
+                    }
+                    let va = ((l4 as u64) << 39)
+                        | ((l3 as u64) << 30)
+                        | ((l2 as u64) << 21)
+                        | ((l1 as u64) << 12);
+                    let frame = e1.phys_addr().as_u64();
+                    let pte_raw = e1.raw();
+                    let hash = diag_cka_page_hash(frame);
+                    if store {
+                        if slot >= DIAG_CKA_MAX_PAGES {
+                            break 'l4;
+                        }
+                        // SAFETY: réservé PID 1 mono-CPU ; slot < MAX.
+                        unsafe {
+                            *core::ptr::addr_of_mut!(DIAG_CKA_VA[slot]) = va;
+                            *core::ptr::addr_of_mut!(DIAG_CKA_PTE[slot]) = pte_raw;
+                            *core::ptr::addr_of_mut!(DIAG_CKA_HASH[slot]) = hash;
+                            *core::ptr::addr_of_mut!(DIAG_CKA_COUNT) = slot + 1;
+                        }
+                    } else {
+                        if slot >= DIAG_CKA_MAX_PAGES {
+                            break 'l4;
+                        }
+                        // SAFETY: lecture des slots remplis au snapshot (PID 1).
+                        let (va0, pte0, hash0) = unsafe {
+                            (
+                                *core::ptr::addr_of!(DIAG_CKA_VA[slot]),
+                                *core::ptr::addr_of!(DIAG_CKA_PTE[slot]),
+                                *core::ptr::addr_of!(DIAG_CKA_HASH[slot]),
+                            )
+                        };
+                        if va0 != va {
+                            // Le mapping lui-même a changé (remap).
+                            if logged < 4 {
+                                crate::arch::x86_64::terminal::debug_write(b"<CKAmap old=0x");
+                                diag_ns_hex(va0);
+                                crate::arch::x86_64::terminal::debug_write(b" new=0x");
+                                diag_ns_hex(va);
+                                crate::arch::x86_64::terminal::debug_write(b">\n");
+                                logged += 1;
+                            }
+                        } else {
+                            if pte_raw != pte0 && logged < 4 {
+                                crate::arch::x86_64::terminal::debug_write(b"<CKApte va=0x");
+                                diag_ns_hex(va);
+                                crate::arch::x86_64::terminal::debug_write(b" old=0x");
+                                diag_ns_hex(pte0);
+                                crate::arch::x86_64::terminal::debug_write(b" new=0x");
+                                diag_ns_hex(pte_raw);
+                                crate::arch::x86_64::terminal::debug_write(b">\n");
+                                logged += 1;
+                            }
+                            if hash != hash0 && logged < 4 {
+                                // Contenu de la page modifié pendant le sommeil.
+                                crate::arch::x86_64::terminal::debug_write(b"<CKApg va=0x");
+                                diag_ns_hex(va);
+                                crate::arch::x86_64::terminal::debug_write(b" f=0x");
+                                diag_ns_hex(frame);
+                                crate::arch::x86_64::terminal::debug_write(b">\n");
+                                logged += 1;
+                            }
+                        }
+                    }
+                    slot += 1;
+                }
+            }
+        }
+    }
+    if !store {
+        let n = unsafe { *core::ptr::addr_of!(DIAG_CKA_COUNT) };
+        if slot != n {
+            crate::arch::x86_64::terminal::debug_write(b"<CKAn old=");
+            let mut v = n as u64;
+            if v == 0 {
+                crate::arch::x86_64::terminal::debug_write(b"0");
+            } else {
+                let mut d = [0u8; 20];
+                let mut i = d.len();
+                while v != 0 && i > 0 {
+                    i -= 1;
+                    d[i] = b'0' + (v % 10) as u8;
+                    v /= 10;
+                }
+                crate::arch::x86_64::terminal::debug_write(&d[i..]);
+            }
+            crate::arch::x86_64::terminal::debug_write(b" new=");
+            let mut v = slot as u64;
+            if v == 0 {
+                crate::arch::x86_64::terminal::debug_write(b"0");
+            } else {
+                let mut d = [0u8; 20];
+                let mut i = d.len();
+                while v != 0 && i > 0 {
+                    i -= 1;
+                    d[i] = b'0' + (v % 10) as u8;
+                    v /= 10;
+                }
+                crate::arch::x86_64::terminal::debug_write(&d[i..]);
+            }
+            crate::arch::x86_64::terminal::debug_write(b">\n");
+        }
+    }
+}
+
+/// FIX-KPTI-RESYNC (défense, bisect run 5) : resynchronise et republie les CR3
+/// de PID 1 juste avant son retour en Ring 3 après le nanosleep.
+///
+/// Motivation : run 5 — init se réveille avec sa pile VALIDÉE propre (CKP via
+/// la PML4 réelle) puis SEGV sur rip=0 avec une pile contenant des données
+/// plausibles d'un AUTRE binaire (0xa = len("ipc_router")). Si le CR3 chargé
+/// au SYSRETQ (gs:[0x48]) n'était pas la table d'init, init exécuterait sur
+/// l'AS d'ipc_router sans que le CKP (qui lit la PML4 réelle) le voie. Ce
+/// resync au dernier moment élimine toute fenêtre de désync entre le dernier
+/// context switch et le retour userspace. No-op si KPTI est désactivé.
+#[cfg(target_arch = "x86_64")]
+fn diag_pid1_kpti_resync() {
+    if !crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+        return;
+    }
+    let tcb = crate::scheduler::core::switch::current_thread_raw();
+    if tcb.is_null() {
+        return;
+    }
+    // SAFETY: TCB courant (PID 1) publié par le scheduler.
+    let shadow = unsafe { (*(tcb as *const crate::scheduler::core::task::ThreadControlBlock))
+        .kpti_user_cr3() };
+    if shadow == 0 {
+        return; // pas de shadow personnelle — le switch gère la per-CPU
+    }
+    let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(1))
+    else {
+        return;
+    };
+    let as_ptr = pcb.address_space_ptr();
+    if as_ptr.is_null() {
+        return;
+    }
+    // SAFETY: AS de PID 1 vivant (thread courant).
+    let real = unsafe {
+        (*(as_ptr as *const crate::memory::virt::UserAddressSpace))
+            .pml4_phys()
+            .as_u64()
+    };
+    if real == 0 {
+        return;
+    }
+    // Republie (kernel=real, user=shadow) + resynchronise la shadow et la
+    // per-CPU depuis la PML4 réelle d'init.
+    crate::arch::x86_64::spectre::kpti::set_current_cr3(real, shadow);
+    crate::arch::x86_64::terminal::debug_write(b"<KRSYNC>\n");
+}
+
+/// DIAG-CKP (bisect #25) : snapshot (`snapshot=true`) ou comparaison
+/// (`snapshot=false`) de la page user contenant `addr` — utilisée sur la page
+/// de pile d'init avant/après le nanosleep. Le thread étant endormi, TOUTE
+/// modification de sa pile pendant le sommeil est une écriture sauvage (le
+/// profil exact du bug #25 : frame aliasée écrite par l'execve de l'enfant).
+///
+/// En mode comparaison, logge `<CKP! mod=N>` puis jusqu'à 4 mots modifiés
+/// `<CKPw off=0x.. old=0x.. new=0x..>` — l'adresse et la VALEUR de la
+/// corruption en flagrant délit.
+#[cfg(target_arch = "x86_64")]
+fn diag_ckp_page(addr: u64, snapshot: bool) -> usize {
+    let page = (addr & !0xfffu64) as usize;
+    if page < 0x1000 || page >= 0x0000_8000_0000_0000usize {
+        return usize::MAX;
+    }
+    // SAFETY: réservé au thread PID 1 (mono-CPU), accès exclusif par construction.
+    let buf: &mut [u8; 4096] = unsafe { &mut *core::ptr::addr_of_mut!(DIAG_CKP_PAGE_BUF) };
+    let mut changed = 0usize;
+    let mut i = 0usize;
+    while i < 4096 {
+        // SAFETY: lecture volatile d'une page user valide et présente (le
+        // syscall vient de la lire via read_user_typed avec succès).
+        let b = unsafe { core::ptr::read_volatile((page + i) as *const u8) };
+        if snapshot {
+            buf[i] = b;
+        } else if buf[i] != b {
+            changed += 1;
+        }
+        i += 1;
+    }
+
+    if !snapshot && changed > 0 {
+        let out = crate::arch::x86_64::terminal::debug_write;
+        let hex = |val: u64| {
+            let lut = b"0123456789abcdef";
+            let mut hb = [0u8; 16];
+            let mut x = val;
+            let mut k = 16;
+            while k > 0 {
+                k -= 1;
+                hb[k] = lut[(x & 0xf) as usize];
+                x >>= 4;
+            }
+            hb
+        };
+        out(b"<CKP! mod=");
+        let mut v = changed as u64;
+        if v == 0 {
+            out(b"0");
+        } else {
+            let mut d = [0u8; 20];
+            let mut di = d.len();
+            while v != 0 && di > 0 {
+                di -= 1;
+                d[di] = b'0' + (v % 10) as u8;
+                v /= 10;
+            }
+            out(&d[di..]);
+        }
+        out(b">\n");
+        // Logger jusqu'à 4 mots de 8 octets modifiés (offset, avant, après).
+        let mut logged = 0usize;
+        let mut w = 0usize;
+        while w < 512 && logged < 4 {
+            let mut diff = false;
+            let mut b_idx = w * 8;
+            while b_idx < w * 8 + 8 {
+                // SAFETY: lecture volatile page user valide ; buf in-bounds.
+                let b = unsafe { core::ptr::read_volatile((page + b_idx) as *const u8) };
+                if buf[b_idx] != b {
+                    diff = true;
+                }
+                b_idx += 1;
+            }
+            if diff {
+                // SAFETY: lectures volatiles alignées 8 dans la page user valide.
+                let old = u64::from_le_bytes(buf[w * 8..w * 8 + 8].try_into().unwrap());
+                let new = unsafe {
+                    u64::from_le_bytes(
+                        core::ptr::read_volatile((page + w * 8) as *const [u8; 8]),
+                    )
+                };
+                out(b"<CKPw off=0x");
+                out(&hex((w * 8) as u64));
+                out(b" old=");
+                out(&hex(old));
+                out(b" new=");
+                out(&hex(new));
+                out(b">\n");
+                logged += 1;
+            }
+            w += 1;
+        }
+    }
+    changed
+}
+
 /// `nanosleep(req_ptr, rem_ptr)` — suspend le thread pendant une durée.
 pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_NANOSLEEP);
@@ -2565,7 +3198,114 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
         return EINVAL;
     }
     let ns = (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64);
-    if !crate::scheduler::timer::sleep_ns(ns) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        diag_ns_pid1(b"<NS1 ns=0x", ns);
+        // FIX-V6 (OOM post-Phoenix, run 7) : log du pool buddy AVANT le sommeil.
+        // Permet de comparer <NS1-FF> / <NS2-FF> : si pin croît sans jamais
+        // décroître entre deux NS2, chaque fork leak des frames → OOM.
+        if crate::syscall::fast_path::syscall_current_pid() == 1 {
+            crate::memory::physical::allocator::buddy::diag_ff_log(b"<NS1-FF");
+        }
+    }
+    // DIAG-CKP v2 (bisect #25) : snapshot de la page de pile d'init AVANT le
+    // sommeil — PTE brute + contenu + sentinelle .text. Toute différence au
+    // réveil désigne le mécanisme : <CKPpte> = PTE remappée (H1), <CKP!> =
+    // frame physique réécrite (H2), <CKT!> = .text corrompu.
+    #[cfg(target_arch = "x86_64")]
+    let ckp_active = if crate::syscall::fast_path::syscall_current_pid() == 1 {
+        let page = req_ptr & !0xfffu64;
+        // SAFETY: réservé au thread PID 1 (mono-CPU) — accès exclusif.
+        unsafe {
+            *core::ptr::addr_of_mut!(DIAG_CKP_PTE_OLD) = diag_pid1_read_pte(page);
+            let kt_pte0 = diag_pid1_read_pte(DIAG_CKT_PAGE);
+            *core::ptr::addr_of_mut!(DIAG_CKT_PTE_OLD) = kt_pte0;
+            // Ne checksummer la page .text que si elle est présente — une lecture
+            // volatile sur une page non mappée fauterait en kernel.
+            *core::ptr::addr_of_mut!(DIAG_CKT_SUM_OLD) = if kt_pte0 != 0 {
+                diag_pid1_text_checksum()
+            } else {
+                0
+            };
+        }
+        diag_ckp_page(req_ptr, true);
+        true
+    } else {
+        false
+    };
+    let sleep_ok = crate::scheduler::timer::sleep_ns(ns);
+    #[cfg(target_arch = "x86_64")]
+    if ckp_active {
+        // FIX-KPTI-RESYNC : avant toute vérification, resynchroniser/publier
+        // les CR3 d'init (défense anti-désync de la table d'exécution Ring 3).
+        diag_pid1_kpti_resync();
+        let page = req_ptr & !0xfffu64;
+        let pte_old = unsafe { *core::ptr::addr_of!(DIAG_CKP_PTE_OLD) };
+        let pte_new = diag_pid1_read_pte(page);
+        if pte_new != pte_old {
+            // H1 : la PTE de la page de pile d'init a été REMAPPÉE pendant le
+            // sommeil — un chemin a écrit dans les tables de pages d'init.
+            crate::arch::x86_64::terminal::debug_write(b"<CKPpte old=0x");
+            diag_ns_hex(pte_old);
+            crate::arch::x86_64::terminal::debug_write(b" new=0x");
+            diag_ns_hex(pte_new);
+            crate::arch::x86_64::terminal::debug_write(b">\n");
+        }
+        diag_ckp_page(req_ptr, false);
+        // Sentinelle .text : page du <UD1> (FF FF) — checksum uniquement si
+        // la page est présente.
+        let kt_pte_old = unsafe { *core::ptr::addr_of!(DIAG_CKT_PTE_OLD) };
+        let kt_sum_old = unsafe { *core::ptr::addr_of!(DIAG_CKT_SUM_OLD) };
+        let kt_pte_new = diag_pid1_read_pte(DIAG_CKT_PAGE);
+        let kt_sum_new = if kt_pte_new != 0 { diag_pid1_text_checksum() } else { 0 };
+        if kt_sum_new != kt_sum_old || kt_pte_new != kt_pte_old {
+            crate::arch::x86_64::terminal::debug_write(b"<CKT! sum_old=0x");
+            diag_ns_hex(kt_sum_old);
+            crate::arch::x86_64::terminal::debug_write(b" sum_new=0x");
+            diag_ns_hex(kt_sum_new);
+            crate::arch::x86_64::terminal::debug_write(b" pte_old=0x");
+            diag_ns_hex(kt_pte_old);
+            crate::arch::x86_64::terminal::debug_write(b" pte_new=0x");
+            diag_ns_hex(kt_pte_new);
+            crate::arch::x86_64::terminal::debug_write(b">\n");
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        diag_ns_pid1(b"<NS2 ok=0x", sleep_ok as u64);
+        // FIX-V6 (OOM post-Phoenix, bisect run 7) : libérer les pins posés
+        // pendant le sommeil sur les frames DIAG25_INITF capturées.
+        // La fenêtre du nanosleep est passée : la protection n'a plus de raison
+        // d'être. Le désépinglement est idempotent pour les frames non pinnées.
+        if crate::syscall::fast_path::syscall_current_pid() == 1 {
+            use core::sync::atomic::Ordering;
+            let mut freed: u64 = 0;
+            let mut live: u64 = 0;
+            for j in 0..24usize {
+                let fp = crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
+                    .load(Ordering::Relaxed);
+                if fp == 0 {
+                    continue;
+                }
+                if diag_pid1_frame_mapped(fp) {
+                    live += 1;
+                    continue;
+                }
+                let frame = crate::memory::core::Frame::containing(PhysAddr::new(fp));
+                crate::memory::physical::allocator::buddy::unreserve_frame(frame);
+                crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
+                    .store(0, Ordering::Relaxed);
+                freed += 1;
+            }
+            crate::arch::x86_64::terminal::debug_write(b"<NS2-UNP fr=");
+            diag_ns_hex(freed);
+            crate::arch::x86_64::terminal::debug_write(b" live=");
+            diag_ns_hex(live);
+            crate::arch::x86_64::terminal::debug_write(b">\n");
+            crate::memory::physical::allocator::buddy::diag_ff_log(b"<NS2-FF");
+        }
+    }
+    if !sleep_ok {
         return EINTR;
     }
     let _ = rem_ptr;
@@ -2704,12 +3444,11 @@ pub fn sys_framebuffer_info(out_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     // Autoriser uniquement le premier appelant (fb_server au boot).
     // Tout PID different est rejete avec EACCES.
-    let prev = FB_INFO_AUTHORIZED_PID.compare_exchange(
-        0, caller_pid, Ordering::AcqRel, Ordering::Acquire
-    );
+    let prev =
+        FB_INFO_AUTHORIZED_PID.compare_exchange(0, caller_pid, Ordering::AcqRel, Ordering::Acquire);
     match prev {
-        Ok(_) => {}                           // premier appelant autorise
-        Err(authorized) if authorized == caller_pid => {} // rappel idempotent
+        Ok(_) => {}                                               // premier appelant autorise
+        Err(authorized) if authorized == caller_pid => {}         // rappel idempotent
         Err(_) => return -(crate::syscall::errno::EACCES as i64), // PID non autorise
     }
     stat_inc(SYS_FRAMEBUFFER_INFO);
@@ -2971,9 +3710,7 @@ pub fn sys_exo_ipc_send(
     // qui font confiance à ce champ pour leurs contrôles d'accès.
     // Les services Ring 1 trusted (can_inject) restent libres : l'ipc_router
     // doit pouvoir relayer un message en préservant le PID d'origine.
-    if !caller_can_inject
-        && payload.len() == crate::ipc::core::constants::ABI_IPC_ENVELOPE_SIZE
-    {
+    if !caller_can_inject && payload.len() == crate::ipc::core::constants::ABI_IPC_ENVELOPE_SIZE {
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
     if is_reserved_kernel_ipc(endpoint, &payload) {
@@ -3999,14 +4736,7 @@ pub fn sys_exo_cap_check(
 /// restrictions, n'en retire jamais. Init (PID 1) ne peut pas pledge (PLEDGE-03).
 ///
 /// Retour : `0` si appliqué (ou rien à restreindre), `EPERM` si init / PID hors-plage.
-pub fn sys_exo_pledge(
-    promises: u64,
-    _flags: u64,
-    _a3: u64,
-    _a4: u64,
-    _a5: u64,
-    _a6: u64,
-) -> i64 {
+pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PLEDGE);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {

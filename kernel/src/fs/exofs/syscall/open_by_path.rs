@@ -16,9 +16,7 @@
 //! RECUR-01 : zéro boucle for.
 //! OOM-02   : try_reserve() avant push().
 
-use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, CapabilityType, EFAULT, ENOENT,
-};
+use super::validation::{exofs_err_to_errno, read_user_path_heap, CapabilityType, EFAULT, ENOENT};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 

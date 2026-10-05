@@ -747,13 +747,13 @@ pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, r
         if now_ns == 0 {
             return;
         }
-    let ttl_s = ttl_for_right(rights);
-    let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
-    // SAFETY: Ring 0, table protégée par PKS Credentials via scoped_domain_access
-    // interne à insert(). L'ObjectId provient de la table kernel (create()).
-    unsafe {
-        let _ = cap_deadline_table::insert(oid, deadline_ns);
-    }
+        let ttl_s = ttl_for_right(rights);
+        let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
+        // SAFETY: Ring 0, table protégée par PKS Credentials via scoped_domain_access
+        // interne à insert(). L'ObjectId provient de la table kernel (create()).
+        unsafe {
+            let _ = cap_deadline_table::insert(oid, deadline_ns);
+        }
     }
 }
 

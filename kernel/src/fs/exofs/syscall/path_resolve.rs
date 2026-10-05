@@ -9,8 +9,8 @@
 //! ARITH-02 : saturating_*/wrapping_* pour tous les calculs d'index.
 
 use super::validation::{
-    exofs_err_to_errno, read_user_path_heap, write_user_struct, EFAULT,
-    ERANGE, EXOFS_NAME_MAX, EXOFS_PATH_MAX,
+    exofs_err_to_errno, read_user_path_heap, write_user_struct, EFAULT, ERANGE, EXOFS_NAME_MAX,
+    EXOFS_PATH_MAX,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::{object_id_from_blob_id, BlobId};

@@ -5,8 +5,7 @@
 
 use super::export_object::{check_export_header, extract_payload, EXPORT_HDR_SIZE};
 use super::validation::{
-    copy_struct_from_user, exofs_err_to_errno, write_user_struct, CapabilityType,
-    EFAULT, EINVAL,
+    copy_struct_from_user, exofs_err_to_errno, write_user_struct, CapabilityType, EFAULT, EINVAL,
 };
 use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
 use crate::fs::exofs::core::types::BlobId;

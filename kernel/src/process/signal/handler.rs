@@ -71,8 +71,15 @@ pub const SS_ONSTACK: i32 = 1;
 pub const SS_DISABLE: i32 = 2;
 
 /// Equivalent de ucontext_t (Linux x86_64).
+///
+/// FIX-SIGALIGN : pas de `align(16)` sur cette structure. `_fpregs_mem` n'est
+/// pour l'instant qu'un espace réservé mis à zéro (aucun FXSAVE/XRSTOR). Un
+/// `align(16)` ici se propage à `SignalFrame` (champ imbriqué) et rendrait
+/// `ptr.write` à `sig_rsp` ≡8 mod16 un UB — exactement le placement SysV que
+/// `setup_signal_frame` doit livrer. Si un FXSAVE/XRSTOR y est branché, aligner
+/// spécifiquement ce champ, pas toute la structure.
 #[derive(Copy, Clone)]
-#[repr(C, align(16))]
+#[repr(C)]
 pub struct UContext {
     pub uc_flags: u64,
     pub uc_link: u64, // pointeur vers ucontext parent (optionnel)
@@ -92,8 +99,12 @@ impl Default for UContext {
 }
 
 /// Frame complet placé sur la pile utilisateur avant appel du handler.
+///
+/// FIX-SIGALIGN (bisect OOM/GP run 12/13, `<GP1 rip=... rsp mod16=8>`) :
+/// pas de `align(16)` ici ni sur `UContext` (où vit `_fpregs_mem`). Voir
+/// `setup_signal_frame` : RSP d'entrée du handler doit être ≡8 mod16.
 #[derive(Copy, Clone)]
-#[repr(C, align(16))]
+#[repr(C)]
 pub struct SignalFrame {
     /// Adresse de retour : pointe sur la routine sigreturn (restorer).
     pub pretcode: u64,
@@ -270,8 +281,20 @@ pub fn setup_signal_frame(
     };
 
     // Aligner selon SysV : (rsp - frame_size) & ~0xF, puis -8 (pour la red zone).
+    //
+    // FIX-SIGALIGN (bisect OOM/GP run 12/13) : ce commentaire décrivait déjà le
+    // bon algorithme, mais le "-8" n'était jamais appliqué — `sig_rsp` sortait
+    // ≡0 mod16 et était utilisé tel quel comme RSP d'entrée du handler
+    // (`frame.user_rsp = sig_rsp` plus bas). Or l'ABI SysV attend RSP ≡8 mod16
+    // à l'entrée d'une fonction atteinte "comme par un call" (ce qu'un handler
+    // de signal simule) : le compilateur du binaire utilisateur émet un
+    // prologue qui suppose cet invariant (ex. `movaps [rsp+N], xmmM`, qui
+    // n'est correct que 16-aligné). Avec l'ancien calcul, ce prologue voit un
+    // RSP faux de 8 octets et `movaps` lève #GP — c'est exactement le crash
+    // observé (`<GP1 ... rsp=...b8>`, rsp mod16=8 au lieu de 0 attendu par le
+    // code compilé une fois son propre push effectué).
     let frame_size = core::mem::size_of::<SignalFrame>() as u64;
-    let sig_rsp = (target_rsp - frame_size) & !0xFu64;
+    let sig_rsp = ((target_rsp - frame_size) & !0xFu64) - 8;
 
     // Construire le contenu du frame dans un buffer temporaire.
     // Assurer que sig_rsp est une adresse utilisateur valide (< USER_SPACE_TOP).
