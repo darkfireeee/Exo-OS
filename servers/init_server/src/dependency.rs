@@ -26,8 +26,14 @@ where
     let Some(service) = metadata(name) else {
         return false;
     };
-
-    service.requires.iter().copied().all(|dep| has_service(dep))
+    let mut idx = 0usize;
+    while idx < service.requires.len() {
+        if !has_service(service.requires[idx]) {
+            return false;
+        }
+        idx += 1;
+    }
+    true
 }
 
 #[inline]

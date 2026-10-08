@@ -211,9 +211,15 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
 
 #[inline]
 pub fn metadata(name: &str) -> Option<&'static ServiceMetadata> {
-    CANONICAL_SERVICES
-        .iter()
-        .find(|service| service.name == name)
+    let mut idx = 0usize;
+    while idx < CANONICAL_SERVICES.len() {
+        let service = &CANONICAL_SERVICES[idx];
+        if service.name == name {
+            return Some(service);
+        }
+        idx += 1;
+    }
+    None
 }
 
 #[inline]

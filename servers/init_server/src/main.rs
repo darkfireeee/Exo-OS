@@ -106,7 +106,12 @@ impl Service {
         self.disabled.store(false, Ordering::Release);
         self.dead.store(false, Ordering::Release);
         self.ready.store(false, Ordering::Release);
-        self.spawn_time_ms.store(monotonic_ms(), Ordering::Release);
+        // Ne pas appeler CLOCK_GETTIME dans la fenêtre immédiate du retour
+        // SYS_VFORK : PID 1 vient de reprendre après le remplacement d'image
+        // de l'enfant et ce syscall réintroduit une transition fragile avant
+        // la première readiness. Le graphe utilise son compteur fallback tant
+        // que spawn_time_ms vaut zéro.
+        self.spawn_time_ms.store(0, Ordering::Release);
     }
 
     fn mark_ready(&self) {

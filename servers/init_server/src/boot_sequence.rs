@@ -57,9 +57,11 @@ fn diag_step(tag: &[u8], n: u64) {
 ///   - hash ok à P2b puis crash → la corruption atterrit dans les ~20
 ///     instructions restantes (fenêtre IRQ timer) ou le saut vers 0 vient
 ///     d'un registre/kstate kernel corrompu → le dump V9 (ret0/rdx8) tranche.
+#[allow(dead_code)]
 static V9_TXT_HASH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 #[inline]
+#[allow(dead_code)]
 fn v9_boot_text_hash() -> u64 {
     let base = boot_services as *const () as *const u8;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -75,6 +77,7 @@ fn v9_boot_text_hash() -> u64 {
     h
 }
 
+#[allow(dead_code)]
 fn v9_check_boot_text() {
     let now = v9_boot_text_hash();
     let prev = V9_TXT_HASH.load(core::sync::atomic::Ordering::Relaxed);
@@ -237,11 +240,11 @@ fn should_quiet_console_after_ready(service_name: &str) -> bool {
 
 /// Démarre un serveur Ring1 via fork + execve.
 ///
-/// Le noyau implémente `vfork` comme un clone CoW séparé, mais son attente parent
-/// a produit un retour utilisateur à RIP nul juste après le premier exec. `fork`
-/// offre le même isolement d'espace d'adressage sans traverser ce retour bloquant.
-/// La barrière de stabilisation post-exec ci-dessous laisse l'enfant terminer son
-/// chargement et son enregistrement IPC avant le lancement du service suivant.
+/// Le noyau implémente `vfork` comme un clone CoW séparé et bloque le parent
+/// jusqu'à la publication de `EXEC_DONE` par l'enfant. Cette synchronisation
+/// protège la frame syscall et la pile vivante de PID 1 pendant `execve`.
+/// La barrière de stabilisation post-exec ci-dessous laisse ensuite l'enfant
+/// terminer son enregistrement IPC avant le lancement du service suivant.
 /// Contrat respecté : l'enfant ne fait que setpgid + execve (ou _exit) et ne
 /// retourne jamais de cette fonction.
 ///
@@ -251,7 +254,11 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
     let envp: [u64; 1] = [0];
 
     log::service_status(b"init: start ", service_name, b"\n");
-    let child_pid = syscall::syscall0(syscall::SYS_FORK);
+    // Le chemin VFORK du noyau utilise désormais un espace CoW séparé, mais
+    // conserve la garantie essentielle : PID 1 ne reprend qu'après execve().
+    // Utiliser FORK ici recrée la course qui corrompt le contexte de PID 1
+    // pendant le chargement ELF du premier service.
+    let child_pid = syscall::syscall0(syscall::SYS_VFORK);
     if child_pid < 0 {
         log::service_error(b"init: fork failed ", service_name, child_pid);
         return 0;
@@ -279,35 +286,15 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
         log::service_pid(b"init: spawned ", service_name, child_pid as u32);
     }
 
-    // FIX #25 (Audit 4.1) — Barrière post-execve : bloquer init pendant que
-    // l'enfant termine son démarrage utilisateur (demand-paging .text +
-    // IPC_REGISTER). Sans cette barrière, init reprend immédiatement après
-    // l'execve de l'enfant et la course de co-planification peut corrompre
-    // une frame vivante d'init (validé expérimentalement session 2026-06-21 :
-    // 500 ms fait progresser init de 1→2 services au lieu d'un seul).
-    // Le shell `exosh` est exempté car c'est le service terminal — aucun spawn
-    // supplémentaire n'a lieu après lui, donc la barrière n'apporterait rien
-    // et ralentirait l'accès au shell.
-    if !owns_interactive_console(service_name) {
-        let stabilise = Timespec {
-            tv_sec: 0,
-            tv_nsec: 500_000_000, // 500 ms — validé session 2026-06-21
-        };
-        let _ = unsafe {
-            syscall::syscall2(
-                syscall::SYS_NANOSLEEP,
-                &stabilise as *const Timespec as u64,
-                0,
-            )
-        };
-    }
-
-    // DIAG-P1 (bisect run 6) : le nanosleep est terminé, spawn_service va
-    // retourner child_pid à boot_services.
-    diag_step(b"<P1 post-sleep>", u64::MAX);
-    // DIAG-V9 : baseline de l'empreinte .text de boot_services (page du site
-    // d'appel set_pid) — comparée à <P2b> juste avant l'appel qui crashe.
-    v9_check_boot_text();
+    // La synchronisation post-exec est déjà garantie par SYS_VFORK : le noyau
+    // ne réveille PID 1 qu'après EXEC_DONE. Une seconde barrière nanosleep ici
+    // est redondante et force inutilement le chemin timer/page-fault pendant
+    // le bootstrap ; la readiness IPC ci-dessous reste la barrière fonctionnelle.
+    diag_step(b"<P1 post-exec>", u64::MAX);
+    // DIAG-V9 est conservé pour les campagnes de bissection explicites, mais
+    // ne doit pas lire la page .text de boot_services dans le chemin normal :
+    // après le retour synchronisé de vfork, cette instrumentation ajoutait une
+    // fenêtre fragile avant la reprise du graphe de services.
     child_pid as u32
 }
 
@@ -367,10 +354,30 @@ fn dependency_ready_in_wave(services: &[Service], ready_mask: u64, dep: &str) ->
 }
 
 fn can_start_in_wave(services: &[Service], name: &str, ready_mask: u64) -> bool {
-    let optional = dependency::optional_dependencies(name);
-    dependency::dependencies_satisfied(name, |dep| {
-        dependency_ready_in_wave(services, ready_mask, dep) || optional.contains(&dep)
-    })
+    let Some(meta) = dependency::metadata(name) else {
+        return false;
+    };
+    let optional = meta.requires_optional;
+    let mut dep_idx = 0usize;
+    while dep_idx < meta.requires.len() {
+        let dep = meta.requires[dep_idx];
+        let mut satisfied = dependency_ready_in_wave(services, ready_mask, dep);
+        if !satisfied {
+            let mut optional_idx = 0usize;
+            while optional_idx < optional.len() {
+                if optional[optional_idx] == dep {
+                    satisfied = true;
+                    break;
+                }
+                optional_idx += 1;
+            }
+        }
+        if !satisfied {
+            return false;
+        }
+        dep_idx += 1;
+    }
+    true
 }
 
 fn log_service_graph_timeout(services: &[Service]) {
@@ -456,14 +463,15 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
             // : P2b se place à ~5 instructions du `call *%rax` fautif et re-vérifie
             // l'intégrité de la page .text du site d'appel (cf. v9_check_boot_text).
             diag_step(b"<P2b pre-setpid>", u64::MAX);
-            v9_check_boot_text();
             service.set_pid(pid);
             // DIAG-P3 (bisect run 6) : set_pid terminé (inclut monotonic_ms).
             diag_step(b"<P3 setpid>", u64::MAX);
             if idx < fallback_wait_ms.len() {
                 fallback_wait_ms[idx] = 0;
             }
-            note_graph_progress(&mut last_progress_ms);
+            // Le temps monotone est volontairement différé après le premier
+            // retour vfork : la boucle fallback suffit pour la readiness et
+            // évite un CLOCK_GETTIME dans cette fenêtre fragile.
             // DIAG-P4 (bisect run 6) : note_graph_progress terminé (inclut
             // monotonic_ms → SYS_CLOCK_GETTIME).
             diag_step(b"<P4 progress>", u64::MAX);
