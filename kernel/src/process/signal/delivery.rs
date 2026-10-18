@@ -334,51 +334,6 @@ fn deliver_one(
     use super::handler::setup_signal_frame;
     use crate::process::lifecycle::exit::do_exit;
 
-    // DIAG-SG (bisect mort d'init) : chaque signal livré (rare au boot — pas de
-    // flood). k = U(ser handler) / I(gnore) / T(erm) / C(ore) / S(top) / c(ont).
-    #[cfg(target_arch = "x86_64")]
-    {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        out(b"<SG pid=");
-        let mut v = thread.sched_tcb.pid.0 as u64;
-        if v == 0 {
-            out(b"0");
-        } else {
-            let mut d = [0u8; 20];
-            let mut i = d.len();
-            while v != 0 && i > 0 {
-                i -= 1;
-                d[i] = b'0' + (v % 10) as u8;
-                v /= 10;
-            }
-            out(&d[i..]);
-        }
-        out(b" sig=");
-        let mut s = sig_n as u64;
-        if s == 0 {
-            out(b"0");
-        } else {
-            let mut d = [0u8; 20];
-            let mut i = d.len();
-            while s != 0 && i > 0 {
-                i -= 1;
-                d[i] = b'0' + (s % 10) as u8;
-                s /= 10;
-            }
-            out(&d[i..]);
-        }
-        out(b" k=");
-        out(match action.kind {
-            SigActionKind::User => b"U",
-            SigActionKind::Ignore => b"I",
-            SigActionKind::Term => b"T",
-            SigActionKind::Core => b"C",
-            SigActionKind::Stop => b"S",
-            SigActionKind::Cont => b"c",
-        });
-        out(b">\n");
-    }
-
     match action.kind {
         SigActionKind::Ignore => {
             // Rien à faire.

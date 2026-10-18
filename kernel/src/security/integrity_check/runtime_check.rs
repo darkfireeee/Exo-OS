@@ -150,31 +150,51 @@ pub fn init_runtime_integrity() {
     state.last_ok_tsc = read_tsc();
 }
 
+/// Hash une section en tranches de 256 Kio en cédant coopérativement le CPU
+/// entre les tranches si l'ordonnanceur est actif, afin de ne jamais bloquer
+/// les threads interactifs pendant le hash des 15 Mio de `.text`/`.rodata`.
+fn hash_section_cooperative(section: &[u8]) -> [u8; 32] {
+    const CHUNK_SIZE: usize = 256 * 1024;
+    let mut hasher = super::super::crypto::blake3::Blake3Hasher::new();
+    for chunk in section.chunks(CHUNK_SIZE) {
+        hasher.update(chunk);
+        // SAFETY: cooperative_reschedule vérifie en interne TCB, IRQ et preempt_count.
+        unsafe {
+            let _ = crate::scheduler::core::switch::cooperative_reschedule();
+        }
+    }
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
+
 /// Effectue une vérification d'intégrité des sections kernel.
 ///
 /// Retourne Err si une altération est détectée.
 /// **En production : appeler kernel_panic() en cas d'Err.**
 pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
-    let state = INTEGRITY_STATE.lock();
-    if !state.initialized {
-        return Err(IntegrityError::NotInitialized);
-    }
+    let (expected_text, expected_rodata) = {
+        let state = INTEGRITY_STATE.lock();
+        if !state.initialized {
+            return Err(IntegrityError::NotInitialized);
+        }
+        (state.text_hash, state.rodata_hash)
+    };
 
-    // Calculer les hashes actuels
+    // Calculer les hashes actuels hors du spinlock, par tranches coopératives
     // SAFETY: Voir text_section() / rodata_section().
-    let current_text = unsafe { blake3_hash(text_section()) };
-    let current_rodata = unsafe { blake3_hash(rodata_section()) };
+    let current_text = unsafe { hash_section_cooperative(text_section()) };
+    let current_rodata = unsafe { hash_section_cooperative(rodata_section()) };
 
     // Comparer en temps constant
     let mut text_diff = 0u8;
     let mut rodata_diff = 0u8;
     for i in 0..32 {
-        text_diff |= current_text[i] ^ state.text_hash[i];
-        rodata_diff |= current_rodata[i] ^ state.rodata_hash[i];
+        text_diff |= current_text[i] ^ expected_text[i];
+        rodata_diff |= current_rodata[i] ^ expected_rodata[i];
     }
 
     CHECKS_PERFORMED.fetch_add(1, Ordering::Relaxed);
-    drop(state);
 
     if text_diff != 0 {
         VIOLATIONS_DETECTED.fetch_add(1, Ordering::Relaxed);

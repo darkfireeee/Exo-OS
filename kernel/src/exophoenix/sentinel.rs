@@ -121,11 +121,11 @@ fn apic_elapsed_us(start_ticks: u32, end_ticks: u32) -> u64 {
 }
 
 #[inline(always)]
-fn is_b_region(pa: u64) -> bool {
+fn is_b_region(pa: u64, is_user_half: bool) -> bool {
     let pool_r3_base = stage0::pool_r3_base_phys();
     let pool_r3_end = pool_r3_base.saturating_add(stage0::pool_r3_alloc_bytes());
 
-    let in_b_region = pa >= B_REGION_PHYS_BASE && pa < b_region_phys_end();
+    let in_b_region = is_user_half && pa >= B_REGION_PHYS_BASE && pa < b_region_phys_end();
     let in_pool_r3 = pa >= pool_r3_base && pa < pool_r3_end;
     let in_ssr_cmd = pa >= SSR_CMD_PHYS_START && pa < SSR_CMD_PHYS_END;
 
@@ -136,13 +136,16 @@ fn walk_a_page_tables_iterative() -> u32 {
     let mut score = 0u32;
     let mut pf_count = 0u32;
     let mut steps = 0usize;
-    let max_steps = (KERNEL_IMAGE_MAX_SIZE / PAGE_SIZE).saturating_mul(4);
+    let max_steps = (real_kernel_image_size() / PAGE_SIZE)
+        .saturating_mul(4)
+        .max(4096);
 
     let pml4_phys = read_cr3();
     // SAFETY: CR3 courant doit pointer sur une PML4 valide en contexte noyau.
     let pml4 = unsafe { phys_to_table_ref(pml4_phys) };
 
     'walk: for p4i in 0..512 {
+        let is_user_half = p4i < 256;
         steps = steps.saturating_add(1);
         if steps > max_steps {
             break;
@@ -150,16 +153,18 @@ fn walk_a_page_tables_iterative() -> u32 {
 
         let l4e = pml4[p4i];
         if !l4e.is_present() {
-            pf_count = pf_count.saturating_add(1);
-            if pf_count > PF_THRESHOLD_HIGH {
-                score = score.saturating_add(SCORE_PF_FLOOD);
-                break;
+            if l4e.raw() != 0 {
+                pf_count = pf_count.saturating_add(1);
+                if pf_count > PF_THRESHOLD_HIGH {
+                    score = score.saturating_add(SCORE_PF_FLOOD);
+                    break;
+                }
             }
             continue;
         }
 
         let pdpt_phys = l4e.phys_addr().as_u64();
-        if is_b_region(pdpt_phys) {
+        if is_b_region(pdpt_phys, is_user_half) {
             score = score.saturating_add(SCORE_PA_REMAP);
         }
 
@@ -173,16 +178,18 @@ fn walk_a_page_tables_iterative() -> u32 {
 
             let l3e = pdpt[p3i];
             if !l3e.is_present() {
-                pf_count = pf_count.saturating_add(1);
-                if pf_count > PF_THRESHOLD_HIGH {
-                    score = score.saturating_add(SCORE_PF_FLOOD);
-                    break 'walk;
+                if l3e.raw() != 0 {
+                    pf_count = pf_count.saturating_add(1);
+                    if pf_count > PF_THRESHOLD_HIGH {
+                        score = score.saturating_add(SCORE_PF_FLOOD);
+                        break 'walk;
+                    }
                 }
                 continue;
             }
 
             let pd_phys = l3e.phys_addr().as_u64();
-            if is_b_region(pd_phys) {
+            if is_b_region(pd_phys, is_user_half) {
                 score = score.saturating_add(SCORE_PA_REMAP);
             }
 
@@ -200,22 +207,24 @@ fn walk_a_page_tables_iterative() -> u32 {
 
                 let l2e = pd[p2i];
                 if !l2e.is_present() {
-                    pf_count = pf_count.saturating_add(1);
-                    if pf_count > PF_THRESHOLD_HIGH {
-                        score = score.saturating_add(SCORE_PF_FLOOD);
-                        break 'walk;
+                    if l2e.raw() != 0 {
+                        pf_count = pf_count.saturating_add(1);
+                        if pf_count > PF_THRESHOLD_HIGH {
+                            score = score.saturating_add(SCORE_PF_FLOOD);
+                            break 'walk;
+                        }
                     }
                     continue;
                 }
 
                 let pt_phys = l2e.phys_addr().as_u64();
-                if is_b_region(pt_phys) {
+                if is_b_region(pt_phys, is_user_half) {
                     score = score.saturating_add(SCORE_PA_REMAP);
                 }
 
                 if l2e.is_huge() {
                     let huge_base = l2e.phys_addr().as_u64();
-                    if is_b_region(huge_base) {
+                    if is_b_region(huge_base, is_user_half) {
                         score = score.saturating_add(SCORE_PA_REMAP);
                     }
                     continue;
@@ -235,7 +244,7 @@ fn walk_a_page_tables_iterative() -> u32 {
                     }
 
                     let page_phys = l1e.phys_addr().as_u64();
-                    if is_b_region(page_phys) {
+                    if is_b_region(page_phys, is_user_half) {
                         score = score.saturating_add(SCORE_PA_REMAP);
                     }
                 }

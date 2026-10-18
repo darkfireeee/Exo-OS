@@ -555,31 +555,6 @@ impl FileFaultProvider for ExoFsElfLoader {
         let dst =
             unsafe { core::slice::from_raw_parts_mut(dst_virt.as_u64() as *mut u8, PAGE_SIZE) };
 
-        // FIX #25 (Audit 5.1) — Diagnostic défensif : `dst.fill(0)` ci-dessous
-        // est la SEULE écriture physmap PAGE_SIZE sur le chemin live (demand-
-        // paging execve) qui contourne le détecteur ZEROINIT du buddy
-        // (dest_frame est alloué via alloc_nonzeroed, pas ZEROED). Si dest_frame
-        // est corrompu (frame pile d'init vivante), cette écriture zéroe la
-        // page d'init → SEGV rip=0. On vérifie donc ici que dest_frame n'est PAS
-        // une frame de pile d'init avant d'écrire.
-        #[cfg(target_arch = "x86_64")]
-        {
-            use core::sync::atomic::Ordering;
-            let dest_phys = dest_frame.start_address().as_u64();
-            let mut i = 0usize;
-            while i < 24 {
-                let initf = crate::memory::physical::allocator::buddy::DIAG25_INITF[i]
-                    .load(Ordering::Relaxed);
-                if initf != 0 && initf == dest_phys {
-                    panic!(
-                        "#25 CAUGHT load_file_page: dest_frame={:#x} == DIAG25_INITF[{}]",
-                        dest_phys, i
-                    );
-                }
-                i += 1;
-            }
-        }
-
         dst.fill(0);
 
         let (segments, segment_count) = lookup_elf_segments(file_id);
@@ -1047,29 +1022,6 @@ fn write_stack_bytes(
         let page_off = off % PAGE_SIZE;
         let n = (bytes.len() - copied).min(PAGE_SIZE - page_off);
         let dst_virt = phys_to_virt(stack_frames[page_idx].start_address());
-
-        // FIX #25 (Audit 5.2) — Diagnostic défensif : vérifier que
-        // stack_frames[page_idx] n'est PAS une frame de pile d'init vivante.
-        // Si stack_frames (sur la pile noyau de l'enfant) a été corrompu,
-        // write_stack_bytes écrirait via physmap sur une frame d'init →
-        // corruption. On panic pour capturer le coupable.
-        #[cfg(target_arch = "x86_64")]
-        {
-            use core::sync::atomic::Ordering;
-            let dest_phys = stack_frames[page_idx].start_address().as_u64();
-            let mut i = 0usize;
-            while i < 24 {
-                let initf = crate::memory::physical::allocator::buddy::DIAG25_INITF[i]
-                    .load(Ordering::Relaxed);
-                if initf != 0 && initf == dest_phys {
-                    panic!(
-                        "#25 CAUGHT write_stack_bytes: stack_frames[{}]={:#x} == DIAG25_INITF[{}]",
-                        page_idx, dest_phys, i
-                    );
-                }
-                i += 1;
-            }
-        }
 
         let dst = unsafe {
             core::slice::from_raw_parts_mut((dst_virt.as_u64() as usize + page_off) as *mut u8, n)

@@ -417,17 +417,6 @@ fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : le #GP1 identique
     // bit-pour-bit d'un run à l'autre, sans jamais un seul <SG pid=... k=...>
     // (imprimé par deliver_one avant toute action), prouve que la livraison
-    // n'atteint jamais deliver_one — donc jamais setup_signal_frame (V13),
-    // ce qui explique pourquoi ce patch n'a rien changé. Ce marqueur dit si
-    // c'est déjà ICI que ça casse (tcb introuvable → queue_signal_for_current
-    // ne fait RIEN, silencieusement).
-    #[cfg(target_arch = "x86_64")]
-    {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        out(b"<V14QSIG tcb=");
-        if tcb_raw == 0 { out(b"0"); } else { out(b"nz"); }
-        out(b">");
-    }
     if tcb_raw == 0 {
         return;
     }
@@ -436,126 +425,6 @@ fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let pid = crate::process::core::pid::Pid(tcb.pid.0);
     let _ = crate::process::signal::delivery::send_signal_to_pid(pid, sig);
-}
-
-/// DIAG-PFK (bisect run 5) : pour chaque #PF userspace de PID 1, compare la
-/// frame obtenue en marchant la PML4 RÉELLE d'init (pcb.address_space) avec la
-/// frame obtenue en marchant la table sur laquelle l'utilisateur EXÉCUTAIT
-/// réellement (gs:[0x48] — CR3 user préservée par le stub d'exception).
-///
-/// Motivation : run 5 — init se réveille avec sa pile validée propre (CKP
-/// lit la PML4 réelle) puis SEGV rip=0 avec une pile contenant des données
-/// plausibles d'un autre binaire. Si gs:[0x48] ≠ table d'init au moment de la
-/// faute, init exécutait sur l'AS d'un AUTRE processus : c'est la preuve de la
-/// désync KPTI (et le FIX-KPTI-RESYNC du nanosleep l'éliminera).
-#[cfg(target_arch = "x86_64")]
-fn diag_pfk_pid1(frame: &ExceptionFrame, fault_addr_raw: u64) {
-    use crate::memory::core::{PhysAddr, VirtAddr};
-    use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
-
-    let tcb_raw = current_tcb_raw_checked();
-    if tcb_raw == 0 {
-        return;
-    }
-    // SAFETY: TCB courant publié par le scheduler pour ce CPU.
-    let pid = unsafe {
-        (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
-            .pid
-            .0
-    };
-    if pid != 1 {
-        return;
-    }
-
-    // CR3 user au moment de la faute (le stub ne modifie pas gs:[0x48]).
-    let user_cr3: u64;
-    // SAFETY: lecture du slot per-CPU (GS kernel actif dans le handler).
-    unsafe {
-        core::arch::asm!(
-            "mov {v}, gs:[0x48]",
-            v = out(reg) user_cr3,
-            options(nostack, preserves_flags),
-        );
-    }
-    if user_cr3 == 0 {
-        return; // KPTI désactivé — pas de table d'exécution séparée
-    }
-
-    // PML4 réelle d'init via le PCB.
-    let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
-        .find_by_pid(crate::process::core::pid::Pid(1))
-    else {
-        return;
-    };
-    let as_ptr = pcb.address_space_ptr();
-    if as_ptr.is_null() {
-        return;
-    }
-    // SAFETY: AS de PID 1 vivant pendant le handler.
-    let real_pml4 = unsafe {
-        (*(as_ptr as *const crate::memory::virt::UserAddressSpace))
-            .pml4_phys()
-            .as_u64()
-    };
-    if real_pml4 == 0 {
-        return;
-    }
-
-    let walk_leaf = |pml4: u64, va: u64| -> u64 {
-        let walker = PageTableWalker::new(PhysAddr::new(pml4 & !0xfffu64));
-        match walker.walk_read(VirtAddr::new(va)) {
-            WalkResult::Leaf { entry, .. } | WalkResult::HugePage { entry, .. } => {
-                entry.phys_addr().as_u64() & !0xfffu64
-            }
-            _ => u64::MAX,
-        }
-    };
-
-    let rsp = frame.rsp;
-    let rip = frame.rip;
-    let f_rsp_real = walk_leaf(real_pml4, rsp);
-    let f_rsp_user = walk_leaf(user_cr3, rsp);
-    let f_rip_real = walk_leaf(real_pml4, rip);
-    let f_rip_user = walk_leaf(user_cr3, rip);
-
-    let out = crate::arch::x86_64::terminal::debug_write;
-    let hex = |val: u64| {
-        let lut = b"0123456789abcdef";
-        let mut hb = [0u8; 16];
-        let mut x = val;
-        let mut k = 16;
-        while k > 0 {
-            k -= 1;
-            hb[k] = lut[(x & 0xf) as usize];
-            x >>= 4;
-        }
-        hb
-    };
-
-    if f_rsp_real != f_rsp_user || f_rip_real != f_rip_user {
-        // DÉSYNC PROUVÉE : l'utilisateur exécutait sur une AUTRE table que
-        // la PML4 réelle d'init. u48 = CR3 au moment de la faute.
-        out(b"<PFK! u48=0x");
-        out(&hex(user_cr3));
-        out(b" real=0x");
-        out(&hex(real_pml4));
-        out(b" rspR=0x");
-        out(&hex(f_rsp_real));
-        out(b" rspU=0x");
-        out(&hex(f_rsp_user));
-        out(b" ripR=0x");
-        out(&hex(f_rip_real));
-        out(b" ripU=0x");
-        out(&hex(f_rip_user));
-        out(b">\n");
-    } else {
-        out(b"<PFK ok u48=0x");
-        out(&hex(user_cr3));
-        out(b" rspF=0x");
-        out(&hex(f_rsp_real));
-        out(b">\n");
-    }
-    let _ = fault_addr_raw;
 }
 
 /// DIAG-UD1/GP1 (bisect mort d'init) : dump complet d'une exception fatale
@@ -1217,14 +1086,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         );
     }
 
-    // DIAG-PFK (bisect run 5) : pour chaque #PF user de PID 1, comparer la
-    // table d'exécution réelle (gs:[0x48]) avec la PML4 d'init — détecte une
-    // désync KPTI (init exécutant sur l'AS d'un autre processus).
-    #[cfg(target_arch = "x86_64")]
-    if frame.from_userspace() {
-        diag_pfk_pid1(frame, fault_addr_raw);
-    }
-
     // Dispatcher vers le sous-système memory/
     //
     // Une faute sur une adresse userspace peut arriver avec CS=kernel pendant
@@ -1459,36 +1320,6 @@ extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                 queue_signal_for_current(crate::process::signal::Signal::SIGKILL);
                 exception_return_to_user(frame);
             } else {
-                // DIAG-V10-OOMCTX : journaliser le contexte avant la récupération
-                // ExoPhoenix, qui efface le contexte de l'exception.
-                use crate::arch::x86_64::terminal::debug_write;
-                use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
-                let cpu_id = crate::arch::x86_64::cpu::topology::current_cpu_id().0;
-                // SAFETY: TCB courant publié dans le stockage per-CPU pendant
-                // le traitement de l'exception.
-                let tcb_raw = unsafe {
-                    crate::arch::x86_64::smp::percpu::try_read_current_tcb()
-                }
-                .unwrap_or(0);
-                let cur_pid = if tcb_raw != 0 {
-                    // SAFETY: TCB courant valide pendant cette exception.
-                    unsafe {
-                        (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
-                            .pid
-                            .0
-                    }
-                } else {
-                    0
-                };
-                debug_write(b"<V10OOM cpu=");
-                diag25_dec(cpu_id as u64);
-                debug_write(b" pid=");
-                diag25_dec(cur_pid as u64);
-                debug_write(b" rip=0x");
-                diag25_hex(frame.rip);
-                debug_write(b" addr=0x");
-                diag25_hex(addr.as_u64());
-                debug_write(b">\n");
                 kernel_panic_exception("#PF kernel : OOM", frame);
             }
         }

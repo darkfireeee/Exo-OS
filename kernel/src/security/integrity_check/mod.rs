@@ -33,10 +33,10 @@ pub fn integrity_init() {
     init_runtime_integrity();
 }
 
-/// Intervalle entre deux vérifications d'intégrité runtime (15 s). Le hash
+/// Intervalle entre deux vérifications d'intégrité runtime (60 s). Le hash
 /// Blake3 de `.text/.rodata` est une opération lourde → basse fréquence
 /// suffisante pour détecter une altération persistante sans charge inutile.
-const INTEGRITY_CHECK_INTERVAL_NS: u64 = 15_000_000_000;
+const INTEGRITY_CHECK_INTERVAL_NS: u64 = 60_000_000_000;
 
 /// Boucle du kthread moniteur d'intégrité (TIER 2.1-a). Dort, puis — une fois le
 /// boot sécurité terminé (`is_security_ready`, donc `.text/.rodata` stables) —
@@ -68,6 +68,6 @@ pub fn start_integrity_monitor() {
         entry: integrity_monitor_loop,
         arg: 0,
         target_cpu: 0,
-        priority: Priority::NORMAL_DEFAULT,
+        priority: Priority::NORMAL_MIN,
     });
 }

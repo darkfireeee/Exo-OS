@@ -20,7 +20,7 @@ use core::fmt;
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
 /// Adresse physique du framebuffer VGA texte (0xB8000 — plan vidéo MMIO).
-const VGA_BUFFER_BASE: usize = 0xB800_0000;
+const VGA_BUFFER_BASE: usize = 0xB8000;
 
 /// Dimensions de l'écran VGA texte standard.
 const VGA_COLS: usize = 80;

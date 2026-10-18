@@ -414,15 +414,10 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
     // Ce compteur global garantit que l'OS entre en mode rescue si la somme
     // des timeouts individuels dépasse 45 secondes -- signalant un blocage
     // inattendu dans la résolution des dépendances.
-    let boot_global_start_ms = unsafe {
-        exo_syscall_abi::syscall3(exo_syscall_abi::SYS_CLOCK_GETTIME, 1, 0, 0) as u64 / 1_000_000
-    };
-    const GLOBAL_BOOT_TIMEOUT_MS: u64 = 45_000; // 45s max pour tous les services
+    let boot_global_start_ms = boot_sequence::monotonic_ms();
+    const GLOBAL_BOOT_TIMEOUT_MS: u64 = 180_000; // 180s max pour les 17 services en émulation QEMU debug
     let _ = unsafe { boot_sequence::boot_services(&SERVICES) };
-    let boot_elapsed = unsafe {
-        let now = exo_syscall_abi::syscall3(exo_syscall_abi::SYS_CLOCK_GETTIME, 1, 0, 0) as u64 / 1_000_000;
-        now.saturating_sub(boot_global_start_ms)
-    };
+    let boot_elapsed = boot_sequence::monotonic_ms().saturating_sub(boot_global_start_ms);
     if boot_elapsed > GLOBAL_BOOT_TIMEOUT_MS {
         log::line(b"init_server: BOOT GLOBAL TIMEOUT -- entering degraded supervision mode");
         // Mode rescue : continuer la supervision mais logger le problème

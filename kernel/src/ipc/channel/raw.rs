@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{alloc_message_id, EndpointId, IpcError, MessageId};
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
+use crate::scheduler::core::task::ThreadControlBlock;
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapTable, CapToken, Rights};
 
@@ -142,6 +143,12 @@ struct RawSlot {
     endpoint_id: AtomicU64,
     /// Anneau de messages protégé par spinlock.
     ring: SpinLock<InnerRing>,
+    /// TCB du récepteur bloqué sur cette mailbox (0 = aucun).
+    ///
+    /// RÈGLE IPC-RAW-03 : lu/écrit UNIQUEMENT sous `ring` verrouillé. Le
+    /// récepteur ne peut donc pas quitter `recv_ipc_message` (et libérer son
+    /// TCB) pendant qu'un émetteur le réveille.
+    waiter: AtomicUsize,
     /// Compteurs statistiques.
     send_count: AtomicU64,
     recv_count: AtomicU64,
@@ -153,9 +160,56 @@ impl RawSlot {
         Self {
             endpoint_id: AtomicU64::new(0),
             ring: SpinLock::new(InnerRing::empty()),
+            waiter: AtomicUsize::new(0),
             send_count: AtomicU64::new(0),
             recv_count: AtomicU64::new(0),
             drop_count: AtomicU64::new(0),
+        }
+    }
+
+    /// Réveille le récepteur enregistré, s'il existe.
+    ///
+    /// Doit être appelé avec `ring` verrouillé (RÈGLE IPC-RAW-03).
+    #[inline]
+    fn wake_waiter_locked(&self) {
+        let raw = self.waiter.swap(0, Ordering::AcqRel);
+        if raw != 0 {
+            // SAFETY: le pointeur a été publié par le récepteur sous le même
+            // verrou et il ne le retire qu'en reprenant ce verrou : le TCB est
+            // vivant pendant toute la durée de l'appel.
+            unsafe { wake_receiver(raw as *mut ThreadControlBlock) };
+        }
+    }
+}
+
+/// Transition Sleeping → Runnable + enqueue du récepteur IPC bloqué.
+///
+/// Si le récepteur n'est pas (encore) endormi, l'appel est un no-op : il
+/// re-sondera l'anneau au plus tard à l'expiration de sa sieste bornée.
+unsafe fn wake_receiver(tcb: *mut ThreadControlBlock) {
+    use crate::scheduler::core::preempt::{IrqGuard, MAX_CPUS};
+    use crate::scheduler::core::runqueue::run_queue;
+    use crate::scheduler::core::task::{CpuId, TaskState};
+    use core::ptr::NonNull;
+
+    let Some(nn) = NonNull::new(tcb) else {
+        return;
+    };
+    let t = &*tcb;
+    let cpu_raw = t.cpu_id.load(Ordering::Relaxed) as usize;
+    if cpu_raw >= MAX_CPUS {
+        return;
+    }
+    let _irq = IrqGuard::new();
+    if !t.try_transition(TaskState::Sleeping, TaskState::Runnable) {
+        return;
+    }
+    run_queue(CpuId(cpu_raw as u32)).enqueue(nn);
+    let current = crate::scheduler::core::switch::current_thread_raw();
+    if !current.is_null() {
+        let cur = &*current;
+        if cur.current_cpu().0 as usize == cpu_raw {
+            cur.request_preemption();
         }
     }
 }
@@ -283,6 +337,7 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
             ring.enqueue(data);
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
+            slot.wake_waiter_locked();
             return Ok(alloc_message_id());
         }
         // Anneau plein.
@@ -301,6 +356,7 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
         if ring.enqueue(data) {
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
+            slot.wake_waiter_locked();
             return Ok(alloc_message_id());
         }
         if spins > 200_000 {
@@ -341,11 +397,58 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
         ring.enqueue(data);
         slot.send_count.fetch_add(1, Ordering::Relaxed);
         IPC_STATS.record(StatEvent::MessageSent);
+        slot.wake_waiter_locked();
         return Ok(alloc_message_id());
     }
 
     slot.drop_count.fetch_add(1, Ordering::Relaxed);
     Err(IpcError::WouldBlock)
+}
+
+/// Tente de recevoir un message ; si l'anneau est vide et qu'un TCB est fourni,
+/// enregistre atomiquement `waiter_tcb` comme waiter sous le verrou d'anneau.
+pub fn recv_raw_or_register_waiter(
+    ep_id: EndpointId,
+    buf: &mut [u8],
+    waiter_tcb: *mut ThreadControlBlock,
+) -> Result<Option<usize>, IpcError> {
+    let id = ep_id.get();
+    if id == 0 {
+        return Err(IpcError::NullEndpoint);
+    }
+    let idx = find_slot(id).ok_or(IpcError::NotFound)?;
+    let slot = &RAW_TABLE[idx];
+    let mut ring = slot.ring.lock();
+    match ring.dequeue(buf) {
+        Ok(Some(n)) => {
+            slot.recv_count.fetch_add(1, Ordering::Relaxed);
+            IPC_STATS.record(StatEvent::MessageReceived);
+            slot.waiter.store(0, Ordering::Release);
+            Ok(Some(n))
+        }
+        Ok(None) => {
+            if !waiter_tcb.is_null() {
+                slot.waiter.store(waiter_tcb as usize, Ordering::Release);
+            }
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Retire le waiter enregistré sur la mailbox si c'est bien `tcb`.
+pub fn clear_waiter(ep_id: EndpointId, tcb: *mut ThreadControlBlock) {
+    let id = ep_id.get();
+    if let Some(idx) = find_slot(id) {
+        let slot = &RAW_TABLE[idx];
+        let mut _ring = slot.ring.lock();
+        let _ = slot.waiter.compare_exchange(
+            tcb as usize,
+            0,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        );
+    }
 }
 
 /// Reçoit un message de la mailbox de `ep_id` dans `buf`.

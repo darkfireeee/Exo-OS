@@ -253,45 +253,77 @@ impl SlubCache {
     // ─── helpers privés ─────────────────────────────────────────────────────
 
     fn alloc_partial(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {
-        if inner.partial.is_null() {
-            return None;
-        }
-        // SAFETY: inner.partial pointe sur un SlubHeader valide.
-        let header = unsafe { &mut *inner.partial };
-        if header.freelist.is_null() {
-            return None;
-        }
-
-        let obj = header.freelist;
-        if unsafe { !self.object_belongs_to_slub(header as *mut SlubHeader, obj) } {
-            self.stats.invalid_frees.fetch_add(1, Ordering::Relaxed);
-            debug_assert!(
-                false,
-                "SLUB freelist object escaped cache layout: {:p}",
-                obj
-            );
-            return None;
-        }
-        if unsafe { !self.free_poison_is_intact(obj) } {
-            self.stats.use_after_free.fetch_add(1, Ordering::Relaxed);
-            debug_assert!(false, "SLUB free object payload modified: {:p}", obj);
-            return None;
-        }
-
-        // SAFETY: header est valide, obj pointe sur un objet libre encodé XOR.
-        let next = unsafe { header.read_next(obj) };
-        header.freelist = next;
-        header.inuse += 1;
-
-        if header.inuse == header.total {
-            let h = inner.partial as *mut SlubHeader;
-            // SAFETY: h = partial non-null (inuse == total); retrait de la liste partielle.
-            unsafe {
-                slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+        while !inner.partial.is_null() {
+            let h = inner.partial;
+            // SAFETY: inner.partial pointe sur un SlubHeader valide.
+            let header = unsafe { &mut *h };
+            if header.freelist.is_null() {
+                // Slab sans objet libre mais encore dans partial : l'isoler.
+                unsafe {
+                    slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+                }
+                inner.full_count += 1;
+                continue;
             }
-            inner.full_count += 1;
+
+            let obj = header.freelist;
+            if unsafe { !self.object_belongs_to_slub(h as *const SlubHeader, obj) } {
+                self.stats.invalid_frees.fetch_add(1, Ordering::Relaxed);
+                debug_assert!(
+                    false,
+                    "SLUB freelist object escaped cache layout: {:p}",
+                    obj
+                );
+                // Isoler le slab dont la freelist est corrompue pour ne pas bloquer le cache.
+                header.freelist = core::ptr::null_mut();
+                unsafe {
+                    slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+                }
+                inner.full_count += 1;
+                continue;
+            }
+            if unsafe { !self.free_poison_is_intact(obj) } {
+                self.stats.use_after_free.fetch_add(1, Ordering::Relaxed);
+                debug_assert!(false, "SLUB free object payload modified: {:p}", obj);
+                // Retirer l'objet altéré de la freelist et le réparer si son pointeur next est valide,
+                // sinon isoler le slab.
+                let next = unsafe { header.read_next(obj) };
+                if next.is_null()
+                    || unsafe { self.object_belongs_to_slub(h as *const SlubHeader, next) }
+                {
+                    header.freelist = next;
+                    header.inuse = header.inuse.saturating_add(1);
+                    if header.inuse >= header.total || header.freelist.is_null() {
+                        unsafe {
+                            slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+                        }
+                        inner.full_count += 1;
+                    }
+                } else {
+                    header.freelist = core::ptr::null_mut();
+                    unsafe {
+                        slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+                    }
+                    inner.full_count += 1;
+                }
+                continue;
+            }
+
+            // SAFETY: header est valide, obj pointe sur un objet libre encodé XOR.
+            let next = unsafe { header.read_next(obj) };
+            header.freelist = next;
+            header.inuse += 1;
+
+            if header.inuse == header.total {
+                // SAFETY: h = partial non-null (inuse == total); retrait de la liste partielle.
+                unsafe {
+                    slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
+                }
+                inner.full_count += 1;
+            }
+            return NonNull::new(obj);
         }
-        NonNull::new(obj)
+        None
     }
 
     fn reactivate_empty(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {

@@ -354,7 +354,10 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
 
                 // Phase 3 : libérer les frames (TLBs déjà invalidés partout).
                 for i in 0..count {
-                    let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
+                    let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
+                    if remaining == 0 || remaining == u32::MAX {
+                        let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
+                    }
                 }
             }
             Ok(())
@@ -435,8 +438,24 @@ pub fn do_mprotect_in_as(
     let mut walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
     let mut cursor = range_start.as_u64();
     while cursor < range_end.as_u64() {
+        let va = VirtAddr::new(cursor);
+        let old_entry =
+            crate::memory::virt::page_table::PageTableEntry::from_raw(walker.read_pte_raw(va));
+        let is_shared_cow = old_entry.is_cow()
+            || old_entry.frame().is_some_and(|f| {
+                crate::memory::cow::tracker::COW_TRACKER
+                    .tracked_ref_count(f)
+                    .is_some_and(|rc| rc > 1)
+            });
+        let pte_flags = if is_shared_cow && new_page_flags.contains(PageFlags::WRITABLE) {
+            new_page_flags
+                .clear(PageFlags::WRITABLE)
+                .set(PageFlags::COW)
+        } else {
+            new_page_flags
+        };
         // remap_flags → Err si page absente (demand paging) → ignoré intentionnellement.
-        let _ = walker.remap_flags(VirtAddr::new(cursor), new_page_flags);
+        let _ = walker.remap_flags(va, pte_flags);
         cursor += PAGE_SIZE as u64;
     }
 

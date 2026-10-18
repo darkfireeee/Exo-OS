@@ -45,26 +45,7 @@ fn try_box_new<T>(value: T) -> Option<Box<T>> {
 fn track_cow_frame(frame: Frame) -> Result<(), AddrSpaceCloneError> {
     COW_TRACKER
         .try_inc(frame)
-        .map(|_| {
-            // FIX-#25-PIN (boot-hang bisect, CKP flagrant délit) : épingler chaque
-            // frame CoW-partagée contre toute libération/réallocation buddy.
-            //
-            // Preuve CKP (last_output_4) : la page de pile d'init (frame privée
-            // post-CoW-break) est RÉÉCRITE pendant son nanosleep (~1139 octets,
-            // zéros + struct — l'empreinte de la pile d'ipc_router). Pour que les
-            // écritures d'ipc_router atterrissent physiquement sur une frame
-            // vivante d'init, il faut que cette frame ait été rendue au buddy par
-            // erreur puis réattribuée (H2-buddy), ou que la PTE d'init ait été
-            // remappée (H1 — détecté par <CKPpte>).
-            //
-            // L'épinglage ferme H2-buddy : reserve_frame() pose PINNED|RESERVED →
-            // buddy::free_pages() REFUSE toute libération ultérieure de ces frames
-            // (marqueur <25RSVD-REFUSE>) → elles ne peuvent jamais être réattribuées
-            // à un autre processus. Coût : quelques frames « orphelines de CoW »
-            // fuient à chaque spawn (~2 pages/service) — négligeable au boot, et
-            // chaque refus est un marqueur diagnostic qui désigne le fautif.
-            crate::memory::physical::allocator::buddy::reserve_frame(frame);
-        })
+        .map(|_| ())
         .map_err(|_| AddrSpaceCloneError::OutOfMemory)
 }
 
@@ -350,12 +331,6 @@ unsafe fn clone_pt(
                 continue;
             }
             if let Some(frame) = src_entry.frame() {
-                #[cfg(target_arch = "x86_64")]
-                crate::memory::physical::allocator::buddy::diag25_trace(
-                    b"<25CLPT ",
-                    frame.phys_addr().as_u64(),
-                    1,
-                );
                 track_cow_frame(frame)?;
             }
             let shared = shared_leaf_entry(src_entry);
@@ -401,11 +376,6 @@ fn repoint_table_entry(src_entry: PageTableEntry, new_phys: PhysAddr) -> PageTab
 }
 
 unsafe fn free_userspace_tables(root_pml4_phys: PhysAddr) {
-    #[cfg(target_arch = "x86_64")]
-    crate::memory::physical::allocator::buddy::diag25_tag_hex(
-        b"<25TD pml4=",
-        root_pml4_phys.as_u64(),
-    );
     let pml4 = phys_to_table_ref(root_pml4_phys);
     for l4_idx in 0..256 {
         let entry = pml4[l4_idx];
@@ -474,170 +444,20 @@ fn release_leaf_frame(entry: PageTableEntry) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    // `track_cow_frame()` épingle la frame tant qu'elle est réellement
-    // partagée. Quand remaining == 0, la frame n'est plus référencée par
-    // aucun processus : on peut retirer la réservation. Tant que remaining > 0,
-    // la frame est encore mappée par au moins un processus (par ex. le parent)
-    // et doit impérativement rester RESERVED/PINNED.
-    if remaining == 0 {
-        crate::memory::physical::allocator::buddy::unreserve_frame(frame);
-    }
     // `remaining == 0` est la dernière référence explicitement suivie : la
     // frame doit être libérée. `u32::MAX` signifie « non suivi » et n'est
     // libérable que pour une entrée non-CoW ; une entrée CoW non suivie est
     // volontairement conservée, car son partage ne peut pas être prouvé.
     let will_free = remaining == 0 || (remaining == u32::MAX && !entry.is_cow());
-    // FIX-V9 (SEGV rip=0 run 10) — Garde UNIVERSELLE anti-vol de page vivante :
-    // les gardes DIAG25_INITF ne couvrent que les 24 frames de pile capturées
-    // au fork. Or le crash du run 10 désigne une page .text d'init (décodage
-    // garbage de boot_services : rax=1, rcx=1, rbx=rbp=r8-r15=0 puis
-    // call/jmp → rip=0), hors de toute surveillance. AVANT tout free_pages,
-    // on vérifie la RÉALITÉ des tables de pages de PID 1 : si la frame y est
-    // encore mappée et que le teardown n'est pas celui d'init lui-même, la
-    // libérer = remettre une page VIVANTE en circulation (le prochain alloc
-    // ZEROED/ELF la zéroée/l'écrase via physmap → corruption d'init). On
-    // refuse (fuite volontaire d'une frame par boot, négligeable) et on
-    // désigne le fautif. Couvre TOUTES les frames (.text/.rodata/.data/heap),
-    // pas seulement DIAG25_INITF.
-    #[cfg(target_arch = "x86_64")]
-    if will_free {
-        let fp_live = frame.phys_addr().as_u64();
-        // SAFETY: lecture du TCB courant depuis le stockage per-CPU publié par
-        // le scheduler pendant le teardown du thread courant.
-        let tcb_raw = unsafe {
-            crate::arch::x86_64::smp::percpu::try_read_current_tcb()
-        }
-        .unwrap_or(0);
-        let cur_pid = if tcb_raw != 0 {
-            // SAFETY: TCB courant publié par le scheduler ; le teardown
-            // s'exécute dans le contexte syscall du processus mourant.
-            unsafe {
-                (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
-                    .pid
-                    .0
-            }
-        } else {
-            0
-        };
-        if cur_pid != 1 && crate::syscall::table::diag_pid1_frame_mapped(fp_live) {
-            use crate::arch::x86_64::terminal::debug_write;
-            use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
-            debug_write(b"<V9FREE-LIVE f=");
-            diag25_hex(fp_live);
-            debug_write(b" rem=");
-            diag25_dec(remaining as u64);
-            debug_write(b" pid=");
-            diag25_dec(cur_pid as u64);
-            debug_write(b">\n");
-            return; // REFUS : frame vivante d'init — fuir plutôt que corrompre.
-        }
-    }
-    // #25 : signaler le cas anormal « une entrée CoW arrive à zéro pendant le
-    // teardown ». La garde DIAG25_INITF ci-dessous reste l'autorité finale :
-    // elle bloque toute libération d'une frame de pile init surveillée.
-    #[cfg(target_arch = "x86_64")]
-    if cow_teardown_underflow(entry, remaining) {
-        crate::memory::physical::allocator::buddy::diag25_hex_always(
-            b"<25TDCF f=",
-            frame.phys_addr().as_u64(),
-        );
-        crate::memory::physical::allocator::buddy::diag25_hex_always(b" rem=", remaining as u64);
-    }
-    // FIX #25 (Audit 3.5) — Guard DIAG25_INITF avant buddy::free_pages.
-    // Defense-in-depth runtime : si, malgré les fixes 2.1/2.2/3.3, un
-    // déséquilibre de refcount rendait un frame init « éligible » au free,
-    // ce guard l'empêche physiquement. On émet `<25GUARD-LEAK>` et on fuit
-    // volontairement le frame (non-fatal, détectable dans les stats buddy).
-    //
-    // ⚠️ FIX-V6 (OOM post-Phoenix, bisect run 7) : la stratégie de fuite
-    // volontaire drainait le pool buddy après quelques forks (chaque fork
-    // ajoute ≥1 frame à DIAG25_INITF, jamais libérée → après 2-3 forks,
-    // pool épuisé → #PF kernel : OOM → ExoPhoenix reboot).
-    // NOUVEAU comportement : on LOG encore (détection) MAIS on unreserve le
-    // frame puis on laisse le free_pages se faire — le pin (posé par
-    // cow.rs `<25PIN>` pour le frame pile d'init / track_cow_frame pour les
-    // frames partagées) reste l'autorité finale pendant la fenêtre du
-    // nanosleep. Hors nanosleep, libérer le frame est LÉGITIME (le CoW a
-    // été cassé, le frame n'est plus dans l'AS d'init).
-    #[cfg(target_arch = "x86_64")]
-    if will_free {
-        use core::sync::atomic::Ordering;
-        let fp = frame.phys_addr().as_u64();
-        let mut j = 0usize;
-        while j < 24 {
-            let initf =
-                crate::memory::physical::allocator::buddy::DIAG25_INITF[j].load(Ordering::Relaxed);
-            if initf != 0 && initf == fp {
-                use crate::arch::x86_64::terminal::debug_write;
-                use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
-                // FIX-V8 (SEGV run 9, vol de page vivante) : ne libérer cette
-                // frame QUE si elle n'est plus mappée dans l'AS de PID 1. Si
-                // elle y est ENCORE mappée (page de pile VIVANTE d'init), la
-                // libérer = vol de page : le prochain alloc la réattribue et
-                // la zéro-page → init retourne en user avec une pile vidée
-                // (run 9 : SEGV [base-0x82], rbx=rbp=0, stk=0×16). On garde
-                // le pin (free_pages refusera via <25RSVD-REFUSE>) et la
-                // watch, et on REFUSE la libération — la frame est allouée et
-                // vivante, ce n'est pas une fuite.
-                if crate::syscall::table::diag_pid1_frame_mapped(fp) {
-                    debug_write(b"<25GUARD-LIVE f=");
-                    diag25_hex(fp);
-                    debug_write(b" rem=");
-                    diag25_dec(remaining as u64);
-                    debug_write(b">\n");
-                    return;
-                }
-                debug_write(b"<25GUARD-FREE f=");
-                diag25_hex(fp);
-                debug_write(b" rem=");
-                diag25_dec(remaining as u64);
-                debug_write(b">\n");
-                // FIX-V6 : clear PINNED+RESERVED avant de libérer, sinon
-                // free_pages émet <25RSVD-REFUSE> et le frame reste leaké.
-                crate::memory::physical::allocator::buddy::unreserve_frame(frame);
-                // FIX-V7 (post-v6 stale DIAG25_INITF → faux positif REALLOCINIT) :
-                // Le frame 0x5757000 (= DIAG25_INITF[1] après fork d'init) est
-                // libéré LÉGITIMEMENT ici (le CoW a été cassé par init, puis
-                // restauré in-place par l'enfant via cow.rs L42-56, le refcount
-                // COW_TRACKER est tombstoné, will_free=true via la branche
-                // `remaining==u32::MAX && !entry.is_cow()`). Sans ce clear,
-                // DIAG25_INITF[j] reste pointé sur 0x5757000 même après que le
-                // frame retourne au pool buddy. La prochaine alloc_pages qui
-                // tombe sur ce frame déclenche le check diag25_on_alloc
-                // (buddy.rs ~L1341) → panic REALLOCINIT (observé run 8/v6).
-                //
-                // On clear DIAG25_INITF[j] + DIAG25_WATCH_FRAME (si elle pointe
-                // sur fp) puis on re-baseline le checksum (la frame libérée va
-                // être modifiée par free list metadata / zero_pages, donc le
-                // checksum actuel ne sera plus valide — sans re-baseline,
-                // diag25_check_init émettrait des <25CORRUPT> faux positifs
-                // sur les étapes postTD suivantes).
-                crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
-                    .store(0, Ordering::Relaxed);
-                let wf = crate::memory::physical::allocator::buddy::DIAG25_WATCH_FRAME
-                    .load(Ordering::Relaxed);
-                if wf == fp {
-                    crate::memory::physical::allocator::buddy::DIAG25_WATCH_FRAME
-                        .store(0, Ordering::Relaxed);
-                }
-                crate::memory::physical::allocator::buddy::diag25_init_baseline();
-                debug_write(b"<25INITFCLEAR j=");
-                diag25_dec(j as u64);
-                debug_write(b">\n");
-                break; // Sort du while j<24, tombe dans free_pages ci-dessous.
-            }
-            j += 1;
-        }
-    }
     if will_free {
         let _ = buddy::free_pages(frame, 0);
     }
 }
 
 /// Un teardown ne doit jamais faire tomber à zéro le compteur d'une feuille
-/// encore marquée CoW. Cette condition pilote uniquement la sonde E9 ; la
-/// décision de libération reste gouvernée par `will_free` ci-dessus.
+/// encore marquée CoW.
 #[inline]
+#[allow(dead_code)]
 fn cow_teardown_underflow(entry: PageTableEntry, remaining: u32) -> bool {
     remaining == 0 && entry.is_cow()
 }
@@ -647,116 +467,8 @@ fn release_huge_frame(entry: PageTableEntry, order: usize) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    if remaining == 0 {
-        crate::memory::physical::allocator::buddy::unreserve_frame(frame);
-    }
     let will_free = remaining == 0 || (remaining == u32::MAX && !entry.is_cow());
-    // FIX-V9 : garde universelle anti-vol de page vivante, identique à
-    // release_leaf_frame — la page de BASE du huge block suffit à détecter
-    // l'alias le plus courant (le reste de la plage reste couvert par la
-    // boucle DIAG25_INITF ci-dessous, qui vérifie chaque entrée chevauchante
-    // contre diag_pid1_frame_mapped).
-    #[cfg(target_arch = "x86_64")]
     if will_free {
-        let fp_live = frame.phys_addr().as_u64();
-        // SAFETY: lecture du TCB courant depuis le stockage per-CPU publié par
-        // le scheduler pendant le teardown du thread courant.
-        let tcb_raw = unsafe {
-            crate::arch::x86_64::smp::percpu::try_read_current_tcb()
-        }
-        .unwrap_or(0);
-        let cur_pid = if tcb_raw != 0 {
-            // SAFETY: TCB courant publié par le scheduler ; teardown du mourant.
-            unsafe {
-                (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
-                    .pid
-                    .0
-            }
-        } else {
-            0
-        };
-        if cur_pid != 1 && crate::syscall::table::diag_pid1_frame_mapped(fp_live) {
-            use crate::arch::x86_64::terminal::debug_write;
-            use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
-            debug_write(b"<V9FREE-LIVE-HUGE f=");
-            diag25_hex(fp_live);
-            debug_write(b" ord=");
-            diag25_dec(order as u64);
-            debug_write(b" pid=");
-            diag25_dec(cur_pid as u64);
-            debug_write(b">\n");
-            return; // REFUS : page de base vivante d'init dans ce huge block.
-        }
-    }
-    if will_free {
-        // FIX #25 (Audit 3.5) — Même guard DIAG25_INITF pour les huge frames.
-        // FIX-V6 : idem que release_leaf_frame — on LOG+unreserve au lieu de
-        // fuite permanente, sinon OOM après N forks.
-        // FIX-V7 : clear DIAG25_INITF[j] + DIAG25_WATCH_FRAME + re-baseline,
-        // sinon faux positif REALLOCINIT à la prochaine alloc du frame (cf.
-        // release_leaf_frame commentaire FIX-V7). Pour les huge frames, on
-        // ne break pas : on clear TOUTES les entrées DIAG25_INITF qui
-        // chevauchent la plage du huge frame.
-        #[cfg(target_arch = "x86_64")]
-        {
-            use core::sync::atomic::Ordering;
-            let fp = frame.phys_addr().as_u64();
-            let span = (4096usize << order) as u64;
-            // FIX-V8 : si AU MOINS une entrée DIAG25_INITF chevauchant ce huge
-            // block est encore mappée dans PID 1, libérer le block ENTIER
-            // recyclerait une page VIVANTE d'init → on saute le free_pages
-            // final (le/les entrées concernées restent pinnées + surveillées).
-            let mut live_block = false;
-            let mut j = 0usize;
-            while j < 24 {
-                let initf = crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
-                    .load(Ordering::Relaxed);
-                if initf != 0 && initf >= fp && initf < fp + span {
-                    use crate::arch::x86_64::terminal::debug_write;
-                    use crate::memory::physical::allocator::buddy::{diag25_dec, diag25_hex};
-                    // FIX-V8 : même garde que release_leaf_frame — une frame
-                    // encore mappée dans PID 1 ne doit JAMAIS être libérée par
-                    // un teardown enfant (vol de page vivante, cf. run 9).
-                    if crate::syscall::table::diag_pid1_frame_mapped(initf) {
-                        debug_write(b"<25GUARD-LIVE-HUGE f=");
-                        diag25_hex(fp);
-                        debug_write(b" ord=");
-                        diag25_dec(order as u64);
-                        debug_write(b">\n");
-                        live_block = true;
-                        j += 1;
-                        continue;
-                    }
-                    debug_write(b"<25GUARD-FREE-HUGE f=");
-                    diag25_hex(fp);
-                    debug_write(b" ord=");
-                    diag25_dec(order as u64);
-                    debug_write(b" rem=");
-                    diag25_dec(remaining as u64);
-                    debug_write(b">\n");
-                    crate::memory::physical::allocator::buddy::unreserve_frame(frame);
-                    // FIX-V7 : clear DIAG25_INITF[j] + DIAG25_WATCH_FRAME + re-baseline.
-                    crate::memory::physical::allocator::buddy::DIAG25_INITF[j]
-                        .store(0, Ordering::Relaxed);
-                    let wf = crate::memory::physical::allocator::buddy::DIAG25_WATCH_FRAME
-                        .load(Ordering::Relaxed);
-                    if wf >= fp && wf < fp + span {
-                        crate::memory::physical::allocator::buddy::DIAG25_WATCH_FRAME
-                            .store(0, Ordering::Relaxed);
-                    }
-                    crate::memory::physical::allocator::buddy::diag25_init_baseline();
-                    debug_write(b"<25INITFCLEAR-HUGE j=");
-                    diag25_dec(j as u64);
-                    debug_write(b">\n");
-                    // Pas de break : continuer pour clearer toute autre
-                    // entrée DIAG25_INITF qui chevauche ce huge frame.
-                }
-                j += 1;
-            }
-            if live_block {
-                return;
-            }
-        }
         let _ = buddy::free_pages(frame, order);
     }
 }

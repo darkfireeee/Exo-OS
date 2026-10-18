@@ -260,9 +260,6 @@ pub fn do_execve(
             return Err(ExecError::ElfLoadFailed(err));
         }
     };
-    // #25 : bissection — la pile d'init est-elle déjà corrompue après load_elf ?
-    #[cfg(target_arch = "x86_64")]
-    crate::memory::physical::allocator::buddy::diag25_check_init(b"postelf");
 
     // FIX-EXEC-SIG (Security_Audit_Passe2 §C-01) : vérification de la signature
     // du module avant remplacement de l'espace d'adressage.
@@ -362,9 +359,7 @@ pub fn do_execve(
     thread.sched_tcb.cr3_phys = elf_result.cr3;
     // FIX #25 (Audit 6.1) — Libérer l'ancienne shadow PML4 KPTI avant de
     // l'écraser. Sans cette libération, chaque `fork()`+`execve()` orpheline
-    // une page physique de 4 KiB. Sur le boot (~10 services), c'est négligeable,
-    // mais c'est une vraie fuite à corriger (et ça évite de mélanger les
-    // symptômes lors d'investigations KPTI futures).
+    // une page physique de 4 KiB.
     {
         let old_kpti_cr3 = thread.sched_tcb.kpti_user_cr3();
         if old_kpti_cr3 != 0 && old_kpti_cr3 != exec_kpti_user_cr3 {
@@ -424,9 +419,6 @@ pub fn do_execve(
         }
         crate::arch::x86_64::write_cr3(elf_result.cr3);
     }
-    // #25 : bissection — corruption pendant load_elf+switch CR3 ?
-    #[cfg(target_arch = "x86_64")]
-    crate::memory::physical::allocator::buddy::diag25_check_init(b"postcr3");
 
     // BUG-04 / PROC-01 fix: écrire IA32_FS_BASE MSR immédiatement.
     // do_execve() s'exécute en contexte kernel sur le CPU courant du thread ;
@@ -469,9 +461,6 @@ pub fn do_execve(
     if old_as_ptr != 0 && old_as_ptr != elf_result.addr_space_ptr && !old_as_is_vfork_shared {
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER.free_addr_space(old_as_ptr);
     }
-    // #25 : bissection — corruption pendant le teardown de l'ancien AS enfant ?
-    #[cfg(target_arch = "x86_64")]
-    crate::memory::physical::allocator::buddy::diag25_check_init(b"postTD");
 
     pcb.flags.fetch_or(
         process_flags::EXEC_DONE | process_flags::VFORK_DONE,

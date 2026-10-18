@@ -62,8 +62,6 @@ impl Blake3Hasher {
     /// Ajoute des données au hasher. Retourne `&mut Self` pour le chaînage.
     #[inline]
     pub fn update(&mut self, input: &[u8]) -> &mut Self {
-        #[cfg(target_arch = "x86_64")]
-        blake3_diag_big(b"<BLAKE3upd len=", input.len());
         self.0.update(input);
         self
     }
@@ -107,55 +105,10 @@ impl Default for Blake3Hasher {
 
 /// DIAG: signale un input blake3 anormalement grand (longueur corrompue probable)
 /// avant la récursion de compress_subtree_wide qui déborderait la pile noyau.
-#[cfg(target_arch = "x86_64")]
-fn diag_emit_dec(n: u64) {
-    let out = crate::arch::x86_64::terminal::debug_write;
-    if n == 0 {
-        out(b"0");
-        return;
-    }
-    let mut v = n;
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    while v != 0 && i > 0 {
-        i -= 1;
-        buf[i] = b'0' + (v % 10) as u8;
-        v /= 10;
-    }
-    out(&buf[i..]);
-}
-
-#[cfg(target_arch = "x86_64")]
-fn blake3_diag_big(tag: &[u8], len: usize) {
-    if len <= 4096 {
-        return;
-    }
-    let out = crate::arch::x86_64::terminal::debug_write;
-    out(tag);
-    diag_emit_dec(len as u64);
-    // DIAG-25 : PID courant (qui calcule ce gros hash). p9999 = pas de TCB.
-    out(b" p");
-    // SAFETY: try_read_current_tcb valide GS avant de lire ; renvoie None hors AS user.
-    let pid = unsafe {
-        let tcb = crate::arch::x86_64::smp::percpu::try_read_current_tcb().unwrap_or(0);
-        if tcb != 0 {
-            (*(tcb as *const crate::scheduler::core::task::ThreadControlBlock))
-                .pid
-                .0 as u64
-        } else {
-            9999
-        }
-    };
-    diag_emit_dec(pid);
-    out(b">");
-}
-
 /// Hash BLAKE3 d'un message — retourne 32 bytes.
 /// Utilise `blake3::hash` (implémentation pure Rust validée IETF).
 #[inline]
 pub fn blake3_hash(input: &[u8]) -> [u8; 32] {
-    #[cfg(target_arch = "x86_64")]
-    blake3_diag_big(b"<BLAKE3hash len=", input.len());
     *blake3::hash(input).as_bytes()
 }
 
@@ -163,8 +116,6 @@ pub fn blake3_hash(input: &[u8]) -> [u8; 32] {
 /// Utilise `blake3::keyed_hash`.
 #[inline]
 pub fn blake3_mac(key: &[u8; 32], input: &[u8]) -> [u8; 32] {
-    #[cfg(target_arch = "x86_64")]
-    blake3_diag_big(b"<BLAKE3mac len=", input.len());
     *blake3::keyed_hash(key, input).as_bytes()
 }
 

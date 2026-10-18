@@ -1,4 +1,4 @@
-﻿//! main.rs  Point d'entrée du bootloader Exo-OS.
+//! main.rs  Point d'entrée du bootloader Exo-OS.
 //!
 //! CE FICHIER est le pivot entre les deux chemins de démarrage :
 //!   - UEFI  (x86_64-unknown-uefi)   `efi_main()`  appelé par le firmware
@@ -129,9 +129,23 @@ fn efi_main(
         let elf = kernel_loader::elf::ElfKernel::parse(kernel_data.as_bytes())
             .expect("Kernel ELF64 invalide");
         let load_pages = ((elf.load_size() + 0xFFF) / 0x1000 + 1) as usize;
-        boot_services
-            .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, load_pages)
-            .expect("Impossible d'allouer la mémoire kernel")
+        let kaslr_alloc = if cfg.kaslr_enabled && elf.is_pie {
+            let (kaslr_phys, _) = kernel_loader::compute_kaslr_base(&entropy);
+            boot_services
+                .allocate_pages(
+                    AllocateType::Address(kaslr_phys),
+                    MemoryType::LOADER_DATA,
+                    load_pages,
+                )
+                .ok()
+        } else {
+            None
+        };
+        kaslr_alloc.unwrap_or_else(|| {
+            boot_services
+                .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, load_pages)
+                .expect("Impossible d'allouer la mémoire kernel")
+        })
     };
 
     let params = kernel_loader::KernelLoadParams {

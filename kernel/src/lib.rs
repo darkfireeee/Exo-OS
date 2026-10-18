@@ -164,7 +164,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     let _ = crate::arch::x86_64::apic::local_apic::init_lapic_fixmap_post_memory();
     kdb(b'3'); // Phase 2b done
     crate::arch::x86_64::boot_display::stage_ok("MEMORY");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-MEMORY");
 
     // ── Phase 2c : Time subsystem (HPET + calibration TSC + ktime seqlock) ────────
     // Remplace les 3 appels directs par time_init() qui orchestre :
@@ -174,13 +173,11 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     crate::arch::x86_64::time::time_init();
     kdb(b'4'); // Phase 2c done
     crate::arch::x86_64::boot_display::stage_ok("TIME");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-TIME");
 
     // ── Phase 2d : drivers GI-03 (IOMMU queues + notifications kernel) ────────
     crate::drivers::init();
     kdb(b'D'); // Phase 2d done
     crate::arch::x86_64::boot_display::stage_ok("DRIVERS");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-DRIVERS");
 
     // ── Phase 2e : ExoSeal/ExoCage pré-scheduler (CORR-82 / S-03) ───────────
     // ExoSeal phase0 est idempotente et doit verrouiller CET/PKS/IOMMU avant
@@ -190,7 +187,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     }
     kdb(b'C');
     crate::arch::x86_64::boot_display::stage_ok("EXOSEAL0");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-EXOSEAL0");
 
     // ── Phase 2f : cgroup root before runqueues (CORR-77) ─────────────
     crate::process::resource::cgroup::init();
@@ -225,7 +221,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     }
     kdb(b'F'); // fork cloner registered
     crate::arch::x86_64::boot_display::stage_ok("SCHEDULER");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-SCHEDULER");
 
     // ── Phase 4 : Process ────────────────────────────────────────────────────
     // CORRECTIF : le crash GPF "f000ff53f000ff53" observé précédemment était causé
@@ -255,7 +250,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     drop(process_irq_guard);
     kdb(b'P'); // Phase 4 done (process init + cgroup root + OOM hooks)
     crate::arch::x86_64::boot_display::stage_ok("PROCESS");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-PROCESS");
 
     // ── Phase 5 : Security ──────────────────────────────────────────────────
     // Si la sécurité a déjà été initialisée en early boot (SECURITY_READY=true),
@@ -283,7 +277,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     }
     kdb(b'8'); // futex seed done
     crate::arch::x86_64::boot_display::stage_ok("SECURITY");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-SECURITY");
 
     // TIER 2.1-a : kthread moniteur d'intégrité runtime (mode observe). Vérifie
     // périodiquement `.text/.rodata` une fois le boot sécurité terminé ; journalise
@@ -306,7 +299,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     let _stage0_summary = crate::exophoenix::stage0::stage0_init_all_steps(true);
     kdb(b'S'); // Stage0 ExoPhoenix done
     crate::arch::x86_64::boot_display::stage_ok("STAGE0");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-STAGE0");
 
     // ── Phase 6 : IPC ────────────────────────────────────────────────────────
     ipc::ring::spsc::init_spsc_rings();
@@ -336,7 +328,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     );
     kdb(b'9'); // IPC done
     crate::arch::x86_64::boot_display::stage_ok("IPC");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-IPC");
 
     // ── Phase 7 : FS ─────────────────────────────────────────────────────────
     let exofs_ready = crate::fs::exofs::exofs_init(
@@ -346,10 +337,9 @@ pub unsafe fn kernel_init(cpu_count: usize) {
 
     kdb(b'R'); // exofs_init retourné (post-#6)
     if exofs_ready {
-        // DIAG: seed_kernel_a_image_blob temporairement sauté pour isoler le fault.
-        // let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
+        let _ = crate::exophoenix::forge::seed_kernel_a_image_blob();
     }
-    kdb(b'T'); // seed_kernel_a_image_blob fait (ou sauté)
+    kdb(b'T'); // seed_kernel_a_image_blob fait
 
     // CORRECTION P0-02 : enregistrer le chargeur ELF après exofs_init
     {
@@ -376,7 +366,6 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     }
     kdb(b'@'); // fs_bridge/net_bridge actifs
     crate::arch::x86_64::boot_display::stage_ok("FS");
-    crate::memory::physical::allocator::buddy::diag_ff_log(b"<FF-FS");
 }
 
 #[cfg(all(target_os = "none", not(kani)))]
