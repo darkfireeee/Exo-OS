@@ -5,7 +5,7 @@ sleep 1
 LOG=/tmp/e9p.txt
 ERR=/tmp/qerr.txt
 rm -f "$LOG" "$ERR"
-timeout 28 qemu-system-x86_64 \
+timeout 120 qemu-system-x86_64 \
   -machine q35 -m 256M -boot d -vga std -serial null \
   -no-reboot -no-shutdown \
   -debugcon "file:$LOG" \

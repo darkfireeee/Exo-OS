@@ -133,6 +133,9 @@ struct RmOptions {
 struct ShellState {
     cwd: [u8; PATH_MAX],
     cwd_len: usize,
+    old_cwd: [u8; PATH_MAX],
+    old_cwd_len: usize,
+    last_status: i32,
     history: [[u8; LINE_MAX]; HISTORY_MAX],
     history_len: [usize; HISTORY_MAX],
     history_count: usize,
@@ -146,6 +149,9 @@ impl ShellState {
         Self {
             cwd,
             cwd_len: 1,
+            old_cwd: [0u8; PATH_MAX],
+            old_cwd_len: 0,
+            last_status: 0,
             history: [[0u8; LINE_MAX]; HISTORY_MAX],
             history_len: [0usize; HISTORY_MAX],
             history_count: 0,
@@ -155,6 +161,12 @@ impl ShellState {
 
     fn cwd(&self) -> &[u8] {
         &self.cwd[..self.cwd_len]
+    }
+
+    fn record_old_cwd(&mut self) {
+        self.old_cwd[..self.cwd_len].copy_from_slice(&self.cwd[..self.cwd_len]);
+        self.old_cwd[self.cwd_len] = 0;
+        self.old_cwd_len = self.cwd_len;
     }
 
     fn set_cwd(&mut self, path: &[u8]) {
@@ -273,6 +285,113 @@ fn register_readiness_endpoint() {
     };
 }
 
+fn u64_to_str(mut value: u64, out: &mut [u8]) -> usize {
+    if value == 0 {
+        if !out.is_empty() {
+            out[0] = b'0';
+            return 1;
+        }
+        return 0;
+    }
+    let mut buf = [0u8; 20];
+    let mut pos = buf.len();
+    while value != 0 && pos > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    let len = buf.len() - pos;
+    let n = len.min(out.len());
+    out[..n].copy_from_slice(&buf[pos..pos + n]);
+    n
+}
+
+fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
+    let mut fds = [0i32; 2];
+    let pipe_rc = unsafe { syscall::syscall2(syscall::SYS_PIPE2, fds.as_mut_ptr() as u64, 0) };
+    if pipe_rc < 0 {
+        print_errno(b"pipe", pipe_rc);
+        return;
+    }
+    let p_read = fds[0] as u64;
+    let p_write = fds[1] as u64;
+
+    let child_left = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    if child_left < 0 {
+        print_errno(b"fork", child_left);
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+        }
+        return;
+    }
+
+    if child_left == 0 {
+        unsafe {
+            let _ = syscall::syscall2(syscall::SYS_DUP2, p_write, STDOUT);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+        }
+        run_command(left, state);
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_EXIT, 0);
+        }
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    let child_right = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    if child_right < 0 {
+        print_errno(b"fork", child_right);
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+        }
+        return;
+    }
+
+    if child_right == 0 {
+        unsafe {
+            let _ = syscall::syscall2(syscall::SYS_DUP2, p_read, STDIN);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+        }
+        run_command(right, state);
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_EXIT, 0);
+        }
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
+        let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+    }
+
+    let mut st1 = 0i32;
+    let mut st2 = 0i32;
+    unsafe {
+        let _ = syscall::syscall4(
+            syscall::SYS_WAIT4,
+            child_left as u64,
+            &mut st1 as *mut i32 as u64,
+            0,
+            0,
+        );
+        let _ = syscall::syscall4(
+            syscall::SYS_WAIT4,
+            child_right as u64,
+            &mut st2 as *mut i32 as u64,
+            0,
+            0,
+        );
+    }
+    state.last_status = if (st2 & 0x7f) == 0 { (st2 >> 8) & 0xff } else { 128 + (st2 & 0x7f) };
+}
+
 fn run_commands(line: &[u8], state: &mut ShellState) {
     let mut start = 0usize;
     let mut i = 0usize;
@@ -280,7 +399,17 @@ fn run_commands(line: &[u8], state: &mut ShellState) {
         if i == line.len() || line[i] == b';' {
             let part = trim(&line[start..i]);
             if !part.is_empty() {
-                run_command(part, state);
+                if let Some(pipe_pos) = find_byte(part, b'|') {
+                    let left = trim(&part[..pipe_pos]);
+                    let right = trim(&part[pipe_pos + 1..]);
+                    if !left.is_empty() && !right.is_empty() {
+                        run_pipeline(left, right, state);
+                    } else {
+                        write_all(b"exosh: syntax error near unexpected token '|'\n");
+                    }
+                } else {
+                    run_command(part, state);
+                }
             }
             start = i.saturating_add(1);
         }
@@ -334,6 +463,8 @@ fn run_command(line: &[u8], state: &mut ShellState) {
         run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"ipc-stat") {
         run_external_or_report(line, state);
+    } else if bytes_eq(cmd, b"grep") {
+        run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"shutdown") || bytes_eq(cmd, b"poweroff") {
         cmd_shutdown();
     } else if bytes_eq(cmd, b"reboot") {
@@ -360,7 +491,7 @@ fn run_command(line: &[u8], state: &mut ShellState) {
     }
 }
 
-fn run_external_or_report(line: &[u8], state: &ShellState) {
+fn run_external_or_report(line: &[u8], state: &mut ShellState) {
     if let Err(()) = run_external(line, state) {
         let (cmd, _) = first_token(line);
         write_all(b"exosh: command not found: ");
@@ -369,23 +500,96 @@ fn run_external_or_report(line: &[u8], state: &ShellState) {
     }
 }
 
-fn run_external(line: &[u8], state: &ShellState) -> Result<(), ()> {
+fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
     let mut arg_storage = [[0u8; EXEC_ARG_MAX]; EXEC_MAX_ARGS];
     let mut argv = [0u64; EXEC_MAX_ARGS + 1];
     let mut argc = 0usize;
+
+    let mut stdin_file = [0u8; PATH_MAX];
+    let mut stdout_file = [0u8; PATH_MAX];
+    let mut stderr_file = [0u8; PATH_MAX];
+    let mut has_stdin = false;
+    let mut has_stdout = false;
+    let mut stdout_append = false;
+    let mut has_stderr = false;
+
     let mut rest = line;
     loop {
         let (arg, tail) = next_arg(rest);
         if arg.is_empty() {
             break;
         }
+
+        if bytes_eq(arg, b">") || bytes_eq(arg, b">>") {
+            let (target, after_target) = next_arg(tail);
+            if target.is_empty() {
+                write_all(b"exosh: syntax error near unexpected token 'newline'\n");
+                return Ok(());
+            }
+            let mut resolved = [0u8; PATH_MAX];
+            if let Some(rlen) = absolute_path(state.cwd(), target, &mut resolved) {
+                stdout_file[..rlen].copy_from_slice(&resolved[..rlen]);
+                stdout_file[rlen] = 0;
+                has_stdout = true;
+                stdout_append = bytes_eq(arg, b">>");
+            }
+            rest = after_target;
+            continue;
+        } else if bytes_eq(arg, b"<") {
+            let (target, after_target) = next_arg(tail);
+            if target.is_empty() {
+                write_all(b"exosh: syntax error near unexpected token 'newline'\n");
+                return Ok(());
+            }
+            let mut resolved = [0u8; PATH_MAX];
+            if let Some(rlen) = absolute_path(state.cwd(), target, &mut resolved) {
+                stdin_file[..rlen].copy_from_slice(&resolved[..rlen]);
+                stdin_file[rlen] = 0;
+                has_stdin = true;
+            }
+            rest = after_target;
+            continue;
+        } else if bytes_eq(arg, b"2>") {
+            let (target, after_target) = next_arg(tail);
+            if target.is_empty() {
+                write_all(b"exosh: syntax error near unexpected token 'newline'\n");
+                return Ok(());
+            }
+            let mut resolved = [0u8; PATH_MAX];
+            if let Some(rlen) = absolute_path(state.cwd(), target, &mut resolved) {
+                stderr_file[..rlen].copy_from_slice(&resolved[..rlen]);
+                stderr_file[rlen] = 0;
+                has_stderr = true;
+            }
+            rest = after_target;
+            continue;
+        }
+
         if argc == EXEC_MAX_ARGS {
             write_all(b"exosh: too many arguments\n");
             return Ok(());
         }
-        let n = arg.len().min(EXEC_ARG_MAX - 1);
-        arg_storage[argc][..n].copy_from_slice(&arg[..n]);
-        arg_storage[argc][n] = 0;
+
+        // Expansion de variables ($?, $PWD, $HOME)
+        if bytes_eq(arg, b"$?") {
+            let mut num_buf = [0u8; 16];
+            let nlen = u64_to_str(state.last_status as u64, &mut num_buf);
+            arg_storage[argc][..nlen].copy_from_slice(&num_buf[..nlen]);
+            arg_storage[argc][nlen] = 0;
+        } else if bytes_eq(arg, b"$PWD") {
+            let cwd = state.cwd();
+            let nlen = cwd.len().min(EXEC_ARG_MAX - 1);
+            arg_storage[argc][..nlen].copy_from_slice(&cwd[..nlen]);
+            arg_storage[argc][nlen] = 0;
+        } else if bytes_eq(arg, b"$HOME") {
+            arg_storage[argc][0] = b'/';
+            arg_storage[argc][1] = 0;
+        } else {
+            let n = arg.len().min(EXEC_ARG_MAX - 1);
+            arg_storage[argc][..n].copy_from_slice(&arg[..n]);
+            arg_storage[argc][n] = 0;
+        }
+
         argv[argc] = arg_storage[argc].as_ptr() as u64;
         argc += 1;
         rest = tail;
@@ -416,6 +620,67 @@ fn run_external(line: &[u8], state: &ShellState) -> Result<(), ()> {
         return Ok(());
     }
     if child == 0 {
+        // Appliquer redirections
+        if has_stdin {
+            let fd = unsafe {
+                syscall::syscall4(
+                    syscall::SYS_OPENAT,
+                    AT_FDCWD,
+                    stdin_file.as_ptr() as u64,
+                    syscall::O_RDONLY,
+                    0,
+                )
+            };
+            if fd >= 0 {
+                unsafe {
+                    let _ = syscall::syscall2(syscall::SYS_DUP2, fd as u64, STDIN);
+                    let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                }
+            }
+        }
+        if has_stdout {
+            let flags = syscall::O_CREAT
+                | syscall::O_WRONLY
+                | if stdout_append {
+                    syscall::O_APPEND
+                } else {
+                    syscall::O_TRUNC
+                };
+            let fd = unsafe {
+                syscall::syscall4(
+                    syscall::SYS_OPENAT,
+                    AT_FDCWD,
+                    stdout_file.as_ptr() as u64,
+                    flags,
+                    0o644,
+                )
+            };
+            if fd >= 0 {
+                unsafe {
+                    let _ = syscall::syscall2(syscall::SYS_DUP2, fd as u64, STDOUT);
+                    let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                }
+            }
+        }
+        if has_stderr {
+            let flags = syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC;
+            let fd = unsafe {
+                syscall::syscall4(
+                    syscall::SYS_OPENAT,
+                    AT_FDCWD,
+                    stderr_file.as_ptr() as u64,
+                    flags,
+                    0o644,
+                )
+            };
+            if fd >= 0 {
+                unsafe {
+                    let _ = syscall::syscall2(syscall::SYS_DUP2, fd as u64, STDERR);
+                    let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                }
+            }
+        }
+
         let mut rc = unsafe {
             syscall::syscall3(
                 syscall::SYS_EXECVE,
@@ -460,6 +725,8 @@ fn run_external(line: &[u8], state: &ShellState) -> Result<(), ()> {
     };
     if wait_rc < 0 {
         print_errno(b"wait4", wait_rc);
+    } else {
+        state.last_status = if (status & 0x7f) == 0 { (status >> 8) & 0xff } else { 128 + (status & 0x7f) };
     }
     Ok(())
 }
@@ -515,29 +782,47 @@ fn build_prefixed_command_path(
 
 fn cmd_help() {
     write_all(b"Commands:\n");
-    write_all(b"  help cd history time shutdown reboot ping tcping bench exit\n");
+    write_all(b"  help cd pwd history time shutdown reboot ping tcping bench exit\n");
     write_all(
-        b"  /bin: basename cat clear cp dd dirname echo false ipc-stat kill ls meminfo mkdir mv ps pwd rm rmdir sleep stat sync syscall-stat top touch tree true uname uptime wc whoami\n",
+        b"  /bin: basename cat clear cp dd dirname echo false grep ipc-stat kill ls meminfo mkdir mv ps pwd rm rmdir sleep stat sync syscall-stat top touch tree true uname uptime wc whoami\n",
     );
+    write_all(b"Features:\n");
+    write_all(b"  Pipelines:     cmd1 | cmd2\n");
+    write_all(b"  Redirections:  cmd > out  ;  cmd >> out  ;  cmd < in\n");
+    write_all(b"  Variables:     $? (exit code)  ;  $PWD  ;  $HOME\n");
     write_all(b"Examples:\n");
-    write_all(b"  ls -lah /tmp ; rm -rf /tmp/t ; history\n");
-    write_all(b"  time echo test ; dd if=/dev/urandom of=/tmp/bench bs=1M count=4\n");
-    write_all(b"  ping 127.0.0.1 4\n");
-    write_all(b"  tcping 127.0.0.1 80\n");
-    write_all(b"  top ; kill <pid> ; kill -9 <pid>\n");
+    write_all(b"  cd - ; ls -lah /tmp ; history\n");
+    write_all(b"  cat /etc/hostname | wc\n");
+    write_all(b"  ps | grep server\n");
+    write_all(b"  echo 'test message' > /tmp/out.txt ; cat /tmp/out.txt\n");
 }
 
 fn cmd_cd(rest: &[u8], state: &mut ShellState) {
     let (arg, _) = next_arg(rest);
-    let target = if arg.is_empty() { b"/".as_slice() } else { arg };
     let mut path = [0u8; PATH_MAX];
-    let Some(len) = absolute_path(state.cwd(), target, &mut path) else {
-        write_all(b"cd: path too long\n");
-        return;
+    let len = if bytes_eq(arg, b"-") {
+        if state.old_cwd_len == 0 {
+            write_all(b"cd: no previous directory\n");
+            return;
+        }
+        path[..state.old_cwd_len].copy_from_slice(&state.old_cwd[..state.old_cwd_len]);
+        write_bytes(&path[..state.old_cwd_len]);
+        write_all(b"\n");
+        state.old_cwd_len
+    } else {
+        let target = if arg.is_empty() { b"/".as_slice() } else { arg };
+        match absolute_path(state.cwd(), target, &mut path) {
+            Some(l) => l,
+            None => {
+                write_all(b"cd: path too long\n");
+                return;
+            }
+        }
     };
 
     let rc = unsafe { syscall::syscall1(syscall::SYS_CHDIR, path.as_ptr() as u64) };
     if rc == 0 {
+        state.record_old_cwd();
         state.set_cwd(&path[..len]);
     } else {
         print_errno(b"cd", rc);
@@ -2814,6 +3099,23 @@ fn first_token(line: &[u8]) -> (&[u8], &[u8]) {
 
 fn next_arg(input: &[u8]) -> (&[u8], &[u8]) {
     let input = trim_start(input);
+    if input.is_empty() {
+        return (&[], &[]);
+    }
+    if input[0] == b'"' || input[0] == b'\'' {
+        let quote = input[0];
+        let mut i = 1usize;
+        while i < input.len() && input[i] != quote {
+            i += 1;
+        }
+        if i < input.len() {
+            let arg = &input[1..i];
+            let rest = if i + 1 < input.len() { &input[i + 1..] } else { &[] };
+            return (arg, rest);
+        } else {
+            return (&input[1..], &[]);
+        }
+    }
     let mut end = 0usize;
     while end < input.len() && !is_space(input[end]) {
         end += 1;

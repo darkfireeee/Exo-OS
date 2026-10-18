@@ -139,7 +139,14 @@ static GLOBAL_TICK: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
-    let _ = bytes;
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_EXO_LOG,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+            1,
+        );
+    }
 }
 
 fn current_tick() -> u64 {

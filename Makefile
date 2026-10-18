@@ -87,6 +87,7 @@ ROOTFS_BIN_BINS = \
 	dirname \
 	echo \
 	false \
+	grep \
 	ipc-stat \
 	kill \
 	ls \
