@@ -112,20 +112,31 @@ ROOTFS_BIN_BINS = \
 	whoami
 
 # ── QEMU ─────────────────────────────────────────────────────────────────────
-# Paramètres QEMU communs (machine Q35 moderne, 256 4GiB, VGA standard)
+# Détection automatique de l'affichage graphique WSLg sous Windows 11
+ifeq ($(DISPLAY),)
+ifneq ($(wildcard /tmp/.X11-unix/X0),)
+export DISPLAY := :0
+endif
+endif
+
+# Paramètres QEMU communs (machine Q35 moderne, 4 GiB, boot ISO)
 QEMU = qemu-system-x86_64
-QEMU_FLAGS  = -machine q35
-QEMU_FLAGS += -m 4G
-QEMU_FLAGS += -boot d
-QEMU_FLAGS += -vga std
-QEMU_FLAGS += -serial stdio
-QEMU_FLAGS += -no-reboot
-QEMU_FLAGS += -no-shutdown
-QEMU_FLAGS += -d int,cpu_reset -D /tmp/qemu-exoos.log
+QEMU_COMMON_FLAGS  = -machine q35
+QEMU_COMMON_FLAGS += -m 4G
+QEMU_COMMON_FLAGS += -boot d
+QEMU_COMMON_FLAGS += -no-reboot
+QEMU_COMMON_FLAGS += -no-shutdown
+QEMU_COMMON_FLAGS += -d int,cpu_reset -D /tmp/qemu-exoos.log
 # Sortie debug sur port 0xE9 → fichier /tmp/e9k.txt (debugcon QEMU)
-QEMU_FLAGS += -debugcon file:/tmp/e9k.txt
+QEMU_COMMON_FLAGS += -debugcon file:/tmp/e9k.txt
 # isa-debug-exit : permet à l'OS de signaler le code de sortie à QEMU
-QEMU_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
+QEMU_COMMON_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
+
+# Variante graphique interactive canonique (VGA standard framebuffer + console)
+QEMU_FLAGS = $(QEMU_COMMON_FLAGS) -vga std -serial stdio
+
+# Variante headless terminal (multiplexage automatique console/moniteur sur stdio)
+QEMU_NOGRAPHIC_FLAGS = $(QEMU_COMMON_FLAGS) -nographic
 
 # Variante headless "zéro surprise" : pas de stdio partagé.
 # Utiliser des fichiers de logs dédiés pour éviter le conflit
@@ -300,10 +311,10 @@ qemu-release: iso-release $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Lancement QEMU (release)$(NC)"
 	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
 
-## 4c. Lancer QEMU sans fenêtre graphique (serveur headless)
+## 4c. Lancer QEMU sans fenêtre graphique (serveur headless, multiplexé sur stdio)
 qemu-nographic: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU headless (sortie texte)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -nographic -display none
+	@echo "$(CYAN)Lancement QEMU headless (sortie texte multiplexée sur stdio)$(NC)"
+	$(QEMU) $(QEMU_NOGRAPHIC_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
 
 qemu-nographic-virtio-net: qemu-nographic
 
