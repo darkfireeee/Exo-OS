@@ -20,9 +20,6 @@ const ENDPOINT_ID: u64 = 16;
 const NETWORK_ENDPOINT_ID: u64 = 7;
 const PAGE_SIZE: usize = 4096;
 const DMA_DIR_BIDIR: u64 = 2;
-// e1000 descriptors need DMA-visible physical addresses until the kernel
-// programs a translated IOMMU context for this Ring1 driver.
-const DMA_MAP_FLAGS_BYPASS_IOMMU: u64 = 1 << 4;
 
 const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
 const NET_CTRL_RX_RELEASE: u32 = 0x4F01;
@@ -555,7 +552,7 @@ fn dma_alloc(size: usize) -> Result<DmaRegion, i64> {
             size as u64,
             DMA_DIR_BIDIR,
             &mut virt as *mut u64 as u64,
-            DMA_MAP_FLAGS_BYPASS_IOMMU,
+            0,
             0,
         )
     };

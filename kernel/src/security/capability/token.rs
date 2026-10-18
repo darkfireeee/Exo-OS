@@ -128,6 +128,16 @@ pub enum CapObjectType {
     CryptoKey = 10,
     /// Capability elle-même (délégation de caps).
     Capability = 11,
+    /// Network Pact (ExoNet V5 K1).
+    NetworkPact = 12,
+    /// Network Lease (ExoNet V5 K1).
+    NetworkLease = 13,
+    /// Network Session (ExoNet V5 K1).
+    NetworkSession = 14,
+    /// Portal Device (ExoNet V5 K1).
+    PortalDevice = 15,
+    /// Observation Scope (ExoNet V5 K1).
+    ObservationScope = 16,
 }
 
 impl CapObjectType {
@@ -146,6 +156,11 @@ impl CapObjectType {
             9 => Self::IommuDomain,
             10 => Self::CryptoKey,
             11 => Self::Capability,
+            12 => Self::NetworkPact,
+            13 => Self::NetworkLease,
+            14 => Self::NetworkSession,
+            15 => Self::PortalDevice,
+            16 => Self::ObservationScope,
             _ => Self::Invalid,
         }
     }

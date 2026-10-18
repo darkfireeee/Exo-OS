@@ -8,7 +8,7 @@ use crate::protocol::{
 use crate::virtio_device::ExoNetDevice;
 
 const DRIVER_RETRY_TICKS: u16 = 32;
-const HARDWARE_BOOT_WAIT_MS: u64 = 3_000;
+const HARDWARE_BOOT_WAIT_MS: u64 = 100;
 const HARDWARE_BOOT_POLL_MS: u64 = 10;
 const DRIVER_SEND_TIMEOUT_MS: u64 = 10;
 const DRIVER_SEND_RETRIES: usize = 32;
@@ -52,6 +52,9 @@ impl DriverLink {
         };
         if let Some(endpoint) = hardware_endpoint {
             return Self::connect_endpoint(endpoint, pool, true);
+        }
+        if let Some(endpoint) = lookup_fallback_endpoint() {
+            return Self::connect_endpoint(endpoint, pool, false);
         }
         if log_timeout {
             debug_write(b"network_server: hardware wait timeout\n");
@@ -146,6 +149,10 @@ impl DriverLink {
         if !self.hardware {
             if let Some(endpoint) = lookup_hardware_endpoint() {
                 *self = Self::connect_endpoint(endpoint, pool, true);
+            } else if !self.ready {
+                if let Some(endpoint) = lookup_fallback_endpoint() {
+                    *self = Self::connect_endpoint(endpoint, pool, false);
+                }
             }
         }
         self.hardware_ready()
@@ -207,6 +214,10 @@ fn lookup_hardware_endpoint() -> Option<u64> {
     // Under QEMU the virtio path is the most predictable transport; keep e1000
     // as a fallback so both devices remain usable.
     lookup_endpoint(b"virtio_net").or_else(|| lookup_endpoint(b"e1000_net"))
+}
+
+fn lookup_fallback_endpoint() -> Option<u64> {
+    lookup_endpoint(b"loopback_net").or_else(|| lookup_endpoint(b"loopback_driver"))
 }
 
 fn wait_hardware_endpoint(timeout_ms: u64) -> Option<u64> {

@@ -95,6 +95,20 @@ impl Rights {
     /// Contrôle IRQ (enable/disable sur ce device).
     pub const DEV_IRQ: Self = Self(1 << 15);
 
+    // ── Droits domaine Réseau (bits 16..19) ───────────────────────────────────
+
+    /// Autorisation d'émission de lease réseau (Arbiter).
+    pub const NET_ISSUE: Self = Self(1 << 16);
+
+    /// Matérialisation de brin / socket réseau (Engine).
+    pub const NET_MATERIALIZE: Self = Self(1 << 17);
+
+    /// Révocation d'un pacte / lease réseau.
+    pub const NET_REVOKE: Self = Self(1 << 18);
+
+    /// Administration / observation réseau (Lens / Console).
+    pub const NET_OBSERVE: Self = Self(1 << 19);
+
     // ── Champs composites utiles ─────────────────────────────────────────────
 
     /// Droits complets en lecture/écriture sans délégation.

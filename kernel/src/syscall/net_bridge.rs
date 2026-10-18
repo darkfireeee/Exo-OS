@@ -386,7 +386,20 @@ fn msghdr_peer(msg: &LinuxMsghdr) -> Result<(u32, u16), i64> {
     read_sockaddr_in(msg.msg_name, msg.msg_namelen as u64)
 }
 
+#[inline]
+fn check_net_permission(syscall_no: u64) -> Result<(), i64> {
+    let caller_pid = current_pid();
+    if caller_pid != 0 {
+        let ctx = crate::security::zero_trust::context_for_caller(caller_pid, 0);
+        if crate::security::zero_trust::verify_syscall(&ctx, syscall_no).is_err() {
+            return Err(-1); // EPERM
+        }
+    }
+    Ok(())
+}
+
 pub fn net_socket(domain: i32, ty: i32, protocol: i32) -> Result<i64, i64> {
+    check_net_permission(crate::syscall::numbers::SYS_SOCKET)?;
     let reply = dispatch(
         NET_OP_OPEN,
         0,
@@ -418,6 +431,7 @@ pub fn net_bind(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
     }
+    check_net_permission(crate::syscall::numbers::SYS_BIND)?;
     let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
     dispatch(
         NET_OP_BIND,
@@ -434,6 +448,7 @@ pub fn net_connect(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
     }
+    check_net_permission(crate::syscall::numbers::SYS_CONNECT)?;
     let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
     let deadline =
         crate::scheduler::timer::clock::monotonic_ns().saturating_add(CONNECT_TIMEOUT_NS);
@@ -464,6 +479,7 @@ pub fn net_listen(fd: i32, backlog: i32) -> Result<i64, i64> {
     if fd < 0 || backlog < 0 {
         return Err(EINVAL);
     }
+    check_net_permission(crate::syscall::numbers::SYS_LISTEN)?;
     dispatch(NET_OP_LISTEN, fd as u32, backlog as u64, 0, 0, 0)?;
     Ok(0)
 }
@@ -472,6 +488,7 @@ pub fn net_accept(fd: i32, addr_ptr: u64, addr_len_ptr: u64) -> Result<i64, i64>
     if fd < 0 {
         return Err(EBADF);
     }
+    check_net_permission(crate::syscall::numbers::SYS_ACCEPT)?;
     let reply = dispatch(NET_OP_ACCEPT, fd as u32, 0, 0, 0, 0)?;
     let peer_addr = reply_u32(&reply, 8);
     let peer_port = reply_u16(&reply, 12);
@@ -490,6 +507,7 @@ pub fn net_sendto(
     if fd < 0 {
         return Err(EBADF);
     }
+    check_net_permission(crate::syscall::numbers::SYS_SENDTO)?;
     if len != 0 && buf_ptr == 0 {
         return Err(EFAULT);
     }
@@ -533,6 +551,7 @@ pub fn net_recvfrom(
     if fd < 0 {
         return Err(EBADF);
     }
+    check_net_permission(crate::syscall::numbers::SYS_RECVFROM)?;
     let request_len = len.min(NET_INLINE_DATA_MAX);
     let msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
     let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
@@ -570,6 +589,7 @@ pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     if msg_ptr == 0 {
         return Err(EFAULT);
     }
+    check_net_permission(crate::syscall::numbers::SYS_SENDMSG)?;
     let msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
     let len = msghdr_total_iov_len(&msg)?;
     let (addr, port) = msghdr_peer(&msg)?;
@@ -602,6 +622,7 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     if msg_ptr == 0 {
         return Err(EFAULT);
     }
+    check_net_permission(crate::syscall::numbers::SYS_RECVMSG)?;
     let mut msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
     let len = msghdr_total_iov_len(&msg)?;
     let request_len = len.min(NET_INLINE_DATA_MAX);

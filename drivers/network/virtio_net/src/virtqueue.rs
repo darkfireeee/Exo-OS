@@ -6,9 +6,6 @@ use crate::config::PAGE_SIZE;
 
 pub const VIRTQ_DESC_F_NEXT: u16 = 1;
 pub const VIRTQ_DESC_F_WRITE: u16 = 2;
-// VirtIO queue addresses stay physical until translated IOMMU contexts are
-// attached and programmed for Ring1 drivers.
-const DMA_MAP_FLAGS_BYPASS_IOMMU: u64 = 1 << 4;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -89,7 +86,7 @@ impl Virtqueue {
                 bytes as u64,
                 2,
                 &mut virt as *mut u64 as u64,
-                DMA_MAP_FLAGS_BYPASS_IOMMU,
+                0,
                 0,
             )
         };
