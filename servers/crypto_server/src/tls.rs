@@ -181,6 +181,8 @@ pub struct TlsSession {
     pub send_counter: AtomicU64,
     /// Compteur de records reçus.
     pub recv_counter: AtomicU64,
+    /// PID du propriétaire de la session (0 = non assigné).
+    pub owner_pid: u32,
     /// PID du pair (0 = non connecté).
     pub peer_pid: u32,
     /// Handle de la clé dans le keystore (0 = pas de clé).
@@ -207,6 +209,7 @@ impl TlsSession {
             server_write_iv: [0u8; IV_SIZE],
             send_counter: AtomicU64::new(0),
             recv_counter: AtomicU64::new(0),
+            owner_pid: 0,
             peer_pid: 0,
             key_handle: 0,
             last_activity_tsc: AtomicU64::new(0),
@@ -337,10 +340,20 @@ fn derive_traffic_keys(session: &mut TlsSession) {
 // ── X25519 ───────────────────────────────────────────────────────────────────
 
 /// Échange de clés X25519 via x25519-dalek.
-fn x25519_dh(private_key: &[u8; 32], public_key: &[u8; 32]) -> [u8; 32] {
+///
+/// Retourne `None` si le secret partagé est tout-à-zéro (point à l'infini / RFC 7748 §6),
+/// indiquant une clé publique invalide ou un twist attack.
+fn x25519_dh(private_key: &[u8; 32], public_key: &[u8; 32]) -> Option<[u8; 32]> {
     let secret = StaticSecret::from(*private_key);
     let public = PublicKey::from(*public_key);
-    secret.diffie_hellman(&public).to_bytes()
+    let shared = secret.diffie_hellman(&public).to_bytes();
+
+    let is_zero = shared.iter().fold(0u8, |acc, &b| acc | b);
+    if is_zero == 0 {
+        None
+    } else {
+        Some(shared)
+    }
 }
 
 /// Génère une paire de clés X25519 éphémère à partir du CSPRNG kernel.
@@ -362,13 +375,17 @@ fn generate_x25519_keypair() -> Option<([u8; 32], [u8; 32])> {
 
 /// Initie un handshake TLS 1.3 (côté client).
 ///
+/// ## Paramètres
+/// - `owner_pid` : PID du propriétaire créant la session
+/// - `peer_pid` : PID du pair visé
+///
 /// ## Retour
 /// - `session_handle` : identifiant de session (non-zéro si succès)
 /// - `client_hello` : message ClientHello à envoyer au serveur
 ///
 /// ## Format ClientHello (simplifié)
 /// `msg_type=1 || suite[2] || client_random[32] || client_public_key[32]`
-pub fn tls_handshake_initiate(peer_pid: u32) -> (u32, [u8; 67]) {
+pub fn tls_handshake_initiate(owner_pid: u32, peer_pid: u32) -> (u32, [u8; 67]) {
     let mut hello = [0u8; 67];
 
     // Allouer une session
@@ -402,6 +419,7 @@ pub fn tls_handshake_initiate(peer_pid: u32) -> (u32, [u8; 67]) {
 
             session.state = TlsState::HandshakePending as u8;
             session.cipher_suite = CipherSuite::XChaCha20Blake3 as u16;
+            session.owner_pid = owner_pid;
             session.peer_pid = peer_pid;
             session.flags = 0;
             session.send_counter.store(1, Ordering::Release);
@@ -424,7 +442,11 @@ pub fn tls_handshake_initiate(peer_pid: u32) -> (u32, [u8; 67]) {
 ///
 /// ## Retour
 /// - `true` si le handshake est complété avec succès
-pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -> bool {
+pub fn tls_handshake_complete_client(
+    session_handle: u32,
+    caller_pid: u32,
+    server_hello: &[u8],
+) -> bool {
     if session_handle == 0 || server_hello.len() < 67 {
         return false;
     }
@@ -438,6 +460,10 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
     let session = &mut pool[idx];
 
     if session.state != TlsState::HandshakePending as u8 {
+        return false;
+    }
+
+    if session.owner_pid != 0 && session.owner_pid != caller_pid && caller_pid != 0 {
         return false;
     }
 
@@ -472,8 +498,19 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
         pk
     };
 
-    // Calculer le secret partagé
-    session.shared_secret = x25519_dh(&private_key, &server_public);
+    // Calculer le secret partagé (rejet point tout-à-zéro RFC 7748 §6)
+    let shared = match x25519_dh(&private_key, &server_public) {
+        Some(s) => s,
+        None => {
+            session.state = TlsState::Error as u8;
+            for b in private_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+            core::sync::atomic::fence(Ordering::SeqCst);
+            return false;
+        }
+    };
+    session.shared_secret = shared;
     for b in private_key.iter_mut() {
         unsafe { core::ptr::write_volatile(b, 0) };
     }
@@ -497,7 +534,11 @@ pub fn tls_handshake_complete_client(session_handle: u32, server_hello: &[u8]) -
 /// ## Retour
 /// - `session_handle` : identifiant de session (non-zéro si succès)
 /// - `server_hello` : message ServerHello à renvoyer au client
-pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 67]) {
+pub fn tls_handshake_respond(
+    client_hello: &[u8],
+    owner_pid: u32,
+    peer_pid: u32,
+) -> (u32, [u8; 67]) {
     let mut server_hello = [0u8; 67];
     let mut session_handle = 0u32;
 
@@ -538,8 +579,18 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
                 None => return (0, server_hello),
             };
 
-            // Calculer le secret partagé
-            session.shared_secret = x25519_dh(&private_key, &client_public);
+            // Calculer le secret partagé (rejet point neutre)
+            let shared = match x25519_dh(&private_key, &client_public) {
+                Some(s) => s,
+                None => {
+                    for b in private_key.iter_mut() {
+                        unsafe { core::ptr::write_volatile(b, 0) };
+                    }
+                    core::sync::atomic::fence(Ordering::SeqCst);
+                    return (0, server_hello);
+                }
+            };
+            session.shared_secret = shared;
             for b in private_key.iter_mut() {
                 unsafe { core::ptr::write_volatile(b, 0) };
             }
@@ -557,6 +608,7 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
 
             session.state = TlsState::Verified as u8;
             session.cipher_suite = CipherSuite::XChaCha20Blake3 as u16;
+            session.owner_pid = owner_pid;
             session.peer_pid = peer_pid;
             session.flags = TLS_ROLE_SERVER;
             session.send_counter.store(1, Ordering::Release);
@@ -577,7 +629,12 @@ pub fn tls_handshake_respond(client_hello: &[u8], peer_pid: u32) -> (u32, [u8; 6
 ///
 /// ## Format
 /// `content_type[1] || counter[8] || encrypted_payload[N] || tag[32]`
-pub fn tls_encrypt_record(session_handle: u32, data: &[u8], output: &mut [u8]) -> bool {
+pub fn tls_encrypt_record(
+    session_handle: u32,
+    caller_pid: u32,
+    data: &[u8],
+    output: &mut [u8],
+) -> bool {
     if session_handle == 0 || session_handle as usize > MAX_SESSIONS {
         return false;
     }
@@ -586,7 +643,7 @@ pub fn tls_encrypt_record(session_handle: u32, data: &[u8], output: &mut [u8]) -
     let pool = SESSION_POOL.lock();
     let session = &pool[idx];
 
-    if !session.is_active() {
+    if !session.is_active() || (session.owner_pid != 0 && session.owner_pid != caller_pid && caller_pid != 0) {
         return false;
     }
 
@@ -612,7 +669,12 @@ pub fn tls_encrypt_record(session_handle: u32, data: &[u8], output: &mut [u8]) -
 }
 
 /// Déchiffre un enregistrement d'application TLS.
-pub fn tls_decrypt_record(session_handle: u32, input: &[u8], plaintext: &mut [u8]) -> bool {
+pub fn tls_decrypt_record(
+    session_handle: u32,
+    caller_pid: u32,
+    input: &[u8],
+    plaintext: &mut [u8],
+) -> bool {
     if session_handle == 0 || session_handle as usize > MAX_SESSIONS {
         return false;
     }
@@ -621,7 +683,7 @@ pub fn tls_decrypt_record(session_handle: u32, input: &[u8], plaintext: &mut [u8
     let pool = SESSION_POOL.lock();
     let session = &pool[idx];
 
-    if !session.is_active() {
+    if !session.is_active() || (session.owner_pid != 0 && session.owner_pid != caller_pid && caller_pid != 0) {
         return false;
     }
 
@@ -643,7 +705,7 @@ pub fn tls_decrypt_record(session_handle: u32, input: &[u8], plaintext: &mut [u8
 
 /// Ferme une session TLS de manière sécurisée.
 /// Toutes les clés sont shreddées, la session est remise à Closed.
-pub fn tls_close(session_handle: u32) -> bool {
+pub fn tls_close(session_handle: u32, caller_pid: u32) -> bool {
     if session_handle == 0 || session_handle as usize > MAX_SESSIONS {
         return false;
     }
@@ -656,11 +718,16 @@ pub fn tls_close(session_handle: u32) -> bool {
         return false;
     }
 
+    if session.owner_pid != 0 && session.owner_pid != caller_pid && caller_pid != 0 {
+        return false;
+    }
+
     // Shredder toutes les clés
     session.shred_keys();
 
     // Réinitialiser la session
     session.state = TlsState::Closed as u8;
+    session.owner_pid = 0;
     session.peer_pid = 0;
     session.key_handle = 0;
     session.send_counter.store(0, Ordering::Release);
@@ -708,6 +775,7 @@ pub fn cleanup_expired_sessions() -> u32 {
         if now.wrapping_sub(last) > timeout_tsc {
             session.shred_keys();
             session.state = TlsState::Closed as u8;
+            session.owner_pid = 0;
             session.peer_pid = 0;
             session.key_handle = 0;
             session.send_counter.store(0, Ordering::Release);
@@ -729,6 +797,7 @@ pub fn tls_init() {
     for session in pool.iter_mut() {
         session.state = TlsState::Closed as u8;
         session.shred_keys();
+        session.owner_pid = 0;
         session.peer_pid = 0;
         session.key_handle = 0;
         session.send_counter.store(0, Ordering::Release);

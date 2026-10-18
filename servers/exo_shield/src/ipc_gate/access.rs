@@ -83,10 +83,10 @@ pub fn classify_service_cap_requirement(
                         ServiceCapRequirement::NotRequired
                     }
                 }
-                _ => ServiceCapRequirement::NotRequired,
+                _ => ServiceCapRequirement::Malformed,
             }
         }
-        _ => ServiceCapRequirement::NotRequired,
+        _ => ServiceCapRequirement::Required,
     }
 }
 
@@ -169,6 +169,13 @@ mod tests {
             classify_service_cap_requirement(42, THREAT_QUERY, &payload),
             ServiceCapRequirement::Required
         );
+
+        // Unknown threat query type is Malformed
+        payload[0] = 0xee;
+        assert_eq!(
+            classify_service_cap_requirement(42, THREAT_QUERY, &payload),
+            ServiceCapRequirement::Malformed
+        );
     }
 
     #[test]
@@ -181,6 +188,11 @@ mod tests {
         );
         assert_eq!(
             classify_service_cap_requirement(42, POLICY_UPDATE, &payload),
+            ServiceCapRequirement::Required
+        );
+        // Unknown message type fails closed (Required)
+        assert_eq!(
+            classify_service_cap_requirement(42, 9999, &payload),
             ServiceCapRequirement::Required
         );
     }

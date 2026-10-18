@@ -405,8 +405,9 @@ fn caller_peer_pid(caller_principal: u64) -> u32 {
 }
 
 fn tls_init_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
-    let peer_pid = read_u32_le(payload, 0).unwrap_or_else(|| caller_peer_pid(caller_principal));
-    let (session_handle, client_hello) = tls::tls_handshake_initiate(peer_pid);
+    let caller_pid = caller_peer_pid(caller_principal);
+    let peer_pid = read_u32_le(payload, 0).unwrap_or(caller_pid);
+    let (session_handle, client_hello) = tls::tls_handshake_initiate(caller_pid, peer_pid);
     if session_handle == 0 {
         reply.status = CRYPTO_ERR_BUSY;
         return;
@@ -422,10 +423,12 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
         return;
     }
 
+    let caller_pid = caller_peer_pid(caller_principal);
+
     // Compatibilité simple: un ClientHello brut peut être envoyé directement.
     if payload[0] == 1 && payload.len() >= 67 {
         let (session_handle, server_hello) =
-            tls::tls_handshake_respond(&payload[..67], caller_peer_pid(caller_principal));
+            tls::tls_handshake_respond(&payload[..67], caller_pid, caller_pid);
         if session_handle == 0 {
             reply.status = CRYPTO_ERR_AUTH;
             return;
@@ -439,7 +442,7 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
     match payload[0] {
         TLS_OP_RESPOND => {
             let peer_pid =
-                read_u32_le(payload, 1).unwrap_or_else(|| caller_peer_pid(caller_principal));
+                read_u32_le(payload, 1).unwrap_or(caller_pid);
             let Some(hello_len) = read_u16_le(payload, 5) else {
                 reply.status = CRYPTO_ERR_ARGS;
                 return;
@@ -450,7 +453,7 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
                 return;
             }
             let (session_handle, server_hello) =
-                tls::tls_handshake_respond(&payload[7..7 + hello_len], peer_pid);
+                tls::tls_handshake_respond(&payload[7..7 + hello_len], caller_pid, peer_pid);
             if session_handle == 0 {
                 reply.status = CRYPTO_ERR_AUTH;
                 return;
@@ -473,7 +476,7 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
                 reply.status = CRYPTO_ERR_ARGS;
                 return;
             }
-            if tls::tls_handshake_complete_client(session_handle, &payload[7..7 + hello_len]) {
+            if tls::tls_handshake_complete_client(session_handle, caller_pid, &payload[7..7 + hello_len]) {
                 reply.status = CRYPTO_OK;
                 reply.key_handle = session_handle;
             } else {
@@ -486,7 +489,7 @@ fn tls_handshake_reply(payload: &[u8], caller_principal: u64, reply: &mut Crypto
     }
 }
 
-fn tls_encrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
+fn tls_encrypt_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
     let Some(session_handle) = read_u32_le(payload, 0) else {
         reply.status = CRYPTO_ERR_ARGS;
         return;
@@ -500,9 +503,10 @@ fn tls_encrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
         reply.status = CRYPTO_ERR_ARGS;
         return;
     }
+    let caller_pid = caller_peer_pid(caller_principal);
     let data = &payload[6..6 + data_len];
     let mut output = [0u8; CRYPTO_REPLY_DATA_SIZE];
-    if tls::tls_encrypt_record(session_handle, data, &mut output) {
+    if tls::tls_encrypt_record(session_handle, caller_pid, data, &mut output) {
         reply.status = CRYPTO_OK;
         reply.key_handle = session_handle;
         reply.write_data(&output[..24 + data_len + TAG_SIZE]);
@@ -511,7 +515,7 @@ fn tls_encrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
     }
 }
 
-fn tls_decrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
+fn tls_decrypt_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
     let Some(session_handle) = read_u32_le(payload, 0) else {
         reply.status = CRYPTO_ERR_ARGS;
         return;
@@ -525,9 +529,10 @@ fn tls_decrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
         reply.status = CRYPTO_ERR_ARGS;
         return;
     }
+    let caller_pid = caller_peer_pid(caller_principal);
     let input = &payload[6..6 + input_len];
     let mut plaintext = [0u8; CRYPTO_REPLY_DATA_SIZE];
-    if tls::tls_decrypt_record(session_handle, input, &mut plaintext) {
+    if tls::tls_decrypt_record(session_handle, caller_pid, input, &mut plaintext) {
         let pt_len = input_len - 24 - TAG_SIZE;
         reply.status = CRYPTO_OK;
         reply.key_handle = session_handle;
@@ -537,12 +542,13 @@ fn tls_decrypt_reply(payload: &[u8], reply: &mut CryptoReply) {
     }
 }
 
-fn tls_close_reply(payload: &[u8], reply: &mut CryptoReply) {
+fn tls_close_reply(payload: &[u8], caller_principal: u64, reply: &mut CryptoReply) {
     let Some(session_handle) = read_u32_le(payload, 0) else {
         reply.status = CRYPTO_ERR_ARGS;
         return;
     };
-    if tls::tls_close(session_handle) {
+    let caller_pid = caller_peer_pid(caller_principal);
+    if tls::tls_close(session_handle, caller_pid) {
         reply.status = CRYPTO_OK;
         reply.key_handle = session_handle;
     } else {
@@ -561,6 +567,12 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
 
     let payload = &req.payload[..req.payload_len as usize];
     let caller_principal = if req.msg_type == PHOENIX_WAKE_ENTROPY {
+        // FIX-CS-PHOENIX-01 : Seul le noyau (PID 0) peut invoquer PHOENIX_WAKE_ENTROPY
+        if req.sender_pid != 0 {
+            reply.status = CRYPTO_ERR_CAP;
+            REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+            return reply;
+        }
         0
     } else {
         match authorize_request(req) {
@@ -855,13 +867,13 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             tls_handshake_reply(payload, caller_principal, &mut reply);
         }
         CRYPTO_TLS_CLOSE => {
-            tls_close_reply(payload, &mut reply);
+            tls_close_reply(payload, caller_principal, &mut reply);
         }
         CRYPTO_TLS_ENCRYPT => {
-            tls_encrypt_reply(payload, &mut reply);
+            tls_encrypt_reply(payload, caller_principal, &mut reply);
         }
         CRYPTO_TLS_DECRYPT => {
-            tls_decrypt_reply(payload, &mut reply);
+            tls_decrypt_reply(payload, caller_principal, &mut reply);
         }
         CRYPTO_KEY_REVOKE => {
             let Some(key_handle) = read_u32_le(payload, 0) else {
@@ -918,8 +930,9 @@ fn handle_request(req: &CryptoRequest) -> CryptoReply {
             reply.write_data(&encoded);
         }
         PHOENIX_WAKE_ENTROPY => {
-            let authenticated_kernel_wake =
-                req.sender_pid == 0 || (req.reply_endpoint & KERNEL_EPHEMERAL_REPLY_BIT) != 0;
+            // FIX-CS-PHOENIX-01 : Seul le noyau (PID 0) authentifié peut déclencher
+            // le réveil Phoenix et la réinitialisation des clés.
+            let authenticated_kernel_wake = req.sender_pid == 0 && caller_principal == 0;
             if !authenticated_kernel_wake {
                 reply.status = CRYPTO_ERR_CAP;
             } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {

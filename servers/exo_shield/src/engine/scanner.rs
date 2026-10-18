@@ -599,12 +599,13 @@ pub fn heuristic_analyze(data: &[u8]) -> u32 {
 
     // Factor 5: suspicious byte sequences (common shellcode patterns)
     let suspicious_patterns: &[(&[u8], u32)] = &[
-        (b"\xcd\x80", 150), // int 0x80 (Linux syscall)
-        (b"\x0f\x05", 150), // syscall instruction
-        (b"\xff\xe4", 120), // jmp esp
-        (b"\xff\xe0", 120), // jmp eax
-        (b"\xeb\xfe", 100), // jmp -2 (infinite loop)
-        (b"\x90\x90", 60),  // NOP sled
+        (b"\xcd\x80", 150),                                      // int 0x80 (Linux 32-bit legacy syscall)
+        (b"\x48\x31\xf6\x56", 150),                              // xor rsi, rsi; push rsi (x64 shellcode prologue)
+        (b"\x31\xc0\x50\x68", 150),                              // xor eax, eax; push eax; push ... (stack string)
+        (b"\xff\xe4", 120),                                      // jmp esp
+        (b"\xff\xe0", 120),                                      // jmp eax
+        (b"\xeb\xfe", 100),                                      // jmp -2 (infinite spin)
+        (b"\x90\x90\x90\x90\x90\x90\x90\x90", 120),              // NOP sled (>= 8 NOPs)
     ];
     for &(pattern, weight) in suspicious_patterns {
         if match_pattern(data, pattern) > 0 {
@@ -999,68 +1000,68 @@ pub fn scanner_init() {
         let default_sigs: &[(&[u8], u8, ThreatCategory, ThreatLevel, u32, &[u8])] = &[
             // (pattern, sig_type, category, severity, base_score, name)
             (
-                b"\xcd\x80\x00\x00",
+                b"\x48\x31\xf6\x56\x48\xbf\x2f\x62\x69\x6e\x2f\x2f\x73\x68",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::Critical,
+                900,
+                b"linux_execve_binsh",
+            ),
+            (
+                b"\x31\xff\x6a\x69\x58\x0f\x05\x6a\x3b\x58",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::Critical,
+                900,
+                b"linux_setuid0_exec",
+            ),
+            (
+                b"\x6a\x29\x58\x99\x6a\x02\x5f\x6a\x01\x5e\x0f\x05",
                 0,
                 ThreatCategory::Intrusion,
                 ThreatLevel::High,
-                700,
-                b"linux_syscall_int80",
+                800,
+                b"linux_socket_connect",
             ),
             (
-                b"\x0f\x05\x00\x00",
+                b"\x6a\x03\x5e\xb0\x21\xff\xce\x0f\x05",
                 0,
                 ThreatCategory::Intrusion,
                 ThreatLevel::High,
-                700,
-                b"linux_syscall_new",
+                750,
+                b"linux_dup2_loop",
             ),
             (
-                b"\xff\xe4\x00\x00",
+                b"\x6a\x4e\x58\x48\x31\xf6\x0f\x05",
+                0,
+                ThreatCategory::Intrusion,
+                ThreatLevel::High,
+                750,
+                b"linux_memfd_create",
+            ),
+            (
+                b"\x48\x31\xc0\xb0\x0a\x6a\x07\x5a\x0f\x05",
                 0,
                 ThreatCategory::Intrusion,
                 ThreatLevel::Critical,
                 850,
-                b"jmp_esp_shellcode",
+                b"linux_mprotect_rwx",
             ),
             (
-                b"\xff\xe0\x00\x00",
+                b"\x6a\x32\x58\x0f\x05\x48\x31\xf6\x6a\x2b\x58",
                 0,
                 ThreatCategory::Intrusion,
-                ThreatLevel::Critical,
-                850,
-                b"jmp_eax_shellcode",
+                ThreatLevel::High,
+                800,
+                b"linux_bind_shell",
             ),
             (
-                b"\x90\x90\x90\x90",
+                b"\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90",
                 0,
                 ThreatCategory::Malware,
                 ThreatLevel::Medium,
                 500,
                 b"nop_sled_long",
-            ),
-            (
-                b"\xeb\xfe\x90\x90",
-                0,
-                ThreatCategory::Malware,
-                ThreatLevel::Medium,
-                450,
-                b"infinite_loop_nop",
-            ),
-            (
-                b"\xcc\xcc\xcc\xcc",
-                0,
-                ThreatCategory::Anomaly,
-                ThreatLevel::Low,
-                200,
-                b"int3_breakpoint",
-            ),
-            (
-                b"\x48\x31\xc0\x48",
-                0,
-                ThreatCategory::Intrusion,
-                ThreatLevel::High,
-                600,
-                b"xor_rax_x64_seq",
             ),
         ];
 
