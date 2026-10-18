@@ -381,7 +381,20 @@ impl BlockCache {
         st: &mut CacheState,
         write_fn: Option<&dyn Fn(&[u8], DiskOffset) -> ExofsResult<usize>>,
     ) -> ExofsResult<()> {
-        let victim_idx = match st.lru_victim() {
+        let victim_idx = if write_fn.is_some() {
+            st.lru_victim()
+        } else {
+            // RÈGLE FS-DIRTY : sans write_fn pour flusher vers le disque,
+            // interdiction absolue d'évincer un bloc dirty pour ne pas perdre de données.
+            st.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| !b.is_dirty())
+                .min_by_key(|(_, b)| b.lru_tick)
+                .map(|(i, _)| i)
+        };
+
+        let victim_idx = match victim_idx {
             Some(i) => i,
             None => return Err(ExofsError::NoMemory),
         };

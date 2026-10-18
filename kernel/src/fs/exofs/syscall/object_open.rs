@@ -223,6 +223,41 @@ pub fn sys_exofs_object_open(
         return e;
     }
 
+    // Zero-Trust MLS : vérification de politique d'accès par processus (POLICY-007).
+    {
+        let tcb = crate::scheduler::core::switch::current_thread_raw();
+        let pid = if !tcb.is_null() {
+            unsafe { (*tcb).pid.0 }
+        } else {
+            0u32
+        };
+        if pid != 0 {
+            let ctx = crate::security::zero_trust::context_for_caller(pid, 0);
+            if open_flags::can_read(open_args.flags) {
+                if crate::security::zero_trust::verify_file_read(
+                    &ctx,
+                    crate::security::zero_trust::SecurityLabel::user_default(),
+                    0,
+                )
+                .is_err()
+                {
+                    return crate::syscall::errno::EACCES;
+                }
+            }
+            if open_flags::can_write(open_args.flags) {
+                if crate::security::zero_trust::verify_file_write(
+                    &ctx,
+                    crate::security::zero_trust::SecurityLabel::user_default(),
+                    0,
+                )
+                .is_err()
+                {
+                    return crate::syscall::errno::EACCES;
+                }
+            }
+        }
+    }
+
     // FIX-SEC-T0.3 : l'arg `cap_rights` (bitmask auto-déclaré) n'est plus une preuve
     // d'autorité — on l'ignore. L'autorité réelle = la capability MINTÉE ci-dessous,
     // stockée dans la cap_table du process et vérifiée à chaque opération suivante.
