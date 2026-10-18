@@ -1,5 +1,5 @@
-#![no_std]
-#![no_main]
+#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_os = "none", no_main)]
 
 //! # crypto_server — Service de cryptographie (SRV-04)
 //!
@@ -19,6 +19,7 @@
 
 extern crate blake3;
 
+#[cfg(target_os = "none")]
 use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;
 
@@ -134,6 +135,10 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
+#[cfg(not(target_os = "none"))]
+fn main() {}
+
+#[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     boot_log(b"crypto_server: panic\n");

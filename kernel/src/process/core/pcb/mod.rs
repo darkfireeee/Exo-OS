@@ -1,430 +1,32 @@
-// kernel/src/process/core/pcb.rs
-//
-// ═══════════════════════════════════════════════════════════════════════════════
-// ProcessControlBlock — Structure de contrôle d'un processus (Exo-OS Couche 1.5)
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// Le PCB est partagé entre tous les threads d'un même processus.
-// Accès protégé par un spinlock interne ; les champs atomiques sont lus
-// sans verrou depuis les hot paths (scheduler, signal delivery).
-//
-// RÈGLES :
-//   • Jamais d'import fs/ ou ipc/ directs — traits abstraits uniquement.
-//   • PCB libéré via RAII (Drop) avec cleanup ordonné.
-//   • Les champs file_table et mmap_regions sont des index opaques
-//     enregistrés as handle — pas de type concret fs/.
-// ═══════════════════════════════════════════════════════════════════════════════
+//! # process/core/pcb/mod.rs — ProcessControlBlock (Exo-OS Couche 1.5)
+//!
+//! Le PCB est partagé entre tous les threads d'un même processus.
+//! Accès protégé par un spinlock interne ; les champs atomiques sont lus
+//! sans verrou depuis les hot paths (scheduler, signal delivery).
+//!
+//! RÈGLES :
+//!   • Jamais d'import fs/ ou ipc/ directs — traits abstraits uniquement.
+//!   • PCB libéré via RAII (Drop) avec cleanup ordonné.
+//!   • Les champs file_table et mmap_regions sont des index opaques
+//!     enregistrés as handle — pas de type concret fs/.
 
-use super::pid::Pid;
+pub mod file_table;
+pub mod types;
+
+pub use file_table::{FileDescriptor, OpenFileTable};
+pub use types::{
+    process_flags, Credentials, ProcessFlags, ProcessState, DEFAULT_UMASK, MAX_THREADS_PER_PROCESS,
+    PROCESS_NAME_LEN,
+};
+
+use alloc::boxed::Box;
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use crate::process::core::pid::Pid;
 use crate::process::signal::default::SigHandlerTable;
 use crate::scheduler::core::task::ThreadId;
 use crate::scheduler::sync::spinlock::SpinLock;
-use alloc::alloc::{alloc, Layout};
-use alloc::boxed::Box;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-// FIX-P2-A03 (Security_Audit_Passe2 §A-03): import CapTable pour intégration PCB.
 use crate::security::capability::table::CapTable;
-
-fn try_box_new<T>(value: T) -> Option<Box<T>> {
-    let layout = Layout::new::<T>();
-    if layout.size() == 0 {
-        return None;
-    }
-
-    // SAFETY: `layout` is built for T; null is handled and the initialized
-    // allocation is immediately owned by Box.
-    let raw = unsafe { alloc(layout) as *mut T };
-    if raw.is_null() {
-        return None;
-    }
-    // SAFETY: `raw` points to a valid allocation for T and is not aliased.
-    unsafe {
-        raw.write(value);
-        Some(Box::from_raw(raw))
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ProcessState — machine d'états du processus
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// État du processus (distinct de l'état des threads individuels).
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum ProcessState {
-    /// En cours de création (fork / execve non terminé).
-    Creating = 0,
-    /// Au moins un thread actif.
-    Running = 1,
-    /// Tous les threads bloqués.
-    Sleeping = 2,
-    /// Arrêté via SIGSTOP (tous threads Stopped).
-    Stopped = 3,
-    /// exit() appelé, en attente de waitpid() par le parent.
-    Zombie = 4,
-    /// Ressources libérées (après reap).
-    Dead = 5,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ProcessFlags
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub mod process_flags {
-    /// fork() par copy-on-write (CLONE_VM absent).
-    pub const FORKED: u32 = 1 << 0;
-    /// execve() effectué au moins une fois.
-    pub const EXEC_DONE: u32 = 1 << 1;
-    /// Processus leader de session.
-    pub const SESSION_LEADER: u32 = 1 << 2;
-    /// Processus démonisé (no ctty).
-    pub const DAEMON: u32 = 1 << 3;
-    /// Undergoing exit — ne pas envoyer de nouveaux signaux.
-    pub const EXITING: u32 = 1 << 4;
-    /// Setuid actif.
-    pub const SETUID: u32 = 1 << 5;
-    /// Setgid actif.
-    pub const SETGID: u32 = 1 << 6;
-    /// Dump core interdit (prctl(PR_SET_DUMPABLE, 0)).
-    pub const NO_DUMP: u32 = 1 << 7;
-    /// Processus soumis à ptrace.
-    pub const TRACED: u32 = 1 << 8;
-    /// Processus dans un namespace PID (non-init).
-    pub const IN_PID_NS: u32 = 1 << 9;
-    /// Vfork en attente — libérer le parent bloqué.
-    pub const VFORK_DONE: u32 = 1 << 10;
-    /// Enfant vfork() partageant temporairement l'adresse parent jusqu'à exec/exit.
-    pub const VFORK_SHARED_AS: u32 = 1 << 11;
-}
-
-pub use process_flags as ProcessFlags;
-
-pub const PROCESS_NAME_LEN: usize = 16;
-pub const MAX_THREADS_PER_PROCESS: usize = 64;
-pub const DEFAULT_UMASK: u32 = 0o022;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OpenFileTable — table des descripteurs de fichiers ouverts
-// Opaque : les handles sont des indices dans la table fs/.
-// Pas d'import fs/ direct — RÈGLE PROC-01.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Un descripteur de fichier : opaque (géré par fs/ via handle entier).
-#[derive(Copy, Clone, Debug)]
-pub struct FileDescriptor {
-    /// Numéro fd (0=stdin, 1=stdout, 2=stderr, 3+...).
-    pub fd: i32,
-    /// Handle opaque vers l'entrée fs/ (index dans la table vfs).
-    pub handle: u64,
-    /// Flags O_CLOEXEC, O_NONBLOCK...
-    pub flags: u32,
-}
-
-/// Table des fichiers ouverts d'un processus (partagée entre threads via fork+CLONE_FILES).
-pub struct OpenFileTable {
-    /// fd_limit par processus (configurable via rlimit RLIMIT_NOFILE).
-    fd_limit: usize,
-    /// Descripteurs actifs. Index = numéro fd.
-    descriptors: Vec<Option<FileDescriptor>>,
-    /// Prochain fd à essayer en premier (hint, pas garanti).
-    next_hint: usize,
-    /// Compteur d'ouvertures cumulées.
-    open_count: AtomicU64,
-    /// Compteur de fermetures cumulées.
-    close_count: AtomicU64,
-}
-
-impl OpenFileTable {
-    /// Crée une table vide avec les 3 fds standards pré-réservés (mais vides).
-    pub fn new(fd_limit: usize) -> Self {
-        Self::try_new(fd_limit).expect("OpenFileTable::new: allocation échouée")
-    }
-
-    /// Variante fallible utilisée par les chemins noyau qui doivent rester OOM-safe.
-    pub fn try_new(fd_limit: usize) -> Option<Self> {
-        let mut descriptors = Vec::new();
-        descriptors
-            .try_reserve_exact(32.min(fd_limit).max(3))
-            .ok()?;
-        // Allouer slots 0,1,2 pour stdin/stdout/stderr (initialement None).
-        descriptors.push(None); // stdin
-        descriptors.push(None); // stdout
-        descriptors.push(None); // stderr
-        Some(Self {
-            fd_limit,
-            descriptors,
-            next_hint: 3,
-            open_count: AtomicU64::new(0),
-            close_count: AtomicU64::new(0),
-        })
-    }
-
-    /// Installe le triplet stdin/stdout/stderr.
-    pub fn install_std_fds(&mut self, stdin: u64, stdout: u64, stderr: u64) {
-        self.descriptors[0] = Some(FileDescriptor {
-            fd: 0,
-            handle: stdin,
-            flags: 0,
-        });
-        self.descriptors[1] = Some(FileDescriptor {
-            fd: 1,
-            handle: stdout,
-            flags: 1,
-        });
-        self.descriptors[2] = Some(FileDescriptor {
-            fd: 2,
-            handle: stderr,
-            flags: 1,
-        });
-        self.open_count
-            .store(self.open_fd_count() as u64, Ordering::Relaxed);
-    }
-
-    /// Installe ou remplace un fd précis par un handle opaque.
-    pub fn install_at(&mut self, fd: i32, handle: u64, flags: u32) -> bool {
-        if fd < 0 || fd as usize >= self.fd_limit {
-            return false;
-        }
-        let idx = fd as usize;
-        while self.descriptors.len() <= idx {
-            if self.descriptors.try_reserve(1).is_err() {
-                return false;
-            }
-            self.descriptors.push(None);
-        }
-
-        if self.descriptors[idx].is_none() {
-            self.open_count.fetch_add(1, Ordering::Relaxed);
-        }
-        self.descriptors[idx] = Some(FileDescriptor { fd, handle, flags });
-        if idx == self.next_hint {
-            while self.next_hint < self.descriptors.len()
-                && self.descriptors[self.next_hint].is_some()
-            {
-                self.next_hint += 1;
-            }
-        }
-        true
-    }
-
-    /// Alloue le prochain fd disponible et y associe le handle.
-    /// Retourne le numéro fd alloué ou -1 si la table est pleine.
-    pub fn install(&mut self, handle: u64, flags: u32) -> i32 {
-        let start = self.next_hint;
-        let limit = self.fd_limit;
-
-        // Scanner à partir du hint.
-        for idx in start..limit {
-            if idx < self.descriptors.len() {
-                if self.descriptors[idx].is_none() {
-                    self.descriptors[idx] = Some(FileDescriptor {
-                        fd: idx as i32,
-                        handle,
-                        flags,
-                    });
-                    self.next_hint = idx + 1;
-                    self.open_count.fetch_add(1, Ordering::Relaxed);
-                    return idx as i32;
-                }
-            } else {
-                // Étendre le vecteur.
-                if self.descriptors.try_reserve(1).is_err() {
-                    return -1;
-                }
-                self.descriptors.push(Some(FileDescriptor {
-                    fd: idx as i32,
-                    handle,
-                    flags,
-                }));
-                self.next_hint = idx + 1;
-                self.open_count.fetch_add(1, Ordering::Relaxed);
-                return idx as i32;
-            }
-        }
-        // Rescan depuis 0 au cas où il y a des trous avant start.
-        for idx in 3..start {
-            if idx < self.descriptors.len() && self.descriptors[idx].is_none() {
-                self.descriptors[idx] = Some(FileDescriptor {
-                    fd: idx as i32,
-                    handle,
-                    flags,
-                });
-                self.next_hint = idx + 1;
-                self.open_count.fetch_add(1, Ordering::Relaxed);
-                return idx as i32;
-            }
-        }
-        -1 // EMFILE
-    }
-
-    /// Ferme le fd donné. Retourne le handle associé pour que fs/ puisse fermer le fichier.
-    pub fn close(&mut self, fd: i32) -> Option<u64> {
-        if fd < 0 || fd as usize >= self.descriptors.len() {
-            return None;
-        }
-        let entry = self.descriptors[fd as usize].take()?;
-        if (fd as usize) < self.next_hint {
-            self.next_hint = fd as usize;
-        }
-        self.close_count.fetch_add(1, Ordering::Relaxed);
-        Some(entry.handle)
-    }
-
-    /// Lit le handle associé à un fd (sans fermer).
-    #[inline(always)]
-    pub fn get(&self, fd: i32) -> Option<&FileDescriptor> {
-        self.descriptors.get(fd as usize)?.as_ref()
-    }
-
-    /// Met à jour les flags de descripteur (FD_CLOEXEC, O_NONBLOCK miroir...).
-    pub fn set_flags(&mut self, fd: i32, flags: u32) -> bool {
-        let Some(Some(entry)) = self.descriptors.get_mut(fd as usize) else {
-            return false;
-        };
-        entry.flags = flags;
-        true
-    }
-
-    /// Ferme tous les fds marqués O_CLOEXEC (appelé lors de execve).
-    pub fn close_on_exec(&mut self) -> Result<Vec<u64>, ()> {
-        const O_CLOEXEC: u32 = 0x80000;
-        let mut closed_handles = Vec::new();
-        let close_count = self
-            .descriptors
-            .iter()
-            .filter(|slot| slot.as_ref().is_some_and(|fd| fd.flags & O_CLOEXEC != 0))
-            .count();
-        closed_handles
-            .try_reserve_exact(close_count)
-            .map_err(|_| ())?;
-        for slot in &mut self.descriptors {
-            if let Some(fd_entry) = slot {
-                if fd_entry.flags & O_CLOEXEC != 0 {
-                    closed_handles.push(fd_entry.handle);
-                    *slot = None;
-                    self.close_count.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-        self.next_hint = 3;
-        Ok(closed_handles)
-    }
-
-    /// Ferme tous les descripteurs ouverts du processus.
-    pub fn close_all(&mut self) -> Result<Vec<u64>, ()> {
-        let mut closed_handles = Vec::new();
-        let close_count = self
-            .descriptors
-            .iter()
-            .filter(|slot| slot.is_some())
-            .count();
-        closed_handles
-            .try_reserve_exact(close_count)
-            .map_err(|_| ())?;
-        for slot in &mut self.descriptors {
-            if let Some(fd_entry) = slot.take() {
-                closed_handles.push(fd_entry.handle);
-                self.close_count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        self.next_hint = 3;
-        Ok(closed_handles)
-    }
-
-    /// Ferme tous les descripteurs sans allocation, pour les chemins exit/reap.
-    pub fn close_all_noalloc(&mut self) {
-        for slot in &mut self.descriptors {
-            if slot.take().is_some() {
-                self.close_count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        self.next_hint = 3;
-    }
-
-    /// Clone la table pour fork() (les handles sont dupliqués).
-    pub fn clone_for_fork(&self) -> Self {
-        self.try_clone_for_fork()
-            .expect("OpenFileTable::clone_for_fork: allocation échouée")
-    }
-
-    /// Clone fallible de la table pour fork().
-    pub fn try_clone_for_fork(&self) -> Option<Self> {
-        let mut descriptors = Vec::new();
-        descriptors.try_reserve_exact(self.descriptors.len()).ok()?;
-        let mut idx = 0usize;
-        while idx < self.descriptors.len() {
-            descriptors.push(self.descriptors[idx]);
-            idx += 1;
-        }
-        Some(Self {
-            fd_limit: self.fd_limit,
-            descriptors,
-            next_hint: self.next_hint,
-            open_count: AtomicU64::new(self.open_count.load(Ordering::Relaxed)),
-            close_count: AtomicU64::new(0),
-        })
-    }
-
-    /// Nombre de fds ouverts actuellement.
-    pub fn open_fd_count(&self) -> usize {
-        self.descriptors.iter().filter(|s| s.is_some()).count()
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Credentials — UID/GID
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Identifiants d'un processus (clones entre fork, remplacés par setuid/setgid).
-#[derive(Copy, Clone, Debug)]
-#[repr(C)]
-pub struct Credentials {
-    pub uid: u32,
-    pub gid: u32,
-    pub euid: u32,
-    pub egid: u32,
-    pub suid: u32,
-    pub sgid: u32,
-    /// Filesystem UID/GID (Linux-compat).
-    pub fsuid: u32,
-    pub fsgid: u32,
-}
-
-impl Credentials {
-    pub const ROOT: Self = Self {
-        uid: 0,
-        gid: 0,
-        euid: 0,
-        egid: 0,
-        suid: 0,
-        sgid: 0,
-        fsuid: 0,
-        fsgid: 0,
-    };
-
-    pub fn new(uid: u32, gid: u32) -> Self {
-        Self {
-            uid,
-            gid,
-            euid: uid,
-            egid: gid,
-            suid: uid,
-            sgid: gid,
-            fsuid: uid,
-            fsgid: gid,
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_root(&self) -> bool {
-        self.euid == 0
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ProcessControlBlock
-// ─────────────────────────────────────────────────────────────────────────────
+use types::try_box_new;
 
 /// Process Control Block — structure centrale par processus.
 ///
@@ -472,7 +74,6 @@ pub struct ProcessControlBlock {
 
     // ── Mémoire virtuelle ──────────────────────────────────────────────────────
     /// Pointeur opaque vers l'espace d'adressage virtuel (géré par memory/virt/).
-    /// Type réel : *mut memory::virt::address_space::user::UserAddressSpace.
     pub address_space: AtomicUsize, // *mut opaque
     /// CR3 courant (base de la PML4 physique).
     pub cr3: AtomicU64,
@@ -515,14 +116,6 @@ pub struct ProcessControlBlock {
 
     // ── Capabilities (FIX-P2-A03) ─────────────────────────────────────────
     /// Table de capabilities propre au processus.
-    ///
-    /// FIX-P2-A03 (Security_Audit_Passe2 §A-03) : CapTable absente du PCB.
-    /// Sans ce champ, les vérifications de capability utilisaient une table
-    /// globale partagée (KERNEL_CAP_TABLE), rendant impossible l'isolation
-    /// par processus et la révocation ciblée de capabilities.
-    ///
-    /// Héritée du parent lors de fork() via CapTable::inherit_from().
-    /// Les capabilities accordées après fork() n'affectent pas le parent.
     pub cap_table: Box<CapTable>,
 }
 
@@ -597,10 +190,6 @@ impl ProcessControlBlock {
             net_ns: 0,
             uts_ns: 0,
             user_ns: 0,
-            // FIX-P2-A03: allouer une CapTable vide pour ce processus.
-            // try_box_new() peut retourner None (OOM) — on utilise Box::new
-            // car CapTable ne contient que des types stack-compatible (pas
-            // d'allocation interne propre). L'allocation est faite dans la Box.
             cap_table: Box::new(CapTable::new()),
         })
     }
@@ -809,7 +398,6 @@ impl ProcessControlBlock {
     #[inline]
     pub fn set_resuid(&self, ruid: u32, euid: u32, suid: u32) {
         let mut c = self.creds.lock();
-        // Convention POSIX : (u32::MAX) = ne pas modifier
         if ruid != u32::MAX {
             c.uid = ruid;
             c.fsuid = ruid;
@@ -897,7 +485,6 @@ impl ProcessControlBlock {
     }
 
     /// Pointeur vers le thread principal du processus (TID = PID).
-    /// Null si pas encore initialisé.
     #[inline(always)]
     pub fn main_thread_ptr(&self) -> *mut crate::process::core::tcb::ProcessThread {
         self.main_thread_rawptr.load(Ordering::Acquire)
@@ -958,9 +545,6 @@ impl ProcessControlBlock {
     }
 
     /// Retourne un thread vivant pouvant recevoir un signal.
-    ///
-    /// La table multi-thread complète n'est pas encore matérialisée dans le PCB ;
-    /// on utilise donc le thread principal quand il n'est pas en fin de vie.
     #[inline]
     pub fn find_alive_thread(&self) -> *mut crate::process::core::tcb::ProcessThread {
         let ptr = self.main_thread_ptr();
@@ -985,7 +569,6 @@ impl ProcessControlBlock {
     }
 
     /// Libère tous les threads enregistrés dans ce PCB.
-    /// Appelé lors de la destruction finale du PCB (impl Drop) ou lors d'un reap explicite.
     pub fn cleanup_all_threads(&self) {
         let main_ptr = self.main_thread_rawptr.swap(core::ptr::null_mut(), Ordering::AcqRel);
 
@@ -1026,4 +609,3 @@ impl Drop for ProcessControlBlock {
 // Tous les champs mutables sont soit atomiques, soit protégés par SpinLock.
 unsafe impl Send for ProcessControlBlock {}
 unsafe impl Sync for ProcessControlBlock {}
-
