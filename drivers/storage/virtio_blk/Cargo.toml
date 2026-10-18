@@ -9,11 +9,18 @@ publish.workspace = true
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[[bin]]
+name = "virtio_blk_driver"
+path = "src/main.rs"
+test = false
+bench = false
 
 [dependencies]
 virtio-drivers = { version = "0.7.2", default-features = false }
 spin = { workspace = true }
 log = { workspace = true }
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo-storage-common-hal = { path = "../common_hal" }
 
 [features]
 default = []

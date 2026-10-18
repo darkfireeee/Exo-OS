@@ -1,5 +1,6 @@
 #![no_std]
 
+#[cfg(test)]
 extern crate alloc;
 
 pub mod hal;
@@ -124,6 +125,28 @@ impl ExoVirtioBlkDevice {
             #[cfg(test)]
             Backend::Sparse(_) => Ok(()),
         }
+    }
+}
+
+impl exo_storage_common_hal::BlockDeviceOps for ExoVirtioBlkDevice {
+    fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), i64> {
+        self.read_block(lba, buf).map_err(|_| -5)
+    }
+
+    fn write_block(&mut self, lba: u64, buf: &[u8]) -> Result<(), i64> {
+        self.write_block(lba, buf).map_err(|_| -5)
+    }
+
+    fn flush(&mut self) -> Result<(), i64> {
+        self.flush().map_err(|_| -5)
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks()
+    }
+
+    fn block_size(&self) -> u32 {
+        self.block_size()
     }
 }
 

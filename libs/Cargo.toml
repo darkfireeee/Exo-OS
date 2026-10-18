@@ -18,6 +18,7 @@ members = [
     # Bibliothèques Ring3 — runtime userspace
     "exo-alloc",
     "generic-rt",
+    "exo-pkg",
     # exo-libc exclu : fork de relibc avec son propre workspace
     # musl-exo exclu : projet C (pas Cargo)
 ]

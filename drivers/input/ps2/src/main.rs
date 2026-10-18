@@ -18,6 +18,10 @@ const IRQ_KEYBOARD_LINE: u64 = 1;
 #[cfg(target_os = "none")]
 const IRQ_KEYBOARD_VECTOR: u64 = 33;
 #[cfg(target_os = "none")]
+const IRQ_MOUSE_LINE: u64 = 12;
+#[cfg(target_os = "none")]
+const IRQ_MOUSE_VECTOR: u64 = 44;
+#[cfg(target_os = "none")]
 const IRQ_SOURCE_IOAPIC_EDGE: u64 = 0;
 #[cfg(target_os = "none")]
 const IRQ_ACK_HANDLED: u64 = 0;
@@ -130,6 +134,22 @@ fn register_keyboard_irq() -> i64 {
 }
 
 #[cfg(target_os = "none")]
+fn register_mouse_irq() -> i64 {
+    let endpoint_lo = syscall::PS2_DRIVER_IRQ_CHANNEL << 32;
+    unsafe {
+        syscall::syscall6(
+            syscall::SYS_IRQ_REGISTER,
+            IRQ_MOUSE_LINE,
+            endpoint_lo,
+            0,
+            IRQ_SOURCE_IOAPIC_EDGE,
+            0,
+            0,
+        )
+    }
+}
+
+#[cfg(target_os = "none")]
 fn ack_keyboard_irq(reg_id: u64, wave_gen: u64) {
     let _ = unsafe {
         syscall::syscall5(
@@ -144,7 +164,21 @@ fn ack_keyboard_irq(reg_id: u64, wave_gen: u64) {
 }
 
 #[cfg(target_os = "none")]
-fn recv_irq_notification(endpoint: u64, buf: &mut [u8; 9]) -> Option<u64> {
+fn ack_mouse_irq(reg_id: u64, wave_gen: u64) {
+    let _ = unsafe {
+        syscall::syscall5(
+            syscall::SYS_IRQ_ACK,
+            IRQ_MOUSE_VECTOR,
+            reg_id,
+            0,
+            wave_gen,
+            IRQ_ACK_HANDLED,
+        )
+    };
+}
+
+#[cfg(target_os = "none")]
+fn recv_irq_notification(endpoint: u64, buf: &mut [u8; 9]) -> Option<(u64, u64)> {
     let rc = unsafe {
         syscall::syscall4(
             syscall::SYS_IPC_RECV,
@@ -154,12 +188,14 @@ fn recv_irq_notification(endpoint: u64, buf: &mut [u8; 9]) -> Option<u64> {
             syscall::IPC_FLAG_TIMEOUT | IRQ_RECV_TIMEOUT_MS,
         )
     };
-    if rc < 9 || buf[0] as u64 != IRQ_KEYBOARD_VECTOR {
+    if rc < 9 {
         return None;
     }
-    Some(u64::from_le_bytes([
+    let vector = buf[0] as u64;
+    let wave = u64::from_le_bytes([
         buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8],
-    ]))
+    ]);
+    Some((vector, wave))
 }
 
 #[cfg(target_os = "none")]
@@ -222,15 +258,27 @@ fn push_input_event(event: InputEvent) {
 }
 
 #[cfg(target_os = "none")]
-fn drain_controller(controller: &mut I8042<SyscallPorts>, keyboard: &mut Ps2Keyboard) -> bool {
+fn drain_controller(
+    controller: &mut I8042<SyscallPorts>,
+    keyboard: &mut Ps2Keyboard,
+    mouse: &mut exo_ps2_input::mouse::Ps2Mouse,
+) -> bool {
     let mut drained_any = false;
     let mut drained = 0usize;
+    let mut mouse_events = [None; 5];
     while drained < IRQ_DRAIN_LIMIT {
-        let Some(byte) = controller.poll_byte() else {
+        let Some((byte, is_aux)) = controller.poll_byte_with_origin() else {
             break;
         };
         drained_any = true;
-        if let Some(event) = keyboard.feed(byte) {
+        if is_aux {
+            let count = mouse.feed(byte, &mut mouse_events);
+            for i in 0..count {
+                if let Some(event) = mouse_events[i].take() {
+                    push_input_event(event);
+                }
+            }
+        } else if let Some(event) = keyboard.feed(byte) {
             push_input_event(event);
         }
         drained += 1;
@@ -252,9 +300,16 @@ pub extern "C" fn _start() -> ! {
 
     let irq_reg_id = register_keyboard_irq();
     if irq_reg_id < 0 {
-        boot_log(b"ps2_driver: irq register failed\n");
+        boot_log(b"ps2_driver: irq keyboard register failed\n");
     } else {
-        boot_log(b"ps2_driver: irq registered\n");
+        boot_log(b"ps2_driver: irq keyboard registered\n");
+    }
+
+    let mouse_irq_reg_id = register_mouse_irq();
+    if mouse_irq_reg_id < 0 {
+        boot_log(b"ps2_driver: irq mouse register failed\n");
+    } else {
+        boot_log(b"ps2_driver: irq mouse registered\n");
     }
 
     let mut controller = I8042::new(SyscallPorts);
@@ -265,14 +320,17 @@ pub extern "C" fn _start() -> ! {
         boot_log(b"ps2_driver: i8042 init timeout, using translated set1\n");
         Ps2Keyboard::new_set1()
     };
+    let mut mouse = exo_ps2_input::mouse::Ps2Mouse::new();
 
     let mut irq_buf = [0u8; 9];
     loop {
         let wave = recv_irq_notification(endpoint, &mut irq_buf);
-        let drained = drain_controller(&mut controller, &mut keyboard);
-        if let Some(wave_gen) = wave {
-            if irq_reg_id >= 0 {
+        let drained = drain_controller(&mut controller, &mut keyboard, &mut mouse);
+        if let Some((vector, wave_gen)) = wave {
+            if vector == IRQ_KEYBOARD_VECTOR && irq_reg_id >= 0 {
                 ack_keyboard_irq(irq_reg_id as u64, wave_gen);
+            } else if vector == IRQ_MOUSE_VECTOR && mouse_irq_reg_id >= 0 {
+                ack_mouse_irq(mouse_irq_reg_id as u64, wave_gen);
             }
         }
         if wave.is_none() && !drained {

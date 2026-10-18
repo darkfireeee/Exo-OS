@@ -36,6 +36,10 @@ pub mod constants;
 pub mod epoll;
 /// Codes d'erreur unifiés ExoOS/POSIX.
 pub mod error;
+/// Vecteur de taille fixe no_std (`FixedVec<T, N>`).
+pub mod fixed_vec;
+/// Identifiants typés stricts (Pid, Tid, Bdf, EndpointId).
+pub mod ids;
 /// Chaîne de taille fixe no_std (`FixedString<N>`).
 pub mod fixed_string;
 /// Vecteurs d'E/S `IoVec` compatibles readv/writev.
@@ -46,6 +50,8 @@ pub mod ipc_msg;
 pub mod object_id;
 /// Descripteur poll(2) ABI Linux (`PollFd`).
 pub mod pollfd;
+/// Constantes et layout SSR ExoPhoenix.
+pub mod ssr_layout;
 
 // ─── Réexports publics ────────────────────────────────────────────────────────
 pub use addr::{IoVirtAddr, PhysAddr, VirtAddr};
@@ -54,7 +60,10 @@ pub use constants::{EXOFS_PAGE_SIZE, ZERO_BLOB_ID_4K};
 pub use epoll::EpollEventAbi;
 pub use error::ExoError;
 pub use fixed_string::{FixedString, PathBuf, ServiceName};
+pub use fixed_vec::FixedVec;
+pub use ids::{Bdf, EndpointId, Pid, Tid};
 pub use iovec::IoVec;
 pub use ipc_msg::{IpcEndpoint, IpcMessage};
 pub use object_id::ObjectId;
 pub use pollfd::PollFd;
+pub use ssr_layout::{SsrHeader, SSR_BASE_PHYS, SSR_MAGIC, SSR_MAX_CORES_LAYOUT, SSR_SIZE};

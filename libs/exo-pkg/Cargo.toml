@@ -1,0 +1,18 @@
+[package]
+name = "exo-pkg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+description = "Format de paquet natif Exo-OS et vérification de signature"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+exo-syscall-abi = { path = "../../servers/syscall_abi" }
+
+[features]
+default = []

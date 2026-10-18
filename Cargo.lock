@@ -304,6 +304,8 @@ dependencies = [
 name = "exo-ahci"
 version = "0.1.0"
 dependencies = [
+ "exo-storage-common-hal",
+ "exo-syscall-abi",
  "log",
  "spin",
 ]
@@ -428,6 +430,8 @@ dependencies = [
 name = "exo-nvme"
 version = "0.1.0"
 dependencies = [
+ "exo-storage-common-hal",
+ "exo-syscall-abi",
  "log",
  "spin",
 ]
@@ -509,12 +513,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-storage-common-hal"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
 name = "exo-syscall-abi"
 version = "0.1.0"
 
 [[package]]
 name = "exo-tty"
 version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+]
 
 [[package]]
 name = "exo-tty-server"
@@ -550,11 +565,16 @@ dependencies = [
 [[package]]
 name = "exo-vga-text"
 version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+]
 
 [[package]]
 name = "exo-virtio-blk"
 version = "0.1.0"
 dependencies = [
+ "exo-storage-common-hal",
+ "exo-syscall-abi",
  "log",
  "spin",
  "virtio-drivers",

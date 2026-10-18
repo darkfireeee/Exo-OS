@@ -16,6 +16,7 @@
 //! - `dma_alloc` échoue proprement (fail-closed) plutôt que de fabriquer une
 //!   adresse physique fictive.
 
+#[cfg(test)]
 extern crate alloc;
 
 pub mod cmd;
@@ -445,5 +446,59 @@ fn submit_and_poll<H: NvmeHal>(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Implémentations pour ExoUserspaceStorageHal
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl NvmeHal for exo_storage_common_hal::ExoUserspaceStorageHal {
+    fn dma_alloc(&self, pages: usize) -> Option<DmaRegion> {
+        let (phys, virt) = self.dma_alloc(pages)?;
+        Some(DmaRegion { phys, virt, pages })
+    }
+
+    unsafe fn dma_dealloc(&self, region: DmaRegion) {
+        self.dma_dealloc(region.phys, region.pages);
+    }
+
+    fn mmio_read32(&self, off: usize) -> u32 {
+        self.mmio_read32(off)
+    }
+
+    fn mmio_write32(&self, off: usize, val: u32) {
+        self.mmio_write32(off, val)
+    }
+
+    fn mmio_read64(&self, off: usize) -> u64 {
+        self.mmio_read64(off)
+    }
+
+    fn mmio_write64(&self, off: usize, val: u64) {
+        self.mmio_write64(off, val)
+    }
+}
+
+impl exo_storage_common_hal::BlockDeviceOps for NvmeDevice<exo_storage_common_hal::ExoUserspaceStorageHal> {
+    fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), i64> {
+        self.read_block(lba, buf).map_err(|_| -5)
+    }
+
+    fn write_block(&mut self, lba: u64, buf: &[u8]) -> Result<(), i64> {
+        self.write_block(lba, buf).map_err(|_| -5)
+    }
+
+    fn flush(&mut self) -> Result<(), i64> {
+        self.flush().map_err(|_| -5)
+    }
+
+    fn total_blocks(&self) -> u64 {
+        self.total_blocks()
+    }
+
+    fn block_size(&self) -> u32 {
+        self.block_size()
+    }
+}
+
 #[cfg(test)]
 mod tests;
+

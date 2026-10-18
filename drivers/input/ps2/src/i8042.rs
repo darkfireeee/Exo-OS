@@ -6,6 +6,7 @@ pub const COMMAND_PORT: u16 = 0x64;
 
 pub const STATUS_OUTPUT_FULL: u8 = 1 << 0;
 pub const STATUS_INPUT_FULL: u8 = 1 << 1;
+pub const STATUS_AUX_DATA: u8 = 1 << 5;
 
 pub const CMD_READ_CONFIG: u8 = 0x20;
 pub const CMD_WRITE_CONFIG: u8 = 0x60;
@@ -66,6 +67,16 @@ impl<P: PortIo> I8042<P> {
     pub fn poll_byte(&mut self) -> Option<u8> {
         if self.io.read_u8(STATUS_PORT) & STATUS_OUTPUT_FULL != 0 {
             Some(self.io.read_u8(DATA_PORT))
+        } else {
+            None
+        }
+    }
+
+    pub fn poll_byte_with_origin(&mut self) -> Option<(u8, bool)> {
+        let status = self.io.read_u8(STATUS_PORT);
+        if status & STATUS_OUTPUT_FULL != 0 {
+            let is_aux = (status & STATUS_AUX_DATA) != 0;
+            Some((self.io.read_u8(DATA_PORT), is_aux))
         } else {
             None
         }

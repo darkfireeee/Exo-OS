@@ -9,9 +9,17 @@ publish.workspace = true
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[[bin]]
+name = "nvme_driver"
+path = "src/main.rs"
+test = false
+bench = false
+
 [dependencies]
 spin = { workspace = true }
 log = { workspace = true }
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo-storage-common-hal = { path = "../common_hal" }
 
 [features]
 default = []

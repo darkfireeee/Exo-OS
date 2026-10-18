@@ -23,6 +23,7 @@ members = [
     "drivers/storage/virtio_blk",
     "drivers/storage/nvme",
     "drivers/storage/ahci",
+    "drivers/storage/common_hal",
     "drivers/storage/fscrypt",
     "drivers/storage/partition",
     "drivers/security/verity",
