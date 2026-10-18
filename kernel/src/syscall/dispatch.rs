@@ -272,7 +272,11 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             ),
         );
         frame.rax = result as u64;
-        post_dispatch(frame, tsc_start);
+        // Comme pour fork(), le parent vient de reprendre après une attente
+        // vfork et sa SyscallFrame est encore la source de vérité du retour
+        // SYSRETQ. Ne pas préempter ici : un changement de contexte avant la
+        // restauration ASM du frame peut réutiliser/corrompre cette pile.
+        post_dispatch_defer_resched(frame, tsc_start);
         return;
     }
 
@@ -977,11 +981,17 @@ fn handle_execve_inplace(frame: &mut SyscallFrame) {
             unsafe { core::arch::asm!("out 0xE9, al", in("al") b'K', options(nomem, nostack)) };
             let new_kernel_cr3 = thread.sched_tcb.cr3_phys;
             let new_user_cr3 = thread.sched_tcb.kpti_user_cr3();
-            crate::arch::x86_64::spectre::kpti::set_current_cr3(new_kernel_cr3, new_user_cr3);
-            if !crate::arch::x86_64::spectre::kpti::kpti_enabled() {
-                // KPTI désactivé : gs:[0x48] vaut 0 et le stub saute le switch
-                // CR3. On bascule donc immédiatement sur la nouvelle image (la
-                // moitié noyau est partagée, l'exécution noyau reste valide).
+            if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+                crate::arch::x86_64::spectre::kpti::set_current_cr3(new_kernel_cr3, new_user_cr3);
+            } else {
+                // KPTI désactivé : gs:[0x40] et gs:[0x48] DOIVENT rester à 0.
+                // Appeler set_current_cr3() avec KPTI off écrivait new_kernel_cr3
+                // dans gs:[0x40] et 0 dans gs:[0x48] ; comme context_switch() ne
+                // met pas à jour gs:[0x40] quand KPTI est off, toute entrée
+                // syscall/IRQ/exception ultérieure d'un autre processus (PID 1)
+                // rechargeait le CR3 de cet execve depuis gs:[0x40] et revenait
+                // en Ring 3 (gs:[0x48]==0) sur le mauvais espace d'adressage (#25).
+                crate::arch::x86_64::smp::percpu::set_kpti_cr3_slots(0, 0);
                 // SAFETY: new_kernel_cr3 = PML4 de la nouvelle image, moitié
                 // noyau synchronisée par do_execve(); Ring 0.
                 unsafe {

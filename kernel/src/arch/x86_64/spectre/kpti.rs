@@ -70,6 +70,10 @@ fn current_cpu_slot() -> &'static Cr3Slot {
 /// Enregistre le couple (cr3_kernel, cr3_user) pour le thread courant sur CE CPU.
 /// Doit être appelé après chaque context switch (FIX-KPTI-01).
 pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
+    if !kpti_enabled() {
+        percpu::set_kpti_cr3_slots(0, 0);
+        return;
+    }
     let slot = current_cpu_slot();
     slot.kernel.store(cr3_kernel, Ordering::Release);
     slot.user.store(cr3_user, Ordering::Release);
@@ -216,9 +220,9 @@ pub fn init_kpti() {
                 );
             }
             crate::memory::virt::page_table::kpti_split::KPTI.enable();
+            KPTI_ENABLED.store(true, Ordering::Release);
             // FIX-KPTI-01 : initialiser le slot per-CPU lors de l'activation.
             set_current_cr3(kernel_pml4_phys.as_u64(), user_pml4_phys.as_u64());
-            KPTI_ENABLED.store(true, Ordering::Release);
         }
         Err(_) => {
             log::warn!(

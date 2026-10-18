@@ -475,11 +475,11 @@ fn release_leaf_frame(entry: PageTableEntry) {
     };
     let remaining = COW_TRACKER.dec(frame);
     // `track_cow_frame()` épingle la frame tant qu'elle est réellement
-    // partagée. Après le teardown d'un enfant, le compteur passe de 2 à 1 :
-    // le parent est alors l'unique propriétaire logique et la réservation CoW
-    // doit être retirée. Sinon chaque fork laisse ses pages héritées
-    // RESERVED/PINNED et finit par épuiser le buddy allocator.
-    if remaining <= 1 {
+    // partagée. Quand remaining == 0, la frame n'est plus référencée par
+    // aucun processus : on peut retirer la réservation. Tant que remaining > 0,
+    // la frame est encore mappée par au moins un processus (par ex. le parent)
+    // et doit impérativement rester RESERVED/PINNED.
+    if remaining == 0 {
         crate::memory::physical::allocator::buddy::unreserve_frame(frame);
     }
     // `remaining == 0` est la dernière référence explicitement suivie : la
@@ -647,7 +647,7 @@ fn release_huge_frame(entry: PageTableEntry, order: usize) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    if remaining <= 1 {
+    if remaining == 0 {
         crate::memory::physical::allocator::buddy::unreserve_frame(frame);
     }
     let will_free = remaining == 0 || (remaining == u32::MAX && !entry.is_cow());

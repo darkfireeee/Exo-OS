@@ -250,9 +250,6 @@ fn should_quiet_console_after_ready(service_name: &str) -> bool {
 ///
 /// Retourne le PID du fils, ou `0` si le lancement échoue.
 pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
-    let argv: [u64; 2] = [bin_path.as_ptr() as u64, 0];
-    let envp: [u64; 1] = [0];
-
     log::service_status(b"init: start ", service_name, b"\n");
     // Le chemin VFORK du noyau utilise désormais un espace CoW séparé, mais
     // conserve la garantie essentielle : PID 1 ne reprend qu'après execve().
@@ -266,11 +263,14 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
 
     if child_pid == 0 {
         let _ = syscall::syscall2(syscall::SYS_SETPGID, 0, 0);
+        // Les services Ring1 ne consomment pas argv/envp. Passer NULL évite
+        // une lecture de la pile utilisateur CoW héritée de PID 1 avant que
+        // execve() ne remplace l'espace d'adressage de l'enfant.
         let rc = syscall::syscall3(
             syscall::SYS_EXECVE,
             bin_path.as_ptr() as u64,
-            argv.as_ptr() as u64,
-            envp.as_ptr() as u64,
+            0,
+            0,
         );
         if rc < 0 {
             log::service_error(b"init-child: exec failed ", service_name, rc);
@@ -286,15 +286,26 @@ pub unsafe fn spawn_service(service_name: &str, bin_path: &[u8]) -> u32 {
         log::service_pid(b"init: spawned ", service_name, child_pid as u32);
     }
 
-    // La synchronisation post-exec est déjà garantie par SYS_VFORK : le noyau
-    // ne réveille PID 1 qu'après EXEC_DONE. Une seconde barrière nanosleep ici
-    // est redondante et force inutilement le chemin timer/page-fault pendant
-    // le bootstrap ; la readiness IPC ci-dessous reste la barrière fonctionnelle.
+    // FIX #25 — Barrière post-execve : bloquer init pendant que l'enfant
+    // termine son démarrage utilisateur (demand-paging .text + IPC_REGISTER).
+    // SYS_VFORK garantit la synchronisation pendant execve() seulement ;
+    // la course de co-planification post-execve corrompt une frame vivante
+    // d'init si on ne bloque pas ici.
+    if !owns_interactive_console(service_name) {
+        let stabilise = Timespec {
+            tv_sec: 0,
+            tv_nsec: 500_000_000, // 500 ms — validé session 2026-06-21
+        };
+        let _ = unsafe {
+            syscall::syscall2(
+                syscall::SYS_NANOSLEEP,
+                &stabilise as *const Timespec as u64,
+                0,
+            )
+        };
+    }
+
     diag_step(b"<P1 post-exec>", u64::MAX);
-    // DIAG-V9 est conservé pour les campagnes de bissection explicites, mais
-    // ne doit pas lire la page .text de boot_services dans le chemin normal :
-    // après le retour synchronisé de vfork, cette instrumentation ajoutait une
-    // fenêtre fragile avant la reprise du graphe de services.
     child_pid as u32
 }
 
@@ -430,6 +441,10 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
         let mut launched = false;
         let mut idx = 0usize;
         while idx < services.len() {
+            if (ready_mask & (1u64 << idx)) != 0 {
+                idx += 1;
+                continue;
+            }
             let service = &services[idx];
             if service.current_pid() != 0 {
                 idx += 1;

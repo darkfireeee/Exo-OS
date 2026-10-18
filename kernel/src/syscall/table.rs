@@ -3208,68 +3208,7 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
             crate::memory::physical::allocator::buddy::diag_ff_log(b"<NS1-FF");
         }
     }
-    // DIAG-CKP v2 (bisect #25) : snapshot de la page de pile d'init AVANT le
-    // sommeil — PTE brute + contenu + sentinelle .text. Toute différence au
-    // réveil désigne le mécanisme : <CKPpte> = PTE remappée (H1), <CKP!> =
-    // frame physique réécrite (H2), <CKT!> = .text corrompu.
-    #[cfg(target_arch = "x86_64")]
-    let ckp_active = if crate::syscall::fast_path::syscall_current_pid() == 1 {
-        let page = req_ptr & !0xfffu64;
-        // SAFETY: réservé au thread PID 1 (mono-CPU) — accès exclusif.
-        unsafe {
-            *core::ptr::addr_of_mut!(DIAG_CKP_PTE_OLD) = diag_pid1_read_pte(page);
-            let kt_pte0 = diag_pid1_read_pte(DIAG_CKT_PAGE);
-            *core::ptr::addr_of_mut!(DIAG_CKT_PTE_OLD) = kt_pte0;
-            // Ne checksummer la page .text que si elle est présente — une lecture
-            // volatile sur une page non mappée fauterait en kernel.
-            *core::ptr::addr_of_mut!(DIAG_CKT_SUM_OLD) = if kt_pte0 != 0 {
-                diag_pid1_text_checksum()
-            } else {
-                0
-            };
-        }
-        diag_ckp_page(req_ptr, true);
-        true
-    } else {
-        false
-    };
     let sleep_ok = crate::scheduler::timer::sleep_ns(ns);
-    #[cfg(target_arch = "x86_64")]
-    if ckp_active {
-        // FIX-KPTI-RESYNC : avant toute vérification, resynchroniser/publier
-        // les CR3 d'init (défense anti-désync de la table d'exécution Ring 3).
-        diag_pid1_kpti_resync();
-        let page = req_ptr & !0xfffu64;
-        let pte_old = unsafe { *core::ptr::addr_of!(DIAG_CKP_PTE_OLD) };
-        let pte_new = diag_pid1_read_pte(page);
-        if pte_new != pte_old {
-            // H1 : la PTE de la page de pile d'init a été REMAPPÉE pendant le
-            // sommeil — un chemin a écrit dans les tables de pages d'init.
-            crate::arch::x86_64::terminal::debug_write(b"<CKPpte old=0x");
-            diag_ns_hex(pte_old);
-            crate::arch::x86_64::terminal::debug_write(b" new=0x");
-            diag_ns_hex(pte_new);
-            crate::arch::x86_64::terminal::debug_write(b">\n");
-        }
-        diag_ckp_page(req_ptr, false);
-        // Sentinelle .text : page du <UD1> (FF FF) — checksum uniquement si
-        // la page est présente.
-        let kt_pte_old = unsafe { *core::ptr::addr_of!(DIAG_CKT_PTE_OLD) };
-        let kt_sum_old = unsafe { *core::ptr::addr_of!(DIAG_CKT_SUM_OLD) };
-        let kt_pte_new = diag_pid1_read_pte(DIAG_CKT_PAGE);
-        let kt_sum_new = if kt_pte_new != 0 { diag_pid1_text_checksum() } else { 0 };
-        if kt_sum_new != kt_sum_old || kt_pte_new != kt_pte_old {
-            crate::arch::x86_64::terminal::debug_write(b"<CKT! sum_old=0x");
-            diag_ns_hex(kt_sum_old);
-            crate::arch::x86_64::terminal::debug_write(b" sum_new=0x");
-            diag_ns_hex(kt_sum_new);
-            crate::arch::x86_64::terminal::debug_write(b" pte_old=0x");
-            diag_ns_hex(kt_pte_old);
-            crate::arch::x86_64::terminal::debug_write(b" pte_new=0x");
-            diag_ns_hex(kt_pte_new);
-            crate::arch::x86_64::terminal::debug_write(b">\n");
-        }
-    }
     #[cfg(target_arch = "x86_64")]
     {
         diag_ns_pid1(b"<NS2 ok=0x", sleep_ok as u64);
