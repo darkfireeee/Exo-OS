@@ -176,33 +176,40 @@ L'architecture globale est formellement spécifiée et prouvée via 12 modules T
 
 ---
 
-## Structure du Dépôt
+## Structure du Dépôt & Modularité
+
+Le noyau ExoOS applique une ségrégation modulaire stricte où chaque grand sous-système est subdivisé en sous-modules spécialisés à responsabilité unique, indexés par un `mod.rs` sans god files (> 900 lignes) :
 
 ```text
 Exo-OS/
 ├── bootloader/             # Configuration GRUB 2 et Multiboot2
 ├── kernel/                 # Ring 0 — Microkernel hybride Rust no_std
-│   ├── src/arch/x86_64/    # Boot BSP/AP, GDT/IDT, KASLR, Page Tables, HPET/TSC
-│   ├── src/memory/         # Allocateur Buddy, SLUB, CoW, VMA, EmergencyPool
-│   ├── src/scheduler/      # Ordonnanceur SMP, KTCB, switch de contexte, signaux
-│   ├── src/security/       # ExoShield, ExoSeal, ExoCage (CET), ExoKairos
-│   ├── src/ipc/            # SpscRing, CapTokens, Zero-Copy SHM
-│   ├── src/fs/exofs/       # Système de fichiers ExoFS, cache de blocs, journalisation
-│   └── src/exophoenix/     # Dual-Kernel Sentinel & résurrection
-├── servers/                # Serveurs Ring 1 et espace utilisateur privilégié
-│   ├── init_server/        # PID 1 — Superviseur et bootstrap des services
+│   ├── src/arch/x86_64/    # Boot BSP/AP, GDT/IDT, KASLR, Page Tables, HPET/TSC, Framebuffer early
+│   ├── src/memory/         # Allocateur Buddy modulaire (node, stats, zone), SLUB, CoW, VMA, KPTI
+│   ├── src/process/        # PCB modulaire (types, file_table), registry, signaux, cycle de vie
+│   ├── src/scheduler/      # Ordonnanceur SMP, KTCB, switch de contexte, timers
+│   ├── src/security/       # ExoShield, ExoSeal, ExoCage (CET), Zero-Trust Pledge, ExoKairos
+│   ├── src/ipc/            # SpscRing, CapTokens, Zero-Copy SHM, mailboxes brutes
+│   ├── src/fs/exofs/       # Système de fichiers ExoFS, cache de blocs, object_fd modulaire, journalisation
+│   ├── src/syscall/        # Table de dispatch O(1), dispatch modulaire, fs/ & ipc/ ségrégués, fs_bridge modulaire
+│   └── src/exophoenix/     # Dual-Kernel Sentinel & Stage0 modulaire (features, scan, routing, isolation)
+├── servers/                # Serveurs Ring 1 et espace utilisateur supervisé
+│   ├── init_server/        # PID 1 — Superviseur et bootstrap ordonnancé des services
 │   ├── ipc_router/         # PID 2 — Annuaire d'endpoints et routage IPC
 │   ├── memory_server/      # PID 3 — Gestionnaire mémoire Ring 1
 │   ├── vfs_server/         # PID 5 — Serveur VFS
-│   ├── crypto_server/      # PID 10 — Crypto-serveur et isolation TLS
-│   ├── network_server/     # PID 14 — Pile réseau ExoNet V5
-│   ├── tty_server/         # PID 15 — Serveur TTY et émulation console
-│   ├── exo_shield/         # PID 17 — Confinement IA, NGAV & Forensics
-│   └── exosh/              # PID 18 — Shell interactif exosh
-├── drivers/                # Pilotes Ring 1 (PS/2, VirtIO-Net, e1000, Loopback, FB)
-├── libs/                   # Bibliothèques (exo_syscall_abi, exo_libc)
-├── userspace/apps/         # Utilitaires Coreutils (cat, grep, ls, ps, top, wc...)
-└── docs/                   # Documentation technique, audits et preuves TLA+
+│   ├── device_server/      # PID 6 — Serveur de périphériques matériels
+│   ├── scheduler_server/   # PID 7 — Ordonnanceur Ring 1
+│   ├── input_server/       # PID 9 — Serveur d'entrées
+│   ├── fb_server/          # PID 10 — Serveur Framebuffer graphique
+│   ├── crypto_server/      # PID 8 — Crypto-serveur et isolation TLS
+│   ├── network_server/     # Pile réseau ExoNet V5 (NetGrant ABI, TCP/UDP/IP)
+│   ├── tty_server/         # Serveur TTY et émulation console
+│   └── exo_shield/         # Module NGAV, Confinement IA, Détection d'anomalies & Forensics
+├── drivers/                # Pilotes Ring 1 (PS/2, VirtIO-Net, e1000, Loopback, FB, VirtIO-Blk)
+├── libs/                   # Bibliothèques (exo_syscall_abi, exo_libc, exo_network_common)
+├── userspace/apps/         # Utilitaires Coreutils (cat, grep, ls, ps, top, wc...) & exosh
+└── docs/                   # Documentation technique, plans d'architecture V5 et preuves TLA+
 ```
 
 ---
