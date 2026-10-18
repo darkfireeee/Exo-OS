@@ -7,6 +7,7 @@ use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 
 mod echo;
+pub mod grant_loop;
 mod state;
 
 const SERVER_ENDPOINT_ID: u64 = 15;

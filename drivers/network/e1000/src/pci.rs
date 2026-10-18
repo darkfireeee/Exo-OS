@@ -71,6 +71,16 @@ pub fn discover_and_map() -> Result<PciDevice, i64> {
         return Err(bus_master);
     }
 
+    // Invariant S24 TLA+ : SYS_PCI_SET_TOPOLOGY doit impérativement précéder SYS_IRQ_REGISTER
+    let _ = unsafe {
+        syscall::syscall3(
+            syscall::SYS_PCI_SET_TOPOLOGY,
+            bdf_raw as u64,
+            0,
+            1,
+        )
+    };
+
     Ok(PciDevice {
         bdf_raw,
         bar0_phys: info.bar0_phys,
@@ -78,4 +88,20 @@ pub fn discover_and_map() -> Result<PciDevice, i64> {
         bar0_virt: mapped as u64 as *mut u8,
         irq_line: info.irq_line,
     })
+}
+
+pub fn set_topology(bdf_raw: u32, parent_bdf_raw: u32) -> Result<(), i64> {
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_PCI_SET_TOPOLOGY,
+            bdf_raw as u64,
+            parent_bdf_raw as u64,
+            1,
+        )
+    };
+    if rc < 0 {
+        Err(rc)
+    } else {
+        Ok(())
+    }
 }

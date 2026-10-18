@@ -14,3 +14,4 @@ bench = false
 
 [dependencies]
 exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo-network-common = { path = "../common" }

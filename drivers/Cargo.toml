@@ -10,3 +10,4 @@ crate-type = ["rlib"]
 
 [dependencies]
 spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }
+exo-syscall-abi = { path = "../servers/syscall_abi" }

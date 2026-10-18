@@ -1,6 +1,7 @@
 pub struct LoopbackState {
     rx_released: u64,
     tx_echoed: u64,
+    pub grant_engine: crate::grant_loop::LoopbackGrantEngine,
 }
 
 impl LoopbackState {
@@ -8,6 +9,7 @@ impl LoopbackState {
         Self {
             rx_released: 0,
             tx_echoed: 0,
+            grant_engine: crate::grant_loop::LoopbackGrantEngine::new(),
         }
     }
 

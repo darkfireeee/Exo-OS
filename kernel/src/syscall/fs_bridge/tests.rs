@@ -1,5 +1,7 @@
 //! Tests unitaires du pont FS
 use super::*;
+use crate::fs::exofs::cache::BLOB_CACHE;
+use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
 
 #[cfg(test)]
 mod tests {

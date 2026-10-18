@@ -12,6 +12,7 @@ default-members = [
 ]
 members = [
     "kernel",
+    "drivers",
     "drivers/input/ps2",
     "drivers/tty",
     "drivers/display/vga",

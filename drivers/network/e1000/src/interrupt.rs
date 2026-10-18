@@ -53,3 +53,23 @@ pub fn register_irq(irq_line: u8, endpoint_id: u64, bdf_raw: u32) -> Result<u64,
         Ok(rc as u64)
     }
 }
+
+/// Acquittement explicite de l'IRQ conforme au modèle TLA+ IrqRouting.tla
+pub fn ack_irq(irq_line: u8, reg_id: u64, handler_gen: u64, wave_gen: u64, handled: bool) -> Result<(), i64> {
+    let result_raw = if handled { 0 } else { 1 };
+    let rc = unsafe {
+        syscall::syscall5(
+            syscall::SYS_IRQ_ACK,
+            irq_line as u64 + 32,
+            reg_id,
+            handler_gen,
+            wave_gen,
+            result_raw,
+        )
+    };
+    if rc < 0 {
+        Err(rc)
+    } else {
+        Ok(())
+    }
+}

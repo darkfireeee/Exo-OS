@@ -75,6 +75,7 @@ impl Drop for MockNvme {
 
 // ── Lecture/écriture mémoire « device » via phys==virt ──────────────────────
 
+#[allow(dead_code)]
 unsafe fn rd32(phys: u64, dword_index: usize) -> u32 {
     let p = (phys as *const u32).add(dword_index);
     core::ptr::read_volatile(p)

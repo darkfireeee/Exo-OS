@@ -129,6 +129,16 @@ fn find_one(device_id: u16) -> Result<PciDevice, i64> {
         return Err(syscall::ENODEV);
     }
 
+    // Invariant S24 TLA+ : SYS_PCI_SET_TOPOLOGY doit impérativement précéder SYS_IRQ_REGISTER
+    let _ = unsafe {
+        syscall::syscall3(
+            syscall::SYS_PCI_SET_TOPOLOGY,
+            bdf_raw as u64,
+            0,
+            1,
+        )
+    };
+
     Ok(PciDevice {
         bdf_raw,
         irq_line: info.irq_line,
@@ -138,6 +148,22 @@ fn find_one(device_id: u16) -> Result<PciDevice, i64> {
         isr_cfg: regions.isr_cfg,
         device_cfg: regions.device_cfg,
     })
+}
+
+pub fn set_topology(bdf_raw: u32, parent_bdf_raw: u32) -> Result<(), i64> {
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_PCI_SET_TOPOLOGY,
+            bdf_raw as u64,
+            parent_bdf_raw as u64,
+            1,
+        )
+    };
+    if rc < 0 {
+        Err(rc)
+    } else {
+        Ok(())
+    }
 }
 
 fn parse_capabilities(

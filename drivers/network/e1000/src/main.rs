@@ -6,6 +6,7 @@ use core::panic::PanicInfo;
 
 use exo_syscall_abi as syscall;
 
+mod grant_adapter;
 mod interrupt;
 mod mac;
 mod pci;
@@ -13,6 +14,7 @@ mod regs;
 mod rx;
 mod tx;
 
+use grant_adapter::E1000GrantAdapter;
 use rx::{RxRing, RX_RING_SIZE};
 use tx::{TxRing, TX_RING_SIZE};
 
@@ -129,6 +131,7 @@ struct E1000Driver {
     pool_ready: bool,
     saw_tx: bool,
     saw_rx: bool,
+    grant_adapter: E1000GrantAdapter,
 }
 
 impl E1000Driver {
@@ -149,6 +152,7 @@ impl E1000Driver {
             pool_ready: false,
             saw_tx: false,
             saw_rx: false,
+            grant_adapter: E1000GrantAdapter::new(),
         }
     }
 

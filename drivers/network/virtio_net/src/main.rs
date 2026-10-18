@@ -7,12 +7,14 @@ use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 
 mod config;
+mod grant_bridge;
 mod interrupt;
 mod mac;
 mod net;
 mod pci;
 mod virtqueue;
 
+use grant_bridge::VirtioNetGrantBridge;
 use config::{
     PAGE_SIZE, VIRTIO_F_VERSION_1, VIRTIO_NET_F_MAC, VIRTIO_PCI_COMMON_DEVICE_FEATURE,
     VIRTIO_PCI_COMMON_DEVICE_FEATURE_SELECT, VIRTIO_PCI_COMMON_DEVICE_STATUS,
@@ -117,6 +119,7 @@ struct VirtioHardware {
     saw_tx: bool,
     saw_tx_complete: bool,
     saw_rx: bool,
+    grant_bridge: VirtioNetGrantBridge,
 }
 
 impl VirtioHardware {
@@ -147,6 +150,7 @@ impl VirtioHardware {
             saw_tx: false,
             saw_tx_complete: false,
             saw_rx: false,
+            grant_bridge: VirtioNetGrantBridge::new(config::VIRTIO_NET_HDR_SIZE_MODERN),
         }
     }
 

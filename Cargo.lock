@@ -333,6 +333,7 @@ dependencies = [
 name = "exo-e1000-driver"
 version = "0.1.0"
 dependencies = [
+ "exo-network-common",
  "exo-syscall-abi",
 ]
 
@@ -398,6 +399,7 @@ version = "0.1.0"
 name = "exo-loopback-driver"
 version = "0.1.0"
 dependencies = [
+ "exo-network-common",
  "exo-syscall-abi",
 ]
 
@@ -427,6 +429,14 @@ name = "exo-nvme"
 version = "0.1.0"
 dependencies = [
  "log",
+ "spin",
+]
+
+[[package]]
+name = "exo-os-drivers"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
  "spin",
 ]
 
@@ -561,6 +571,7 @@ dependencies = [
 name = "exo-virtio-net-driver"
 version = "0.1.0"
 dependencies = [
+ "exo-network-common",
  "exo-syscall-abi",
 ]
 
