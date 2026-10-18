@@ -7,9 +7,17 @@ use super::handler::FaultAllocator;
 use super::{FaultContext, FaultResult};
 use crate::memory::core::{PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::cow::tracker::COW_TRACKER;
-use crate::memory::virt::address_space::tlb::flush_single;
+use crate::memory::virt::address_space::tlb::{shootdown_sync, TlbFlushType};
 use crate::memory::virt::page_table::PageTableEntry;
 use crate::memory::virt::vma::VmaDescriptor;
+
+#[inline(always)]
+unsafe fn flush_cow_tlb(page_addr: VirtAddr) {
+    shootdown_sync(
+        TlbFlushType::Single(page_addr),
+        crate::arch::x86_64::smp::smp_cpu_count(),
+    );
+}
 
 /// Traite un CoW fault (write sur page en lecture seule avec flag COW).
 pub fn handle_cow_fault<A: FaultAllocator>(
@@ -52,7 +60,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
                 vma.record_cow_break();
                 // SAFETY: adresse canonique.
                 unsafe {
-                    flush_single(page_addr);
+                    flush_cow_tlb(page_addr);
                 }
                 return FaultResult::Handled;
             }
@@ -61,7 +69,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
                 if actual.is_present() && !actual.is_cow() {
                     // Un autre CPU a déjà restauré l'écriture en place.
                     unsafe {
-                        flush_single(page_addr);
+                        flush_cow_tlb(page_addr);
                     }
                     return FaultResult::Handled;
                 }
@@ -102,7 +110,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             vma.record_cow_break();
             // SAFETY: adresse canonique.
             unsafe {
-                flush_single(page_addr);
+                flush_cow_tlb(page_addr);
             }
             FaultResult::Handled
         }
@@ -112,7 +120,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             if actual.is_present() {
                 // Un autre CPU a probablement gagné la course et a déjà cassé le CoW.
                 unsafe {
-                    flush_single(page_addr);
+                    flush_cow_tlb(page_addr);
                 }
                 FaultResult::Handled
             } else {

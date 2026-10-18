@@ -371,8 +371,10 @@ fn deliver_one(
             }
         }
         SigActionKind::Term | SigActionKind::Core => {
-            // Terminer le processus.
-            let exit_status: u32 = sig_n as u32;
+            // Terminer le processus par un signal (bit 31 = signal, bit 7 = core dump, bits 0..6 = signal).
+            let is_core = matches!(action.kind, SigActionKind::Core);
+            let exit_status: u32 =
+                0x8000_0000 | ((sig_n as u32) & 0x7F) | if is_core { 0x80 } else { 0 };
             do_exit(thread, pcb, exit_status);
         }
     }

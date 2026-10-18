@@ -983,9 +983,47 @@ impl ProcessControlBlock {
             let _ = self.register_thread_ptr(ptr);
         }
     }
+
+    /// Libère tous les threads enregistrés dans ce PCB.
+    /// Appelé lors de la destruction finale du PCB (impl Drop) ou lors d'un reap explicite.
+    pub fn cleanup_all_threads(&self) {
+        let main_ptr = self.main_thread_rawptr.swap(core::ptr::null_mut(), Ordering::AcqRel);
+
+        for slot in &self.thread_slots {
+            let ptr = slot.swap(core::ptr::null_mut(), Ordering::AcqRel);
+            if !ptr.is_null() && ptr != main_ptr {
+                // SAFETY: thread secondaire alloué par Box::into_raw.
+                // Le thread est Dead et retiré de toute runqueue.
+                unsafe {
+                    let thread_box = alloc::boxed::Box::from_raw(ptr);
+                    let tid = thread_box.tid;
+                    drop(thread_box);
+                    crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
+                }
+            }
+        }
+
+        if !main_ptr.is_null() {
+            // SAFETY: main thread alloué par Box::into_raw.
+            // Le processus est Dead/Zombie et n'est plus exécuté par aucun CPU.
+            unsafe {
+                let thread_box = alloc::boxed::Box::from_raw(main_ptr);
+                let tid = thread_box.tid;
+                drop(thread_box);
+                crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
+            }
+        }
+    }
+}
+
+impl Drop for ProcessControlBlock {
+    fn drop(&mut self) {
+        self.cleanup_all_threads();
+    }
 }
 
 // SAFETY: ProcessControlBlock est partagé entre threads du même processus.
 // Tous les champs mutables sont soit atomiques, soit protégés par SpinLock.
 unsafe impl Send for ProcessControlBlock {}
 unsafe impl Sync for ProcessControlBlock {}
+

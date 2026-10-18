@@ -191,6 +191,7 @@ fn apply_domain_permission(pkrs: u64, domain: PksDomain, perm: PksPermission) ->
 #[inline(always)]
 // SAFETY: opération bas-niveau validée — voir documentation du bloc.
 unsafe fn write_pkrs_shadowed(new_val: u64) {
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     // SAFETY: l'appelant garantit Ring 0 et une valeur PKRS valide.
     unsafe {
         wrpkrs(new_val);
@@ -225,6 +226,7 @@ impl Drop for ScopedPkrsAccess {
             return;
         }
 
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
         // SAFETY: la garde ne peut être active que si PKS est disponible et
         // qu'une valeur PKRS précédente valide a été sauvegardée.
         unsafe {

@@ -450,6 +450,7 @@ pub fn exo_ledger_append_p0(action: ActionTag) {
     let idx = P0_USED.load(Ordering::Acquire);
 
     if idx >= P0_ZONE_ENTRIES {
+        drop(_guard);
         if !P0_OVERFLOW_REPORTED.swap(true, Ordering::AcqRel) {
             exo_ledger_append(ActionTag::Custom {
                 tag: 0x5030_4f56_4552_464c,
@@ -499,6 +500,7 @@ pub fn exo_ledger_append_p0(action: ActionTag) {
 /// # ISR-safe
 /// Pas d'allocation, pas de lock. Utilise des atomiques pour le head.
 pub fn exo_ledger_append(action: ActionTag) {
+    let _guard = P0_CHAIN_LOCK.lock();
     let seq = GLOBAL_SEQ.fetch_add(1, Ordering::AcqRel);
     let prev_hash = load_last_hash();
     let head = RING_HEAD.fetch_add(1, Ordering::AcqRel) % RING_BUFFER_ENTRIES;

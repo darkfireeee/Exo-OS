@@ -279,13 +279,44 @@ fn reaper_loop(_arg: usize) -> ! {
 /// Libère les ressources associées à une entrée reaper.
 fn reap_entry(entry: ReaperEntry) {
     let pid = Pid(entry.pid);
-    let _tid = Tid(entry.tid);
+    let tid = Tid(entry.tid);
 
     // Vérifier si c'est le dernier thread du processus.
     let is_last_thread = PROCESS_REGISTRY
         .find_by_pid(pid)
         .map(|pcb| {
-            pcb.thread_count.load(Ordering::Relaxed) == 0 && pcb.state() == ProcessState::Zombie
+            let last = pcb.thread_count.load(Ordering::Relaxed) == 0 && pcb.state() == ProcessState::Zombie;
+            if !last {
+                // Thread secondaire terminé : libérer ses ressources immédiatement.
+                let main_ptr = pcb.main_thread_rawptr.load(Ordering::Acquire);
+                for slot in &pcb.thread_slots {
+                    let ptr = slot.load(Ordering::Acquire);
+                    if !ptr.is_null() && ptr != main_ptr {
+                        // SAFETY: ptr pointe vers un ProcessThread valide.
+                        let thread_tid = unsafe { (*ptr).tid };
+                        if thread_tid == tid {
+                            if slot
+                                .compare_exchange(
+                                    ptr,
+                                    core::ptr::null_mut(),
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                )
+                                .is_ok()
+                            {
+                                // SAFETY: thread alloué par Box::into_raw, état Dead.
+                                unsafe {
+                                    let thread_box = alloc::boxed::Box::from_raw(ptr);
+                                    drop(thread_box);
+                                    crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            last
         })
         .unwrap_or(false);
 

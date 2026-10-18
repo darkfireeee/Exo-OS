@@ -163,6 +163,10 @@ pub fn do_waitpid(
     // NOTE : la wait_queue utilise l'EmergencyPool (RÈGLE WAITQ-01).
     // Boucle : les wakeup spurieux sont tolérés.
     loop {
+        // Tenter de récolter immédiatement avant d'interrompre sur signal pending
+        if let Some(r) = reap_zombie_child(caller_pid, wait_pid, opts) {
+            return Ok(r);
+        }
         // Vérifier signal pending (EINTR si signal non-SIGCHLD).
         if caller_tcb.has_signal_pending() {
             return Err(WaitError::Interrupted);
@@ -172,7 +176,7 @@ pub fn do_waitpid(
         unsafe {
             WAIT_TABLE.wait_interruptible(caller_tcb as *const _ as *mut _);
         }
-        // Réessàyer.
+        // Réessayer.
         if let Some(r) = reap_zombie_child(caller_pid, wait_pid, opts) {
             return Ok(r);
         }
@@ -220,7 +224,16 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     // restriction héritée du défunt.
     crate::security::zero_trust::clear_process_restrictions(candidate.pid.0);
     PID_ALLOCATOR.free(candidate.pid.0);
-    Some(WaitResult::exited(candidate.pid, candidate.code as u8))
+
+    let raw_code = candidate.code;
+    let wait_res = if raw_code & 0x8000_0000 != 0 {
+        let sig = (raw_code & 0x7F) as u8;
+        let core = (raw_code & 0x80) != 0;
+        WaitResult::signaled(candidate.pid, sig, core)
+    } else {
+        WaitResult::exited(candidate.pid, (raw_code & 0xFF) as u8)
+    };
+    Some(wait_res)
 }
 
 /// Scanne la registry pour trouver un fils Zombie du parent.
