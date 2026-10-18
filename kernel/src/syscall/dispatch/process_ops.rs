@@ -216,10 +216,13 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             return;
         }
     };
-    // DIAG E9: print étiqueté du chemin execve (non-ambigu, greppable).
-    crate::arch::x86_64::terminal::debug_write(b"\n<EXEC ");
-    crate::arch::x86_64::terminal::debug_write(path.as_bytes());
-    crate::arch::x86_64::terminal::debug_write(b">");
+    // DIAG E9: print étiqueté du chemin execve (non-ambigu, greppable en mode trace).
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+    {
+        crate::arch::x86_64::terminal::debug_write(b"\n<EXEC ");
+        crate::arch::x86_64::terminal::debug_write(path.as_bytes());
+        crate::arch::x86_64::terminal::debug_write(b">");
+    }
 
     // Lire TCB courant.
     // SAFETY: GS kernel actif.
@@ -282,8 +285,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
     exec_trace(b"execve: load\n");
     match do_execve(thread, pcb, &path, &argv_refs, &envp_refs) {
         Ok(()) => {
-            exec_trace(b"execve: ok\n");
-            crate::arch::x86_64::terminal::debug_write(b"=OK\n");
+            exec_trace(b"execve: ok\n=OK\n");
             // Succès : lire le nouveau point d'entrée depuis le ProcessThread mis à jour.
             let new_rip = thread.addresses.entry_point;
             let new_rsp = thread.addresses.initial_rsp;
@@ -321,6 +323,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             // virtuelle), exécutant le code de l'ancienne image → boucle
             // fork/execve sans jamais charger la nouvelle image.
             // DIAG E9: 'K' = chemin fix CR3 execve exécuté.
+            #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
             unsafe { core::arch::asm!("out 0xE9, al", in("al") b'K', options(nomem, nostack)) };
             let new_kernel_cr3 = thread.sched_tcb.cr3_phys;
             let new_user_cr3 = thread.sched_tcb.kpti_user_cr3();
@@ -344,7 +347,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
         }
         Err(e) => {
             exec_trace(b"execve: err\n");
-            crate::arch::x86_64::terminal::debug_write(match e {
+            exec_trace(match e {
                 ExecError::ElfLoadFailed(ElfLoadError::NotFound) => b"=ER:NotFound\n" as &[u8],
                 ExecError::ElfLoadFailed(ElfLoadError::InvalidElf) => b"=ER:InvalidElf\n",
                 ExecError::ElfLoadFailed(ElfLoadError::PermissionDenied) => b"=ER:Perm\n",

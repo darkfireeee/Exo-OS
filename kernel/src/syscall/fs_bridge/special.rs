@@ -171,8 +171,8 @@ pub fn tty_send(req: &TtyRequestWire) -> Result<(), FsBridgeError> {
 }
 
 pub fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
-    // Tap console headless : recopie la sortie console (fd 1) sur le port debug E9.
-    // Permet d'observer init/serveurs/shell sous QEMU `-display none -debugcon`.
+    // Tap console headless : recopie la sortie console sur le port debug E9 uniquement en trace debug.
+    #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     crate::arch::x86_64::terminal::debug_write(bytes);
     let mut written = 0usize;
     while written < bytes.len() {
@@ -186,8 +186,11 @@ pub fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
             Ok(()) => {}
             Err(FsBridgeError::NotReady) => {
                 #[cfg(target_arch = "x86_64")]
-                if !TTY_E9ONLY_LOGGED.swap(true, Ordering::AcqRel) {
-                    crate::arch::x86_64::terminal::debug_write(b"<TTY-E9ONLY>\n");
+                {
+                    if !TTY_E9ONLY_LOGGED.swap(true, Ordering::AcqRel) {
+                        crate::arch::x86_64::terminal::debug_write(b"<TTY-E9ONLY>\n");
+                    }
+                    crate::arch::x86_64::terminal::debug_write(&bytes[written..]);
                 }
                 return Ok(bytes.len() as i64);
             }
@@ -196,6 +199,51 @@ pub fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
         written += n;
     }
     Ok(bytes.len() as i64)
+}
+
+/// Écriture TTY sans allocation sur le heap : copie les tranches de mémoire utilisateur
+/// directement dans les requêtes de ligne TTY allouées sur la pile (184 octets max).
+pub fn tty_write_from_user(pid: u32, buf_ptr: u64, count: usize) -> Result<i64, FsBridgeError> {
+    let mut written = 0usize;
+    while written < count {
+        let n = (count - written).min(TTY_LINE_MAX);
+        let mut req = TtyRequestWire::zeroed();
+        req.sender_pid = pid;
+        req.msg_type = TTY_MSG_WRITE;
+        req.a = n as u64;
+        let uptr = (buf_ptr as usize).checked_add(written).ok_or(FsBridgeError::Fault)? as *const u8;
+        copy_from_user(req.data.as_mut_ptr(), uptr, n).map_err(|_| FsBridgeError::Fault)?;
+        #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
+        crate::arch::x86_64::terminal::debug_write(&req.data[..n]);
+
+        match tty_send(&req) {
+            Ok(()) => {}
+            Err(FsBridgeError::NotReady) => {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    if !TTY_E9ONLY_LOGGED.swap(true, Ordering::AcqRel) {
+                        crate::arch::x86_64::terminal::debug_write(b"<TTY-E9ONLY>\n");
+                    }
+                    crate::arch::x86_64::terminal::debug_write(&req.data[..n]);
+                    let mut rem = count - written - n;
+                    let mut cur = written + n;
+                    while rem > 0 {
+                        let c = rem.min(TTY_LINE_MAX);
+                        let ptr = (buf_ptr as usize).checked_add(cur).ok_or(FsBridgeError::Fault)? as *const u8;
+                        let mut tmp = [0u8; TTY_LINE_MAX];
+                        copy_from_user(tmp.as_mut_ptr(), ptr, c).map_err(|_| FsBridgeError::Fault)?;
+                        crate::arch::x86_64::terminal::debug_write(&tmp[..c]);
+                        cur += c;
+                        rem -= c;
+                    }
+                }
+                return Ok(count as i64);
+            }
+            Err(e) => return Err(e),
+        }
+        written += n;
+    }
+    Ok(count as i64)
 }
 
 pub fn tty_refill_stdin(pid: u32) -> Result<(), FsBridgeError> {

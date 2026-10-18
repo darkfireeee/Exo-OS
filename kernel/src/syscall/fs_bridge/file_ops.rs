@@ -280,8 +280,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
         if !fd_can_write_flags(resolved.flags) {
             return Err(FsBridgeError::BadFd);
         }
-        let input = read_user_bytes(buf_ptr, count)?;
-        return tty_write_bytes(pid, &input);
+        return tty_write_from_user(pid, buf_ptr, count);
     }
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);

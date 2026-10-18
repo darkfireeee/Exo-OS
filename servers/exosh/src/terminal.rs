@@ -239,23 +239,29 @@ pub fn render_input_line(
     visible_len: &mut usize,
     show_cursor: bool,
 ) {
-    write_all(b"\r");
-    prompt(state);
+    let mut out = [0u8; PATH_MAX + LINE_MAX + 96];
+    let mut out_len = 0usize;
+
+    push_bytes(&mut out, &mut out_len, b"\r");
+    push_bytes(&mut out, &mut out_len, b"exosh:");
+    push_bytes(&mut out, &mut out_len, state.cwd());
+    push_bytes(&mut out, &mut out_len, b"$ ");
+
     let cursor = cursor.min(len);
-    write_bytes(&line[..cursor]);
+    push_bytes(&mut out, &mut out_len, &line[..cursor]);
     if show_cursor {
-        write_all(ANSI_REVERSE);
+        push_bytes(&mut out, &mut out_len, ANSI_REVERSE);
         if cursor < len {
-            write_bytes(&line[cursor..cursor + 1]);
+            push_bytes(&mut out, &mut out_len, &line[cursor..cursor + 1]);
         } else {
-            write_all(b" ");
+            push_bytes(&mut out, &mut out_len, b" ");
         }
-        write_all(ANSI_RESET);
+        push_bytes(&mut out, &mut out_len, ANSI_RESET);
         if cursor < len {
-            write_bytes(&line[cursor + 1..len]);
+            push_bytes(&mut out, &mut out_len, &line[cursor + 1..len]);
         }
     } else {
-        write_bytes(&line[cursor..len]);
+        push_bytes(&mut out, &mut out_len, &line[cursor..len]);
     }
 
     let next_visible_len = if show_cursor && cursor == len {
@@ -264,21 +270,29 @@ pub fn render_input_line(
         len
     };
     if *visible_len > next_visible_len {
+        let diff = *visible_len - next_visible_len;
         let mut i = 0usize;
-        while i < *visible_len - next_visible_len {
-            write_all(b" ");
+        while i < diff {
+            push_bytes(&mut out, &mut out_len, b" ");
             i += 1;
         }
     }
     *visible_len = next_visible_len;
+
+    if out_len > 0 {
+        write_bytes(&out[..out_len]);
+    }
 }
 
 pub fn render_input_append(byte: u8) {
-    write_all(b"\x08");
-    write_byte(byte);
-    write_all(ANSI_REVERSE);
-    write_all(b" ");
-    write_all(ANSI_RESET);
+    let mut out = [0u8; 16];
+    let mut len = 0usize;
+    push_bytes(&mut out, &mut len, b"\x08");
+    push_bytes(&mut out, &mut len, &[byte]);
+    push_bytes(&mut out, &mut len, ANSI_REVERSE);
+    push_bytes(&mut out, &mut len, b" ");
+    push_bytes(&mut out, &mut len, ANSI_RESET);
+    write_bytes(&out[..len]);
 }
 
 pub fn read_byte_poll() -> Option<u8> {

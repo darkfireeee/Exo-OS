@@ -74,12 +74,17 @@ pub fn cmd_ls(rest: &[u8], state: &ShellState) {
         if opts.long {
             print_long_entry(&path, path_len, basename(&path[..path_len]), opts);
         } else if let Some(stat) = stat_path(&path) {
-            write_colored_name(
+            let mut line = [0u8; PATH_MAX + 32];
+            let mut len = 0usize;
+            push_colored_name(
+                &mut line,
+                &mut len,
                 basename(&path[..path_len]),
                 stat.st_mode,
                 is_dir_mode(stat.st_mode) && path_len > 1,
             );
-            write_all(b"\n");
+            push_bytes(&mut line, &mut len, b"\n");
+            write_bytes(&line[..len]);
         } else {
             print_errno(b"ls", fd);
         }
@@ -87,6 +92,8 @@ pub fn cmd_ls(rest: &[u8], state: &ShellState) {
     }
 
     let mut buf = [0u8; IO_BUF];
+    let mut out_buf = [0u8; IO_BUF];
+    let mut out_len = 0usize;
     let mut printed = false;
     loop {
         let n = unsafe {
@@ -101,12 +108,27 @@ pub fn cmd_ls(rest: &[u8], state: &ShellState) {
             break;
         }
         if n < 0 {
+            if out_len > 0 {
+                write_bytes(&out_buf[..out_len]);
+                out_len = 0;
+            }
             print_errno(b"ls", n);
             break;
         }
-        parse_ls_dirents(&buf[..n as usize], &path, path_len, opts, &mut printed);
+        parse_ls_dirents(
+            &buf[..n as usize],
+            &path,
+            path_len,
+            opts,
+            &mut printed,
+            &mut out_buf,
+            &mut out_len,
+        );
     }
-    if printed {
+    if out_len > 0 {
+        write_bytes(&out_buf[..out_len]);
+    }
+    if printed && !opts.long {
         write_all(b"\n");
     }
     let _ = close_fd(fd);
@@ -800,6 +822,8 @@ pub fn parse_ls_dirents(
     parent_len: usize,
     opts: LsOptions,
     printed: &mut bool,
+    out_buf: &mut [u8; IO_BUF],
+    out_len: &mut usize,
 ) {
     let mut off = 0usize;
     while off + DIRENT64_HEADER_SIZE <= buf.len() {
@@ -816,6 +840,10 @@ pub fn parse_ls_dirents(
         let name = &buf[name_start..name_end];
         if !name.is_empty() && (opts.all || name[0] != b'.') {
             if opts.long {
+                if *out_len > 0 {
+                    write_bytes(&out_buf[..*out_len]);
+                    *out_len = 0;
+                }
                 let mut child = [0u8; PATH_MAX];
                 if let Some(child_len) =
                     append_path_component(parent_path, parent_len, name, &mut child)
@@ -824,12 +852,20 @@ pub fn parse_ls_dirents(
                 }
             } else {
                 if *printed {
-                    write_all(b"  ");
+                    if *out_len + 2 >= out_buf.len() {
+                        write_bytes(&out_buf[..*out_len]);
+                        *out_len = 0;
+                    }
+                    push_bytes(out_buf, out_len, b"  ");
+                }
+                if *out_len + name.len() + 32 >= out_buf.len() {
+                    write_bytes(&out_buf[..*out_len]);
+                    *out_len = 0;
                 }
                 if dtype == DT_DIR {
-                    write_colored_name(name, S_IFDIR | 0o755, true);
+                    push_colored_name(out_buf, out_len, name, S_IFDIR | 0o755, true);
                 } else {
-                    write_colored_name(name, S_IFREG | 0o644, false);
+                    push_colored_name(out_buf, out_len, name, S_IFREG | 0o644, false);
                 }
             }
             *printed = true;
@@ -839,49 +875,45 @@ pub fn parse_ls_dirents(
 }
 
 pub fn print_long_entry(path: &[u8; PATH_MAX], path_len: usize, name: &[u8], opts: LsOptions) {
+    let mut line = [0u8; PATH_MAX + 128];
+    let mut len = 0usize;
     let Some(stat) = stat_path(path) else {
-        write_all(b"?????????? ? ? ? ");
-        write_bytes(name);
-        write_all(b"\n");
+        push_bytes(&mut line, &mut len, b"?????????? ? ? ? ");
+        push_bytes(&mut line, &mut len, name);
+        push_bytes(&mut line, &mut len, b"\n");
+        write_bytes(&line[..len]);
         return;
     };
-    write_mode(stat.st_mode);
-    write_all(b" ");
-    write_u64(stat.st_nlink);
-    write_all(b" ");
-    write_u32(stat.st_uid);
-    write_all(b" ");
-    write_u32(stat.st_gid);
-    write_all(b" ");
+    push_mode(&mut line, &mut len, stat.st_mode);
+    push_bytes(&mut line, &mut len, b" ");
+    push_u64(&mut line, &mut len, stat.st_nlink);
+    push_bytes(&mut line, &mut len, b" ");
+    push_u32(&mut line, &mut len, stat.st_uid);
+    push_bytes(&mut line, &mut len, b" ");
+    push_u32(&mut line, &mut len, stat.st_gid);
+    push_bytes(&mut line, &mut len, b" ");
     if opts.human {
-        write_human_size(stat.st_size);
+        push_human_size(&mut line, &mut len, stat.st_size);
     } else {
-        write_i64(stat.st_size);
+        push_i64(&mut line, &mut len, stat.st_size);
     }
-    write_all(b" ");
-    write_colored_name(
+    push_bytes(&mut line, &mut len, b" ");
+    push_colored_name(
+        &mut line,
+        &mut len,
         name,
         stat.st_mode,
         is_dir_mode(stat.st_mode) && path_len > 1,
     );
-    write_all(b"\n");
+    push_bytes(&mut line, &mut len, b"\n");
+    write_bytes(&line[..len]);
 }
 
 pub fn write_colored_name(name: &[u8], mode: u32, append_slash: bool) {
-    if is_dir_mode(mode) {
-        write_all(ANSI_DIR);
-        write_bytes(name);
-        if append_slash {
-            write_all(b"/");
-        }
-        write_all(ANSI_RESET);
-    } else if mode & 0o111 != 0 {
-        write_all(ANSI_EXEC);
-        write_bytes(name);
-        write_all(ANSI_RESET);
-    } else {
-        write_bytes(name);
-    }
+    let mut buf = [0u8; PATH_MAX + 32];
+    let mut len = 0usize;
+    push_colored_name(&mut buf, &mut len, name, mode, append_slash);
+    write_bytes(&buf[..len]);
 }
 
 pub fn parse_tree_dirents(buf: &[u8], parent_path: &[u8; PATH_MAX], parent_len: usize, depth: usize) {

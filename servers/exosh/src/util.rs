@@ -631,6 +631,60 @@ pub fn write_mode(mode: u32) {
     write_bytes(&out);
 }
 
+pub fn push_mode(out: &mut [u8], len: &mut usize, mode: u32) {
+    let kind = if is_dir_mode(mode) {
+        b'd'
+    } else if is_regular_mode(mode) {
+        b'-'
+    } else {
+        b'?'
+    };
+    let mut buf = [b'-'; 10];
+    buf[0] = kind;
+    let bits = [
+        (0o400, b'r'),
+        (0o200, b'w'),
+        (0o100, b'x'),
+        (0o040, b'r'),
+        (0o020, b'w'),
+        (0o010, b'x'),
+        (0o004, b'r'),
+        (0o002, b'w'),
+        (0o001, b'x'),
+    ];
+    let mut i = 0usize;
+    while i < bits.len() {
+        if mode & bits[i].0 != 0 {
+            buf[i + 1] = bits[i].1;
+        }
+        i += 1;
+    }
+    push_bytes(out, len, &buf);
+}
+
+pub fn push_colored_name(
+    out: &mut [u8],
+    len: &mut usize,
+    name: &[u8],
+    mode: u32,
+    append_slash: bool,
+) {
+    if is_dir_mode(mode) {
+        push_bytes(out, len, ANSI_DIR);
+        push_bytes(out, len, name);
+        if append_slash {
+            push_bytes(out, len, b"/");
+        }
+        push_bytes(out, len, ANSI_RESET);
+    } else if mode & 0o111 != 0 {
+        push_bytes(out, len, ANSI_EXEC);
+        push_bytes(out, len, name);
+        push_bytes(out, len, ANSI_RESET);
+    } else {
+        push_bytes(out, len, name);
+    }
+}
+
 pub fn write_octal_mode(mode: u32) {
     let mut shift = 9i32;
     while shift >= 0 {
@@ -638,6 +692,22 @@ pub fn write_octal_mode(mode: u32) {
         write_byte(b'0' + digit);
         shift -= 3;
     }
+}
+
+pub fn push_human_size(out: &mut [u8], len: &mut usize, size: i64) {
+    if size < 0 {
+        push_i64(out, len, size);
+        return;
+    }
+    let mut value = size as u64;
+    let units = [b'B', b'K', b'M', b'G'];
+    let mut unit = 0usize;
+    while value >= 1024 && unit + 1 < units.len() {
+        value = value.saturating_add(512) / 1024;
+        unit += 1;
+    }
+    push_u64(out, len, value);
+    push_bytes(out, len, &[units[unit]]);
 }
 
 pub fn write_human_size(size: i64) {

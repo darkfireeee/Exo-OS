@@ -590,34 +590,142 @@ use exo_syscall_abi as syscall;
         }
     }
 
+    pub fn push_bytes(out: &mut [u8], len: &mut usize, bytes: &[u8]) {
+        let available = out.len().saturating_sub(*len);
+        let n = bytes.len().min(available);
+        if n == 0 {
+            return;
+        }
+        out[*len..*len + n].copy_from_slice(&bytes[..n]);
+        *len += n;
+    }
+
+    pub fn push_u64(out: &mut [u8], len: &mut usize, mut value: u64) {
+        let mut buf = [0u8; 20];
+        let mut pos = buf.len();
+        if value == 0 {
+            push_bytes(out, len, b"0");
+            return;
+        }
+        while value != 0 {
+            pos -= 1;
+            buf[pos] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        push_bytes(out, len, &buf[pos..]);
+    }
+
+    pub fn push_i64(out: &mut [u8], len: &mut usize, value: i64) {
+        if value < 0 {
+            push_bytes(out, len, b"-");
+            push_u64(out, len, value.unsigned_abs());
+        } else {
+            push_u64(out, len, value as u64);
+        }
+    }
+
+    pub fn push_mode(out: &mut [u8], len: &mut usize, mode: u32) {
+        let kind = if is_dir_mode(mode) {
+            b'd'
+        } else if is_regular_mode(mode) {
+            b'-'
+        } else {
+            b'?'
+        };
+        let mut buf = [b'-'; 10];
+        buf[0] = kind;
+        let bits = [
+            (0o400, b'r'),
+            (0o200, b'w'),
+            (0o100, b'x'),
+            (0o040, b'r'),
+            (0o020, b'w'),
+            (0o010, b'x'),
+            (0o004, b'r'),
+            (0o002, b'w'),
+            (0o001, b'x'),
+        ];
+        let mut i = 0usize;
+        while i < bits.len() {
+            if mode & bits[i].0 != 0 {
+                buf[i + 1] = bits[i].1;
+            }
+            i += 1;
+        }
+        push_bytes(out, len, &buf);
+    }
+
+    pub fn push_human_size(out: &mut [u8], len: &mut usize, size: i64) {
+        if size < 0 {
+            push_i64(out, len, size);
+            return;
+        }
+        let mut value = size as u64;
+        let units = [b'B', b'K', b'M', b'G', b'T'];
+        let mut unit = 0usize;
+        while value >= 1024 && unit + 1 < units.len() {
+            value = value.saturating_add(512) / 1024;
+            unit += 1;
+        }
+        push_u64(out, len, value);
+        push_bytes(out, len, &[units[unit]]);
+    }
+
+    pub fn push_colored_name(
+        out: &mut [u8],
+        len: &mut usize,
+        name: &[u8],
+        mode: u32,
+        append_slash: bool,
+    ) {
+        if is_dir_mode(mode) {
+            push_bytes(out, len, ANSI_DIR);
+            push_bytes(out, len, name);
+            if append_slash {
+                push_bytes(out, len, b"/");
+            }
+            push_bytes(out, len, ANSI_RESET);
+        } else if mode & 0o111 != 0 {
+            push_bytes(out, len, ANSI_EXEC);
+            push_bytes(out, len, name);
+            push_bytes(out, len, ANSI_RESET);
+        } else {
+            push_bytes(out, len, name);
+        }
+    }
+
     pub fn print_long_entry(
         path: &[u8; PATH_MAX],
         display_name: &[u8],
         human: bool,
         append_slash: bool,
     ) {
+        let mut line = [0u8; PATH_MAX + 128];
+        let mut len = 0usize;
         let Some(stat) = stat_path(path) else {
-            write_all(STDOUT, b"?????????? ? ? ? ");
-            write_all(STDOUT, display_name);
-            write_byte(STDOUT, b'\n');
+            push_bytes(&mut line, &mut len, b"?????????? ? ? ? ");
+            push_bytes(&mut line, &mut len, display_name);
+            push_bytes(&mut line, &mut len, b"\n");
+            write_all(STDOUT, &line[..len]);
             return;
         };
-        write_mode(stat.st_mode);
-        write_byte(STDOUT, b' ');
-        write_u64(STDOUT, stat.st_nlink);
-        write_byte(STDOUT, b' ');
-        write_u64(STDOUT, stat.st_uid as u64);
-        write_byte(STDOUT, b' ');
-        write_u64(STDOUT, stat.st_gid as u64);
-        write_byte(STDOUT, b' ');
+        push_mode(&mut line, &mut len, stat.st_mode);
+        push_bytes(&mut line, &mut len, b" ");
+        push_u64(&mut line, &mut len, stat.st_nlink);
+        push_bytes(&mut line, &mut len, b" ");
+        push_u64(&mut line, &mut len, stat.st_uid as u64);
+        push_bytes(&mut line, &mut len, b" ");
+        push_u64(&mut line, &mut len, stat.st_gid as u64);
+        push_bytes(&mut line, &mut len, b" ");
         if human {
-            write_human_size(stat.st_size);
+            push_human_size(&mut line, &mut len, stat.st_size);
         } else {
-            write_i64(STDOUT, stat.st_size);
+            push_i64(&mut line, &mut len, stat.st_size);
         }
-        write_byte(STDOUT, b' ');
-        write_colored_name(display_name, stat.st_mode, append_slash);
-        write_byte(STDOUT, b'\n');
+        push_bytes(&mut line, &mut len, b" ");
+        push_colored_name(&mut line, &mut len, display_name, stat.st_mode, append_slash);
+        push_bytes(&mut line, &mut len, b"\n");
+        write_all(STDOUT, &line[..len]);
     }
 
     pub fn is_dev_zero(path: &[u8]) -> bool {

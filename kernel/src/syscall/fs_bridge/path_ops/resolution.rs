@@ -100,6 +100,12 @@ pub fn ensure_root_directory() -> Result<(), FsBridgeError> {
 #[inline]
 pub fn load_path_index(path: &[u8]) -> Result<PathIndex, FsBridgeError> {
     let blob_id = blob_id_for_path(path)?;
+    if let Some(cached) = BLOB_CACHE.get(&blob_id) {
+        if !blob_is_directory(&cached) {
+            return Err(FsBridgeError::NotDir);
+        }
+        return PathIndex::from_bytes(&cached).map_err(exofs_to_bridge_error);
+    }
     let data = snapshot_blob(&blob_id)?;
     if !blob_is_directory(&data) {
         return Err(FsBridgeError::NotDir);
@@ -125,8 +131,7 @@ pub fn ensure_directory_exists(path: &[u8]) -> Result<(), FsBridgeError> {
     }
 
     let blob_id = blob_id_for_path(path)?;
-    let data = snapshot_blob(&blob_id)?;
-    if blob_is_directory(&data) {
+    if blob_is_directory_by_id(&blob_id) {
         Ok(())
     } else {
         Err(FsBridgeError::NotDir)
@@ -193,7 +198,6 @@ pub fn upsert_parent_entry(
     child_blob_id: BlobId,
     kind: u8,
 ) -> Result<(), FsBridgeError> {
-    ensure_directory_exists(parent_path)?;
     let mut index = load_path_index(parent_path)?;
     if index.lookup(leaf).is_some() {
         index.remove(leaf).map_err(exofs_to_bridge_error)?;
@@ -206,7 +210,6 @@ pub fn upsert_parent_entry(
 
 #[inline]
 pub fn remove_parent_entry(parent_path: &[u8], leaf: &PathComponent) -> Result<(), FsBridgeError> {
-    ensure_directory_exists(parent_path)?;
     let mut index = load_path_index(parent_path)?;
     index.remove(leaf).map_err(exofs_to_bridge_error)?;
     store_path_index(parent_path, &index)
@@ -251,11 +254,18 @@ pub fn blob_is_directory(data: &[u8]) -> bool {
 
 #[inline]
 pub fn blob_is_directory_by_id(blob_id: &BlobId) -> bool {
-    snapshot_blob(blob_id)
-        .ok()
-        .as_deref()
-        .and_then(path_index_entry_count)
-        .is_some()
+    let header_len = size_of::<PathIndexHeader>();
+    if let Ok(prefix) = BLOB_CACHE.read_at(blob_id, 0, header_len) {
+        if prefix.len() == header_len {
+            return blob_is_directory(&prefix);
+        }
+    }
+    if let Ok(Some(data)) = object_store::load_blob_data_if_available(blob_id) {
+        let is_dir = blob_is_directory(&data);
+        let _ = BLOB_CACHE.insert(*blob_id, data);
+        return is_dir;
+    }
+    false
 }
 
 #[inline]
@@ -285,7 +295,6 @@ pub fn resolve_path_with_symlinks(
     while idx < pending.len() {
         let comp = pending.as_slice()[idx].clone();
         let parent_path = path_buf_to_bytes(&resolved)?;
-        ensure_directory_exists(&parent_path)?;
 
         let index = load_path_index(&parent_path)?;
         let (object_id, kind) = match index.lookup(&comp) {

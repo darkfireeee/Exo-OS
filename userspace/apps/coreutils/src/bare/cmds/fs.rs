@@ -207,15 +207,45 @@ use exo_syscall_abi as syscall;
             }
             i += 1;
         }
+        let mut out_buf = [0u8; IO_BUF];
+        let mut out_len = 0usize;
         i = 1;
         while i < stop {
             if i > 1 {
-                write_byte(fd, b' ');
+                if out_len + 1 >= out_buf.len() {
+                    write_all(fd, &out_buf[..out_len]);
+                    out_len = 0;
+                }
+                out_buf[out_len] = b' ';
+                out_len += 1;
             }
-            write_all(fd, args.get(i));
+            let arg = args.get(i);
+            if out_len + arg.len() >= out_buf.len() {
+                if out_len > 0 {
+                    write_all(fd, &out_buf[..out_len]);
+                    out_len = 0;
+                }
+                if arg.len() >= out_buf.len() {
+                    write_all(fd, arg);
+                } else {
+                    out_buf[..arg.len()].copy_from_slice(arg);
+                    out_len = arg.len();
+                }
+            } else {
+                out_buf[out_len..out_len + arg.len()].copy_from_slice(arg);
+                out_len += arg.len();
+            }
             i += 1;
         }
-        write_byte(fd, b'\n');
+        if out_len + 1 >= out_buf.len() {
+            write_all(fd, &out_buf[..out_len]);
+            out_len = 0;
+        }
+        out_buf[out_len] = b'\n';
+        out_len += 1;
+        if out_len > 0 {
+            write_all(fd, &out_buf[..out_len]);
+        }
         if fd != STDOUT {
             close(fd as i64);
         }
