@@ -3172,6 +3172,7 @@ pub fn sys_exo_ipc_destroy(endpoint: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         None => return EINVAL,
     };
     crate::ipc::channel::raw::mailbox_close(ep);
+    crate::ipc::endpoint::unregister_endpoint_by_id(ep);
     let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
     0
 }

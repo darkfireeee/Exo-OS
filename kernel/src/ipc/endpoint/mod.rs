@@ -15,6 +15,6 @@ pub use lifecycle::{
     active_endpoint_count, endpoint_close, endpoint_create, endpoint_destroy, endpoint_listen,
 };
 pub use registry::{
-    lookup_endpoint, register_endpoint, unregister_endpoint, NamedEndpointRegistry,
-    ENDPOINT_REGISTRY,
+    lookup_endpoint, register_endpoint, unregister_endpoint, unregister_endpoint_by_id,
+    NamedEndpointRegistry, ENDPOINT_REGISTRY,
 };

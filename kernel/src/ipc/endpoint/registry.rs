@@ -210,6 +210,21 @@ impl RegistryInner {
         }
     }
 
+    /// Supprime un endpoint du registre par son identifiant numérique.
+    fn remove_by_endpoint(&mut self, ep_id: u64) -> bool {
+        let mut removed = false;
+        for slot in self.slots.iter_mut() {
+            if !slot.is_empty() && !slot.is_tombstone() && slot.ep_id == ep_id {
+                slot.hash = RegistryEntry::TOMBSTONE;
+                slot.ep_id = 0;
+                slot.rh_dist = 0;
+                self.count = self.count.saturating_sub(1);
+                removed = true;
+            }
+        }
+        removed
+    }
+
     /// Retourne le nombre d'endpoints enregistrés.
     #[inline(always)]
     fn count(&self) -> usize {
@@ -267,6 +282,12 @@ impl NamedEndpointRegistry {
         let hash = fnv1a(name);
         let mut inner = self.inner.lock();
         inner.remove(hash)
+    }
+
+    /// Retire un endpoint du registre par son identifiant.
+    pub fn unregister_by_endpoint(&self, ep_id: EndpointId) -> bool {
+        let mut inner = self.inner.lock();
+        inner.remove_by_endpoint(ep_id.get())
     }
 
     /// Retourne le nombre d'endpoints enregistrés.
@@ -327,4 +348,12 @@ pub fn unregister_endpoint(name: &[u8]) -> bool {
         return false;
     }
     ENDPOINT_REGISTRY.unregister(name)
+}
+
+/// Retire un endpoint du registre global par son identifiant numérique.
+pub fn unregister_endpoint_by_id(ep_id: EndpointId) -> bool {
+    if !endpoint_registry_initialized() {
+        return false;
+    }
+    ENDPOINT_REGISTRY.unregister_by_endpoint(ep_id)
 }

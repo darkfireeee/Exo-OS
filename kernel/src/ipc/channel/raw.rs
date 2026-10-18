@@ -25,7 +25,7 @@ use crate::security::capability::{CapTable, CapToken, Rights};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Nombre maximum de mailboxes raw simultanées.
-pub const MAX_RAW_SLOTS: usize = 64;
+pub const MAX_RAW_SLOTS: usize = 128;
 
 /// Profondeur de l'anneau par mailbox (puissance de 2).
 pub const RAW_RING_DEPTH: usize = 16;

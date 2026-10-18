@@ -245,7 +245,7 @@ const REFILL_INTERVAL_TSC: u64 = 3_000_000_000;
 ///
 /// Encodage lock-free : slot AtomicU64 = pid (bits 0..32) | service_id (bits 32..40).
 /// 0 = slot libre.
-const MAX_DYNAMIC_SERVICES: usize = 32;
+const MAX_DYNAMIC_SERVICES: usize = 64;
 static DYNAMIC_PIDS: [AtomicU64; MAX_DYNAMIC_SERVICES] = {
     const Z: AtomicU64 = AtomicU64::new(0);
     [Z; MAX_DYNAMIC_SERVICES]
