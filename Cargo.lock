@@ -347,6 +347,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-ext-server"
+version = "0.1.0"
+dependencies = [
+ "exo-os-driver-fs",
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
+name = "exo-fat-server"
+version = "0.1.0"
+dependencies = [
+ "exo-os-driver-fs",
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
 name = "exo-fb-server"
 version = "0.1.0"
 dependencies = [
@@ -433,6 +451,13 @@ dependencies = [
  "exo-storage-common-hal",
  "exo-syscall-abi",
  "log",
+ "spin",
+]
+
+[[package]]
+name = "exo-os-driver-fs"
+version = "0.1.0"
+dependencies = [
  "spin",
 ]
 

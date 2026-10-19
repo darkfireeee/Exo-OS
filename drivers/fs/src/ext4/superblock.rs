@@ -4,7 +4,6 @@
 //
 // RÈGLE FS-EXT4-01/02/03 : Vérification via compat::verify_before_mount().
 
-use core::mem::size_of;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::FsDriverError;
 use super::compat::{verify_before_mount, Ext4MountMode};

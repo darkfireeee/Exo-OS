@@ -111,9 +111,12 @@ pub fn parse_dir_cluster(buf: &[u8]) -> Vec<DirEntryParsed> {
             let lfn: LfnEntry = unsafe { core::ptr::read_unaligned(buf.as_ptr().add(i) as *const LfnEntry) };
             let order = lfn.order & !LFN_LAST_MASK;
             let mut chars = [0u16; 13];
-            chars[..5].copy_from_slice(&lfn.name1);
-            chars[5..11].copy_from_slice(&lfn.name2);
-            chars[11..13].copy_from_slice(&lfn.name3);
+            let name1 = unsafe { core::ptr::addr_of!(lfn.name1).read_unaligned() };
+            let name2 = unsafe { core::ptr::addr_of!(lfn.name2).read_unaligned() };
+            let name3 = unsafe { core::ptr::addr_of!(lfn.name3).read_unaligned() };
+            chars[..5].copy_from_slice(&name1);
+            chars[5..11].copy_from_slice(&name2);
+            chars[11..13].copy_from_slice(&name3);
             lfns.push((order, chars, lfn.checksum));
             i += 32; continue;
         }

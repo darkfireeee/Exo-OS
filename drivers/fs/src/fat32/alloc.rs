@@ -6,7 +6,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use super::bpb::ParsedBpb;
-use super::fat_table::{is_eoc, is_free, is_bad, FAT_FREE, FAT_EOC};
+use super::fat_table::is_free;
 
 static LAST_ALLOC_HINT: AtomicU32 = AtomicU32::new(2);
 

@@ -10,11 +10,3 @@ crate-type = ["rlib"]
 
 [dependencies]
 spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }
-
-[profile.dev]
-opt-level = 0
-panic     = "abort"
-
-[profile.release]
-opt-level = 3
-panic     = "abort"

@@ -1,0 +1,16 @@
+[package]
+name        = "exo-fat-server"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Exo-OS Team"]
+license     = "MIT OR Apache-2.0"
+description = "Exo-OS FAT32 Filesystem Ring 1 Server"
+
+[[bin]]
+name = "exo-fat-server"
+path = "src/main.rs"
+
+[dependencies]
+exo-syscall-abi  = { path = "../syscall_abi" }
+exo-os-driver-fs = { path = "../../drivers/fs" }
+spin             = { version = "0.9", default-features = false, features = ["spin_mutex"] }

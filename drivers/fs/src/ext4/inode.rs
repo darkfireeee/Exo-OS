@@ -39,8 +39,8 @@ pub struct Ext4InodeDisk {
     pub i_crtime_extra: u32,
     pub i_version_hi:  u32,
     pub i_projid:      u32,
-    // Rembourrage jusqu'à 256 octets.
-    pub _pad:          [u8; 100],
+    // Rembourrage jusqu'à 256 octets (160 + 96 = 256).
+    pub _pad:          [u8; 96],
 }
 
 const _: () = assert!(size_of::<Ext4InodeDisk>() == 256);
