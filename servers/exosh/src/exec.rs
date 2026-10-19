@@ -125,6 +125,8 @@ pub fn run_command(line: &[u8], state: &mut ShellState) {
     let (cmd, rest) = first_token(line);
     if bytes_eq(cmd, b"help") {
         cmd_help();
+    } else if bytes_eq(cmd, b"exo") {
+        cmd_exo(rest);
     } else if bytes_eq(cmd, b"pwd") {
         cmd_pwd(state);
     } else if bytes_eq(cmd, b"cd") {

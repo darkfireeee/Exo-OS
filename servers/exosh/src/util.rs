@@ -601,65 +601,24 @@ pub fn push_bytes(out: &mut [u8], len: &mut usize, bytes: &[u8]) {
 }
 
 pub fn write_mode(mode: u32) {
-    let kind = if is_dir_mode(mode) {
-        b'd'
-    } else if is_regular_mode(mode) {
-        b'-'
-    } else {
-        b'?'
-    };
-    let mut out = [b'-'; 10];
-    out[0] = kind;
-    let bits = [
-        (0o400, b'r'),
-        (0o200, b'w'),
-        (0o100, b'x'),
-        (0o040, b'r'),
-        (0o020, b'w'),
-        (0o010, b'x'),
-        (0o004, b'r'),
-        (0o002, b'w'),
-        (0o001, b'x'),
-    ];
-    let mut i = 0usize;
-    while i < bits.len() {
-        if mode & bits[i].0 != 0 {
-            out[i + 1] = bits[i].1;
-        }
-        i += 1;
-    }
-    write_bytes(&out);
+    let mut buf = [0u8; 16];
+    let mut len = 0usize;
+    push_mode(&mut buf, &mut len, mode);
+    write_bytes(&buf[..len]);
 }
 
 pub fn push_mode(out: &mut [u8], len: &mut usize, mode: u32) {
-    let kind = if is_dir_mode(mode) {
-        b'd'
-    } else if is_regular_mode(mode) {
-        b'-'
+    if is_dir_mode(mode) {
+        push_bytes(out, len, b"[dir:cap]");
+    } else if (mode & 0o170000) == 0o060000 || (mode & 0o170000) == 0o020000 {
+        push_bytes(out, len, b"[device ]");
     } else {
-        b'?'
-    };
-    let mut buf = [b'-'; 10];
-    buf[0] = kind;
-    let bits = [
-        (0o400, b'r'),
-        (0o200, b'w'),
-        (0o100, b'x'),
-        (0o040, b'r'),
-        (0o020, b'w'),
-        (0o010, b'x'),
-        (0o004, b'r'),
-        (0o002, b'w'),
-        (0o001, b'x'),
-    ];
-    let mut i = 0usize;
-    while i < bits.len() {
-        if mode & bits[i].0 != 0 {
-            buf[i + 1] = bits[i].1;
-        }
-        i += 1;
+        let r = if mode & 0o400 != 0 { b'r' } else { b'-' };
+        let w = if mode & 0o200 != 0 { b'w' } else { b'-' };
+        let x = if mode & 0o100 != 0 { b'x' } else { b'-' };
+        let cap_buf = [b'[', b'c', b'a', b'p', b':', r, w, x, b']'];
+        push_bytes(out, len, &cap_buf);
     }
-    push_bytes(out, len, &buf);
 }
 
 pub fn push_colored_name(
