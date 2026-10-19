@@ -302,12 +302,14 @@ core::arch::global_asm!(
     ".balign 4096",
     ".global _exo_boot_stack_bottom",
     "_exo_boot_stack_bottom:",
-    ".space 524288", // 512 KiB (était 64 KiB — trop petit : overflow sur le chemin
+    // 512 KiB (était 64 KiB — trop petit : overflow sur le chemin
     // profond exofs_init/virtio/recovery corrompait l'IDT/TSS/IST adjacents →
     // triple fault bypassant les handlers. 4 MiB collisionnait la SSR à 16 MiB ;
     // 512 KiB = marge confortable sans collision. FIX-BOOT-STACK.)
+    ".space 524288",
     ".global _exo_boot_stack_top",
     "_exo_boot_stack_top:",
+    ".section .text",
 );
 
 //  Point d'entree Rust principal 
