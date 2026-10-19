@@ -94,6 +94,7 @@ ROOTFS_BIN_BINS = \
 	dd \
 	dirname \
 	echo \
+	exo \
 	false \
 	grep \
 	ipc-stat \
