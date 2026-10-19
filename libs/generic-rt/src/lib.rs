@@ -160,3 +160,20 @@ impl<T> ExpectTlsFree for Option<T> {
         }
     }
 }
+
+/// Dynamic TLS symbol for ELF binaries loaded via /lib/ld-exo.so (Phase 0)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tls_get_addr(ti: *const [usize; 2]) -> *mut u8 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let tcb_ptr = GenericTcb::<()>::arch_read(0);
+        let offset = (*ti)[1];
+        (tcb_ptr + offset) as *mut u8
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = ti;
+        core::ptr::null_mut()
+    }
+}
+

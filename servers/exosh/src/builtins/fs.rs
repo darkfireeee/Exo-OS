@@ -874,36 +874,59 @@ pub fn parse_ls_dirents(
     }
 }
 
+fn push_hex16(buf: &mut [u8], len: &mut usize, val: u16) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let b0 = HEX[((val >> 12) & 0xF) as usize];
+    let b1 = HEX[((val >> 8) & 0xF) as usize];
+    let b2 = HEX[((val >> 4) & 0xF) as usize];
+    let b3 = HEX[(val & 0xF) as usize];
+    push_bytes(buf, len, &[b0, b1, b2, b3]);
+}
+
 pub fn print_long_entry(path: &[u8; PATH_MAX], path_len: usize, name: &[u8], opts: LsOptions) {
     let mut line = [0u8; PATH_MAX + 128];
     let mut len = 0usize;
     let Some(stat) = stat_path(path) else {
-        push_bytes(&mut line, &mut len, b"?????????? ? ? ? ");
+        push_bytes(&mut line, &mut len, b"? ??????? .          @0000 ep:0000 ? ");
         push_bytes(&mut line, &mut len, name);
         push_bytes(&mut line, &mut len, b"\n");
         write_bytes(&line[..len]);
         return;
     };
-    push_mode(&mut line, &mut len, stat.st_mode);
-    push_bytes(&mut line, &mut len, b" ");
-    push_u64(&mut line, &mut len, stat.st_nlink);
-    push_bytes(&mut line, &mut len, b" ");
-    push_u32(&mut line, &mut len, stat.st_uid);
-    push_bytes(&mut line, &mut len, b" ");
-    push_u32(&mut line, &mut len, stat.st_gid);
-    push_bytes(&mut line, &mut len, b" ");
+
+    let is_dir = is_dir_mode(stat.st_mode);
+    let is_exec = (stat.st_mode & 0o111) != 0;
+
+    // 1. Type & Rights & Flags (SPEC-EXO-DISPLAY-PROTOCOL-STRATA)
+    if is_dir {
+        push_bytes(&mut line, &mut len, b"d rw-l--- .          ");
+    } else if is_exec {
+        push_bytes(&mut line, &mut len, b"x r-x---- [sig]      ");
+    } else {
+        push_bytes(&mut line, &mut len, b"r rw----- .          ");
+    }
+
+    // 2. Capability Token & Epoch
+    let token_hint = ((stat.st_ino & 0xFFFF) as u16).max(1);
+    push_bytes(&mut line, &mut len, b"@");
+    push_hex16(&mut line, &mut len, token_hint);
+    push_bytes(&mut line, &mut len, b" ep:0001 ");
+
+    // 3. Size
     if opts.human {
         push_human_size(&mut line, &mut len, stat.st_size);
     } else {
         push_i64(&mut line, &mut len, stat.st_size);
     }
     push_bytes(&mut line, &mut len, b" ");
+
+    // 4. Name
     push_colored_name(
         &mut line,
         &mut len,
         name,
         stat.st_mode,
-        is_dir_mode(stat.st_mode) && path_len > 1,
+        is_dir && path_len > 1,
     );
     push_bytes(&mut line, &mut len, b"\n");
     write_bytes(&line[..len]);

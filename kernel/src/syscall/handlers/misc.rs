@@ -187,11 +187,49 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
             }
             0
         }
-        ARCH_GET_FS | ARCH_GET_GS => {
+        ARCH_GET_FS => {
             if addr == 0 || addr >= USER_ADDR_MAX {
                 return EFAULT;
             }
-            ENOSYS
+            let fs_base: u64;
+            unsafe {
+                let low: u32;
+                let high: u32;
+                core::arch::asm!(
+                    "rdmsr",
+                    in("ecx") 0xC000_0100u32,
+                    out("eax") low,
+                    out("edx") high,
+                    options(nomem, nostack),
+                );
+                fs_base = ((high as u64) << 32) | (low as u64);
+            }
+            if crate::syscall::validation::write_user_typed::<u64>(addr, fs_base).is_err() {
+                return EFAULT;
+            }
+            0
+        }
+        ARCH_GET_GS => {
+            if addr == 0 || addr >= USER_ADDR_MAX {
+                return EFAULT;
+            }
+            let gs_base: u64;
+            unsafe {
+                let low: u32;
+                let high: u32;
+                core::arch::asm!(
+                    "rdmsr",
+                    in("ecx") 0xC000_0102u32,
+                    out("eax") low,
+                    out("edx") high,
+                    options(nomem, nostack),
+                );
+                gs_base = ((high as u64) << 32) | (low as u64);
+            }
+            if crate::syscall::validation::write_user_typed::<u64>(addr, gs_base).is_err() {
+                return EFAULT;
+            }
+            0
         }
         _ => EINVAL,
     }

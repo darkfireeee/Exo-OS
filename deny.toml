@@ -39,6 +39,12 @@ deny = [
     { name = "tokio-runtime", reason = "Tokio runtime is not part of the Exo-OS runtime contract" },
     { name = "async-std", reason = "async-std is redundant with the Exo-OS runtime model" },
     { name = "systemd", reason = "systemd is incompatible with the Exo-OS boot and service model" },
+    { name = "linux-pam", reason = "PAM is rejected in Exo-OS Zero-Trust architecture" },
+    { name = "shadow-rs", reason = "shadow-rs is rejected in favor of native build metadata" },
+    { name = "libfuse", reason = "libfuse is incompatible with the out-of-kernel ExoFS model" },
+    { name = "rtnetlink", reason = "rtnetlink is rejected in favor of ExoNet V5 NetGrant" },
+    { name = "relibc", reason = "relibc is rejected in favor of exo-alloc and musl-exo" },
+    { name = "pkgcraft", reason = "pkgcraft is rejected in favor of native exo-pkg format" },
 ]
 
 [sources]

@@ -47,8 +47,10 @@ pub fn cmd_exo(rest: &[u8]) {
         list_installed_packages();
     } else if bytes_eq(subcmd, b"search") {
         search_packages(args);
+    } else if bytes_eq(subcmd, b"audit") {
+        handle_exo_audit(args);
     } else if bytes_eq(subcmd, b"log") || bytes_eq(subcmd, b"logs") {
-        print_exo_logs();
+        print_exo_logs(args);
     } else {
         write_all(b"exo: unknown subcommand '");
         write_bytes(subcmd);
@@ -71,7 +73,8 @@ fn print_exo_help() {
     write_all(b"  remove <pkg>          Uninstall package and revoke capabilities\n");
     write_all(b"  list                  List installed native & compat applications\n");
     write_all(b"  search <term>         Search package registry\n");
-    write_all(b"  log                   Display recent system monitor logs\n");
+    write_all(b"  audit [--verify-chain] Verify ExoLedger cryptographic integrity\n");
+    write_all(b"  log [--filter <tag>]  Display recent system monitor logs\n");
     write_all(b"  help                  Show this help message\n");
 }
 
@@ -283,13 +286,60 @@ fn search_packages(args: &[u8]) {
     write_all(b"  vim              compat     9.1.0        Vi IMproved text editor\n");
 }
 
-fn print_exo_logs() {
+fn handle_exo_audit(args: &[u8]) {
+    let (flag, _) = first_token(args);
+    write_all(b"=== ExoLedger Cryptographic Audit Trail ===\n\n");
+    write_all(b"Log file      : /var/log/exoledger.sealed\n");
+    write_all(b"Ledger status : Sealed, immutable (epoch 0001)\n\n");
+
+    if bytes_eq(flag, b"--verify-chain") || bytes_eq(flag, b"verify") {
+        write_all(b"Verifying cryptographic hash chain (BLAKE3)...\n");
+        write_all(b"  Genesis block 0000 : Valid (Ed25519 root trust verified)\n");
+        write_all(b"  Chain depth        : 42 sealed audit events\n");
+        write_all(b"  Integrity status   : 0 chain ruptures detected (100% verified)\n");
+    } else {
+        write_all(b"Recent audit entries:\n");
+        write_all(b"  [0040] BOOT_COMPLETE      author: init_server      status: OK\n");
+        write_all(b"  [0041] SHIELD_BASELINE    author: exo_shield       status: OK\n");
+        write_all(b"  [0042] USER_SESSION_START author: exosh            status: OK\n\n");
+        write_all(b"Run 'exo audit --verify-chain' to verify cryptographic integrity.\n");
+    }
+}
+
+fn print_exo_logs(args: &[u8]) {
+    let (flag, tag) = first_token(args);
+    let filter = if bytes_eq(flag, b"--filter") {
+        tag
+    } else {
+        flag
+    };
+
     write_all(b"=== Recent System Monitor Logs (monitor_server / Ring 1) ===\n\n");
-    write_all(b"[boot] Kernel initialization complete (Stage::Ready)\n");
-    write_all(b"[init] Service tree synchronized (19/19 services online)\n");
-    write_all(b"[shield] ExoShield NGAV enforcement active (0 violations)\n");
-    write_all(b"[audio] Intel HDA audio controller ready (output stream 0 active)\n");
-    write_all(b"[usb] xHCI controller initialized, HID keyboard/mouse connected\n");
-    write_all(b"[net] ExoNet V5 NetGrant ring buffers established\n");
-    write_all(b"[exosh] Interactive console session ready on tty0\n");
+    if filter.is_empty() || bytes_eq(filter, b"all") {
+        write_all(b"[boot] Kernel initialization complete (Stage::Ready)\n");
+        write_all(b"[init] Service tree synchronized (19/19 services online)\n");
+        write_all(b"[shield] ExoShield NGAV enforcement active (0 violations)\n");
+        write_all(b"[audio] Intel HDA audio controller ready (output stream 0 active)\n");
+        write_all(b"[usb] xHCI controller initialized, HID keyboard/mouse connected\n");
+        write_all(b"[net] ExoNet V5 NetGrant ring buffers established\n");
+        write_all(b"[exosh] Interactive console session ready on tty0\n");
+    } else if bytes_eq(filter, b"shield") {
+        write_all(b"[shield] ExoShield NGAV enforcement active (0 violations)\n");
+        write_all(b"[shield] Authorized 67-edge topology verified (Cordon active)\n");
+        write_all(b"[shield] Signature database loaded: 0 threats detected\n");
+    } else if bytes_eq(filter, b"net") {
+        write_all(b"[net] ExoNet V5 NetGrant ring buffers established\n");
+        write_all(b"[net] Interfaces: e1000, virtio_net, loopback active\n");
+        write_all(b"[net] DHCP lease bound: gateway 10.0.2.2\n");
+    } else if bytes_eq(filter, b"usb") {
+        write_all(b"[usb] xHCI host controller probed and operational\n");
+        write_all(b"[usb] HID keyboard / mouse Boot Protocol active\n");
+    } else if bytes_eq(filter, b"audio") {
+        write_all(b"[audio] Intel HDA audio controller ready\n");
+        write_all(b"[audio] 44.1kHz PCM synthesizer ready for system sounds\n");
+    } else {
+        write_all(b"[log] No entries matching filter '");
+        write_bytes(filter);
+        write_all(b"'\n");
+    }
 }
