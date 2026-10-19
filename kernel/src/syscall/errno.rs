@@ -66,6 +66,8 @@ pub const EINVAL: i64 = -22;
 pub const EMFILE: i64 = -24;
 /// Espace disque épuisé (ENOSPC)
 pub const ENOSPC: i64 = -28;
+/// Recherche invalide (pipe, socket, FIFO) (ESPIPE)
+pub const ESPIPE: i64 = -29;
 /// Résultat hors plage — overflow (ERANGE)
 pub const ERANGE: i64 = -34;
 /// Syscall non implémenté (ENOSYS)

@@ -19,8 +19,8 @@ use smoltcp::wire::{
 const SOCKET_STORAGE_LEN: usize = MAX_SOCKETS;
 const ETHERNET_MTU_WITH_HEADER: usize = 1514;
 const CLOCK_MONOTONIC: u64 = 1;
-const TCP_BUFFER_SIZE: usize = 2048;
-const UDP_BUFFER_SIZE: usize = 2048;
+const TCP_BUFFER_SIZE: usize = 16384;
+const UDP_BUFFER_SIZE: usize = 16384;
 const UDP_PACKET_METADATA_LEN: usize = 4;
 const ICMP_BUFFER_SIZE: usize = 256;
 const ICMP_PACKET_METADATA_LEN: usize = 4;

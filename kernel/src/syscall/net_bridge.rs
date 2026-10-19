@@ -508,7 +508,10 @@ pub fn net_sendto(
         return Err(EBADF);
     }
     check_net_permission(crate::syscall::numbers::SYS_SENDTO)?;
-    if len != 0 && buf_ptr == 0 {
+    if len == 0 {
+        return Ok(0);
+    }
+    if buf_ptr == 0 {
         return Err(EFAULT);
     }
     let (addr, port) = if addr_ptr != 0 {
@@ -516,28 +519,39 @@ pub fn net_sendto(
     } else {
         (0, 0)
     };
-    if len > NET_INLINE_DATA_MAX {
-        return Err(EMSGSIZE);
+
+    let mut total_sent: usize = 0;
+    while total_sent < len {
+        let chunk_len = (len - total_sent).min(NET_INLINE_DATA_MAX);
+        let mut data = [0u8; NET_INLINE_DATA_MAX];
+        let curr_buf = match buf_ptr.checked_add(total_sent as u64) {
+            Some(p) => p,
+            None => return if total_sent > 0 { Ok(total_sent as i64) } else { Err(EFAULT) },
+        };
+        if copy_from_user(data.as_mut_ptr(), curr_buf as *const u8, chunk_len).is_err() {
+            return if total_sent > 0 { Ok(total_sent as i64) } else { Err(EFAULT) };
+        }
+        let msg = make_msg(
+            NET_OP_SENDTO,
+            fd as u32,
+            chunk_len as u64,
+            addr as u64,
+            port as u32,
+            flags,
+        );
+        let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+        let _ = call_network_raw(&msg, &data[..chunk_len], &mut reply_raw)?;
+        let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+        if reply.status < 0 {
+            return if total_sent > 0 { Ok(total_sent as i64) } else { Err(reply.status) };
+        }
+        let sent_this_chunk = (reply.status as usize).min(chunk_len);
+        total_sent += sent_this_chunk;
+        if sent_this_chunk < chunk_len {
+            break;
+        }
     }
-    let mut data = [0u8; NET_INLINE_DATA_MAX];
-    if len != 0 && copy_from_user(data.as_mut_ptr(), buf_ptr as *const u8, len).is_err() {
-        return Err(EFAULT);
-    }
-    let msg = make_msg(
-        NET_OP_SENDTO,
-        fd as u32,
-        len as u64,
-        addr as u64,
-        port as u32,
-        flags,
-    );
-    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
-    let _ = call_network_raw(&msg, &data[..len], &mut reply_raw)?;
-    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
-    if reply.status < 0 {
-        return Err(reply.status);
-    }
-    Ok(reply.status)
+    Ok(total_sent as i64)
 }
 
 pub fn net_recvfrom(
@@ -552,6 +566,12 @@ pub fn net_recvfrom(
         return Err(EBADF);
     }
     check_net_permission(crate::syscall::numbers::SYS_RECVFROM)?;
+    if len == 0 {
+        return Ok(0);
+    }
+    if buf_ptr == 0 {
+        return Err(EFAULT);
+    }
     let request_len = len.min(NET_INLINE_DATA_MAX);
     let msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
     let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
@@ -563,9 +583,6 @@ pub fn net_recvfrom(
     let n = reply.status.max(0) as usize;
     let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
     if data_len != 0 {
-        if buf_ptr == 0 {
-            return Err(EFAULT);
-        }
         if copy_to_user(
             buf_ptr as *mut u8,
             reply_raw[NET_REPLY_DATA_OFFSET..].as_ptr(),
@@ -578,8 +595,10 @@ pub fn net_recvfrom(
     }
     let peer_addr = reply_u32(&reply, 8);
     let peer_port = reply_u16(&reply, 12);
-    write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
-    Ok(n as i64)
+    if peer_addr != 0 || addr_ptr != 0 {
+        write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+    }
+    Ok(data_len as i64)
 }
 
 pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {

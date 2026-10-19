@@ -69,6 +69,9 @@ pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
 /// `lseek(fd, offset, whence)` → nouvelle position ou errno.
 pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_LSEEK);
+    if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
+        return ESPIPE;
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),

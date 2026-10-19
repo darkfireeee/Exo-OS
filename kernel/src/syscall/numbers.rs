@@ -542,6 +542,8 @@ pub const ENOSPC: i64 = -28;
 pub const ENOTSUP: i64 = -95;
 /// Alias POSIX/Linux de ENOTSUP
 pub const EOPNOTSUPP: i64 = -95;
+/// Recherche invalide (pipe, socket, FIFO)
+pub const ESPIPE: i64 = -29;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers de classification

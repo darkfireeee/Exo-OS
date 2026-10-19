@@ -7,6 +7,18 @@ use crate::syscall::validation::{validate_fd, UserBuf, IO_BUF_MAX};
 /// `read(fd, buf, count)` → nombre d'octets lus ou errno.
 pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_READ);
+    if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
+        let len = count as usize;
+        if len > IO_BUF_MAX {
+            return E2BIG;
+        }
+        if let Err(e) = UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+            return e.to_errno();
+        }
+        return crate::syscall::net_bridge::bridge_result(
+            crate::syscall::net_bridge::net_recvfrom(sock_fd, buf_ptr, len, 0, 0, 0),
+        );
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -30,6 +42,18 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
 /// `write(fd, buf, count)` → nombre d'octets écrits ou errno.
 pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WRITE);
+    if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
+        let len = count as usize;
+        if len > IO_BUF_MAX {
+            return E2BIG;
+        }
+        if let Err(e) = UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
+            return e.to_errno();
+        }
+        return crate::syscall::net_bridge::bridge_result(
+            crate::syscall::net_bridge::net_sendto(sock_fd, buf_ptr, len, 0, 0, 0),
+        );
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -51,6 +75,9 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
 /// `pread64(fd, buf, count, offset)` → read without changing fd cursor.
 pub fn sys_pread64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PREAD64);
+    if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
+        return ESPIPE;
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -71,6 +98,9 @@ pub fn sys_pread64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a6
 /// `pwrite64(fd, buf, count, offset)` → write without changing fd cursor.
 pub fn sys_pwrite64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PWRITE64);
+    if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
+        return ESPIPE;
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -94,6 +124,43 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
     if iovcnt > u32::MAX as u64 {
         return EINVAL;
     }
+    if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
+        if iovcnt == 0 {
+            return 0;
+        }
+        if iov_ptr == 0 {
+            return EFAULT;
+        }
+        for i in 0..iovcnt {
+            let elem_ptr = match iov_ptr.checked_add(i.saturating_mul(16)) {
+                Some(p) => p,
+                None => return EFAULT,
+            };
+            let mut iov_buf = [0u64; 2];
+            if crate::syscall::validation::copy_from_user(
+                iov_buf.as_mut_ptr() as *mut u8,
+                elem_ptr as *const u8,
+                16,
+            ).is_err() {
+                return EFAULT;
+            }
+            let base = iov_buf[0];
+            let len = iov_buf[1] as usize;
+            if len == 0 {
+                continue;
+            }
+            if len > IO_BUF_MAX {
+                return E2BIG;
+            }
+            if let Err(e) = UserBuf::validate(base, len, IO_BUF_MAX) {
+                return e.to_errno();
+            }
+            return crate::syscall::net_bridge::bridge_result(
+                crate::syscall::net_bridge::net_recvfrom(sock_fd, base, len, 0, 0, 0),
+            );
+        }
+        return 0;
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -109,6 +176,52 @@ pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u
     if iovcnt > u32::MAX as u64 {
         return EINVAL;
     }
+    if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
+        if iovcnt == 0 {
+            return 0;
+        }
+        if iov_ptr == 0 {
+            return EFAULT;
+        }
+        let mut total_written: usize = 0;
+        for i in 0..iovcnt {
+            let elem_ptr = match iov_ptr.checked_add(i.saturating_mul(16)) {
+                Some(p) => p,
+                None => return EFAULT,
+            };
+            let mut iov_buf = [0u64; 2];
+            if crate::syscall::validation::copy_from_user(
+                iov_buf.as_mut_ptr() as *mut u8,
+                elem_ptr as *const u8,
+                16,
+            ).is_err() {
+                return if total_written > 0 { total_written as i64 } else { EFAULT };
+            }
+            let base = iov_buf[0];
+            let len = iov_buf[1] as usize;
+            if len == 0 {
+                continue;
+            }
+            if len > IO_BUF_MAX {
+                return E2BIG;
+            }
+            if let Err(e) = UserBuf::validate(base, len, IO_BUF_MAX) {
+                return e.to_errno();
+            }
+            match crate::syscall::net_bridge::net_sendto(sock_fd, base, len, 0, 0, 0) {
+                Ok(n) => {
+                    total_written += n as usize;
+                    if (n as usize) < len {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    return if total_written > 0 { total_written as i64 } else { err };
+                }
+            }
+        }
+        return total_written as i64;
+    }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -123,6 +236,9 @@ pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6
     stat_inc(SYS_PREADV);
     if iovcnt > u32::MAX as u64 {
         return EINVAL;
+    }
+    if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
+        return ESPIPE;
     }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
@@ -144,6 +260,9 @@ pub fn sys_pwritev(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a
     stat_inc(SYS_PWRITEV);
     if iovcnt > u32::MAX as u64 {
         return EINVAL;
+    }
+    if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
+        return ESPIPE;
     }
     let fd = match validate_fd(fd) {
         Ok(f) => f,
