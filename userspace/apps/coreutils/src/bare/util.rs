@@ -315,6 +315,10 @@ use exo_syscall_abi as syscall;
         mode & S_IFMT == S_IFDIR
     }
 
+    pub fn is_regular_mode(mode: u32) -> bool {
+        mode & S_IFMT == S_IFREG
+    }
+
     pub fn path_len(path: &[u8; PATH_MAX]) -> usize {
         let mut len = 0usize;
         while len < PATH_MAX && path[len] != 0 {

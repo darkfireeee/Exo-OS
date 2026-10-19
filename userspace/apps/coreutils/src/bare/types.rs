@@ -14,6 +14,7 @@ use exo_syscall_abi as syscall;
     pub const DT_DIR: u8 = 4;
     pub const S_IFMT: u32 = 0o170000;
     pub const S_IFDIR: u32 = 0o040000;
+    pub const S_IFREG: u32 = 0o100000;
     pub const SIGTERM: u64 = 15;
     pub const CLOCK_MONOTONIC: u64 = 1;
     pub const RM_MAX_DEPTH: usize = 8;
