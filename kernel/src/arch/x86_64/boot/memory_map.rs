@@ -681,6 +681,25 @@ struct ExoBootInfo {
     _fb_pad: u32,       // offset 6188 (align u64)
     fb_size_bytes: u64, // offset 6192
     acpi_rsdp: u64,     // offset 6200
+    entropy: [u8; 64],  // offset 6208
+    kernel_physical_base: u64, // offset 6272
+    kernel_entry_offset: u64,  // offset 6280
+    kernel_elf_phys: u64,      // offset 6288
+    kernel_elf_size: u64,      // offset 6296
+    boot_flags: u64,           // offset 6304
+    boot_tsc: u64,             // offset 6312
+    exofs_root_phys: u64,      // offset 6320
+    exofs_root_lba: u64,       // offset 6328
+    exofs_root_sectors: u64,   // offset 6336
+    exofs_data_phys: u64,      // offset 6344
+    exofs_data_lba: u64,       // offset 6352
+    exofs_data_sectors: u64,   // offset 6360
+    disk_guid: [u8; 16],       // offset 6368
+    boot_partition_guid: [u8; 16], // offset 6384
+    boot_from_usb: u8,         // offset 6400
+    _pad_v2: [u8; 7],          // offset 6401
+    nvme_controller_phys: u64, // offset 6408
+    ahci_controller_phys: u64, // offset 6416
 }
 
 /// Convertit `MemoryKind` exo-boot (repr u32) en `MemoryRegionType` kernel.

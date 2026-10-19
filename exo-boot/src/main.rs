@@ -39,6 +39,9 @@ pub mod memory;
 pub mod panic;
 
 #[cfg(feature = "uefi-boot")]
+extern crate alloc;
+
+#[cfg(feature = "uefi-boot")]
 pub mod uefi;
 
 //  CHEMIN UEFI 
@@ -76,10 +79,9 @@ fn efi_main(
 
     // Étape 3b : Diagnostic GPT (NON fatal). Localise les partitions ExoFS par
     // type-GUID via le parseur PARTAGÉ `exo-partition` (même code que le kernel),
-    // sur EFI_BLOCK_IO en lecture seule. Le kernel re-scanne lui-même au montage
-    // (storage::partition_scan), donc ceci sert à valider la table au boot et à
-    // tracer la disposition réelle — aucune dépendance du flux de boot dessus.
-    match disk::gpt::scan_boot_disk(boot_services, image_handle) {
+    // sur EFI_BLOCK_IO en lecture seule.
+    let discovered_layout = disk::gpt::scan_boot_disk(boot_services, image_handle);
+    match discovered_layout {
         Some(layout) => boot_println!(
             "GPT: ESP@{:?} ExoFS-ROOT@{:?} ({} sect) ExoFS-DATA@{:?}",
             layout.esp_lba,
@@ -89,6 +91,9 @@ fn efi_main(
         ),
         None => boot_println!("GPT: pas de partition ExoFS reconnue (boot via ESP/FAT)"),
     }
+
+    // Étape 3c : Enregistrement NVRAM UEFI (BootXXXX + BootOrder)
+    uefi::nvram::register_boot_entry(&system_table);
 
     // Étape 4 : Carte mémoire UEFI
     let uefi_memmap = memory::map::collect_uefi_memory_map(boot_services)
@@ -201,6 +206,16 @@ fn efi_main(
         if boot_info_ref.acpi_rsdp != 0            { flags |= ACPI2_PRESENT; }
         flags
     };
+    if let Some(layout) = discovered_layout {
+        if let Some(root_lba) = layout.root_lba {
+            boot_info_ref.exofs_root_lba = root_lba;
+            boot_info_ref.exofs_root_sectors = layout.root_sectors;
+        }
+        if let Some(data_lba) = layout.data_lba {
+            boot_info_ref.exofs_data_lba = data_lba;
+            boot_info_ref.exofs_data_sectors = layout.data_sectors;
+        }
+    }
     boot_info_ref.record_tsc();
     boot_println!("BootInfo: {} régions mémoire", boot_info_ref.memory_region_count);
 

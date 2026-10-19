@@ -36,7 +36,7 @@ pub const BOOT_INFO_MAGIC: u64 = 0x4F42_5F53_4F4F_5845; // "EXOOS_BO"
 pub const EXOBOOT_MAGIC_U32: u32 = 0x4F4F_5845; // "EXOO"
 
 /// Version du format BootInfo. Incrémentée si structure change.
-pub const BOOT_INFO_VERSION: u32 = 1;
+pub const BOOT_INFO_VERSION: u32 = 2;
 
 // ─── FramebufferInfo ─────────────────────────────────────────────────────────
 
@@ -147,6 +147,19 @@ pub struct BootInfo {
     pub boot_flags:           u64,
     /// Timestamp TSC au moment de la collecte (utile pour profiling).
     pub boot_tsc:             u64,
+    // ── Disposition disques & ExoFS (BootInfo v2) ────────────────────────
+    pub exofs_root_phys:      u64,
+    pub exofs_root_lba:       u64,
+    pub exofs_root_sectors:   u64,
+    pub exofs_data_phys:      u64,
+    pub exofs_data_lba:       u64,
+    pub exofs_data_sectors:   u64,
+    pub disk_guid:            [u8; 16],
+    pub boot_partition_guid:  [u8; 16],
+    pub boot_from_usb:        u8,
+    pub _pad_v2:              [u8; 7],
+    pub nvme_controller_phys: u64,
+    pub ahci_controller_phys: u64,
     // ── Réservé ──────────────────────────────────────────────────────────
     /// Champs réservés — DOIVENT être à zéro (RÈGLE BOOT-03).
     pub _reserved:            [u64; 16],

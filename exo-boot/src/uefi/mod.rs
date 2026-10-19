@@ -14,6 +14,7 @@
 
 pub mod entry;
 pub mod exit;
+pub mod nvram;
 pub mod protocols;
 pub mod secure_boot;
 pub mod services;
