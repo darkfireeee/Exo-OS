@@ -11,6 +11,7 @@ pub enum LineEvent {
     Echo(u8),
     Backspace,
     ClearScreen,
+    Bell,
     LineReady { len: usize },
     Signal(Signal),
 }
@@ -87,6 +88,7 @@ impl LineDiscipline {
                 }
             }
             0x0c if self.canonical => Some(LineEvent::ClearScreen),
+            0x07 => Some(LineEvent::Bell),
             byte => {
                 if self.len < LINE_MAX {
                     self.buf[self.len] = byte;

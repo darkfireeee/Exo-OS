@@ -246,6 +246,10 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
             console_write(b"\x0c");
             reply(0, 0, b"\x0c")
         }
+        Some(LineEvent::Bell) => {
+            play_bell();
+            reply(0, 0, &[])
+        }
         None => reply(0, 0, &[]),
     }
 }
@@ -354,14 +358,47 @@ fn reply(status: i64, signal: u32, data: &[u8]) -> syscall::TtyReply {
     }
 }
 
+fn play_bell() {
+    let req = syscall::AudioRequest {
+        sender_pid: 0,
+        msg_type: syscall::AUDIO_MSG_BEEP,
+        reply_endpoint: 0,
+        a: 800, // 800 Hz
+        b: 100, // 100 ms
+        _reserved: [0; 16],
+    };
+    unsafe {
+        let _ = syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::AUDIO_SERVER_ENDPOINT,
+            &req as *const syscall::AudioRequest as u64,
+            core::mem::size_of::<syscall::AudioRequest>() as u64,
+            0,
+            0,
+            0,
+        );
+    }
+}
+
 fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
     match req.msg_type {
         syscall::TTY_MSG_INPUT_BYTE => handle_input(req.a as u8),
         syscall::TTY_MSG_READ_LINE => handle_read_line(),
         syscall::TTY_MSG_WRITE => {
             let n = core::cmp::min(req.a as usize, LINE_OUT_MAX);
-            console_write(&req.data[..n]);
-            reply(0, 0, &req.data[..n])
+            let slice = &req.data[..n];
+            let mut has_bell = false;
+            for &b in slice {
+                if b == 0x07 {
+                    has_bell = true;
+                    break;
+                }
+            }
+            if has_bell {
+                play_bell();
+            }
+            console_write(slice);
+            reply(0, 0, slice)
         }
         syscall::TTY_MSG_IOCTL => reply(0, 0, &[]),
         _ => reply(syscall::EINVAL, 0, &[]),

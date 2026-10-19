@@ -407,8 +407,59 @@ pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) ->
             result.detail1,
             result.detail2,
         );
+        match result.level {
+            engine::ThreatLevel::High => emit_audio_alert_high(),
+            engine::ThreatLevel::Critical => emit_audio_alert_critical(),
+            _ => {}
+        }
     }
 
     result
+}
+
+fn emit_audio_alert_high() {
+    let req = syscall::AudioRequest {
+        sender_pid: 0,
+        msg_type: syscall::AUDIO_MSG_BEEP,
+        reply_endpoint: 0,
+        a: 300, // 300 Hz
+        b: 150, // 150 ms
+        _reserved: [0; 16],
+    };
+    unsafe {
+        for _ in 0..3 {
+            let _ = syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                syscall::AUDIO_SERVER_ENDPOINT,
+                &req as *const syscall::AudioRequest as u64,
+                core::mem::size_of::<syscall::AudioRequest>() as u64,
+                0,
+                0,
+                0,
+            );
+        }
+    }
+}
+
+fn emit_audio_alert_critical() {
+    let req = syscall::AudioRequest {
+        sender_pid: 0,
+        msg_type: syscall::AUDIO_MSG_PLAY_SYSTEM_SOUND,
+        reply_endpoint: 0,
+        a: syscall::AUDIO_SOUND_SECURITY_ALERT,
+        b: 0,
+        _reserved: [0; 16],
+    };
+    unsafe {
+        let _ = syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::AUDIO_SERVER_ENDPOINT,
+            &req as *const syscall::AudioRequest as u64,
+            core::mem::size_of::<syscall::AudioRequest>() as u64,
+            0,
+            0,
+            0,
+        );
+    }
 }
 

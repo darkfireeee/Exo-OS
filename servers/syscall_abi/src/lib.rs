@@ -737,8 +737,16 @@ pub const SYS_IOPORT_WRITE: u64 = 549;
 
 pub const INPUT_SERVER_ENDPOINT: u64 = 11;
 pub const TTY_SERVER_ENDPOINT: u64 = 12;
+pub const AUDIO_SERVER_ENDPOINT: u64 = 16;
 pub const FB_SERVER_ENDPOINT: u64 = 20;
 pub const PS2_DRIVER_IRQ_CHANNEL: u64 = 17;
+
+pub const AUDIO_MSG_PLAY_SYSTEM_SOUND: u32 = 0;
+pub const AUDIO_MSG_BEEP: u32 = 1;
+pub const AUDIO_MSG_STOP: u32 = 2;
+
+pub const AUDIO_SOUND_BOOT_COMPLETE: u32 = 0;
+pub const AUDIO_SOUND_SECURITY_ALERT: u32 = 1;
 
 pub const INPUT_MSG_PUSH: u32 = 0x120;
 pub const INPUT_MSG_POLL: u32 = 0x121;
@@ -890,10 +898,30 @@ pub struct FbReply {
     pub _pad: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AudioRequest {
+    pub sender_pid: u32,
+    pub msg_type: u32,
+    pub reply_endpoint: u64,
+    pub a: u32,
+    pub b: u32,
+    pub _reserved: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AudioReply {
+    pub status: i64,
+    pub _reserved: [u8; 16],
+}
+
 const _: () = assert!(core::mem::size_of::<InputRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);
 const _: () = assert!(core::mem::size_of::<InputReply>() <= IPC_KERNEL_MAX_MSG_SIZE);
 const _: () = assert!(core::mem::size_of::<TtyRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);
 const _: () = assert!(core::mem::size_of::<TtyReply>() <= IPC_KERNEL_MAX_MSG_SIZE);
+const _: () = assert!(core::mem::size_of::<AudioRequest>() <= IPC_KERNEL_MAX_MSG_SIZE);
+const _: () = assert!(core::mem::size_of::<AudioReply>() <= IPC_KERNEL_MAX_MSG_SIZE);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

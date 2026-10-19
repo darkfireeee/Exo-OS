@@ -1,0 +1,20 @@
+[package]
+name = "exo-audio-server"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "exo-audio-server"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+spin = { workspace = true }
+exo-syscall-abi = { path = "../syscall_abi" }
+exo-audio-drivers = { path = "../../drivers/audio" }
+exo-os-drivers = { path = "../../drivers" }
+
+[features]
+default = []

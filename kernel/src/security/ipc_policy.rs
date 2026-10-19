@@ -26,6 +26,7 @@ pub enum ServiceClass {
     VirtioDriver,
     ExoShield,
     Exosh,
+    AudioServer,
     Unknown,
 }
 
@@ -37,7 +38,7 @@ struct ServiceEntry {
 
 const INIT_SERVER_PID: u32 = 1;
 const IPC_BROKER_PID: u32 = 2;
-const MAX_REGISTERED_SERVICES: usize = 16;
+const MAX_REGISTERED_SERVICES: usize = 32;
 
 static SERVICE_REGISTRY: RwLock<[Option<ServiceEntry>; MAX_REGISTERED_SERVICES]> =
     RwLock::new([None; MAX_REGISTERED_SERVICES]);
@@ -94,10 +95,16 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::DeviceServer, ServiceClass::NetworkServer),
     (ServiceClass::NetworkServer, ServiceClass::VirtioDriver),
     (ServiceClass::VirtioDriver, ServiceClass::NetworkServer),
+    (ServiceClass::InitServer, ServiceClass::AudioServer),
+    (ServiceClass::AudioServer, ServiceClass::InitServer),
+    (ServiceClass::TtyServer, ServiceClass::AudioServer),
+    (ServiceClass::AudioServer, ServiceClass::TtyServer),
+    (ServiceClass::ExoShield, ServiceClass::AudioServer),
+    (ServiceClass::AudioServer, ServiceClass::ExoShield),
 ];
 
 const _: () = assert!(
-    POLICY.len() == 51,
+    POLICY.len() == 57,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -133,6 +140,7 @@ fn is_ring1_trusted_class(class: ServiceClass) -> bool {
             | ServiceClass::Ps2Driver
             | ServiceClass::VirtioDriver
             | ServiceClass::ExoShield
+            | ServiceClass::AudioServer
     )
 }
 

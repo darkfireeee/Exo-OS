@@ -1,6 +1,6 @@
 use super::Service;
 
-pub const SERVICE_COUNT: usize = 17;
+pub const SERVICE_COUNT: usize = 18;
 
 pub struct ServiceMetadata {
     pub name: &'static str,
@@ -27,6 +27,7 @@ const DEPS_INPUT: &[&str] = &["ipc_router", "device_server"];
 const DEPS_FB: &[&str] = &["ipc_router", "device_server"];
 const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "fb_server", "vfs_server"];
 const DEPS_PS2: &[&str] = &["ipc_router", "device_server", "input_server", "tty_server"];
+const DEPS_AUDIO: &[&str] = &["ipc_router", "device_server"];
 // STRATA-SEC-01: exosh DOIT attendre exo_shield (vague 5 -> vague 6).
 // exosh ne peut pas etre interactif avant que la surveillance NGAV soit active.
 const DEPS_EXOSH: &[&str] = &[
@@ -67,6 +68,7 @@ pub static TTY_SERVER_BIN: &[u8] = b"/sbin/exo-tty-server\0";
 pub static PS2_DRIVER_BIN: &[u8] = b"/sbin/exo-ps2-input\0";
 pub static EXOSH_BIN: &[u8] = b"/bin/exosh\0";
 pub static EXO_SHIELD_BIN: &[u8] = b"/sbin/exo-shield\0";
+pub static AUDIO_SERVER_BIN: &[u8] = b"/sbin/exo-audio-server\0";
 
 pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
     ServiceMetadata {
@@ -194,6 +196,14 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         name: "scheduler_server",
         bin_path: SCHEDULER_SERVER_BIN,
         requires: DEPS_SCHEDULER,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 20_000,
+        critical: false,
+    },
+    ServiceMetadata {
+        name: "audio_server",
+        bin_path: AUDIO_SERVER_BIN,
+        requires: DEPS_AUDIO,
         requires_optional: NO_DEPS,
         ready_timeout_ms: 20_000,
         critical: false,

@@ -178,6 +178,7 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("network_server", service_table::NETWORK_SERVER_BIN),
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
     Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
+    Service::new("audio_server", service_table::AUDIO_SERVER_BIN),
 ];
 
 #[inline(always)]
@@ -215,6 +216,28 @@ unsafe fn reap_children(service_watchdog: &mut ServiceWatchdog) {
 fn kill_service(pid: u32, signal: u64) {
     unsafe {
         let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, signal);
+    }
+}
+
+fn play_boot_chime() {
+    let req = syscall::AudioRequest {
+        sender_pid: 1,
+        msg_type: syscall::AUDIO_MSG_PLAY_SYSTEM_SOUND,
+        reply_endpoint: 0,
+        a: syscall::AUDIO_SOUND_BOOT_COMPLETE,
+        b: 0,
+        _reserved: [0; 16],
+    };
+    unsafe {
+        let _ = syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            syscall::AUDIO_SERVER_ENDPOINT,
+            &req as *const syscall::AudioRequest as u64,
+            core::mem::size_of::<syscall::AudioRequest>() as u64,
+            0,
+            0,
+            0,
+        );
     }
 }
 
@@ -430,6 +453,9 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
         idx += 1;
     }
     log::line(b"init_server: service graph booted");
+
+    // Émettre le carillon de démarrage (Chime Boot - SPEC-AUDIO-STRATA §6, fallback silencieux)
+    play_boot_chime();
 
     // ── 3. Boucle de supervision ──────────────────────────────────────────
     loop {

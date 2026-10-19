@@ -60,7 +60,8 @@ ROOTFS_SERVER_PACKAGES = \
 	-p exo-exosh \
 	-p exo-shield \
 	-p exo-fat-server \
-	-p exo-ext-server
+	-p exo-ext-server \
+	-p exo-audio-server
 ROOTFS_SERVER_FEATURES = -F exo-network-server/baremetal-bin
 ROOTFS_SBIN_BINS = \
 	exo-init-server \
@@ -81,7 +82,8 @@ ROOTFS_SBIN_BINS = \
 	exo-ps2-input \
 	exo-shield \
 	exo-fat-server \
-	exo-ext-server
+	exo-ext-server \
+	exo-audio-server
 ROOTFS_BIN_BINS = \
 	basename \
 	cat \

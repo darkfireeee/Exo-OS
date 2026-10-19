@@ -34,6 +34,7 @@ pub enum ServiceId {
     Fb             = 13,  // fb_server     — framebuffer GOP Ring1
     Exosh          = 14,  // exosh         — shell interactif
     Ps2            = 15,  // ps2_driver    — driver clavier/souris PS/2
+    Audio          = 16,  // audio_server  — audio système Ring 1
 }
 
 impl ServiceId {
@@ -54,6 +55,7 @@ impl ServiceId {
             13 => Some(Self::Fb),
             14 => Some(Self::Exosh),
             15 => Some(Self::Ps2),
+            16 => Some(Self::Audio),
             _  => None,
         }
     }
@@ -81,6 +83,7 @@ pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
         b"fb_server" => Some(ServiceId::Fb),
         b"exo_shield" => Some(ServiceId::ExoShield),
         b"exosh" => Some(ServiceId::Exosh),
+        b"audio_server" => Some(ServiceId::Audio),
         _ => None,
     }
 }
@@ -147,7 +150,7 @@ impl AuthEdge {
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
 ///   500_000+ — drivers et shell (haut débit)
-static AUTHORIZED_GRAPH: [AuthEdge; 51] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 57] = [
     // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
     AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
     AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
@@ -216,6 +219,14 @@ static AUTHORIZED_GRAPH: [AuthEdge; 51] = [
     AuthEdge::new(ServiceId::Device,    ServiceId::Network,       2, 100_000),
     AuthEdge::new(ServiceId::Network,   ServiceId::VirtioDrivers, 1, 1_000_000),
     AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Network,   1, 1_000_000),
+
+    // ── Audio ↔ services autorisés (SPEC-AUDIO-STRATA) ───────────────────────
+    AuthEdge::new(ServiceId::Init,      ServiceId::Audio,         2, 10_000),
+    AuthEdge::new(ServiceId::Audio,     ServiceId::Init,          2, 10_000),
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Audio,         2, 100_000),
+    AuthEdge::new(ServiceId::Audio,     ServiceId::Tty,           2, 100_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Audio,         2, 50_000),
+    AuthEdge::new(ServiceId::Audio,     ServiceId::ExoShield,     2, 50_000),
 ];
 
 const _: () = assert!(
@@ -224,11 +235,11 @@ const _: () = assert!(
 );
 
 // FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
-// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 51` ; toute
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 57` ; toute
 // évolution de la politique kernel doit être répercutée ici (et inversement).
 const _: () = assert!(
-    AUTHORIZED_GRAPH.len() == 51,
-    "DAG ExoCordon doit rester le miroir exact des 51 paires de ipc_policy.rs"
+    AUTHORIZED_GRAPH.len() == 57,
+    "DAG ExoCordon doit rester le miroir exact des 57 paires de ipc_policy.rs"
 );
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);

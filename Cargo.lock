@@ -311,6 +311,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-audio-drivers"
+version = "0.1.0"
+dependencies = [
+ "exo-os-drivers",
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
+name = "exo-audio-server"
+version = "0.1.0"
+dependencies = [
+ "exo-audio-drivers",
+ "exo-os-drivers",
+ "exo-syscall-abi",
+ "spin",
+]
+
+[[package]]
 name = "exo-crypto-server"
 version = "0.1.0"
 dependencies = [
