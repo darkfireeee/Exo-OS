@@ -591,6 +591,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-usb-hid"
+version = "0.1.0"
+dependencies = [
+ "exo-os-drivers",
+ "exo-syscall-abi",
+]
+
+[[package]]
+name = "exo-usb-server"
+version = "0.1.0"
+dependencies = [
+ "exo-os-drivers",
+ "exo-syscall-abi",
+ "exo-usb-hid",
+ "spin",
+]
+
+[[package]]
 name = "exo-verity"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,20 @@
+[package]
+name = "exo-usb-server"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "exo-usb-server"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+spin = { workspace = true }
+exo-syscall-abi = { path = "../syscall_abi" }
+exo-os-drivers = { path = "../../drivers" }
+exo-usb-hid = { path = "../../drivers/input/usb_hid" }
+
+[features]
+default = []

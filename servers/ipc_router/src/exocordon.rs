@@ -35,6 +35,7 @@ pub enum ServiceId {
     Exosh          = 14,  // exosh         — shell interactif
     Ps2            = 15,  // ps2_driver    — driver clavier/souris PS/2
     Audio          = 16,  // audio_server  — audio système Ring 1
+    Usb            = 17,  // usb_server    — contrôleur xHCI / périphériques USB
 }
 
 impl ServiceId {
@@ -56,6 +57,7 @@ impl ServiceId {
             14 => Some(Self::Exosh),
             15 => Some(Self::Ps2),
             16 => Some(Self::Audio),
+            17 => Some(Self::Usb),
             _  => None,
         }
     }
@@ -84,6 +86,7 @@ pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
         b"exo_shield" => Some(ServiceId::ExoShield),
         b"exosh" => Some(ServiceId::Exosh),
         b"audio_server" => Some(ServiceId::Audio),
+        b"usb_server" => Some(ServiceId::Usb),
         _ => None,
     }
 }
@@ -150,7 +153,7 @@ impl AuthEdge {
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
 ///   500_000+ — drivers et shell (haut débit)
-static AUTHORIZED_GRAPH: [AuthEdge; 57] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 67] = [
     // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
     AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
     AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
@@ -227,6 +230,18 @@ static AUTHORIZED_GRAPH: [AuthEdge; 57] = [
     AuthEdge::new(ServiceId::Audio,     ServiceId::Tty,           2, 100_000),
     AuthEdge::new(ServiceId::ExoShield, ServiceId::Audio,         2, 50_000),
     AuthEdge::new(ServiceId::Audio,     ServiceId::ExoShield,     2, 50_000),
+
+    // ── USB ↔ services autorisés (SPEC-USB-STRATA) ───────────────────────────
+    AuthEdge::new(ServiceId::Init,      ServiceId::Usb,           2, 10_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::Init,          2, 10_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Usb,           2, 100_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::Device,        2, 100_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Usb,           2, 100_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::Input,         2, 100_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Usb,           2, 100_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::Vfs,           2, 100_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Usb,           2, 50_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::ExoShield,     2, 50_000),
 ];
 
 const _: () = assert!(
@@ -235,11 +250,11 @@ const _: () = assert!(
 );
 
 // FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
-// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 57` ; toute
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 67` ; toute
 // évolution de la politique kernel doit être répercutée ici (et inversement).
 const _: () = assert!(
-    AUTHORIZED_GRAPH.len() == 57,
-    "DAG ExoCordon doit rester le miroir exact des 57 paires de ipc_policy.rs"
+    AUTHORIZED_GRAPH.len() == 67,
+    "DAG ExoCordon doit rester le miroir exact des 67 paires de ipc_policy.rs"
 );
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);

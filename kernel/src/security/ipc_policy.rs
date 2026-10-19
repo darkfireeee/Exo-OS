@@ -27,6 +27,7 @@ pub enum ServiceClass {
     ExoShield,
     Exosh,
     AudioServer,
+    UsbServer,
     Unknown,
 }
 
@@ -101,10 +102,20 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::AudioServer, ServiceClass::TtyServer),
     (ServiceClass::ExoShield, ServiceClass::AudioServer),
     (ServiceClass::AudioServer, ServiceClass::ExoShield),
+    (ServiceClass::InitServer, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::InitServer),
+    (ServiceClass::DeviceServer, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::DeviceServer),
+    (ServiceClass::InputServer, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::InputServer),
+    (ServiceClass::VfsServer, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::VfsServer),
+    (ServiceClass::ExoShield, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::ExoShield),
 ];
 
 const _: () = assert!(
-    POLICY.len() == 57,
+    POLICY.len() == 67,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -141,6 +152,7 @@ fn is_ring1_trusted_class(class: ServiceClass) -> bool {
             | ServiceClass::VirtioDriver
             | ServiceClass::ExoShield
             | ServiceClass::AudioServer
+            | ServiceClass::UsbServer
     )
 }
 

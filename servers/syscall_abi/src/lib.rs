@@ -735,6 +735,7 @@ pub const SYS_PCI_FIND_DEVICE: u64 = 547;
 pub const SYS_IOPORT_READ: u64 = 548;
 pub const SYS_IOPORT_WRITE: u64 = 549;
 
+pub const USB_SERVER_ENDPOINT: u64 = 10;
 pub const INPUT_SERVER_ENDPOINT: u64 = 11;
 pub const TTY_SERVER_ENDPOINT: u64 = 12;
 pub const AUDIO_SERVER_ENDPOINT: u64 = 16;

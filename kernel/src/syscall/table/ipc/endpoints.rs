@@ -43,6 +43,7 @@ pub(super) fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::secu
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
         b"exosh" => Some(crate::security::ServiceClass::Exosh),
         b"audio_server" => Some(crate::security::ServiceClass::AudioServer),
+        b"usb_server" => Some(crate::security::ServiceClass::UsbServer),
         _ => None,
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "exo-usb-hid"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[lib]
+name = "exo_usb_hid"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo-os-drivers = { path = "../.." }
+
+[features]
+default = []

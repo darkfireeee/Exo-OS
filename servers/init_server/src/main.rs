@@ -179,6 +179,7 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
     Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
     Service::new("audio_server", service_table::AUDIO_SERVER_BIN),
+    Service::new("usb_server", service_table::USB_SERVER_BIN),
 ];
 
 #[inline(always)]
