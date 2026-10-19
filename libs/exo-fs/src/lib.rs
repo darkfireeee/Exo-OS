@@ -12,6 +12,8 @@ pub enum FsVerdict {
     Rejected,
 }
 
+use exo_phoenix_ssr::{PhoenixError, PhoenixRecovery, PhoenixSafe};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FsPort {
     pub name: &'static str,
@@ -20,6 +22,18 @@ pub struct FsPort {
     pub exo_boundary: &'static str,
     pub verdict: FsVerdict,
     pub phoenix_policy: &'static str,
+}
+
+impl PhoenixSafe for FsPort {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 }
 
 pub const FS_PORTS: &[FsPort] = &[

@@ -13,6 +13,8 @@ pub enum CryptoVerdict {
     Rejected,
 }
 
+use exo_phoenix_ssr::{PhoenixError, PhoenixRecovery, PhoenixSafe};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CryptoPort {
     pub name: &'static str,
@@ -20,6 +22,18 @@ pub struct CryptoPort {
     pub boundary: CryptoBoundary,
     pub verdict: CryptoVerdict,
     pub phoenix_policy: &'static str,
+}
+
+impl PhoenixSafe for CryptoPort {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 }
 
 pub const CRYPTO_PORTS: &[CryptoPort] = &[

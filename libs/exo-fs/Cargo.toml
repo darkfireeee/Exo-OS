@@ -7,4 +7,5 @@ license.workspace = true
 description = "Exo-OS filesystem library adaptation boundaries"
 
 [dependencies]
+exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }
 

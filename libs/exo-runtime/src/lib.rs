@@ -16,6 +16,8 @@ pub enum RuntimeVerdict {
     Rejected,
 }
 
+use exo_phoenix_ssr::{PhoenixError, PhoenixRecovery, PhoenixSafe};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimePort {
     pub name: &'static str,
@@ -23,6 +25,18 @@ pub struct RuntimePort {
     pub kind: RuntimePortKind,
     pub verdict: RuntimeVerdict,
     pub phoenix_policy: &'static str,
+}
+
+impl PhoenixSafe for RuntimePort {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 }
 
 pub const RUNTIME_PORTS: &[RuntimePort] = &[

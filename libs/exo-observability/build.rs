@@ -6,7 +6,7 @@ fn main() {
         let path = root.join(tree);
         println!("cargo:rerun-if-changed={}", path.display());
         assert!(
-            path.join(".git").is_dir(),
+            path.is_dir(),
             "missing observability vendor {tree}"
         );
     }

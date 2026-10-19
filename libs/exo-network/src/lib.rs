@@ -25,6 +25,8 @@ pub enum NetworkVerdict {
     Rejected,
 }
 
+use exo_phoenix_ssr::{PhoenixError, PhoenixRecovery, PhoenixSafe};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NetworkPort {
     pub name: &'static str,
@@ -33,6 +35,18 @@ pub struct NetworkPort {
     pub exo_boundary: &'static str,
     pub verdict: NetworkVerdict,
     pub phoenix_policy: &'static str,
+}
+
+impl PhoenixSafe for NetworkPort {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 }
 
 pub const NETWORK_PORTS: &[NetworkPort] = &[

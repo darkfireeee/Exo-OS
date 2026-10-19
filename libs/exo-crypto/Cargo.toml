@@ -7,4 +7,5 @@ license.workspace = true
 description = "Exo-OS crypto library adaptation boundaries"
 
 [dependencies]
+exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }
 
