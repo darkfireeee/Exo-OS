@@ -41,13 +41,16 @@ use wire::{
 };
 
 fn boot_log(bytes: &[u8]) {
-    for &byte in bytes {
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
-        }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = byte;
+    if bytes.is_empty() {
+        return;
+    }
+    unsafe {
+        let _ = syscall::syscall3(
+            syscall::SYS_EXO_LOG,
+            bytes.as_ptr() as u64,
+            bytes.len() as u64,
+            1,
+        );
     }
 }
 
