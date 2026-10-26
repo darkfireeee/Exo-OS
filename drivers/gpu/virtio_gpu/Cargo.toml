@@ -1,0 +1,17 @@
+[package]
+name              = "exo-virtio-gpu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description       = "Exo-OS Ring 1 VirtIO-GPU 2D & Hardware Cursor driver (#![no_std])"
+
+[lib]
+name = "exo_virtio_gpu"
+path = "src/lib.rs"
+test = false
+bench = false
+
+[dependencies]
+exo-syscall-abi = { path = "../../../servers/syscall_abi" }
