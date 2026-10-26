@@ -204,12 +204,20 @@ impl SecurityContext {
     }
 
     /// Dégrade le niveau de confiance — RÈGLE ZT-02.
-    /// Ne peut PAS augmenter le niveau.
+    /// Ne peut PAS augmenter le niveau (CAS atomique anti-race).
     pub fn downgrade(&self, new_level: TrustLevel) {
-        let current = self.trust_level.load(Ordering::Acquire);
-        if (new_level as u32) < current {
-            self.trust_level.store(new_level as u32, Ordering::Release);
-        }
+        let target = new_level as u32;
+        let _ = self.trust_level.fetch_update(
+            Ordering::Release,
+            Ordering::Acquire,
+            |curr| {
+                if target < curr {
+                    Some(target)
+                } else {
+                    None
+                }
+            },
+        );
     }
 
     /// Retourne le label de sécurité.

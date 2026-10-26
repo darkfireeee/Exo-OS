@@ -29,7 +29,9 @@ impl PhysAddr {
     }
 
     /// Crée une PhysAddr sans aucune vérification (unsafe).
-    /// SAFETY: L'appelant garantit que l'adresse est physiquement valide
+    ///
+    /// # Safety
+    /// L'appelant garantit que l'adresse est physiquement valide
     /// et dans la plage adressable du matériel.
     #[inline(always)]
     pub const unsafe fn new_unchecked(addr: u64) -> Self {
@@ -195,7 +197,9 @@ impl VirtAddr {
     }
 
     /// Crée sans vérification.
-    /// SAFETY: L'appelant garantit que `addr` est une valeur virtuelle brute
+    ///
+    /// # Safety
+    /// L'appelant garantit que `addr` est une valeur virtuelle brute
     /// acceptable dans son contexte. Cela inclut des sentinelles non canoniques
     /// comme `USER_END`, donc cette fonction ne canonicalise rien.
     #[inline(always)]
@@ -204,7 +208,9 @@ impl VirtAddr {
     }
 
     /// Crée depuis un pointeur brut.
-    /// SAFETY: Le pointeur doit être une adresse virtuelle canonique valide.
+    ///
+    /// # Safety
+    /// Le pointeur doit être une adresse virtuelle canonique valide.
     #[inline(always)]
     pub unsafe fn from_ptr<T>(ptr: *const T) -> Self {
         VirtAddr(ptr as u64)
@@ -223,7 +229,9 @@ impl VirtAddr {
     }
 
     /// Convertit en pointeur brut *const T.
-    /// SAFETY: L'appelant doit s'assurer que la page est mappée,
+    ///
+    /// # Safety
+    /// L'appelant doit s'assurer que la page est mappée,
     /// alignée correctement, et que la durée de vie est valide.
     #[inline(always)]
     pub const unsafe fn as_ptr<T>(self) -> *const T {
@@ -232,7 +240,9 @@ impl VirtAddr {
     }
 
     /// Convertit en pointeur brut *mut T.
-    /// SAFETY: Comme as_ptr, plus : la page doit être writable.
+    ///
+    /// # Safety
+    /// Comme as_ptr, plus : la page doit être writable.
     #[inline(always)]
     pub const unsafe fn as_mut_ptr<T>(self) -> *mut T {
         debug_assert!(self.is_canonical());
@@ -723,6 +733,20 @@ impl BitOr for PageFlags {
     #[inline(always)]
     fn bitor(self, rhs: Self) -> Self {
         PageFlags(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign for PageFlags {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl core::ops::BitAndAssign for PageFlags {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
     }
 }
 

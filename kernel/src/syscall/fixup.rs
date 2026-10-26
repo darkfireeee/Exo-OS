@@ -165,6 +165,7 @@ pub fn fixup_lookup(cpu_id: usize) -> Option<usize> {
 /// au lieu de paniquer.
 ///
 /// Remplace copy_from_user() dans validation.rs.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
     if len == 0 {
         return true;
@@ -215,6 +216,7 @@ pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usi
 }
 
 /// Copie `len` octets de `src` (kernel) vers `dst` (userspace), avec fixup #PF.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_to_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
     if len == 0 {
         return true;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // syscall/net_bridge.rs -- pont BSD sockets -> network_server
 //
 // Architecture V4: les syscalls reseau Ring 3 ne manipulent pas de memoire
@@ -554,6 +555,10 @@ pub fn net_sendto(
     Ok(total_sent as i64)
 }
 
+const RECV_TIMEOUT_NS: u64 = 2_000_000_000; // 2 secondes
+const RECV_RETRY_NAP_NS: u64 = 5_000_000;   // 5 ms entre chaque poll
+const MSG_DONTWAIT: u32 = 0x40;
+
 pub fn net_recvfrom(
     fd: i32,
     buf_ptr: u64,
@@ -574,31 +579,44 @@ pub fn net_recvfrom(
     }
     let request_len = len.min(NET_INLINE_DATA_MAX);
     let msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
-    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
-    let n_raw = call_network_raw(&msg, &[], &mut reply_raw)?;
-    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
-    if reply.status < 0 {
-        return Err(reply.status);
-    }
-    let n = reply.status.max(0) as usize;
-    let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
-    if data_len != 0 {
-        if copy_to_user(
-            buf_ptr as *mut u8,
-            reply_raw[NET_REPLY_DATA_OFFSET..].as_ptr(),
-            data_len,
-        )
-        .is_err()
-        {
-            return Err(EFAULT);
+    let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(RECV_TIMEOUT_NS);
+
+    loop {
+        let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
+        let n_raw = call_network_raw(&msg, &[], &mut reply_raw)?;
+        let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
+        if reply.status == EAGAIN && (flags & MSG_DONTWAIT == 0) {
+            if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                return Err(ETIMEDOUT);
+            }
+            if !crate::scheduler::timer::sleep_ns(RECV_RETRY_NAP_NS) {
+                crate::syscall::fast_path::sys_sched_yield();
+            }
+            continue;
         }
+        if reply.status < 0 {
+            return Err(reply.status);
+        }
+        let n = reply.status.max(0) as usize;
+        let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
+        if data_len != 0 {
+            if copy_to_user(
+                buf_ptr as *mut u8,
+                reply_raw[NET_REPLY_DATA_OFFSET..].as_ptr(),
+                data_len,
+            )
+            .is_err()
+            {
+                return Err(EFAULT);
+            }
+        }
+        let peer_addr = reply_u32(&reply, 8);
+        let peer_port = reply_u16(&reply, 12);
+        if peer_addr != 0 || addr_ptr != 0 {
+            write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+        }
+        return Ok(data_len as i64);
     }
-    let peer_addr = reply_u32(&reply, 8);
-    let peer_port = reply_u16(&reply, 12);
-    if peer_addr != 0 || addr_ptr != 0 {
-        write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
-    }
-    Ok(data_len as i64)
 }
 
 pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
@@ -610,28 +628,45 @@ pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     }
     check_net_permission(crate::syscall::numbers::SYS_SENDMSG)?;
     let msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
-    let len = msghdr_total_iov_len(&msg)?;
-    let (addr, port) = msghdr_peer(&msg)?;
-    if len > NET_INLINE_DATA_MAX {
-        return Err(EMSGSIZE);
+    let _total_len = msghdr_total_iov_len(&msg)?;
+
+    let mut total_sent: usize = 0;
+    let mut idx = 0u64;
+    while idx < msg.msg_iovlen {
+        let ptr = msg
+            .msg_iov
+            .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
+            .ok_or(if total_sent > 0 { total_sent as i64 } else { EFAULT })?;
+        let iov = read_user_typed::<LinuxIovec>(ptr)
+            .map_err(|_| if total_sent > 0 { total_sent as i64 } else { EFAULT })?;
+        let chunk_len = iov.iov_len as usize;
+        if chunk_len != 0 {
+            if iov.iov_base == 0 {
+                return if total_sent > 0 { Ok(total_sent as i64) } else { Err(EFAULT) };
+            }
+            match net_sendto(
+                fd,
+                iov.iov_base,
+                chunk_len,
+                flags,
+                msg.msg_name,
+                msg.msg_namelen as u64,
+            ) {
+                Ok(n) => {
+                    let sent = n.max(0) as usize;
+                    total_sent += sent;
+                    if sent < chunk_len {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    return if total_sent > 0 { Ok(total_sent as i64) } else { Err(err) };
+                }
+            }
+        }
+        idx += 1;
     }
-    let mut data = [0u8; NET_INLINE_DATA_MAX];
-    let copied = copy_msghdr_iov_to_inline(&msg, &mut data)?;
-    let net_msg = make_msg(
-        NET_OP_SENDTO,
-        fd as u32,
-        copied as u64,
-        addr as u64,
-        port as u32,
-        flags,
-    );
-    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
-    let _ = call_network_raw(&net_msg, &data[..copied], &mut reply_raw)?;
-    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
-    if reply.status < 0 {
-        return Err(reply.status);
-    }
-    Ok(reply.status)
+    Ok(total_sent as i64)
 }
 
 pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {

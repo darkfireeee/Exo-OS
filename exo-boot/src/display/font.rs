@@ -19,7 +19,7 @@ const FONT_GLYPH_COUNT: usize = (0x7E - 0x20 + 1) + 1; // 95 chars + 1 fallback
 /// Si le caractère n'est pas dans la plage, retourne le glyphe fallback ('?').
 #[inline]
 pub fn glyph_for(ch: u8) -> &'static [u8; FONT_GLYPH_HEIGHT] {
-    let idx = if ch >= 0x20 && ch <= 0x7E {
+    let idx = if (0x20..=0x7E).contains(&ch) {
         (ch - 0x20) as usize
     } else {
         FONT_GLYPH_COUNT - 1 // Fallback

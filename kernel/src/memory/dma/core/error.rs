@@ -144,6 +144,12 @@ pub struct DmaErrorCounters {
     pub total: AtomicU64,
 }
 
+impl Default for DmaErrorCounters {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaErrorCounters {
     pub const fn new() -> Self {
         DmaErrorCounters {

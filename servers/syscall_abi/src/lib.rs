@@ -1,10 +1,14 @@
 #![no_std]
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall1(nr: u64, a1: u64) -> i64 {
     unsafe { syscall6(nr, a1, 0, 0, 0, 0, 0) }
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
     let ret: i64;
@@ -28,26 +32,36 @@ pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6:
     ret
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que le numéro d'appel système est valide.
 #[inline(always)]
 pub unsafe fn syscall0(nr: u64) -> i64 {
     unsafe { syscall6(nr, 0, 0, 0, 0, 0, 0) }
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> i64 {
     unsafe { syscall6(nr, a1, a2, 0, 0, 0, 0) }
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
     unsafe { syscall6(nr, a1, a2, a3, 0, 0, 0) }
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
     unsafe { syscall6(nr, a1, a2, a3, a4, 0, 0) }
 }
 
+/// # Safety
+/// L'appelant doit s'assurer que les arguments et le numéro d'appel système sont valides.
 #[inline(always)]
 pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> i64 {
     unsafe { syscall6(nr, a1, a2, a3, a4, a5, 0) }
@@ -325,9 +339,9 @@ pub const SYS_EXO_CAP_CHECK: u64 = 323;
 pub const SYS_EXO_PLEDGE: u64 = 324;
 /// Drain du feed d'événements de sécurité kernel→exo_shield (TIER 3.1).
 pub const SYS_EXO_SHIELD_DRAIN: u64 = 325;
-pub const SYS_EXO_PERF_READ: u64 = 330;
-pub const SYS_EXO_PERF_ENABLE: u64 = 331;
-pub const SYS_EXO_PERF_DISABLE: u64 = 332;
+pub const SYS_EXO_PERF_READ: u64 = 342;
+pub const SYS_EXO_PERF_ENABLE: u64 = 343;
+pub const SYS_EXO_PERF_DISABLE: u64 = 344;
 
 pub const EXO_PERF_SYSCALL_COUNT: u64 = 1;
 pub const EXO_PERF_IPC_MESSAGES_SENT: u64 = 2;
@@ -543,6 +557,8 @@ impl ExoCapTokenWire {
     }
 }
 
+/// # Safety
+/// L'appelant doit fournir une référence valide vers un `ExoCapTokenWire`.
 #[inline(always)]
 pub unsafe fn exo_cap_create(
     cap_type: u32,
@@ -561,6 +577,8 @@ pub unsafe fn exo_cap_create(
     }
 }
 
+/// # Safety
+/// L'appelant doit fournir une référence valide vers un `ExoCapTokenWire`.
 #[inline(always)]
 pub unsafe fn exo_cap_check(
     token: &ExoCapTokenWire,
@@ -651,6 +669,8 @@ pub struct ExofsOpenArgs {
 
 const _: () = assert!(core::mem::size_of::<ExofsOpenArgs>() == 48);
 
+/// # Safety
+/// Les pointeurs `path_ptr` et `out` doivent désigner de la mémoire valide.
 #[inline(always)]
 pub unsafe fn exofs_path_resolve_raw(
     path_ptr: u64,
@@ -672,6 +692,8 @@ pub unsafe fn exofs_path_resolve_raw(
     }
 }
 
+/// # Safety
+/// Les pointeurs `path_ptr`, `out_fd` et `args` doivent désigner de la mémoire valide.
 #[inline(always)]
 pub unsafe fn exofs_object_open_raw(
     path_ptr: u64,
@@ -694,6 +716,8 @@ pub unsafe fn exofs_object_open_raw(
     }
 }
 
+/// # Safety
+/// Le pointeur `path_ptr` doit désigner une chaîne de chemin valide en mémoire.
 #[inline(always)]
 pub unsafe fn exofs_open_by_path_raw(path_ptr: u64, flags: u64, mode: u64, cap_rights: u64) -> i64 {
     unsafe {
@@ -709,6 +733,8 @@ pub unsafe fn exofs_open_by_path_raw(path_ptr: u64, flags: u64, mode: u64, cap_r
     }
 }
 
+/// # Safety
+/// Le pointeur `buf_ptr` doit désigner un buffer valide d'au moins `buf_len` octets.
 #[inline(always)]
 pub unsafe fn exofs_readdir_raw(fd: u64, buf_ptr: u64, buf_len: u64, cap_rights: u64) -> i64 {
     unsafe { syscall6(SYS_EXOFS_READDIR, fd, buf_ptr, buf_len, 0, 0, cap_rights) }
@@ -735,7 +761,7 @@ pub const SYS_PCI_FIND_DEVICE: u64 = 547;
 pub const SYS_IOPORT_READ: u64 = 548;
 pub const SYS_IOPORT_WRITE: u64 = 549;
 
-pub const USB_SERVER_ENDPOINT: u64 = 10;
+pub const USB_SERVER_ENDPOINT: u64 = 18;
 pub const INPUT_SERVER_ENDPOINT: u64 = 11;
 pub const TTY_SERVER_ENDPOINT: u64 = 12;
 pub const AUDIO_SERVER_ENDPOINT: u64 = 16;
@@ -1043,6 +1069,7 @@ pub fn sigreturn_trampoline() -> u64 {
 }
 pub const EPERM: i64 = -1;
 pub const ENOENT: i64 = -2;
+pub const ESRCH: i64 = -3;
 pub const EINTR: i64 = -4;
 pub const EIO: i64 = -5;
 pub const E2BIG: i64 = -7;

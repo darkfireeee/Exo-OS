@@ -17,6 +17,10 @@
 #![no_std]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+#[cfg(test)]
+#[macro_use]
+extern crate alloc;
+
 pub mod bump;
 pub mod mimalloc;
 pub mod oom;
@@ -26,6 +30,8 @@ pub mod telemetry;
 pub use bump::BumpAllocator;
 pub use mimalloc::Mimalloc;
 pub use slab::SlabAllocator;
+pub use telemetry::Telemetry;
+
 
 /// Allocator error types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -302,7 +302,8 @@ impl NvmeDmaEngine {
 
     /// Initialise le contrôleur NVMe.
     ///
-    /// # Safety : BAR0 MMIO valide, SQ/CQ en mémoire physique identité-mappée.
+    /// # Safety
+    /// BAR0 MMIO valide, SQ/CQ en mémoire physique identité-mappée.
     pub unsafe fn init(&self, bar0: u64, nsid: u32) -> bool {
         self.bar0.store(bar0, Ordering::Release);
         self.nsid.store(nsid, Ordering::Relaxed);
@@ -374,14 +375,16 @@ impl NvmeDmaEngine {
 
     /// Soumet une lecture NVMe.
     ///
-    /// # Safety : `prp1` est une adresse physique 4 KiB-alignée, taille <= 4096.
+    /// # Safety
+    /// `prp1` est une adresse physique 4 KiB-alignée, taille <= 4096.
     pub unsafe fn submit_read(&self, slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
         self.submit_io(slba, nlb, prp1, false)
     }
 
     /// Soumet une écriture NVMe.
     ///
-    /// # Safety : idem submit_read.
+    /// # Safety
+    /// `prp1` est une adresse physique 4 KiB-alignée, taille <= 4096.
     pub unsafe fn submit_write(&self, slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
         self.submit_io(slba, nlb, prp1, true)
     }
@@ -423,7 +426,8 @@ impl NvmeDmaEngine {
 
     /// Sonde la Completion Queue pour les entrées terminées.
     ///
-    /// # Safety : contexte non-préemptible.
+    /// # Safety
+    /// contexte non-préemptible.
     pub unsafe fn poll_cq(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -462,28 +466,32 @@ pub static NVME_DMA: NvmeDmaEngine = NvmeDmaEngine::new_uninit();
 
 /// Initialise le moteur NVMe DMA.
 ///
-/// # Safety : BAR0 valide.
+/// # Safety
+/// BAR0 valide.
 pub unsafe fn nvme_dma_init(bar0: u64, nsid: u32) -> bool {
     NVME_DMA.init(bar0, nsid)
 }
 
 /// Lit des secteurs NVMe.
 ///
-/// # Safety : `prp1` valide.
+/// # Safety
+/// `prp1` valide.
 pub unsafe fn nvme_read(slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
     NVME_DMA.submit_read(slba, nlb, prp1)
 }
 
 /// Écrit des secteurs NVMe.
 ///
-/// # Safety : `prp1` valide.
+/// # Safety
+/// `prp1` valide.
 pub unsafe fn nvme_write(slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
     NVME_DMA.submit_write(slba, nlb, prp1)
 }
 
 /// Sonde les compléments NVMe.
 ///
-/// # Safety : contexte non-préemptible.
+/// # Safety
+/// contexte non-préemptible.
 pub unsafe fn nvme_poll() -> usize {
     NVME_DMA.poll_cq()
 }

@@ -73,6 +73,12 @@ pub struct SeqLock<T: Copy> {
 unsafe impl<T: Copy + Send> Send for SeqLock<T> {}
 unsafe impl<T: Copy + Send + Sync> Sync for SeqLock<T> {}
 
+impl<T: Copy + Default> Default for SeqLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T: Copy> SeqLock<T> {
     /// Crée un `SeqLock` avec la valeur initiale donnée.
     /// Le compteur démarre à 0 (pair = état stable).
@@ -157,7 +163,7 @@ impl<T: Copy> SeqLock<T> {
     /// ## Safety
     /// - Thread d'écriture exclusif — un seul écrivain à la fois.
     ///   (SeqLock *sans* lock ne détecte pas les writes concurrents —
-    ///    si plusieurs écrivains possibles, utiliser `write_guarded()`)
+    ///   si plusieurs écrivains possibles, utiliser `write_guarded()`)
     /// - Pas de `read()` ni `read_with()` dans le corps de l'écrivain.
     #[inline]
     pub unsafe fn write(&self, value: T) {

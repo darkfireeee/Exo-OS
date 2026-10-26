@@ -94,6 +94,7 @@ fn vfork_completion_reached(child_pid: Pid) -> bool {
     }
 }
 
+#[allow(clippy::result_unit_err)]
 pub fn wait_for_vfork_completion(
     child_pid: Pid,
     caller_tcb: &mut ThreadControlBlock,
@@ -139,6 +140,19 @@ fn rollback_child_allocations(
     }
     PID_ALLOCATOR.free(pid_raw);
     TID_ALLOCATOR.free(tid_raw);
+}
+
+fn rollback_child_process_resources(
+    cloned_as: &ClonedAddressSpace,
+    pid_raw: u32,
+    owns_addr_space: bool,
+) {
+    if owns_addr_space {
+        if let Some(cl) = ADDR_SPACE_CLONER.get() {
+            cl.free_addr_space(cloned_as.addr_space_ptr);
+        }
+    }
+    PID_ALLOCATOR.free(pid_raw);
 }
 
 #[inline]
@@ -363,10 +377,9 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let cloned_as = if shares_address_space {
         cloned_address_space_for_vfork(parent_cr3, parent_space_ptr)
     } else {
-        clone_parent_address_space(*cloner, parent_cr3, parent_space_ptr).map_err(|err| {
+        clone_parent_address_space(*cloner, parent_cr3, parent_space_ptr).inspect_err(|_| {
             PID_ALLOCATOR.free(child_pid_raw);
             TID_ALLOCATOR.free(child_tid_raw);
-            err
         })?
     };
     fork_trace(b"fork: clone-as done\n");
@@ -501,7 +514,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     fork_debug_parent(b"fork_dbg: after_addresses", parent, parent_pcb);
 
     // 4. Créer le PCB fils — hérite des namespaces, credentials, etc.
-    let parent_creds = parent_pcb.creds.lock().clone();
+    let parent_creds = *parent_pcb.creds.lock();
     let (fd_limit, cloned_files) = {
         let f = parent_pcb.files.lock();
         fork_trace(b"fork: files locked\n");
@@ -617,12 +630,10 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     fork_debug_parent(b"fork_dbg: after_child_setup", parent, parent_pcb);
 
     // 5. Insérer le fils dans la registry.
+    // NOTE: Si insert échoue, le drop de `child_pcb` appelle `cleanup_all_threads()`
+    // qui libère déjà `child_thread_ptr` et `child_tid_raw`.
     PROCESS_REGISTRY.insert(child_pcb).map_err(|_| {
-        // SAFETY: child_thread_ptr valide.
-        unsafe {
-            drop(Box::from_raw(child_thread_ptr));
-        }
-        rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
+        rollback_child_process_resources(&cloned_as, child_pid_raw, owns_addr_space);
         ForkError::RegistryError
     })?;
     fork_trace(b"fork: registry\n");
@@ -635,12 +646,9 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     {
         let _preempt = PreemptGuard::new();
         if ctx.target_cpu as usize >= MAX_CPUS {
+            // CPU invalide — le retrait du child_pcb et son drop libèrent thread et tid.
             let _ = PROCESS_REGISTRY.remove(child_pid);
-            // SAFETY: child_thread_ptr créé via Box::into_raw() ci-dessus, pas encore enfilé.
-            unsafe {
-                drop(Box::from_raw(child_thread_ptr));
-            }
-            rollback_child_allocations(&cloned_as, child_pid_raw, child_tid_raw, owns_addr_space);
+            rollback_child_process_resources(&cloned_as, child_pid_raw, owns_addr_space);
             return Err(ForkError::InvalidCpu);
         }
         // SAFETY: cpu vérifié, child_thread_ptr valide.

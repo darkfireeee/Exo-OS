@@ -26,11 +26,12 @@ const IRQ_SOURCE_IOAPIC_EDGE: u64 = 0;
 #[cfg(target_os = "none")]
 const IRQ_ACK_HANDLED: u64 = 0;
 #[cfg(target_os = "none")]
-const IRQ_RECV_TIMEOUT_MS: u64 = 2;
+const IRQ_RECV_TIMEOUT_MS: u64 = 10;
 #[cfg(target_os = "none")]
 const IRQ_DRAIN_LIMIT: usize = 64;
 
 #[cfg(target_os = "none")]
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Timespec {
@@ -85,6 +86,7 @@ fn exit_failed() -> ! {
 }
 
 #[cfg(target_os = "none")]
+#[allow(dead_code)]
 fn sleep_ms(ms: u64) {
     let ts = Timespec {
         tv_sec: (ms / 1000) as i64,
@@ -333,8 +335,8 @@ pub extern "C" fn _start() -> ! {
                 ack_mouse_irq(mouse_irq_reg_id as u64, wave_gen);
             }
         }
-        if wave.is_none() && !drained {
-            sleep_ms(1);
+        if drained {
+            while drain_controller(&mut controller, &mut keyboard, &mut mouse) {}
         }
     }
 }

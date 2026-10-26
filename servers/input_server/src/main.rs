@@ -70,7 +70,7 @@ static DROPPED: AtomicUsize = AtomicUsize::new(0);
 // Chaque slot est un AtomicU64 (0 = slot vide).
 // INPUT_MSG_ATTACH enregistre dans le premier slot libre.
 // deliver_to_subscribers diffuse à tous les slots actifs.
-const MAX_SUBSCRIBERS: usize = 4;
+const MAX_SUBSCRIBERS: usize = 8;
 struct SubscriberTable {
     endpoints: [AtomicU64; MAX_SUBSCRIBERS],
 }
@@ -82,20 +82,29 @@ impl SubscriberTable {
                 AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
             ],
         }
     }
     fn attach(&self, endpoint: u64) -> bool {
+        if endpoint == 0 {
+            return false;
+        }
+        // 1. Vérifier si l'endpoint est déjà abonné pour éviter les doublons
+        for slot in &self.endpoints {
+            if slot.load(Ordering::Acquire) == endpoint {
+                return true;
+            }
+        }
+        // 2. Allouer le premier slot libre
         for slot in &self.endpoints {
             if slot.load(Ordering::Acquire) == 0 {
-                // CAS : si encore vide, on prend le slot
                 if slot.compare_exchange(0, endpoint, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                     return true;
                 }
-            }
-            // Si ce slot a déjà cet endpoint enregistré, pas de doublon
-            if slot.load(Ordering::Acquire) == endpoint {
-                return true;
             }
         }
         false // table pleine
@@ -124,13 +133,16 @@ impl SubscriberTable {
                     ep,
                     &reply as *const syscall::InputReply as u64,
                     core::mem::size_of::<syscall::InputReply>() as u64,
-                    0, 0, 0,
+                    syscall::IPC_FLAG_TIMEOUT,
+                    0,
+                    0,
                 )
             };
             if rc >= 0 {
                 delivered = true;
-            } else {
-                // Endpoint mort → retirer le slot pour libérer la place
+            } else if rc == syscall::ESRCH || rc == syscall::ENOENT || rc == syscall::EBADF {
+                // Détacher UNIQUEMENT si l'endpoint est mort (ESRCH / ENOENT / EBADF)
+                // Ne JAMAIS détacher sur tampon plein ou indisponibilité temporaire (EAGAIN, ENOBUFS)
                 let _ = slot.compare_exchange(ep, 0, Ordering::AcqRel, Ordering::Acquire);
             }
         }

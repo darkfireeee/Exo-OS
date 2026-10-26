@@ -46,6 +46,12 @@ pub struct GlobalBuddyAllocator {
 unsafe impl Sync for GlobalBuddyAllocator {}
 unsafe impl Send for GlobalBuddyAllocator {}
 
+impl Default for GlobalBuddyAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalBuddyAllocator {
     pub const fn new() -> Self {
         GlobalBuddyAllocator {
@@ -235,7 +241,8 @@ impl GlobalBuddyAllocator {
 
     /// Accès mutant à une zone (initialisation uniquement).
     ///
-    /// SAFETY: Doit être appelé uniquement pendant l'init, en single-CPU.
+    /// # Safety
+    /// Doit être appelé uniquement pendant l'init, en single-CPU.
     pub unsafe fn zone_mut(&self, zone_type: ZoneType) -> Option<&BuddyZone> {
         self.zone(zone_type)
     }

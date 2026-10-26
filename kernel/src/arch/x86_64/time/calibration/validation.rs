@@ -170,10 +170,7 @@ impl ValidationResult {
 // ── Historique de calibration ──────────────────────────────────────────────────
 
 /// Historique des dernières mesures de fréquence TSC (FIFO circulaire).
-static HISTORY: [AtomicU64; HISTORY_SIZE] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; HISTORY_SIZE]
-};
+static HISTORY: [AtomicU64; HISTORY_SIZE] = [const { AtomicU64::new(0) }; HISTORY_SIZE];
 static HISTORY_IDX: AtomicU32 = AtomicU32::new(0);
 static HISTORY_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Dernière valeur validée et acceptée (pour contrôle successif).
@@ -218,7 +215,7 @@ pub fn cross_check(measured_hz: u64) -> Option<u64> {
 /// Vérifie que la fréquence est dans la plage physique raisonnable.
 #[inline(always)]
 pub fn hz_in_range(hz: u64) -> bool {
-    hz >= TSC_FREQ_MIN_HZ && hz <= TSC_FREQ_MAX_HZ
+    (TSC_FREQ_MIN_HZ..=TSC_FREQ_MAX_HZ).contains(&hz)
 }
 
 /// Validation complète retournant le `ValidationResult` détaillé.
@@ -294,8 +291,8 @@ pub fn history_mean_hz() -> u64 {
     }
     let n = count.min(HISTORY_SIZE);
     let mut sum = 0u128;
-    for i in 0..n {
-        sum += HISTORY[i].load(Ordering::Relaxed) as u128;
+    for item in &HISTORY[..n] {
+        sum += item.load(Ordering::Relaxed) as u128;
     }
     (sum / n as u128) as u64
 }
@@ -315,14 +312,10 @@ pub fn history_variance_ppm2() -> u64 {
     }
 
     let mut sum_sq_ppm: u128 = 0;
-    for i in 0..n {
-        let val = HISTORY[i].load(Ordering::Relaxed);
+    for item in &HISTORY[..n] {
+        let val = item.load(Ordering::Relaxed);
         // déviation en ppm = |val - mean| × 1_000_000 / mean
-        let dev_ppm = if val >= mean {
-            ((val - mean) as u128 * 1_000_000) / mean as u128
-        } else {
-            ((mean - val) as u128 * 1_000_000) / mean as u128
-        };
+        let dev_ppm = (val.abs_diff(mean) as u128 * 1_000_000) / mean as u128;
         sum_sq_ppm = sum_sq_ppm.saturating_add(dev_ppm * dev_ppm);
     }
     (sum_sq_ppm / n as u128) as u64
@@ -429,7 +422,7 @@ fn percent_x100_u128(a: u128, b: u128) -> u128 {
     if b == 0 {
         return 10_000;
     }
-    let diff = if a > b { a - b } else { b - a };
+    let diff = a.abs_diff(b);
     diff.saturating_mul(10_000) / b
 }
 
@@ -438,7 +431,7 @@ fn percent_x100(a: u64, b: u64) -> u64 {
     if b == 0 {
         return 10_000;
     }
-    let diff = if a > b { a - b } else { b - a };
+    let diff = a.abs_diff(b);
     ((diff as u128).saturating_mul(10_000) / b as u128) as u64
 }
 

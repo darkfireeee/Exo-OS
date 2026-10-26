@@ -58,6 +58,9 @@ static VGA_ROW: AtomicUsize = AtomicUsize::new(0);
 ///         remap explicite de cette région (jamais fait en Phase 1).
 #[inline(always)]
 unsafe fn put_cell(col: usize, row: usize, ch: u8, attribute: u8) {
+    if col >= VGA_COLS || row >= VGA_ROWS {
+        return;
+    }
     let offset = (row * VGA_COLS + col) * 2;
     let ptr = (VGA_BASE + offset) as *mut u8;
     core::ptr::write_volatile(ptr, ch);
@@ -120,7 +123,7 @@ pub fn write_char(ch: u8, attribute: u8) {
             VGA_COL.store(0, Ordering::Relaxed);
         }
         _ => {
-            let ch_out = if ch >= 0x20 && ch < 0x7F { ch } else { b'?' };
+            let ch_out = if (0x20..0x7F).contains(&ch) { ch } else { b'?' };
             // SAFETY: voir put_cell
             unsafe {
                 put_cell(col, row, ch_out, attribute);

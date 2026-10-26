@@ -268,7 +268,8 @@ impl VirtioDmaEngine {
 
     /// Initialise le périphérique VirtIO MMIO.
     ///
-    /// # Safety : `mmio_base` identité-mappé en CPL 0.
+    /// # Safety
+    /// `mmio_base` identité-mappé en CPL 0.
     pub unsafe fn init(&self, mmio_base: u64) -> bool {
         // Vérifier magic value.
         let magic = ((mmio_base + virtio_mmio::MAGIC as u64) as *const u32).read_volatile();
@@ -322,7 +323,8 @@ impl VirtioDmaEngine {
     ///
     /// `write` = vrai si le device doit écrire dans `phys` (lecture côté host).
     ///
-    /// # Safety : `phys` valide pour toute la durée du transfert.
+    /// # Safety
+    /// `phys` valide pour toute la durée du transfert.
     pub unsafe fn submit(&self, phys: PhysAddr, len: u32, write: bool) -> bool {
         if !self.present.load(Ordering::Acquire) {
             return false;
@@ -341,7 +343,8 @@ impl VirtioDmaEngine {
 
     /// Sonde le used ring.
     ///
-    /// # Safety : contexte non-préemptible.
+    /// # Safety
+    /// contexte non-préemptible.
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -368,21 +371,24 @@ pub static VIRTIO_DMA: VirtioDmaEngine = VirtioDmaEngine::new_uninit();
 
 /// Initialise le moteur VirtIO DMA.
 ///
-/// # Safety : MMIO valide.
+/// # Safety
+/// MMIO valide.
 pub unsafe fn virtio_dma_init(mmio_base: u64) -> bool {
     VIRTIO_DMA.init(mmio_base)
 }
 
 /// Soumet un buffer VirtIO.
 ///
-/// # Safety : `phys` valide.
+/// # Safety
+/// `phys` valide.
 pub unsafe fn virtio_dma_submit(phys: PhysAddr, len: u32, write: bool) -> bool {
     VIRTIO_DMA.submit(phys, len, write)
 }
 
 /// Sonde les compléments VirtIO.
 ///
-/// # Safety : contexte non-préemptible.
+/// # Safety
+/// contexte non-préemptible.
 pub unsafe fn virtio_dma_poll() -> usize {
     VIRTIO_DMA.poll()
 }

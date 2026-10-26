@@ -133,14 +133,18 @@ impl AtomicRefCount {
     }
 
     /// Fixe le refcount à 0 (libération forcée — boot/reinit uniquement).
-    /// SAFETY: Aucun autre thread ne doit utiliser ce frame au moment de l'appel.
+    ///
+    /// # Safety
+    /// Aucun autre thread ne doit utiliser ce frame au moment de l'appel.
     #[inline(always)]
     pub unsafe fn reset_to_zero(&self) {
         self.0.store(0, Ordering::Release);
     }
 
     /// Fixe le refcount à 1 (allocation initiale — boot/reinit uniquement).
-    /// SAFETY: Comme reset_to_zero.
+    ///
+    /// # Safety
+    /// Comme `reset_to_zero`.
     #[inline(always)]
     pub unsafe fn reset_to_one(&self) {
         self.0.store(1, Ordering::Release);
@@ -153,7 +157,6 @@ impl AtomicRefCount {
         self.0
             .compare_exchange(expected, new, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| ())
-            .map_err(|cur| cur)
     }
 }
 

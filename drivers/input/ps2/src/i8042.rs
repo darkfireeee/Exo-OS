@@ -50,6 +50,13 @@ impl<P: PortIo> I8042<P> {
         self.io
     }
 
+    pub const CMD_WRITE_AUX: u8 = 0xD4;
+
+    pub fn write_aux(&mut self, byte: u8) -> Result<(), ControllerError> {
+        self.write_command(Self::CMD_WRITE_AUX)?;
+        self.write_data(byte)
+    }
+
     pub fn init(&mut self) -> Result<(), ControllerError> {
         self.write_command(CMD_DISABLE_KEYBOARD)?;
         self.write_command(CMD_DISABLE_AUX)?;
@@ -61,6 +68,13 @@ impl<P: PortIo> I8042<P> {
         self.write_command(CMD_WRITE_CONFIG)?;
         self.write_data(config)?;
         self.write_command(CMD_ENABLE_AUX)?;
+
+        // Activer la transmission de paquets par la souris PS/2 (0xF6 Defaults, 0xF4 Enable)
+        let _ = self.write_aux(0xF6);
+        let _ = self.read_data(); // ACK 0xFA
+        let _ = self.write_aux(0xF4);
+        let _ = self.read_data(); // ACK 0xFA
+
         self.write_command(CMD_ENABLE_KEYBOARD)
     }
 

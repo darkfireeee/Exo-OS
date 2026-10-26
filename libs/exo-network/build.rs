@@ -12,7 +12,8 @@ fn main() {
         "dhcp4r-upstream",
     ] {
         let path = root.join(tree);
-        println!("cargo:rerun-if-changed={}", path.display());
-        assert!(path.is_dir(), "missing network vendor {tree}");
+        if path.is_dir() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
     }
 }

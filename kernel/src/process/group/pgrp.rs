@@ -54,9 +54,8 @@ unsafe impl Sync for PGroupTable {}
 
 impl PGroupTable {
     const fn new() -> Self {
-        const EMPTY: ProcessGroup = ProcessGroup::empty();
         Self {
-            slots: [EMPTY; MAX_PGROUPS],
+            slots: [const { ProcessGroup::empty() }; MAX_PGROUPS],
             lock: SpinLock::new(()),
             count: AtomicU32::new(0),
         }
@@ -106,12 +105,9 @@ impl PGroupTable {
 
     /// Cherche un groupe par PGID.
     pub fn find(&self, pgid: PgId) -> Option<&ProcessGroup> {
-        for slot in &self.slots {
-            if slot.valid.load(Ordering::Acquire) == 1 && slot.pgid == pgid {
-                return Some(slot);
-            }
-        }
-        None
+        self.slots
+            .iter()
+            .find(|slot| slot.valid.load(Ordering::Acquire) == 1 && slot.pgid == pgid)
     }
 
     /// Envoie un signal à tous les membres d'un groupe.

@@ -35,7 +35,7 @@ impl RLimitKind {
     pub fn from_u8(n: u8) -> Option<Self> {
         if n < 16 {
             // SAFETY : n < COUNT, tous les discriminants de 0 à 15 sont valides.
-            Some(unsafe { core::mem::transmute(n) })
+            Some(unsafe { core::mem::transmute::<u8, RLimitKind>(n) })
         } else {
             None
         }

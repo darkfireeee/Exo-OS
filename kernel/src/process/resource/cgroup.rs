@@ -127,11 +127,16 @@ pub struct CgroupTable {
 
 unsafe impl Sync for CgroupTable {}
 
+impl Default for CgroupTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CgroupTable {
     const fn new() -> Self {
-        const EMPTY: Cgroup = Cgroup::empty();
         Self {
-            slots: [EMPTY; MAX_CGROUPS],
+            slots: [const { Cgroup::empty() }; MAX_CGROUPS],
             lock: SpinLock::new(()),
             count: AtomicU32::new(0),
         }

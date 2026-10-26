@@ -137,8 +137,9 @@ impl RtRunQueue {
         // SAFETY: tcb est un NonNull<ThreadControlBlock> valide fourni par
         // pick_next / enqueue — la run queue est l'unique propriétaire.
         // La préemption est désactivée (invariant PerCpuRunQueue).
-        let prio = unsafe { tcb.as_ref() }.priority.0 as usize;
-        debug_assert!(prio < RT_LEVELS);
+        let raw_prio = unsafe { tcb.as_ref() }.priority.0 as usize;
+        let prio = raw_prio.min(RT_LEVELS - 1);
+        debug_assert!(raw_prio < RT_LEVELS, "RT priority >= RT_LEVELS clamped");
 
         let slot = self.alloc_slot();
         let Some(slot_idx) = slot else {
@@ -486,7 +487,7 @@ impl PerCpuRunQueue {
             SchedPolicy::Fifo | SchedPolicy::RoundRobin => {
                 // Recherche dans les slots RT — O(RT_QUEUE_CAPACITY)
                 // SAFETY: même invariant que pour policy.
-                let prio = unsafe { tcb.as_ref() }.priority.0 as usize;
+                let prio = (unsafe { tcb.as_ref() }.priority.0 as usize).min(RT_LEVELS - 1);
                 let head = self.rt.heads[prio];
                 if head == RT_QUEUE_NONE {
                     return false;

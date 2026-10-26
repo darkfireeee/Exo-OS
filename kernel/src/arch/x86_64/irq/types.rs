@@ -159,6 +159,12 @@ pub struct IrqTable {
     entries: [Option<IrqRoute>; 256],
 }
 
+impl Default for IrqTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrqTable {
     pub const fn new() -> Self {
         const INIT: Option<IrqRoute> = None;

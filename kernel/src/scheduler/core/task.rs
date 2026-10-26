@@ -359,7 +359,7 @@ const _: () = assert!(
     "TCB: _cold_reserve doit commencer à l'offset 144 (ExoShield shadow_stack_token)"
 );
 const _: () = assert!(
-    offset_of!(ThreadControlBlock, _cold_reserve) + 0 == 144,
+    offset_of!(ThreadControlBlock, _cold_reserve) == 144,
     "TCB ExoShield: shadow_stack_token doit être à l'offset absolu 144"
 );
 const _: () = assert!(
@@ -440,11 +440,11 @@ impl ThreadControlBlock {
         cold_reserve[56..64].copy_from_slice(&u64::MAX.to_le_bytes());
         cold_reserve[64..72].copy_from_slice(&u64::MAX.to_le_bytes());
         cold_reserve[72..80].copy_from_slice(&u64::MAX.to_le_bytes());
-        let tcb = Self {
+        Self {
             tid: tid.0,
             kstack_ptr: kernel_stack_top,
             priority: prio,
-            policy: policy,
+            policy,
             _pad0: [0u8; 6],
             sched_state: AtomicU64::new(TaskState::Runnable as u64),
             vruntime: AtomicU64::new(0),
@@ -466,8 +466,7 @@ impl ThreadControlBlock {
             fpu_state_ptr: 0,
             rq_next: 0,
             rq_prev: 0,
-        };
-        tcb
+        }
     }
 
     /// Thread kernel (pid=0, flag KTHREAD dans sched_state).
@@ -928,6 +927,12 @@ pub struct TaskStats {
     pub last_start_ns: AtomicU64,
     /// Priority inversions détectées par le kernel mutex.
     pub priority_inversions: AtomicU64,
+}
+
+impl Default for TaskStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TaskStats {

@@ -51,7 +51,8 @@ impl PackageManifest {
 
     /// Analyse et valide un buffer de manifeste au format binaire ou clé-valeur
     pub fn parse(bytes: &[u8]) -> Result<Self, PkgError> {
-        if bytes.len() < 16 {
+        // AUDIT-LIB2 : l'en-tête fixe nécessite au moins 20 octets (champs jusqu'à bytes[19])
+        if bytes.len() < 20 {
             return Err(PkgError::ManifestTooShort);
         }
 

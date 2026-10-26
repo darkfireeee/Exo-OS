@@ -27,6 +27,15 @@ use crate::arch::x86_64::syscall::SyscallFrame;
 ///
 /// En cas d'échec (magic invalide, adresse invalide) : le processus reçoit SIGSEGV
 /// au retour vers userspace (RIP sera 0, qui est non-mappé).
+/// Sanitise RFLAGS pour le retour en Ring 3 (anti-élévation IOPL/VM/TF, force IF=1).
+#[inline]
+pub fn sanitize_user_rflags(rflags: u64) -> u64 {
+    const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
+    const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200; // IF=1 (interruptions activées en user)
+    const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100; // TF=0, IOPL=0, NT=0, RF=0, VM=0
+    ((rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR
+}
+
 pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     use crate::process::signal::handler::{verify_and_extract_uc, SIGNAL_FRAME_UC_OFFSET};
     use crate::scheduler::core::task::ThreadControlBlock;
@@ -50,8 +59,8 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     // Restaurer les registres dans la frame arch (lus par SYSRETQ).
     // RIP de retour = rcx pour SYSRETQ.
     frame.rcx = regs.rip;
-    // RFLAGS userspace = r11 pour SYSRETQ.
-    frame.r11 = regs.rflags & !0x100; // Clear TF (Trap Flag) par sécurité.
+    // RFLAGS userspace = r11 pour SYSRETQ avec masquage strict anti-élévation (T9-006 / T6-001).
+    frame.r11 = sanitize_user_rflags(regs.rflags);
     frame.rax = regs.rax;
     frame.rdi = regs.rdi;
     frame.rsi = regs.rsi;
@@ -89,18 +98,25 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
         let tcb = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
         tcb.signal_mask
             .store(safe_mask, core::sync::atomic::Ordering::Release);
-        tcb.fs_base = regs.fs_base;
-        tcb.user_gs_base = regs.gs_base;
-        #[cfg(target_os = "none")]
-        unsafe {
-            crate::arch::x86_64::cpu::msr::write_msr(
-                crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
-                regs.fs_base,
-            );
-            crate::arch::x86_64::cpu::msr::write_msr(
-                crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
-                regs.gs_base,
-            );
+        if crate::memory::core::address::is_user_canonical(regs.fs_base) {
+            tcb.fs_base = regs.fs_base;
+            #[cfg(target_os = "none")]
+            unsafe {
+                crate::arch::x86_64::cpu::msr::write_msr(
+                    crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
+                    regs.fs_base,
+                );
+            }
+        }
+        if crate::memory::core::address::is_user_canonical(regs.gs_base) {
+            tcb.user_gs_base = regs.gs_base;
+            #[cfg(target_os = "none")]
+            unsafe {
+                crate::arch::x86_64::cpu::msr::write_msr(
+                    crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
+                    regs.gs_base,
+                );
+            }
         }
     }
 }
@@ -197,7 +213,7 @@ pub fn check_and_deliver_signals(frame: &mut SyscallFrame) {
 
     // Répercuter les modifications potentielles (ex. RIP redirigé, RSP vers sigaltstack).
     frame.rcx = d_frame.user_rip;
-    frame.r11 = d_frame.user_rflags;
+    frame.r11 = sanitize_user_rflags(d_frame.user_rflags);
     frame.rax = d_frame.user_rax;
     frame.rdi = d_frame.user_rdi;
     frame.rsi = d_frame.user_rsi;

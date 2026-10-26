@@ -31,6 +31,12 @@ pub struct VmaTree {
 unsafe impl Send for VmaTree {}
 unsafe impl Sync for VmaTree {}
 
+impl Default for VmaTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VmaTree {
     pub const fn new() -> Self {
         VmaTree {
@@ -65,8 +71,9 @@ impl VmaTree {
     ///
     /// Retourne `false` si une VMA existante chevauche la plage.
     ///
-    /// SAFETY: `vma` doit pointer sur un VmaDescriptor valide et non encore
-    ///         inséré dans un autre arbre.
+    /// # Safety
+    /// `vma` doit pointer sur un VmaDescriptor valide et non encore
+    /// inséré dans un autre arbre.
     pub unsafe fn insert(&mut self, vma: *mut VmaDescriptor) -> bool {
         if self.count >= MAX_VMAS_PER_PROCESS {
             return false;
@@ -252,14 +259,18 @@ impl VmaTree {
             } else if n.rb_right.is_null() {
                 *root = n.rb_left;
             } else {
-                // Trouver le successeur inorder (min du sous-arbre droit)
+                // Deux enfants : trouver le successeur inorder (min du sous-arbre droit)
                 let succ = Self::min_node(n.rb_right);
-                // Swap succ et root
+                let right_sub = Self::remove_min(n.rb_right);
                 (*succ).rb_left = n.rb_left;
-                (*succ).rb_right = Self::remove_min(n.rb_right);
+                (*succ).rb_right = right_sub;
                 (*succ).rb_height =
                     1 + Self::height((*succ).rb_left).max(Self::height((*succ).rb_right));
                 *root = succ;
+            }
+            if !(*root).is_null() {
+                let r = &mut **root;
+                r.rb_height = 1 + Self::height(r.rb_left).max(Self::height(r.rb_right));
                 Self::rebalance(root);
             }
             (*removed).rb_left = core::ptr::null_mut();

@@ -53,11 +53,8 @@ impl DmaCompletionSlot {
 }
 
 /// Tableau statique des slots de complétion.
-static DMA_COMPLETIONS: [DmaCompletionSlot; DMA_COMPLETION_SLOTS] = {
-    // const construction over array with non-Copy const fn.
-    const EMPTY: DmaCompletionSlot = DmaCompletionSlot::empty();
-    [EMPTY; DMA_COMPLETION_SLOTS]
-};
+static DMA_COMPLETIONS: [DmaCompletionSlot; DMA_COMPLETION_SLOTS] =
+    [const { DmaCompletionSlot::empty() }; DMA_COMPLETION_SLOTS];
 
 /// Enregistre la complétion d'une transaction pour le thread `tid`.
 fn store_completion(tid: u64, txn_id: u64, result: i64) {

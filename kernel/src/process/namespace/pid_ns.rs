@@ -19,13 +19,16 @@ pub struct NsPidBitmap {
     words: [AtomicU64; NS_PID_WORDS],
 }
 
-impl NsPidBitmap {
-    #[allow(clippy::declare_interior_mutable_const)]
-    const FREE_WORD: AtomicU64 = AtomicU64::new(u64::MAX);
+impl Default for NsPidBitmap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+impl NsPidBitmap {
     pub const fn new() -> Self {
         Self {
-            words: [Self::FREE_WORD; NS_PID_WORDS],
+            words: [const { AtomicU64::new(u64::MAX) }; NS_PID_WORDS],
         }
     }
 
@@ -101,9 +104,8 @@ impl PidNamespace {
     /// Alloue un PID local dans ce namespace.
     pub fn alloc_local_pid(&self) -> Option<u32> {
         let _guard = self.alloc_lock.lock();
-        self.bitmap.alloc(2).map(|n| {
+        self.bitmap.alloc(2).inspect(|_| {
             self.pop.fetch_add(1, Ordering::Relaxed);
-            n
         })
     }
 

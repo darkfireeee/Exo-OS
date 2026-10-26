@@ -150,81 +150,10 @@ pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
     h
 }
 
-/// Calcule un hash Blake3 simplifié (compression 256 bits, RECUR-01, ARITH-02).
-///
-/// NOTE : implémentation simplifiée pour no_std noyau — utilise une fonction
-/// de compression basée sur les constantes Blake3.  
-///
-/// RECUR-01 : boucle itérative.
+/// Calcule un hash Blake3 officiel standard (via crate blake3, features = ["pure"]).
+#[inline]
 pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
-    // Constantes IV Blake3 (8 premiers mots de Sha-256 IV).
-    const IV: [u32; 8] = [
-        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB,
-        0x5BE0CD19,
-    ];
-    const BLOCK_LEN: usize = 64;
-    let mut state = IV;
-    let mut offset: usize = 0;
-    let total = data.len();
-    // Traite chaque bloc de 64 octets.
-    while offset < total || offset == 0 {
-        let end = (offset.saturating_add(BLOCK_LEN)).min(total);
-        let chunk_data = &data[offset..end];
-        let mut block = [0u32; 16];
-        for (i, w) in block.iter_mut().enumerate() {
-            let byte_off = i * 4;
-            let b0 = chunk_data.get(byte_off).copied().unwrap_or(0);
-            let b1 = chunk_data
-                .get(byte_off.saturating_add(1))
-                .copied()
-                .unwrap_or(0);
-            let b2 = chunk_data
-                .get(byte_off.saturating_add(2))
-                .copied()
-                .unwrap_or(0);
-            let b3 = chunk_data
-                .get(byte_off.saturating_add(3))
-                .copied()
-                .unwrap_or(0);
-            *w = u32::from_le_bytes([b0, b1, b2, b3]);
-        }
-        // Compression simplifiée (G-function Blake3).
-        let compress = |a: u32, b: u32, c: u32, d: u32, x: u32, y: u32| -> (u32, u32, u32, u32) {
-            let a = a.wrapping_add(b).wrapping_add(x);
-            let d = (d ^ a).rotate_right(16);
-            let c = c.wrapping_add(d);
-            let b = (b ^ c).rotate_right(12);
-            let a = a.wrapping_add(b).wrapping_add(y);
-            let d = (d ^ a).rotate_right(8);
-            let c = c.wrapping_add(d);
-            let b = (b ^ c).rotate_right(7);
-            (a, b, c, d)
-        };
-        let (s0, s1, s2, s3, s4, s5, s6, s7) = (
-            state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
-        );
-        let (a, b, c, d) = compress(s0, s1, s4, s5, block[0], block[1]);
-        let (e, f, g, h) = compress(s2, s3, s6, s7, block[2], block[3]);
-        state[0] = a ^ e;
-        state[1] = b ^ f;
-        state[2] = c ^ g;
-        state[3] = d ^ h;
-        state[4] = (s4 ^ block[4]).wrapping_add(state[0]);
-        state[5] = (s5 ^ block[5]).wrapping_add(state[1]);
-        state[6] = (s6 ^ block[6]).wrapping_add(state[2]);
-        state[7] = (s7 ^ block[7]).wrapping_add(state[3]);
-        if end >= total {
-            break;
-        }
-        offset = end;
-    }
-    // Sérialise l'état en 32 octets.
-    let mut out = [0u8; 32];
-    for (i, &w) in state.iter().enumerate() {
-        let bytes = w.to_le_bytes();
-        out[i * 4..(i + 1) * 4].copy_from_slice(&bytes);
-    }
-    out
+    crate::fs::exofs::core::blake3_hash(data)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

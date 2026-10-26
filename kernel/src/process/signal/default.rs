@@ -58,7 +58,7 @@ impl Signal {
             return None;
         }
         // SAFETY: n est dans [1..31], un discriminant valide de Signal.
-        Some(unsafe { core::mem::transmute(n) })
+        Some(unsafe { core::mem::transmute::<u8, Signal>(n) })
     }
 
     #[inline(always)]
@@ -69,7 +69,7 @@ impl Signal {
     /// Vrai si ce signal est un signal temps-réel (SIGRT*).
     #[inline(always)]
     pub fn is_realtime(n: u8) -> bool {
-        n >= Self::SIGRTMIN && n <= Self::SIGRTMAX
+        (Self::SIGRTMIN..=Self::SIGRTMAX).contains(&n)
     }
 
     /// Ce signal peut-il être bloqué ?
@@ -255,6 +255,12 @@ pub fn default_action(sig: u8) -> SigAction {
 pub struct SigHandlerTable {
     /// Slots 0..63 (signal 0 = unused, 1..31 = standard, 32..63 = RT).
     actions: [SigAction; 64],
+}
+
+impl Default for SigHandlerTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SigHandlerTable {

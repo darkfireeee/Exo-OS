@@ -278,16 +278,10 @@ const MAX_CPUS: usize = 256;
 /// TSC offset de chaque CPU logique, mesuré depuis le BSP au boot SMP.
 /// offset[cpu] = TSC_AP_au_boot - TSC_BSP_au_boot (delta de synchronisation).
 /// ktime_get_ns() applique : tsc_adj = rdtscp() - offset[coreid].
-static TSC_OFFSETS: [AtomicI64; MAX_CPUS] = {
-    const ZERO: AtomicI64 = AtomicI64::new(0);
-    [ZERO; MAX_CPUS]
-};
+static TSC_OFFSETS: [AtomicI64; MAX_CPUS] = [const { AtomicI64::new(0) }; MAX_CPUS];
 
 /// Validité des offsets : bit i = true → CPU i a son offset mesuré.
-static TSC_OFFSET_VALID: [AtomicBool; MAX_CPUS] = {
-    const FALSE: AtomicBool = AtomicBool::new(false);
-    [FALSE; MAX_CPUS]
-};
+static TSC_OFFSET_VALID: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
 /// Enregistre l'offset TSC d'un CPU AP (appelé depuis percpu::sync).
 ///
@@ -320,6 +314,9 @@ pub fn tsc_offset_valid(cpu_id: usize) -> bool {
 }
 
 /// Invalide tous les offsets (utilisé pour reset au reboot SMP).
+///
+/// # Safety
+/// Doit être appelé exclusivement par le BSP en phase mono-cœur d'initialisation SMP.
 pub unsafe fn reset_tsc_offsets() {
     for i in 0..MAX_CPUS {
         TSC_OFFSETS[i].store(0, Ordering::Relaxed);

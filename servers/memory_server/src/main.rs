@@ -55,10 +55,9 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
 
     match request.msg_type {
         MEMORY_MSG_ALLOC => {
-            // FIX-APP-04 (Security_Application_Audit §GAP-04) : guard cross-PID.
-            // Un PID non-init ne peut allouer que pour lui-même.
-            let requested_owner = u32::from_le_bytes(request.payload.get(0..4).map(|b| [b[0],b[1],b[2],b[3]]).unwrap_or([0u8;4]));
-            if requested_owner != 0 && requested_owner != request.sender_pid && request.sender_pid != 1 {
+            // FIX-APP-04 (Security_Application_Audit §GAP-04) : handle_alloc alloue
+            // exclusivement dans l'espace d'adressage de request.sender_pid.
+            if request.sender_pid == 0 {
                 MemoryReply::error(exo_syscall_abi::EACCES)
             } else {
                 service.handle_alloc(request.sender_pid, &request.payload)

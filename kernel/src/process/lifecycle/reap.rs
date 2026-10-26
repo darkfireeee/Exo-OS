@@ -114,6 +114,12 @@ unsafe impl Sync for ReaperQueue {}
 
 pub static REAPER_QUEUE: ReaperQueue = ReaperQueue::new();
 
+impl Default for ReaperQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReaperQueue {
     pub const fn new() -> Self {
         Self {
@@ -294,8 +300,8 @@ fn reap_entry(entry: ReaperEntry) {
                     if !ptr.is_null() && ptr != main_ptr {
                         // SAFETY: ptr pointe vers un ProcessThread valide.
                         let thread_tid = unsafe { (*ptr).tid };
-                        if thread_tid == tid {
-                            if slot
+                        if thread_tid == tid
+                            && slot
                                 .compare_exchange(
                                     ptr,
                                     core::ptr::null_mut(),
@@ -303,15 +309,14 @@ fn reap_entry(entry: ReaperEntry) {
                                     Ordering::Acquire,
                                 )
                                 .is_ok()
-                            {
-                                // SAFETY: thread alloué par Box::into_raw, état Dead.
-                                unsafe {
-                                    let thread_box = alloc::boxed::Box::from_raw(ptr);
-                                    drop(thread_box);
-                                    crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
-                                }
-                                break;
+                        {
+                            // SAFETY: thread alloué par Box::into_raw, état Dead.
+                            unsafe {
+                                let thread_box = alloc::boxed::Box::from_raw(ptr);
+                                drop(thread_box);
+                                crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
                             }
+                            break;
                         }
                     }
                 }

@@ -66,7 +66,7 @@ pub enum DrainPolicy {
 fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> usize {
     // SAFETY: cpu_id correspond au CPU courant; aucune préemption pendant le drain.
     let cache = unsafe { CPU_CACHES.get_mut(cpu_id) };
-    let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;
+    let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
     let mut count = 0usize;
 
     match policy {

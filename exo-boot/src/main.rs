@@ -301,7 +301,7 @@ pub unsafe extern "C" fn exoboot_main_bios(
     };
 
     let load_result = unsafe {
-        kernel_loader::load_kernel(&bios_params, 0)
+        kernel_loader::load_kernel(&bios_params, 0x100_000)
     }.expect("Erreur chargement kernel");
 
     let page_tables = memory::paging::setup_kernel_page_tables(

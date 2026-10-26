@@ -85,29 +85,26 @@ pub fn sys_uname(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
         return EFAULT;
     }
 
-    // SAFETY: buf_ptr est une adresse userspace validée ci-dessus.
-    // On écrit 390 bytes (6 × 65) : d'abord tout à zéro puis les champs.
-    unsafe {
-        let p = buf_ptr as *mut u8;
-        core::ptr::write_bytes(p, 0u8, 390);
-
-        // Macro locale : copie au plus 64 octets (+ null déjà positionné).
-        macro_rules! write_field {
-            ($off:expr, $s:expr) => {{
-                let src: &[u8] = $s;
-                let len = src.len().min(64);
-                core::ptr::copy_nonoverlapping(src.as_ptr(), p.add($off), len);
-            }};
-        }
-
-        write_field!(0, b"Exo-OS"); // sysname
-        write_field!(65, b"exo-os"); // nodename
-        write_field!(130, b"1.0.0"); // release
-        write_field!(195, b"#1 SMP 2026"); // version
-        write_field!(260, b"x86_64"); // machine
-        write_field!(325, b"(none)"); // domainname
+    let mut buf = [0u8; 390];
+    macro_rules! write_field {
+        ($off:expr, $s:expr) => {{
+            let src: &[u8] = $s;
+            let len = src.len().min(64);
+            buf[$off..$off + len].copy_from_slice(&src[..len]);
+        }};
     }
-    0
+
+    write_field!(0, b"Exo-OS"); // sysname
+    write_field!(65, b"exo-os"); // nodename
+    write_field!(130, b"1.0.0"); // release
+    write_field!(195, b"#1 SMP 2026"); // version
+    write_field!(260, b"x86_64"); // machine
+    write_field!(325, b"(none)"); // domainname
+
+    match crate::syscall::validation::write_user_typed(buf_ptr, buf) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno(),
+    }
 }
 
 /// `sysinfo(info_ptr)` → 0 ou errno.
@@ -161,6 +158,18 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     const ARCH_GET_GS: u64 = 0x1004;
     match code {
         ARCH_SET_FS => {
+            if !crate::memory::core::address::is_user_canonical(addr) {
+                return EINVAL;
+            }
+            // Mettre à jour le TCB du thread courant
+            let tcb_ptr: u64;
+            unsafe {
+                core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+                if tcb_ptr != 0 {
+                    let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
+                    tcb.fs_base = addr;
+                }
+            }
             // Écrire IA32_FS_BASE MSR — initialise le TLS Ring3.
             unsafe {
                 core::arch::x86_64::_mm_mfence();
@@ -176,6 +185,17 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
             0
         }
         ARCH_SET_GS => {
+            if !crate::memory::core::address::is_user_canonical(addr) {
+                return EINVAL;
+            }
+            let tcb_ptr: u64;
+            unsafe {
+                core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+                if tcb_ptr != 0 {
+                    let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
+                    tcb.user_gs_base = addr;
+                }
+            }
             unsafe {
                 core::arch::asm!(
                     "wrmsr",

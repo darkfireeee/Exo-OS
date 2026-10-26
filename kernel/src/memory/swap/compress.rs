@@ -121,7 +121,7 @@ impl ZswapSlot {
 fn xor_checksum(data: &[u8]) -> u16 {
     let mut acc = 0xFFFFu16;
     for &b in data {
-        acc = acc ^ (b as u16);
+        acc ^= b as u16;
         acc = acc.rotate_left(5);
     }
     acc
@@ -173,10 +173,8 @@ pub struct ZswapPool {
 }
 
 // Tableau statique global des slots.
-static mut ZSWAP_SLOTS: [ZswapSlot; MAX_ZSWAP_SLOTS] = {
-    const S: ZswapSlot = ZswapSlot::new();
-    [S; MAX_ZSWAP_SLOTS]
-};
+static mut ZSWAP_SLOTS: [ZswapSlot; MAX_ZSWAP_SLOTS] =
+    [const { ZswapSlot::new() }; MAX_ZSWAP_SLOTS];
 
 #[inline(always)]
 fn zswap_slots_mut() -> &'static mut [ZswapSlot] {
@@ -186,6 +184,12 @@ fn zswap_slots_mut() -> &'static mut [ZswapSlot] {
             core::ptr::addr_of_mut!(ZSWAP_SLOTS).cast::<ZswapSlot>(),
             MAX_ZSWAP_SLOTS,
         )
+    }
+}
+
+impl Default for ZswapPool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

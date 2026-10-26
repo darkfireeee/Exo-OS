@@ -33,7 +33,7 @@ pub const BLOB_HEADER_MAGIC: u64 = 0x5244484C424F5845; // "EXOBLHDR"
 pub const BLOB_HEADER_SIZE: usize = 96;
 
 /// Magic de la table de références : "EXOREFTB".
-pub const REF_TABLE_MAGIC: u64 = 0x425446455246_4F45; // not needed on-disk
+pub const REF_TABLE_MAGIC: u64 = 0x4254_4645_5246_4F45; // not needed on-disk
 
 /// Nombre maximal de blobs attendus dans le walk (protection contre boucles).
 pub const PHASE2_MAX_BLOBS: usize = 1_048_576;

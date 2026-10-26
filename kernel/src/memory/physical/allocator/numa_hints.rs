@@ -132,10 +132,7 @@ static NUMA_DISTANCE_TABLE: [[u8; NumaNode::MAX_NODES]; NumaNode::MAX_NODES] = [
 
 /// Mapping CPU → nœud NUMA renseigné au boot par ACPI/SRAT.
 /// LOCK-FREE : lecture sûre dès que `TOPO_READY` = true.
-static CPU_TO_NUMA: [AtomicU8; 256] = {
-    const INIT: AtomicU8 = AtomicU8::new(0);
-    [INIT; 256]
-};
+static CPU_TO_NUMA: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
 
 static TOPO_READY: AtomicBool = AtomicBool::new(false);
 

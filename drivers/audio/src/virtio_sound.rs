@@ -51,15 +51,26 @@ impl VirtioSoundDriver {
     }
 
     pub fn setup_dma(&mut self) -> Result<(), DriverError> {
-        const PAGES: u64 = 16;
-        let dma = unsafe { syscall::syscall1(syscall::SYS_DMA_ALLOC, PAGES) };
+        const PAGES: usize = 16;
+        const SIZE: usize = PAGES * 4096;
+        let mut virt = 0u64;
+        let dma = unsafe {
+            syscall::syscall5(
+                syscall::SYS_DMA_ALLOC,
+                SIZE as u64,
+                0, // DMA_BIDIRECTIONAL
+                &mut virt as *mut u64 as u64,
+                0,
+                0,
+            )
+        };
         if dma < 0 {
             return Err(DriverError::DmaAllocFailed(dma));
         }
 
         self.dma_buffer_phys = dma as u64;
-        self.dma_buffer_virt = dma as usize as *mut u8;
-        self.dma_buffer_size = (PAGES as usize) * 4096;
+        self.dma_buffer_virt = virt as *mut u8;
+        self.dma_buffer_size = SIZE;
         Ok(())
     }
 }

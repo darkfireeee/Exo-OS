@@ -15,10 +15,11 @@ use crate::memory::physical::allocator::numa_hints::{numa_distance, NumaNode};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Politique d'allocation NUMA.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum NumaPolicy {
     /// Allouer sur le nœud local du CPU courant (défaut).
+    #[default]
     LocalFirst = 0,
     /// Interleave round-robin entre tous les nœuds disponibles.
     Interleave = 1,
@@ -26,12 +27,6 @@ pub enum NumaPolicy {
     Bind = 2,
     /// Préférer le nœud local, tomber en fallback si indisponible.
     Preferred = 3,
-}
-
-impl Default for NumaPolicy {
-    fn default() -> Self {
-        NumaPolicy::LocalFirst
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,17 +99,17 @@ pub struct NumaStats {
     pub interleave_idx: AtomicU8,
 }
 
+impl Default for NumaStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NumaStats {
     pub const fn new() -> Self {
         NumaStats {
-            local_allocs: {
-                const ZERO: AtomicU64 = AtomicU64::new(0);
-                [ZERO; NumaNode::MAX_NODES]
-            },
-            remote_allocs: {
-                const ZERO: AtomicU64 = AtomicU64::new(0);
-                [ZERO; NumaNode::MAX_NODES]
-            },
+            local_allocs: [const { AtomicU64::new(0) }; NumaNode::MAX_NODES],
+            remote_allocs: [const { AtomicU64::new(0) }; NumaNode::MAX_NODES],
             fallback_count: AtomicU64::new(0),
             bind_failures: AtomicU64::new(0),
             interleave_idx: AtomicU8::new(0),
@@ -156,6 +151,12 @@ struct NumaAllocatorInner {
 
 // SAFETY: NumaAllocator est thread-safe via son Mutex interne.
 unsafe impl Sync for NumaAllocator {}
+
+impl Default for NumaAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NumaAllocator {
     pub const fn new() -> Self {
@@ -242,6 +243,7 @@ impl NumaAllocator {
     }
 
     /// Alloue sur `preferred`, puis tente les autres nœuds par distance croissante.
+    #[allow(clippy::too_many_arguments)]
     fn alloc_with_fallback<A: PageAllocator>(
         &self,
         allocator: &A,
@@ -290,8 +292,7 @@ impl NumaAllocator {
             }
         }
 
-        for i in 0..count {
-            let node = ordered[i];
+        for &node in &ordered[..count] {
             if let Ok(frame) = allocator.alloc_on_node(order, node, flags) {
                 NUMA_STATS.remote_allocs[node.as_usize()].fetch_add(1, Ordering::Relaxed);
                 return Ok(frame);
@@ -318,7 +319,7 @@ fn current_policy_cpu_slot() -> usize {
     #[cfg(target_os = "none")]
     {
         let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
-        return cpu.min(MAX_NUMA_POLICY_CPUS - 1);
+        cpu.min(MAX_NUMA_POLICY_CPUS - 1)
     }
 
     #[cfg(not(target_os = "none"))]

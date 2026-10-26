@@ -156,6 +156,7 @@ pub enum ShellKey {
     HistoryNext,
     CursorLeft,
     CursorRight,
+    CursorHome,
     CursorEnd,
 }
 

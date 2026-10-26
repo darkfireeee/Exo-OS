@@ -27,9 +27,24 @@ pub enum TextError {
 
 pub type Result<T> = core::result::Result<T, TextError>;
 
+impl core::fmt::Display for TextError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ParseError => write!(f, "Parse error"),
+            Self::InvalidUtf8 => write!(f, "Invalid UTF-8"),
+            Self::InvalidFormat => write!(f, "Invalid format"),
+            Self::BufferTooSmall => write!(f, "Buffer too small"),
+            Self::UnexpectedToken => write!(f, "Unexpected token"),
+            Self::UnexpectedEof => write!(f, "Unexpected EOF"),
+        }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn test_error_display() {

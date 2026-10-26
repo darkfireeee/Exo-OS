@@ -208,6 +208,8 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     }
 
     let addr_space_ptr = pcb_box.address_space.load(Ordering::Acquire);
+    let pcb_flags = pcb_box.flags.load(Ordering::Acquire);
+    let is_vfork_shared = pcb_flags & crate::process::core::pcb::process_flags::VFORK_SHARED_AS != 0;
     {
         let mut files = pcb_box.files.lock();
         files.close_all_noalloc();
@@ -215,7 +217,7 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     pcb_box.set_state(ProcessState::Dead);
     drop(pcb_box);
 
-    if addr_space_ptr != 0 {
+    if addr_space_ptr != 0 && !is_vfork_shared {
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
             .free_addr_space(addr_space_ptr);
     }
@@ -242,7 +244,7 @@ fn scan_zombie_children(
     wait_pid: i32,
     _opts: WaitOptions,
 ) -> Option<ZombieCandidate> {
-    let any_child = wait_pid < 0 || wait_pid == 0;
+    let any_child = wait_pid <= 0;
     let mut found: Option<ZombieCandidate> = None;
 
     PROCESS_REGISTRY.for_each(|pcb| {

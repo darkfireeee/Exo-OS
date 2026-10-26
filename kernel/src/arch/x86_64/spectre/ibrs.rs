@@ -119,7 +119,7 @@ pub fn flush_mds() {
         core::arch::asm!(
             "verw [{sel}]",
             sel = in(reg) &ds_sel,
-            options(nostack, nomem, preserves_flags),
+            options(nostack, preserves_flags),
         );
     }
 }

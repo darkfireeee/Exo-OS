@@ -99,8 +99,8 @@ fn try_process_thread_box(
 /// Taille du stack kernel par thread.
 ///
 /// Les chemins userspace critiques (fork/exec/IPC) traversent assez de Rust
-/// noyau pour que 16 KiB soit fragile en debug. Le chemin `do_fork` (clone CoW
-/// + clone fds + namespaces + credentials + hash BLAKE3 d'identité) consomme à
+/// noyau pour que 16 KiB soit fragile en debug. Le chemin `do_fork` (clone CoW,
+/// clone fds, namespaces, credentials, hash BLAKE3 d'identité) consomme à
 /// lui seul ~56–64 KiB en build debug : 64 KiB débordait la guard page de ~360
 /// octets (overflow noyau → ExoPhoenix). 256 KiB garde une marge confortable
 /// pour les forks imbriqués (fork→execve) tout en restant modeste (vmalloc, 256
@@ -110,7 +110,7 @@ const KSTACK_PAGE_SIZE: usize = crate::memory::core::constants::PAGE_SIZE;
 const KSTACK_USABLE_PAGES: usize = KSTACK_SIZE / KSTACK_PAGE_SIZE;
 const KSTACK_TOTAL_PAGES: usize = KSTACK_USABLE_PAGES + 2;
 
-const _: () = assert!(KSTACK_SIZE % KSTACK_PAGE_SIZE == 0);
+const _: () = assert!(KSTACK_SIZE.is_multiple_of(KSTACK_PAGE_SIZE));
 
 /// Canari de stack pour détecter les débordements.
 const STACK_CANARY: u64 = 0xDEAD_BEEF_CAFE_BABE;
@@ -130,6 +130,7 @@ impl crate::memory::virt::page_table::FrameAllocatorForWalk for KernelStackPtAll
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum KernelStackBacking {
     Heap,
@@ -273,7 +274,6 @@ impl KernelStack {
 
         let stack_base_virt =
             VirtAddr::new(reserved.as_u64().saturating_add(KSTACK_PAGE_SIZE as u64));
-        let mut mapped_pages = 0usize;
         for (i, frame) in frames.iter().copied().enumerate() {
             tcb_trace(b"kstack: map page\n");
             let virt = VirtAddr::new(stack_base_virt.as_u64() + (i * KSTACK_PAGE_SIZE) as u64);
@@ -286,7 +286,7 @@ impl KernelStack {
                 )
             };
             if mapped.is_err() {
-                for j in 0..mapped_pages {
+                for j in 0..i {
                     let virt =
                         VirtAddr::new(stack_base_virt.as_u64() + (j * KSTACK_PAGE_SIZE) as u64);
                     if let Some(frame) =
@@ -295,12 +295,11 @@ impl KernelStack {
                         let _ = crate::memory::physical::free_page(frame);
                     }
                 }
-                for frame in frames.iter().copied().skip(mapped_pages) {
+                for frame in frames.iter().copied().skip(i) {
                     let _ = crate::memory::physical::free_page(frame);
                 }
                 return None;
             }
-            mapped_pages += 1;
         }
         tcb_trace(b"kstack: mapped\n");
 

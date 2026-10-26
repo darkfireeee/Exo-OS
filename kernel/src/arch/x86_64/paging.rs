@@ -22,7 +22,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
 pub const HUGE_PAGE_2M: usize = 2 * 1024 * 1024;
-pub const HUGE_PAGE_1G: usize = 1 * 1024 * 1024 * 1024;
+pub const HUGE_PAGE_1G: usize = 1024 * 1024 * 1024;
 
 pub const PAGE_TABLE_ENTRIES: usize = 512;
 

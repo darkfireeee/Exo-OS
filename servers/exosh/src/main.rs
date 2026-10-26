@@ -20,6 +20,7 @@ use exec::*;
 pub extern "C" fn _start(_boot_info_virt: usize) -> ! {
     attach_stdio_to_tty();
     register_readiness_endpoint();
+    ignore_sigint();
 
     let mut state = ShellState::new();
     write_all(b"\x0cExo-OS userspace console ready\n");
@@ -27,7 +28,7 @@ pub extern "C" fn _start(_boot_info_virt: usize) -> ! {
 
     loop {
         let mut line = [0u8; LINE_MAX];
-        let len = read_line(&mut line, &mut state);
+        let len = read_line_interactive(&mut line, &mut state);
         let command = trim(&line[..len]);
         if command.is_empty() {
             continue;
@@ -39,10 +40,17 @@ pub extern "C" fn _start(_boot_info_virt: usize) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    let msg = b"exosh: PANIC!\n";
+    unsafe {
+        let _ = exo_syscall_abi::syscall3(
+            exo_syscall_abi::SYS_EXO_LOG,
+            msg.as_ptr() as u64,
+            msg.len() as u64,
+            1,
+        );
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }
 

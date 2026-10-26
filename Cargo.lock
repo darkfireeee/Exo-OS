@@ -647,6 +647,14 @@ name = "exo-virtio-drivers"
 version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",
+ "exo-virtio-gpu",
+]
+
+[[package]]
+name = "exo-virtio-gpu"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
 ]
 
 [[package]]

@@ -253,9 +253,7 @@ impl EndpointDesc {
 
     /// Vérifie si un ThreadId est propriétaire de cet endpoint.
     pub fn is_owner(&self, tid: ThreadId) -> bool {
-        self.owners[..self.owner_count as usize]
-            .iter()
-            .any(|&o| o == tid)
+        self.owners[..self.owner_count as usize].contains(&tid)
     }
 
     /// Ajoute un propriétaire supplémentaire.

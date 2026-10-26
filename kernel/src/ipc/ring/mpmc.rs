@@ -71,11 +71,10 @@ impl MpmcRing {
     /// # Safety
     /// `init()` DOIT être appelé avant toute utilisation.
     pub const fn new_uninit() -> Self {
-        const INIT_CELL: SlotCell = SlotCell::new_at(0);
         Self {
             head: [0u8; 64],
             tail: [0u8; 64],
-            cells: UnsafeCell::new([INIT_CELL; RING_SIZE]),
+            cells: UnsafeCell::new([const { SlotCell::new_at(0) }; RING_SIZE]),
         }
     }
 

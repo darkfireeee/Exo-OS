@@ -290,42 +290,61 @@ impl UserStr {
     /// - [`SyscallError::Invalid`] si la chaîne contient des octets invalides
     pub fn from_user(ptr: u64, max: usize) -> Result<Self, SyscallError> {
         VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
-        if ptr == 0 {
-            record_fault();
-            return Err(SyscallError::Fault);
-        }
-        // Valider que l'adresse de départ est bien en userspace
-        if ptr >= USER_ADDR_MAX {
+        if ptr == 0 || ptr >= USER_ADDR_MAX {
             record_fault();
             return Err(SyscallError::Fault);
         }
         let capped_max = max.min(STRING_MAX);
-        let mut buf = Vec::new();
-        buf.try_reserve(capped_max)
-            .map_err(|_| SyscallError::NoMemory)?;
+        let mut buf = Vec::with_capacity(64);
 
-        // Copie octet par octet jusqu'au '\0' ou ptr+max
-        // (safe car on vérifie la borne userspace ci-dessous)
-        let mut offset = 0usize;
-        loop {
-            if offset >= capped_max {
+        #[cfg(target_os = "none")]
+        {
+            use crate::memory::core::{phys_to_virt, PAGE_SIZE};
+            let user_as = current_user_address_space().ok_or_else(|| {
                 record_fault();
-                return Err(SyscallError::TooBig);
+                SyscallError::Fault
+            })?;
+            let mut offset = 0usize;
+            while offset < capped_max {
+                let user_addr = ptr.checked_add(offset as u64).ok_or(SyscallError::Fault)?;
+                if user_addr >= USER_ADDR_MAX {
+                    record_fault();
+                    return Err(SyscallError::Fault);
+                }
+                let page_off = (user_addr as usize) & (PAGE_SIZE - 1);
+                let chunk = (PAGE_SIZE - page_off).min(capped_max - offset);
+                let phys = resolve_user_page(user_as, user_addr, false)?;
+                let kernel_slice = unsafe {
+                    core::slice::from_raw_parts(phys_to_virt(phys).as_u64() as *const u8, chunk)
+                };
+                if let Some(nul_pos) = kernel_slice.iter().position(|&b| b == 0) {
+                    buf.extend_from_slice(&kernel_slice[..nul_pos]);
+                    COPY_FROM_USER_BYTES.fetch_add((offset + nul_pos + 1) as u64, Ordering::Relaxed);
+                    return Ok(Self { buf });
+                }
+                buf.extend_from_slice(kernel_slice);
+                offset += chunk;
             }
-            let byte_addr = ptr.checked_add(offset as u64).ok_or(SyscallError::Fault)?;
-            if byte_addr >= USER_ADDR_MAX {
-                record_fault();
-                return Err(SyscallError::Fault);
-            }
-            let mut byte = 0u8;
-            copy_from_user(&mut byte as *mut u8, byte_addr as *const u8, 1)?;
-            if byte == 0 {
-                break;
-            }
-            buf.push(byte);
-            offset += 1;
+            record_fault();
+            return Err(SyscallError::TooBig);
         }
-        Ok(Self { buf })
+        #[cfg(not(target_os = "none"))]
+        {
+            // Conserver la boucle hôte pour les tests unitaires std
+            let mut offset = 0usize;
+            loop {
+                if offset >= capped_max {
+                    return Err(SyscallError::TooBig);
+                }
+                let byte = unsafe { core::ptr::read_volatile((ptr as *const u8).add(offset)) };
+                if byte == 0 {
+                    break;
+                }
+                buf.push(byte);
+                offset += 1;
+            }
+            Ok(Self { buf })
+        }
     }
 
     /// Retourne la chaîne comme slice d'octets (sans le null terminal).

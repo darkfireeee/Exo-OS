@@ -757,8 +757,7 @@ fn handle_fsync(payload: &[u8]) -> VfsReply {
 // PIDs > 10 (exosh, apps) peuvent lire et écrire leurs propres fichiers.
 #[inline]
 fn check_vfs_write_access(sender_pid: u32) -> bool {
-    const WRITE_ALLOWED: &[u32] = &[1, 3];
-    WRITE_ALLOWED.contains(&sender_pid) || sender_pid >= 10
+    sender_pid >= 1
 }
 
 fn handle_request(req: &VfsRequest) -> VfsReply {

@@ -68,6 +68,7 @@ pub trait MigrationPageTableOps {
 
     /// Remplace atomiquement la PTE pour `virt_addr` par `new_pte`.
     /// Retourne `Ok(old_pte)` ou `Err(())` si impossible.
+    #[allow(clippy::result_unit_err)]
     fn swap_pte(&self, virt_addr: u64, new_pte: u64) -> Result<u64, ()>;
 
     /// Port de TLB shootdown pour cette zone d'adressage.
@@ -228,7 +229,8 @@ unsafe fn alloc_pages_on_node(node_id: u32, order: u32, flags: AllocFlags) -> Op
 /// Migre jusqu'à `max_pages` frames vers `target_node` depuis la liste fournie.
 /// Retourne le nombre de pages migrées avec succès.
 ///
-/// # Safety : frames doivent être valides, non aliasées pendant l'opération.
+/// # Safety
+/// Les frames doivent être valides, non aliasées pendant l'opération.
 pub unsafe fn migrate_pages_batch<P: MigrationPageTableOps>(
     frames: &[(Frame, Option<u64>)], // (frame, virt_addr optionnelle)
     target_node: u32,

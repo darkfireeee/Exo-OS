@@ -34,18 +34,14 @@ pub const TICK_NS: u64 = 1_000_000_000 / HZ;
 const GI03_DEFERRED_TICK_INTERVAL: u64 = 10;
 
 // Temps accumulé sur le CPU courant depuis la dernière sélection du thread (par CPU).
-static ELAPSED_NS: [AtomicU64; MAX_CPUS] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; MAX_CPUS]
-};
+static ELAPSED_NS: [AtomicU64; MAX_CPUS] =
+    [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// Dernier pointeur TCB observé par CPU — permet de détecter un changement de thread
 /// et de remettre ELAPSED_NS à zéro pour ne pas imputer le temps de l'ancien thread
 /// au nouveau (BUG-FIX R).
-static LAST_TCB_PTR: [AtomicUsize; MAX_CPUS] = {
-    const ZERO: AtomicUsize = AtomicUsize::new(0);
-    [ZERO; MAX_CPUS]
-};
+static LAST_TCB_PTR: [AtomicUsize; MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; MAX_CPUS];
 
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static TICK_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
@@ -113,27 +109,23 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
                 TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
             }
         }
-        SchedPolicy::RoundRobin => {
+        SchedPolicy::RoundRobin if rr_tick(tcb, elapsed) => {
             // ── 4. Quantum RR ──────────────────────────────────────────
-            if rr_tick(tcb, elapsed) {
-                tcb.sched_state
-                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
-                ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
-                TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-            }
+            tcb.sched_state
+                .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+            ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
+            TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
         }
-        SchedPolicy::Deadline => {
+        SchedPolicy::Deadline if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) => {
             // ── 4b. Budget SCHED_DEADLINE ──────────────────────────────
             // BUG-FIX S : vérifier l'épuisement du budget EDF à chaque tick.
             // Sans ce correctif, les threads SCHED_DEADLINE n'appelaient jamais
             // `deadline_tick()`, ignoraient leur `runtime_ns` et s'exécutaient
             // indéfiniment sans respecter leur budget par période.
-            if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) {
-                tcb.sched_state
-                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
-                ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
-                TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-            }
+            tcb.sched_state
+                .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+            ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
+            TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
         }
         _ => {}
     }
@@ -148,13 +140,13 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     // ── 5c. Maintenance GI-03 (BSP, 100 Hz) ───────────────────────────────
     // Watchdog IRQ + drainage des fautes IOMMU hors ISR matériel dédié.
-    if cpu_id == 0 && tick % GI03_DEFERRED_TICK_INTERVAL == 0 {
+    if cpu_id == 0 && tick.is_multiple_of(GI03_DEFERRED_TICK_INTERVAL) {
         crate::arch::x86_64::irq::watchdog::watchdog_tick();
         crate::drivers::iommu::fault_handler::process_iommu_faults();
     }
 
     // ── 6. Équilibrage de charge ──────────────────────────────────────────
-    if tick % BALANCE_INTERVAL_TICKS == 0 {
+    if tick.is_multiple_of(BALANCE_INTERVAL_TICKS) {
         balance_cpu(CpuId(cpu_id));
     }
 }
@@ -193,8 +185,8 @@ pub fn reset_tick_counters(cpu_id: usize) {
 ///
 /// `tcb_ptr` : pointeur vers le `ThreadControlBlock` courant (lu depuis GS:[0x20]).
 ///   - Si null : IPI reçu avant l'init scheduler — ignoré silencieusement.
-///   - Sinon  : positionne le flag `NEED_RESCHED` sur ce thread pour
-///              déclencher un reschedule au retour d'interruption.
+///   - Sinon : positionne le flag `NEED_RESCHED` sur ce thread pour
+///     déclencher un reschedule au retour d'interruption.
 ///
 /// # Safety
 /// Appelé depuis un handler d'interruption, préemption implicitement désactivée.

@@ -61,8 +61,9 @@ pub fn sys_exo_cap_revoke(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _
         Ok(v) => v,
         Err(e) => return e,
     };
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
 
-    match crate::security::capability::revoke_handle(handle) {
+    match crate::security::capability::revoke_handle_by_caller(caller_pid, handle) {
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }

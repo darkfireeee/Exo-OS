@@ -143,9 +143,9 @@ impl GdtDescriptor {
     /// Descripteur TSS (lower 8 bytes d'un System Segment 16-bytes)
     fn tss_lower(base: u64, limit: u32) -> Self {
         // Access : P=1, DPL=0, Type=0x9 (Available 64-bit TSS)
-        let base_lo = (base & 0xFFFF) as u64;
-        let base_mid = ((base >> 16) & 0xFF) as u64;
-        let base_hi = ((base >> 24) & 0xFF) as u64;
+        let base_lo = base & 0xFFFF;
+        let base_mid = (base >> 16) & 0xFF;
+        let base_hi = (base >> 24) & 0xFF;
         let limit_lo = (limit & 0xFFFF) as u64;
         let limit_hi = ((limit >> 16) & 0xF) as u64;
         let access = 0x89u64; // P=1, DPL=0, Type=0x9
@@ -156,7 +156,7 @@ impl GdtDescriptor {
             | (base_mid << 32)
             | (access   << 40)
             | (limit_hi  << 48)
-            | (0xAu64    << 52) // G=1, flags
+            | (0x0u64    << 52) // G=0 (byte-granular limit), L=0, D/B=0, AVL=0 (AUDIT-FS2)
             | (base_hi   << 56),
         )
     }

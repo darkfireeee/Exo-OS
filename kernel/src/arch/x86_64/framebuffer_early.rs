@@ -60,12 +60,17 @@ impl Framebuffer {
     }
 
     fn is_present(&self) -> bool {
+        let bpp = self.bytes_per_pixel();
+        let fb_bytes = (self.height as usize)
+            .saturating_mul(self.stride as usize)
+            .saturating_mul(bpp);
         self.virt_addr != 0
             && self.width != 0
             && self.height != 0
             && self.size_bytes != 0
             && self.bpp >= 24
             && self.stride >= self.width
+            && self.size_bytes >= fb_bytes as u64
     }
 
     fn bytes_per_pixel(&self) -> usize {
@@ -388,11 +393,17 @@ fn render_screen(state: &ConsoleState) {
 
 /// Active le framebuffer de boot si le bootloader en a fourni un.
 pub fn init_from_boot_info(info: &BootInfo) -> bool {
+    let bpp_bytes = ((info.framebuffer_bpp as usize).saturating_add(7) / 8).max(1);
+    let needed_bytes = (info.framebuffer_height as usize)
+        .saturating_mul(info.framebuffer_stride as usize)
+        .saturating_mul(bpp_bytes);
     if info.framebuffer_phys_addr == 0
         || info.framebuffer_size_bytes == 0
         || info.framebuffer_width == 0
         || info.framebuffer_height == 0
         || info.framebuffer_bpp < 24
+        || info.framebuffer_stride < info.framebuffer_width
+        || info.framebuffer_size_bytes < needed_bytes as u64
     {
         return false;
     }

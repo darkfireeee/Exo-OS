@@ -472,7 +472,7 @@ impl QuotaEnforcer {
             .get_limits(key)
             .unwrap_or(super::quota_policy::QuotaLimits::unlimited());
         EnforcementResult {
-            action: action,
+            action,
             entity_id: key.entity_id,
             used_bytes: usage.bytes_used,
             used_blobs: usage.blobs_used,
@@ -481,7 +481,7 @@ impl QuotaEnforcer {
             limit_blobs: limits.hard_blobs,
             limit_inodes: limits.hard_inodes,
             grace_ticks: limits.grace_ticks,
-            requested: requested,
+            requested,
         }
     }
 

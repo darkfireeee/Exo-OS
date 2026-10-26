@@ -423,12 +423,19 @@ fn rollback_pinned_pages(pinned: &[PinnedPage]) {
     }
 }
 
-fn mmio_page_flags() -> PageFlags {
-    PageFlags::PRESENT
+fn mmio_page_flags_for(phys: PhysAddr, size: usize) -> PageFlags {
+    let mut flags = PageFlags::PRESENT
         | PageFlags::WRITABLE
         | PageFlags::USER
-        | PageFlags::NO_CACHE
-        | PageFlags::NO_EXECUTE
+        | PageFlags::NO_EXECUTE;
+    // Pour le framebuffer d'affichage, activer Write-Combining (PAT index 7)
+    // afin de démultiplier le débit d'affichage sans saturer le bus MMIO QEMU.
+    if crate::arch::x86_64::framebuffer_early::user_framebuffer_contains(phys.as_u64(), size as u64) {
+        flags |= PageFlags::WRITE_COMBINING;
+    } else {
+        flags |= PageFlags::NO_CACHE;
+    }
+    flags
 }
 
 fn mmio_vma_flags() -> VmaFlags {
@@ -500,12 +507,26 @@ fn unmap_dma_alloc_record(record: &DmaAllocRecord) {
         return;
     };
     let map_base = VirtAddr::new(record.virt);
+    let map_size = align_up(record.size);
     if let Some(vma_ptr) = user_as.remove_vma(map_base) {
         // SAFETY: remove_vma a retiré ce vma_ptr de l'AS et nous en transfère la
         // possession ; il provenait de Box::into_raw — on le libère une seule fois.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
-    rollback_mmio_pages(user_as, map_base, align_up(record.size) / PAGE_SIZE);
+    rollback_mmio_pages(user_as, map_base, map_size / PAGE_SIZE);
+
+    let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
+    // SAFETY: shootdown_sync émet un TLB shootdown IPI sur les cœurs actifs
+    // pour invalider les entrées TLB des pages DMA libérées.
+    unsafe {
+        shootdown_sync(
+            TlbFlushType::Range {
+                start: map_base,
+                end: VirtAddr::new(record.virt + map_size as u64),
+            },
+            cpu_count,
+        );
+    }
 }
 
 fn unmap_mmio_record(record: MmioRecord) {
@@ -866,7 +887,7 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
         return Err(MmioError::OutOfMemory);
     };
 
-    let page_flags = mmio_page_flags();
+    let page_flags = mmio_page_flags_for(phys, size);
     let mapped_pages = map_size / PAGE_SIZE;
     let alloc = UserFaultAllocator { user_as };
 

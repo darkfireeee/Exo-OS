@@ -395,7 +395,7 @@ unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
         in("rdi") block,
         in("rsi") round_keys,
         out("rax") _,
-        options(preserves_flags),
+        // AUDIT: "add rax, 16" modifie les flags EFLAGS — pas de preserves_flags
     );
 }
 

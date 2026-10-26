@@ -30,6 +30,12 @@ pub struct UserAsStats {
     pub vma_count: AtomicU64,
 }
 
+impl Default for UserAsStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UserAsStats {
     pub const fn new() -> Self {
         UserAsStats {
@@ -126,7 +132,8 @@ impl UserAddressSpace {
 
     /// Mappe `virt` → `frame` directement (sans VMA — pour le loader ELF).
     ///
-    /// SAFETY: `virt` doit être dans l'espace user (< USER_END).
+    /// # Safety
+    /// `virt` doit être dans l'espace user (< USER_END).
     pub unsafe fn map_page<A: FrameAllocatorForWalk>(
         &self,
         virt: VirtAddr,
@@ -146,7 +153,8 @@ impl UserAddressSpace {
 
     /// Mappe `virt` -> `frame` sans invalider le TLB.
     ///
-    /// SAFETY: a utiliser uniquement pour une plage userspace fraichement
+    /// # Safety
+    /// a utiliser uniquement pour une plage userspace fraichement
     /// reservee, avant publication de la VMA et avant tout acces utilisateur a
     /// cette plage. Les chemins qui remplacent ou demappent une page doivent
     /// continuer a utiliser `map_page()` ou faire leur propre invalidation.
@@ -171,6 +179,9 @@ impl UserAddressSpace {
     }
 
     /// Démappe `virt` (sans VMA).
+    ///
+    /// # Safety
+    /// `virt` doit être dans l'espace d'adressage utilisateur de cette table.
     pub unsafe fn unmap_page(&self, virt: VirtAddr) -> Option<Frame> {
         let mut walker = PageTableWalker::new(self.pml4_phys);
         let result = walker.unmap(virt);
@@ -212,7 +223,7 @@ impl UserAddressSpace {
     /// Marque toutes les VMAs privées writables comme CoW après fork().
     pub fn mark_all_writable_vmas_cow(&self) {
         let mut inner = self.inner.lock();
-        inner.vma_tree.for_each_mut(|vma| mark_vma_cow(vma));
+        inner.vma_tree.for_each_mut(mark_vma_cow);
     }
 
     /// Clone les métadonnées internes du parent vers l'enfant de fork().
@@ -233,8 +244,9 @@ impl UserAddressSpace {
 
     /// Enregistre une nouvelle VMA dans l'espace d'adressage.
     ///
-    /// SAFETY: Le descripteur doit avoir été alloué par le slab et l'appelant
-    ///         cède la propriété au VmaTree.
+    /// # Safety
+    /// Le descripteur doit avoir été alloué par le slab et l'appelant
+    /// cède la propriété au VmaTree.
     pub unsafe fn insert_vma(&self, vma: *mut VmaDescriptor) -> bool {
         let mut inner = self.inner.lock();
         let result = inner.vma_tree.insert(vma);

@@ -22,7 +22,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // ── Masque de CPUs online ─────────────────────────────────────────────────────
 
 /// Nombre de mots u64 nécessaires pour le bitmask online.
-const ONLINE_MASK_WORDS: usize = (MAX_CPUS + 63) / 64;
+const ONLINE_MASK_WORDS: usize = MAX_CPUS.div_ceil(64);
 
 /// Bitmask des CPUs online — bit N = CPU N online.
 /// Tableau d'AtomicU64 : supporte jusqu'à MAX_CPUS CPUs.
@@ -36,7 +36,7 @@ static CPU_ONLINE_MASK: [AtomicU64; ONLINE_MASK_WORDS] = [
 
 /// Assertion compile-time : tableau dimensionné correctement.
 const _: () = assert!(
-    ONLINE_MASK_WORDS == (MAX_CPUS + 63) / 64,
+    ONLINE_MASK_WORDS == MAX_CPUS.div_ceil(64),
     "CPU_ONLINE_MASK mal dimensionné pour MAX_CPUS"
 );
 

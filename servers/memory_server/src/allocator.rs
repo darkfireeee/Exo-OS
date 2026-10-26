@@ -87,11 +87,15 @@ impl QuotaTable {
     pub fn release(&mut self, pid: u32, bytes: u64) -> Result<QuotaSnapshot, i64> {
         let entry = self.entry_mut(pid)?;
         entry.used_bytes = entry.used_bytes.saturating_sub(bytes);
-        Ok(QuotaSnapshot {
+        let snapshot = QuotaSnapshot {
             used_bytes: entry.used_bytes,
             peak_bytes: entry.peak_bytes,
             limit_bytes: entry.limit_bytes,
-        })
+        };
+        if entry.used_bytes == 0 && entry.limit_bytes == DEFAULT_LIMIT_BYTES {
+            *entry = QuotaEntry::empty();
+        }
+        Ok(snapshot)
     }
 
     pub fn set_limit(&mut self, pid: u32, limit_bytes: u64) -> Result<QuotaSnapshot, i64> {

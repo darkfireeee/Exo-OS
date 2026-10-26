@@ -96,7 +96,7 @@ impl FrameFlags {
 ///   - zone     (1 byte,  u8)        : ZoneType (Dma/Dma32/Normal/High/Movable)
 ///   - numa_node(1 byte,  u8)        : nœud NUMA d'appartenance (0..MAX_NUMA_NODES)
 ///   - order    (1 byte,  AtomicU8)  : ordre buddy (0=4KiB, 9=2MiB, ...)
-///              si > BUDDY_MAX_ORDER → dans pool DMA ou réservé
+///     si > BUDDY_MAX_ORDER → dans pool DMA ou réservé
 ///   - lru_gen  (1 byte,  AtomicU8)  : génération LRU (pour clock algorithm)
 ///   - mapcount (2 bytes, AtomicU16) : nombre de page tables qui mappent ce frame
 ///   - _pad     (20 bytes)           : alignement futur / 32 bytes total
@@ -196,7 +196,9 @@ impl FrameDesc {
     }
 
     /// Fixe le refcount à une valeur arbitraire (boot uniquement).
-    /// SAFETY: Doit être appelé uniquement pendant l'initialisation du frame table,
+    ///
+    /// # Safety
+    /// Doit être appelé uniquement pendant l'initialisation du frame table,
     /// avant que d'autres CPUs aient accès au descripteur.
     #[inline(always)]
     pub unsafe fn set_refcount_init(&self, count: u32) {
@@ -351,9 +353,9 @@ impl FrameDesc {
     }
 
     /// Marque le frame comme libre (remet les flags à FREE, refcount à 0).
-    /// SAFETY: L'appelant doit garantir que plus aucune référence n'existe.
     ///
-    /// # Safety – refcount guard
+    /// # Safety
+    /// L'appelant doit garantir que plus aucune référence n'existe.
     /// Si refcount != 0 en release, refuse de marquer le frame libre pour éviter
     /// un use-after-free (retourne sans modifier les flags).
     #[inline]
@@ -488,8 +490,5 @@ impl FrameDescriptorTable {
 /// En BSS — initialisée à zéro (tous les flags à 0 = EMPTY).
 /// À l'allocation d'un frame, `mark_allocated()` positionne les flags appropriés.
 pub static FRAME_DESCRIPTORS: FrameDescriptorTable = FrameDescriptorTable {
-    entries: {
-        const E: FrameDescEntry = FrameDescEntry::new();
-        [E; MAX_PHYS_FRAMES]
-    },
+    entries: [const { FrameDescEntry::new() }; MAX_PHYS_FRAMES],
 };

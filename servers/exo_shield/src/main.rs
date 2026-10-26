@@ -79,10 +79,11 @@ pub extern "C" fn _start() -> ! {
     };
     if register_rc < 0 {
         boot_log(b"exo_shield: register failed\n");
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+        }
         loop {
-            unsafe {
-                core::arch::asm!("hlt", options(nostack, nomem));
-            }
+            core::hint::spin_loop();
         }
     }
     boot_log(b"exo_shield: registered\n");

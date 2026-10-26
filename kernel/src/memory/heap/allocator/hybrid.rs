@@ -24,6 +24,12 @@ pub struct HybridAllocStats {
     pub current_inuse: AtomicU64,
 }
 
+impl Default for HybridAllocStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HybridAllocStats {
     pub const fn new() -> Self {
         HybridAllocStats {
@@ -66,14 +72,16 @@ pub fn is_heap_ready() -> bool {
 ///
 /// - Si size <= 2048 : utilise SLUB.
 /// - Sinon : utilise le large allocator (vmalloc).
-pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
+pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
     if !HYBRID_ENABLED.load(Ordering::Acquire) {
         return Err(AllocError::NotInitialized);
     }
 
     let user_size = if size == 0 { 8 } else { size };
 
-    if user_size <= HEAP_LARGE_THRESHOLD {
+    // T5-001 FIX : Si l'alignement demandé excède 64 bytes, router vers vmalloc
+    // qui garantit un alignement sur PAGE_SIZE (4096 bytes).
+    if user_size <= HEAP_LARGE_THRESHOLD && align <= 64 {
         // Petite allocation via SLUB
         let sc_entry = heap_size_class_for(user_size).ok_or(AllocError::InvalidParams)?;
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
@@ -124,8 +132,9 @@ pub fn alloc(size: usize, _align: usize, flags: AllocFlags) -> Result<NonNull<u8
 
 /// Libère un pointeur alloué par `alloc`.
 ///
-/// SAFETY: `ptr` doit avoir été alloué par `alloc()` avec la même `size`.
-///         Ne plus être utilisé après cet appel.
+/// # Safety
+/// `ptr` doit avoir été alloué par `alloc()` avec la même `size`.
+/// Ne plus être utilisé après cet appel.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     let user_size = if size == 0 { 8 } else { size };
 

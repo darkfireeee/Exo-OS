@@ -112,21 +112,24 @@ use exo_syscall_abi as syscall;
     pub fn cmd_ps(_args: &Args) -> i32 {
         let mut entries = [syscall::ExoProcessInfo::zeroed(); 64];
         let rc = unsafe {
-            syscall::syscall2(
+            syscall::syscall3(
                 syscall::SYS_EXO_PROCESS_LIST,
                 entries.as_mut_ptr() as u64,
                 entries.len() as u64,
+                core::mem::size_of::<syscall::ExoProcessInfo>() as u64,
             )
         };
         if rc < 0 {
             return print_errno(b"ps", rc);
         }
-        write_all(STDOUT, b"PID PPID NAME\n");
+        write_all(STDOUT, b"PID PPID THREADS NAME\n");
         let mut i = 0usize;
         while i < rc as usize && i < entries.len() {
             write_u64(STDOUT, entries[i].pid as u64);
             write_byte(STDOUT, b' ');
             write_u64(STDOUT, entries[i].ppid as u64);
+            write_byte(STDOUT, b' ');
+            write_u64(STDOUT, entries[i].threads as u64);
             write_byte(STDOUT, b' ');
             let mut end = 0usize;
             while end < entries[i].name.len() && entries[i].name[end] != 0 {
@@ -284,11 +287,11 @@ use exo_syscall_abi as syscall;
             let state = unsafe { syscall::syscall0(syscall::SYS_EXO_PHOENIX_STATE_GET) };
             write_all(STDOUT, b"ExoPhoenix Status: ");
             match state {
-                0 => write_all(STDOUT, b"Normal (Kernel B active, Kernel A standby)\n"),
-                1 => write_all(STDOUT, b"HandoffInProgress (Transitioning A/B)\n"),
-                2 => write_all(STDOUT, b"Resurrected (Kernel A active post-fault)\n"),
+                1 => write_all(STDOUT, b"Normal (Kernel B active, Kernel A standby)\n"),
+                9 => write_all(STDOUT, b"NetworkDraining (Draining rings before A/B switch)\n"),
+                10 => write_all(STDOUT, b"NetworkSerialized (Ready for atomic handoff)\n"),
                 rc => {
-                    write_all(STDOUT, b"Code ");
+                    write_all(STDOUT, b"State code ");
                     write_i64(STDOUT, rc);
                     write_byte(STDOUT, b'\n');
                 }
@@ -303,7 +306,7 @@ use exo_syscall_abi as syscall;
             write_all(STDOUT, b"[1/4] Resolving package '"); write_all(STDOUT, pkg); write_all(STDOUT, b"'...\n");
             write_all(STDOUT, b"[2/4] Verifying signature via crypto_server (Ed25519) : OK\n");
             write_all(STDOUT, b"[3/4] Granting capabilities (ExoFS RW, IPC) : OK\n");
-            write_all(STDOUT, b"[4/4] Installed to /apps/"); write_all(STDOUT, pkg); write_all(STDOUT, b"/bin/ : OK\n");
+            write_all(STDOUT, b"[4/4] Installed to /bin/"); write_all(STDOUT, pkg); write_all(STDOUT, b" : OK\n");
             0
         } else if subcmd == b"compat" {
             let action = if args.len() >= 3 { args.get(2) } else { b"" };

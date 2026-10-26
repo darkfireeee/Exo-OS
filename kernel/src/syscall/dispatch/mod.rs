@@ -105,7 +105,13 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             return;
         }
         AuditVerdict::Kill => {
-            // Thread marqué pour terminaison — signal SIGKILL au prochain retour Ring3.
+            // Thread marqué pour terminaison — signal SIGKILL immédiat (RÈGLE SAU-02).
+            if caller_pid != 0 {
+                let _ = crate::process::signal::delivery::send_signal_number_to_pid(
+                    crate::process::core::pid::Pid(caller_pid),
+                    9, // SIGKILL
+                );
+            }
             frame.rax = crate::syscall::numbers::EPERM as u64;
             post_dispatch(frame, tsc_start);
             return;

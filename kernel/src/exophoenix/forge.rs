@@ -117,6 +117,13 @@ pub fn seed_kernel_a_image_blob() -> Result<(), ForgeError> {
         return Err(ForgeError::ExoFsLoadFailed);
     }
 
+    // L'image de Kernel A est déjà embarquée statiquement en mémoire (RODATA propre).
+    // load_a_image_from_exofs() retombe directement dessus en zero-copy.
+    // Éviter 3000 allocations de pages et une saturation inutile du heap au boot.
+    if kernel_a_image_provisioned() {
+        return Ok(());
+    }
+
     if A_CLEAN_IMAGE.len() > MAX_EAGER_KERNEL_A_BLOB_BYTES {
         return Ok(());
     }

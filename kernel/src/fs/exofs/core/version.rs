@@ -78,6 +78,7 @@ impl FormatVersion {
     }
 
     /// Montable en lecture-écriture (mineur == courant, même majeur).
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn is_read_write_compatible(self) -> bool {
         self.major == FORMAT_VERSION_MAJOR && self.minor <= FORMAT_VERSION_MINOR
     }

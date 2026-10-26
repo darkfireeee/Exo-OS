@@ -84,6 +84,13 @@ pub fn sys_clock_nanosleep(
 /// `futex(uaddr, op, val, timeout, uaddr2, val3)`.
 pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3: u64) -> i64 {
     stat_inc(SYS_FUTEX);
+    if uaddr == 0
+        || !uaddr.is_multiple_of(4)
+        || uaddr.checked_add(4).map_or(true, |end| end > crate::syscall::USER_ADDR_MAX)
+        || !crate::memory::core::address::is_user_canonical(uaddr)
+    {
+        return -crate::syscall::errno::EFAULT;
+    }
     // futex est dans memory/utils/futex_table.rs (RÈGLE SCHED-03 DOC3).
     match crate::memory::utils::futex_table::sys_futex(
         uaddr,

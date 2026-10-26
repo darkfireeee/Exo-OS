@@ -25,6 +25,10 @@ pub struct FreeNode {
 }
 
 impl FreeNode {
+    /// Initialise le nœud sentinelle ou autonome.
+    ///
+    /// # Safety
+    /// Le pointeur `ptr` doit être valide et correctement aligné.
     #[inline]
     pub unsafe fn init(ptr: *mut FreeNode, order: u8) {
         (*ptr).next = ptr;
@@ -32,6 +36,10 @@ impl FreeNode {
         (*ptr).order = order;
     }
 
+    /// Insère un nœud après la tête de liste donnée.
+    ///
+    /// # Safety
+    /// `list_head` et `node` doivent être des pointeurs valides et déréférençables.
     #[inline]
     pub unsafe fn insert_after(list_head: *mut FreeNode, node: *mut FreeNode) {
         let next = (*list_head).next;
@@ -41,6 +49,10 @@ impl FreeNode {
         (*list_head).next = node;
     }
 
+    /// Retire le nœud de sa liste doublement chaînée.
+    ///
+    /// # Safety
+    /// `node` doit être un pointeur valide actuellement inséré dans une liste.
     #[inline]
     pub unsafe fn remove(node: *mut FreeNode) {
         let prev = (*node).prev;
@@ -51,14 +63,22 @@ impl FreeNode {
         (*node).prev = node;
     }
 
+    /// Vérifie si la liste est vide.
+    ///
+    /// # Safety
+    /// `list_head` doit être null ou un pointeur valide vers une sentinelle de liste.
     #[inline]
     pub unsafe fn is_empty(list_head: *const FreeNode) -> bool {
         if list_head.is_null() {
             return true;
         }
-        (*list_head).next == list_head as *mut FreeNode
+        core::ptr::eq((*list_head).next, list_head)
     }
 
+    /// Retire et renvoie le premier élément de la liste.
+    ///
+    /// # Safety
+    /// `list_head` doit pointer vers une sentinelle de liste valide.
     #[inline]
     pub unsafe fn pop(list_head: *mut FreeNode) -> Option<*mut FreeNode> {
         if Self::is_empty(list_head) {
@@ -83,6 +103,12 @@ pub struct BuddyOrderLevel {
     pub count: AtomicUsize,
 }
 
+impl Default for BuddyOrderLevel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuddyOrderLevel {
     pub const fn new() -> Self {
         BuddyOrderLevel {
@@ -97,6 +123,9 @@ impl BuddyOrderLevel {
     }
 
     /// Initialise la sentinelle (ne peut pas être fait en const, besoin de pointeur).
+    ///
+    /// # Safety
+    /// `self` doit être pinned ou stocké à une adresse mémoire finale stable.
     pub unsafe fn init(&mut self) {
         let h = &mut self.head as *mut FreeNode;
         (*h).next = h;
@@ -125,7 +154,8 @@ pub fn virt_to_phys_buddy(virt: usize) -> PhysAddr {
 
 /// Remplit une plage de pages de zéros.
 ///
-/// SAFETY: `phys` doit être l'adresse de `2^order` pages allouées exclusivement
+/// # Safety
+/// `phys` doit être l'adresse de `2^order` pages allouées exclusivement
 /// par l'appelant. La physmap doit être accessible.
 #[inline]
 pub unsafe fn zero_pages(phys: PhysAddr, order: usize) {

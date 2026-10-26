@@ -66,7 +66,7 @@ pub struct ParsedBpb {
 
 impl ParsedBpb {
     pub fn cluster_to_sector(&self, cluster: u32) -> u64 {
-        self.data_start as u64 + (cluster - 2) as u64 * self.sec_per_cluster as u64
+        self.data_start as u64 + (cluster.saturating_sub(2) as u64) * self.sec_per_cluster as u64
     }
 }
 
@@ -92,8 +92,14 @@ pub fn parse_bpb(raw: &[u8; 512]) -> Result<ParsedBpb, FsDriverError> {
     let resvd    = bpb.bpb_resvd_sec_cnt as u32;
     let fat_sz   = if bpb.bpb_fat_sz32 != 0 { bpb.bpb_fat_sz32 } else { bpb.bpb_fat_sz16 as u32 };
     let tot_sec  = if bpb.bpb_tot_sec32 != 0 { bpb.bpb_tot_sec32 as u64 } else { bpb.bpb_tot_sec16 as u64 };
-    let data_start = resvd + num_fats * fat_sz;
-    let data_sectors = if tot_sec > data_start as u64 { tot_sec - data_start as u64 } else { 0 };
+
+    // AUDIT-DRV2 : calcul u64 saturant pour éviter overflow u32 de data_start
+    let data_start_64 = (resvd as u64).saturating_add((num_fats as u64).saturating_mul(fat_sz as u64));
+    if data_start_64 >= tot_sec || data_start_64 > u32::MAX as u64 || bpb.bpb_root_clus < 2 {
+        return Err(FsDriverError::InvalidParameter);
+    }
+    let data_start = data_start_64 as u32;
+    let data_sectors = tot_sec - data_start_64;
     let cluster_count = if spc > 0 { (data_sectors / spc as u64) as u32 } else { 0 };
 
     if cluster_count < 65525 {

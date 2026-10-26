@@ -34,10 +34,10 @@ use super::exocordon;
 // ── Constantes ───────────────────────────────────────────────────────────────
 
 /// Taille maximale d'un payload inline (IPC-04).
-/// FIX-IPC-04: 48 → 192 pour correspondre à IPC_INLINE_PAYLOAD_SIZE de l'ABI.
-/// L'ancienne valeur de 48 octets bloquait tous les messages FbRequest, TtyRequest
-/// et les enveloppes ABI standard (192 bytes).
-const MAX_INLINE_PAYLOAD: usize = exo_syscall_abi::IPC_INLINE_PAYLOAD_SIZE;
+/// FIX-IPC-04: Alignement sur IPC_KERNEL_MAX_MSG_SIZE (240 octets) pour permettre
+/// aux messages requêtes complètes (FbRequest: 240B, InputRequest, TtyRequest)
+/// et aux enveloppes ABI standard de transiter sans être faussement rejetés.
+const MAX_INLINE_PAYLOAD: usize = exo_syscall_abi::IPC_KERNEL_MAX_MSG_SIZE;
 
 /// Nombre maximum de paires src→dst tracées pour les statistiques.
 const MAX_TRACKED_PIDS: usize = 16;

@@ -236,13 +236,10 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     pcb.set_main_thread_ptr(thread_ptr);
 
     // 4. Insérer dans la registry.
+    // NOTE: Si insert échoue, le drop de `pcb` appelle `cleanup_all_threads()` qui libère
+    // `thread_ptr` et `tid_raw`. Il ne faut donc libérer ici que le `pid_raw`.
     PROCESS_REGISTRY.insert(pcb).map_err(|_| {
-        // SAFETY: thread_ptr a été créé par Box::into_raw juste au-dessus.
-        unsafe {
-            drop(Box::from_raw(thread_ptr));
-        }
         PID_ALLOCATOR.free(pid_raw);
-        TID_ALLOCATOR.free(tid_raw);
         CreateError::RegistryError
     })?;
     sync_process_kernel_half(params.cr3);
@@ -257,13 +254,9 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         };
         if cpu_id as usize >= MAX_CPUS {
             // CPU invalide — nettoyer et retourner erreur.
+            // Le retrait du PCB de la registry et son drop libèrent thread_ptr et tid_raw.
             let _ = PROCESS_REGISTRY.remove(pid);
-            // SAFETY: thread_ptr créé par Box::into_raw(), non passé à la runqueue; Box::from_raw seul reclaim valide.
-            unsafe {
-                drop(Box::from_raw(thread_ptr));
-            }
             PID_ALLOCATOR.free(pid_raw);
-            TID_ALLOCATOR.free(tid_raw);
             return Err(CreateError::InvalidCpu);
         }
         // SAFETY: cpu_id vérifié, thread_ptr valide, durée de vie gérée par lifecycle.
@@ -506,7 +499,7 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         let frame = kernel_rsp as *mut u64;
         *frame.add(0) = 0; // rbx
         *frame.add(1) = 0; // rbp
-        *frame.add(2) = params.entry as u64; // r12 → entry_fn
+        *frame.add(2) = params.entry as usize as u64; // r12 → entry_fn
         *frame.add(3) = params.arg as u64; // r13 → arg
         *frame.add(4) = 0; // r14
         *frame.add(5) = 0; // r15

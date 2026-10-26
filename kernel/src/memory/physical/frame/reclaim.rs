@@ -63,11 +63,8 @@ const PF_KSWAPD_BIT: u32 = 1 << 1;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Table de flags per-CPU pour les threads de reclaim.
-static RECLAIM_FLAGS: [AtomicU32; RECLAIM_MAX_CPUS] = {
-    // SAFETY: AtomicU32::new(0) est une const.
-    const INIT: AtomicU32 = AtomicU32::new(0);
-    [INIT; RECLAIM_MAX_CPUS]
-};
+static RECLAIM_FLAGS: [AtomicU32; RECLAIM_MAX_CPUS] =
+    [const { AtomicU32::new(0) }; RECLAIM_MAX_CPUS];
 
 /// Marque le CPU courant comme étant en cours de reclaim (antirecursion).
 #[inline]

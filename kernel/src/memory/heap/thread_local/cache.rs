@@ -169,7 +169,7 @@ impl PerCpuCache {
     pub fn alloc_slow(&mut self, _size: usize, class_idx: usize) -> Option<NonNull<u8>> {
         // Remplit le magazine loaded depuis le SLUB (batch de MAGAZINE_SIZE/2).
         let batch = MAGAZINE_SIZE / 2;
-        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;
+        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
         let mut loaded = 0usize;
 
         for _ in 0..batch {
@@ -205,7 +205,7 @@ impl PerCpuCache {
         if class_idx >= CACHED_SIZE_CLASSES {
             return;
         }
-        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;
+        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
 
         // Vide loaded.
         while let Some(ptr) = self.magazines[class_idx].loaded.pop() {
@@ -304,6 +304,7 @@ impl PerCpuCacheTable {
     /// # Safety
     /// `cpu_id` doit correspondre au CPU courant. Pas de préemption pendant l'accès.
     #[inline]
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut(&self, cpu_id: usize) -> &mut PerCpuCache {
         let cache_ptr = core::ptr::addr_of!(self.caches[cpu_id]) as *mut PerCpuCache;
         &mut *cache_ptr
@@ -361,7 +362,7 @@ pub unsafe fn cache_free(ptr: NonNull<u8>, size: usize, cpu_id: usize) {
     }
     // Dernier recours: libère directement via SLUB.
     if let Some(class_idx) = heap_size_class_for(size) {
-        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx as usize;
+        let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
         SLUB_CACHES[slub_idx].free(ptr);
     }
 }

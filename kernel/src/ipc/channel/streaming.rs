@@ -128,9 +128,8 @@ unsafe impl Send for StreamPool {}
 
 impl StreamPool {
     pub const fn new() -> Self {
-        const INIT_BUF: StreamBuffer = StreamBuffer::new_uninit();
         Self {
-            buffers: [INIT_BUF; STREAM_POOL_SIZE],
+            buffers: [const { StreamBuffer::new_uninit() }; STREAM_POOL_SIZE],
             total: 0,
             base_phys: AtomicU64::new(0),
         }
@@ -153,12 +152,7 @@ impl StreamPool {
 
     /// Alloue un buffer libre. Retourne son index ou `None`.
     pub fn alloc_buffer(&self) -> Option<usize> {
-        for i in 0..self.total {
-            if self.buffers[i].acquire() {
-                return Some(i);
-            }
-        }
-        None
+        (0..self.total).find(|&i| self.buffers[i].acquire())
     }
 
     /// Libère le buffer à l'index `idx`.

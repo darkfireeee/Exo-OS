@@ -14,6 +14,8 @@ CARGO          = cargo
 KERNEL_DIR     = kernel
 ISO_WORKDIR    = iso_build
 ISO_OUTPUT     = exo-os.iso
+ISO_EXOFS_DISK ?= target/iso/exofs-root.img
+ISO_EXOFS_DISK_SIZE ?= 64M
 BAREMETAL_TARGET ?= x86_64-unknown-none
 USERSPACE_TARGET_JSON ?= $(abspath x86_64-exo-userspace.json)
 USERSPACE_TARGET_DIR  ?= x86_64-exo-userspace
@@ -88,6 +90,7 @@ ROOTFS_SBIN_BINS = \
 	exo-usb-server
 ROOTFS_BIN_BINS = \
 	basename \
+	calendar \
 	cat \
 	clear \
 	cp \
@@ -135,14 +138,25 @@ QEMU_COMMON_FLAGS += -m 4G
 QEMU_COMMON_FLAGS += -boot d
 QEMU_COMMON_FLAGS += -no-reboot
 QEMU_COMMON_FLAGS += -no-shutdown
+# FIX-PERF : Ne pas tracer toutes les interruptions (-d int) en continu pour éviter
+# un ralentissement massif de l'émulation CPU QEMU sur disque sous WSL.
+ifneq ($(QEMU_INT_TRACE),)
 QEMU_COMMON_FLAGS += -d int,cpu_reset -D /tmp/qemu-exoos.log
+endif
 # Sortie debug sur port 0xE9 → fichier /tmp/e9k.txt (debugcon QEMU)
 QEMU_COMMON_FLAGS += -debugcon file:/tmp/e9k.txt
 # isa-debug-exit : permet à l'OS de signaler le code de sortie à QEMU
 QEMU_COMMON_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
+# Affichage interactif avec curseur hôte visible sous WSLg / X11
+ifneq ($(DISPLAY),)
+QEMU_DISPLAY_FLAGS ?= -display gtk,show-cursor=on
+else
+QEMU_DISPLAY_FLAGS ?=
+endif
+
 # Variante graphique interactive canonique (VGA standard framebuffer + console)
-QEMU_FLAGS = $(QEMU_COMMON_FLAGS) -vga std -serial stdio
+QEMU_FLAGS = $(QEMU_COMMON_FLAGS) -vga std $(QEMU_DISPLAY_FLAGS) -serial stdio
 
 # Variante headless terminal (multiplexage automatique console/moniteur sur stdio)
 QEMU_NOGRAPHIC_FLAGS = $(QEMU_COMMON_FLAGS) -nographic
@@ -163,6 +177,20 @@ QEMU_NET_FLAGS          ?= $(QEMU_CANONICAL_NET_FLAGS)
 ifeq ($(strip $(QEMU_NET_FLAGS)),)
 override QEMU_NET_FLAGS := $(QEMU_CANONICAL_NET_FLAGS)
 endif
+
+# Audio configuration (Intel HDA + Sound Chime)
+export PULSE_SERVER ?= $(shell if [ -z "$$PULSE_SERVER" ] && [ -S "/mnt/wslg/PulseServer" ]; then echo "unix:/mnt/wslg/PulseServer"; else echo "$$PULSE_SERVER"; fi)
+QEMU_AUDIO_DRIVER ?= $(shell if [ -n "$$PULSE_SERVER" ] || [ -S "/mnt/wslg/PulseServer" ]; then echo pa; else echo none; fi)
+ifeq ($(QEMU_AUDIO_DRIVER),pa)
+QEMU_AUDIO_FLAGS   = -audiodev pa,id=snd0,out.mixing-engine=on -device intel-hda -device hda-duplex,audiodev=snd0
+else
+QEMU_AUDIO_FLAGS   = -audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0
+endif
+
+# USB configuration (xHCI Host Controller + Mass Storage)
+QEMU_USB_DISK      ?= target/qemu/usb.img
+QEMU_USB_FLAGS     = -device qemu-xhci,id=xhci -drive if=none,id=usbdisk,file=$(QEMU_USB_DISK),format=raw -device usb-storage,bus=xhci.0,drive=usbdisk
+
 QEMU_HEADLESS_SAFE_FLAGS  = -machine q35
 QEMU_HEADLESS_SAFE_FLAGS += -m 4G
 QEMU_HEADLESS_SAFE_FLAGS += -boot d
@@ -175,6 +203,12 @@ QEMU_HEADLESS_SAFE_FLAGS += -debugcon file:$(QEMU_SAFE_E9_LOG)
 QEMU_HEADLESS_SAFE_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 $(QEMU_EXOFS_DISK): rootfs-image
+
+$(QEMU_USB_DISK):
+	@mkdir -p target/qemu
+	@echo "$(BLUE)[usb] Creation de l'image cle USB virtuelle : $(QEMU_USB_DISK)...$(NC)"
+	@dd if=/dev/zero of=$(QEMU_USB_DISK) bs=1M count=32 2>/dev/null || true
+	@mkfs.vfat -F 32 $(QEMU_USB_DISK) 2>/dev/null || mkfs.fat $(QEMU_USB_DISK) 2>/dev/null || true
 
 # Couleurs
 BLUE   = \033[0;34m
@@ -195,7 +229,11 @@ build-rootfs-binaries:
 	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)"
-	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib"
+	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
+	@printf "WAYLAND_DISPLAY=wayland-0\nEXO_COMPOSITOR_ENDPOINT=11\nPROTOCOL=wl_display,wl_registry,wl_compositor,wl_shm,xdg_wm_base,wl_seat\n" > "$(ROOTFS_STAGING_DIR)/run/wayland-0"
+	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
+	@printf "[theme]\nname = \"Exo-Strata Aurora\"\nwallpaper_top = \"#0d2642\"\nwallpaper_mid = \"#113256\"\nwallpaper_bottom = \"#0a1e36\"\naccent = \"#00c5ff\"\nwindow_border = \"#2e77b0\"\n" > "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata/theme.toml"
+	@printf "cursor_pointer_64x64_argb8888\nicon_terminal_32x32\nicon_exodoctor_32x32\nicon_calendar_32x32\nicon_exofs_32x32\n" > "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata/icons.manifest"
 	@for bin in $(ROOTFS_SBIN_BINS); do \
 		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/sbin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/$$bin" 2>/dev/null || true; fi; \
@@ -297,17 +335,21 @@ _make_iso:
 	@# dans $(KERNEL_BIN) (target/, NON strippé) pour gdb (mêmes adresses).
 	@$(STRIP_TOOL) --strip-all $(ISO_WORKDIR)/boot/exo-os-kernel 2>/dev/null || true
 	@cp bootloader/grub.cfg $(ISO_WORKDIR)/boot/grub/grub.cfg
+	@echo "$(BLUE)[rootfs] Creation image ExoFS ramdisk pour ISO : $(ISO_EXOFS_DISK) ($(ISO_EXOFS_DISK_SIZE))$(NC)"
+	@mkdir -p target/iso
+	@$(CARGO) run -p exofs-mkroot -- --image "$(ISO_EXOFS_DISK)" --size "$(ISO_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
+	@cp "$(ISO_EXOFS_DISK)" "$(ISO_WORKDIR)/boot/exofs-root.img"
 	@grub-mkrescue -o $(ISO_OUTPUT) $(ISO_WORKDIR) \
 	    --compress=xz 2>&1 | grep -v "^$$" || true
 	@rm -rf $(ISO_WORKDIR)
 
 # ── Lancement QEMU ────────────────────────────────────────────────────────────
 ## 4. Lancer Exo-OS dans QEMU (depuis l'ISO debug)
-qemu: iso $(QEMU_EXOFS_DISK)
-	@echo "$(CYAN)Lancement QEMU canonique (ExoFS persistant + VirtIO-net + e1000) — Ctrl+C pour quitter$(NC)"
+qemu: iso $(QEMU_EXOFS_DISK) $(QEMU_USB_DISK)
+	@echo "$(CYAN)Lancement QEMU canonique (ExoFS persistant + VirtIO-net + e1000 + Intel-HDA + xHCI USB) — Ctrl+C pour quitter$(NC)"
 	@echo "$(YELLOW)Log interruptions : /tmp/qemu-exoos.log$(NC)"
 	@echo "$(BLUE)Net flags : $(QEMU_NET_FLAGS)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+	PULSE_SERVER=$(PULSE_SERVER) $(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_AUDIO_FLAGS) $(QEMU_USB_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4a. Lancer QEMU avec le transport reseau Intel e1000
 qemu-e1000: qemu
@@ -316,24 +358,24 @@ qemu-e1000: qemu
 qemu-virtio-net: qemu
 
 ## 4b. Lancer en mode release
-qemu-release: iso-release $(QEMU_EXOFS_DISK)
+qemu-release: iso-release $(QEMU_EXOFS_DISK) $(QEMU_USB_DISK)
 	@echo "$(CYAN)Lancement QEMU (release)$(NC)"
-	$(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+	PULSE_SERVER=$(PULSE_SERVER) $(QEMU) $(QEMU_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_AUDIO_FLAGS) $(QEMU_USB_FLAGS) -cdrom $(ISO_OUTPUT)
 
 ## 4c. Lancer QEMU sans fenêtre graphique (serveur headless, multiplexé sur stdio)
-qemu-nographic: iso $(QEMU_EXOFS_DISK)
+qemu-nographic: iso $(QEMU_EXOFS_DISK) $(QEMU_USB_DISK)
 	@echo "$(CYAN)Lancement QEMU headless (sortie texte multiplexée sur stdio)$(NC)"
-	$(QEMU) $(QEMU_NOGRAPHIC_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT)
+	$(QEMU) $(QEMU_NOGRAPHIC_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_AUDIO_FLAGS) $(QEMU_USB_FLAGS) -cdrom $(ISO_OUTPUT)
 
 qemu-nographic-virtio-net: qemu-nographic
 
 ## 4d. Lancer QEMU headless "zéro surprise" (logs fichiers dédiés)
-qemu-headless-safe: iso $(QEMU_EXOFS_DISK)
+qemu-headless-safe: iso $(QEMU_EXOFS_DISK) $(QEMU_USB_DISK)
 	@echo "$(CYAN)Lancement QEMU headless sûr (logs fichiers, sans stdio partagé)$(NC)"
 	@echo "$(YELLOW)Serial  : $(QEMU_SAFE_SERIAL_LOG)$(NC)"
 	@echo "$(YELLOW)INT log : $(QEMU_SAFE_INT_LOG)$(NC)"
 	@echo "$(YELLOW)E9 log  : $(QEMU_SAFE_E9_LOG)$(NC)"
-	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) -cdrom $(ISO_OUTPUT) -display none
+	$(QEMU) $(QEMU_HEADLESS_SAFE_FLAGS) $(QEMU_EXOFS_DRIVE_FLAGS) $(QEMU_NET_FLAGS) $(QEMU_AUDIO_FLAGS) $(QEMU_USB_FLAGS) -cdrom $(ISO_OUTPUT) -display none
 
 qemu-headless-safe-virtio-net: qemu-headless-safe
 

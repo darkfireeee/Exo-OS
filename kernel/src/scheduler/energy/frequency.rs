@@ -31,9 +31,7 @@ static PSTATE_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Appelé une seule fois avant toute utilisation de la fréquence.
 pub unsafe fn set_pstate_table(freqs_mhz: &[u32]) {
     let n = freqs_mhz.len().min(MAX_PSTATES);
-    for i in 0..n {
-        PSTATE_TABLE[i] = freqs_mhz[i];
-    }
+    PSTATE_TABLE[..n].copy_from_slice(&freqs_mhz[..n]);
     PSTATE_COUNT.store(n as u32, Ordering::Release);
 }
 
@@ -52,10 +50,8 @@ pub fn pstate_freq_mhz(p: usize) -> u32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// P-state courant de chaque CPU (index dans PSTATE_TABLE ; 0 = plus haute fréquence).
-static CURRENT_PSTATE: [AtomicU32; MAX_CPUS] = {
-    const INIT: AtomicU32 = AtomicU32::new(0);
-    [INIT; MAX_CPUS]
-};
+static CURRENT_PSTATE: [AtomicU32; MAX_CPUS] =
+    [const { AtomicU32::new(0) }; MAX_CPUS];
 
 pub fn current_pstate(cpu: usize) -> u32 {
     if cpu < MAX_CPUS {

@@ -53,6 +53,12 @@ pub struct GuardPageStats {
     pub false_positives: AtomicU64,
 }
 
+impl Default for GuardPageStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GuardPageStats {
     const fn new() -> Self {
         Self {
@@ -125,6 +131,12 @@ struct GuardRegionTable {
     count: usize,
 }
 
+impl Default for GuardRegionTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GuardRegionTable {
     const fn new() -> Self {
         Self {
@@ -141,12 +153,7 @@ impl GuardRegionTable {
     }
 
     fn alloc_slot(&mut self) -> Option<usize> {
-        for i in 0..MAX_GUARD_REGIONS {
-            if !self.regions[i].active {
-                return Some(i);
-            }
-        }
-        None
+        (0..MAX_GUARD_REGIONS).find(|&i| !self.regions[i].active)
     }
 
     fn find_by_id(&mut self, id: GuardRegionId) -> Option<&mut GuardRegion> {
@@ -197,7 +204,8 @@ pub fn is_guard_pte(pte: u64) -> bool {
 
 /// Efface une PTE guard (la remet à 0).
 ///
-/// # Safety : `pte_ptr` doit être valide.
+/// # Safety
+/// `pte_ptr` doit être valide.
 pub unsafe fn clear_guard_pte(pte_ptr: *mut u64) {
     pte_ptr.write_volatile(0);
 }

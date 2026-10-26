@@ -140,6 +140,12 @@ pub struct PrioritySchedulerStats {
     pub full_drops: AtomicU64,
 }
 
+impl Default for PrioritySchedulerStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrioritySchedulerStats {
     const fn new() -> Self {
         PrioritySchedulerStats {
@@ -203,6 +209,12 @@ pub struct PriorityScheduler {
 unsafe impl Sync for PriorityScheduler {}
 unsafe impl Send for PriorityScheduler {}
 
+impl Default for PriorityScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PriorityScheduler {
     pub const fn new() -> Self {
         PriorityScheduler {
@@ -247,7 +259,7 @@ impl PriorityScheduler {
 
         // Anti-famine : toutes les N passes, promouvoir les anciennes entrées.
         inner.pass_counter = inner.pass_counter.wrapping_add(1);
-        if inner.pass_counter % STARVATION_THRESHOLD == 0 {
+        if inner.pass_counter.is_multiple_of(STARVATION_THRESHOLD) {
             self.check_starvation(&mut inner);
         }
 

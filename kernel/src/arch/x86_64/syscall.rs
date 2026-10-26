@@ -145,21 +145,25 @@ pub fn init_syscall() {
         write_msr(MSR_LSTAR, syscall_entry_asm as *const () as u64);
     }
 
-    // 4. MSR CSTAR : handler mode compat (non utilisé — pointe vers une fonction vide)
-    // SAFETY: syscall_cstar_asm est une fonction noop valide
-    unsafe {
-        write_msr(MSR_CSTAR, syscall_cstar_noop as *const () as u64);
+    // 4. MSR CSTAR : handler mode compat (AMD-only, WRMSR #GP(0) sur Intel réel)
+    if super::cpu::features::cpu_features().vendor == super::cpu::features::CpuVendor::Amd {
+        // SAFETY: syscall_cstar_noop est une fonction noop valide
+        unsafe {
+            write_msr(MSR_CSTAR, syscall_cstar_noop as *const () as u64);
+        }
     }
 
     // 5. MSR SFMASK : masque RFLAGS lors de SYSCALL
-    // Masquer IF, TF, DF, NT, RF et AC avant l'entrée Ring 0.
-    let sfmask = (1 << 9)  // IF
-               | (1 << 8)  // TF
-               | (1 << 10) // DF
-               | (1 << 14) // NT
-               | (1 << 16) // RF
+    // Masquer IF, TF, DF, IOPL, NT, RF, VM et AC avant l'entrée Ring 0 (conforme Linux / SDM).
+    let sfmask = (1 << 9)   // IF
+               | (1 << 8)   // TF
+               | (1 << 10)  // DF
+               | (3 << 12)  // IOPL (bits 12-13)
+               | (1 << 14)  // NT
+               | (1 << 16)  // RF
+               | (1 << 17)  // VM (bit 17)
                | (1 << 18); // AC
-                            // SAFETY: SFMASK masque les flags dangereux uniquement
+    // SAFETY: SFMASK masque les flags dangereux uniquement
     unsafe {
         write_msr(MSR_SFMASK, sfmask);
     }
@@ -392,13 +396,13 @@ type SyscallFn = fn(u64, u64, u64, u64, u64, u64) -> i64;
 
 /// Handler appelé depuis l'ASM avec la SyscallFrame
 ///
-/// # SAFETY
+/// # Safety
 /// Appelé uniquement depuis `syscall_entry_asm` avec une `SyscallFrame` valide
 /// sur la pile kernel.
 #[no_mangle]
-pub extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
+pub unsafe extern "C" fn syscall_rust_handler(frame: *mut SyscallFrame) {
     // SAFETY: frame est une SyscallFrame valide construite par l'ASM d'entrée
-    let frame = unsafe { &mut *frame };
+    let frame = &mut *frame;
 
     SYSCALL_COUNT.fetch_add(1, Ordering::Relaxed);
 

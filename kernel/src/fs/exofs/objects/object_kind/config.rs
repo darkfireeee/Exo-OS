@@ -96,6 +96,10 @@ impl ConfigEntryDisk {
         if { self.checksum } != computed {
             return Err(ExofsError::Corrupt);
         }
+        let val_len = (({ self.val_len_hi } as u16) << 8) | { self.val_len_lo } as u16;
+        if self.key_len as usize > CONFIG_KEY_LEN || val_len as usize > CONFIG_VALUE_LEN {
+            return Err(ExofsError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -161,6 +165,9 @@ impl ConfigEntry {
     pub fn from_disk(d: &ConfigEntryDisk) -> ExofsResult<Self> {
         d.verify()?;
         let val_len = (({ d.val_len_hi } as u16) << 8) | { d.val_len_lo } as u16;
+        if d.key_len as usize > CONFIG_KEY_LEN || val_len as usize > CONFIG_VALUE_LEN {
+            return Err(ExofsError::Corrupt);
+        }
         Ok(Self {
             key: { d.key },
             key_len: { d.key_len },
@@ -287,6 +294,12 @@ impl ConfigStore {
 
     /// Insère ou met à jour une entrée (OOM-02 : try_reserve).
     pub fn set(&mut self, key: &[u8], value: &[u8], now: EpochId) -> ExofsResult<()> {
+        if key.is_empty() || key.len() > CONFIG_KEY_LEN {
+            return Err(ExofsError::InvalidArgument);
+        }
+        if value.len() > CONFIG_VALUE_LEN {
+            return Err(ExofsError::Overflow);
+        }
         if self.entries.len() >= CONFIG_MAX_ENTRIES {
             // Cherche d'abord un tombstone à réutiliser.
             let tombstone = self.entries.iter_mut().find(|e| e.is_deleted());

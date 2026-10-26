@@ -39,6 +39,12 @@ pub struct CondVar {
 unsafe impl Send for CondVar {}
 unsafe impl Sync for CondVar {}
 
+impl Default for CondVar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CondVar {
     pub const fn new() -> Self {
         Self {

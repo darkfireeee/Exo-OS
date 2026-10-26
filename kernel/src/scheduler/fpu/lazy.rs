@@ -29,7 +29,7 @@ static FPU_LAZY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 ///
 /// - Active CR0.TS = 1 (tout thread considéré sans FPU chargée).
 /// - Doit être appelé sur CHAQUE CPU (BSP + APs).
-/// Correspond au step 4 de la séquence d'initialisation scheduler (DOC3).
+///   Correspond au step 4 de la séquence d'initialisation scheduler (DOC3).
 pub fn init() {
     // SAFETY: cr0_set_ts() set le bit TS dans CR0. Sûr au boot avant tout thread.
     unsafe {
@@ -43,6 +43,9 @@ pub fn init() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Active CR0.TS (Task Switched) → déclenche #NM sur prochaine instruction FP.
+///
+/// # Safety
+/// Modifie directement le registre de contrôle CR0 (Ring 0).
 #[inline(always)]
 pub unsafe fn cr0_set_ts() {
     #[cfg(target_arch = "x86_64")]
@@ -57,6 +60,9 @@ pub unsafe fn cr0_set_ts() {
 
 /// Désactive CR0.TS → accès FP autorisé sans #NM.
 /// Appelé par le handler #NM après xrstor réussi.
+///
+/// # Safety
+/// Exécute l'instruction privilégiée CLTS en Ring 0.
 #[inline(always)]
 pub unsafe fn cr0_clear_ts() {
     #[cfg(target_arch = "x86_64")]
@@ -64,6 +70,9 @@ pub unsafe fn cr0_clear_ts() {
 }
 
 /// Retourne vrai si CR0.TS est activé.
+///
+/// # Safety
+/// Lit directement le registre de contrôle CR0.
 #[inline(always)]
 pub unsafe fn cr0_ts_is_set() -> bool {
     #[cfg(target_arch = "x86_64")]
@@ -90,6 +99,9 @@ pub unsafe fn cr0_ts_is_set() -> bool {
 /// Appelé depuis `switch.rs` après `context_switch_asm()` retourne.
 ///
 /// RÈGLE SWITCH-02 (DOC3) : cette fonction est le "mark APRÈS" la sauvegarde.
+///
+/// # Safety
+/// Modifie CR0.TS en Ring 0.
 #[inline(always)]
 pub unsafe fn mark_fpu_not_loaded() {
     cr0_set_ts();

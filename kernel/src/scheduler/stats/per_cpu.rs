@@ -23,6 +23,12 @@ pub struct CpuStats {
     pub ticks: AtomicU64,
 }
 
+impl Default for CpuStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CpuStats {
     const fn new() -> Self {
         Self {
@@ -38,8 +44,7 @@ impl CpuStats {
     }
 }
 
-const INIT_STATS: CpuStats = CpuStats::new();
-static CPU_STATS: [CpuStats; MAX_CPUS] = [INIT_STATS; MAX_CPUS];
+static CPU_STATS: [CpuStats; MAX_CPUS] = [const { CpuStats::new() }; MAX_CPUS];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Accesseurs

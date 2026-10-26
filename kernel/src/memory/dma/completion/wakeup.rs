@@ -168,11 +168,16 @@ pub struct DmaWakeupTable {
 unsafe impl Sync for DmaWakeupTable {}
 unsafe impl Send for DmaWakeupTable {}
 
+impl Default for DmaWakeupTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaWakeupTable {
     const fn new() -> Self {
-        const SLOT: WaiterSlot = WaiterSlot::new();
         DmaWakeupTable {
-            slots: [SLOT; WAKEUP_TABLE_SIZE],
+            slots: [const { WaiterSlot::new() }; WAKEUP_TABLE_SIZE],
             active_count: core::sync::atomic::AtomicU32::new(0),
             delivered: AtomicU64::new(0),
             orphans: AtomicU64::new(0),

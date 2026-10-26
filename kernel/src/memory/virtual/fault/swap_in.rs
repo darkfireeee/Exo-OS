@@ -148,6 +148,12 @@ pub struct SwapInStats {
     pub null_pte: AtomicU64,
 }
 
+impl Default for SwapInStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SwapInStats {
     pub const fn new() -> Self {
         SwapInStats {

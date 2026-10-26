@@ -111,10 +111,10 @@ fn claim_bdf(bdf: pci_topology::PciBdf) -> PciBdf {
 
 fn cfg_address(bdf: PciBdf, offset: u16) -> u32 {
     0x8000_0000u32
-        | ((bdf.bus as u32) << 16)
-        | ((bdf.dev as u32) << 11)
-        | ((bdf.func as u32) << 8)
-        | ((offset as u32) & !0x3)
+        | (((bdf.bus as u32) & 0xFF) << 16)
+        | (((bdf.dev as u32) & 0x1F) << 11)
+        | (((bdf.func as u32) & 0x07) << 8)
+        | ((offset as u32) & 0xFC)
 }
 
 fn pci_cfg_read32(bdf: PciBdf, offset: u16) -> u32 {
@@ -413,6 +413,9 @@ fn find_capability(bdf: PciBdf, cap_id: u8) -> Option<u16> {
 }
 
 pub fn sys_pci_cfg_read_for_pid(pid: u32, offset: u16) -> Result<u32, PciCfgError> {
+    if offset > 0xFC || offset & 0x3 != 0 {
+        return Err(PciCfgError::InvalidParams);
+    }
     Ok(pci_cfg_read32(claimed_bdf(pid)?, offset))
 }
 
@@ -505,6 +508,9 @@ pub fn find_virtio_blk_legacy_io_port() -> Option<u16> {
 }
 
 pub fn sys_pci_cfg_write_for_pid(pid: u32, offset: u16, value: u32) -> Result<(), PciCfgError> {
+    if offset > 0xFC || offset & 0x3 != 0 {
+        return Err(PciCfgError::InvalidParams);
+    }
     pci_cfg_write32(claimed_bdf(pid)?, offset, value);
     Ok(())
 }

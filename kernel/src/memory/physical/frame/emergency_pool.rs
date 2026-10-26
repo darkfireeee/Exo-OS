@@ -1,3 +1,4 @@
+#![allow(clippy::missing_safety_doc)]
 // kernel/src/memory/physical/frame/emergency_pool.rs
 //
 // EmergencyPool — EMERGENCY_POOL_SIZE (≥256) WaitNodes pré-alloués au BOOT.

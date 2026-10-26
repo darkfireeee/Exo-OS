@@ -83,12 +83,23 @@ pub fn register_current_as_getter(f: CurrentAsGetterFn) {
 /// Obtient un pointeur vers l'espace d'adressage utilisateur courant.
 fn get_current_user_as() -> Option<*mut UserAddressSpace> {
     let ptr = CURRENT_AS_FN.load(Ordering::Acquire);
-    if ptr.is_null() {
+    if !ptr.is_null() {
+        // SAFETY: Enregistré via register_current_as_getter avec la bonne signature.
+        let f: CurrentAsGetterFn = unsafe { core::mem::transmute(ptr) };
+        let as_ptr = f();
+        if !as_ptr.is_null() {
+            return Some(as_ptr);
+        }
+    }
+    // Fallback direct via le PCB du thread courant
+    let tcb_raw = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
+    if tcb_raw == 0 {
         return None;
     }
-    // SAFETY: Enregistré via register_current_as_getter avec la bonne signature.
-    let f: CurrentAsGetterFn = unsafe { core::mem::transmute(ptr) };
-    let as_ptr = f();
+    let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+    let pid = crate::process::core::pid::Pid(tcb.pid.0);
+    let pcb = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid)?;
+    let as_ptr = pcb.address_space_ptr() as *mut UserAddressSpace;
     if as_ptr.is_null() {
         None
     } else {
@@ -126,11 +137,11 @@ const MAP_ANON: u32 = 0x20;
 fn prot_to_page_flags(prot: u32) -> PageFlags {
     let mut f = PageFlags::PRESENT | PageFlags::USER;
     if prot & PROT_WRITE != 0 {
-        f = f | PageFlags::WRITABLE;
+        f |= PageFlags::WRITABLE;
     }
     // NX par défaut sauf si PROT_EXEC explicite
     if prot & PROT_EXEC == 0 {
-        f = f | PageFlags::NO_EXECUTE;
+        f |= PageFlags::NO_EXECUTE;
     }
     f
 }
@@ -139,22 +150,22 @@ fn prot_to_page_flags(prot: u32) -> PageFlags {
 fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
     let mut f = VmaFlags::NONE;
     if prot & PROT_READ != 0 {
-        f = f | VmaFlags::READ;
+        f |= VmaFlags::READ;
     }
     if prot & PROT_WRITE != 0 {
-        f = f | VmaFlags::WRITE;
+        f |= VmaFlags::WRITE;
     }
     if prot & PROT_EXEC != 0 {
-        f = f | VmaFlags::EXEC;
+        f |= VmaFlags::EXEC;
     }
     if map_flags & MAP_SHARED != 0 {
-        f = f | VmaFlags::SHARED;
+        f |= VmaFlags::SHARED;
     }
     if map_flags & MAP_FIXED != 0 {
-        f = f | VmaFlags::FIXED;
+        f |= VmaFlags::FIXED;
     }
     if map_flags & MAP_ANON != 0 {
-        f = f | VmaFlags::ANONYMOUS;
+        f |= VmaFlags::ANONYMOUS;
     }
     f
 }
@@ -219,7 +230,7 @@ pub fn do_mmap_in_as(
     // Recherche d'un gap virtuel libre
     let fixed = flags & MAP_FIXED != 0;
     let base = if fixed {
-        if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
+        if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
             return Err(MmapError::InvalidAddress);
         }
         VirtAddr::new(addr)
@@ -239,6 +250,10 @@ pub fn do_mmap_in_as(
         .as_u64()
         .checked_add(len_aligned as u64)
         .ok_or(MmapError::OutOfVirtualMemory)?;
+    // T4-002 FIX: Vérification stricte des bornes utilisateurs (jamais dans la moitié noyau)
+    if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
+        return Err(MmapError::InvalidAddress);
+    }
     let end = VirtAddr::new(end_raw);
 
     let page_flags = prot_to_page_flags(prot);
@@ -285,7 +300,7 @@ pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
 
 /// Démappe une VMA dans un espace d'adressage explicite.
 pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), MmapError> {
-    if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
+    if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
 
@@ -294,10 +309,10 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
     match user_as.remove_vma(VirtAddr::new(addr)) {
         None => Err(MmapError::NotMapped),
         Some(vma_ptr) => {
-            // Récupérer les bornes de la VMA avant de libérer le descripteur.
-            let (vma_start, vma_end) = unsafe {
+            // Récupérer les bornes et le backing de la VMA avant de libérer le descripteur.
+            let (vma_start, vma_end, vma_backing) = unsafe {
                 let vma = &*vma_ptr;
-                (vma.start, vma.end)
+                (vma.start, vma.end, vma.backing)
             };
 
             // Libérer le VmaDescriptor alloué par do_mmap / do_brk.
@@ -353,10 +368,13 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
                 }
 
                 // Phase 3 : libérer les frames (TLBs déjà invalidés partout).
-                for i in 0..count {
-                    let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
-                    if remaining == 0 || remaining == u32::MAX {
-                        let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
+                // T4-001 FIX : Ne JAMAIS libérer les frames des VMA Shared/Device/Direct au buddy allocator.
+                if vma_backing == VmaBacking::Anonymous {
+                    for i in 0..count {
+                        let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
+                        if remaining == 0 || remaining == u32::MAX {
+                            let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
+                        }
                     }
                 }
             }
@@ -387,7 +405,7 @@ pub fn do_mprotect_in_as(
     len: usize,
     prot: u32,
 ) -> Result<(), MmapError> {
-    if addr == 0 || addr % PAGE_SIZE as u64 != 0 {
+    if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
     if len == 0 {
@@ -422,13 +440,13 @@ pub fn do_mprotect_in_as(
     let keep = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
     let mut new_perm = VmaFlags::NONE;
     if prot & PROT_READ != 0 {
-        new_perm = new_perm | VmaFlags::READ;
+        new_perm |= VmaFlags::READ;
     }
     if prot & PROT_WRITE != 0 {
-        new_perm = new_perm | VmaFlags::WRITE;
+        new_perm |= VmaFlags::WRITE;
     }
     if prot & PROT_EXEC != 0 {
-        new_perm = new_perm | VmaFlags::EXEC;
+        new_perm |= VmaFlags::EXEC;
     }
     vma.flags = keep | new_perm;
 
@@ -497,7 +515,7 @@ pub fn do_mremap_zero_copy(
     const MREMAP_FIXED: u64 = 0x2;
     const MREMAP_DONTUNMAP: u64 = 0x4;
 
-    if old_addr == 0 || old_addr % PAGE_SIZE as u64 != 0 {
+    if old_addr == 0 || !old_addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
     if old_len == 0 || new_len == 0 {
@@ -509,7 +527,7 @@ pub fn do_mremap_zero_copy(
     if flags & MREMAP_MAYMOVE == 0 {
         return Ok(MremapZeroCopy::Unsupported);
     }
-    if flags & MREMAP_FIXED != 0 && (new_addr == 0 || new_addr % PAGE_SIZE as u64 != 0) {
+    if flags & MREMAP_FIXED != 0 && (new_addr == 0 || !new_addr.is_multiple_of(PAGE_SIZE as u64)) {
         return Err(MmapError::InvalidAddress);
     }
 
@@ -790,10 +808,10 @@ fn shm_provider() -> Option<ShmProviderFns> {
     }
     Some(ShmProviderFns {
         // SAFETY: enregistré exclusivement via register_shm_provider avec les signatures attendues.
-        region_info: unsafe { core::mem::transmute(region_info) },
-        page_phys: unsafe { core::mem::transmute(page_phys) },
-        release_region: unsafe { core::mem::transmute(release_region) },
-        register_mapping: unsafe { core::mem::transmute(register_mapping) },
+        region_info: unsafe { core::mem::transmute::<*mut (), ShmRegionInfoFn>(region_info) },
+        page_phys: unsafe { core::mem::transmute::<*mut (), ShmPagePhysFn>(page_phys) },
+        release_region: unsafe { core::mem::transmute::<*mut (), ShmReleaseRegionFn>(release_region) },
+        register_mapping: unsafe { core::mem::transmute::<*mut (), ShmRegisterMappingFn>(register_mapping) },
     })
 }
 
@@ -939,7 +957,7 @@ pub fn map_shm_into_process(
             let virt = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
             // SAFETY: virt est dans l'espace user du processus cible,
             // frame est une page SHM allouée et initialisée.
-            if let Err(_) = unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) } {
+            if unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }.is_err() {
                 rollback_shm_into_process(user_as, virt_base, i);
                 (provider.release_region)(desc_idx);
                 return Err(ShmMapError::AllocFailed);
@@ -948,14 +966,11 @@ pub fn map_shm_into_process(
     }
 
     // ── 6. Enregistrer dans SHM_MAPPING_TABLE ────────────────────────────
-    let mapping_idx =
-        (provider.register_mapping)(desc_idx, pid, virt_base.as_u64(), writable, n_pages).map_err(
-            |err| {
-                rollback_shm_into_process(user_as, virt_base, n_pages);
-                (provider.release_region)(desc_idx);
-                err
-            },
-        )?;
+    let mapping_idx = (provider.register_mapping)(desc_idx, pid, virt_base.as_u64(), writable, n_pages)
+        .inspect_err(|_| {
+            rollback_shm_into_process(user_as, virt_base, n_pages);
+            (provider.release_region)(desc_idx);
+        })?;
 
     Ok(ShmMapIntoResult {
         virt_base: virt_base.as_u64(),

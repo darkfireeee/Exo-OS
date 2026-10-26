@@ -107,6 +107,12 @@ pub struct WaitQueue {
 unsafe impl Send for WaitQueue {}
 unsafe impl Sync for WaitQueue {}
 
+impl Default for WaitQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaitQueue {
     pub const fn new() -> Self {
         Self {
@@ -236,11 +242,18 @@ impl WaitQueue {
     // ─────────────────────────────────────────────────────────────────────
 
     /// Alias de `notify_one` pour compatibilité.
+    ///
+    /// # Safety
+    /// Appelé en contexte valide avec accès thread-safe.
     #[inline]
     pub unsafe fn wake_one(&self) -> bool {
         self.notify_one()
     }
+
     /// Alias de `notify_all` pour compatibilité.
+    ///
+    /// # Safety
+    /// Appelé en contexte valide avec accès thread-safe.
     #[inline]
     pub unsafe fn wake_all(&self) -> usize {
         self.notify_all()

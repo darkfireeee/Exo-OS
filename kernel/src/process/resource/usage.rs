@@ -49,6 +49,12 @@ pub struct RUsage {
     pub msgrcv: AtomicU64,
 }
 
+impl Default for RUsage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RUsage {
     pub const fn new() -> Self {
         Self {

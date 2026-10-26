@@ -293,14 +293,14 @@ pub extern "C" fn _start() -> ! {
                         );
                         continue;
                     }
-                    // Forward via SYS_IPC_SEND vers l'endpoint de destination.
+                    // Forward via SYS_IPC_SEND vers l'endpoint de destination avec timeout de sécurité.
                     let _ = unsafe {
                         syscall::syscall6(
                             syscall::SYS_IPC_SEND,
                             dest as u64,
                             payload_ptr(&msg, 4) as u64,
                             route_payload_len as u64,
-                            0,
+                            syscall::IPC_FLAG_TIMEOUT | 10,
                             0,
                             0,
                         )
@@ -319,7 +319,7 @@ pub extern "C" fn _start() -> ! {
                         reply_endpoint,
                         pid_bytes.as_ptr() as u64,
                         4,
-                        0,
+                        syscall::IPC_FLAG_TIMEOUT | 10,
                         0,
                         0,
                     )

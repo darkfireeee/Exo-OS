@@ -225,6 +225,12 @@ pub struct FutexBucket {
     inner: Mutex<BucketInner>,
 }
 
+impl Default for FutexBucket {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FutexBucket {
     pub const fn new() -> Self {
         Self {
@@ -252,6 +258,12 @@ pub struct FutexStats {
     pub timeouts: AtomicU64,
     pub total_woken: AtomicU64,
     pub max_bucket_depth: AtomicU32,
+}
+
+impl Default for FutexStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FutexStats {
@@ -427,6 +439,10 @@ pub unsafe fn futex_wait(
 
     // Vérifier atomiquement la valeur *avant* de s'endormir (pour éviter
     // la race condition entre lecture + enfilement).
+    if virt_addr == 0 || !virt_addr.is_multiple_of(4) || !crate::memory::core::address::is_user_canonical(virt_addr) {
+        FUTEX_STATS.value_mismatches.fetch_add(1, Ordering::Relaxed);
+        return FutexWaitResult::ValueMismatch;
+    }
     let current_val = (virt_addr as *const u32).read_volatile();
     if current_val != expected {
         FUTEX_STATS.value_mismatches.fetch_add(1, Ordering::Relaxed);
@@ -457,7 +473,8 @@ pub unsafe fn futex_wait(
 ///
 /// Doit être appelé avant de libérer la mémoire du waiter.
 ///
-/// # Safety : `waiter` doit être dans la table.
+/// # Safety
+/// `waiter` doit être dans la table.
 pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
     if waiter.is_null() {
         return;
@@ -478,7 +495,8 @@ pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
 ///
 /// `wake_code` : valeur retournée par `futex_wait` au thread réveillé.
 ///
-/// # Safety : l'appelant garantit que les waiters sont valides.
+/// # Safety
+/// l'appelant garantit que les waiters sont valides.
 pub unsafe fn futex_wake(virt_addr: u64, max: u32, wake_code: i32) -> u32 {
     FUTEX_STATS.wake_calls.fetch_add(1, Ordering::Relaxed);
     let idx = bucket_index(virt_addr);
@@ -491,6 +509,9 @@ pub unsafe fn futex_wake(virt_addr: u64, max: u32, wake_code: i32) -> u32 {
 }
 
 /// Réveille exactement `n` threads.
+///
+/// # Safety
+/// l'appelant garantit que les waiters sont valides.
 #[inline]
 pub unsafe fn futex_wake_n(virt_addr: u64, n: u32) -> u32 {
     futex_wake(virt_addr, n, 0)
@@ -499,7 +520,8 @@ pub unsafe fn futex_wake_n(virt_addr: u64, n: u32) -> u32 {
 /// Réveille `max_wake` threads sur `src_addr` et requeue `max_requeue` autres
 /// vers `dst_addr`.  Utile pour `pthread_cond_broadcast`.
 ///
-/// # Safety : idem.
+/// # Safety
+/// waiters valides.
 pub unsafe fn futex_requeue(
     src_addr: u64,
     dst_addr: u64,
@@ -581,6 +603,8 @@ const FUTEX_PRIVATE_FLAG: u32 = 128;
 pub enum FutexError {
     /// Opération inconnue ou non supportée.
     InvalidOp,
+    /// Adresse uaddr invalide (non alignée sur 4 octets, hors espace user, nulle).
+    InvalidAddr,
     /// *uaddr != val au moment de FUTEX_WAIT.
     ValueMismatch,
     /// Attente interrompue (pas de sleep hook enregistré).
@@ -596,6 +620,7 @@ impl FutexError {
     pub fn to_kernel_errno(self) -> i64 {
         match self {
             FutexError::InvalidOp => -22,     // EINVAL
+            FutexError::InvalidAddr => -14,   // EFAULT
             FutexError::ValueMismatch => -11, // EAGAIN
             FutexError::Interrupted => -4,    // EINTR
             FutexError::Timeout => -110,      // ETIMEDOUT
@@ -629,7 +654,7 @@ fn get_sleep_hook() -> Option<FutexSleepHook> {
         None
     } else {
         // SAFETY: Stocké via register_sleep_hook avec la bonne signature FutexSleepHook.
-        Some(unsafe { core::mem::transmute(ptr) })
+        Some(unsafe { core::mem::transmute::<*mut (), FutexSleepHook>(ptr) })
     }
 }
 
@@ -661,6 +686,15 @@ pub fn sys_futex(
     uaddr2: u64,
     val3: u32,
 ) -> Result<i64, FutexError> {
+    // Validation stricte de l'adresse user (AUDIT-MEM2 / T4-003)
+    if uaddr == 0
+        || !uaddr.is_multiple_of(4)
+        || !crate::memory::core::address::is_user_canonical(uaddr)
+        || uaddr > crate::syscall::validation::USER_ADDR_MAX - 4
+    {
+        return Err(FutexError::InvalidAddr);
+    }
+
     // Retirer le flag PRIVATE — la table courante est déjà par-processus.
     let cmd = op & !FUTEX_PRIVATE_FLAG;
 
@@ -715,6 +749,13 @@ pub fn sys_futex(
 
         // ── FUTEX_REQUEUE ─────────────────────────────────────────────────
         FUTEX_REQUEUE => {
+            if uaddr2 == 0
+                || !uaddr2.is_multiple_of(4)
+                || !crate::memory::core::address::is_user_canonical(uaddr2)
+                || uaddr2 > crate::syscall::validation::USER_ADDR_MAX - 4
+            {
+                return Err(FutexError::InvalidAddr);
+            }
             // val  = max threads réveillés sur uaddr
             // val3 = max threads requeueés vers uaddr2
             // timeout (troisième arg Linux) = max_wake ; val3 = max_requeue

@@ -27,6 +27,8 @@ const ICMP_PACKET_METADATA_LEN: usize = 4;
 
 static LOGGED_STACK_RX: AtomicBool = AtomicBool::new(false);
 static LOGGED_STACK_TX: AtomicBool = AtomicBool::new(false);
+static LAST_EGRESS_WAS_ARP: AtomicBool = AtomicBool::new(false);
+static LAST_EGRESS_SENT_IPV4: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Default)]
@@ -218,6 +220,11 @@ impl SmoltcpIface {
         self.socket_exo_handles[slot] = 0;
     }
 
+    pub fn ensure_interface(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool) {
+        let now = smoltcp_now_ms(self.egress_ticks.max(self.ingress_ticks));
+        self.ensure_iface(device, pool, now);
+    }
+
     pub fn apply_socket_state(&mut self, snapshot: &SocketSnapshot) {
         let Some(slot) = self.socket_slot_by_exo_handle(snapshot.handle) else {
             return;
@@ -249,7 +256,11 @@ impl SmoltcpIface {
         )
     }
 
-    pub fn poll_egress(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool) {
+    pub fn poll_egress(&mut self, device: &mut ExoNetDevice, pool: &NetBufPool) -> bool {
+        use core::sync::atomic::Ordering;
+        LAST_EGRESS_WAS_ARP.store(false, Ordering::Relaxed);
+        LAST_EGRESS_SENT_IPV4.store(false, Ordering::Relaxed);
+
         self.egress_ticks = self.egress_ticks.saturating_add(1);
         let now = smoltcp_now_ms(self.egress_ticks);
         self.ensure_iface(device, pool, now);
@@ -263,6 +274,7 @@ impl SmoltcpIface {
         // TX buffers are consumed by DriverLink::flush_tx() after smoltcp has
         // queued the egress frame. Freeing them here would drop packets before
         // the hardware driver can submit them.
+        LAST_EGRESS_WAS_ARP.load(Ordering::Relaxed) && !LAST_EGRESS_SENT_IPV4.load(Ordering::Relaxed)
     }
 
     pub fn drain_bounded(
@@ -330,9 +342,15 @@ impl SmoltcpIface {
             }
             SocketKind::Raw => {
                 let socket = sockets.get_mut::<icmp::Socket>(handle);
-                if !socket.is_open() && snapshot.local_port != 0 {
+                // En ICMP Echo (type 8 ou 0), l'identifiant est aux octets 4..6 de l'en-tête ICMP.
+                let icmp_ident = if data.len() >= 6 {
+                    u16::from_be_bytes([data[4], data[5]])
+                } else {
+                    snapshot.local_port.max(1)
+                };
+                if !socket.is_open() {
                     socket
-                        .bind(icmp::Endpoint::Ident(snapshot.local_port))
+                        .bind(icmp::Endpoint::Ident(icmp_ident))
                         .map_err(|_| syscall::EINVAL)?;
                 }
                 socket
@@ -507,17 +525,11 @@ impl SmoltcpIface {
 
     fn apply_icmp_state(
         &mut self,
-        handle: SocketHandle,
-        sockets: &mut SocketSet<'static>,
-        snapshot: &SocketSnapshot,
+        _handle: SocketHandle,
+        _sockets: &mut SocketSet<'static>,
+        _snapshot: &SocketSnapshot,
     ) {
-        if snapshot.local_port == 0 {
-            return;
-        }
-        let socket = sockets.get_mut::<icmp::Socket>(handle);
-        if !socket.is_open() {
-            let _ = socket.bind(icmp::Endpoint::Ident(snapshot.local_port));
-        }
+        // Le bind ICMP est effectué dans send_socket_data avec l'identifiant exact de l'en-tête ICMP.
     }
 }
 
@@ -742,6 +754,14 @@ impl TxToken for ExoTxToken<'_, '_> {
                 )
             };
             let result = f(payload);
+            if payload.len() >= 14 {
+                let ethertype = u16::from_be_bytes([payload[12], payload[13]]);
+                if ethertype == 0x0806 {
+                    LAST_EGRESS_WAS_ARP.store(true, core::sync::atomic::Ordering::Relaxed);
+                } else if ethertype == 0x0800 {
+                    LAST_EGRESS_SENT_IPV4.store(true, core::sync::atomic::Ordering::Relaxed);
+                }
+            }
             log_first_frame(
                 &LOGGED_STACK_TX,
                 b"network_server: first stack tx ",

@@ -717,8 +717,20 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
+    let resolved = resolve_fd(pid, fd)?;
+    if is_tty_handle(resolved.handle) {
+        if request == 0x5402 || request == 0x5403 || request == 0x5404 || request == 0x5410 {
+            let mut req = special::TtyRequestWire::zeroed();
+            req.sender_pid = pid;
+            req.msg_type = TTY_MSG_IOCTL;
+            req.a = request;
+            req.b = arg;
+            let reply = special::tty_call(&req)?;
+            return Ok(reply.status);
+        }
+    }
     let entry = OBJECT_TABLE
-        .get(resolve_fd(pid, fd)?.handle)
+        .get(resolved.handle)
         .map_err(exofs_to_bridge_error)?;
     match request {
         FIONREAD => {

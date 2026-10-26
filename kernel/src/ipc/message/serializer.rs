@@ -342,7 +342,7 @@ pub fn write_bytes(buf: &mut [u8], offset: usize, data: &[u8]) -> Result<usize, 
 }
 
 /// Lit un slice de bytes depuis le buffer (lu avec sa longueur u32 LE).
-pub fn read_bytes<'a>(buf: &'a [u8], offset: usize) -> Result<(&'a [u8], usize), IpcError> {
+pub fn read_bytes(buf: &[u8], offset: usize) -> Result<(&[u8], usize), IpcError> {
     let (len, off) = read_u32(buf, offset)?;
     let end = off + len as usize;
     if end > buf.len() {

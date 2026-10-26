@@ -54,6 +54,12 @@ pub struct KptiTable {
 //         accède uniquement à sa propre entrée).
 unsafe impl Sync for KptiTable {}
 
+impl Default for KptiTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KptiTable {
     pub const fn new() -> Self {
         KptiTable {
@@ -75,8 +81,9 @@ impl KptiTable {
 
     /// Enregistre les PML4 pour un CPU donné.
     ///
-    /// SAFETY: `cpu_id < 256`, `kernel_pml4` et `user_pml4` sont des PML4
-    ///         valides allouées avant cet appel.
+    /// # Safety
+    /// `cpu_id < 256`, `kernel_pml4` et `user_pml4` sont des PML4
+    /// valides allouées avant cet appel.
     pub unsafe fn register_cpu(
         &self,
         cpu_id: usize,
@@ -94,7 +101,8 @@ impl KptiTable {
 
     /// Switch vers la PML4 noyau pour ce CPU.
     ///
-    /// SAFETY: Doit être appelé en entrée de syscall/exception avec KPTI actif.
+    /// # Safety
+    /// Doit être appelé en entrée de syscall/exception avec KPTI actif.
     #[inline]
     pub unsafe fn switch_to_kernel(&self, cpu_id: usize) {
         if !self.is_enabled() {
@@ -110,7 +118,8 @@ impl KptiTable {
 
     /// Switch vers la PML4 user pour ce CPU.
     ///
-    /// SAFETY: Doit être appelé en sortie de syscall/exception (avant iret/sysret).
+    /// # Safety
+    /// Doit être appelé en sortie de syscall/exception (avant iret/sysret).
     #[inline]
     pub unsafe fn switch_to_user(&self, cpu_id: usize) {
         if !self.is_enabled() {

@@ -240,6 +240,9 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         boot_info.multiboot2_magic = mb2_magic;
         boot_info.multiboot2_addr = mb2_info;
         let mb2 = super::multiboot2::parse_multiboot2(mb2_info);
+        if mb2.module_start != 0 && mb2.module_end > mb2.module_start {
+            super::multiboot2::set_multiboot2_module(mb2.module_start, mb2.module_end);
+        }
         boot_info.total_memory_kb = mb2.total_memory_kb;
         boot_info.rsdp_phys = if mb2.rsdp_phys != 0 {
             mb2.rsdp_phys
@@ -379,7 +382,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         if madt.cpu_count > 1 {
             super::trampoline_asm::install_trampoline();
             let bsp_lapic = super::super::apic::local_apic::lapic_id();
-            super::super::smp::init::smp_boot_aps(madt, bsp_lapic as u32);
+            super::super::smp::init::smp_boot_aps(madt, bsp_lapic);
         }
     }
     boot_info.cpu_count = super::super::smp::init::smp_cpu_count();

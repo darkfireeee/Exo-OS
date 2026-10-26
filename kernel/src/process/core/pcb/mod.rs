@@ -121,6 +121,7 @@ pub struct ProcessControlBlock {
 
 impl ProcessControlBlock {
     /// Crée un nouveau PCB pour `fork()` / `create_process()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pid: Pid,
         ppid: Pid,
@@ -145,6 +146,7 @@ impl ProcessControlBlock {
     }
 
     /// Crée un PCB sans paniquer en cas d'OOM.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         pid: Pid,
         ppid: Pid,

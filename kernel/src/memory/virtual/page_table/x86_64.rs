@@ -241,6 +241,12 @@ pub struct PageTable {
     entries: [PageTableEntry; 512],
 }
 
+impl Default for PageTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PageTable {
     /// Crée une table vide (toutes les entrées = 0).
     pub const fn new() -> Self {
@@ -274,6 +280,10 @@ impl PageTable {
     #[inline]
     pub fn len(&self) -> usize {
         512
+    }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        false
     }
 
     /// Adresse physique de cette table (via le physmap).
@@ -363,8 +373,9 @@ impl PageTableLevel {
 
 /// Retourne un pointeur vers la table de pages physique via le physmap.
 ///
-/// SAFETY: `phys` doit pointer sur une PageTable valide et le physmap doit
-///         être initialisé (PHYS_MAP_BASE mappé).
+/// # Safety
+/// `phys` doit pointer sur une PageTable valide et le physmap doit
+/// être initialisé (PHYS_MAP_BASE mappé).
 #[inline]
 pub unsafe fn phys_to_table(phys: PhysAddr) -> *mut PageTable {
     (PHYS_MAP_BASE.as_u64() + phys.as_u64()) as *mut PageTable
@@ -372,8 +383,9 @@ pub unsafe fn phys_to_table(phys: PhysAddr) -> *mut PageTable {
 
 /// Retourne une référence vers la table de pages physique via le physmap.
 ///
-/// SAFETY: Même conditions que phys_to_table. La durée de vie est liée au
-///         physmap (statique).
+/// # Safety
+/// Même conditions que phys_to_table. La durée de vie est liée au
+/// physmap (statique).
 #[inline]
 pub unsafe fn phys_to_table_ref<'a>(phys: PhysAddr) -> &'a PageTable {
     &*(phys_to_table(phys))
@@ -381,8 +393,9 @@ pub unsafe fn phys_to_table_ref<'a>(phys: PhysAddr) -> &'a PageTable {
 
 /// Retourne une référence mutable vers la table de pages physique.
 ///
-/// SAFETY: Même conditions que phys_to_table. Aucune autre référence
-///         mutable ne doit exister simultanément.
+/// # Safety
+/// Même conditions que phys_to_table. Aucune autre référence
+/// mutable ne doit exister simultanément.
 #[inline]
 pub unsafe fn phys_to_table_mut<'a>(phys: PhysAddr) -> &'a mut PageTable {
     &mut *(phys_to_table(phys))
@@ -405,8 +418,9 @@ pub fn read_cr3() -> PhysAddr {
 
 /// Charge une nouvelle PML4 dans CR3 (invalide tout le TLB global).
 ///
-/// SAFETY: `pml4` doit pointer sur une PML4 valide. Des entrées invalides
-///         provoqueront une #PF ou #GP immédiate.
+/// # Safety
+/// `pml4` doit pointer sur une PML4 valide. Des entrées invalides
+/// provoqueront une #PF ou #GP immédiate.
 #[inline]
 pub unsafe fn write_cr3(pml4: PhysAddr) {
     let pcid_bits = read_cr3().as_u64() & 0xFFF; // Conserver les bits PCID
@@ -419,7 +433,8 @@ pub unsafe fn write_cr3(pml4: PhysAddr) {
 
 /// Invalide une seule entrée TLB pour l'adresse virtuelle donnée.
 ///
-/// SAFETY: addr doit être une adresse canonique x86_64.
+/// # Safety
+/// addr doit être une adresse canonique x86_64.
 #[inline]
 pub unsafe fn invlpg(addr: VirtAddr) {
     core::arch::asm!(

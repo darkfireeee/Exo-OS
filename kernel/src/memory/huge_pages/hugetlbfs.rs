@@ -91,6 +91,12 @@ pub struct HugeTlbStats {
     pub frees: AtomicU64,
 }
 
+impl Default for HugeTlbStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HugeTlbStats {
     const fn new() -> Self {
         HugeTlbStats {
@@ -129,6 +135,12 @@ pub struct HugeTlbPool {
     initialized: AtomicBool,
 }
 
+impl Default for HugeTlbPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HugeTlbPool {
     const fn new() -> Self {
         HugeTlbPool {
@@ -139,7 +151,8 @@ impl HugeTlbPool {
 
     /// Initialise le pool en pré-allouant `n_2mib` pages 2 MiB et `n_1gib` pages 1 GiB.
     ///
-    /// # Safety : CPL 0, appelé une seule fois au boot.
+    /// # Safety
+    /// CPL 0, appelé une seule fois au boot.
     pub unsafe fn init(&self, n_2mib: usize, n_1gib: usize) {
         if self.initialized.swap(true, Ordering::AcqRel) {
             return;
@@ -222,7 +235,8 @@ impl HugeTlbPool {
 
     /// Libère une huge page vers le pool.
     ///
-    /// # Safety : `frame` doit avoir été alloué via `HugeTlbPool::alloc`.
+    /// # Safety
+    /// `frame` doit avoir été alloué via `HugeTlbPool::alloc`.
     pub unsafe fn free(&self, frame: Frame, size: HugeTlbSize) {
         let phys = frame.start_address().as_u64();
         let mut inner = self.inner.lock();
@@ -257,7 +271,8 @@ impl HugeTlbPool {
     /// Ajuste dynamiquement la taille du pool.
     /// Alloue ou libère des slots pour atteindre `target_count` pour `size`.
     ///
-    /// # Safety : CPL 0.
+    /// # Safety
+    /// CPL 0.
     pub unsafe fn resize(&self, size: HugeTlbSize, target_count: usize) {
         let current_free = self.free_count(size);
         if current_free == target_count {
@@ -331,7 +346,8 @@ pub fn hugetlb_alloc_1gib() -> Option<Frame> {
 
 /// Libère une huge page 2 MiB vers le pool.
 ///
-/// # Safety : `frame` doit avoir été alloué via `hugetlb_alloc_2mib`.
+/// # Safety
+/// `frame` doit avoir été alloué via `hugetlb_alloc_2mib`.
 #[inline]
 pub unsafe fn hugetlb_free_2mib(frame: Frame) {
     HUGETLB_POOL.free(frame, HugeTlbSize::TwoMiB);
@@ -339,7 +355,8 @@ pub unsafe fn hugetlb_free_2mib(frame: Frame) {
 
 /// Libère une huge page 1 GiB vers le pool.
 ///
-/// # Safety : `frame` doit avoir été alloué via `hugetlb_alloc_1gib`.
+/// # Safety
+/// `frame` doit avoir été alloué via `hugetlb_alloc_1gib`.
 #[inline]
 pub unsafe fn hugetlb_free_1gib(frame: Frame) {
     HUGETLB_POOL.free(frame, HugeTlbSize::OneGiB);
@@ -359,7 +376,8 @@ pub fn hugetlb_free_1gib_count() -> usize {
 
 /// Initialise le pool hugetlb au boot.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn init(n_2mib: usize, n_1gib: usize) {
     HUGETLB_POOL.init(n_2mib, n_1gib);
 }

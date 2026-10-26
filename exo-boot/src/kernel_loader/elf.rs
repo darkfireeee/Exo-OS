@@ -163,8 +163,19 @@ impl<'a> ElfKernel<'a> {
         if header.e_phentsize as usize != core::mem::size_of::<Elf64ProgramHeader>() {
             return Err(ElfError::InvalidPhentsize { size: header.e_phentsize });
         }
-        let ph_end = header.e_phoff as usize
-            + header.e_phnum as usize * core::mem::size_of::<Elf64ProgramHeader>();
+        // AUDIT-BOOT2 : arithmétique checked pour éviter le wrap sur ELF corrompu
+        let ph_size = (header.e_phnum as usize)
+            .checked_mul(core::mem::size_of::<Elf64ProgramHeader>())
+            .ok_or(ElfError::ProgramHeaderOutOfBounds {
+                ph_end: usize::MAX,
+                file_size: data.len(),
+            })?;
+        let ph_end = (header.e_phoff as usize)
+            .checked_add(ph_size)
+            .ok_or(ElfError::ProgramHeaderOutOfBounds {
+                ph_end: usize::MAX,
+                file_size: data.len(),
+            })?;
         if ph_end > data.len() {
             return Err(ElfError::ProgramHeaderOutOfBounds {
                 ph_end,

@@ -121,6 +121,13 @@ pub unsafe fn apply_pie_relocations(
     }
 
     // Parse la table .dynamic
+    if dynamic_ph.p_vaddr < elf.virt_base() || dynamic_ph.p_vaddr >= elf.virt_end() {
+        return Err(RelocationError::TargetOutOfBounds {
+            offset: dynamic_ph.p_vaddr,
+            virt_base: elf.virt_base(),
+            virt_end: elf.virt_end(),
+        });
+    }
     let dyn_offset = dynamic_ph.p_vaddr - elf.virt_base();
     let dyn_phys   = phys_load_base + dyn_offset;
     let dyn_size   = dynamic_ph.p_filesz as usize;
@@ -166,6 +173,14 @@ pub unsafe fn apply_pie_relocations(
         });
     }
 
+    if rela_vaddr < elf.virt_base() || rela_vaddr.saturating_add(rela_size) > elf.virt_end() {
+        return Err(RelocationError::TargetOutOfBounds {
+            offset: rela_vaddr,
+            virt_base: elf.virt_base(),
+            virt_end: elf.virt_end(),
+        });
+    }
+
     let rela_offset  = rela_vaddr - elf.virt_base();
     let rela_phys    = phys_load_base + rela_offset;
     let rela_count   = rela_size as usize / core::mem::size_of::<Elf64Rela>();
@@ -179,6 +194,16 @@ pub unsafe fn apply_pie_relocations(
         // SAFETY : rela_ptr + i est dans les bornes de la table .rela
         let rela = unsafe { core::ptr::read_unaligned(rela_ptr.add(i)) };
         let sym_type = rela.sym_type();
+
+        if sym_type == R_X86_64_RELATIVE || sym_type == R_X86_64_64 {
+            if rela.r_offset < elf.virt_base() || rela.r_offset.saturating_add(8) > elf.virt_end() {
+                return Err(RelocationError::TargetOutOfBounds {
+                    offset: rela.r_offset,
+                    virt_base: elf.virt_base(),
+                    virt_end: elf.virt_end(),
+                });
+            }
+        }
 
         match sym_type {
             R_X86_64_RELATIVE => {
@@ -236,6 +261,7 @@ pub enum RelocationError {
     InvalidDynamicSize       { size: usize },
     UnexpectedRelaEntSize    { got: u64, expected: u64 },
     NoRelativeRelocations    { total: usize, skipped: u32 },
+    TargetOutOfBounds        { offset: u64, virt_base: u64, virt_end: u64 },
 }
 
 impl core::fmt::Display for RelocationError {
@@ -248,6 +274,9 @@ impl core::fmt::Display for RelocationError {
             Self::NoRelativeRelocations { total, skipped } =>
                 write!(f, "Aucune relocation RELATIVE parmi {} entrées ({} skipped)",
                     total, skipped),
+            Self::TargetOutOfBounds { offset, virt_base, virt_end } =>
+                write!(f, "Relocation hors bornes de l'image : 0x{:x} (base: 0x{:x}, end: 0x{:x})",
+                    offset, virt_base, virt_end),
         }
     }
 }

@@ -14,6 +14,12 @@ pub struct KRwLock<T> {
 unsafe impl<T: Send> Send for KRwLock<T> {}
 unsafe impl<T: Send> Sync for KRwLock<T> {}
 
+impl<T: Default> Default for KRwLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T> KRwLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
@@ -25,14 +31,13 @@ impl<T> KRwLock<T> {
     pub fn read(&self) -> KReadGuard<'_, T> {
         loop {
             let s = self.state.load(Ordering::Acquire);
-            if s >= 0 {
-                if self
+            if s >= 0
+                && self
                     .state
                     .compare_exchange_weak(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
-                {
-                    break;
-                }
+            {
+                break;
             }
             core::hint::spin_loop();
         }

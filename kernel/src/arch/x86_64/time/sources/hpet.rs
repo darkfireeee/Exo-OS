@@ -145,11 +145,7 @@ pub fn init_hpet_source() {
     let period_femtos = cap >> CAP_CLK_PERIOD_SHIFT;
     let is_64bit = (cap & CAP_COUNT_SIZE_CAP) != 0;
 
-    let freq_hz = if period_femtos > 0 {
-        FEMTOS_PER_SEC / period_femtos
-    } else {
-        0
-    };
+    let freq_hz = FEMTOS_PER_SEC.checked_div(period_femtos).unwrap_or(0);
 
     HPET_IS_64BIT.store(is_64bit, Ordering::Relaxed);
     HPET_FREQ_HZ.store(freq_hz, Ordering::Relaxed);

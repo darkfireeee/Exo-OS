@@ -57,11 +57,16 @@ pub struct SessionTable {
 // SAFETY : Session ne contient que des atomiques + SpinLock, accès serialisé.
 unsafe impl Sync for SessionTable {}
 
+impl Default for SessionTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionTable {
     const fn new() -> Self {
-        const EMPTY: Session = Session::empty();
         Self {
-            slots: [EMPTY; MAX_SESSIONS],
+            slots: [const { Session::empty() }; MAX_SESSIONS],
             lock: SpinLock::new(()),
             count: AtomicU32::new(0),
         }
@@ -89,12 +94,9 @@ impl SessionTable {
 
     /// Cherche une session par SID.
     pub fn find(&self, sid: SessionId) -> Option<&Session> {
-        for slot in &self.slots {
-            if slot.valid.load(Ordering::Acquire) == 1 && slot.sid == sid {
-                return Some(slot);
-            }
-        }
-        None
+        self.slots
+            .iter()
+            .find(|slot| slot.valid.load(Ordering::Acquire) == 1 && slot.sid == sid)
     }
 
     /// Supprime une session quand son refcount atteint 0.

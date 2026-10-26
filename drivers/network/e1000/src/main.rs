@@ -18,7 +18,7 @@ use grant_adapter::E1000GrantAdapter;
 use rx::{RxRing, RX_RING_SIZE};
 use tx::{TxRing, TX_RING_SIZE};
 
-const ENDPOINT_ID: u64 = 16;
+const ENDPOINT_ID: u64 = 21;
 const NETWORK_ENDPOINT_ID: u64 = 7;
 const PAGE_SIZE: usize = 4096;
 const DMA_DIR_BIDIR: u64 = 2;
@@ -30,7 +30,7 @@ const NET_CTRL_MAC_REPLY: u32 = 0x4F03;
 const NET_CTRL_RX_READY: u32 = 0x4F04;
 const NET_CTRL_TX_SUBMIT: u32 = 0x4F05;
 const NET_CTRL_TX_COMPLETE: u32 = 0x4F06;
-const IPC_RECV_TIMEOUT_MS: u64 = 2;
+const IPC_RECV_TIMEOUT_MS: u64 = 50;
 
 #[repr(C)]
 struct NetCtrlEnvelope {
@@ -264,6 +264,14 @@ impl E1000Driver {
 
     fn apply_driver_init(&mut self, init: DriverInitMsg) {
         if init.opcode != NET_CTRL_DRIVER_INIT || !self.online {
+            return;
+        }
+        // T12-002 : Validation des adresses IOVA fournies
+        if init.rx_base_iova == 0 || init.tx_base_iova == 0
+            || init.rx_base_iova % PAGE_SIZE as u64 != 0
+            || init.tx_base_iova % PAGE_SIZE as u64 != 0
+            || init.pool_count == 0
+        {
             return;
         }
         self.rx_base_iova = init.rx_base_iova;

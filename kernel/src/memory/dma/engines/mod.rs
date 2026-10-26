@@ -33,7 +33,8 @@ pub trait DmaEngine: Send + Sync {
     fn is_present(&self) -> bool;
     /// Initialise le moteur (MMIO, rings, etc.).
     ///
-    /// # Safety : CPL 0, adresse MMIO valide.
+    /// # Safety
+    /// CPL 0, adresse MMIO valide.
     unsafe fn init(&self, mmio_base: u64) -> bool;
     /// Retourne le nombre de slots disponibles dans la file de soumission.
     fn available_slots(&self) -> usize;

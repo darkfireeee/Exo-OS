@@ -78,8 +78,8 @@ pub unsafe fn dma_sg_async(
         IDENTITY_DOMAIN_ID,
         &mut dst_iovas[..dst_count],
     ) {
-        for i in 0..n_src_mapped {
-            let _ = IOVA_ALLOCATOR.unmap(src_iovas[i], IDENTITY_DOMAIN_ID);
+        for &iova in &src_iovas[..n_src_mapped] {
+            let _ = IOVA_ALLOCATOR.unmap(iova, IDENTITY_DOMAIN_ID);
         }
         return Err(e);
     }

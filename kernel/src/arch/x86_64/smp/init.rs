@@ -70,8 +70,7 @@ pub fn smp_boot_aps(madt_info: &madt::MadtInfo, bsp_lapic_id: u32) {
     let n = madt_info.cpu_count;
     let apic_ids = &madt_info.apic_ids;
 
-    for i in 0..(n as usize) {
-        let apic_id = apic_ids[i];
+    for &apic_id in &apic_ids[..(n as usize)] {
         if apic_id == bsp_lapic_id {
             continue;
         } // skip BSP

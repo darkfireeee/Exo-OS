@@ -243,7 +243,8 @@ impl IoatEngine {
 
     /// Initialise le canal I/OAT.
     ///
-    /// # Safety : CPL 0, `mmio_base` valide et mappée en WB.
+    /// # Safety
+    /// CPL 0, `mmio_base` valide et mappée en WB.
     pub unsafe fn init(&self, mmio_base: u64) -> bool {
         self.mmio_base.store(mmio_base, Ordering::Release);
 
@@ -258,7 +259,7 @@ impl IoatEngine {
         self.write16(regs::CHANCTRL, ctrl);
 
         // 3. Réinitialiser le canal (RESET = 0x20 dans CHANCMD).
-        let cmd_offs = regs::CHANCMD as usize;
+        let cmd_offs = regs::CHANCMD;
         let base = mmio_base as *mut u8;
         base.add(cmd_offs).write_volatile(0x20); // CHANCMD_RESET
 
@@ -281,7 +282,8 @@ impl IoatEngine {
     /// `src` / `dst` : adresses physiques. `size` en octets (≤ 4 MiB par desc.).
     /// Retourne l'index du slot ou None si ring plein.
     ///
-    /// # Safety : adresses physiques valides, mappées en physmap.
+    /// # Safety
+    /// adresses physiques valides, mappées en physmap.
     pub unsafe fn submit_copy(&self, src: PhysAddr, dst: PhysAddr, size: u32) -> Option<u16> {
         if !self.present.load(Ordering::Acquire) {
             return None;
@@ -314,7 +316,8 @@ impl IoatEngine {
 
     /// Sonde les compléments — retourne le nombre de transferts terminés.
     ///
-    /// # Safety : appelé depuis un contexte non-préemptible (IRQ off ou spinlock).
+    /// # Safety
+    /// appelé depuis un contexte non-préemptible (IRQ off ou spinlock).
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -357,21 +360,24 @@ pub static IOAT_ENGINE: IoatEngine = IoatEngine::new();
 
 /// Initialise le moteur I/OAT.
 ///
-/// # Safety : `mmio_base` = base du BAR MMIO PCI du contrôleur I/OAT.
+/// # Safety
+/// `mmio_base` = base du BAR MMIO PCI du contrôleur I/OAT.
 pub unsafe fn ioat_init(mmio_base: u64) -> bool {
     IOAT_ENGINE.init(mmio_base)
 }
 
 /// Soumet une copie DMA via I/OAT.
 ///
-/// # Safety : adresses physiques valides.
+/// # Safety
+/// adresses physiques valides.
 pub unsafe fn ioat_submit(src: PhysAddr, dst: PhysAddr, size: u32) -> Option<u16> {
     IOAT_ENGINE.submit_copy(src, dst, size)
 }
 
 /// Sonde les compléments I/OAT.
 ///
-/// # Safety : contexte non-préemptible.
+/// # Safety
+/// contexte non-préemptible.
 pub unsafe fn ioat_poll() -> usize {
     IOAT_ENGINE.poll()
 }

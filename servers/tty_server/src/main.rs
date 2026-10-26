@@ -1,18 +1,23 @@
 #![no_std]
 #![no_main]
+#![allow(dead_code, unused_variables)]
 
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicBool, Ordering};
 use exo_syscall_abi as syscall;
 use exo_tty::{LineDiscipline, LineEvent, Signal};
 
 const LINE_OUT_MAX: usize = syscall::TTY_LINE_MAX;
 const TTY_INPUT_STREAM_CHANNEL: u64 = 0x5454_5902;
-const TTY_RECV_TIMEOUT_MS: u64 = 25;
+// Doit être PAIR car le bit 0 transporte IPC_FLAG_TIMEOUT (0x0001).
+const TTY_RECV_TIMEOUT_MS: u64 = 2;
 const INPUT_DRAIN_LIMIT: usize = 32;
-const INPUT_DRAIN_TIMEOUT_MS: u64 = 1;
-const FB_SEND_RETRY_LIMIT: usize = 8;
+const FB_SEND_RETRY_LIMIT: usize = 256;
+const FB_SEND_TIMEOUT_MS: u64 = 4;
 const RAW_CALL_MAGIC: u32 = 0x4558_4F43;
+
+static FB_ENDPOINT_CACHED: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -53,6 +58,9 @@ fn console_write(bytes: &[u8]) {
 }
 
 fn fb_endpoint_ready() -> bool {
+    if FB_ENDPOINT_CACHED.load(Ordering::Relaxed) {
+        return true;
+    }
     let name = b"fb_server";
     let rc = unsafe {
         syscall::syscall3(
@@ -62,7 +70,12 @@ fn fb_endpoint_ready() -> bool {
             0,
         )
     };
-    rc == syscall::FB_SERVER_ENDPOINT as i64
+    if rc == syscall::FB_SERVER_ENDPOINT as i64 {
+        FB_ENDPOINT_CACHED.store(true, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
 }
 
 fn exit_failed() -> ! {
@@ -132,8 +145,8 @@ fn fb_write_all(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return true;
     }
+    debug_log(bytes);
     if !fb_endpoint_ready() {
-        debug_log(bytes);
         return false;
     }
     let mut done = 0usize;
@@ -152,7 +165,7 @@ fn fb_write_all(bytes: &[u8]) -> bool {
                     syscall::FB_SERVER_ENDPOINT,
                     &req as *const syscall::FbRequest as u64,
                     core::mem::size_of::<syscall::FbRequest>() as u64,
-                    syscall::IPC_FLAG_TIMEOUT,
+                    syscall::IPC_FLAG_TIMEOUT | 4,
                     0,
                     0,
                 )
@@ -160,9 +173,9 @@ fn fb_write_all(bytes: &[u8]) -> bool {
             if rc >= 0 {
                 break;
             }
-            if (rc != syscall::EAGAIN && rc != syscall::ETIMEDOUT) || retries >= FB_SEND_RETRY_LIMIT
+            if (rc != syscall::EAGAIN && rc != syscall::ETIMEDOUT)
+                || retries >= FB_SEND_RETRY_LIMIT
             {
-                debug_log(bytes);
                 return false;
             }
             retries += 1;
@@ -172,7 +185,6 @@ fn fb_write_all(bytes: &[u8]) -> bool {
         }
         done += n;
     }
-    debug_log(bytes);
     true
 }
 
@@ -183,8 +195,15 @@ struct TtyState {
     // FIX-SRV-M4 (ANALYSE_SERVERS §M4) : queue de 4 lectures en attente
     // (au lieu de 1) pour gérer les appels concurrent de exosh + scripts.
     // Si la queue est pleine, EAGAIN est retourné immédiatement.
-    pending_reads: [Option<RawCallHeader>; 4],
+    pending_reads: [Option<PendingRead>; 4],
     pending_reads_count: usize,
+    foreground_pid: u32,
+}
+
+#[derive(Copy, Clone)]
+struct PendingRead {
+    header: RawCallHeader,
+    sender_pid: u32,
 }
 
 impl TtyState {
@@ -195,6 +214,7 @@ impl TtyState {
             ready_len: 0,
             pending_reads: [None, None, None, None],
             pending_reads_count: 0,
+            foreground_pid: 0,
         }
     }
 }
@@ -217,17 +237,43 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
     let event = state.line.input_byte(byte);
     match event {
         Some(LineEvent::LineReady { len }) => {
+            let is_canon = state.line.is_canonical();
             let mut tmp = [0u8; LINE_OUT_MAX];
             let copied = state.line.take_line(&mut tmp).len();
             let n = core::cmp::min(copied, core::cmp::min(len, LINE_OUT_MAX));
-            state.ready[..n].copy_from_slice(&tmp[..n]);
-            state.ready_len = n;
-            console_write(b"\n");
+            let rem = LINE_OUT_MAX.saturating_sub(state.ready_len);
+            let to_copy = n.min(rem);
+            let start = state.ready_len;
+            state.ready[start..start + to_copy].copy_from_slice(&tmp[..to_copy]);
+            state.ready_len += to_copy;
+            if is_canon {
+                console_write(b"\n");
+            }
             complete_pending_read();
             reply(0, 0, &[])
         }
         Some(LineEvent::Signal(Signal::Interrupt)) => {
             console_write(b"^C\n");
+            let state = tty_mut();
+            if state.pending_reads_count > 0 {
+                let p = state.pending_reads[0].take().unwrap();
+                for i in 0..3 { state.pending_reads[i] = state.pending_reads[i+1].take(); }
+                state.pending_reads_count -= 1;
+                let mut int_reply = syscall::TtyReply::zeroed();
+                int_reply.status = -4; // -EINTR
+                int_reply.signal = 2;  // SIGINT
+                send_raw_call_reply(p.header.reply_ep, p.header.cookie, &int_reply);
+                if p.sender_pid != 0 {
+                    unsafe {
+                        let _ = syscall::syscall2(syscall::SYS_KILL, p.sender_pid as u64, 2);
+                    }
+                }
+            }
+            if state.foreground_pid != 0 {
+                unsafe {
+                    let _ = syscall::syscall2(syscall::SYS_KILL, state.foreground_pid as u64, 2);
+                }
+            }
             reply(0, 2, &[])
         }
         Some(LineEvent::Signal(Signal::EndOfFile)) => {
@@ -235,7 +281,17 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
             reply(0, 4, &[])
         }
         Some(LineEvent::Echo(byte)) => {
-            console_write(&[byte]);
+            let state = tty_mut();
+            if state.line.is_echo() {
+                console_write(&[byte]);
+            }
+            if !state.line.is_canonical() {
+                if state.ready_len < LINE_OUT_MAX {
+                    state.ready[state.ready_len] = byte;
+                    state.ready_len += 1;
+                    complete_pending_read();
+                }
+            }
             reply(0, 0, &[byte])
         }
         Some(LineEvent::Backspace) => {
@@ -257,22 +313,65 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
 fn handle_input_event(event: syscall::InputEventWire) {
     if event.device != syscall::INPUT_DEVICE_KEYBOARD
         || event.state != syscall::INPUT_KEY_PRESSED
-        || event.ascii == 0
     {
         return;
     }
-    let _ = handle_input(event.ascii);
+    if event.ascii != 0 {
+        let _ = handle_input(event.ascii);
+        return;
+    }
+    // Translation des touches non-ASCII (touches fléchées, navigation) en séquences ANSI
+    match event.code {
+        0x0052 => { // UP
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'A');
+        }
+        0x0051 => { // DOWN
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'B');
+        }
+        0x004F => { // RIGHT
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'C');
+        }
+        0x0050 => { // LEFT
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'D');
+        }
+        0x004A => { // HOME
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'H');
+        }
+        0x004D => { // END
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'F');
+        }
+        0x004C => { // DELETE
+            let _ = handle_input(0x1B);
+            let _ = handle_input(b'[');
+            let _ = handle_input(b'3');
+            let _ = handle_input(b'~');
+        }
+        _ => {}
+    }
 }
 
-fn recv_input_reply(endpoint: u64, timeout_ms: u64) -> Option<syscall::InputReply> {
+/// Lecture non-bloquante (`SYS_EXO_IPC_RECV_NB`) de la file d'événements clavier/souris.
+fn recv_input_reply(endpoint: u64) -> Option<syscall::InputReply> {
     let mut reply = syscall::InputReply::default();
     let rc = unsafe {
         syscall::syscall4(
-            syscall::SYS_IPC_RECV,
+            syscall::SYS_EXO_IPC_RECV_NB,
             endpoint,
             &mut reply as *mut syscall::InputReply as u64,
             core::mem::size_of::<syscall::InputReply>() as u64,
-            syscall::IPC_FLAG_TIMEOUT | timeout_ms,
+            0,
         )
     };
     (rc >= 0).then_some(reply)
@@ -281,7 +380,7 @@ fn recv_input_reply(endpoint: u64, timeout_ms: u64) -> Option<syscall::InputRepl
 fn drain_stream_input_events(endpoint: u64) {
     let mut drained = 0usize;
     while drained < INPUT_DRAIN_LIMIT {
-        let Some(reply) = recv_input_reply(endpoint, INPUT_DRAIN_TIMEOUT_MS) else {
+        let Some(reply) = recv_input_reply(endpoint) else {
             break;
         };
         if reply.status == 0 {
@@ -322,28 +421,25 @@ fn take_ready_line() -> Option<syscall::TtyReply> {
 fn complete_pending_read() {
     // FIX-SRV-M4 : dépiler le premier reader en attente.
     let state = tty_mut();
-    let header = if state.pending_reads_count == 0 {
+    let pending = if state.pending_reads_count == 0 {
         return;
     } else {
-        let h = state.pending_reads[0].take().unwrap();
+        let p = state.pending_reads[0].take().unwrap();
         // Shift down
         for i in 0..3 { state.pending_reads[i] = state.pending_reads[i+1].take(); }
         state.pending_reads_count -= 1;
-        h
-    };
-    let Some(_dummy) = Some(header) else {
-        return;
+        p
     };
     let Some(response) = take_ready_line() else {
         // FIX: pending_read renommé en pending_reads (queue de 4 slots)
         let state = tty_mut();
         if state.pending_reads_count < 4 {
-            state.pending_reads[state.pending_reads_count] = Some(header);
+            state.pending_reads[state.pending_reads_count] = Some(pending);
             state.pending_reads_count += 1;
         }
         return;
     };
-    send_raw_call_reply(header.reply_ep, header.cookie, &response);
+    send_raw_call_reply(pending.header.reply_ep, pending.header.cookie, &response);
 }
 
 fn reply(status: i64, signal: u32, data: &[u8]) -> syscall::TtyReply {
@@ -400,7 +496,21 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
             console_write(slice);
             reply(0, 0, slice)
         }
-        syscall::TTY_MSG_IOCTL => reply(0, 0, &[]),
+        syscall::TTY_MSG_IOCTL => {
+            let state = tty_mut();
+            if req.a == 0x5402 || req.a == 0x5403 || req.a == 0x5404 {
+                state.line.set_echo(req.b & 1 != 0);
+                state.line.set_canonical(req.b & 2 != 0);
+                if req.b == 0 {
+                    state.ready_len = 0;
+                    let mut tmp = [0u8; LINE_OUT_MAX];
+                    let _ = state.line.take_line(&mut tmp);
+                }
+            } else if req.a == 0x5410 {
+                state.foreground_pid = req.b as u32;
+            }
+            reply(0, 0, &[])
+        }
         _ => reply(syscall::EINVAL, 0, &[]),
     }
 }
@@ -462,7 +572,7 @@ fn send_raw_call_reply(reply_ep: u64, cookie: u64, reply: &syscall::TtyReply) {
             reply_ep,
             out.as_ptr() as u64,
             total as u64,
-            0,
+            syscall::IPC_FLAG_TIMEOUT,
             0,
             0,
         )
@@ -479,7 +589,7 @@ fn send_tty_reply(reply_endpoint: u64, response: &syscall::TtyReply) {
             reply_endpoint,
             response as *const syscall::TtyReply as u64,
             core::mem::size_of::<syscall::TtyReply>() as u64,
-            0,
+            syscall::IPC_FLAG_TIMEOUT,
             0,
             0,
         )
@@ -490,13 +600,20 @@ fn dispatch_message(bytes: &[u8]) {
     if let Some((header, payload)) = parse_raw_call(bytes) {
         let response = match read_tty_request(payload) {
             Some(req) if req.msg_type == syscall::TTY_MSG_READ_LINE => {
+                let state = tty_mut();
+                if req.sender_pid != 0 {
+                    state.foreground_pid = req.sender_pid;
+                }
                 if let Some(response) = take_ready_line() {
                     response
                 } else {
                     let state = tty_mut();
-                    if state.pending_reads_count < 4 {
-                        // FIX-SRV-M4 : enqueue dans la queue circulaire
-                        state.pending_reads[state.pending_reads_count] = Some(header);
+                    if state.line.is_canonical() && state.pending_reads_count < 4 {
+                        // FIX-SRV-M4 : enqueue dans la queue circulaire uniquement en mode canonique
+                        state.pending_reads[state.pending_reads_count] = Some(PendingRead {
+                            header,
+                            sender_pid: req.sender_pid,
+                        });
                         state.pending_reads_count += 1;
                         return;
                     }
@@ -514,12 +631,9 @@ fn dispatch_message(bytes: &[u8]) {
         return;
     };
     let response = handle(&req);
-    let reply_endpoint = if req.reply_endpoint != 0 {
-        req.reply_endpoint
-    } else {
-        req.sender_pid as u64
-    };
-    send_tty_reply(reply_endpoint, &response);
+    if req.reply_endpoint != 0 {
+        send_tty_reply(req.reply_endpoint, &response);
+    }
 }
 
 #[no_mangle]

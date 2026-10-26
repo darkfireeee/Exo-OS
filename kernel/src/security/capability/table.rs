@@ -356,6 +356,8 @@ impl CapTable {
         if let Some(idx) = self.find_slot(object_id) {
             // Incrément atomique de génération — invalide TOUS les tokens existants
             self.entries[idx].generation.fetch_add(1, Ordering::Release);
+            // Remise à zéro des droits — invalide immédiatement check_object et check_right_any_type
+            self.entries[idx].rights.store(0, Ordering::Release);
             self.stats.revocations.fetch_add(1, Ordering::Relaxed);
             Ok(())
         } else {
@@ -425,6 +427,16 @@ impl CapTable {
     pub fn check_object(&self, object_id: ObjectId, required: Rights, ty: CapObjectType) -> bool {
         match self.get(object_id) {
             Some(v) => v.type_tag == ty && v.rights.contains(required),
+            None => false,
+        }
+    }
+
+    /// Vérifie qu'une capability existe pour `object_id` couvrant au moins les droits `required`,
+    /// quel que soit le type de l'objet (utilisé pour les droits universels comme REVOKE).
+    #[inline]
+    pub fn check_right_any_type(&self, object_id: ObjectId, required: Rights) -> bool {
+        match self.get(object_id) {
+            Some(v) => v.rights.contains(required),
             None => false,
         }
     }

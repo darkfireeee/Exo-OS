@@ -57,7 +57,7 @@ pub const PKU_KERNEL_HEAP_KEY: u8 = 1;
 pub const PKU_GUARD_KEY: u8 = 2;
 /// Clé 3 réservée aux données MMIO.
 pub const PKU_MMIO_KEY: u8 = 3;
-/// Clé 4..15 libre pour attribution dynamique par userland / driver.
+// Clé 4..15 libre pour attribution dynamique par userland / driver.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistiques
@@ -71,6 +71,12 @@ pub struct PkuStats {
     pub pkru_write_count: AtomicU64,
     pub violation_count: AtomicU64,
     pub exhausted_count: AtomicU64,
+}
+
+impl Default for PkuStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PkuStats {
@@ -118,6 +124,12 @@ struct PkuKeyAllocator {
     keys: [PkuKeyDesc; PKU_KEY_COUNT],
 }
 
+impl Default for PkuKeyAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PkuKeyAllocator {
     const fn new() -> Self {
         // Les clés 0..PKU_DEFAULT+3 sont réservées noyau.
@@ -163,7 +175,7 @@ impl PkuKeyAllocator {
     /// Libère une clé.
     fn free(&mut self, key: u8) -> bool {
         let k = key as usize;
-        if k < 4 || k >= PKU_KEY_COUNT {
+        if !(4..PKU_KEY_COUNT).contains(&k) {
             return false; // clé réservée ou invalide
         }
         if !self.keys[k].in_use {
@@ -183,7 +195,8 @@ static PKU_KEY_ALLOC: Mutex<PkuKeyAllocator> = Mutex::new(PkuKeyAllocator::new()
 
 /// Lit le registre PKRU sur le CPU courant.
 ///
-/// # Safety : CPL 0, PKE doit être actif.
+/// # Safety
+/// CPL 0, PKE doit être actif.
 #[inline(always)]
 pub unsafe fn rdpkru() -> u32 {
     let val: u32;
@@ -200,7 +213,8 @@ pub unsafe fn rdpkru() -> u32 {
 
 /// Écrit `val` dans le registre PKRU.
 ///
-/// # Safety : CPL 0 ou user (RDPKRU user-mode ok si CR4.PKE).
+/// # Safety
+/// CPL 0 ou user (RDPKRU user-mode ok si CR4.PKE).
 #[inline(always)]
 pub unsafe fn wrpkru(val: u32) {
     core::arch::asm!(
@@ -270,7 +284,8 @@ pub fn pku_supported() -> bool {
 ///   - Clé 3 (MMIO)    : AD=0 WD=1 → lecture seule (protection données MMIO).
 ///   - Clés 4..15      : AD=0 WD=0 → accessible (allouées dynamiquement).
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn enable_pku() {
     if !pku_supported() {
         return;
@@ -312,7 +327,8 @@ pub fn pku_free_key(key: u8) -> bool {
 
 /// Active l'accès R/W pour la clé `key` dans le PKRU courant.
 ///
-/// # Safety : CPL 0. Seulement si PKU actif.
+/// # Safety
+/// CPL 0. Seulement si PKU actif.
 pub unsafe fn pku_allow_key(key: u8) {
     if key >= PKU_KEY_COUNT as u8 {
         return;
@@ -324,7 +340,8 @@ pub unsafe fn pku_allow_key(key: u8) {
 
 /// Désactive l'accès total pour la clé `key` (AD = 1).
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn pku_deny_key(key: u8) {
     if key >= PKU_KEY_COUNT as u8 {
         return;
@@ -335,7 +352,8 @@ pub unsafe fn pku_deny_key(key: u8) {
 
 /// Active uniquement la lecture pour la clé `key` (WD = 1, AD = 0).
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn pku_readonly_key(key: u8) {
     if key >= PKU_KEY_COUNT as u8 {
         return;
@@ -370,7 +388,8 @@ pub struct PkuAccessGuard {
 }
 
 impl PkuAccessGuard {
-    /// # Safety : CPL 0, PKU actif.
+    /// # Safety
+    /// CPL 0, PKU actif.
     pub unsafe fn new(key: u8) -> Self {
         let saved_pkru = rdpkru();
         pku_allow_key(key);
@@ -403,7 +422,8 @@ pub fn pku_handle_violation(fault_addr: u64, key: u8) -> bool {
 
 /// Init PKU. Doit être appelé sur BSP + chaque AP après init page tables.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn init() {
     enable_pku();
 }

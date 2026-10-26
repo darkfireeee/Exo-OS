@@ -257,6 +257,28 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         target_pid as u32
     };
 
+    // Vérification des privilèges POSIX pour kill (AUDIT-SEC3)
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid != real_pid {
+        let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
+            Some(p) => p,
+            None => return EPERM,
+        };
+        let target_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(real_pid)) {
+            Some(p) => p,
+            None => return ESRCH,
+        };
+        let c_creds = caller_pcb.get_creds();
+        let t_creds = target_pcb.get_creds();
+        let is_privileged = c_creds.is_root() || c_creds.euid == 0;
+        let uid_match = c_creds.uid == t_creds.uid
+            || c_creds.euid == t_creds.uid
+            || c_creds.euid == t_creds.euid;
+        if !is_privileged && !uid_match {
+            return EPERM;
+        }
+    }
+
     if signum == 0 {
         let found = PROCESS_REGISTRY.find_by_pid(Pid(real_pid)).is_some();
         return if found { 0 } else { ESRCH };

@@ -141,6 +141,7 @@ pub struct AuxvParams {
 ///
 /// Retourne un Vec<AuxEntry> à sérialiser sur la pile userspace.
 /// OOM-02 : try_reserve explicite.
+#[allow(clippy::result_unit_err)]
 pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     let mut v: Vec<AuxEntry> = Vec::new();
     // Nombre maximal connu : ~16 entrées + AT_NULL.
@@ -182,6 +183,7 @@ pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
 /// Sérialise le vecteur auxv en bytes (pour copy_to_user sur la pile).
 ///
 /// RECUR-01 : while, pas de for.
+#[allow(clippy::result_unit_err)]
 pub fn serialize_auxv(entries: &[AuxEntry]) -> Result<Vec<u8>, ()> {
     let byte_count = entries
         .len()
@@ -223,6 +225,7 @@ pub fn serialize_auxv(entries: &[AuxEntry]) -> Result<Vec<u8>, ()> {
 /// let new_sp = push_auxv(user_stack_top, &params)?;
 /// // Puis écrire environ/argv au-dessus de new_sp.
 /// ```
+#[allow(clippy::result_unit_err)]
 pub fn push_auxv(stack_top: u64, params: &AuxvParams) -> Result<u64, ()> {
     let entries = build_auxv(params)?;
     let bytes = serialize_auxv(&entries)?;

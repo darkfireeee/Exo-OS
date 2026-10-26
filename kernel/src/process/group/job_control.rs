@@ -28,6 +28,12 @@ pub struct ControlTerminal {
     pub owner_sid: AtomicU32,
 }
 
+impl Default for ControlTerminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ControlTerminal {
     pub const fn new() -> Self {
         Self {
@@ -49,29 +55,18 @@ unsafe impl Sync for CttyTable {}
 
 impl CttyTable {
     const fn new() -> Self {
-        const EMPTY: ControlTerminal = ControlTerminal::new();
         Self {
-            slots: [EMPTY; MAX_CTTY],
+            slots: [const { ControlTerminal::new() }; MAX_CTTY],
         }
     }
 
     fn find_by_sid(&self, sid: u32) -> Option<&ControlTerminal> {
-        for slot in &self.slots {
-            if slot.owner_sid.load(Ordering::Acquire) == sid {
-                return Some(slot);
-            }
-        }
-        None
+        self.slots.iter().find(|slot| slot.owner_sid.load(Ordering::Acquire) == sid)
     }
 
     #[allow(dead_code)]
     fn find_free(&self) -> Option<&ControlTerminal> {
-        for slot in &self.slots {
-            if slot.owner_sid.load(Ordering::Acquire) == 0 {
-                return Some(slot);
-            }
-        }
-        None
+        self.slots.iter().find(|slot| slot.owner_sid.load(Ordering::Acquire) == 0)
     }
 }
 

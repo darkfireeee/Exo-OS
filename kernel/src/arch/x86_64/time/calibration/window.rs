@@ -347,7 +347,7 @@ pub fn calibrate_tsc_via_pit() -> Option<u64> {
         outb(PIT_GATE_PORT, gate & !0x01);
 
         // 2. Commande : canal 2, lobyte/hibyte, mode 0 (terminal count), bcd=0.
-        outb(PIT_CMD_PORT, 0b10_11_000_0);
+        outb(PIT_CMD_PORT, 0b1011_0000);
         outb(PIT_CH2_PORT, (target_count & 0xFF) as u8); // LSB
         outb(PIT_CH2_PORT, ((target_count >> 8) & 0xFF) as u8); // MSB
 
@@ -499,8 +499,8 @@ pub fn mean_and_variance(sorted_samples: &[u64]) -> (u64, u64) {
     let mut count: u64 = 0;
 
     for &s in sorted_samples.iter() {
-        if s >= lo && s <= hi {
-            let diff = if s >= mean { s - mean } else { mean - s };
+        if (lo..=hi).contains(&s) {
+            let diff = s.abs_diff(mean);
             sum_sq = sum_sq.saturating_add((diff as u128).saturating_mul(diff as u128));
             count += 1;
         }

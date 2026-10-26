@@ -207,7 +207,7 @@ pub struct UContextRegs {
 /// `uc_ptr` doit être une adresse userspace valide (vérifiée en interne).
 pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
-    if uc_ptr < 0x1000 || uc_ptr >= USER_SPACE_TOP {
+    if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return None;
     }
     // SAFETY: adresse userspace validée ci-dessus.
@@ -299,7 +299,7 @@ pub fn setup_signal_frame(
     // Construire le contenu du frame dans un buffer temporaire.
     // Assurer que sig_rsp est une adresse utilisateur valide (< USER_SPACE_TOP).
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
-    if sig_rsp >= USER_SPACE_TOP || sig_rsp < 0x1000 {
+    if !(0x1000..USER_SPACE_TOP).contains(&sig_rsp) {
         // Pile utilisateur corrompue : forcer SIGSEGV.
         // En prod, mettre le thread en SIGSEGV et passer à l'action Core.
         return;
@@ -389,7 +389,7 @@ pub fn setup_signal_frame(
 /// Modifie `frame` pour restaurer les registres sauvegardés.
 pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame, uc_ptr: u64) {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
-    if uc_ptr >= USER_SPACE_TOP || uc_ptr < 0x1000 {
+    if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return;
     }
 
@@ -443,7 +443,10 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     frame.user_r15 = r15_saved;
     frame.user_rbx = rbx_saved;
     frame.user_rbp = rbp_saved;
-    frame.user_rflags = rflags_saved;
+    const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5;
+    const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200;
+    const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100;
+    frame.user_rflags = ((rflags_saved & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
     frame.user_fs_base = fs_base_saved;
     frame.user_gs_base = gs_base_saved;
     thread.sched_tcb.fs_base = fs_base_saved;

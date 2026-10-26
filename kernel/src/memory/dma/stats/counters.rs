@@ -38,6 +38,12 @@ pub struct DmaEngineStats {
     pub retries: AtomicU32,
 }
 
+impl Default for DmaEngineStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaEngineStats {
     pub const fn new() -> Self {
         DmaEngineStats {
@@ -146,29 +152,16 @@ pub struct DmaStats {
 // SAFETY: DmaStats n'est accessible que via des méthodes atomiques.
 unsafe impl Sync for DmaStats {}
 
+impl Default for DmaStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaStats {
     const fn new() -> Self {
-        // Impossible de faire new() dans un array en const sans macro dans no_std.
-        // On utilise un transmute-from-zeros approach.
         DmaStats {
-            engines: [
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-                DmaEngineStats::new(),
-            ],
+            engines: [const { DmaEngineStats::new() }; MAX_DMA_ENGINES],
             active_engines: AtomicU32::new(0),
             iommu_faults: AtomicU64::new(0),
             iommu_tlb_flushes: AtomicU64::new(0),

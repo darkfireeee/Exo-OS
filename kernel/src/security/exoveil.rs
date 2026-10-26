@@ -53,8 +53,9 @@ const MAX_PKS_KEYS: usize = 16;
 #[allow(dead_code)]
 const PKRS_DEFAULT_ALL_ACCESS: u64 = 0x0000_0000_0000_0000;
 
-/// Valeur PKRS tous révoqués : tous les domaines = 0b11 (Access Disabled).
-const PKRS_ALL_REVOKED: u64 = 0x5555_5555_5555_5555; // chaque paire = 0b11
+/// Valeur PKRS tous révoqués : tous les domaines = 0b11 (Access Disabled + Write Disabled).
+/// En PKS, chaque domaine pkey a 2 bits (AD=bit0, WD=bit1) : 0b11 = 0xF par quartet.
+const PKRS_ALL_REVOKED: u64 = 0xFFFF_FFFF_FFFF_FFFF; // chaque paire = 0b11 (AUDIT-SEC1)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PksDomain — Domaines de protection
@@ -65,13 +66,14 @@ const PKRS_ALL_REVOKED: u64 = 0x5555_5555_5555_5555; // chaque paire = 0b11
 /// Chaque domaine correspond à une clé de protection (pkey) dans les PTE.
 /// La valeur du domaine est le numéro de pkey (0..15).
 ///
-/// # Layout PKR dans IA32_PKRS
+/// # Layout PKR dans IA32_PKRS (Intel SDM Vol 3A §4.6.2.2)
 ///
 /// Pour le domaine `d`, les bits `PKRS[2*d+1 : 2*d]` contrôlent l'accès :
-/// - `00` : Read/Write (accès total)
-/// - `01` : Read-only
-/// - `10` : Write-only
-/// - `11` : Access Disabled (révoqué)
+/// - Bit `2*d` : AD (Access-Disable, 1 = tout accès données interdit)
+/// - Bit `2*d+1` : WD (Write-Disable, 1 = écriture interdite)
+/// - `0b00` : Read/Write (AD=0, WD=0)
+/// - `0b10` : Read-only (AD=0, WD=1)
+/// - `0b11` : Access Disabled / Révoqué (AD=1, WD=1)
 ///
 /// # Correspondance PTE
 ///
@@ -118,13 +120,11 @@ impl PksDomain {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PksPermission {
-    /// Lecture et écriture autorisées (valeur PKRS = 0b00).
+    /// Lecture et écriture autorisées (valeur PKRS = 0b00 : AD=0, WD=0).
     ReadWrite = 0b00,
-    /// Lecture seule (valeur PKRS = 0b01).
-    ReadOnly = 0b01,
-    /// Écriture seule (valeur PKRS = 0b10).
-    WriteOnly = 0b10,
-    /// Accès totalement interdit / révoqué (valeur PKRS = 0b11).
+    /// Lecture seule (valeur PKRS = 0b10 : AD=0, WD=1, conforme Intel SDM).
+    ReadOnly = 0b10,
+    /// Accès totalement interdit / révoqué (valeur PKRS = 0b11 : AD=1, WD=1).
     Disabled = 0b11,
 }
 

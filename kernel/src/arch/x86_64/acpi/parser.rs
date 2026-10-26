@@ -176,7 +176,7 @@ pub fn find_rsdp() -> Option<u64> {
     // SAFETY: accès Low Memory — identity-mapped par le boot
     let ebda_segment = unsafe { read_volatile(0x40E as *const u16) } as u64;
     let ebda_base = ebda_segment << 4;
-    if ebda_base >= 0x80000 && ebda_base < 0xA0000 {
+    if (0x80000..0xA0000).contains(&ebda_base) {
         if let Some(a) = find_rsdp_in_range(ebda_base, ebda_base + 1024) {
             return Some(a);
         }

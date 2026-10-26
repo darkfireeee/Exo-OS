@@ -99,8 +99,12 @@ pub unsafe fn load_kernel(
             (phys_dest, virt)
         }
     } else {
-        let virt = crate::kernel_loader::handoff::kernel_virtual_base(phys_dest);
-        (phys_dest, virt)
+        // T13-001 / T13-002 : Si le kernel n'est pas PIE ou si phys_dest == 0,
+        // charger à 1 MiB (0x100_000) pour ne jamais écraser l'IVT/BDA à 0x0
+        // et respecter l'adresse de liaison fixe du noyau.
+        let target = if phys_dest == 0 { 0x100_000 } else { phys_dest };
+        let virt = crate::kernel_loader::handoff::kernel_virtual_base(target);
+        (target, virt)
     };
 
     // ── 4. Charge les segments ────────────────────────────────────────────

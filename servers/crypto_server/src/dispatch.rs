@@ -93,13 +93,23 @@ pub fn handle_request(req: &CryptoRequest) -> CryptoReply {
 
     let payload = &req.payload[..req.payload_len as usize];
     let caller_principal = if req.msg_type == PHOENIX_WAKE_ENTROPY {
-        // FIX-CS-PHOENIX-01 : Seul le noyau (PID 0) peut invoquer PHOENIX_WAKE_ENTROPY
-        if req.sender_pid != 0 {
-            reply.status = CRYPTO_ERR_CAP;
-            REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
-            return reply;
+        // FIX-CS-PHOENIX-01 / T20-001 : Valider la capability kernel via exo_cap_check.
+        // req.sender_pid ne suffit pas car non-authentifié sans vérification de capability.
+        match authorize_request(req) {
+            Ok(principal) => {
+                if req.sender_pid != 0 || principal > 1 {
+                    reply.status = CRYPTO_ERR_CAP;
+                    REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+                    return reply;
+                }
+                principal
+            }
+            Err(status) => {
+                reply.status = status;
+                REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
+                return reply;
+            }
         }
-        0
     } else {
         match authorize_request(req) {
             Ok(principal) => principal,

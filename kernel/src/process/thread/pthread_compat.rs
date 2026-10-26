@@ -116,7 +116,8 @@ pub fn PTHREAD_CREATE(
 /// # Safety
 /// `thread_ptr` doit pointer vers un ProcessThread valide.
 /// `caller_tcb` doit être le TCB du thread appelant.
-pub fn PTHREAD_JOIN(
+/// `retval_out` doit être accessible en écriture ou null.
+pub unsafe fn PTHREAD_JOIN(
     thread_ptr: *const ProcessThread,
     caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
     retval_out: *mut u64,
@@ -140,7 +141,10 @@ pub fn PTHREAD_JOIN(
 }
 
 /// Implémentation kernel de pthread_detach().
-pub fn PTHREAD_DETACH(thread_ptr: *mut ProcessThread) -> i32 {
+///
+/// # Safety
+/// `thread_ptr` doit pointer vers un ProcessThread valide.
+pub unsafe fn PTHREAD_DETACH(thread_ptr: *mut ProcessThread) -> i32 {
     match thread_detach(thread_ptr) {
         Ok(_) => ESUCCESS,
         Err(_) => -EINVAL,

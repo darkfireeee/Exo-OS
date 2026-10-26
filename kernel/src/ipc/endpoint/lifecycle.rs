@@ -51,9 +51,8 @@ struct EndpointPool {
 
 impl EndpointPool {
     const fn new() -> Self {
-        const ZERO: AtomicU64 = AtomicU64::new(0);
         Self {
-            bitmap: [ZERO; MAX_ENDPOINTS / 64],
+            bitmap: [const { AtomicU64::new(0) }; MAX_ENDPOINTS / 64],
             active: AtomicU64::new(0),
         }
     }
@@ -237,13 +236,11 @@ where
     F: FnOnce(&EndpointDesc) -> Result<R, IpcError>,
 {
     let pool = EP_POOL_DESCS.lock();
-    for slot in pool.iter() {
-        if let Some(ref b) = slot {
-            // SAFETY: accessed under lock.
-            let desc = unsafe { b.as_ref() };
-            if desc.id == ep_id {
-                return f(desc);
-            }
+    for ref b in pool.iter().flatten() {
+        // SAFETY: accessed under lock.
+        let desc = unsafe { b.as_ref() };
+        if desc.id == ep_id {
+            return f(desc);
         }
     }
     Err(IpcError::EndpointNotFound)

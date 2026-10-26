@@ -63,15 +63,11 @@ pub fn fifo_should_preempt(rq: &PerCpuRunQueue, running: &ThreadControlBlock) ->
     let running_prio = running.priority.0;
     // rt_bitmap_highest_prio() retourne None si aucun thread RT n'est prêt.
     match rq.rt_bitmap_highest_prio() {
-        None => false,
-        Some(highest_waiting) => {
-            if highest_waiting < running_prio {
-                RT_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-                true
-            } else {
-                false
-            }
+        Some(highest_waiting) if highest_waiting < running_prio => {
+            RT_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+            true
         }
+        _ => false,
     }
 }
 

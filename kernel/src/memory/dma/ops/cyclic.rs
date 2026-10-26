@@ -81,7 +81,7 @@ impl CyclicConfig {
         if self.period_bytes & 63 != 0 {
             return Err(CyclicConfigError::InvalidAlignment);
         }
-        if self.buf_bytes % self.period_bytes != 0 {
+        if !self.buf_bytes.is_multiple_of(self.period_bytes) {
             return Err(CyclicConfigError::BufNotMultipleOfPeriod);
         }
         let periods = self.buf_bytes / self.period_bytes;
@@ -245,9 +245,8 @@ struct CyclicTable {
 
 impl CyclicTable {
     const fn new() -> Self {
-        const T: CyclicTransfer = CyclicTransfer::new();
         CyclicTable {
-            slots: [T; MAX_CYCLIC_CHANNELS],
+            slots: [const { CyclicTransfer::new() }; MAX_CYCLIC_CHANNELS],
             count: 0,
         }
     }
@@ -269,6 +268,12 @@ pub struct CyclicManager {
 
 unsafe impl Sync for CyclicManager {}
 unsafe impl Send for CyclicManager {}
+
+impl Default for CyclicManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CyclicManager {
     const fn new() -> Self {

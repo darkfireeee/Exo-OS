@@ -149,11 +149,7 @@ impl SourceEntry {
 
 // Registre global de 4 sources.
 const NUM_SOURCES: usize = 4;
-static REGISTRY: [AtomicU32; NUM_SOURCES * 2] = {
-    // Encodage : pairs (status, rating) pour chaque source.
-    const ZERO: AtomicU32 = AtomicU32::new(0);
-    [ZERO; NUM_SOURCES * 2]
-};
+static REGISTRY: [AtomicU32; NUM_SOURCES * 2] = [const { AtomicU32::new(0) }; NUM_SOURCES * 2];
 
 /// Index des sources dans REGISTRY.
 const IDX_TSC: usize = 0;
@@ -225,9 +221,7 @@ pub fn init_sources() {
     }
 
     // PM Timer : disponible si le port est non-nul.
-    if pm_timer::available() {
-        write_entry(IDX_PMTIMER, SourceStatus::Available, 200);
-    } else if pm_timer::auto_detect() {
+    if pm_timer::available() || pm_timer::auto_detect() {
         write_entry(IDX_PMTIMER, SourceStatus::Available, 200);
     } else {
         write_entry(IDX_PMTIMER, SourceStatus::Unavailable, 0);
@@ -343,11 +337,7 @@ pub fn source_health_check() -> bool {
     }
 
     // Divergence en centièmes de % = |hpet_ns - pm_ns| × 10000 / pm_ns.
-    let diff = if hpet_ns > pm_ns {
-        hpet_ns - pm_ns
-    } else {
-        pm_ns - hpet_ns
-    };
+    let diff = hpet_ns.abs_diff(pm_ns);
     let divergence_x100 = (diff as u128 * 10_000) / pm_ns as u128;
 
     if divergence_x100 > 500 {

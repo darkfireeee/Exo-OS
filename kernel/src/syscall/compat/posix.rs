@@ -98,10 +98,10 @@ pub mod mmap_flags {
     pub const MAP_EXECUTABLE: u32 = 0x1000;
     pub const MAP_LOCKED: u32 = 0x2000;
     pub const MAP_NORESERVE: u32 = 0x4000;
-    pub const MAP_POPULATE: u32 = 0x0800_0;
-    pub const MAP_NONBLOCK: u32 = 0x1000_0;
-    pub const MAP_STACK: u32 = 0x2000_0;
-    pub const MAP_HUGETLB: u32 = 0x4000_0;
+    pub const MAP_POPULATE: u32 = 0x0000_8000;
+    pub const MAP_NONBLOCK: u32 = 0x0001_0000;
+    pub const MAP_STACK: u32 = 0x0002_0000;
+    pub const MAP_HUGETLB: u32 = 0x0004_0000;
 }
 
 /// Flags `mprotect(2)` / mmap `prot`.

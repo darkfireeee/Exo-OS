@@ -139,6 +139,7 @@ impl MemoryService {
         }
 
         let handle = self.make_handle(owner_pid, idx);
+        let initial_shares = if kind == RegionKind::Shared { 1 } else { 0 };
 
         self.regions[idx] = RegionEntry {
             active: true,
@@ -149,7 +150,7 @@ impl MemoryService {
             length,
             prot,
             flags: extra_flags,
-            share_count: 0,
+            share_count: initial_shares,
         };
 
         Ok((
@@ -159,7 +160,7 @@ impl MemoryService {
                 length,
                 prot,
                 flags: extra_flags,
-                share_count: 0,
+                share_count: initial_shares,
             },
             quota,
         ))
@@ -223,7 +224,7 @@ impl MemoryService {
         if region.owner_pid != sender_pid && sender_pid != 1 {
             return MemoryReply::error(syscall::EACCES);
         }
-        if region.kind == RegionKind::Shared && region.share_count != 0 {
+        if region.kind == RegionKind::Shared && region.share_count > 1 {
             return MemoryReply::error(syscall::EBUSY);
         }
 
@@ -423,7 +424,7 @@ impl MemoryService {
             return MemoryReply::error(syscall::EINVAL);
         }
         if sender_pid != region.owner_pid && sender_pid != 1 {
-            if region.share_count == 0 {
+            if region.share_count <= 1 {
                 return MemoryReply::error(syscall::EACCES);
             }
             self.regions[idx].share_count = region.share_count.saturating_sub(1);
@@ -431,13 +432,14 @@ impl MemoryService {
                 Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
                 Err(err) => MemoryReply::error(err),
             }
-        } else if region.share_count > 0 {
+        } else if region.share_count > 1 {
             self.regions[idx].share_count = region.share_count - 1;
             match self.quotas.snapshot(region.owner_pid) {
                 Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
                 Err(err) => MemoryReply::error(err),
             }
         } else {
+            self.regions[idx].share_count = 0;
             self.handle_free(sender_pid, payload)
         }
     }

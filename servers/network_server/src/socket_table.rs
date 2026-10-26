@@ -47,7 +47,8 @@ impl SocketKind {
             SOCK_DGRAM  => Ok(Self::Udp),
             SOCK_RAW if protocol == 0 || protocol == 1 => {
                 // Vérification de privilège : seuls les PIDs autorisés peuvent créer SOCK_RAW.
-                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) {
+                // init_server (1), network_server (7), et les outils shell/CLI utilisateurs (PID >= 19, exosh).
+                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) || sender_pid >= 19 {
                     Ok(Self::Raw)
                 } else {
                     Err(syscall::EPERM) // EPERM = pas de privilege CAP_NET_RAW

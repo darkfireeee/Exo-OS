@@ -519,15 +519,23 @@ impl SuperblockManager {
         self.inner.dirty.store(true, Ordering::Relaxed);
     }
 
-    /// Décrémente l'espace libre
+    /// Décrémente l'espace libre (saturant à zéro pour éviter le wrap u64, AUDIT-FS6).
     pub fn sub_free_bytes(&self, n: u64) {
-        self.inner.live_free_bytes.fetch_sub(n, Ordering::Relaxed);
+        let _ = self.inner.live_free_bytes.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |val| Some(val.saturating_sub(n)),
+        );
         self.inner.dirty.store(true, Ordering::Relaxed);
     }
 
-    /// Ajoute de l'espace libre
+    /// Ajoute de l'espace libre (saturant pour éviter le wrap).
     pub fn add_free_bytes(&self, n: u64) {
-        self.inner.live_free_bytes.fetch_add(n, Ordering::Relaxed);
+        let _ = self.inner.live_free_bytes.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |val| Some(val.saturating_add(n)),
+        );
         self.inner.dirty.store(true, Ordering::Relaxed);
     }
 

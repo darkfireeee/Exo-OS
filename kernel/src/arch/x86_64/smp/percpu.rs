@@ -129,7 +129,9 @@ unsafe impl Sync for PerCpuTable {}
 static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
     // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valide pour #[repr(C,align(64))] zeros-init.
     UnsafeCell::new(unsafe {
-        core::mem::transmute([0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()])
+        core::mem::transmute::<[u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()], [PerCpuData; MAX_CPUS]>(
+            [0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()],
+        )
     }),
 );
 
@@ -177,12 +179,19 @@ pub unsafe fn per_cpu_mut(cpu_id: usize) -> &'static mut PerCpuData {
 /// Retourne l'ID du CPU courant en lisant GS:[0x10]
 #[inline]
 pub fn current_cpu_id() -> u32 {
-    let id: u64;
-    // SAFETY: GS:[0x10] est initialisé lors de l'init percpu de ce CPU
-    unsafe {
-        core::arch::asm!("mov {}, gs:[0x10]", out(reg) id, options(nostack, nomem));
+    #[cfg(test)]
+    {
+        0
     }
-    id as u32
+    #[cfg(not(test))]
+    {
+        let id: u64;
+        // SAFETY: GS:[0x10] est initialisé lors de l'init percpu de ce CPU
+        unsafe {
+            core::arch::asm!("mov {}, gs:[0x10]", out(reg) id, options(nostack, nomem));
+        }
+        id as u32
+    }
 }
 
 #[inline(always)]
@@ -231,14 +240,21 @@ pub unsafe extern "C" fn arch_current_cpu() -> u32 {
 /// reste `scheduler::core::preempt::PREEMPT_COUNT`.
 #[no_mangle]
 pub extern "C" fn arch_set_preempt_count_shadow(depth: i32) {
-    let value = depth.max(0) as u64;
-    // SAFETY: GS pointe sur le slot per-CPU courant; offset 0x30 = preempt_shadow.
-    unsafe {
-        core::arch::asm!(
-            "mov gs:[0x30], {}",
-            in(reg) value,
-            options(nostack, preserves_flags),
-        );
+    #[cfg(test)]
+    {
+        let _ = depth;
+    }
+    #[cfg(not(test))]
+    {
+        let value = depth.max(0) as u64;
+        // SAFETY: GS pointe sur le slot per-CPU courant; offset 0x30 = preempt_shadow.
+        unsafe {
+            core::arch::asm!(
+                "mov gs:[0x30], {}",
+                in(reg) value,
+                options(nostack, preserves_flags),
+            );
+        }
     }
 }
 
@@ -257,15 +273,22 @@ pub fn current_per_cpu() -> &'static PerCpuData {
 /// chemin syscall/exception retrouve toujours le bon thread courant.
 #[inline(always)]
 pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBlock) {
-    let tcb_ptr = tcb as u64;
-    // SAFETY: GS pointe sur une zone per-CPU valide initialisée au boot.
-    // L'offset 0x20 correspond au champ `current_tcb` du layout PerCpuData.
-    unsafe {
-        core::arch::asm!(
-            "mov gs:[0x20], {}",
-            in(reg) tcb_ptr,
-            options(nostack, preserves_flags),
-        );
+    #[cfg(test)]
+    {
+        let _ = tcb;
+    }
+    #[cfg(not(test))]
+    {
+        let tcb_ptr = tcb as u64;
+        // SAFETY: GS pointe sur une zone per-CPU valide initialisée au boot.
+        // L'offset 0x20 correspond au champ `current_tcb` du layout PerCpuData.
+        unsafe {
+            core::arch::asm!(
+                "mov gs:[0x20], {}",
+                in(reg) tcb_ptr,
+                options(nostack, preserves_flags),
+            );
+        }
     }
 }
 
@@ -277,13 +300,20 @@ pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBloc
 /// GS doit déjà pointer sur une zone per-CPU valide.
 #[inline(always)]
 pub unsafe fn read_current_tcb() -> u64 {
-    let tcb: u64;
-    core::arch::asm!(
-        "mov {}, gs:[0x20]",
-        out(reg) tcb,
-        options(nostack, preserves_flags),
-    );
-    tcb
+    #[cfg(test)]
+    {
+        0
+    }
+    #[cfg(not(test))]
+    {
+        let tcb: u64;
+        core::arch::asm!(
+            "mov {}, gs:[0x20]",
+            out(reg) tcb,
+            options(nostack, preserves_flags),
+        );
+        tcb
+    }
 }
 
 /// Lit `current_tcb` uniquement si GS pointe sur une zone per-CPU kernel valide.
@@ -292,6 +322,9 @@ pub unsafe fn read_current_tcb() -> u64 {
 /// (retour syscall/KPTI, faute noyau imbriquée). Dans ces chemins, lire
 /// directement `gs:[0x20]` peut transformer la faute initiale en cascade sur
 /// `CR2=0x20`. Cette API rend le contrat explicite.
+///
+/// # Safety
+/// Exécutable uniquement depuis Ring 0 en contexte où RDMSR est autorisé.
 #[inline(always)]
 pub unsafe fn try_read_current_tcb() -> Option<u64> {
     let gs_base = unsafe { msr::read_msr(msr::MSR_GS_BASE) };
@@ -311,11 +344,18 @@ pub unsafe fn try_read_current_tcb() -> Option<u64> {
 /// courant (alignement ABI, mapping kernel présent).
 #[inline(always)]
 pub unsafe fn set_kernel_rsp(kstack_top: u64) {
-    core::arch::asm!(
-        "mov gs:[0x00], {}",
-        in(reg) kstack_top,
-        options(nostack, preserves_flags),
-    );
+    #[cfg(test)]
+    {
+        let _ = kstack_top;
+    }
+    #[cfg(not(test))]
+    {
+        core::arch::asm!(
+            "mov gs:[0x00], {}",
+            in(reg) kstack_top,
+            options(nostack, preserves_flags),
+        );
+    }
 }
 
 /// Lit la valeur courante du slot `gs:[0x00]`.
@@ -326,24 +366,38 @@ pub unsafe fn set_kernel_rsp(kstack_top: u64) {
 /// GS doit déjà pointer sur une zone per-CPU valide.
 #[inline(always)]
 pub unsafe fn read_kernel_rsp() -> u64 {
-    let rsp: u64;
-    core::arch::asm!("mov {}, gs:[0x00]", out(reg) rsp, options(nostack, preserves_flags));
-    rsp
+    #[cfg(test)]
+    {
+        0
+    }
+    #[cfg(not(test))]
+    {
+        let rsp: u64;
+        core::arch::asm!("mov {}, gs:[0x00]", out(reg) rsp, options(nostack, preserves_flags));
+        rsp
+    }
 }
 
 /// Publie les CR3 utilisés par le stub syscall KPTI.
 #[inline(always)]
 pub fn set_kpti_cr3_slots(kernel_cr3: u64, user_cr3: u64) {
-    // SAFETY: GS pointe sur une zone per-CPU valide. Les offsets 0x40/0x48
-    // sont lus directement par syscall_entry_asm avant/après le handler Rust.
-    unsafe {
-        core::arch::asm!(
-            "mov gs:[0x40], {kernel}",
-            "mov gs:[0x48], {user}",
-            kernel = in(reg) kernel_cr3,
-            user = in(reg) user_cr3,
-            options(nostack, preserves_flags),
-        );
+    #[cfg(test)]
+    {
+        let _ = (kernel_cr3, user_cr3);
+    }
+    #[cfg(not(test))]
+    {
+        // SAFETY: GS pointe sur une zone per-CPU valide. Les offsets 0x40/0x48
+        // sont lus directement par syscall_entry_asm avant/après le handler Rust.
+        unsafe {
+            core::arch::asm!(
+                "mov gs:[0x40], {kernel}",
+                "mov gs:[0x48], {user}",
+                kernel = in(reg) kernel_cr3,
+                user = in(reg) user_cr3,
+                options(nostack, preserves_flags),
+            );
+        }
     }
 }
 

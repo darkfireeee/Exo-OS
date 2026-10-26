@@ -140,6 +140,12 @@ pub struct OomStats {
     pub suppressed: AtomicBool,
 }
 
+impl Default for OomStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OomStats {
     const fn new() -> Self {
         Self {
@@ -243,7 +249,7 @@ pub fn select_oom_victim<S: OomScorer>(scorer: &S) -> Option<u64> {
     }
     // Trier par score décroissant (simple, n ≤ 64).
     let slice = &mut buf[..n];
-    slice.sort_unstable_by(|a, b| b.oom_score.cmp(&a.oom_score));
+    slice.sort_unstable_by_key(|b| core::cmp::Reverse(b.oom_score));
     let pid = slice[0].pid;
     OOM_STATS.victims_selected.fetch_add(1, Ordering::Relaxed);
     Some(pid)

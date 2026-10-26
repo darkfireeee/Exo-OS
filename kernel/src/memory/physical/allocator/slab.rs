@@ -131,6 +131,12 @@ pub struct SlabCacheStats {
     pub cache_full: AtomicU64,
 }
 
+impl Default for SlabCacheStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlabCacheStats {
     pub const fn new() -> Self {
         SlabCacheStats {
@@ -245,8 +251,9 @@ impl SlabCache {
 
     /// Libère un objet vers ce cache.
     ///
-    /// SAFETY: `ptr` doit avoir été alloué par ce cache et ne pas être
-    ///         référencé après cet appel.
+    /// # Safety
+    /// `ptr` doit avoir été alloué par ce cache et ne pas être
+    /// référencé après cet appel.
     pub unsafe fn free(&self, ptr: NonNull<u8>) {
         let mut inner = self.inner.lock();
         // Retrouver le header du slab (début de la page contenant ptr)
@@ -502,8 +509,9 @@ pub static SLAB_PAGE_PROVIDER: DefaultProvider = DefaultProvider {
 /// Enregistre le fournisseur de pages utilisé par slab.
 /// Doit être appelé avant tout appel à `alloc()`.
 ///
-/// SAFETY: `provider` doit être une référence statique valide pendant
-///         toute la durée de vie du kernel.
+/// # Safety
+/// `provider` doit être une référence statique valide pendant
+/// toute la durée de vie du kernel.
 pub unsafe fn register_slab_page_provider(provider: *const dyn SlabPageProvider) {
     let (data, vtable): (usize, usize) = core::mem::transmute(provider);
     SLAB_PAGE_PROVIDER.data.store(data, Ordering::SeqCst);
@@ -557,8 +565,9 @@ pub fn alloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> 
 
 /// Libère un objet alloué par le slab.
 ///
-/// SAFETY: `ptr` doit avoir été alloué via `alloc()` avec la même `size`,
-///         et ne plus être utilisé après cet appel.
+/// # Safety
+/// `ptr` doit avoir été alloué via `alloc()` avec la même `size`,
+/// et ne plus être utilisé après cet appel.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     if let Some(idx) = size_class_for(size) {
         SLAB_CACHES[idx].free(ptr);

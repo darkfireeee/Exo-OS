@@ -73,13 +73,21 @@ pub fn resolve_fd(pid: u32, fd: u32) -> Result<ResolvedFd, FsBridgeError> {
         });
     }
 
-    if fd <= 2 {
+    // Si le processus possède une table de descripteurs, un fd absent est strictement invalide (T9-001 FIX).
+    if process_has_fd_table(pid) || fd <= 2 {
         return Err(FsBridgeError::BadFd);
     }
-    Ok(ResolvedFd {
-        handle: fd,
-        flags: open_flags::O_RDWR,
-    })
+
+    #[cfg(test)]
+    {
+        Ok(ResolvedFd {
+            handle: fd,
+            flags: open_flags::O_RDWR,
+        })
+    }
+
+    #[cfg(not(test))]
+    Err(FsBridgeError::BadFd)
 }
 
 #[inline]

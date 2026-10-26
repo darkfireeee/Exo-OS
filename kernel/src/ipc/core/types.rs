@@ -76,7 +76,10 @@ pub struct ChannelId(pub NonZeroU64);
 impl ChannelId {
     /// Sentinel « pendant » — valeur invalide utilisée comme valeur initiale
     /// avant qu'un `ChannelId` réel soit alloué.
-    pub const DANGLING: Self = Self(unsafe { NonZeroU64::new_unchecked(u64::MAX) });
+    pub const DANGLING: Self = Self(match NonZeroU64::new(u64::MAX) {
+        Some(v) => v,
+        None => panic!("u64::MAX is non-zero"),
+    });
 
     #[inline(always)]
     pub fn new(v: u64) -> Option<Self> {
@@ -114,7 +117,10 @@ impl EndpointId {
 
     /// Sentinel « invalide » — valeur sentinelle utilisée à la place de
     /// `EndpointId(0)` qui est impossible (`NonZeroU64`).
-    pub const INVALID: Self = Self(unsafe { NonZeroU64::new_unchecked(u64::MAX) });
+    pub const INVALID: Self = Self(match NonZeroU64::new(u64::MAX) {
+        Some(v) => v,
+        None => panic!("u64::MAX is non-zero"),
+    });
 
     /// Convertit en ObjectId pour le système de capabilities.
     /// Les 32 bits hauts encodent le type (0x01 = endpoint IPC).

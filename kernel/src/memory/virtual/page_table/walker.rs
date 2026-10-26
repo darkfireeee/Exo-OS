@@ -339,6 +339,9 @@ impl PageTableWalker {
     ///
     /// Retourne `Err(actual_raw)` si l'entrée n'est plus égale à `expected`,
     /// ou `Err(0)` si aucune PTE feuille n'existe pour cette adresse.
+    ///
+    /// # Safety
+    /// L'accès à la PTE doit respecter les invariants de synchronisation des tables de pages.
     pub unsafe fn compare_exchange_leaf_raw(
         &self,
         virt: VirtAddr,

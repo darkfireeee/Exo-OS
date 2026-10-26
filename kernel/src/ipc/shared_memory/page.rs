@@ -43,6 +43,10 @@ impl PageFlags {
     pub fn insert(&mut self, other: Self) {
         self.0 |= other.0;
     }
+
+    pub fn remove(&mut self, other: Self) {
+        self.0 &= !other.0;
+    }
 }
 
 // ---------------------------------------------------------------------------

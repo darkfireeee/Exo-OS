@@ -69,6 +69,37 @@ impl PendingConnect {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PendingArpPacket {
+    active: bool,
+    snapshot: socket_table::SocketSnapshot,
+    data: [u8; NET_INLINE_DATA_MAX],
+    len: usize,
+}
+
+impl PendingArpPacket {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            snapshot: socket_table::SocketSnapshot {
+                handle: 0,
+                owner_pid: 0,
+                kind: SocketKind::Udp,
+                state: socket_table::SocketState::Closed,
+                local_addr: 0,
+                local_port: 0,
+                remote_addr: 0,
+                remote_port: 0,
+                pending_rx: 0,
+                tx_bytes: 0,
+                rx_bytes: 0,
+            },
+            data: [0u8; NET_INLINE_DATA_MAX],
+            len: 0,
+        }
+    }
+}
+
 const MAX_PENDING_CONNECTS: usize = 16;
 
 struct NetworkService {
@@ -89,6 +120,7 @@ struct NetworkService {
     // FIX-SRV-M5 : file d'attente des connexions TCP en cours d'établissement.
     pending_connects: [PendingConnect; MAX_PENDING_CONNECTS],
     pending_connect_count: usize,
+    pending_arp: PendingArpPacket,
 }
 
 impl NetworkService {
@@ -110,6 +142,7 @@ impl NetworkService {
             reported_no_hardware_route: false,
             pending_connects: [const { PendingConnect::empty() }; MAX_PENDING_CONNECTS],
             pending_connect_count: 0,
+            pending_arp: PendingArpPacket::empty(),
         }
     }
 
@@ -161,7 +194,17 @@ impl NetworkService {
                 break;
             }
         }
-        self.iface.poll_egress(&mut self.device, &self.pool);
+        // Si au moins une trame entrante (ex: ARP Reply) a été traitée et qu'un paquet
+        // ICMP/UDP attendait la résolution ARP, on le ré-injecte immédiatement !
+        if polls > 0 && self.pending_arp.active {
+            let snap = self.pending_arp.snapshot;
+            let len = self.pending_arp.len;
+            let mut buf = [0u8; NET_INLINE_DATA_MAX];
+            buf[..len].copy_from_slice(&self.pending_arp.data[..len]);
+            self.pending_arp.active = false;
+            let _ = self.iface.send_socket_data(&snap, &buf[..len]);
+        }
+        let _ = self.iface.poll_egress(&mut self.device, &self.pool);
         self.driver.flush_tx(&mut self.device, &self.pool);
         self.driver.flush_released(&mut self.device);
         let _ = self.dhcp.poll(self.ticks);
@@ -172,6 +215,9 @@ impl NetworkService {
     }
 
     fn handle_driver_ctrl(&mut self, ctrl: DriverCtrlMsg) {
+        if !self.driver.is_active_sender(ctrl.sender_pid) {
+            return;
+        }
         match ctrl.msg_type {
             NET_CTRL_MAC_REPLY => {
                 if ctrl.payload.len() >= core::mem::size_of::<MacReplyMsg>() {
@@ -179,6 +225,7 @@ impl NetworkService {
                         core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const MacReplyMsg)
                     };
                     if msg.opcode == NET_CTRL_MAC_REPLY {
+                        self.driver.set_active_pid(ctrl.sender_pid);
                         self.driver.set_mac(msg.mac);
                         self.dhcp.configure_mac(msg.mac);
                         self.iface.set_mac(msg.mac);
@@ -187,6 +234,7 @@ impl NetworkService {
                 }
             }
             NET_CTRL_RX_READY => {
+                self.driver.set_active_pid(ctrl.sender_pid);
                 if ctrl.payload.len() >= core::mem::size_of::<RxReadyMsg>() {
                     let msg = unsafe {
                         core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const RxReadyMsg)
@@ -207,6 +255,7 @@ impl NetworkService {
                 }
             }
             NET_CTRL_TX_COMPLETE => {
+                self.driver.set_active_pid(ctrl.sender_pid);
                 if ctrl.payload.len() >= core::mem::size_of::<TxCompleteMsg>() {
                     let msg = unsafe {
                         core::ptr::read_unaligned(ctrl.payload.as_ptr() as *const TxCompleteMsg)
@@ -461,6 +510,7 @@ impl NetworkService {
     }
 
     fn handle_bind(&mut self, msg: NetMsg) -> NetReply {
+        self.iface.ensure_interface(&mut self.device, &self.pool);
         match self
             .sockets
             .bind(msg.sender_pid, msg.fd, msg.arg1 as u32, msg.arg2 as u16)
@@ -477,6 +527,7 @@ impl NetworkService {
         if let Err(err) = self.require_hardware_route(msg.arg1 as u32) {
             return NetReply::error(err);
         }
+        self.iface.ensure_interface(&mut self.device, &self.pool);
         match self
             .sockets
             .connect(msg.sender_pid, msg.fd, msg.arg1 as u32, msg.arg2 as u16)
@@ -490,6 +541,7 @@ impl NetworkService {
                 match self.iface.tcp_connect_status(&snapshot) {
                     TcpConnectStatus::Failed => {
                         self.iface.poll_egress(&mut self.device, &self.pool);
+                        self.driver.flush_tx(&mut self.device, &self.pool);
                         match self.iface.tcp_connect_status(&snapshot) {
                             TcpConnectStatus::Established => {
                                 match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
@@ -508,22 +560,9 @@ impl NetworkService {
                         }
                     }
                     TcpConnectStatus::Pending => {
-                        // FIX-SRV-M5 (ANALYSE_SERVERS §M5) : au lieu de retourner EAGAIN
-                        // qui force le client à boucler en polling, on stocke le contexte
-                        // de la requête et on répondra de manière asynchrone dans tick()
-                        // quand la connexion sera établie.
-                        // Le caller ne reçoit pas de réponse immédiate — il attend.
-                        // Note : reply_ep et cookie sont injectés par dispatch_raw_call().
-                        // On les transmet via le champ _pending_reply_ep du NetMsg (arg4).
                         self.iface.poll_egress(&mut self.device, &self.pool);
-                        self.register_pending_connect(
-                            msg.sender_pid, msg.fd,
-                            msg.arg4 as u64,  // reply_ep passé dans arg4 si disponible
-                            0,                // cookie — sera 0 si non disponible
-                        );
-                        // Retour spécial 0 indique "réponse différée" au dispatcher.
-                        // Le dispatcher détecte reply_ep == 0 et n'envoie pas de réponse.
-                        NetReply::ok(-EINPROGRESS as i64)
+                        self.driver.flush_tx(&mut self.device, &self.pool);
+                        NetReply::error(exo_syscall_abi::EAGAIN)
                     }
                 }
             }
@@ -532,6 +571,7 @@ impl NetworkService {
     }
 
     fn handle_listen(&mut self, msg: NetMsg) -> NetReply {
+        self.iface.ensure_interface(&mut self.device, &self.pool);
         match self.sockets.listen(msg.sender_pid, msg.fd, msg.arg1 as u32) {
             Ok(snapshot) => {
                 self.iface.apply_socket_state(&snapshot);
@@ -586,6 +626,17 @@ impl NetworkService {
                 Err(err) => return NetReply::error(err),
             }
         }
+        let only_arp_sent = self.iface.poll_egress(&mut self.device, &self.pool);
+        self.driver.flush_tx(&mut self.device, &self.pool);
+
+        // Si smoltcp a émis un ARP Request (0x0806) au lieu du paquet IPv4,
+        // sauvegarder le paquet pour le ré-émettre dès réception de l'ARP Reply !
+        if only_arp_sent && !data.is_empty() && data.len() <= NET_INLINE_DATA_MAX {
+            self.pending_arp.active = true;
+            self.pending_arp.snapshot = snapshot;
+            self.pending_arp.len = data.len();
+            self.pending_arp.data[..data.len()].copy_from_slice(data);
+        }
         socket_reply(len as i64, &snapshot)
     }
 
@@ -599,6 +650,13 @@ impl NetworkService {
         msg: NetMsg,
     ) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
         let mut data = [0u8; NET_INLINE_DATA_MAX];
+        let mut polls = 0usize;
+        while self.iface.poll_one(&mut self.device, &self.pool) {
+            polls += 1;
+            if polls >= 16 {
+                break;
+            }
+        }
         let before = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
             Ok(snapshot) => snapshot,
             Err(err) => return (NetReply::error(err), data, 0),

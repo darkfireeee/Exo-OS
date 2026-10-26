@@ -56,10 +56,7 @@ impl Cr3Slot {
 
 unsafe impl Sync for Cr3Slot {}
 
-static CR3_PER_CPU: [Cr3Slot; MAX_CPUS] = {
-    const SLOT: Cr3Slot = Cr3Slot::new();
-    [SLOT; MAX_CPUS]
-};
+static CR3_PER_CPU: [Cr3Slot; MAX_CPUS] = [const { Cr3Slot::new() }; MAX_CPUS];
 
 #[inline(always)]
 fn current_cpu_slot() -> &'static Cr3Slot {
@@ -120,6 +117,9 @@ pub fn current_user_cr3() -> u64 {
 // ── Switch Kernel → User CR3 ─────────────────────────────────────────────────
 
 /// Bascule vers les tables de pages user (à exécuter avant IRETQ vers Ring 3)
+///
+/// # Safety
+/// Exécutable uniquement depuis Ring 0 juste avant le retour vers userspace.
 #[inline]
 pub unsafe fn kpti_switch_to_user() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) {
@@ -141,6 +141,9 @@ pub unsafe fn kpti_switch_to_user() {
 }
 
 /// Bascule vers les tables de pages kernel (au retour vers Ring 0)
+///
+/// # Safety
+/// Exécutable uniquement depuis Ring 0 lors de l'entrée dans le noyau.
 #[inline]
 pub unsafe fn kpti_switch_to_kernel() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) {

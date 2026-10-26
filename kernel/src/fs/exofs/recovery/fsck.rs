@@ -22,7 +22,7 @@ use super::fsck_phase1::{FsckPhase1, Phase1Options, Phase1Report};
 use super::fsck_phase2::{FsckPhase2, Phase2Options, Phase2Report};
 use super::fsck_phase3::{FsckPhase3, Phase3Options, Phase3Report};
 use super::fsck_phase4::{FsckPhase4, Phase4Options, Phase4Report};
-use super::fsck_repair::{FsckRepair, RepairAction};
+use super::fsck_repair::FsckRepair;
 use super::recovery_log::RECOVERY_LOG;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
@@ -411,29 +411,19 @@ impl Fsck {
         let mut total = 0u32;
         let mut succeeded = 0u32;
 
-        // Si le superbloc est corrompu, tenter une reconstruction.
+        // T16-001 : Si le superbloc est corrompu, ne jamais écraser le superbloc
+        // primaire avec des zéros. La récupération doit se faire via les miroirs
+        // (SuperblockBackup) pour préserver la cartographie des blobs existants.
         if p1.superblock_corrupt {
-            let action = RepairAction::WriteFallbackSuperblock {
-                lba: super::fsck_phase1::SUPERBLOCK_LBA,
-            };
-            total = total.saturating_add(1);
-            match FsckRepair::apply(device, action, dry_run) {
-                Ok(_) => {
-                    succeeded = succeeded.saturating_add(1);
-                }
-                Err(_) => {}
-            }
+            // Aucun écrasement destructif du LBA primaire
         }
 
         // Pour chaque erreur dans p1.errors, tenter une réparation ciblée.
         for error in &p1.errors {
             use super::fsck_phase1::Phase1ErrorKind;
             let action_opt = match error.kind {
-                Phase1ErrorKind::SuperblockBadMagic | Phase1ErrorKind::SuperblockBadChecksum => {
-                    Some(RepairAction::WriteFallbackSuperblock {
-                        lba: super::fsck_phase1::SUPERBLOCK_LBA,
-                    })
-                }
+                // T16-001 : Ne pas écraser le superbloc primaire avec un template vide
+                Phase1ErrorKind::SuperblockBadMagic | Phase1ErrorKind::SuperblockBadChecksum => None,
                 _ => None,
             };
             if let Some(action) = action_opt {

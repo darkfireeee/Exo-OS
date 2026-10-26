@@ -19,6 +19,12 @@ pub struct CowStats {
     pub fork_copies: AtomicU64,
 }
 
+impl Default for CowStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CowStats {
     pub const fn new() -> Self {
         CowStats {
@@ -62,8 +68,9 @@ pub enum CowBreakResult {
 
 /// Effectue un bris de CoW pour `old_frame`.
 ///
-/// SAFETY: `old_frame` doit avoir été préalablement pin pour éviter la
-///         libération concurrente. Le TLB doit être invalidé par l'appelant.
+/// # Safety
+/// `old_frame` doit avoir été préalablement pin pour éviter la
+/// libération concurrente. Le TLB doit être invalidé par l'appelant.
 pub unsafe fn cow_break<A: CowFrameAllocator>(
     old_frame: Frame,
     refcount: &AtomicRefCount,

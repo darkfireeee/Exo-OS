@@ -121,12 +121,13 @@ fn probe_usb_controller() {
     // 1. Recherche d'un controleur xHCI (PCI Class 0x0C, Subclass 0x03, ProgIF 0x30)
     let mut dev_info = syscall::PciDeviceInfo::default();
     let rc = unsafe {
-        syscall::syscall5(
+        syscall::syscall6(
             syscall::SYS_PCI_FIND_DEVICE,
             0,
             0,
             0x0C,
             0x03,
+            0,
             &mut dev_info as *mut syscall::PciDeviceInfo as u64,
         )
     };

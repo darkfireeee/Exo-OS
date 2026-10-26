@@ -76,7 +76,7 @@ pub fn read_tsc_end() -> (u64, u32) {
     let hi: u32;
     let aux: u32;
 
-    if cpu_features_or_none().map_or(false, |features| features.has_rdtscp()) {
+    if cpu_features_or_none().is_some_and(|features| features.has_rdtscp()) {
         // SAFETY: RDTSCP supporté matériellement.
         unsafe {
             core::arch::asm!(
@@ -239,8 +239,7 @@ pub fn calibrate_tsc_with_pit() -> u64 {
     // La duree de mesure est deja encodee par le diviseur PIT:
     // seconds = PIT_CALIBRATE_COUNT / PIT_BASE_HZ.
     // Donc Hz = delta_tsc / seconds = delta_tsc * PIT_BASE_HZ / PIT_CALIBRATE_COUNT.
-    let hz = (tsc_delta as u128 * PIT_BASE_HZ as u128 / PIT_CALIBRATE_COUNT as u128) as u64;
-    hz
+    (tsc_delta as u128 * PIT_BASE_HZ as u128 / PIT_CALIBRATE_COUNT as u128) as u64
 }
 
 /// Calibration TSC via CPUID (Intel uniquement — leaf 0x15)
@@ -330,7 +329,7 @@ pub fn init_tsc(cpu_logical_id: u32) {
     TSC_CALIBRATED.store(true, Ordering::Release);
 
     // Configurer TSC_AUX avec le CPU ID logique (utilisé par RDTSCP)
-    if cpu_features_or_none().map_or(false, |features| features.has_rdtscp()) {
+    if cpu_features_or_none().is_some_and(|features| features.has_rdtscp()) {
         // SAFETY: MSR_TSC_AUX toujours disponible si RDTSCP supporté
         unsafe {
             msr::write_msr(msr::MSR_TSC_AUX, cpu_logical_id as u64);
@@ -338,7 +337,7 @@ pub fn init_tsc(cpu_logical_id: u32) {
     }
 
     // Activer NXE dans EFER si NX disponible
-    if cpu_features_or_none().map_or(false, |features| features.has_nx()) {
+    if cpu_features_or_none().is_some_and(|features| features.has_nx()) {
         // SAFETY: activation NXE dans EFER — requis pour protections mémoire
         unsafe {
             msr::set_msr_bits(msr::MSR_IA32_EFER, msr::EFER_NXE);
@@ -517,7 +516,7 @@ pub fn recalibrate_tsc_with_pm_timer() -> bool {
     let hz_raw = tsc_delta.saturating_mul(1000 / MEASURE_MS);
 
     // Sanity check : [10 MHz, 10 GHz]
-    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 {
+    if !(10_000_000..=10_000_000_000).contains(&hz_raw) {
         return false;
     }
 
@@ -590,7 +589,7 @@ pub fn recalibrate_tsc_with_hpet() -> bool {
     }
 
     let hz_raw = (tsc_delta as u128 * 100) as u64; // ×100 car 10ms = 1/100 s
-    if hz_raw < 10_000_000 || hz_raw > 10_000_000_000 {
+    if !(10_000_000..=10_000_000_000).contains(&hz_raw) {
         return false;
     }
 

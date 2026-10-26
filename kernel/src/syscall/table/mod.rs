@@ -219,6 +219,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXO_SHIELD_DRAIN => sys_exo_shield_drain,
         SYS_EXO_PERF_READ => sys_exo_perf_read,
         SYS_EXO_PERF_ENABLE => sys_exo_perf_enable,
+        SYS_EXO_PERF_DISABLE => sys_exo_perf_disable,
         SYS_EXO_LOG => sys_exo_log,
         SYS_EXO_PROCESS_LIST => sys_exo_process_list,
         SYS_EXO_PHOENIX_STATE_SET => sys_exo_phoenix_state_set,

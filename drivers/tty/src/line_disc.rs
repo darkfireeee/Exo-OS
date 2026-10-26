@@ -44,8 +44,16 @@ impl LineDiscipline {
         self.canonical = enabled;
     }
 
+    pub fn is_canonical(&self) -> bool {
+        self.canonical
+    }
+
     pub fn set_echo(&mut self, enabled: bool) {
         self.echo = enabled;
+    }
+
+    pub fn is_echo(&self) -> bool {
+        self.echo
     }
 
     pub fn line(&self) -> &[u8] {

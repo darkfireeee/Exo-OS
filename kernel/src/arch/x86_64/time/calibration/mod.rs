@@ -426,7 +426,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         // sur le fallback 3 GHz pour ne pas bloquer le boot.
         e9_tag_hz(b"CAL:FB3G", 3_000_000_000u64);
         let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
-        return CalibratedTsc {
+        CalibratedTsc {
             tsc_hz: 3_000_000_000u64,
             source: CalibSource::Fallback3G,
             confidence: 10,
@@ -435,7 +435,7 @@ fn run_calibration_chain() -> CalibratedTsc {
             duration_tsc_cycles: duration,
             tsc_invariant,
             seq,
-        };
+        }
     }
 }
 

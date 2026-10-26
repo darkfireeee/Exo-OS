@@ -91,13 +91,7 @@ pub struct RpcTimeout {
 impl RpcTimeout {
     /// Timeout avec durée spécifique
     pub fn with_ns(duration_ns: u64) -> Self {
-        let d = if duration_ns < RPC_MIN_TIMEOUT_NS {
-            RPC_MIN_TIMEOUT_NS
-        } else if duration_ns > RPC_MAX_TIMEOUT_NS {
-            RPC_MAX_TIMEOUT_NS
-        } else {
-            duration_ns
-        };
+        let d = duration_ns.clamp(RPC_MIN_TIMEOUT_NS, RPC_MAX_TIMEOUT_NS);
         Self {
             duration_ns: d,
             start_ns: now_ns(),

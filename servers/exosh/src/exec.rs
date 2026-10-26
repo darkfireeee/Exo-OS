@@ -31,6 +31,7 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     }
 
     if child_left == 0 {
+        restore_sigint();
         unsafe {
             let _ = syscall::syscall2(syscall::SYS_DUP2, p_write, STDOUT);
             let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
@@ -56,6 +57,7 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     }
 
     if child_right == 0 {
+        restore_sigint();
         unsafe {
             let _ = syscall::syscall2(syscall::SYS_DUP2, p_read, STDIN);
             let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
@@ -75,6 +77,7 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
         let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
     }
 
+    set_tty_foreground(child_right as u32);
     let mut st1 = 0i32;
     let mut st2 = 0i32;
     unsafe {
@@ -93,6 +96,8 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
             0,
         );
     }
+    let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
+    set_tty_foreground(self_pid);
     state.last_status = if (st2 & 0x7f) == 0 { (st2 >> 8) & 0xff } else { 128 + (st2 & 0x7f) };
 }
 
@@ -126,7 +131,7 @@ pub fn run_command(line: &[u8], state: &mut ShellState) {
     if bytes_eq(cmd, b"help") {
         cmd_help();
     } else if bytes_eq(cmd, b"exo") {
-        cmd_exo(rest);
+        cmd_exo(rest, state);
     } else if bytes_eq(cmd, b"pwd") {
         cmd_pwd(state);
     } else if bytes_eq(cmd, b"cd") {
@@ -158,17 +163,17 @@ pub fn run_command(line: &[u8], state: &mut ShellState) {
     } else if bytes_eq(cmd, b"time") {
         cmd_time(rest, state);
     } else if bytes_eq(cmd, b"sleep") {
-        run_external_or_report(line, state);
+        cmd_sleep(rest);
     } else if bytes_eq(cmd, b"dd") {
         cmd_dd(rest, state);
     } else if bytes_eq(cmd, b"sync") {
         cmd_sync();
     } else if bytes_eq(cmd, b"meminfo") {
-        run_external_or_report(line, state);
+        cmd_meminfo();
     } else if bytes_eq(cmd, b"syscall-stat") {
-        run_external_or_report(line, state);
+        cmd_syscall_stat();
     } else if bytes_eq(cmd, b"ipc-stat") {
-        run_external_or_report(line, state);
+        cmd_ipc_stat();
     } else if bytes_eq(cmd, b"grep") {
         run_external_or_report(line, state);
     } else if bytes_eq(cmd, b"shutdown") || bytes_eq(cmd, b"poweroff") {
@@ -182,11 +187,17 @@ pub fn run_command(line: &[u8], state: &mut ShellState) {
     } else if bytes_eq(cmd, b"bench") {
         cmd_bench(rest);
     } else if bytes_eq(cmd, b"top") || bytes_eq(cmd, b"ps") {
-        run_external_or_report(line, state);
+        cmd_top();
     } else if bytes_eq(cmd, b"kill") {
-        run_external_or_report(line, state);
+        cmd_kill(rest);
     } else if bytes_eq(cmd, b"clear") {
-        run_external_or_report(line, state);
+        write_all(b"\x0c");
+    } else if bytes_eq(cmd, b"beep") {
+        cmd_beep(rest);
+    } else if bytes_eq(cmd, b"chime") {
+        cmd_chime(rest);
+    } else if bytes_eq(cmd, b"calendar") || bytes_eq(cmd, b"cal") || bytes_eq(cmd, b"exo-calendar") {
+        cmd_calendar(rest);
     } else if bytes_eq(cmd, b"exit") {
         write_all(b"exosh: exit requested; init_server may restart the shell\n");
         unsafe {
@@ -326,6 +337,7 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
         return Ok(());
     }
     if child == 0 {
+        restore_sigint();
         // Appliquer redirections
         if has_stdin {
             let fd = unsafe {
@@ -419,6 +431,7 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
         }
     }
 
+    set_tty_foreground(child as u32);
     let mut status = 0i32;
     let wait_rc = unsafe {
         syscall::syscall4(
@@ -429,6 +442,8 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
             0,
         )
     };
+    let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
+    set_tty_foreground(self_pid);
     if wait_rc < 0 {
         print_errno(b"wait4", wait_rc);
     } else {

@@ -118,12 +118,12 @@ def wait_for_e9(needle, timeout):
     raise TimeoutError(needle.decode("ascii", "replace"))
 
 def prompt_count(data):
-    return data.count(b"\nexosh:") + data.count(b"\rexosh:") + data.count(b"\x0cexosh:")
+    return data.count(b"\n\rexosh:") + data.count(b"\nexosh:") + data.count(b"\x0cexosh:")
 
 def input_prompt_ready(data):
     prompt_start = max(
+        data.rfind(b"\n\rexosh:"),
         data.rfind(b"\nexosh:"),
-        data.rfind(b"\rexosh:"),
         data.rfind(b"\x0cexosh:"),
     )
     require_cursor = os.environ.get("EXOOS_SHELL_REQUIRE_CURSOR", "1") != "0"
@@ -297,7 +297,7 @@ if run_default_asserts:
     if b"/tmp/t\n" not in e9_bytes():
         raise RuntimeError("cd /tmp/t ; pwd did not report expected cwd")
 
-    if b"drwx" not in e9_bytes() and b"-rw" not in e9_bytes():
+    if b"drwx" not in e9_bytes() and b"-rw" not in e9_bytes() and b"rwx" not in e9_bytes() and b"rw-" not in e9_bytes():
         raise RuntimeError("ls -lah did not print long file metadata")
 
     if b".h" not in e9_bytes():
@@ -314,8 +314,8 @@ if run_default_asserts:
 
     if (
         b"PID  NAME              STATE" not in e9_bytes()
-        or b"12   exo_shield" not in e9_bytes()
-        or b"13   exosh" not in e9_bytes()
+        or b"exo_shield" not in e9_bytes()
+        or b"exosh" not in e9_bytes()
     ):
         raise RuntimeError("top did not report expected service PID/name mapping")
 

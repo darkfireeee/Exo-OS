@@ -87,6 +87,12 @@ pub struct KasanStats {
     pub shadow_writes: AtomicU64,
 }
 
+impl Default for KasanStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KasanStats {
     const fn new() -> Self {
         Self {
@@ -143,7 +149,8 @@ unsafe fn write_shadow(addr: u64, val: u8) {
 ///
 /// Chaque mot de 8 octets → 1 octet shadow.
 ///
-/// # Safety : `addr` doit être aligné sur 8 et dans la plage couverte.
+/// # Safety
+/// `addr` doit être aligné sur 8 et dans la plage couverte.
 pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
     if !kasan_is_enabled() {
         return;
@@ -168,7 +175,8 @@ pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
 
 /// Marque `size` octets à partir de `addr` comme accessibles (SHADOW_ACCESSIBLE).
 ///
-/// # Safety : idem `kasan_poison`.
+/// # Safety
+/// idem `kasan_poison`.
 pub unsafe fn kasan_unpoison(addr: u64, size: usize) {
     if !kasan_is_enabled() {
         return;
@@ -184,7 +192,8 @@ pub unsafe fn kasan_unpoison(addr: u64, size: usize) {
 /// `obj_addr` : début de l'objet, `obj_size` : taille.
 /// `redzone_size` : taille de chaque redzone (doit être multiple de 8).
 ///
-/// # Safety : addresses valides, dans la plage heap couverte.
+/// # Safety
+/// addresses valides, dans la plage heap couverte.
 pub unsafe fn kasan_poison_redzone(obj_addr: u64, obj_size: usize, redzone_size: usize) {
     if !kasan_is_enabled() {
         return;
@@ -314,7 +323,8 @@ pub fn kasan_report(error: KasanError, ip: u64) -> ! {
 /// Appelé juste avant de retourner un pointeur depuis l'allocateur.
 /// Marque `size` octets accessibles.
 ///
-/// # Safety : `ptr` valide dans la plage heap.
+/// # Safety
+/// `ptr` valide dans la plage heap.
 pub unsafe fn kasan_on_alloc(ptr: *mut u8, size: usize) {
     kasan_unpoison(ptr as u64, size);
 }
@@ -322,7 +332,8 @@ pub unsafe fn kasan_on_alloc(ptr: *mut u8, size: usize) {
 /// Appelé juste après la libération d'un pointeur.
 /// Marque `size` octets comme FREED.
 ///
-/// # Safety : `ptr` valide dans la plage heap.
+/// # Safety
+/// `ptr` valide dans la plage heap.
 pub unsafe fn kasan_on_free(ptr: *mut u8, size: usize) {
     kasan_poison(ptr as u64, size, SHADOW_FREED);
 }
@@ -336,7 +347,8 @@ pub unsafe fn kasan_on_free(ptr: *mut u8, size: usize) {
 /// La shadow map doit avoir été préalablement mappée (32 GiB de pages zeroes)
 /// par le mapper noyau.  Cette fonction active simplement la vérification.
 ///
-/// # Safety : CPL 0, shadow map mappée.
+/// # Safety
+/// CPL 0, shadow map mappée.
 pub unsafe fn init() {
     // Empoisonner toute la shadow map en SHADOW_UNINIT.
     // En pratique on fait confiance au zeroing de la page table (0x00 = ACCESSIBLE).

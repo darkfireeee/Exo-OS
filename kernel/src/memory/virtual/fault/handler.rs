@@ -26,6 +26,12 @@ pub struct FaultStats {
     pub oom_kills: AtomicU64,
 }
 
+impl Default for FaultStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FaultStats {
     pub const fn new() -> Self {
         FaultStats {

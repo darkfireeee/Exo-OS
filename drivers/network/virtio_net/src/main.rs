@@ -35,7 +35,7 @@ const INVALID_POOL: u16 = u16::MAX;
 const NET_CTRL_RX_READY: u32 = 0x4F04;
 const NET_CTRL_TX_SUBMIT: u32 = 0x4F05;
 const NET_CTRL_TX_COMPLETE: u32 = 0x4F06;
-const IPC_RECV_TIMEOUT_MS: u64 = 2;
+const IPC_RECV_TIMEOUT_MS: u64 = 50;
 
 #[repr(C)]
 struct DriverRequest {
@@ -292,6 +292,14 @@ impl VirtioHardware {
 
     fn apply_driver_init(&mut self, init: net::DriverInitMsg, state: &mut net::VirtioNet) {
         if init.opcode != net::NET_CTRL_DRIVER_INIT {
+            return;
+        }
+        // T12-002 : Validation des adresses IOVA fournies
+        if init.rx_base_iova == 0 || init.tx_base_iova == 0
+            || init.rx_base_iova % PAGE_SIZE as u64 != 0
+            || init.tx_base_iova % PAGE_SIZE as u64 != 0
+            || init.pool_count == 0
+        {
             return;
         }
         state.apply_driver_init(init);

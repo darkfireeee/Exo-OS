@@ -65,27 +65,33 @@ extern "C" {
 
 // Fonctions Rust appelées depuis l'ASM (no_mangle pour linkage).
 // Implémentées dans ring/spsc.rs.
+/// # Safety
+/// `msg` doit pointer vers un `IpcFastMsg` valide en mémoire.
 #[no_mangle]
-pub extern "C" fn ipc_ring_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
+pub unsafe extern "C" fn ipc_ring_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     use crate::ipc::ring::spsc::spsc_fast_write;
     // SAFETY: msg est un pointeur valide (vérifié par ipc_fast_send asm).
-    unsafe { spsc_fast_write(msg, channel_id) }
+    spsc_fast_write(msg, channel_id)
 }
 
+/// # Safety
+/// `dst` doit pointer vers un `IpcFastMsg` valide en écriture.
 #[no_mangle]
-pub extern "C" fn ipc_ring_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
+pub unsafe extern "C" fn ipc_ring_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     use crate::ipc::ring::spsc::spsc_fast_read;
     // SAFETY: dst est un pointeur valide (vérifié par ipc_fast_recv asm).
-    unsafe { spsc_fast_read(dst, channel_id) }
+    spsc_fast_read(dst, channel_id)
 }
 
+/// # Safety
+/// `dst` doit pointer vers un `IpcFastMsg` valide en écriture.
 #[no_mangle]
-pub extern "C" fn ipc_ring_fast_wait_reply(
+pub unsafe extern "C" fn ipc_ring_fast_wait_reply(
     dst: *mut IpcFastMsg,
     channel_id: u64,
     timeout_ns: u64,
 ) -> u64 {
     use crate::ipc::ring::spsc::spsc_wait_reply;
     // SAFETY: dst est un pointeur valide (vérifié par ipc_fast_call asm).
-    unsafe { spsc_wait_reply(dst, channel_id, timeout_ns) }
+    spsc_wait_reply(dst, channel_id, timeout_ns)
 }

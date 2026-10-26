@@ -46,6 +46,12 @@ pub struct CanaryStats {
     pub check_ok: AtomicU64,
 }
 
+impl Default for CanaryStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CanaryStats {
     const fn new() -> Self {
         Self {
@@ -163,7 +169,8 @@ unsafe fn generate_canary(cpu_id: u32) -> u64 {
 /// Initialise le canary pour `cpu_id`.  Doit être appelé une fois par CPU
 /// (BSP depuis `init()`, APs depuis leur entry point).
 ///
-/// # Safety : CPL 0 exclusif pour ce `cpu_id`.
+/// # Safety
+/// CPL 0 exclusif pour ce `cpu_id`.
 pub unsafe fn init_cpu_canary(cpu_id: u32) {
     if cpu_id as usize >= MAX_CPUS {
         return;
@@ -220,7 +227,8 @@ pub fn canary_violation_handler(expected: u64, actual: u64) -> ! {
 /// Effectue une rotation du canary pour tous les CPUs initialisés.
 /// Usages : rotation périodique, réponse à incident, hardening proactif.
 ///
-/// # Safety : CPL 0 ; doit être appelé sur BSP avec quiescence globale.
+/// # Safety
+/// CPL 0 ; doit être appelé sur BSP avec quiescence globale.
 pub unsafe fn rotate_all_canaries() {
     for cpu_id in 0..MAX_CPUS as u32 {
         let slot = &CANARY_TABLE.slots[cpu_id as usize];
@@ -235,7 +243,8 @@ pub unsafe fn rotate_all_canaries() {
 
 /// Initialisation du sous-système canary pour le BSP (cpu_id = 0).
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn init() {
     init_cpu_canary(0);
 }

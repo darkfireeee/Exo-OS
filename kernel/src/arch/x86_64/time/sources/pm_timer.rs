@@ -48,7 +48,7 @@ const PM_TIMER_MASK_32: u32 = 0xFFFF_FFFF;
 
 /// Femtosecondes par tick PM Timer : 10^15 / 3_579_545 ≈ 279_365 fs/tick.
 #[allow(dead_code)]
-const PM_TIMER_FEMTOS_PER_TICK: u64 = 10_000_000_000_000_00 / PM_TIMER_FREQ_HZ;
+const PM_TIMER_FEMTOS_PER_TICK: u64 = 1_000_000_000_000_000 / PM_TIMER_FREQ_HZ;
 
 // ── État PM Timer ─────────────────────────────────────────────────────────────
 

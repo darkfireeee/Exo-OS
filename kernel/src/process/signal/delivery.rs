@@ -221,34 +221,6 @@ pub fn handle_pending_signals(
     let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
     let pid = Pid(thread.sched_tcb.pid.0);
 
-    // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : has_signal_pending()
-    // vient de passer, donc un signal EST en attente côté scheduler — ce print
-    // montre le masque et les bitmaps bruts au moment précis de la décision de
-    // livraison. Si `std=0 rt=0` malgré `pending=true`, la queue elle-même est
-    // vide/désynchronisée du flag ; si un bit std correspond à SIGSEGV (1<<10)
-    // dans `mask`, c'est le signal qui est bloqué, pas absent.
-    #[cfg(target_arch = "x86_64")]
-    {
-        let out = crate::arch::x86_64::terminal::debug_write;
-        let hex64 = |v: u64| {
-            let mut buf = [0u8; 16];
-            let mut x = v;
-            for i in (0..16).rev() {
-                let nib = (x & 0xf) as u8;
-                buf[i] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
-                x >>= 4;
-            }
-            buf
-        };
-        out(b"<V14PEND mask=0x");
-        out(&hex64(mask));
-        out(b" std=0x");
-        out(&hex64(thread.sig_queue.pending.load(Ordering::Acquire)));
-        out(b" rt=0x");
-        out(&hex64(thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u64));
-        out(b">");
-    }
-
     // Lire la table des handlers depuis le PCB.
     let pcb = match PROCESS_REGISTRY.find_by_pid(pid) {
         Some(p) => p,
@@ -437,9 +409,9 @@ struct ExcFrame {
 /// devra remplacer ce passage par le PCB.
 ///
 /// # Safety
-/// - `tcb_ptr`      : pointeur vers le `ThreadControlBlock` courant (GS:[0x20]).
+/// `tcb_ptr` et `excframe_ptr` doivent pointer vers des structures valides et non partagées :
+/// - `tcb_ptr` : pointeur vers le `ThreadControlBlock` courant (GS:[0x20]).
 /// - `excframe_ptr` : pointeur vers la `ExceptionFrame` sur la pile kernel.
-/// Les deux doivent pointer vers des structures valides et non partagées.
 #[no_mangle]
 pub unsafe extern "C" fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excframe_ptr: *mut u8) {
     if tcb_ptr.is_null() || excframe_ptr.is_null() {

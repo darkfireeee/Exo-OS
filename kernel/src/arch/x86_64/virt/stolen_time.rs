@@ -53,12 +53,8 @@ const _: () = assert!(
 struct StealTimeTable([KvmStealTime; STOLEN_TIME_MAX_CPUS]);
 unsafe impl Sync for StealTimeTable {}
 
-static STEAL_TIME_TABLE: StealTimeTable = StealTimeTable(
-    // SAFETY: KvmStealTime est composé de types primitifs, tous-zéros est valide
-    unsafe {
-        core::mem::transmute([0u8; core::mem::size_of::<[KvmStealTime; STOLEN_TIME_MAX_CPUS]>()])
-    },
-);
+static STEAL_TIME_TABLE: StealTimeTable =
+    StealTimeTable([const { KvmStealTime::zeroed() }; STOLEN_TIME_MAX_CPUS]);
 
 static TOTAL_STOLEN_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_STEAL_NS: AtomicU64 = AtomicU64::new(0);

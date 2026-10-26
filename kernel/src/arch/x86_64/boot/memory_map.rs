@@ -384,6 +384,11 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     // ── Phase 1 : initialiser le bitmap allocateur ────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
+    let (mod_start_raw, mod_end_raw) =
+        super::multiboot2::get_multiboot2_module().unwrap_or((0, 0));
+    let mod_start = align_down(mod_start_raw, PAGE_SIZE as u64);
+    let mod_end = align_up(mod_end_raw, PAGE_SIZE as u64);
+
     // ── Phase 2 : libérer toutes les régions utilisables ─────────────────────
     for entry in entries {
         if entry.entry_type != MMAP_AVAILABLE {
@@ -402,7 +407,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
             continue;
         }
 
-        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+        for_each_usable_subrange_excluding_reserved(base_adj, end_adj, mod_start, mod_end, |s, e| {
             init_phase2_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
@@ -438,7 +443,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
             continue;
         }
 
-        for_each_usable_subrange_excluding_ssr(base_adj, end_adj, |s, e| {
+        for_each_usable_subrange_excluding_reserved(base_adj, end_adj, mod_start, mod_end, |s, e| {
             init_phase2b_buddy_free_region(PhysAddr::new(s), PhysAddr::new(e));
         });
     }
@@ -637,6 +642,31 @@ fn for_each_usable_subrange_excluding_ssr(start: u64, end: u64, mut f: impl FnMu
         f(ssr_end, end);
     }
 }
+
+/// Applique `f(start, end)` sur les sous-ranges utilisables, en excluant à la fois
+/// la SSR ExoPhoenix et la plage du module Multiboot2 (ramdisk rootfs).
+#[inline]
+fn for_each_usable_subrange_excluding_reserved(
+    start: u64,
+    end: u64,
+    mod_start: u64,
+    mod_end: u64,
+    mut f: impl FnMut(u64, u64),
+) {
+    for_each_usable_subrange_excluding_ssr(start, end, |s1, e1| {
+        if mod_start >= mod_end || e1 <= mod_start || s1 >= mod_end {
+            f(s1, e1);
+        } else {
+            if s1 < mod_start {
+                f(s1, mod_start);
+            }
+            if e1 > mod_end {
+                f(mod_end, e1);
+            }
+        }
+    });
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INIT DEPUIS EXO-BOOT (UEFI natif)

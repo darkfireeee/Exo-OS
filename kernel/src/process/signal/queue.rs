@@ -86,6 +86,12 @@ pub struct SigQueue {
     pub pending: AtomicU64,
 }
 
+impl Default for SigQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SigQueue {
     pub const fn new() -> Self {
         Self {
@@ -288,12 +294,16 @@ pub struct RTSigQueue {
 unsafe impl Send for RTSigQueue {}
 unsafe impl Sync for RTSigQueue {}
 
-impl RTSigQueue {
-    const EMPTY_RING: RTRing = RTRing::new();
+impl Default for RTSigQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+impl RTSigQueue {
     pub const fn new() -> Self {
         Self {
-            rings: [Self::EMPTY_RING; RT_NSIG],
+            rings: [const { RTRing::new() }; RT_NSIG],
             pending_mask: AtomicU64::new(0),
         }
     }

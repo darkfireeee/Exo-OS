@@ -47,18 +47,6 @@ fn mark_exit(
     exit_status: u32,
     join_result: u64,
 ) {
-    pcb.set_exiting();
-    pcb.exit_code.store(exit_status, Ordering::Release);
-    pcb.flags
-        .fetch_or(process_flags::VFORK_DONE, Ordering::Release);
-
-    {
-        let mut files = pcb.files.lock();
-        files.close_all_noalloc();
-    }
-    close_all_pid_vfs(pcb.pid.0);
-    drivers::driver_do_exit(pcb.pid.0);
-
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
     crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&thread.sched_tcb);
@@ -67,24 +55,28 @@ fn mark_exit(
         crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);
     }
 
+    // T6-003 FIX : Distinguer thread-exit et process-exit.
+    // Ne détruire les ressources globales (fichiers, VFS, drivers, VFORK) que si c'était le dernier thread.
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
-        // FIX-APP-08 (Security_Application_Audit §GAP-08) : tracer la terminaison
-        // du processus dans ExoLedger. process spawn/exit n'étaient pas audités.
-        // ActionTag::Custom { tag = 0x4558_4954 "EXIT", data = pid|status<<32 }.
+        pcb.set_exiting();
+        pcb.exit_code.store(exit_status, Ordering::Release);
+        pcb.flags
+            .fetch_or(process_flags::VFORK_DONE, Ordering::Release);
+
+        {
+            let mut files = pcb.files.lock();
+            files.close_all_noalloc();
+        }
+        close_all_pid_vfs(pcb.pid.0);
+        drivers::driver_do_exit(pcb.pid.0);
+
         crate::security::exoledger::exo_ledger_append(
             crate::security::exoledger::ActionTag::Custom {
                 tag: 0x4558_4954, // "EXIT"
                 data: (pcb.pid.0 as u64) | ((exit_status as u64) << 32),
             },
         );
-        // FIX-P1-VEIL (Security_Application_Audit §GAP-07) : la révocation des
-        // capabilities du processus est portée par `pcb.cap_table` (Box détenue
-        // par le PCB), libérée au reap — les capabilities par-processus meurent
-        // donc avec le PCB sans appel explicite. `exoveil::revoke_domain()` n'est
-        // PAS utilisé ici : c'est une primitive de lockdown PKS GLOBAL (décision
-        // Kernel B), pas un cleanup per-process — l'invoquer à chaque exit
-        // verrouillerait les tables de capabilities de tout le système.
         let ppid = pcb.ppid();
         if ppid.0 != 0 {
             let _ = send_signal_to_pid(ppid, Signal::SIGCHLD);

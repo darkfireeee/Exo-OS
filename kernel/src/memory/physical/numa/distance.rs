@@ -68,7 +68,8 @@ impl NumaDistanceTable {
 
     /// Met à jour la distance (depuis le parseur ACPI SLIT).
     ///
-    /// # Safety : appelé en initialisation single-threaded.
+    /// # Safety
+    /// Appelé en initialisation single-threaded.
     pub unsafe fn set(&mut self, from: u32, to: u32, distance: u8) {
         if (from as usize) < MAX_NUMA_NODES && (to as usize) < MAX_NUMA_NODES {
             self.dist[from as usize][to as usize] = distance;

@@ -70,15 +70,23 @@ const EARLY_IST_POOL_SIZE: usize = MAX_CPUS * GUARDED_IST_STACKS_PER_CPU * GUARD
 pub struct TaskStateSegment {
     _reserved0: u32,
     /// Piles par niveau de privilège (RSP0 = entrée Ring 3 → Ring 0)
-    pub rsp: [u64; 3], // RSP0, RSP1, RSP2
-    _reserved1: u64,
+    pub rsp: [u64; 3], // RSP0, RSP1, RSP2 (offsets 0x04..0x1C)
+    _reserved1: u32,   // offset 0x1C..0x20
     /// Interrupt Stack Table (7 entrées)
-    pub ist: [u64; 7], // IST1-IST7
-    _reserved2: u64,
-    _reserved3: u16,
+    pub ist: [u64; 7], // IST1-IST7 (offsets 0x20..0x58)
+    _reserved2: u64,   // offset 0x58..0x60 (8 bytes)
+    _reserved3: u32,   // offset 0x60..0x64 (4 bytes)
+    _reserved4: u16,   // offset 0x64..0x66 (2 bytes)
     /// Offset de l'I/O Permission Bitmap (mettre à taille du TSS = pas de IOPB)
-    pub iopb_offset: u16,
+    pub iopb_offset: u16, // offset 0x66..0x68 (2 bytes)
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<TaskStateSegment>() == 104);
+    assert!(core::mem::offset_of!(TaskStateSegment, rsp) == 0x04);
+    assert!(core::mem::offset_of!(TaskStateSegment, ist) == 0x20);
+    assert!(core::mem::offset_of!(TaskStateSegment, iopb_offset) == 0x66);
+};
 
 impl TaskStateSegment {
     pub const fn zero() -> Self {
@@ -89,6 +97,7 @@ impl TaskStateSegment {
             ist: [0u64; 7],
             _reserved2: 0,
             _reserved3: 0,
+            _reserved4: 0,
             iopb_offset: core::mem::size_of::<TaskStateSegment>() as u16,
         }
     }
@@ -123,10 +132,7 @@ impl PerCpuStacks {
 
 /// TSS statiques per-CPU (limite : MAX_CPUS)
 static mut CPU_TSS: [TaskStateSegment; MAX_CPUS] = [TaskStateSegment::zero(); MAX_CPUS];
-static mut CPU_STACKS: [PerCpuStacks; MAX_CPUS] = const {
-    let arr = [PerCpuStacks::zero(); MAX_CPUS];
-    arr
-};
+static mut CPU_STACKS: [PerCpuStacks; MAX_CPUS] = [PerCpuStacks::zero(); MAX_CPUS];
 
 #[repr(C, align(4096))]
 struct EarlyIstPool {

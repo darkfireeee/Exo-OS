@@ -83,7 +83,9 @@ impl PerCpuFramePool {
     }
 
     /// Initialise le pool pour un CPU donné.
-    /// SAFETY: Doit être appelé une fois, uniquement par le CPU `cpu_id`,
+    ///
+    /// # Safety
+    /// Doit être appelé une fois, uniquement par le CPU `cpu_id`,
     /// pendant l'init SMP avant tout accès concurrent.
     pub unsafe fn init(&self, cpu_id: usize) {
         self.cpu_id.store(cpu_id, Ordering::Release);
@@ -278,6 +280,12 @@ pub struct PerCpuPoolTable {
 unsafe impl Sync for PerCpuPoolTable {}
 unsafe impl Send for PerCpuPoolTable {}
 
+impl Default for PerCpuPoolTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerCpuPoolTable {
     pub const fn new() -> Self {
         PerCpuPoolTable {
@@ -287,7 +295,10 @@ impl PerCpuPoolTable {
         }
     }
 
-    /// Initialise le pool d'un CPU. SAFETY: voir PerCpuFramePool::init().
+    /// Initialise le pool d'un CPU.
+    ///
+    /// # Safety
+    /// Voir `PerCpuFramePool::init()`. Doit être appelé lors de l'initialisation du CPU `cpu_id`.
     pub unsafe fn init_cpu(&self, cpu_id: usize) {
         debug_assert!(cpu_id < MAX_CPUS, "cpu_id hors limites");
         self.pools[cpu_id].init(cpu_id);
@@ -337,7 +348,9 @@ impl PerCpuPoolTable {
 pub static PER_CPU_POOLS: PerCpuPoolTable = PerCpuPoolTable::new();
 
 /// Initialise le pool du CPU `cpu_id`.
-/// SAFETY: Comme PerCpuFramePool::init().
+///
+/// # Safety
+/// Comme `PerCpuFramePool::init()`. Doit être appelé lors de l'initialisation du CPU `cpu_id`.
 pub unsafe fn init_cpu_pool(cpu_id: usize) {
     PER_CPU_POOLS.init_cpu(cpu_id);
 }

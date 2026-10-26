@@ -32,13 +32,10 @@ struct MigrationQueue {
 
 impl MigrationQueue {
     const fn new() -> Self {
-        // SAFETY: AtomicPtr<T> has same representation as *mut T (null = 0).
-        const NULL: core::sync::atomic::AtomicPtr<ThreadControlBlock> =
-            core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
         Self {
             head: AtomicU32::new(0),
             tail: AtomicU32::new(0),
-            slots: [NULL; MIGRATION_QUEUE_DEPTH],
+            slots: [const { core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()) }; MIGRATION_QUEUE_DEPTH],
         }
     }
 
@@ -71,12 +68,8 @@ impl MigrationQueue {
 // Tableaux globaux (statique, no_alloc)
 // ─────────────────────────────────────────────────────────────────────────────
 
-static MIGRATION_QUEUES: [MigrationQueue; MAX_CPUS] = {
-    // Initialisation par macro répétée — ne peut pas itérer avec const.
-    // Utilisation d'un tableau d'initialiseurs.
-    const INIT: MigrationQueue = MigrationQueue::new();
-    [INIT; MAX_CPUS]
-};
+static MIGRATION_QUEUES: [MigrationQueue; MAX_CPUS] =
+    [const { MigrationQueue::new() }; MAX_CPUS];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFI vers l'arch (envoi IPI)
@@ -134,6 +127,9 @@ pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId)
 /// Traite les migrations en attente pour le CPU courant.
 ///
 /// `drain_cb` est appelé pour chaque TCB reçu.
+///
+/// # Safety
+/// CPL 0, `cpu` doit être le CPU local, et `drain_cb` doit être sûr à invoquer pour chaque TCB.
 pub unsafe fn drain_pending_migrations(
     cpu: CpuId,
     drain_cb: unsafe fn(tcb: NonNull<ThreadControlBlock>),

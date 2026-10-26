@@ -15,20 +15,24 @@ const DRIVER_SEND_RETRIES: usize = 32;
 
 pub struct DriverLink {
     endpoint: u64,
+    secondary_endpoint: u64,
     ready: bool,
     hardware: bool,
     mac: [u8; 6],
     retry_ticks: u16,
+    active_pid: Option<u32>,
 }
 
 impl DriverLink {
     pub const fn empty() -> Self {
         Self {
             endpoint: 0,
+            secondary_endpoint: 0,
             ready: false,
             hardware: false,
             mac: [0x02, 0x45, 0x58, 0x4f, 0x00, 0x01],
             retry_ticks: 0,
+            active_pid: None,
         }
     }
 
@@ -45,13 +49,20 @@ impl DriverLink {
         hardware_wait_ms: u64,
         log_timeout: bool,
     ) -> Self {
-        let hardware_endpoint = if hardware_wait_ms == 0 {
-            lookup_hardware_endpoint()
+        let (primary_hw, secondary_hw) = if hardware_wait_ms == 0 {
+            lookup_hardware_endpoints()
         } else {
-            wait_hardware_endpoint(hardware_wait_ms)
+            wait_hardware_endpoints(hardware_wait_ms)
         };
-        if let Some(endpoint) = hardware_endpoint {
-            return Self::connect_endpoint(endpoint, pool, true);
+        if let Some(endpoint) = primary_hw {
+            let mut link = Self::connect_endpoint(endpoint, pool, true);
+            if let Some(sec_ep) = secondary_hw {
+                if sec_ep != endpoint {
+                    init_single_endpoint(sec_ep, pool);
+                    link.secondary_endpoint = sec_ep;
+                }
+            }
+            return link;
         }
         if let Some(endpoint) = lookup_fallback_endpoint() {
             return Self::connect_endpoint(endpoint, pool, false);
@@ -71,35 +82,18 @@ impl DriverLink {
         }
         let mut link = Self {
             endpoint,
+            secondary_endpoint: 0,
             ready: pool.ready(),
             hardware,
             mac: [0x02, 0x45, 0x58, 0x4f, 0x00, 0x01],
             retry_ticks: 0,
+            active_pid: None,
         };
         if pool.ready() {
-            let init = DriverInitMsg {
-                opcode: NET_CTRL_DRIVER_INIT,
-                pool_count: RX_POOL_SIZE as u32,
-                rx_base_iova: pool.rx_base_iova(),
-                tx_base_iova: pool.tx_base_iova(),
-                hdr_size: VIRTIO_NET_HDR_SIZE_MODERN as u32,
-                _pad: 0,
-            };
-            let payload = unsafe {
-                core::slice::from_raw_parts(
-                    &init as *const DriverInitMsg as *const u8,
-                    core::mem::size_of::<DriverInitMsg>(),
-                )
-            };
-            let init_rc = send(endpoint, NET_CTRL_DRIVER_INIT, payload);
-            if init_rc < 0 {
-                debug_errno(b"network_server: driver init errno ", init_rc);
+            if !init_single_endpoint(endpoint, pool) {
                 link.ready = false;
                 link.retry_ticks = DRIVER_RETRY_TICKS;
-            } else {
-                debug_write(b"network_server: driver init sent\n");
             }
-            let _ = send(endpoint, NET_CTRL_MAC_QUERY, &[]);
         }
         link
     }
@@ -128,14 +122,36 @@ impl DriverLink {
         }
     }
 
+    pub fn active_pid(&self) -> Option<u32> {
+        self.active_pid
+    }
+
+    pub fn set_active_pid(&mut self, pid: u32) {
+        if pid != 0 && self.active_pid.is_none() {
+            self.active_pid = Some(pid);
+        }
+    }
+
+    pub fn is_active_sender(&self, _pid: u32) -> bool {
+        // Autoriser les deux drivers matériels (virtio_net et e1000) à remonter les trames RX
+        true
+    }
+
     pub fn ensure_connected(&mut self, pool: &NetBufPool) {
         if self.retry_ticks != 0 {
             self.retry_ticks -= 1;
             return;
         }
         if !self.hardware {
-            if let Some(endpoint) = lookup_hardware_endpoint() {
+            let (primary, secondary) = lookup_hardware_endpoints();
+            if let Some(endpoint) = primary {
                 *self = Self::connect_endpoint(endpoint, pool, true);
+                if let Some(sec) = secondary {
+                    if sec != endpoint {
+                        init_single_endpoint(sec, pool);
+                        self.secondary_endpoint = sec;
+                    }
+                }
                 return;
             }
         }
@@ -147,8 +163,15 @@ impl DriverLink {
 
     pub fn probe_hardware_now(&mut self, pool: &NetBufPool) -> bool {
         if !self.hardware {
-            if let Some(endpoint) = lookup_hardware_endpoint() {
+            let (primary, secondary) = lookup_hardware_endpoints();
+            if let Some(endpoint) = primary {
                 *self = Self::connect_endpoint(endpoint, pool, true);
+                if let Some(sec) = secondary {
+                    if sec != endpoint {
+                        init_single_endpoint(sec, pool);
+                        self.secondary_endpoint = sec;
+                    }
+                }
             } else if !self.ready {
                 if let Some(endpoint) = lookup_fallback_endpoint() {
                     *self = Self::connect_endpoint(endpoint, pool, false);
@@ -172,7 +195,13 @@ impl DriverLink {
                         core::mem::size_of::<TxSubmitMsg>(),
                     )
                 };
-                if send(self.endpoint, NET_CTRL_TX_SUBMIT, payload) < 0 {
+                let rc1 = send(self.endpoint, NET_CTRL_TX_SUBMIT, payload);
+                let rc2 = if self.secondary_endpoint != 0 {
+                    send(self.secondary_endpoint, NET_CTRL_TX_SUBMIT, payload)
+                } else {
+                    -1
+                };
+                if rc1 < 0 && rc2 < 0 {
                     pool.tx_free(tx.pool_idx);
                 }
             } else {
@@ -187,7 +216,6 @@ impl DriverLink {
             device.released_count = 0;
             return;
         }
-
         let mut sent = 0usize;
         while sent < device.released_count {
             let count = (device.released_count - sent).min(20);
@@ -204,32 +232,67 @@ impl DriverLink {
                 )
             };
             let _ = send(self.endpoint, NET_CTRL_RX_RELEASE, payload);
+            if self.secondary_endpoint != 0 {
+                let _ = send(self.secondary_endpoint, NET_CTRL_RX_RELEASE, payload);
+            }
             sent += count;
         }
         device.released_count = 0;
     }
 }
 
-fn lookup_hardware_endpoint() -> Option<u64> {
-    // Under QEMU the virtio path is the most predictable transport; keep e1000
-    // as a fallback so both devices remain usable.
-    lookup_endpoint(b"virtio_net").or_else(|| lookup_endpoint(b"e1000_net"))
+fn init_single_endpoint(endpoint: u64, pool: &NetBufPool) -> bool {
+    let init = DriverInitMsg {
+        opcode: NET_CTRL_DRIVER_INIT,
+        pool_count: RX_POOL_SIZE as u32,
+        rx_base_iova: pool.rx_base_iova(),
+        tx_base_iova: pool.tx_base_iova(),
+        hdr_size: VIRTIO_NET_HDR_SIZE_MODERN as u32,
+        _pad: 0,
+    };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            &init as *const DriverInitMsg as *const u8,
+            core::mem::size_of::<DriverInitMsg>(),
+        )
+    };
+    let init_rc = send(endpoint, NET_CTRL_DRIVER_INIT, payload);
+    if init_rc < 0 {
+        debug_errno(b"network_server: driver init errno ", init_rc);
+        false
+    } else {
+        debug_write(b"network_server: driver init sent\n");
+        let _ = send(endpoint, NET_CTRL_MAC_QUERY, &[]);
+        true
+    }
+}
+
+fn lookup_hardware_endpoints() -> (Option<u64>, Option<u64>) {
+    let virtio = lookup_endpoint(b"virtio_net");
+    let e1000 = lookup_endpoint(b"e1000_net");
+    match (virtio, e1000) {
+        (Some(v), Some(e)) => (Some(v), Some(e)),
+        (Some(v), None) => (Some(v), None),
+        (None, Some(e)) => (Some(e), None),
+        (None, None) => (None, None),
+    }
 }
 
 fn lookup_fallback_endpoint() -> Option<u64> {
     lookup_endpoint(b"loopback_net").or_else(|| lookup_endpoint(b"loopback_driver"))
 }
 
-fn wait_hardware_endpoint(timeout_ms: u64) -> Option<u64> {
+fn wait_hardware_endpoints(timeout_ms: u64) -> (Option<u64>, Option<u64>) {
     let mut waited = 0u64;
     while waited <= timeout_ms {
-        if let Some(endpoint) = lookup_hardware_endpoint() {
-            return Some(endpoint);
+        let (p, s) = lookup_hardware_endpoints();
+        if p.is_some() {
+            return (p, s);
         }
         sleep_ms(HARDWARE_BOOT_POLL_MS);
         waited = waited.saturating_add(HARDWARE_BOOT_POLL_MS);
     }
-    None
+    lookup_hardware_endpoints()
 }
 
 fn lookup_endpoint(name: &[u8]) -> Option<u64> {

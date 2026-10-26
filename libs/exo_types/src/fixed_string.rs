@@ -61,10 +61,11 @@ impl<const N: usize> FixedString<N> {
         Self::from_bytes(s.as_bytes())
     }
 
-    /// Retourne le slice de bytes valides.
+    /// Retourne le slice de bytes valides (borné à N pour résister aux payloads IPC forgés).
     #[inline(always)]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes[..self.len as usize]
+        let valid_len = (self.len as usize).min(N);
+        &self.bytes[..valid_len]
     }
 
     /// Tente de convertir en `&str` UTF-8.
@@ -72,10 +73,10 @@ impl<const N: usize> FixedString<N> {
         core::str::from_utf8(self.as_bytes())
     }
 
-    /// Longueur en bytes.
+    /// Longueur en bytes (bornée à N).
     #[inline(always)]
     pub fn len(&self) -> usize {
-        self.len as usize
+        (self.len as usize).min(N)
     }
 
     /// Vrai si la chaîne est vide.
@@ -98,8 +99,9 @@ impl<const N: usize> FixedString<N> {
 
 impl<const N: usize> PartialEq for FixedString<N> {
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len
-            && self.bytes[..self.len as usize] == other.bytes[..other.len as usize]
+        let l1 = (self.len as usize).min(N);
+        let l2 = (other.len as usize).min(N);
+        l1 == l2 && self.bytes[..l1] == other.bytes[..l2]
     }
 }
 

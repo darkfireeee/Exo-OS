@@ -58,14 +58,13 @@ pub type ContextSwitchOutHook = fn(&ThreadControlBlock);
 
 static CONTEXT_SWITCH_OUT_HOOK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(target_arch = "x86_64", debug_assertions))]
+#[allow(dead_code)]
 static IDLE_SCHED_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(all(target_arch = "x86_64", debug_assertions))]
 #[inline]
-fn idle_sched_trace(message: &[u8]) {
-    if false && IDLE_SCHED_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 32 {
-        crate::arch::x86_64::terminal::debug_write(message);
-    }
+fn idle_sched_trace(_message: &[u8]) {
+    // Tracing debug désactivé pour éviter l'inondation de terminal
 }
 
 #[cfg(not(all(target_arch = "x86_64", debug_assertions)))]
@@ -238,6 +237,7 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// 12. Restaurer FS.base puis user_gs_base, enfin publier GS current_tcb.
 ///
 /// # Sécurité
+/// # Safety
 /// - Appelé avec préemption désactivée (IrqGuard ou PreemptGuard).
 /// - `prev` et `next` DOIVENT être des pointeurs valides.
 ///
@@ -246,8 +246,8 @@ pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
 /// Elle ne fait que lire `signal_pending` via `check_signal_pending()`.
 pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
     let features = cpu_features_or_none();
-    let has_pks = features.map_or(false, |cpu| cpu.has_pks());
-    let has_cet_ss = features.map_or(false, |cpu| cpu.has_cet_ss());
+    let has_pks = features.is_some_and(|cpu| cpu.has_pks());
+    let has_cet_ss = features.is_some_and(|cpu| cpu.has_cet_ss());
     // FIX-IBPB (Security_Audit_Passe2 §B-01) : IBPB (Indirect Branch Predictor Barrier)
     // doit être émis lors d'un context-switch cross-processus pour prévenir Spectre v2.
     // Gated sur :
@@ -256,7 +256,7 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     //      (threads du même processus) n'ont pas besoin d'IBPB.
     //   3. Processus Ring3 uniquement (pid != 0 ; les kthreads partagent Ring0 BTB).
     let ibpb_needed =
-        features.map_or(false, |cpu| cpu.has_ibpb()) && prev.pid != next.pid && next.pid.0 != 0;
+        features.is_some_and(|cpu| cpu.has_ibpb()) && prev.pid != next.pid && next.pid.0 != 0;
     if ibpb_needed {
         // SAFETY: MSR_IA32_PRED_CMD (0x49) est garanti présent par has_ibpb().
         // L'écriture est atomique et visible sur le CPU local uniquement.
@@ -473,6 +473,9 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 /// Place le thread courant en fin de file CFS avant d'appeler context_switch.
 ///
 /// Appelé depuis : sys_sched_yield(), mutex_lock() (contention), condvar_wait().
+///
+/// # Safety
+/// `rq` et `current` doivent être valides, exécuté dans le contexte du thread courant.
 pub unsafe fn schedule_yield(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
@@ -600,12 +603,18 @@ unsafe fn schedule_current(force: bool) -> bool {
 ///
 /// Le helper est volontairement petit : il ne déclenche un switch que si le TCB
 /// courant demande explicitement une préemption.
+///
+/// # Safety
+/// CPL 0, contexte d'interruption ou sortie d'appel système.
 pub unsafe fn schedule_current_if_needed() -> bool {
     schedule_current(false)
 }
 
 /// Point de rescheduling coopératif pour les syscalls qui attendent en boucle
 /// courte tant que les vraies queues de sommeil ne sont pas encore câblées.
+///
+/// # Safety
+/// CPL 0, appelé hors section critique non-préemptible.
 pub unsafe fn cooperative_reschedule() -> bool {
     schedule_current(true)
 }

@@ -158,13 +158,12 @@ unsafe impl Sync for ZeroCopyRing {}
 impl ZeroCopyRing {
     /// Crée un ring zéro-copie.
     pub const fn new() -> Self {
-        const ZERO_SLOT: ZcSlot = ZcSlot::zeroed();
         Self {
             head: AtomicU64::new(0),
             _pad1: [0u8; 56],
             tail: AtomicU64::new(0),
             _pad2: [0u8; 56],
-            slots: [ZERO_SLOT; ZC_RING_SIZE],
+            slots: [const { ZcSlot::zeroed() }; ZC_RING_SIZE],
         }
     }
 

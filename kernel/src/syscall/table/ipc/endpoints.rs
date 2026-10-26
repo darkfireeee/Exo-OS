@@ -197,14 +197,11 @@ pub fn sys_exo_ipc_create(
         None => return EINVAL,
     };
 
-    let _validated = match UserBuf::validate(name_ptr, len, 128) {
-        Ok(buf) => buf,
-        Err(err) => return err.to_errno(),
-    };
-    let mut name = match super::channel::zeroed_user_vec(len) {
-        Ok(name) => name,
-        Err(errno) => return errno,
-    };
+    if let Err(err) = UserBuf::validate(name_ptr, len, 128) {
+        return err.to_errno();
+    }
+    let mut name_buf = [0u8; 128];
+    let name = &mut name_buf[..len];
     if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
         return EFAULT;
     }
@@ -218,15 +215,15 @@ pub fn sys_exo_ipc_create(
     }
 
     if crate::ipc::channel::raw::mailbox_open(ep) {
-        if let Err(err) = crate::ipc::endpoint::register_endpoint(&name, ep) {
+        if let Err(err) = crate::ipc::endpoint::register_endpoint(name, ep) {
             crate::ipc::channel::raw::mailbox_close(ep);
             let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
             return super::channel::ipc_error_to_errno(err);
         }
-        if let Some(class) = service_class_for_endpoint_name(&name) {
+        if let Some(class) = service_class_for_endpoint_name(name) {
             let _ = crate::security::register_service_class(Pid(caller_pid), class);
         }
-        if name.as_slice() == b"fb_server" {
+        if name == b"fb_server" {
             crate::arch::x86_64::framebuffer_early::deactivate_for_userspace();
         }
         0
@@ -269,31 +266,25 @@ pub fn sys_exo_ipc_lookup(
     stat_inc(SYS_EXO_IPC_LOOKUP);
 
     let len = name_len as usize;
-    if len == 0 || len > crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN {
+    let max_len = crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN.min(128);
+    if len == 0 || len > max_len {
         return EINVAL;
     }
     if name_ptr == 0 {
         return EFAULT;
     }
 
-    let _validated = match UserBuf::validate(
-        name_ptr,
-        len,
-        crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN,
-    ) {
-        Ok(buf) => buf,
-        Err(err) => return err.to_errno(),
-    };
+    if let Err(err) = UserBuf::validate(name_ptr, len, max_len) {
+        return err.to_errno();
+    }
 
-    let mut name = match super::channel::zeroed_user_vec(len) {
-        Ok(name) => name,
-        Err(errno) => return errno,
-    };
+    let mut name_buf = [0u8; 128];
+    let name = &mut name_buf[..len];
     if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
         return EFAULT;
     }
 
-    match crate::ipc::endpoint::lookup_endpoint(&name) {
+    match crate::ipc::endpoint::lookup_endpoint(name) {
         Some(endpoint) => endpoint.get() as i64,
         None => ENOENT,
     }

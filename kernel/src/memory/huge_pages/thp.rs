@@ -35,6 +35,12 @@ pub struct ThpConfig {
     pub min_vma_size: AtomicU64,
 }
 
+impl Default for ThpConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThpConfig {
     const fn new() -> Self {
         ThpConfig {
@@ -67,6 +73,12 @@ pub struct ThpStats {
     pub splits: AtomicU64,
     pub promotions: AtomicU64,
     pub current_huge: AtomicU64,
+}
+
+impl Default for ThpStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThpStats {
@@ -145,7 +157,7 @@ pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
 /// Retourne `Some(frame_base)` si réussi.
 pub fn try_promote_to_huge(base: PhysAddr) -> Option<Frame> {
     // Vérifie l'alignement 2 MiB.
-    if base.as_u64() % HUGE_PAGE_SIZE as u64 != 0 {
+    if !base.as_u64().is_multiple_of(HUGE_PAGE_SIZE as u64) {
         return None;
     }
     // Vérifie que toutes les pages sont dispos dans le buddy — non implémenté ici

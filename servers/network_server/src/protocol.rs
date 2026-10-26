@@ -3,8 +3,8 @@ use exo_syscall_abi as syscall;
 pub const SERVER_ENDPOINT_ID: u64 = 7;
 pub const RAW_MSG_SIZE: usize = syscall::IPC_ENVELOPE_SIZE;
 // The timeout value is encoded in the same ABI word as IPC_FLAG_TIMEOUT, so it
-// must stay even: `IPC_FLAG_TIMEOUT | 2` decodes to a real 2 ms timeout.
-pub const IPC_RECV_TIMEOUT_MS: u64 = 2;
+// must stay even: `IPC_FLAG_TIMEOUT | 20` decodes to a real 20 ms timeout.
+pub const IPC_RECV_TIMEOUT_MS: u64 = 20;
 
 const _: () = assert!(RAW_MSG_SIZE == syscall::IPC_ENVELOPE_SIZE);
 

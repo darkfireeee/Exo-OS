@@ -395,9 +395,8 @@ unsafe impl Sync for PriorityQueueTable {}
 
 impl PriorityQueueTable {
     const fn new() -> Self {
-        const EMPTY: PrioQueueSlot = PrioQueueSlot::empty();
         Self {
-            slots: [EMPTY; MAX_PRIORITY_QUEUES],
+            slots: [const { PrioQueueSlot::empty() }; MAX_PRIORITY_QUEUES],
             count: AtomicU32::new(0),
         }
     }

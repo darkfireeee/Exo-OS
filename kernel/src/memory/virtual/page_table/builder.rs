@@ -107,7 +107,8 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
     /// contenir l'image noyau basse en pages supervisor, sinon le premier
     /// `context_switch_asm` faute immédiatement après `mov cr3`.
     ///
-    /// SAFETY: Doit être appelé quand la PML4 active est complète et valide.
+    /// # Safety
+    /// Doit être appelé quand la PML4 active est complète et valide.
     pub unsafe fn copy_kernel_entries(&mut self) -> Result<&mut Self, AllocError> {
         let current_pml4_phys = read_cr3();
         let current_pml4 = phys_to_table_mut(current_pml4_phys);
@@ -224,7 +225,8 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
 
     /// Efface la moitié utilisateur de la PML4 (indices 0..256).
     ///
-    /// SAFETY: pml4_phys pointe sur une PML4 valide.
+    /// # Safety
+    /// `pml4_phys` pointe sur une PML4 valide.
     pub unsafe fn clear_user_entries(&mut self) -> &mut Self {
         let pml4 = phys_to_table_mut(self.pml4_phys);
         for i in 0..256 {

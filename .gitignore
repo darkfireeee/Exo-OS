@@ -27,6 +27,7 @@ tools/ml_training/
 *.tmp
 /tmp/
 /rustc-ice-*.txt
+/clippy_*.txt
 servers/phase5-tests/rustc-ice-*.txt
 /ssh/
 .rule_dor_exit.txt
@@ -38,6 +39,8 @@ states/
 /.codex-audit-kernel-protocol-pre-v0.2-worklog.md
 /.codex-fs-completion-worklog.md
 /.codex-audit-bug-25-worklog.md
+/clone
+
 
 # macOS
 .DS_Store

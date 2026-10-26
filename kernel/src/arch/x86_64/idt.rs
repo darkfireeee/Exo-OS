@@ -424,7 +424,7 @@ pub fn init_idt() {
         EXC_MACHINE_CHECK,
         exc_machine_check_handler as *const () as u64,
         IST_MACHINE_CHECK as u8 + 1,
-        IdtEntryFlags::TRAP_GATE,
+        IdtEntryFlags::INTERRUPT_GATE,
     );
     idt.set_handler(
         EXC_SIMD_FP,
@@ -676,10 +676,8 @@ pub fn exophoenix_tlb_handler_addr() -> u64 {
 // ── Instrumentation IDT ───────────────────────────────────────────────────────
 
 /// Compteurs d'interruptions par vecteur (256 entrées)
-static IRQ_COUNTERS: [core::sync::atomic::AtomicU64; IDT_ENTRY_COUNT] = {
-    const ZERO: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    [ZERO; IDT_ENTRY_COUNT]
-};
+static IRQ_COUNTERS: [core::sync::atomic::AtomicU64; IDT_ENTRY_COUNT] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; IDT_ENTRY_COUNT];
 
 /// Incrémente le compteur pour le vecteur donné (appelé depuis les handlers)
 #[inline(always)]

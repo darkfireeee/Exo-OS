@@ -65,7 +65,7 @@ fn phoenix_wake_reply_endpoint(
     entropy: u64,
     timestamp: u64,
 ) -> Option<crate::ipc::core::types::EndpointId> {
-    let cookie = (entropy ^ timestamp ^ 0x5048_4f45_4e49_58) & 0x7fff_ffff_ffff_ffff;
+    let cookie = (entropy ^ timestamp ^ 0x0050_484f_454e_4958) & 0x7fff_ffff_ffff_ffff;
     crate::ipc::core::types::EndpointId::new((1u64 << 63) | cookie.max(1))
 }
 
@@ -78,7 +78,7 @@ fn wait_crypto_phoenix_ack(
 
     loop {
         match crate::ipc::channel::raw::recv_raw(reply_endpoint, &mut reply, RAW_NOWAIT) {
-            Ok(n) if n >= CRYPTO_REPLY_VERSION_OFFSET + 1 => {
+            Ok(n) if n > CRYPTO_REPLY_VERSION_OFFSET => {
                 let status = u32::from_le_bytes([
                     reply[CRYPTO_REPLY_STATUS_OFFSET],
                     reply[CRYPTO_REPLY_STATUS_OFFSET + 1],

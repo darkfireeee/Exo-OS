@@ -277,7 +277,6 @@ impl DmarUnit {
     pub unsafe fn invalidate_context(&self, domain_id: u16, bus: u8, df: u8) {
         // CCMD: IWS=1, CIIG=00 (device-specific), DID, SID
         let ccmd: u64 = (1u64 << 63)              // ICC
-                      | (0b00 << 61)              // Cireg (domain inv.)
                       | ((domain_id as u64) << 16)
                       | ((bus as u64) << 8)
                       | (df as u64);

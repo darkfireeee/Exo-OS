@@ -20,6 +20,23 @@
 
 #![no_std]
 #![no_main]
+#![allow(binary_asm_labels)]
+#![allow(unexpected_cfgs)]
+#![allow(clippy::redundant_field_names)]
+#![allow(clippy::manual_div_ceil)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::explicit_auto_deref)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::unnecessary_safety_doc)]
+#![allow(clippy::large_enum_variant)]
+#![allow(clippy::declare_interior_mutable_const)]
+#![allow(clippy::mut_from_ref)]
 
 use exo_os_kernel as kernel;
 

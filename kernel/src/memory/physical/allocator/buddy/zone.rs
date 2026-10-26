@@ -28,6 +28,12 @@ pub struct BuddyZoneInner {
 // SAFETY: BuddyZoneInner n'est accessible que sous le spinlock de BuddyZone.
 unsafe impl Send for BuddyZoneInner {}
 
+impl Default for BuddyZoneInner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuddyZoneInner {
     pub const fn new() -> Self {
         BuddyZoneInner {
@@ -38,6 +44,9 @@ impl BuddyZoneInner {
     }
 
     /// Marque le frame `pfn` comme libre dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit pointer vers un buffer valide d'au moins `bitmap_words` mots `u64`.
     #[inline(always)]
     pub unsafe fn bitmap_clear(&self, pfn: usize) {
         if self.bitmap_ptr.is_null() {
@@ -51,6 +60,9 @@ impl BuddyZoneInner {
     }
 
     /// Marque le frame `pfn` comme alloué dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit pointer vers un buffer valide d'au moins `bitmap_words` mots `u64`.
     #[inline(always)]
     pub unsafe fn bitmap_set(&self, pfn: usize) {
         if self.bitmap_ptr.is_null() {
@@ -64,6 +76,9 @@ impl BuddyZoneInner {
     }
 
     /// Retourne `true` si le frame `pfn` est libre dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit être valide pour la lecture si non null.
     #[inline(always)]
     pub unsafe fn bitmap_is_free(&self, pfn: usize) -> bool {
         if self.bitmap_ptr.is_null() {
@@ -78,6 +93,9 @@ impl BuddyZoneInner {
     }
 
     /// Retourne `true` si le frame `pfn` est marqué alloué dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit être valide pour la lecture si non null.
     #[inline(always)]
     pub unsafe fn bitmap_is_allocated(&self, pfn: usize) -> bool {
         if self.bitmap_ptr.is_null() {
@@ -91,11 +109,19 @@ impl BuddyZoneInner {
         ((*self.bitmap_ptr.add(word)) & (1u64 << bit)) != 0
     }
 
+    /// Vérifie si une plage de frames est libre dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit être valide pour la lecture de la plage si non null.
     #[inline(always)]
     pub unsafe fn bitmap_range_is_free(&self, pfn: usize, count: usize) -> bool {
         (0..count).all(|i| self.bitmap_is_free(pfn + i))
     }
 
+    /// Vérifie si une plage de frames est allouée dans le bitmap.
+    ///
+    /// # Safety
+    /// `self.bitmap_ptr` doit être valide pour la lecture de la plage si non null.
     #[inline(always)]
     pub unsafe fn bitmap_range_is_allocated(&self, pfn: usize, count: usize) -> bool {
         (0..count).all(|i| self.bitmap_is_allocated(pfn + i))
@@ -153,6 +179,11 @@ impl BuddyZone {
         }
     }
 
+    /// Initialise la zone buddy.
+    ///
+    /// # Safety
+    /// `bitmap_buf` doit être valide pour écrire `bitmap_words` mots `u64`, et l'appelant
+    /// doit détenir un accès exclusif à `self` pendant l'initialisation.
     pub unsafe fn init(
         &self,
         zone_type: ZoneType,
@@ -186,6 +217,11 @@ impl BuddyZone {
         self.initialized.store(true, Ordering::Release);
     }
 
+    /// Ajoute une plage de frames libres dans la zone buddy.
+    ///
+    /// # Safety
+    /// Les frames de `first_pfn` à `last_pfn` doivent être de la mémoire physique réelle
+    /// et libre appartenant à cette zone.
     pub unsafe fn add_free_range(&self, first_pfn: usize, last_pfn: usize) {
         debug_assert!(self.initialized.load(Ordering::Acquire));
         debug_assert!(first_pfn < last_pfn);

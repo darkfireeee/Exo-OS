@@ -14,6 +14,9 @@ pub(super) const IPC_FLAG_INJECT_SRC_PID: u64 = 0x0002;
 pub(super) const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 pub(super) const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
 
+/// Seuil de bascule pile/tas pour `sys_exo_ipc_call`.
+const STACK_RPC_BUF_MAX: usize = 512;
+
 #[inline]
 pub(super) fn zeroed_user_vec(len: usize) -> Result<Vec<u8>, i64> {
     let mut out = Vec::new();
@@ -214,7 +217,12 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
     let recv_cap = len.min(crate::ipc::core::constants::MAX_MSG_SIZE);
     let mut payload = [0u8; crate::ipc::core::constants::MAX_MSG_SIZE];
     let timeout_requested = !nowait && (flags & IPC_RECV_TIMEOUT_FLAG != 0);
-    let timeout_ms = flags & !IPC_RECV_TIMEOUT_FLAG;
+    let raw_timeout_ms = flags & !IPC_RECV_TIMEOUT_FLAG;
+    let timeout_ms = if timeout_requested && raw_timeout_ms == 0 {
+        1
+    } else {
+        raw_timeout_ms
+    };
 
     let current_tcb = crate::scheduler::core::switch::current_thread_raw();
     let result = if nowait {
@@ -304,25 +312,24 @@ pub fn sys_exo_ipc_send(
         Some(id) => id,
         None => return EINVAL,
     };
-    let _validated_buf =
-        match UserBuf::validate(msg_ptr, len, crate::ipc::core::constants::MAX_MSG_SIZE) {
-            Ok(b) => b,
-            Err(e) => return e.to_errno(),
-        };
-    let mut payload = match zeroed_user_vec(len) {
-        Ok(payload) => payload,
-        Err(errno) => return errno,
-    };
+    if let Err(e) = UserBuf::validate(msg_ptr, len, crate::ipc::core::constants::MAX_MSG_SIZE) {
+        return e.to_errno();
+    }
+
+    // Buffer statique sur la pile (MAX_MSG_SIZE = 240 octets) : 0 allocation SLUB/Heap
+    let mut payload_buf = [0u8; crate::ipc::core::constants::MAX_MSG_SIZE];
+    let payload = &mut payload_buf[..len];
     if len != 0 {
         if copy_from_user(payload.as_mut_ptr(), msg_ptr as *const u8, len).is_err() {
             return EFAULT;
         }
     }
+
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     let caller_can_inject =
         crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid));
     let envelope_auth =
-        match validate_ipc_envelope_auth(endpoint, caller_pid, caller_can_inject, &payload) {
+        match validate_ipc_envelope_auth(endpoint, caller_pid, caller_can_inject, payload) {
             Ok(auth) => auth,
             Err(errno) => return errno,
         };
@@ -338,7 +345,7 @@ pub fn sys_exo_ipc_send(
     if !caller_can_inject && payload.len() == crate::ipc::core::constants::ABI_IPC_ENVELOPE_SIZE {
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
-    if is_reserved_kernel_ipc(endpoint, &payload) {
+    if is_reserved_kernel_ipc(endpoint, payload) {
         return EACCES;
     }
     let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
@@ -346,7 +353,7 @@ pub fn sys_exo_ipc_send(
     } else {
         0
     };
-    match crate::ipc::channel::raw::send_raw(endpoint_id, &payload, raw_flags) {
+    match crate::ipc::channel::raw::send_raw(endpoint_id, payload, raw_flags) {
         Ok(_) => 0,
         Err(err) => ipc_error_to_errno(err),
     }
@@ -415,6 +422,32 @@ pub fn sys_exo_ipc_call(
         Some(ep) => ep,
         None => return EINVAL,
     };
+
+    // Chemin rapide sans allocation sur la pile pour toutes les tailles <= 512 octets
+    if send_len <= STACK_RPC_BUF_MAX && recv_len <= STACK_RPC_BUF_MAX {
+        let mut req_buf = [0u8; STACK_RPC_BUF_MAX];
+        let mut resp_buf = [0u8; STACK_RPC_BUF_MAX];
+        if send_len != 0 {
+            if copy_from_user(req_buf.as_mut_ptr(), msg_ptr as *const u8, send_len).is_err() {
+                return EFAULT;
+            }
+        }
+        return match crate::ipc::rpc::call_raw(
+            server_ep,
+            &req_buf[..send_len],
+            &mut resp_buf[..recv_len],
+        ) {
+            Ok(reply_len) => {
+                if reply_len != 0
+                    && copy_to_user(resp_ptr as *mut u8, resp_buf.as_ptr(), reply_len).is_err()
+                {
+                    return EFAULT;
+                }
+                reply_len as i64
+            }
+            Err(err) => ipc_error_to_errno(err),
+        };
+    }
 
     let mut request = match zeroed_user_vec(send_len) {
         Ok(request) => request,

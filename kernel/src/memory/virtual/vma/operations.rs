@@ -121,7 +121,7 @@ pub fn split_vma(vma: &VmaDescriptor, split_point: VirtAddr) -> Result<SplitResu
     if sp <= vma.start.as_u64() || sp >= vma.end.as_u64() {
         return Err(AllocError::InvalidParams);
     }
-    if sp % PAGE_SIZE as u64 != 0 {
+    if !sp.is_multiple_of(PAGE_SIZE as u64) {
         return Err(AllocError::InvalidParams);
     }
 
@@ -211,10 +211,10 @@ pub fn validate_vma(vma: &VmaDescriptor) -> Result<(), AllocError> {
     if start >= end {
         return Err(AllocError::InvalidParams);
     }
-    if start % PAGE_SIZE as u64 != 0 {
+    if !start.is_multiple_of(PAGE_SIZE as u64) {
         return Err(AllocError::InvalidParams);
     }
-    if end % PAGE_SIZE as u64 != 0 {
+    if !end.is_multiple_of(PAGE_SIZE as u64) {
         return Err(AllocError::InvalidParams);
     }
     if vma.size() == 0 {

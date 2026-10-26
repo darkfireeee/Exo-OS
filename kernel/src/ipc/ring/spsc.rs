@@ -86,11 +86,10 @@ impl SpscRing {
     /// Construit un SpscRing — head et tail sur des cache lines séparées.
     /// Note: `CachePad` = AtomicU64(8B) + padding(56B) = 64B = 1 cache line.
     pub const fn new() -> Self {
-        const INIT_CELL: SlotCell = SlotCell::new_at(0);
         Self {
             head: CachePad(AtomicU64::new(0), [0u8; 56]),
             tail: CachePad(AtomicU64::new(0), [0u8; 56]),
-            cells: UnsafeCell::new([INIT_CELL; RING_SIZE]),
+            cells: UnsafeCell::new([const { SlotCell::new_at(0) }; RING_SIZE]),
         }
     }
 
@@ -277,10 +276,7 @@ impl SpscRing {
 // Aspirationnel : 65536 (MAX_CHANNELS) — sera revisité avec allocation dynamique.
 const MAX_SPSC_RINGS: usize = 4096;
 
-static SPSC_RINGS: [SpscRing; MAX_SPSC_RINGS] = {
-    const ZERO: SpscRing = SpscRing::new();
-    [ZERO; MAX_SPSC_RINGS]
-};
+static SPSC_RINGS: [SpscRing; MAX_SPSC_RINGS] = [const { SpscRing::new() }; MAX_SPSC_RINGS];
 
 static SPSC_INIT: AtomicU64 = AtomicU64::new(0);
 

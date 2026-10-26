@@ -23,7 +23,7 @@ pub enum DetachError {
 ///
 /// # Safety
 /// `target` doit pointer vers un ProcessThread valide.
-pub fn thread_detach(target: *mut ProcessThread) -> Result<(), DetachError> {
+pub unsafe fn thread_detach(target: *mut ProcessThread) -> Result<(), DetachError> {
     // SAFETY: target garanti valide par l'appelant.
     let thread = unsafe { &*target };
 

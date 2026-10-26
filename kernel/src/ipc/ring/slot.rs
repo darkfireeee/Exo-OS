@@ -73,6 +73,7 @@ impl SlotCell {
     /// # Safety
     /// L'appelant doit posséder l'accès exclusif au slot via le protocole de séquence.
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut MaybeUninit<RingSlot> {
         &mut *self.slot.get()
     }
@@ -150,6 +151,7 @@ impl<'a> SlotWriteGuard<'a> {
     ///
     /// # Safety
     /// L'appelant est le seul producteur actif sur ce slot.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut MaybeUninit<RingSlot> {
         self.cell.data_mut()
     }

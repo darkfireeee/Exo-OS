@@ -49,6 +49,12 @@ struct KernelAsStats {
 unsafe impl Sync for KernelAddressSpace {}
 unsafe impl Send for KernelAddressSpace {}
 
+impl Default for KernelAddressSpace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KernelAddressSpace {
     pub const fn new() -> Self {
         KernelAddressSpace {
@@ -68,7 +74,8 @@ impl KernelAddressSpace {
 
     /// Initialise l'espace d'adressage kernel (boot-time, single-CPU).
     ///
-    /// SAFETY: Doit être appelé UNE SEULE FOIS, avant tout autre thread.
+    /// # Safety
+    /// Doit être appelé UNE SEULE FOIS, avant tout autre thread.
     pub unsafe fn init(&self, pml4_phys: PhysAddr) {
         debug_assert!(!self.initialized.load(Ordering::Relaxed));
         // SAFETY: Accès non-concurrent en single-CPU — ptr::write évite &mut T depuis &T.
@@ -84,7 +91,8 @@ impl KernelAddressSpace {
 
     /// Mappe `frame` → `virt` avec les flags donnés dans l'espace kernel.
     ///
-    /// SAFETY: `virt` doit être dans la moitié haute (>= 0xFFFF800000000000).
+    /// # Safety
+    /// `virt` doit être dans la moitié haute (>= 0xFFFF800000000000).
     pub unsafe fn map<A: FrameAllocatorForWalk>(
         &self,
         virt: VirtAddr,
@@ -103,7 +111,8 @@ impl KernelAddressSpace {
 
     /// Démappe `virt` dans l'espace kernel.
     ///
-    /// SAFETY: `virt` doit être dans la moitié haute.
+    /// # Safety
+    /// `virt` doit être dans la moitié haute.
     pub unsafe fn unmap(&self, virt: VirtAddr) -> Option<Frame> {
         debug_assert!(virt.is_kernel());
         let mut walker = PageTableWalker::new(self.pml4_phys);
@@ -118,6 +127,9 @@ impl KernelAddressSpace {
     /// Alloue une plage vmalloc et y mappe `n_pages` frames fournis.
     ///
     /// Retourne l'adresse virtuelle de début.
+    ///
+    /// # Safety
+    /// Les frames doivent être valides et non corrompus.
     pub unsafe fn vmalloc<A: FrameAllocatorForWalk>(
         &self,
         frames: &[Frame],

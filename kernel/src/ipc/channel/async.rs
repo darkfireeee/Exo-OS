@@ -118,9 +118,8 @@ unsafe impl Send for WakerTable {}
 
 impl WakerTable {
     pub const fn new() -> Self {
-        const INIT_WAKER: AsyncWaker = AsyncWaker::new();
         Self {
-            entries: [INIT_WAKER; MAX_ASYNC_WAKERS],
+            entries: [const { AsyncWaker::new() }; MAX_ASYNC_WAKERS],
             count: 0,
         }
     }

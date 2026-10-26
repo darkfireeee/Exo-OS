@@ -50,18 +50,14 @@ impl CState {
 
 /// Contrainte maximale de C-state par CPU (0 = aucune contrainte = C3 autorisé).
 /// Un thread RT impose C1 en utilisant `fetch_min(C1 as u8)`.
-static CSTATE_MAX: [AtomicU8; MAX_CPUS] = {
-    const INIT: AtomicU8 = AtomicU8::new(CState::C3 as u8);
-    [INIT; MAX_CPUS]
-};
+static CSTATE_MAX: [AtomicU8; MAX_CPUS] =
+    [const { AtomicU8::new(CState::C3 as u8) }; MAX_CPUS];
 
 /// BUG-FIX G : compteur du nombre de threads RT actifs par CPU.
 /// Avant ce correctif, `release_rt_constraint()` restaurait C3 immédiatement
 /// même si d'autres threads RT tournaient encore sur le même CPU.
-static RT_ACTIVE_COUNT: [AtomicU8; MAX_CPUS] = {
-    const ZERO: AtomicU8 = AtomicU8::new(0);
-    [ZERO; MAX_CPUS]
-};
+static RT_ACTIVE_COUNT: [AtomicU8; MAX_CPUS] =
+    [const { AtomicU8::new(0) }; MAX_CPUS];
 
 /// Applique la contrainte RT : force C1 maximum sur le CPU `cpu`.
 /// Utilise `fetch_min` pour respecter RÈGLE CSTATE-01.

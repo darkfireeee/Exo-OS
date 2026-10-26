@@ -61,6 +61,7 @@ pub enum MsiError {
 pub enum PciCfgError {
     NotClaimed,
     PermissionDenied,
+    InvalidParams,
 }
 
 const MAX_MSI_HANDLES: usize = 256;

@@ -63,11 +63,10 @@ pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u6
     }
     let nr = nr_tasks.max(1);
     let weight = tcb.priority.cfs_weight() as u64;
-    let raw_slice = if total_weight == 0 {
-        CFS_TARGET_PERIOD_NS / nr as u64
-    } else {
-        CFS_TARGET_PERIOD_NS.saturating_mul(weight) / total_weight
-    };
+    let raw_slice = CFS_TARGET_PERIOD_NS
+        .saturating_mul(weight)
+        .checked_div(total_weight)
+        .unwrap_or(CFS_TARGET_PERIOD_NS / nr as u64);
     raw_slice.max(CFS_MIN_SLICE_NS)
 }
 

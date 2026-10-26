@@ -366,18 +366,66 @@ use exo_syscall_abi as syscall;
         if path_arg(args, args.get(1), &mut path).is_none() {
             return print_errno(b"stat", -36);
         }
-        let Some(st) = stat_path(&path) else {
+        let resolved_opt = resolve_exofs_path(&path);
+        let stat_opt = stat_path(&path);
+        if resolved_opt.is_none() && stat_opt.is_none() {
             return print_errno(b"stat", -2);
-        };
-        write_all(STDOUT, b"File: ");
+        }
+
+        let is_dir = stat_opt.map(|s| is_dir_mode(s.st_mode)).unwrap_or(false);
+        let obj_kind = resolved_opt.map(|r| r.object_kind).unwrap_or(if is_dir { 1 } else { 0 });
+
+        write_all(STDOUT, b"Object   : ");
         write_all(STDOUT, args.get(1));
-        write_all(STDOUT, b"\nSize: ");
-        write_i64(STDOUT, st.st_size);
-        write_all(STDOUT, b"\nMode: ");
-        write_mode(st.st_mode);
-        write_all(STDOUT, b"\nInode: ");
-        write_u64(STDOUT, st.st_ino);
-        write_byte(STDOUT, b'\n');
+        write_all(STDOUT, b"\nType     : ");
+        match obj_kind {
+            1 => write_all(STDOUT, b"Directory (d)\n"),
+            2 => write_all(STDOUT, b"Executable Code (x)\n"),
+            3 => write_all(STDOUT, b"Relation (r)\n"),
+            4 => write_all(STDOUT, b"Secret (s)\n"),
+            5 => write_all(STDOUT, b"Configuration (c)\n"),
+            _ => if is_dir {
+                write_all(STDOUT, b"Directory (d)\n")
+            } else {
+                write_all(STDOUT, b"Immutable Blob (b)\n")
+            },
+        }
+
+        write_all(STDOUT, b"Rights   : ");
+        if is_dir {
+            write_all(STDOUT, b"rw-lk-d (READ | WRITE | LIST | LINK | DERIVE)\n");
+        } else if path.starts_with(b"/mnt/usb") {
+            write_all(STDOUT, b"rw----d (READ | WRITE | DERIVE, MS_NOEXEC enforced)\n");
+        } else {
+            write_all(STDOUT, b"rw---sd (READ | WRITE | SEAL | DERIVE)\n");
+        }
+
+        if let Some(res) = resolved_opt {
+            let mut hex_buf = [0u8; 64];
+            let mut hlen = 0usize;
+            push_hex_bytes(&mut hex_buf, &mut hlen, &res.object_id[..8]);
+            write_all(STDOUT, b"CapToken : @");
+            write_all(STDOUT, &hex_buf[..hlen]);
+            write_all(STDOUT, b"\nEpoch    : ");
+            write_u64(STDOUT, res.epoch_id.max(1));
+            write_all(STDOUT, b"\nSize     : ");
+            write_u64(STDOUT, res.size_bytes);
+            write_all(STDOUT, b" bytes\nBLAKE3   : ");
+            if obj_kind == 4 {
+                // Règle S-09 : interdiction de divulguer le hash d'un objet Secret
+                write_all(STDOUT, b"[redacted - SecretObject S-09]\n");
+            } else {
+                let mut b3_buf = [0u8; 64];
+                let mut blen = 0usize;
+                push_hex_bytes(&mut b3_buf, &mut blen, &res.blob_id);
+                write_all(STDOUT, &b3_buf[..blen]);
+                write_byte(STDOUT, b'\n');
+            }
+        } else if let Some(st) = stat_opt {
+            write_all(STDOUT, b"Size     : ");
+            write_i64(STDOUT, st.st_size);
+            write_all(STDOUT, b" bytes\nEpoch    : ---- (VFS pseudo/compat)\n");
+        }
         0
     }
 

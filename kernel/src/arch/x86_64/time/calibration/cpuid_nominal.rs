@@ -193,7 +193,7 @@ pub fn hypervisor_tsc_hz() -> Option<u64> {
         return None;
     }
     let hz = (eax as u64).saturating_mul(1_000);
-    if hz < TSC_MIN_HZ || hz > TSC_MAX_HZ {
+    if !(TSC_MIN_HZ..=TSC_MAX_HZ).contains(&hz) {
         None
     } else {
         Some(hz)
@@ -259,7 +259,7 @@ fn cpuid_leaf16_full() -> Option<CpuidLeaf16Result> {
     }
 
     let tsc_hz = (base_mhz as u64).saturating_mul(1_000_000);
-    if tsc_hz < TSC_MIN_HZ || tsc_hz > TSC_MAX_HZ {
+    if !(TSC_MIN_HZ..=TSC_MAX_HZ).contains(&tsc_hz) {
         return None;
     }
 
@@ -502,11 +502,7 @@ pub fn cross_check_0x15_vs_0x16() -> bool {
     if hz16 == 0 {
         return true;
     }
-    let diff = if hz15 > hz16 {
-        hz15 - hz16
-    } else {
-        hz16 - hz15
-    };
+    let diff = hz15.abs_diff(hz16);
     let pct_x100 = (diff as u128 * 10_000) / hz16 as u128;
     pct_x100 <= 500 // ≤ 5% d'écart acceptable
 }

@@ -38,11 +38,8 @@ pub const MAX_CPUS: usize = 256;
 #[repr(C, align(64))]
 struct PreemptCounter(AtomicI32, [u8; 60]); // padding cache line
 
-static PREEMPT_COUNT: [PreemptCounter; MAX_CPUS] = {
-    // SAFETY: zero-initialization correcte pour AtomicI32(0) + padding.
-    const ZERO: PreemptCounter = PreemptCounter(AtomicI32::new(0), [0u8; 60]);
-    [ZERO; MAX_CPUS]
-};
+static PREEMPT_COUNT: [PreemptCounter; MAX_CPUS] =
+    [const { PreemptCounter(AtomicI32::new(0), [0u8; 60]) }; MAX_CPUS];
 
 /// Compteur global de désactivations de préemption (instrumentation).
 static PREEMPT_DISABLE_TOTAL: AtomicI32 = AtomicI32::new(0);
@@ -165,6 +162,12 @@ pub struct PreemptGuard {
     _phantom: PhantomData<*mut ()>,
 }
 
+impl Default for PreemptGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PreemptGuard {
     /// Désactive la préemption et retourne un guard RAII.
     #[inline(always)]
@@ -210,6 +213,12 @@ pub struct IrqGuard {
     /// Flags RFLAGS sauvegardés (IF bit).
     rflags: u64,
     _phantom: PhantomData<*mut ()>,
+}
+
+impl Default for IrqGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IrqGuard {

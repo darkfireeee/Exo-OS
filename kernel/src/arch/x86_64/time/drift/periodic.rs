@@ -267,7 +267,7 @@ pub fn update_cpu_load(load_permil: u32) {
 /// Vérifie qu'une fréquence mesurée est dans la plage raisonnable [500 MHz, 10 GHz].
 #[inline(always)]
 fn is_plausible_hz(hz: u64) -> bool {
-    hz >= 500_000_000 && hz <= 10_000_000_000
+    (500_000_000..=10_000_000_000).contains(&hz)
 }
 
 // ── Primitive assembleur locale ───────────────────────────────────────────────

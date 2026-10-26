@@ -40,6 +40,12 @@ pub struct DmaMemsetStats {
     pub errors: AtomicU64,
 }
 
+impl Default for DmaMemsetStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaMemsetStats {
     pub const fn new() -> Self {
         DmaMemsetStats {

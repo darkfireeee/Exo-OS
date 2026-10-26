@@ -118,7 +118,7 @@ impl<'a> JsonParser<'a> {
                     }
                 } else {
                     result.push(c);
-                    self.pos += 1;
+                    self.pos += c.len_utf8(); // AUDIT-LIB1 : support UTF-8 multi-octets
                 }
             }
             Err(TextError::UnexpectedEof)

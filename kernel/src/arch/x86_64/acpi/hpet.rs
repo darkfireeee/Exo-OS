@@ -222,7 +222,7 @@ pub fn init_hpet_post_memory() -> bool {
 
     // Valider la période : QEMU retourne 69841279 fs (~14.318 MHz PIT reference).
     // Plage acceptable : 100 ps (10 GHz) à 100 ns (10 MHz).
-    if period_fs < 100 || period_fs > 100_000_000 {
+    if !(100..=100_000_000).contains(&period_fs) {
         return false; // GCAP_ID invalide — HPET non disponible ou MMIO inaccessible
     }
 

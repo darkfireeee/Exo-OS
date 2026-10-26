@@ -562,7 +562,7 @@ impl SyncChannel {
 
         if msg_flags.contains(MsgFlags::ZEROCOPY) {
             // Mode zero-copy : retourner la référence sans copie de données
-            let copy_len = 0usize.min(buf.len());
+            let copy_len = 0usize;
             let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
             self.slot
                 .state

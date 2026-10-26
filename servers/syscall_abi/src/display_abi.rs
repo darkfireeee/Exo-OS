@@ -56,3 +56,9 @@ pub const DISPLAY_OP_CREATE_SURFACE: u32 = 0x5002;
 pub const DISPLAY_OP_DESTROY_SURFACE: u32 = 0x5003;
 pub const DISPLAY_OP_COMMIT_DAMAGE: u32 = 0x5004;
 pub const DISPLAY_OP_FLIP: u32 = 0x5005;
+pub const DISPLAY_OP_MOVE_WINDOW: u32 = 0x5006;
+pub const DISPLAY_OP_WAYLAND_WIRE: u32 = 0x5010;
+
+// Opcodes IPC VirtIO-GPU (`virtio_drivers` endpoint 13)
+pub const VIRTIO_GPU_MSG_TRANSFER_FLUSH: u32 = 2;
+pub const VIRTIO_GPU_MSG_MOVE_CURSOR: u32 = 3;

@@ -37,6 +37,12 @@ pub struct SmapStats {
     pub redundant_enable: AtomicU64,
 }
 
+impl Default for SmapStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SmapStats {
     const fn new() -> Self {
         Self {
@@ -131,7 +137,8 @@ pub unsafe fn clac() {
 
 /// Active SMAP sur le CPU courant.
 ///
-/// # Safety : CPL 0, interruptible safe.
+/// # Safety
+/// CPL 0, interruptible safe.
 pub unsafe fn enable_smap() {
     if !smap_supported() {
         return;
@@ -150,7 +157,8 @@ pub unsafe fn enable_smap() {
 
 /// Désactive SMAP temporairement — usage debug uniquement.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn disable_smap() -> bool {
     let cr4 = read_cr4();
     if cr4 & CR4_SMAP_BIT == 0 {
@@ -164,7 +172,8 @@ pub unsafe fn disable_smap() -> bool {
 
 /// Retourne `true` si SMAP est actif sur ce CPU.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 #[inline]
 pub unsafe fn smap_active() -> bool {
     read_cr4() & CR4_SMAP_BIT != 0
@@ -187,7 +196,8 @@ pub struct SmapAccessGuard {
 }
 
 impl SmapAccessGuard {
-    /// # Safety : CPL 0.  La fenêtre SMAP est ouverte tant que ce guard vit.
+    /// # Safety
+    /// CPL 0.  La fenêtre SMAP est ouverte tant que ce guard vit.
     #[inline]
     pub unsafe fn new() -> Self {
         stac();
@@ -222,7 +232,8 @@ pub unsafe fn copy_from_user(kernel_dst: *mut u8, user_src: *const u8, count: us
 
 /// Copie `count` bytes depuis `kernel_src` vers `user_dst`.
 ///
-/// # Safety : idem copy_from_user.
+/// # Safety
+/// idem copy_from_user.
 pub unsafe fn copy_to_user(user_dst: *mut u8, kernel_src: *const u8, count: usize) {
     let _guard = SmapAccessGuard::new();
     core::ptr::copy_nonoverlapping(kernel_src, user_dst, count);
@@ -230,7 +241,8 @@ pub unsafe fn copy_to_user(user_dst: *mut u8, kernel_src: *const u8, count: usiz
 
 /// Efface (zero) `count` bytes à `user_dst`.
 ///
-/// # Safety : CPL 0, `user_dst` user-valid.
+/// # Safety
+/// CPL 0, `user_dst` user-valid.
 pub unsafe fn zero_user(user_dst: *mut u8, count: usize) {
     let _guard = SmapAccessGuard::new();
     core::ptr::write_bytes(user_dst, 0, count);
@@ -255,7 +267,8 @@ pub fn smap_handle_violation(fault_addr: u64, rip: u64) -> bool {
 
 /// Init SMAP : doit être appelé sur BSP + chaque AP.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// CPL 0.
 pub unsafe fn init() {
     enable_smap();
 }

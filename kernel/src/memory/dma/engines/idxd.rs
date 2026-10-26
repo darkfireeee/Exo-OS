@@ -258,7 +258,8 @@ impl IdxdEngine {
     /// `mmio_base`  : base BAR MMIO PCI.
     /// `wq_portal`  : adresse du portal de soumission WQ0 (BAR2).
     ///
-    /// # Safety : CPL 0, MMIOs valides, la CPU supporte ENQCMD.
+    /// # Safety
+    /// CPL 0, MMIOs valides, la CPU supporte ENQCMD.
     pub unsafe fn init(&self, mmio_base: u64, wq_portal: u64) -> bool {
         self.mmio_base.store(mmio_base, Ordering::Release);
         self.wq_portal.store(wq_portal, Ordering::Release);
@@ -291,7 +292,8 @@ impl IdxdEngine {
 
     /// Soumet un descripteur DSA via ENQCMD vers le portal WQ0.
     ///
-    /// # Safety : portal MMIO valide, CPU avec ENQCMD, descripteur valide.
+    /// # Safety
+    /// portal MMIO valide, CPU avec ENQCMD, descripteur valide.
     pub unsafe fn submit(&self, desc: DsaDescriptor) -> bool {
         if !self.present.load(Ordering::Acquire) {
             return false;
@@ -330,7 +332,8 @@ impl IdxdEngine {
 
     /// Sonde les compléments via les completion records.
     ///
-    /// # Safety : appelé en contexte non-préemptible.
+    /// # Safety
+    /// appelé en contexte non-préemptible.
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -360,7 +363,8 @@ impl IdxdEngine {
 
     /// Soumet une copie mémoire DSA.
     ///
-    /// # Safety : adresses physiques valides.
+    /// # Safety
+    /// adresses physiques valides.
     pub unsafe fn submit_memmove(
         &self,
         src: PhysAddr,
@@ -380,21 +384,24 @@ pub static IDXD_ENGINE: IdxdEngine = IdxdEngine::new();
 
 /// Initialise le moteur IDXD.
 ///
-/// # Safety : MMIOs valides.
+/// # Safety
+/// MMIOs valides.
 pub unsafe fn idxd_init(mmio_base: u64, wq_portal: u64) -> bool {
     IDXD_ENGINE.init(mmio_base, wq_portal)
 }
 
 /// Soumet une opération DSA.
 ///
-/// # Safety : adresses physiques valides.
+/// # Safety
+/// adresses physiques valides.
 pub unsafe fn idxd_submit(desc: DsaDescriptor) -> bool {
     IDXD_ENGINE.submit(desc)
 }
 
 /// Sonde les compléments DSA.
 ///
-/// # Safety : contexte non-préemptible.
+/// # Safety
+/// contexte non-préemptible.
 pub unsafe fn idxd_poll() -> usize {
     IDXD_ENGINE.poll()
 }

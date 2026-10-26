@@ -142,7 +142,6 @@ pub fn exception_return_to_user_after_recovered_fault(frame: &mut ExceptionFrame
 }
 
 #[inline]
-
 pub fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     let tcb_raw = current_tcb_raw_checked();
     // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : le #GP1 identique
@@ -212,14 +211,13 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     out(&hex(frame.rip));
     out(b" rsp=");
     out(&hex(frame.rsp));
-    // Octets à RIP : le fetch a réussi (l'instruction a été décodée) donc la
-    // page RIP est présente et lisible.
-    // SAFETY: lecture guardée sur plage user plausible uniquement.
+    // Octets à RIP : lecture protégée par fixup pour éviter un #PF nested (T1-025 FIX).
     let mut rb = 0u64;
+    let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
     if frame.rip >= 0x1000 && frame.rip < 0x0000_8000_0000_0000 {
-        for bi in 0..8u64 {
-            let byte = unsafe { core::ptr::read_volatile((frame.rip + bi) as *const u8) };
-            rb |= (byte as u64) << (bi * 8);
+        let mut buf = [0u8; 8];
+        if crate::syscall::fixup::copy_from_user_safe(buf.as_mut_ptr(), frame.rip as *const u8, 8, cpu) {
+            rb = u64::from_le_bytes(buf);
         }
     }
     out(b" ripb=");
@@ -256,26 +254,26 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     out(&hex(frame.r14));
     out(b" r15=");
     out(&hex(frame.r15));
-    // 8 mots de pile user à RSP : la chaîne de return addresses — révèle
-    // d'où provient le saut vers le RIP fautif (corruption #25).
+    // 8 mots de pile user à RSP : la chaîne de return addresses — protégée par fixup (T1-025 FIX).
     out(b" stk=");
     if frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
-        for wi in 0..8u64 {
-            // SAFETY: RSP user plausible ; lecture volatile.
-            let w = unsafe { core::ptr::read_volatile((frame.rsp + wi * 8) as *const u64) };
-            out(&hex(w));
-            out(b" ");
+        let mut words = [0u64; 8];
+        if crate::syscall::fixup::copy_from_user_safe(words.as_mut_ptr() as *mut u8, frame.rsp as *const u8, 64, cpu) {
+            for &w in &words {
+                out(&hex(w));
+                out(b" ");
+            }
         }
     }
-    // DIAG-UD1/SEGV étendu (run 5) : 16 octets à RDI — identifie l'argument
-    // du call null (souvent un pointeur .rodata : la chaîne de caractères).
+    // DIAG-UD1/SEGV étendu (run 5) : 16 octets à RDI — protégés par fixup (T1-025 FIX).
     out(b" rdib=");
     if frame.rdi >= 0x1000 && frame.rdi < 0x0000_8000_0000_0000 {
-        for bi in 0..16u64 {
-            // SAFETY: RDI user plausible ; lecture volatile.
-            let byte = unsafe { core::ptr::read_volatile((frame.rdi + bi) as *const u8) };
+        let mut bytes = [0u8; 16];
+        if crate::syscall::fixup::copy_from_user_safe(bytes.as_mut_ptr(), frame.rdi as *const u8, 16, cpu) {
             let lut = b"0123456789abcdef";
-            out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+            for &byte in &bytes {
+                out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+            }
         }
     }
     out(b">\n");
@@ -342,10 +340,7 @@ pub fn kernel_panic_exception(msg: &str, frame: &mut ExceptionFrame) {
 // ── Instrumentations ──────────────────────────────────────────────────────────
 
 /// Compteurs per-vecteur (vecteurs 0–31 seulement ici)
-pub static EXC_COUNTERS: [AtomicU64; 32] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; 32]
-};
+pub static EXC_COUNTERS: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
 
 pub static NMI_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static MC_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -353,9 +348,6 @@ pub static GP_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static TIMER_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static SPURIOUS_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static FPU_DEVICE_NOT_AVAIL_COUNT: AtomicU64 = AtomicU64::new(0);
-#[cfg(debug_assertions)]
-#[cfg(all(debug_assertions, exo_kernel_trace))]
-pub static USER_PF_DEBUG_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub fn exc_count(vector: u8) -> u64 {
     if (vector as usize) < 32 {

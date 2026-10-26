@@ -214,11 +214,9 @@ unsafe impl Send for BroadcastChannel {}
 
 impl BroadcastChannel {
     pub const fn new_uninit() -> Self {
-        // SAFETY: SubscriberSlot::new() est const, donc valide
-        const INIT_SLOT: SubscriberSlot = SubscriberSlot::new();
         Self {
             id: ChannelId::DANGLING,
-            subscribers: [INIT_SLOT; MAX_BROADCAST_SUBSCRIBERS],
+            subscribers: [const { SubscriberSlot::new() }; MAX_BROADCAST_SUBSCRIBERS],
             subscriber_bitmap: AtomicU64::new(0),
             subscriber_count: AtomicU32::new(0),
             stats: BroadcastStats::new(),

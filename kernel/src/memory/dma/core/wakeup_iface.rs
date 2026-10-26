@@ -82,7 +82,6 @@ pub fn lost_wakeup_count() -> usize {
 ///
 /// En no_std/bare-metal on encode le fat pointer comme deux AtomicUsize adjacents.
 /// Le registre est write-once : on ne supporte pas de swap dynamique.
-
 struct WakeupHandlerSlot {
     data: AtomicUsize,
     vtbl: AtomicUsize,

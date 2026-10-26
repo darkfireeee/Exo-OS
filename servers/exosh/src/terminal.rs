@@ -90,39 +90,152 @@ pub fn log_stdin_read_error_once(rc: i64) {
     }
 }
 
+pub fn set_tty_echo(enabled: bool) {
+    let mode: u64 = if enabled { 3 } else { 0 }; // bit 0 = echo, bit 1 = canonical
+    unsafe {
+        let _ = syscall::syscall3(syscall::SYS_IOCTL, STDIN, 0x5402, mode);
+    }
+}
+
+pub fn set_tty_foreground(pid: u32) {
+    unsafe {
+        let _ = syscall::syscall3(syscall::SYS_IOCTL, STDIN, 0x5410, pid as u64);
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Sigaction {
+    pub sa_handler: u64,
+    pub sa_flags: u64,
+    pub sa_restorer: u64,
+    pub sa_mask: u64,
+}
+
+pub fn ignore_sigint() {
+    let act = Sigaction {
+        sa_handler: 1, // SIG_IGN
+        sa_flags: 0x1000_0000, // SA_RESTART
+        sa_restorer: 0,
+        sa_mask: 0,
+    };
+    unsafe {
+        let _ = syscall::syscall4(
+            syscall::SYS_RT_SIGACTION,
+            2, // SIGINT
+            &act as *const Sigaction as u64,
+            0,
+            8,
+        );
+    }
+}
+
+pub fn restore_sigint() {
+    let act = Sigaction {
+        sa_handler: 0, // SIG_DFL
+        sa_flags: 0,
+        sa_restorer: 0,
+        sa_mask: 0,
+    };
+    unsafe {
+        let _ = syscall::syscall4(
+            syscall::SYS_RT_SIGACTION,
+            2, // SIGINT
+            &act as *const Sigaction as u64,
+            0,
+            8,
+        );
+    }
+}
+
 pub fn read_line_interactive(line: &mut [u8; LINE_MAX], state: &mut ShellState) -> usize {
     let mut len = 0usize;
-    prompt(state);
+    let mut cursor = 0usize;
+    let mut visible_len = 0usize;
+    let mut history_offset: Option<usize> = None;
+
+    set_tty_echo(false);
+    render_input_line(line, 0, 0, state, &mut visible_len, true);
+
     loop {
         let Some(key) = read_shell_key_poll() else {
             sleep_ms(5);
             continue;
         };
-
         match key {
             ShellKey::Enter => {
-                write_all(b"\n");
+                write_all(b"\x08 \x08\n");
+                set_tty_echo(true);
                 return len;
             }
-            ShellKey::Interrupt | ShellKey::EndOfFile => {
-                write_all(b"\n");
-                return 0;
+            ShellKey::Interrupt => {
+                write_all(b"^C\n");
+                len = 0;
+                cursor = 0;
+                history_offset = None;
+                visible_len = 0;
+                line[0] = 0;
+                render_input_line(line, 0, 0, state, &mut visible_len, true);
+            }
+            ShellKey::EndOfFile => {
+                if len == 0 {
+                    write_all(b"\n");
+                    return 0;
+                }
+            }
+            ShellKey::HistoryPrev => {
+                apply_history_prev(line, &mut len, &mut cursor, &mut history_offset, state);
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
+            }
+            ShellKey::HistoryNext => {
+                apply_history_next(line, &mut len, &mut cursor, &mut history_offset, state);
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
+            }
+            ShellKey::CursorLeft => {
+                if cursor > 0 {
+                    cursor -= 1;
+                    render_input_line(line, len, cursor, state, &mut visible_len, true);
+                }
+            }
+            ShellKey::CursorRight => {
+                if cursor < len {
+                    cursor += 1;
+                    render_input_line(line, len, cursor, state, &mut visible_len, true);
+                }
+            }
+            ShellKey::CursorHome => {
+                cursor = 0;
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
+            }
+            ShellKey::CursorEnd => {
+                cursor = len;
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
             }
             ShellKey::Backspace => {
-                if len > 0 {
-                    len -= 1;
-                    write_all(b"\x08 \x08");
+                if cursor > 0 {
+                    delete_before_cursor(line, &mut len, &mut cursor);
+                    render_input_line(line, len, cursor, state, &mut visible_len, true);
                 }
+            }
+            ShellKey::Delete => {
+                delete_at_cursor(line, &mut len, cursor);
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
             }
             ShellKey::ClearScreen => {
                 write_all(b"\x0c");
-                prompt(state);
-                write_bytes(&line[..len]);
+                visible_len = 0;
+                render_input_line(line, len, cursor, state, &mut visible_len, true);
             }
-            ShellKey::Char(b) if len < LINE_MAX - 1 => {
-                line[len] = b;
-                len += 1;
-                write_byte(b);
+            ShellKey::Char(b) => {
+                let append_at_end = cursor == len;
+                if insert_input_byte(line, &mut len, &mut cursor, b) {
+                    if append_at_end {
+                        visible_len = len + 1;
+                        render_input_append(b);
+                    } else {
+                        render_input_line(line, len, cursor, state, &mut visible_len, true);
+                    }
+                }
             }
             _ => {}
         }
@@ -389,54 +502,36 @@ pub fn recv_input_reply(reply_endpoint: u64, timeout_ms: u64) -> Option<syscall:
 
 pub fn input_poll_event() -> Option<syscall::InputEventWire> {
     let reply_endpoint = input_reply_endpoint()?;
-    if ensure_input_stream_attached(reply_endpoint) {
-        if let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_WAIT_TIMEOUT_MS) {
-            if reply.status == 0 {
-                return Some(reply.event);
-            }
-        }
+    if !ensure_input_stream_attached(reply_endpoint) {
+        return None;
     }
-
-    for _ in 0..INPUT_REPLY_DRAIN_LIMIT {
-        let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_DRAIN_TIMEOUT_MS) else {
-            break;
-        };
-        if reply.status == 0 {
-            return Some(reply.event);
-        }
-    }
-
-    let req = syscall::InputRequest {
-        sender_pid: 0,
-        msg_type: syscall::INPUT_MSG_POLL,
-        reply_endpoint,
-        event: syscall::InputEventWire::default(),
-    };
-
-    let send_rc = unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            syscall::INPUT_SERVER_ENDPOINT,
-            &req as *const syscall::InputRequest as u64,
-            core::mem::size_of::<syscall::InputRequest>() as u64,
-            0,
-            0,
+    let mut reply = syscall::InputReply::default();
+    let rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_EXO_IPC_RECV_NB,
+            reply_endpoint,
+            &mut reply as *mut syscall::InputReply as u64,
+            core::mem::size_of::<syscall::InputReply>() as u64,
             0,
         )
     };
-    if send_rc < 0 {
-        return None;
+    if rc >= core::mem::size_of::<syscall::InputReply>() as i64 && reply.status == 0 {
+        Some(reply.event)
+    } else {
+        None
     }
+}
 
-    for _ in 0..INPUT_REPLY_DRAIN_LIMIT {
-        let Some(reply) = recv_input_reply(reply_endpoint, INPUT_REPLY_WAIT_TIMEOUT_MS) else {
-            return None;
-        };
-        if reply.status == 0 {
-            return Some(reply.event);
+pub fn check_interrupt_poll() -> bool {
+    if let Some(event) = input_poll_event() {
+        if event.device == syscall::INPUT_DEVICE_KEYBOARD
+            && event.state == syscall::INPUT_KEY_PRESSED
+            && (event.ascii == 0x03 || event.ascii == b'q')
+        {
+            return true;
         }
     }
-    None
+    false
 }
 
 pub fn map_input_event_to_shell_key(event: syscall::InputEventWire) -> Option<ShellKey> {
@@ -448,8 +543,9 @@ pub fn map_input_event_to_shell_key(event: syscall::InputEventWire) -> Option<Sh
         HID_KEY_DOWN => return Some(ShellKey::HistoryNext),
         HID_KEY_LEFT => return Some(ShellKey::CursorLeft),
         HID_KEY_RIGHT => return Some(ShellKey::CursorRight),
-        HID_KEY_DELETE => return Some(ShellKey::Delete),
+        HID_KEY_HOME => return Some(ShellKey::CursorHome),
         HID_KEY_END => return Some(ShellKey::CursorEnd),
+        HID_KEY_DELETE => return Some(ShellKey::Delete),
         _ => {}
     }
 
@@ -465,19 +561,7 @@ pub fn map_input_event_to_shell_key(event: syscall::InputEventWire) -> Option<Sh
     }
 }
 
-pub fn read_shell_key_poll() -> Option<ShellKey> {
-    let mut skipped = 0usize;
-    while skipped < INPUT_REPLY_DRAIN_LIMIT {
-        let Some(event) = input_poll_event() else {
-            break;
-        };
-        if let Some(key) = map_input_event_to_shell_key(event) {
-            return Some(key);
-        }
-        skipped += 1;
-    }
-
-    let byte = read_byte_poll()?;
+pub fn map_byte_to_shell_key(byte: u8) -> Option<ShellKey> {
     match byte {
         b'\n' | b'\r' => Some(ShellKey::Enter),
         0x03 => Some(ShellKey::Interrupt),
@@ -485,24 +569,34 @@ pub fn read_shell_key_poll() -> Option<ShellKey> {
         0x08 | 0x7F => Some(ShellKey::Backspace),
         0x0C => Some(ShellKey::ClearScreen),
         b'\t' => Some(ShellKey::Tab),
-        0x1B => read_ansi_escape_key(),
         b if b.is_ascii_graphic() || b == b' ' => Some(ShellKey::Char(b)),
         _ => None,
     }
 }
 
+pub fn read_shell_key_poll() -> Option<ShellKey> {
+    let byte = read_byte_poll()?;
+    if byte == 0x1B {
+        if let Some(key) = read_ansi_escape_key() {
+            return Some(key);
+        }
+    }
+    map_byte_to_shell_key(byte)
+}
+
 pub fn read_ansi_escape_key() -> Option<ShellKey> {
-    let second = read_byte_wait_ms(25)?;
+    let second = read_byte_wait_ms(10)?;
     if second != b'[' {
         return None;
     }
-    let third = read_byte_wait_ms(25)?;
+    let third = read_byte_wait_ms(10)?;
     match third {
         b'A' => Some(ShellKey::HistoryPrev),
         b'B' => Some(ShellKey::HistoryNext),
         b'C' => Some(ShellKey::CursorRight),
         b'D' => Some(ShellKey::CursorLeft),
-        b'F' => Some(ShellKey::CursorEnd),
+        b'H' | b'1' => Some(ShellKey::CursorHome),
+        b'F' | b'4' => Some(ShellKey::CursorEnd),
         b'3' => {
             if read_byte_wait_ms(25) == Some(b'~') {
                 Some(ShellKey::Delete)

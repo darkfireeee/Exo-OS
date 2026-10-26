@@ -486,11 +486,14 @@ impl FsckRepair {
         Ok(true)
     }
 
-    /// Écrit un superbloc de repli minimal.
+    /// Écrit un superbloc de repli minimal sur un LBA de secours.
     ///
-    /// Un superbloc de repli ne contient que le magic + version pour permettre
-    /// à un scan futur de retrouver la partition.
+    /// T16-001 : Ne jamais écraser le superbloc primaire avec un contenu vide
+    /// pour préserver la possibilité d'une récupération par miroirs.
     fn write_fallback_superblock(device: &mut dyn BlockDevice, lba: u64) -> ExofsResult<bool> {
+        if lba == super::fsck_phase1::SUPERBLOCK_LBA {
+            return Err(ExofsError::Corrupt);
+        }
         let bsz = device.block_size() as usize;
         let mut buf = alloc::vec![0u8; bsz];
         const SB_MAGIC: u64 = 0x4B4C42534F465845; // "EXOFSBLK"

@@ -327,8 +327,9 @@ pub fn shm_map(
             let dir = SHM_DESC_DIR.lock();
             if let Some(desc) = unsafe { dir.get(desc_idx) } {
                 let mut page_flags = PageFlags::SHM_DEFAULT;
-                if region_perms.can_write() {
-                    page_flags.insert(PageFlags::WRITE);
+                // T8-001 FIX : retirer WRITE si les permissions de la région sont read-only
+                if !region_perms.can_write() {
+                    page_flags.remove(PageFlags::WRITE);
                 }
                 for i in 0..n_pages {
                     if let Some(phys) = desc.page_phys(i) {

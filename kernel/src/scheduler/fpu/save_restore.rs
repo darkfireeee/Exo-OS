@@ -73,9 +73,10 @@ pub unsafe fn xsave_current(tcb: &mut ThreadControlBlock) {
     state.generation = state.generation.wrapping_add(1);
 
     // SAFETY: state.as_mut_ptr() est aligné 64 bytes (garanti par FpuState::repr(align(64))).
-    // Le masque 0xFFFFFFFF_FFFFFFFF sauvegarde tous les composants XCR0 activés.
+    // T7-002 FIX: Utiliser le masque XCR0 réel supporté pour éviter un #GP matériel.
     if HAS_XSAVE.load(Ordering::Relaxed) {
-        arch_xsave64(state.as_mut_ptr(), !0u64);
+        let xcr0 = crate::arch::x86_64::cpu::fpu::read_xcr0();
+        arch_xsave64(state.as_mut_ptr(), xcr0);
     } else {
         arch_fxsave64(state.as_mut_ptr());
     }
@@ -103,9 +104,10 @@ pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
 
     let state = &*state_ptr;
 
-    // SAFETY: state.as_ptr() est aligné 64 bytes. Le masque !0u64 restaure tous les composants.
+    // SAFETY: state.as_ptr() est aligné 64 bytes. T7-002 FIX: masque XCR0 valide pour éviter #GP.
     if HAS_XSAVE.load(Ordering::Relaxed) {
-        arch_xrstor64(state.as_ptr(), !0u64);
+        let xcr0 = crate::arch::x86_64::cpu::fpu::read_xcr0();
+        arch_xrstor64(state.as_ptr(), xcr0);
     } else {
         arch_fxrstor64(state.as_ptr());
     }
@@ -115,12 +117,13 @@ pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
 
 /// Initialise les registres FPU à leur état par défaut (FINIT + LDMXCSR).
 unsafe fn init_fpu_registers() {
+    let mxcsr_val: u32 = 0x1F80;
     // SAFETY: instructions FPU standard disponibles sur tout x86_64.
     core::arch::asm!(
         "fninit",
         "ldmxcsr [{mxcsr}]",
-        mxcsr = in(reg) &0x1F80u32,  // Mode arrondi par défaut, masques actifs
-        options(nomem, nostack),
+        mxcsr = in(reg) &mxcsr_val,  // Mode arrondi par défaut, masques actifs
+        options(nostack),
     );
 }
 
@@ -135,6 +138,10 @@ unsafe fn init_fpu_registers() {
 ///
 /// RÈGLE : Utilise l'allocateur heap kernel (global_allocator). Ne peut PAS
 /// être appelé depuis un contexte IN_RECLAIM (deadlock potentiel).
+///
+/// # Safety
+/// Modifie les pointeurs FPU internes de `tcb`. Ne doit pas être appelé en concurrence
+/// sur le même TCB.
 pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     use core::alloc::Layout;
 

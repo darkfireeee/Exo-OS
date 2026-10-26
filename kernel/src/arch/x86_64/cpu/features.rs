@@ -245,15 +245,15 @@ impl CpuFeatures {
         // Leaf 0 : vendor string + max basic leaf
         let (max_basic, ebx, ecx, edx) = cpuid(0);
         let vendor_string = [
-            (ebx >> 0) as u8,
+            ebx as u8,
             (ebx >> 8) as u8,
             (ebx >> 16) as u8,
             (ebx >> 24) as u8,
-            (edx >> 0) as u8,
+            edx as u8,
             (edx >> 8) as u8,
             (edx >> 16) as u8,
             (edx >> 24) as u8,
-            (ecx >> 0) as u8,
+            ecx as u8,
             (ecx >> 8) as u8,
             (ecx >> 16) as u8,
             (ecx >> 24) as u8,

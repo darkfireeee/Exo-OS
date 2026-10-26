@@ -290,7 +290,7 @@ pub fn timer_oneshot_us(us: u64) {
 #[inline]
 fn has_tsc_deadline_timer() -> bool {
     super::super::cpu::features::cpu_features_or_none()
-        .map_or(false, |features| features.has_tsc_deadline())
+        .is_some_and(|features| features.has_tsc_deadline())
 }
 
 /// Retourne vrai quand le LAPIC timer est réservé au tick scheduler.

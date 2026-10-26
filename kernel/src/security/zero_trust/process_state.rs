@@ -32,10 +32,9 @@ use super::context::{restriction_flags, PrincipalId, SecurityContext, TrustLevel
 use super::verify::ring1_trusted_mask;
 use crate::syscall::numbers;
 
-/// Nombre de PID traçables sans verrou. Couvre largement les PID système précoces
-/// et les premiers process utilisateur d'ExoOS. Un PID >= cette borne est traité
-/// comme non-restreignable (cf. en-tête).
-pub const MAX_TRACKED_PIDS: usize = 1024;
+/// Nombre de PID traçables sans verrou. Couvre l'intégralité de l'espace PID d'Exo-OS
+/// (PID_MAX = 32 767, donc 32 768 slots pour couvrir PIDs 0..=32767 sans fail-open).
+pub const MAX_TRACKED_PIDS: usize = 32768;
 
 /// PID du process init — ne peut pas être restreint (RÈGLE PLEDGE-03).
 const INIT_PID: u32 = 1;

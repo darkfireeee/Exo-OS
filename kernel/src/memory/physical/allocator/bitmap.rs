@@ -42,6 +42,12 @@ struct BitmapInner {
 // SAFETY: BitmapAllocator est thread-safe via son spinlock interne.
 unsafe impl Sync for BitmapAllocator {}
 
+impl Default for BitmapAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BitmapAllocator {
     pub const fn new() -> Self {
         BitmapAllocator {
@@ -59,7 +65,8 @@ impl BitmapAllocator {
 
     /// Initialise la plage d'adresses physiques gérée par ce bitmap.
     ///
-    /// SAFETY: Single-CPU uniquement (avant init SMP).
+    /// # Safety
+    /// Single-CPU uniquement (avant init SMP).
     pub unsafe fn init(&self, phys_start: PhysAddr, phys_end: PhysAddr) {
         let mut inner = self.inner.lock();
         inner.phys_start = phys_start.as_u64();
@@ -78,7 +85,8 @@ impl BitmapAllocator {
 
     /// Marque une plage physique comme libre (disponible à l'allocation).
     ///
-    /// SAFETY: Single-CPU uniquement.
+    /// # Safety
+    /// Single-CPU uniquement.
     pub unsafe fn add_free_region(&self, start: PhysAddr, end: PhysAddr) {
         debug_assert!(self.initialized.load(Ordering::Acquire));
         let mut inner = self.inner.lock();

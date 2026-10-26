@@ -221,21 +221,11 @@ struct AhciCmdTable {
 
 const AHCI_SLOTS: usize = 32;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct AhciSlotStatus {
     occupied: bool,
     write_op: bool,
     size_bytes: u32,
-}
-
-impl Default for AhciSlotStatus {
-    fn default() -> Self {
-        AhciSlotStatus {
-            occupied: false,
-            write_op: false,
-            size_bytes: 0,
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,7 +292,8 @@ impl AhciDmaEngine {
     ///
     /// `hba_base` : base MMIO BAR5 du HBA AHCI.
     ///
-    /// # Safety : CPL 0, HBA MMIO mappé.
+    /// # Safety
+    /// CPL 0, HBA MMIO mappé.
     pub unsafe fn init(&self, hba_base: u64, port: u32) -> bool {
         // Vérifie que le port est implémenté.
         let pi = (hba_base as *const u32)
@@ -332,7 +323,8 @@ impl AhciDmaEngine {
 
     /// Soumet une opération Read DMA48 (lecture disque → mémoire).
     ///
-    /// # Safety : `buf_phys` valide, taille alignée sur 512.
+    /// # Safety
+    /// `buf_phys` valide, taille alignée sur 512.
     pub unsafe fn submit_read(
         &self,
         lba: u64,
@@ -344,7 +336,8 @@ impl AhciDmaEngine {
 
     /// Soumet une opération Write DMA48 (mémoire → disque).
     ///
-    /// # Safety : `buf_phys` valide, taille alignée sur 512.
+    /// # Safety
+    /// `buf_phys` valide, taille alignée sur 512.
     pub unsafe fn submit_write(
         &self,
         lba: u64,
@@ -416,7 +409,8 @@ impl AhciDmaEngine {
 
     /// Sonde les slots terminés en lisant CI.
     ///
-    /// # Safety : contexte non-préemptible.
+    /// # Safety
+    /// contexte non-préemptible.
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -460,28 +454,32 @@ pub static AHCI_DMA: AhciDmaEngine = AhciDmaEngine::new_uninit();
 
 /// Initialise le moteur AHCI DMA.
 ///
-/// # Safety : HBA MMIO valide.
+/// # Safety
+/// HBA MMIO valide.
 pub unsafe fn ahci_dma_init(hba_base: u64, port: u32) -> bool {
     AHCI_DMA.init(hba_base, port)
 }
 
 /// Soumet une lecture AHCI DMA.
 ///
-/// # Safety : `buf_phys` valide.
+/// # Safety
+/// `buf_phys` valide.
 pub unsafe fn ahci_dma_read(lba: u64, sectors: u16, buf: PhysAddr) -> Option<usize> {
     AHCI_DMA.submit_read(lba, sectors, buf)
 }
 
 /// Soumet une écriture AHCI DMA.
 ///
-/// # Safety : `buf_phys` valide.
+/// # Safety
+/// `buf_phys` valide.
 pub unsafe fn ahci_dma_write(lba: u64, sectors: u16, buf: PhysAddr) -> Option<usize> {
     AHCI_DMA.submit_write(lba, sectors, buf)
 }
 
 /// Sonde les compléments AHCI.
 ///
-/// # Safety : contexte non-préemptible.
+/// # Safety
+/// contexte non-préemptible.
 pub unsafe fn ahci_dma_poll() -> usize {
     AHCI_DMA.poll()
 }

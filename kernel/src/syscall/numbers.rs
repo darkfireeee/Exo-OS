@@ -344,11 +344,11 @@ pub const SYS_EXO_PLEDGE: u64 = 324;
 /// `count` `ShieldEvent` dans `buf` ; retourne le nombre d'événements drainés.
 pub const SYS_EXO_SHIELD_DRAIN: u64 = 325;
 /// Lire un compteur de performance kernel
-pub const SYS_EXO_PERF_READ: u64 = 330;
+pub const SYS_EXO_PERF_READ: u64 = 342;
 /// Activer les événements de performance
-pub const SYS_EXO_PERF_ENABLE: u64 = 331;
+pub const SYS_EXO_PERF_ENABLE: u64 = 343;
 /// Désactiver les événements de performance
-pub const SYS_EXO_PERF_DISABLE: u64 = 332;
+pub const SYS_EXO_PERF_DISABLE: u64 = 344;
 
 pub const EXO_PERF_SYSCALL_COUNT: u64 = 1;
 pub const EXO_PERF_IPC_MESSAGES_SENT: u64 = 2;
@@ -623,7 +623,7 @@ macro_rules! syscall_stub {
             // STUB: $reason
             // Ce syscall est intentionnellement non-implémenté en v0.2.0.
             // Utiliser syscall_stub! pour documenter pourquoi (vs silencieux).
-            crate::syscall::numbers::ENOSYS
+            $crate::syscall::numbers::ENOSYS
         }
     };
 }

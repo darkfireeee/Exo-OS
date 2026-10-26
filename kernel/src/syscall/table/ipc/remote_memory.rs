@@ -30,7 +30,15 @@ fn caller_can_manage_target_memory(caller_pid: u32) -> bool {
         return true;
     }
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
-        Some(pcb) => process_name_eq(&pcb.name_snapshot(), b"memory_server"),
+        Some(pcb) => {
+            // T9-003 FIX : Authentification stricte — doit être un enfant direct d'init (PID 1),
+            // root (euid 0) ET avoir le nom de service réservé vérifié.
+            if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
+                return false;
+            }
+            let name = pcb.name_snapshot();
+            process_name_eq(&name, b"memory_server") || process_name_eq(&name, b"fb_server")
+        }
         None => false,
     }
 }
@@ -41,8 +49,14 @@ fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
     }
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
         Some(pcb) => {
+            // T9-003 FIX : Doit être un enfant direct d'init (PID 1), root (euid 0) et service autorisé.
+            if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
+                return false;
+            }
             let name = pcb.name_snapshot();
-            process_name_eq(&name, b"memory_server") || process_name_eq(&name, b"vfs_server")
+            process_name_eq(&name, b"memory_server")
+                || process_name_eq(&name, b"vfs_server")
+                || process_name_eq(&name, b"fb_server")
         }
         None => false,
     }

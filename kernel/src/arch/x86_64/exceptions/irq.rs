@@ -1,12 +1,14 @@
-#![allow(unused_imports, dead_code)]
+#![allow(unused_imports, dead_code, clippy::missing_safety_doc)]
 use super::*;
 use super::frame::*;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch::x86_64::{apic, halt_cpu, idt, memory_iface, paging, read_cr2, read_cr3, smp};
 
 
+/// # Safety
+/// `frame` doit être un pointeur valide vers une ExceptionFrame allouée par le stub ASM.
 #[inline(always)]
-pub fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
+pub unsafe fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     crate::arch::x86_64::idt::irq_counter_inc(vector);
@@ -23,7 +25,7 @@ pub fn do_irq_generic(frame: *mut ExceptionFrame, vector: u8) {
 macro_rules! define_generic_irq_handler {
     ($name:ident, $vector:expr) => {
         #[no_mangle]
-        pub extern "C" fn $name(frame: *mut ExceptionFrame) {
+        pub unsafe extern "C" fn $name(frame: *mut ExceptionFrame) {
             do_irq_generic(frame, $vector);
         }
     };
@@ -47,7 +49,7 @@ define_generic_irq_handler!(do_irq_15, 47);
 
 /// Handler IRQ timer (vecteur 32, APIC timer)
 #[no_mangle]
-pub extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
     // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
     let frame = unsafe { &mut *frame };
     crate::arch::x86_64::idt::irq_counter_inc(32);
@@ -81,8 +83,11 @@ pub extern "C" fn do_irq_timer(frame: *mut ExceptionFrame) {
 }
 
 /// Handler IRQ spurious (vecteur 0xFF)
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_irq_spurious(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_irq_spurious(_frame: *mut ExceptionFrame) {
     // IRQ spurious : ne PAS envoyer EOI (c'est une fausse interruption)
     SPURIOUS_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
 }
@@ -90,8 +95,11 @@ pub extern "C" fn do_irq_spurious(_frame: *mut ExceptionFrame) {
 // ── IPI Handlers ──────────────────────────────────────────────────────────────
 
 /// IPI wakeup thread
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_IPI_WAKEUP);
     // Réutiliser sched_ipi_reschedule : positionne NEED_RESCHED sur le thread
     // courant (RÈGLE IPI-01) — le reschedule effectif a lieu à l'IRET.
@@ -106,8 +114,11 @@ pub extern "C" fn do_ipi_wakeup(_frame: *mut ExceptionFrame) {
 }
 
 /// IPI reschedule
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
     let _ = frame;
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_IPI_RESCHEDULE);
 
@@ -140,8 +151,11 @@ pub extern "C" fn do_ipi_reschedule(frame: *mut ExceptionFrame) {
 /// ## Règle de précédence
 /// JAMAIS appeler free_pages() avant que TOUS les CPUs aient acquitté
 /// (c'est `tlb::shootdown()` qui attend l'acquittement, pas ce handler).
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_IPI_TLB_SHOOTDOWN);
     crate::arch::x86_64::paging::inc_tlb_shootdown();
 
@@ -160,8 +174,11 @@ pub extern "C" fn do_ipi_tlb_shootdown(_frame: *mut ExceptionFrame) {
 }
 
 /// IPI hotplug CPU
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_IPI_CPU_HOTPLUG);
 
     // EOI avant halt pour que le BSP ne reste pas bloqué en attente.
@@ -177,28 +194,37 @@ pub extern "C" fn do_ipi_cpu_hotplug(_frame: *mut ExceptionFrame) {
 ///
 /// Reçu par tous les APs lors d'un kernel panic.
 /// Arrêt immédiat sans tentative de sauvegarde.
+///
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_ipi_panic(_frame: *mut ExceptionFrame) {
     // SAFETY: réponse à un panic — arrêt irréversible requis
     crate::arch::x86_64::halt_cpu();
 }
 
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_exophoenix_freeze(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_exophoenix_freeze(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_EXOPHOENIX_FREEZE);
     // SAFETY: handler d'IPI ExoPhoenix FREEZE en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_freeze_ipi() };
 }
 
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_exophoenix_pmc(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_exophoenix_pmc(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_EXOPHOENIX_PMC);
     // SAFETY: handler d'IPI ExoPhoenix PMC snapshot en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_pmc_snapshot_ipi() };
 }
 
+/// # Safety
+/// Appelé exclusivement depuis le stub ASM d'interruption.
 #[no_mangle]
-pub extern "C" fn do_exophoenix_tlb(_frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_exophoenix_tlb(_frame: *mut ExceptionFrame) {
     crate::arch::x86_64::idt::irq_counter_inc(crate::arch::x86_64::idt::VEC_EXOPHOENIX_TLB);
     // SAFETY: handler d'IPI ExoPhoenix TLB flush en contexte interruption Ring 0.
     unsafe { crate::exophoenix::interrupts::handle_tlb_flush_ipi() };

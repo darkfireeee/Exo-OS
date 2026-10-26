@@ -240,8 +240,10 @@ pub fn cmd_cat(rest: &[u8], state: &ShellState) {
 pub fn cmd_echo(rest: &[u8], state: &ShellState) {
     let body = trim(rest);
     if let Some(redir) = find_byte(body, b'>') {
+        let is_append = redir + 1 < body.len() && body[redir + 1] == b'>';
         let text = trim_end(&body[..redir]);
-        let path_arg = trim(&body[redir + 1..]);
+        let path_start = if is_append { redir + 2 } else { redir + 1 };
+        let path_arg = trim(&body[path_start..]);
         if path_arg.is_empty() {
             write_all(b"echo: missing redirection path\n");
             return;
@@ -251,12 +253,17 @@ pub fn cmd_echo(rest: &[u8], state: &ShellState) {
             write_all(b"echo: path too long\n");
             return;
         }
+        let flags = if is_append {
+            syscall::O_CREAT | syscall::O_WRONLY | syscall::O_APPEND
+        } else {
+            syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC
+        };
         let fd = unsafe {
             syscall::syscall4(
                 syscall::SYS_OPENAT,
                 AT_FDCWD,
                 path.as_ptr() as u64,
-                syscall::O_CREAT | syscall::O_WRONLY | syscall::O_TRUNC,
+                flags,
                 0o644,
             )
         };
@@ -533,36 +540,66 @@ pub fn cmd_stat(rest: &[u8], state: &ShellState) {
         write_all(b"stat: path too long\n");
         return;
     };
-    let Some(stat) = stat_path(&path) else {
+    let resolved_opt = resolve_exofs_path(&path, path_len);
+    let stat_opt = stat_path(&path);
+    if resolved_opt.is_none() && stat_opt.is_none() {
         print_errno(b"stat", syscall::ENOENT);
         return;
-    };
-
-    write_all(b"  File: ");
-    write_bytes(&path[..path_len]);
-    write_all(b"\n  Size: ");
-    write_i64(stat.st_size);
-    write_all(b"\tBlocks: ");
-    write_i64(stat.st_blocks);
-    write_all(b"\tIO Block: ");
-    write_i64(stat.st_blksize);
-    write_all(b"\n  Type: ");
-    if is_dir_mode(stat.st_mode) {
-        write_all(b"directory");
-    } else if is_regular_mode(stat.st_mode) {
-        write_all(b"regular file");
-    } else {
-        write_all(b"special");
     }
-    write_all(b"\n  Inode: ");
-    write_u64(stat.st_ino);
-    write_all(b"\tLinks: ");
-    write_u64(stat.st_nlink);
-    write_all(b"\n  Mode: ");
-    write_mode(stat.st_mode);
-    write_all(b" (");
-    write_octal_mode(stat.st_mode & 0o7777);
-    write_all(b")\n");
+
+    let is_dir = stat_opt.map(|s| is_dir_mode(s.st_mode)).unwrap_or(false);
+    let obj_kind = resolved_opt.map(|r| r.object_kind).unwrap_or(if is_dir { 1 } else { 0 });
+
+    write_all(b"Object   : ");
+    write_bytes(&path[..path_len]);
+    write_all(b"\nType     : ");
+    match obj_kind {
+        1 => write_all(b"Directory (d)\n"),
+        2 => write_all(b"Executable Code (x)\n"),
+        3 => write_all(b"Relation (r)\n"),
+        4 => write_all(b"Secret (s)\n"),
+        5 => write_all(b"Configuration (c)\n"),
+        _ => if is_dir {
+            write_all(b"Directory (d)\n")
+        } else {
+            write_all(b"Immutable Blob (b)\n")
+        },
+    }
+
+    write_all(b"Rights   : ");
+    if is_dir {
+        write_all(b"rw-lk-d (READ | WRITE | LIST | LINK | DERIVE)\n");
+    } else if path.starts_with(b"/mnt/usb") {
+        write_all(b"rw----d (READ | WRITE | DERIVE, MS_NOEXEC enforced)\n");
+    } else {
+        write_all(b"rw---sd (READ | WRITE | SEAL | DERIVE)\n");
+    }
+
+    if let Some(res) = resolved_opt {
+        let mut hex_buf = [0u8; 64];
+        let mut hlen = 0usize;
+        push_hex_bytes(&mut hex_buf, &mut hlen, &res.object_id[..8]);
+        write_all(b"CapToken : @");
+        write_bytes(&hex_buf[..hlen]);
+        write_all(b"\nEpoch    : ");
+        write_u64(res.epoch_id.max(1));
+        write_all(b"\nSize     : ");
+        write_u64(res.size_bytes);
+        write_all(b" bytes\nBLAKE3   : ");
+        if obj_kind == 4 {
+            write_all(b"[redacted - SecretObject S-09]\n");
+        } else {
+            let mut b3_buf = [0u8; 64];
+            let mut blen = 0usize;
+            push_hex_bytes(&mut b3_buf, &mut blen, &res.blob_id);
+            write_bytes(&b3_buf[..blen]);
+            write_all(b"\n");
+        }
+    } else if let Some(st) = stat_opt {
+        write_all(b"Size     : ");
+        write_i64(st.st_size);
+        write_all(b" bytes\nEpoch    : ---- (VFS pseudo/compat)\n");
+    }
 }
 
 pub fn cmd_dd(rest: &[u8], state: &ShellState) {
@@ -874,6 +911,49 @@ pub fn parse_ls_dirents(
     }
 }
 
+pub fn resolve_exofs_path(path: &[u8; PATH_MAX], path_len: usize) -> Option<syscall::ExofsPathResolveResult> {
+    if path_len == 0 {
+        return None;
+    }
+    let mut resolved = syscall::ExofsPathResolveResult::default();
+    let rc = unsafe {
+        syscall::exofs_path_resolve_raw(
+            path.as_ptr() as u64,
+            path_len as u64,
+            0,
+            &mut resolved,
+            syscall::EXOFS_RIGHT_READ_ONLY as u64,
+        )
+    };
+    if rc >= 0 {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
+pub fn push_hex_bytes(out: &mut [u8], len: &mut usize, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &b in bytes {
+        let pair = [
+            HEX[(b >> 4) as usize],
+            HEX[(b & 0xF) as usize],
+        ];
+        push_bytes(out, len, &pair);
+    }
+}
+
+pub fn push_u64_padded4(out: &mut [u8], len: &mut usize, val: u64) {
+    let v = (val % 10_000) as u32;
+    let digits = [
+        b'0' + ((v / 1000) % 10) as u8,
+        b'0' + ((v / 100) % 10) as u8,
+        b'0' + ((v / 10) % 10) as u8,
+        b'0' + (v % 10) as u8,
+    ];
+    push_bytes(out, len, &digits);
+}
+
 fn push_hex16(buf: &mut [u8], len: &mut usize, val: u16) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let b0 = HEX[((val >> 12) & 0xF) as usize];
@@ -884,48 +964,139 @@ fn push_hex16(buf: &mut [u8], len: &mut usize, val: u16) {
 }
 
 pub fn print_long_entry(path: &[u8; PATH_MAX], path_len: usize, name: &[u8], opts: LsOptions) {
-    let mut line = [0u8; PATH_MAX + 128];
+    let mut line = [0u8; PATH_MAX + 160];
     let mut len = 0usize;
-    let Some(stat) = stat_path(path) else {
-        push_bytes(&mut line, &mut len, b"? ??????? .          @0000 ep:0000 ? ");
+
+    let resolved_opt = resolve_exofs_path(path, path_len);
+    let stat_opt = stat_path(path);
+
+    if resolved_opt.is_none() && stat_opt.is_none() {
+        push_bytes(&mut line, &mut len, b"?  -------  .           @0000  ep:----  0         --------  ");
         push_bytes(&mut line, &mut len, name);
         push_bytes(&mut line, &mut len, b"\n");
         write_bytes(&line[..len]);
         return;
-    };
+    }
 
-    let is_dir = is_dir_mode(stat.st_mode);
-    let is_exec = (stat.st_mode & 0o111) != 0;
+    let is_usb = path.starts_with(b"/mnt/usb");
+    let is_dir = stat_opt.map(|s| is_dir_mode(s.st_mode)).unwrap_or(false);
+    let is_exec = stat_opt.map(|s| (s.st_mode & 0o111) != 0).unwrap_or(false) && !is_usb;
 
-    // 1. Type & Rights & Flags (SPEC-EXO-DISPLAY-PROTOCOL-STRATA)
-    if is_dir {
-        push_bytes(&mut line, &mut len, b"d rw-l--- .          ");
+    // 1. Type
+    let obj_type = if is_dir {
+        b'd'
+    } else if let Some(ref res) = resolved_opt {
+        match res.object_kind {
+            1 => b'd',
+            2 => b'x',
+            3 => b'r',
+            4 => b's',
+            5 => b'c',
+            _ => if is_exec { b'x' } else { b'b' },
+        }
     } else if is_exec {
-        push_bytes(&mut line, &mut len, b"x r-x---- [sig]      ");
+        b'x'
     } else {
-        push_bytes(&mut line, &mut len, b"r rw----- .          ");
+        b'b'
+    };
+    push_bytes(&mut line, &mut len, &[obj_type, b' ', b' ']);
+
+    // 2. Rights (7 caractères)
+    let rights: [u8; 7] = if is_dir {
+        *b"rw-lk-d"
+    } else if is_usb {
+        *b"rw----d"
+    } else if obj_type == b'x' {
+        *b"r-x---d"
+    } else if obj_type == b's' {
+        *b"r----sd"
+    } else {
+        *b"rw---sd"
+    };
+    push_bytes(&mut line, &mut len, &rights);
+    push_bytes(&mut line, &mut len, b"  ");
+
+    // 3. Flags (10 caractères)
+    let flags_str: &[u8; 10] = if is_usb {
+        b"[usb]     "
+    } else if let Some(ref res) = resolved_opt {
+        if (res.flags & 0x01) != 0 {
+            b"[sealed]  "
+        } else if obj_type == b'x' {
+            b"[sig ok]  "
+        } else if obj_type == b's' {
+            b"[enc]     "
+        } else {
+            b".         "
+        }
+    } else {
+        b".         "
+    };
+    push_bytes(&mut line, &mut len, flags_str);
+    push_bytes(&mut line, &mut len, b"  @");
+
+    // 4. CapToken (@<token:04x>)
+    let token_u16 = if let Some(ref res) = resolved_opt {
+        u16::from_le_bytes([res.object_id[0], res.object_id[1]])
+    } else if let Some(ref st) = stat_opt {
+        (st.st_ino & 0xFFFF) as u16
+    } else {
+        0
+    };
+    push_hex16(&mut line, &mut len, token_u16);
+
+    // 5. Epoch (ep:<epoch:04>)
+    push_bytes(&mut line, &mut len, b"  ep:");
+    if let Some(ref res) = resolved_opt {
+        if !is_usb {
+            push_u64_padded4(&mut line, &mut len, res.epoch_id.max(1));
+        } else {
+            push_bytes(&mut line, &mut len, b"----");
+        }
+    } else {
+        push_bytes(&mut line, &mut len, b"----");
     }
+    push_bytes(&mut line, &mut len, b"  ");
 
-    // 2. Capability Token & Epoch
-    let token_hint = ((stat.st_ino & 0xFFFF) as u16).max(1);
-    push_bytes(&mut line, &mut len, b"@");
-    push_hex16(&mut line, &mut len, token_hint);
-    push_bytes(&mut line, &mut len, b" ep:0001 ");
-
-    // 3. Size
+    // 6. Size (8 colonnes min)
+    let size_val = resolved_opt
+        .map(|r| r.size_bytes as i64)
+        .or_else(|| stat_opt.map(|s| s.st_size))
+        .unwrap_or(0);
+    let size_start = len;
     if opts.human {
-        push_human_size(&mut line, &mut len, stat.st_size);
+        push_human_size(&mut line, &mut len, size_val);
     } else {
-        push_i64(&mut line, &mut len, stat.st_size);
+        push_i64(&mut line, &mut len, size_val);
     }
-    push_bytes(&mut line, &mut len, b" ");
+    let size_written = len - size_start;
+    let mut pad = 0usize;
+    while size_written + pad < 8 {
+        push_bytes(&mut line, &mut len, b" ");
+        pad += 1;
+    }
+    push_bytes(&mut line, &mut len, b"  ");
 
-    // 4. Name
+    // 7. BLAKE3 truncated to 8 hex chars (-------- for dirs and secrets S-09)
+    if obj_type == b'd' || obj_type == b's' {
+        push_bytes(&mut line, &mut len, b"--------");
+    } else if let Some(ref res) = resolved_opt {
+        if res.blob_id != [0u8; 32] {
+            push_hex_bytes(&mut line, &mut len, &res.blob_id[..4]);
+        } else {
+            push_bytes(&mut line, &mut len, b"00000000");
+        }
+    } else {
+        push_bytes(&mut line, &mut len, b"--------");
+    }
+    push_bytes(&mut line, &mut len, b"  ");
+
+    // 8. Name
     push_colored_name(
         &mut line,
         &mut len,
         name,
-        stat.st_mode,
+        stat_opt.map(|s| s.st_mode).unwrap_or(if is_dir { S_IFDIR | 0o755 } else { S_IFREG | 0o644 }),
         is_dir && path_len > 1,
     );
     push_bytes(&mut line, &mut len, b"\n");

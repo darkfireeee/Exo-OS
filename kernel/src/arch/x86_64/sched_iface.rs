@@ -89,6 +89,9 @@ pub fn pstate_changes() -> u64 {
 /// ## Utilisateur
 /// `scheduler::smp::migration::request_migration()` — déclenche le reschedule
 /// sur le CPU de destination après avoir mis en file d'attente la migration.
+///
+/// # Safety
+/// Appelé par le scheduler lors d'une demande de migration de thread.
 #[no_mangle]
 pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
     // Borne supérieure : ne pas accéder hors du tableau
@@ -139,6 +142,9 @@ pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
 /// ## Utilisateur
 /// `scheduler::energy::frequency::set_pstate()` — appelé depuis le tick handler
 /// ou le gouverneur d'énergie s'exécutant sur le CPU cible.
+///
+/// # Safety
+/// L'appelant doit garantir que l'exécution a lieu sur le processeur cible.
 #[no_mangle]
 pub unsafe extern "C" fn arch_set_cpu_pstate(cpu: u32, pstate: u32) {
     // Vérification de borne
@@ -149,6 +155,13 @@ pub unsafe extern "C" fn arch_set_cpu_pstate(cpu: u32, pstate: u32) {
     // Vérifier que c'est bien un CPU en ligne
     let cpu_data = percpu::per_cpu(cpu as usize);
     if !cpu_data.online {
+        return;
+    }
+
+    // MSR_IA32_PERF_CTL est un registre local au CPU exécutant.
+    // Si cpu != current_cpu, ignorer pour éviter de modifier la fréquence du mauvais cœur.
+    let local_id = percpu::current_cpu_id();
+    if cpu != local_id {
         return;
     }
 

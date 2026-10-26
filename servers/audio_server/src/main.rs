@@ -72,12 +72,13 @@ fn probe_audio_hardware() {
     // 1. Recherche d'un contrôleur Intel HDA (Class 0x04, Subclass 0x03)
     let mut dev_info = syscall::PciDeviceInfo::default();
     let rc = unsafe {
-        syscall::syscall5(
+        syscall::syscall6(
             syscall::SYS_PCI_FIND_DEVICE,
             0, // vendor (0 = wildcard)
             0, // device (0 = wildcard)
             0x04, // class Multimedia
             0x03, // subclass Audio Controller
+            0, // index
             &mut dev_info as *mut syscall::PciDeviceInfo as u64,
         )
     };
@@ -110,10 +111,11 @@ fn probe_audio_hardware() {
     // 2. Recherche VirtIO Sound (Device ID 0x1059)
     let mut virtio_info = syscall::PciDeviceInfo::default();
     let v_rc = unsafe {
-        syscall::syscall5(
+        syscall::syscall6(
             syscall::SYS_PCI_FIND_DEVICE,
             exo_audio_drivers::virtio_sound::VIRTIO_VENDOR_ID as u64,
             exo_audio_drivers::virtio_sound::VIRTIO_SOUND_DEVICE_ID as u64,
+            0,
             0,
             0,
             &mut virtio_info as *mut syscall::PciDeviceInfo as u64,
@@ -259,9 +261,20 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
+struct LogWriter;
+impl core::fmt::Write for LogWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        boot_log(s.as_bytes());
+        Ok(())
+    }
+}
+
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    boot_log(b"audio_server: panic!\n");
+fn panic(info: &PanicInfo) -> ! {
+    boot_log(b"audio_server: panic: ");
+    let mut writer = LogWriter;
+    let _ = core::fmt::write(&mut writer, format_args!("{}", info));
+    boot_log(b"\n");
     loop {
         core::hint::spin_loop();
     }

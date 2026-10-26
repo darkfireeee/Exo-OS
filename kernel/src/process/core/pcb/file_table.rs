@@ -185,6 +185,7 @@ impl OpenFileTable {
     }
 
     /// Ferme tous les fds marqués O_CLOEXEC (appelé lors de execve).
+    #[allow(clippy::result_unit_err)]
     pub fn close_on_exec(&mut self) -> Result<Vec<u64>, ()> {
         const O_CLOEXEC: u32 = 0x80000;
         let mut closed_handles = Vec::new();
@@ -210,6 +211,7 @@ impl OpenFileTable {
     }
 
     /// Ferme tous les descripteurs ouverts du processus.
+    #[allow(clippy::result_unit_err)]
     pub fn close_all(&mut self) -> Result<Vec<u64>, ()> {
         let mut closed_handles = Vec::new();
         let close_count = self

@@ -278,15 +278,21 @@ struct DmaDescriptorTableInner {
 unsafe impl Sync for DmaDescriptorTable {}
 unsafe impl Send for DmaDescriptorTable {}
 
+impl Default for DmaDescriptorTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaDescriptorTable {
     const fn new() -> Self {
         DmaDescriptorTable {
             slots: spin::Mutex::new(DmaDescriptorTableInner {
                 // Initialise free_list[i] = i.
-                free_list: unsafe { core::mem::transmute([0u8; MAX_DMA_TRANSACTIONS * 2]) },
+                free_list: [0u16; MAX_DMA_TRANSACTIONS],
                 free_head: 0,
                 free_count: 0,
-                storage: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
+                storage: [const { core::mem::MaybeUninit::uninit() }; MAX_DMA_TRANSACTIONS],
             }),
         }
     }
@@ -302,6 +308,7 @@ impl DmaDescriptorTable {
     }
 
     /// Alloue un descripteur depuis le pool.
+    #[allow(clippy::mut_from_ref)]
     pub fn alloc_descriptor(
         &self,
         channel_id: u32,

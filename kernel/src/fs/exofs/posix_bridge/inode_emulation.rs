@@ -127,8 +127,17 @@ impl InodeEmulation {
         if table.is_empty() {
             return;
         }
-        // Retire la première entrée (FIFO simple)
-        table.remove(0);
+        // Ne jamais évincer l'inode racine (INO_ROOT) ni les répertoires
+        let mut target_idx = None;
+        for i in 0..table.len() {
+            if table[i].ino != INO_ROOT && (table[i].flags & inode_flags::DIRECTORY) == 0 {
+                target_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = target_idx {
+            table.remove(idx);
+        }
     }
 
     // ─── API publique ───

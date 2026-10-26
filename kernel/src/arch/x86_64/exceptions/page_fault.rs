@@ -193,8 +193,10 @@ pub fn debug_user_page_fault(
 /// ## Intégration process/ (RÈGLE DOC1)
 /// Quand process/ sera intégré, l'allocateur utilisera l'espace d'adressage
 /// du processus courant. Pour l'instant, `KernelFaultAllocator` est utilisé.
+/// # Safety
+/// `frame` doit être un pointeur valide vers une ExceptionFrame allouée par le stub ASM.
 #[no_mangle]
-pub extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
+pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
     // unique pour ce contexte d'exception.
     let frame = unsafe { &mut *frame };
@@ -398,7 +400,7 @@ pub extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     // SAFETY: lecture GARDÉE — uniquement si RIP est une adresse user
                     // plausible. Sinon lire (p.ex. RIP=0x130) re-fault en KERNEL et
                     // déclenche une résurrection ExoPhoenix (perte du dump #25).
-                    if frame.rip >= 0x1000 && frame.rip < 0x0000_8000_0000_0000 {
+                    if (0x1000..0x0000_8000_0000_0000).contains(&frame.rip) {
                         for bi in 0..8u64 {
                             let byte =
                                 unsafe { core::ptr::read_volatile((frame.rip + bi) as *const u8) };
@@ -454,14 +456,14 @@ pub extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     // décisive (adresse de retour du call/jmp vers NULL, directement
                     // addr2line-able) → on l'imprime DÈS MAINTENANT, avant les 16
                     // mots de pile, pour qu'elle survive à toute troncature.
-                    if frame.rip == 0 && frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
+                    if frame.rip == 0 && (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
                         // SAFETY: RSP user plausible ; lecture volatile.
                         let ret0 = unsafe {
                             core::ptr::read_volatile(frame.rsp as *const u64)
                         };
                         out(b" ret0=");
                         out(&hex(ret0));
-                        if ret0 >= 0x1000_0000_0000 && ret0 < 0x1001_0000_0000 {
+                        if (0x1000_0000_0000..0x1001_0000_0000).contains(&ret0) {
                             out(b" cs16=");
                             let base = ret0.saturating_sub(16);
                             for bi in 0..16u64 {
@@ -479,7 +481,7 @@ pub extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     // si rdx pointe dans le binaire, dumper 8 octets à rdx : le
                     // décodage de ces octets identifie si le flux d'instructions
                     // était déjà corrompu (garbage) au moment du saut vers 0.
-                    if frame.rdx >= 0x1000_0000_0000 && frame.rdx < 0x1001_0000_0000 {
+                    if (0x1000_0000_0000..0x1001_0000_0000).contains(&frame.rdx) {
                         out(b" rdx8=");
                         for bi in 0..8u64 {
                             // SAFETY: rdx dans la plage binaire user (mappée).
@@ -493,7 +495,7 @@ pub extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     // DIAG-25 : 8 mots de la pile user à RSP — révèle la chaîne de
                     // retour (d'où provient le saut vers le RIP corrompu).
                     out(b" stk=");
-                    if frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
+                    if (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
                         for wi in 0..16u64 {
                             // SAFETY: RSP user plausible ; KPTI off ; lecture volatile.
                             let w = unsafe {

@@ -236,9 +236,8 @@ struct InterleavedTable {
 
 impl InterleavedTable {
     const fn new() -> Self {
-        const X: InterleavedXfer = InterleavedXfer::new();
         InterleavedTable {
-            xfers: [X; MAX_INTERLEAVED_TRANSFERS],
+            xfers: [const { InterleavedXfer::new() }; MAX_INTERLEAVED_TRANSFERS],
         }
     }
 
@@ -262,6 +261,12 @@ pub struct InterleavedManager {
 
 unsafe impl Sync for InterleavedManager {}
 unsafe impl Send for InterleavedManager {}
+
+impl Default for InterleavedManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl InterleavedManager {
     pub const fn new() -> Self {

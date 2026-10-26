@@ -102,8 +102,7 @@ impl NumaPolicy {
                 // Parcourir les nœuds du masque par distance croissante.
                 let origin = NUMA_NODES.node_for_cpu(cpu_id);
                 let (sorted, len) = super::distance::NUMA_DISTANCE.sorted_nodes_from(origin);
-                for i in 0..len {
-                    let nid = sorted[i];
+                for &nid in &sorted[..len] {
                     if mask.contains(nid) {
                         if let Some(node) = NUMA_NODES.get(nid) {
                             if node.free_pages() > 0 {

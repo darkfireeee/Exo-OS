@@ -171,6 +171,9 @@ impl RelationEntryDisk {
         if matches!(RelationKind::from_u8(self.kind), RelationKind::Unknown) {
             return Err(ExofsError::InvalidArgument);
         }
+        if self.label_len as usize > RELATION_LABEL_LEN {
+            return Err(ExofsError::Corrupt);
+        }
         Ok(())
     }
 }
@@ -249,6 +252,9 @@ impl RelationDescriptor {
     /// Reconstruit depuis on-disk (HDR-03 : verify() en premier).
     pub fn from_disk(d: &RelationEntryDisk) -> ExofsResult<Self> {
         d.verify()?;
+        if d.label_len as usize > RELATION_LABEL_LEN {
+            return Err(ExofsError::Corrupt);
+        }
         let kind = RelationKind::from_u8(d.kind);
         Ok(Self {
             src: ObjectId(d.src_id),

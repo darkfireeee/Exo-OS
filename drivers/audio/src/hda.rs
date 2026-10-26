@@ -30,6 +30,13 @@ pub const HDA_SD_FMT: usize   = 0x12; // Format (u16)
 pub const HDA_SD_BDPL: usize  = 0x18; // BDL Pointer Lower (u32)
 pub const HDA_SD_BDPU: usize  = 0x1C; // BDL Pointer Upper (u32)
 
+// ── Immediate Command (ICW / IRR / ICS) ──────────────────────────────────────
+pub const HDA_REG_ICW: usize     = 0x60; // Immediate Command Write (u32)
+pub const HDA_REG_IRR: usize     = 0x64; // Immediate Response Read (u32)
+pub const HDA_REG_ICS: usize     = 0x68; // Immediate Command Status (u16)
+pub const HDA_ICS_ICB: u16       = 1 << 0; // Immediate Command Busy
+pub const HDA_ICS_IRV: u16       = 1 << 1; // Immediate Result Valid
+
 // SD_CTL bits
 pub const HDA_SD_CTL_SRST: u32  = 1 << 0; // Stream Reset
 pub const HDA_SD_CTL_RUN: u32   = 1 << 1; // Stream Run
@@ -126,24 +133,112 @@ impl HdaDriver {
     /// Alloue les pages DMA nécessaires pour le buffer PCM et la table BDL
     pub fn setup_dma(&mut self) -> Result<(), DriverError> {
         // Allouer 32 pages (128 Kio) pour le buffer PCM de sortie
-        const PCM_PAGES: u64 = 32;
-        let pcm_dma = unsafe { syscall::syscall1(syscall::SYS_DMA_ALLOC, PCM_PAGES) };
+        const PCM_SIZE: usize = 32 * 4096;
+        let mut pcm_virt = 0u64;
+        let pcm_dma = unsafe {
+            syscall::syscall5(
+                syscall::SYS_DMA_ALLOC,
+                PCM_SIZE as u64,
+                0, // DMA_BIDIRECTIONAL
+                &mut pcm_virt as *mut u64 as u64,
+                0,
+                0,
+            )
+        };
         if pcm_dma < 0 {
             return Err(DriverError::DmaAllocFailed(pcm_dma));
         }
 
-        // Allouer 1 page pour la table BDL (jusqu'à 256 descripteurs)
-        let bdl_dma = unsafe { syscall::syscall1(syscall::SYS_DMA_ALLOC, 1) };
+        // Allouer 1 page (4 Kio) pour la table BDL (jusqu'à 256 descripteurs)
+        const BDL_SIZE: usize = 4096;
+        let mut bdl_virt = 0u64;
+        let bdl_dma = unsafe {
+            syscall::syscall5(
+                syscall::SYS_DMA_ALLOC,
+                BDL_SIZE as u64,
+                0, // DMA_BIDIRECTIONAL
+                &mut bdl_virt as *mut u64 as u64,
+                0,
+                0,
+            )
+        };
         if bdl_dma < 0 {
             return Err(DriverError::DmaAllocFailed(bdl_dma));
         }
 
         self.dma_buffer_phys = pcm_dma as u64;
-        self.dma_buffer_virt = pcm_dma as usize as *mut u8;
-        self.dma_buffer_size = (PCM_PAGES as usize) * 4096;
+        self.dma_buffer_virt = pcm_virt as *mut u8;
+        self.dma_buffer_size = PCM_SIZE;
 
         self.bdl_phys = bdl_dma as u64;
-        self.bdl_virt = bdl_dma as usize as *mut HdaBdlEntry;
+        self.bdl_virt = bdl_virt as *mut HdaBdlEntry;
+
+        Ok(())
+    }
+
+    /// Envoie un verbe 32-bit au codec via Immediate Command (ICW/IRR)
+    pub fn send_verb(&self, verb: u32) -> Result<u32, DriverError> {
+        let Some(ref h) = self.handle else {
+            return Err(DriverError::DeviceNotFound);
+        };
+
+        unsafe {
+            let mut timeout = 20_000usize;
+            while (h.mmio.read16(HDA_REG_ICS) & HDA_ICS_ICB) != 0 && timeout > 0 {
+                core::hint::spin_loop();
+                timeout -= 1;
+            }
+            if timeout == 0 {
+                return Err(DriverError::HardwareTimeout);
+            }
+
+            // Effacer le bit IRV précédent (W1C)
+            h.mmio.write16(HDA_REG_ICS, HDA_ICS_IRV);
+
+            // Écrire le verbe dans ICW
+            h.mmio.write32(HDA_REG_ICW, verb);
+
+            // Déclencher l'exécution par le matériel (ICB = 1)
+            h.mmio.write16(HDA_REG_ICS, HDA_ICS_ICB);
+
+            // Attendre la fin d'exécution (ICB = 0)
+            timeout = 50_000usize;
+            while (h.mmio.read16(HDA_REG_ICS) & HDA_ICS_ICB) != 0 && timeout > 0 {
+                core::hint::spin_loop();
+                timeout -= 1;
+            }
+
+            Ok(h.mmio.read32(HDA_REG_IRR))
+        }
+    }
+
+    /// Configure les nœuds du codec HDA (DAC + Pin Out) pour router le flux PCM
+    pub fn init_codecs(&mut self) -> Result<(), DriverError> {
+        // QEMU hda-duplex standard :
+        // Node 0x02 : Audio Output Converter (DAC)
+        // Node 0x03 : Pin Complex (Line Out)
+        // Node 0x04 : Pin Complex / Speaker (hda-micro ou autre)
+
+        // 1. Allumer DAC 0x02, Pin 0x03 (Line Out) et Pin 0x04 (Power State D0 = 0)
+        let _ = self.send_verb(0x0027_0500);
+        let _ = self.send_verb(0x0037_0500);
+        let _ = self.send_verb(0x0047_0500);
+
+        // 2. Activer la sortie analogique (Pin Widget Control = Out Enable 0x40) sur Pin 0x03 et 0x04
+        let _ = self.send_verb(0x0037_0740);
+        let _ = self.send_verb(0x0047_0740);
+
+        // 3. Dé-muter l'ampli de sortie avec gain nominal (0 dB) sur DAC 0x02, Pin 0x03 et Pin 0x04
+        // Verbe 0x3000 (Set Amp Gain): 0xB000 (Output, Left+Right) | 0x7F (0 dB, unmuted)
+        let _ = self.send_verb(0x0023_B07F);
+        let _ = self.send_verb(0x0033_B07F);
+        let _ = self.send_verb(0x0043_B07F);
+
+        // 4. Assigner le stream tag 1 (canal 0) au DAC 0x02 (Verbe 0x706, param 0x10)
+        let _ = self.send_verb(0x0027_0610);
+
+        // 5. Configurer le format du DAC 0x02 pour correspondre au flux (44.1 kHz, 16b, stéréo)
+        let _ = self.send_verb(0x0022_0000 | (HDA_FMT_44100_16BIT_STEREO as u32));
 
         Ok(())
     }
@@ -172,7 +267,7 @@ impl ExoDriver for HdaDriver {
         self.handle = Some(handle);
 
         let h = self.handle.as_ref().unwrap();
-        let gcap = unsafe { h.mmio.read32(HDA_REG_GCAP) as u16 };
+        let gcap = unsafe { h.mmio.read16(HDA_REG_GCAP) };
         self.num_iss = ((gcap >> 8) & 0x0F) as u8;
         self.num_oss = ((gcap >> 12) & 0x0F) as u8;
 
@@ -181,6 +276,7 @@ impl ExoDriver for HdaDriver {
 
         self.reset_controller()?;
         self.setup_dma()?;
+        self.init_codecs()?;
 
         Ok(())
     }
@@ -220,25 +316,32 @@ impl AudioDevice for HdaDriver {
                 copy_len,
             );
 
-            // 3. Préparer l'entrée BDL
-            let bdl_entry = HdaBdlEntry {
+            // 3. Préparer les entrées BDL (Au moins 2 entrées obligatoires par la spec Intel HDA et QEMU)
+            // L'échantillon stéréo 16-bit fait 4 octets : chaque moitié doit être alignée sur 4 octets.
+            let half = (copy_len / 2) & !3;
+            let bdl_entry0 = HdaBdlEntry {
                 addr_lo: self.dma_buffer_phys as u32,
                 addr_hi: (self.dma_buffer_phys >> 32) as u32,
-                length: copy_len as u32,
+                length: half as u32,
+                ioc: 0,
+            };
+            let bdl_entry1 = HdaBdlEntry {
+                addr_lo: (self.dma_buffer_phys + half as u64) as u32,
+                addr_hi: ((self.dma_buffer_phys + half as u64) >> 32) as u32,
+                length: (copy_len - half) as u32,
                 ioc: 1, // Interruption de complétion
             };
-            core::ptr::write(self.bdl_virt, bdl_entry);
+            core::ptr::write(self.bdl_virt, bdl_entry0);
+            core::ptr::write(self.bdl_virt.add(1), bdl_entry1);
 
             // 4. Configurer le Stream Descriptor
             h.mmio.write32(sd_base + HDA_SD_BDPL, self.bdl_phys as u32);
             h.mmio.write32(sd_base + HDA_SD_BDPU, (self.bdl_phys >> 32) as u32);
             h.mmio.write32(sd_base + HDA_SD_CBL, copy_len as u32);
-            h.mmio.write32(sd_base + HDA_SD_LVI, 0); // 1 entrée valide (index 0)
+            h.mmio.write16(sd_base + HDA_SD_LVI, 1); // 2 entrées valides (indices 0 et 1)
 
-            // Format : 44.1 kHz, 16-bit, Stéréo
-            let fmt_reg = (h.mmio.read32(sd_base + HDA_SD_FMT) & 0xFFFF_0000)
-                | (HDA_FMT_44100_16BIT_STEREO as u32);
-            h.mmio.write32(sd_base + HDA_SD_FMT, fmt_reg);
+            // Format : 44.1 kHz, 16-bit, Stéréo (offset 0x12 est u16)
+            h.mmio.write16(sd_base + HDA_SD_FMT, HDA_FMT_44100_16BIT_STEREO);
 
             // Stream tag = 1, lancer le flux (RUN)
             let ctl = (1 << 20) | HDA_SD_CTL_RUN | HDA_SD_CTL_IOCE;

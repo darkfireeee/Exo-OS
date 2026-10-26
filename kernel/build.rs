@@ -146,7 +146,7 @@ fn section_body<'a>(
         .ok_or_else(|| format!("ELF section {section_name} hors image"))
 }
 
-fn section_name<'a>(shstr: &'a [u8], name_off: usize) -> Result<&'a str, String> {
+fn section_name(shstr: &[u8], name_off: usize) -> Result<&str, String> {
     if name_off >= shstr.len() {
         return Err("ELF nom de section hors .shstrtab".to_owned());
     }

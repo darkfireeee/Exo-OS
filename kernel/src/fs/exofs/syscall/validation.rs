@@ -195,6 +195,14 @@ pub unsafe fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> ExofsR
     if src.is_null() || dst.is_null() {
         return Err(ExofsError::InvalidArgument);
     }
+    #[cfg(not(test))]
+    let src_addr = src as u64;
+    #[cfg(not(test))]
+    if src_addr >= crate::syscall::validation::USER_ADDR_MAX
+        || src_addr.checked_add(len as u64).map_or(true, |end| end > crate::syscall::validation::USER_ADDR_MAX)
+    {
+        return Err(ExofsError::InvalidArgument);
+    }
     if len == 0 {
         return Ok(());
     }
@@ -210,6 +218,14 @@ pub unsafe fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> ExofsR
 #[inline]
 pub unsafe fn copy_to_user(dst: *mut u8, src: *const u8, len: usize) -> ExofsResult<()> {
     if dst.is_null() || src.is_null() {
+        return Err(ExofsError::InvalidArgument);
+    }
+    #[cfg(not(test))]
+    let dst_addr = dst as u64;
+    #[cfg(not(test))]
+    if dst_addr >= crate::syscall::validation::USER_ADDR_MAX
+        || dst_addr.checked_add(len as u64).map_or(true, |end| end > crate::syscall::validation::USER_ADDR_MAX)
+    {
         return Err(ExofsError::InvalidArgument);
     }
     if len == 0 {

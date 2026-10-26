@@ -94,7 +94,7 @@ impl MethodEntry {
             return None;
         }
         // SAFETY: handler est une fn pointer statique enregistrée via register()
-        Some(unsafe { core::mem::transmute(p) })
+        Some(unsafe { core::mem::transmute::<usize, RpcHandlerFn>(p) })
     }
 
     pub fn invoke(&self, call: &RpcCallFrame, reply_payload: &mut [u8]) -> Result<usize, IpcError> {
@@ -143,13 +143,12 @@ unsafe impl Send for RpcServer {}
 
 impl RpcServer {
     pub const fn new(id: u32) -> Self {
-        const EMPTY_ME: MethodEntry = MethodEntry::empty();
         Self {
             id,
             endpoint: AtomicU64::new(0),
             active: AtomicBool::new(false),
             _pad0: [0u8; 3],
-            methods: [EMPTY_ME; MAX_RPC_METHODS],
+            methods: [const { MethodEntry::empty() }; MAX_RPC_METHODS],
             method_count: AtomicU32::new(0),
             total_calls: AtomicU64::new(0),
             total_errors: AtomicU64::new(0),
@@ -388,9 +387,8 @@ unsafe impl Sync for RpcServerTable {}
 
 impl RpcServerTable {
     const fn new() -> Self {
-        const EMPTY: RpcServerSlot = RpcServerSlot::empty();
         Self {
-            slots: [EMPTY; MAX_RPC_SERVERS],
+            slots: [const { RpcServerSlot::empty() }; MAX_RPC_SERVERS],
             count: AtomicU32::new(0),
         }
     }

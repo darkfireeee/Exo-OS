@@ -39,7 +39,7 @@ pub enum JoinError {
 /// # Safety
 /// `target` doit pointer vers un ProcessThread valide, non libéré.
 /// `caller_tcb` doit être le TCB du thread appelant.
-pub fn thread_join(
+pub unsafe fn thread_join(
     target: *const ProcessThread,
     caller_tcb: &ThreadControlBlock,
 ) -> Result<u64, JoinError> {

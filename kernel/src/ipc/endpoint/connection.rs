@@ -224,7 +224,7 @@ pub fn do_connect(
     }
 
     let channel_id = alloc_channel_id();
-    let cookie = Cookie::new(channel_id.get() ^ (client.0 as u64));
+    let cookie = Cookie::new(channel_id.get() ^ client.0);
 
     let pending = PendingConnection {
         requester: client,

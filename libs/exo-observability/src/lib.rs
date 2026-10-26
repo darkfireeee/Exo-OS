@@ -160,3 +160,25 @@ pub const fn severity_score(level: Level) -> u8 {
         Level::Trace => 1,
     }
 }
+
+pub fn observability_stress_signature(iterations: u32) -> u64 {
+    let levels = [
+        Level::Error,
+        Level::Warn,
+        Level::Info,
+        Level::Debug,
+        Level::Trace,
+    ];
+    let mut acc = 0x4558_4f4c_4f47_u64;
+    for i in 0..iterations.max(1) {
+        let level = levels[i as usize % levels.len()];
+        let rec = ExoLogRecord {
+            level,
+            target: "exo",
+            code: i,
+        };
+        acc = acc.rotate_left(7) ^ rec.code as u64 ^ severity_score(rec.level) as u64;
+    }
+    acc
+}
+

@@ -253,6 +253,12 @@ struct IommuDomainTableInner {
 unsafe impl Sync for IommuDomainTable {}
 unsafe impl Send for IommuDomainTable {}
 
+impl Default for IommuDomainTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IommuDomainTable {
     const fn new() -> Self {
         const EMPTY_DOMAIN_SLOT: Option<IommuDomain> = None;
@@ -326,11 +332,9 @@ impl IommuDomainTable {
         f: F,
     ) -> Option<T> {
         let inner = self.domains.lock();
-        for slot in inner.slots.iter() {
-            if let Some(ref dom) = slot {
-                if dom.id == id {
-                    return Some(f(dom));
-                }
+        for dom in inner.slots.iter().flatten() {
+            if dom.id == id {
+                return Some(f(dom));
             }
         }
         None
@@ -343,11 +347,9 @@ impl IommuDomainTable {
         f: F,
     ) -> Option<T> {
         let mut inner = self.domains.lock();
-        for slot in inner.slots.iter_mut() {
-            if let Some(ref mut dom) = slot {
-                if dom.id == id {
-                    return Some(f(dom));
-                }
+        for dom in inner.slots.iter_mut().flatten() {
+            if dom.id == id {
+                return Some(f(dom));
             }
         }
         None

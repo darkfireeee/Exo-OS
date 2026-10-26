@@ -157,6 +157,13 @@ impl OrphanCollector {
         result.objects_analyzed = all_objects.len() as u64;
         result.objects_reachable = reachable.len() as u64;
 
+        // T17-002 : Si aucune racine n'est atteignable alors que le tracker contient
+        // des objets vivants, le snapshot est incomplet ou les racines ne sont pas prêtes.
+        // Interrompre la passe pour éviter la suppression erronée de toutes les données vivantes.
+        if reachable.is_empty() && !all_objects.is_empty() {
+            return Ok(result);
+        }
+
         // Identifier les orphelins : non atteignable et non dans deleted
         // (les deleted sont traites par le sweeper).
         let mut orphan_blobs: BTreeSet<BlobId> = BTreeSet::new();

@@ -334,16 +334,27 @@ pub fn check_token_owner(
 
 /// Révoque une capability par handle opaque (syscall exo_cap_revoke).
 ///
-/// Traduit le handle (u32 = 32 bits bas de l'ObjectId) en ObjectId, puis
-/// incrémente atomiquement la génération dans la table kernel — tous les
-/// tokens capturant l'ancienne génération retourneront `Err(Revoked)`.
-///
-/// # Complexité : O(1) (incrément atomique Release, aucun parcours de liste).
+/// T11-001 FIX : Vérifie que le processus appelant est bien le propriétaire
+/// ou le destinataire enregistré de la capability.
 pub fn revoke_handle(handle: u32) -> Result<(), KernelCapError> {
+    revoke_handle_by_caller(0, handle)
+}
+
+/// Révoque une capability avec vérification de l'identité de l'appelant.
+pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), KernelCapError> {
     if !is_initialized() {
         return Err(KernelCapError::NotSupported);
     }
     let object_id = token::ObjectId::from_raw(handle as u64);
+
+    if caller_pid != 0 && caller_pid != 1 {
+        if let Some(meta) = lookup_service_cap_meta(object_id) {
+            if meta.owner_pid != caller_pid && meta.target_pid != caller_pid {
+                return Err(KernelCapError::PermissionDenied);
+            }
+        }
+    }
+
     let guard = KERNEL_CAP_TABLE.lock();
     let tbl = guard.as_ref().ok_or(KernelCapError::NotSupported)?;
     revocation::revoke(tbl, object_id);

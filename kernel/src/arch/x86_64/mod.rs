@@ -66,8 +66,8 @@ pub fn arch_info() -> ArchInfo {
     let features = cpu_features_or_none();
     ArchInfo {
         cpu_count: smp::percpu::cpu_count(),
-        has_apic: features.map_or(false, |cpu| cpu.has_apic()),
-        has_x2apic: features.map_or(false, |cpu| cpu.has_x2apic()),
+        has_apic: features.is_some_and(|cpu| cpu.has_apic()),
+        has_x2apic: features.is_some_and(|cpu| cpu.has_x2apic()),
         has_acpi: acpi::parser::acpi_available(),
         page_size: PAGE_SIZE,
     }

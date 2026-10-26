@@ -240,8 +240,20 @@ pub fn ack_irq_syscall(vector: IrqVector) -> Result<(), IrqError> {
         None => return Err(IrqError::NotRegistered),
     };
 
-    let _prev = route.pending_acks.fetch_sub(1, Ordering::AcqRel);
-    let remaining = route.pending_acks.load(Ordering::Acquire);
+    // AUDIT-IRQ1 : mise à jour saturante pour éviter le wrap de pending_acks à u32::MAX
+    let prev = match route.pending_acks.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Acquire,
+        |val| Some(val.saturating_sub(1)),
+    ) {
+        Ok(p) => p,
+        Err(p) => p,
+    };
+
+    if prev == 0 {
+        return Ok(());
+    }
+    let remaining = prev - 1;
 
     if remaining == 0 {
         route.handled_count.store(0, Ordering::Release);
@@ -296,9 +308,16 @@ pub fn ack_irq_canonical(
         route.handled_count.fetch_add(1, Ordering::AcqRel);
     }
 
-    let prev = route.pending_acks.fetch_sub(1, Ordering::AcqRel);
+    // AUDIT-IRQ1 : mise à jour saturante pour éviter le wrap de pending_acks
+    let prev = match route.pending_acks.fetch_update(
+        Ordering::AcqRel,
+        Ordering::Acquire,
+        |val| Some(val.saturating_sub(1)),
+    ) {
+        Ok(p) => p,
+        Err(p) => p,
+    };
     if prev == 0 {
-        route.pending_acks.store(0, Ordering::Release);
         log::warn!(
             "IRQ {} ack_irq underflow (reg_id={}, wave={})",
             irq_vector.as_u8(),
@@ -545,10 +564,8 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     }
 
     // ÉTAPE 5: Dispatch notifications (en ISR c'est un push non bloquant dans la MQ)
-    for i in 0..n_eps {
-        if let Some(ep) = eps[i] {
-            let _ = ipc::send_irq_notification(&ep, irq_vector.as_u8(), wg);
-        }
+    for ep in eps.iter().take(n_eps).flatten() {
+        let _ = ipc::send_irq_notification(ep, irq_vector.as_u8(), wg);
     }
 }
 

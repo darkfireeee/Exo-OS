@@ -305,7 +305,7 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
     let tsc_hz_raw = (tsc_delta as u128 * PIT_FREQ_HZ as u128 / count as u128) as u64;
 
     // Validation plage physique.
-    let valid = tsc_hz_raw >= 100_000_000 && tsc_hz_raw <= 10_000_000_000;
+    let valid = (100_000_000..=10_000_000_000).contains(&tsc_hz_raw);
 
     // Indicateur de qualité : dépend de la valeur de tsc_delta.
     // Un delta trop petit (< 100_000 cycles) → mesure peu précise.

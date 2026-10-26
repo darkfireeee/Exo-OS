@@ -25,11 +25,16 @@ pub struct LatencyHist {
     max_ns: AtomicU64,
 }
 
+impl Default for LatencyHist {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LatencyHist {
     const fn new() -> Self {
-        const ZERO: AtomicU64 = AtomicU64::new(0);
         Self {
-            buckets: [ZERO; BUCKETS],
+            buckets: [const { AtomicU64::new(0) }; BUCKETS],
             total: AtomicU64::new(0),
             sum_ns: AtomicU64::new(0),
             max_ns: AtomicU64::new(0),
@@ -105,11 +110,7 @@ impl LatencyHist {
     }
     pub fn avg_ns(&self) -> u64 {
         let t = self.total.load(Ordering::Relaxed);
-        if t == 0 {
-            0
-        } else {
-            self.sum_ns.load(Ordering::Relaxed) / t
-        }
+        self.sum_ns.load(Ordering::Relaxed).checked_div(t).unwrap_or(0)
     }
 
     pub fn reset(&self) {
@@ -158,6 +159,8 @@ pub static PICKNEXT_LATENCY: LatencyHist = LatencyHist::new();
 /// Latence IPI (ns).
 pub static IPI_LATENCY: LatencyHist = LatencyHist::new();
 
+/// # Safety
+/// CPL 0.
 pub unsafe fn init() {
     // Histogrammes initialisés à la compilation — rien à faire.
 }

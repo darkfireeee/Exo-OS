@@ -82,12 +82,16 @@ pub struct DmaAffinityTable {
 unsafe impl Sync for DmaAffinityTable {}
 unsafe impl Send for DmaAffinityTable {}
 
+impl Default for DmaAffinityTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DmaAffinityTable {
     const fn new() -> Self {
-        // SAFETY: AffinityEntry est const-initialisable.
-        const ENTRY: AffinityEntry = AffinityEntry::new();
         DmaAffinityTable {
-            entries: [ENTRY; MAX_DMA_CHANNELS],
+            entries: [const { AffinityEntry::new() }; MAX_DMA_CHANNELS],
             stats_local_total: AtomicU64::new(0),
             stats_remote_total: AtomicU64::new(0),
         }
@@ -190,9 +194,9 @@ impl DmaAffinityTable {
     ///   3. Canal sans affinité définie (fallback).
     ///
     /// Retourne `None` si `candidates` est vide.
-    pub fn best_for_cpu<'a>(
+    pub fn best_for_cpu(
         &self,
-        candidates: &'a [DmaChannelId],
+        candidates: &[DmaChannelId],
         cpu_id: u8,
     ) -> Option<DmaChannelId> {
         let mut best_exact: Option<DmaChannelId> = None;

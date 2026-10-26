@@ -120,6 +120,7 @@ pub mod object_writer;
 pub mod object_reader;
 
 pub mod ata_pio;
+pub mod ramdisk;
 /// Statistiques globales du module storage
 pub mod storage_stats;
 pub mod virtio_adapter; // pilote ATA/IDE PIO (repli quand virtio absent : Bochs / QEMU pc)

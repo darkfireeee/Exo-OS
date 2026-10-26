@@ -17,6 +17,7 @@ members = [
     "drivers/input/usb_hid",
     "drivers/tty",
     "drivers/display/vga",
+    "drivers/gpu/virtio_gpu",
     "drivers/network/common",
     "drivers/network/e1000",
     "drivers/network/loopback",

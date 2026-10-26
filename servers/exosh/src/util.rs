@@ -96,6 +96,8 @@ pub const INPUT_REPLY_WAIT_TIMEOUT_MS: u64 = 10;
 
 pub const HID_KEY_END: u16 = 0x004d;
 
+pub const HID_KEY_HOME: u16 = 0x004a;
+
 pub const HID_KEY_DELETE: u16 = 0x004c;
 
 pub const HID_KEY_LEFT: u16 = 0x0050;

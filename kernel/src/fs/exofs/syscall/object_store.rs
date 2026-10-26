@@ -166,18 +166,20 @@ impl ObjectStore {
             }
             old_extent = Some(*existing);
         }
-        if let Some(old) = old_extent {
-            inner.add_free_extent(old.base_lba, old.allocated_blocks)?;
-        }
 
         let baseline_lba = data_lba_start(total_blocks);
+        let reused_extent = if needed_blocks > 0 {
+            inner.take_free_extent(needed_blocks)
+        } else {
+            None
+        };
         let start_lba = if needed_blocks == 0 {
             inner
                 .map
                 .get(&blob_id)
                 .map(|mapping| mapping.base_lba)
                 .unwrap_or(baseline_lba)
-        } else if let Some(reused) = inner.take_free_extent(needed_blocks) {
+        } else if let Some(reused) = reused_extent {
             reused
         } else if inner.next_lba == 0 {
             baseline_lba
@@ -188,7 +190,16 @@ impl ObjectStore {
             .checked_add(needed_blocks)
             .ok_or(ExofsError::OffsetOverflow)?;
         if end_lba > total_blocks {
+            if let Some(reused) = reused_extent {
+                let _ = inner.add_free_extent(reused, needed_blocks);
+            }
             return Err(ExofsError::NoSpace);
+        }
+
+        // T18-002 : Ne libérer l'ancien extent qu'après confirmation du succès
+        // de la nouvelle allocation pour éviter l'incohérence mapping vivant + extent libre.
+        if let Some(old) = old_extent {
+            inner.add_free_extent(old.base_lba, old.allocated_blocks)?;
         }
 
         let mapping = PersistedBlobMapping {

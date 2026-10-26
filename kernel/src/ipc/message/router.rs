@@ -93,9 +93,8 @@ unsafe impl Sync for RoutingTable {}
 
 impl RoutingTable {
     const fn new() -> Self {
-        const EMPTY: RouteEntry = RouteEntry::empty();
         Self {
-            entries: [EMPTY; MAX_ROUTES],
+            entries: [const { RouteEntry::empty() }; MAX_ROUTES],
             count: AtomicU32::new(0),
         }
     }

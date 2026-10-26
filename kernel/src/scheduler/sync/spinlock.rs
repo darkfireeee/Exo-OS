@@ -31,6 +31,12 @@ pub struct SpinLock<T> {
 unsafe impl<T: Send> Send for SpinLock<T> {}
 unsafe impl<T: Send> Sync for SpinLock<T> {}
 
+impl<T: Default> Default for SpinLock<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
         Self {
@@ -44,14 +50,13 @@ impl<T> SpinLock<T> {
         let preempt = PreemptGuard::new();
         loop {
             // Essai optimiste (non-serialisant) avant le LOCK CMPXCHG.
-            if !self.locked.load(Ordering::Relaxed) {
-                if self
+            if !self.locked.load(Ordering::Relaxed)
+                && self
                     .locked
                     .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
-                {
-                    break;
-                }
+            {
+                break;
             }
             core::hint::spin_loop();
         }
@@ -135,13 +140,19 @@ impl<T> IrqSpinLock<T> {
         // Sauvegarder les IRQ et les désactiver.
         let rflags = save_and_disable_irq();
         let guard = self.inner.lock();
-        IrqSpinLockGuard { guard, rflags }
+        IrqSpinLockGuard {
+            guard: core::mem::ManuallyDrop::new(guard),
+            rflags,
+        }
     }
 
     pub fn try_lock_irq(&self) -> Option<IrqSpinLockGuard<'_, T>> {
         let rflags = save_and_disable_irq();
         match self.inner.try_lock() {
-            Some(g) => Some(IrqSpinLockGuard { guard: g, rflags }),
+            Some(g) => Some(IrqSpinLockGuard {
+                guard: core::mem::ManuallyDrop::new(g),
+                rflags,
+            }),
             None => {
                 restore_irq(rflags);
                 None
@@ -151,26 +162,30 @@ impl<T> IrqSpinLock<T> {
 }
 
 pub struct IrqSpinLockGuard<'a, T> {
-    guard: SpinLockGuard<'a, T>,
+    guard: core::mem::ManuallyDrop<SpinLockGuard<'a, T>>,
     rflags: u64,
 }
 
 impl<'a, T> Deref for IrqSpinLockGuard<'a, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        &*self.guard
+        &self.guard
     }
 }
 
 impl<'a, T> DerefMut for IrqSpinLockGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        &mut *self.guard
+        &mut self.guard
     }
 }
 
 impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
     fn drop(&mut self) {
-        // SpinLockGuard::drop() libère le verrou en premier, PUIS on restaure les IRQ.
+        // AUDIT-SCHED2 : libérer le verrou EN PREMIER, PUIS restaurer les IRQ.
+        // Sinon, une IRQ survenue verrou-tenu peut causer un deadlock avec le même verrou dans l'ISR.
+        unsafe {
+            core::mem::ManuallyDrop::drop(&mut self.guard);
+        }
         restore_irq(self.rflags);
     }
 }

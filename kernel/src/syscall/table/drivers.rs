@@ -146,6 +146,7 @@ fn pci_cfg_error_to_errno(err: PciCfgError) -> i64 {
     match err {
         PciCfgError::NotClaimed => EPERM,
         PciCfgError::PermissionDenied => EACCES,
+        PciCfgError::InvalidParams => EINVAL,
     }
 }
 

@@ -118,7 +118,15 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
     fsdbg(b'1');
 
-    // Repli ATA/IDE (PIO, 0x1F0 maître) si virtio-blk absent — Bochs (qui n'émule
+    // Repli Ramdisk (module Multiboot2 exofs_root) si virtio-blk absent (ex: Live ISO)
+    if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
+        fsdbg(b'M');
+        if crate::fs::exofs::storage::ramdisk::init_global_disk_ramdisk() {
+            fsdbg(b'm');
+        }
+    }
+
+    // Repli ATA/IDE (PIO, 0x1F0 maître) si virtio-blk et ramdisk absents — Bochs (qui n'émule
     // ni virtio ni AHCI/NVMe) ou QEMU machine `pc`. Permet de lire le rootfs ExoFS
     // depuis un disque IDE legacy pour le diagnostic #25 sous Bochs.
     if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {

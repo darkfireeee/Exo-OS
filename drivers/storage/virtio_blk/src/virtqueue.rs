@@ -101,6 +101,10 @@ impl<const N: usize> SubmissionRing<N> {
         self.len
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn push(&mut self, desc: u16) -> Result<(), QueueError> {
         if self.len == N {
             return Err(QueueError::Full);

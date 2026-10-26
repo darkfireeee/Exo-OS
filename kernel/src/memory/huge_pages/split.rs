@@ -25,6 +25,12 @@ pub struct SplitStats {
     pub ptes_rebuilt: AtomicU64,
 }
 
+impl Default for SplitStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SplitStats {
     const fn new() -> Self {
         SplitStats {
@@ -178,7 +184,7 @@ pub unsafe fn split_huge_pde(
     pt_frame: Frame,
 ) -> Result<SplitOutput, SplitResult> {
     // Vérification alignement 2 MiB.
-    if huge_phys.as_u64() % HUGE_PAGE_SIZE as u64 != 0 {
+    if !huge_phys.as_u64().is_multiple_of(HUGE_PAGE_SIZE as u64) {
         SPLIT_STATS.splits_refused.fetch_add(1, Ordering::Relaxed);
         return Err(SplitResult::NotAligned);
     }

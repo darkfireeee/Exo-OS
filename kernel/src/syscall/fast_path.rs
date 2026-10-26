@@ -202,7 +202,8 @@ fn current_creds() -> Credentials {
                 ppid: pcb.ppid.load(Ordering::Relaxed),
             }
         }
-        None => Credentials::root(),
+        // Fail-closed : si le PID non-zéro n'a pas de PCB, refuser les privilèges root (AUDIT-SEC)
+        None => Credentials::nobody(),
     }
 }
 
@@ -224,6 +225,16 @@ impl Credentials {
             euid: 0,
             egid: 0,
             ppid: 0,
+        }
+    }
+
+    fn nobody() -> Self {
+        Self {
+            uid: 65534,
+            gid: 65534,
+            euid: 65534,
+            egid: 65534,
+            ppid: 1,
         }
     }
 }

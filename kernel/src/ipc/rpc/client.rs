@@ -160,7 +160,7 @@ impl RpcClient {
             return None;
         }
         // SAFETY: fn pointer stocké via start()
-        Some(unsafe { core::mem::transmute(p) })
+        Some(unsafe { core::mem::transmute::<usize, RpcTransportFn>(p) })
     }
 
     // -----------------------------------------------------------------------
@@ -403,9 +403,8 @@ unsafe impl Sync for RpcClientTable {}
 
 impl RpcClientTable {
     const fn new() -> Self {
-        const EMPTY: RpcClientSlot = RpcClientSlot::empty();
         Self {
-            slots: [EMPTY; MAX_RPC_CLIENTS],
+            slots: [const { RpcClientSlot::empty() }; MAX_RPC_CLIENTS],
             count: AtomicU32::new(0),
         }
     }

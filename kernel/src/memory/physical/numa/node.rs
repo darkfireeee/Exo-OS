@@ -330,7 +330,8 @@ pub static NUMA_GLOBAL_STATS: NumaGlobalStats = NumaGlobalStats::new();
 /// SRAT qui appelle `NUMA_NODES.register_node()` + `add_range()` pour chaque
 /// nœud découvert.
 ///
-/// # Safety : CPL 0.
+/// # Safety
+/// Exécutable uniquement en CPL 0 pendant l'initialisation du noyau.
 pub unsafe fn init() {
     // Nœud 0 : tous les CPUs, plage 0..4GiB par défaut.
     let nid = NUMA_NODES.register_node(u64::MAX);

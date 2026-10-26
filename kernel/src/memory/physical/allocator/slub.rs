@@ -100,6 +100,12 @@ pub struct SlubCacheStats {
     pub use_after_free: AtomicU64,
 }
 
+impl Default for SlubCacheStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlubCacheStats {
     pub const fn new() -> Self {
         SlubCacheStats {
@@ -160,44 +166,48 @@ impl SlubCache {
     }
 
     /// Alloue un objet de ce cache SLUB.
-    pub fn alloc(&self, _flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
+    pub fn alloc(&self, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
         }
         let mut inner = self.inner.lock();
 
-        // 1. Essayer la liste partielle
-        if let Some(ptr) = self.alloc_partial(&mut inner) {
+        let ptr = if let Some(ptr) = self.alloc_partial(&mut inner) {
             self.stats.allocs.fetch_add(1, Ordering::Relaxed);
             self.stats.current_inuse.fetch_add(1, Ordering::Relaxed);
-            return Ok(ptr);
-        }
-
-        // 2. Réactiver un slub vide
-        if let Some(ptr) = self.reactivate_empty(&mut inner) {
+            ptr
+        } else if let Some(ptr) = self.reactivate_empty(&mut inner) {
             self.stats.allocs.fetch_add(1, Ordering::Relaxed);
             self.stats.current_inuse.fetch_add(1, Ordering::Relaxed);
-            return Ok(ptr);
-        }
+            ptr
+        } else {
+            match self.create_new_slub(&mut inner) {
+                Ok(ptr) => {
+                    self.stats.slubs_created.fetch_add(1, Ordering::Relaxed);
+                    self.stats.allocs.fetch_add(1, Ordering::Relaxed);
+                    self.stats.current_inuse.fetch_add(1, Ordering::Relaxed);
+                    ptr
+                }
+                Err(e) => {
+                    self.stats.oom_count.fetch_add(1, Ordering::Relaxed);
+                    return Err(e);
+                }
+            }
+        };
 
-        // 3. Nouveau slub
-        match self.create_new_slub(&mut inner) {
-            Ok(ptr) => {
-                self.stats.slubs_created.fetch_add(1, Ordering::Relaxed);
-                self.stats.allocs.fetch_add(1, Ordering::Relaxed);
-                self.stats.current_inuse.fetch_add(1, Ordering::Relaxed);
-                Ok(ptr)
-            }
-            Err(e) => {
-                self.stats.oom_count.fetch_add(1, Ordering::Relaxed);
-                Err(e)
+        // T5-002 FIX : Si ZEROED est requis, zéroifier l'objet alloué.
+        if flags.contains(AllocFlags::ZEROED) {
+            unsafe {
+                core::ptr::write_bytes(ptr.as_ptr(), 0, self.info.size);
             }
         }
+        Ok(ptr)
     }
 
     /// Libère un objet de ce cache SLUB.
     ///
-    /// SAFETY: `ptr` doit avoir été alloué via ce cache et ne plus être utilisé.
+    /// # Safety
+    /// `ptr` doit avoir été alloué via ce cache et ne plus être utilisé.
     pub unsafe fn free(&self, ptr: NonNull<u8>) {
         let mut inner = self.inner.lock();
         let page_start = ptr.as_ptr() as usize & !(PAGE_SIZE - 1);
@@ -424,7 +434,7 @@ impl SlubCache {
         };
         let addr = obj as usize;
 
-        addr >= first_obj && addr < obj_end && (addr - first_obj) % self.info.size == 0
+        addr >= first_obj && addr < obj_end && (addr - first_obj).is_multiple_of(self.info.size)
     }
 
     unsafe fn freelist_contains(&self, header: &SlubHeader, needle: *mut u8) -> bool {
@@ -531,7 +541,10 @@ pub fn alloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> 
     SLUB_CACHES[idx].alloc(flags)
 }
 
-/// SAFETY: `ptr` doit avoir été alloué via `alloc()` avec la même `size`.
+/// Libère un objet précédemment alloué via `alloc()`.
+///
+/// # Safety
+/// `ptr` doit avoir été alloué via `alloc()` avec la même `size`.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     if let Some(idx) = size_class_for(size) {
         SLUB_CACHES[idx].free(ptr);

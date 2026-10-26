@@ -56,6 +56,12 @@ pub struct CowBreakerStats {
     pub bytes_copied: AtomicU64,
 }
 
+impl Default for CowBreakerStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CowBreakerStats {
     const fn new() -> Self {
         CowBreakerStats {

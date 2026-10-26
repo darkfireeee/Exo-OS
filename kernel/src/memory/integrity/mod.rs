@@ -34,7 +34,8 @@ pub use sanitizer::{
 
 /// Initialise tous les sous-systèmes d'intégrité mémoire.
 ///
-/// # Safety : CPL 0, shadow map heap mappée.
+/// # Safety
+/// CPL 0, shadow map heap mappée.
 pub unsafe fn init() {
     canary::init();
     guard_pages::init();

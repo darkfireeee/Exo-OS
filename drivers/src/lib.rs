@@ -91,6 +91,38 @@ impl MmioRegion {
     }
 
     #[inline]
+    pub unsafe fn read8(&self, offset: usize) -> u8 {
+        if offset + 1 <= self.size && !self.virt_addr.is_null() {
+            core::ptr::read_volatile(self.virt_addr.add(offset) as *const u8)
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub unsafe fn write8(&self, offset: usize, value: u8) {
+        if offset + 1 <= self.size && !self.virt_addr.is_null() {
+            core::ptr::write_volatile(self.virt_addr.add(offset) as *mut u8, value);
+        }
+    }
+
+    #[inline]
+    pub unsafe fn read16(&self, offset: usize) -> u16 {
+        if offset + 2 <= self.size && !self.virt_addr.is_null() {
+            core::ptr::read_volatile(self.virt_addr.add(offset) as *const u16)
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub unsafe fn write16(&self, offset: usize, value: u16) {
+        if offset + 2 <= self.size && !self.virt_addr.is_null() {
+            core::ptr::write_volatile(self.virt_addr.add(offset) as *mut u16, value);
+        }
+    }
+
+    #[inline]
     pub unsafe fn read32(&self, offset: usize) -> u32 {
         if offset + 4 <= self.size && !self.virt_addr.is_null() {
             core::ptr::read_volatile(self.virt_addr.add(offset) as *const u32)

@@ -154,41 +154,56 @@ pub fn run_block_server<D: BlockDeviceOps>(
             )
         };
 
+        // T12-001 : Validation stricte du tampon mémoire fourni pour le transfert
+        const USER_SPACE_MAX: u64 = 0x0000_8000_0000_0000;
+        let is_valid_dma_target = |addr: u64| -> bool {
+            addr != 0
+                && addr < USER_SPACE_MAX
+                && addr.checked_add(BLOCK_DEFAULT_SIZE as u64).map_or(false, |end| end <= USER_SPACE_MAX)
+        };
+
         let reply_wire = match cmd.opcode {
             BLOCK_OP_GET_INFO => {
                 BlockReplyWire::ok(0, 0, dev.block_size(), dev.total_blocks())
             }
             BLOCK_OP_READ => {
-                match dev.read_block(cmd.lba, &mut block_scratch) {
-                    Ok(()) => {
-                        // Si un tampon physique de destination DMA est fourni, copier
-                        if cmd.dma_phys != 0 {
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    block_scratch.as_ptr(),
-                                    cmd.dma_phys as *mut u8,
-                                    BLOCK_DEFAULT_SIZE,
-                                );
+                if cmd.dma_phys != 0 && !is_valid_dma_target(cmd.dma_phys) {
+                    BlockReplyWire::error(syscall::EFAULT)
+                } else {
+                    match dev.read_block(cmd.lba, &mut block_scratch) {
+                        Ok(()) => {
+                            if cmd.dma_phys != 0 {
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(
+                                        block_scratch.as_ptr(),
+                                        cmd.dma_phys as *mut u8,
+                                        BLOCK_DEFAULT_SIZE,
+                                    );
+                                }
                             }
+                            BlockReplyWire::ok(cmd.lba, 1, dev.block_size(), dev.total_blocks())
                         }
-                        BlockReplyWire::ok(cmd.lba, 1, dev.block_size(), dev.total_blocks())
+                        Err(err) => BlockReplyWire::error(err),
                     }
-                    Err(err) => BlockReplyWire::error(err),
                 }
             }
             BLOCK_OP_WRITE => {
-                if cmd.dma_phys != 0 {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            cmd.dma_phys as *const u8,
-                            block_scratch.as_mut_ptr(),
-                            BLOCK_DEFAULT_SIZE,
-                        );
+                if cmd.dma_phys != 0 && !is_valid_dma_target(cmd.dma_phys) {
+                    BlockReplyWire::error(syscall::EFAULT)
+                } else {
+                    if cmd.dma_phys != 0 {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                cmd.dma_phys as *const u8,
+                                block_scratch.as_mut_ptr(),
+                                BLOCK_DEFAULT_SIZE,
+                            );
+                        }
                     }
-                }
-                match dev.write_block(cmd.lba, &block_scratch) {
-                    Ok(()) => BlockReplyWire::ok(cmd.lba, 1, dev.block_size(), dev.total_blocks()),
-                    Err(err) => BlockReplyWire::error(err),
+                    match dev.write_block(cmd.lba, &block_scratch) {
+                        Ok(()) => BlockReplyWire::ok(cmd.lba, 1, dev.block_size(), dev.total_blocks()),
+                        Err(err) => BlockReplyWire::error(err),
+                    }
                 }
             }
             BLOCK_OP_FLUSH => {

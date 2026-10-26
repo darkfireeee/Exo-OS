@@ -115,6 +115,10 @@ impl ExoUserspaceStorageHal {
     }
 
     /// Libération DMA contiguë via syscall SYS_DMA_FREE
+    ///
+    /// # Safety
+    /// L'appelant doit s'assurer que `phys` correspond à une allocation DMA valide de `pages` pages
+    /// et qu'aucun périphérique n'accède encore à cette région.
     pub unsafe fn dma_dealloc(&self, phys: u64, pages: usize) {
         if let Some(size) = pages.checked_mul(4096) {
             let _ = syscall::syscall6(

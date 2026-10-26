@@ -58,14 +58,8 @@ struct IoApicEntry {
 }
 
 // Structure statique de 8 I/O APICs potentiels
-static IOAPIC_BASES: [AtomicUsize; MAX_IOAPICS] = {
-    const ZERO: AtomicUsize = AtomicUsize::new(0);
-    [ZERO; MAX_IOAPICS]
-};
-static IOAPIC_GSI_BASE: [AtomicU8; MAX_IOAPICS] = {
-    const ZERO: AtomicU8 = AtomicU8::new(0);
-    [ZERO; MAX_IOAPICS]
-};
+static IOAPIC_BASES: [AtomicUsize; MAX_IOAPICS] = [const { AtomicUsize::new(0) }; MAX_IOAPICS];
+static IOAPIC_GSI_BASE: [AtomicU8; MAX_IOAPICS] = [const { AtomicU8::new(0) }; MAX_IOAPICS];
 static IOAPIC_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 // ── Lecture / écriture MMIO ───────────────────────────────────────────────────
@@ -187,15 +181,15 @@ pub fn unmask_irq(gsi: u32) {
 /// Appelé depuis `init_apic_system()` après la détection ACPI.
 pub fn init_all_ioapics() {
     let count = IOAPIC_COUNT.load(Ordering::Acquire).min(MAX_IOAPICS);
-    for i in 0..count {
-        let base = IOAPIC_BASES[i].load(Ordering::Relaxed);
+    for base_atomic in &IOAPIC_BASES[..count] {
+        let base = base_atomic.load(Ordering::Relaxed);
         if base == 0 {
             continue;
         }
 
         // SAFETY: base validée lors de l'enregistrement ACPI
         let max_redir = unsafe { (ioapic_read(base, IOAPIC_VER) >> 16) & 0xFF };
-        for pin in 0..=(max_redir as u32) {
+        for pin in 0..=max_redir {
             let reg = IOAPIC_REDTBL + (pin * 2) as u8;
             // SAFETY: registre calculé depuis max_redir valide
             unsafe {

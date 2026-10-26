@@ -54,34 +54,19 @@ const SYNC_ITERATIONS: usize = 10;
 // Utilisation : chaque AP écrit dans la case de son CPU ID.
 
 /// TSC de l'AP au moment du wake-up (écrit par l'AP, lu par le BSP).
-static AP_TSC: [AtomicU64; MAX_CPUS] = {
-    const INIT: AtomicU64 = AtomicU64::new(0);
-    [INIT; MAX_CPUS]
-};
+static AP_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// Signal BSP → AP : le BSP a noté tsc_start, l'AP peut lire son TSC.
-static BSP_READY: [AtomicBool; MAX_CPUS] = {
-    const INIT: AtomicBool = AtomicBool::new(false);
-    [INIT; MAX_CPUS]
-};
+static BSP_READY: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
 /// TSC du BSP juste avant d'envoyer le signal à l'AP.
-static BSP_TSC_BEFORE: [AtomicU64; MAX_CPUS] = {
-    const INIT: AtomicU64 = AtomicU64::new(0);
-    [INIT; MAX_CPUS]
-};
+static BSP_TSC_BEFORE: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// TSC du BSP juste après confirmation de l'AP.
-static BSP_TSC_AFTER: [AtomicU64; MAX_CPUS] = {
-    const INIT: AtomicU64 = AtomicU64::new(0);
-    [INIT; MAX_CPUS]
-};
+static BSP_TSC_AFTER: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// Confirmation que l'AP a terminé sa mesure.
-static AP_DONE: [AtomicBool; MAX_CPUS] = {
-    const INIT: AtomicBool = AtomicBool::new(false);
-    [INIT; MAX_CPUS]
-};
+static AP_DONE: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
 // ── Mesure depuis le BSP ──────────────────────────────────────────────────────
 
@@ -98,7 +83,7 @@ static AP_DONE: [AtomicBool; MAX_CPUS] = {
 ///   Exécute SYNC_ITERATIONS mesures et prend la médiane pour réduire le jitter.
 ///   Stocke l'offset via `ktime::store_tsc_offset(ap_cpu_id, offset_signed)`.
 ///
-/// # Sécurité
+/// # Safety
 ///   Unsafe : accès direct aux MSR TSC, coordination avec l'AP via atomics partagés.
 pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
     if ap_cpu_id as usize >= MAX_CPUS {
@@ -144,7 +129,8 @@ pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
         // Référence BSP au moment de la lecture AP = tsc_before + propagation_half
         let bsp_ref = tsc_before.wrapping_add(propagation_half);
         // offset = ap_tsc - bsp_ref (signé : positif = AP en avance)
-        let offset = ap_tsc as i64 - bsp_ref as i64;
+        // Utilise wrapping_sub pour éviter l'overflow signé si le TSC dépasse 2^63 - 1
+        let offset = ap_tsc.wrapping_sub(bsp_ref) as i64;
         samples[i] = offset;
 
         // Reset pour la prochaine itération.
@@ -169,6 +155,9 @@ pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
 // ── Côté AP ───────────────────────────────────────────────────────────────────
 
 /// Exécuté par l'AP lors du boot SMP pour répondre au BSP.
+///
+/// # Safety
+/// Doit être appelé exclusivement par le processeur AP actif au cours de la phase de démarrage SMP.
 ///
 /// Appelé depuis le code d'init AP (arch/x86_64/smp/ap_entry.rs ou équivalent)
 /// après la configuration des registres de base (GDT/IDT/paging) mais avant

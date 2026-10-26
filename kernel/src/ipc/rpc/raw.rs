@@ -123,16 +123,38 @@ fn recv_reply(
     raw_reply: &mut [u8; MAX_MSG_SIZE],
     deadline_ns: u64,
 ) -> Result<usize, IpcError> {
+    #[cfg(not(test))]
+    let current_tcb = crate::scheduler::core::switch::current_thread_raw();
+    #[cfg(test)]
+    let current_tcb = core::ptr::null_mut();
+
     loop {
-        match channel_raw::recv_raw(reply_ep, raw_reply, RAW_NOWAIT) {
-            Ok(n) => return Ok(n),
-            Err(IpcError::WouldBlock) | Err(IpcError::QueueEmpty) => {
-                if monotonic_ns() >= deadline_ns {
+        match channel_raw::recv_raw_or_register_waiter(reply_ep, raw_reply, current_tcb) {
+            Ok(Some(n)) => return Ok(n),
+            Ok(None) => {
+                let now = monotonic_ns();
+                if now >= deadline_ns {
+                    channel_raw::clear_waiter(reply_ep, current_tcb);
                     return Err(IpcError::Timeout);
                 }
-                yield_to_peer();
+                #[cfg(not(test))]
+                unsafe {
+                    let nap_ns = deadline_ns.saturating_sub(now).min(2_000_000);
+                    if !crate::scheduler::timer::sleep_ns(nap_ns) {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                    channel_raw::clear_waiter(reply_ep, current_tcb);
+                }
+                #[cfg(test)]
+                {
+                    std::thread::yield_now();
+                    channel_raw::clear_waiter(reply_ep, current_tcb);
+                }
             }
-            Err(err) => return Err(err),
+            Err(err) => {
+                channel_raw::clear_waiter(reply_ep, current_tcb);
+                return Err(err);
+            }
         }
     }
 }

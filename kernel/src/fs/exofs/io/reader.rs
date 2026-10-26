@@ -99,7 +99,7 @@ impl ReadConfig {
     }
 
     pub fn validate(&self) -> ExofsResult<()> {
-        if self.max_size > 0 && self.max_size > 512 * 1024 * 1024 {
+        if self.max_size > 512 * 1024 * 1024 {
             return Err(ExofsError::InvalidArgument);
         }
         Ok(())

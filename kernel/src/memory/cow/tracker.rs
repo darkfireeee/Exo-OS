@@ -70,11 +70,16 @@ pub enum CowTrackerError {
 unsafe impl Sync for CowTracker {}
 unsafe impl Send for CowTracker {}
 
+impl Default for CowTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CowTracker {
     const fn new() -> Self {
         CowTracker {
-            // SAFETY: CowEntry est zéro-initialisable.
-            table: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+            table: [const { CowEntry::new() }; COW_TABLE_SIZE],
             lock: Mutex::new(()),
             tracked_count: AtomicU64::new(0),
             inc_count: AtomicU64::new(0),
@@ -125,9 +130,9 @@ impl CowTracker {
         let start = Self::hash(idx);
         let _guard = self.lock.lock();
         let mut first_tombstone: Option<usize> = None;
-        let mut collisions = 0u32;
 
-        for probe in 0..COW_TABLE_SIZE {
+        for (collisions, probe) in (0..COW_TABLE_SIZE).enumerate() {
+            let collisions = collisions as u32;
             let slot = (start + probe) & COW_TABLE_MASK;
             let entry = &self.table[slot];
             let existing = entry.frame_idx.load(Ordering::Relaxed);
@@ -156,7 +161,6 @@ impl CowTracker {
             if existing == SLOT_DELETED && first_tombstone.is_none() {
                 first_tombstone = Some(slot);
             }
-            collisions += 1;
         }
         // Table pleine — cas dégénéré.
         let overflow = self.overflow_count.fetch_add(1, Ordering::Relaxed) + 1;

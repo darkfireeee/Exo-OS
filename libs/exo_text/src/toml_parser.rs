@@ -63,8 +63,8 @@ impl<'a> TomlParser<'a> {
     fn parse_value(&self, s: &str) -> Result<TomlValue> {
         let s = s.trim();
 
-        // String
-        if s.starts_with('"') && s.ends_with('"') {
+        // String (garde s.len() >= 2 pour éviter panic sur simple guillemet '"')
+        if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
             return Ok(TomlValue::String(s[1..s.len() - 1].to_string()));
         }
 

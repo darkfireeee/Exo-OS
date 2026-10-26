@@ -282,12 +282,15 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
 pub fn mailbox_close(ep_id: EndpointId) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
-        if RAW_TABLE[idx]
+        let slot = &RAW_TABLE[idx];
+        if slot
             .endpoint_id
             .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            RAW_TABLE[idx].ring.lock().reset();
+            let mut ring = slot.ring.lock();
+            slot.wake_waiter_locked();
+            ring.reset();
             OPEN_COUNT.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -358,6 +361,14 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
             IPC_STATS.record(StatEvent::MessageSent);
             slot.wake_waiter_locked();
             return Ok(alloc_message_id());
+        }
+        if (spins & 0x7F) == 0 {
+            drop(ring);
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        } else {
+            drop(ring);
         }
         if spins > 200_000 {
             slot.drop_count.fetch_add(1, Ordering::Relaxed);

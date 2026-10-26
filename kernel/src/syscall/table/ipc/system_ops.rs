@@ -9,20 +9,32 @@ use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{copy_to_user, UserBuf};
 
-/// `exo_log(buf_ptr, len, level)` — log direct vers le ring buffer kernel.
+/// `exo_log(buf_ptr, len, level)` — log direct vers le ring buffer kernel par tranches de 256 octets.
 pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_LOG);
     let log_len = (len as usize).min(4096);
-    let buf = match UserBuf::validate(buf_ptr, log_len, 4096) {
-        Ok(b) => b,
-        Err(e) => return e.to_errno(),
-    };
-    // Copier le message dans un buffer kernel local (stack, NO-ALLOC)
-    let mut kbuf = [0u8; 4096];
-    if let Err(e) = buf.read_into(&mut kbuf[..log_len]) {
+    if log_len == 0 {
+        return 0;
+    }
+    if let Err(e) = UserBuf::validate(buf_ptr, log_len, 4096) {
         return e.to_errno();
     }
-    crate::arch::x86_64::terminal::debug_write(&kbuf[..log_len]);
+    let mut kbuf = [0u8; 256];
+    let mut offset = 0usize;
+    while offset < log_len {
+        let chunk = (log_len - offset).min(kbuf.len());
+        if crate::syscall::validation::copy_from_user(
+            kbuf.as_mut_ptr(),
+            (buf_ptr + offset as u64) as *const u8,
+            chunk,
+        )
+        .is_err()
+        {
+            return EFAULT;
+        }
+        crate::arch::x86_64::terminal::debug_write(&kbuf[..chunk]);
+        offset += chunk;
+    }
     let _ = level;
     0
 }
@@ -164,17 +176,15 @@ pub fn sys_exo_phoenix_state_set(
         return EINVAL;
     }
     let caller = current_pid_u32();
-    if caller != 0 {
-        let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
-            return EPERM;
-        };
-        if !pcb.is_root() {
-            return EPERM;
-        }
-        let name = pcb.name_snapshot();
-        if !process_name_eq(&name, b"network_server") && !process_name_eq(&name, b"init_server") {
-            return EPERM;
-        }
+    let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
+        return EPERM;
+    };
+    if !pcb.is_root() {
+        return EPERM;
+    }
+    let name = pcb.name_snapshot();
+    if !process_name_eq(&name, b"network_server") && !process_name_eq(&name, b"init_server") {
+        return EPERM;
     }
     if crate::exophoenix::try_set_state_raw(state as u8) {
         0

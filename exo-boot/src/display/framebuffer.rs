@@ -364,9 +364,15 @@ pub fn init_panic_display(fb: &Framebuffer) {
 /// Fait défiler le framebuffer d'une ligne vers le haut.
 /// Copie les pixels ligne par ligne de bas en haut.
 fn scroll_framebuffer(fb: &Framebuffer, clear_color: u32) {
-    let bytes_per_row = fb.stride as usize * 4;
     let glyph_h = FONT_GLYPH_HEIGHT as usize;
     let scroll_pixels = glyph_h; // Défile d'une ligne texte
+
+    // AUDIT-BOOT1 : garde headless / hauteur insuffisante (évite sous-flow usize)
+    if (fb.height as usize) <= scroll_pixels || fb.stride == 0 {
+        return;
+    }
+
+    let bytes_per_row = fb.stride as usize * 4;
 
     // Déplace chaque ligne d'une ligne de glyphe vers le haut
     for y in 0..(fb.height as usize - scroll_pixels) {

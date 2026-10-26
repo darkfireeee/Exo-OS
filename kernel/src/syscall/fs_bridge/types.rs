@@ -190,6 +190,8 @@ pub const TTY_MSG_READ_LINE: u32 = 0x131;
 
 pub const TTY_MSG_WRITE: u32 = 0x132;
 
+pub const TTY_MSG_IOCTL: u32 = 0x133;
+
 pub const TTY_LINE_MAX: usize = 184;
 
 // PATCH-TTY-01: timeout reduit de 5 s a 500 ms.

@@ -70,6 +70,9 @@ pub enum PickResult {
 ///
 /// # Garantie de performance
 /// En l'absence de contention, cette fonction s'exécute en 100-150 cycles.
+///
+/// # Safety
+/// Préemption doit être désactivée sur le CPU courant. `rq` et `current` doivent être valides.
 #[inline(always)]
 pub unsafe fn pick_next_task(
     rq: &mut PerCpuRunQueue,
@@ -149,6 +152,9 @@ pub unsafe fn pick_next_task(
 
 /// Comptabilise le temps CPU du thread `tcb` pour `delta_ns` nanosecondes.
 /// À appeler dans le tick handler, avec préemption désactivée.
+///
+/// # Safety
+/// Préemption doit être désactivée sur le CPU courant. `tcb` doit être valide.
 #[inline(always)]
 pub unsafe fn account_time(tcb: &ThreadControlBlock, delta_ns: u64) {
     let weight = tcb.priority.cfs_weight();

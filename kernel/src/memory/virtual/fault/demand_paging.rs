@@ -35,6 +35,12 @@ pub struct DemandPagingStats {
     pub device_pages: AtomicU64,
 }
 
+impl Default for DemandPagingStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DemandPagingStats {
     pub const fn new() -> Self {
         DemandPagingStats {
@@ -107,14 +113,18 @@ static DEVICE_FAULT_VTABLE: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut()
 /// Enregistre un fournisseur de pages file-backed.
 ///
 /// Doit être appelé une seule fois depuis la couche VFS (après init mémoire).
-/// # Safety : appel single-threaded pendant l'init VFS.
+///
+/// # Safety
+/// Appel single-threaded pendant l'init VFS.
 pub unsafe fn register_file_fault_provider(data_ptr: *const (), vtable: *const ()) {
     FILE_FAULT_PROVIDER.store(data_ptr as *mut (), Ordering::Release);
     FILE_FAULT_VTABLE.store(vtable as *mut (), Ordering::Release);
 }
 
 /// Enregistre un fournisseur de frames device-backed.
-/// # Safety : appel single-threaded pendant l'init drivers.
+///
+/// # Safety
+/// Appel single-threaded pendant l'init drivers.
 pub unsafe fn register_device_fault_provider(data_ptr: *const (), vtable: *const ()) {
     DEVICE_FAULT_PROVIDER.store(data_ptr as *mut (), Ordering::Release);
     DEVICE_FAULT_VTABLE.store(vtable as *mut (), Ordering::Release);
