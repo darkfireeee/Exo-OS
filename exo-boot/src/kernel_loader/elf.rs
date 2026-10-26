@@ -297,8 +297,22 @@ impl<'a> ElfKernel<'a> {
             let seg_offset = ph.p_vaddr.saturating_sub(self.virt_base);
             let dest_phys  = phys_load_base + seg_offset;
 
+            if ph.p_filesz > ph.p_memsz {
+                return Err(ElfError::SegmentOutOfFile {
+                    offset: ph.p_offset,
+                    size: ph.p_filesz,
+                    file: ph.p_memsz,
+                });
+            }
+
             // Valide que le segment est dans le fichier ELF
-            let src_end = ph.p_offset as usize + ph.p_filesz as usize;
+            let src_end = (ph.p_offset as usize)
+                .checked_add(ph.p_filesz as usize)
+                .ok_or(ElfError::SegmentOutOfFile {
+                    offset: ph.p_offset,
+                    size: ph.p_filesz,
+                    file: self.data.len() as u64,
+                })?;
             if src_end > self.data.len() {
                 return Err(ElfError::SegmentOutOfFile {
                     offset: ph.p_offset,

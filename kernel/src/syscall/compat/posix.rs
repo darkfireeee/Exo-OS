@@ -73,7 +73,8 @@ pub mod open_flags {
     pub const O_PATH: u32 = 0x0020_0000;
     pub const O_TMPFILE: u32 = 0x0040_0000;
     /// Masque de tous les flags autorisés (pour validate_flags)
-    pub const ALLOWED_MASK: u64 = 0x0040_1FFFu64;
+    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC
+    pub const ALLOWED_MASK: u64 = 0x005F_1FFFu64;
 }
 
 /// Valeurs `whence` pour `lseek(2)`.

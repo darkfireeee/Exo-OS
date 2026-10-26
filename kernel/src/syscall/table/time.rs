@@ -29,7 +29,10 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
         return EINVAL;
     }
-    let ns = (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64);
+    // FIX-SYSCALL-NANOSLEEP-01 : calcul saturant anti-overflow
+    let ns = (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64);
     if !crate::scheduler::timer::sleep_ns(ns) {
         return EINTR;
     }

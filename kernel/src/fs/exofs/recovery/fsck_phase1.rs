@@ -403,7 +403,13 @@ impl FsckPhase1 {
                     // ── Étape 4 : valider la table d'allocation ─────────────
                     let alloc_lba = sb.alloc_lba;
                     let mut alloc_buf = [0u8; 64];
-                    if device.read_block(alloc_lba, &mut alloc_buf).is_ok() {
+                    let read_alloc = if sb_blk < 64 {
+                        Err(ExofsError::InvalidState)
+                    } else {
+                        device.read_block(alloc_lba, &mut sb_block[..sb_blk])
+                    };
+                    if read_alloc.is_ok() {
+                        alloc_buf.copy_from_slice(&sb_block[..64]);
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
                         let magic =
                             u64::from_le_bytes(alloc_buf[0..8].try_into().unwrap_or([0; 8]));
@@ -430,7 +436,13 @@ impl FsckPhase1 {
                     // ── Étape 5 : valider l'en-tête de la région blob ───────
                     let region_lba = sb.blob_region_start;
                     let mut region_buf = [0u8; 64];
-                    if device.read_block(region_lba, &mut region_buf).is_ok() {
+                    let read_region = if sb_blk < 64 {
+                        Err(ExofsError::InvalidState)
+                    } else {
+                        device.read_block(region_lba, &mut sb_block[..sb_blk])
+                    };
+                    if read_region.is_ok() {
+                        region_buf.copy_from_slice(&sb_block[..64]);
                         lbas_checked = lbas_checked.checked_add(1).unwrap_or(u64::MAX);
                         let magic =
                             u64::from_le_bytes(region_buf[0..8].try_into().unwrap_or([0; 8]));

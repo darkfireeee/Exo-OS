@@ -239,7 +239,10 @@ impl SwapPte {
     pub const SWAP_FLAG: u64 = 0b10; // bit 1 = swap marker (bit 0 = 0 = not present)
 
     pub fn encode(dev_idx: usize, slot: SwapSlot) -> Self {
-        let s = (slot.as_u64() << 12) | ((dev_idx as u64 & 0x7) << 1) | Self::SWAP_FLAG;
+        // FIX-SWAP-SWAP-PTE-01 : dev_idx doit être en bits [11:9] comme documenté.
+        // L'ancien décalage (<< 1) écrasait SWAP_FLAG (bit 1) et causait
+        // dev_idx(encode(0, s)) == 1 (round-trip faux).
+        let s = (slot.as_u64() << 12) | ((dev_idx as u64 & 0x7) << 9) | Self::SWAP_FLAG;
         SwapPte(s)
     }
 
@@ -248,7 +251,7 @@ impl SwapPte {
     }
 
     pub fn dev_idx(self) -> usize {
-        ((self.0 >> 1) & 0x7) as usize
+        ((self.0 >> 9) & 0x7) as usize
     }
     pub fn slot(self) -> SwapSlot {
         SwapSlot(self.0 >> 12)

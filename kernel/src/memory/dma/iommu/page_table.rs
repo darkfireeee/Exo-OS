@@ -24,7 +24,9 @@ pub mod iommu_entry_flags {
     /// Écriture autorisée (mémoire → device).
     pub const WRITE: u64 = 1 << 2;
     /// Cache ignoré (device coherency bypass).
-    pub const SNOOP: u64 = 1 << 3;
+    // FIX-IOMMU-SNP-01 : le bit Snoop du PTE VT-d est le bit 11 (DMA_PTE_SNP),
+    // pas le bit 3 (réservé).
+    pub const SNOOP: u64 = 1 << 11;
     /// Huge page (2MiB).
     pub const HUGE: u64 = 1 << 7;
     /// Accessed (matériel).

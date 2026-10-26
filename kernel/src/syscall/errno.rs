@@ -78,6 +78,8 @@ pub const EBADMSG: i64 = -74;
 pub const EOVERFLOW: i64 = -75;
 /// Opération non supportée (ENOTSUP / EOPNOTSUPP)
 pub const ENOTSUP: i64 = -95;
+/// Répertoire non vide (ENOTEMPTY)
+pub const ENOTEMPTY: i64 = -39;
 /// Attente expirée (ETIMEDOUT)
 pub const ETIMEDOUT: i64 = -110;
 /// Quota capability dépassé (EDQUOT)
@@ -212,7 +214,7 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
         ExofsError::PathTooLong => ERANGE,
         ExofsError::TooManySymlinks => ERANGE,
         ExofsError::NotADirectory => ENOTDIR,
-        ExofsError::DirectoryNotEmpty => ENOTSUP,
+        ExofsError::DirectoryNotEmpty => ENOTEMPTY,
         ExofsError::InvalidPathComponent => EINVAL,
         ExofsError::InvalidObjectKind => EINVAL,
         ExofsError::InvalidObjectClass => EINVAL,

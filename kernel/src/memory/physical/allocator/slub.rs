@@ -235,12 +235,20 @@ impl SlubCache {
 
         let inuse = (*header).inuse;
         let total = (*header).total;
+        let was_full = inuse + 1 == total;
 
         let r = &mut *inner;
         if inuse == 0 {
             // SAFETY: header ptr valide; listes manipulées sous verrou cache.
             unsafe {
-                slub_list_remove(header, &mut r.partial, &mut r.partial_count);
+                if was_full {
+                    // FIX-SLUB-FREE-01 : si total==1 (classe 2048), le slub n'était
+                    // pas dans partial mais dans full_count. slub_list_remove sur
+                    // un nœud absent écrasait partial à null (perte de tous les partiels).
+                    r.full_count = r.full_count.saturating_sub(1);
+                } else {
+                    slub_list_remove(header, &mut r.partial, &mut r.partial_count);
+                }
                 slub_list_push_front(header, &mut r.empty, &mut r.empty_count);
             }
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);

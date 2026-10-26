@@ -68,6 +68,10 @@ impl ThreadTable {
             .iter()
             .position(|record| record.active && record.tid == tid)
         {
+            // FIX-SCHEDSRV-TT-01 : empêcher un PID de détourner un TID appartenant à un autre PID.
+            if self.records[idx].pid != pid {
+                return Err(syscall::EPERM);
+            }
             self.records[idx] = ThreadRecord {
                 active: true,
                 pid,

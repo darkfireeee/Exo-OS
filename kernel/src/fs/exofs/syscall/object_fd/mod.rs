@@ -158,7 +158,9 @@ impl ObjectFdTable {
     }
 
     /// Met à jour le curseur d'un fd.
+    /// FIX-FS-FD-OWNER-01 : vérification du propriétaire ajoutée.
     pub fn set_cursor(&self, fd: u32, cursor: u64) -> ExofsResult<()> {
+        self.get(fd)?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.set_cursor(fd, cursor);
@@ -167,7 +169,9 @@ impl ObjectFdTable {
     }
 
     /// Met à jour la taille connue d'un fd.
+    /// FIX-FS-FD-OWNER-01 : idem set_cursor.
     pub fn set_size(&self, fd: u32, size: u64) -> ExofsResult<()> {
+        self.get(fd)?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.set_size(fd, size);
@@ -176,7 +180,9 @@ impl ObjectFdTable {
     }
 
     /// Avance le curseur d'un fd de `n` octets.
+    /// FIX-FS-FD-OWNER-01 : idem set_cursor.
     pub fn advance_cursor(&self, fd: u32, n: u64) -> ExofsResult<u64> {
+        self.get(fd)?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let inner = unsafe { &mut *self.inner.get() };

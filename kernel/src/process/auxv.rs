@@ -148,7 +148,7 @@ pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     v.try_reserve(20).map_err(|_| ())?;
 
     v.push(AuxEntry::new(AT_PHDR, params.phdr_vaddr));
-    v.push(AuxEntry::new(AT_PHENT, 64)); // Elf64_Phdr = 56 bytes, arrondi à 64
+    v.push(AuxEntry::new(AT_PHENT, 56)); // Elf64_Phdr = 56 bytes standard
     v.push(AuxEntry::new(AT_PHNUM, params.phnum));
     v.push(AuxEntry::new(AT_PAGESZ, 4096));
     v.push(AuxEntry::new(AT_BASE, params.interp_base));

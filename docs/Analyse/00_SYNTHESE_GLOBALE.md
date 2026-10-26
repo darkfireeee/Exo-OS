@@ -9,7 +9,7 @@
 ## 1. Résumé Exécutif
 
 Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemble de l'arborescence du projet Exo-OS, une revue exhaustive a été menée sur chaque module, sous-module et fichier source :
-- **39 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs).
+- **42 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs, ainsi que les vérifications empiriques des audits externes 1, 2 et 3).
 - **Plus de 300 anomalies, incohérences, avertissements de compilation (clippy) et bogues de sûreté mémoire** ont été analysés, documentés et rigoureusement corrigés dans le code source.
 - **Résultat de la vérification :** Le noyau Exo-OS compile avec **0 erreur** (`cargo check` = code de sortie 0) et atteint **0 avertissement** sous l'ensemble des règles fondamentales de sûreté, de correction et de performance (`clippy::correctness`, `clippy::suspicious`, `clippy::complexity`, `clippy::perf`).
 
@@ -60,6 +60,7 @@ Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemb
 | `39_loader_and_tools.md` | `loader/` & `tools/` | Dynamic Linker `ld-exo.so`, `exofs_mkroot`, `kernel_signer` | Conforme / 0 warning |
 | `40_audit_verification_p0_p1.md` | Audit Croisé | Contre-vérification et corrections d'audit externe P0 & P1 | Conforme / 0 warning |
 | `41_audit_2_verification.md` | Audit 2 (`Analyse_2`) | Vérification ligne à ligne, correction des bogues avérés et rejet des faux positifs de l'audit 2 | Conforme / 100% tests validés |
+| `42_audit_3_verification.md` | Audit 3 (`Analyse (3)`) | Vérification exhaustive, correction des 26 bogues confirmés et réfutation des faux positifs | Conforme / 100% tests validés |
 
 ---
 

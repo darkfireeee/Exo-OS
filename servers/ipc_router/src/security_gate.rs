@@ -230,15 +230,15 @@ pub fn audit_log_violation(
     buf[4..8].copy_from_slice(&src_pid.to_le_bytes());
     buf[8..12].copy_from_slice(&dst_pid.to_le_bytes());
 
-    // Envoi non-bloquant (IPC_FLAG_NONBLOCK = 0x02) — on ne peut pas attendre
-    // dans le hot path de vérification IPC.
+    // FIX-ROUTER-FLAG-01 : flag 0x01 (NOWAIT) au lieu de 0x02 (IPC_FLAG_INJECT_SRC_PID
+    // qui écrasait EVENT_IPC_VIOLATION à l'offset [0..4] avec le PID du routeur).
     let _ = unsafe {
         exo_syscall_abi::syscall6(
             exo_syscall_abi::SYS_IPC_SEND,
             EXO_SHIELD_ENDPOINT,
             buf.as_ptr() as u64,
             buf.len() as u64,
-            0x02, // IPC_FLAG_NONBLOCK
+            0x01, // IPC_FLAG_NOWAIT
             0,
             0,
         )

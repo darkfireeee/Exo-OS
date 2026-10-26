@@ -171,11 +171,16 @@ pub fn compute_threat_score(
     let rec_c = recency.min(1000);
 
     // Weighted sum with overflow-safe arithmetic
-    let total = (sig_c / 1000 * WEIGHT_SIGNATURE)
-        + (beh_c / 1000 * WEIGHT_BEHAVIOR)
-        + (freq_c / 1000 * WEIGHT_FREQUENCY)
-        + (scope_c / 1000 * WEIGHT_SCOPE)
-        + (rec_c / 1000 * WEIGHT_RECENCY);
+    // FIX-SHIELD-SCORE-01 : ordre correct (c * w) / 1000 pour éviter la division à 0
+    fn weighted(c: u32, w: u32) -> u32 {
+        ((c as u64 * w as u64) / 1000) as u32
+    }
+
+    let total = weighted(sig_c, WEIGHT_SIGNATURE)
+        + weighted(beh_c, WEIGHT_BEHAVIOR)
+        + weighted(freq_c, WEIGHT_FREQUENCY)
+        + weighted(scope_c, WEIGHT_SCOPE)
+        + weighted(rec_c, WEIGHT_RECENCY);
 
     total.min(1000)
 }

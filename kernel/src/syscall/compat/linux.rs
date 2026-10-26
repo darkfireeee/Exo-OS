@@ -122,12 +122,7 @@ pub fn translate_linux_nr(nr: u64) -> Option<u64> {
         // (numéros Linux obsolètes hors de notre plage)
         // → passthrough
 
-        // idle (numéro 112 Linux obsolète) → ENOSYS
-        112u64 => {
-            COMPAT_BLOCKED.fetch_add(1, Ordering::Relaxed);
-            return Some(u64::MAX);
-        }
-
+        // Pas de blocage pour setsid (112 en x86_64 Linux).
         // Pas de traduction pour les autres
         _ => return None,
     };

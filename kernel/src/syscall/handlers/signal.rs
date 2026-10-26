@@ -327,6 +327,24 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         None => return ESRCH,
     };
 
+    // Vérification des privilèges POSIX pour tgkill
+    let target_pid = tgid as u32;
+    if sender_pid != target_pid {
+        let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(sender_pid)) {
+            Some(p) => p,
+            None => return EPERM,
+        };
+        let c_creds = caller_pcb.get_creds();
+        let t_creds = pcb.get_creds();
+        let is_privileged = c_creds.is_root() || c_creds.euid == 0;
+        let uid_match = c_creds.uid == t_creds.uid
+            || c_creds.euid == t_creds.uid
+            || c_creds.euid == t_creds.euid;
+        if !is_privileged && !uid_match {
+            return EPERM;
+        }
+    }
+
     let thread_ptr = pcb.main_thread_ptr();
     if thread_ptr.is_null() {
         return ESRCH;

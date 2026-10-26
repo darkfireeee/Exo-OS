@@ -158,16 +158,14 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         let bss_end = (&raw const __bss_end) as u64;
         let kernel_end = (&raw const __kernel_end) as u64;
 
-        let kernel_rxw = PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::GLOBAL;
         let kernel_ro = PageFlags::PRESENT | PageFlags::GLOBAL | PageFlags::NO_EXECUTE;
         let text_end_page = Self::page_align_up(text_end);
         let rodata_end_page = Self::page_align_up(rodata_end);
         let data_end_page = Self::page_align_up(data_end);
         let bss_end_page = Self::page_align_up(bss_end);
 
-        // Ne jamais poser temporairement NX sur .text quand ce CR3 est actif:
-        // une IRQ/#PF pendant fork doit pouvoir exécuter ses handlers.
-        self.map_identity_range(image_start, text_start, kernel_rxw)?;
+        // En-tête avant .text mappé en données (non-exécutable, respect W^X).
+        self.map_identity_range(image_start, text_start, PageFlags::KERNEL_DATA)?;
         self.map_identity_range(text_start, text_end, PageFlags::KERNEL_CODE)?;
         self.map_identity_range(text_end_page, rodata_start, PageFlags::KERNEL_DATA)?;
         self.map_identity_range(rodata_start, rodata_end, kernel_ro)?;

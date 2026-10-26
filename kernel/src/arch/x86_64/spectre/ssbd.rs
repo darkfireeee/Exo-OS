@@ -25,7 +25,8 @@ pub fn ssbd_enabled() -> bool {
 pub fn init_ssbd() {
     let features = super::super::cpu::features::cpu_features();
 
-    if !features.has_ssbd() && !features.ssb_no() {
+    // Si le CPU est non vulnérable (ssb_no) ou ne supporte pas SSBD (!has_ssbd), rien à faire.
+    if features.ssb_no() || !features.has_ssbd() {
         return;
     }
 

@@ -475,6 +475,10 @@ pub fn glob_match(pattern: &[u8], text: &[u8]) -> bool {
             continue;
         }
         if let Some(sp) = star_pi {
+            // FIX-SHIELD-GLOB-01 : éviter la boucle infinie si star_ti dépasse text.len()
+            if star_ti >= text.len() {
+                return false;
+            }
             pi = sp + 1;
             star_ti += 1;
             ti = star_ti;

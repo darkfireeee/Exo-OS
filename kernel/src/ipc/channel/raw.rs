@@ -167,17 +167,30 @@ impl RawSlot {
         }
     }
 
-    /// Réveille le récepteur enregistré, s'il existe.
+    /// Extrait le récepteur enregistré, s'il existe, pour réveil hors verrou.
     ///
     /// Doit être appelé avec `ring` verrouillé (RÈGLE IPC-RAW-03).
+    /// FIX-IPC-LOCKORD-01 : l'ancien `wake_waiter_locked` acquérait le verrou
+    /// runqueue (niveau Scheduler = 2) en tenant le verrou IPC (niveau 4),
+    /// violant la hiérarchie documentée dans ipc/mod.rs (Memory→Scheduler→
+    /// Security→IPC) et créant un risque d'inversion de deadlock. Le réveil
+    /// est désormais effectué APRÈS relâchement du verrou d'anneau.
     #[inline]
-    fn wake_waiter_locked(&self) {
-        let raw = self.waiter.swap(0, Ordering::AcqRel);
-        if raw != 0 {
-            // SAFETY: le pointeur a été publié par le récepteur sous le même
-            // verrou et il ne le retire qu'en reprenant ce verrou : le TCB est
-            // vivant pendant toute la durée de l'appel.
-            unsafe { wake_receiver(raw as *mut ThreadControlBlock) };
+    fn take_waiter_locked(&self) -> *mut ThreadControlBlock {
+        self.waiter.swap(0, Ordering::AcqRel) as *mut ThreadControlBlock
+    }
+
+    /// Réveille le récepteur extrait par `take_waiter_locked`.
+    /// À appeler HORS du verrou d'anneau. No-op si le pointeur est nul
+    /// (le récepteur a déjà été servi ou aucun waiter n'était enregistré).
+    #[inline]
+    fn wake_waiter(waiter: *mut ThreadControlBlock) {
+        if !waiter.is_null() {
+            // SAFETY: le pointeur a été publié par le récepteur sous le verrou
+            // d'anneau et extrait atomiquement (swap) sous le même verrou : il
+            // reste vivant jusqu'au réveil (le récepteur ne peut pas libérer
+            // son TCB sans reprendre le verrou, et le waiter a déjà été retiré).
+            unsafe { wake_receiver(waiter) };
         }
     }
 }
@@ -288,9 +301,13 @@ pub fn mailbox_close(ep_id: EndpointId) {
             .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
-            let mut ring = slot.ring.lock();
-            slot.wake_waiter_locked();
-            ring.reset();
+            let waiter = {
+                let mut ring = slot.ring.lock();
+                let w = slot.take_waiter_locked();
+                ring.reset();
+                w
+            };
+            wake_waiter_outside_lock(waiter);
             OPEN_COUNT.fetch_sub(1, Ordering::Relaxed);
         }
     }
@@ -336,11 +353,22 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
 
     {
         let mut ring = slot.ring.lock();
+        // FIX-IPC-RAW-TOCTOU-01 : re-vérifier la propriété du slot SOUS le
+        // verrou. Sans cette garde, un `mailbox_close` concurrent peut libérer
+        // le slot (CAS endpoint_id→0) puis un `mailbox_open` peut le réattribuer
+        // à un AUTRE endpoint : le message serait alors déposé dans la mailbox
+        // d'un tiers (fuite inter-endpoint).
+        if slot.endpoint_id.load(Ordering::Acquire) != id {
+            return Err(IpcError::NotFound);
+        }
         if !ring.is_full() {
             ring.enqueue(data);
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
-            slot.wake_waiter_locked();
+            let waiter = slot.take_waiter_locked();
+            // Réveil HORS verrou (FIX-IPC-LOCKORD-01) — voir drop(ring) ci-dessous.
+            drop(ring);
+            wake_waiter_outside_lock(waiter);
             return Ok(alloc_message_id());
         }
         // Anneau plein.
@@ -356,10 +384,16 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         let mut ring = slot.ring.lock();
+        // FIX-IPC-RAW-TOCTOU-01 : même garde dans la boucle d'attente.
+        if slot.endpoint_id.load(Ordering::Acquire) != id {
+            return Err(IpcError::NotFound);
+        }
         if ring.enqueue(data) {
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
-            slot.wake_waiter_locked();
+            let waiter = slot.take_waiter_locked();
+            drop(ring);
+            wake_waiter_outside_lock(waiter);
             return Ok(alloc_message_id());
         }
         if (spins & 0x7F) == 0 {
@@ -375,6 +409,12 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
             return Err(IpcError::Timeout);
         }
     }
+}
+
+/// Wrapper libre pour réveiller un waiter hors verrou (FIX-IPC-LOCKORD-01).
+#[inline]
+fn wake_waiter_outside_lock(waiter: *mut ThreadControlBlock) {
+    RawSlot::wake_waiter(waiter);
 }
 
 /// Variante strictement non bloquante de `send_raw`.
@@ -404,11 +444,18 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
         return Err(IpcError::WouldBlock);
     };
 
+    // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou.
+    if slot.endpoint_id.load(Ordering::Acquire) != id {
+        return Err(IpcError::NotFound);
+    }
+
     if !ring.is_full() {
         ring.enqueue(data);
         slot.send_count.fetch_add(1, Ordering::Relaxed);
         IPC_STATS.record(StatEvent::MessageSent);
-        slot.wake_waiter_locked();
+        let waiter = slot.take_waiter_locked();
+        drop(ring);
+        wake_waiter_outside_lock(waiter);
         return Ok(alloc_message_id());
     }
 
@@ -430,6 +477,11 @@ pub fn recv_raw_or_register_waiter(
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
     let mut ring = slot.ring.lock();
+    // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou
+    // (évite de lire un message d'un endpoint précédent sur un slot réattribué).
+    if slot.endpoint_id.load(Ordering::Acquire) != id {
+        return Err(IpcError::NotFound);
+    }
     match ring.dequeue(buf) {
         Ok(Some(n)) => {
             slot.recv_count.fetch_add(1, Ordering::Relaxed);
@@ -480,6 +532,10 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
 
     {
         let mut ring = slot.ring.lock();
+        // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou.
+        if slot.endpoint_id.load(Ordering::Acquire) != id {
+            return Err(IpcError::NotFound);
+        }
         match ring.dequeue(buf) {
             Ok(Some(n)) => {
                 slot.recv_count.fetch_add(1, Ordering::Relaxed);
@@ -500,6 +556,10 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         let mut ring = slot.ring.lock();
+        // FIX-IPC-RAW-TOCTOU-01 : garde dans la boucle d'attente également.
+        if slot.endpoint_id.load(Ordering::Acquire) != id {
+            return Err(IpcError::NotFound);
+        }
         match ring.dequeue(buf) {
             Ok(Some(n)) => {
                 slot.recv_count.fetch_add(1, Ordering::Relaxed);

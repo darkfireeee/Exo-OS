@@ -49,6 +49,8 @@ fn mark_exit(
 ) {
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
+    // FIX-PROC-JOIN-01 : réveiller les threads bloqués dans pthread_join.
+    crate::process::thread::join::wake_joiners();
     crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&thread.sched_tcb);
     thread.set_state(TaskState::Dead);
     unsafe {

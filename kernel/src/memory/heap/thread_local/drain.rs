@@ -78,14 +78,19 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
                 }
                 count += 1;
             }
-            while let Some(_ptr) = cache.magazines[class_idx].prev.pop() {
-                // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx].                unsafe { SLUB_CACHES[slub_idx].free(ptr); }
+            while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
+                // SAFETY: ptr alloué par SLUB_CACHES[slub_idx].
+                // FIX-HEAP-DRAIN-01 : l'appel free était resté en commentaire,
+                // provoquant une fuite mémoire de tous les objets de prev lors du drain.
+                unsafe {
+                    SLUB_CACHES[slub_idx].free(ptr);
+                }
                 count += 1;
             }
         }
         DrainPolicy::Partial => {
             while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
-                // SAFETY: ptr alloqu\u00e9 par SLUB_CACHES[slub_idx] (drain partial).
+                // SAFETY: ptr alloué par SLUB_CACHES[slub_idx] (drain partial).
                 unsafe {
                     SLUB_CACHES[slub_idx].free(ptr);
                 }
