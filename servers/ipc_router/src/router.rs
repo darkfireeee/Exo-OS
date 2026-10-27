@@ -216,14 +216,28 @@ pub fn add_route(
     true
 }
 
-/// Retire une route de la table.
+/// Retire une route de la table avec compaction O(1) pour préserver la contiguïté.
 pub fn remove_route(dest_service_id: u32) -> bool {
-    let table = ROUTE_TABLE.lock();
+    let mut table = ROUTE_TABLE.lock();
     let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
 
     for i in 0..count.min(MAX_ROUTES) {
         if table[i].dest_service_id == dest_service_id && table[i].is_active() {
-            table[i].flags.store(RouteFlags::Inactive as u8, Ordering::Release);
+            let last = count - 1;
+            if i != last {
+                table[i].dest_service_id = table[last].dest_service_id;
+                table[i].priority = table[last].priority;
+                table[i].next_hop_pid = table[last].next_hop_pid;
+                table[i].metric = table[last].metric;
+                table[i].flags.store(table[last].flags.load(Ordering::Relaxed), Ordering::Release);
+                table[i].policy = table[last].policy;
+                table[i].missed_heartbeats.store(table[last].missed_heartbeats.load(Ordering::Relaxed), Ordering::Release);
+                table[i].last_heartbeat_tsc.store(table[last].last_heartbeat_tsc.load(Ordering::Relaxed), Ordering::Release);
+                table[i].messages_routed.store(table[last].messages_routed.load(Ordering::Relaxed), Ordering::Release);
+                table[i].messages_dropped.store(table[last].messages_dropped.load(Ordering::Relaxed), Ordering::Release);
+                table[i].bytes_forwarded.store(table[last].bytes_forwarded.load(Ordering::Relaxed), Ordering::Release);
+            }
+            table[last].flags.store(RouteFlags::Inactive as u8, Ordering::Release);
             ROUTE_COUNT.fetch_sub(1, Ordering::Release);
             return true;
         }

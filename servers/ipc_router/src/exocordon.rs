@@ -338,6 +338,8 @@ pub fn service_id_of(raw: Pid) -> Option<ServiceId> {
         13 => Some(ServiceId::Fb),
         14 => Some(ServiceId::Exosh),
         15 => Some(ServiceId::Ps2),
+        16 => Some(ServiceId::Audio),
+        17 | 18 => Some(ServiceId::Usb),
         20 => Some(ServiceId::Fb), // FB_SERVER_ENDPOINT (syscall_abi)
         _  => None,
     }

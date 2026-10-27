@@ -148,6 +148,10 @@ pub fn parse_superblock(raw: &[u8; 1024]) -> Result<Ext4ParsedSb, FsDriverError>
         return Err(FsDriverError::BadSignature);
     }
 
+    if disk.s_log_block_size > 6 {
+        return Err(FsDriverError::InvalidParameter);
+    }
+
     let block_size = 1024u32 << disk.s_log_block_size;
     let needs_recovery = (disk.s_feature_incompat & 0x0004) != 0; // INCOMPAT_RECOVER
 

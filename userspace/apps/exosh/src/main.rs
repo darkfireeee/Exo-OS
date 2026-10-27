@@ -32,7 +32,26 @@ fn main() {
             "pwd" => println!("{}", cwd.display()),
             "exit" => break,
             cmd => {
-                let status = Command::new(cmd).args(&parsed.argv[1..]).status();
+                let mut cmd_obj = Command::new(cmd);
+                cmd_obj.args(&parsed.argv[1..]);
+                if let Some(ref path) = parsed.stdout {
+                    let file_res = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .append(parsed.append)
+                        .truncate(!parsed.append)
+                        .open(path);
+                    match file_res {
+                        Ok(file) => {
+                            cmd_obj.stdout(std::process::Stdio::from(file));
+                        }
+                        Err(err) => {
+                            eprintln!("exosh: {path}: {err}");
+                            continue;
+                        }
+                    }
+                }
+                let status = cmd_obj.status();
                 match status {
                     Ok(status) if status.success() => {}
                     Ok(status) => eprintln!("{cmd}: exit {status}"),

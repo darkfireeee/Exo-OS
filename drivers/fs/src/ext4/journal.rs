@@ -26,12 +26,12 @@ pub fn read_journal_state(raw: &[u8]) -> JournalState {
     if magic != JBD2_MAGIC {
         return JournalState::Error;
     }
-    // Offset 8 dans le superblock JBD2 (après h_blocktype=4, h_sequence) : s_start.
-    // Superblock JBD2 v2 : offset 28 = s_start (0 = journal clean).
-    if raw.len() < 32 {
+    // Offset dans le superblock JBD2 :
+    // offset 20 = s_first, offset 24 = s_start (0 = journal clean), offset 28 = s_errno.
+    if raw.len() < 28 {
         return JournalState::Error;
     }
-    let s_start = u32::from_be_bytes([raw[28], raw[29], raw[30], raw[31]]);
+    let s_start = u32::from_be_bytes([raw[24], raw[25], raw[26], raw[27]]);
     if s_start == 0 {
         JournalState::Clean
     } else {

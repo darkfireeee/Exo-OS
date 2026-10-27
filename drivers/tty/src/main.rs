@@ -68,8 +68,8 @@ pub extern "C" fn _start() -> ! {
                         send_line_to_client(sender_pid, line);
                     }
                     LineEvent::Signal(Signal::Interrupt) => {
-                        // Signal SIGINT (2) envoyé au processus de premier plan
-                        if sender_pid > 0 {
+                        // Signal SIGINT (2) envoyé au processus client (uniquement si applicatif > 19)
+                        if sender_pid > 19 {
                             unsafe {
                                 let _ = syscall::syscall2(syscall::SYS_KILL, sender_pid as u64, 2);
                             }

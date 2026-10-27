@@ -210,10 +210,13 @@ impl WaylandState {
         None
     }
 
-    pub fn destroy_surface(&mut self, surface_id: u32) -> bool {
+    pub fn destroy_surface(&mut self, surface_id: u32, sender_pid: u32) -> bool {
         let mut i = 0usize;
         while i < MAX_SHM_SURFACES {
             if self.surfaces[i].active && self.surfaces[i].surface_id == surface_id {
+                if sender_pid != 0 && sender_pid != 1 && self.surfaces[i].owner_pid != sender_pid {
+                    return false;
+                }
                 self.surfaces[i] = CompositorSurface::empty();
                 return true;
             }
@@ -222,10 +225,13 @@ impl WaylandState {
         false
     }
 
-    pub fn commit_surface_damage(&mut self, surface_id: u32, rect: syscall::DamageRect) -> bool {
+    pub fn commit_surface_damage(&mut self, surface_id: u32, sender_pid: u32, rect: syscall::DamageRect) -> bool {
         let mut i = 0usize;
         while i < MAX_SHM_SURFACES {
             if self.surfaces[i].active && self.surfaces[i].surface_id == surface_id {
+                if sender_pid != 0 && sender_pid != 1 && self.surfaces[i].owner_pid != sender_pid {
+                    return false;
+                }
                 self.surfaces[i].damaged = true;
                 self.surfaces[i].damage = rect;
                 return true;
@@ -301,8 +307,9 @@ impl WaylandState {
             (WlObjectKind::Compositor, 0) => {
                 let surf_id = read_u32(payload, 0);
                 if surf_id != 0 {
-                    let s_idx = self.alloc_surface(sender_pid, 320, 200).unwrap_or(0) as u8;
-                    let _ = self.register_object(surf_id, WlObjectKind::Surface, sender_pid, s_idx);
+                    if let Some(s_idx) = self.alloc_surface(sender_pid, 320, 200) {
+                        let _ = self.register_object(surf_id, WlObjectKind::Surface, sender_pid, s_idx as u8);
+                    }
                 }
             }
             // wl_shm.create_pool(new_id pool, fd, size)

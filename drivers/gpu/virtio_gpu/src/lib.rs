@@ -197,11 +197,13 @@ impl VirtioGpuDevice {
     pub fn probe_and_init(&mut self) -> bool {
         let mut info = syscall::PciDeviceInfo::default();
         let rc = unsafe {
-            syscall::syscall4(
+            syscall::syscall6(
                 syscall::SYS_PCI_FIND_DEVICE,
                 VIRTIO_PCI_VENDOR_ID as u64,
                 VIRTIO_GPU_PCI_DEVICE_ID as u64,
-                0,
+                0xFFFF, // classe wildcard
+                0xFFFF, // sous-classe wildcard
+                0,      // index
                 &mut info as *mut syscall::PciDeviceInfo as u64,
             )
         };
@@ -221,13 +223,19 @@ impl VirtioGpuDevice {
                     self.bar0_virt = mapped as u64;
                 }
             }
-            let mut phys_out: u64 = 0;
-            let dma_virt = unsafe {
-                syscall::syscall2(syscall::SYS_DMA_ALLOC, 16384, &mut phys_out as *mut u64 as u64)
+            let mut virt_out: u64 = 0;
+            // Alloue 20 KiB (4096 octets commandes + 16384 octets sprite curseur 64x64)
+            let iova = unsafe {
+                syscall::syscall3(
+                    syscall::SYS_DMA_ALLOC,
+                    20480,
+                    0, // DMA_BIDIRECTIONAL
+                    &mut virt_out as *mut u64 as u64,
+                )
             };
-            if dma_virt > 0 {
-                self.dma_cmd_virt = dma_virt as u64;
-                self.dma_cmd_phys = phys_out;
+            if iova > 0 && virt_out > 0 {
+                self.dma_cmd_virt = virt_out;
+                self.dma_cmd_phys = iova as u64;
                 // Génère le sprite curseur 64x64 ARGB8888 dans la seconde moitié du tampon DMA
                 let sprite_ptr = (self.dma_cmd_virt + 4096) as *mut u32;
                 let sprite_slice = unsafe { core::slice::from_raw_parts_mut(sprite_ptr, 64 * 64) };

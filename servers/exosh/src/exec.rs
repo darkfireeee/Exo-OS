@@ -52,6 +52,16 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
         unsafe {
             let _ = syscall::syscall1(syscall::SYS_CLOSE, p_read);
             let _ = syscall::syscall1(syscall::SYS_CLOSE, p_write);
+            // Tue et récolte child_left pour éviter qu'il ne reste bloqué sur le pipe orphelin
+            let _ = syscall::syscall2(syscall::SYS_KILL, child_left as u64, 9);
+            let mut status: i32 = 0;
+            let _ = syscall::syscall4(
+                syscall::SYS_WAIT4,
+                child_left as u64,
+                &mut status as *mut i32 as u64,
+                0,
+                0,
+            );
         }
         return;
     }

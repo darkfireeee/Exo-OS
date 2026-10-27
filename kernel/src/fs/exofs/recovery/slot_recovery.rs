@@ -36,8 +36,8 @@ pub const SLOT_HEADER_SIZE: usize = 128;
 /// Nombre de slots redondants.
 pub const SLOT_COUNT: usize = 3;
 
-/// LBA de départ de chaque slot (valeurs par défaut, surchargées à l'init).
-pub const SLOT_DEFAULT_LBAS: [u64; SLOT_COUNT] = [0x0100, 0x0200, 0x0300];
+/// LBA de départ de chaque slot (alignés sur EPOCH_SLOT_A_OFFSET 4K et EPOCH_SLOT_B_OFFSET 8K).
+pub const SLOT_DEFAULT_LBAS: [u64; SLOT_COUNT] = [8, 16, 24];
 
 // ── Identifiant de slot ───────────────────────────────────────────────────────
 

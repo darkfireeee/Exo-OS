@@ -152,6 +152,11 @@ static IPC_INIT_STATE: AtomicU8 = AtomicU8::new(0);
 /// # Sécurité
 /// Doit être appelée en contexte de démarrage, core 0, interruptions désactivées.
 pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
+    // Garde de ré-entrance : ne pas réinitialiser les pools et compteurs si déjà fait.
+    if IPC_INIT_STATE.load(Ordering::Acquire) & IPC_INIT_DONE != 0 {
+        return;
+    }
+
     // 1. Initialiser le pool de pages SHM
     // SAFETY: shm_base_phys aligné 4K, mémoire physique réservée SHM, appelé une seule fois au boot.
     unsafe {

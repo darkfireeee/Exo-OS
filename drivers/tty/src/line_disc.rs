@@ -63,7 +63,12 @@ impl LineDiscipline {
     pub fn take_line<'a>(&mut self, out: &'a mut [u8]) -> &'a [u8] {
         let n = core::cmp::min(out.len(), self.len);
         out[..n].copy_from_slice(&self.buf[..n]);
-        self.len = 0;
+        if n < self.len {
+            self.buf.copy_within(n..self.len, 0);
+            self.len -= n;
+        } else {
+            self.len = 0;
+        }
         &out[..n]
     }
 

@@ -937,7 +937,7 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             }
         }
         syscall::DISPLAY_OP_DESTROY_SURFACE => {
-            let ok = wayland_mut().destroy_surface(req.a as u32);
+            let ok = wayland_mut().destroy_surface(req.a as u32, req.sender_pid);
             syscall::FbReply {
                 status: if ok { 0 } else { syscall::ENOENT },
                 len: 0,
@@ -945,13 +945,18 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             }
         }
         syscall::DISPLAY_OP_COMMIT_DAMAGE | syscall::DISPLAY_OP_FLIP => {
+            let target_surface_id = if (req.a >> 32) != 0 {
+                (req.a >> 32) as u32
+            } else {
+                req.a as u32
+            };
             let rect = syscall::DamageRect {
                 x: (req.a & 0xFFFF) as u32,
                 y: ((req.a >> 16) & 0xFFFF) as u32,
                 width: (req.b & 0xFFFF) as u32,
                 height: ((req.b >> 16) & 0xFFFF) as u32,
             };
-            let _ = wayland_mut().commit_surface_damage(req.a as u32, rect);
+            let _ = wayland_mut().commit_surface_damage(target_surface_id, req.sender_pid, rect);
             console_mut().mark_dirty_rows(0, console_mut().fb.height);
             syscall::FbReply::default()
         }

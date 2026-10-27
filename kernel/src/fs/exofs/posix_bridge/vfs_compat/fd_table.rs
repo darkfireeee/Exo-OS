@@ -148,13 +148,14 @@ impl OpenFdTable {
     }
 
     pub fn update_offset(&self, fd: u64, new_offset: u64) {
+        let caller = current_vfs_owner_pid();
         self.lock_acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
             if let Some(mut entry) = fds[i] {
-                if entry.fd == fd && entry.active {
+                if entry.fd == fd && entry.active && vfs_owner_matches(entry, caller) {
                     entry.offset = new_offset;
                     fds[i] = Some(entry);
                     break;
@@ -218,6 +219,14 @@ pub fn current_vfs_owner_pid() -> u32 {
 
 #[inline]
 pub fn vfs_owner_matches(entry: VfsFd, caller: u32) -> bool {
-    caller == 0 || entry.pid == 0 || entry.pid == caller
+    #[cfg(not(target_os = "none"))]
+    {
+        caller == 0 || entry.pid == 0 || entry.pid == caller
+    }
+    #[cfg(target_os = "none")]
+    {
+        // En mode bare-metal : PID 1 (init) est privilégié, sinon vérification stricte
+        caller == 1 || (entry.pid != 0 && entry.pid == caller)
+    }
 }
 

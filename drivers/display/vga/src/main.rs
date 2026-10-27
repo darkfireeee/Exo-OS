@@ -68,6 +68,11 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+    } else {
+        unsafe {
+            let err_msg = b"[vga_text] notice: MMIO 0xB8000 mapping unavailable (GOP/FB active)\n";
+            let _ = syscall::syscall2(syscall::SYS_EXO_LOG, err_msg.as_ptr() as u64, err_msg.len() as u64);
+        }
     }
 
     loop {

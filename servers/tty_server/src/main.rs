@@ -507,7 +507,12 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
                     let _ = state.line.take_line(&mut tmp);
                 }
             } else if req.a == 0x5410 {
-                state.foreground_pid = req.b as u32;
+                let target = req.b as u32;
+                // Protection contre kill de serveurs système : seul un PID applicatif (> 19)
+                // ou 0 (reset) peut être désigné comme foreground.
+                if target == 0 || target > 19 {
+                    state.foreground_pid = target;
+                }
             }
             reply(0, 0, &[])
         }
@@ -601,7 +606,7 @@ fn dispatch_message(bytes: &[u8]) {
         let response = match read_tty_request(payload) {
             Some(req) if req.msg_type == syscall::TTY_MSG_READ_LINE => {
                 let state = tty_mut();
-                if req.sender_pid != 0 {
+                if req.sender_pid > 19 {
                     state.foreground_pid = req.sender_pid;
                 }
                 if let Some(response) = take_ready_line() {

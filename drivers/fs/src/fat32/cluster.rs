@@ -11,5 +11,5 @@ pub fn cluster_to_sector(cluster: u32, bpb: &ParsedBpb) -> u64 {
 /// Vérifie que le numéro de cluster est dans la plage valide.
 #[inline]
 pub fn cluster_is_valid(cluster: u32, bpb: &ParsedBpb) -> bool {
-    cluster >= 2 && cluster < bpb.cluster_count + 2
+    cluster >= 2 && cluster < bpb.cluster_count.saturating_add(2)
 }

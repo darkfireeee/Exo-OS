@@ -207,9 +207,8 @@ impl SpscRing {
             let h = slot.header;
             let ln = slot.header.len as usize;
             if ln > dst.len() {
-                // Libérer le slot quand même pour ne pas bloquer le ring.
-                cell.store_seq(pos + RING_SIZE as u64);
-                self.tail.0.store(pos + 1, Ordering::Release);
+                // Ne pas consommer le slot : le message reste en tête du ring pour que
+                // l'appelant puisse allouer un buffer plus grand et retenter.
                 return Err(IpcError::MessageTooLarge);
             }
             if ln > 0 {
