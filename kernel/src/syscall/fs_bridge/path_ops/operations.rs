@@ -42,6 +42,17 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         None => blob_id_for_path(&normalized_path)?,
     };
     let exists = existing_entry.is_some();
+    let is_dir = existing_entry
+        .map(|(_, kind)| kind == PATH_INDEX_KIND_DIR)
+        .unwrap_or(false);
+
+    const O_DIRECTORY: u32 = 0x0001_0000;
+    if (flags & O_DIRECTORY != 0) && exists && !is_dir {
+        return Err(FsBridgeError::NotDir);
+    }
+    if is_dir && open_flags::can_write(fd_flags) {
+        return Err(FsBridgeError::IsDir);
+    }
 
     if !exists && fd_flags & open_flags::O_CREAT == 0 {
         return Err(FsBridgeError::NotFound);

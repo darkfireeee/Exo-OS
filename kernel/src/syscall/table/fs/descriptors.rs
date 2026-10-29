@@ -14,8 +14,8 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
         Err(e) => return e.to_errno(),
     };
     // Flags O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_NONBLOCK
-    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC
-    let allowed_flags = 0x005F_1FFFu64;
+    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
+    let allowed_flags = 0x007F_FFFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
@@ -98,8 +98,8 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC
-    let allowed_flags = 0x005F_1FFFu64;
+    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
+    let allowed_flags = 0x007F_FFFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),

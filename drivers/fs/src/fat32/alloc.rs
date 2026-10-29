@@ -20,15 +20,18 @@ pub fn alloc_reset_hint() {
 /// `bpb` : BPB parsé (pour connaître cluster_count).
 /// Retourne le numéro du cluster libre, ou None si plus d'espace.
 pub fn find_free_cluster(fat_entries: &[u32], bpb: &ParsedBpb) -> Option<u32> {
-    let hint  = LAST_ALLOC_HINT.load(Ordering::Relaxed) as usize;
     let total = bpb.cluster_count as usize;
+    let max_cluster = (total + 2).min(fat_entries.len());
+    let hint = (LAST_ALLOC_HINT.load(Ordering::Relaxed) as usize)
+        .max(2)
+        .min(max_cluster);
 
     for pass in 0..2 {
         let start = if pass == 0 { hint } else { 2 };
-        let end   = if pass == 0 { total + 2 } else { hint };
-        for i in start..end.min(fat_entries.len()) {
+        let end   = if pass == 0 { max_cluster } else { hint };
+        for i in start..end {
             if is_free(fat_entries[i]) {
-                LAST_ALLOC_HINT.store((i + 1).max(2) as u32, Ordering::Relaxed);
+                LAST_ALLOC_HINT.store(((i + 1).max(2).min(max_cluster)) as u32, Ordering::Relaxed);
                 return Some(i as u32);
             }
         }

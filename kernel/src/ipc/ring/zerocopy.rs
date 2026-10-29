@@ -84,13 +84,28 @@ impl ZeroCopyBuffer {
     /// Décrémente le refcount. Retourne true si le buffer peut être libéré.
     #[inline(always)]
     pub fn release(&self) -> bool {
-        let prev = self.refcount.fetch_sub(1, Ordering::Release);
-        if prev == 1 {
-            // Dernier utilisateur — invalider la génération.
-            self.generation.fetch_add(1, Ordering::AcqRel);
-            return true;
+        let mut cur = self.refcount.load(Ordering::Acquire);
+        loop {
+            if cur == 0 {
+                return false;
+            }
+            match self.refcount.compare_exchange_weak(
+                cur,
+                cur - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if cur == 1 {
+                        // Dernier utilisateur — invalider la génération.
+                        self.generation.fetch_add(1, Ordering::AcqRel);
+                        return true;
+                    }
+                    return false;
+                }
+                Err(actual) => cur = actual,
+            }
         }
-        false
     }
 
     /// Construit une `ZeroCopyRef` pour envoyer dans le ring.

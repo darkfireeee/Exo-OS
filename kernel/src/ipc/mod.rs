@@ -79,7 +79,10 @@ pub use channel::sync::{
 // shared_memory/ — API SHM
 pub use shared_memory::{
     allocator::{shm_alloc, shm_free},
-    mapping::{register_map_hook, register_unmap_hook, shm_map, shm_unmap, vmm_hooks_ready},
+    mapping::{
+        register_map_hook, register_unmap_hook, shm_map, shm_unmap, shm_unmap_for_process,
+        vmm_hooks_ready,
+    },
     numa_aware::numa_init,
     pool::init_shm_pool,
 };

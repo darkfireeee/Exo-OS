@@ -174,7 +174,7 @@ pub fn shm_alloc(
     perms: ShmPermissions,
     requested_bytes: usize,
 ) -> Result<ShmHandle, IpcError> {
-    if requested_bytes == 0 {
+    if requested_bytes == 0 || requested_bytes > ShmSizeClass::Huge.bytes() {
         return Err(IpcError::InvalidArgument);
     }
 

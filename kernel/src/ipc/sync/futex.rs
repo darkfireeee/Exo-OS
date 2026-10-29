@@ -173,26 +173,28 @@ pub unsafe fn futex_wait(
             // Le waiter est dans le bucket de memory/utils/futex_table.
             // Stratégie : spin court puis blocage réel via sched_hooks.
             const SPIN_BEFORE_BLOCK: u64 = 64;
-            let mut spins: u64 = 0;
+            let mut phase_spins: u64 = 0;
+            let mut total_spins: u64 = 0;
 
             loop {
                 core::hint::spin_loop();
-                spins += 1;
+                phase_spins += 1;
+                total_spins += 1;
 
                 if waiter.woken.load(Ordering::Acquire) {
                     guard.disarm();
                     return Ok(WaiterState::Woken);
                 }
 
-                // Timeout explicite (spin_max non nul).
-                if spin_max != 0 && spins >= spin_max {
+                // Timeout explicite (spin_max non nul) — T8-013 FIX : cumulatif sur total_spins
+                if spin_max != 0 && total_spins >= spin_max {
                     mem_futex_cancel(wptr);
                     guard.disarm();
                     return Err(IpcError::Timeout);
                 }
 
                 // Après la phase de spin courte : bloquer via le scheduler.
-                if spins >= SPIN_BEFORE_BLOCK {
+                if phase_spins >= SPIN_BEFORE_BLOCK {
                     // Vérifier à nouveau avant de bloquer (évite réveil manqué).
                     if waiter.woken.load(Ordering::Acquire) {
                         guard.disarm();
@@ -205,8 +207,8 @@ pub unsafe fn futex_wait(
                         "futex_wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
                     );
                     super::sched_hooks::block_current(thread_id);
-                    // Réinitialiser le compteur pour la prochaine itération.
-                    spins = 0;
+                    // Réinitialiser uniquement le spin de la phase courante.
+                    phase_spins = 0;
                 }
             }
         }

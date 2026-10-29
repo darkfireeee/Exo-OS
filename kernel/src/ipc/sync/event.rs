@@ -113,6 +113,12 @@ impl IpcEvent {
         loop {
             core::hint::spin_loop();
             spins += 1;
+            if spins % 128 == 0 {
+                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
 
             if self.state.load(Ordering::Acquire) == event_state::SET {
                 let mode = self.mode.load(Ordering::Relaxed);
@@ -255,6 +261,12 @@ impl IpcCountingEvent {
         loop {
             core::hint::spin_loop();
             spins += 1;
+            if spins % 128 == 0 {
+                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
 
             let old = self.count.load(Ordering::Acquire);
             if old > 0 {

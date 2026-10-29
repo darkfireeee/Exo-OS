@@ -17,7 +17,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ipc::core::types::{IpcError, ProcessId};
-use crate::ipc::shared_memory::descriptor::{ShmPermissions, SHM_DESC_DIR};
+use crate::ipc::shared_memory::descriptor::{ShmPermissions, MAX_SHM_PAGES_PER_DESC, SHM_DESC_DIR};
 use crate::ipc::shared_memory::page::{PageFlags, PhysAddr, PAGE_SIZE};
 use crate::scheduler::sync::spinlock::SpinLock;
 
@@ -39,6 +39,12 @@ impl VirtAddr {
 
     pub fn is_page_aligned(self) -> bool {
         (self.0 & (PAGE_SIZE as u64 - 1)) == 0
+    }
+
+    pub fn is_canonical(self) -> bool {
+        let sign = (self.0 >> 47) & 1;
+        let upper = self.0 >> 48;
+        (sign == 0 && upper == 0) || (sign == 1 && upper == 0xffff)
     }
 }
 
@@ -317,42 +323,61 @@ pub fn shm_map(
         // (sera remplacé par memory::virtual::find_vma() lors de l'intégration)
         VirtAddr(phys.0)
     } else {
+        if !hint_virt.is_page_aligned() || !hint_virt.is_canonical() {
+            let dir = SHM_DESC_DIR.lock();
+            if let Some(desc) = unsafe { dir.get(desc_idx) } {
+                desc.remove_mapping();
+            }
+            SHM_MAPPING_TABLE.lock().free(mapping_idx);
+            return Err(IpcError::InvalidArgument);
+        }
         hint_virt
     };
+
+    // Extraire les adresses physiques sous le lock, puis relâcher SHM_DESC_DIR
+    // avant d'invoquer les hooks VMM pour prévenir toute inversion de verrous (T8-025).
+    let mut phys_addrs = [PhysAddr::NULL; MAX_SHM_PAGES_PER_DESC];
+    {
+        let dir = SHM_DESC_DIR.lock();
+        if let Some(desc) = unsafe { dir.get(desc_idx) } {
+            for i in 0..n_pages.min(MAX_SHM_PAGES_PER_DESC) {
+                if let Some(phys) = desc.page_phys(i) {
+                    phys_addrs[i] = phys;
+                }
+            }
+        }
+    }
 
     // Appeler le hook de mappage pour chaque page
     {
         let map_hook = *MAP_PAGE_HOOK.lock();
         if let Some(map_fn) = map_hook {
-            let dir = SHM_DESC_DIR.lock();
-            if let Some(desc) = unsafe { dir.get(desc_idx) } {
-                let mut page_flags = PageFlags::SHM_DEFAULT;
-                // T8-001 FIX : retirer WRITE si les permissions de la région sont read-only
-                if !region_perms.can_write() {
-                    page_flags.remove(PageFlags::WRITE);
-                }
-                for i in 0..n_pages {
-                    if let Some(phys) = desc.page_phys(i) {
-                        let virt = virt_base.0 + (i * PAGE_SIZE) as u64;
-                        let result = unsafe { map_fn(phys.0, virt, page_flags.0, pid.0) };
-                        if result != 0 {
-                            // Annuler les mappings précédents
-                            if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
-                                for j in 0..i {
-                                    let v = virt_base.0 + (j * PAGE_SIZE) as u64;
-                                    // SAFETY: unmap_fn est un hook validé; v est dans la région mappée (j < i < n_pages).
-                                    unsafe { unmap_fn(v, pid.0) };
-                                }
+            let mut page_flags = PageFlags::SHM_DEFAULT;
+            // T8-001 FIX : retirer WRITE si les permissions de la région sont read-only
+            if !region_perms.can_write() {
+                page_flags.remove(PageFlags::WRITE);
+            }
+            for i in 0..n_pages.min(MAX_SHM_PAGES_PER_DESC) {
+                let phys = phys_addrs[i];
+                if !phys.is_null() {
+                    let virt = virt_base.0 + (i * PAGE_SIZE) as u64;
+                    let result = unsafe { map_fn(phys.0, virt, page_flags.0, pid.0) };
+                    if result != 0 {
+                        // Annuler les mappings précédents
+                        if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
+                            for j in 0..i {
+                                let v = virt_base.0 + (j * PAGE_SIZE) as u64;
+                                // SAFETY: unmap_fn est un hook validé; v est dans la région mappée (j < i < n_pages).
+                                unsafe { unmap_fn(v, pid.0) };
                             }
-                            drop(dir);
-                            // Libérer le compte de mapping
-                            let dir2 = SHM_DESC_DIR.lock();
-                            if let Some(d) = unsafe { dir2.get(desc_idx) } {
-                                d.remove_mapping();
-                            }
-                            SHM_MAPPING_TABLE.lock().free(mapping_idx);
-                            return Err(IpcError::MappingFailed);
                         }
+                        // Libérer le compte de mapping
+                        let dir2 = SHM_DESC_DIR.lock();
+                        if let Some(d) = unsafe { dir2.get(desc_idx) } {
+                            d.remove_mapping();
+                        }
+                        SHM_MAPPING_TABLE.lock().free(mapping_idx);
+                        return Err(IpcError::MappingFailed);
                     }
                 }
             }
@@ -382,18 +407,31 @@ pub fn shm_map(
 
 /// Démappe la région SHM identifiée par `mapping_idx`.
 pub fn shm_unmap(mapping_idx: usize) -> Result<(), IpcError> {
+    shm_unmap_for_process(mapping_idx, None)
+}
+
+/// Démappe la région SHM identifiée par `mapping_idx` pour le processus spécifié (si spécifié).
+pub fn shm_unmap_for_process(mapping_idx: usize, expected_pid: Option<ProcessId>) -> Result<(), IpcError> {
     let (desc_idx, pid, virt_base, n_pages) = {
-        let tbl = SHM_MAPPING_TABLE.lock();
+        let mut tbl = SHM_MAPPING_TABLE.lock();
         if mapping_idx >= MAX_SHM_MAPPINGS || !tbl.entries[mapping_idx].is_active() {
             return Err(IpcError::InvalidHandle);
         }
         let m = &tbl.entries[mapping_idx];
-        (
-            m.desc_idx() as usize,
-            ProcessId(m.process_id.load(Ordering::Relaxed)),
-            VirtAddr(m.virt_base.load(Ordering::Relaxed)),
-            m.mapped_pages.load(Ordering::Relaxed) as usize,
-        )
+        let actual_pid = ProcessId(m.process_id.load(Ordering::Relaxed));
+        if let Some(exp) = expected_pid {
+            if exp != actual_pid {
+                return Err(IpcError::PermissionDenied);
+            }
+        }
+        let desc = m.desc_idx() as usize;
+        let virt = VirtAddr(m.virt_base.load(Ordering::Relaxed));
+        let pages = m.mapped_pages.load(Ordering::Relaxed) as usize;
+        // Libérer atomiquement le slot de mapping sous le verrou de table
+        // avant d'appeler les hooks VMM afin de garantir qu'aucun autre thread
+        // ne puisse exécuter un double démappage concurrent (T8-010).
+        tbl.free(mapping_idx);
+        (desc, actual_pid, virt, pages)
     };
 
     // Appeler le hook de démappage
@@ -404,9 +442,6 @@ pub fn shm_unmap(mapping_idx: usize) -> Result<(), IpcError> {
             unsafe { unmap_fn(virt, pid.0) };
         }
     }
-
-    // Libérer le slot de mapping
-    SHM_MAPPING_TABLE.lock().free(mapping_idx);
 
     // Décrémenter le compteur de mappings sur la région
     let dir = SHM_DESC_DIR.lock();

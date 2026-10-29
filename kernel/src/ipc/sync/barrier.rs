@@ -162,9 +162,26 @@ impl IpcBarrier {
             }
 
             if spins >= limit {
-                // Timeout : décrémenter le compteur pour ne pas bloquer
-                // les autres participants (meilleur effort)
-                self.arrived.fetch_sub(1, Ordering::Relaxed);
+                // Vérifier une dernière fois si la barrière a été franchie avant de déclarer timeout
+                if self.generation.load(Ordering::Acquire) != gen {
+                    return Ok(BarrierResult::Follower);
+                }
+                // T8-043 FIX : Décrémenter arrived sous CAS uniquement si la génération n'a pas tourné
+                let mut cur = self.arrived.load(Ordering::Acquire);
+                while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
+                    match self.arrived.compare_exchange_weak(
+                        cur,
+                        cur - 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => cur = actual,
+                    }
+                }
+                if self.generation.load(Ordering::Acquire) != gen {
+                    return Ok(BarrierResult::Follower);
+                }
                 self.total_timeouts.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Timeout);
             }

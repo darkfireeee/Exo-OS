@@ -135,8 +135,25 @@ impl IpcRendezvous {
             }
 
             if spins >= limit {
-                // Timeout : décrémenter pour ne pas bloquer le rendez-vous
-                self.arrived.fetch_sub(1, Ordering::Relaxed);
+                if self.generation.load(Ordering::Acquire) != gen {
+                    return Ok(false);
+                }
+                // Timeout : décrémenter sans wrap si la génération n'a pas tourné (T8-043)
+                let mut cur = self.arrived.load(Ordering::Acquire);
+                while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
+                    match self.arrived.compare_exchange_weak(
+                        cur,
+                        cur - 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => cur = actual,
+                    }
+                }
+                if self.generation.load(Ordering::Acquire) != gen {
+                    return Ok(false);
+                }
                 self.total_timeouts.fetch_add(1, Ordering::Relaxed);
                 return Err(IpcError::Timeout);
             }
@@ -192,10 +209,12 @@ pub const MAX_EXCHANGE_SIZE: usize = 512;
 pub enum ExchangeState {
     /// Personne n'attend
     Empty = 0,
+    /// Thread A prépare son offre dans offer_buf (T8-016 FIX)
+    WritingOffer = 1,
     /// Thread A a déposé sa valeur et attend
-    OfferPending = 1,
+    OfferPending = 2,
     /// Thread B a récupéré, dépôt en cours
-    Completing = 2,
+    Completing = 3,
 }
 
 /// Slot d'échange inline (pas de pointeur, données copiées)
@@ -257,12 +276,12 @@ impl ExchangeSlot {
 
         let size = data.len() as u32;
 
-        // Tenter de devenir l'offrant (CAS Empty → OfferPending)
+        // Tenter de devenir l'offrant (CAS Empty → WritingOffer)
         let became_offerer = self
             .state
             .compare_exchange(
                 ExchangeState::Empty as u32,
-                ExchangeState::OfferPending as u32,
+                ExchangeState::WritingOffer as u32,
                 Ordering::AcqRel,
                 Ordering::Relaxed,
             )
@@ -281,6 +300,9 @@ impl ExchangeSlot {
             }
 
             self.result_ready.store(false, Ordering::Release);
+            // T8-016 FIX : Publier OfferPending seulement après que les données soient entièrement écrites
+            self.state
+                .store(ExchangeState::OfferPending as u32, Ordering::Release);
 
             // Attendre que Thread B complète l'échange
             let limit = if spin_max == 0 { u64::MAX } else { spin_max };
@@ -291,19 +313,29 @@ impl ExchangeSlot {
                 if self.result_ready.load(Ordering::Acquire) {
                     // Lire la réponse de B dans reply_buf
                     // SAFETY: B a écrit reply_buf avant de mettre result_ready
+                    let recv_len = data.len().min(out.len());
                     unsafe {
                         let src = self.reply_buf.as_ptr();
-                        core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), data.len());
+                        core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                     }
                     self.exchanges.fetch_add(1, Ordering::Relaxed);
                     return Ok(());
                 }
                 if spins >= limit {
-                    // Annuler l'offre
-                    self.state
-                        .store(ExchangeState::Empty as u32, Ordering::Release);
-                    self.timeouts.fetch_add(1, Ordering::Relaxed);
-                    return Err(IpcError::Timeout);
+                    // T8-016 FIX : Annuler l'offre seulement si Thread B n'est pas déjà en train de compléter
+                    if self
+                        .state
+                        .compare_exchange(
+                            ExchangeState::OfferPending as u32,
+                            ExchangeState::Empty as u32,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        self.timeouts.fetch_add(1, Ordering::Relaxed);
+                        return Err(IpcError::Timeout);
+                    }
                 }
             }
         } else {

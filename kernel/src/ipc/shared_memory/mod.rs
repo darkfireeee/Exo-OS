@@ -38,8 +38,9 @@ pub use descriptor::{
 
 // Mapping virtuel
 pub use mapping::{
-    register_map_hook, register_unmap_hook, shm_map, shm_mapping_count, shm_unmap, MapPageFn,
-    ShmMapResult, ShmMapping, UnmapPageFn, VirtAddr, MAX_SHM_MAPPINGS,
+    register_map_hook, register_unmap_hook, shm_map, shm_mapping_count, shm_unmap,
+    shm_unmap_for_process, MapPageFn, ShmMapResult, ShmMapping, UnmapPageFn, VirtAddr,
+    MAX_SHM_MAPPINGS,
 };
 
 // Allocateur par classe de taille

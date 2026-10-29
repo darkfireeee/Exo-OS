@@ -9,7 +9,7 @@
 ## 1. Résumé Exécutif
 
 Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemble de l'arborescence du projet Exo-OS, une revue exhaustive a été menée sur chaque module, sous-module et fichier source :
-- **48 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs, ainsi que les vérifications empiriques des audits externes 1, 2, 3, l'audit ciblé Shell/Affichage/IPC/FS et les audits approfondis IPC/FS/Syscall/Scheduler).
+- **49 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs, ainsi que les vérifications empiriques des audits externes 1, 2, 3, l'audit ciblé Shell/Affichage/IPC/FS et les audits approfondis IPC/FS/Syscall/Scheduler).
 - **Plus de 300 anomalies, incohérences, avertissements de compilation (clippy) et bogues de sûreté mémoire** ont été analysés, documentés et rigoureusement corrigés dans le code source.
 - **Résultat de la vérification :** Le noyau Exo-OS compile avec **0 erreur** (`cargo check` = code de sortie 0) et atteint **0 avertissement** sous l'ensemble des règles fondamentales de sûreté, de correction et de performance (`clippy::correctness`, `clippy::suspicious`, `clippy::complexity`, `clippy::perf`).
 
@@ -67,6 +67,7 @@ Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemb
 | `46_audit_approfondi_phase2_ipc_sched_fs_syscall.md` | Audit IPC, FS, Syscall, Sched (Phase 2) | Corrections de 6 failles : fuites de spinlock dedup, rejet de mise à jour config, rejet noms path_index >128 B, bornage IOV_MAX preadv/pwritev | Conforme / 100% tests validés |
 | `47_audit_approfondi_ipc_fs_syscall.md` | Audit Approfondi IPC, FS, Syscall (2h) | Corrections de 11 failles : squatting endpoint registry, recv interruptible, garde sys_exo_log, monotonic timeout SPSC, socket readv multi-iovec, shrink mremap unmap, rollback MMIO, release GLOBAL_DISK, remove_zero GC, borne ext4 extents | Conforme / 100% tests validés |
 | `48_audit_approfondi_fs_pipe_fchdir_quota.md` | Audit Approfondi FS, Pipe, Fchdir, Quota | Corrections de 13 failles : inversion grace quota, atomicity mutate_usage, fallback cleartext volume_key, backward shift delete robin hood, tracking dir_paths fchdir, bornes pipe/socket buffers, purge mode file, auth service class | Conforme / 100% tests validés |
+| `49_audit_approfondi_shm_sync_openflags_dup2.md` | Audit Approfondi SHM, Sync, OpenFlags, Dup2 | Corrections de 15 failles : anti-wrap refcounts SHM/ZeroCopy, atomic unmap, lock-ordering VMM/IPC, cohérence NUMA, rendezvous ordered offer, wait_queue CAS claim, futex cumulative spins, barrier CAS timeout, open flags 0x007F_FFFF, dup2 POSIX CLOEXEC, O_DIRECTORY validation | Conforme / 100% tests validés |
 
 ---
 
@@ -133,4 +134,4 @@ flowchart TD
 Le projet Exo-OS présente désormais une conformité architecturale et une intégrité de code exceptionnelles :
 1. **Compilation Parfaite :** Aucun bogue bloquant, zéro avertissement sous l'ensemble des règles fondamentales de sûreté.
 2. **Robustesse Prouvée :** Les sous-systèmes critiques (mémoire d'urgence, ordonnanceur temps-réel, IPC lock-free, cryptographie post-boot, et résurrection Phoenix A/B) satisfont rigoureusement leurs spécifications contractuelles (DOC1, DOC2, DOC3, DOC10 et GI-03).
-3. **Documentation Pérenne :** Les 48 rapports consignés dans `docs/Analyse/` fournissent un référentiel exhaustif pour les audits futurs et l'industrialisation du système.
+3. **Documentation Pérenne :** Les 49 rapports consignés dans `docs/Analyse/` fournissent un référentiel exhaustif pour les audits futurs et l'industrialisation du système.

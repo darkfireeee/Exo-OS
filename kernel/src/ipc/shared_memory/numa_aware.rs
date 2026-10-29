@@ -352,57 +352,44 @@ pub fn numa_shm_alloc(
     n_pages: usize,
     preferred_node: NumaNodeId,
 ) -> Result<ShmHandle, IpcError> {
-    if n_pages == 0 {
+    if n_pages == 0 || n_pages > crate::ipc::shared_memory::descriptor::MAX_SHM_PAGES_PER_DESC {
         return Err(IpcError::InvalidArgument);
     }
 
     let size_class = ShmSizeClass::for_size(n_pages * crate::ipc::shared_memory::page::PAGE_SIZE);
 
-    // Allouer les pages NUMA-aware
-    let mut page_indices = [0u32; crate::ipc::shared_memory::descriptor::MAX_SHM_PAGES_PER_DESC];
-    let effective_n = n_pages.min(page_indices.len());
+    // Allouer le descripteur SHM depuis le pool global (T8-011 FIX : évite
+    // la réservation redondante et la double libération corrompant le refcount).
+    let desc_idx = shm_create(owner, perms, n_pages)?;
 
-    for i in 0..effective_n {
-        match NUMA_MANAGER.alloc_page(preferred_node) {
-            Some(idx) => {
-                page_indices[i] = idx as u32;
-            }
-            None => {
-                // Annuler les allocations précédentes
-                for j in 0..i {
-                    NUMA_MANAGER.free_page(page_indices[j] as usize);
+    // Mettre à jour les statistiques NUMA selon le placement effectif des pages
+    if NUMA_MANAGER.is_initialized() {
+        let pref_idx = preferred_node.index().min(NUMA_MANAGER.active_nodes().saturating_sub(1));
+        let dir = crate::ipc::shared_memory::descriptor::SHM_DESC_DIR.lock();
+        if let Some(desc) = unsafe { dir.get(desc_idx) } {
+            for i in 0..n_pages {
+                if let Some(page_idx) = desc.page_pool_idx(i) {
+                    let node_of_page = page_idx / NUMA_PAGES_PER_NODE;
+                    if node_of_page == pref_idx {
+                        NUMA_MANAGER.stats.local_hits.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        NUMA_MANAGER.stats.remote_misses.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-                return Err(IpcError::OutOfResources);
             }
         }
     }
 
-    // Créer le descripteur SHM avec les pages allouées
-    // On utilise shm_create() qui va à son tour allouer depuis le pool global —
-    // mais comme les pages NUMA sont déjà "réservées" dans nos bitmaps NUMA,
-    // on doit les libérer du pool global et réenregistrer manuellement.
-    //
-    // Simplification : on appelle shm_create() directement (qui alloue du pool
-    // global) et on marque les pages NUMA correspondantes comme occupées pour
-    // assurer la cohérence.
-    let desc_idx = shm_create(owner, perms, effective_n)?;
-
-    // Libérer les pages NUMA réservées manuellement ci-dessus (elles seront
-    // gérées par le descripteur SHM via le pool global)
-    for i in 0..effective_n {
-        NUMA_MANAGER.free_page(page_indices[i] as usize);
-    }
-
     let shm_id = crate::ipc::shared_memory::descriptor::shm_get_id(desc_idx)
         .unwrap_or(crate::ipc::shared_memory::descriptor::ShmId::INVALID);
-    let size_bytes = effective_n * crate::ipc::shared_memory::page::PAGE_SIZE;
+    let size_bytes = n_pages * crate::ipc::shared_memory::page::PAGE_SIZE;
 
     Ok(ShmHandle {
         desc_idx,
         shm_id,
         size_bytes,
         size_class,
-        page_count: effective_n,
+        page_count: n_pages,
     })
 }
 

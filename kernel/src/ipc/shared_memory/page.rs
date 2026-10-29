@@ -166,14 +166,29 @@ impl ShmPage {
     /// Décrémente le compteur de références.
     /// Retourne `true` si la page est maintenant libre (refcount == 0).
     pub fn ref_release(&self) -> bool {
-        let prev = self.refcount.fetch_sub(1, Ordering::AcqRel);
-        if prev == 1 {
-            // Incrémenter la génération pour invalider les références pendantes
-            self.generation.fetch_add(1, Ordering::Release);
-            self.reuse_count.fetch_add(1, Ordering::Relaxed);
-            true
-        } else {
-            false
+        let mut cur = self.refcount.load(Ordering::Acquire);
+        loop {
+            if cur == 0 {
+                // Double libération prévenue : éviter le wrap u32 (T8-026)
+                return false;
+            }
+            match self.refcount.compare_exchange_weak(
+                cur,
+                cur - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if cur == 1 {
+                        // Incrémenter la génération pour invalider les références pendantes
+                        self.generation.fetch_add(1, Ordering::Release);
+                        self.reuse_count.fetch_add(1, Ordering::Relaxed);
+                        return true;
+                    }
+                    return false;
+                }
+                Err(actual) => cur = actual,
+            }
         }
     }
 

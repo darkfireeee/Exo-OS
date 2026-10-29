@@ -233,8 +233,10 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
             let _ = OBJECT_TABLE.close(old_handle as u32);
         }
     }
+    // POSIX spécifie que FD_CLOEXEC doit toujours être effacé sur newfd lors de dup2
+    let dup_flags = resolved.flags & !O_CLOEXEC;
     if is_tty_handle(resolved.handle) {
-        if install_process_fd_at(pid, newfd, TTY_PTS0_HANDLE as u64, resolved.flags) {
+        if install_process_fd_at(pid, newfd, TTY_PTS0_HANDLE as u64, dup_flags) {
             return Ok(newfd as i64);
         }
         return Err(FsBridgeError::NoMemory);
@@ -242,7 +244,7 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     let handle = OBJECT_TABLE
         .dup(resolved.handle)
         .map_err(exofs_to_bridge_error)?;
-    if install_process_fd_at(pid, newfd, handle as u64, resolved.flags) {
+    if install_process_fd_at(pid, newfd, handle as u64, dup_flags) {
         Ok(newfd as i64)
     } else {
         OBJECT_TABLE

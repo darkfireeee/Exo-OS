@@ -189,7 +189,12 @@ impl IpcWaitQueue {
     /// Retourne l'index du waiter, ou `None` si la queue est pleine.
     pub fn enqueue(&self, thread_id: u64, timeout_ns: u64, now_ns: u64) -> Option<usize> {
         for i in 0..MAX_IPC_WAITERS {
-            if !self.waiters[i].is_active() {
+            // T8-015 FIX : CAS atomique false -> true pour réserver le slot de façon exclusive
+            if self.waiters[i]
+                .active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 self.waiters[i]
                     .thread_id
                     .store(thread_id, Ordering::Relaxed);
@@ -198,8 +203,7 @@ impl IpcWaitQueue {
                     .store(timeout_ns, Ordering::Relaxed);
                 self.waiters[i].enqueued_at.store(now_ns, Ordering::Relaxed);
                 self.waiters[i].woken.store(false, Ordering::Relaxed);
-                self.waiters[i].reason.store(0, Ordering::Relaxed);
-                self.waiters[i].active.store(true, Ordering::Release);
+                self.waiters[i].reason.store(0, Ordering::Release);
                 self.count.fetch_add(1, Ordering::Relaxed);
                 self.total_waits.fetch_add(1, Ordering::Relaxed);
                 return Some(i);
