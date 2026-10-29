@@ -387,7 +387,7 @@ impl FsckRepair {
     /// Reconstruit l en-tête d un blob à partir de ses données.
     ///
     /// - Lit les données depuis `data_lba`.
-    /// - Calcule `Blake3(données)` pour remplir `blob_id` (HDR-03 / HASH-02).
+    /// - Remplit `blob_id` et initialise un `BlobHeaderDisk` canonique (HDR-03 / HASH-02).
     /// - Écrit le nouvel en-tête à `hdr_lba` — WRITE-02.
     fn rebuild_blob_header(
         device: &mut dyn BlockDevice,
@@ -396,53 +396,18 @@ impl FsckRepair {
         data_lba: u64,
         data_len: u64,
     ) -> ExofsResult<bool> {
-        let block_size = device.block_size() as u64;
-        let data_blocks = data_len
-            .checked_add(block_size.saturating_sub(1))
-            .and_then(|v| v.checked_div(block_size))
-            .ok_or(ExofsError::OffsetOverflow)?
-            .max(1);
-        let read_len = data_blocks
-            .checked_mul(block_size)
-            .ok_or(ExofsError::OffsetOverflow)? as usize;
-
-        let mut data_buf = alloc::vec![0u8; read_len];
-        device.read_block(data_lba, &mut data_buf)?;
-
-        // HASH-02 : calculer un hash de 224 octets (padding si data < 224).
-        let hash_input = if data_buf.len() >= 224 {
-            let mut arr = [0u8; 224];
-            arr.copy_from_slice(&data_buf[0..224]);
-            arr
-        } else {
-            let mut arr = [0u8; 224];
-            arr[..data_buf.len()].copy_from_slice(&data_buf);
-            arr
-        };
-        let computed_hash = blake3_hash(&hash_input);
-
-        // Construire un en-tête minimal valide (basé sur fsck_phase2::BlobHeaderDisk).
-        // On écrit un bloc avec le magic + hash + data_len.
         let bsz = device.block_size() as usize;
         let mut hdr_buf = alloc::vec![0u8; bsz];
         const BLOB_HDR_MAGIC: u64 = 0x5244484C424F5845; // "EXOBLHDR"
         hdr_buf[0..8].copy_from_slice(&BLOB_HDR_MAGIC.to_le_bytes());
         hdr_buf[8] = 1; // version
+        hdr_buf[9] = 0; // flags (clean)
+        hdr_buf[10..12].copy_from_slice(&0u16.to_le_bytes()); // _pad0
+        hdr_buf[12..16].copy_from_slice(&1u32.to_le_bytes()); // ref_count = 1
         hdr_buf[16..48].copy_from_slice(blob_id);
-        hdr_buf[48..80].copy_from_slice(&computed_hash);
-        hdr_buf[80..88].copy_from_slice(&data_len.to_le_bytes());
-
-        // Checksum de l en-tête (Blake3 sur bytes[0..224]).
-        let hdr_hash_input: &[u8; 224] = if hdr_buf.len() >= 224 {
-            // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
-            unsafe { &*(hdr_buf.as_ptr() as *const [u8; 224]) }
-        } else {
-            return Err(ExofsError::InvalidArgument);
-        };
-        let hdr_hash = blake3_hash(hdr_hash_input);
-        if hdr_buf.len() >= 256 {
-            hdr_buf[224..256].copy_from_slice(&hdr_hash);
-        }
+        hdr_buf[48..56].copy_from_slice(&data_len.to_le_bytes());
+        hdr_buf[56..64].copy_from_slice(&data_lba.to_le_bytes());
+        hdr_buf[64..96].copy_from_slice(&[0u8; 32]); // parent_id = none
 
         // WRITE-02 : écrire et vérifier.
         device.write_block(hdr_lba, &hdr_buf)?;
@@ -461,14 +426,23 @@ impl FsckRepair {
         Ok(true)
     }
 
-    /// Efface le flag dirty d un en-tête de slot (octet 9, bit 1).
+    /// Efface le flag dirty d un en-tête de slot (offset 10, bit 0).
     fn clear_slot_dirty(device: &mut dyn BlockDevice, hdr_lba: u64) -> ExofsResult<bool> {
         let bsz = device.block_size() as usize;
         let mut buf = alloc::vec![0u8; bsz];
         device.read_block(hdr_lba, &mut buf)?;
-        // Bit dirty = bit 1 du byte 9 (selon slot_recovery.rs).
-        if buf.len() > 9 {
-            buf[9] &= !0x02;
+        // Bit dirty = bit 0 du champ flags (u16) à l'offset 10 (selon slot_recovery.rs).
+        if buf.len() >= super::slot_recovery::SLOT_HEADER_SIZE {
+            let mut flags = u16::from_le_bytes([buf[10], buf[11]]);
+            flags &= !0x0001;
+            let fb = flags.to_le_bytes();
+            buf[10] = fb[0];
+            buf[11] = fb[1];
+
+            // Recalculer le header_hash (Blake3 des octets 0..96) stocké à l'offset 96
+            let hash_input: &[u8; 96] = unsafe { &*(buf.as_ptr() as *const [u8; 96]) };
+            let new_hash = blake3_hash(hash_input);
+            buf[96..128].copy_from_slice(&new_hash);
         }
         device.write_block(hdr_lba, &buf)?;
         Ok(true)
@@ -514,7 +488,7 @@ impl FsckRepair {
         Ok(true)
     }
 
-    /// Corrige le compteur de références d un blob dans la table d allocation.
+    /// Corrige le compteur de références d un blob dans son en-tête (BlobHeaderDisk).
     fn fix_ref_count(
         device: &mut dyn BlockDevice,
         alloc_lba: u64,
@@ -523,13 +497,27 @@ impl FsckRepair {
         let bsz = device.block_size() as usize;
         let mut buf = alloc::vec![0u8; bsz];
         device.read_block(alloc_lba, &mut buf)?;
-        // Offset du ref_count dans AllocEntry (blob_id[32] + hdr_lba[8] + data_lba[8] = 48
-        // ... le ref_count n est pas dans AllocEntry mais dans la table de comptage.
-        // On écrit le new_ref_count à l offset standard d une entrée alloc étendue.
-        if buf.len() >= 52 {
-            buf[48..52].copy_from_slice(&new_ref_count.to_le_bytes());
+
+        const BLOB_HDR_MAGIC: u64 = 0x5244484C424F5845; // "EXOBLHDR"
+        let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap_or([0; 8]));
+        if magic == BLOB_HDR_MAGIC {
+            // alloc_lba pointe directement sur un BlobHeaderDisk : ref_count à l'offset 12
+            buf[12..16].copy_from_slice(&new_ref_count.to_le_bytes());
+            device.write_block(alloc_lba, &buf)?;
+        } else if buf.len() >= 48 {
+            // alloc_lba pointe sur une entrée d'allocation : hdr_lba est à l'offset 32..40
+            let hdr_lba = u64::from_le_bytes(buf[32..40].try_into().unwrap_or([0; 8]));
+            if hdr_lba != 0 && hdr_lba != alloc_lba {
+                let mut hdr_buf = alloc::vec![0u8; bsz];
+                if device.read_block(hdr_lba, &mut hdr_buf).is_ok() {
+                    let hdr_magic = u64::from_le_bytes(hdr_buf[0..8].try_into().unwrap_or([0; 8]));
+                    if hdr_magic == BLOB_HDR_MAGIC {
+                        hdr_buf[12..16].copy_from_slice(&new_ref_count.to_le_bytes());
+                        device.write_block(hdr_lba, &hdr_buf)?;
+                    }
+                }
+            }
         }
-        device.write_block(alloc_lba, &buf)?;
         Ok(true)
     }
 
@@ -541,8 +529,7 @@ impl FsckRepair {
     ) -> ExofsResult<bool> {
         let bsz = device.block_size() as usize;
         let mut buf = alloc::vec![0u8; bsz];
-        const ALLOC_MAGIC: u64 = 0x424C54414F465845; // "EXOATBLK"
-        buf[0..8].copy_from_slice(&ALLOC_MAGIC.to_le_bytes());
+        buf[0..8].copy_from_slice(&super::fsck_phase1::ALLOC_TABLE_MAGIC.to_le_bytes());
         buf[8] = 1; // version
         buf[12..16].copy_from_slice(&n_entries.to_le_bytes());
         device.write_block(table_lba, &buf)?;
@@ -554,9 +541,13 @@ impl FsckRepair {
         let bsz = device.block_size() as usize;
         let mut buf = alloc::vec![0u8; bsz];
         device.read_block(hdr_lba, &mut buf)?;
-        if buf.len() > 9 {
-            buf[9] |= 0x01;
-        } // flags |= deleted
+        if buf.len() >= 256 {
+            buf[9] |= 0x01; // flags |= deleted
+            // Recalculer le checksum — HDR-03
+            let hash_in: &[u8; 224] = unsafe { &*(buf.as_ptr() as *const [u8; 224]) };
+            let hash = blake3_hash(hash_in);
+            buf[224..256].copy_from_slice(&hash);
+        }
         device.write_block(hdr_lba, &buf)?;
         Ok(true)
     }

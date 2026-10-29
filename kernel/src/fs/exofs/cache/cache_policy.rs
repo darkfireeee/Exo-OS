@@ -192,7 +192,9 @@ impl CachePolicy {
 
     /// Seuil bas : arrêt de l'éviction quand `used < low_watermark()`.
     pub fn low_watermark(&self) -> u64 {
-        self.config.max_bytes / 100 * 80
+        let high_pct = (100u64).saturating_sub(self.config.min_free_ratio as u64);
+        let low_pct = high_pct.saturating_sub(15).max(50);
+        self.config.max_bytes / 100 * low_pct
     }
 
     /// Limite de pages sales avant flush forcé.
@@ -291,6 +293,10 @@ mod tests {
     fn test_low_watermark_below_high() {
         let p = CachePolicy::new(CacheConfig::default_512mib());
         assert!(p.low_watermark() <= p.high_watermark());
+        let p_min = CachePolicy::new(CacheConfig::minimal());
+        assert!(p_min.low_watermark() < p_min.high_watermark());
+        let p_low = CachePolicy::new(CacheConfig::low_memory());
+        assert!(p_low.low_watermark() < p_low.high_watermark());
     }
 
     #[test]

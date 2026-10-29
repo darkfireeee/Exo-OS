@@ -583,6 +583,13 @@ pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     }
 }
 
+/// `personality(persona)` — Linux syscall 135 (compat x86_64).
+/// Retourne 0 (PER_LINUX standard).
+pub fn sys_personality(_persona: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    inc_posix();
+    0
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers d'export : table de mapping numéro → handler POSIX
 // ─────────────────────────────────────────────────────────────────────────────
@@ -613,6 +620,7 @@ pub fn get_posix_handler(nr: u64) -> Option<SyscallHandler> {
         SYS_SETGROUPS => Some(sys_setgroups),
         SYS_CAPGET => Some(sys_capget),
         SYS_CAPSET => Some(sys_capset),
+        SYS_PERSONALITY => Some(sys_personality),
         _ => None,
     }
 }

@@ -38,6 +38,7 @@
 // ═════════════════════════════════════════════════════════════════════════════
 
 use super::apic;
+use super::cpu::features::{cpu_features, CpuVendor};
 use super::cpu::msr;
 use super::smp::percpu;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -155,6 +156,12 @@ pub unsafe extern "C" fn arch_set_cpu_pstate(cpu: u32, pstate: u32) {
     // Vérifier que c'est bien un CPU en ligne
     let cpu_data = percpu::per_cpu(cpu as usize);
     if !cpu_data.online {
+        return;
+    }
+
+    // MSR_IA32_PERF_CTL est spécifique à Intel SpeedStep.
+    // Évite un #GP sur AMD ou hyperviseurs tiers.
+    if cpu_features().vendor != CpuVendor::Intel {
         return;
     }
 

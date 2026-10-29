@@ -158,6 +158,19 @@ pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeErr
     Ok((copy_len + 1) as i64)
 }
 
+/// Retourne le CWD actuel d'un processus sous forme de `Vec<u8>`.
+pub fn current_cwd_for_pid(pid: u32) -> alloc::vec::Vec<u8> {
+    let _guard = CWD_LOCK.lock();
+    let map = unsafe { core::ptr::addr_of!(CWD_MAP).as_ref().unwrap_unchecked() };
+    for slot in map.slots.iter() {
+        if slot.pid == pid && slot.len > 0 {
+            let len = slot.len as usize;
+            return slot.path[..len].to_vec();
+        }
+    }
+    alloc::vec![b'/']
+}
+
 /// `chdir(path)` — FIX-FND-5 : sauvegarde le CWD dans CWD_MAP.
 #[inline]
 pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {

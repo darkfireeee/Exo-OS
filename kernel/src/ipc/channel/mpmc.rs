@@ -236,9 +236,10 @@ impl MpmcChannel {
                     OverflowPolicy::DropOldest => {
                         // Consommer (et jeter) le plus ancien message
                         let mut discard = [0u8; MAX_MSG_SIZE];
-                        let _ = self.ring.pop_into(&mut discard);
-                        self.pending.fetch_sub(1, Ordering::Relaxed);
-                        self.stats.overflow_drops.fetch_add(1, Ordering::Relaxed);
+                        if self.ring.pop_into(&mut discard).is_ok() {
+                            self.pending.fetch_sub(1, Ordering::Relaxed);
+                            self.stats.overflow_drops.fetch_add(1, Ordering::Relaxed);
+                        }
                         // Réessayer
                         match self.ring.push_copy(data, flags) {
                             Ok(_) => {

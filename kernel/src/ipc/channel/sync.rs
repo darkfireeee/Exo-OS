@@ -413,6 +413,31 @@ impl SyncChannel {
             if flags.contains(MsgFlags::NOWAIT) {
                 return Err(IpcError::WouldBlock);
             }
+            // Attente que le slot redevienne Idle
+            let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+            let deadline_ns = deadline_from(timeout_ns);
+            let mut spins: u32 = 0;
+            loop {
+                core::hint::spin_loop();
+                spins += 1;
+                let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                if s == RendezVousState::Idle {
+                    break;
+                }
+                if self.is_closed() {
+                    return Err(IpcError::Closed);
+                }
+                if deadline_expired(deadline_ns) {
+                    self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
+                    return Err(IpcError::Timeout);
+                }
+                if spins > 64 {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                    spins = 0;
+                }
+            }
         }
 
         let mid = alloc_message_id();
@@ -574,8 +599,13 @@ impl SyncChannel {
             return Ok((mid, copy_len, msg_flags));
         }
 
+        // Vérifier que le buffer de destination est suffisant
+        if len > buf.len() {
+            return Err(IpcError::MessageTooLarge);
+        }
+
         // Copie inline
-        let copy_len = len.min(buf.len());
+        let copy_len = len;
         if copy_len > 0 {
             // SAFETY: émetteur terminé avant transition SenderWaiting (Release/Acquire); récepteur unique.
             unsafe {
@@ -826,6 +856,12 @@ pub fn sync_channel_close(idx: usize) -> Result<(), IpcError> {
 /// Détruit et libère le canal synchrone identifié par `idx`.
 pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let mut tbl = SYNC_CHANNEL_TABLE.lock();
+    if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
+        return Err(IpcError::InvalidHandle);
+    }
+    // Fermer le canal pour réveiller les threads en attente avant la destruction
+    let chan = unsafe { tbl.get_unchecked(idx) };
+    chan.close();
     if !tbl.free(idx) {
         return Err(IpcError::InvalidHandle);
     }

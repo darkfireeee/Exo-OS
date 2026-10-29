@@ -329,9 +329,19 @@ impl EpochReplay {
                 continue;
             }
 
-            // Vérifier la taille.
+            // Vérifier la taille et les bornes LBA.
             if rec.data_len == 0 || rec.data_len as u64 > 64 * 1024 * 1024 {
                 result.n_skipped = result.n_skipped.saturating_add(1);
+                continue;
+            }
+
+            let block_size = (device.block_size() as u64).max(512);
+            let blocks_needed = (rec.data_len as u64 + block_size - 1) / block_size;
+            if rec.data_lba.saturating_add(blocks_needed) > device.total_blocks() {
+                result.n_io_error = result.n_io_error.saturating_add(1);
+                if opts.stop_on_invalid {
+                    break;
+                }
                 continue;
             }
 
@@ -385,7 +395,13 @@ impl EpochReplay {
             core::sync::atomic::fence(Ordering::SeqCst);
 
             // Flush intermédiaire (root barrier).
-            let _ = device.flush();
+            if let Err(_) = device.flush() {
+                result.n_io_error = result.n_io_error.saturating_add(1);
+                if opts.stop_on_invalid {
+                    break;
+                }
+                continue;
+            }
 
             // Barrière 3 : après root, avant enregistrement du record.
             core::sync::atomic::fence(Ordering::SeqCst);
@@ -394,7 +410,12 @@ impl EpochReplay {
         }
 
         // Flush final.
-        let _ = device.flush();
+        if let Err(e) = device.flush() {
+            result.n_io_error = result.n_io_error.saturating_add(1);
+            if opts.stop_on_invalid {
+                return Err(e);
+            }
+        }
 
         RECOVERY_LOG.log_replay_done(result.n_replayed);
         RECOVERY_AUDIT.record_epoch_replayed(epoch_id, result.n_replayed);

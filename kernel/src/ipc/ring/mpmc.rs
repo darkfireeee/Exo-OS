@@ -164,6 +164,18 @@ impl MpmcRing {
                 core::hint::spin_loop();
                 continue;
             }
+
+            // Vérifier que le buffer de destination est suffisant AVANT de consommer le slot.
+            // SAFETY: seq == pos + 1 garantit que le slot a été publié par le producteur.
+            unsafe {
+                let slot = (*cell.slot.get()).assume_init_ref();
+                let ln = slot.header.len as usize;
+                if ln > dst.len() {
+                    // Préserver le message en tête du ring sans avancer tail.
+                    return Err(IpcError::MessageTooLarge);
+                }
+            }
+
             if self
                 .tail_atomic()
                 .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
@@ -177,10 +189,6 @@ impl MpmcRing {
                 let slot = (*cell.slot.get()).assume_init_ref();
                 let ln = slot.header.len as usize;
                 let flags = slot.header.flags;
-                if ln > dst.len() {
-                    cell.store_seq(pos + RING_SIZE as u64);
-                    return Err(IpcError::MessageTooLarge);
-                }
                 if ln > 0 {
                     core::ptr::copy_nonoverlapping(slot.payload.as_ptr(), dst.as_mut_ptr(), ln);
                 }

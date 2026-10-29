@@ -86,10 +86,39 @@ impl SubscriberSlot {
         self.active.store(true, Ordering::Release);
     }
 
+    /// Tente d'activer l'abonné de manière atomique (CAS).
+    pub fn try_activate(&self, owner_id: u64) -> bool {
+        if self
+            .active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.owner_id.store(owner_id, Ordering::Relaxed);
+            self.ring.init();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Désactive l'abonné (ne consomme plus les futurs messages).
     pub fn deactivate(&self) {
         self.active.store(false, Ordering::Release);
         self.owner_id.store(0, Ordering::Relaxed);
+    }
+
+    /// Tente de désactiver l'abonné de manière atomique (CAS).
+    pub fn try_deactivate(&self) -> bool {
+        if self
+            .active
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.owner_id.store(0, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -236,10 +265,13 @@ impl BroadcastChannel {
 
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
-        // Désactiver tous les abonnés
+        // Désactiver tous les abonnés de manière atomique
         for i in 0..MAX_BROADCAST_SUBSCRIBERS {
-            if self.subscribers[i].is_active() {
-                self.subscribers[i].deactivate();
+            if self.subscribers[i].try_deactivate() {
+                let mask = 1u64 << (i % 64);
+                self.subscriber_bitmap.fetch_and(!mask, Ordering::AcqRel);
+                self.subscriber_count.fetch_sub(1, Ordering::Relaxed);
+                self.stats.subscriber_leaves.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -254,14 +286,10 @@ impl BroadcastChannel {
         if self.is_closed() {
             return None;
         }
-        // Chercher un slot libre
+        // Chercher un slot libre et l'activer atomiquement (CAS)
         for i in 0..MAX_BROADCAST_SUBSCRIBERS {
-            if !self.subscribers[i].is_active() {
-                // Tentative CAS sur le bitmap (bit i = 0 → 1)
+            if self.subscribers[i].try_activate(owner_id) {
                 let mask = 1u64 << (i % 64);
-                // On utilise le spinlock implicitement via la sémantique atomique
-                // de subscriber.activate() — le bitmap est purement informatif ici.
-                self.subscribers[i].activate(owner_id);
                 self.subscriber_bitmap.fetch_or(mask, Ordering::AcqRel);
                 self.subscriber_count.fetch_add(1, Ordering::Relaxed);
                 self.stats.subscriber_joins.fetch_add(1, Ordering::Relaxed);
@@ -277,8 +305,7 @@ impl BroadcastChannel {
         if idx >= MAX_BROADCAST_SUBSCRIBERS {
             return false;
         }
-        if self.subscribers[idx].is_active() {
-            self.subscribers[idx].deactivate();
+        if self.subscribers[idx].try_deactivate() {
             let mask = 1u64 << (idx % 64);
             self.subscriber_bitmap.fetch_and(!mask, Ordering::AcqRel);
             self.subscriber_count.fetch_sub(1, Ordering::Relaxed);

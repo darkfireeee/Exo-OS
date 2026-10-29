@@ -80,6 +80,7 @@ pub struct BatchResult {
     pub entries_err: u32,
     pub bytes_total: u64,
     pub errors: Vec<(usize, ExofsError)>, // (index, err)
+    pub read_data: Vec<(usize, Vec<u8>)>, // (index, données lues)
 }
 
 impl BatchResult {
@@ -90,6 +91,16 @@ impl BatchResult {
     pub fn add_ok(&mut self, bytes: u64) {
         self.entries_ok = self.entries_ok.saturating_add(1);
         self.bytes_total = self.bytes_total.saturating_add(bytes);
+    }
+
+    pub fn add_read_ok(&mut self, idx: usize, data: Vec<u8>, bytes: u64) -> ExofsResult<()> {
+        self.entries_ok = self.entries_ok.saturating_add(1);
+        self.bytes_total = self.bytes_total.saturating_add(bytes);
+        self.read_data
+            .try_reserve(1)
+            .map_err(|_| ExofsError::NoMemory)?;
+        self.read_data.push((idx, data));
+        Ok(())
     }
 
     pub fn add_err(&mut self, idx: usize, e: ExofsError) -> ExofsResult<()> {
@@ -321,7 +332,7 @@ impl IoBatch {
             let entry = &self.entries[i];
             match entry.op.is_read() {
                 true => match store.read(&entry.blob_id, entry.buf_offset, entry.buf_len) {
-                    Ok((_, bytes)) => result.add_ok(bytes),
+                    Ok((data, bytes)) => result.add_read_ok(i, data, bytes)?,
                     Err(e) => result.add_err(i, e)?,
                 },
                 false => {
@@ -480,6 +491,7 @@ mod tests {
             entries_err: 1,
             bytes_total: 100,
             errors: Vec::new(),
+            read_data: Vec::new(),
         };
         stats.accumulate(&r);
         stats.reset();

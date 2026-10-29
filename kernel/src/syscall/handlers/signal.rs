@@ -345,7 +345,18 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         }
     }
 
-    let thread_ptr = pcb.main_thread_ptr();
+    // Cibler le thread spécifique `tid` s'il existe dans le groupe, sinon fallback main_thread.
+    let mut thread_ptr = core::ptr::null_mut();
+    for slot in &pcb.thread_slots {
+        let p = slot.load(core::sync::atomic::Ordering::Acquire);
+        if !p.is_null() && unsafe { (*p).tid.0 as u64 == tid } {
+            thread_ptr = p;
+            break;
+        }
+    }
+    if thread_ptr.is_null() && (tid == tgid || tid == 0) {
+        thread_ptr = pcb.main_thread_ptr();
+    }
     if thread_ptr.is_null() {
         return ESRCH;
     }

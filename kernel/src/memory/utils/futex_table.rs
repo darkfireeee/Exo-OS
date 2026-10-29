@@ -218,6 +218,27 @@ impl BucketInner {
         }
         requeued
     }
+
+    /// Requeue jusqu'à `max_requeue` waiters de `src_addr` vers `dst_addr` au sein du même bucket.
+    unsafe fn requeue_inplace(&mut self, src_addr: u64, dst_addr: u64, max_requeue: u32) -> u32 {
+        let mut requeued = 0u32;
+        let mut cur = self.head;
+
+        while let Some(node) = cur {
+            let w = node.as_ptr();
+            let next = (*w).next;
+
+            if (*w).virt_addr == src_addr && !(*w).woken.load(Ordering::Acquire) {
+                (*w).virt_addr = dst_addr;
+                requeued += 1;
+                if requeued >= max_requeue {
+                    break;
+                }
+            }
+            cur = next;
+        }
+        requeued
+    }
 }
 
 /// Un bucket public avec son Mutex.
@@ -538,13 +559,15 @@ pub unsafe fn futex_requeue(
         // Même bucket : une seule acquisition.
         let mut bucket = FUTEX_TABLE.buckets[src_idx].inner.lock();
         let woken = bucket.wake(src_addr, max_wake, wake_code);
-        // requeue dans le même bucket → même adresse différente.
-        // Résoudre le problème de double-emprunt en faisant un split.
-        // Simplification : on wake seulement dans ce cas.
+        let requeued = if src_addr != dst_addr {
+            bucket.requeue_inplace(src_addr, dst_addr, max_requeue)
+        } else {
+            0
+        };
         FUTEX_STATS
             .total_woken
             .fetch_add(woken as u64, Ordering::Relaxed);
-        return (woken, 0);
+        return (woken, requeued);
     }
 
     // Deux buckets différents — lock toujours dans l'ordre d'index pour éviter

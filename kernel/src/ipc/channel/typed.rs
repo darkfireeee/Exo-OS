@@ -29,14 +29,14 @@ use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 // Contrainte de taille
 // ---------------------------------------------------------------------------
 
-/// Taille maximale d'une valeur typée transmissible via TypedChannel
-pub const MAX_TYPED_VALUE_SIZE: usize = 512;
+/// Taille maximale d'une valeur typée transmissible via TypedChannel (bornée par MAX_MSG_SIZE du SpscRing)
+pub const MAX_TYPED_VALUE_SIZE: usize = crate::ipc::core::constants::MAX_MSG_SIZE;
 
 /// Erreur de compilation si T est trop grand — vérification dans TypedChannel::create()
 const fn assert_type_size<T>() {
     assert!(
         size_of::<T>() <= MAX_TYPED_VALUE_SIZE,
-        "TypedChannel: T dépasse MAX_TYPED_VALUE_SIZE (512 octets)"
+        "TypedChannel: T dépasse MAX_TYPED_VALUE_SIZE (240 octets)"
     );
 }
 

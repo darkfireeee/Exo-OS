@@ -137,15 +137,16 @@ impl PathCache {
     // ── Insertion ─────────────────────────────────────────────────────────────
 
     pub fn insert(&self, path: &[u8], inode_id: u64, flags: u32) -> ExofsResult<()> {
-        // Chemin sur heap (Règle RECUR-01 + pas de heap sur pile).
-        let path_str = {
-            let mut s = String::new();
-            s.try_reserve(path.len())
-                .map_err(|_| ExofsError::NoMemory)?;
-            for &b in path {
-                s.push(b as char);
+        // Chemin sur heap (Règle RECUR-01 + préservation UTF-8 stricte).
+        let path_str = match core::str::from_utf8(path) {
+            Ok(valid_str) => {
+                let mut s = String::new();
+                s.try_reserve(valid_str.len())
+                    .map_err(|_| ExofsError::NoMemory)?;
+                s.push_str(valid_str);
+                s
             }
-            s
+            Err(_) => return Err(ExofsError::InvalidArgument),
         };
         let depth = path.iter().filter(|&&c| c == b'/').count() as u32;
         let now = crate::arch::time::read_ticks();
@@ -483,5 +484,16 @@ mod tests {
         assert_eq!(h[1], 1);
         assert_eq!(h[2], 1);
         assert_eq!(h[3], 1);
+    }
+
+    #[test]
+    fn test_non_ascii_path_hit() {
+        let c = PathCache::new_const();
+        let path = "/dossier_café/fichier_étoile.txt".as_bytes();
+        c.insert(path, 42, 0).test_unwrap();
+        assert!(c.contains(path));
+        let entry = c.lookup(path).test_expect("entry must exist");
+        assert_eq!(entry.inode_id, 42);
+        assert_eq!(entry.path.as_bytes(), path);
     }
 }

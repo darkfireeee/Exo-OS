@@ -285,7 +285,18 @@ pub fn resolve_path_with_symlinks(
     follow_last: bool,
     allow_missing_final: bool,
 ) -> Result<Vec<u8>, FsBridgeError> {
-    let mut pending = normalize_path_buf(path)?;
+    let mut pending = if !path.starts_with(b"/") {
+        let pid = crate::syscall::fast_path::syscall_current_pid();
+        let cwd = crate::syscall::fs_bridge::cwd::current_cwd_for_pid(pid);
+        let mut full_path = cwd;
+        if !full_path.ends_with(b"/") {
+            full_path.push(b'/');
+        }
+        full_path.extend_from_slice(path);
+        normalize_path_buf(&full_path)?
+    } else {
+        normalize_path_buf(path)?
+    };
     let mut resolved = PathComponentBuf::new();
     let mut depth = 0usize;
     let mut idx = 0usize;

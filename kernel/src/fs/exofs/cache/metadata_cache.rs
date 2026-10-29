@@ -94,15 +94,19 @@ impl MetadataCacheInner {
         }
     }
 
-    fn evict_one(&mut self) {
-        // LRU approxé : retire l'entrée avec le tick le plus bas.
+    fn evict_one(&mut self) -> bool {
+        // LRU approxé : retire l'entrée propre (!v.dirty) avec le tick le plus bas.
         let oldest = self
             .map
             .iter()
+            .filter(|(_, v)| !v.dirty)
             .min_by_key(|(_, v)| v.cached_tick)
             .map(|(k, _)| *k);
         if let Some(k) = oldest {
             self.map.remove(&k);
+            true
+        } else {
+            false
         }
     }
 }
@@ -137,7 +141,9 @@ impl MetadataCache {
         let inode_id = meta.inode_id;
         let mut inner = self.inner.lock();
         if inner.map.len() >= inner.max {
-            inner.evict_one();
+            if !inner.evict_one() {
+                return Err(ExofsError::NoSpace);
+            }
         }
         inner.map.insert(inode_id, meta);
         CACHE_STATS.record_insert(core::mem::size_of::<MetaEntry>() as u64);

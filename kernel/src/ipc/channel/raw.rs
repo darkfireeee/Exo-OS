@@ -569,7 +569,15 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
             Ok(None) => {}
             Err(err) => return Err(err),
         }
-        if spins > 1_000_000 {
+        if (spins & 0x7F) == 0 {
+            drop(ring);
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        } else {
+            drop(ring);
+        }
+        if spins > 200_000 {
             return Err(IpcError::Timeout);
         }
     }

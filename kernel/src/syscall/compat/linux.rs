@@ -75,7 +75,7 @@ const LINUX_REMOVED: &[u64] = &[
     184, // gettls          (non POSIX)
     185, // settls          (non POSIX)
     154, // modify_ldt      (LDT user non supporté dans Exo-OS)
-    135, // uselib          (retiré Linux 3.15)
+    134, // uselib          (retiré Linux 3.15 — note: 134=uselib, 135=personality)
     136, // ustat           (obsolète)
 ];
 

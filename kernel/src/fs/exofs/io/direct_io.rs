@@ -127,7 +127,7 @@ pub struct DirectIoBuffer {
 impl DirectIoBuffer {
     /// Crée un buffer de `n_blocks` blocs (OOM-02).
     pub fn new(n_blocks: u32, block_size: BlockSize) -> ExofsResult<Self> {
-        if n_blocks == 0 {
+        if n_blocks == 0 || block_size != BlockSize::B512 {
             return Err(ExofsError::InvalidArgument);
         }
         let mut blocks: Vec<AlignedBlock512> = Vec::new();
@@ -183,7 +183,7 @@ impl DirectIoBuffer {
         let mut blk_idx = 0u32;
         while written < data.len() {
             let left = data.len().saturating_sub(written);
-            let n = left.min(bs);
+            let n = left.min(bs).min(512);
             let blk = self.block_mut(blk_idx)?;
             blk.data[..n].copy_from_slice(&data[written..written.wrapping_add(n)]);
             written = written.wrapping_add(n);
@@ -201,7 +201,7 @@ impl DirectIoBuffer {
         let mut blk_idx = 0u32;
         while read < n {
             let left = n.saturating_sub(read);
-            let chunk = left.min(bs);
+            let chunk = left.min(bs).min(512);
             let blk = self.block(blk_idx)?;
             out[read..read.wrapping_add(chunk)].copy_from_slice(&blk.data[..chunk]);
             read = read.wrapping_add(chunk);
@@ -289,6 +289,9 @@ impl DirectIo {
         buf: &mut DirectIoBuffer,
     ) -> ExofsResult<u32> {
         self.validate_access(lba, buf.n_blocks())?;
+        if buf.block_size != self.config.block_size || self.config.block_size != BlockSize::B512 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let bs = self.config.block_size.as_usize();
         let byte_offset = (lba as usize).saturating_mul(bs);
         let byte_len = (buf.n_blocks() as usize).saturating_mul(bs);
@@ -323,6 +326,9 @@ impl DirectIo {
         buf: &DirectIoBuffer,
     ) -> ExofsResult<u32> {
         self.validate_access(lba, buf.n_blocks())?;
+        if buf.block_size != self.config.block_size || self.config.block_size != BlockSize::B512 {
+            return Err(ExofsError::InvalidArgument);
+        }
         let bs = self.config.block_size.as_usize();
         let byte_offset = (lba as usize).saturating_mul(bs);
         let byte_len = (buf.n_blocks() as usize).saturating_mul(bs);

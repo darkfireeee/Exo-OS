@@ -169,6 +169,10 @@ impl StreamPool {
     pub fn make_ref(&self, idx: usize, data_len: usize) -> Option<ZeroCopyRef> {
         if idx < self.total {
             let buf = &self.buffers[idx];
+            // Vérifier que le buffer a bien été acquis et que data_len ne dépasse pas la capacité
+            if buf.is_available() || data_len > buf.zc.capacity as usize {
+                return None;
+            }
             buf.data_len.store(data_len, Ordering::Relaxed);
             Some(buf.zc.to_ref())
         } else {
