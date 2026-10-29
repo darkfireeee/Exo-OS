@@ -79,6 +79,10 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
         let _ = BLOB_CACHE.mark_dirty(&blob_id);
     }
 
+    if existing_entry.map(|(_, kind)| kind == PATH_INDEX_KIND_DIR).unwrap_or(false) {
+        crate::syscall::fs_bridge::cwd::register_dir_path(blob_id, &normalized_path);
+    }
+
     let size = blob_len(&blob_id) as u64;
     let fd = OBJECT_TABLE
         .open(blob_id, fd_flags, size, 0, pid as u64)
@@ -222,6 +226,7 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     let _ = BLOB_CACHE.mark_dirty(&blob_id);
     upsert_mode(blob_id, effective_mode);
     upsert_parent_entry(&parent_path, &leaf, blob_id, PATH_INDEX_KIND_DIR)?;
+    crate::syscall::fs_bridge::cwd::register_dir_path(blob_id, &normalized_path);
     Ok(0)
 }
 
@@ -248,6 +253,7 @@ pub fn fs_rmdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     }
     BLOB_CACHE.invalidate(&blob_id);
     remove_parent_entry(&parent_path, &leaf)?;
+    remove_mode(&blob_id);
     Ok(0)
 }
 
@@ -276,6 +282,7 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     }
     BLOB_CACHE.invalidate(&blob_id);
     remove_parent_entry(&parent_path, &leaf)?;
+    remove_mode(&blob_id);
     Ok(0)
 }
 
@@ -329,6 +336,7 @@ pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBr
             }
             remove_parent_entry(&new_parent, &new_leaf)?;
             BLOB_CACHE.invalidate(&dst_blob_id);
+            remove_mode(&dst_blob_id);
         }
         Err(FsBridgeError::NotFound) => {}
         Err(err) => return Err(err),

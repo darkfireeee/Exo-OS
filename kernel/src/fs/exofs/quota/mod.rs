@@ -250,16 +250,10 @@ impl QuotaModule {
         if !self.is_enabled() {
             return Ok(());
         }
-        if bytes > 0 {
-            QUOTA_TRACKER.add_bytes(key, bytes)?;
-        }
-        if blobs > 0 {
-            QUOTA_TRACKER.add_blobs(key, blobs)?;
-        }
-        if inodes > 0 {
-            QUOTA_TRACKER.add_inodes(key, inodes)?;
-        }
-        Ok(())
+        let b = i64::try_from(bytes).map_err(|_| ExofsError::InvalidArgument)?;
+        let bl = i64::try_from(blobs).map_err(|_| ExofsError::InvalidArgument)?;
+        let ino = i64::try_from(inodes).map_err(|_| ExofsError::InvalidArgument)?;
+        QUOTA_TRACKER.mutate_usage(key, b, bl, ino)
     }
 
     /// Libère une consommation (suppression de données).
@@ -273,16 +267,10 @@ impl QuotaModule {
         if !self.is_enabled() {
             return Ok(());
         }
-        if bytes > 0 {
-            QUOTA_TRACKER.sub_bytes(key, bytes)?;
-        }
-        if blobs > 0 {
-            QUOTA_TRACKER.sub_blobs(key, blobs)?;
-        }
-        if inodes > 0 {
-            QUOTA_TRACKER.sub_inodes(key, inodes)?;
-        }
-        Ok(())
+        let b = i64::try_from(bytes).map_err(|_| ExofsError::InvalidArgument)?;
+        let bl = i64::try_from(blobs).map_err(|_| ExofsError::InvalidArgument)?;
+        let ino = i64::try_from(inodes).map_err(|_| ExofsError::InvalidArgument)?;
+        QUOTA_TRACKER.mutate_usage(key, -b, -bl, -ino)
     }
 
     /// Configure les limites d'une entité.

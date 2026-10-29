@@ -26,6 +26,24 @@ pub const CWD_MAX_LEN: usize = 256;
 
 pub const CWD_MAP_SIZE: usize = 512; // max PIDs simultanés dans la map
 
+static DIR_PATHS: SpinMutex<Option<alloc::collections::BTreeMap<BlobId, Vec<u8>>>> = SpinMutex::new(None);
+
+pub fn register_dir_path(blob_id: BlobId, path: &[u8]) {
+    let mut lock = DIR_PATHS.lock();
+    let map = lock.get_or_insert_with(alloc::collections::BTreeMap::new);
+    if map.len() < 1024 {
+        map.insert(blob_id, path.to_vec());
+    }
+}
+
+pub fn dir_path_for_blob(blob_id: &BlobId) -> Option<Vec<u8>> {
+    if *blob_id == BlobId::from_bytes_blake3(b"/") {
+        return Some(alloc::vec![b'/']);
+    }
+    let lock = DIR_PATHS.lock();
+    lock.as_ref().and_then(|m| m.get(blob_id).cloned())
+}
+
 #[repr(C, align(64))]
 pub struct CwdEntry {
     pub path: [u8; CWD_MAX_LEN],
@@ -191,6 +209,8 @@ pub fn fs_chdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if path_bytes.len() >= CWD_MAX_LEN {
         return Err(FsBridgeError::BadPath);
     }
+    let (blob_id, _) = path_entry(&normalized_path)?;
+    register_dir_path(blob_id, path_bytes);
     {
         let _guard = CWD_LOCK.lock();
         // SAFETY: accès exclusif garanti par CWD_LOCK.
@@ -219,6 +239,22 @@ pub fn fs_fchdir(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
         .map_err(exofs_to_bridge_error)?;
     if !blob_is_directory_by_id(&entry.blob_id) {
         return Err(FsBridgeError::NotDir);
+    }
+    let path = dir_path_for_blob(&entry.blob_id).unwrap_or_else(|| alloc::vec![b'/']);
+    if path.len() >= CWD_MAX_LEN {
+        return Err(FsBridgeError::BadPath);
+    }
+    {
+        let _guard = CWD_LOCK.lock();
+        let map = unsafe { &mut *core::ptr::addr_of_mut!(CWD_MAP) };
+        let idx = match cwd_slot_for_pid(pid) {
+            Some(i) => i,
+            None => return Err(FsBridgeError::NoMemory),
+        };
+        let len = path.len();
+        map.slots[idx].path[..len].copy_from_slice(&path);
+        map.slots[idx].len = len as u32;
+        map.slots[idx].path[len] = 0;
     }
     Ok(0)
 }

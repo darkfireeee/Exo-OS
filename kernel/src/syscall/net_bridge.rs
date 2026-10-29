@@ -302,7 +302,7 @@ fn msghdr_total_iov_len(msg: &LinuxMsghdr) -> Result<usize, i64> {
             .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
             .ok_or(EFAULT)?;
         let iov = read_user_typed::<LinuxIovec>(ptr).map_err(|_| EFAULT)?;
-        if iov.iov_len > usize::MAX as u64 {
+        if iov.iov_len > isize::MAX as u64 {
             return Err(EINVAL);
         }
         if iov.iov_len != 0 && iov.iov_base == 0 {

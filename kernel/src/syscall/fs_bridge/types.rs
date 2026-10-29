@@ -314,6 +314,13 @@ pub fn stored_mode(blob_id: &BlobId) -> Option<u32> {
         .map(|record| record.mode)
 }
 
+pub fn remove_mode(blob_id: &BlobId) {
+    let mut table = FILE_MODE_TABLE.lock();
+    if let Some(pos) = table.iter().position(|record| record.blob_id == *blob_id) {
+        table.swap_remove(pos);
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LinuxTimespec {
@@ -652,7 +659,7 @@ where
             .ok_or(FsBridgeError::Fault)?;
         let iov = read_user_typed::<LinuxIovec>(addr).map_err(|_| FsBridgeError::Fault)?;
         if iov.iov_len != 0 {
-            if iov.iov_len > usize::MAX as u64 {
+            if iov.iov_len > isize::MAX as u64 {
                 return Err(FsBridgeError::Invalid);
             }
             let n = op(iov.iov_base, iov.iov_len as usize)?;

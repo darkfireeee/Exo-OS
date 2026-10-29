@@ -3,7 +3,6 @@
 use core::sync::atomic::Ordering;
 
 use crate::syscall::table::common::*;
-use super::remote_memory::process_name_eq;
 use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::syscall::numbers::*;
@@ -191,15 +190,17 @@ pub fn sys_exo_phoenix_state_set(
         return EINVAL;
     }
     let caller = current_pid_u32();
-    let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
-        return EPERM;
-    };
-    if !pcb.is_root() {
-        return EPERM;
-    }
-    let name = pcb.name_snapshot();
-    if !process_name_eq(&name, b"network_server") && !process_name_eq(&name, b"init_server") {
-        return EPERM;
+    if caller != 1 {
+        let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
+            return EPERM;
+        };
+        if !pcb.is_root() || pcb.ppid().0 != 1 {
+            return EPERM;
+        }
+        let class = crate::security::service_class_of(Pid(caller));
+        if class != crate::security::ServiceClass::NetworkServer {
+            return EPERM;
+        }
     }
     if crate::exophoenix::try_set_state_raw(state as u8) {
         0

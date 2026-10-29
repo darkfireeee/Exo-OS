@@ -7,6 +7,7 @@ use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{copy_from_user, copy_to_user};
 
+#[allow(dead_code)]
 pub(super) fn process_name_eq(name: &[u8; 16], expected: &[u8]) -> bool {
     let mut len = 0usize;
     while len < name.len() && name[len] != 0 {
@@ -32,12 +33,13 @@ fn caller_can_manage_target_memory(caller_pid: u32) -> bool {
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
         Some(pcb) => {
             // T9-003 FIX : Authentification stricte — doit être un enfant direct d'init (PID 1),
-            // root (euid 0) ET avoir le nom de service réservé vérifié.
+            // root (euid 0) ET avoir la classe de service réservée vérifiée.
             if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
                 return false;
             }
-            let name = pcb.name_snapshot();
-            process_name_eq(&name, b"memory_server") || process_name_eq(&name, b"fb_server")
+            let class = crate::security::service_class_of(Pid(caller_pid));
+            class == crate::security::ServiceClass::MemoryServer
+                || class == crate::security::ServiceClass::FbServer
         }
         None => false,
     }
@@ -53,10 +55,10 @@ fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
             if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
                 return false;
             }
-            let name = pcb.name_snapshot();
-            process_name_eq(&name, b"memory_server")
-                || process_name_eq(&name, b"vfs_server")
-                || process_name_eq(&name, b"fb_server")
+            let class = crate::security::service_class_of(Pid(caller_pid));
+            class == crate::security::ServiceClass::MemoryServer
+                || class == crate::security::ServiceClass::VfsServer
+                || class == crate::security::ServiceClass::FbServer
         }
         None => false,
     }

@@ -485,8 +485,15 @@ impl BlobWriter {
             }
         };
 
-        // CRYPTO-02 : chiffrement APRÈS compression, AVANT écriture disque.
-        let encrypted_payload = Self::encrypt_payload(&blob_id, &payload)?;
+        // CRYPTO-02 : chiffrement APRÈS compression, AVANT écriture disque
+        // si une clé de volume est installée. En l'absence de clé de volume
+        // (disque non chiffré), le blob est stocké en clair avec encrypted = false.
+        let (encrypted_payload, is_encrypted) =
+            if crate::fs::exofs::crypto::volume_secret::volume_key().is_some() {
+                (Self::encrypt_payload(&blob_id, &payload)?, true)
+            } else {
+                (payload, false)
+            };
         let stored_size = encrypted_payload.len() as u32;
 
         Ok(WriteContext {
@@ -495,7 +502,7 @@ impl BlobWriter {
             stored_size,
             algo: effective_algo,
             payload: encrypted_payload,
-            encrypted: true,
+            encrypted: is_encrypted,
         })
     }
 

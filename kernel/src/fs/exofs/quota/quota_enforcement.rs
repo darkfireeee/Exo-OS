@@ -262,56 +262,49 @@ impl QuotaEnforcer {
         let projected = used.saturating_add(request_bytes);
 
         let result = if limits.hard_bytes != u64::MAX && projected > limits.hard_bytes {
-            // Vérifier le délai de grâce
-            let grace_ok = if limits.grace_ticks > 0 {
-                entry.map(|e| !e.grace_expired(tick)).unwrap_or(false)
+            QUOTA_AUDIT.log_hard_denial(key, used, limits.hard_bytes);
+            self._build(
+                key,
+                EnforcementAction::Deny,
+                used,
+                limits.hard_bytes,
+                request_bytes,
+                tick,
+            )
+        } else if limits.soft_bytes != u64::MAX && projected > limits.soft_bytes {
+            // Soft breach : vérifier si le délai de grâce est expiré
+            let grace_expired = if limits.grace_ticks > 0 {
+                entry.map(|e| e.grace_expired(tick)).unwrap_or(false)
             } else {
                 false
             };
 
-            if grace_ok {
-                let _remaining_grace = entry
-                    .map(|e| {
-                        e.soft_breach_tick
-                            .saturating_add(limits.grace_ticks)
-                            .saturating_sub(tick)
-                    })
-                    .unwrap_or(0);
+            if grace_expired {
+                QUOTA_AUDIT.log_grace_expired(key, used, limits.soft_bytes);
                 self._build(
                     key,
                     EnforcementAction::DenyGrace,
                     used,
-                    limits.hard_bytes,
+                    limits.soft_bytes,
                     request_bytes,
                     tick,
                 )
             } else {
-                QUOTA_AUDIT.log_hard_denial(key, used, limits.hard_bytes);
+                if let Some(en) = entry {
+                    if en.soft_breach_tick == 0 {
+                        QUOTA_TRACKER.record_soft_breach(key, tick);
+                    }
+                }
+                QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_bytes);
                 self._build(
                     key,
-                    EnforcementAction::Deny,
+                    EnforcementAction::AllowWithWarning,
                     used,
-                    limits.hard_bytes,
+                    limits.soft_bytes,
                     request_bytes,
                     tick,
                 )
             }
-        } else if limits.soft_bytes != u64::MAX && projected > limits.soft_bytes {
-            // Soft breach
-            if let Some(en) = entry {
-                if en.soft_breach_tick == 0 {
-                    QUOTA_TRACKER.record_soft_breach(key, tick);
-                }
-            }
-            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_bytes);
-            self._build(
-                key,
-                EnforcementAction::AllowWithWarning,
-                used,
-                limits.soft_bytes,
-                request_bytes,
-                tick,
-            )
         } else {
             self._make_allow(key)
         };
@@ -335,6 +328,7 @@ impl QuotaEnforcer {
             .get_usage(key)
             .map(|u| u.blobs_used)
             .unwrap_or(0);
+        let entry = QUOTA_TRACKER.get_entry(key);
         let projected = used.saturating_add(request_blobs);
 
         let result = if limits.hard_blobs != u64::MAX && projected > limits.hard_blobs {
@@ -348,15 +342,38 @@ impl QuotaEnforcer {
                 tick,
             )
         } else if limits.soft_blobs != u64::MAX && projected > limits.soft_blobs {
-            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_blobs);
-            self._build(
-                key,
-                EnforcementAction::AllowWithWarning,
-                used,
-                limits.soft_blobs,
-                request_blobs,
-                tick,
-            )
+            let grace_expired = if limits.grace_ticks > 0 {
+                entry.map(|e| e.grace_expired(tick)).unwrap_or(false)
+            } else {
+                false
+            };
+
+            if grace_expired {
+                QUOTA_AUDIT.log_grace_expired(key, used, limits.soft_blobs);
+                self._build(
+                    key,
+                    EnforcementAction::DenyGrace,
+                    used,
+                    limits.soft_blobs,
+                    request_blobs,
+                    tick,
+                )
+            } else {
+                if let Some(en) = entry {
+                    if en.soft_breach_tick == 0 {
+                        QUOTA_TRACKER.record_soft_breach(key, tick);
+                    }
+                }
+                QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_blobs);
+                self._build(
+                    key,
+                    EnforcementAction::AllowWithWarning,
+                    used,
+                    limits.soft_blobs,
+                    request_blobs,
+                    tick,
+                )
+            }
         } else {
             self._make_allow(key)
         };
@@ -380,6 +397,7 @@ impl QuotaEnforcer {
             .get_usage(key)
             .map(|u| u.inodes_used)
             .unwrap_or(0);
+        let entry = QUOTA_TRACKER.get_entry(key);
         let projected = used.saturating_add(request_inodes);
 
         let result = if limits.hard_inodes != u64::MAX && projected > limits.hard_inodes {
@@ -393,15 +411,38 @@ impl QuotaEnforcer {
                 tick,
             )
         } else if limits.soft_inodes != u64::MAX && projected > limits.soft_inodes {
-            QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_inodes);
-            self._build(
-                key,
-                EnforcementAction::AllowWithWarning,
-                used,
-                limits.soft_inodes,
-                request_inodes,
-                tick,
-            )
+            let grace_expired = if limits.grace_ticks > 0 {
+                entry.map(|e| e.grace_expired(tick)).unwrap_or(false)
+            } else {
+                false
+            };
+
+            if grace_expired {
+                QUOTA_AUDIT.log_grace_expired(key, used, limits.soft_inodes);
+                self._build(
+                    key,
+                    EnforcementAction::DenyGrace,
+                    used,
+                    limits.soft_inodes,
+                    request_inodes,
+                    tick,
+                )
+            } else {
+                if let Some(en) = entry {
+                    if en.soft_breach_tick == 0 {
+                        QUOTA_TRACKER.record_soft_breach(key, tick);
+                    }
+                }
+                QUOTA_AUDIT.log_soft_breach(key, used, limits.soft_inodes);
+                self._build(
+                    key,
+                    EnforcementAction::AllowWithWarning,
+                    used,
+                    limits.soft_inodes,
+                    request_inodes,
+                    tick,
+                )
+            }
         } else {
             self._make_allow(key)
         };

@@ -49,6 +49,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 type RobinHoodDist = u16;
 
 /// Entrée de la table de hachage.
+#[derive(Clone, Copy)]
 struct RegistryEntry {
     /// Hash du nom (-1 si slot libre, -2 = tombstone).
     hash: u64,
@@ -79,6 +80,7 @@ impl RegistryEntry {
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     fn is_tombstone(&self) -> bool {
         self.hash == Self::TOMBSTONE
     }
@@ -112,6 +114,27 @@ impl RegistryInner {
         }
     }
 
+    /// Supprime un slot par décalage arrière (backward shift deletion),
+    /// éliminant les tombstones et préservant les invariants Robin Hood.
+    fn backward_shift_delete(&mut self, mut pos: usize) {
+        loop {
+            let next = (pos + 1) % MAX_ENDPOINTS;
+            let next_slot = self.slots[next];
+            if next_slot.is_empty() || next_slot.rh_dist == 0 {
+                self.slots[pos] = RegistryEntry::empty();
+                break;
+            }
+            self.slots[pos] = RegistryEntry {
+                hash: next_slot.hash,
+                ep_id: next_slot.ep_id,
+                rh_dist: next_slot.rh_dist - 1,
+                _pad: [0u8; 6],
+            };
+            pos = next;
+        }
+        self.count = self.count.saturating_sub(1);
+    }
+
     /// Insère ou met à jour un endpoint.
     fn insert(&mut self, hash: u64, ep_id: u64) -> Result<(), IpcError> {
         if self.count >= MAX_ENDPOINTS * 3 / 4 {
@@ -126,7 +149,7 @@ impl RegistryInner {
 
         loop {
             let slot = &mut self.slots[pos];
-            if slot.is_empty() || slot.is_tombstone() {
+            if slot.is_empty() {
                 *slot = RegistryEntry {
                     hash: cur_hash,
                     ep_id: cur_ep_id,
@@ -167,11 +190,6 @@ impl RegistryInner {
             if slot.is_empty() {
                 return None;
             }
-            if slot.is_tombstone() {
-                pos = (pos + 1) % MAX_ENDPOINTS;
-                dist += 1;
-                continue;
-            }
             if slot.hash == hash {
                 return Some(slot.ep_id);
             }
@@ -193,16 +211,16 @@ impl RegistryInner {
         let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let mut dist = 0usize;
         loop {
-            let slot = &mut self.slots[pos];
+            let slot = &self.slots[pos];
             if slot.is_empty() {
                 return false;
             }
-            if !slot.is_tombstone() && slot.hash == hash {
-                slot.hash = RegistryEntry::TOMBSTONE;
-                slot.ep_id = 0;
-                slot.rh_dist = 0;
-                self.count -= 1;
+            if slot.hash == hash {
+                self.backward_shift_delete(pos);
                 return true;
+            }
+            if (slot.rh_dist as usize) < dist {
+                return false;
             }
             pos = (pos + 1) % MAX_ENDPOINTS;
             dist += 1;
@@ -214,17 +232,13 @@ impl RegistryInner {
 
     /// Supprime un endpoint du registre par son identifiant numérique.
     fn remove_by_endpoint(&mut self, ep_id: u64) -> bool {
-        let mut removed = false;
-        for slot in self.slots.iter_mut() {
-            if !slot.is_empty() && !slot.is_tombstone() && slot.ep_id == ep_id {
-                slot.hash = RegistryEntry::TOMBSTONE;
-                slot.ep_id = 0;
-                slot.rh_dist = 0;
-                self.count = self.count.saturating_sub(1);
-                removed = true;
+        for pos in 0..MAX_ENDPOINTS {
+            if !self.slots[pos].is_empty() && self.slots[pos].ep_id == ep_id {
+                self.backward_shift_delete(pos);
+                return true;
             }
         }
-        removed
+        false
     }
 
     /// Retourne le nombre d'endpoints enregistrés.

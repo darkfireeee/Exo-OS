@@ -206,6 +206,23 @@ pub fn sys_exo_ipc_create(
         return EFAULT;
     }
 
+    if let Some(_class) = service_class_for_endpoint_name(name) {
+        #[cfg(not(test))]
+        {
+            let is_system = if caller_pid == 1 {
+                true
+            } else {
+                crate::process::core::registry::PROCESS_REGISTRY
+                    .find_by_pid(Pid(caller_pid))
+                    .map(|pcb| pcb.ppid().0 == 1 && pcb.creds.lock().euid == 0)
+                    .unwrap_or(false)
+            };
+            if !is_system {
+                return EPERM;
+            }
+        }
+    }
+
     let replaced_dead_owner = match reserve_ipc_endpoint_owner(endpoint, caller_pid) {
         Ok(replaced) => replaced,
         Err(errno) => return errno,

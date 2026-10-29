@@ -377,6 +377,9 @@ pub fn read_socket_payload(
     Ok(out)
 }
 
+pub const SOCKET_MAX_CAPACITY: usize = 131072;
+pub const PIPE_MAX_CAPACITY: usize = 65536;
+
 #[inline]
 pub fn append_socket_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
     if bytes.is_empty() {
@@ -386,14 +389,19 @@ pub fn append_socket_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBri
     if data.len() < SOCKET_HEADER_LEN {
         return Err(FsBridgeError::Invalid);
     }
-    data.try_reserve(bytes.len())
+    let cur_payload = data.len() - SOCKET_HEADER_LEN;
+    if cur_payload >= SOCKET_MAX_CAPACITY {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    let to_write = bytes.len().min(SOCKET_MAX_CAPACITY - cur_payload);
+    data.try_reserve(to_write)
         .map_err(|_| FsBridgeError::NoSpace)?;
-    data.extend_from_slice(bytes);
+    data.extend_from_slice(&bytes[..to_write]);
     BLOB_CACHE
         .insert(blob_id, data)
         .map_err(exofs_to_bridge_error)?;
     let _ = BLOB_CACHE.mark_dirty(&blob_id);
-    Ok(bytes.len() as i64)
+    Ok(to_write as i64)
 }
 
 #[inline]
@@ -429,14 +437,18 @@ pub fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridg
         .get(&blob_id)
         .map(|existing| existing.to_vec())
         .unwrap_or_default();
-    data.try_reserve(bytes.len())
+    if data.len() >= PIPE_MAX_CAPACITY {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    let to_write = bytes.len().min(PIPE_MAX_CAPACITY - data.len());
+    data.try_reserve(to_write)
         .map_err(|_| FsBridgeError::NoSpace)?;
-    data.extend_from_slice(bytes);
+    data.extend_from_slice(&bytes[..to_write]);
     BLOB_CACHE
         .insert(blob_id, data)
         .map_err(exofs_to_bridge_error)?;
     let _ = BLOB_CACHE.mark_dirty(&blob_id);
-    Ok(bytes.len() as i64)
+    Ok(to_write as i64)
 }
 
 /// `pipe2(pipefd, flags)`.

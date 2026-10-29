@@ -259,14 +259,16 @@ impl QuotaTracker {
     }
 
     fn _set_limits_locked(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
+        let opt_idx = self.find_idx(key);
+        let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        if let Some(idx) = self.find_idx(key) {
+        if let Some(idx) = opt_idx {
             entries[idx].limits = limits;
             return Ok(());
         }
         // Nouvelle entrée
-        let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
+        let slot = opt_slot.ok_or(ExofsError::NoSpace)?;
         entries[slot] = QuotaEntry::new(key, limits);
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -275,9 +277,10 @@ impl QuotaTracker {
     /// Retire une entité du tracker.
     pub fn remove(&self, key: QuotaKey) -> ExofsResult<()> {
         self.acquire();
+        let opt_idx = self.find_idx(key);
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        let result = if let Some(idx) = self.find_idx(key) {
+        let result = if let Some(idx) = opt_idx {
             let e = &entries[idx];
             self.total_bytes
                 .fetch_sub(e.usage.bytes_used, Ordering::Relaxed);
@@ -342,12 +345,17 @@ impl QuotaTracker {
     }
 
     fn _mutate_bytes_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        let opt_idx = self.find_idx(key);
+        if opt_idx.is_none() && !add {
+            return Ok(0);
+        }
+        let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        let idx = match self.find_idx(key) {
+        let idx = match opt_idx {
             Some(i) => i,
             None => {
-                let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
+                let slot = opt_slot.ok_or(ExofsError::NoSpace)?;
                 entries[slot] = QuotaEntry::new(key, QuotaLimits::unlimited());
                 self.count.fetch_add(1, Ordering::Relaxed);
                 slot
@@ -383,12 +391,17 @@ impl QuotaTracker {
     }
 
     fn _mutate_blobs_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        let opt_idx = self.find_idx(key);
+        if opt_idx.is_none() && !add {
+            return Ok(0);
+        }
+        let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        let idx = match self.find_idx(key) {
+        let idx = match opt_idx {
             Some(i) => i,
             None => {
-                let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
+                let slot = opt_slot.ok_or(ExofsError::NoSpace)?;
                 entries[slot] = QuotaEntry::new(key, QuotaLimits::unlimited());
                 self.count.fetch_add(1, Ordering::Relaxed);
                 slot
@@ -422,12 +435,17 @@ impl QuotaTracker {
     }
 
     fn _mutate_inodes_locked(&self, key: QuotaKey, n: u64, add: bool) -> ExofsResult<u64> {
+        let opt_idx = self.find_idx(key);
+        if opt_idx.is_none() && !add {
+            return Ok(0);
+        }
+        let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        let idx = match self.find_idx(key) {
+        let idx = match opt_idx {
             Some(i) => i,
             None => {
-                let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
+                let slot = opt_slot.ok_or(ExofsError::NoSpace)?;
                 entries[slot] = QuotaEntry::new(key, QuotaLimits::unlimited());
                 self.count.fetch_add(1, Ordering::Relaxed);
                 slot
@@ -447,9 +465,10 @@ impl QuotaTracker {
     /// Enregistre le tick du premier dépassement soft.
     pub fn record_soft_breach(&self, key: QuotaKey, tick: u64) {
         self.acquire();
+        let opt_idx = self.find_idx(key);
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        if let Some(idx) = self.find_idx(key) {
+        if let Some(idx) = opt_idx {
             if entries[idx].soft_breach_tick == 0 {
                 entries[idx].soft_breach_tick = tick;
             }
@@ -460,12 +479,92 @@ impl QuotaTracker {
     /// Efface le tick de dépassement soft (grâce terminée ou quota libéré).
     pub fn clear_soft_breach(&self, key: QuotaKey) {
         self.acquire();
+        let opt_idx = self.find_idx(key);
         // SAFETY: validité des données vérifiée par les gardes ci-dessus.
         let entries = unsafe { &mut *self.entries.get() };
-        if let Some(idx) = self.find_idx(key) {
+        if let Some(idx) = opt_idx {
             entries[idx].soft_breach_tick = 0;
         }
         self.release();
+    }
+
+    /// Met à jour de façon atomique bytes, blobs et inodes sous un verrou unique.
+    pub fn mutate_usage(
+        &self,
+        key: QuotaKey,
+        delta_bytes: i64,
+        delta_blobs: i64,
+        delta_inodes: i64,
+    ) -> ExofsResult<()> {
+        if delta_bytes == 0 && delta_blobs == 0 && delta_inodes == 0 {
+            return Ok(());
+        }
+        self.acquire();
+        let opt_idx = self.find_idx(key);
+        let opt_slot = if opt_idx.is_none() && (delta_bytes > 0 || delta_blobs > 0 || delta_inodes > 0) {
+            self.find_free_slot()
+        } else {
+            None
+        };
+        // SAFETY: validité des données vérifiée sous spinlock.
+        let entries = unsafe { &mut *self.entries.get() };
+        let idx = match opt_idx {
+            Some(i) => i,
+            None => {
+                if delta_bytes <= 0 && delta_blobs <= 0 && delta_inodes <= 0 {
+                    self.release();
+                    return Ok(());
+                }
+                let slot = match opt_slot {
+                    Some(s) => s,
+                    None => {
+                        self.release();
+                        return Err(ExofsError::NoSpace);
+                    }
+                };
+                entries[slot] = QuotaEntry::new(key, QuotaLimits::unlimited());
+                self.count.fetch_add(1, Ordering::Relaxed);
+                slot
+            }
+        };
+
+        if delta_bytes > 0 {
+            let n = delta_bytes as u64;
+            entries[idx].usage = entries[idx].usage.add_bytes(n);
+            self.total_bytes.fetch_add(n, Ordering::Relaxed);
+        } else if delta_bytes < 0 {
+            let n = (-delta_bytes) as u64;
+            entries[idx].usage = entries[idx].usage.sub_bytes(n);
+            self.total_bytes.fetch_sub(
+                n.min(self.total_bytes.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
+        }
+
+        if delta_blobs > 0 {
+            let n = delta_blobs as u64;
+            entries[idx].usage = entries[idx].usage.add_blobs(n);
+            self.total_blobs.fetch_add(n, Ordering::Relaxed);
+        } else if delta_blobs < 0 {
+            let n = (-delta_blobs) as u64;
+            entries[idx].usage = entries[idx].usage.sub_blobs(n);
+            let cur = self.total_blobs.load(Ordering::Relaxed);
+            self.total_blobs.fetch_sub(n.min(cur), Ordering::Relaxed);
+        }
+
+        if delta_inodes > 0 {
+            let n = delta_inodes as u64;
+            entries[idx].usage = entries[idx].usage.add_inodes(n);
+            self.total_inodes.fetch_add(n, Ordering::Relaxed);
+        } else if delta_inodes < 0 {
+            let n = (-delta_inodes) as u64;
+            entries[idx].usage = entries[idx].usage.sub_inodes(n);
+            let cur = self.total_inodes.load(Ordering::Relaxed);
+            self.total_inodes.fetch_sub(n.min(cur), Ordering::Relaxed);
+        }
+
+        self.release();
+        Ok(())
     }
 
     /// Nombre d'entités actives.
