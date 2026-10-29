@@ -236,7 +236,8 @@ pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u
 /// `preadv(fd, iov, iovcnt, offset)`.
 pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PREADV);
-    if iovcnt > u32::MAX as u64 {
+    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    if iovcnt > 1024 {
         return EINVAL;
     }
     if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
@@ -260,7 +261,8 @@ pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6
 /// `pwritev(fd, iov, iovcnt, offset)`.
 pub fn sys_pwritev(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PWRITEV);
-    if iovcnt > u32::MAX as u64 {
+    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    if iovcnt > 1024 {
         return EINVAL;
     }
     if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {

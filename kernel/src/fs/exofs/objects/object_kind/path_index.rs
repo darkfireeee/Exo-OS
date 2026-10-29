@@ -165,8 +165,8 @@ impl PathIndexEntry {
         parent_id: [u8; 16],
         kind: ObjectKind,
     ) -> ExofsResult<Self> {
-        if name.is_empty() || name.len() > PATH_NAME_MAX {
-            return Err(ExofsError::InvalidArgument);
+        if name.is_empty() || name.len() > PATH_NAME_STORE_LEN {
+            return Err(ExofsError::InvalidPathComponent);
         }
         let hash = fnv1a_hash_u64(name);
         let mut stored_name = [0u8; PATH_NAME_STORE_LEN];

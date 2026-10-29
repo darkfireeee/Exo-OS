@@ -300,19 +300,7 @@ impl ConfigStore {
         if value.len() > CONFIG_VALUE_LEN {
             return Err(ExofsError::Overflow);
         }
-        if self.entries.len() >= CONFIG_MAX_ENTRIES {
-            // Cherche d'abord un tombstone à réutiliser.
-            let tombstone = self.entries.iter_mut().find(|e| e.is_deleted());
-            if let Some(slot) = tombstone {
-                let new = ConfigEntry::from_slices(key, value)?;
-                *slot = new;
-                self.epoch_modify = now;
-                self.version = self.version.saturating_add(1);
-                return Ok(());
-            }
-            return Err(ExofsError::NoSpace);
-        }
-        // Mise à jour si existe.
+        // Mise à jour si existe (prioritaire : ne consomme pas de nouveau slot).
         for entry in self.entries.iter_mut() {
             if entry.key_matches(key) && !entry.is_deleted() {
                 if entry.is_readonly() {
@@ -324,6 +312,18 @@ impl ConfigStore {
                 self.version = self.version.saturating_add(1);
                 return Ok(());
             }
+        }
+        if self.entries.len() >= CONFIG_MAX_ENTRIES {
+            // Cherche d'abord un tombstone à réutiliser.
+            let tombstone = self.entries.iter_mut().find(|e| e.is_deleted());
+            if let Some(slot) = tombstone {
+                let new = ConfigEntry::from_slices(key, value)?;
+                *slot = new;
+                self.epoch_modify = now;
+                self.version = self.version.saturating_add(1);
+                return Ok(());
+            }
+            return Err(ExofsError::NoSpace);
         }
         // Insertion (OOM-02).
         self.entries

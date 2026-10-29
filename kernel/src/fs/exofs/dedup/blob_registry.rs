@@ -174,14 +174,23 @@ impl BlobRegistry {
         self.acquire();
         let map = self.map();
         let is_new = if let Some(e) = map.get_mut(&key) {
-            e.inc_ref()?;
+            if let Err(err) = e.inc_ref() {
+                self.release();
+                return Err(err);
+            }
             false
         } else {
             if map.len() >= BLOB_REGISTRY_MAX_ENTRIES {
                 self.release();
                 return Err(ExofsError::NoMemory);
             }
-            let entry = BlobEntry::new(blob_id, total_size, chunk_keys)?;
+            let entry = match BlobEntry::new(blob_id, total_size, chunk_keys) {
+                Ok(ent) => ent,
+                Err(err) => {
+                    self.release();
+                    return Err(err);
+                }
+            };
             map.insert(key, entry);
             true
         };
@@ -248,7 +257,10 @@ impl BlobRegistry {
         let mut result: Vec<BlobId> = Vec::new();
         for v in self.map().values() {
             if v.ref_count == 0 {
-                result.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                if result.try_reserve(1).is_err() {
+                    self.release();
+                    return Err(ExofsError::NoMemory);
+                }
                 result.push(v.blob_id.clone());
             }
         }

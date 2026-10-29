@@ -146,13 +146,22 @@ impl BlobSharing {
         self.acquire();
         let map = self.map();
         if let Some(entry) = map.get_mut(&chunk_blake3) {
-            entry.add_blob(blob_id)?;
+            if let Err(err) = entry.add_blob(blob_id) {
+                self.release();
+                return Err(err);
+            }
         } else {
             if map.len() >= SHARING_MAX_ENTRIES {
                 self.release();
                 return Err(ExofsError::NoMemory);
             }
-            let entry = SharedChunkRef::new(chunk_blake3, blob_id)?;
+            let entry = match SharedChunkRef::new(chunk_blake3, blob_id) {
+                Ok(ent) => ent,
+                Err(err) => {
+                    self.release();
+                    return Err(err);
+                }
+            };
             map.insert(chunk_blake3, entry);
         }
         self.release();
@@ -220,7 +229,10 @@ impl BlobSharing {
         let mut out: Vec<[u8; 32]> = Vec::new();
         for (k, v) in self.map().iter() {
             if v.is_shared() {
-                out.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                if out.try_reserve(1).is_err() {
+                    self.release();
+                    return Err(ExofsError::NoMemory);
+                }
                 out.push(*k);
             }
         }

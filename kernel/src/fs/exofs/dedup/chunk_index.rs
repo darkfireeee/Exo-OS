@@ -159,7 +159,10 @@ impl ChunkIndex {
         self.acquire();
         let map = self.map();
         let is_new = if let Some(e) = map.get_mut(&key) {
-            e.inc_ref()?;
+            if let Err(err) = e.inc_ref() {
+                self.release();
+                return Err(err);
+            }
             false
         } else {
             if map.len() >= CHUNK_INDEX_MAX_ENTRIES {
@@ -247,7 +250,10 @@ impl ChunkIndex {
         let mut keys: Vec<[u8; 32]> = Vec::new();
         for (k, v) in self.map().iter() {
             if v.ref_count == 0 {
-                keys.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                if keys.try_reserve(1).is_err() {
+                    self.release();
+                    return Err(ExofsError::NoMemory);
+                }
                 keys.push(*k);
             }
         }
