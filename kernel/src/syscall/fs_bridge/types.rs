@@ -68,6 +68,8 @@ pub enum FsBridgeError {
     Interrupted,
     /// Écriture sur pipe sans lecteur.
     BrokenPipe,
+    /// Recherche invalide (pipe, socket, etc.) (ESPIPE).
+    IllegalSeek,
 }
 
 impl FsBridgeError {
@@ -92,6 +94,7 @@ impl FsBridgeError {
             FsBridgeError::WouldBlock => -11, // EAGAIN
             FsBridgeError::Interrupted => -4, // EINTR
             FsBridgeError::BrokenPipe => -32, // EPIPE
+            FsBridgeError::IllegalSeek => -29, // ESPIPE
         }
     }
 }

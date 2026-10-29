@@ -191,6 +191,9 @@ impl PathIndexEntry {
     /// Reconstruit depuis on-disk.
     pub fn from_disk(d: &PathIndexEntryDisk) -> ExofsResult<Self> {
         let kind = ObjectKind::from_u8(d.kind).ok_or(ExofsError::InvalidObjectKind)?;
+        if d.name_len == 0 || d.name_len as usize > PATH_NAME_STORE_LEN {
+            return Err(ExofsError::Corrupt);
+        }
         Ok(Self {
             hash: d.hash,
             object_id: ObjectId(d.object_id),
@@ -431,7 +434,7 @@ impl PathIndexPage {
             if e.is_deleted() {
                 continue;
             }
-            if e.name_len == 0 || e.name_len as usize > PATH_NAME_MAX {
+            if e.name_len == 0 || e.name_len as usize > PATH_NAME_STORE_LEN {
                 return Err(ExofsError::Corrupt);
             }
         }

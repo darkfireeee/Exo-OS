@@ -196,6 +196,9 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     if !entry.can_read() {
         return Err(FsBridgeError::PermDenied);
     }
+    if blob_is_directory_by_id(&entry.blob_id) {
+        return Err(FsBridgeError::IsDir);
+    }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
         let data = BLOB_CACHE
@@ -291,6 +294,9 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
     }
+    if blob_is_directory_by_id(&entry.blob_id) {
+        return Err(FsBridgeError::IsDir);
+    }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
         if OBJECT_TABLE.readable_count_for(&entry.blob_id) == 0 {
@@ -374,6 +380,9 @@ pub fn fs_pread64(
     if !entry.can_read() {
         return Err(FsBridgeError::PermDenied);
     }
+    if blob_is_directory_by_id(&entry.blob_id) {
+        return Err(FsBridgeError::IsDir);
+    }
     read_blob_at(entry.blob_id, offset, buf_ptr, count)
 }
 
@@ -394,6 +403,9 @@ pub fn fs_pwrite64(
     let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
+    }
+    if blob_is_directory_by_id(&entry.blob_id) {
+        return Err(FsBridgeError::IsDir);
     }
     let written = write_blob_at(entry.blob_id, offset, buf_ptr, count)?;
     let new_size = offset.saturating_add(written as u64).max(entry.size);
@@ -457,6 +469,13 @@ pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBr
     }
     let obj_fd = resolve_fd(pid, fd)?.handle;
     let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG)
+    {
+        return Err(FsBridgeError::IllegalSeek);
+    }
     let base = match whence {
         SEEK_SET => 0i64,
         SEEK_CUR => entry.cursor as i64,
@@ -496,6 +515,13 @@ pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError
     let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if !entry.can_write() {
         return Err(FsBridgeError::PermDenied);
+    }
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG)
+    {
+        return Err(FsBridgeError::Invalid);
     }
     resize_regular_blob(entry.blob_id, length)?;
     OBJECT_TABLE

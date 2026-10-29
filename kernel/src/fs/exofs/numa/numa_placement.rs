@@ -2,7 +2,7 @@
 // ExoFS NUMA — Stratégies de placement de blobs sur les nœuds NUMA
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
-use super::numa_affinity::{NumaNodeId, MAX_NUMA_NODES};
+use super::numa_affinity::{NumaNodeId, AFFINITY_MAP, CpuId, MAX_NUMA_NODES};
 use super::numa_stats::NUMA_STATS;
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use alloc::vec::Vec;
@@ -210,8 +210,14 @@ impl NumaPlacement {
     }
 
     fn _local_first(&self, hint: &PlacementHint, n: usize) -> usize {
-        // Hash du CPU sur les nœuds
+        // Résolution du CPU vers son nœud NUMA réel via AFFINITY_MAP
         if let Some(cpu) = hint.cpu_id {
+            if let Some(node) = AFFINITY_MAP.node_of_cpu(CpuId(cpu as u32)) {
+                let idx = node.idx();
+                if idx < n {
+                    return idx;
+                }
+            }
             return (cpu as usize).wrapping_rem(n);
         }
         // Fallback : hash de BlobId

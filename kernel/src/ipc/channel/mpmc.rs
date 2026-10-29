@@ -258,6 +258,12 @@ impl MpmcChannel {
                         loop {
                             core::hint::spin_loop();
                             spins += 1;
+                            if spins % 128 == 0 {
+                                // SAFETY: reschedule coopératif sans détention de verrou.
+                                unsafe {
+                                    crate::scheduler::core::switch::cooperative_reschedule();
+                                }
+                            }
                             if self.is_closed() {
                                 return Err(IpcError::Closed);
                             }
@@ -328,6 +334,12 @@ impl MpmcChannel {
                     Err(IpcError::QueueEmpty) => {
                         core::hint::spin_loop();
                         spins += 1;
+                        if spins % 128 == 0 {
+                            // SAFETY: reschedule coopératif sans détention de verrou.
+                            unsafe {
+                                crate::scheduler::core::switch::cooperative_reschedule();
+                            }
+                        }
                         if self.is_closed() && self.pending.load(Ordering::Relaxed) == 0 {
                             return Err(IpcError::Closed);
                         }

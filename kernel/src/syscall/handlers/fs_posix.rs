@@ -13,8 +13,8 @@ use crate::syscall::validation::{read_user_path, validate_fd, validate_flags, US
 const AT_FDCWD: i32 = -100;
 const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
 const AT_REMOVEDIR: u64 = 0x200;
-// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC (0x005F_1FFF)
-const OPEN_FLAGS_MASK: u64 = 0x005F_1FFF;
+// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
+const OPEN_FLAGS_MASK: u64 = 0x007F_FFFF;
 
 #[inline]
 fn current_pid() -> u32 {

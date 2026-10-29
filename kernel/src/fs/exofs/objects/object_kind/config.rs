@@ -307,6 +307,7 @@ impl ConfigStore {
                     return Err(ExofsError::InvalidArgument);
                 }
                 entry.value[..value.len()].copy_from_slice(value);
+                entry.value[value.len()..].fill(0);
                 entry.val_len = value.len() as u16;
                 self.epoch_modify = now;
                 self.version = self.version.saturating_add(1);

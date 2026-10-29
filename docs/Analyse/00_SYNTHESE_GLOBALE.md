@@ -134,4 +134,4 @@ flowchart TD
 Le projet Exo-OS présente désormais une conformité architecturale et une intégrité de code exceptionnelles :
 1. **Compilation Parfaite :** Aucun bogue bloquant, zéro avertissement sous l'ensemble des règles fondamentales de sûreté.
 2. **Robustesse Prouvée :** Les sous-systèmes critiques (mémoire d'urgence, ordonnanceur temps-réel, IPC lock-free, cryptographie post-boot, et résurrection Phoenix A/B) satisfont rigoureusement leurs spécifications contractuelles (DOC1, DOC2, DOC3, DOC10 et GI-03).
-3. **Documentation Pérenne :** Les 49 rapports consignés dans `docs/Analyse/` fournissent un référentiel exhaustif pour les audits futurs et l'industrialisation du système.
+3. **Documentation Pérenne :** Les 50 rapports consignés dans `docs/Analyse/` fournissent un référentiel exhaustif pour les audits futurs et l'industrialisation du système (incluant le rapport 50 sur les canaux IPC sync/raw/async/mpmc, la validation des open flags et la conformité POSIX du fs bridge).

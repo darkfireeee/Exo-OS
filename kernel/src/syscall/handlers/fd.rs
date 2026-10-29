@@ -26,8 +26,8 @@ static CNT_FSTAT: AtomicU64 = AtomicU64::new(0);
 // Flags open() autorisés (O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC (0x005F_1FFF)
-const OPEN_FLAGS_MASK: u64 = 0x005F_1FFF;
+// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
+const OPEN_FLAGS_MASK: u64 = 0x007F_FFFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers

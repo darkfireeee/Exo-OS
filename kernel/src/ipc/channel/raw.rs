@@ -296,20 +296,24 @@ pub fn mailbox_close(ep_id: EndpointId) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
         let slot = &RAW_TABLE[idx];
-        if slot
-            .endpoint_id
-            .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            let waiter = {
-                let mut ring = slot.ring.lock();
+        let waiter = {
+            // T8-007 FIX : verrouiller l'anneau avant le CAS pour garantir
+            // qu'aucun send_raw en cours ne puisse enfiler un message pendant ou après le reset.
+            let mut ring = slot.ring.lock();
+            if slot
+                .endpoint_id
+                .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 let w = slot.take_waiter_locked();
                 ring.reset();
+                OPEN_COUNT.fetch_sub(1, Ordering::Relaxed);
                 w
-            };
-            wake_waiter_outside_lock(waiter);
-            OPEN_COUNT.fetch_sub(1, Ordering::Relaxed);
-        }
+            } else {
+                core::ptr::null_mut()
+            }
+        };
+        wake_waiter_outside_lock(waiter);
     }
 }
 

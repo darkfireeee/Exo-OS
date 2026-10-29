@@ -293,6 +293,7 @@ impl ExportModule {
 
         let block = self.config.block_size as usize;
         let mut i = 0usize;
+        let mut blobs_exported = 0u64;
 
         // RECUR-01 : boucle while
         while i < blob_ids.len() {
@@ -303,8 +304,7 @@ impl ExportModule {
                     if self.config.audit_enabled {
                         EXPORT_AUDIT.log_blob_exported(0, blob_id, data.len() as u64, 0);
                     }
-                    self.summary.total_blobs_exported =
-                        self.summary.total_blobs_exported.saturating_add(1);
+                    blobs_exported = blobs_exported.saturating_add(1);
                     let _ = block;
                 }
                 Err(_) => {
@@ -317,7 +317,7 @@ impl ExportModule {
         let (buf, _) = writer.finalize()?;
 
         self.summary
-            .record_export(self.summary.total_blobs_exported, buf.len() as u64);
+            .record_export(blobs_exported, buf.len() as u64);
 
         if self.config.audit_enabled {
             EXPORT_AUDIT.log_event(0, ExportEvent::SessionCompleted);

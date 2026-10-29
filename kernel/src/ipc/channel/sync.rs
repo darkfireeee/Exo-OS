@@ -34,21 +34,24 @@ use crate::security::capability::{CapTable, CapToken, Rights};
 pub enum RendezVousState {
     /// Canal vide, personne n'attend
     Idle = 0,
+    /// Un émetteur est en cours d'écriture (réservation exclusive du slot, T8-005)
+    SenderWriting = 1,
     /// Un émetteur a déposé un message et attend le récepteur
-    SenderWaiting = 1,
+    SenderWaiting = 2,
     /// Le récepteur a pris le message, il signale l'émetteur
-    ReceiverAcked = 2,
+    ReceiverAcked = 3,
     /// Timeout ou annulation
-    Cancelled = 3,
+    Cancelled = 4,
 }
 
 impl RendezVousState {
     fn from_u32(v: u32) -> Self {
         match v {
             0 => Self::Idle,
-            1 => Self::SenderWaiting,
-            2 => Self::ReceiverAcked,
-            3 => Self::Cancelled,
+            1 => Self::SenderWriting,
+            2 => Self::SenderWaiting,
+            3 => Self::ReceiverAcked,
+            4 => Self::Cancelled,
             _ => Self::Cancelled,
         }
     }
@@ -203,7 +206,9 @@ pub struct SyncChannel {
     pub closed: AtomicU32,
     /// Timeout d'envoi en nanosecondes (0 = infini)
     pub send_timeout_ns: AtomicU64,
-    _pad: [u8; 24],
+    /// Compteur d'opérations en cours pour prévenir UAF sur destroy (T8-002)
+    pub active_ops: AtomicU32,
+    _pad: [u8; 20],
 }
 
 // SAFETY: ChannelId est Copy, SyncSlot est Sync+Send, AtomicU32 est Sync+Send.
@@ -219,7 +224,8 @@ impl SyncChannel {
             stats: SyncChannelStats::new(),
             closed: AtomicU32::new(0),
             send_timeout_ns: AtomicU64::new(SYNC_CHANNEL_TIMEOUT_NS),
-            _pad: [0u8; 24],
+            active_ops: AtomicU32::new(0),
+            _pad: [0u8; 20],
         }
     }
 
@@ -265,37 +271,36 @@ impl SyncChannel {
             return Err(IpcError::MessageTooLarge);
         }
 
-        // Attendre que le slot soit libre (pas d'émetteur précédent)
-        let cur = self.slot.state.load(Ordering::Acquire);
-        if RendezVousState::from_u32(cur) != RendezVousState::Idle {
+        // T8-005 FIX : Attente et réservation exclusive par CAS atomique Idle → SenderWriting
+        let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+        let deadline_ns = deadline_from(timeout_ns);
+        let mut spins: u32 = 0;
+        loop {
+            if self.is_closed() {
+                return Err(IpcError::Closed);
+            }
+            if self.slot.state.compare_exchange_weak(
+                RendezVousState::Idle as u32,
+                RendezVousState::SenderWriting as u32,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                break;
+            }
             if flags.contains(MsgFlags::NOWAIT) {
                 return Err(IpcError::WouldBlock);
             }
-            // Attente de contention entre senders. Ne pas écrire sender_tid ici :
-            // ce champ appartient au sender actif dans le rendez-vous courant.
-            let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
-            let deadline_ns = deadline_from(timeout_ns);
-            let mut spins: u32 = 0;
-            loop {
-                core::hint::spin_loop();
-                spins += 1;
-                let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-                if s == RendezVousState::Idle {
-                    break;
+            if deadline_expired(deadline_ns) {
+                self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
+                return Err(IpcError::Timeout);
+            }
+            core::hint::spin_loop();
+            spins += 1;
+            if spins > 64 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
-                if self.is_closed() {
-                    return Err(IpcError::Closed);
-                }
-                if deadline_expired(deadline_ns) {
-                    self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
-                    return Err(IpcError::Timeout);
-                }
-                if spins > 64 {
-                    unsafe {
-                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
-                    }
-                    spins = 0;
-                }
+                spins = 0;
             }
         }
 
@@ -305,13 +310,13 @@ impl SyncChannel {
         self.slot.payload_len.store(data.len(), Ordering::Relaxed);
         self.slot.flags.store(flags.bits(), Ordering::Relaxed);
 
-        // SAFETY: seul l'émetteur écrit ici (protocole état Idle → SenderWaiting)
+        // SAFETY: seul l'émetteur écrit ici (état SenderWriting réservé)
         unsafe {
             let dst = self.slot.data.get() as *mut u8;
             core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
         }
 
-        // Transition Idle → SenderWaiting (Release pour rendre les writes visibles)
+        // Transition SenderWriting → SenderWaiting (Release pour rendre les writes visibles)
         // Enregistrer le TID de l'émetteur avant la transition pour que le
         // récepteur puisse nous réveiller après avoir pris le message.
         let my_tid = crate::ipc::sync::sched_hooks::current_tid();
@@ -408,35 +413,36 @@ impl SyncChannel {
             return Err(IpcError::Closed);
         }
 
-        let cur = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-        if cur != RendezVousState::Idle {
+        // T8-006 FIX : Attente et réservation exclusive par CAS atomique Idle → SenderWriting
+        let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
+        let deadline_ns = deadline_from(timeout_ns);
+        let mut spins: u32 = 0;
+        loop {
+            if self.is_closed() {
+                return Err(IpcError::Closed);
+            }
+            if self.slot.state.compare_exchange_weak(
+                RendezVousState::Idle as u32,
+                RendezVousState::SenderWriting as u32,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ).is_ok() {
+                break;
+            }
             if flags.contains(MsgFlags::NOWAIT) {
                 return Err(IpcError::WouldBlock);
             }
-            // Attente que le slot redevienne Idle
-            let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
-            let deadline_ns = deadline_from(timeout_ns);
-            let mut spins: u32 = 0;
-            loop {
-                core::hint::spin_loop();
-                spins += 1;
-                let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-                if s == RendezVousState::Idle {
-                    break;
+            if deadline_expired(deadline_ns) {
+                self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
+                return Err(IpcError::Timeout);
+            }
+            core::hint::spin_loop();
+            spins += 1;
+            if spins > 64 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
-                if self.is_closed() {
-                    return Err(IpcError::Closed);
-                }
-                if deadline_expired(deadline_ns) {
-                    self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
-                    return Err(IpcError::Timeout);
-                }
-                if spins > 64 {
-                    unsafe {
-                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
-                    }
-                    spins = 0;
-                }
+                spins = 0;
             }
         }
 
@@ -447,7 +453,7 @@ impl SyncChannel {
         f.insert(MsgFlags::ZEROCOPY);
         self.slot.flags.store(f.bits(), Ordering::Relaxed);
 
-        // SAFETY: seul l'émetteur écrit zc_ref ici (état Idle)
+        // SAFETY: seul l'émetteur écrit zc_ref ici (état SenderWriting réservé)
         unsafe {
             *self.slot.zc_ref.get() = zc_ref;
         }
@@ -806,18 +812,14 @@ pub fn sync_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
         return Err(IpcError::InvalidHandle);
     }
     // SAFETY: used[idx] est true, vérifié ci-dessus sous spinlock
-    // Extraire le pointeur brut AVANT drop(tbl) pour éviter le emprunt-après-move.
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
-    // On doit relâcher le lock avant d'attendre (rendezvous peut bloquer)
+    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
 
-    // Accès direct sans lock car SyncChannel est Sync
-    // (l'accès concurrent est géré par les atomiques internes)
-    // SAFETY: chan_ptr vit dans la table statique SYNC_CHANNEL_TABLE dont la durée
-    // de vie est 'static. Le canal ne peut pas être libéré pendant un send
-    // car free() nécessite aussi le SpinLock.
-    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
-    chan_ref.send(data, flags)
+    let res = chan_ref.send(data, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Reçoit depuis le canal synchrone identifié par `idx`.
@@ -832,12 +834,13 @@ pub fn sync_channel_recv(
     }
     // SAFETY: used[idx] vérifié sous spinlock ci-dessus.
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
+    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
 
-    // SAFETY: chan_ptr vit dans SYNC_CHANNEL_TABLE statique ('static).
-    // Le canal ne peut pas être libéré pendant recv() car free() requiert le SpinLock.
-    let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
-    chan_ref.recv(buf, flags)
+    let res = chan_ref.recv(buf, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Ferme le canal synchrone identifié par `idx`.
@@ -862,6 +865,22 @@ pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
     // Fermer le canal pour réveiller les threads en attente avant la destruction
     let chan = unsafe { tbl.get_unchecked(idx) };
     chan.close();
+
+    // T8-002 FIX : attendre que les opérations en vol soient terminées avant de libérer le slot
+    let mut spins = 0u32;
+    while chan.active_ops.load(Ordering::Acquire) != 0 {
+        if spins >= 256 {
+            return Err(IpcError::Retry);
+        }
+        core::hint::spin_loop();
+        spins += 1;
+        if spins % 32 == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
+
     if !tbl.free(idx) {
         return Err(IpcError::InvalidHandle);
     }

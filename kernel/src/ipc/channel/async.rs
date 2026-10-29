@@ -147,7 +147,7 @@ impl WakerTable {
         }
     }
 
-    /// Déclenche tous les wakers actifs.
+    /// Déclenche tous les wakers actifs (interne, appelant détient le verrou).
     pub fn fire_all(&self) {
         for i in 0..MAX_ASYNC_WAKERS {
             if self.entries[i].is_active() {
@@ -155,6 +155,21 @@ impl WakerTable {
                 unsafe { self.entries[i].fire() };
             }
         }
+    }
+
+    /// Extrait les callbacks des wakers actifs sans les appeler sous verrou,
+    /// évitant tout interblocage si le callback interagit avec la table.
+    pub fn collect_active_wakers(&mut self) -> ([(Option<WakeFn>, *mut ()); MAX_ASYNC_WAKERS], usize) {
+        let mut list = [(None, core::ptr::null_mut()); MAX_ASYNC_WAKERS];
+        let mut n = 0;
+        for i in 0..MAX_ASYNC_WAKERS {
+            if self.entries[i].is_active() {
+                self.entries[i].fired.store(true, Ordering::Release);
+                list[n] = (self.entries[i].wake_fn, self.entries[i].data);
+                n += 1;
+            }
+        }
+        (list, n)
     }
 
     pub fn count(&self) -> usize {
@@ -264,9 +279,16 @@ impl AsyncChannel {
 
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
-        // Notifier les wakers que le canal est fermé
-        let tbl = self.wakers.lock();
-        tbl.fire_all();
+        // Notifier les wakers que le canal est fermé (hors verrou pour éviter interblocage)
+        let (callbacks, n) = {
+            let mut tbl = self.wakers.lock();
+            tbl.collect_active_wakers()
+        };
+        for i in 0..n {
+            if let Some(f) = callbacks[i].0 {
+                unsafe { f(callbacks[i].1) };
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -315,13 +337,20 @@ impl AsyncChannel {
                 self.pending.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
 
-                // Notifier les wakers enregistrés
-                let tbl = self.wakers.lock();
-                if tbl.count() > 0 {
-                    tbl.fire_all();
+                // Notifier les wakers enregistrés (hors verrou)
+                let (callbacks, count) = {
+                    let mut tbl = self.wakers.lock();
+                    tbl.collect_active_wakers()
+                };
+                if count > 0 {
                     self.stats
                         .waker_fires
-                        .fetch_add(tbl.count() as u64, Ordering::Relaxed);
+                        .fetch_add(count as u64, Ordering::Relaxed);
+                    for i in 0..count {
+                        if let Some(f) = callbacks[i].0 {
+                            unsafe { f(callbacks[i].1) };
+                        }
+                    }
                 }
 
                 Ok(mid)
