@@ -225,6 +225,10 @@ unsafe fn kernel_mmio_phys_to_virt(paddr: usize, size: usize) -> Option<NonNull<
             page_phys.as_u64() + (page_idx * PAGE_SIZE) as u64,
         ));
         if unsafe { KERNEL_AS.map(virt, frame, flags, &KERNEL_FAULT_ALLOC) }.is_err() {
+            for unmap_idx in 0..page_idx {
+                let unmap_virt = VirtAddr::new(virt_base.as_u64() + (unmap_idx * PAGE_SIZE) as u64);
+                let _ = unsafe { KERNEL_AS.unmap(unmap_virt) };
+            }
             return None;
         }
     }
@@ -286,8 +290,10 @@ pub fn with_global_disk<T, F>(f: F) -> ExofsResult<T>
 where
     F: FnOnce(&dyn BlockDevice) -> ExofsResult<T>,
 {
-    let disk = GLOBAL_DISK.lock();
-    let device = disk.as_ref().ok_or(ExofsError::Resource)?;
+    let device = {
+        let disk = GLOBAL_DISK.lock();
+        disk.as_ref().cloned().ok_or(ExofsError::Resource)?
+    };
     f(device.as_ref())
 }
 

@@ -357,6 +357,11 @@ pub unsafe fn spsc_wait_reply(dst: *mut IpcFastMsg, channel_id: u64, timeout_ns:
     let m = &mut *dst;
     let buf = &mut m.data[..];
 
+    let start_ns = if timeout_ns > 0 {
+        crate::scheduler::timer::clock::monotonic_ns()
+    } else {
+        0
+    };
     let mut spins: u64 = 0;
     loop {
         match ring.pop_into(buf) {
@@ -377,9 +382,8 @@ pub unsafe fn spsc_wait_reply(dst: *mut IpcFastMsg, channel_id: u64, timeout_ns:
             arch_cpu_relax();
         }
         if timeout_ns > 0 {
-            // Vérification timeout simplifiée.
-            // En production, lire le TSC et comparer.
-            if spins > timeout_ns / 100 {
+            let elapsed = crate::scheduler::timer::clock::monotonic_ns().saturating_sub(start_ns);
+            if elapsed >= timeout_ns {
                 return IpcError::Timeout as u64;
             }
         }

@@ -148,6 +148,15 @@ pub fn sys_mremap(
         Err(e) => return e,
     };
     if new_len <= old_len && flags & MREMAP_FIXED == 0 {
+        if new_len < old_len {
+            let shrink_start = old_addr.saturating_add(new_len as u64);
+            let aligned_shrink_start = (shrink_start.saturating_add(4095)) & !4095;
+            let old_end = old_addr.saturating_add(old_len as u64);
+            if aligned_shrink_start < old_end {
+                let shrink_len = (old_end - aligned_shrink_start) as usize;
+                let _ = crate::memory::virt::mmap::do_munmap(aligned_shrink_start, shrink_len);
+            }
+        }
         return old_addr as i64;
     }
     if flags & MREMAP_MAYMOVE == 0 {

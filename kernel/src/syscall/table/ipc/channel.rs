@@ -231,6 +231,10 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
         let deadline = crate::scheduler::timer::clock::monotonic_ns()
             .saturating_add(timeout_ms.saturating_mul(1_000_000));
         loop {
+            if !current_tcb.is_null() && unsafe { (*current_tcb).has_signal_pending() } {
+                crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                break Err(IpcError::Interrupted);
+            }
             match crate::ipc::channel::raw::recv_raw_or_register_waiter(
                 endpoint_id,
                 &mut payload[..recv_cap],
@@ -258,6 +262,10 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
         }
     } else {
         loop {
+            if !current_tcb.is_null() && unsafe { (*current_tcb).has_signal_pending() } {
+                crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                break Err(IpcError::Interrupted);
+            }
             match crate::ipc::channel::raw::recv_raw_or_register_waiter(
                 endpoint_id,
                 &mut payload[..recv_cap],

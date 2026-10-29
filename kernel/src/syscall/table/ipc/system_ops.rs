@@ -12,6 +12,21 @@ use crate::syscall::validation::{copy_to_user, UserBuf};
 /// `exo_log(buf_ptr, len, level)` — log direct vers le ring buffer kernel par tranches de 256 octets.
 pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_LOG);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid > 1 {
+        let is_service = crate::security::service_class_of(Pid(caller_pid))
+            != crate::security::ServiceClass::Unknown;
+        let is_root = PROCESS_REGISTRY
+            .find_by_pid(Pid(caller_pid))
+            .map(|pcb| {
+                let creds = pcb.get_creds();
+                creds.is_root() || creds.euid == 0
+            })
+            .unwrap_or(false);
+        if !is_service && !is_root {
+            return EPERM;
+        }
+    }
     let log_len = (len as usize).min(4096);
     if log_len == 0 {
         return 0;

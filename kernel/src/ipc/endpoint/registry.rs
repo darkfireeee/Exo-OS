@@ -137,8 +137,10 @@ impl RegistryInner {
                 return Ok(());
             }
             if slot.hash == cur_hash {
-                slot.ep_id = cur_ep_id;
-                return Ok(());
+                if slot.ep_id == cur_ep_id {
+                    return Ok(());
+                }
+                return Err(IpcError::AlreadyConnected);
             }
             // Robin Hood : si le slot existant est moins loin de sa position idéale,
             // on le déplace.

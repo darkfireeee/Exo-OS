@@ -132,10 +132,11 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
         if iov_ptr == 0 {
             return EFAULT;
         }
+        let mut total_read: usize = 0;
         for i in 0..iovcnt {
             let elem_ptr = match iov_ptr.checked_add(i.saturating_mul(16)) {
                 Some(p) => p,
-                None => return EFAULT,
+                None => return if total_read > 0 { total_read as i64 } else { EFAULT },
             };
             let mut iov_buf = [0u64; 2];
             if crate::syscall::validation::copy_from_user(
@@ -143,7 +144,7 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
                 elem_ptr as *const u8,
                 16,
             ).is_err() {
-                return EFAULT;
+                return if total_read > 0 { total_read as i64 } else { EFAULT };
             }
             let base = iov_buf[0];
             let len = iov_buf[1] as usize;
@@ -151,16 +152,24 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
                 continue;
             }
             if len > IO_BUF_MAX {
-                return E2BIG;
+                return if total_read > 0 { total_read as i64 } else { E2BIG };
             }
             if let Err(e) = UserBuf::validate(base, len, IO_BUF_MAX) {
-                return e.to_errno();
+                return if total_read > 0 { total_read as i64 } else { e.to_errno() };
             }
-            return crate::syscall::net_bridge::bridge_result(
-                crate::syscall::net_bridge::net_recvfrom(sock_fd, base, len, 0, 0, 0),
-            );
+            match crate::syscall::net_bridge::net_recvfrom(sock_fd, base, len, 0, 0, 0) {
+                Ok(n) => {
+                    total_read += n as usize;
+                    if (n as usize) < len {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    return if total_read > 0 { total_read as i64 } else { err };
+                }
+            }
         }
-        return 0;
+        return total_read as i64;
     }
     let fd = match validate_fd(fd) {
         Ok(f) => f,

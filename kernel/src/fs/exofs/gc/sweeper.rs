@@ -326,8 +326,22 @@ impl Sweeper {
     /// GC-01 : seuls les blobs avec `min_epoch <= current_epoch` sont liberes.
     pub fn flush_deferred(&self, current_epoch: EpochId) -> ExofsResult<u64> {
         let deferred_entries = BLOB_REFCOUNT.flush_deferred(current_epoch);
+        let mut bytes_freed: u64 = 0;
+        let mut blobs_removed: u64 = 0;
+        for entry in &deferred_entries {
+            if let Ok(bytes) = BLOB_REFCOUNT.remove_zero(&entry.blob_id) {
+                bytes_freed = bytes_freed.saturating_add(bytes);
+                blobs_removed = blobs_removed.saturating_add(1);
+            }
+        }
         let flushed = deferred_entries.len() as u64;
         GC_METRICS.add_deferred_flushed(flushed);
+        if bytes_freed > 0 {
+            GC_METRICS.add_bytes_freed(bytes_freed);
+        }
+        if blobs_removed > 0 {
+            GC_METRICS.add_blobs_collected(blobs_removed);
+        }
         Ok(flushed)
     }
 

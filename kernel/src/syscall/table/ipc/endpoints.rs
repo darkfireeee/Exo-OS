@@ -212,6 +212,7 @@ pub fn sys_exo_ipc_create(
     };
     if replaced_dead_owner {
         crate::ipc::channel::raw::mailbox_close(ep);
+        crate::ipc::endpoint::unregister_endpoint_by_id(ep);
     }
 
     if crate::ipc::channel::raw::mailbox_open(ep) {

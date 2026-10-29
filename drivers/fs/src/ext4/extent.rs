@@ -59,15 +59,19 @@ fn search_level(base: *const u8, logical: u32, depth: u16) -> Option<(u64, u16)>
         return None;
     }
     if depth == 0 {
-        // Feuille : liste d'Ext4Extent
+        // Feuille : liste d'Ext4Extent (au maximum 4 dans les 60 octets d'i_block)
         let entries = base.wrapping_add(12) as *const Ext4Extent;
-        for i in 0..hdr.eh_entries as usize {
+        let max_entries = (hdr.eh_max as usize).min(4);
+        let count = (hdr.eh_entries as usize).min(max_entries);
+        for i in 0..count {
             let ext = unsafe { &*entries.add(i) };
             let start = ext.ee_block;
             let len   = ext.len() as u32;
-            if logical >= start && logical < start + len {
-                let offset = logical - start;
-                return Some((ext.physical_block() + offset as u64, (len - offset) as u16));
+            if let Some(end) = start.checked_add(len) {
+                if logical >= start && logical < end {
+                    let offset = logical - start;
+                    return Some((ext.physical_block() + offset as u64, (len - offset) as u16));
+                }
             }
         }
         None

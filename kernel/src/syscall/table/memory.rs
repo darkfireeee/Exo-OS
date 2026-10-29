@@ -31,7 +31,7 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
         Ok(v) => v,
         Err(e) => return e,
     };
-    let _len_pages = (len + 4095) / 4096;
+    let _len_pages = len.saturating_add(4095) / 4096;
     // Déléguer à memory/virtual/mmap.rs
     match crate::memory::virt::mmap::do_mmap(addr, len, prot, flags, fd, off) {
         Ok(va) => va as i64,
