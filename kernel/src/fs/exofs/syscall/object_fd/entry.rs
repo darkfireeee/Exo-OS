@@ -28,7 +28,14 @@ pub fn current_owner_pid() -> u64 {
 
 #[inline]
 pub fn owner_matches(entry: ObjectFdEntry, owner_pid: u64) -> bool {
-    owner_pid == 0 || entry.owner_uid == 0 || entry.owner_uid == owner_pid
+    #[cfg(target_os = "none")]
+    {
+        owner_pid == 1 || (entry.owner_uid != 0 && entry.owner_uid == owner_pid)
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        owner_pid == 0 || entry.owner_uid == 0 || entry.owner_uid == owner_pid
+    }
 }
 
 /// Un descripteur de fichier ExoFS ouvert.

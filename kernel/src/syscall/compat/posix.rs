@@ -220,12 +220,15 @@ pub fn sys_setuid(uid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
         None => EINVAL,
         Some(pcb) => {
             let c = pcb.get_creds();
-            // Root : set uid partout ; sinon seulement si uid est dans {uid,euid,suid}.
-            if c.is_root() || uid32 == c.uid || uid32 == c.euid || uid32 == c.suid {
+            // POSIX.1-2017 : root met à jour real, effective et saved uid.
+            // Non-privilégié : met à jour uniquement effective uid si uid32 == uid ou suid.
+            if c.is_root() {
                 pcb.set_uid(uid32);
-                if c.is_root() {
-                    pcb.set_euid(uid32);
-                }
+                pcb.set_euid(uid32);
+                pcb.creds.lock().suid = uid32;
+                0
+            } else if uid32 == c.uid || uid32 == c.suid {
+                pcb.set_euid(uid32);
                 0
             } else {
                 EPERM
@@ -243,11 +246,15 @@ pub fn sys_setgid(gid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
         None => EINVAL,
         Some(pcb) => {
             let c = pcb.get_creds();
-            if c.is_root() || gid32 == c.gid || gid32 == c.egid || gid32 == c.sgid {
+            // POSIX.1-2017 : root met à jour real, effective et saved gid.
+            // Non-privilégié : met à jour uniquement effective gid si gid32 == gid ou sgid.
+            if c.is_root() {
                 pcb.set_gid(gid32);
-                if c.is_root() {
-                    pcb.set_egid(gid32);
-                }
+                pcb.set_egid(gid32);
+                pcb.creds.lock().sgid = gid32;
+                0
+            } else if gid32 == c.gid || gid32 == c.sgid {
+                pcb.set_egid(gid32);
                 0
             } else {
                 EPERM

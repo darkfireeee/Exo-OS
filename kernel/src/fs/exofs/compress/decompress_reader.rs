@@ -11,7 +11,9 @@
 //! RÈGLE ARITH-02 : arithmétique checked/saturating.
 //! RÈGLE RECUR-01 : aucune récursivité.
 
-use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
+use crate::fs::exofs::compress::algorithm::{
+    validate_decompressed_size, CompressionAlgorithm,
+};
 use crate::fs::exofs::compress::compress_header::{
     CompressionHeader, COMPRESSION_HEADER_SIZE, COMPRESSION_MAGIC,
 };
@@ -128,7 +130,7 @@ impl DecompressReader {
             return Err(ExofsError::CorruptedStructure);
         }
 
-        let orig_size = header.original_size as usize;
+        let orig_size = validate_decompressed_size(header.original_size)?;
         let algo = CompressionAlgorithm::try_from(header.algorithm)
             .map_err(|_| ExofsError::NotSupported)?;
 

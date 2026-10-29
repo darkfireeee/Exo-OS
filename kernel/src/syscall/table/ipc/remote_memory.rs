@@ -103,7 +103,7 @@ fn remote_user_phys(
         WalkResult::Leaf { entry, level } | WalkResult::HugePage { entry, level } => (entry, level),
         _ => return Err(EFAULT),
     };
-    if !entry.is_user() || (write && !entry.is_writable()) {
+    if !entry.is_user() || (write && (!entry.is_writable() || entry.is_cow())) {
         return Err(EFAULT);
     }
     let page_size = level.page_size();

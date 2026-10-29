@@ -157,7 +157,13 @@ pub fn sys_dup3(oldfd: u64, newfd: u64, flags: u64, _a4: u64, _a5: u64, _a6: u64
     if oldfd == newfd || flags & !O_CLOEXEC != 0 {
         return EINVAL;
     }
-    sys_dup2(oldfd, newfd, 0, 0, 0, 0)
+    let res = sys_dup2(oldfd, newfd, 0, 0, 0, 0);
+    if res >= 0 && (flags & O_CLOEXEC != 0) {
+        use crate::syscall::fs_bridge::{self, F_SETFD, FD_CLOEXEC};
+        let pid = current_pid_u32();
+        let _ = fs_bridge::fs_fcntl(newfd as u32, F_SETFD as u32, FD_CLOEXEC, pid);
+    }
+    res
 }
 
 /// `fcntl(fd, cmd, arg)`.

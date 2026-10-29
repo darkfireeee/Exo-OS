@@ -398,7 +398,7 @@ pub fn fs_pwrite64(
     let written = write_blob_at(entry.blob_id, offset, buf_ptr, count)?;
     let new_size = offset.saturating_add(written as u64).max(entry.size);
     OBJECT_TABLE
-        .set_size(fd, new_size)
+        .set_size(obj_fd, new_size)
         .map_err(exofs_to_bridge_error)?;
     Ok(written)
 }

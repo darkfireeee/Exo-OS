@@ -348,8 +348,14 @@ pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), Kerne
     let object_id = token::ObjectId::from_raw(handle as u64);
 
     if caller_pid != 0 && caller_pid != 1 {
-        if let Some(meta) = lookup_service_cap_meta(object_id) {
-            if meta.owner_pid != caller_pid && meta.target_pid != caller_pid {
+        match lookup_service_cap_meta(object_id) {
+            Some(meta) => {
+                if meta.owner_pid != caller_pid && meta.target_pid != caller_pid {
+                    return Err(KernelCapError::PermissionDenied);
+                }
+            }
+            None => {
+                // Sans métadonnées prouvant la propriété, un appelant non-root ne peut pas révoquer.
                 return Err(KernelCapError::PermissionDenied);
             }
         }

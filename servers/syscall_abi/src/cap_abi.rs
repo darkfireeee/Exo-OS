@@ -10,8 +10,8 @@ pub const CAP_TOKEN_WIRE_SIZE: usize = 20;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapObjectType {
     Null = 0,
-    MemoryRegion = 1,
-    IpcEndpoint = 2,
+    IpcEndpoint = 1,
+    MemoryRegion = 2,
     FileObject = 3,
     DeviceBar = 4,
     IrqLine = 5,

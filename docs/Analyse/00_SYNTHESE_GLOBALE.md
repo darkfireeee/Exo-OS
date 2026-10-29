@@ -9,7 +9,7 @@
 ## 1. Résumé Exécutif
 
 Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemble de l'arborescence du projet Exo-OS, une revue exhaustive a été menée sur chaque module, sous-module et fichier source :
-- **43 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs, ainsi que les vérifications empiriques des audits externes 1, 2, 3 et l'audit ciblé Shell/Affichage/IPC/FS).
+- **44 rapports d'analyse détaillés** ont été rédigés et consignés dans `docs/Analyse/` (couvrant l'architecture, la mémoire, l'ordonnanceur, les processus, l'IPC, la sécurité, les syscalls, le système de fichiers, les pilotes, ExoPhoenix, les bibliothèques partagées, le bootloader et les serveurs, ainsi que les vérifications empiriques des audits externes 1, 2, 3, l'audit ciblé Shell/Affichage/IPC/FS et l'audit approfondi IPC/FS/Syscall).
 - **Plus de 300 anomalies, incohérences, avertissements de compilation (clippy) et bogues de sûreté mémoire** ont été analysés, documentés et rigoureusement corrigés dans le code source.
 - **Résultat de la vérification :** Le noyau Exo-OS compile avec **0 erreur** (`cargo check` = code de sortie 0) et atteint **0 avertissement** sous l'ensemble des règles fondamentales de sûreté, de correction et de performance (`clippy::correctness`, `clippy::suspicious`, `clippy::complexity`, `clippy::perf`).
 
@@ -62,6 +62,7 @@ Conformément à la directive d'analyse ligne par ligne approfondie sur l'ensemb
 | `41_audit_2_verification.md` | Audit 2 (`Analyse_2`) | Vérification ligne à ligne, correction des bogues avérés et rejet des faux positifs de l'audit 2 | Conforme / 100% tests validés |
 | `42_audit_3_verification.md` | Audit 3 (`Analyse (3)`) | Vérification exhaustive, correction des 26 bogues confirmés et réfutation des faux positifs | Conforme / 100% tests validés |
 | `43_audit_shell_affichage_ipc_fs.md` | Audit Shell, Affichage, IPC, FS | Corrections ciblées des sous-systèmes névralgiques (JBD2, Ext4, FAT32, SPSC, Wayland, VirtIO-GPU, TTY, Exosh) | Conforme / 100% tests validés |
+| `44_audit_ipc_fs_syscall.md` | Audit IPC, FS, Syscall | Corrections majeures du routage POSIX, CoW bypass, sigaltstack, waitid, setuid, dup3, zip-bomb, owner_matches, VFS write access | Conforme / 100% tests validés |
 
 ---
 

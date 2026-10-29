@@ -264,8 +264,16 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
             }
             0 // waitid retourne 0 en succès (contrairement à wait4)
         }
-        // WNOHANG, fils présents mais pas zombie : succès avec si_pid=0.
-        Err(WaitError::WouldBlock) => 0,
+        // WNOHANG, fils présents mais pas zombie : succès avec si_pid=0 (conforme POSIX waitid).
+        Err(WaitError::WouldBlock) => {
+            if infop != 0 {
+                let siginfo = [0u8; 128];
+                if copy_to_user(infop as *mut u8, siginfo.as_ptr(), siginfo.len()).is_err() {
+                    return EFAULT;
+                }
+            }
+            0
+        }
         Err(WaitError::NoChild) => ECHILD,
         Err(WaitError::Interrupted) => EINTR,
         Err(WaitError::InvalidPid) => EINVAL,

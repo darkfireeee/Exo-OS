@@ -269,7 +269,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_MSI_FREE => sys_msi_free,
         SYS_PCI_SET_TOPOLOGY => sys_pci_set_topology,
         SYS_PCI_FIND_DEVICE => sys_pci_find_device,
-        // ── Catch-all ──────────────────────────────────────────────────────
-        _ => sys_enosys,
+        // ── Catch-all avec délégation aux handlers POSIX compatibles ──────
+        _ => crate::syscall::compat::posix::get_posix_handler(nr).unwrap_or(sys_enosys),
     }
 }

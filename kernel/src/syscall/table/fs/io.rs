@@ -121,7 +121,8 @@ pub fn sys_pwrite64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a
 /// `readv(fd, iov, iovcnt)`.
 pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_READV);
-    if iovcnt > u32::MAX as u64 {
+    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    if iovcnt > 1024 {
         return EINVAL;
     }
     if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
@@ -173,7 +174,8 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
 /// `writev(fd, iov, iovcnt)`.
 pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WRITEV);
-    if iovcnt > u32::MAX as u64 {
+    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    if iovcnt > 1024 {
         return EINVAL;
     }
     if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {

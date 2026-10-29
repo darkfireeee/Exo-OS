@@ -752,12 +752,12 @@ fn handle_fsync(payload: &[u8]) -> VfsReply {
 
 // FIX-APP-06 (Security_Application_Audit §GAP-06) : garde d'accès VFS.
 // En v0.2.0, validation basée sur les PIDs de confiance Ring1.
-// Règle : PIDs 2..9 (serveurs Ring1 non-storage) ont accès READ seul sauf PID 1,3.
-// PID 1 (init) et PID 3 (vfs lui-même) peuvent toujours écrire.
-// PIDs > 10 (exosh, apps) peuvent lire et écrire leurs propres fichiers.
+// Règle : PIDs 2..9 (serveurs Ring1 non-storage) ont accès READ seul sauf PID 1,5.
+// PID 1 (init) et PID 5 (vfs lui-même) peuvent toujours écrire.
+// PIDs >= 10 (exosh, apps) peuvent lire et écrire leurs propres fichiers.
 #[inline]
 fn check_vfs_write_access(sender_pid: u32) -> bool {
-    sender_pid >= 1
+    sender_pid == 1 || sender_pid == 5 || sender_pid >= 10
 }
 
 fn handle_request(req: &VfsRequest) -> VfsReply {

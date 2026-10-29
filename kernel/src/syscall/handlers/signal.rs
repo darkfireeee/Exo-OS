@@ -397,7 +397,18 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         None => return EFAULT,
     };
 
-    let thread_ptr = pcb.main_thread_ptr();
+    let target_tid = unsafe { (*tcb_ptr).tid };
+    let mut thread_ptr = core::ptr::null_mut();
+    for slot in &pcb.thread_slots {
+        let p = slot.load(core::sync::atomic::Ordering::Acquire);
+        if !p.is_null() && unsafe { (*p).tid.0 as u64 == target_tid } {
+            thread_ptr = p;
+            break;
+        }
+    }
+    if thread_ptr.is_null() {
+        thread_ptr = pcb.main_thread_ptr();
+    }
     if thread_ptr.is_null() {
         return EFAULT;
     }

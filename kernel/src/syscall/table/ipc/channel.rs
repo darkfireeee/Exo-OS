@@ -245,9 +245,8 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
                     }
                     let nap_ns = deadline.saturating_sub(now).min(IPC_RECV_IDLE_NAP_NS);
                     if !crate::scheduler::timer::sleep_ns(nap_ns) {
-                        unsafe {
-                            let _ = crate::scheduler::core::switch::cooperative_reschedule();
-                        }
+                        crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                        break Err(IpcError::Interrupted);
                     }
                     crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
                 }
@@ -265,12 +264,13 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
                 current_tcb,
             ) {
                 Ok(Some(n)) => break Ok(n),
-                Ok(None) => unsafe {
+                Ok(None) => {
                     if !crate::scheduler::timer::sleep_ns(IPC_RECV_IDLE_NAP_NS) {
-                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                        crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                        break Err(IpcError::Interrupted);
                     }
                     crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
-                },
+                }
                 Err(err) => {
                     crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
                     break Err(err);
