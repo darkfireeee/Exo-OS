@@ -222,6 +222,31 @@ pub fn smoltcp_stress_signature(iterations: u32) -> u64 {
     acc
 }
 
+/// Descripteur de socket Ring 3 (`0x4000_0000 | idx`) conforme `PhoenixSafe`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExoNetSocket {
+    pub raw_fd: i32,
+    pub local_port: u16,
+}
+
+impl ExoNetSocket {
+    pub const fn new(raw_fd: i32, local_port: u16) -> Self {
+        Self { raw_fd, local_port }
+    }
+}
+
+impl PhoenixSafe for ExoNetSocket {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Transactional;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

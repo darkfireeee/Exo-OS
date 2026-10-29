@@ -313,15 +313,16 @@ pub fn do_execve(
             }
         };
 
-    // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTCOPY | DONTEXPAND.
-    // Empêche un attaquant d'utiliser mmap(MAP_FIXED) pour écraser le SignalTcb.
+    // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTEXPAND (et non DONTCOPY pour
+    // préserver la page SignalTcb en CoW lors d'un fork() ultérieur).
+    // Empêche un attaquant d'utiliser mremap pour étendre la VMA SignalTcb.
     if elf_result.signal_tcb_vaddr != 0 {
         // SAFETY: addr_space_ptr créé par ElfLoader::load_elf() comme Box<UserAddressSpace>;
         // on est le seul détenteur de cet AS (l'ancien AS a été remplacé).
         let addr_space = unsafe { &*(elf_result.addr_space_ptr as *const UserAddressSpace) };
         addr_space.set_vma_flags(
             VirtAddr::new(elf_result.signal_tcb_vaddr),
-            VmaFlags::DONTCOPY | VmaFlags::DONTEXPAND,
+            VmaFlags::DONTEXPAND,
         );
     }
 
@@ -445,6 +446,8 @@ pub fn do_execve(
     pcb.cr3.store(elf_result.cr3, Ordering::Release);
     pcb.address_space
         .store(elf_result.addr_space_ptr, Ordering::Release);
+    pcb.signal_tcb_vaddr
+        .store(elf_result.signal_tcb_vaddr, Ordering::Release);
     pcb.brk_start.store(elf_result.brk_start, Ordering::Release);
     pcb.brk_current
         .store(elf_result.brk_start, Ordering::Release);

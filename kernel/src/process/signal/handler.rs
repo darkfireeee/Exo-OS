@@ -252,6 +252,51 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
 // setup_signal_frame — construit le frame sur la pile utilisateur
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[repr(C, align(16))]
+struct AlignedFpRegs([u8; 512]);
+
+#[cfg(target_os = "none")]
+#[inline]
+fn save_fpu_regs_to_bytes() -> [u8; 512] {
+    let mut fp = AlignedFpRegs([0u8; 512]);
+    // SAFETY: fp est aligné sur 16 octets (requis par fxsave64).
+    unsafe {
+        core::arch::asm!(
+            "fxsave64 [{}]",
+            in(reg) fp.0.as_mut_ptr(),
+            options(nostack, preserves_flags)
+        );
+    }
+    fp.0
+}
+
+#[cfg(not(target_os = "none"))]
+#[inline]
+fn save_fpu_regs_to_bytes() -> [u8; 512] {
+    [0u8; 512]
+}
+
+#[cfg(target_os = "none")]
+#[inline]
+fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
+    let mut fp = AlignedFpRegs(*src);
+    // Masquer les bits réservés de MXCSR (octets 24..28) pour interdire un #GP(0) forgé depuis Ring 3.
+    let mxcsr = u32::from_le_bytes([fp.0[24], fp.0[25], fp.0[26], fp.0[27]]) & 0x0000_FFBF;
+    fp.0[24..28].copy_from_slice(&mxcsr.to_le_bytes());
+    // SAFETY: fp est aligné sur 16 octets et MXCSR est assaini.
+    unsafe {
+        core::arch::asm!(
+            "fxrstor64 [{}]",
+            in(reg) fp.0.as_ptr(),
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+#[inline]
+fn restore_fpu_regs_from_bytes(_src: &[u8; 512]) {}
+
 /// Construit un SignalFrame sur la pile utilisateur et redirige RIP vers
 /// le handler. Appelé depuis delivery::deliver_one() uniquement.
 ///
@@ -268,11 +313,31 @@ pub fn setup_signal_frame(
     info: &SigInfo,
     action: &SigAction,
 ) {
+    const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
+    let sig_tcb_opt = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(thread.sched_tcb.pid.0))
+        .and_then(|pcb| {
+            let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+            if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
+                Some(unsafe { &*(vaddr as *const super::tcb::SignalTcb) })
+            } else {
+                None
+            }
+        });
+
     // Choisir la pile cible.
     let target_rsp = if action.flags & SigAction::SA_ONSTACK != 0 {
         let alt = thread.addresses.sigaltstack_top();
         if alt != 0 {
             alt
+        } else if let Some(stcb) = sig_tcb_opt {
+            if stcb.has_altstack() {
+                stcb.altstack_sp
+                    .load(Ordering::Acquire)
+                    .saturating_add(stcb.altstack_size.load(Ordering::Acquire))
+            } else {
+                frame.user_rsp
+            }
         } else {
             frame.user_rsp
         }
@@ -298,12 +363,17 @@ pub fn setup_signal_frame(
 
     // Construire le contenu du frame dans un buffer temporaire.
     // Assurer que sig_rsp est une adresse utilisateur valide (< USER_SPACE_TOP).
-    const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     if !(0x1000..USER_SPACE_TOP).contains(&sig_rsp) {
         // Pile utilisateur corrompue : forcer SIGSEGV.
         // En prod, mettre le thread en SIGSEGV et passer à l'action Core.
         return;
     }
+
+    let old_mask = {
+        let k_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+        let u_mask = sig_tcb_opt.map(|s| s.get_mask()).unwrap_or(0);
+        k_mask | u_mask
+    };
 
     // Construire le SignalFrame.
     let sig_frame = SignalFrame {
@@ -350,10 +420,10 @@ pub fn setup_signal_frame(
                 eflags: frame.user_rflags,
                 ..Default::default()
             },
-            uc_sigmask: thread.sched_tcb.signal_mask.load(Ordering::Acquire),
+            uc_sigmask: old_mask,
             uc_fs_base: thread.sched_tcb.fs_base,
             uc_gs_base: thread.sched_tcb.user_gs_base,
-            _fpregs_mem: [0u8; 512],
+            _fpregs_mem: save_fpu_regs_to_bytes(),
         },
     };
 
@@ -364,16 +434,21 @@ pub fn setup_signal_frame(
         ptr.write(sig_frame);
     }
 
-    // Mettre à jour le masque pendantl'exécution du handler (SA_NODEFER exclut sig_n).
-    let old_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+    // Mettre à jour le masque pendant l'exécution du handler (SA_NODEFER exclut sig_n).
     let mut new_mask = old_mask | action.mask;
     if action.flags & SigAction::SA_NODEFER == 0 {
         new_mask |= 1u64 << (sig_n - 1); // bloquer le signal courant
     }
+    use super::mask::SigMask;
+    let safe_new_mask = SigMask::from(new_mask).0;
     thread
         .sched_tcb
         .signal_mask
-        .store(new_mask, Ordering::Release);
+        .store(safe_new_mask, Ordering::Release);
+    if let Some(stcb) = sig_tcb_opt {
+        stcb.set_mask(safe_new_mask);
+        stcb.in_handler.store(1, Ordering::Release);
+    }
 
     // Rediriger le retour syscall vers le handler.
     frame.user_rip = action.handler;
@@ -418,6 +493,7 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     let fs_base_saved = uc.uc_fs_base;
     let gs_base_saved = uc.uc_gs_base;
     let mask_saved = uc.uc_sigmask;
+    let fpregs_saved = uc._fpregs_mem;
 
     // Vérification magic constant-time (SIG-13 / SIG-14).
     // Si le magic est invalide, on ne restaure rien (attaque de sigframe).
@@ -425,6 +501,8 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     if magic_diff != 0 {
         return;
     }
+
+    restore_fpu_regs_from_bytes(&fpregs_saved);
 
     // Restaurer les registres.
     frame.user_rip = rip_saved;
@@ -460,6 +538,16 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
         .sched_tcb
         .signal_mask
         .store(restored_mask.0, Ordering::Release);
+    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(thread.sched_tcb.pid.0))
+    {
+        let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+        if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
+            let stcb = unsafe { &*(vaddr as *const super::tcb::SignalTcb) };
+            stcb.set_mask(restored_mask.0);
+            stcb.in_handler.store(0, Ordering::Release);
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

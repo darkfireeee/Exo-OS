@@ -113,6 +113,17 @@ pub struct Sigaction {
 }
 
 pub fn ignore_sigint() {
+    let _ = exo_rt::sigaction_0syscall(
+        2,
+        Some(exo_rt::SigActionSlot {
+            handler_vaddr: 1, // SIG_IGN
+            flags: 0x1000_0000,
+            _pad: 0,
+            mask: 0,
+            restorer: 0,
+        }),
+        None,
+    );
     let act = Sigaction {
         sa_handler: 1, // SIG_IGN
         sa_flags: 0x1000_0000, // SA_RESTART
@@ -131,6 +142,17 @@ pub fn ignore_sigint() {
 }
 
 pub fn restore_sigint() {
+    let _ = exo_rt::sigaction_0syscall(
+        2,
+        Some(exo_rt::SigActionSlot {
+            handler_vaddr: 0, // SIG_DFL
+            flags: 0,
+            _pad: 0,
+            mask: 0,
+            restorer: 0,
+        }),
+        None,
+    );
     let act = Sigaction {
         sa_handler: 0, // SIG_DFL
         sa_flags: 0,

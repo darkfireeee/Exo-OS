@@ -1,43 +1,26 @@
-//! Mimalloc FFI bindings and GlobalAlloc implementation
+//! Pure-Rust GlobalAlloc implementation backed by `exo-alloc` (`dlmalloc` on `SYS_MMAP`).
+//! Replaces the legacy C `mimalloc` FFI so zero C symbols exist in `libs/`.
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::ffi::c_void;
 
-// FFI declarations for mimalloc
-extern "C" {
-    fn mi_malloc(size: usize) -> *mut c_void;
-    fn mi_free(ptr: *mut c_void);
-    fn mi_calloc(count: usize, size: usize) -> *mut c_void;
-    fn mi_realloc(ptr: *mut c_void, newsize: usize) -> *mut c_void;
-    fn mi_malloc_aligned(size: usize, alignment: usize) -> *mut c_void;
-}
-
-/// Mimalloc global allocator
+/// General-purpose global allocator (backed by pure-Rust `exo_alloc::GLOBAL`).
 pub struct Mimalloc;
 
 unsafe impl GlobalAlloc for Mimalloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            if layout.align() <= 16 {
-                mi_malloc(layout.size()) as *mut u8
-            } else {
-                mi_malloc_aligned(layout.size(), layout.align()) as *mut u8
-            }
-        }
+        unsafe { exo_alloc::GLOBAL.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        unsafe {
-            mi_free(ptr as *mut c_void);
-        }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { exo_alloc::GLOBAL.dealloc(ptr, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        unsafe { mi_calloc(1, layout.size()) as *mut u8 }
+        unsafe { exo_alloc::GLOBAL.alloc_zeroed(layout) }
     }
 
-    unsafe fn realloc(&self, ptr: *mut u8, _layout: Layout, new_size: usize) -> *mut u8 {
-        unsafe { mi_realloc(ptr as *mut c_void, new_size) as *mut u8 }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        unsafe { exo_alloc::GLOBAL.realloc(ptr, layout, new_size) }
     }
 }
 

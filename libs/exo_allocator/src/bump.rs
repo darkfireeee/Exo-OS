@@ -163,10 +163,10 @@ mod tests {
         assert_eq!(bump.available(), 1024);
 
         unsafe {
-            let ptr1 = bump.alloc(64, 8).unwrap();
+            let _ptr1 = bump.alloc(64, 8).unwrap();
             assert_eq!(bump.used(), 64);
 
-            let ptr2 = bump.alloc(32, 8).unwrap();
+            let _ptr2 = bump.alloc(32, 8).unwrap();
             assert_eq!(bump.used(), 96);
 
             bump.reset();

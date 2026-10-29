@@ -87,6 +87,24 @@ pub fn runtime_stress_signature(iterations: u32) -> u64 {
     acc
 }
 
+/// Exécuteur / pool Ring 3 léger conforme `PhoenixSafe`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExoRuntimeExecutor {
+    pub worker_budget: u32,
+}
+
+impl PhoenixSafe for ExoRuntimeExecutor {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

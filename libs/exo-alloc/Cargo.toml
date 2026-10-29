@@ -6,5 +6,12 @@ edition = "2021"
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+global-alloc = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'] }
+
 [dependencies]
 exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }

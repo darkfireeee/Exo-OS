@@ -126,6 +126,24 @@ pub fn crypto_stress_signature(iterations: u32) -> u64 {
     acc
 }
 
+/// Contexte cryptographique Ring 3 (`PhoenixSafe` stateless, zéro secret persistant hors `crypto_server`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExoCryptoContext {
+    pub epoch: u64,
+}
+
+impl PhoenixSafe for ExoCryptoContext {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Stateless;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

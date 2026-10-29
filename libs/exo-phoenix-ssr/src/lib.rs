@@ -36,6 +36,7 @@ pub enum PhoenixError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhoenixRecovery {
     Stateless,
+    Transactional,
     RecreateAfterSwitch,
     SerializeBeforeSwitch,
     InvalidateBeforeSwitch,

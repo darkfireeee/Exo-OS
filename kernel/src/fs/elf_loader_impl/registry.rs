@@ -60,6 +60,11 @@ pub struct LoadedElfImage {
     pub dynamic_vaddr: u64,
     pub dynamic_count: u64,
     pub brk_end: u64,
+    pub tls_vaddr: u64,
+    pub tls_offset: u64,
+    pub tls_filesz: u64,
+    pub tls_memsz: u64,
+    pub tls_align: u64,
 }
 
 #[derive(Clone, Copy)]

@@ -17,13 +17,14 @@ members = [
     "exo-phoenix-ssr",
     # Bibliothèques Ring3 — runtime userspace
     "exo-alloc",
+    "exo-syscall",
+    "exo-rt",
+    "exo-libc",
     "generic-rt",
     "exo-pkg",
-    # exo-libc exclu : fork de relibc avec son propre workspace
     # musl-exo exclu : projet C (pas Cargo)
 ]
 exclude = [
-    "exo-libc",
     "musl-exo",
     "vendors",
 ]

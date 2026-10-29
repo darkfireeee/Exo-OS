@@ -99,6 +99,8 @@ pub struct ProcessControlBlock {
     // ── Signaux ────────────────────────────────────────────────────────────────
     /// Table des handlers de signaux installés (partagée entre tous les threads).
     pub sig_handlers: SpinLock<SigHandlerTable>,
+    /// Adresse virtuelle de la page SignalTcb partagée Kernel/Userspace (AT_SIGNAL_TCB = 51).
+    pub signal_tcb_vaddr: AtomicU64,
     /// Pointeur vers le ProcessThread principal (TID = PID).
     pub main_thread_rawptr: AtomicPtr<crate::process::core::tcb::ProcessThread>,
 
@@ -186,6 +188,7 @@ impl ProcessControlBlock {
             io_read_bytes: AtomicU64::new(0),
             io_write_bytes: AtomicU64::new(0),
             sig_handlers: SpinLock::new(SigHandlerTable::new()),
+            signal_tcb_vaddr: AtomicU64::new(0),
             main_thread_rawptr: AtomicPtr::new(core::ptr::null_mut()),
             pid_ns: 0,
             mnt_ns: 0,

@@ -48,9 +48,21 @@ const _: () = assert!(
 );
 
 impl EpollEventAbi {
+    /// Lit la valeur `u32` du champ `events` par copie (sans référence non-alignée).
+    #[inline(always)]
+    pub const fn events_u32(&self) -> u32 {
+        self.events
+    }
+
+    /// Écrit la valeur `u32` du champ `events`.
+    #[inline(always)]
+    pub fn set_events_u32(&mut self, ev: u32) {
+        self.events = ev;
+    }
+
     /// Lit la valeur `u64` du champ `data` — **toujours safe** (lecture unaligned explicite).
     #[inline(always)]
-    pub fn data_u64(&self) -> u64 {
+    pub const fn data_u64(&self) -> u64 {
         // SAFETY: from_ne_bytes sur [u8;8] = lecture unaligned sûre en Rust.
         // Pas de référence au champ — évite E0793.
         u64::from_ne_bytes(self.data_bytes)
@@ -62,9 +74,21 @@ impl EpollEventAbi {
         self.data_bytes = v.to_ne_bytes();
     }
 
+    /// Alias explicite de lecture unaligned (CORR-06).
+    #[inline(always)]
+    pub const fn read_data(&self) -> u64 {
+        self.data_u64()
+    }
+
+    /// Alias explicite d'écriture unaligned (CORR-06).
+    #[inline(always)]
+    pub fn write_data(&mut self, v: u64) {
+        self.set_data_u64(v);
+    }
+
     /// Constructeur complet.
     #[inline]
-    pub fn new(events: u32, data: u64) -> Self {
+    pub const fn new(events: u32, data: u64) -> Self {
         EpollEventAbi {
             events,
             data_bytes: data.to_ne_bytes(),

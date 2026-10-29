@@ -1,0 +1,18 @@
+[package]
+name = "exo-std"
+version = "0.1.0"
+edition = "2021"
+description = "Exo-OS standard library (std::sys::exo_os + std::os::exo)"
+
+[lib]
+name = "exo_std"
+path = "src/lib.rs"
+
+[dependencies]
+exo-alloc = { path = "../../libs/exo-alloc" }
+exo-syscall = { path = "../../libs/exo-syscall" }
+exo-rt = { path = "../../libs/exo-rt" }
+exo-libc = { path = "../../libs/exo-libc" }
+exo-phoenix-ssr = { path = "../../libs/exo-phoenix-ssr" }
+exo_types = { package = "exo-types", path = "../../libs/exo_types" }
+exo_syscall_abi = { package = "exo-syscall-abi", path = "../../servers/syscall_abi" }

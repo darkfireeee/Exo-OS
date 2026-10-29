@@ -30,8 +30,8 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 /// Entrée d'un gestionnaire de signal.
 ///
 /// Stockée PAR VALEUR dans `SignalTcb::handlers`, jamais par pointeur atomique.
-/// Taille : 32 bytes (4 champs × 8/8/4/8 octets, padding inclus).
-#[repr(C, align(8))]
+/// Taille : 32 bytes (aligné sur 16 octets pour CMPXCHG16B lock-free).
+#[repr(C, align(16))]
 #[derive(Copy, Clone, Debug)]
 pub struct SigactionEntry {
     /// Adresse virtuelle du gestionnaire (0 = SIG_DFL, 1 = SIG_IGN).

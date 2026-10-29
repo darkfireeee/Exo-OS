@@ -311,6 +311,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-alloc"
+version = "0.1.0"
+dependencies = [
+ "exo-phoenix-ssr",
+]
+
+[[package]]
 name = "exo-audio-drivers"
 version = "0.1.0"
 dependencies = [
@@ -362,6 +369,10 @@ dependencies = [
 name = "exo-exosh"
 version = "0.1.0"
 dependencies = [
+ "exo-alloc",
+ "exo-libc",
+ "exo-rt",
+ "exo-std",
  "exo-syscall-abi",
 ]
 
@@ -428,6 +439,18 @@ version = "0.1.0"
 dependencies = [
  "exo-verity",
  "getrandom",
+]
+
+[[package]]
+name = "exo-libc"
+version = "0.1.0"
+dependencies = [
+ "exo-alloc",
+ "exo-phoenix-ssr",
+ "exo-rt",
+ "exo-syscall",
+ "exo-syscall-abi",
+ "exo-types",
 ]
 
 [[package]]
@@ -541,6 +564,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-rt"
+version = "0.1.0"
+dependencies = [
+ "exo-alloc",
+ "exo-phoenix-ssr",
+ "exo-syscall",
+ "exo-syscall-abi",
+]
+
+[[package]]
 name = "exo-scheduler-server"
 version = "0.1.0"
 dependencies = [
@@ -557,11 +590,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-std"
+version = "0.1.0"
+dependencies = [
+ "exo-alloc",
+ "exo-libc",
+ "exo-phoenix-ssr",
+ "exo-rt",
+ "exo-syscall",
+ "exo-syscall-abi",
+ "exo-types",
+]
+
+[[package]]
 name = "exo-storage-common-hal"
 version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",
  "spin",
+]
+
+[[package]]
+name = "exo-syscall"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+ "exo-types",
 ]
 
 [[package]]

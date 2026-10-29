@@ -19,6 +19,8 @@ ISO_EXOFS_DISK_SIZE ?= 64M
 BAREMETAL_TARGET ?= x86_64-unknown-none
 USERSPACE_TARGET_JSON ?= $(abspath x86_64-exo-userspace.json)
 USERSPACE_TARGET_DIR  ?= x86_64-exo-userspace
+EXO_STD_TARGET_JSON   ?= $(abspath x86_64-unknown-exo.json)
+EXO_STD_TARGET_DIR    ?= x86_64-unknown-exo
 LOADER_TARGET_JSON    ?= $(abspath x86_64-exo-loader.json)
 LOADER_TARGET_DIR     ?= x86_64-exo-loader
 CARGO_TEST_FLAGS = -Z panic-abort-tests
@@ -38,6 +40,7 @@ KERNEL_BIN_REL  = target/x86_64-unknown-none/release/exo-os-kernel
 KERNEL_A_DBG    = target/exophoenix/kernel-a-debug.elf
 KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
 ROOTFS_RAW_DIR = target/$(USERSPACE_TARGET_DIR)/debug
+ROOTFS_STD_RAW_DIR = target/$(EXO_STD_TARGET_DIR)/debug
 ROOTFS_LOADER_RAW_DIR = target/$(LOADER_TARGET_DIR)/debug
 ROOTFS_STAGING_DIR = target/exofs-rootfs
 COREUTILS_MANIFEST = userspace/apps/coreutils/Cargo.toml
@@ -59,7 +62,6 @@ ROOTFS_SERVER_PACKAGES = \
 	-p exo-fb-server \
 	-p exo-tty-server \
 	-p exo-ps2-input \
-	-p exo-exosh \
 	-p exo-shield \
 	-p exo-fat-server \
 	-p exo-ext-server \
@@ -226,7 +228,8 @@ all: iso
 build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
 	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)"
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
@@ -238,10 +241,10 @@ build-rootfs-binaries:
 		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/sbin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/$$bin" 2>/dev/null || true; fi; \
 	done
-	@cp "$(ROOTFS_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
+	@cp "$(ROOTFS_STD_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true; fi
 	@for bin in $(ROOTFS_BIN_BINS); do \
-		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
+		cp "$(ROOTFS_STD_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; fi; \
 	done
 	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"

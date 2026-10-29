@@ -195,6 +195,28 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         return;
     }
 
+    if effective_nr == crate::syscall::numbers::SYS_CLONE && (arg1 & 0x0001_0000) == 0 {
+        let mut fork_flags = crate::process::lifecycle::fork::ForkFlags::default();
+        if (arg1 & 0x0000_0400) != 0 {
+            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::CLONE_FILES);
+        }
+        if (arg1 & 0x0000_0800) != 0 {
+            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::CLONE_SIGHAND);
+        }
+        if (arg1 & 0x0000_4000) != 0 {
+            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::VFORK);
+        }
+        let saved_rsp = frame.rsp;
+        if arg2 != 0 {
+            frame.rsp = arg2;
+        }
+        let result = handle_fork_like_inplace(frame, fork_flags);
+        frame.rsp = saved_rsp;
+        frame.rax = result as u64;
+        post_dispatch_defer_resched(frame, tsc_start);
+        return;
+    }
+
     // ── [5c] Cas spécial execve — modifie frame pour sauter au nouveau binaire ──
     if effective_nr == crate::syscall::numbers::SYS_EXECVE {
         handle_execve_inplace(frame);

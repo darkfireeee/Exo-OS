@@ -8,7 +8,7 @@ use crate::process::lifecycle::exec::ElfLoadError;
 
 use super::parser::{
     elf_page_flags, elf_u16, elf_u32, elf_u64, elf_vma_flags, phdr_at, phdr_span,
-    validate_load_segment_flags, validate_user_segment_range, PT_DYNAMIC, PT_LOAD, PT_PHDR,
+    validate_load_segment_flags, validate_user_segment_range, PT_DYNAMIC, PT_LOAD, PT_PHDR, PT_TLS,
 };
 use super::registry::{register_elf_segment, LoadedElfImage};
 
@@ -25,6 +25,11 @@ pub fn install_elf_image(
     let mut phdr_vaddr = 0u64;
     let mut dynamic_vaddr = 0u64;
     let mut dynamic_count = 0u64;
+    let mut tls_vaddr = 0u64;
+    let mut tls_offset = 0u64;
+    let mut tls_filesz = 0u64;
+    let mut tls_memsz = 0u64;
+    let mut tls_align = 8u64;
 
     let mut i = 0usize;
     while i < e_phnum {
@@ -35,12 +40,22 @@ pub fn install_elf_image(
         let p_vaddr = elf_u64(ph, 16).saturating_add(load_bias);
         let p_filesz = elf_u64(ph, 32) as usize;
         let p_memsz = elf_u64(ph, 40) as usize;
+        let p_align = elf_u64(ph, 48);
 
         if p_type == PT_PHDR {
             phdr_vaddr = p_vaddr;
         } else if p_type == PT_DYNAMIC {
             dynamic_vaddr = p_vaddr;
             dynamic_count = (p_filesz / 16) as u64;
+        } else if p_type == PT_TLS {
+            if p_filesz > p_memsz || p_offset.saturating_add(p_filesz) > elf_data.len() {
+                return Err(ElfLoadError::InvalidElf);
+            }
+            tls_vaddr = p_vaddr;
+            tls_offset = p_offset as u64;
+            tls_filesz = p_filesz as u64;
+            tls_memsz = p_memsz as u64;
+            tls_align = p_align.max(8);
         }
 
         if p_type != PT_LOAD {
@@ -87,6 +102,11 @@ pub fn install_elf_image(
         dynamic_vaddr,
         dynamic_count,
         brk_end,
+        tls_vaddr,
+        tls_offset,
+        tls_filesz,
+        tls_memsz,
+        tls_align,
     })
 }
 
@@ -135,6 +155,34 @@ pub fn install_stack_vma(
         VirtAddr::new(stack_base),
         VirtAddr::new(stack_base.saturating_add(stack_size as u64)),
         VmaFlags::READ | VmaFlags::WRITE | VmaFlags::ANONYMOUS | VmaFlags::STACK,
+        PageFlags::USER_DATA,
+        VmaBacking::Anonymous,
+    ));
+    let vma_ptr = Box::into_raw(vma);
+    let inserted = unsafe { user_as.insert_vma(vma_ptr) };
+    if !inserted {
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+        return Err(ElfLoadError::OutOfMemory);
+    }
+    Ok(())
+}
+
+pub fn install_anon_rw_vma(
+    user_as: &UserAddressSpace,
+    start_vaddr: u64,
+    size_bytes: usize,
+    extra_flags: crate::memory::virt::vma::VmaFlags,
+) -> Result<(), ElfLoadError> {
+    use crate::memory::core::PageFlags;
+    use crate::memory::virt::vma::VmaFlags;
+
+    if size_bytes == 0 {
+        return Ok(());
+    }
+    let vma = Box::new(VmaDescriptor::new(
+        VirtAddr::new(start_vaddr),
+        VirtAddr::new(start_vaddr.saturating_add(size_bytes as u64)),
+        VmaFlags::READ | VmaFlags::WRITE | VmaFlags::ANONYMOUS | extra_flags,
         PageFlags::USER_DATA,
         VmaBacking::Anonymous,
     ));

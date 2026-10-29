@@ -256,6 +256,16 @@ use exo_syscall_abi as syscall;
             write_all(STDOUT, b"Filesystem: ExoFS (Content-Addressed Storage)\n");
             write_all(STDOUT, b"Security: ExoShield LSM & Strict 67-Edge Authorized IPC Graph\n");
             0
+        } else if subcmd == b"cap" || subcmd == b"caps" {
+            use crate::std::os::exo::{CapTokenExt, CapTokenUser};
+            let tok = CapTokenUser::current_process_token();
+            crate::std::println!(
+                "CapToken [AT_CAP_TOKEN=52]: generation={} rights={:#x} owner_pid={}",
+                tok.generation(),
+                tok.rights(),
+                tok.owner_pid()
+            );
+            0
         } else if subcmd == b"doctor" {
             write_all(STDOUT, b"=== Exo-OS Doctor : System Diagnostics ===\n\n");
             write_all(STDOUT, b"[PASS] 1. Kernel Arch & SMP       : x86_64 Core 0 BSP, x2APIC ready, TSC invariant\n");

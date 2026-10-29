@@ -1,0 +1,19 @@
+[package]
+name = "exo-rt"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime bas-niveau Exo-OS (TLS GenericTcb, signaux 0-syscall SignalTcb, fork/execve, PhoenixSafe)"
+
+[lib]
+name = "exo_rt"
+path = "src/lib.rs"
+
+[features]
+default = []
+crt0 = []
+
+[dependencies]
+exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo-syscall = { path = "../exo-syscall" }
+exo-alloc = { path = "../exo-alloc" }
+exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }

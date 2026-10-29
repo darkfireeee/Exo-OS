@@ -218,7 +218,9 @@ pub fn handle_pending_signals(
         return;
     }
 
-    let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+    // SIG-08 / SIG-24 : barrière Acquire avant lecture de l'état signal / SignalTcb.
+    core::sync::atomic::fence(Ordering::Acquire);
+
     let pid = Pid(thread.sched_tcb.pid.0);
 
     // Lire la table des handlers depuis le PCB.
@@ -229,6 +231,27 @@ pub fn handle_pending_signals(
             return;
         }
     };
+
+    const NON_BLOCKABLE: u64 =
+        (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
+    const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
+    let sig_tcb_vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+    let sig_tcb_opt = if (0x1000..USER_SPACE_TOP).contains(&sig_tcb_vaddr) {
+        // SAFETY: handle_pending_signals s'exécute dans le CR3 du processus courant (retour syscall/exception).
+        Some(unsafe { &*(sig_tcb_vaddr as *const super::tcb::SignalTcb) })
+    } else {
+        None
+    };
+
+    let mut mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+    if let Some(stcb) = sig_tcb_opt {
+        let user_blocked = stcb.get_mask() & !NON_BLOCKABLE;
+        mask = (mask | user_blocked) & !NON_BLOCKABLE;
+        let q_pending = thread.sig_queue.pending.load(Ordering::Acquire);
+        if q_pending != 0 {
+            stcb.pending.fetch_or(q_pending, Ordering::AcqRel);
+        }
+    }
 
     // Boucle de livraison : on traite jusqu'à ce qu'il n'y ait plus rien.
     loop {
@@ -246,10 +269,29 @@ pub fn handle_pending_signals(
             }
         };
 
-        let action = {
+        if let Some(stcb) = sig_tcb_opt {
+            stcb.consume(sig_n);
+        }
+
+        let mut action = {
             let handlers = pcb.sig_handlers.lock();
             handlers.get(sig_n)
         };
+        if let Some(stcb) = sig_tcb_opt {
+            if let Some(entry) = stcb.get_action(sig_n) {
+                if entry.is_ign() && sig_n != Signal::SIGKILL as u8 && sig_n != Signal::SIGSTOP as u8 {
+                    action = SigAction::IGN;
+                } else if entry.is_user() && sig_n != Signal::SIGKILL as u8 && sig_n != Signal::SIGSTOP as u8 {
+                    action = SigAction {
+                        kind: SigActionKind::User,
+                        handler: entry.handler_vaddr,
+                        flags: entry.flags,
+                        mask: entry.mask,
+                        restorer: entry.restorer,
+                    };
+                }
+            }
+        }
 
         deliver_one(thread, frame, sig_n, info, action, pcb);
 
@@ -258,6 +300,25 @@ pub fn handle_pending_signals(
             let def = default_action(sig_n);
             let mut handlers = pcb.sig_handlers.lock();
             handlers.set(sig_n, def);
+            if let Some(stcb) = sig_tcb_opt {
+                if let Some(idx) = sig_n.checked_sub(1).map(|i| i as usize) {
+                    if idx < super::tcb::NSIG {
+                        // SAFETY: écriture du slot handler du thread courant au retour syscall.
+                        unsafe {
+                            let slot_ptr = &stcb.handlers[idx]
+                                as *const super::tcb::SigactionEntry
+                                as *mut super::tcb::SigactionEntry;
+                            slot_ptr.write_volatile(super::tcb::SigactionEntry::default_dfl());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Si un handler utilisateur vient d'être installé sur la frame de retour,
+        // livrer un seul signal par retour vers Ring 3 (le prochain sera livré au sigreturn).
+        if action.kind == SigActionKind::User {
+            break;
         }
     }
 

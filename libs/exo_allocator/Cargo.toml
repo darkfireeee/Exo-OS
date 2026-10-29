@@ -9,13 +9,11 @@ repository = "https://github.com/darkfireeee/Exo-OS"
 
 [dependencies]
 exo_types = { package = "exo-types", path = "../exo_types" }
+exo_alloc = { package = "exo-alloc", path = "../exo-alloc" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.5"
-
-[build-dependencies]
-cc = "1.0"
 
 [[bench]]
 name = "allocator_bench"

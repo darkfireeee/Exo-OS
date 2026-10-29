@@ -43,7 +43,7 @@ deny = [
     { name = "shadow-rs", reason = "shadow-rs is rejected in favor of native build metadata" },
     { name = "libfuse", reason = "libfuse is incompatible with the out-of-kernel ExoFS model" },
     { name = "rtnetlink", reason = "rtnetlink is rejected in favor of ExoNet V5 NetGrant" },
-    { name = "relibc", reason = "relibc is rejected in favor of exo-alloc and musl-exo" },
+    { name = "relibc", reason = "External unmodified relibc is rejected (LIB-09 / O-10); use local libs/exo-libc (Pal for ExoOs) and exo-alloc" },
     { name = "pkgcraft", reason = "pkgcraft is rejected in favor of native exo-pkg format" },
 ]
 

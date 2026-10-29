@@ -14,6 +14,7 @@ pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
 pub const PT_INTERP: u32 = 3;
 pub const PT_PHDR: u32 = 6;
+pub const PT_TLS: u32 = 7;
 pub const PF_X: u32 = 0x1;
 pub const PF_W: u32 = 0x2;
 pub const PF_R: u32 = 0x4;

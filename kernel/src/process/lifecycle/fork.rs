@@ -617,7 +617,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     child_pcb.set_state(ProcessState::Running);
     fork_trace(b"fork: pcb state\n");
 
-    // Copier les valeurs brk.
+    // Copier les valeurs brk et SignalTcb / dispositions de signaux POSIX.
     child_pcb.brk_start.store(
         parent_pcb.brk_start.load(Ordering::Relaxed),
         Ordering::Relaxed,
@@ -626,6 +626,11 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         parent_pcb.brk_current.load(Ordering::Relaxed),
         Ordering::Relaxed,
     );
+    child_pcb.signal_tcb_vaddr.store(
+        parent_pcb.signal_tcb_vaddr.load(Ordering::Acquire),
+        Ordering::Release,
+    );
+    *child_pcb.sig_handlers.lock() = *parent_pcb.sig_handlers.lock();
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_setup", parent, parent_pcb);
 

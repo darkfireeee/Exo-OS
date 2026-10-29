@@ -20,7 +20,11 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     let p_read = fds[0] as u64;
     let p_write = fds[1] as u64;
 
-    let child_left = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    exo_libc::fflush_all();
+    let child_left = match exo_rt::fork() {
+        Ok(pid) => pid as i64,
+        Err(e) => -(e as i64),
+    };
     if child_left < 0 {
         print_errno(b"fork", child_left);
         unsafe {
@@ -46,7 +50,11 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
         }
     }
 
-    let child_right = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    exo_libc::fflush_all();
+    let child_right = match exo_rt::fork() {
+        Ok(pid) => pid as i64,
+        Err(e) => -(e as i64),
+    };
     if child_right < 0 {
         print_errno(b"fork", child_right);
         unsafe {
@@ -341,7 +349,11 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
     pwd_env[4 + cwd_len] = 0;
     let envp = [pwd_env.as_ptr() as u64, 0u64];
 
-    let child = unsafe { syscall::syscall0(syscall::SYS_FORK) };
+    exo_libc::fflush_all();
+    let child = match exo_rt::fork() {
+        Ok(pid) => pid as i64,
+        Err(e) => -(e as i64),
+    };
     if child < 0 {
         print_errno(b"fork", child);
         return Ok(());

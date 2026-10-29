@@ -80,6 +80,36 @@ pub fn fs_stress_signature(iterations: u32) -> u64 {
     acc
 }
 
+/// Descripteur ExoFS transactionnel Ring 3 (conforme `PhoenixSafe`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExoFsDescriptor {
+    pub fd: i32,
+    pub generation: u32,
+    pub rights_mask: u32,
+}
+
+impl ExoFsDescriptor {
+    pub const fn new(fd: i32, generation: u32, rights_mask: u32) -> Self {
+        Self {
+            fd,
+            generation,
+            rights_mask,
+        }
+    }
+}
+
+impl PhoenixSafe for ExoFsDescriptor {
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::Transactional;
+
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

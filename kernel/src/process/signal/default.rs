@@ -251,6 +251,7 @@ pub fn default_action(sig: u8) -> SigAction {
 
 /// Table des actions installées pour un processus (SigAction par signal).
 /// Partagé entre threads (les handlers sont globaux au processus).
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SigHandlerTable {
     /// Slots 0..63 (signal 0 = unused, 1..31 = standard, 32..63 = RT).

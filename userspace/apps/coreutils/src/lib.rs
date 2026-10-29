@@ -1,32 +1,45 @@
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(any(target_os = "none", target_os = "exo"), no_std)]
 
-#[cfg(not(target_os = "none"))]
+#[cfg(any(target_os = "none", target_os = "exo"))]
+extern crate exo_alloc;
+
+#[cfg(any(target_os = "none", target_os = "exo"))]
+pub use exo_rt;
+#[cfg(any(target_os = "none", target_os = "exo"))]
+pub use exo_std as std;
+
+#[cfg(not(any(target_os = "none", target_os = "exo")))]
 pub mod host;
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_os = "exo")))]
 pub use host::{cat, echo, ls, mkdir, rm, rmdir, touch};
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "exo"))]
 pub mod bare;
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_os = "exo"))]
 #[macro_export]
 macro_rules! exo_command {
     ($run:path) => {
         core::arch::global_asm!(
             ".global _start",
             "_start:",
+            "xor rbp, rbp",
             "mov rdi, rsp",
             "and rsp, -16",
             "call {entry}",
+            "ud2",
             entry = sym __exo_coreutils_entry,
         );
 
         #[no_mangle]
         extern "C" fn __exo_coreutils_entry(stack: usize) -> ! {
+            unsafe {
+                let _ = $crate::exo_rt::exo_rt_init_from_stack(stack as *const usize);
+            }
             let args = unsafe { $crate::bare::Args::from_stack(stack) };
             let code = $run(&args);
-            $crate::bare::exit(code);
+            $crate::std::process::exit(code);
         }
     };
 }
@@ -65,4 +78,3 @@ mod tests {
         fs::remove_dir(&dir).unwrap();
     }
 }
-

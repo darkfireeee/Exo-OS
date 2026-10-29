@@ -1,0 +1,13 @@
+[package]
+name = "exo-syscall"
+version = "0.1.0"
+edition = "2021"
+description = "Safe/typed no_std syscall wrappers for Exo-OS (ExoFS 500-520, POSIX compat, ExoPhoenix)"
+
+[lib]
+name = "exo_syscall"
+path = "src/lib.rs"
+
+[dependencies]
+exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo_types = { package = "exo-types", path = "../exo_types" }

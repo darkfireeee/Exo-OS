@@ -54,6 +54,7 @@ members = [
     "servers/vfs_server",
     "tools/exofs_mkroot",
     "tools/kernel_signer",
+    "library/std",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
 exclude = ["libs"]

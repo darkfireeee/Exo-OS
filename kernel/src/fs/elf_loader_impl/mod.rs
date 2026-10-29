@@ -29,14 +29,15 @@ use crate::memory::{Frame, PAGE_SIZE};
 use crate::process::lifecycle::exec::{ElfLoadError, ElfLoadResult, ElfLoader};
 
 use cache::{load_blob_cached, read_blob_from_cache, resolve_blob_id};
-use image::{install_elf_image, install_stack_vma};
+use image::{install_anon_rw_vma, install_elf_image, install_stack_vma};
 use parser::{default_interpreter_path, read_interpreter_path, validate_elf_header};
 use registry::{
     clear_elf_segments, lookup_elf_blob, lookup_elf_segments, register_elf_blob,
     DynamicLoaderHandoff, ElfWalkAllocator,
 };
 use stack::{
-    build_dynamic_handoff, build_initial_process_stack, map_stack_pages, write_stack_bytes,
+    build_dynamic_handoff, build_initial_process_stack_with_auxv, generate_random_16,
+    map_anon_pages, map_stack_pages, write_anon_bytes, write_stack_bytes, StackAuxvConfig,
     DYNAMIC_LOADER_HANDOFF_STACK_GAP,
 };
 use trace::{trace_blob, trace_path};
@@ -111,6 +112,70 @@ impl ElfLoader for ExoFsElfLoader {
             main_image.brk_end.saturating_add(PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
         child_as.init_heap_bounds(brk_start);
 
+        // ── 7b. Page SignalTcb partagée Kernel/Userspace (AT_SIGNAL_TCB = 51) ─
+        let rand_bytes = generate_random_16(file_id ^ main_image.entry_point);
+        let rand_u64 = u64::from_le_bytes([
+            rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3],
+            rand_bytes[4], rand_bytes[5], rand_bytes[6], rand_bytes[7],
+        ]);
+        const SIGNAL_TCB_BASE: u64 = 0x0000_7FFF_FF60_0000;
+        let signal_tcb_vaddr = SIGNAL_TCB_BASE + ((rand_u64 & 0x7F) * PAGE_SIZE as u64);
+        let sig_frame = map_anon_pages(&mut builder, &alloc, signal_tcb_vaddr, PAGE_SIZE)?;
+        install_anon_rw_vma(
+            &child_as,
+            signal_tcb_vaddr,
+            PAGE_SIZE,
+            crate::memory::virt::VmaFlags::DONTEXPAND,
+        )?;
+        let _ = sig_frame; // Déjà zéroïsé par map_anon_pages
+
+        // ── 7c. TLS statique initial (PT_TLS + GenericTcb) pour %fs (MSR_FS_BASE) ─
+        const INITIAL_TLS_BASE_REGION: u64 = 0x0000_7FFF_FF50_0000;
+        let tls_align = (main_image.tls_align as usize).max(16).next_power_of_two();
+        let tls_memsz = main_image.tls_memsz as usize;
+        let tls_filesz = (main_image.tls_filesz as usize).min(tls_memsz);
+        let aligned_tls_memsz = (tls_memsz + tls_align - 1) & !(tls_align - 1);
+        let static_tls_pages = aligned_tls_memsz.div_ceil(PAGE_SIZE);
+        let total_tls_pages = static_tls_pages + 1; // +1 page pour GenericTcb à [%fs:0]
+        let tls_alloc_len = total_tls_pages * PAGE_SIZE;
+        let tls_frames = map_anon_pages(
+            &mut builder,
+            &alloc,
+            INITIAL_TLS_BASE_REGION,
+            tls_alloc_len,
+        )?;
+        install_anon_rw_vma(
+            &child_as,
+            INITIAL_TLS_BASE_REGION,
+            tls_alloc_len,
+            crate::memory::virt::VmaFlags::from_bits(0),
+        )?;
+
+        let tls_base = INITIAL_TLS_BASE_REGION + (static_tls_pages * PAGE_SIZE) as u64;
+        if tls_filesz > 0 {
+            let src_start = main_image.tls_offset as usize;
+            let src_end = src_start.saturating_add(tls_filesz);
+            if src_end > elf_data.len() {
+                return Err(ElfLoadError::InvalidElf);
+            }
+            let tdata_vaddr = tls_base - aligned_tls_memsz as u64;
+            write_anon_bytes(
+                &tls_frames,
+                INITIAL_TLS_BASE_REGION,
+                tdata_vaddr,
+                &elf_data[src_start..src_end],
+            )?;
+        }
+
+        // Initialiser GenericTcb à tls_base ([%fs:0] = tls_end = tls_base, [%fs:16] = tcb_ptr = tls_base)
+        let mut tcb_header = [0u8; 40];
+        tcb_header[0..8].copy_from_slice(&tls_base.to_le_bytes());
+        tcb_header[8..16].copy_from_slice(&(tls_alloc_len as u64).to_le_bytes());
+        tcb_header[16..24].copy_from_slice(&tls_base.to_le_bytes());
+        tcb_header[24..32].copy_from_slice(&(PAGE_SIZE as u64).to_le_bytes());
+        tcb_header[32..40].copy_from_slice(&signal_tcb_vaddr.to_le_bytes());
+        write_anon_bytes(&tls_frames, INITIAL_TLS_BASE_REGION, tls_base, &tcb_header)?;
+
         // ── 8. Pile utilisateur : bootstrap eager minimal, plafond layout partagé ─
         const STACK_TOP: u64 = USER_STACK_TOP.as_u64();
         const STACK_SIZE: usize = USER_STACK_BOOTSTRAP_SIZE;
@@ -119,8 +184,24 @@ impl ElfLoader for ExoFsElfLoader {
 
         let stack_frames = map_stack_pages(&mut builder, &alloc, stack_base, stack_size)?;
         install_stack_vma(&child_as, stack_base, stack_size)?;
-        let executable_stack_top =
-            build_initial_process_stack(&stack_frames, stack_base, STACK_TOP, argv, envp)?;
+        let interp_base = interp_image.as_ref().map(|(_, img)| img.base).unwrap_or(0);
+        let auxv_cfg = StackAuxvConfig {
+            phdr_vaddr: main_image.phdr_vaddr,
+            phnum: main_image.phnum,
+            entry_vaddr: main_image.entry_point,
+            interp_base,
+            vdso_ehdr_vaddr: 0,
+            signal_tcb_vaddr,
+            seed_hint: file_id,
+        };
+        let executable_stack_top = build_initial_process_stack_with_auxv(
+            &stack_frames,
+            stack_base,
+            STACK_TOP,
+            argv,
+            envp,
+            &auxv_cfg,
+        )?;
         if let Some((interp, image)) = interp_image {
             let handoff =
                 build_dynamic_handoff(path, &interp, &main_image, &image, executable_stack_top);
@@ -153,12 +234,12 @@ impl ElfLoader for ExoFsElfLoader {
             entry_point,
             initial_stack_top: executable_stack_top,
             entry_arg0,
-            tls_base: 0,
-            tls_size: 0,
+            tls_base,
+            tls_size: tls_alloc_len,
             brk_start,
             cr3: child_cr3,
             addr_space_ptr,
-            signal_tcb_vaddr: 0,
+            signal_tcb_vaddr,
         })
     }
 }

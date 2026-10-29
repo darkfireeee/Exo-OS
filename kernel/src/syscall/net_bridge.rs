@@ -577,46 +577,99 @@ pub fn net_recvfrom(
     if buf_ptr == 0 {
         return Err(EFAULT);
     }
-    let request_len = len.min(NET_INLINE_DATA_MAX);
-    let msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
     let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(RECV_TIMEOUT_NS);
+    let mut total_recv: usize = 0;
+    let mut peer_addr_recorded = false;
 
-    loop {
+    while total_recv < len {
+        let chunk_len = (len - total_recv).min(NET_INLINE_DATA_MAX);
+        let chunk_flags = if total_recv == 0 {
+            flags
+        } else {
+            flags | MSG_DONTWAIT
+        };
+        let msg = make_msg(
+            NET_OP_RECVFROM,
+            fd as u32,
+            chunk_len as u64,
+            0,
+            chunk_flags,
+            0,
+        );
+
         let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
-        let n_raw = call_network_raw(&msg, &[], &mut reply_raw)?;
+        let n_raw = match call_network_raw(&msg, &[], &mut reply_raw) {
+            Ok(n) => n,
+            Err(e) => return if total_recv > 0 { Ok(total_recv as i64) } else { Err(e) },
+        };
         let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
-        if reply.status == EAGAIN && (flags & MSG_DONTWAIT == 0) {
-            if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
-                return Err(ETIMEDOUT);
+        if reply.status == EAGAIN {
+            if total_recv == 0 && (flags & MSG_DONTWAIT == 0) {
+                if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    return Err(ETIMEDOUT);
+                }
+                if !crate::scheduler::timer::sleep_ns(RECV_RETRY_NAP_NS) {
+                    crate::syscall::fast_path::sys_sched_yield();
+                }
+                continue;
             }
-            if !crate::scheduler::timer::sleep_ns(RECV_RETRY_NAP_NS) {
-                crate::syscall::fast_path::sys_sched_yield();
-            }
-            continue;
+            return if total_recv > 0 {
+                Ok(total_recv as i64)
+            } else {
+                Err(EAGAIN)
+            };
         }
         if reply.status < 0 {
-            return Err(reply.status);
+            return if total_recv > 0 {
+                Ok(total_recv as i64)
+            } else {
+                Err(reply.status)
+            };
         }
         let n = reply.status.max(0) as usize;
-        let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
+        let data_len = n
+            .min(chunk_len)
+            .min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
         if data_len != 0 {
+            let curr_buf = match buf_ptr.checked_add(total_recv as u64) {
+                Some(p) => p,
+                None => {
+                    return if total_recv > 0 {
+                        Ok(total_recv as i64)
+                    } else {
+                        Err(EFAULT)
+                    }
+                }
+            };
             if copy_to_user(
-                buf_ptr as *mut u8,
+                curr_buf as *mut u8,
                 reply_raw[NET_REPLY_DATA_OFFSET..].as_ptr(),
                 data_len,
             )
             .is_err()
             {
-                return Err(EFAULT);
+                return if total_recv > 0 {
+                    Ok(total_recv as i64)
+                } else {
+                    Err(EFAULT)
+                };
             }
         }
-        let peer_addr = reply_u32(&reply, 8);
-        let peer_port = reply_u16(&reply, 12);
-        if peer_addr != 0 || addr_ptr != 0 {
-            write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+        if !peer_addr_recorded {
+            let peer_addr = reply_u32(&reply, 8);
+            let peer_port = reply_u16(&reply, 12);
+            if peer_addr != 0 || addr_ptr != 0 {
+                write_sockaddr_in(addr_ptr, addr_len_ptr, peer_addr, peer_port)?;
+            }
+            peer_addr_recorded = true;
         }
-        return Ok(data_len as i64);
+        total_recv += data_len;
+        // Si MSG_PEEK (0x02) ou tranche partielle/EOF, arrêter la boucle.
+        if data_len < chunk_len || (flags & 0x02) != 0 {
+            break;
+        }
     }
+    Ok(total_recv as i64)
 }
 
 pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
@@ -678,30 +731,60 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     }
     check_net_permission(crate::syscall::numbers::SYS_RECVMSG)?;
     let mut msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
-    let len = msghdr_total_iov_len(&msg)?;
-    let request_len = len.min(NET_INLINE_DATA_MAX);
-    let net_msg = make_msg(NET_OP_RECVFROM, fd as u32, request_len as u64, 0, flags, 0);
-    let mut reply_raw = [0u8; core::mem::size_of::<NetReply>() + NET_INLINE_DATA_MAX];
-    let n_raw = call_network_raw(&net_msg, &[], &mut reply_raw)?;
-    let reply = unsafe { core::ptr::read_unaligned(reply_raw.as_ptr() as *const NetReply) };
-    if reply.status < 0 {
-        return Err(reply.status);
-    }
-    let n = reply.status.max(0) as usize;
-    let data_len = n.min(len).min(n_raw.saturating_sub(NET_REPLY_DATA_OFFSET));
-    copy_inline_to_msghdr_iov(
-        &msg,
-        &reply_raw[NET_REPLY_DATA_OFFSET..NET_REPLY_DATA_OFFSET + data_len],
-    )?;
-    if msg.msg_name != 0 {
-        let peer_addr = reply_u32(&reply, 8);
-        let peer_port = reply_u16(&reply, 12);
-        write_sockaddr_in(msg.msg_name, 0, peer_addr, peer_port)?;
-        msg.msg_namelen = SOCKADDR_IN_LEN as u32;
+    let _total_len = msghdr_total_iov_len(&msg)?;
+    let _ = copy_inline_to_msghdr_iov;
+
+    let mut total_recv: usize = 0;
+    let mut idx = 0u64;
+    while idx < msg.msg_iovlen {
+        let ptr = msg
+            .msg_iov
+            .checked_add(idx.saturating_mul(core::mem::size_of::<LinuxIovec>() as u64))
+            .ok_or(if total_recv > 0 { total_recv as i64 } else { EFAULT })?;
+        let iov = read_user_typed::<LinuxIovec>(ptr)
+            .map_err(|_| if total_recv > 0 { total_recv as i64 } else { EFAULT })?;
+        let chunk_len = iov.iov_len as usize;
+        if chunk_len != 0 {
+            if iov.iov_base == 0 {
+                return if total_recv > 0 {
+                    Ok(total_recv as i64)
+                } else {
+                    Err(EFAULT)
+                };
+            }
+            let effective_flags = if total_recv == 0 {
+                flags
+            } else {
+                flags | MSG_DONTWAIT
+            };
+            let addr_out = if total_recv == 0 { msg.msg_name } else { 0 };
+            match net_recvfrom(fd, iov.iov_base, chunk_len, effective_flags, addr_out, 0) {
+                Ok(n) => {
+                    let recvd = n.max(0) as usize;
+                    if total_recv == 0 && msg.msg_name != 0 {
+                        msg.msg_namelen = SOCKADDR_IN_LEN as u32;
+                    }
+                    total_recv += recvd;
+                    if recvd < chunk_len || (flags & 0x02) != 0 {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    return if total_recv > 0 {
+                        msg.msg_flags = 0;
+                        let _ = write_user_typed::<LinuxMsghdr>(msg_ptr, msg);
+                        Ok(total_recv as i64)
+                    } else {
+                        Err(err)
+                    };
+                }
+            }
+        }
+        idx += 1;
     }
     msg.msg_flags = 0;
     write_user_typed::<LinuxMsghdr>(msg_ptr, msg).map_err(|_| EFAULT)?;
-    Ok(n as i64)
+    Ok(total_recv as i64)
 }
 
 pub fn net_shutdown(fd: i32, how: i32) -> Result<i64, i64> {
