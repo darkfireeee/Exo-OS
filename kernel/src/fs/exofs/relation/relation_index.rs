@@ -222,6 +222,23 @@ impl RelationIndex {
         let mut guard = self.inner.lock();
         let outgoing = guard.by_from.remove(&key).unwrap_or_default();
         let incoming = guard.by_to.remove(&key).unwrap_or_default();
+
+        // Nettoyer les relations sortantes de ce blob dans les `by_to` des pairs
+        for id in &outgoing {
+            for v in guard.by_to.values_mut() {
+                v.retain(|r| r != id);
+            }
+        }
+        guard.by_to.retain(|_, v| !v.is_empty());
+
+        // Nettoyer les relations entrantes vers ce blob dans les `by_from` des pairs
+        for id in &incoming {
+            for v in guard.by_from.values_mut() {
+                v.retain(|r| r != id);
+            }
+        }
+        guard.by_from.retain(|_, v| !v.is_empty());
+
         let mut all = outgoing;
         for id in incoming {
             if !all.contains(&id) {
@@ -230,6 +247,8 @@ impl RelationIndex {
         }
         guard.stats.n_from_keys = guard.by_from.len();
         guard.stats.n_to_keys = guard.by_to.len();
+        guard.stats.n_total_ids = guard.stats.n_total_ids.saturating_sub(all.len());
+        guard.stats.total_removes = guard.stats.total_removes.wrapping_add(all.len() as u64);
         all
     }
 
@@ -385,6 +404,8 @@ mod tests {
         assert_eq!(removed.len(), 2);
         assert!(!idx.has_outgoing(&blob(30)));
         assert!(!idx.has_incoming(&blob(30)));
+        assert!(!idx.has_incoming(&blob(31)));
+        assert!(!idx.has_outgoing(&blob(32)));
     }
 
     #[test]

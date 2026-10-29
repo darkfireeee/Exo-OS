@@ -192,19 +192,39 @@ impl PendingWriteBuffer {
     }
 
     /// Flush toutes les entrées vers le store (RECUR-01 : while).
+    /// En cas d'erreur sur l'entrée `i`, restaure les entrées non flushées dans le buffer.
     pub fn flush_to<S: BlobStoreWrite>(&mut self, store: &mut S) -> ExofsResult<u32> {
         let mut done = 0u32;
         let entries = self.drain_all();
         let mut i = 0usize;
+        let mut flush_err = None;
         while i < entries.len() {
             let e = &entries[i];
-            if e.is_delete {
-                store.delete_blob(&e.blob_id)?;
+            let res = if e.is_delete {
+                store.delete_blob(&e.blob_id)
             } else {
-                store.write_blob(&e.blob_id, &e.data)?;
+                store.write_blob(&e.blob_id, &e.data)
+            };
+            match res {
+                Ok(_) => {
+                    done = done.saturating_add(1);
+                    i = i.wrapping_add(1);
+                }
+                Err(err) => {
+                    flush_err = Some(err);
+                    break;
+                }
             }
-            done = done.saturating_add(1);
-            i = i.wrapping_add(1);
+        }
+        if let Some(err) = flush_err {
+            // Restaurer les entrées non flushées pour éviter la perte de données
+            for remaining_entry in entries.into_iter().skip(i) {
+                self.total_bytes_pending = self
+                    .total_bytes_pending
+                    .saturating_add(remaining_entry.data.len() as u64);
+                self.entries.push(remaining_entry);
+            }
+            return Err(err);
         }
         Ok(done)
     }

@@ -171,7 +171,8 @@ impl SnapshotDeleter {
 
     // ── Suppression récursive ────────────────────────────────────────
 
-    /// Supprime récursivement les enfants (pré-ordre enfants avant parent)
+    /// Supprime récursivement les enfants de manière itérative (RECUR-01).
+    /// Valide les préconditions sur tous les descendants avant toute suppression.
     fn cascade_delete(
         parent_id: SnapshotId,
         opts: DeleteOptions,
@@ -179,28 +180,40 @@ impl SnapshotDeleter {
         cascade_ids: &mut Vec<SnapshotId>,
         n_cascade: &mut u32,
     ) -> ExofsResult<()> {
-        let children = SNAPSHOT_LIST.children_of(parent_id)?;
-        for child_id in children {
-            // Récursion sur les petits-enfants
-            Self::cascade_delete(child_id, opts, total_freed, cascade_ids, n_cascade)?;
+        let mut worklist = Vec::new();
+        worklist.try_reserve(16).map_err(|_| ExofsError::NoMemory)?;
+        for child in SNAPSHOT_LIST.children_of(parent_id)? {
+            worklist.push(child);
+        }
 
-            let child = SNAPSHOT_LIST
-                .get(child_id)
-                .map_err(|_| ExofsError::NotFound)?;
-            // Vérification force pour les enfants aussi
-            if child.is_protected() && !opts.force {
-                return Err(ExofsError::from(DeleteDenyReason::Protected));
+        let mut to_delete = Vec::new();
+        to_delete.try_reserve(worklist.len()).map_err(|_| ExofsError::NoMemory)?;
+
+        while let Some(current) = worklist.pop() {
+            to_delete.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+            to_delete.push(current);
+            let grand_children = SNAPSHOT_LIST.children_of(current)?;
+            for gc in grand_children {
+                worklist.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                worklist.push(gc);
             }
+        }
+
+        // Vérification des préconditions pour tous les descendants avant suppression
+        for &child_id in &to_delete {
+            let child = SNAPSHOT_LIST.get(child_id).map_err(|_| ExofsError::NotFound)?;
+            Self::check_preconditions(&child, opts)?;
+        }
+
+        // Suppression effective en ordre inverse (feuilles avant branches)
+        while let Some(child_id) = to_delete.pop() {
             let removed = SNAPSHOT_LIST.remove(child_id)?;
             *total_freed = total_freed.saturating_add(removed.total_bytes);
-
-            // OOM-02 : try_reserve avant push
-            cascade_ids
-                .try_reserve(1)
-                .map_err(|_| ExofsError::NoMemory)?;
+            cascade_ids.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             cascade_ids.push(child_id);
             *n_cascade = n_cascade.checked_add(1).ok_or(ExofsError::Overflow)?;
         }
+
         Ok(())
     }
 

@@ -111,9 +111,7 @@ pub fn write_bytes_at(
         let available = block_size.saturating_sub(current_intra);
         let chunk_len = remaining.min(available);
         if current_intra != 0 || chunk_len != block_size {
-            if device.read_block(current_lba, &mut block).is_err() {
-                block.fill(0);
-            }
+            device.read_block(current_lba, &mut block)?;
         }
         let src_end = src_offset
             .checked_add(chunk_len)
