@@ -355,37 +355,6 @@ struct Console {
 }
 
 #[cfg(target_os = "none")]
-impl Console {
-    const fn new() -> Self {
-        Self {
-            fb: Framebuffer::absent(),
-            cols: 0,
-            rows: 0,
-            col: 0,
-            row: 0,
-            fg: (0xe6, 0xf1, 0xff),
-            bg: (0x03, 0x0d, 0x14),
-            cursor_visible: true,
-            cursor_drawn: false,
-            ansi_state: ANSI_GROUND,
-            params: [0; 4],
-            param_count: 0,
-            dirty_y_min: u32::MAX,
-            dirty_y_max: 0,
-        }
-    }
-
-    #[inline]
-    fn mark_dirty_rows(&mut self, y_start: u32, y_end: u32) {
-        if y_start < self.dirty_y_min {
-            self.dirty_y_min = y_start;
-        }
-        if y_end > self.dirty_y_max {
-            self.dirty_y_max = y_end.min(self.fb.height);
-        }
-    }
-
-#[cfg(target_os = "none")]
 fn notify_virtio_gpu_flush(x: u32, y: u32, w: u32, h: u32) {
     #[repr(C)]
     struct VirtioReq {
@@ -415,6 +384,72 @@ fn notify_virtio_gpu_flush(x: u32, y: u32, w: u32, h: u32) {
         );
     }
 }
+
+#[cfg(not(target_os = "none"))]
+fn notify_virtio_gpu_flush(_x: u32, _y: u32, _w: u32, _h: u32) {}
+
+#[cfg(target_os = "none")]
+fn notify_virtio_gpu_move_cursor(x: u32, y: u32) {
+    #[repr(C)]
+    struct VirtioCursorReq {
+        sender_pid: u32,
+        msg_type: u32,
+        payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
+    }
+    let mut req = VirtioCursorReq {
+        sender_pid: 0,
+        msg_type: syscall::VIRTIO_GPU_MSG_MOVE_CURSOR,
+        payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
+    };
+    req.payload[0..4].copy_from_slice(&x.to_le_bytes());
+    req.payload[4..8].copy_from_slice(&y.to_le_bytes());
+
+    unsafe {
+        let _ = syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            13, // virtio_drivers endpoint
+            &req as *const VirtioCursorReq as u64,
+            core::mem::size_of::<VirtioCursorReq>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | 2,
+            0,
+            0,
+        );
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+fn notify_virtio_gpu_move_cursor(_x: u32, _y: u32) {}
+
+#[cfg(target_os = "none")]
+impl Console {
+    const fn new() -> Self {
+        Self {
+            fb: Framebuffer::absent(),
+            cols: 0,
+            rows: 0,
+            col: 0,
+            row: 0,
+            fg: (0xe6, 0xf1, 0xff),
+            bg: (0x03, 0x0d, 0x14),
+            cursor_visible: true,
+            cursor_drawn: false,
+            ansi_state: ANSI_GROUND,
+            params: [0; 4],
+            param_count: 0,
+            dirty_y_min: u32::MAX,
+            dirty_y_max: 0,
+        }
+    }
+
+    #[inline]
+    fn mark_dirty_rows(&mut self, y_start: u32, y_end: u32) {
+        if y_start < self.dirty_y_min {
+            self.dirty_y_min = y_start;
+        }
+        if y_end > self.dirty_y_max {
+            self.dirty_y_max = y_end.min(self.fb.height);
+        }
+    }
 
     #[inline]
     fn flush_damage(&mut self) {
@@ -1004,7 +1039,10 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
         }
         syscall::DISPLAY_OP_WAYLAND_WIRE => {
             let n = core::cmp::min(req.a as usize, syscall::FB_TEXT_MAX);
-            let count = wayland_mut().dispatch_wire(req.sender_pid, &req.data[..n]);
+            let (count, dirty) = wayland_mut().dispatch_wire(req.sender_pid, &req.data[..n], console_mut().fb);
+            if let Some((y_min, y_max)) = dirty {
+                console_mut().mark_dirty_rows(y_min, y_max);
+            }
             syscall::FbReply {
                 status: count,
                 len: n as u32,
@@ -1087,16 +1125,34 @@ impl MouseState {
         }
         let w = self.saved_w;
         let h = self.saved_h;
+        let bpp = fb.bytes_per_pixel() as usize;
+        let target_base = fb.draw_target_base();
+        let row_stride = (fb.stride_pixels as usize).saturating_mul(bpp);
         let mut cy = 0u32;
         while cy < h {
+            let row_offset = ((self.saved_y + cy) as usize).saturating_mul(row_stride);
             let mut cx = 0u32;
             while cx < w {
                 let pixel = self.saved_pixels[(cy * w + cx) as usize];
-                fb.put_pixel_direct(self.saved_x + cx, self.saved_y + cy, pixel);
+                let px_offset = row_offset.saturating_add(((self.saved_x + cx) as usize).saturating_mul(bpp));
+                let addr = target_base.saturating_add(px_offset);
+                unsafe {
+                    match bpp {
+                        4 => core::ptr::write(addr as *mut u32, pixel),
+                        3 => {
+                            let bytes = pixel.to_le_bytes();
+                            core::ptr::write(addr as *mut u8, bytes[0]);
+                            core::ptr::write((addr + 1) as *mut u8, bytes[1]);
+                            core::ptr::write((addr + 2) as *mut u8, bytes[2]);
+                        }
+                        _ => {}
+                    }
+                }
                 cx += 1;
             }
             cy += 1;
         }
+        fb.flush_rows(self.saved_y, self.saved_y + h);
         self.drawn = false;
     }
 
@@ -1111,6 +1167,9 @@ impl MouseState {
         let y = self.y.min(fb.height.saturating_sub(1));
         let w = MOUSE_CURSOR_W.min(fb.width.saturating_sub(x));
         let h = MOUSE_CURSOR_H.min(fb.height.saturating_sub(y));
+        let bpp = fb.bytes_per_pixel() as usize;
+        let target_base = fb.draw_target_base();
+        let row_stride = (fb.stride_pixels as usize).saturating_mul(bpp);
         let mut cy = 0u32;
         while cy < h {
             let mut cx = 0u32;
@@ -1129,18 +1188,37 @@ impl MouseState {
         let cyan = fb.encode(0x00, 0xc5, 0xff);
         cy = 0;
         while cy < h {
+            let row_offset = ((y + cy) as usize).saturating_mul(row_stride);
             let mut cx = 0u32;
             while cx < w {
-                match MOUSE_CURSOR_BITMAP[cy as usize][cx as usize] {
-                    1 => fb.put_pixel_direct(x + cx, y + cy, black),
-                    2 => fb.put_pixel_direct(x + cx, y + cy, white),
-                    3 => fb.put_pixel_direct(x + cx, y + cy, cyan),
-                    _ => {}
+                let pixel = match MOUSE_CURSOR_BITMAP[cy as usize][cx as usize] {
+                    1 => Some(black),
+                    2 => Some(white),
+                    3 => Some(cyan),
+                    _ => None,
+                };
+                if let Some(p) = pixel {
+                    let px_offset = row_offset.saturating_add(((x + cx) as usize).saturating_mul(bpp));
+                    let addr = target_base.saturating_add(px_offset);
+                    unsafe {
+                        match bpp {
+                            4 => core::ptr::write(addr as *mut u32, p),
+                            3 => {
+                                let bytes = p.to_le_bytes();
+                                core::ptr::write(addr as *mut u8, bytes[0]);
+                                core::ptr::write((addr + 1) as *mut u8, bytes[1]);
+                                core::ptr::write((addr + 2) as *mut u8, bytes[2]);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 cx += 1;
             }
             cy += 1;
         }
+        fb.flush_rows(y, y + h);
+        notify_virtio_gpu_move_cursor(x, y);
         self.drawn = true;
     }
 

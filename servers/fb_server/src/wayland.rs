@@ -338,9 +338,11 @@ impl WaylandState {
     }
 
     /// Décode et traite un flux de messages filaires Wayland (`[object_id: u32, size_opcode: u32, payload...]`).
-    pub fn dispatch_wire(&mut self, sender_pid: u32, bytes: &[u8]) -> i64 {
+    pub fn dispatch_wire(&mut self, sender_pid: u32, bytes: &[u8], fb: Framebuffer) -> (i64, Option<(u32, u32)>) {
         let mut offset = 0usize;
         let mut processed = 0i64;
+        let mut dirty_min = u32::MAX;
+        let mut dirty_max = 0u32;
         while offset + 8 <= bytes.len() {
             let object_id = read_u32(bytes, offset);
             let size_op = read_u32(bytes, offset + 4);
@@ -350,17 +352,36 @@ impl WaylandState {
                 break;
             }
             let payload = &bytes[offset + 8..offset + msg_size];
-            self.handle_single_wire_msg(sender_pid, object_id, opcode, payload);
+            if let Some((y0, y1)) = self.handle_single_wire_msg(sender_pid, object_id, opcode, payload, fb) {
+                if y0 < dirty_min {
+                    dirty_min = y0;
+                }
+                if y1 > dirty_max {
+                    dirty_max = y1;
+                }
+            }
             offset += msg_size;
             processed += 1;
             self.wire_messages_processed = self.wire_messages_processed.saturating_add(1);
         }
-        processed
+        let dirty_bounds = if dirty_min < dirty_max {
+            Some((dirty_min, dirty_max))
+        } else {
+            None
+        };
+        (processed, dirty_bounds)
     }
 
-    fn handle_single_wire_msg(&mut self, sender_pid: u32, object_id: u32, opcode: u16, payload: &[u8]) {
+    fn handle_single_wire_msg(
+        &mut self,
+        sender_pid: u32,
+        object_id: u32,
+        opcode: u16,
+        payload: &[u8],
+        fb: Framebuffer,
+    ) -> Option<(u32, u32)> {
         let Some(obj_idx) = self.find_object(object_id) else {
-            return;
+            return None;
         };
         let kind = self.objects[obj_idx].kind;
         let surf_idx = self.objects[obj_idx].surface_idx;
@@ -422,6 +443,12 @@ impl WaylandState {
                     let _ = self.register_object(buf_id, WlObjectKind::Buffer, sender_pid, 0xFF);
                 }
             }
+            // wl_surface.attach(buffer_id, x, y)
+            (WlObjectKind::Surface, 1) => {
+                if (surf_idx as usize) < MAX_SHM_SURFACES {
+                    self.surfaces[surf_idx as usize].damaged = true;
+                }
+            }
             // wl_surface.damage / damage_buffer(x, y, w, h)
             (WlObjectKind::Surface, 2 | 9) => {
                 if (surf_idx as usize) < MAX_SHM_SURFACES && payload.len() >= 16 {
@@ -434,10 +461,12 @@ impl WaylandState {
                     };
                 }
             }
-            // wl_surface.commit()
+            // wl_surface.commit() -> composite et synchronise les lignes vers le framebuffer
             (WlObjectKind::Surface, 6) => {
                 if (surf_idx as usize) < MAX_SHM_SURFACES {
-                    self.surfaces[surf_idx as usize].damaged = true;
+                    let s_id = self.surfaces[surf_idx as usize].surface_id;
+                    let rect = self.surfaces[surf_idx as usize].damage;
+                    return self.commit_surface_damage(s_id, sender_pid, rect, fb);
                 }
             }
             // xdg_wm_base.get_xdg_surface(new_id, wl_surface)
@@ -474,6 +503,7 @@ impl WaylandState {
             }
             _ => {}
         }
+        None
     }
 }
 
