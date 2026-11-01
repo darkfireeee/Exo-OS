@@ -213,7 +213,8 @@ pub fn fs_dup(oldfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if let Some(fd) = install_process_fd(pid, handle as u64, resolved.flags) {
         Ok(fd as i64)
     } else {
-        Ok(handle as i64)
+        let _ = OBJECT_TABLE.close(handle);
+        Err(FsBridgeError::NoMemory)
     }
 }
 
@@ -241,11 +242,16 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
         }
         return Err(FsBridgeError::NoMemory);
     }
-    let handle = OBJECT_TABLE
-        .dup(resolved.handle)
-        .map_err(exofs_to_bridge_error)?;
-    if install_process_fd_at(pid, newfd, handle as u64, dup_flags) {
-        Ok(newfd as i64)
+    if process_has_fd_table(pid) {
+        let handle = OBJECT_TABLE
+            .dup(resolved.handle)
+            .map_err(exofs_to_bridge_error)?;
+        if install_process_fd_at(pid, newfd, handle as u64, dup_flags) {
+            Ok(newfd as i64)
+        } else {
+            let _ = OBJECT_TABLE.close(handle);
+            Err(FsBridgeError::NoMemory)
+        }
     } else {
         OBJECT_TABLE
             .dup2(resolved.handle, newfd)
@@ -261,12 +267,17 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
         return Err(FsBridgeError::NotReady);
     }
     match cmd {
-        F_DUPFD => {
+        F_DUPFD | F_DUPFD_CLOEXEC => {
             let resolved = resolve_fd(pid, fd)?;
             if arg > i32::MAX as u64 {
                 return Err(FsBridgeError::Invalid);
             }
             let min_fd = arg as i32;
+            let target_flags = if cmd == F_DUPFD_CLOEXEC {
+                resolved.flags | O_CLOEXEC
+            } else {
+                resolved.flags & !O_CLOEXEC
+            };
             if is_tty_handle(resolved.handle) {
                 if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
                     .find_by_pid(crate::process::core::pid::Pid(pid))
@@ -275,7 +286,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
                     let mut candidate = min_fd.max(0);
                     while candidate < 65536 {
                         if files.get(candidate).is_none() {
-                            if files.install_at(candidate, TTY_PTS0_HANDLE as u64, resolved.flags) {
+                            if files.install_at(candidate, TTY_PTS0_HANDLE as u64, target_flags) {
                                 return Ok(candidate as i64);
                             }
                             return Err(FsBridgeError::NoMemory);
@@ -296,7 +307,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
                 let mut candidate = min_fd.max(0);
                 while candidate < 65536 {
                     if files.get(candidate).is_none() {
-                        if files.install_at(candidate, handle as u64, resolved.flags) {
+                        if files.install_at(candidate, handle as u64, target_flags) {
                             return Ok(candidate as i64);
                         }
                         let _ = OBJECT_TABLE.close(handle);

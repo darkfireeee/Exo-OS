@@ -69,6 +69,11 @@ pub fn checked_usize_sysarg(value: u64) -> Result<usize, i64> {
 #[inline(always)]
 pub fn current_pid_u32() -> u32 {
     let tcb_ptr: u64;
+    #[cfg(test)]
+    {
+        tcb_ptr = 0;
+    }
+    #[cfg(not(test))]
     unsafe {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
     }

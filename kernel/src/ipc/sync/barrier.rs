@@ -150,6 +150,11 @@ impl IpcBarrier {
         loop {
             core::hint::spin_loop();
             spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
 
             if !self.active.load(Ordering::Relaxed) {
                 return Err(IpcError::Closed);

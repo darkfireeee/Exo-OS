@@ -253,6 +253,7 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C, align(16))]
+#[allow(dead_code)]
 struct AlignedFpRegs([u8; 512]);
 
 #[cfg(target_os = "none")]

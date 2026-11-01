@@ -185,7 +185,7 @@ pub fn sys_exo_ipc_create(
 ) -> i64 {
     stat_inc(SYS_EXO_IPC_CREATE);
     let len = name_len as usize;
-    if len == 0 || len > 128 {
+    if len == 0 || len >= crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN {
         return EINVAL;
     }
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
@@ -197,7 +197,7 @@ pub fn sys_exo_ipc_create(
         None => return EINVAL,
     };
 
-    if let Err(err) = UserBuf::validate(name_ptr, len, 128) {
+    if let Err(err) = UserBuf::validate(name_ptr, len, crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN) {
         return err.to_errno();
     }
     let mut name_buf = [0u8; 128];
@@ -284,8 +284,8 @@ pub fn sys_exo_ipc_lookup(
     stat_inc(SYS_EXO_IPC_LOOKUP);
 
     let len = name_len as usize;
-    let max_len = crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN.min(128);
-    if len == 0 || len > max_len {
+    let max_len = crate::ipc::core::constants::MAX_ENDPOINT_NAME_LEN;
+    if len == 0 || len >= max_len {
         return EINVAL;
     }
     if name_ptr == 0 {

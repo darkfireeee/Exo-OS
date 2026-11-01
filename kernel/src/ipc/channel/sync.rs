@@ -908,10 +908,12 @@ pub fn sync_channel_send_checked(
         return Err(IpcError::InvalidHandle);
     }
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
-    drop(tbl);
-    // SAFETY: même garanties que sync_channel_send().
     let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
-    chan_ref.send_checked(data, flags, table, token)
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
+    drop(tbl);
+    let res = chan_ref.send_checked(data, flags, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Reçoit depuis le canal synchrone `idx` avec vérification capability (IPC-04 v6).
@@ -927,8 +929,10 @@ pub fn sync_channel_recv_checked(
         return Err(IpcError::InvalidHandle);
     }
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
-    drop(tbl);
-    // SAFETY: même garanties que sync_channel_recv().
     let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
-    chan_ref.recv_checked(buf, flags, table, token)
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
+    drop(tbl);
+    let res = chan_ref.recv_checked(buf, flags, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }

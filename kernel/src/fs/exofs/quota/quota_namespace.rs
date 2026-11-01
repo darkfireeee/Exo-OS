@@ -478,38 +478,41 @@ impl QuotaNamespace {
         result
     }
 
-    /// Initialise le namespace root (id=0).
+    /// Initialise le namespace root (id=0). Idempotent si déjà initialisé.
     pub fn init_root(&self, policy: QuotaPolicy, tick: u64) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let entries = unsafe { &mut *self.entries.get() };
-        // Trouver un slot libre pour le root
-        let slot = {
-            let mut s = None;
-            let mut i = 0usize;
-            while i < NAMESPACE_MAX {
-                if !entries[i].occupied {
-                    s = Some(i);
-                    break;
-                }
-                i = i.wrapping_add(1);
+        let mut existing_root = None;
+        let mut free_slot = None;
+        let mut i = 0usize;
+        while i < NAMESPACE_MAX {
+            if entries[i].occupied && entries[i].id == NamespaceId::ROOT {
+                existing_root = Some(i);
+                break;
             }
-            s.ok_or(ExofsError::NoSpace)
-        };
-        let result = match slot {
-            Ok(s) => {
-                entries[s] = QuotaNamespaceEntry::new(
-                    NamespaceId::ROOT,
-                    NamespaceId::ROOT,
-                    policy,
-                    "root",
-                    tick,
-                );
-                self.count.fetch_add(1, Ordering::Relaxed);
-                Ok(())
+            if !entries[i].occupied && free_slot.is_none() {
+                free_slot = Some(i);
             }
-            Err(e) => Err(e),
+            i = i.wrapping_add(1);
+        }
+
+        let result = if let Some(s) = existing_root {
+            entries[s].policy = policy;
+            Ok(())
+        } else if let Some(s) = free_slot {
+            entries[s] = QuotaNamespaceEntry::new(
+                NamespaceId::ROOT,
+                NamespaceId::ROOT,
+                policy,
+                "root",
+                tick,
+            );
+            self.count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(ExofsError::NoSpace)
         };
         self.release();
         result

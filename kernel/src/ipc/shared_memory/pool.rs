@@ -214,6 +214,13 @@ pub fn shm_alloc_contiguous(count: usize) -> Option<usize> {
             let bit = idx % 64;
             let mask = 1u64 << bit;
             let v = POOL_BITMAP[word_idx].load(Ordering::Acquire);
+            if (v & mask) == 0 {
+                // Bit déjà pris par une allocation concurrente — rollback
+                for j in 0..reserved {
+                    shm_page_free(start + j);
+                }
+                continue 'outer;
+            }
 
             match POOL_BITMAP[word_idx].compare_exchange(
                 v,

@@ -246,8 +246,15 @@ impl RelationBatch {
                 let id = RELATION_STORAGE.allocate_id();
                 let rel = Relation::new(id, from, to, rel_type, tick);
                 RELATION_STORAGE.persist(&rel)?;
-                RELATION_GRAPH.add_relation(&rel)?;
-                RELATION_INDEX.insert(&rel)?;
+                if let Err(e) = RELATION_GRAPH.add_relation(&rel) {
+                    RELATION_STORAGE.remove(id);
+                    return Err(e);
+                }
+                if let Err(e) = RELATION_INDEX.insert(&rel) {
+                    RELATION_GRAPH.remove_relation(&rel);
+                    RELATION_STORAGE.remove(id);
+                    return Err(e);
+                }
                 Ok(OpKind::Insert)
             }
             BatchOp::Remove { id } => {
@@ -260,7 +267,17 @@ impl RelationBatch {
                 Ok(OpKind::Remove)
             }
             BatchOp::Update { rel } => {
+                if let Some(old_res) = RELATION_STORAGE.load(rel.id) {
+                    if let Ok(old_rel) = old_res {
+                        RELATION_GRAPH.remove_relation(&old_rel);
+                        RELATION_INDEX.remove(&old_rel);
+                    }
+                }
                 RELATION_STORAGE.update(&rel)?;
+                if rel.is_active() {
+                    let _ = RELATION_GRAPH.add_relation(&rel);
+                    let _ = RELATION_INDEX.insert(&rel);
+                }
                 Ok(OpKind::Update)
             }
         }

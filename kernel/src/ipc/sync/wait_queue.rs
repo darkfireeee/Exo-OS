@@ -114,9 +114,24 @@ impl IpcWaiter {
         self.woken.load(Ordering::Acquire)
     }
 
+    pub fn try_wake(&self, reason: WakeReason) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        if self
+            .woken
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.reason.store(reason as u32, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn wake(&self, reason: WakeReason) {
-        self.reason.store(reason as u32, Ordering::Relaxed);
-        self.woken.store(true, Ordering::Release);
+        let _ = self.try_wake(reason);
     }
 
     pub fn dequeue(&self) {
@@ -125,7 +140,7 @@ impl IpcWaiter {
     }
 
     pub fn wake_reason(&self) -> WakeReason {
-        WakeReason::from_u32(self.reason.load(Ordering::Relaxed))
+        WakeReason::from_u32(self.reason.load(Ordering::Acquire))
     }
 }
 
@@ -342,10 +357,11 @@ impl IpcWaitQueue {
             let w = &self.waiters[i];
             if w.is_active() && !w.is_woken() {
                 let tid = w.thread_id.load(Ordering::Relaxed);
-                w.wake(reason);
-                // Réveiller le thread au niveau scheduler (si bloqué).
-                super::sched_hooks::wake_thread(tid);
-                woken += 1;
+                if w.try_wake(reason) {
+                    // Réveiller le thread au niveau scheduler (si bloqué).
+                    super::sched_hooks::wake_thread(tid);
+                    woken += 1;
+                }
             }
         }
         self.total_woken.fetch_add(woken as u64, Ordering::Relaxed);
@@ -357,10 +373,11 @@ impl IpcWaitQueue {
         for i in 0..MAX_IPC_WAITERS {
             let w = &self.waiters[i];
             if w.is_active() && w.thread_id.load(Ordering::Relaxed) == thread_id && !w.is_woken() {
-                w.wake(reason);
-                super::sched_hooks::wake_thread(thread_id);
-                self.total_woken.fetch_add(1, Ordering::Relaxed);
-                return true;
+                if w.try_wake(reason) {
+                    super::sched_hooks::wake_thread(thread_id);
+                    self.total_woken.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
             }
         }
         false

@@ -74,9 +74,11 @@ pub struct TypedChannelInner {
     recvs: AtomicU64,
     drops: AtomicU64,
     closed: AtomicU32,
+    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    pub active_ops: AtomicU32,
     /// Taille de type T enregistrée à la création (vérification runtime)
     type_size: u32,
-    _pad: [u8; 28],
+    _pad: [u8; 24],
 }
 
 // SAFETY: SpscRing est Sync via ses barrières atomiques internes
@@ -92,8 +94,9 @@ impl TypedChannelInner {
             recvs: AtomicU64::new(0),
             drops: AtomicU64::new(0),
             closed: AtomicU32::new(0),
+            active_ops: AtomicU32::new(0),
             type_size: type_size as u32,
-            _pad: [0u8; 28],
+            _pad: [0u8; 24],
         };
         s.ring.init();
         s
@@ -261,11 +264,14 @@ impl<T: Copy + Sized> TypedSender<T> {
         let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
         let inner_ref: &'static TypedChannelInner =
             unsafe { &*(inner as *const TypedChannelInner) };
+        inner_ref.active_ops.fetch_add(1, Ordering::Acquire);
         drop(tbl);
 
         let size = size_of::<T>();
         // SAFETY: val est T: Copy, la mémoire de size octets de &val est valide
-        unsafe { inner_ref.push_raw(&val as *const T as *const u8, size, flags) }
+        let res = unsafe { inner_ref.push_raw(&val as *const T as *const u8, size, flags) };
+        inner_ref.active_ops.fetch_sub(1, Ordering::Release);
+        res
     }
 
     /// Ferme le canal (côté émetteur — notifie le récepteur).
@@ -293,6 +299,7 @@ impl<T: Copy + Sized> TypedReceiver<T> {
         let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
         let inner_ref: &'static TypedChannelInner =
             unsafe { &*(inner as *const TypedChannelInner) };
+        inner_ref.active_ops.fetch_add(1, Ordering::Acquire);
         drop(tbl);
 
         let size = size_of::<T>();
@@ -301,7 +308,9 @@ impl<T: Copy + Sized> TypedReceiver<T> {
         let mut val = MaybeUninit::<T>::uninit();
 
         // SAFETY: val est T: Copy, les bytes non-initialisés seront remplis par pop_raw
-        let read_len = unsafe { inner_ref.pop_raw(val.as_mut_ptr() as *mut u8, size)? };
+        let pop_res = unsafe { inner_ref.pop_raw(val.as_mut_ptr() as *mut u8, size) };
+        inner_ref.active_ops.fetch_sub(1, Ordering::Release);
+        let read_len = pop_res?;
 
         if read_len != size {
             return Err(IpcError::ProtocolError);
@@ -339,10 +348,28 @@ impl<T: Copy + Sized> TypedReceiver<T> {
 /// Détruit et libère le canal typé identifié par `idx`.
 pub fn typed_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = typed_table().lock();
-    if let Some(inner) = unsafe { tbl.get(idx) } {
-        inner.close();
-    }
+    let inner_ref: &'static TypedChannelInner = match unsafe { tbl.get(idx) } {
+        Some(inner) => {
+            inner.close();
+            unsafe { &*(inner as *const TypedChannelInner) }
+        }
+        None => return Err(IpcError::InvalidHandle),
+    };
     drop(tbl);
+
+    let mut spins = 0u32;
+    while inner_ref.active_ops.load(Ordering::Acquire) != 0 {
+        if spins >= 256 {
+            return Err(IpcError::Retry);
+        }
+        core::hint::spin_loop();
+        spins = spins.wrapping_add(1);
+        if spins % 32 == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
 
     let mut tbl = typed_table().lock();
     if !tbl.free(idx) {

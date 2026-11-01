@@ -70,6 +70,8 @@ pub enum FsBridgeError {
     BrokenPipe,
     /// Recherche invalide (pipe, socket, etc.) (ESPIPE).
     IllegalSeek,
+    /// Tampon trop petit pour le résultat (ERANGE).
+    Range,
 }
 
 impl FsBridgeError {
@@ -95,6 +97,7 @@ impl FsBridgeError {
             FsBridgeError::Interrupted => -4, // EINTR
             FsBridgeError::BrokenPipe => -32, // EPIPE
             FsBridgeError::IllegalSeek => -29, // ESPIPE
+            FsBridgeError::Range => -34,      // ERANGE
         }
     }
 }
@@ -108,6 +111,8 @@ pub const SEEK_END: u32 = 2;
 pub const AT_FDCWD: i32 = -100;
 
 pub const F_DUPFD: u32 = 0;
+
+pub const F_DUPFD_CLOEXEC: u32 = 1030;
 
 pub const F_GETFD: u32 = 1;
 

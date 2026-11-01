@@ -278,6 +278,7 @@ impl AuditFilter {
 /// Journal circulaire d'audit (ring de AUDIT_RING_SIZE entrées).
 pub struct QuotaAuditLog {
     entries: UnsafeCell<[QuotaAuditEntry; AUDIT_RING_SIZE]>,
+    lock: AtomicU64,
     head: AtomicU64,
     count: AtomicU64,
     cnt_breach: AtomicU64,
@@ -293,6 +294,7 @@ impl QuotaAuditLog {
     pub const fn new_const() -> Self {
         Self {
             entries: UnsafeCell::new([QuotaAuditEntry::zeroed(); AUDIT_RING_SIZE]),
+            lock: AtomicU64::new(0),
             head: AtomicU64::new(0),
             count: AtomicU64::new(0),
             cnt_breach: AtomicU64::new(0),
@@ -302,10 +304,32 @@ impl QuotaAuditLog {
         }
     }
 
+    fn acquire(&self) {
+        let mut spins = 0u32;
+        while self
+            .lock
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+            spins = spins.wrapping_add(1);
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+    }
+
+    fn release(&self) {
+        self.lock.store(0, Ordering::Release);
+    }
+
     /// Enregistre une entrée d'audit dans le ring.
     pub fn push(&self, entry: QuotaAuditEntry) {
+        self.acquire();
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % AUDIT_RING_SIZE;
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
         unsafe {
             (*self.entries.get())[idx] = entry;
         }
@@ -326,6 +350,7 @@ impl QuotaAuditLog {
                 self.cnt_admin.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.release();
     }
 
     /// Raccourci : journalise un événement directement.
@@ -388,13 +413,16 @@ impl QuotaAuditLog {
 
     /// Dernier événement enregistré.
     pub fn latest(&self) -> Option<QuotaAuditEntry> {
+        self.acquire();
         if self.count.load(Ordering::Relaxed) == 0 {
+            self.release();
             return None;
         }
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(1)) % AUDIT_RING_SIZE;
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
         let e = unsafe { (*self.entries.get())[idx] };
+        self.release();
         if e.is_empty() {
             None
         } else {
@@ -412,18 +440,23 @@ impl QuotaAuditLog {
         let capacity = n.min(total);
         let mut v = Vec::new();
         v.try_reserve(capacity).map_err(|_| ExofsError::NoMemory)?;
+        self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let mut i = 0usize;
         while i < total && v.len() < n {
             let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(i + 1)) % AUDIT_RING_SIZE;
-            // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+            // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
             let entry = unsafe { (*self.entries.get())[idx] };
             if filter.matches(&entry) {
-                v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
+                if let Err(_) = v.try_reserve(1) {
+                    self.release();
+                    return Err(ExofsError::NoMemory);
+                }
                 v.push(entry);
             }
             i = i.wrapping_add(1);
         }
+        self.release();
         Ok(v)
     }
 

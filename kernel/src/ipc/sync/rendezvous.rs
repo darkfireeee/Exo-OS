@@ -125,6 +125,11 @@ impl IpcRendezvous {
         loop {
             core::hint::spin_loop();
             spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
 
             if !self.active.load(Ordering::Relaxed) {
                 return Err(IpcError::Closed);
@@ -310,6 +315,11 @@ impl ExchangeSlot {
             loop {
                 core::hint::spin_loop();
                 spins += 1;
+                if spins % 128 == 0 {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                }
                 if self.result_ready.load(Ordering::Acquire) {
                     // Lire la réponse de B dans reply_buf
                     // SAFETY: B a écrit reply_buf avant de mettre result_ready
@@ -319,6 +329,10 @@ impl ExchangeSlot {
                         core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                     }
                     self.exchanges.fetch_add(1, Ordering::Relaxed);
+                    // Réinitialiser result_ready et state après que Thread A a fini de lire reply_buf
+                    self.result_ready.store(false, Ordering::Release);
+                    self.state
+                        .store(ExchangeState::Empty as u32, Ordering::Release);
                     return Ok(());
                 }
                 if spins >= limit {
@@ -345,6 +359,11 @@ impl ExchangeSlot {
             loop {
                 core::hint::spin_loop();
                 spins += 1;
+                if spins % 128 == 0 {
+                    unsafe {
+                        let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                    }
+                }
 
                 let st = self.state.load(Ordering::Acquire);
                 if st == ExchangeState::OfferPending as u32 {
@@ -377,11 +396,8 @@ impl ExchangeSlot {
                             core::ptr::copy_nonoverlapping(data.as_ptr(), dst, write_len);
                         }
 
-                        // Signaler à A que l'échange est terminé
+                        // Signaler à A que l'échange est prêt (A remettra state à Empty après lecture)
                         self.result_ready.store(true, Ordering::Release);
-                        // Revenir à Empty pour le prochain échange
-                        self.state
-                            .store(ExchangeState::Empty as u32, Ordering::Release);
                         return Ok(());
                     }
                 }

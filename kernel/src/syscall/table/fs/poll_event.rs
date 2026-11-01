@@ -89,8 +89,34 @@ pub fn sys_ppoll(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_PPOLL);
-    let _ = (timeout_ptr, sigmask_ptr, sigsetsize);
-    sys_poll(fds_ptr, nfds, 0, 0, 0, 0)
+    let _ = (sigmask_ptr, sigsetsize);
+    if nfds > 1024 {
+        return EINVAL;
+    }
+    let timeout_ms = if timeout_ptr == 0 {
+        -1i32
+    } else {
+        use crate::syscall::fast_path::Timespec;
+        use crate::syscall::validation::read_user_typed;
+        let ts = match read_user_typed::<Timespec>(timeout_ptr) {
+            Ok(t) => t,
+            Err(e) => return e.to_errno(),
+        };
+        if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
+            return EINVAL;
+        }
+        let ms = (ts.tv_sec as i64)
+            .saturating_mul(1000)
+            .saturating_add((ts.tv_nsec as i64) / 1_000_000);
+        if ms > i32::MAX as i64 {
+            i32::MAX
+        } else {
+            ms as i32
+        }
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_poll(fds_ptr, nfds as usize, timeout_ms, pid))
 }
 
 /// `select(nfds, readfds, writefds, exceptfds, timeout)`.
@@ -229,6 +255,39 @@ pub fn sys_epoll_pwait2(
     sigsetsize: u64,
 ) -> i64 {
     stat_inc(SYS_EPOLL_PWAIT2);
-    let _ = (timeout_ptr, sigmask_ptr, sigsetsize);
-    sys_epoll_wait(epfd, events_ptr, maxevents, 0, 0, 0)
+    let _ = (sigmask_ptr, sigsetsize);
+    let timeout_ms = if timeout_ptr == 0 {
+        -1i32
+    } else {
+        use crate::syscall::fast_path::Timespec;
+        use crate::syscall::validation::read_user_typed;
+        let ts = match read_user_typed::<Timespec>(timeout_ptr) {
+            Ok(t) => t,
+            Err(e) => return e.to_errno(),
+        };
+        if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
+            return EINVAL;
+        }
+        let ms = (ts.tv_sec as i64)
+            .saturating_mul(1000)
+            .saturating_add((ts.tv_nsec as i64) / 1_000_000);
+        if ms > i32::MAX as i64 {
+            i32::MAX
+        } else {
+            ms as i32
+        }
+    };
+    let epfd = match validate_fd(epfd) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_epoll_wait(
+        epfd as u32,
+        events_ptr,
+        maxevents as i32,
+        timeout_ms,
+        pid,
+    ))
 }

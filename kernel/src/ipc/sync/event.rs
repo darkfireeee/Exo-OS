@@ -52,6 +52,10 @@ pub struct IpcEvent {
     mode: AtomicU32,
     /// Nombre de waiters courants
     waiter_count: AtomicU32,
+    /// Compteur d'opérations actives (anti-UAF sur destruction concurrente)
+    pub active_ops: AtomicU32,
+    /// Marqueur de destruction/fermeture
+    closed: AtomicBool,
     /// Statistiques
     pub total_sets: AtomicU64,
     pub total_clears: AtomicU64,
@@ -71,12 +75,19 @@ impl IpcEvent {
             state: AtomicU32::new(event_state::CLEAR),
             mode: AtomicU32::new(mode as u32),
             waiter_count: AtomicU32::new(0),
+            active_ops: AtomicU32::new(0),
+            closed: AtomicBool::new(false),
             total_sets: AtomicU64::new(0),
             total_clears: AtomicU64::new(0),
             total_waits: AtomicU64::new(0),
             total_timeouts: AtomicU64::new(0),
             _pad: [0u8; 16],
         }
+    }
+
+    /// Ferme l'événement et signale la destruction aux waiters.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
     }
 
     /// Positionne l'événement (réveille les waiters si AUTO_RESET ou tous si MANUAL).
@@ -118,6 +129,11 @@ impl IpcEvent {
                 unsafe {
                     let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
+            }
+
+            if self.closed.load(Ordering::Acquire) {
+                self.waiter_count.fetch_sub(1, Ordering::Relaxed);
+                return Err(IpcError::ChannelClosed);
             }
 
             if self.state.load(Ordering::Acquire) == event_state::SET {
@@ -418,6 +434,14 @@ static IPC_EVENT_TABLE: IpcEventTable = IpcEventTable::new();
 // API publique
 // ---------------------------------------------------------------------------
 
+struct ActiveOpGuard<'a>(&'a AtomicU32);
+
+impl<'a> Drop for ActiveOpGuard<'a> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
 /// Crée un événement IPC dans la table globale.
 /// Retourne l'index (handle) de l'événement.
 pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
@@ -426,18 +450,20 @@ pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
 
 /// Positionne l'événement `idx`.
 pub fn event_set(idx: usize) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE
-        .get(idx)
-        .ok_or(IpcError::InvalidHandle)
-        .map(|e| e.set())
+    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
+    e.active_ops.fetch_add(1, Ordering::AcqRel);
+    let _guard = ActiveOpGuard(&e.active_ops);
+    e.set();
+    Ok(())
 }
 
 /// Efface l'événement `idx`.
 pub fn event_clear(idx: usize) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE
-        .get(idx)
-        .ok_or(IpcError::InvalidHandle)
-        .map(|e| e.clear())
+    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
+    e.active_ops.fetch_add(1, Ordering::AcqRel);
+    let _guard = ActiveOpGuard(&e.active_ops);
+    e.clear();
+    Ok(())
 }
 
 /// Vérifie l'état de l'événement sans attendre.
@@ -447,14 +473,28 @@ pub fn event_is_set(idx: usize) -> Option<bool> {
 
 /// Attend l'événement `idx` avec spin-max.
 pub fn event_wait(idx: usize, spin_max: u64) -> Result<(), IpcError> {
-    IPC_EVENT_TABLE
-        .get(idx)
-        .ok_or(IpcError::InvalidHandle)?
-        .wait(spin_max)
+    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
+    e.active_ops.fetch_add(1, Ordering::AcqRel);
+    let _guard = ActiveOpGuard(&e.active_ops);
+    e.wait(spin_max)
 }
 
 /// Détruit un événement (libère son slot).
 pub fn event_destroy(idx: usize) -> bool {
+    if let Some(event) = IPC_EVENT_TABLE.get(idx) {
+        event.close();
+        let mut spins = 0u64;
+        while event.active_ops.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+    }
     IPC_EVENT_TABLE.free(idx)
 }
 

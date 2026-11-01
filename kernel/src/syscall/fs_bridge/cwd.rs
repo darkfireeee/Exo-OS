@@ -132,17 +132,17 @@ pub fn apply_umask(mode: u32, default_perms: u32, pid: u32) -> u32 {
     requested & !process_umask(pid) & 0o777
 }
 
-/// `getcwd(buf, size)`; ExoFS currently exposes a process-neutral root cwd.
+/// `getcwd(buf, size)` conforme POSIX (ERANGE si size < path_len + 1, EINVAL si size == 0).
 #[inline]
 pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
+    if size == 0 {
+        return Err(FsBridgeError::Invalid);
+    }
     if buf_ptr == 0 {
         return Err(FsBridgeError::Fault);
-    }
-    if size < 2 {
-        return Err(FsBridgeError::Invalid);
     }
     // FIX-FND-5: lire le chemin réel depuis CWD_MAP au lieu de retourner "/" fixe.
     let (path_bytes, path_len) = {
@@ -162,18 +162,21 @@ pub fn fs_getcwd(buf_ptr: u64, size: usize, pid: u32) -> Result<i64, FsBridgeErr
         }
         (found_path, found_len)
     };
+    // POSIX ERANGE : le tampon doit être suffisant pour contenir le chemin complet et le terminateur nul.
+    if size < path_len + 1 {
+        return Err(FsBridgeError::Range);
+    }
     // Copier vers l'espace utilisateur (path + null terminator)
-    let copy_len = path_len.min(size.saturating_sub(1));
-    copy_to_user(buf_ptr as *mut u8, path_bytes.as_ptr(), copy_len)
+    copy_to_user(buf_ptr as *mut u8, path_bytes.as_ptr(), path_len)
         .map_err(|_| FsBridgeError::Fault)?;
     // Écrire le null terminator
     copy_to_user(
-        (buf_ptr + copy_len as u64) as *mut u8,
+        (buf_ptr + path_len as u64) as *mut u8,
         &[0u8] as *const u8,
         1,
     )
     .map_err(|_| FsBridgeError::Fault)?;
-    Ok((copy_len + 1) as i64)
+    Ok((path_len + 1) as i64)
 }
 
 /// Retourne le CWD actuel d'un processus sous forme de `Vec<u8>`.

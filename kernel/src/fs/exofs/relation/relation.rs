@@ -89,12 +89,15 @@ pub struct RelationOnDisk {
 const _CHECK_ONDISK: () = assert!(core::mem::size_of::<RelationOnDisk>() == RELATION_ONDISK_SIZE);
 
 impl RelationOnDisk {
-    /// Parse depuis un slice d'octets (HDR-03 : magic first).
+    /// Parse depuis un slice d'octets (HDR-03 : magic first, CRC validation).
     pub fn from_bytes(buf: &[u8; RELATION_ONDISK_SIZE]) -> ExofsResult<Self> {
         // HDR-03 : lire et valider le magic en premier.
         let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
         if magic != RELATION_MAGIC {
             return Err(ExofsError::InvalidMagic);
+        }
+        if !Self::crc_ok(buf) {
+            return Err(ExofsError::ChecksumMismatch);
         }
         // Recopie manuelle pour éviter l'UB sur packed.
         let mut d: [u8; RELATION_ONDISK_SIZE] = [0u8; RELATION_ONDISK_SIZE];

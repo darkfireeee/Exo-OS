@@ -267,7 +267,9 @@ pub struct StreamChannel {
     closed: AtomicU32,
     /// Granule configurée
     granule: AtomicU32,
-    _pad: [u8; 24],
+    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    pub active_ops: AtomicU32,
+    _pad: [u8; 20],
 }
 
 // SAFETY: ZeroCopyRing est Sync, StreamPool est Sync
@@ -283,7 +285,8 @@ impl StreamChannel {
             stats: StreamStats::new(),
             closed: AtomicU32::new(0),
             granule: AtomicU32::new(StreamGranule::Page4K as u32),
-            _pad: [0u8; 24],
+            active_ops: AtomicU32::new(0),
+            _pad: [0u8; 20],
         }
     }
 
@@ -485,8 +488,11 @@ pub fn stream_alloc_buffer(idx: usize) -> Result<usize, IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static StreamChannel = unsafe { &*(chan as *const StreamChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.alloc_buffer()
+    let res = chan_ref.alloc_buffer();
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Envoie le buffer `buf_idx` (avec `data_len` octets utiles) sur le canal `idx`.
@@ -494,8 +500,11 @@ pub fn stream_push(idx: usize, buf_idx: usize, data_len: usize) -> Result<Messag
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static StreamChannel = unsafe { &*(chan as *const StreamChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.push(buf_idx, data_len)
+    let res = chan_ref.push(buf_idx, data_len);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Reçoit le prochain ZeroCopyRef du canal `idx`.
@@ -503,8 +512,11 @@ pub fn stream_pop(idx: usize) -> Result<ZeroCopyRef, IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static StreamChannel = unsafe { &*(chan as *const StreamChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.pop()
+    let res = chan_ref.pop();
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Libère le buffer `pool_idx` après consommation sur le canal `idx`.
@@ -512,8 +524,11 @@ pub fn stream_release_buffer(idx: usize, pool_idx: usize) -> Result<(), IpcError
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static StreamChannel = unsafe { &*(chan as *const StreamChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    if chan_ref.release_buffer(pool_idx) {
+    let freed = chan_ref.release_buffer(pool_idx);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    if freed {
         Ok(())
     } else {
         Err(IpcError::InvalidHandle)
@@ -523,10 +538,25 @@ pub fn stream_release_buffer(idx: usize, pool_idx: usize) -> Result<(), IpcError
 /// Ferme et détruit le canal streaming `idx`.
 pub fn stream_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
-    if let Some(chan) = unsafe { tbl.get(idx) } {
-        chan.close();
-    }
+    let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    let chan_ref: &'static StreamChannel = unsafe { &*(chan as *const StreamChannel) };
+    chan_ref.close();
     drop(tbl);
+
+    let mut spins = 0u32;
+    while chan_ref.active_ops.load(Ordering::Acquire) != 0 {
+        if spins >= 256 {
+            return Err(IpcError::Retry);
+        }
+        core::hint::spin_loop();
+        spins = spins.wrapping_add(1);
+        if spins % 32 == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
+
     let mut tbl = STREAM_CHANNEL_TABLE.lock();
     if !tbl.free(idx) {
         return Err(IpcError::InvalidHandle);

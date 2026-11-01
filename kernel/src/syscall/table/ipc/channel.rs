@@ -111,7 +111,7 @@ pub(super) fn ipc_error_to_errno(err: IpcError) -> i64 {
         IpcError::EndpointNotFound | IpcError::NotFound => ENOENT,
         IpcError::PermissionDenied => EACCES,
         IpcError::MessageTooLarge => EMSGSIZE,
-        IpcError::Timeout => EAGAIN,
+        IpcError::Timeout => crate::syscall::errno::ETIMEDOUT,
         IpcError::ResourceExhausted | IpcError::ShmPoolFull | IpcError::OutOfResources => ENOMEM,
         IpcError::ConnRefused => ENOENT,
         IpcError::AlreadyConnected => EBUSY,

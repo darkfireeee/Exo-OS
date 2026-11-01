@@ -114,12 +114,44 @@ pub fn fs_access(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError>
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     if mode & !0x7 != 0 {
         return Err(FsBridgeError::Invalid);
     }
     let normalized_path = resolve_path_with_symlinks(path, true, false)?;
-    let _ = path_entry(&normalized_path)?;
+    let (blob_id, kind) = path_entry(&normalized_path)?;
+    if mode == 0 {
+        return Ok(0);
+    }
+
+    let is_dir = kind == PATH_INDEX_KIND_DIR;
+    let file_mode = stat_mode_for_blob(&blob_id, kind, is_dir);
+
+    let euid = if pid == 0 || pid == 1 {
+        0
+    } else {
+        crate::process::core::registry::PROCESS_REGISTRY
+            .find_by_pid(crate::process::core::pid::Pid(pid))
+            .map(|pcb| pcb.creds.lock().euid)
+            .unwrap_or(0)
+    };
+
+    if euid == 0 {
+        if (mode & 1 != 0) && !is_dir && (file_mode & 0o111 == 0) {
+            return Err(FsBridgeError::PermDenied);
+        }
+        return Ok(0);
+    }
+
+    let perm = ((file_mode >> 6) | file_mode) & 0x7;
+    if (mode & 4 != 0) && (perm & 4 == 0) {
+        return Err(FsBridgeError::PermDenied);
+    }
+    if (mode & 2 != 0) && (perm & 2 == 0) {
+        return Err(FsBridgeError::PermDenied);
+    }
+    if (mode & 1 != 0) && (perm & 1 == 0) {
+        return Err(FsBridgeError::PermDenied);
+    }
     Ok(0)
 }
 

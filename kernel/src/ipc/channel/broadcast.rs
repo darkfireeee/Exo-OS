@@ -234,7 +234,9 @@ pub struct BroadcastChannel {
     pub stats: BroadcastStats,
     /// Canal fermé
     closed: AtomicU32,
-    _pad: [u8; 24],
+    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    pub active_ops: AtomicU32,
+    _pad: [u8; 20],
 }
 
 // SAFETY: SubscriberSlot est Sync, BroadcastStats est Sync (AtomicU64)
@@ -250,7 +252,8 @@ impl BroadcastChannel {
             subscriber_count: AtomicU32::new(0),
             stats: BroadcastStats::new(),
             closed: AtomicU32::new(0),
-            _pad: [0u8; 24],
+            active_ops: AtomicU32::new(0),
+            _pad: [0u8; 20],
         }
     }
 
@@ -543,11 +546,12 @@ pub fn broadcast_subscribe(chan_idx: usize, owner_id: u64) -> Result<SubscriberI
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: chan vit dans BROADCAST_TABLE statique ('static).
-    // free() requiert le SpinLock, donc la durée de vie est garantie.
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.subscribe(owner_id).ok_or(IpcError::OutOfResources)
+    let res = chan_ref.subscribe(owner_id).ok_or(IpcError::OutOfResources);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Se désabonner du canal `chan_idx`.
@@ -555,10 +559,12 @@ pub fn broadcast_unsubscribe(chan_idx: usize, sub_id: SubscriberId) -> Result<()
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    if chan_ref.unsubscribe(sub_id) {
+    let ok = chan_ref.unsubscribe(sub_id);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    if ok {
         Ok(())
     } else {
         Err(IpcError::InvalidHandle)
@@ -574,10 +580,12 @@ pub fn broadcast_publish(
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.publish(data, flags)
+    let res = chan_ref.publish(data, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Recevoir un message pour l'abonné `sub_id` sur le canal `chan_idx`.
@@ -589,10 +597,12 @@ pub fn broadcast_recv(
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.recv(sub_id, buf)
+    let res = chan_ref.recv(sub_id, buf);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Ferme et détruit le canal broadcast.
@@ -600,8 +610,24 @@ pub fn broadcast_destroy(chan_idx: usize) -> Result<(), IpcError> {
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    chan.close();
+    let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.close();
     drop(tbl);
+
+    let mut spins = 0u32;
+    while chan_ref.active_ops.load(Ordering::Acquire) != 0 {
+        if spins >= 256 {
+            return Err(IpcError::Retry);
+        }
+        core::hint::spin_loop();
+        spins = spins.wrapping_add(1);
+        if spins % 32 == 0 {
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
+
     let mut tbl = broadcast_table().lock();
     tbl.free(chan_idx);
     Ok(())
@@ -622,10 +648,12 @@ pub fn broadcast_publish_checked(
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.publish_checked(data, flags, table, token)
+    let res = chan_ref.publish_checked(data, flags, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// S'abonner avec vérification capability (IPC-04 v6).
@@ -638,12 +666,14 @@ pub fn broadcast_subscribe_checked(
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref
-        .subscribe_checked(owner_id, table, token)?
-        .ok_or(IpcError::OutOfResources)
+    let res = chan_ref
+        .subscribe_checked(owner_id, table, token)
+        .and_then(|opt| opt.ok_or(IpcError::OutOfResources));
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }
 
 /// Recevoir avec vérification capability (IPC-04 v6).
@@ -657,8 +687,10 @@ pub fn broadcast_recv_checked(
     let tbl = broadcast_table().lock();
     // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que broadcast_subscribe().
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
+    chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
     drop(tbl);
-    chan_ref.recv_checked(sub_id, buf, table, token)
+    let res = chan_ref.recv_checked(sub_id, buf, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::Release);
+    res
 }

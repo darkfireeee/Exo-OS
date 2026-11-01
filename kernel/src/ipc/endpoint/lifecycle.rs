@@ -201,7 +201,12 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
             })
     };
 
-    if active == Some(0) || active.is_none() {
+    let conns = match active {
+        Some(c) => c,
+        None => return Err(IpcError::EndpointNotFound),
+    };
+
+    if conns == 0 {
         // Retirer du registre + libérer le slot.
         unregister_endpoint(name);
         // Trouver et libérer le slot dans le pool.
