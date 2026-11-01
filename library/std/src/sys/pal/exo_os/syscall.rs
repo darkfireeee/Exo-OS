@@ -691,20 +691,67 @@ pub fn exofs_fchmod(fd: i32, mode: u32) -> SysResult<()> {
 }
 
 #[inline]
-pub fn exofs_readdir(fd: i32, entries: &mut [ExoDirEntry]) -> SysResult<usize> {
-    let byte_len = core::mem::size_of_val(entries);
+pub fn getdents64(fd: i32, buf: &mut [u8]) -> SysResult<usize> {
+    let ret = unsafe {
+        syscall3(
+            SYS_GETDENTS,
+            fd as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+        )
+    };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn exofs_readdir_raw(fd: i32, buf: &mut [u8]) -> SysResult<usize> {
     let ret = unsafe {
         syscall6(
             SYS_EXOFS_READDIR,
             fd as u64,
-            entries.as_mut_ptr() as u64,
-            byte_len as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
             0,
             0,
             EXOFS_RIGHT_LIST as u64,
         )
     };
     decode_ret(ret)
+}
+
+#[inline]
+pub fn exofs_readdir(fd: i32, entries: &mut [ExoDirEntry]) -> SysResult<usize> {
+    let mut buf = [0u8; 4096];
+    let n = match getdents64(fd, &mut buf) {
+        Ok(n) => n,
+        Err(_) => exofs_readdir_raw(fd, &mut buf)?,
+    };
+    let mut count = 0usize;
+    let mut offset = 0usize;
+    while offset < n && count < entries.len() {
+        if offset + 19 > n {
+            break;
+        }
+        let ino = u64::from_ne_bytes(buf[offset..offset + 8].try_into().unwrap());
+        let reclen = u16::from_ne_bytes(buf[offset + 16..offset + 18].try_into().unwrap()) as usize;
+        if reclen < 19 || offset + reclen > n {
+            break;
+        }
+        let d_type = buf[offset + 18];
+        let name_bytes = &buf[offset + 19..offset + reclen];
+        let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len()).min(245);
+        let mut entry = ExoDirEntry {
+            inode: ino,
+            file_type: d_type,
+            name_len: name_len as u8,
+            name: [0u8; 246],
+        };
+        entry.name[..name_len].copy_from_slice(&name_bytes[..name_len]);
+        entries[count] = entry;
+        count += 1;
+        offset += reclen;
+    }
+    Ok(count)
 }
 
 #[inline]

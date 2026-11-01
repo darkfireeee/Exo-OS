@@ -33,6 +33,8 @@ const O_RDWR: u32 = 0x0002;
 #[allow(dead_code)]
 const O_CREAT: u32 = 0x0040;
 #[allow(dead_code)]
+const O_EXCL: u32 = 0x0080;
+#[allow(dead_code)]
 const O_TRUNC: u32 = 0x0200;
 #[allow(dead_code)]
 const O_APPEND: u32 = 0x0400;
@@ -62,8 +64,16 @@ fn open_by_path_inner(
     if path_len == 0 {
         return Err(ExofsError::InvalidArgument);
     }
-    if flags & !0x000F_FFFFu32 != 0 {
+    if flags & !crate::fs::exofs::syscall::object_fd::open_flags::VALID_FLAGS != 0 {
         return Err(ExofsError::InvalidArgument);
+    }
+
+    if (flags & O_CREAT != 0) && (flags & O_EXCL != 0) {
+        if let Ok(res) = super::path_resolve::resolve_path_to_blob(&path_bytes[..path_len], 0) {
+            if res.link_count != 0 {
+                return Err(ExofsError::AlreadyExists);
+            }
+        }
     }
 
     let open_args = crate::fs::exofs::syscall::object_open::OpenArgs {

@@ -388,16 +388,42 @@ pub fn readdir(p: &Path) -> io::Result<ReadDir> {
     let mut opts = OpenOptions::new();
     opts.read(true);
     let file = File::open(p, &opts)?;
-    let mut raw_entries = [ExoDirEntry::default(); 64];
     let mut entries = Vec::new();
-    if let Ok(count) = syscall::exofs_readdir(file.as_raw_fd(), &mut raw_entries) {
-        for raw in raw_entries.iter().take(count) {
-            let name_bytes = raw.name_bytes();
-            if !name_bytes.is_empty() && name_bytes != b"." && name_bytes != b".." {
-                let file_name = OsString::from_vec(name_bytes.to_vec());
+    let mut buf = [0u8; 4096];
+
+    loop {
+        let bytes_read = match syscall::getdents64(file.as_raw_fd(), &mut buf) {
+            Ok(n) => n,
+            Err(_) => match syscall::exofs_readdir_raw(file.as_raw_fd(), &mut buf) {
+                Ok(n) => n,
+                Err(e) => return Err(map_exo_err(e)),
+            },
+        };
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        let mut offset = 0usize;
+        while offset < bytes_read {
+            if offset + 19 > bytes_read {
+                break;
+            }
+            let ino = u64::from_ne_bytes(buf[offset..offset + 8].try_into().unwrap());
+            let reclen = u16::from_ne_bytes(buf[offset + 16..offset + 18].try_into().unwrap()) as usize;
+            if reclen < 19 || offset + reclen > bytes_read {
+                break;
+            }
+            let d_type = buf[offset + 18];
+            let name_bytes = &buf[offset + 19..offset + reclen];
+            let name_len = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+            let name = &name_bytes[..name_len];
+
+            if !name.is_empty() && name != b"." && name != b".." {
+                let file_name = OsString::from_vec(name.to_vec());
                 let mut full_path = p.to_path_buf();
                 full_path.push(&file_name);
-                let mode = if raw.file_type == 4 {
+                let mode = if d_type == 4 {
                     syscall::EXOFS_MODE_DIR
                 } else {
                     syscall::EXOFS_MODE_FILE
@@ -405,10 +431,11 @@ pub fn readdir(p: &Path) -> io::Result<ReadDir> {
                 entries.push(DirEntry {
                     path: full_path,
                     file_name,
-                    ino: raw.inode,
+                    ino,
                     mode,
                 });
             }
+            offset += reclen;
         }
     }
     Ok(ReadDir { entries, index: 0 })

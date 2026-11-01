@@ -165,10 +165,16 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
 pub fn sys_mkdirat(dirfd: u64, path_ptr: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MKDIRAT);
     const AT_FDCWD_RAW: i64 = -100;
-    if dirfd as i64 != AT_FDCWD_RAW {
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
         return ENOSYS;
     }
-    sys_mkdir(path_ptr, mode, 0, 0, 0, 0)
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_mkdir(path.as_bytes(), mode as u32, pid))
 }
 
 /// `rmdir(path)`.
@@ -200,16 +206,22 @@ pub fn sys_unlinkat(dirfd: u64, path_ptr: u64, flags: u64, _a4: u64, _a5: u64, _
     stat_inc(SYS_UNLINKAT);
     const AT_FDCWD_RAW: i64 = -100;
     const AT_REMOVEDIR: u64 = 0x200;
-    if dirfd as i64 != AT_FDCWD_RAW {
-        return ENOSYS;
-    }
     if flags & !AT_REMOVEDIR != 0 {
         return EINVAL;
     }
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
+        return ENOSYS;
+    }
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
     if flags & AT_REMOVEDIR != 0 {
-        sys_rmdir(path_ptr, 0, 0, 0, 0, 0)
+        fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), pid))
     } else {
-        sys_unlink(path_ptr, 0, 0, 0, 0, 0)
+        fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), pid))
     }
 }
 
@@ -558,10 +570,19 @@ pub fn sys_fchmodat(dirfd: u64, path_ptr: u64, mode: u64, flags: u64, _a5: u64, 
     stat_inc(SYS_FCHMODAT);
     const AT_FDCWD_RAW: i64 = -100;
     const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
-    if dirfd as i64 != AT_FDCWD_RAW || flags & !AT_SYMLINK_NOFOLLOW != 0 {
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return EINVAL;
+    }
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
         return ENOSYS;
     }
-    sys_chmod(path_ptr, mode, 0, 0, 0, 0)
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_chmod(path.as_bytes(), mode as u32, pid))
 }
 
 /// `fchownat(dirfd, path, uid, gid, flags)`.
@@ -569,10 +590,24 @@ pub fn sys_fchownat(dirfd: u64, path_ptr: u64, uid: u64, gid: u64, flags: u64, _
     stat_inc(SYS_FCHOWNAT);
     const AT_FDCWD_RAW: i64 = -100;
     const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
-    if dirfd as i64 != AT_FDCWD_RAW || flags & !AT_SYMLINK_NOFOLLOW != 0 {
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return EINVAL;
+    }
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
         return ENOSYS;
     }
-    sys_chown(path_ptr, uid, gid, 0, 0, 0)
+    use crate::syscall::fs_bridge;
+    let pid = current_pid_u32();
+    fs_bridge::bridge_result(fs_bridge::fs_chown(
+        path.as_bytes(),
+        uid as u32,
+        gid as u32,
+        pid,
+    ))
 }
 
 /// `statx(dirfd, path, flags, mask, statxbuf)`.

@@ -172,6 +172,29 @@ fn stat_by_path(path_bytes: &[u8], path_len: usize, flags: u32) -> ExofsResult<O
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Format compact ExoFsFileStat (104 octets — ABI Rust library/std & libs/exo-syscall)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Format compact 104 octets ExoFsFileStat attendu par `library/std` et `libs/exo-syscall`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExoFsFileStat {
+    pub object_id: [u8; 32],
+    pub content_hash: [u8; 32],
+    pub size: u64,
+    pub mode: u32,
+    pub flags: u32,
+    pub ctime_ns: u64,
+    pub mtime_ns: u64,
+    pub generation: u64,
+}
+
+const _: () = assert!(
+    core::mem::size_of::<ExoFsFileStat>() == 104,
+    "ExoFsFileStat layout must be exactly 104 bytes"
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Handler SYS_EXOFS_OBJECT_STAT (506)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -187,11 +210,18 @@ pub fn sys_exofs_object_stat(
     _a5: u64,
     cap_rights: u64,
 ) -> i64 {
-    if out_ptr == 0 {
+    // Support the 3-argument calling convention: syscall(SYS_EXOFS_OBJECT_STAT, fd, out_ptr, 104)
+    // where arg2 (_length) is the userspace output pointer, and arg3 (flags) is the expected size (104).
+    let (real_out_ptr, is_exofs_stat104, f) = if out_ptr == 0 && _length != 0 && flags == 104 {
+        (_length, true, stat_flags::USE_FD)
+    } else {
+        (out_ptr, _length == 104, flags as u32)
+    };
+
+    if real_out_ptr == 0 {
         return EFAULT;
     }
-    let f = flags as u32;
-    if f & !stat_flags::VALID_MASK != 0 {
+    if !is_exofs_stat104 && (f & !stat_flags::VALID_MASK != 0) {
         return EINVAL;
     }
 
@@ -224,9 +254,34 @@ pub fn sys_exofs_object_stat(
         }
     };
 
-    match write_user_struct(out_ptr, &result) {
-        Ok(_) => 0i64,
-        Err(e) => e,
+    if is_exofs_stat104 {
+        let st104 = ExoFsFileStat {
+            object_id: result.object_id,
+            content_hash: if result.content_hash == [0u8; 32] {
+                result.blob_id
+            } else {
+                result.content_hash
+            },
+            size: result.size,
+            mode: if result.kind == 1 {
+                0o040755
+            } else {
+                0o100644
+            },
+            flags: result.access_flags,
+            ctime_ns: 0,
+            mtime_ns: 0,
+            generation: result.epoch_id,
+        };
+        match write_user_struct(real_out_ptr, &st104) {
+            Ok(_) => 0i64,
+            Err(e) => e,
+        }
+    } else {
+        match write_user_struct(real_out_ptr, &result) {
+            Ok(_) => 0i64,
+            Err(e) => e,
+        }
     }
 }
 

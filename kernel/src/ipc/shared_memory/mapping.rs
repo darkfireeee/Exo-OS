@@ -267,7 +267,7 @@ pub fn shm_map(
         return Err(IpcError::MappingFailed);
     }
 
-    // Vérifier que la région existe et est active
+    // Vérifier que la région existe, est active et autorise les permissions demandées
     let (n_pages, region_perms, size_bytes) = {
         let dir = SHM_DESC_DIR.lock();
         let desc = unsafe { dir.get(desc_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -276,21 +276,14 @@ pub fn shm_map(
         }
         // Calculer les permissions effectives (intersection)
         let rp = ShmPermissions(requested_perms.0 & desc.permissions);
+        if requested_perms.can_write() && !rp.can_write() {
+            return Err(IpcError::PermissionDenied);
+        }
         let n = desc.page_count();
         let sz = desc.size_bytes;
         desc.add_mapping();
         (n, rp, sz)
     };
-
-    // Vérifier que les permissions demandées sont accordées
-    if requested_perms.can_write() && !region_perms.can_write() {
-        // Retirer le mapping
-        let dir = SHM_DESC_DIR.lock();
-        if let Some(desc) = unsafe { dir.get(desc_idx) } {
-            desc.remove_mapping();
-        }
-        return Err(IpcError::PermissionDenied);
-    }
 
     // Allouer un slot de mapping
     let mapping_idx = {

@@ -177,57 +177,38 @@ pub fn endpoint_close(ep_id: EndpointId) -> Result<(), IpcError> {
 
 /// Détruit un endpoint (uniquement si active_conns == 0).
 pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> {
-    // Vérifier qu'il n'y a plus de connexions actives.
-    let active = {
-        let pool = EP_POOL_DESCS.lock();
-        // Trouver l'index par ep_id.
-        pool.iter()
-            .position(|slot| {
-                if let Some(ref b) = slot {
-                    // SAFETY: accessed under lock, slot is Some.
-                    unsafe { b.as_ref().id == ep_id }
-                } else {
-                    false
-                }
-            })
-            .map(|idx| {
-                pool[idx]
-                    .as_ref()
-                    .map(|desc| {
-                        // SAFETY: slot is Some and protected by EP_POOL_DESCS.
-                        unsafe { desc.as_ref().active_conns.load(Ordering::Acquire) }
-                    })
-                    .unwrap_or(u32::MAX)
-            })
-    };
+    let mut pool = EP_POOL_DESCS.lock();
+    let slot_idx = pool.iter().position(|slot| {
+        if let Some(ref b) = slot {
+            // SAFETY: accessed under lock, slot is Some.
+            unsafe { b.as_ref().id == ep_id }
+        } else {
+            false
+        }
+    });
 
-    let conns = match active {
-        Some(c) => c,
+    let idx = match slot_idx {
+        Some(i) => i,
         None => return Err(IpcError::EndpointNotFound),
     };
 
-    if conns == 0 {
-        // Retirer du registre + libérer le slot.
-        unregister_endpoint(name);
-        // Trouver et libérer le slot dans le pool.
-        let mut pool = EP_POOL_DESCS.lock();
-        for (idx, slot) in pool.iter_mut().enumerate() {
-            let matches = if let Some(ref b) = slot {
-                // SAFETY: accessed under lock.
-                unsafe { b.as_ref().id == ep_id }
-            } else {
-                false
-            };
-            if matches {
-                *slot = None;
-                drop(pool); // libérer le lock avant de modifier le bitmap
-                EP_POOL_BITMAP.free(idx);
-                return Ok(());
-            }
-        }
+    let conns = pool[idx]
+        .as_ref()
+        .map(|desc| {
+            // SAFETY: slot is Some and protected by EP_POOL_DESCS.
+            unsafe { desc.as_ref().active_conns.load(Ordering::Acquire) }
+        })
+        .unwrap_or(u32::MAX);
+
+    if conns != 0 {
+        return Err(IpcError::WouldBlock);
     }
 
-    Err(IpcError::WouldBlock) // encore des connexions actives
+    pool[idx] = None;
+    drop(pool); // libérer le lock avant de modifier le bitmap et le registre
+    EP_POOL_BITMAP.free(idx);
+    unregister_endpoint(name);
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
