@@ -139,6 +139,29 @@ use exo_syscall_abi as syscall;
             }
         }
 
+        pub fn from_slices(arg_slices: &[&'a [u8]], env_slices: &[&'a [u8]]) -> Self {
+            let mut argv = [&[][..]; ARG_MAX];
+            let mut envp = [&[][..]; ENV_MAX];
+            let argc = arg_slices.len().min(ARG_MAX);
+            let mut i = 0usize;
+            while i < argc {
+                argv[i] = arg_slices[i];
+                i += 1;
+            }
+            let envc = env_slices.len().min(ENV_MAX);
+            let mut j = 0usize;
+            while j < envc {
+                envp[j] = env_slices[j];
+                j += 1;
+            }
+            Self {
+                argv,
+                argc,
+                envp,
+                envc,
+            }
+        }
+
         pub fn len(&self) -> usize {
             self.argc
         }
@@ -184,6 +207,7 @@ use exo_syscall_abi as syscall;
         }
     }
 
+    #[cfg(target_os = "none")]
     #[panic_handler]
     fn panic(_info: &PanicInfo) -> ! {
         unsafe {

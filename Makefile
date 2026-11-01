@@ -26,6 +26,7 @@ LOADER_TARGET_DIR     ?= x86_64-exo-loader
 CARGO_TEST_FLAGS = -Z panic-abort-tests
 CARGO_BAREMETAL_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 CARGO_USERSPACE_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem -Z json-target-spec
+CARGO_EXO_STD_FLAGS = -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec
 HOST_TEST_TARGET ?= x86_64-unknown-linux-gnu
 HOST_TEST_OVERRIDES = --target $(HOST_TEST_TARGET)
 
@@ -227,9 +228,10 @@ all: iso
 ## 1a. Build des binaires Ring1 installes dans l'image ExoFS racine
 build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
+	@rsync -a --delete library/std/ "$$(rustc --print sysroot)/lib/rustlib/src/rust/library/std/"
 	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@$(CARGO) build -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@$(CARGO) build -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
+	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)"
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"

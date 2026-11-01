@@ -369,10 +369,7 @@ dependencies = [
 name = "exo-exosh"
 version = "0.1.0"
 dependencies = [
- "exo-alloc",
  "exo-libc",
- "exo-rt",
- "exo-std",
  "exo-syscall-abi",
 ]
 
@@ -587,19 +584,6 @@ version = "0.1.0"
 dependencies = [
  "exo-syscall-abi",
  "spin",
-]
-
-[[package]]
-name = "exo-std"
-version = "0.1.0"
-dependencies = [
- "exo-alloc",
- "exo-libc",
- "exo-phoenix-ssr",
- "exo-rt",
- "exo-syscall",
- "exo-syscall-abi",
- "exo-types",
 ]
 
 [[package]]

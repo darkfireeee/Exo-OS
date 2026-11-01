@@ -18,7 +18,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'
 
 [dependencies]
 exo-syscall-abi = { path = "../syscall_abi" }
-exo-std = { path = "../../library/std" }
-exo-rt = { path = "../../libs/exo-rt" }
-exo-alloc = { path = "../../libs/exo-alloc", features = ["global-alloc"] }
 exo-libc = { path = "../../libs/exo-libc" }

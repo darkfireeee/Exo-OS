@@ -1,12 +1,10 @@
-#![cfg_attr(any(target_os = "none", target_os = "exo"), no_std)]
+#![cfg_attr(target_os = "none", no_std)]
 
-#[cfg(any(target_os = "none", target_os = "exo"))]
+#[cfg(target_os = "none")]
 extern crate exo_alloc;
 
-#[cfg(any(target_os = "none", target_os = "exo"))]
+#[cfg(target_os = "none")]
 pub use exo_rt;
-#[cfg(any(target_os = "none", target_os = "exo"))]
-pub use exo_std as std;
 
 #[cfg(not(any(target_os = "none", target_os = "exo")))]
 pub mod host;
@@ -17,7 +15,7 @@ pub use host::{cat, echo, ls, mkdir, rm, rmdir, touch};
 #[cfg(any(target_os = "none", target_os = "exo"))]
 pub mod bare;
 
-#[cfg(any(target_os = "none", target_os = "exo"))]
+#[cfg(target_os = "none")]
 #[macro_export]
 macro_rules! exo_command {
     ($run:path) => {
@@ -39,11 +37,35 @@ macro_rules! exo_command {
             }
             let args = unsafe { $crate::bare::Args::from_stack(stack) };
             let code = $run(&args);
-            $crate::std::process::exit(code);
+            $crate::bare::exit(code);
         }
     };
 }
 
+#[cfg(target_os = "exo")]
+#[macro_export]
+macro_rules! exo_command {
+    ($run:path) => {
+        fn main() {
+            use std::os::exo::ffi::OsStrExt;
+            let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+            let raw_envs: Vec<Vec<u8>> = std::env::vars_os()
+                .map(|(k, v)| {
+                    let mut entry = Vec::with_capacity(k.as_bytes().len() + 1 + v.as_bytes().len());
+                    entry.extend_from_slice(k.as_bytes());
+                    entry.push(b'=');
+                    entry.extend_from_slice(v.as_bytes());
+                    entry
+                })
+                .collect();
+            let arg_slices: Vec<&[u8]> = raw_args.iter().map(|s| s.as_bytes()).collect();
+            let env_slices: Vec<&[u8]> = raw_envs.iter().map(|v| v.as_slice()).collect();
+            let args = $crate::bare::Args::from_slices(&arg_slices, &env_slices);
+            let code = $run(&args);
+            std::process::exit(code);
+        }
+    };
+}
 
 #[cfg(test)]
 mod tests {

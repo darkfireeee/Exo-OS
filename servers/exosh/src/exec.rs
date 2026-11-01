@@ -21,7 +21,7 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     let p_write = fds[1] as u64;
 
     exo_libc::fflush_all();
-    let child_left = match exo_rt::fork() {
+    let child_left = match std::os::exo::fork() {
         Ok(pid) => pid as i64,
         Err(e) => -(e as i64),
     };
@@ -51,7 +51,7 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     }
 
     exo_libc::fflush_all();
-    let child_right = match exo_rt::fork() {
+    let child_right = match std::os::exo::fork() {
         Ok(pid) => pid as i64,
         Err(e) => -(e as i64),
     };
@@ -350,7 +350,7 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
     let envp = [pwd_env.as_ptr() as u64, 0u64];
 
     exo_libc::fflush_all();
-    let child = match exo_rt::fork() {
+    let child = match std::os::exo::fork() {
         Ok(pid) => pid as i64,
         Err(e) => -(e as i64),
     };

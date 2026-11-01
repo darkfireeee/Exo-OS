@@ -54,10 +54,10 @@ members = [
     "servers/vfs_server",
     "tools/exofs_mkroot",
     "tools/kernel_signer",
-    "library/std",
 ]
 # libs/ gère son propre workspace Cargo.toml avec ses sous-crates std.
-exclude = ["libs"]
+# library/std est le fork de rust-lang/rust/library/std compilé via -Z build-std.
+exclude = ["libs", "library", "library/std"]
 
 [workspace.package]
 version   = "0.1.0"

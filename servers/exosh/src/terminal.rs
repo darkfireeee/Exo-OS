@@ -113,9 +113,9 @@ pub struct Sigaction {
 }
 
 pub fn ignore_sigint() {
-    let _ = exo_rt::sigaction_0syscall(
+    let _ = std::os::exo::sigaction_0syscall(
         2,
-        Some(exo_rt::SigActionSlot {
+        Some(std::os::exo::SigActionSlot {
             handler_vaddr: 1, // SIG_IGN
             flags: 0x1000_0000,
             _pad: 0,
@@ -142,9 +142,9 @@ pub fn ignore_sigint() {
 }
 
 pub fn restore_sigint() {
-    let _ = exo_rt::sigaction_0syscall(
+    let _ = std::os::exo::sigaction_0syscall(
         2,
-        Some(exo_rt::SigActionSlot {
+        Some(std::os::exo::SigActionSlot {
             handler_vaddr: 0, // SIG_DFL
             flags: 0,
             _pad: 0,

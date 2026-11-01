@@ -1,0 +1,19 @@
+[package]
+name = "exo-libc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Implémentation locale de la Platform Abstraction Layer (Pal, PalSignal, PalThread, PalSocket) pour Exo-OS"
+
+[lib]
+name = "exo_libc"
+path = "src/lib.rs"
+
+[dependencies]
+exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo-syscall = { path = "../exo-syscall" }
+exo-rt = { path = "../exo-rt" }
+exo-alloc = { path = "../exo-alloc" }
+exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }
+exo_types = { package = "exo-types", path = "../exo_types" }

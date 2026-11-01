@@ -24,6 +24,9 @@
   "pre-link-args": {
     "ld.lld": [
       "--no-pie",
+      "--gc-sections",
+      "-z",
+      "separate-loadable-segments",
       "--image-base=0x0000010000000000"
     ]
   }
