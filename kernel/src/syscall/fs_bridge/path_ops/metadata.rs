@@ -339,6 +339,47 @@ pub fn fs_statx(
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return Err(FsBridgeError::Invalid);
     }
+
+    if flags & AT_EMPTY_PATH != 0 && path.is_empty() {
+        if dirfd >= 0 {
+            let handle = resolve_fd(pid, dirfd as u32)?.handle;
+            let entry = OBJECT_TABLE.get(handle).map_err(exofs_to_bridge_error)?;
+            let is_dir = blob_is_directory_by_id(&entry.blob_id);
+            let kind = if is_dir {
+                PATH_INDEX_KIND_DIR
+            } else {
+                PATH_INDEX_KIND_FILE
+            };
+            let statx = linux_statx_for_blob_meta(
+                entry.blob_id,
+                blob_len(&entry.blob_id) as u64,
+                pid,
+                kind,
+                is_dir,
+            );
+            write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
+            return Ok(0);
+        } else if dirfd == AT_FDCWD {
+            let normalized_path = resolve_path_with_symlinks(b".", true, false)?;
+            let (blob_id, kind) = path_entry(&normalized_path)?;
+            let statx = linux_statx_for_blob_meta(
+                blob_id,
+                blob_len(&blob_id) as u64,
+                pid,
+                kind,
+                kind == PATH_INDEX_KIND_DIR,
+            );
+            write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
+            return Ok(0);
+        } else {
+            return Err(FsBridgeError::Invalid);
+        }
+    }
+
+    if path.is_empty() {
+        return Err(FsBridgeError::NotFound);
+    }
+
     if dirfd != AT_FDCWD && !path.starts_with(b"/") {
         return Err(FsBridgeError::Invalid);
     }

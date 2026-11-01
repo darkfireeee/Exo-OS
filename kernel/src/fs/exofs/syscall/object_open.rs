@@ -292,6 +292,12 @@ pub fn sys_exofs_object_open(
         }
     }
 
+    let pid = crate::syscall::fast_path::syscall_current_pid();
+    if pid != 0 {
+        let fd_flags = crate::syscall::fs_bridge::fd::fd_table_flags(open_args.flags, open_args.flags);
+        let _ = crate::syscall::fs_bridge::fd::install_process_fd_at(pid, fd, fd as u64, fd_flags);
+    }
+
     fd as i64
 }
 

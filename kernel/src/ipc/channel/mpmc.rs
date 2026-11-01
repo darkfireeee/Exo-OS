@@ -129,6 +129,8 @@ pub struct MpmcChannel {
     ring: MpmcRing,
     /// Statistiques locales
     pub stats: MpmcStats,
+    /// Compteur d'opérations concurrentes actives (drain avant libération/réutilisation).
+    pub active_ops: AtomicU32,
     /// Canal fermé
     closed: AtomicU32,
     /// Politique de débordement (OverflowPolicy encodée en u8)
@@ -139,7 +141,7 @@ pub struct MpmcChannel {
     consumer_count: AtomicU32,
     /// Nombre de messages en attente (approximatif)
     pending: AtomicUsize,
-    _pad: [u8; 24],
+    _pad: [u8; 20],
 }
 
 // SAFETY: MpmcRing est Sync (atomic CAS internes), AtomicU64 est Sync.
@@ -153,12 +155,13 @@ impl MpmcChannel {
             id: alloc_channel_id(),
             ring: MpmcRing::new_uninit(),
             stats: MpmcStats::new(),
+            active_ops: AtomicU32::new(0),
             closed: AtomicU32::new(0),
             overflow_policy: AtomicU32::new(policy as u32),
             producer_count: AtomicU32::new(0),
             consumer_count: AtomicU32::new(0),
             pending: AtomicUsize::new(0),
-            _pad: [0u8; 24],
+            _pad: [0u8; 20],
         };
         c.ring.init();
         c
@@ -515,11 +518,15 @@ pub fn mpmc_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
     let tbl = MPMC_CHANNEL_TABLE.lock();
     // SAFETY: tbl.get() interne vérifie used[idx] < TABLE_SIZE avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: chan vit dans MPMC_CHANNEL_TABLE statique ('static).
-    // free() requiert le SpinLock, donc le canal n'est pas détruit pendant send().
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.send(data, flags)
+    let res = chan_ref.send(data, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Reçoit un message du canal MPMC identifié par `idx`.
@@ -531,10 +538,15 @@ pub fn mpmc_channel_recv(
     let tbl = MPMC_CHANNEL_TABLE.lock();
     // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que mpmc_channel_send().
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.recv(buf, flags)
+    let res = chan_ref.recv(buf, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Ferme et détruit le canal MPMC identifié par `idx`.
@@ -543,7 +555,21 @@ pub fn mpmc_channel_destroy(idx: usize) -> Result<(), IpcError> {
     // SAFETY: tbl.get() vérifie used[idx].
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     chan.close();
+    let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     drop(tbl);
+
+    // Drain coopératif des opérations concurrentes en vol avant libération du slot
+    let mut spins = 0u32;
+    while chan_ref.active_ops.load(Ordering::SeqCst) > 0 {
+        core::hint::spin_loop();
+        spins = spins.wrapping_add(1);
+        if spins % 64 == 0 {
+            // SAFETY: cooperative_reschedule() cède le CPU au scheduler si des threads sont prêts.
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
 
     let mut tbl = MPMC_CHANNEL_TABLE.lock();
     if !tbl.free(idx) {
@@ -568,10 +594,15 @@ pub fn mpmc_channel_send_checked(
     let tbl = MPMC_CHANNEL_TABLE.lock();
     // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que les autres fonctions send/recv.
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.send_checked(data, flags, table, token)
+    let res = chan_ref.send_checked(data, flags, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Reçoit depuis le canal MPMC `idx` avec vérification capability (IPC-04 v6).
@@ -585,8 +616,13 @@ pub fn mpmc_channel_recv_checked(
     let tbl = MPMC_CHANNEL_TABLE.lock();
     // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
-    // SAFETY: même invariant 'static que les autres fonctions send/recv.
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.recv_checked(buf, flags, table, token)
+    let res = chan_ref.recv_checked(buf, flags, table, token);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }

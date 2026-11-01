@@ -247,11 +247,13 @@ pub struct AsyncChannel {
     wakers: SpinLock<WakerTable>,
     /// Statistiques locales
     pub stats: AsyncChannelStats,
+    /// Compteur d'opérations concurrentes actives (drain avant libération/réutilisation).
+    pub active_ops: AtomicU32,
     /// Nombre de messages en attente (approximatif)
     pending: AtomicUsize,
     /// Canal fermé
     closed: AtomicU32,
-    _pad: [u8; 20],
+    _pad: [u8; 16],
 }
 
 // SAFETY: SpscRing est Sync, SpinLock<WakerTable> est Sync
@@ -265,9 +267,10 @@ impl AsyncChannel {
             ring: SpscRing::new(),
             wakers: SpinLock::new(WakerTable::new()),
             stats: AsyncChannelStats::new(),
+            active_ops: AtomicU32::new(0),
             pending: AtomicUsize::new(0),
             closed: AtomicU32::new(0),
-            _pad: [0u8; 20],
+            _pad: [0u8; 16],
         };
         s.ring.init();
         s
@@ -505,10 +508,16 @@ pub fn async_channel_register_waker(
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref
+    let res = chan_ref
         .register_waker(f, data)
-        .ok_or(IpcError::OutOfResources)
+        .ok_or(IpcError::OutOfResources);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Désenregistre un waker.
@@ -516,12 +525,18 @@ pub fn async_channel_unregister_waker(chan_idx: usize, waker_idx: usize) -> Resu
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    if chan_ref.unregister_waker(waker_idx) {
+    let res = if chan_ref.unregister_waker(waker_idx) {
         Ok(())
     } else {
         Err(IpcError::InvalidHandle)
-    }
+    };
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Envoie `data` sur le canal asynchrone `idx`.
@@ -529,8 +544,14 @@ pub fn async_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Me
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.send(data, flags)
+    let res = chan_ref.send(data, flags);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Reçoit un message sans blocage du canal `idx`.
@@ -538,17 +559,37 @@ pub fn async_channel_try_recv(idx: usize, buf: &mut [u8]) -> Result<(usize, MsgF
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
+    if chan_ref.is_closed() {
+        return Err(IpcError::Closed);
+    }
+    chan_ref.active_ops.fetch_add(1, Ordering::SeqCst);
     drop(tbl);
-    chan_ref.try_recv(buf)
+    let res = chan_ref.try_recv(buf);
+    chan_ref.active_ops.fetch_sub(1, Ordering::SeqCst);
+    res
 }
 
 /// Ferme et détruit le canal asynchrone `idx`.
 pub fn async_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
-    if let Some(chan) = unsafe { tbl.get(idx) } {
-        chan.close();
-    }
+    let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
+    chan.close();
+    let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
     drop(tbl);
+
+    // Drain coopératif des opérations concurrentes en vol avant libération du slot
+    let mut spins = 0u32;
+    while chan_ref.active_ops.load(Ordering::SeqCst) > 0 {
+        core::hint::spin_loop();
+        spins = spins.wrapping_add(1);
+        if spins % 64 == 0 {
+            // SAFETY: cooperative_reschedule() cède le CPU au scheduler si des threads sont prêts.
+            unsafe {
+                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
+
     let mut tbl = ASYNC_CHANNEL_TABLE.lock();
     if !tbl.free(idx) {
         return Err(IpcError::InvalidHandle);

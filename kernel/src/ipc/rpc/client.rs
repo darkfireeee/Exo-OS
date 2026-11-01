@@ -243,7 +243,7 @@ impl RpcClient {
                                 IPC_STATS.record(StatEvent::RpcProtocolError);
                                 self.total_errors.fetch_add(1, Ordering::Relaxed);
 
-                                if retry.should_retry() {
+                                if status.is_retryable() && retry.should_retry() {
                                     let wait_ns = retry.next_attempt()?;
                                     RetryState::spin_wait_ns(wait_ns);
                                     self.total_retries_used.fetch_add(1, Ordering::Relaxed);

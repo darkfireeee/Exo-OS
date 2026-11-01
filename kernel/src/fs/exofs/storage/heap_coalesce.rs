@@ -251,12 +251,15 @@ impl HeapCoalescer {
 
     /// Vérifie si deux blocs d'ordre `order` sont des buddies.
     pub fn are_buddies(a: u64, b: u64, order: u32) -> bool {
-        if order >= 64 {
+        if order >= 63 {
             return false;
         }
         let size = 1u64 << order;
         // Les deux doivent être alignés sur 2×size.
-        let align = size.checked_mul(2).unwrap_or(u64::MAX);
+        let align = match size.checked_mul(2) {
+            Some(v) => v,
+            None => return false,
+        };
         let mask = align.saturating_sub(1);
         // L'aîné est celui dont le bit `order` est à 0.
         let base = a & !mask;
@@ -273,25 +276,31 @@ impl HeapCoalescer {
         let mut merges = 0u64;
 
         for order in 0..max_order {
+            if order >= 63 {
+                break;
+            }
             let buddy = match Self::buddy_of(current, order) {
                 Some(b) if b < map.total_blocks() => b,
                 _ => break,
             };
 
-            if !map.is_free(buddy) {
-                break; // Le buddy est occupé, on ne peut pas fusionner.
+            let buddy_size = 1u64 << order;
+            if buddy.saturating_add(buddy_size) > map.total_blocks() {
+                break;
             }
 
-            // Les deux sont libres → fusionner (marquer le buddy comme "occupé" puis
-            // laisser le nouveau super-bloc libre).
-            // En pratique on aligne sur l'aîné.
-            let _size = 1u64 << order;
-            let parent = current.min(buddy);
+            let mut all_free = true;
+            for i in 0..buddy_size {
+                if !map.is_free(buddy + i) {
+                    all_free = false;
+                    break;
+                }
+            }
+            if !all_free {
+                break; // Au moins un bloc du buddy est occupé, fusion impossible.
+            }
 
-            // Re-marquer les deux blocs puis le parent libre (déjà dans la carte).
-            // (la carte ne stocke pas les ordres, mais cette opération est no-op
-            //  car ils sont déjà libres — l'important est le décompte).
-            let _ = parent; // utilisé pour la logique de fusion
+            // Les deux sont libres → fusionner
             merges = merges.saturating_add(1);
             current = current.min(buddy);
         }

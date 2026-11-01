@@ -118,7 +118,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_STATFS => sys_statfs,
         SYS_FSTATFS => sys_fstatfs,
         SYS_OPENAT => sys_openat,
-        SYS_GETDENTS64 => sys_getdents64,
+        SYS_GETDENTS | SYS_GETDENTS64 => sys_getdents64,
         SYS_READLINK => sys_readlink,
         SYS_SYMLINKAT => sys_symlinkat,
         SYS_READLINKAT => sys_readlinkat,

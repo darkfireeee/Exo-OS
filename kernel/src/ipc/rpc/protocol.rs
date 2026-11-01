@@ -116,6 +116,14 @@ impl RpcStatus {
         matches!(self, Self::Ok)
     }
 
+    /// Indique si l'erreur est transitoire (retry utile) ou fatale (échec immédiat).
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::ServerTimeout | Self::ServerBusy | Self::InternalError
+        )
+    }
+
     pub fn to_ipc_error(self) -> IpcError {
         match self {
             Self::Ok => IpcError::Invalid, // ne devrait pas être appelé sur Ok

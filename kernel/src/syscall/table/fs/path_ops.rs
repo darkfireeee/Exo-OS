@@ -61,12 +61,52 @@ pub fn sys_newfstatat(
     stat_inc(SYS_NEWFSTATAT);
     const AT_FDCWD_RAW: i64 = -100;
     const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
-    if dirfd as i64 != AT_FDCWD_RAW {
+    const AT_EMPTY_PATH: u64 = 0x1000;
+    const AT_NO_AUTOMOUNT: u64 = 0x800;
+
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT) != 0 {
+        return EINVAL;
+    }
+
+    if path_ptr == 0 {
+        if flags & AT_EMPTY_PATH != 0 {
+            if dirfd as i64 == AT_FDCWD_RAW {
+                use crate::syscall::fs_bridge;
+                return fs_bridge::bridge_result(fs_bridge::fs_stat(
+                    b".",
+                    stat_ptr,
+                    current_pid_u32(),
+                ));
+            }
+            return sys_fstat(dirfd, stat_ptr, 0, 0, 0, 0);
+        }
+        return EFAULT;
+    }
+
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+
+    if path.is_empty() {
+        if flags & AT_EMPTY_PATH != 0 {
+            if dirfd as i64 == AT_FDCWD_RAW {
+                use crate::syscall::fs_bridge;
+                return fs_bridge::bridge_result(fs_bridge::fs_stat(
+                    b".",
+                    stat_ptr,
+                    current_pid_u32(),
+                ));
+            }
+            return sys_fstat(dirfd, stat_ptr, 0, 0, 0, 0);
+        }
+        return ENOENT;
+    }
+
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
         return ENOSYS;
     }
-    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
-        return ENOSYS;
-    }
+
     if flags & AT_SYMLINK_NOFOLLOW != 0 {
         sys_lstat(path_ptr, stat_ptr, 0, 0, 0, 0)
     } else {
@@ -90,9 +130,22 @@ pub fn sys_access(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
 pub fn sys_faccessat(dirfd: u64, path_ptr: u64, mode: u64, flags: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FACCESSAT);
     const AT_FDCWD_RAW: i64 = -100;
-    if dirfd as i64 != AT_FDCWD_RAW || flags != 0 {
+    const AT_EACCESS: u64 = 0x200;
+    const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+
+    if flags & !(AT_EACCESS | AT_SYMLINK_NOFOLLOW) != 0 {
+        return EINVAL;
+    }
+
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+
+    if dirfd as i64 != AT_FDCWD_RAW && !path.as_bytes().starts_with(b"/") {
         return ENOSYS;
     }
+
     sys_access(path_ptr, mode, 0, 0, 0, 0)
 }
 
@@ -533,6 +586,20 @@ pub fn sys_statx(
 ) -> i64 {
     stat_inc(SYS_STATX);
     let pid = current_pid_u32();
+    if path_ptr == 0 {
+        if flags & 0x1000 != 0 {
+            use crate::syscall::fs_bridge;
+            return fs_bridge::bridge_result(fs_bridge::fs_statx(
+                dirfd as i32,
+                b"",
+                flags as u32,
+                mask as u32,
+                statx_ptr,
+                pid,
+            ));
+        }
+        return EFAULT;
+    }
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),

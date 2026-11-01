@@ -140,6 +140,11 @@ pub fn sys_exofs_open_by_path(
                     return e;
                 }
             }
+            let pid = crate::syscall::fast_path::syscall_current_pid();
+            if pid != 0 {
+                let fd_flags = crate::syscall::fs_bridge::fd::fd_table_flags(flags32, flags32);
+                let _ = crate::syscall::fs_bridge::fd::install_process_fd_at(pid, fd, fd as u64, fd_flags);
+            }
             fd as i64
         }
         Err(e) => exofs_err_to_errno(e),

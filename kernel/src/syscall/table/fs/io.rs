@@ -298,6 +298,9 @@ pub fn sys_preadv2(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, flags: u64, 
     if flags != 0 {
         return EINVAL;
     }
+    if offset == u64::MAX || (offset as i64) == -1 {
+        return sys_readv(fd, iov_ptr, iovcnt, 0, 0, 0);
+    }
     sys_preadv(fd, iov_ptr, iovcnt, offset, 0, 0)
 }
 
@@ -306,6 +309,9 @@ pub fn sys_pwritev2(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, flags: u64,
     stat_inc(SYS_PWRITEV2);
     if flags != 0 {
         return EINVAL;
+    }
+    if offset == u64::MAX || (offset as i64) == -1 {
+        return sys_writev(fd, iov_ptr, iovcnt, 0, 0, 0);
     }
     sys_pwritev(fd, iov_ptr, iovcnt, offset, 0, 0)
 }
