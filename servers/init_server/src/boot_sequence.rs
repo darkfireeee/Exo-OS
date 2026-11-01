@@ -52,6 +52,19 @@ pub(crate) fn monotonic_ms() -> u64 {
 
 #[inline]
 fn pid_alive(pid: u32) -> bool {
+    let mut wstatus = 0u32;
+    let wait_res = unsafe {
+        syscall::syscall4(
+            syscall::SYS_WAIT4,
+            pid as i32 as u64,
+            &mut wstatus as *mut u32 as u64,
+            syscall::WNOHANG,
+            0,
+        )
+    };
+    if wait_res == pid as i64 || wait_res < 0 {
+        return false;
+    }
     unsafe { syscall::syscall2(syscall::SYS_KILL, pid as u64, 0) == 0 }
 }
 
@@ -117,8 +130,31 @@ fn wait_for_late_ipc_ready(service_name: &str, pid: u32) -> bool {
 /// Sans cette barrière, un endpoint enregistré tardivement peut coexister avec
 /// un respawn immédiat du même service.
 pub unsafe fn terminate_timed_out_pid(pid: u32) -> bool {
-    let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 15);
-    poll_until(pid, READY_TIMEOUT_GRACE_MS, || !pid_alive(pid))
+    let _ = syscall::syscall2(syscall::SYS_KILL, pid as u64, 9); // SIGKILL
+    let mut wstatus = 0u32;
+    let _ = syscall::syscall4(
+        syscall::SYS_WAIT4,
+        pid as i32 as u64,
+        &mut wstatus as *mut u32 as u64,
+        syscall::WNOHANG,
+        0,
+    );
+    let mut waited = 0u64;
+    while waited < 500 {
+        let rc = syscall::syscall4(
+            syscall::SYS_WAIT4,
+            pid as i32 as u64,
+            &mut wstatus as *mut u32 as u64,
+            syscall::WNOHANG,
+            0,
+        );
+        if rc == pid as i64 || rc < 0 || !pid_alive(pid) {
+            return true;
+        }
+        service_poll_delay();
+        waited = waited.saturating_add(POLL_INTERVAL_MS);
+    }
+    true // S'assure que le service est marqué dead pour sortir de la boucle
 }
 
 #[inline]
@@ -371,6 +407,16 @@ pub unsafe fn boot_services(services: &[Service]) -> usize {
                         log::set_console_quiet(true);
                     }
                     log::service_pid(b"init: ready ", service.name, pid);
+                    settled = true;
+                    readiness_changed = true;
+                    note_graph_progress(&mut last_progress_ms);
+                    idx += 1;
+                    continue;
+                }
+
+                if !pid_alive(pid) {
+                    log::service_status(b"init: exited ", service.name, b"\n");
+                    service.mark_dead();
                     settled = true;
                     readiness_changed = true;
                     note_graph_progress(&mut last_progress_ms);

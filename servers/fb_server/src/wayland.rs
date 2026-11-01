@@ -13,6 +13,7 @@
 //! - `wl_seat` / `wl_pointer` / `wl_keyboard` : routage d'événements d'entrée
 
 use exo_syscall_abi as syscall;
+use crate::Framebuffer;
 
 pub const MAX_WAYLAND_OBJECTS: usize = 32;
 pub const MAX_SHM_SURFACES: usize = 8;
@@ -185,10 +186,27 @@ impl WaylandState {
                     )
                 };
                 let virt_addr = if virt_rc > 0 { virt_rc as u64 } else { 0 };
+                let mut client_handle = 0u64;
+                if owner_pid > 1 {
+                    let client_virt = unsafe {
+                        syscall::syscall5(
+                            syscall::SYS_EXO_MEM_MAP_PID,
+                            owner_pid as u64,
+                            0,
+                            size_bytes,
+                            3,    // PROT_READ | PROT_WRITE
+                            0x22, // MAP_PRIVATE | MAP_ANONYMOUS
+                        )
+                    };
+                    if client_virt > 0 {
+                        client_handle = client_virt as u64;
+                    }
+                }
                 let mut s = CompositorSurface::empty();
                 s.active = true;
                 s.surface_id = id;
                 s.owner_pid = owner_pid;
+                s.shm_handle = client_handle;
                 s.virt_addr = virt_addr;
                 s.width = width;
                 s.height = height;
@@ -225,20 +243,98 @@ impl WaylandState {
         false
     }
 
-    pub fn commit_surface_damage(&mut self, surface_id: u32, sender_pid: u32, rect: syscall::DamageRect) -> bool {
+    pub fn commit_surface_damage(
+        &mut self,
+        surface_id: u32,
+        sender_pid: u32,
+        rect: syscall::DamageRect,
+        fb: Framebuffer,
+    ) -> Option<(u32, u32)> {
         let mut i = 0usize;
         while i < MAX_SHM_SURFACES {
             if self.surfaces[i].active && self.surfaces[i].surface_id == surface_id {
                 if sender_pid != 0 && sender_pid != 1 && self.surfaces[i].owner_pid != sender_pid {
-                    return false;
+                    return None;
                 }
                 self.surfaces[i].damaged = true;
                 self.surfaces[i].damage = rect;
-                return true;
+
+                // Si la surface possède un buffer distant dans l'espace client (shm_handle),
+                // copier la zone modifiée vers le buffer local de fb_server
+                let s = &self.surfaces[i];
+                if s.shm_handle != 0 && s.virt_addr != 0 && s.owner_pid > 1 {
+                    let dmg_y = rect.y.min(s.height);
+                    let dmg_h = if rect.height == 0 { s.height } else { rect.height }.min(s.height.saturating_sub(dmg_y));
+                    let stride = s.stride_bytes as u64;
+                    let mut r = 0u32;
+                    while r < dmg_h {
+                        let row_offset = ((dmg_y + r) as u64).saturating_mul(stride);
+                        let remote_src = s.shm_handle.saturating_add(row_offset);
+                        let local_dst = s.virt_addr.saturating_add(row_offset);
+                        unsafe {
+                            let _ = syscall::syscall6(
+                                syscall::SYS_EXO_MEM_COPY_FROM_PID,
+                                s.owner_pid as u64,
+                                remote_src,
+                                local_dst,
+                                stride,
+                                0,
+                                0,
+                            );
+                        }
+                        r += 1;
+                    }
+                }
+
+                self.composite_surface(i, fb);
+
+                let y_start = (self.surfaces[i].y + rect.y as i32).max(0) as u32;
+                let rect_h = if rect.height == 0 { self.surfaces[i].height } else { rect.height };
+                let y_end = (self.surfaces[i].y + (rect.y + rect_h) as i32).max(0) as u32;
+                return Some((y_start, y_end));
             }
             i += 1;
         }
-        false
+        None
+    }
+
+    pub fn composite_surface(&self, s_idx: usize, fb: Framebuffer) {
+        if s_idx >= MAX_SHM_SURFACES || !self.surfaces[s_idx].active || self.surfaces[s_idx].virt_addr == 0 {
+            return;
+        }
+        let s = &self.surfaces[s_idx];
+        let base = fb.draw_target_base();
+        if base == 0 || s.width == 0 || s.height == 0 {
+            return;
+        }
+        let bpp = fb.bytes_per_pixel() as usize;
+        let dst_stride = (fb.stride_pixels as usize).saturating_mul(bpp);
+        let src_stride = s.stride_bytes as usize;
+
+        let dmg_x = s.damage.x.min(s.width);
+        let dmg_y = s.damage.y.min(s.height);
+        let dmg_w = if s.damage.width == 0 { s.width } else { s.damage.width }.min(s.width.saturating_sub(dmg_x));
+        let dmg_h = if s.damage.height == 0 { s.height } else { s.damage.height }.min(s.height.saturating_sub(dmg_y));
+
+        let mut row = 0u32;
+        while row < dmg_h {
+            let sy = dmg_y + row;
+            let dy = s.y + sy as i32;
+            if dy >= 0 && (dy as u32) < fb.height {
+                let dx = s.x + dmg_x as i32;
+                if dx >= 0 && (dx as u32) < fb.width {
+                    let clip_w = dmg_w.min(fb.width.saturating_sub(dx as u32));
+                    let src_offset = (sy as usize).saturating_mul(src_stride) + (dmg_x as usize) * 4;
+                    let dst_offset = (dy as usize).saturating_mul(dst_stride) + (dx as usize) * bpp;
+                    let src_ptr = (s.virt_addr as usize + src_offset) as *const u8;
+                    let dst_ptr = (base + dst_offset) as *mut u8;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, (clip_w as usize) * bpp);
+                    }
+                }
+            }
+            row += 1;
+        }
     }
 
     /// Décode et traite un flux de messages filaires Wayland (`[object_id: u32, size_opcode: u32, payload...]`).

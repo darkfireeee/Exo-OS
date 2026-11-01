@@ -330,19 +330,21 @@ pub extern "C" fn _start() -> ! {
     }
 
     // Ne devrait jamais arriver — boucle infinie de sécurité.
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    // En cas de panique inattendue : halt et attendre le watchdog init.
+    // En cas de panique inattendue : exit et attendre le watchdog init.
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

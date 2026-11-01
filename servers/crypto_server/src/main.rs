@@ -55,10 +55,11 @@ fn boot_log(bytes: &[u8]) {
 }
 
 fn halt_forever() -> ! {
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }
 

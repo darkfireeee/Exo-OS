@@ -160,8 +160,6 @@ fn send_ctrl(endpoint: u64, msg_type: u32, payload: &[u8]) {
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

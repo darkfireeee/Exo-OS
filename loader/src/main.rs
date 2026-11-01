@@ -69,24 +69,31 @@ unsafe fn jump_to_user(jump: UserJump) -> ! {
 }
 
 #[cfg(target_os = "none")]
+const SYS_EXO_LOG: u64 = 350;
+
+#[cfg(target_os = "none")]
 #[inline(always)]
 fn debug_byte(byte: u8) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        core::arch::asm!(
-            "out 0xE9, al",
-            in("al") byte,
-            options(nomem, nostack, preserves_flags)
-        );
-    }
-    let _ = byte;
+    debug_write(&[byte]);
 }
 
 #[cfg(target_os = "none")]
 fn debug_write(bytes: &[u8]) {
-    for &byte in bytes {
-        debug_byte(byte);
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") SYS_EXO_LOG,
+            in("rdi") bytes.as_ptr() as u64,
+            in("rsi") bytes.len() as u64,
+            lateout("rax") _,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = bytes;
 }
 
 #[cfg(all(target_os = "none", feature = "dynamic_linking"))]

@@ -912,10 +912,11 @@ fn panic(_info: &PanicInfo) -> ! {
             exo_syscall_abi::ExoPhoenixStateWire::Normal.as_syscall_arg(),
         )
     };
+    unsafe {
+        let _ = exo_syscall_abi::syscall1(exo_syscall_abi::SYS_EXIT, 1);
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }
 

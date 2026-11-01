@@ -385,10 +385,45 @@ impl Console {
         }
     }
 
+#[cfg(target_os = "none")]
+fn notify_virtio_gpu_flush(x: u32, y: u32, w: u32, h: u32) {
+    #[repr(C)]
+    struct VirtioReq {
+        sender_pid: u32,
+        msg_type: u32,
+        payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
+    }
+    let mut req = VirtioReq {
+        sender_pid: 0,
+        msg_type: syscall::VIRTIO_GPU_MSG_TRANSFER_FLUSH,
+        payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
+    };
+    req.payload[0..4].copy_from_slice(&x.to_le_bytes());
+    req.payload[4..8].copy_from_slice(&y.to_le_bytes());
+    req.payload[8..12].copy_from_slice(&w.to_le_bytes());
+    req.payload[12..16].copy_from_slice(&h.to_le_bytes());
+
+    unsafe {
+        let _ = syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            13, // virtio_drivers endpoint
+            &req as *const VirtioReq as u64,
+            core::mem::size_of::<VirtioReq>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | 4,
+            0,
+            0,
+        );
+    }
+}
+
     #[inline]
     fn flush_damage(&mut self) {
         if self.dirty_y_min < self.dirty_y_max {
-            self.fb.flush_rows(self.dirty_y_min, self.dirty_y_max);
+            let y_min = self.dirty_y_min;
+            let y_max = self.dirty_y_max;
+            let h = y_max.saturating_sub(y_min);
+            notify_virtio_gpu_flush(0, y_min, self.fb.width, h);
+            self.fb.flush_rows(y_min, y_max);
             self.dirty_y_min = u32::MAX;
             self.dirty_y_max = 0;
         }
@@ -923,8 +958,9 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             let h = (req.b & 0xFFFF_FFFF) as u32;
             if let Some(idx) = wayland_mut().alloc_surface(req.sender_pid, w.max(64), h.max(64)) {
                 let s = wayland_mut().surfaces[idx];
+                let return_addr = if s.shm_handle != 0 { s.shm_handle } else { s.virt_addr };
                 syscall::FbReply {
-                    status: s.virt_addr as i64,
+                    status: return_addr as i64,
                     len: s.surface_id,
                     _pad: s.stride_bytes,
                 }
@@ -956,8 +992,14 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
                 width: (req.b & 0xFFFF) as u32,
                 height: ((req.b >> 16) & 0xFFFF) as u32,
             };
-            let _ = wayland_mut().commit_surface_damage(target_surface_id, req.sender_pid, rect);
-            console_mut().mark_dirty_rows(0, console_mut().fb.height);
+            let fb = console_mut().fb;
+            if let Some((y_min, y_max)) =
+                wayland_mut().commit_surface_damage(target_surface_id, req.sender_pid, rect, fb)
+            {
+                console_mut().mark_dirty_rows(y_min, y_max);
+            } else {
+                console_mut().mark_dirty_rows(0, console_mut().fb.height);
+            }
             syscall::FbReply::default()
         }
         syscall::DISPLAY_OP_WAYLAND_WIRE => {

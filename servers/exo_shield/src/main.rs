@@ -135,8 +135,6 @@ pub extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

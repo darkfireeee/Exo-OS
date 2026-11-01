@@ -401,10 +401,10 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    unsafe {
+        let _ = exo_syscall_abi::syscall1(exo_syscall_abi::SYS_EXIT, 1);
+    }
     loop {
-        // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

@@ -704,9 +704,10 @@ fn debug_errno(prefix: &[u8], err: i64) {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+    }
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

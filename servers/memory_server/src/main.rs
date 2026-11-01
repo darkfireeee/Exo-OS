@@ -10,6 +10,7 @@
 //! - sous-service SHM de contrôle pour les régions partageables.
 
 use core::panic::PanicInfo;
+use exo_syscall_abi as syscall;
 
 use spin::Mutex;
 
@@ -89,10 +90,10 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
+    unsafe {
+        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
+    }
     loop {
-        // SAFETY: panic terminale pour un serveur no_std monothread.
-        unsafe {
-            core::arch::asm!("hlt", options(nostack, nomem));
-        }
+        core::hint::spin_loop();
     }
 }

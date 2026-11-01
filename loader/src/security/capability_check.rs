@@ -25,6 +25,26 @@ pub enum ExecCheckResult {
     Denied,
 }
 
+#[inline(always)]
+fn loader_log_byte(b: u8) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let msg = [b];
+        core::arch::asm!(
+            "syscall",
+            in("rax") 350u64, // SYS_EXO_LOG
+            in("rdi") msg.as_ptr() as u64,
+            in("rsi") 1u64,
+            lateout("rax") _,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = b;
+}
+
 /// Vérifie si un binaire ELF peut être exécuté.
 ///
 /// FIX-APP-09 : remplace `may_exec(mask)` par une vérification de la note EXOSIG.
@@ -36,19 +56,10 @@ pub fn check_exec_permission(image: &[u8], require_signature: bool) -> ExecCheck
         SignatureState::Present => ExecCheckResult::SignedOk,
         SignatureState::Unsigned => {
             if require_signature {
-                // Avertissement sur port debug 0xE9
-                #[cfg(target_arch = "x86_64")]
-                unsafe {
-                    // SAFETY: port 0xE9 debug QEMU, ignoré sur bare metal.
-                    core::arch::asm!("out 0xe9, al", in("al") b'U', options(nomem, nostack));
-                }
+                loader_log_byte(b'U');
                 ExecCheckResult::Denied
             } else {
-                // Mode dev : autoriser avec log
-                #[cfg(target_arch = "x86_64")]
-                unsafe {
-                    core::arch::asm!("out 0xe9, al", in("al") b'u', options(nomem, nostack));
-                }
+                loader_log_byte(b'u');
                 ExecCheckResult::UnsignedAllowed
             }
         }

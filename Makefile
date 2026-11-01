@@ -235,7 +235,7 @@ build-rootfs-binaries:
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)" 2>/dev/null || (sleep 1 && rm -rf "$(ROOTFS_STAGING_DIR)") || true
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
-	@printf "WAYLAND_DISPLAY=wayland-0\nEXO_COMPOSITOR_ENDPOINT=11\nPROTOCOL=wl_display,wl_registry,wl_compositor,wl_shm,xdg_wm_base,wl_seat\n" > "$(ROOTFS_STAGING_DIR)/run/wayland-0"
+	@printf "WAYLAND_DISPLAY=wayland-0\nEXO_COMPOSITOR_ENDPOINT=20\nPROTOCOL=wl_display,wl_registry,wl_compositor,wl_shm,xdg_wm_base,wl_seat\n" > "$(ROOTFS_STAGING_DIR)/run/wayland-0"
 	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
 	@printf "[theme]\nname = \"Exo-Strata Aurora\"\nwallpaper_top = \"#0d2642\"\nwallpaper_mid = \"#113256\"\nwallpaper_bottom = \"#0a1e36\"\naccent = \"#00c5ff\"\nwindow_border = \"#2e77b0\"\n" > "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata/theme.toml"
 	@printf "cursor_pointer_64x64_argb8888\nicon_terminal_32x32\nicon_exodoctor_32x32\nicon_calendar_32x32\nicon_exofs_32x32\n" > "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata/icons.manifest"

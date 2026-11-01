@@ -103,11 +103,16 @@ impl<Os> GenericTcb<Os> {
 fn debug_port_e9_putc(byte: u8) {
     #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
     unsafe {
+        let b = [byte];
         asm!(
-            "out dx, al",
-            in("dx") 0xE9u16,
-            in("al") byte,
-            options(nostack, nomem),
+            "syscall",
+            in("rax") 350u64, // SYS_EXO_LOG
+            in("rdi") b.as_ptr() as u64,
+            in("rsi") 1u64,
+            lateout("rax") _,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
         );
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
