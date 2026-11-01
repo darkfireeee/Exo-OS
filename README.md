@@ -9,14 +9,14 @@
                ╚══════╝╚═╝  ╚═╝ ╚═════╝       ╚═════╝ ╚══════╝
 ```
 
-### Microkernel Hybride Haute Performance & Résilience
+### High-Performance, Fault-Tolerant Hybrid Microkernel
 
 [![Status](https://img.shields.io/badge/status-v0.2.0%20Strata-22c55e?style=flat-square)](.)
-[![Rust](https://img.shields.io/badge/Rust-no__std%20nightly-orange?style=flat-square&logo=rust)](.)
-[![Arch](https://img.shields.io/badge/cible-x86__64-blue?style=flat-square)](.)
-[![Preuves](https://img.shields.io/badge/preuves-Coq%20·%20TLA%2B-8b5cf6?style=flat-square)](.)
+[![Rust](https://img.shields.io/badge/Rust-no__std%20%2B%20std%20(target__os%3Dexo)-orange?style=flat-square&logo=rust)](.)
+[![Arch](https://img.shields.io/badge/target-x86__64--unknown--exo-blue?style=flat-square)](.)
+[![Proofs](https://img.shields.io/badge/proofs-Coq%20%C2%B7%20TLA%2B-8b5cf6?style=flat-square)](.)
 [![Crypto](https://img.shields.io/badge/crypto-XChaCha20--Poly1305-22c55e?style=flat-square)](.)
-[![Licence](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](.)
+[![License](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](.)
 
 <br>
 
@@ -30,73 +30,90 @@
 
 **A formally verified, capability-based microkernel for x86_64 bare-metal hardware.**
 
-ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant architecture (**ExoPhoenix**), hardware-enforced containment and Next-Gen Antivirus (**ExoShield**), and a complete formal verification corpus of 12 TLA+ modules covering 60 safety and liveness properties.
+ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant architecture (**ExoPhoenix**), hardware-enforced containment and Next-Gen Antivirus (**ExoShield**), a full native port of the official Rust Standard Library (`library/std` for `target_os = "exo"`), and a complete formal verification corpus of 12 TLA+ modules covering 60 safety and liveness properties.
 
-> **Status (v0.2.0 « Strata »):** Consolidation intégrale des 7 organes fondamentaux du système. Amorçage QEMU validé du bootloader Multiboot2 au Framebuffer VGA graphique, initialisation coordonnée des 17 services Ring 1 supervisés, et session interactive complète sur le shell `exosh:/$` avec pipelines Unix, redirections de flux et utilitaires Coreutils enrichis.
+> **Status (v0.2.0 "Strata"):** Full consolidation of the 7 core system organs and native Rust `std` integration (`x86_64-unknown-exo.json`). Verified QEMU boot from Multiboot2 to graphical VGA Framebuffer, coordinated initialization of 19 supervised Ring 1 services, and interactive session on the `exosh:/$` shell and 35 `coreutils` binaries compiled against the real Rust `library/std`.
 
 ---
 
-## Galerie d'Amorçage & Framebuffer VGA
+## Boot Gallery & Graphical VGA Framebuffer
 
-ExoOS intègre un gestionnaire d'affichage graphique haute fidélité (`boot_display` & `fb_server`) fournissant un retour visuel direct sur chaque étape d'initialisation du noyau et des services utilisateurs.
+ExoOS includes a high-fidelity graphical display manager (`boot_display` & `fb_server`) providing live visual feedback for every kernel initialization stage and userspace service handoff.
 
 <div align="center">
-  <img src="docs/avancement/qemu_boot/img1.png" width="48%" alt="Écran de boot graphique Framebuffer VGA — Validation des étapes ARCH, MEMORY, TIME, DRIVERS...">
-  <img src="docs/avancement/qemu_boot/img2.png" width="48%" alt="Console graphique interactive — Hand-off vers PID 1 et services Ring 1">
-  <p><em>Captures d'écran du Framebuffer VGA dans QEMU : séquence d'amorçage modulaire et bascule vers la console interactive.</em></p>
+  <img src="docs/avancement/qemu_boot/img1.png" width="48%" alt="Graphical VGA Framebuffer boot screen — ARCH, MEMORY, TIME, DRIVERS stage validation">
+  <img src="docs/avancement/qemu_boot/img2.png" width="48%" alt="Interactive graphical console — Handoff to PID 1 and Ring 1 services">
+  <p><em>VGA Framebuffer screenshots in QEMU: modular boot sequence and transition to the interactive console.</em></p>
 </div>
 
 ---
 
-## ExoOS v0.2.0 « Strata » — Bilan de Consolidation
+## Native Rust `std` Integration (`target_os = "exo"`)
 
-La version **v0.2.0 (« Strata »)** marque l'étape de consolidation en profondeur de l'ensemble des sous-systèmes du noyau et des serveurs Ring 1, articulée autour de 7 organes majeurs audités et certifiés :
+ExoOS enforces a strict privilege boundary between `#![no_std]` kernel/critical services and full Rust `std` userspace applications (detailed in [`docs/std_integration.md`](docs/std_integration.md)):
 
-| Organe | Domaine Technique | Avancées & Résolutions Majeures |
-| :--- | :--- | :--- |
-| **1** | **Socle Boot, KASLR, Horloge, Mémoire & Sentinel** | Élimination des fuites CoW/SLUB, initialisation KASLR sécurisée, surveillance d'intégrité Sentinel BLAKE3 coopérative et bornée à 256 PML4. |
-| **2** | **SMP, Cycle de vie Processus & Synchronisation** | Récupération intégrale de la mémoire des piles noyau (256 KiB) et TIDs au Drop des PCB, recyclage immédiat des threads défunts, encodage standard wstatus/exit reason, synchronisation SMP du TLB shootdown sur CoW. |
-| **3** | **Système de fichiers ExoFS & Cache de Blocs** | Protection stricte contre l'éviction silencieuse des blocs sales sans writeback, intégration du contrôle d'accès Multi-Level Security (MLS) Zero-Trust sur toute ouverture d'objet. |
-| **4** | **Pile Réseau ExoNet V5 & Pilotes** | Fermeture stricte de la porte de contournement DMA-0 (élimination de `BYPASS_IOMMU`), réduction du timeout boot à 100ms avec bascule automatique immédiate sur `loopback_net` (127.0.0.1 opérationnel), intégration des CapTokens K1 V5 et vérification Zero-Trust sur les sockets. |
-| **5** | **IPC, Registre d'Endpoints & ExoCordon** | Éradication des courses TOCTOU sur destruction d'endpoint, doublement des capacités des boîtes aux lettres brutes (128 slots) et extension du registre des services dynamiques du DAG ExoCordon (64 services). |
-| **6** | **Crypto Server & ExoShield NGAV** | Suppression intégrale des faux positifs SCAN-FP-1 dans le scanner NGAV (signatures de vrais shellcodes discriminants), passage de l'IPC Gate en fail-closed, isolation stricte des sessions TLS par PID appelant, protection de l'entropie Phoenix réservée au PID 0. |
-| **7** | **Shell `exosh`, Pipelines & Coreutils** | Prise en charge complète des pipelines Unix (`cmd1 \| cmd2`) via `SYS_PIPE2` / `SYS_FORK` / `SYS_DUP2`, redirections (`>`, `>>`, `<`, `2>`), quotes (`'...'`, `"..."`), variables système (`$?`, `$PWD`, `$HOME`), navigation `cd -` et intégration de l'utilitaire `grep` (avec flags `-i`, `-n`, `-v` et lecture STDIN). |
+- **Ring 0 & Critical Ring 1 (`#![no_std]`, `panic = "abort"`)**: `kernel/`, `exo-boot/`, shared ABI crates (`libs/exo_types`, `libs/exo-phoenix-ssr`, `servers/syscall_abi`), and Wave 0–2 system servers (`init_server`, `ipc_router`, `memory_server`, `device_server`, `crypto_server`, hardware drivers) remain strictly `#![no_std]`.
+- **Full `rust-lang/rust` `library/std` Port (`x86_64-unknown-exo.json`)**:
+  - **Platform Abstraction Layer (`library/std/src/sys/pal/exo_os/`)**: Pure-Rust PAL over ExoOS Ring 0/Ring 1 syscalls (`0..=549`), `GenericTcb`/`ExoTcb` static TLS (`%fs:0`), 0-syscall `sigaction` (`LOCK CMPXCHG16B`) and `sigprocmask` (`AtomicU64`) via the shared `SignalTcb` page (`AT_SIGNAL_TCB = 51`), and a 100% Rust `dlmalloc` global allocator over `SYS_MMAP`/`SYS_MREMAP`/`SYS_MUNMAP` with zero C symbols.
+  - **Modular `std::sys::*` Backends (`exo.rs`)**: Native support for `alloc`, `args`, `env`, `fd`, `fs`, `io`, `net`, `pipe`, `process` (`fork`/`execve`/`wait4`), `random` (`SYS_GETRANDOM` + `AT_RANDOM`), `stdio`, `sync` (`futex`), `thread`, `thread_local`, and `time`.
+  - **ExoOS-Specific Extensions (`std::os::exo`)**:
+    - `CapTokenExt`: Inspect, attenuate (`clone_for_child`), and delegate capability tokens (`AT_CAP_TOKEN = 52`).
+    - `ExoFsExt`: Native CoW snapshots, B+Tree searches, and extended attributes on `std::fs::File`.
+    - `PhoenixSafeExt`: `PhoenixSafe<T>` fault-surviving allocations (`PROT_PHOENIX_SAFE`) and `SYS_PHOENIX_CHECKPOINT`.
+    - `ExoPledgeExt`: Zero-Trust process sandboxing via `pledge()` (`SYS_EXO_PLEDGE`) and `unveil()` (`SYS_EXO_UNVEIL`).
+- **Migrated Userspace (`-Z build-std=core,alloc,std,panic_abort`)**: Both the interactive shell (`servers/exosh`) and all 35 `userspace/apps/coreutils` binaries compile directly against the real Rust `std`.
 
 ---
 
-## Démarrage Rapide (Quick Start)
+## ExoOS v0.2.0 "Strata" — Consolidation Highlights
 
-### Prérequis
-Le développement et l'exécution d'ExoOS reposent sur Linux ou **WSL2 sous Windows** avec QEMU et la chaîne d'outils Rust nightly.
+Version **v0.2.0 ("Strata")** consolidates all kernel subsystems and Ring 1 servers across 7 audited architectural organs:
+
+| Organ | Technical Domain | Major Advances & Resolutions |
+| :--- | :--- | :--- |
+| **1** | **Boot Foundation, KASLR, Clock, Memory & Sentinel** | Elimination of CoW/SLUB leaks, secure KASLR initialization, cooperative BLAKE3 Sentinel integrity monitoring bounded to 256 PML4 entries. |
+| **2** | **SMP, Process Lifecycle & Synchronization** | Full reclamation of kernel stacks (256 KiB) and TIDs on PCB Drop, immediate recycling of exited threads, standard `wstatus`/exit reason encoding, SMP TLB shootdown synchronization on CoW, FPU/SSE state preservation (`fxsave64`/`fxrstor64`) across signal frames. |
+| **3** | **ExoFS File System & Block Cache** | Strict protection against silent eviction of dirty blocks without writeback, Zero-Trust Multi-Level Security (MLS) access control on every object open. |
+| **4** | **ExoNet V5 Network Stack & Drivers** | Strict closure of DMA-0 bypass (`BYPASS_IOMMU` removed), 100ms boot timeout with automatic fallback to `loopback_net` (`127.0.0.1`), K1 V5 CapTokens and Zero-Trust socket verification, chunked `NET_INLINE_DATA_MAX` IPC transfers. |
+| **5** | **IPC, Endpoint Registry & ExoCordon** | Elimination of TOCTOU races on endpoint destruction, 128-slot raw mailboxes, dynamic service registry extended to 64 DAG services. |
+| **6** | **Crypto Server & ExoShield NGAV** | Elimination of false positives (`SCAN-FP-1`) in the NGAV scanner, fail-closed IPC Gate, strict per-PID TLS session isolation, Phoenix entropy reserved for PID 0. |
+| **7** | **Native Rust `std`, `exosh` Shell & Coreutils** | Full `library/std` port (`target_os = "exo"`), Unix pipelines (`cmd1 \| cmd2`) via `SYS_PIPE2`/`SYS_FORK`/`SYS_DUP2`, stream redirections (`>`, `>>`, `<`, `2>`), quoting, environment variables (`$?`, `$PWD`, `$HOME`), and 35 `std`-powered Coreutils utilities. |
+
+---
+
+## Quick Start
+
+### Prerequisites
+Building and running ExoOS requires Linux or **WSL2 on Windows** with QEMU and the Rust nightly toolchain:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential qemu-system-x86 xorriso grub-pc-bin grub-common mtools llvm
+sudo apt install -y build-essential qemu-system-x86 xorriso grub-pc-bin grub-common mtools llvm rsync
 rustup toolchain install nightly
 rustup component add rust-src rustfmt clippy llvm-tools-preview --toolchain nightly
 ```
 
-### 1. Lancement Graphique Canonique (Fenêtre Framebuffer VGA)
-Pour admirer l'écran de démarrage graphique et utiliser la console :
+### 1. Canonical Graphical Boot (VGA Framebuffer Window)
+To launch ExoOS with the graphical boot screen and interactive console:
 
 ```bash
 make qemu
 ```
-*(Depuis Windows PowerShell : `wsl -e bash -lc "cd /mnt/c/Users/xavie/Desktop/Exo-OS && make qemu"`)*
+*(From Windows PowerShell: `wsl -e bash -lc "cd /mnt/c/Users/xavie/Desktop/Exo-OS && make qemu"`)*
 
 > [!TIP]
-> Sous Windows 11 avec WSLg, le `Makefile` détecte automatiquement le socket X11 (`/tmp/.X11-unix/X0`) et exporte `DISPLAY=:0`. La fenêtre QEMU s'affiche directement sur votre bureau Windows.
+> On Windows 11 with WSLg, the `Makefile` automatically detects the X11 socket (`/tmp/.X11-unix/X0`) and exports `DISPLAY=:0`, displaying the QEMU window directly on your Windows desktop.
 
-### 2. Lancement Headless (Directement dans le Terminal)
-Pour une exécution purement textuelle dans votre fenêtre de console actuelle sans ouvrir de fenêtre externe :
+### 2. Headless Boot (Terminal Mode)
+For a purely text-based session inside your current terminal without opening an external window:
 
 ```bash
 make qemu-nographic
 ```
-*(Pour quitter le mode nographic de QEMU : pressez `Ctrl + A` puis `X`)*
+*(To exit QEMU in nographic mode: press `Ctrl + A` then `X`)*
 
-### 3. Suivi des Journaux Kernel & Services en Direct
-Pour observer les marqueurs d'amorçage et diagnostics en temps réel dans un autre terminal :
+### 3. Live Kernel & Service Log Monitoring
+To inspect real-time boot markers and debug output via the QEMU `debugcon` (`0xe9`) port:
 
 ```bash
 tail -f /tmp/e9k.txt
@@ -104,115 +121,125 @@ tail -f /tmp/e9k.txt
 
 ---
 
-## Architecture de Supervision Ring 1 (17 Services Synchronisés)
+## Ring 1 Supervision Architecture (19 Synchronized Services + Shell)
 
-Sous ExoOS v0.2.0, l'orchestration des services est gérée par `init_server` (PID 1) selon un graphe de dépendances strict vérifié par `check_service_order.py` :
+In ExoOS v0.2.0, service orchestration is managed by `init_server` (PID 1) according to a strict dependency DAG verified by `check_service_order.py`:
 
-| PID | Service / Composant | Rôle & Responsabilité |
+| PID | Service / Component | Role & Responsibility |
 | :---: | :--- | :--- |
-| **1** | `init_server` | Superviseur racine, orchestration du graphe de services et respawn |
-| **2** | `ipc_router` | Routage des messages IPC et registre de noms d'endpoints |
-| **3** | `memory_server` | Allocation et gestion de la mémoire partagée Ring 1 |
-| **4** | `loopback_driver` | Interface réseau locale virtuelle (`127.0.0.1`) |
-| **5** | `vfs_server` | Système de fichiers virtuel bridgé sur ExoFS |
-| **6** | `device_server` | Énumération et gestion des périphériques matériels |
-| **7** | `scheduler_server` | Ordonnancement coopératif Ring 1 |
-| **8** | `input_server` | Multiplexeur d'événements clavier et souris |
-| **9** | `fb_server` | Serveur de Framebuffer graphique et accélération écran |
-| **10** | `crypto_server` | Primitives cryptographiques (XChaCha20, Ed25519, TLS, Blake3) |
-| **11** | `virtio_drivers` | Pilotes paravirtualisés de stockage VirtIO-Blk |
-| **12** | `e1000_driver` | Pilote de carte réseau Intel Gigabit Ethernet |
-| **13** | `virtio_net_driver` | Pilote réseau VirtIO PCI haute performance |
-| **14** | `network_server` | Pile réseau ExoNet V5 (IP, TCP, UDP, DNS, sockets Unix) |
-| **15** | `tty_server` | Gestionnaire de terminaux virtuels et émulation ANSI |
-| **16** | `ps2_driver` | Pilote d'entrée clavier PS/2 (i8042 Scan Code Set 2) |
-| **17** | `exo_shield` | Module NGAV, Confinement IA, Détection d'anomalies & Forensics |
-| **18** | `exosh` | Console utilisateur interactive et shell racine |
+| **1** | `init_server` | Root supervisor, service graph orchestration, and fault recovery |
+| **2** | `ipc_router` | IPC message routing and endpoint name registry |
+| **3** | `memory_server` | Ring 1 shared memory allocation and management |
+| **4** | `loopback_driver` | Virtual local network interface (`127.0.0.1`) |
+| **5** | `vfs_server` | Virtual File System bridged over ExoFS |
+| **6** | `device_server` | Hardware device enumeration and management |
+| **7** | `scheduler_server` | Ring 1 cooperative scheduling service |
+| **8** | `crypto_server` | Cryptographic primitives (XChaCha20, Ed25519, TLS, BLAKE3) |
+| **9** | `input_server` | Keyboard and mouse event multiplexer |
+| **10** | `fb_server` | Graphical Framebuffer server and screen acceleration |
+| **11** | `virtio_drivers` | Paravirtualized VirtIO-Blk storage drivers |
+| **12** | `e1000_driver` | Intel Gigabit Ethernet network card driver |
+| **13** | `virtio_net_driver` | High-performance VirtIO PCI network driver |
+| **14** | `network_server` | ExoNet V5 network stack (IP, TCP, UDP, DNS, Unix sockets) |
+| **15** | `audio_server` | Ring 1 Wave 4 Intel HDA audio server |
+| **16** | `usb_server` | Ring 1 Wave 4 xHCI USB host controller server |
+| **17** | `tty_server` | Virtual terminal manager and ANSI emulation |
+| **18** | `ps2_driver` | PS/2 keyboard & mouse driver (i8042 Scan Code Set 2) |
+| **19** | `exo_shield` | NGAV module, AI containment, anomaly detection & forensics |
+| **20** | `exosh` | Interactive user console and root shell (compiled with Rust `std`) |
 
 ---
 
-## Capacités du Shell Utilisateur (`exosh`)
+## User Shell Capabilities (`exosh`)
 
-Le shell d'ExoOS fournit un environnement interactif complet pour explorer le système et manipuler les fichiers sur ExoFS :
+The ExoOS shell provides a complete interactive environment for exploring the system and manipulating files on ExoFS:
 
-### Commandes et Utilitaires
-- **Navigation & Fichiers** : `pwd`, `cd`, `cd -`, `ls` (`-l`, `-a`, `-la`, `-lah`), `mkdir`, `rmdir`, `touch`, `cat`, `echo`, `cp`, `mv`, `rm` (`-r`, `-rf`), `tree`, `stat`.
-- **Filtres & Tubes** : Pipelines Unix complets (`cmd1 | cmd2 | cmd3`), utilitaire `grep` (options `-i`, `-n`, `-v`), comptage `wc`, et redirections (`>`, `>>`, `<`, `2>`).
-- **Processus & Diagnostic** : `top`, `ps`, `kill`, `kill -9`, `uptime`, `meminfo`, `ipc-stat`, `syscall-stat`, `uname`, `whoami`.
-- **Édition de Ligne** : Historique (`Flèche Haut` / `Bas`), déplacement curseur (`Gauche` / `Droite`), complétion, `Ctrl+L` (effacer), `Ctrl+C` (interrompre).
+### Commands and Utilities
+- **Navigation & Files**: `pwd`, `cd`, `cd -`, `ls` (`-l`, `-a`, `-la`, `-lah`), `mkdir`, `rmdir`, `touch`, `cat`, `echo`, `cp`, `mv`, `rm` (`-r`, `-rf`), `dd`, `tree`, `stat`, `sync`, `basename`, `dirname`.
+- **Filters & Pipes**: Full Unix pipelines (`cmd1 | cmd2 | cmd3`), `grep` (`-i`, `-n`, `-v`), `wc`, and stream redirections (`>`, `>>`, `<`, `2>`).
+- **Processes, Capabilities & Diagnostics**: `exo` (`exo cap`), `top`, `ps`, `kill`, `kill -9`, `sleep`, `uptime`, `meminfo`, `ipc-stat`, `syscall-stat`, `uname`, `whoami`, `calendar`, `clear`.
+- **Line Editing**: Command history (`Up` / `Down` arrows), cursor movement (`Left` / `Right`), tab completion, `Ctrl+L` (clear screen), `Ctrl+C` (interrupt).
 
-### Exemple de Session Interactive
+### Interactive Session Example
 ```text
-exosh:/$ echo "Architecture ExoOS v0.2.0" > /tmp/strata.txt
+exosh:/$ echo "ExoOS v0.2.0 Strata" > /tmp/strata.txt
 exosh:/$ cat /tmp/strata.txt | grep -i strata
-Architecture ExoOS v0.2.0
+ExoOS v0.2.0 Strata
 exosh:/$ ls -lah /bin | grep grep
 -rwxr-xr-x 1 root root 84K Oct 18 16:30 grep
-exosh:/$ echo "Code de retour : $?"
-Code de retour : 0
-exosh:/$ top
+exosh:/$ echo "Exit status: $?"
+Exit status: 0
+exosh:/$ exo cap
 ```
 
 ---
 
-## Vérification Formelle (TLA+)
+## Formal Verification (TLA+)
 
-L'architecture globale est formellement spécifiée et prouvée via 12 modules TLA+ couvrant 60 propriétés de sûreté et de vivacité (absence de famine, exclusivité du double-noyau, unforgeabilité des tokens de capacité, intégrité IOMMU, atomicité des commutations de contexte).
+The global architecture is formally specified and verified across 12 TLA+ modules covering 60 safety and liveness properties (starvation freedom, dual-kernel exclusivity, capability token unforgeability, IOMMU integrity, context switch atomicity).
 
-| Module TLA+ | Propriétés Vérifiées | Résultat |
+| TLA+ Module | Verified States | Status |
 | :--- | :---: | :---: |
-| 1 · ExoPhoenix Dual-Kernel Handoff | 178,992 états | ✅ Vérifié |
-| 2 · SMP Boot Sequence (18-step) | 481 états | ✅ Vérifié |
-| 3 · IRQ Routing & Atomic Invariants | 524,288 états | ✅ Vérifié |
-| 4 · IOMMU Fault Queue (CAS-based) | 34,790 états | ✅ Vérifié |
-| 5 · PCI Claim & do_exit() 7-step | 37,133 états | ✅ Vérifié |
-| 6 · Context Switch Atomicity | 135,117 états | ✅ Vérifié |
-| 7 · ExoFS Crash Consistency | 5,128 états | ✅ Vérifié |
-| 8+9 · ExoShield + CapTokens | 107,584 états | ✅ Vérifié |
-| 10 · Process Death & fd_table restore | 342 états | ✅ Vérifié |
-| 11 · Memory Ordering (Release/Acquire) | 184 états | ✅ Vérifié |
-| 12 · Adversarial Attack Surface | 1,495 états | ✅ Vérifié |
-| **Composition Complète (Monte Carlo)** | **565,076,967 états** | **✅ Vérifié** |
+| 1 · ExoPhoenix Dual-Kernel Handoff | 178,992 states | ✅ Verified |
+| 2 · SMP Boot Sequence (18-step) | 481 states | ✅ Verified |
+| 3 · IRQ Routing & Atomic Invariants | 524,288 states | ✅ Verified |
+| 4 · IOMMU Fault Queue (CAS-based) | 34,790 states | ✅ Verified |
+| 5 · PCI Claim & do_exit() 7-step | 37,133 states | ✅ Verified |
+| 6 · Context Switch Atomicity | 135,117 states | ✅ Verified |
+| 7 · ExoFS Crash Consistency | 5,128 states | ✅ Verified |
+| 8+9 · ExoShield + CapTokens | 107,584 states | ✅ Verified |
+| 10 · Process Death & fd_table restore | 342 states | ✅ Verified |
+| 11 · Memory Ordering (Release/Acquire) | 184 states | ✅ Verified |
+| 12 · Adversarial Attack Surface | 1,495 states | ✅ Verified |
+| **Full Composition (Monte Carlo)** | **565,076,967 states** | **✅ Verified** |
 
 ---
 
-## Structure du Dépôt & Modularité
+## Repository Structure & Modularity
 
-Le noyau ExoOS applique une ségrégation modulaire stricte où chaque grand sous-système est subdivisé en sous-modules spécialisés à responsabilité unique, indexés par un `mod.rs` sans god files (> 900 lignes) :
+The ExoOS codebase enforces strict modular segregation where every major subsystem is decomposed into single-responsibility modules without god files (> 900 lines):
 
 ```text
 Exo-OS/
-├── bootloader/             # Configuration GRUB 2 et Multiboot2
-├── kernel/                 # Ring 0 — Microkernel hybride Rust no_std
-│   ├── src/arch/x86_64/    # Boot BSP/AP, GDT/IDT, KASLR, Page Tables, HPET/TSC, Framebuffer early
-│   ├── src/memory/         # Allocateur Buddy modulaire (node, stats, zone), SLUB, CoW, VMA, KPTI
-│   ├── src/process/        # PCB modulaire (types, file_table), registry, signaux, cycle de vie
-│   ├── src/scheduler/      # Ordonnanceur SMP, KTCB, switch de contexte, timers
-│   ├── src/security/       # ExoShield, ExoSeal, ExoCage (CET), Zero-Trust Pledge, ExoKairos
-│   ├── src/ipc/            # SpscRing, CapTokens, Zero-Copy SHM, mailboxes brutes
-│   ├── src/fs/exofs/       # Système de fichiers ExoFS, cache de blocs, object_fd modulaire, journalisation
-│   ├── src/syscall/        # Table de dispatch O(1), dispatch modulaire, fs/ & ipc/ ségrégués, fs_bridge modulaire
-│   └── src/exophoenix/     # Dual-Kernel Sentinel & Stage0 modulaire (features, scan, routing, isolation)
-├── servers/                # Serveurs Ring 1 et espace utilisateur supervisé
-│   ├── init_server/        # PID 1 — Superviseur et bootstrap ordonnancé des services
-│   ├── ipc_router/         # PID 2 — Annuaire d'endpoints et routage IPC
-│   ├── memory_server/      # PID 3 — Gestionnaire mémoire Ring 1
-│   ├── vfs_server/         # PID 5 — Serveur VFS
-│   ├── device_server/      # PID 6 — Serveur de périphériques matériels
-│   ├── scheduler_server/   # PID 7 — Ordonnanceur Ring 1
-│   ├── input_server/       # PID 9 — Serveur d'entrées
-│   ├── fb_server/          # PID 10 — Serveur Framebuffer graphique
-│   ├── crypto_server/      # PID 8 — Crypto-serveur et isolation TLS
-│   ├── network_server/     # Pile réseau ExoNet V5 (NetGrant ABI, TCP/UDP/IP)
-│   ├── tty_server/         # Serveur TTY et émulation console
-│   └── exo_shield/         # Module NGAV, Confinement IA, Détection d'anomalies & Forensics
-├── drivers/                # Pilotes Ring 1 (PS/2, VirtIO-Net, e1000, Loopback, FB, VirtIO-Blk)
-├── libs/                   # Bibliothèques (exo_syscall_abi, exo_libc, exo_network_common)
-├── userspace/apps/         # Utilitaires Coreutils (cat, grep, ls, ps, top, wc...) & exosh
-└── docs/                   # Documentation technique, plans d'architecture V5 et preuves TLA+
+├── bootloader/                 # GRUB 2 and Multiboot2 configuration
+├── x86_64-unknown-exo.json     # Custom Rust target specification for target_os = "exo"
+├── library/std/                # Native port of rust-lang/rust library/std for ExoOS
+│   ├── src/sys/pal/exo_os/     # Low-level PAL (syscalls, TCB/SignalTcb runtime, dlmalloc, futex)
+│   ├── src/sys/*/exo.rs        # Per-subsystem std::sys backends (fs, net, process, thread, fd...)
+│   └── src/os/exo/             # Public std::os::exo traits (CapTokenExt, ExoFsExt, PhoenixSafeExt, ExoPledgeExt)
+├── kernel/                     # Ring 0 — Hybrid Rust #![no_std] microkernel
+│   ├── src/arch/x86_64/        # BSP/AP boot, GDT/IDT, KASLR, Page Tables, HPET/TSC, early Framebuffer
+│   ├── src/memory/             # Modular Buddy allocator, SLUB, CoW, VMA, KPTI
+│   ├── src/process/            # Modular PCB, registry, 0-syscall SignalTcb & signal delivery, lifecycle
+│   ├── src/scheduler/          # SMP scheduler, KTCB, context switch, timers
+│   ├── src/security/           # ExoShield, ExoSeal, ExoCage (CET), Zero-Trust Pledge, ExoKairos
+│   ├── src/ipc/                # SpscRing, CapTokens, Zero-Copy SHM, raw mailboxes
+│   ├── src/fs/                 # ExoFS file system, block cache, ELF64 loader (PT_TLS, SignalTcb, auxv)
+│   ├── src/syscall/            # O(1) dispatch table, fs_bridge, net_bridge, ipc_bridge
+│   └── src/exophoenix/         # Dual-Kernel Sentinel & Stage0 fault recovery
+├── servers/                    # Ring 1 supervised servers and interactive shell
+│   ├── init_server/            # PID 1 — Root supervisor and DAG service bootstrap
+│   ├── ipc_router/             # PID 2 — Endpoint directory and IPC routing
+│   ├── memory_server/          # PID 3 — Ring 1 memory manager
+│   ├── vfs_server/             # PID 5 — VFS server
+│   ├── device_server/          # PID 6 — Hardware device server
+│   ├── scheduler_server/       # PID 7 — Ring 1 scheduler
+│   ├── crypto_server/          # PID 8 — Cryptographic server and TLS isolation
+│   ├── input_server/           # PID 9 — Input multiplexer
+│   ├── fb_server/              # PID 10 — Graphical Framebuffer server
+│   ├── network_server/         # PID 14 — ExoNet V5 network stack (NetGrant ABI, TCP/UDP/IP)
+│   ├── audio_server/           # PID 15 — Intel HDA audio server
+│   ├── usb_server/             # PID 16 — xHCI USB host controller server
+│   ├── tty_server/             # PID 17 — TTY server and console emulation
+│   ├── exo_shield/             # PID 19 — NGAV, AI containment, anomaly detection & forensics
+│   └── exosh/                  # PID 20 — Interactive shell compiled with Rust std
+├── drivers/                    # Ring 1 drivers (PS/2, VirtIO-Net, e1000, Loopback, FB, VirtIO-Blk)
+├── libs/                       # Runtime & shared crates (exo_types, exo-syscall, exo-alloc, exo-rt, exo-libc)
+├── userspace/apps/coreutils/   # 35 standard utilities compiled with Rust std (cat, grep, ls, ps, top, exo...)
+└── docs/                       # Technical documentation, std_integration.md, V5 architecture & TLA+ proofs
 ```
 
 ---
 
-*ExoOS — v0.2.0 "Strata" · Octobre 2026*  
-*12 modules TLA+ · 60 propriétés · Plus de 565 millions d'états formellement vérifiés*
+*ExoOS — v0.2.0 "Strata" · November 2026*  
+*12 TLA+ modules · 60 properties · Over 565 million formally verified states*
