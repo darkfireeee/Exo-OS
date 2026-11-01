@@ -400,6 +400,10 @@ fn check_net_permission(syscall_no: u64) -> Result<(), i64> {
 }
 
 pub fn net_socket(domain: i32, ty: i32, protocol: i32) -> Result<i64, i64> {
+    if domain == AF_UNIX {
+        return crate::syscall::fs_bridge::fs_unix_socket(domain, ty, protocol, current_pid())
+            .map_err(|e| e.to_errno());
+    }
     check_net_permission(crate::syscall::numbers::SYS_SOCKET)?;
     let reply = dispatch(
         NET_OP_OPEN,
@@ -432,6 +436,11 @@ pub fn net_bind(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
     }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_bind(fd as u32, addr_ptr, addr_len, pid)
+            .map_err(|e| e.to_errno());
+    }
     check_net_permission(crate::syscall::numbers::SYS_BIND)?;
     let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
     dispatch(
@@ -448,6 +457,11 @@ pub fn net_bind(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
 pub fn net_connect(fd: i32, addr_ptr: u64, addr_len: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
+    }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_connect(fd as u32, addr_ptr, addr_len, pid)
+            .map_err(|e| e.to_errno());
     }
     check_net_permission(crate::syscall::numbers::SYS_CONNECT)?;
     let (addr, port) = read_sockaddr_in(addr_ptr, addr_len)?;
@@ -480,6 +494,11 @@ pub fn net_listen(fd: i32, backlog: i32) -> Result<i64, i64> {
     if fd < 0 || backlog < 0 {
         return Err(EINVAL);
     }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_listen(fd as u32, backlog, pid)
+            .map_err(|e| e.to_errno());
+    }
     check_net_permission(crate::syscall::numbers::SYS_LISTEN)?;
     dispatch(NET_OP_LISTEN, fd as u32, backlog as u64, 0, 0, 0)?;
     Ok(0)
@@ -488,6 +507,11 @@ pub fn net_listen(fd: i32, backlog: i32) -> Result<i64, i64> {
 pub fn net_accept(fd: i32, addr_ptr: u64, addr_len_ptr: u64) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
+    }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_accept(fd as u32, addr_ptr, addr_len_ptr, pid)
+            .map_err(|e| e.to_errno());
     }
     check_net_permission(crate::syscall::numbers::SYS_ACCEPT)?;
     let reply = dispatch(NET_OP_ACCEPT, fd as u32, 0, 0, 0, 0)?;
@@ -507,6 +531,11 @@ pub fn net_sendto(
 ) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
+    }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_sendto(fd as u32, buf_ptr, len, flags, pid)
+            .map_err(|e| e.to_errno());
     }
     check_net_permission(crate::syscall::numbers::SYS_SENDTO)?;
     if len == 0 {
@@ -569,6 +598,11 @@ pub fn net_recvfrom(
 ) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
+    }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_recvfrom(fd as u32, buf_ptr, len, flags, pid)
+            .map_err(|e| e.to_errno());
     }
     check_net_permission(crate::syscall::numbers::SYS_RECVFROM)?;
     if len == 0 {
@@ -679,6 +713,11 @@ pub fn net_sendmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     if msg_ptr == 0 {
         return Err(EFAULT);
     }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_sendmsg(fd as u32, msg_ptr, flags, pid)
+            .map_err(|e| e.to_errno());
+    }
     check_net_permission(crate::syscall::numbers::SYS_SENDMSG)?;
     let msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
     let _total_len = msghdr_total_iov_len(&msg)?;
@@ -728,6 +767,11 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
     }
     if msg_ptr == 0 {
         return Err(EFAULT);
+    }
+    let pid = current_pid();
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, pid) {
+        return crate::syscall::fs_bridge::fs_unix_recvmsg(fd as u32, msg_ptr, flags, pid)
+            .map_err(|e| e.to_errno());
     }
     check_net_permission(crate::syscall::numbers::SYS_RECVMSG)?;
     let mut msg = read_user_typed::<LinuxMsghdr>(msg_ptr).map_err(|_| EFAULT)?;
@@ -790,6 +834,9 @@ pub fn net_recvmsg(fd: i32, msg_ptr: u64, flags: u32) -> Result<i64, i64> {
 pub fn net_shutdown(fd: i32, how: i32) -> Result<i64, i64> {
     if fd < 0 {
         return Err(EBADF);
+    }
+    if crate::syscall::fs_bridge::fs_is_unix_socket_fd(fd as u32, current_pid()) {
+        return Ok(0);
     }
     dispatch(NET_OP_SHUTDOWN, fd as u32, how as u32 as u64, 0, 0, 0)?;
     Ok(0)

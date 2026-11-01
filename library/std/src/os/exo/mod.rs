@@ -14,6 +14,7 @@ use crate::sys::{map_exo_err, runtime, syscall};
 
 pub mod ffi;
 pub mod io;
+pub mod unix;
 
 /// 48-byte user capability token (`CapTokenUser`).
 #[repr(C)]

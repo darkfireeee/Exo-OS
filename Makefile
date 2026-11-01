@@ -233,7 +233,7 @@ build-rootfs-binaries:
 	@$(CARGO) build -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
 	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
 	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@rm -rf "$(ROOTFS_STAGING_DIR)"
+	@rm -rf "$(ROOTFS_STAGING_DIR)" 2>/dev/null || (sleep 1 && rm -rf "$(ROOTFS_STAGING_DIR)") || true
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
 	@printf "WAYLAND_DISPLAY=wayland-0\nEXO_COMPOSITOR_ENDPOINT=11\nPROTOCOL=wl_display,wl_registry,wl_compositor,wl_shm,xdg_wm_base,wl_seat\n" > "$(ROOTFS_STAGING_DIR)/run/wayland-0"
 	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
@@ -245,9 +245,14 @@ build-rootfs-binaries:
 	done
 	@cp "$(ROOTFS_STD_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true; fi
+	@# std binaries use the large code model: lld keeps one .ltext.<symbol> section per
+	@# function, so .shstrtab alone weighs > 1 MiB. The ELF loader only needs program
+	@# headers, so section headers are dropped (GNU strip >= 2.41) to shrink the blob.
+	@strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true
 	@for bin in $(ROOTFS_BIN_BINS); do \
 		cp "$(ROOTFS_STD_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; fi; \
+		strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; \
 	done
 	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi

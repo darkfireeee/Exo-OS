@@ -27,6 +27,7 @@ members = [
 exclude = [
     "musl-exo",
     "vendors",
+    "wayland-rs",
 ]
 resolver = "2"
 

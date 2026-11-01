@@ -619,6 +619,527 @@ pub fn fs_socketpair(
     Ok(0)
 }
 
+pub struct UnixListenerEntry {
+    pub path: Vec<u8>,
+    pub listener_blob: BlobId,
+    pub pending: Vec<BlobId>,
+}
+
+pub static UNIX_LISTENERS: Mutex<Vec<UnixListenerEntry>> = Mutex::new(Vec::new());
+pub static SOCKET_ANCILLARY_FDS: Mutex<Vec<(BlobId, u32, u32)>> = Mutex::new(Vec::new());
+
+#[inline]
+pub fn fs_is_unix_socket_fd(fd: u32, pid: u32) -> bool {
+    let Ok(resolved) = resolve_fd(pid, fd) else {
+        return false;
+    };
+    if is_tty_handle(resolved.handle) {
+        return false;
+    }
+    let Ok(entry) = OBJECT_TABLE.get(resolved.handle) else {
+        return false;
+    };
+    is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
+}
+
+#[inline]
+pub fn socket_is_readable(blob_id: BlobId) -> bool {
+    if socket_payload_len(blob_id) != 0 {
+        return true;
+    }
+    if SOCKET_ANCILLARY_FDS
+        .lock()
+        .iter()
+        .any(|(b, _, _)| *b == blob_id)
+    {
+        return true;
+    }
+    if UNIX_LISTENERS
+        .lock()
+        .iter()
+        .any(|l| l.listener_blob == blob_id && !l.pending.is_empty())
+    {
+        return true;
+    }
+    false
+}
+
+fn parse_sockaddr_un_path(addr_ptr: u64, addr_len: u64) -> Result<Vec<u8>, FsBridgeError> {
+    if addr_ptr == 0 || addr_len < 3 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let copy_len = (addr_len as usize).min(110);
+    let mut raw = [0u8; 110];
+    copy_from_user(raw.as_mut_ptr(), addr_ptr as *const u8, copy_len)
+        .map_err(|_| FsBridgeError::Fault)?;
+    let family = u16::from_ne_bytes([raw[0], raw[1]]);
+    if family != 1 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let path_slice = &raw[2..copy_len];
+    let end = path_slice
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(path_slice.len());
+    if end == 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    resolve_path_with_symlinks(&path_slice[..end], false, true)
+}
+
+/// `socket(AF_UNIX, ty, protocol)`.
+pub fn fs_unix_socket(domain: i32, ty: i32, protocol: i32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let clean_ty = ty & !((O_NONBLOCK | O_CLOEXEC) as i32);
+    if domain != 1 || protocol != 0 || (clean_ty != 1 && clean_ty != 2) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let blob_id = next_pseudo_blob(PSEUDO_SOCKET_TAG);
+    BLOB_CACHE
+        .insert(blob_id, socket_blob_with_peer(BlobId([0u8; 32])))
+        .map_err(exofs_to_bridge_error)?;
+    let obj_fd = OBJECT_TABLE
+        .open(blob_id, open_flags::O_RDWR, 0, 0, pid as u64)
+        .map_err(exofs_to_bridge_error)?;
+    if process_has_fd_table(pid) {
+        let fd_flags = fd_table_flags(ty as u32, open_flags::O_RDWR);
+        if let Some(logical) = install_process_fd(pid, obj_fd as u64, fd_flags) {
+            return Ok(logical as i64);
+        }
+        let _ = OBJECT_TABLE.close(obj_fd);
+        return Err(FsBridgeError::NoMemory);
+    }
+    Ok(obj_fd as i64)
+}
+
+/// `bind(fd, sockaddr_un*, addrlen)`.
+pub fn fs_unix_bind(
+    fd: u32,
+    addr_ptr: u64,
+    addr_len: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    if path_entry(&normalized).is_ok() {
+        return Err(FsBridgeError::Exists);
+    }
+    let (parent_path, leaf) = split_parent_and_leaf(&normalized)?;
+    ensure_directory_chain(&parent_path)?;
+    let file_blob = blob_id_for_path(&normalized)?;
+    BLOB_CACHE
+        .insert(file_blob, Vec::new())
+        .map_err(exofs_to_bridge_error)?;
+    let _ = BLOB_CACHE.mark_dirty(&file_blob);
+    upsert_mode(file_blob, 0o140000 | 0o660);
+    upsert_parent_entry(&parent_path, &leaf, file_blob, PATH_INDEX_KIND_FILE)?;
+
+    let mut listeners = UNIX_LISTENERS.lock();
+    if let Some(existing) = listeners.iter_mut().find(|l| l.path == normalized) {
+        existing.listener_blob = entry.blob_id;
+        existing.pending.clear();
+    } else {
+        listeners
+            .try_reserve(1)
+            .map_err(|_| FsBridgeError::NoMemory)?;
+        listeners.push(UnixListenerEntry {
+            path: normalized,
+            listener_blob: entry.blob_id,
+            pending: Vec::new(),
+        });
+    }
+    Ok(0)
+}
+
+/// `listen(fd, backlog)`.
+pub fn fs_unix_listen(fd: u32, _backlog: i32, pid: u32) -> Result<i64, FsBridgeError> {
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    Ok(0)
+}
+
+/// `connect(fd, sockaddr_un*, addrlen)`.
+pub fn fs_unix_connect(
+    fd: u32,
+    addr_ptr: u64,
+    addr_len: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    let server_blob = next_pseudo_blob(PSEUDO_SOCKET_TAG);
+    {
+        let mut listeners = UNIX_LISTENERS.lock();
+        let Some(listener) = listeners.iter_mut().find(|l| l.path == normalized) else {
+            return Err(FsBridgeError::NotFound);
+        };
+        listener
+            .pending
+            .try_reserve(1)
+            .map_err(|_| FsBridgeError::NoMemory)?;
+        listener.pending.push(server_blob);
+    }
+    BLOB_CACHE
+        .insert(entry.blob_id, socket_blob_with_peer(server_blob))
+        .map_err(exofs_to_bridge_error)?;
+    BLOB_CACHE
+        .insert(server_blob, socket_blob_with_peer(entry.blob_id))
+        .map_err(exofs_to_bridge_error)?;
+    Ok(0)
+}
+
+/// `accept(fd, addr_ptr, addr_len_ptr)`.
+pub fn fs_unix_accept(
+    fd: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let server_blob = {
+        let mut listeners = UNIX_LISTENERS.lock();
+        let Some(listener) = listeners
+            .iter_mut()
+            .find(|l| l.listener_blob == entry.blob_id)
+        else {
+            return Err(FsBridgeError::Invalid);
+        };
+        if listener.pending.is_empty() {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        listener.pending.remove(0)
+    };
+    if addr_ptr != 0 && addr_len_ptr != 0 {
+        let _ = write_user_typed::<u32>(addr_len_ptr, 2);
+        let _ = write_user_typed::<u16>(addr_ptr, 1);
+    }
+    let s_fd = OBJECT_TABLE
+        .open(server_blob, open_flags::O_RDWR, 0, 0, pid as u64)
+        .map_err(exofs_to_bridge_error)?;
+    if process_has_fd_table(pid) {
+        let fd_flags = fd_table_flags(0, open_flags::O_RDWR);
+        if let Some(logical) = install_process_fd(pid, s_fd as u64, fd_flags) {
+            return Ok(logical as i64);
+        }
+        let _ = OBJECT_TABLE.close(s_fd);
+        return Err(FsBridgeError::NoMemory);
+    }
+    Ok(s_fd as i64)
+}
+
+/// `sendto` sur socket `AF_UNIX`.
+pub fn fs_unix_sendto(
+    fd: u32,
+    buf_ptr: u64,
+    len: usize,
+    _flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if len == 0 {
+        return Ok(0);
+    }
+    if buf_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let peer = socket_peer_blob(entry.blob_id)?;
+    let input = read_user_bytes(buf_ptr, len)?;
+    append_socket_payload(peer, &input)
+}
+
+/// `recvfrom` sur socket `AF_UNIX`.
+pub fn fs_unix_recvfrom(
+    fd: u32,
+    buf_ptr: u64,
+    len: usize,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if len == 0 {
+        return Ok(0);
+    }
+    if buf_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let consume = (flags & 0x02) == 0;
+    let data = read_socket_payload(entry.blob_id, len, consume)?;
+    if data.is_empty() {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    copy_to_user(buf_ptr as *mut u8, data.as_ptr(), data.len())
+        .map_err(|_| FsBridgeError::Fault)?;
+    Ok(data.len() as i64)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct UnixMsghdr {
+    msg_name: u64,
+    msg_namelen: u32,
+    _pad0: u32,
+    msg_iov: u64,
+    msg_iovlen: u64,
+    msg_control: u64,
+    msg_controllen: u64,
+    msg_flags: i32,
+    _pad1: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct UnixCmsghdr {
+    cmsg_len: usize,
+    cmsg_level: i32,
+    cmsg_type: i32,
+}
+
+/// `sendmsg` sur socket `AF_UNIX` avec support `SCM_RIGHTS`.
+pub fn fs_unix_sendmsg(
+    fd: u32,
+    msg_ptr: u64,
+    _flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if msg_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let peer = socket_peer_blob(entry.blob_id)?;
+    let msg = read_user_typed::<UnixMsghdr>(msg_ptr).map_err(|_| FsBridgeError::Fault)?;
+    if msg.msg_iovlen > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    // Parse SCM_RIGHTS ancillary FDs if present
+    if msg.msg_control != 0 && msg.msg_controllen >= 16 {
+        let ctrl_len = (msg.msg_controllen as usize).min(4096);
+        let ctrl_bytes = read_user_bytes(msg.msg_control, ctrl_len)?;
+        let mut off = 0usize;
+        while off + 16 <= ctrl_bytes.len() {
+            let hdr = unsafe {
+                core::ptr::read_unaligned(ctrl_bytes.as_ptr().add(off) as *const UnixCmsghdr)
+            };
+            if hdr.cmsg_len < 16 || off + hdr.cmsg_len > ctrl_bytes.len() {
+                break;
+            }
+            if hdr.cmsg_level == 1 && hdr.cmsg_type == 1 {
+                let fd_bytes = hdr.cmsg_len - 16;
+                let fd_count = fd_bytes / 4;
+                for i in 0..fd_count {
+                    let pos = off + 16 + i * 4;
+                    let raw_fd = i32::from_ne_bytes([
+                        ctrl_bytes[pos],
+                        ctrl_bytes[pos + 1],
+                        ctrl_bytes[pos + 2],
+                        ctrl_bytes[pos + 3],
+                    ]);
+                    if raw_fd >= 0 {
+                        if let Ok(src_res) = resolve_fd(pid, raw_fd as u32) {
+                            if let Ok(dup_handle) = OBJECT_TABLE.dup(src_res.handle) {
+                                let mut q = SOCKET_ANCILLARY_FDS.lock();
+                                if q.try_reserve(1).is_ok() {
+                                    q.push((peer, dup_handle, src_res.flags));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            off += (hdr.cmsg_len + 7) & !7;
+        }
+    }
+
+    let mut payload = Vec::new();
+    for i in 0..msg.msg_iovlen {
+        let addr = msg
+            .msg_iov
+            .checked_add(i.saturating_mul(size_of::<LinuxIovec>() as u64))
+            .ok_or(FsBridgeError::Fault)?;
+        let iov = read_user_typed::<LinuxIovec>(addr).map_err(|_| FsBridgeError::Fault)?;
+        if iov.iov_len != 0 {
+            let chunk = read_user_bytes(iov.iov_base, iov.iov_len as usize)?;
+            payload
+                .try_reserve(chunk.len())
+                .map_err(|_| FsBridgeError::NoMemory)?;
+            payload.extend_from_slice(&chunk);
+        }
+    }
+    append_socket_payload(peer, &payload)
+}
+
+/// `recvmsg` sur socket `AF_UNIX` avec support `SCM_RIGHTS`.
+pub fn fs_unix_recvmsg(
+    fd: u32,
+    msg_ptr: u64,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if msg_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let mut msg = read_user_typed::<UnixMsghdr>(msg_ptr).map_err(|_| FsBridgeError::Fault)?;
+    if msg.msg_iovlen > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let mut total_cap = 0usize;
+    for i in 0..msg.msg_iovlen {
+        let addr = msg
+            .msg_iov
+            .checked_add(i.saturating_mul(size_of::<LinuxIovec>() as u64))
+            .ok_or(FsBridgeError::Fault)?;
+        let iov = read_user_typed::<LinuxIovec>(addr).map_err(|_| FsBridgeError::Fault)?;
+        total_cap = total_cap.saturating_add(iov.iov_len as usize);
+    }
+
+    let consume = (flags & 0x02) == 0;
+    let data = read_socket_payload(entry.blob_id, total_cap, consume)?;
+    let has_ancillary = SOCKET_ANCILLARY_FDS
+        .lock()
+        .iter()
+        .any(|(b, _, _)| *b == entry.blob_id);
+
+    if data.is_empty() && !has_ancillary {
+        return Err(FsBridgeError::WouldBlock);
+    }
+
+    let mut copied = 0usize;
+    for i in 0..msg.msg_iovlen {
+        if copied >= data.len() {
+            break;
+        }
+        let addr = msg
+            .msg_iov
+            .checked_add(i.saturating_mul(size_of::<LinuxIovec>() as u64))
+            .ok_or(FsBridgeError::Fault)?;
+        let iov = read_user_typed::<LinuxIovec>(addr).map_err(|_| FsBridgeError::Fault)?;
+        let chunk = (data.len() - copied).min(iov.iov_len as usize);
+        if chunk != 0 {
+            copy_to_user(
+                iov.iov_base as *mut u8,
+                data[copied..copied + chunk].as_ptr(),
+                chunk,
+            )
+            .map_err(|_| FsBridgeError::Fault)?;
+            copied += chunk;
+        }
+    }
+
+    if msg.msg_control != 0 && msg.msg_controllen >= 16 && has_ancillary {
+        let max_fds = ((msg.msg_controllen as usize).saturating_sub(16)) / 4;
+        let mut received_fds = Vec::new();
+        {
+            let mut q = SOCKET_ANCILLARY_FDS.lock();
+            let mut i = 0;
+            while i < q.len() && received_fds.len() < max_fds {
+                if q[i].0 == entry.blob_id {
+                    let (_, obj_handle, fd_flags) = q.remove(i);
+                    let new_flags = if (flags & 0x4000_0000) != 0 {
+                        fd_flags | O_CLOEXEC
+                    } else {
+                        fd_flags
+                    };
+                    let new_fd = if process_has_fd_table(pid) {
+                        install_process_fd(pid, obj_handle as u64, new_flags)
+                            .unwrap_or(obj_handle as i32)
+                    } else {
+                        obj_handle as i32
+                    };
+                    let _ = received_fds.try_reserve(1);
+                    received_fds.push(new_fd);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        if !received_fds.is_empty() {
+            let cmsg_len = 16 + received_fds.len() * 4;
+            let aligned_len = ((cmsg_len + 7) & !7).min(msg.msg_controllen as usize);
+            let hdr = UnixCmsghdr {
+                cmsg_len,
+                cmsg_level: 1,
+                cmsg_type: 1,
+            };
+            write_user_typed(msg.msg_control, hdr).map_err(|_| FsBridgeError::Fault)?;
+            for (idx, &rfd) in received_fds.iter().enumerate() {
+                let fd_addr = msg
+                    .msg_control
+                    .checked_add(16 + (idx as u64) * 4)
+                    .ok_or(FsBridgeError::Fault)?;
+                write_user_typed(fd_addr, rfd).map_err(|_| FsBridgeError::Fault)?;
+            }
+            msg.msg_controllen = aligned_len as u64;
+        } else {
+            msg.msg_controllen = 0;
+        }
+    } else {
+        msg.msg_controllen = 0;
+    }
+    msg.msg_flags = 0;
+    write_user_typed(msg_ptr, msg).map_err(|_| FsBridgeError::Fault)?;
+    Ok(copied as i64)
+}
+
 /// `splice(fd_in, off_in, fd_out, off_out, len, flags)`.
 #[inline]
 pub fn fs_splice(

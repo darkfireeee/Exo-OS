@@ -63,6 +63,15 @@ ExoOS enforces a strict privilege boundary between `#![no_std]` kernel/critical 
     - `ExoPledgeExt`: Zero-Trust process sandboxing via `pledge()` (`SYS_EXO_PLEDGE`) and `unveil()` (`SYS_EXO_UNVEIL`).
 - **Migrated Userspace (`-Z build-std=core,alloc,std,panic_abort`)**: Both the interactive shell (`servers/exosh`) and all 35 `userspace/apps/coreutils` binaries compile directly against the real Rust `std`.
 
+## Pure-Rust Wayland Stack (`wayland-rs`)
+
+With real `std`, `epoll`, and `AF_UNIX` with `SCM_RIGHTS` in place, ExoOS runs the official pure-Rust `wayland-rs` ecosystem in userspace (detailed in [`docs/wayland_rs_integration.md`](docs/wayland_rs_integration.md)):
+
+- **Modular Wayland Crates (`libs/wayland-rs/`)**: Includes `wayland-backend` (pure Rust wire protocol engine), `wayland-client`, `wayland-server`, `wayland-protocols` (XDG Shell, compositor, etc.), and `wayland-cursor`.
+- **System Compatibility (`exo-rustix`)**: Lightweight `rustix` compatibility layer enabling standard Wayland server/client socket polling on `target_os = "exo"`.
+- **Compositor & Client Communication**: Zero-overhead IPC over Unix domain sockets (`AF_UNIX`) using file descriptor passing (`SCM_RIGHTS`) and `epoll` event dispatching.
+- **Live Verification**: `exosh` provides the `exo wayland` builtin verifying live compositor/client roundtrips (`wl_compositor`, `wl_shm`, `xdg_wm_base`, surface allocation).
+
 ---
 
 ## ExoOS v0.2.0 "Strata" — Consolidation Highlights

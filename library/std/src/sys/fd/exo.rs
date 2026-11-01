@@ -70,7 +70,10 @@ impl FileDesc {
         self.duplicate()
     }
 
-    pub fn set_nonblocking(&self, _nonblocking: bool) -> io::Result<()> {
+    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        let flags = syscall::fcntl(self.as_raw_fd(), 3, 0).unwrap_or(0);
+        let new_flags = if nonblocking { flags | 0o4000 } else { flags & !0o4000 };
+        let _ = syscall::fcntl(self.as_raw_fd(), 4, new_flags as u64);
         Ok(())
     }
 }

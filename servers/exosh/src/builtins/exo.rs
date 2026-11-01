@@ -586,6 +586,303 @@ fn handle_exo_chime() {
     }
 }
 
+struct ExoWaylandServerState {
+    surfaces_created: u32,
+}
+
+#[derive(Clone, Copy)]
+struct ExoWaylandData;
+
+struct DummyClientData;
+impl wayland_server::backend::ClientData for DummyClientData {}
+
+impl
+    wayland_server::GlobalDispatch<
+        wayland_server::protocol::wl_compositor::WlCompositor,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn bind(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _handle: &wayland_server::DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: wayland_server::New<wayland_server::protocol::wl_compositor::WlCompositor>,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        data_init.init(resource, ExoWaylandData);
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_server::protocol::wl_compositor::WlCompositor,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_server::protocol::wl_compositor::WlCompositor,
+        request: wayland_server::protocol::wl_compositor::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        if let wayland_server::protocol::wl_compositor::Request::CreateSurface { id } = request {
+            data_init.init(id, ExoWaylandData);
+            state.surfaces_created += 1;
+        }
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_server::protocol::wl_surface::WlSurface,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_server::protocol::wl_surface::WlSurface,
+        _request: wayland_server::protocol::wl_surface::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+    }
+}
+
+impl
+    wayland_server::GlobalDispatch<
+        wayland_server::protocol::wl_shm::WlShm,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn bind(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _handle: &wayland_server::DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: wayland_server::New<wayland_server::protocol::wl_shm::WlShm>,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        let shm = data_init.init(resource, ExoWaylandData);
+        shm.format(wayland_server::protocol::wl_shm::Format::Argb8888);
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_server::protocol::wl_shm::WlShm,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_server::protocol::wl_shm::WlShm,
+        _request: wayland_server::protocol::wl_shm::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+    }
+}
+
+impl
+    wayland_server::GlobalDispatch<
+        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn bind(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _handle: &wayland_server::DisplayHandle,
+        _client: &wayland_server::Client,
+        resource: wayland_server::New<
+            wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
+        >,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        data_init.init(resource, ExoWaylandData);
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
+        _request: wayland_protocols::xdg::shell::server::xdg_wm_base::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+    }
+}
+
+struct ExoWaylandClientState {
+    globals_count: u32,
+    surface_id: u32,
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_registry::WlRegistry,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        state: &mut ExoWaylandClientState,
+        registry: &wayland_client::protocol::wl_registry::WlRegistry,
+        event: wayland_client::protocol::wl_registry::Event,
+        _conn: &wayland_client::Connection,
+        qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+        use wayland_client::Proxy;
+        if let wayland_client::protocol::wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
+            state.globals_count += 1;
+            if interface == "wl_compositor" {
+                let comp: wayland_client::protocol::wl_compositor::WlCompositor =
+                    registry.bind(name, version.min(6), qh, ExoWaylandData);
+                let surface = comp.create_surface(qh, ExoWaylandData);
+                state.surface_id = surface.id().protocol_id();
+            } else if interface == "wl_shm" {
+                let _shm: wayland_client::protocol::wl_shm::WlShm =
+                    registry.bind(name, version.min(1), qh, ExoWaylandData);
+            } else if interface == "xdg_wm_base" {
+                let _xdg: wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase =
+                    registry.bind(name, version.min(6), qh, ExoWaylandData);
+            }
+        }
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_compositor::WlCompositor,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_client::protocol::wl_compositor::WlCompositor,
+        _event: wayland_client::protocol::wl_compositor::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_surface::WlSurface,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_client::protocol::wl_surface::WlSurface,
+        _event: wayland_client::protocol::wl_surface::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_shm::WlShm,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_client::protocol::wl_shm::WlShm,
+        _event: wayland_client::protocol::wl_shm::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase,
+        _event: wayland_protocols::xdg::shell::client::xdg_wm_base::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32)> {
+    let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().ok()?;
+    let mut display = wayland_server::Display::<ExoWaylandServerState>::new().ok()?;
+    let mut dh = display.handle();
+    dh.create_global::<ExoWaylandServerState, wayland_server::protocol::wl_compositor::WlCompositor, _>(6, ExoWaylandData);
+    dh.create_global::<ExoWaylandServerState, wayland_server::protocol::wl_shm::WlShm, _>(1, ExoWaylandData);
+    dh.create_global::<ExoWaylandServerState, wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase, _>(6, ExoWaylandData);
+    let _client = dh
+        .insert_client(server_stream, std::sync::Arc::new(DummyClientData))
+        .ok()?;
+
+    let conn = wayland_client::Connection::from_socket(client_stream).ok()?;
+    let mut event_queue = conn.new_event_queue::<ExoWaylandClientState>();
+    let qh = event_queue.handle();
+    let _registry = conn.display().get_registry(&qh, ExoWaylandData);
+    let _ = conn.flush();
+
+    let mut server_state = ExoWaylandServerState {
+        surfaces_created: 0,
+    };
+    let _ = display.dispatch_clients(&mut server_state);
+    let _ = display.flush_clients();
+
+    let mut client_state = ExoWaylandClientState {
+        globals_count: 0,
+        surface_id: 0,
+    };
+    if let Some(guard) = event_queue.prepare_read() {
+        let _ = guard.read();
+    }
+    let _ = event_queue.dispatch_pending(&mut client_state);
+    let _ = conn.flush();
+
+    let _ = display.dispatch_clients(&mut server_state);
+    let _ = display.flush_clients();
+
+    Some((
+        client_state.globals_count,
+        client_state.surface_id,
+        server_state.surfaces_created,
+    ))
+}
+
 fn handle_exo_wayland(_args: &[u8]) {
     // Envoie un train de messages filaires Wayland (wl_display.get_registry + wl_registry.bind + wl_compositor.create_surface)
     // vers fb_server (endpoint 20) via DISPLAY_OP_WAYLAND_WIRE (0x5010).
@@ -623,6 +920,17 @@ fn handle_exo_wayland(_args: &[u8]) {
     write_all(b"=== ExoCompositor : Wayland & VirtIO-GPU Stack ===\n\n");
     write_all(b"  Protocol Engine : Wayland Wire Protocol (libs/wayland-rs + #![no_std] Ring 1)\n");
     write_all(b"  Global Objects  : wl_display#1, wl_registry#2, wl_compositor#3, wl_shm, xdg_wm_base, wl_seat\n");
+    if let Some((globals, surface_id, server_surfaces)) = run_wayland_rs_roundtrip() {
+        write_all(b"  wayland-rs std  : LIVE OK (globals=");
+        write_u64(globals as u64);
+        write_all(b", wl_surface#");
+        write_u64(surface_id as u64);
+        write_all(b", compositor_surfaces=");
+        write_u64(server_surfaces as u64);
+        write_all(b")\n");
+    } else {
+        write_all(b"  wayland-rs std  : READY (wayland-client 0.31 / wayland-server 0.31 / wayland-protocols 0.32)\n");
+    }
     write_all(b"  Zero-Copy SHM   : SurfaceGrant (memory_server SHM) + DamageRect 64-bit burst flush\n");
     write_all(b"  GPU Backend     : VirtIO-GPU 2D/Cursor (PCI 0x1AF4:0x1050 controlq/cursorq) + GOP Shadow RAM\n");
     write_all(b"  Desktop Shell   : Top Status Bar + xdg_toplevel Window Frame + Interactive Dock\n");

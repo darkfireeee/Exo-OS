@@ -19,3 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'
 [dependencies]
 exo-syscall-abi = { path = "../syscall_abi" }
 exo-libc = { path = "../../libs/exo-libc" }
+wayland-backend = { path = "../../libs/wayland-rs/wayland-backend" }
+wayland-client = { path = "../../libs/wayland-rs/wayland-client" }
+wayland-server = { path = "../../libs/wayland-rs/wayland-server" }
+wayland-protocols = { path = "../../libs/wayland-rs/wayland-protocols", features = ["client", "server"] }

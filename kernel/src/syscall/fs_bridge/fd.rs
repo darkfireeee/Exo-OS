@@ -148,7 +148,7 @@ pub fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
     } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
         readable = false;
     } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        readable = socket_payload_len(entry.blob_id) != 0;
+        readable = socket_is_readable(entry.blob_id);
     }
 
     Ok((readable, writable))

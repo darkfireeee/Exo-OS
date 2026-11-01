@@ -72,6 +72,16 @@ pub fn fs_epoll_create1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct EpollWatch {
+    ep_blob: BlobId,
+    fd: u32,
+    events: u32,
+    data: u64,
+}
+
+static EPOLL_WATCHES: Mutex<Vec<EpollWatch>> = Mutex::new(Vec::new());
+
 /// `epoll_ctl(epfd, op, fd, event)`.
 #[inline]
 pub fn fs_epoll_ctl(
@@ -101,10 +111,36 @@ pub fn fs_epoll_ctl(
             if event_ptr == 0 {
                 return Err(FsBridgeError::Fault);
             }
-            let _ =
+            let ev =
                 read_user_typed::<LinuxEpollEvent>(event_ptr).map_err(|_| FsBridgeError::Fault)?;
+            let mut watches = EPOLL_WATCHES.lock();
+            if let Some(existing) = watches
+                .iter_mut()
+                .find(|w| w.ep_blob == ep_entry.blob_id && w.fd == fd)
+            {
+                existing.events = ev.events;
+                existing.data = ev.data;
+            } else {
+                watches
+                    .try_reserve(1)
+                    .map_err(|_| FsBridgeError::NoMemory)?;
+                watches.push(EpollWatch {
+                    ep_blob: ep_entry.blob_id,
+                    fd,
+                    events: ev.events,
+                    data: ev.data,
+                });
+            }
         }
-        EPOLL_CTL_DEL => {}
+        EPOLL_CTL_DEL => {
+            let mut watches = EPOLL_WATCHES.lock();
+            if let Some(pos) = watches
+                .iter()
+                .position(|w| w.ep_blob == ep_entry.blob_id && w.fd == fd)
+            {
+                watches.swap_remove(pos);
+            }
+        }
         _ => return Err(FsBridgeError::Invalid),
     }
     Ok(0)
@@ -137,7 +173,63 @@ pub fn fs_epoll_wait(
     if !is_pseudo_blob(&ep_entry.blob_id, PSEUDO_EPOLL_TAG) {
         return Err(FsBridgeError::Invalid);
     }
-    Ok(0)
+
+    let snapshot: Vec<EpollWatch> = {
+        let watches = EPOLL_WATCHES.lock();
+        let mut out = Vec::new();
+        for w in watches.iter() {
+            if w.ep_blob == ep_entry.blob_id {
+                let _ = out.try_reserve(1);
+                out.push(*w);
+            }
+        }
+        out
+    };
+
+    let mut ready = 0usize;
+    let max_out = (maxevents as usize).min(1024);
+    for w in snapshot {
+        if ready >= max_out {
+            break;
+        }
+        match fd_readiness(w.fd, pid) {
+            Ok((readable, writable)) => {
+                let mut revents = 0u32;
+                if readable && (w.events & 0x001) != 0 {
+                    revents |= 0x001;
+                }
+                if writable && (w.events & 0x004) != 0 {
+                    revents |= 0x004;
+                }
+                if revents != 0 {
+                    let addr = events_ptr
+                        .checked_add(
+                            (ready as u64).saturating_mul(size_of::<LinuxEpollEvent>() as u64),
+                        )
+                        .ok_or(FsBridgeError::Fault)?;
+                    write_user_typed(
+                        addr,
+                        LinuxEpollEvent {
+                            events: revents,
+                            data: w.data,
+                        },
+                    )
+                    .map_err(|_| FsBridgeError::Fault)?;
+                    ready += 1;
+                }
+            }
+            Err(_) => {
+                let mut watches = EPOLL_WATCHES.lock();
+                if let Some(pos) = watches
+                    .iter()
+                    .position(|x| x.ep_blob == ep_entry.blob_id && x.fd == w.fd)
+                {
+                    watches.swap_remove(pos);
+                }
+            }
+        }
+    }
+    Ok(ready as i64)
 }
 
 /// `inotify_init1(flags)`; event production is a higher layer concern.

@@ -185,6 +185,9 @@ pub mod vxworks;
 pub mod xous;
 #[cfg(target_os = "exo")]
 pub mod exo;
+#[cfg(target_os = "exo")]
+#[stable(feature = "rust1", since = "1.0.0")]
+pub use self::exo::unix;
 
 #[cfg(any(
     unix,

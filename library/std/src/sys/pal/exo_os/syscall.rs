@@ -36,11 +36,14 @@ pub const SYS_CONNECT: u64 = 42;
 pub const SYS_ACCEPT: u64 = 43;
 pub const SYS_SENDTO: u64 = 44;
 pub const SYS_RECVFROM: u64 = 45;
+pub const SYS_SENDMSG: u64 = 46;
+pub const SYS_RECVMSG: u64 = 47;
 pub const SYS_SHUTDOWN: u64 = 48;
 pub const SYS_BIND: u64 = 49;
 pub const SYS_LISTEN: u64 = 50;
 pub const SYS_GETSOCKNAME: u64 = 51;
 pub const SYS_GETPEERNAME: u64 = 52;
+pub const SYS_SOCKETPAIR: u64 = 53;
 pub const SYS_SETSOCKOPT: u64 = 54;
 pub const SYS_GETSOCKOPT: u64 = 55;
 pub const SYS_CLONE: u64 = 56;
@@ -50,6 +53,7 @@ pub const SYS_EXIT: u64 = 60;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
 pub const SYS_FCNTL: u64 = 72;
+pub const SYS_FLOCK: u64 = 73;
 pub const SYS_FSYNC: u64 = 74;
 pub const SYS_FDATASYNC: u64 = 75;
 pub const SYS_TRUNCATE: u64 = 76;
@@ -403,6 +407,22 @@ pub struct SockAddrIn {
     pub sin_port: u16,
     pub sin_addr: [u8; 4],
     pub sin_zero: [u8; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct SockAddrUn {
+    pub sun_family: u16,
+    pub sun_path: [u8; 108],
+}
+
+impl Default for SockAddrUn {
+    fn default() -> Self {
+        Self {
+            sun_family: AF_UNIX as u16,
+            sun_path: [0u8; 108],
+        }
+    }
 }
 
 #[repr(C, packed)]
@@ -884,6 +904,59 @@ pub fn futex_wake_raw(addr: *const u32, count: u32) -> SysResult<usize> {
 pub fn socket(domain: i32, ty: i32, protocol: i32) -> SysResult<i32> {
     let ret = unsafe { syscall3(SYS_SOCKET, domain as u64, ty as u64, protocol as u64) };
     decode_ret(ret).map(|fd| fd as i32)
+}
+
+#[inline]
+pub fn socketpair(domain: i32, ty: i32, protocol: i32) -> SysResult<[i32; 2]> {
+    let mut sv = [0i32; 2];
+    let ret = unsafe {
+        syscall4(
+            SYS_SOCKETPAIR,
+            domain as u64,
+            ty as u64,
+            protocol as u64,
+            sv.as_mut_ptr() as u64,
+        )
+    };
+    decode_ret(ret).map(|_| sv)
+}
+
+#[inline]
+pub fn connect_unix(fd: i32, addr: &SockAddrUn) -> SysResult<()> {
+    let ret = unsafe {
+        syscall3(
+            SYS_CONNECT,
+            fd as u64,
+            addr as *const SockAddrUn as u64,
+            core::mem::size_of::<SockAddrUn>() as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn bind_unix(fd: i32, addr: &SockAddrUn) -> SysResult<()> {
+    let ret = unsafe {
+        syscall3(
+            SYS_BIND,
+            fd as u64,
+            addr as *const SockAddrUn as u64,
+            core::mem::size_of::<SockAddrUn>() as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn accept_unix(fd: i32) -> SysResult<i32> {
+    let ret = unsafe { syscall3(SYS_ACCEPT, fd as u64, 0, 0) };
+    decode_ret(ret).map(|cfd| cfd as i32)
+}
+
+#[inline]
+pub fn fcntl(fd: i32, cmd: i32, arg: u64) -> SysResult<i32> {
+    let ret = unsafe { syscall3(SYS_FCNTL, fd as u64, cmd as u64, arg) };
+    decode_ret(ret).map(|v| v as i32)
 }
 
 #[inline]
