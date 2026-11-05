@@ -1,8 +1,8 @@
 // kernel/src/memory/virtual/fault/handler.rs
 //
-// Gestionnaire de page fault (#PF, vecteur 14).
-// Dispatche vers demand_paging, cow, ou swap_in selon la cause.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Page fault handler (#PF, vector 14).
+// Dispatches to demand_paging, cow, or swap_in depending on the cause.
+// Layer 0 — no external dependency except `spin`.
 
 use super::{FaultCause, FaultContext, FaultResult};
 use crate::memory::core::{AllocError, PageFlags, VirtAddr};
@@ -12,7 +12,7 @@ use crate::memory::virt::vma::{VmaBacking, VmaFlags};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES DE PAGE FAULT
+// PAGE FAULT STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct FaultStats {
@@ -95,7 +95,7 @@ fn handle_present_permission_fault<A: FaultAllocator>(
 
     match alloc.remap_flags(page_addr, repaired_flags) {
         Ok(()) => {
-            // SAFETY: page_addr est alignee et provient de CR2.
+            // SAFETY: page_addr is aligned and comes from CR2.
             unsafe {
                 flush_single(page_addr);
             }
@@ -111,27 +111,27 @@ fn handle_present_permission_fault<A: FaultAllocator>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HANDLER PRINCIPAL
+// MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traite un page fault.
+/// Handles a page fault.
 ///
-/// `ctx` contient l'adresse fautive (CR2), l'error code et si l'on était
-/// en mode user ou kernel.
+/// `ctx` contains the faulting address (CR2), error code, and whether it was
+/// in user or kernel mode.
 ///
-/// Retourne `FaultResult::Handled` si le fault a été résolu et l'exécution
-/// peut reprendre, ou une erreur pour déclencher un signal/kill.
+/// Returns `FaultResult::Handled` if the fault was resolved and execution
+/// can resume, or an error to trigger a signal/kill.
 pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> FaultResult {
     FAULT_STATS.total.fetch_add(1, Ordering::Relaxed);
     if ctx.from_kernel {
         FAULT_STATS.kernel_faults.fetch_add(1, Ordering::Relaxed);
-        // Un fault kernel non résolvable = panic.
+        // An unresolvable kernel fault = panic.
         return FaultResult::KernelFault {
             addr: ctx.fault_addr,
         };
     }
 
-    // Trouver la VMA qui contient l'adresse fautive.
+    // Find the VMA containing the faulting address.
     let vma = match ctx.find_vma(ctx.fault_addr) {
         Some(v) => v,
         None => {
@@ -142,7 +142,7 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
         }
     };
 
-    // Vérifier les permissions de la VMA.
+    // Check VMA permissions.
     match ctx.cause {
         FaultCause::Write => {
             if !vma.flags.contains(VmaFlags::WRITE) && !vma.flags.contains(VmaFlags::COW) {
@@ -160,21 +160,21 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
                 };
             }
         }
-        FaultCause::Read => {} // Toujours OK si la VMA est présente
+        FaultCause::Read => {} // Always OK if the VMA is present
     }
 
     if ctx.present {
         return handle_present_permission_fault(ctx, vma, alloc);
     }
 
-    // Dispatcher selon la cause.
+    // Dispatch according to cause.
     if ctx.cause == FaultCause::Write && vma.flags.contains(VmaFlags::COW) {
         // CoW break
         FAULT_STATS.cow_breaks.fetch_add(1, Ordering::Relaxed);
         return super::cow::handle_cow_fault(ctx, vma, alloc);
     }
 
-    // Demand paging ou swap-in
+    // Demand paging or swap-in
     if vma.flags.contains(VmaFlags::ANONYMOUS) || vma.backing == VmaBacking::File {
         match super::demand_paging::handle_demand_paging(ctx, vma, alloc) {
             FaultResult::Handled => {
@@ -184,17 +184,17 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
             other => other,
         }
     } else {
-        // Backup : swap-in
+        // Backup: swap-in
         FAULT_STATS.swap_ins.fetch_add(1, Ordering::Relaxed);
         super::swap_in::handle_swap_in(ctx, vma, alloc)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT D'ALLOCATION POUR LE FAULT HANDLER
+// ALLOCATION TRAIT FOR FAULT HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait d'allocation utilisé par les handlers de fault.
+/// Allocation trait used by fault handlers.
 pub trait FaultAllocator: Sync {
     fn alloc_zeroed(&self) -> Result<crate::memory::core::Frame, AllocError>;
     fn alloc_nonzeroed(&self) -> Result<crate::memory::core::Frame, AllocError>;
@@ -208,20 +208,20 @@ pub trait FaultAllocator: Sync {
     fn remap_flags(&self, virt: VirtAddr, flags: PageFlags) -> Result<(), AllocError>;
     fn translate(&self, virt: VirtAddr) -> Option<crate::memory::core::PhysAddr>;
 
-    /// Lit la valeur brute de la PTE pour l'adresse virtuelle `virt`.
+    /// Reads the raw PTE value for the virtual address `virt`.
     ///
-    /// Utilisé par le swap-in handler pour extraire l'entrée de swap stockée
-    /// dans les bits [63:1] d'une PTE marquée non-présente (PRESENT=0).
+    /// Used by the swap-in handler to extract the swap entry stored
+    /// in bits [63:1] of a PTE marked not-present (PRESENT=0).
     ///
-    /// Retourne `0` si la page n'a pas de PTE connue (implémentation par défaut).
+    /// Returns `0` if the page has no known PTE (default implementation).
     fn read_pte_raw(&self, _virt: VirtAddr) -> u64 {
         0
     }
 
-    /// Compare/exchange atomique sur la PTE 4 KiB d'une page déjà mappée.
+    /// Atomic compare-and-swap on the 4 KiB PTE of an already mapped page.
     ///
-    /// Retourne `Ok(())` si l'échange a réussi, ou `Err(actual_raw)` si la PTE
-    /// observée ne correspondait plus à `current`.
+    /// Returns `Ok(())` if the exchange succeeded, or `Err(actual_raw)` if the
+    /// observed PTE no longer matched `current`.
     fn compare_exchange_pte_raw(
         &self,
         virt: VirtAddr,

@@ -1,25 +1,25 @@
 // kernel/src/memory/heap/mod.rs
 //
-// Module heap : allocateur kernel complet.
+// Heap module: complete kernel allocator.
 //
-// Architecture :
+// Architecture:
 //   allocator/
-//     size_classes  — classes de taille 8→2048 octets
-//     hybrid        — dispatch SLUB (≤2048) ou vmalloc (>2048)
+//     size_classes  — size classes 8->2048 bytes
+//     hybrid        — dispatch SLUB (<=2048) or vmalloc (>2048)
 //     global        — #[global_allocator] wrapping hybrid
 //   thread_local/
-//     magazine      — paire de magazines per-CPU
-//     cache         — cache per-CPU (hot path sans lock)
-//     drain         — drain des caches lors d'un ctx switch ou pression mémoire
+//     magazine      — per-CPU magazine pair
+//     cache         — per-CPU cache (lock-free hot path)
+//     drain         — cache drain upon ctx switch or memory pressure
 //   large/
-//     vmalloc       — allocateur vmalloc pour grandes allocations
+//     vmalloc       — vmalloc allocator for large allocations
 
 pub mod allocator;
 pub mod large;
 pub mod thread_local;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RE-EXPORTS PUBLIQUES
+// PUBLIC RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use allocator::global::KERNEL_ALLOCATOR;

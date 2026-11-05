@@ -1,6 +1,6 @@
 // kernel/src/memory/swap/mod.rs
 //
-// Module swap — éviction de pages et gestion des dispositifs swap.
+// Swap module — page eviction and swap device management.
 
 pub mod backend;
 pub mod cluster;

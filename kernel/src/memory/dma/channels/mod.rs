@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/channels/mod.rs
 //
-// Module canaux DMA.
+// DMA channels module.
 
 pub mod affinity;
 pub mod channel;

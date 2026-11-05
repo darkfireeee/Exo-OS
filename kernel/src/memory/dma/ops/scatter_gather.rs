@@ -1,7 +1,7 @@
 // kernel/src/memory/dma/ops/scatter_gather.rs
 //
-// Opération DMA Scatter-Gather — transfert depuis/vers plusieurs fragments.
-// COUCHE 0 — aucune dépendance externe.
+// Scatter-Gather DMA operation — transfer from/to multiple fragments.
+// LAYER 0 — no external dependencies.
 
 use crate::memory::dma::channels::manager::DMA_CHANNELS;
 use crate::memory::dma::completion::handler::DMA_COMPLETION;
@@ -14,17 +14,17 @@ use crate::memory::dma::iommu::domain::IDENTITY_DOMAIN_ID;
 use crate::memory::dma::ops::memcpy::DmaOpHandle;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API SCATTER-GATHER
+// SCATTER-GATHER API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Soumet un transfert scatter-gather asynchrone.
+/// Submits an asynchronous scatter-gather transfer.
 ///
-/// `srcs` : fragments source (physiques).
-/// `dsts` : fragments destination (physiques).
-/// Les tailles doivent correspondre entry-à-entry.
+/// `srcs`: source fragments (physical).
+/// `dsts`: destination fragments (physical).
+/// Sizes must match entry-by-entry.
 ///
 /// # Safety
-/// Tous les fragments doivent pointer de la mémoire physique valide.
+/// All fragments must point to valid physical memory.
 pub unsafe fn dma_sg_async(
     srcs: &[SgEntry],
     dsts: &[SgEntry],
@@ -45,7 +45,7 @@ pub unsafe fn dma_sg_async(
         .alloc_descriptor(ch_id.0, requester_tid)
         .ok_or(DmaError::OutOfMemory)?;
 
-    // Copie les SG entries.
+    // Copy SG entries.
     let src_count = srcs.len().min(MAX_SG_ENTRIES);
     let dst_count = dsts.len().min(MAX_SG_ENTRIES);
     desc.src_sg[..src_count].copy_from_slice(&srcs[..src_count]);
@@ -54,11 +54,11 @@ pub unsafe fn dma_sg_async(
     desc.dst_sg_count = dst_count as u16;
     desc.direction = DmaDirection::Bidirection;
 
-    // Calcul de la taille totale.
+    // Compute total size.
     let total: usize = srcs.iter().map(|e| e.len as usize).sum();
     desc.transfer_size = total;
 
-    // Mapping IOVA pour chaque fragment src.
+    // IOVA mapping for each src fragment.
     let mut src_iovas = [IovaAddr::zero(); MAX_SG_ENTRIES];
     let n_src_mapped = IOVA_ALLOCATOR.map_sg(
         &desc.src_sg[..src_count],
@@ -68,8 +68,8 @@ pub unsafe fn dma_sg_async(
         &mut src_iovas[..src_count],
     )?;
 
-    // Mapping IOVA pour chaque fragment dst.
-    // En cas d'échec, rollback de toutes les IOVAs src déjà allouées.
+    // IOVA mapping for each dst fragment.
+    // On failure, roll back all previously allocated src IOVAs.
     let mut dst_iovas = [IovaAddr::zero(); MAX_SG_ENTRIES];
     if let Err(e) = IOVA_ALLOCATOR.map_sg(
         &desc.dst_sg[..dst_count],
@@ -97,10 +97,10 @@ pub unsafe fn dma_sg_async(
     })
 }
 
-/// Fallback software pour scatter-gather (concatène les fragments via physmap).
+/// Software fallback for scatter-gather (concatenates fragments via physmap).
 ///
 /// # Safety
-/// Tous les fragments srcss et dsts doivent être mappés dans le physmap.
+/// All src and dst fragments must be mapped in the physmap.
 pub unsafe fn sw_sg_copy(srcs: &[SgEntry], dsts: &[SgEntry]) {
     use crate::memory::core::address::phys_to_virt;
 
@@ -131,7 +131,7 @@ pub unsafe fn sw_sg_copy(srcs: &[SgEntry], dsts: &[SgEntry]) {
 
             let src_ptr = phys_to_virt(src.phys.add(src_off as u64)).as_u64() as *const u8;
             let dst_ptr = phys_to_virt(dst_entry.phys.add(dst_off as u64)).as_u64() as *mut u8;
-            // SAFETY: Physmap valide, tailles contrôlées.
+            // SAFETY: Valid physmap, sizes bounds-checked.
             core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, copy);
 
             src_off += copy;

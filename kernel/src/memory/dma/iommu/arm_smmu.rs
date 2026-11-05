@@ -1,15 +1,15 @@
 // kernel/src/memory/dma/iommu/arm_smmu.rs
 //
-// Pilote ARM SMMU (System Memory Management Unit) v3.
-// Implémente l'interface IOMMU pour architectures ARMv8-A.
+// ARM SMMU (System Memory Management Unit) v3 driver.
+// Implements the IOMMU interface for ARMv8-A architectures.
 //
-// COUCHE 0 — aucune dépendance externe.
-// Référence : ARM IHI0070E — ARM System Memory Management Unit Architecture
-//             Specification — SMMU Architecture version 3.
+// LAYER 0 — no external dependencies.
+// Reference: ARM IHI0070E — ARM System Memory Management Unit Architecture
+//            Specification — SMMU Architecture version 3.
 //
-// ⚠️  Ce pilote est prévu pour ARM64 (AArch64).
-//     Sur x86_64, toutes les opérations retournent `DmaError::NotSupported`.
-//     Structure complète présente pour portabilité future.
+// ⚠️  This driver is intended for ARM64 (AArch64).
+//     On x86_64, all operations return `DmaError::NotSupported`.
+//     Complete structure present for future portability.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -18,10 +18,10 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{IovaAddr, DmaError, IommuDomainId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRES SMMU v3 (offsets dans MMIO)
+// SMMU v3 REGISTERS (offsets in MMIO)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Page 0 (globale) — registres principaux SMMU v3.
+/// Page 0 (global) — SMMU v3 primary registers.
 pub mod smmu_regs {
     /// Identification Register 0.
     pub const IDR0: usize = 0x000;
@@ -71,7 +71,7 @@ pub mod smmu_regs {
     pub const GERRORN: usize = 0x064;
 }
 
-/// Bits du registre CR0.
+/// CR0 register bits.
 pub mod cr0_bits {
     /// SMMU Enable.
     pub const SMMUEN: u32 = 1 << 0;
@@ -81,7 +81,7 @@ pub mod cr0_bits {
     pub const CMDQEN: u32 = 1 << 3;
 }
 
-/// Bits du registre IDR0.
+/// IDR0 register bits.
 pub mod idr0_bits {
     /// Support de S1P (Stage-1 translation).
     pub const S1P:  u32 = 1 << 1;
@@ -96,11 +96,11 @@ pub mod idr0_bits {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STREAM TABLE ENTRY (STE) — format ARM SMMU v3
+// STREAM TABLE ENTRY (STE) — ARM SMMU v3 format
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stream Table Entry — mappe un StreamID → configuration de traduction.
-/// Chaque STE fait 64 octets (4 × 128-bit = 4 DWORDs de 64 bits).
+/// Stream Table Entry — maps a StreamID -> translation configuration.
+/// Each STE is 64 bytes (4 x 128-bit = 4 64-bit DWORDs).
 #[repr(C, align(64))]
 #[derive(Copy, Clone)]
 pub struct StreamTableEntry {
@@ -110,7 +110,7 @@ pub struct StreamTableEntry {
 impl StreamTableEntry {
     pub const EMPTY: Self = StreamTableEntry { word: [0u64; 8] };
 
-    /// STE valide avec bypass (configurations basique, identité).
+    /// Valid STE with bypass (basic configuration, identity).
     #[inline]
     pub const fn bypass() -> Self {
         let mut ste = StreamTableEntry { word: [0u64; 8] };
@@ -119,16 +119,16 @@ impl StreamTableEntry {
         ste
     }
 
-    /// Retourne `true` si ce STE est valide (bit V=1).
+    /// Returns `true` if this STE is valid (bit V=1).
     #[inline]
     pub fn is_valid(&self) -> bool { self.word[0] & 1 != 0 }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMMANDES SMMU v3 — Command Queue
+// SMMU v3 COMMANDS — Command Queue
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Commande ARM SMMU v3 — 128 bits (2 × u64).
+/// ARM SMMU v3 command — 128 bits (2 x u64).
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug)]
 pub struct SmmuCommand {
@@ -137,13 +137,13 @@ pub struct SmmuCommand {
 }
 
 impl SmmuCommand {
-    /// TLBI_NH_ALL — invalide tout le TLB.
+    /// TLBI_NH_ALL — invalidates the entire TLB.
     pub const TLBI_NH_ALL: SmmuCommand = SmmuCommand {
         lo: 0x6,   // CMDOP_TLBI_NH_ALL
         hi: 0,
     };
 
-    /// CMD_SYNC — synchronise la file de commandes.
+    /// CMD_SYNC — synchronizes the command queue.
     #[inline]
     pub const fn cmd_sync(msiseg: u32) -> SmmuCommand {
         SmmuCommand {
@@ -152,7 +152,7 @@ impl SmmuCommand {
         }
     }
 
-    /// CFGI_STE — invalide le STE en cache pour un StreamID.
+    /// CFGI_STE — invalidates the cached STE for a StreamID.
     #[inline]
     pub const fn cfgi_ste(sid: u32) -> SmmuCommand {
         SmmuCommand {
@@ -163,45 +163,45 @@ impl SmmuCommand {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CAPACITÉS AMD DÉTECTÉES
+// DETECTED SMMU CAPABILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacités détectées sur le matériel SMMU lors de l'initialisation.
+/// Capabilities detected on SMMU hardware during initialization.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SmmuCapabilities {
-    /// Stage-1 supporté.
+    /// Stage-1 supported.
     pub s1p:      bool,
-    /// Stage-2 supporté.
+    /// Stage-2 supported.
     pub s2p:      bool,
-    /// ASID 16 bits.
+    /// 16-bit ASID.
     pub asid16:   bool,
-    /// Granule 4KiB.
+    /// 4KiB granule.
     pub tt4k:     bool,
-    /// Nombre de StreamID bits.
+    /// Number of StreamID bits.
     pub sid_size: u8,
-    /// Nombre de VMID bits.
+    /// Number of VMID bits.
     pub vmid16:   bool,
-    /// Nombre maximum de streams.
+    /// Maximum number of streams.
     pub max_streams: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT DU PILOTE
+// DRIVER STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_ARM_SMMU_DEVICES: usize = 4;
 const MAX_STREAMS_PER_SMMU: usize = 256;
 
 struct ArmSmmuState {
-    /// Adresse de base du MMIO.
+    /// MMIO base address.
     mmio_base:   u64,
-    /// Capacités détectées.
+    /// Detected capabilities.
     caps:        SmmuCapabilities,
-    /// Vrai si le SMMU est initialisé et actif.
+    /// True if the SMMU is initialized and active.
     enabled:     bool,
-    /// Stream Table (statique, MAX_STREAMS_PER_SMMU entrées).
+    /// Stream Table (static, MAX_STREAMS_PER_SMMU entries).
     stream_table: [StreamTableEntry; MAX_STREAMS_PER_SMMU],
-    /// Statistiques.
+    /// Statistics.
     maps:        u64,
     unmaps:      u64,
     faults:      u64,
@@ -249,10 +249,10 @@ static ARM_SMMU_DEVICES: spin::Once<ArmSmmuDeviceTable> = spin::Once::new();
 static IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE
+// PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une opération SMMU.
+/// SMMU operation result.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SmmuResult {
     Ok,
@@ -262,15 +262,15 @@ pub enum SmmuResult {
     OutOfResources,
 }
 
-/// Initialise le sous-système ARM SMMU.
+/// Initializes the ARM SMMU subsystem.
 ///
-/// Sur x86_64, retourne immédiatement `SmmuResult::NotSupported`.
-/// Sur ARM64, détecte les SMMMUs via le SMMU discovery mechanism.
+/// On x86_64, immediately returns `SmmuResult::NotSupported`.
+/// On ARM64, detects SMMUs via the SMMU discovery mechanism.
 ///
 /// # Safety
-/// Doit être appelé en CPL 0 (mode kernel) après l'initialisation de la MMU.
+/// Must be called in CPL 0 (kernel mode) after MMU initialization.
 pub unsafe fn init() -> SmmuResult {
-    // Arch guard : ce pilote est ARM64 uniquement.
+    // Arch guard: this driver is ARM64 only.
     #[cfg(not(target_arch = "aarch64"))]
     {
         return SmmuResult::NotSupported;
@@ -279,17 +279,17 @@ pub unsafe fn init() -> SmmuResult {
     #[cfg(target_arch = "aarch64")]
     {
         ARM_SMMU_DEVICES.call_once(ArmSmmuDeviceTable::new);
-        // Sur ARM64 réel, on lirait les SMMU descriptors depuis ACPI/IORT
-        // ou le device tree (FDT). Pas encore implémenté — prévu pour ARM64 port.
+        // On real ARM64, we would read SMMU descriptors from ACPI/IORT
+        // or the device tree (FDT). Not yet implemented — planned for ARM64 port.
         IS_INITIALIZED.store(true, Ordering::Release);
         SmmuResult::Ok
     }
 }
 
-/// Enregistre un nouveau SMMU à l'adresse MMIO donnée.
+/// Registers a new SMMU at the given MMIO address.
 ///
 /// # Safety
-/// `mmio_base` doit pointer sur un SMMU v3 valide, mappé en MMIO.
+/// `mmio_base` must point to a valid SMMU v3, mapped in MMIO.
 pub unsafe fn register_smmu(mmio_base: PhysAddr) -> SmmuResult {
     #[cfg(not(target_arch = "aarch64"))]
     { let _ = mmio_base; return SmmuResult::NotSupported; }
@@ -306,7 +306,7 @@ pub unsafe fn register_smmu(mmio_base: PhysAddr) -> SmmuResult {
         let mut dev = table.devices[idx].lock();
         dev.mmio_base = mmio_base.as_u64();
 
-        // Lire IDR0 pour découvrir les capacités.
+        // Read IDR0 to discover capabilities.
         let idr0 = read_smmu_reg(dev.mmio_base, smmu_regs::IDR0);
         dev.caps.s1p    = idr0 & idr0_bits::S1P  != 0;
         dev.caps.s2p    = idr0 & idr0_bits::S2P  != 0;
@@ -320,10 +320,10 @@ pub unsafe fn register_smmu(mmio_base: PhysAddr) -> SmmuResult {
     }
 }
 
-/// Active le SMMU (écriture dans CR0.SMMUEN).
+/// Enables the SMMU (write to CR0.SMMUEN).
 ///
 /// # Safety
-/// Mêmes préconditions que `register_smmu`.
+/// Same preconditions as `register_smmu`.
 pub unsafe fn enable(smmu_idx: usize) -> SmmuResult {
     #[cfg(not(target_arch = "aarch64"))]
     { let _ = smmu_idx; return SmmuResult::NotSupported; }
@@ -339,11 +339,11 @@ pub unsafe fn enable(smmu_idx: usize) -> SmmuResult {
         let mut dev = table.devices[smmu_idx].lock();
         if dev.mmio_base == 0 { return SmmuResult::InvalidParams; }
 
-        // Activer CMDQ + SMMUEN.
+        // Enable CMDQ + SMMUEN.
         let cr0 = cr0_bits::CMDQEN | cr0_bits::EVENTQEN | cr0_bits::SMMUEN;
         write_smmu_reg(dev.mmio_base, smmu_regs::CR0, cr0);
 
-        // Attendre CR0ACK.
+        // Wait for CR0ACK.
         let mut timeout = 1_000_000u32;
         loop {
             let ack = read_smmu_reg(dev.mmio_base, smmu_regs::CR0ACK);
@@ -357,9 +357,9 @@ pub unsafe fn enable(smmu_idx: usize) -> SmmuResult {
     }
 }
 
-/// Mappe un range DMA [iova, iova+size) → [phys, phys+size).
+/// Maps a DMA range [iova, iova+size) -> [phys, phys+size).
 ///
-/// Sur x86_64, retourne `SmmuResult::NotSupported`.
+/// On x86_64, returns `SmmuResult::NotSupported`.
 pub fn map_range(
     smmu_idx: usize,
     _sid:     u32,
@@ -371,10 +371,10 @@ pub fn map_range(
     #[cfg(not(target_arch = "aarch64"))]
     return SmmuResult::NotSupported;
     #[cfg(target_arch = "aarch64")]
-    SmmuResult::NotSupported  // A_FAIRE: implémenter stage-1 walk ARM64
+    SmmuResult::NotSupported  // TODO: implement stage-1 walk ARM64
 }
 
-/// Libère un mapping DMA.
+/// Releases a DMA mapping.
 pub fn unmap_range(
     smmu_idx: usize,
     _sid:     u32,
@@ -385,10 +385,10 @@ pub fn unmap_range(
     SmmuResult::NotSupported
 }
 
-/// Invalide tout le TLB du SMMU (TLBI_NH_ALL + CMD_SYNC).
+/// Invalidates the entire SMMU TLB (TLBI_NH_ALL + CMD_SYNC).
 ///
 /// # Safety
-/// Doit être appelé avec les locks SMMU non tenus.
+/// Must be called with SMMU locks not held.
 pub unsafe fn flush_tlb_all(smmu_idx: usize) -> SmmuResult {
     #[cfg(not(target_arch = "aarch64"))]
     { let _ = smmu_idx; return SmmuResult::NotSupported; }
@@ -405,18 +405,18 @@ pub unsafe fn flush_tlb_all(smmu_idx: usize) -> SmmuResult {
         if !dev.enabled { return SmmuResult::NotSupported; }
         dev.tlbi_flushes += 1;
         // Issue TLBI_NH_ALL + CMD_SYNC via command queue.
-        // (Command queue management non implémenté — prévu pour ARM64 port.)
+        // (Command queue management not implemented — planned for ARM64 port.)
         SmmuResult::Ok
     }
 }
 
-/// Retourne `true` si l'architecture courante supporte ARM SMMU.
+/// Returns `true` if the current architecture supports ARM SMMU.
 #[inline]
 pub const fn is_supported() -> bool {
     cfg!(target_arch = "aarch64")
 }
 
-/// Statistiques du SMMU idx.
+/// Statistics for SMMU idx.
 pub fn stats(smmu_idx: usize) -> Option<(u64, u64, u64, u64)> {
     let table = ARM_SMMU_DEVICES.get()?;
     if smmu_idx >= MAX_ARM_SMMU_DEVICES { return None; }
@@ -425,13 +425,13 @@ pub fn stats(smmu_idx: usize) -> Option<(u64, u64, u64, u64)> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS MMIO (ARM64)
+// MMIO HELPERS (ARM64)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit un registre 32 bits depuis l'espace MMIO du SMMU.
+/// Reads a 32-bit register from the SMMU MMIO space.
 ///
 /// # Safety
-/// `base` doit être une adresse MMIO valide, mappée, alignée.
+/// `base` must be a valid, mapped, aligned MMIO address.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn read_smmu_reg(base: u64, offset: usize) -> u32 {
@@ -445,10 +445,10 @@ unsafe fn read_smmu_reg(base: u64, offset: usize) -> u32 {
     let _ = (base, offset); 0
 }
 
-/// Écrit un registre 32 bits dans l'espace MMIO du SMMU.
+/// Writes a 32-bit register into the SMMU MMIO space.
 ///
 /// # Safety
-/// `base` doit être une adresse MMIO valide, mappée, alignée.
+/// `base` must be a valid, mapped, aligned MMIO address.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn write_smmu_reg(base: u64, offset: usize, val: u32) {

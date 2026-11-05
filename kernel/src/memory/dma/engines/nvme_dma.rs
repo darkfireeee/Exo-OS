@@ -1,8 +1,8 @@
 // kernel/src/memory/dma/engines/nvme_dma.rs
 //
-// Moteur DMA NVMe PCIe (NVM Express 1.4).
-// Ref : NVM Express Base Specification, Revision 1.4c.
-// Couche 0 — no_std, accès MMIO BAR0 via raw pointers.
+// PCIe NVMe DMA engine (NVM Express 1.4).
+// Ref: NVM Express Base Specification, Revision 1.4c.
+// Layer 0 — no_std, BAR0 MMIO access via raw pointers.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -13,7 +13,7 @@ use crate::memory::dma::stats::counters::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRES CONTROLLER MMIO
+// CONTROLLER MMIO REGISTERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -58,7 +58,7 @@ mod csts {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OPCODE NVM
+// NVM OPCODE
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub struct NvmeSqe {
     pub cdw0: u32,
     /// DW1 : NSID.
     pub nsid: u32,
-    /// DW2-DW3 : CDW2-CDW3 (réservés pour NVM).
+    /// DW2-DW3 : CDW2-CDW3 (reserved for NVM).
     pub cdw2: u32,
     pub cdw3: u32,
     /// DW4-DW5 : Metadata Pointer.
@@ -99,7 +99,7 @@ pub struct NvmeSqe {
     pub prp1_hi: u32,
     pub prp2_lo: u32,
     pub prp2_hi: u32,
-    /// DW10-DW15 : opération-dépendants.
+    /// DW10-DW15 : operation-dependent.
     pub cdw10: u32,
     pub cdw11: u32,
     pub cdw12: u32,
@@ -146,7 +146,7 @@ impl NvmeSqe {
 pub struct NvmeCqe {
     /// DW0 : Command Specific.
     pub dw0: u32,
-    /// DW1 : réservé.
+    /// DW1 : reserved.
     pub dw1: u32,
     /// DW2 : SQ Head Pointer (15:0) + SQ ID (31:16).
     pub dw2: u32,
@@ -170,7 +170,7 @@ impl NvmeCqe {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QUEUES INTERNE
+// INTERNAL QUEUES
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NVME_QUEUE_DEPTH: usize = 64;
@@ -222,7 +222,7 @@ impl NvmeCQ {
         }
     }
 
-    /// Retourne la prochaine entrée complétée, si disponible.
+    /// Returns the next completed entry, if available.
     fn pop(&mut self) -> Option<NvmeCqe> {
         let cqe = self.entries[self.head as usize];
         if cqe.phase() != self.phase {
@@ -237,7 +237,7 @@ impl NvmeCQ {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTEUR NVME DMA
+// NVME DMA ENGINE
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct NvmeState {
@@ -300,21 +300,21 @@ impl NvmeDmaEngine {
         p.write_volatile(v);
     }
 
-    /// Initialise le contrôleur NVMe.
+    /// Initializes the NVMe controller.
     ///
     /// # Safety
-    /// BAR0 MMIO valide, SQ/CQ en mémoire physique identité-mappée.
+    /// Valid BAR0 MMIO, SQ/CQ in identity-mapped physical memory.
     pub unsafe fn init(&self, bar0: u64, nsid: u32) -> bool {
         self.bar0.store(bar0, Ordering::Release);
         self.nsid.store(nsid, Ordering::Relaxed);
 
-        // Réinitialiser l'état des queues (phase CQ = true obligatoirement).
+        // Reset queue state (CQ phase = true required).
         {
             let mut st = self.state.lock();
             *st = NvmeState::new();
         }
 
-        // Désactiver le contrôleur (CC.EN = 0) et attendre CSTS.RDY = 0.
+        // Disable controller (CC.EN = 0) and wait for CSTS.RDY = 0.
         let mut cc = self.read32(regs::CC);
         cc &= !cc::EN;
         self.write32(regs::CC, cc);
@@ -329,13 +329,13 @@ impl NvmeDmaEngine {
             return false;
         }
 
-        // Configurer les queues via les adresses statiques en state.
+        // Configure queues via static addresses in state.
         let st = self.state.lock();
         let sq_phys = &st.sq.entries as *const _ as u64;
         let cq_phys = &st.cq.entries as *const _ as u64;
         drop(st);
 
-        // Admin queues → on utilise les I/O queues (pas d'admin ici).
+        // Admin queues -> we use I/O queues (no admin here).
         self.write64(regs::ASQ, sq_phys);
         self.write64(regs::ACQ, cq_phys);
         self.write32(
@@ -343,7 +343,7 @@ impl NvmeDmaEngine {
             ((NVME_QUEUE_DEPTH as u32 - 1) << 16) | (NVME_QUEUE_DEPTH as u32 - 1),
         );
 
-        // Activer CC.EN avec tailles de queue.
+        // Enable CC.EN with queue sizes.
         let cc_cfg = cc::EN
             | (cc::IO_SQS_64 << cc::IO_SQS_SHIFT)
             | (cc::IO_CQS_16 << cc::IO_CQS_SHIFT)
@@ -351,7 +351,7 @@ impl NvmeDmaEngine {
             | cc::MPS_4K;
         self.write32(regs::CC, cc_cfg);
 
-        // Attendre CSTS.RDY = 1.
+        // Wait for CSTS.RDY = 1.
         let mut tries = 100_000u32;
         while tries > 0 {
             let csts = self.read32(regs::CSTS);
@@ -373,18 +373,18 @@ impl NvmeDmaEngine {
         true
     }
 
-    /// Soumet une lecture NVMe.
+    /// Submits an NVMe read.
     ///
     /// # Safety
-    /// `prp1` est une adresse physique 4 KiB-alignée, taille <= 4096.
+    /// `prp1` is a 4 KiB-aligned physical address, size <= 4096.
     pub unsafe fn submit_read(&self, slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
         self.submit_io(slba, nlb, prp1, false)
     }
 
-    /// Soumet une écriture NVMe.
+    /// Submits an NVMe write.
     ///
     /// # Safety
-    /// `prp1` est une adresse physique 4 KiB-alignée, taille <= 4096.
+    /// `prp1` is a 4 KiB-aligned physical address, size <= 4096.
     pub unsafe fn submit_write(&self, slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
         self.submit_io(slba, nlb, prp1, true)
     }
@@ -424,10 +424,10 @@ impl NvmeDmaEngine {
         true
     }
 
-    /// Sonde la Completion Queue pour les entrées terminées.
+    /// Polls the Completion Queue for completed entries.
     ///
     /// # Safety
-    /// contexte non-préemptible.
+    /// Non-preemptible context.
     pub unsafe fn poll_cq(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -448,7 +448,7 @@ impl NvmeDmaEngine {
             count += 1;
         }
 
-        // Ring CQ Head Doorbell si des entrées ont été consommées.
+        // Ring CQ Head Doorbell if entries were consumed.
         if count > 0 {
             let head = st.cq.head;
             drop(st);
@@ -458,40 +458,40 @@ impl NvmeDmaEngine {
     }
 }
 
-// SAFETY: NvmeDmaEngine utilise Mutex + atomics.
+// SAFETY: NvmeDmaEngine uses Mutex + atomics.
 unsafe impl Sync for NvmeDmaEngine {}
 
-/// Instance globale du moteur NVMe DMA.
+/// Global instance of the NVMe DMA engine.
 pub static NVME_DMA: NvmeDmaEngine = NvmeDmaEngine::new_uninit();
 
-/// Initialise le moteur NVMe DMA.
+/// Initializes the NVMe DMA engine.
 ///
 /// # Safety
-/// BAR0 valide.
+/// Valid BAR0.
 pub unsafe fn nvme_dma_init(bar0: u64, nsid: u32) -> bool {
     NVME_DMA.init(bar0, nsid)
 }
 
-/// Lit des secteurs NVMe.
+/// Reads NVMe sectors.
 ///
 /// # Safety
-/// `prp1` valide.
+/// Valid `prp1`.
 pub unsafe fn nvme_read(slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
     NVME_DMA.submit_read(slba, nlb, prp1)
 }
 
-/// Écrit des secteurs NVMe.
+/// Writes NVMe sectors.
 ///
 /// # Safety
-/// `prp1` valide.
+/// Valid `prp1`.
 pub unsafe fn nvme_write(slba: u64, nlb: u16, prp1: PhysAddr) -> bool {
     NVME_DMA.submit_write(slba, nlb, prp1)
 }
 
-/// Sonde les compléments NVMe.
+/// Polls NVMe completions.
 ///
 /// # Safety
-/// contexte non-préemptible.
+/// Non-preemptible context.
 pub unsafe fn nvme_poll() -> usize {
     NVME_DMA.poll_cq()
 }

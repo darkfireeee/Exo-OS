@@ -1,47 +1,47 @@
 // kernel/src/memory/integrity/sanitizer.rs
 //
-// KASAN-lite — Shadow memory tracking pour détection de :
+// KASAN-lite — Shadow memory tracking for detection of:
 //   • Use-after-free (UAF)
 //   • Buffer overflow (heap / stack)
-//   • Accès mémoire non-initialisée (via poison explicite à l'allocation)
+//   • Uninitialized memory access (via explicit poisoning at allocation)
 //
-// Architecture :
-//   - La shadow map couvre le heap noyau (KERNEL_HEAP_START + 256 GiB).
-//   - Ratio ombre : 1 octet shadow surveille 8 octets objet → shadow = 32 GiB.
-//   - Chaque slot shadow encode un état sur 8 bits :
+// Architecture:
+//   - Shadow map covers the kernel heap (KERNEL_HEAP_START + 256 GiB).
+//   - Shadow ratio: 1 shadow byte monitors 8 object bytes -> shadow = 32 GiB.
+//   - Each shadow slot encodes an 8-bit state:
 //       SHADOW_ACCESSIBLE  (0x00) — accessible
-//       SHADOW_PARTIAL_k   (0x01..0x07) — k premiers octets accessibles
-//       SHADOW_REDZONE     (0xFA) — zone rouge (overflow)
-//       SHADOW_FREED       (0xFD) — mémoire libérée (UAF)
-//       SHADOW_UNINIT      (0xFF) — non-initialisée
+//       SHADOW_PARTIAL_k   (0x01..0x07) — first k bytes accessible
+//       SHADOW_REDZONE     (0xFA) — redzone (overflow)
+//       SHADOW_FREED       (0xFD) — freed memory (UAF)
+//       SHADOW_UNINIT      (0xFF) — uninitialized
 //
-// Couverture dynamique : désactivée si `KASAN_ENABLED` = false (perf).
+// Dynamic coverage: disabled if `KASAN_ENABLED` = false (perf).
 //
-// COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no dependency on scheduler/process/ipc/fs.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::memory::core::layout::KERNEL_HEAP_START;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Configuration shadow
+// Shadow configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Plage du heap noyau couverte : 256 GiB.
+/// Kernel heap range covered: 256 GiB.
 const KASAN_HEAP_SIZE: u64 = 256 * 1024 * 1024 * 1024;
-/// Base de la shadow memory = KERNEL_HEAP_START - (KASAN_HEAP_SIZE / 8).
-/// Placée juste avant le heap pour un calcul d'adresse sans division à runtime.
+/// Shadow memory base = KERNEL_HEAP_START - (KASAN_HEAP_SIZE / 8).
+/// Placed right before heap for division-free address calculation at runtime.
 const KASAN_SHADOW_OFFSET: u64 = KERNEL_HEAP_START.as_u64().wrapping_sub(KASAN_HEAP_SIZE / 8);
-/// Taille shadow totale : 32 GiB.
+/// Total shadow size: 32 GiB.
 #[allow(dead_code)]
 const KASAN_SHADOW_SIZE: u64 = KASAN_HEAP_SIZE / 8;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Valeurs shadow
+// Shadow values
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SHADOW_ACCESSIBLE: u8 = 0x00;
-/// Partiellement accessible : k octets valides depuis le début du mot de 8.
+/// Partially accessible: k valid bytes from the start of the 8-byte word.
 pub const fn shadow_partial(k: u8) -> u8 {
     debug_assert!(k > 0 && k < 8);
     k
@@ -51,7 +51,7 @@ pub const SHADOW_FREED: u8 = 0xFD;
 pub const SHADOW_UNINIT: u8 = 0xFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Activation globale
+// Global activation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static KASAN_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -61,19 +61,19 @@ pub fn kasan_is_enabled() -> bool {
     KASAN_ENABLED.load(Ordering::Acquire)
 }
 
-/// Active KASAN. Doit être appelé après que la shadow map est mappée.
+/// Enables KASAN. Must be called after the shadow map is mapped.
 pub fn kasan_enable() {
     KASAN_ENABLED.store(true, Ordering::Release);
     KASAN_STATS.enable_count.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Désactive KASAN (debug, benchmark).
+/// Disables KASAN (debug, benchmark).
 pub fn kasan_disable() {
     KASAN_ENABLED.store(false, Ordering::Release);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -111,30 +111,30 @@ unsafe impl Sync for KasanStats {}
 pub static KASAN_STATS: KasanStats = KasanStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Accès à la shadow memory
+// Shadow memory access
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit une adresse objet en adresse shadow.
+/// Converts an object address to shadow address.
 ///
 /// addr_shadow = (addr - KERNEL_HEAP_START) / 8 + KASAN_SHADOW_OFFSET
 ///
 /// # Safety
-/// `addr` doit être dans la plage couverte [KERNEL_HEAP_START, +KASAN_HEAP_SIZE).
+/// `addr` must be in covered range [KERNEL_HEAP_START, +KASAN_HEAP_SIZE).
 #[inline]
 unsafe fn shadow_addr(addr: u64) -> *mut u8 {
     let offset = addr.wrapping_sub(KERNEL_HEAP_START.as_u64()) >> 3;
     (KASAN_SHADOW_OFFSET + offset) as *mut u8
 }
 
-/// Lit l'octet shadow pour `addr`.
-/// # Safety : `addr` doit être dans la plage heap couverte.
+/// Reads the shadow byte for `addr`.
+/// # Safety: `addr` must be within covered heap range.
 #[inline]
 unsafe fn read_shadow(addr: u64) -> u8 {
     shadow_addr(addr).read_volatile()
 }
 
-/// Écrit l'octet shadow pour `addr`.
-/// # Safety : idem.
+/// Writes the shadow byte for `addr`.
+/// # Safety: same.
 #[inline]
 unsafe fn write_shadow(addr: u64, val: u8) {
     shadow_addr(addr).write_volatile(val);
@@ -142,15 +142,15 @@ unsafe fn write_shadow(addr: u64, val: u8) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Empoisonnement / déempoisonnement
+// Poisoning / unpoisoning
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Empoisonne `size` octets à partir de `addr` avec `poison_val`.
+/// Poisons `size` bytes starting from `addr` with `poison_val`.
 ///
-/// Chaque mot de 8 octets → 1 octet shadow.
+/// Each 8-byte word -> 1 shadow byte.
 ///
 /// # Safety
-/// `addr` doit être aligné sur 8 et dans la plage couverte.
+/// `addr` must be 8-byte aligned and in covered range.
 pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
     if !kasan_is_enabled() {
         return;
@@ -162,7 +162,7 @@ pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
         write_shadow(addr + i * 8, poison_val);
     }
     if rem > 0 {
-        // Dernier mot partiel : seuls `rem` octets accessibles.
+        // Partial final word: only `rem` bytes accessible.
         write_shadow(
             addr + words as u64 * 8,
             match poison_val {
@@ -173,10 +173,10 @@ pub unsafe fn kasan_poison(addr: u64, size: usize, poison_val: u8) {
     }
 }
 
-/// Marque `size` octets à partir de `addr` comme accessibles (SHADOW_ACCESSIBLE).
+/// Marks `size` bytes starting from `addr` as accessible (SHADOW_ACCESSIBLE).
 ///
 /// # Safety
-/// idem `kasan_poison`.
+/// same as `kasan_poison`.
 pub unsafe fn kasan_unpoison(addr: u64, size: usize) {
     if !kasan_is_enabled() {
         return;
@@ -188,12 +188,12 @@ pub unsafe fn kasan_unpoison(addr: u64, size: usize) {
     }
 }
 
-/// Empoisonne les redzones autour d'une allocation.
-/// `obj_addr` : début de l'objet, `obj_size` : taille.
-/// `redzone_size` : taille de chaque redzone (doit être multiple de 8).
+/// Poisons redzones around an allocation.
+/// `obj_addr`: start of object, `obj_size`: size.
+/// `redzone_size`: size of each redzone (must be multiple of 8).
 ///
 /// # Safety
-/// addresses valides, dans la plage heap couverte.
+/// valid addresses within covered heap range.
 pub unsafe fn kasan_poison_redzone(obj_addr: u64, obj_size: usize, redzone_size: usize) {
     if !kasan_is_enabled() {
         return;
@@ -205,10 +205,10 @@ pub unsafe fn kasan_poison_redzone(obj_addr: u64, obj_size: usize, redzone_size:
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification d'accès
+// Access verification
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un check KASAN.
+/// Result of a KASAN check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KasanError {
     UseAfterFree {
@@ -227,17 +227,17 @@ pub enum KasanError {
     },
 }
 
-/// Vérifie l'accès à `addr` pour `size` octets.
-/// Retourne `Ok(())` si la plage est entièrement accessible.
+/// Verifies access to `addr` for `size` bytes.
+/// Returns `Ok(())` if range is fully accessible.
 ///
 /// # Safety
-/// `addr` doit être dans la plage couverte [KERNEL_HEAP_START, +KASAN_HEAP_SIZE).
+/// `addr` must be in covered range [KERNEL_HEAP_START, +KASAN_HEAP_SIZE).
 pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanError> {
     if !kasan_is_enabled() {
         return Ok(());
     }
     if addr < KERNEL_HEAP_START.as_u64() || addr >= KERNEL_HEAP_START.as_u64() + KASAN_HEAP_SIZE {
-        return Ok(()); // Hors plage couverte — pas d'erreur KASAN (ex: vmalloc).
+        return Ok(()); // Outside covered range — no KASAN error (e.g. vmalloc).
     }
 
     let end = addr + size as u64;
@@ -261,7 +261,7 @@ pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanErro
                 Some(KasanError::UninitMemory { addr: cur })
             }
             partial if partial > 0 && partial < 8 => {
-                // Vérifier si l'accès dépasse les `partial` octets valides.
+                // Check if access exceeds valid `partial` bytes.
                 let byte_in_word = (cur & 7) as u8;
                 let end_in_word = (byte_in_word + size as u8).min(8);
                 if end_in_word > partial {
@@ -282,18 +282,18 @@ pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanErro
         if let Some(e) = err {
             return Err(e);
         }
-        // Avancer d'un mot (8 octets).
+        // Advance by one word (8 bytes).
         cur = (cur & !7) + 8;
     }
     Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rapport de violation
+// Violation report
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appelé par le handler KASAN lorsqu'un accès invalide est détecté.
-/// Log minimal + panic.
+/// Called by KASAN handler when an invalid access is detected.
+/// Minimal log + panic.
 pub fn kasan_report(error: KasanError, ip: u64) -> ! {
     match error {
         KasanError::UseAfterFree { addr } => {
@@ -317,41 +317,41 @@ pub fn kasan_report(error: KasanError, ip: u64) -> ! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hooks d'allocation / libération (appelés par hybrid.rs)
+// Allocation / free hooks (called by hybrid.rs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appelé juste avant de retourner un pointeur depuis l'allocateur.
-/// Marque `size` octets accessibles.
+/// Called right before returning a pointer from allocator.
+/// Marks `size` bytes accessible.
 ///
 /// # Safety
-/// `ptr` valide dans la plage heap.
+/// `ptr` valid within heap range.
 pub unsafe fn kasan_on_alloc(ptr: *mut u8, size: usize) {
     kasan_unpoison(ptr as u64, size);
 }
 
-/// Appelé juste après la libération d'un pointeur.
-/// Marque `size` octets comme FREED.
+/// Called right after freeing a pointer.
+/// Marks `size` bytes as FREED.
 ///
 /// # Safety
-/// `ptr` valide dans la plage heap.
+/// `ptr` valid within heap range.
 pub unsafe fn kasan_on_free(ptr: *mut u8, size: usize) {
     kasan_poison(ptr as u64, size, SHADOW_FREED);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise KASAN.
+/// Initializes KASAN.
 ///
-/// La shadow map doit avoir été préalablement mappée (32 GiB de pages zeroes)
-/// par le mapper noyau.  Cette fonction active simplement la vérification.
+/// The shadow map must have been previously mapped (32 GiB of zeroed pages)
+/// by the kernel mapper. This function simply enables verification.
 ///
 /// # Safety
-/// CPL 0, shadow map mappée.
+/// CPL 0, shadow map mapped.
 pub unsafe fn init() {
-    // Empoisonner toute la shadow map en SHADOW_UNINIT.
-    // En pratique on fait confiance au zeroing de la page table (0x00 = ACCESSIBLE).
-    // On active simplement KASAN.
+    // Poison entire shadow map with SHADOW_UNINIT.
+    // In practice we rely on page table zeroing (0x00 = ACCESSIBLE).
+    // We simply enable KASAN.
     kasan_enable();
 }

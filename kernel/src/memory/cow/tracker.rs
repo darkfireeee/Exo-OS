@@ -1,38 +1,38 @@
 // kernel/src/memory/cow/tracker.rs
 //
-// Traqueur CoW (Copy-on-Write) — maintient le comptage de référence
-// des frames partagés entre processus (fork/mmap shared).
-// COUCHE 0 — aucune dépendance externe.
+// CoW tracker (Copy-on-Write) — maintains reference counting
+// for frames shared between processes (fork/mmap shared).
+// LAYER 0 — no external dependencies.
 
 use crate::memory::core::types::Frame;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE COMPTAGE CoW
+// CoW COUNT TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de frames trackables simultanément (puissance de 2 pour hash).
+/// Number of simultaneously trackable frames (power of 2 for hash).
 ///
-/// Les binaires userspace et leurs serveurs peuvent partager bien plus de 4096
-/// pages après quelques fork/exec. Saturer ici doit rester exceptionnel, pas
-/// devenir une limite pratique du terminal.
+/// Userspace binaries and their servers can share far more than 4096
+/// pages after a few fork/execs. Saturating here must remain exceptional,
+/// not become a practical terminal limit.
 pub const COW_TABLE_SIZE: usize = 65536;
-/// Masque de hash.
+/// Hash mask.
 pub const COW_TABLE_MASK: usize = COW_TABLE_SIZE - 1;
 
-/// Sentinel : slot jamais utilisé.
+/// Sentinel: slot never used.
 const SLOT_EMPTY: u64 = 0;
-/// Sentinel : slot supprimé (tombstone). Permet de ne pas briser la chaîne
-/// de sondage linéaire lors d'une suppression.
+/// Sentinel: slot deleted (tombstone). Prevents breaking the linear
+/// probing chain upon deletion.
 const SLOT_DELETED: u64 = u64::MAX;
 
-/// Une entrée CoW dans la table de hachage.
+/// A CoW entry in the hash table.
 #[repr(C, align(16))]
 struct CowEntry {
-    /// Numéro de frame (0 = slot libre, u64::MAX = tombstone supprimé).
+    /// Frame number (0 = free slot, u64::MAX = deleted tombstone).
     frame_idx: AtomicU64,
-    /// Nombre de mappages de ce frame (refcount CoW).
+    /// Number of mappings for this frame (CoW refcount).
     ref_count: AtomicU32,
     _pad: u32,
 }
@@ -48,11 +48,11 @@ impl CowEntry {
     }
 }
 
-/// Table de hachage CoW avec sondage linéaire.
-/// Stocke les frames partagés (refcount ≥ 2).
+/// CoW hash table with linear probing.
+/// Stores shared frames (refcount >= 2).
 pub struct CowTracker {
     table: [CowEntry; COW_TABLE_SIZE],
-    /// Verrou global protégeant inc/dec contre les races TOCTOU.
+    /// Global lock protecting inc/dec against TOCTOU races.
     lock: Mutex<()>,
     pub tracked_count: AtomicU64,
     pub inc_count: AtomicU64,
@@ -66,7 +66,7 @@ pub enum CowTrackerError {
     TableFull,
 }
 
-// SAFETY: CowTracker utilise un Mutex interne pour toutes les mutations.
+// SAFETY: CowTracker uses an internal Mutex for all mutations.
 unsafe impl Sync for CowTracker {}
 unsafe impl Send for CowTracker {}
 
@@ -114,7 +114,7 @@ impl CowTracker {
     #[cfg(not(target_arch = "x86_64"))]
     fn log_overflow(_count: u64) {}
 
-    /// Hash d'un numéro de frame FNV-1a (rapide, pas de division).
+    /// FNV-1a frame number hash (fast, no division).
     #[inline]
     fn hash(frame_idx: u64) -> usize {
         let mut h = 0xcbf29ce484222325u64;
@@ -123,8 +123,8 @@ impl CowTracker {
         (h as usize) & COW_TABLE_MASK
     }
 
-    /// Incrémente le refcount CoW d'un frame.
-    /// Si le frame n'est pas dans la table, l'y insère avec refcount=2.
+    /// Increments the CoW refcount of a frame.
+    /// If the frame is not in the table, inserts it with refcount=2.
     pub fn try_inc(&self, frame: Frame) -> Result<u32, CowTrackerError> {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
@@ -138,14 +138,14 @@ impl CowTracker {
             let existing = entry.frame_idx.load(Ordering::Relaxed);
 
             if existing == idx {
-                // Slot trouvé — incrémente sous verrou.
+                // Slot found — increment under lock.
                 let rc = entry.ref_count.fetch_add(1, Ordering::Relaxed) + 1;
                 self.inc_count.fetch_add(1, Ordering::Relaxed);
                 return Ok(rc);
             }
             if existing == SLOT_EMPTY {
-                // Fin de chaîne — insérer dans le premier tombstone disponible
-                // ou dans ce slot vide.
+                // End of chain — insert into first available tombstone
+                // or into this empty slot.
                 let insert_slot = first_tombstone.unwrap_or(slot);
                 let entry_ins = &self.table[insert_slot];
                 entry_ins.frame_idx.store(idx, Ordering::Relaxed);
@@ -162,22 +162,22 @@ impl CowTracker {
                 first_tombstone = Some(slot);
             }
         }
-        // Table pleine — cas dégénéré.
+        // Table full — degenerate case.
         let overflow = self.overflow_count.fetch_add(1, Ordering::Relaxed) + 1;
         Self::log_overflow(overflow);
         Err(CowTrackerError::TableFull)
     }
 
-    /// Incrémente le refcount CoW d'un frame.
+    /// Increments the CoW refcount of a frame.
     ///
-    /// API historique conservée pour les chemins qui ne peuvent pas propager
-    /// d'erreur. Les nouveaux chemins critiques doivent utiliser `try_inc()`.
+    /// Historical API kept for code paths that cannot propagate
+    /// errors. New critical paths must use `try_inc()`.
     pub fn inc(&self, frame: Frame) -> u32 {
         self.try_inc(frame).unwrap_or(u32::MAX)
     }
 
-    /// Décrémente le refcount CoW d'un frame.
-    /// Retourne le nouveau refcount (0 = frame peut être libéré/récupéré en écriture).
+    /// Decrements the CoW refcount of a frame.
+    /// Returns the new refcount (0 = frame can be freed/reclaimed for write).
     pub fn dec(&self, frame: Frame) -> u32 {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
@@ -189,15 +189,15 @@ impl CowTracker {
             let existing = entry.frame_idx.load(Ordering::Relaxed);
 
             if existing == SLOT_EMPTY {
-                break; // Fin de chaîne réelle — frame non suivi
+                break; // Real end of chain — frame not tracked
             }
             if existing == SLOT_DELETED {
-                continue; // Tombstone — continuer le sondage
+                continue; // Tombstone — continue probing
             }
             if existing == idx {
                 let old = entry.ref_count.load(Ordering::Relaxed);
                 if old <= 1 {
-                    // Dernière référence — marquer comme tombstone (ne brise pas la chaîne).
+                    // Last reference — mark as tombstone (does not break chain).
                     entry.frame_idx.store(SLOT_DELETED, Ordering::Relaxed);
                     entry.ref_count.store(0, Ordering::Relaxed);
                     self.tracked_count.fetch_sub(1, Ordering::Relaxed);
@@ -206,7 +206,7 @@ impl CowTracker {
                 }
                 let new_rc = entry.ref_count.fetch_sub(1, Ordering::Relaxed) - 1;
                 if new_rc == 0 {
-                    // Passage à zéro : tombstone (cas concurrent sous verrou).
+                    // Transition to zero: tombstone (concurrent case under lock).
                     entry.frame_idx.store(SLOT_DELETED, Ordering::Relaxed);
                     self.tracked_count.fetch_sub(1, Ordering::Relaxed);
                 }
@@ -214,15 +214,15 @@ impl CowTracker {
                 return new_rc;
             }
         }
-        u32::MAX // Non trouvé → sentinelle explicite, ne surtout pas libérer le frame
+        u32::MAX // Not found -> explicit sentinel, do not free frame under any circumstances
     }
 
-    /// Retourne le refcount actuel sans modifier.
+    /// Returns the current refcount without modification.
     pub fn ref_count(&self, frame: Frame) -> u32 {
         self.tracked_ref_count(frame).unwrap_or(1)
     }
 
-    /// Retourne le refcount seulement si le frame est explicitement suivi.
+    /// Returns the refcount only if the frame is explicitly tracked.
     pub fn tracked_ref_count(&self, frame: Frame) -> Option<u32> {
         let idx = frame.phys_addr().as_u64() / 4096;
         let start = Self::hash(idx);
@@ -244,7 +244,7 @@ impl CowTracker {
         None
     }
 
-    /// Indique si un frame est partagé (refcount ≥ 2).
+    /// Indicates whether a frame is shared (refcount >= 2).
     #[inline]
     pub fn is_shared(&self, frame: Frame) -> bool {
         self.ref_count(frame) >= 2

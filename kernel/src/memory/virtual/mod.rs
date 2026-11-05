@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/mod.rs
 //
-// Module virtual — gestion de la mémoire virtuelle.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// virtual module — virtual memory management.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod address_space;
 pub mod fault;

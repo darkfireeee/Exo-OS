@@ -1,9 +1,9 @@
 // kernel/src/memory/physical/allocator/bitmap.rs
 //
-// Bitmap Allocator — allocateur bootstrap simple.
-// Utilisé uniquement pendant la phase d'initialisation du kernel,
-// avant que le buddy allocator soit opérationnel.
-// Couche 0 — aucune dépendance externe.
+// Bitmap Allocator — simple bootstrap allocator.
+// Used only during the kernel initialization phase,
+// before the buddy allocator is operational.
+// Layer 0 — no external dependencies.
 
 use crate::memory::core::{AllocError, AllocFlags, Frame, PhysAddr, PAGE_SIZE};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -13,18 +13,18 @@ use spin::Mutex;
 // BITMAP ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale du bitmap d'amorçage (couvre 512 MiB à 4KiB/page).
+/// Maximum bootstrap bitmap size (covers 512 MiB at 4KiB/page).
 const BOOTSTRAP_MAX_FRAMES: usize = 512 * 1024 * 1024 / 4096; // 131072 frames
 const BITMAP_WORDS: usize = BOOTSTRAP_MAX_FRAMES / 64;
 
-/// Bitmap d'amorçage — statique en .bss, jamais désalloué.
+/// Bootstrap bitmap — static in .bss, never deallocated.
 ///
-/// Convention bitmap :
-///   bit = 0 → frame LIBRE
-///   bit = 1 → frame ALLOUÉ ou RÉSERVÉ
+/// Bitmap convention:
+///   bit = 0 -> frame FREE
+///   bit = 1 -> frame ALLOCATED or RESERVED
 ///
-/// Initialisé à 0xFF...FF (tout réservé), puis les régions libres
-/// sont marquées au fur et à mesure par add_free_region().
+/// Initialized to 0xFF...FF (all reserved), then free regions
+/// are progressively marked by add_free_region().
 pub struct BitmapAllocator {
     inner: Mutex<BitmapInner>,
     initialized: AtomicBool,
@@ -36,10 +36,10 @@ struct BitmapInner {
     phys_end: u64,
     total_frames: usize,
     free_frames: usize,
-    next_hint: usize, // Hint de recherche (évite de repartir de 0 à chaque fois)
+    next_hint: usize, // Search hint (avoids restarting from 0 each time)
 }
 
-// SAFETY: BitmapAllocator est thread-safe via son spinlock interne.
+// SAFETY: BitmapAllocator is thread-safe via its internal spinlock.
 unsafe impl Sync for BitmapAllocator {}
 
 impl Default for BitmapAllocator {
@@ -52,7 +52,7 @@ impl BitmapAllocator {
     pub const fn new() -> Self {
         BitmapAllocator {
             inner: Mutex::new(BitmapInner {
-                bitmap: [u64::MAX; BITMAP_WORDS], // Tout réservé au départ
+                bitmap: [u64::MAX; BITMAP_WORDS], // All reserved initially
                 phys_start: 0,
                 phys_end: 0,
                 total_frames: 0,
@@ -63,10 +63,10 @@ impl BitmapAllocator {
         }
     }
 
-    /// Initialise la plage d'adresses physiques gérée par ce bitmap.
+    /// Initializes the physical address range managed by this bitmap.
     ///
     /// # Safety
-    /// Single-CPU uniquement (avant init SMP).
+    /// Single-CPU only (before SMP init).
     pub unsafe fn init(&self, phys_start: PhysAddr, phys_end: PhysAddr) {
         let mut inner = self.inner.lock();
         inner.phys_start = phys_start.as_u64();
@@ -75,7 +75,7 @@ impl BitmapAllocator {
             ((phys_end.as_u64() - phys_start.as_u64()) / PAGE_SIZE as u64) as usize;
         inner.total_frames = inner.total_frames.min(BOOTSTRAP_MAX_FRAMES);
         inner.free_frames = 0;
-        // Initialiser tout à "réservé"
+        // Initialize all to "reserved"
         for w in &mut inner.bitmap {
             *w = u64::MAX;
         }
@@ -83,10 +83,10 @@ impl BitmapAllocator {
         self.initialized.store(true, Ordering::Release);
     }
 
-    /// Marque une plage physique comme libre (disponible à l'allocation).
+    /// Marks a physical range as free (available for allocation).
     ///
     /// # Safety
-    /// Single-CPU uniquement.
+    /// Single-CPU only.
     pub unsafe fn add_free_region(&self, start: PhysAddr, end: PhysAddr) {
         debug_assert!(self.initialized.load(Ordering::Acquire));
         let mut inner = self.inner.lock();
@@ -109,7 +109,7 @@ impl BitmapAllocator {
         }
     }
 
-    /// Alloue un seul frame physique (ordre 0 uniquement — bootstrap uniquement).
+    /// Allocates a single physical frame (order 0 only — bootstrap only).
     pub fn alloc_frame(&self, _flags: AllocFlags) -> Result<Frame, AllocError> {
         if !self.initialized.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
@@ -120,7 +120,7 @@ impl BitmapAllocator {
             return Err(AllocError::OutOfMemory);
         }
 
-        // Recherche à partir du hint (évite O(n) systématique)
+        // Search starting from hint (avoids systematic O(n))
         let start_word = inner.next_hint / 64;
         let nwords = BITMAP_WORDS;
 
@@ -128,15 +128,15 @@ impl BitmapAllocator {
             let word_idx = (start_word + i) % nwords;
             let word_val = inner.bitmap[word_idx];
             if word_val == u64::MAX {
-                continue; // Tous alloués dans ce mot
+                continue; // All allocated in this word
             }
-            // Trouver le premier bit à 0 (frame libre)
+            // Find first 0 bit (free frame)
             let bit = (!word_val).trailing_zeros() as usize;
             let pfn = word_idx * 64 + bit;
             if pfn >= inner.total_frames {
                 continue;
             }
-            // Marquer comme alloué
+            // Mark as allocated
             inner.bitmap[word_idx] |= 1u64 << bit;
             inner.free_frames -= 1;
             inner.next_hint = pfn + 1;
@@ -148,7 +148,7 @@ impl BitmapAllocator {
         Err(AllocError::OutOfMemory)
     }
 
-    /// Libère un frame précédemment alloué.
+    /// Frees a previously allocated frame.
     pub fn free_frame(&self, frame: Frame) {
         if !self.initialized.load(Ordering::Acquire) {
             return;
@@ -176,18 +176,18 @@ impl BitmapAllocator {
         }
     }
 
-    /// Retourne le nombre de frames libres.
+    /// Returns the number of free frames.
     pub fn free_frames(&self) -> usize {
         self.inner.lock().free_frames
     }
 
-    /// Vérifie si un frame est libre.
+    /// Checks if a frame is free.
     pub fn is_free(&self, frame: Frame) -> bool {
         self.tracked_is_free(frame).unwrap_or(false)
     }
 
-    /// Retourne l'état d'un frame si ce frame appartient à la fenêtre suivie
-    /// par le bitmap bootstrap.
+    /// Returns frame state if this frame belongs to the window tracked
+    /// by the bootstrap bitmap.
     pub fn tracked_is_free(&self, frame: Frame) -> Option<bool> {
         let inner = self.inner.lock();
         let phys = frame.start_address();
@@ -204,6 +204,6 @@ impl BitmapAllocator {
     }
 }
 
-/// Bitmap allocator global d'amorçage.
-/// Utilisé pendant la phase de boot avant que le buddy soit opérationnel.
+/// Global bootstrap bitmap allocator.
+/// Used during boot phase before buddy allocator is operational.
 pub static BOOTSTRAP_BITMAP: BitmapAllocator = BitmapAllocator::new();

@@ -1,8 +1,8 @@
 // kernel/src/memory/dma/engines/mod.rs
 //
-// Module engines — pilotes des moteurs DMA matériels.
+// Engines module — drivers for hardware DMA engines.
 //
-//   ioat      : Intel I/OAT (série Xeon)
+//   ioat      : Intel I/OAT (Xeon series)
 //   idxd      : Intel DSA/IAX (Data Streaming Accelerator)
 //   ahci_dma  : SATA AHCI PRDT
 //   nvme_dma  : NVMe PCIe queues
@@ -14,7 +14,7 @@ pub mod ioat;
 pub mod nvme_dma;
 pub mod virtio_dma;
 
-// Re-exports principaux
+// Main re-exports
 pub use ahci_dma::{
     ahci_dma_init, ahci_dma_poll, ahci_dma_read, ahci_dma_write, AhciDmaEngine, AHCI_DMA,
 };
@@ -25,17 +25,17 @@ pub use virtio_dma::{
     virtio_dma_init, virtio_dma_poll, virtio_dma_submit, VirtioDmaEngine, VIRTIO_DMA,
 };
 
-/// Trait commun à tous les moteurs DMA matériels.
+/// Common trait for all hardware DMA engines.
 pub trait DmaEngine: Send + Sync {
-    /// Identifiant unique du moteur (index dans DMA_STATS).
+    /// Unique engine identifier (index in DMA_STATS).
     fn engine_id(&self) -> usize;
-    /// Vérifie si le matériel est présent/actif.
+    /// Checks if the hardware is present/active.
     fn is_present(&self) -> bool;
-    /// Initialise le moteur (MMIO, rings, etc.).
+    /// Initializes the engine (MMIO, rings, etc.).
     ///
     /// # Safety
-    /// CPL 0, adresse MMIO valide.
+    /// CPL 0, valid MMIO address.
     unsafe fn init(&self, mmio_base: u64) -> bool;
-    /// Retourne le nombre de slots disponibles dans la file de soumission.
+    /// Returns the number of available slots in the submission queue.
     fn available_slots(&self) -> usize;
 }

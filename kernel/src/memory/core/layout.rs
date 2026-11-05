@@ -1,9 +1,9 @@
 // kernel/src/memory/core/layout.rs
 //
-// Carte mémoire statique du noyau Exo-OS — x86_64.
-// Toutes les constantes représentent des adresses virtuelles dans
-// l'espace d'adressage noyau (au-dessus de 0xFFFF_8000_0000_0000).
-// Couche 0 — aucune dépendance externe.
+// Static memory map of the Exo-OS kernel — x86_64.
+// All constants represent virtual addresses in the
+// kernel address space (above 0xFFFF_8000_0000_0000).
+// Layer 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -11,42 +11,42 @@ use super::constants::{GIGA_PAGE_SIZE, PAGE_SIZE};
 use super::types::VirtAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ESPACE D'ADRESSAGE x86_64 (4 niveaux, 48 bits)
+// x86_64 ADDRESS SPACE (4 levels, 48 bits)
 //
-//  0x0000_0000_0000_0000 - 0x0000_7FFF_FFFF_FFFF : Espace utilisateur (128 TiB)
-//  0x0000_8000_0000_0000 - 0xFFFF_7FFF_FFFF_FFFF : Adresses non canoniques (trou)
-//  0xFFFF_8000_0000_0000 - 0xFFFF_FFFF_FFFF_FFFF : Espace noyau (128 TiB)
+//  0x0000_0000_0000_0000 - 0x0000_7FFF_FFFF_FFFF : User space (128 TiB)
+//  0x0000_8000_0000_0000 - 0xFFFF_7FFF_FFFF_FFFF : Non-canonical addresses (hole)
+//  0xFFFF_8000_0000_0000 - 0xFFFF_FFFF_FFFF_FFFF : Kernel space (128 TiB)
 //
-// Layout noyau Exo-OS :
+// Exo-OS kernel layout:
 //
-//  0xFFFF_8000_0000_0000 : PHYS_MAP_BASE     (physmap directe — 64 TiB)
+//  0xFFFF_8000_0000_0000 : PHYS_MAP_BASE     (direct physmap — 64 TiB)
 //  0xFFFF_C000_0000_0000 : VMALLOC_BASE      (vmalloc — 32 TiB)
 //  0xFFFF_E000_0000_0000 : VMPLAT_BASE       (modules / drivers — 8 TiB)
 //  0xFFFF_E800_0000_0000 : FIXMAP_BASE       (fixmaps — 1 TiB)
-//  0xFFFF_F000_0000_0000 : KERNEL_HEAP_START (heap noyau dynamique — 1 TiB)
-//  0xFFFF_F100_0000_0000 : IPC_RING_MAP_BASE (rings IPC kernel → user — 256 GiB)
-//  0xFFFF_F200_0000_0000 : DMA_MAP_BASE      (mapping DMA coherent — 256 GiB)
-//  0xFFFF_FFFF_8000_0000 : KERNEL_START      (image noyau — 2 GiB max)
-//  0xFFFF_FFFF_FFFF_FFF0 : haut de la stack noyau initiale
+//  0xFFFF_F000_0000_0000 : KERNEL_HEAP_START (dynamic kernel heap — 1 TiB)
+//  0xFFFF_F100_0000_0000 : IPC_RING_MAP_BASE (IPC rings kernel -> user — 256 GiB)
+//  0xFFFF_F200_0000_0000 : DMA_MAP_BASE      (coherent DMA mapping — 256 GiB)
+//  0xFFFF_FFFF_8000_0000 : KERNEL_START      (kernel image — 2 GiB max)
+//  0xFFFF_FFFF_FFFF_FFF0 : top of initial kernel stack
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PHYSMAP — mapping direct de toute la RAM physique en noyau
+// PHYSMAP — direct mapping of all physical RAM into kernel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base de la physmap : début de la région noyau.
-/// Toute la RAM physique est accessible à PHYS_MAP_BASE + phys_addr.
+/// Physmap base: start of kernel region.
+/// All physical RAM is accessible at PHYS_MAP_BASE + phys_addr.
 pub const PHYS_MAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_8000_0000_0000);
 
-/// Taille de la physmap (64 TiB — couvre les systèmes NUMA les plus grands).
+/// Physmap size (64 TiB — covers largest NUMA systems).
 pub const PHYS_MAP_SIZE: usize = 64 * 1024 * 1024 * 1024 * 1024; // 64 TiB
 
-/// Couverture initiale garantie par les tables de boot avant extension.
+/// Initial coverage guaranteed by boot tables prior to extension.
 pub const PHYSMAP_INITIAL_COVERAGE: usize = GIGA_PAGE_SIZE; // 1 GiB
 
 static PHYSMAP_LIMIT: AtomicU64 = AtomicU64::new(PHYSMAP_INITIAL_COVERAGE as u64);
 
-/// Fin de la physmap (exclusive).
+/// End of physmap (exclusive).
 pub const PHYS_MAP_END: VirtAddr = VirtAddr::new(0xFFFF_C000_0000_0000);
 
 #[inline]
@@ -67,175 +67,175 @@ pub fn set_physmap_limit(limit: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VMALLOC — allocations virtuellement contiguës (non contiguës physiquement)
+// VMALLOC — virtually contiguous allocations (physically non-contiguous)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base de la région vmalloc.
+/// Base of vmalloc region.
 pub const VMALLOC_BASE: VirtAddr = VirtAddr::new(0xFFFF_C000_0000_0000);
 
-/// Taille de la région vmalloc (32 TiB).
+/// Size of vmalloc region (32 TiB).
 pub const VMALLOC_SIZE: usize = 32 * 1024 * 1024 * 1024 * 1024; // 32 TiB
 
-/// Fin de la région vmalloc (exclusive).
+/// End of vmalloc region (exclusive).
 pub const VMALLOC_END: VirtAddr = VirtAddr::new(0xFFFF_E000_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODULES / PLATFORM — espace pour les drivers et modules dynamiques
+// MODULES / PLATFORM — space for drivers and dynamic modules
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base des modules/drivers (après vmalloc).
+/// Base for modules/drivers (after vmalloc).
 pub const MODULES_BASE: VirtAddr = VirtAddr::new(0xFFFF_E000_0000_0000);
 
-/// Taille de la région modules (8 TiB).
+/// Size of modules region (8 TiB).
 pub const MODULES_SIZE: usize = 8 * 1024 * 1024 * 1024 * 1024; // 8 TiB
 
-/// Fin de la région modules (exclusive).
+/// End of modules region (exclusive).
 pub const MODULES_END: VirtAddr = VirtAddr::new(0xFFFF_E800_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIXMAP — mappings permanents à adresses fixes (APIC, ACPI...)
+// FIXMAP — permanent mappings at fixed addresses (APIC, ACPI...)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base de la région fixmap.
+/// Base of fixmap region.
 pub const FIXMAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_E800_0000_0000);
 
-/// Taille de la fixmap (1 TiB).
+/// Size of fixmap (1 TiB).
 pub const FIXMAP_SIZE: usize = 1024 * 1024 * 1024 * 1024usize; // 1 TiB
 
-/// Fin de la fixmap (exclusive).
+/// End of fixmap (exclusive).
 pub const FIXMAP_END: VirtAddr = VirtAddr::new(0xFFFF_F000_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HEAP NOYAU — allocations dynamiques du noyau (kmalloc/vmalloc)
+// KERNEL HEAP — dynamic kernel allocations (kmalloc/vmalloc)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base du heap noyau dynamique.
+/// Base of dynamic kernel heap.
 pub const KERNEL_HEAP_START: VirtAddr = VirtAddr::new(0xFFFF_F000_0000_0000);
 
-/// Taille maximale du heap noyau (1 TiB).
+/// Maximum kernel heap size (1 TiB).
 pub const KERNEL_HEAP_SIZE: usize = 1024 * 1024 * 1024 * 1024usize; // 1 TiB
 
-/// Fin du heap noyau (exclusive).
+/// End of kernel heap (exclusive).
 pub const KERNEL_HEAP_END: VirtAddr = VirtAddr::new(0xFFFF_F100_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IPC RING MAP — buffers IPC partagés kernel↔user
+// IPC RING MAP — shared kernel↔user IPC buffers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base de la région IPC ring (en noyau, côté kernel).
+/// Base of IPC ring region (in kernel, kernel side).
 pub const IPC_RING_MAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_F100_0000_0000);
 
-/// Taille de la région IPC ring (256 GiB).
+/// Size of IPC ring region (256 GiB).
 pub const IPC_RING_MAP_SIZE: usize = 256 * 1024 * 1024 * 1024; // 256 GiB
 
-/// Fin de la région IPC ring (exclusive).
+/// End of IPC ring region (exclusive).
 pub const IPC_RING_MAP_END: VirtAddr = VirtAddr::new(0xFFFF_F200_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DMA MAP — buffers DMA mappés en cohérence (UC ou WC selon type)
+// DMA MAP — coherent mapped DMA buffers (UC or WC depending on type)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Base de la région DMA map coherent.
+/// Base of coherent DMA map region.
 pub const DMA_MAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_F200_0000_0000);
 
-/// Taille de la région DMA map (256 GiB).
+/// Size of DMA map region (256 GiB).
 pub const DMA_MAP_SIZE: usize = 256 * 1024 * 1024 * 1024; // 256 GiB
 
-/// Fin de la région DMA map (exclusive).
+/// End of DMA map region (exclusive).
 pub const DMA_MAP_END: VirtAddr = VirtAddr::new(0xFFFF_F300_0000_0000);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IMAGE NOYAU — texte, données, BSS, rodata du noyau ELF linké
+// KERNEL IMAGE — text, data, BSS, rodata of linked ELF kernel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse virtuelle de LOAD de l'image noyau (link address).
+/// Virtual LOAD address of kernel image (link address).
 pub const KERNEL_START: VirtAddr = VirtAddr::new(0xFFFF_FFFF_8000_0000);
 
-/// Taille réservée pour l'image noyau (2 GiB max).
+/// Reserved size for kernel image (2 GiB max).
 pub const KERNEL_IMAGE_MAX_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-/// Fin réservée pour l'image noyau.
+/// Reserved end for kernel image.
 pub const KERNEL_IMAGE_END: VirtAddr = VirtAddr::new(0xFFFF_FFFF_FFFF_F000);
 
-/// Offset physique d'où l'image noyau est chargée par le bootloader.
-/// L'image est chargée à l'adresse physique 0x100000 (1 MiB) par GRUB.
+/// Physical offset where kernel image is loaded by bootloader.
+/// Image is loaded at physical address 0x100000 (1 MiB) by GRUB.
 pub const KERNEL_LOAD_PHYS_ADDR: u64 = 0x0010_0000; // 1 MiB
 
-/// Offset de translation KERNEL_START → adresse physique.
+/// Translation offset KERNEL_START -> physical address.
 /// virt = KERNEL_START + phys - KERNEL_LOAD_PHYS_ADDR
 /// phys = virt - KERNEL_START + KERNEL_LOAD_PHYS_ADDR
 pub const KERNEL_PHYS_OFFSET: VirtAddr =
     VirtAddr::new(KERNEL_START.as_u64() - KERNEL_LOAD_PHYS_ADDR);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ESPACE UTILISATEUR — limites de l'espace d'adressage user
+// USER SPACE — limits of user address space
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Première adresse valide dans l'espace utilisateur (évite la page nulle).
+/// First valid address in user space (avoids null page).
 pub const USER_START: VirtAddr = VirtAddr::new(0x0000_0000_0001_0000);
 
-/// Première adresse invalide après l'espace utilisateur canonique.
-/// SAFETY: Cette valeur n'est PAS canonique (bit 47 = 1 → sign-extend vers noyau),
-/// donc on doit utiliser new_unchecked pour préserver la valeur brute.
+/// First invalid address after canonical user space.
+/// SAFETY: This value is NOT canonical (bit 47 = 1 -> sign-extend towards kernel),
+/// therefore we must use new_unchecked to preserve the raw value.
 pub const USER_END: VirtAddr = unsafe { VirtAddr::new_unchecked(0x0000_8000_0000_0000) };
 
-/// Taille maximale de l'espace d'adressage utilisateur (128 TiB - 64 KiB guard).
+/// Maximum user address space size (128 TiB - 64 KiB guard).
 pub const USER_ADDR_SPACE_SIZE: usize =
     (0x0000_8000_0000_0000u64 - 0x0000_0000_0001_0000u64) as usize;
 
-/// Adresse de base par défaut pour la première mmap() utilisateur.
+/// Default base address for initial user mmap().
 pub const USER_MMAP_BASE: VirtAddr = VirtAddr::new(0x0000_0001_0000_0000); // 4 GiB
 
-/// Stack utilisateur — sommet (s'étend vers le bas depuis USER_STACK_TOP).
+/// User stack — top (extends downwards from USER_STACK_TOP).
 pub const USER_STACK_TOP: VirtAddr = VirtAddr::new(0x0000_7FFF_FFFF_0000);
 
-/// Taille maximale de la stack utilisateur (8 MiB par défaut, configurable via setrlimit).
+/// Maximum user stack size (8 MiB by default, configurable via setrlimit).
 pub const USER_STACK_DEFAULT_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
-/// Stack initiale physiquement mappée au démarrage d'une image ELF.
+/// Initial stack physically mapped at startup of an ELF image.
 ///
-/// La limite rlimit reste `USER_STACK_DEFAULT_SIZE`; ces pages sont seulement
-/// le bootstrap eager minimal avant croissance demand-paged.
+/// The rlimit remains `USER_STACK_DEFAULT_SIZE`; these pages are only
+/// the minimal eager bootstrap prior to demand-paged growth.
 pub const USER_STACK_BOOTSTRAP_PAGES: usize = 8;
 pub const USER_STACK_BOOTSTRAP_SIZE: usize = USER_STACK_BOOTSTRAP_PAGES * PAGE_SIZE;
 
-/// Base de la stack utilisateur (USER_STACK_TOP - USER_STACK_DEFAULT_SIZE).
+/// User stack base (USER_STACK_TOP - USER_STACK_DEFAULT_SIZE).
 pub const USER_STACK_BASE: VirtAddr =
     VirtAddr::new(0x0000_7FFF_FFFF_0000 - USER_STACK_DEFAULT_SIZE as u64);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIXMAP SLOTS — index prédéfinis dans la région fixmap
+// FIXMAP SLOTS — predefined indices in fixmap region
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Index dans la fixmap pour le LAPIC local.
+/// Fixmap index for local LAPIC.
 pub const FIXMAP_LAPIC: usize = 0;
 
-/// Index dans la fixmap pour l'I/O APIC.
+/// Fixmap index for I/O APIC.
 pub const FIXMAP_IOAPIC: usize = 1;
 
-/// Index dans la fixmap pour les tables ACPI.
+/// Fixmap index for ACPI tables.
 pub const FIXMAP_ACPI_0: usize = 2;
 pub const FIXMAP_ACPI_1: usize = 3;
 
-/// Index dans la fixmap pour le HPET.
+/// Fixmap index for HPET.
 pub const FIXMAP_HPET: usize = 4;
 
-/// Index dans la fixmap pour le mapping temporaire (utilisé par page table builder).
+/// Fixmap index for temporary mapping (used by page table builder).
 pub const FIXMAP_TEMP_MAP: usize = 5;
 
-/// Nombre total de slots fixmap réservés au système.
+/// Total number of system-reserved fixmap slots.
 pub const FIXMAP_NR_RESERVED: usize = 16;
 
-/// Retourne l'adresse virtuelle d'un slot fixmap par son index.
+/// Returns virtual address of a fixmap slot by its index.
 #[inline(always)]
 pub const fn fixmap_slot_addr(idx: usize) -> VirtAddr {
-    // Les slots sont à FIXMAP_BASE + idx * PAGE_SIZE depuis la fin (croissant vers le bas)
-    // Convention : les fixmaps s'adressent depuis la FIN de la région vers le bas
+    // Slots are at FIXMAP_BASE + idx * PAGE_SIZE from the end (growing downwards)
+    // Convention: fixmaps are addressed from the END of the region downwards
     VirtAddr::new(FIXMAP_END.as_u64() - (idx as u64 + 1) * PAGE_SIZE as u64)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS STATIQUES DE COHÉRENCE DU LAYOUT
+// STATIC LAYOUT CONSISTENCY CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _: () = assert!(

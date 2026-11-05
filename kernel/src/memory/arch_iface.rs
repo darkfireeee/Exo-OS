@@ -1,128 +1,128 @@
 // kernel/src/memory/arch_iface.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// INTERFACE MÉMOIRE ↔ ARCHITECTURE — Côté memory/
+// MEMORY ↔ ARCHITECTURE INTERFACE — memory/ side
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module expose les points d'enregistrement que l'architecture (arch/)
-// utilise pour s'accrocher au sous-système mémoire au démarrage.
+// This module exposes registration hooks that architecture (arch/) code
+// uses to attach to the memory subsystem during startup.
 //
-// ## Rôle
+// ## Role
 //
-// - Convertit la carte mémoire physique fournie par arch/ boot en appels
-//   vers les allocateurs de memory/ (buddy, slab, NUMA).
-// - Fournit les types `PhysMemoryRegion` et `PhysRegionType` que arch/ boot
-//   utilise pour décrire la RAM physique de façon uniforme (E820 ≡ UEFI).
+// - Converts physical memory map provided by arch/ boot into calls
+//   to memory/ allocators (buddy, slab, NUMA).
+// - Provides `PhysMemoryRegion` and `PhysRegionType` types that arch/ boot
+//   uses to describe physical RAM uniformly (E820 ≡ UEFI).
 //
-// ## Points d'intégration
+// ## Integration points
 //
-// `arch/x86_64/boot/memory_map.rs` → `memory::arch_iface::init_from_regions()`
-// `arch/x86_64/memory_iface.rs`    → `memory::virt::address_space::tlb::register_tlb_ipi_sender()`
+// `arch/x86_64/boot/memory_map.rs` -> `memory::arch_iface::init_from_regions()`
+// `arch/x86_64/memory_iface.rs`    -> `memory::virt::address_space::tlb::register_tlb_ipi_sender()`
 //
-// ## Règles architecture (DOC2)
+// ## Architecture rules (DOC2)
 //
-//   MEM-01 : memory/ est COUCHE 0 — ne dépend PAS de scheduler/, process/, etc.
-//   MEM-02 : EmergencyPool initialisé EN PREMIER (avant cet appel).
-//   MEM-04 : free_pages() n'est JAMAIS appelé avant TLB shootdown complet.
+//   MEM-01: memory/ is LAYER 0 — does NOT depend on scheduler/, process/, etc.
+//   MEM-02: EmergencyPool initialized FIRST (before this call).
+//   MEM-04: free_pages() is NEVER called before complete TLB shootdown.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES D'INTÉGRATION
+// INTEGRATION CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vecteur IPI TLB shootdown (0xF2) — doit correspondre à arch/x86_64/idt.
+/// TLB shootdown IPI vector (0xF2) — must match arch/x86_64/idt.
 pub const IPI_TLB_SHOOTDOWN_VECTOR: u8 = 0xF2;
 
-/// Vecteur IPI reschedule (0xF1).
+/// Reschedule IPI vector (0xF1).
 pub const IPI_RESCHEDULE_VECTOR: u8 = 0xF1;
 
-/// Nœuds NUMA maximaux supportés.
+/// Maximum supported NUMA nodes.
 pub const MAX_NUMA_NODES: usize = 8;
 
-/// CPUs maximaux supportés.
+/// Maximum supported CPUs.
 pub const MAX_CPUS: usize = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPES DE RÉGIONS MÉMOIRE
+// MEMORY REGION TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Décrit une région de mémoire physique fournie par arch/ au boot.
+/// Describes a physical memory region provided by arch/ at boot.
 ///
-/// Construit par `arch/x86_64/boot/memory_map.rs` depuis la E820 (Multiboot2)
-/// ou la table UEFI Memory Map. Passé à `init_from_regions()`.
+/// Constructed by `arch/x86_64/boot/memory_map.rs` from E820 (Multiboot2)
+/// or UEFI Memory Map table. Passed to `init_from_regions()`.
 #[derive(Debug, Clone, Copy)]
 pub struct PhysMemoryRegion {
-    /// Adresse physique de début (alignée sur PAGE_SIZE).
+    /// Physical start address (aligned to PAGE_SIZE).
     pub base: u64,
-    /// Taille en octets (multiple de PAGE_SIZE).
+    /// Size in bytes (multiple of PAGE_SIZE).
     pub size: u64,
-    /// Type de la région (usable, reserved, acpi...).
+    /// Region type (usable, reserved, acpi...).
     pub region_type: PhysRegionType,
 }
 
 impl PhysMemoryRegion {
-    /// Adresse physique de fin exclusive.
+    /// Exclusive physical end address.
     #[inline]
     pub fn end(&self) -> u64 {
         self.base.wrapping_add(self.size)
     }
 
-    /// Retourne `true` si c'est de la RAM utilisable par le buddy allocator.
+    /// Returns `true` if this is usable RAM for the buddy allocator.
     #[inline]
     pub fn is_usable(&self) -> bool {
         matches!(self.region_type, PhysRegionType::Usable)
     }
 
-    /// Retourne `true` si c'est une région ACPI reclaimable.
+    /// Returns `true` if this is an ACPI reclaimable region.
     #[inline]
     pub fn is_acpi_reclaimable(&self) -> bool {
         matches!(self.region_type, PhysRegionType::AcpiReclaimable)
     }
 }
 
-/// Type de région mémoire physique (fusion des types E820 et UEFI).
+/// Physical memory region type (fusion of E820 and UEFI types).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysRegionType {
-    /// RAM conventionnelle — libérable par le buddy allocator.
+    /// Conventional RAM — reclaimable by buddy allocator.
     Usable,
-    /// Réservée par le firmware / matériel — NE PAS toucher.
+    /// Reserved by firmware / hardware — DO NOT touch.
     Reserved,
-    /// ACPI reclaimable — libérable après parsage des tables ACPI.
+    /// ACPI reclaimable — reclaimable after parsing ACPI tables.
     AcpiReclaimable,
-    /// ACPI NVS — ne jamais libérer ni modifier.
+    /// ACPI NVS — never free or modify.
     AcpiNvs,
-    /// Mémoire défectueuse (ECC error, BIOS marquée bad).
+    /// Defective memory (ECC error, BIOS marked bad).
     Defective,
-    /// Firmware runtime (UEFI runtime services) — ne pas toucher.
+    /// Firmware runtime (UEFI runtime services) — do not touch.
     FirmwareReserved,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INITIALISATION DE MÉMOIRE PHYSIQUE DEPUIS LA CARTE ARCH
+// PHYSICAL MEMORY INITIALIZATION FROM ARCH MAP
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système de mémoire physique depuis les régions
-/// détectées par le bootloader (E820 / UEFI).
+/// Initializes the physical memory subsystem from regions
+/// detected by the bootloader (E820 / UEFI).
 ///
-/// Cette fonction est le point d'entrée unifié que `arch/x86_64/boot/memory_map.rs`
-/// ou l'initialisation UEFI appelle après avoir analysé la carte mémoire.
+/// This function is the unified entry point that `arch/x86_64/boot/memory_map.rs`
+/// or UEFI initialization calls after parsing the memory map.
 ///
-/// ## Séquence (règle MEM-02 DOC2)
+/// ## Sequence (rule MEM-02 DOC2)
 ///
-/// 1. Détecter `phys_start` / `phys_end` depuis les régions usables.
+/// 1. Detect `phys_start` / `phys_end` from usable regions.
 /// 2. `physical::allocator::init_phase1_bitmap(phys_start, phys_end)`.
-/// 3. Pour chaque région usable : `init_phase2_free_region(start, end)`.
+/// 3. For each usable region: `init_phase2_free_region(start, end)`.
 /// 4. `init_phase3_slab_slub()`.
 /// 5. `init_phase4_numa(active_mask)`.
 ///
-/// ## Prérequis
-/// - `EmergencyPool` doit avoir été initialisé AVANT cet appel.
-/// - Appelé UNE SEULE FOIS, depuis le BSP, avant le démarrage des APs.
-/// - `regions` ne doit PAS être vide.
+/// ## Prerequisites
+/// - `EmergencyPool` must have been initialized BEFORE this call.
+/// - Called ONCE ONLY, from the BSP, before AP startup.
+/// - `regions` must NOT be empty.
 ///
 /// # Safety
-/// - Mémoire non concurrent (single CPU au boot).
-/// - Les plages dans `regions` ne doivent pas se chevaucher.
-/// - Les adresses usables doivent être de la RAM physique réelle.
+/// - Non-concurrent memory (single CPU at boot).
+/// - Ranges in `regions` must not overlap.
+/// - Usable addresses must be genuine physical RAM.
 pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
     use crate::memory::core::{PhysAddr, PAGE_SIZE};
     use crate::memory::physical::allocator::{
@@ -131,7 +131,7 @@ pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
 
     let page = PAGE_SIZE as u64;
 
-    // ── Détecter la plage physique totale ─────────────────────────────────────
+    // ── Detect total physical range ───────────────────────────────────────────
     let mut phys_start = u64::MAX;
     let mut phys_end = 0u64;
 
@@ -150,18 +150,18 @@ pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
     }
 
     if phys_start == u64::MAX || phys_end == 0 || phys_start >= phys_end {
-        // Aucune région détectée — situation non récupérable
+        // No region detected — unrecoverable situation
         return;
     }
 
-    // Aligner les bornes totales sur PAGE_SIZE
+    // Align total bounds to PAGE_SIZE
     let ps = PhysAddr::new((phys_start + page - 1) & !(page - 1));
     let pe = PhysAddr::new(phys_end & !(page - 1));
 
-    // ── Phase 1 : bitmap global sur toute la plage détectée ───────────────────
+    // ── Phase 1: global bitmap across entire detected range ───────────────────
     init_phase1_bitmap(ps, pe);
 
-    // ── Phase 2 : libérer les pages des régions usables ─────────────────────
+    // ── Phase 2: free pages in usable regions ─────────────────────────────────
     for region in regions {
         if !region.is_usable() {
             continue;
@@ -179,10 +179,10 @@ pub unsafe fn init_from_regions(regions: &[PhysMemoryRegion]) {
         init_phase2_free_region(PhysAddr::new(base_adj), PhysAddr::new(end_adj));
     }
 
-    // ── Phase 3 : slab / slub — caches d'allocation objet ───────────────────
+    // ── Phase 3: slab / slub — object allocation caches ───────────────────────
     init_phase3_slab_slub();
 
-    // ── Phase 4 : NUMA — nœud 0 actif par défaut ─────────────────────────────
-    // La topologie réelle sera chargée depuis ACPI/MADT après cette séquence.
+    // ── Phase 4: NUMA — node 0 active by default ──────────────────────────────
+    // Actual topology will be loaded from ACPI/MADT following this sequence.
     init_phase4_numa(0b0000_0001);
 }

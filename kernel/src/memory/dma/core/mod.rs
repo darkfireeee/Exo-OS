@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/core/mod.rs
 //
-// Sous-module core du DMA — types, descripteurs, mapping, interface de réveil.
+// Core DMA sub-module — types, descriptors, mapping, wakeup interface.
 
 pub mod descriptor;
 pub mod error;

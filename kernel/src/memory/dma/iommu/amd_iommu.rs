@@ -1,15 +1,15 @@
 // kernel/src/memory/dma/iommu/amd_iommu.rs
 //
-// Pilote AMD IOMMU (IOMMU Technology for AMD64).
-// Référence : AMD IOMMU Architecture Specification, Rev 3.05.
-// COUCHE 0 — aucune dépendance externe.
+// AMD IOMMU driver (IOMMU Technology for AMD64).
+// Reference: AMD IOMMU Architecture Specification, Rev 3.05.
+// LAYER 0 — no external dependencies.
 
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::DmaError;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OFFSETS MMIO AMD IOMMU
+// AMD IOMMU MMIO OFFSETS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod amd_iommu_regs {
@@ -29,7 +29,7 @@ pub mod amd_iommu_regs {
     pub const PPR_LOG_TAIL: usize = 0x2038; // PPR Log Tail
 }
 
-/// Bits du registre de contrôle AMD IOMMU.
+/// AMD IOMMU control register bits.
 pub mod ctrl_bits {
     pub const IOMMU_EN: u64 = 1 << 0; // IOMMU Enable
     pub const HT_TUN_EN: u64 = 1 << 1; // HyperTransport Tunnel Enable
@@ -57,10 +57,10 @@ pub mod ctrl_bits {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DEVICE TABLE ENTRY (DTE) AMD
+// AMD DEVICE TABLE ENTRY (DTE)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée DTE (Device Table Entry) AMD — 32 octets par device.
+/// AMD DTE (Device Table Entry) — 32 bytes per device.
 #[repr(C, align(32))]
 #[derive(Copy, Clone)]
 pub struct AmdDte {
@@ -92,11 +92,11 @@ impl AmdDte {
         self.dw0 & Self::V != 0
     }
 
-    /// Configure la DTE pour un domaine traduit.
+    /// Configures the DTE for a translated domain.
     ///
-    /// `pt_phys` — adresse physique de la table de pages IOMMU (niveau supérieur).
-    /// `domain_id` — identifiant du domaine (16-bit).
-    /// `mode` — niveau de table: 0=passthrough, 1..6=niveaux.
+    /// `pt_phys` — physical address of the IOMMU page table (top level).
+    /// `domain_id` — domain identifier (16-bit).
+    /// `mode` — table levels: 0=passthrough, 1..6=levels.
     pub fn configure_translated(&mut self, pt_phys: PhysAddr, domain_id: u16, mode: u8) {
         // DW0: V=1, TV=1, PTE Root, Mode (bits 61:59).
         self.dw0 =
@@ -116,10 +116,10 @@ impl AmdDte {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMMANDE AMD IOMMU
+// AMD IOMMU COMMAND
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une commande AMD IOMMU (16 octets).
+/// An AMD IOMMU command (16 bytes).
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
 pub struct AmdIommuCmd {
@@ -136,7 +136,7 @@ impl AmdIommuCmd {
     pub const OPCODE_PREFETCH_IOMMU_PAGES: u64 = 0x06;
     pub const OPCODE_COMPLETE_PPR_REQ: u64 = 0x07;
 
-    /// Commande : Invalidation de l'entrée Device Table (BDF, pasid=0).
+    /// Command: Device Table Entry Invalidation (BDF, pasid=0).
     pub fn invalidate_devtab(bdf: u16) -> Self {
         AmdIommuCmd {
             dw0: (Self::OPCODE_INVAL_DEVTAB_ENTRY << 60) | (bdf as u64 & 0xFFFF),
@@ -144,7 +144,7 @@ impl AmdIommuCmd {
         }
     }
 
-    /// Commande : Invalidation des pages IOMMU (domaine entier).
+    /// Command: IOMMU Pages Invalidation (entire domain).
     pub fn invalidate_iommu_all(domain_id: u16) -> Self {
         AmdIommuCmd {
             dw0: (Self::OPCODE_INVAL_IOMMU_PAGES << 60) | ((domain_id as u64) << 32) | (1 << 0), // S (Size) = all pages
@@ -152,7 +152,7 @@ impl AmdIommuCmd {
         }
     }
 
-    /// Commande : Completion Wait (synchronisation).
+    /// Command: Completion Wait (synchronization).
     pub fn completion_wait(store_addr: u64, data: u64) -> Self {
         AmdIommuCmd {
             dw0: (Self::OPCODE_COMPLETION_WAIT << 60) | (store_addr & !7u64) | (1 << 0), // S=1 (store)
@@ -162,13 +162,13 @@ impl AmdIommuCmd {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONTRÔLEUR AMD IOMMU
+// AMD IOMMU CONTROLLER
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_AMD_IOMMU: usize = 4;
-/// Taille de la Device Table (65536 entrées × 32 octets = 2 MiB).
+/// Device Table size (65536 entries x 32 bytes = 2 MiB).
 pub const DEVTAB_SIZE: usize = 65536;
-/// Capacité du Command Buffer (4096 entrées × 16 octets = 64 KiB).
+/// Command Buffer capacity (4096 entries x 16 bytes = 64 KiB).
 pub const CMD_BUF_CAPACITY: usize = 4096;
 
 pub struct AmdIommuUnit {
@@ -200,50 +200,50 @@ impl AmdIommuUnit {
         core::ptr::write_volatile(ptr, val);
     }
 
-    /// Initialise l'unité AMD IOMMU depuis son adresse MMIO.
+    /// Initializes the AMD IOMMU unit from its MMIO address.
     ///
     /// # Safety
-    /// `mmio_base` est l'adresse virtuelle mappée du registre AMD IOMMU.
+    /// `mmio_base` is the mapped virtual address of the AMD IOMMU register.
     pub unsafe fn init(&mut self, mmio_base: u64) {
         self.mmio_base = mmio_base;
         self.ext_feat = self.read64(amd_iommu_regs::EXT_FEAT);
     }
 
-    /// Configure la Device Table.
+    /// Configures the Device Table.
     ///
     /// # Safety
-    /// `devtab_phys` doit pointer un tableau de 65536 DTEs zéro-initialisé.
+    /// `devtab_phys` must point to a zero-initialized array of 65536 DTEs.
     pub unsafe fn set_device_table(&self, devtab_phys: PhysAddr) {
-        // DTB size encoding: 0b111 = 65536 entrées.
+        // DTB size encoding: 0b111 = 65536 entries.
         let dtsz = 0b111u64;
         self.write64(amd_iommu_regs::DEV_TABLE_BA, devtab_phys.as_u64() | dtsz);
         self.devtab_phys
             .store(devtab_phys.as_u64(), Ordering::Release);
     }
 
-    /// Configure et active le Command Buffer.
+    /// Configures and enables the Command Buffer.
     ///
     /// # Safety
-    /// `cmdbuf_phys` doit pointer un buffer de CMD_BUF_CAPACITY × 16 octets.
+    /// `cmdbuf_phys` must point to a buffer of CMD_BUF_CAPACITY x 16 bytes.
     pub unsafe fn enable_cmdbuf(&self, cmdbuf_phys: PhysAddr) {
-        // Size encoding pour 4096 entrées: 0b1100 (2^12 = 4096).
+        // Size encoding for 4096 entries: 0b1100 (2^12 = 4096).
         let len_encoding = 12u64;
         let ba = cmdbuf_phys.as_u64() | (len_encoding << 56);
         self.write64(amd_iommu_regs::CMD_BUF_BA, ba);
-        // Head/Tail à zéro.
+        // Head/Tail to zero.
         self.write64(amd_iommu_regs::CMD_BUF_HEAD, 0);
         self.write64(amd_iommu_regs::CMD_BUF_TAIL, 0);
         self.cmdbuf_phys
             .store(cmdbuf_phys.as_u64(), Ordering::Release);
-        // Active le buffer.
+        // Enable the buffer.
         let ctrl = self.read64(amd_iommu_regs::CTRL);
         self.write64(amd_iommu_regs::CTRL, ctrl | ctrl_bits::CMD_BUF_EN);
     }
 
-    /// Active l'IOMMU.
+    /// Enables the IOMMU.
     ///
     /// # Safety
-    /// Device Table et Command Buffer doivent être configurés.
+    /// Device Table and Command Buffer must be configured.
     pub unsafe fn enable(&self) {
         let ctrl = self.read64(amd_iommu_regs::CTRL);
         self.write64(amd_iommu_regs::CTRL, ctrl | ctrl_bits::IOMMU_EN);
@@ -278,10 +278,10 @@ impl AmdIommuController {
         }
     }
 
-    /// Enregistre une unit AMD IOMMU depuis l'IVRS ACPI.
+    /// Registers an AMD IOMMU unit from ACPI IVRS.
     ///
     /// # Safety
-    /// `mmio_base` est l'adresse MMIO mappée.
+    /// `mmio_base` is the mapped MMIO address.
     pub unsafe fn register_unit(&self, mmio_base: u64) -> Result<(), DmaError> {
         let idx = self.unit_count.load(Ordering::Relaxed) as usize;
         if idx >= MAX_AMD_IOMMU {

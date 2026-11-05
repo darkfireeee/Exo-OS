@@ -1,8 +1,8 @@
 // kernel/src/memory/physical/frame/ref_count.rs
 //
-// Refcount atomique CoW pour les frames physiques.
-// Gère les scénarios de partage mémoire (fork(), mmap(), SHM).
-// Couche 0 — aucune dépendance externe.
+// Atomic CoW refcount for physical frames.
+// Handles memory sharing scenarios (fork(), mmap(), SHM).
+// Layer 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -10,56 +10,56 @@ use core::sync::atomic::{AtomicU32, Ordering};
 // ATOMIC REFCOUNT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteur de références atomique pour frame physique.
+/// Atomic reference counter for physical frame.
 ///
-/// Protocole :
-///   - 0 = frame libre (aucun propriétaire)
-///   - 1 = frame alloué exclusivement (accessible en lecture/écriture)
-///   - 2+ = frame partagé CoW (lecture seule, copie à l'écriture)
+/// Protocol:
+///   - 0 = free frame (no owner)
+///   - 1 = exclusively allocated frame (read/write access)
+///   - 2+ = CoW shared frame (read-only, copy-on-write)
 ///
-/// Thread-safety : toutes les opérations sont atomiques et sans verrou.
+/// Thread-safety: all operations are atomic and lock-free.
 #[repr(transparent)]
 pub struct AtomicRefCount(AtomicU32);
 
 impl AtomicRefCount {
-    /// Crée un refcount à zéro (frame libre).
+    /// Creates a refcount at zero (free frame).
     #[inline(always)]
     pub const fn new_zero() -> Self {
         AtomicRefCount(AtomicU32::new(0))
     }
 
-    /// Crée un refcount à 1 (frame alloué exclusivement).
+    /// Creates a refcount at 1 (exclusively allocated frame).
     #[inline(always)]
     pub const fn new_one() -> Self {
         AtomicRefCount(AtomicU32::new(1))
     }
 
-    /// Retourne la valeur courante (snapshot ; peut changer ensuite).
+    /// Returns the current value (snapshot; may change afterwards).
     #[inline(always)]
     pub fn get(&self) -> u32 {
         self.0.load(Ordering::Relaxed)
     }
 
-    /// Vérifie si le frame est libre (refcount == 0).
+    /// Checks if frame is free (refcount == 0).
     #[inline(always)]
     pub fn is_zero(&self) -> bool {
         self.0.load(Ordering::Acquire) == 0
     }
 
-    /// Vérifie si le frame est exclusif (refcount == 1).
+    /// Checks if frame is exclusive (refcount == 1).
     #[inline(always)]
     pub fn is_exclusive(&self) -> bool {
         self.0.load(Ordering::Acquire) == 1
     }
 
-    /// Vérifie si le frame est partagé (refcount >= 2).
+    /// Checks if frame is shared (refcount >= 2).
     #[inline(always)]
     pub fn is_shared(&self) -> bool {
         self.0.load(Ordering::Acquire) >= 2
     }
 
-    /// Incrémente le refcount, retourne la nouvelle valeur.
-    /// Ne peut pas déborder (saturation à u32::MAX, panique en debug).
+    /// Increments refcount, returns new value.
+    /// Cannot overflow (saturates at u32::MAX, debug asserts).
     #[inline(always)]
     pub fn inc(&self) -> u32 {
         let mut cur = self.0.load(Ordering::Acquire);
@@ -79,12 +79,12 @@ impl AtomicRefCount {
         }
     }
 
-    /// Décrémente le refcount.
-    /// Retourne `RefCountDecResult` indiquant ce qu'il faut faire.
+    /// Decrements refcount.
+    /// Returns `RefCountDecResult` indicating required action.
     ///
     /// # Double-free guard (release + debug)
-    /// Si le refcount est déjà 0, stoppe la décrémentation (restore 0) et
-    /// retourne `StillShared` pour éviter une libération incorrecte.
+    /// If refcount is already 0, stops decrement (restores 0) and
+    /// returns `StillShared` to avoid improper release.
     #[inline]
     pub fn dec(&self) -> RefCountDecResult {
         let mut cur = self.0.load(Ordering::Acquire);
@@ -110,9 +110,9 @@ impl AtomicRefCount {
         }
     }
 
-    /// Tente d'incrémenter le refcount uniquement si non-nul (frame vivant).
-    /// Pattern "get-or-create" : utile pour les lookups dans le frame table.
-    /// Retourne `false` si le frame était libre (refcount == 0).
+    /// Attempts to increment refcount only if non-zero (live frame).
+    /// "Get-or-create" pattern: useful for lookups in the frame table.
+    /// Returns `false` if frame was free (refcount == 0).
     #[inline]
     pub fn try_inc_if_nonzero(&self) -> bool {
         let mut current = self.0.load(Ordering::Relaxed);
@@ -132,26 +132,26 @@ impl AtomicRefCount {
         }
     }
 
-    /// Fixe le refcount à 0 (libération forcée — boot/reinit uniquement).
+    /// Sets refcount to 0 (forced release — boot/reinit only).
     ///
     /// # Safety
-    /// Aucun autre thread ne doit utiliser ce frame au moment de l'appel.
+    /// No other thread may be using this frame at the time of call.
     #[inline(always)]
     pub unsafe fn reset_to_zero(&self) {
         self.0.store(0, Ordering::Release);
     }
 
-    /// Fixe le refcount à 1 (allocation initiale — boot/reinit uniquement).
+    /// Sets refcount to 1 (initial allocation — boot/reinit only).
     ///
     /// # Safety
-    /// Comme `reset_to_zero`.
+    /// Same as `reset_to_zero`.
     #[inline(always)]
     pub unsafe fn reset_to_one(&self) {
         self.0.store(1, Ordering::Release);
     }
 
-    /// Tente un CAS pour passer de `expected` à `new`.
-    /// Retourne Ok(()) si réussi, Err(current) sinon.
+    /// Attempts a CAS from `expected` to `new`.
+    /// Returns Ok(()) on success, Err(current) otherwise.
     #[inline]
     pub fn compare_exchange(&self, expected: u32, new: u32) -> Result<(), u32> {
         self.0
@@ -160,30 +160,30 @@ impl AtomicRefCount {
     }
 }
 
-/// Résultat d'un décrément de refcount.
+/// Result of a refcount decrement.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum RefCountDecResult {
-    /// Le refcount est tombé à 0 — le frame doit être libéré (retourné au buddy).
+    /// Refcount dropped to 0 — frame must be freed (returned to buddy).
     ShouldFree,
-    /// Le refcount est tombé à 1 — le dernier propriétaire peut écrire sans CoW.
+    /// Refcount dropped to 1 — last owner can write without CoW.
     BecameExclusive,
-    /// Le refcount est encore >= 2 — le frame reste partagé (CoW toujours actif).
+    /// Refcount is still >= 2 — frame remains shared (CoW still active).
     StillShared,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COW SLOT — entrée dans la CoW table
+// COW SLOT — entry in the CoW table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée du tracking CoW pour un frame.
-/// Permet de savoir combien de processus partagent ce frame en lecture.
+/// CoW tracking entry for a frame.
+/// Tracks how many processes share this frame for reading.
 #[repr(C, align(16))]
 pub struct CowSlot {
-    /// PFN du frame partagé.
+    /// PFN of shared frame.
     pub pfn: u64,
-    /// Refcount CoW (copies attendues).
+    /// CoW refcount (expected copies).
     pub refcount: AtomicRefCount,
-    /// Padding pour aligner à 16 bytes.
+    /// Padding to align to 16 bytes.
     _pad: u32,
 }
 
@@ -202,7 +202,7 @@ impl CowSlot {
         }
     }
 
-    /// Vérifie si ce slot est libre (pfn == 0).
+    /// Checks if this slot is free (pfn == 0).
     #[inline(always)]
     pub fn is_free(&self) -> bool {
         self.pfn == 0
@@ -210,27 +210,27 @@ impl CowSlot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COW BREAK — logique de copie-on-write
+// COW BREAK — copy-on-write logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un CoW break.
+/// Result of a CoW break.
 #[derive(Debug)]
 pub enum CowBreakResult {
-    /// La page était exclusive — pas de copie nécessaire, écriture directe OK.
+    /// Page was exclusive — no copy needed, direct write OK.
     AlreadyExclusive,
-    /// CoW break réussi — nouvelle adresse physique (copie du frame original).
+    /// CoW break succeeded — new physical address (copy of original frame).
     Copied { new_frame_pfn: u64 },
-    /// Échec : plus de mémoire pour la copie.
+    /// Failure: out of memory for the copy.
     OutOfMemory,
 }
 
-/// Vérifie si un frame CoW peut être promu en exclusif sans copie.
-/// Condition : refcount == 1 après décrément de la référence partagée.
+/// Checks if a CoW frame can be promoted to exclusive without copying.
+/// Condition: refcount == 1 after shared reference decrement.
 ///
-/// Utilisation : lors d'un page fault CoW en Ring 3, le handler de faute
-/// de page appelle cette fonction avant de décider si copier ou pas.
+/// Usage: on Ring 3 CoW page fault, page fault handler
+/// calls this function before deciding whether to copy.
 #[inline]
 pub fn cow_can_promote(refcount: &AtomicRefCount) -> bool {
-    // Si le refcount est déjà 1, ce thread est le seul détenteur
+    // If refcount is already 1, this thread is the sole holder
     refcount.is_exclusive()
 }

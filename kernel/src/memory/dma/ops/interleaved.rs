@@ -1,19 +1,19 @@
 // kernel/src/memory/dma/ops/interleaved.rs
 //
-// DMA intercalé (interleaved) — transferts avec stride sur source/destination.
+// Interleaved DMA — transfers with stride on source/destination.
 //
-// Un transfert interleaved déplace des chunks non-contigus :
-//   - Source  : adresses src_base, src_base+src_stride, src_base+2*src_stride...
-//   - Dest    : adresses dst_base, dst_base+dst_stride, dst_base+2*dst_stride...
-//   - Chaque chunk fait `chunk_bytes` octets.
+// An interleaved transfer moves non-contiguous chunks:
+//   - Source:  addresses src_base, src_base+src_stride, src_base+2*src_stride...
+//   - Dest:    addresses dst_base, dst_base+dst_stride, dst_base+2*dst_stride...
+//   - Each chunk is `chunk_bytes` bytes.
 //
-// Cas d'usage typiques :
-//   - Désentrelacement audio multi-canal (L/R → buffers séparés).
-//   - RAID-like striping entre zones mémoire.
-//   - Transposition de matrices en mémoire.
-//   - Réorganisation de DMA scatter vers gather.
+// Typical use cases:
+//   - Multi-channel audio de-interleaving (L/R → separate buffers).
+//   - RAID-like striping across memory zones.
+//   - Matrix transposition in memory.
+//   - Reorganizing scatter DMA into gather.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
@@ -23,48 +23,48 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de chunks par transfert interleaved.
+/// Maximum number of chunks per interleaved transfer.
 pub const MAX_INTERLEAVED_CHUNKS: usize = 64;
 
-/// Taille minimum d'un chunk.
+/// Minimum chunk size.
 pub const MIN_CHUNK_BYTES: usize = 8;
 
-/// Nombre maximum de transferts interleaved simultanés.
+/// Maximum number of concurrent interleaved transfers.
 pub const MAX_INTERLEAVED_TRANSFERS: usize = 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pattern de stride pour une extrémité (source ou destination).
+/// Stride pattern for one endpoint (source or destination).
 #[derive(Copy, Clone, Debug)]
 pub struct InterleavedStride {
-    /// Adresse physique de départ.
+    /// Physical starting address.
     pub base: PhysAddr,
-    /// Stride en octets entre deux chunks consécutifs.
-    /// 0 = contiguë (même que scatter-gather ordinaire).
+    /// Stride in bytes between two consecutive chunks.
+    /// 0 = contiguous (same as ordinary scatter-gather).
     pub stride: usize,
 }
 
-/// Configuration d'un transfert DMA interleaved.
+/// Interleaved DMA transfer configuration.
 #[derive(Copy, Clone)]
 pub struct InterleavedConfig {
-    /// Canal DMA.
+    /// DMA channel.
     pub channel: DmaChannelId,
-    /// Pattern source.
+    /// Source pattern.
     pub src: InterleavedStride,
-    /// Pattern destination.
+    /// Destination pattern.
     pub dst: InterleavedStride,
-    /// Taille de chaque chunk en octets.
+    /// Size of each chunk in bytes.
     pub chunk_bytes: usize,
-    /// Nombre de chunks.
+    /// Number of chunks.
     pub chunk_count: usize,
 }
 
-/// Erreur de validation d'une configuration interleaved.
+/// Validation error for an interleaved configuration.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum InterleavedError {
     ChunkTooSmall,
@@ -91,13 +91,13 @@ impl InterleavedConfig {
         Ok(())
     }
 
-    /// Retourne l'adresse physique du chunk `i` côté source.
+    /// Returns the physical address of chunk `i` on the source side.
     #[inline]
     pub fn src_chunk_phys(&self, i: usize) -> PhysAddr {
         PhysAddr::new(self.src.base.as_u64() + (i * self.src.stride) as u64)
     }
 
-    /// Retourne l'adresse physique du chunk `i` côté destination.
+    /// Returns the physical address of chunk `i` on the destination side.
     #[inline]
     pub fn dst_chunk_phys(&self, i: usize) -> PhysAddr {
         PhysAddr::new(self.dst.base.as_u64() + (i * self.dst.stride) as u64)
@@ -105,17 +105,17 @@ impl InterleavedConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRANSFERT INTERLEAVED LOGICIEL (FALLBACK)
+// SOFTWARE INTERLEAVED TRANSFER (FALLBACK)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Exécute un transfert interleaved en mode logiciel (CPU memcpy).
+/// Executes an interleaved transfer in software mode (CPU memcpy).
 ///
-/// Utilisé quand le canal DMA ne supporte pas nativement le mode interleaved.
-/// Synchrone — retourne quand tous les chunks sont copiés.
+/// Used when the DMA channel does not natively support interleaved mode.
+/// Synchronous — returns when all chunks have been copied.
 ///
 /// # Safety
-/// `src.base` et `dst.base` doivent pointer vers des régions mémoire physiques
-/// valides accessibles via la physmap (PHYS_MAP_BASE).
+/// `src.base` and `dst.base` must point to valid physical memory regions
+/// accessible via the physmap (PHYS_MAP_BASE).
 pub unsafe fn sw_interleaved_copy(config: &InterleavedConfig) -> Result<usize, InterleavedError> {
     config.validate()?;
 
@@ -126,7 +126,7 @@ pub unsafe fn sw_interleaved_copy(config: &InterleavedConfig) -> Result<usize, I
         let src_virt = (phys_map_base + config.src_chunk_phys(i).as_u64()) as *const u8;
         let dst_virt = (phys_map_base + config.dst_chunk_phys(i).as_u64()) as *mut u8;
 
-        // SAFETY: Les adresses sont dans la physmap (validité garantie par l'appelant).
+        // SAFETY: The addresses are in the physmap (validity guaranteed by the caller).
         core::ptr::copy_nonoverlapping(src_virt, dst_virt, config.chunk_bytes);
         total += config.chunk_bytes;
     }
@@ -135,10 +135,10 @@ pub unsafe fn sw_interleaved_copy(config: &InterleavedConfig) -> Result<usize, I
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRANSFERT INTERLEAVED VIA DMA ASYNCHRONE
+// INTERLEAVED TRANSFER VIA ASYNCHRONOUS DMA
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État interne d'un transfert interleaved asynchrone.
+/// Internal state of an asynchronous interleaved transfer.
 #[repr(u8)]
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum IxferState {
@@ -148,18 +148,18 @@ enum IxferState {
     Error = 3,
 }
 
-/// Un transfert interleaved asynchrone en cours.
+/// An ongoing asynchronous interleaved transfer.
 struct InterleavedXfer {
     config: InterleavedConfig,
     state: AtomicU8,
     txn_id: DmaTransactionId,
-    /// Chunks déjà soumis au moteur DMA.
+    /// Chunks already submitted to the DMA engine.
     chunks_submitted: AtomicU32,
-    /// Chunks complétés avec succès.
+    /// Chunks completed successfully.
     chunks_done: AtomicU32,
-    /// Chunks en erreur.
+    /// Chunks in error.
     chunks_error: AtomicU32,
-    /// Octets totaux transférés.
+    /// Total bytes transferred.
     bytes_done: AtomicU64,
 }
 
@@ -199,7 +199,7 @@ impl InterleavedXfer {
         done >= total && total > 0
     }
 
-    /// Notifie la complétion d'un chunk (appelé par IRQ handler).
+    /// Notifies chunk completion (called by IRQ handler).
     pub fn on_chunk_complete(&self, success: bool) {
         if success {
             let done = self.chunks_done.fetch_add(1, Ordering::AcqRel) + 1;
@@ -214,7 +214,7 @@ impl InterleavedXfer {
         }
     }
 
-    /// Résultat du transfert (si terminé).
+    /// Transfer result (if completed).
     pub fn result(&self) -> Option<Result<usize, DmaError>> {
         match self.state.load(Ordering::Acquire) {
             s if s == IxferState::Done as u8 => {
@@ -227,7 +227,7 @@ impl InterleavedXfer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GESTIONNAIRE DE TRANSFERTS INTERLEAVED
+// INTERLEAVED TRANSFERS MANAGER
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct InterleavedTable {
@@ -251,7 +251,7 @@ impl InterleavedTable {
     }
 }
 
-/// Gestionnaire global des transferts DMA interleaved.
+/// Global interleaved DMA transfers manager.
 pub struct InterleavedManager {
     inner: Mutex<InterleavedTable>,
     pub submitted: AtomicU64,
@@ -278,13 +278,13 @@ impl InterleavedManager {
         }
     }
 
-    /// Soumet un transfert interleaved asynchrone.
+    /// Submits an asynchronous interleaved transfer.
     ///
-    /// Retourne l'index du slot pour suivre la progression via `result`.
+    /// Returns the slot index to track progress via `result`.
     ///
-    /// Si le canal ne supporte pas le mode interleaved, retourne
-    /// `Err(InterleavedError::ChannelUnsupported)`. Utilise alors
-    /// `sw_interleaved_copy` comme fallback synchrone.
+    /// If the channel does not support interleaved mode, returns
+    /// `Err(InterleavedError::ChannelUnsupported)`. Then uses
+    /// `sw_interleaved_copy` as a synchronous fallback.
     pub fn submit_async(&self, config: InterleavedConfig) -> Result<usize, InterleavedError> {
         config.validate()?;
 
@@ -306,7 +306,7 @@ impl InterleavedManager {
         Ok(idx)
     }
 
-    /// Notifie la complétion du chunk `chunk_idx` du transfert `xfer_idx`.
+    /// Notifies completion of chunk `chunk_idx` of transfer `xfer_idx`.
     pub fn on_chunk_complete(&self, xfer_idx: usize, success: bool) {
         let table = self.inner.lock();
         if xfer_idx < MAX_INTERLEAVED_TRANSFERS {
@@ -314,7 +314,7 @@ impl InterleavedManager {
         }
     }
 
-    /// Retourne le résultat d'un transfert (None si encore en cours).
+    /// Returns the result of a transfer (None if still in progress).
     pub fn result(&self, xfer_idx: usize) -> Option<Result<usize, DmaError>> {
         let table = self.inner.lock();
         if xfer_idx < MAX_INTERLEAVED_TRANSFERS {
@@ -328,7 +328,7 @@ impl InterleavedManager {
         }
     }
 
-    /// Libère un slot de transfert terminé.
+    /// Releases a completed transfer slot.
     pub fn release(&self, xfer_idx: usize) {
         let table = self.inner.lock();
         if xfer_idx < MAX_INTERLEAVED_TRANSFERS {
@@ -339,5 +339,5 @@ impl InterleavedManager {
     }
 }
 
-/// Gestionnaire global des DMA interleaved.
+/// Global interleaved DMA manager.
 pub static DMA_INTERLEAVED: InterleavedManager = InterleavedManager::new();

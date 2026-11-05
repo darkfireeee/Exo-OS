@@ -1,14 +1,14 @@
 // kernel/src/memory/core/mod.rs
 //
-// Module core — types et constantes fondamentaux de gestion mémoire.
-// Couche 0 — aucune dépendance externe au kernel.
+// Core module — fundamental types and constants for memory management.
+// Layer 0 — no external kernel dependencies.
 
 pub mod address;
 pub mod constants;
 pub mod layout;
 pub mod types;
 
-// ─── Re-exports publics ───────────────────────────────────────────────────────
+// ─── Public re-exports ────────────────────────────────────────────────────────
 
 pub use constants::{
     BUDDY_MAX_BYTES, BUDDY_MAX_ORDER, BUDDY_MAX_PAGES, BUDDY_ORDER_COUNT, CACHE_LINE_SHIFT,

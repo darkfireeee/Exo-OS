@@ -1,32 +1,32 @@
 // kernel/src/memory/virtual/page_table/x86_64.rs
 //
-// Tables de pages x86_64 4 niveaux (PML4 → PDPT → PD → PT).
-// Implémentation complète avec flags, entrées, et helpers d'accès.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// x86_64 4-level page tables (PML4 → PDPT → PD → PT).
+// Complete implementation with flags, entries, and access helpers.
+// Layer 0 — no external dependency except `spin`.
 
 use core::ops::{Index, IndexMut};
 
 use crate::memory::core::{Frame, PageFlags, PhysAddr, VirtAddr, PAGE_SIZE, PHYS_MAP_BASE};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENTRÉE DE TABLE DE PAGES (PageTableEntry)
+// PAGE TABLE ENTRY (PageTableEntry)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée d'une table de pages x86_64 (64 bits).
+/// x86_64 page table entry (64 bits).
 ///
-/// Bits 0-11 : flags
-/// Bits 12-51: adresse physique du frame (alignée sur 4 KiB)
-/// Bits 52-62: flags supérieurs (disponibles)
-/// Bit  63   : NX (No-Execute)
+/// Bits 0-11: flags
+/// Bits 12-51: physical frame address (aligned to 4 KiB)
+/// Bits 52-62: upper flags (available)
+/// Bit  63  : NX (No-Execute)
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct PageTableEntry(u64);
 
 impl PageTableEntry {
-    /// Entrée nulle (non présente).
+    /// Null entry (not present).
     pub const EMPTY: PageTableEntry = PageTableEntry(0);
 
-    // ── Bits de flags ────────────────────────────────────────────────────────
+    // ── Flag bits ────────────────────────────────────────────────────────────
     pub const FLAG_PRESENT: u64 = 1 << 0;
     pub const FLAG_WRITABLE: u64 = 1 << 1;
     pub const FLAG_USER: u64 = 1 << 2;
@@ -34,14 +34,14 @@ impl PageTableEntry {
     pub const FLAG_NO_CACHE: u64 = 1 << 4;
     pub const FLAG_ACCESSED: u64 = 1 << 5;
     pub const FLAG_DIRTY: u64 = 1 << 6;
-    pub const FLAG_HUGE_PAGE: u64 = 1 << 7; // PSE bit dans PD/PDPT
-    pub const FLAG_PAT_L1: u64 = 1 << 7; // PAT bit dans une feuille PT 4 KiB
+    pub const FLAG_HUGE_PAGE: u64 = 1 << 7; // PSE bit in PD/PDPT
+    pub const FLAG_PAT_L1: u64 = 1 << 7; // PAT bit in a 4 KiB PT leaf
     pub const FLAG_GLOBAL: u64 = 1 << 8;
-    pub const FLAG_COW: u64 = 1 << 9; // Disponible OS
-    pub const FLAG_PINNED: u64 = 1 << 10; // Disponible OS
+    pub const FLAG_COW: u64 = 1 << 9; // Available to OS
+    pub const FLAG_PINNED: u64 = 1 << 10; // Available to OS
     pub const FLAG_NO_EXECUTE: u64 = 1 << 63;
 
-    /// Masque des bits d'adresse physique.
+    /// Physical address bitmask.
     const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
     #[inline]
@@ -98,13 +98,13 @@ impl PageTableEntry {
         self.0 & Self::FLAG_DIRTY != 0
     }
 
-    /// Adresse physique encodée dans cette entrée.
+    /// Physical address encoded in this entry.
     #[inline]
     pub fn phys_addr(self) -> PhysAddr {
         PhysAddr::new(self.0 & Self::PHYS_MASK)
     }
 
-    /// Frame physique pointé par cette entrée.
+    /// Physical frame pointed to by this entry.
     #[inline]
     pub fn frame(self) -> Option<Frame> {
         if self.is_present() {
@@ -114,24 +114,24 @@ impl PageTableEntry {
         }
     }
 
-    /// Active un flag.
+    /// Enables a flag.
     #[inline]
     pub fn set_flag(&mut self, flag: u64) {
         self.0 |= flag;
     }
-    /// Désactive un flag.
+    /// Disables a flag.
     #[inline]
     pub fn clear_flag(&mut self, flag: u64) {
         self.0 &= !flag;
     }
 
-    /// Efface complètement l'entrée.
+    /// Clears the entry completely.
     #[inline]
     pub fn clear(&mut self) {
         self.0 = 0;
     }
 
-    /// Convertit les PageFlags kernel en bits d'entrée x86_64.
+    /// Converts kernel PageFlags into x86_64 entry bits.
     pub fn from_page_flags(frame: Frame, flags: PageFlags) -> Self {
         let mut raw = frame.start_address().as_u64();
         if flags.contains(PageFlags::PRESENT) {
@@ -171,7 +171,7 @@ impl PageTableEntry {
         PageTableEntry(raw)
     }
 
-    /// Extrait les PageFlags depuis une entrée.
+    /// Extracts PageFlags from an entry.
     pub fn to_page_flags(self) -> PageFlags {
         let mut f = PageFlags::EMPTY;
         if self.0 & Self::FLAG_PRESENT != 0 {
@@ -232,10 +232,10 @@ impl core::fmt::Debug for PageTableEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE PAGES (512 entrées)
+// PAGE TABLE (512 entries)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une table de pages x86_64 (exactement une page = 4 KiB = 512 × 8 octets).
+/// An x86_64 page table (exactly one page = 4 KiB = 512 × 8 bytes).
 #[repr(C, align(4096))]
 pub struct PageTable {
     entries: [PageTableEntry; 512],
@@ -248,21 +248,21 @@ impl Default for PageTable {
 }
 
 impl PageTable {
-    /// Crée une table vide (toutes les entrées = 0).
+    /// Creates an empty table (all entries = 0).
     pub const fn new() -> Self {
         PageTable {
             entries: [PageTableEntry::EMPTY; 512],
         }
     }
 
-    /// Efface toutes les entrées.
+    /// Clears all entries.
     pub fn zero(&mut self) {
         for e in &mut self.entries {
             e.clear();
         }
     }
 
-    /// Efface les entrées user (indices 0..256).
+    /// Clears user entries (indices 0..256).
     pub fn zero_user_half(&mut self) {
         for e in &mut self.entries[0..256] {
             e.clear();
@@ -286,14 +286,14 @@ impl PageTable {
         false
     }
 
-    /// Adresse physique de cette table (via le physmap).
+    /// Physical address of this table (via physmap).
     pub fn phys_addr(&self) -> PhysAddr {
-        // SAFETY: self est dans la mémoire physique mappée via PHYS_MAP_BASE.
+        // SAFETY: self is in physical memory mapped via PHYS_MAP_BASE.
         let virt = self as *const _ as u64;
         if virt >= PHYS_MAP_BASE.as_u64() {
             PhysAddr::new(virt - PHYS_MAP_BASE.as_u64())
         } else {
-            // Fallback pour les tables dans le segment .bss kernel.
+            // Fallback for tables in the kernel .bss segment.
             PhysAddr::new(
                 virt - crate::memory::core::layout::KERNEL_START.as_u64() + KERNEL_PHYS_BASE,
             )
@@ -301,7 +301,7 @@ impl PageTable {
     }
 }
 
-/// Base physique du kernel (supposée 1 MiB pour x86_64 standard).
+/// Physical base of the kernel (assumed 1 MiB for standard x86_64).
 const KERNEL_PHYS_BASE: u64 = 0x0010_0000;
 
 impl Index<usize> for PageTable {
@@ -317,25 +317,25 @@ impl IndexMut<usize> for PageTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NIVEAUX DE TABLE
+// TABLE LEVELS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau d'une table de pages (4=PML4, 3=PDPT, 2=PD, 1=PT).
+/// Level of a page table (4=PML4, 3=PDPT, 2=PD, 1=PT).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum PageTableLevel {
-    /// Page Table (niveau 1).
+    /// Page Table (level 1).
     L1 = 1,
-    /// Page Directory (niveau 2).
+    /// Page Directory (level 2).
     L2 = 2,
-    /// Page Directory Pointer Table (niveau 3).
+    /// Page Directory Pointer Table (level 3).
     L3 = 3,
-    /// PML4 (niveau 4).
+    /// PML4 (level 4).
     L4 = 4,
 }
 
 impl PageTableLevel {
-    /// Retourne l'index dans la VirtAddr pour ce niveau.
+    /// Returns the index in VirtAddr for this level.
     #[inline]
     pub fn index_of(self, addr: VirtAddr) -> usize {
         match self {
@@ -346,7 +346,7 @@ impl PageTableLevel {
         }
     }
 
-    /// Niveau inférieur.
+    /// Lower level.
     pub fn descend(self) -> Option<PageTableLevel> {
         match self {
             PageTableLevel::L4 => Some(PageTableLevel::L3),
@@ -356,10 +356,10 @@ impl PageTableLevel {
         }
     }
 
-    /// Taille de page mappée à ce niveau (huge page).
+    /// Page size mapped at this level (huge page).
     pub fn page_size(self) -> usize {
         match self {
-            PageTableLevel::L4 => 512 * 1024 * 1024 * 1024, // 512 GiB (non utilisé)
+            PageTableLevel::L4 => 512 * 1024 * 1024 * 1024, // 512 GiB (unused)
             PageTableLevel::L3 => 1024 * 1024 * 1024,       // 1 GiB
             PageTableLevel::L2 => 2 * 1024 * 1024,          // 2 MiB
             PageTableLevel::L1 => PAGE_SIZE,                // 4 KiB
@@ -368,62 +368,62 @@ impl PageTableLevel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS : physmap → table de pages
+// HELPERS: physmap → page table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne un pointeur vers la table de pages physique via le physmap.
+/// Returns a pointer to the physical page table via physmap.
 ///
 /// # Safety
-/// `phys` doit pointer sur une PageTable valide et le physmap doit
-/// être initialisé (PHYS_MAP_BASE mappé).
+/// `phys` must point to a valid PageTable and physmap must
+/// be initialized (PHYS_MAP_BASE mapped).
 #[inline]
 pub unsafe fn phys_to_table(phys: PhysAddr) -> *mut PageTable {
     (PHYS_MAP_BASE.as_u64() + phys.as_u64()) as *mut PageTable
 }
 
-/// Retourne une référence vers la table de pages physique via le physmap.
+/// Returns a reference to the physical page table via physmap.
 ///
 /// # Safety
-/// Même conditions que phys_to_table. La durée de vie est liée au
-/// physmap (statique).
+/// Same conditions as phys_to_table. Lifetime is tied to
+/// physmap (static).
 #[inline]
 pub unsafe fn phys_to_table_ref<'a>(phys: PhysAddr) -> &'a PageTable {
     &*(phys_to_table(phys))
 }
 
-/// Retourne une référence mutable vers la table de pages physique.
+/// Returns a mutable reference to the physical page table.
 ///
 /// # Safety
-/// Même conditions que phys_to_table. Aucune autre référence
-/// mutable ne doit exister simultanément.
+/// Same conditions as phys_to_table. No other mutable reference
+/// must exist simultaneously.
 #[inline]
 pub unsafe fn phys_to_table_mut<'a>(phys: PhysAddr) -> &'a mut PageTable {
     &mut *(phys_to_table(phys))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRE CR3
+// CR3 REGISTER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit l'adresse physique de la PML4 active depuis CR3.
+/// Reads the physical address of the active PML4 from CR3.
 #[inline]
 pub fn read_cr3() -> PhysAddr {
     let val: u64;
-    // SAFETY: lecture de CR3, opération x86_64 standard au niveau ring 0.
+    // SAFETY: reading CR3, standard x86_64 operation at ring 0.
     unsafe {
         core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack));
     }
     PhysAddr::new(val & !0xFFF)
 }
 
-/// Charge une nouvelle PML4 dans CR3 (invalide tout le TLB global).
+/// Loads a new PML4 into CR3 (invalidates the entire global TLB).
 ///
 /// # Safety
-/// `pml4` doit pointer sur une PML4 valide. Des entrées invalides
-/// provoqueront une #PF ou #GP immédiate.
+/// `pml4` must point to a valid PML4. Invalid entries
+/// will trigger an immediate #PF or #GP.
 #[inline]
 pub unsafe fn write_cr3(pml4: PhysAddr) {
-    let pcid_bits = read_cr3().as_u64() & 0xFFF; // Conserver les bits PCID
+    let pcid_bits = read_cr3().as_u64() & 0xFFF; // Preserve PCID bits
     core::arch::asm!(
         "mov cr3, {}",
         in(reg) pml4.as_u64() | pcid_bits,
@@ -431,10 +431,10 @@ pub unsafe fn write_cr3(pml4: PhysAddr) {
     );
 }
 
-/// Invalide une seule entrée TLB pour l'adresse virtuelle donnée.
+/// Invalidates a single TLB entry for the given virtual address.
 ///
 /// # Safety
-/// addr doit être une adresse canonique x86_64.
+/// addr must be a canonical x86_64 address.
 #[inline]
 pub unsafe fn invlpg(addr: VirtAddr) {
     core::arch::asm!(

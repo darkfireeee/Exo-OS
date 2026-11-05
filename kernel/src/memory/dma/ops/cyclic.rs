@@ -1,19 +1,19 @@
 // kernel/src/memory/dma/ops/cyclic.rs
 //
-// DMA cyclique — transferts audio/streaming en tampon circulaire.
+// Cyclic DMA — audio/streaming transfers in circular buffer.
 //
-// Un transfert cyclique DMA tourne indéfiniment dans un tampon circulaire
-// découpé en `period_count` périodes. À chaque fin de période, un drapeau
-// `period_elapsed` est levé pour que le driver audio soit notifié.
+// A cyclic DMA transfer runs indefinitely in a circular buffer
+// split into `period_count` periods. At the end of each period, a
+// `period_elapsed` flag is raised so that the audio driver is notified.
 //
-// Architecture :
-//   - Le tampon est découpé en periods de `period_bytes` octets.
-//   - La liste de descripteurs est bouclée (dernier → premier).
-//   - Un compteur atomique `elapsed_periods` incrémente à chaque IRQ DMA.
-//   - Le driver lit `elapsed_periods` pour savoir combien de périodes à traiter.
-//   - `stop()` interrompt le cycle en cours.
+// Architecture:
+//   - The buffer is split into periods of `period_bytes` bytes.
+//   - The descriptor list is looped (last → first).
+//   - An atomic counter `elapsed_periods` increments on each DMA IRQ.
+//   - The driver reads `elapsed_periods` to know how many periods to process.
+//   - `stop()` interrupts the ongoing cycle.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
@@ -22,43 +22,43 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{DmaChannelId, DmaDirection, DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de canaux cycliques simultanés.
+/// Maximum number of concurrent cyclic channels.
 pub const MAX_CYCLIC_CHANNELS: usize = 16;
 
-/// Nombre maximum de périodes par transfert cyclique.
+/// Maximum number of periods per cyclic transfer.
 pub const MAX_CYCLIC_PERIODS: usize = 32;
 
-/// Taille minimum d'une période (64 octets — alignement cache).
+/// Minimum period size (64 bytes — cache line alignment).
 pub const MIN_PERIOD_BYTES: usize = 64;
 
-/// Taille maximum d'une période (1 MiB).
+/// Maximum period size (1 MiB).
 pub const MAX_PERIOD_BYTES: usize = 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONFIGURATION D'UN TRANSFERT CYCLIQUE
+// CYCLIC TRANSFER CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration d'un transfert DMA cyclique.
+/// Cyclic DMA transfer configuration.
 #[derive(Copy, Clone)]
 pub struct CyclicConfig {
-    /// Canal DMA à utiliser.
+    /// DMA channel to use.
     pub channel: DmaChannelId,
-    /// Adresse physique du tampon circulaire.
+    /// Physical address of the circular buffer.
     pub buf_phys: PhysAddr,
-    /// Taille totale du tampon (doit être un multiple de `period_bytes`).
+    /// Total buffer size (must be a multiple of `period_bytes`).
     pub buf_bytes: usize,
-    /// Taille d'une période en octets.
+    /// Period size in bytes.
     pub period_bytes: usize,
-    /// Direction des transferts.
+    /// Transfer direction.
     pub direction: DmaDirection,
-    /// Adresse physique du périphérique (registre FIFO, etc.).
+    /// Peripheral physical address (FIFO register, etc.).
     pub dev_phys: PhysAddr,
 }
 
-/// Résultat de la validation d'une configuration cyclique.
+/// Result of validating a cyclic configuration.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CyclicConfigError {
     InvalidAlignment,
@@ -70,7 +70,7 @@ pub enum CyclicConfigError {
 }
 
 impl CyclicConfig {
-    /// Valide la configuration et retourne le nombre de périodes.
+    /// Validates configuration and returns the number of periods.
     pub fn validate(&self) -> Result<usize, CyclicConfigError> {
         if self.period_bytes < MIN_PERIOD_BYTES {
             return Err(CyclicConfigError::PeriodTooSmall);
@@ -93,7 +93,7 @@ impl CyclicConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT D'UN TRANSFERT CYCLIQUE
+// CYCLIC TRANSFER STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -106,34 +106,34 @@ enum CyclicState {
     Error = 3,
 }
 
-/// Descripteur interne d'une période cyclique.
+/// Internal descriptor of a cyclic period.
 #[allow(dead_code)]
 #[derive(Copy, Clone)]
 struct PeriodDesc {
-    /// Adresse physique de début de la période dans le tampon.
+    /// Physical start address of the period in the buffer.
     phys_start: PhysAddr,
-    /// Octets dans cette période.
+    /// Bytes in this period.
     bytes: usize,
 }
 
-/// Un transfert DMA cyclique actif.
+/// An active cyclic DMA transfer.
 pub struct CyclicTransfer {
-    /// Configuration de ce transfert.
+    /// Configuration of this transfer.
     config: CyclicConfig,
-    /// Période[]s découpées.
+    /// Segmented periods.
     periods: [PeriodDesc; MAX_CYCLIC_PERIODS],
     period_count: usize,
-    /// État courant.
+    /// Current state.
     state: AtomicU8, // CyclicState
-    /// Nombre de périodes écoulées depuis le démarrage (IRQ incrémente ce compteur).
+    /// Number of periods elapsed since startup (IRQ increments this counter).
     elapsed_periods: AtomicU64,
-    /// Dernière période lue par le driver audio.
+    /// Last period consumed by the audio driver.
     consumed_periods: AtomicU64,
-    /// Transaction DMA courante (réutilisée à chaque periode).
+    /// Current DMA transaction (reused for each period).
     current_txn: DmaTransactionId,
-    /// Index de la période en cours de transfert.
+    /// Index of the period currently being transferred.
     current_period: AtomicU32,
-    /// Statistiques.
+    /// Statistics.
     pub underruns: AtomicU32,
     pub overruns: AtomicU32,
 }
@@ -165,7 +165,7 @@ impl CyclicTransfer {
         }
     }
 
-    /// Prépare le transfert à partir d'une configuration validée.
+    /// Prepares the transfer from a validated configuration.
     fn setup(&mut self, config: CyclicConfig, period_count: usize) {
         self.config = config;
         self.period_count = period_count;
@@ -182,7 +182,7 @@ impl CyclicTransfer {
         self.current_period.store(0, Ordering::Relaxed);
     }
 
-    /// Démarre le transfert (premier envoi de commande DMA).
+    /// Starts the transfer (first DMA command submission).
     pub fn start(&mut self) -> Result<DmaTransactionId, DmaError> {
         if self.state.load(Ordering::Acquire) == CyclicState::Running as u8 {
             return Err(DmaError::AlreadySubmitted);
@@ -194,16 +194,16 @@ impl CyclicTransfer {
         Ok(txn)
     }
 
-    /// Appelé par l'IRQ handler quand une période se termine.
+    /// Called by the IRQ handler when a period completes.
     ///
-    /// Incrémente `elapsed_periods` et programme la période suivante.
+    /// Increments `elapsed_periods` and schedules the next period.
     pub fn on_period_complete(&self) {
         let elapsed = self.elapsed_periods.fetch_add(1, Ordering::AcqRel) + 1;
         let next_period = (elapsed as usize) % self.period_count;
         self.current_period
             .store(next_period as u32, Ordering::Relaxed);
 
-        // Détection de xrun.
+        // Xrun detection.
         let consumed = self.consumed_periods.load(Ordering::Relaxed);
         let lag = elapsed.saturating_sub(consumed);
         if lag > self.period_count as u64 {
@@ -211,19 +211,19 @@ impl CyclicTransfer {
         }
     }
 
-    /// Retourne combien de périodes sont disponibles pour le driver.
+    /// Returns how many periods are available for the driver.
     pub fn available_periods(&self) -> u64 {
         let elapsed = self.elapsed_periods.load(Ordering::Acquire);
         let consumed = self.consumed_periods.load(Ordering::Relaxed);
         elapsed.saturating_sub(consumed)
     }
 
-    /// Le driver marque `n` périodes comme consommées.
+    /// The driver marks `n` periods as consumed.
     pub fn consume_periods(&self, n: u64) {
         self.consumed_periods.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Arrête le transfert cyclique.
+    /// Stops the cyclic transfer.
     pub fn stop(&self) {
         self.state.store(CyclicState::Idle as u8, Ordering::Release);
     }
@@ -234,7 +234,7 @@ impl CyclicTransfer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DES TRANSFERTS CYCLIQUES
+// CYCLIC TRANSFERS TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -261,7 +261,7 @@ impl CyclicTable {
     }
 }
 
-/// Table des transferts cycliques DMA.
+/// Table of cyclic DMA transfers.
 pub struct CyclicManager {
     inner: Mutex<CyclicTable>,
 }
@@ -282,9 +282,9 @@ impl CyclicManager {
         }
     }
 
-    /// Prépare et démarre un transfert cyclique.
+    /// Prepares and starts a cyclic transfer.
     ///
-    /// Retourne l'index du slot alloué (pour les appels `on_period_complete`/`stop`).
+    /// Returns the allocated slot index (for `on_period_complete`/`stop` calls).
     pub fn start(&self, config: CyclicConfig) -> Result<usize, CyclicConfigError> {
         let period_count = config.validate()?;
         let mut table = self.inner.lock();
@@ -298,7 +298,7 @@ impl CyclicManager {
         Ok(slot_idx)
     }
 
-    /// Notifie la fin d'une période pour le slot `idx`.
+    /// Notifies completion of a period for slot `idx`.
     pub fn on_period_complete(&self, idx: usize) {
         let table = self.inner.lock();
         if idx < MAX_CYCLIC_CHANNELS {
@@ -306,7 +306,7 @@ impl CyclicManager {
         }
     }
 
-    /// Retourne le nombre de périodes disponibles pour lecture (slot `idx`).
+    /// Returns the number of periods available for reading (slot `idx`).
     pub fn available_periods(&self, idx: usize) -> u64 {
         let table = self.inner.lock();
         if idx < MAX_CYCLIC_CHANNELS {
@@ -316,7 +316,7 @@ impl CyclicManager {
         }
     }
 
-    /// Marque `n` périodes comme consommées par le driver audio.
+    /// Marks `n` periods as consumed by the audio driver.
     pub fn consume_periods(&self, idx: usize, n: u64) {
         let table = self.inner.lock();
         if idx < MAX_CYCLIC_CHANNELS {
@@ -324,7 +324,7 @@ impl CyclicManager {
         }
     }
 
-    /// Arrête le transfert cyclique du slot `idx`.
+    /// Stops the cyclic transfer of slot `idx`.
     pub fn stop(&self, idx: usize) {
         let table = self.inner.lock();
         if idx < MAX_CYCLIC_CHANNELS {
@@ -333,5 +333,5 @@ impl CyclicManager {
     }
 }
 
-/// Gestionnaire global des transferts DMA cycliques.
+/// Global cyclic DMA transfer manager.
 pub static DMA_CYCLIC: CyclicManager = CyclicManager::new();

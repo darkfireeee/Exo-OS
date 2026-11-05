@@ -1,122 +1,122 @@
 // kernel/src/memory/core/types.rs
 //
-// Types fondamentaux du module memory — Exo-OS Couche 0
-// Aucune dépendance externe au kernel.
-// Tous les types sont testés statiquement pour leur taille/alignement.
+// Fundamental types of the memory module — Exo-OS Layer 0
+// No external dependencies to the kernel.
+// All types are statically tested for size/alignment.
 
 use super::constants::{HUGE_PAGE_SIZE, PAGE_MASK, PAGE_SHIFT};
 use core::fmt;
 use core::ops::{Add, AddAssign, BitAnd, BitOr, Not, Sub, SubAssign};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PHYSADDR — Adresse physique
+// PHYSADDR — Physical address
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse physique 64 bits — opaque, ne peut pas être déréférenciée directement.
-/// Toujours canonique (bits 48..63 = 0 sur x86_64 sans 5-level paging).
+/// 64-bit physical address — opaque, cannot be dereferenced directly.
+/// Always canonical (bits 48..63 = 0 on x86_64 without 5-level paging).
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhysAddr(u64);
 
 impl PhysAddr {
-    /// Crée une PhysAddr depuis une valeur brute.
-    /// Panics (debug) si non canonique.
+    /// Creates a PhysAddr from a raw value.
+    /// Panics (debug) if non-canonical.
     #[inline(always)]
     pub const fn new(addr: u64) -> Self {
-        // En no_std, on ne peut pas paniquer en const — on accepte silencieusement
-        // La validation se fait à l'utilisation via is_canonical()
+        // In no_std, we cannot panic in const — we accept silently
+        // Validation occurs upon use via is_canonical()
         PhysAddr(addr)
     }
 
-    /// Crée une PhysAddr sans aucune vérification (unsafe).
+    /// Creates a PhysAddr without any verification (unsafe).
     ///
     /// # Safety
-    /// L'appelant garantit que l'adresse est physiquement valide
-    /// et dans la plage adressable du matériel.
+    /// Caller guarantees that the address is physically valid
+    /// and within the hardware's addressable range.
     #[inline(always)]
     pub const unsafe fn new_unchecked(addr: u64) -> Self {
         PhysAddr(addr)
     }
 
-    /// Retourne la valeur brute de l'adresse.
+    /// Returns the raw value of the address.
     #[inline(always)]
     pub const fn as_u64(self) -> u64 {
         self.0
     }
 
-    /// Retourne la valeur brute sous forme usize (truncature possible sur 32 bits).
+    /// Returns the raw value as usize (possible truncation on 32 bits).
     #[inline(always)]
     pub const fn as_usize(self) -> usize {
         self.0 as usize
     }
 
-    /// Vérifie si l'adresse est alignée sur la taille indiquée (doit être puissance de 2).
+    /// Checks if the address is aligned to the given size (must be a power of 2).
     #[inline(always)]
     pub const fn is_aligned(self, align: u64) -> bool {
         debug_assert!(align.is_power_of_two());
         (self.0 & (align - 1)) == 0
     }
 
-    /// Aligne l'adresse vers le bas sur `align` octets.
+    /// Aligns the address down to `align` bytes.
     #[inline(always)]
     pub const fn align_down(self, align: u64) -> Self {
         PhysAddr(self.0 & !(align - 1))
     }
 
-    /// Aligne l'adresse vers le haut sur `align` octets.
+    /// Aligns the address up to `align` bytes.
     #[inline(always)]
     pub const fn align_up(self, align: u64) -> Self {
         PhysAddr((self.0 + align - 1) & !(align - 1))
     }
 
-    /// Retourne l'index du frame physique (PFN = Physical Frame Number).
+    /// Returns the physical frame index (PFN = Physical Frame Number).
     #[inline(always)]
     pub const fn pfn(self) -> u64 {
         self.0 >> PAGE_SHIFT as u64
     }
 
-    /// Aligne sur une page vers le bas.
+    /// Aligns down to page boundary.
     #[inline(always)]
     pub const fn page_align_down(self) -> Self {
         PhysAddr(self.0 & !(PAGE_MASK as u64))
     }
 
-    /// Aligne sur une page vers le haut.
+    /// Aligns up to page boundary.
     #[inline(always)]
     pub const fn page_align_up(self) -> Self {
         PhysAddr((self.0 + PAGE_MASK as u64) & !(PAGE_MASK as u64))
     }
 
-    /// Retourne `true` si alignée sur une page.
+    /// Returns `true` if aligned to a page.
     #[inline(always)]
     pub const fn is_page_aligned(self) -> bool {
         (self.0 & PAGE_MASK as u64) == 0
     }
 
-    /// Additionne un offset en octets.
+    /// Adds an offset in bytes.
     #[inline(always)]
     pub const fn add(self, offset: u64) -> Self {
         PhysAddr(self.0.wrapping_add(offset))
     }
 
-    /// Soustrait un offset en octets.
+    /// Subtracts an offset in bytes.
     #[inline(always)]
     pub const fn sub(self, offset: u64) -> Self {
         PhysAddr(self.0.wrapping_sub(offset))
     }
 
-    /// Différence entre deux adresses physiques (self - other).
-    /// Panics (debug) si self < other.
+    /// Difference between two physical addresses (self - other).
+    /// Panics (debug) if self < other.
     #[inline(always)]
     pub fn offset_from(self, base: PhysAddr) -> u64 {
         debug_assert!(self >= base, "PhysAddr::offset_from: self < base");
         self.0 - base.0
     }
 
-    /// Adresse nulle (non valide, utilisée comme sentinelle).
+    /// Null address (invalid, used as a sentinel).
     pub const NULL: PhysAddr = PhysAddr(0);
 
-    /// Valeur maximale representable.
+    /// Maximum representable value.
     pub const MAX: PhysAddr = PhysAddr(u64::MAX);
 }
 
@@ -177,164 +177,164 @@ impl fmt::LowerHex for PhysAddr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIRTADDR — Adresse virtuelle
+// VIRTADDR — Virtual address
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse virtuelle canonique 64 bits (x86_64: bits 48..63 = sign-extend bit 47).
-/// Ne peut PAS être convertie en pointeur sans vérification de mapping.
+/// Canonical 64-bit virtual address (x86_64: bits 48..63 = sign-extend bit 47).
+/// Can NOT be converted to a pointer without mapping verification.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VirtAddr(u64);
 
 impl VirtAddr {
-    /// Crée une VirtAddr depuis une valeur brute.
-    /// Canonicalise automatiquement (sign-extend bit 47).
+    /// Creates a VirtAddr from a raw value.
+    /// Canonicalizes automatically (sign-extend bit 47).
     #[inline(always)]
     pub const fn new(addr: u64) -> Self {
-        // Sign-extend bit 47 vers bits 48..63
+        // Sign-extend bit 47 to bits 48..63
         let bits = addr << 16;
         VirtAddr((bits as i64 >> 16) as u64)
     }
 
-    /// Crée sans vérification.
+    /// Creates without verification.
     ///
     /// # Safety
-    /// L'appelant garantit que `addr` est une valeur virtuelle brute
-    /// acceptable dans son contexte. Cela inclut des sentinelles non canoniques
-    /// comme `USER_END`, donc cette fonction ne canonicalise rien.
+    /// Caller guarantees that `addr` is an acceptable raw virtual value
+    /// in its context. This includes non-canonical sentinels
+    /// like `USER_END`, so this function performs no canonicalization.
     #[inline(always)]
     pub const unsafe fn new_unchecked(addr: u64) -> Self {
         VirtAddr(addr)
     }
 
-    /// Crée depuis un pointeur brut.
+    /// Creates from a raw pointer.
     ///
     /// # Safety
-    /// Le pointeur doit être une adresse virtuelle canonique valide.
+    /// The pointer must be a valid canonical virtual address.
     #[inline(always)]
     pub unsafe fn from_ptr<T>(ptr: *const T) -> Self {
         VirtAddr(ptr as u64)
     }
 
-    /// Retourne la valeur brute.
+    /// Returns the raw value.
     #[inline(always)]
     pub const fn as_u64(self) -> u64 {
         self.0
     }
 
-    /// Retourne la valeur brute sous forme usize.
+    /// Returns the raw value as usize.
     #[inline(always)]
     pub const fn as_usize(self) -> usize {
         self.0 as usize
     }
 
-    /// Convertit en pointeur brut *const T.
+    /// Converts to raw pointer *const T.
     ///
     /// # Safety
-    /// L'appelant doit s'assurer que la page est mappée,
-    /// alignée correctement, et que la durée de vie est valide.
+    /// The caller must ensure that the page is mapped,
+    /// properly aligned, and that the lifetime is valid.
     #[inline(always)]
     pub const unsafe fn as_ptr<T>(self) -> *const T {
         debug_assert!(self.is_canonical());
         self.0 as *const T
     }
 
-    /// Convertit en pointeur brut *mut T.
+    /// Converts to raw pointer *mut T.
     ///
     /// # Safety
-    /// Comme as_ptr, plus : la page doit être writable.
+    /// Like as_ptr, plus: the page must be writable.
     #[inline(always)]
     pub const unsafe fn as_mut_ptr<T>(self) -> *mut T {
         debug_assert!(self.is_canonical());
         self.0 as *mut T
     }
 
-    /// Vérifie si l'adresse est canonique (x86_64: bits 48..63 = sign-extend 47).
+    /// Checks if the address is canonical (x86_64: bits 48..63 = sign-extend 47).
     #[inline(always)]
     pub const fn is_canonical(self) -> bool {
         let high = self.0 >> 48;
         high == 0 || high == 0xFFFF
     }
 
-    /// Vérifie si l'adresse est dans l'espace utilisateur (< 0x0000_8000_0000_0000).
+    /// Checks if the address is in user space (< 0x0000_8000_0000_0000).
     #[inline(always)]
     pub const fn is_user(self) -> bool {
         self.0 < 0x0000_8000_0000_0000
     }
 
-    /// Vérifie si l'adresse est dans l'espace noyau (>= 0xFFFF_8000_0000_0000).
+    /// Checks if the address is in kernel space (>= 0xFFFF_8000_0000_0000).
     #[inline(always)]
     pub const fn is_kernel(self) -> bool {
         self.0 >= 0xFFFF_8000_0000_0000
     }
 
-    /// Aligne vers le bas sur `align` octets (puissance de 2).
+    /// Aligns down to `align` bytes (power of 2).
     #[inline(always)]
     pub const fn align_down(self, align: u64) -> Self {
         VirtAddr::new(self.0 & !(align - 1))
     }
 
-    /// Aligne vers le haut sur `align` octets (puissance de 2).
+    /// Aligns up to `align` bytes (power of 2).
     #[inline(always)]
     pub const fn align_up(self, align: u64) -> Self {
         VirtAddr::new((self.0 + align - 1) & !(align - 1))
     }
 
-    /// Aligne sur une page vers le bas.
+    /// Aligns down to page boundary.
     #[inline(always)]
     pub const fn page_align_down(self) -> Self {
         VirtAddr::new(self.0 & !(PAGE_MASK as u64))
     }
 
-    /// Aligne sur une page vers le haut.
+    /// Aligns up to page boundary.
     #[inline(always)]
     pub const fn page_align_up(self) -> Self {
         VirtAddr::new((self.0 + PAGE_MASK as u64) & !(PAGE_MASK as u64))
     }
 
-    /// Index de page (numéro de page virtuelle).
+    /// Page index (virtual page number).
     #[inline(always)]
     pub const fn vpn(self) -> u64 {
         self.0 >> PAGE_SHIFT as u64
     }
 
-    /// Extrait l'index PML4 (bits 39..48).
+    /// Extracts PML4 index (bits 39..48).
     #[inline(always)]
     pub const fn p4_index(self) -> usize {
         ((self.0 >> 39) & 0x1FF) as usize
     }
 
-    /// Extrait l'index PDPT (bits 30..39).
+    /// Extracts PDPT index (bits 30..39).
     #[inline(always)]
     pub const fn p3_index(self) -> usize {
         ((self.0 >> 30) & 0x1FF) as usize
     }
 
-    /// Extrait l'index PD (bits 21..30).
+    /// Extracts PD index (bits 21..30).
     #[inline(always)]
     pub const fn p2_index(self) -> usize {
         ((self.0 >> 21) & 0x1FF) as usize
     }
 
-    /// Extrait l'index PT (bits 12..21).
+    /// Extracts PT index (bits 12..21).
     #[inline(always)]
     pub const fn p1_index(self) -> usize {
         ((self.0 >> 12) & 0x1FF) as usize
     }
 
-    /// Extrait l'offset dans la page (bits 0..12).
+    /// Extracts offset within the page (bits 0..12).
     #[inline(always)]
     pub const fn page_offset(self) -> usize {
         (self.0 & PAGE_MASK as u64) as usize
     }
 
-    /// Extrait l'offset dans la huge page (bits 0..21).
+    /// Extracts offset within the huge page (bits 0..21).
     #[inline(always)]
     pub const fn huge_page_offset(self) -> usize {
         (self.0 & (HUGE_PAGE_SIZE - 1) as u64) as usize
     }
 
-    /// Différence entre self et base (self - base).
+    /// Difference between self and base (self - base).
     #[inline(always)]
     pub fn offset_from(self, base: VirtAddr) -> u64 {
         self.0.wrapping_sub(base.0)
@@ -395,53 +395,53 @@ impl fmt::Display for VirtAddr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PAGE — Page virtuelle
+// PAGE — Virtual page
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'une page virtuelle (VPN — Virtual Page Number).
+/// Identifier for a virtual page (VPN — Virtual Page Number).
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Page(u64);
 
 impl Page {
-    /// Crée une Page depuis une VirtAddr (arrondit vers le bas à la page).
+    /// Creates a Page from a VirtAddr (rounds down to page boundary).
     #[inline(always)]
     pub const fn containing(addr: VirtAddr) -> Self {
         Page(addr.as_u64() >> PAGE_SHIFT as u64)
     }
 
-    /// Retourne le VPN brut.
+    /// Returns the raw VPN.
     #[inline(always)]
     pub const fn vpn(self) -> u64 {
         self.0
     }
 
-    /// Retourne l'adresse virtuelle de début de cette page.
+    /// Returns the start virtual address of this page.
     #[inline(always)]
     pub const fn start_address(self) -> VirtAddr {
         VirtAddr::new(self.0 << PAGE_SHIFT as u64)
     }
 
-    /// Retourne la Page suivante.
+    /// Returns the next Page.
     #[inline(always)]
     pub const fn next(self) -> Self {
         Page(self.0 + 1)
     }
 
-    /// Retourne un itérateur sur la plage [self, end).
+    /// Returns an iterator over the range [self, end).
     #[inline(always)]
     pub fn range(self, end: Page) -> PageRange {
         PageRange { current: self, end }
     }
 
-    /// Nombre de pages séparant self de `end`.
+    /// Number of pages separating self from `end`.
     #[inline(always)]
     pub fn pages_until(self, end: Page) -> u64 {
         end.0 - self.0
     }
 }
 
-/// Itérateur sur une plage de pages virtuelles.
+/// Iterator over a range of virtual pages.
 pub struct PageRange {
     current: Page,
     end: Page,
@@ -469,70 +469,70 @@ impl Iterator for PageRange {
 impl ExactSizeIterator for PageRange {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FRAME — Frame physique
+// FRAME — Physical frame
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'un frame physique (PFN — Physical Frame Number).
+/// Identifier for a physical frame (PFN — Physical Frame Number).
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Frame(u64);
 
 impl Frame {
-    /// Crée un Frame depuis une PhysAddr (arrondit vers le bas).
+    /// Creates a Frame from a PhysAddr (rounds down).
     #[inline(always)]
     pub const fn containing(addr: PhysAddr) -> Self {
         Frame(addr.as_u64() >> PAGE_SHIFT as u64)
     }
 
-    /// Retourne le PFN brut.
+    /// Returns the raw PFN.
     #[inline(always)]
     pub const fn pfn(self) -> u64 {
         self.0
     }
 
-    /// Retourne l'adresse physique de début de ce frame.
+    /// Returns the start physical address of this frame.
     #[inline(always)]
     pub const fn start_address(self) -> PhysAddr {
         PhysAddr::new(self.0 << PAGE_SHIFT as u64)
     }
 
-    /// Retourne le Frame suivant.
+    /// Returns the next Frame.
     #[inline(always)]
     pub const fn next(self) -> Self {
         Frame(self.0 + 1)
     }
 
-    /// Itérateur sur la plage [self, end).
+    /// Iterator over the range [self, end).
     #[inline(always)]
     pub fn range(self, end: Frame) -> FrameRange {
         FrameRange { current: self, end }
     }
 
-    /// Nombre de frames jusqu'à `end`.
+    /// Number of frames until `end`.
     #[inline(always)]
     pub fn frames_until(self, end: Frame) -> u64 {
         end.0 - self.0
     }
 
-    /// Retourne l'adresse physique de début de ce frame.
-    /// Alias de `start_address()` — fourni pour cohérence d'API.
+    /// Returns the start physical address of this frame.
+    /// Alias for `start_address()` — provided for API consistency.
     #[inline(always)]
     pub const fn phys_addr(self) -> PhysAddr {
         self.start_address()
     }
 
-    /// Crée un Frame depuis une PhysAddr (arrondit vers le bas vers la page).
-    /// Alias de `Frame::containing()` — fourni pour cohérence d'API.
+    /// Creates a Frame from a PhysAddr (rounds down to page boundary).
+    /// Alias for `Frame::containing()` — provided for API consistency.
     #[inline(always)]
     pub const fn from_phys_addr(addr: PhysAddr) -> Self {
         Frame::containing(addr)
     }
 
-    /// Frame correspondant au PFN 0 (frame nul, jamais alloué).
+    /// Frame corresponding to PFN 0 (null frame, never allocated).
     pub const NULL: Frame = Frame(0);
 }
 
-/// Itérateur sur une plage de frames physiques.
+/// Iterator over a range of physical frames.
 pub struct FrameRange {
     current: Frame,
     end: Frame,
@@ -560,72 +560,72 @@ impl Iterator for FrameRange {
 impl ExactSizeIterator for FrameRange {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PAGE FLAGS — Drapeaux de protection/attributs de page
+// PAGE FLAGS — Page protection flags / attributes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux de page — représentent les bits de l'entrée page table x86_64.
-/// Les valeurs correspondent exactement aux bits hardware (P, RW, US, PWT, PCD,
-/// A, D, PS, G, NX...) pour un mapping 1:1 avec le matériel.
+/// Page flags — represent bits in the x86_64 page table entry.
+/// Values match hardware bits exactly (P, RW, US, PWT, PCD,
+/// A, D, PS, G, NX...) for a 1:1 hardware mapping.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PageFlags(u64);
 
 impl PageFlags {
-    // ── Bits matériels x86_64 ──────────────────────────────────────────────
+    // ── x86_64 hardware bits ───────────────────────────────────────────────
 
-    /// Bit P : page présente en mémoire physique.
+    /// Bit P: page present in physical memory.
     pub const PRESENT: PageFlags = PageFlags(1 << 0);
-    /// Bit RW : lecture/écriture (sinon lecture seule).
+    /// Bit RW: read/write (otherwise read-only).
     pub const WRITABLE: PageFlags = PageFlags(1 << 1);
-    /// Bit US : accessible depuis userspace (ring 3).
+    /// Bit US: accessible from userspace (ring 3).
     pub const USER: PageFlags = PageFlags(1 << 2);
-    /// Bit PWT : write-through (sinon write-back).
+    /// Bit PWT: write-through (otherwise write-back).
     pub const WRITE_THROUGH: PageFlags = PageFlags(1 << 3);
-    /// Bit PCD : désactiver le cache (No-Cache).
+    /// Bit PCD: disable cache (No-Cache).
     pub const NO_CACHE: PageFlags = PageFlags(1 << 4);
-    /// Bit A : page accédée (mise à jour par le CPU).
+    /// Bit A: page accessed (updated by CPU).
     pub const ACCESSED: PageFlags = PageFlags(1 << 5);
-    /// Bit D : page modifiée/sale (Dirty).
+    /// Bit D: page modified/dirty (Dirty).
     pub const DIRTY: PageFlags = PageFlags(1 << 6);
-    /// Bit PS : huge page (2MiB au niveau PD, 1GiB au niveau PDPT).
+    /// Bit PS: huge page (2MiB at PD level, 1GiB at PDPT level).
     pub const HUGE_PAGE: PageFlags = PageFlags(1 << 7);
-    /// Bit G : page globale (non invalidée sur changement CR3, TLB global).
+    /// Bit G: global page (not invalidated on CR3 reload, global TLB).
     pub const GLOBAL: PageFlags = PageFlags(1 << 8);
-    /// Bit NX (bit 63) : No-Execute — interdit l'exécution de code.
+    /// Bit NX (bit 63): No-Execute — forbids code execution.
     pub const NO_EXECUTE: PageFlags = PageFlags(1 << 63);
 
-    // ── Bits logiciels (bits 9..11, bits 52..62 disponibles pour l'OS) ─────
+    // ── Software bits (bits 9..11, bits 52..62 available for the OS) ───────
 
-    /// Bit logiciel 9 : page Copy-on-Write.
+    /// Software bit 9: Copy-on-Write page.
     pub const COW: PageFlags = PageFlags(1 << 9);
-    /// Bit logiciel 10 : page verrouillée en RAM (ne pas swapper).
+    /// Software bit 10: page pinned in RAM (do not swap).
     pub const PINNED: PageFlags = PageFlags(1 << 10);
-    /// Bit logiciel 11 : shared memory (partagé entre processus).
+    /// Software bit 11: shared memory (shared between processes).
     pub const SHARED: PageFlags = PageFlags(1 << 11);
-    /// Bit logiciel 52 : page utilisée pour DMA (pas de CoW, pas de swap).
+    /// Software bit 52: page used for DMA (no CoW, no swap).
     pub const DMA: PageFlags = PageFlags(1 << 52);
-    /// Bit logiciel 53 : frame DMA — pas de Write-Combining.
+    /// Software bit 53: DMA frame — no Write-Combining.
     pub const DMA_NO_WC: PageFlags = PageFlags(1 << 53);
-    /// Bit logiciel 54 : feuille 4 KiB à mapper via l'entrée PAT write-combining.
+    /// Software bit 54: 4 KiB leaf mapped via PAT write-combining entry.
     pub const WRITE_COMBINING: PageFlags = PageFlags(1 << 54);
 
-    // ── Combinaisons courantes ─────────────────────────────────────────────
+    // ── Common combinations ────────────────────────────────────────────────
 
-    /// Page noyau exécutable : P + RW + G + NX désactivé.
+    /// Executable kernel page: P + RW + G + NX disabled.
     pub const KERNEL_CODE: PageFlags = PageFlags(Self::PRESENT.0 | Self::GLOBAL.0);
 
-    /// Page noyau données R/W, non exécutable.
+    /// R/W kernel data page, non-executable.
     pub const KERNEL_DATA: PageFlags =
         PageFlags(Self::PRESENT.0 | Self::WRITABLE.0 | Self::GLOBAL.0 | Self::NO_EXECUTE.0);
 
-    /// Page utilisateur R/W, non exécutable.
+    /// R/W user page, non-executable.
     pub const USER_DATA: PageFlags =
         PageFlags(Self::PRESENT.0 | Self::WRITABLE.0 | Self::USER.0 | Self::NO_EXECUTE.0);
 
-    /// Page utilisateur exécutable (code).
+    /// Executable user page (code).
     pub const USER_CODE: PageFlags = PageFlags(Self::PRESENT.0 | Self::USER.0);
 
-    /// Page DMA coherent (device memory, no-cache, R/W, noyau global).
+    /// Coherent DMA page (device memory, no-cache, R/W, global kernel).
     pub const KERNEL_DMA: PageFlags = PageFlags(
         Self::PRESENT.0
             | Self::WRITABLE.0
@@ -635,10 +635,10 @@ impl PageFlags {
             | Self::DMA.0,
     );
 
-    /// Page vide (non présente).
+    /// Empty page (not present).
     pub const EMPTY: PageFlags = PageFlags(0);
 
-    // ── Constructeur ──────────────────────────────────────────────────────
+    // ── Constructor ────────────────────────────────────────────────────────
 
     #[inline(always)]
     pub const fn new(bits: u64) -> Self {
@@ -650,7 +650,7 @@ impl PageFlags {
         self.0
     }
 
-    // ── Opérations booléennes ─────────────────────────────────────────────
+    // ── Boolean operations ─────────────────────────────────────────────────
 
     #[inline(always)]
     pub const fn contains(self, other: PageFlags) -> bool {
@@ -677,43 +677,43 @@ impl PageFlags {
         PageFlags(self.0 ^ flag.0)
     }
 
-    /// Vérifie si la page est présente.
+    /// Checks if the page is present.
     #[inline(always)]
     pub const fn is_present(self) -> bool {
         self.contains(Self::PRESENT)
     }
 
-    /// Vérifie si la page est inscriptible.
+    /// Checks if the page is writable.
     #[inline(always)]
     pub const fn is_writable(self) -> bool {
         self.contains(Self::WRITABLE)
     }
 
-    /// Vérifie si la page est accessible depuis userspace.
+    /// Checks if the page is accessible from userspace.
     #[inline(always)]
     pub const fn is_user(self) -> bool {
         self.contains(Self::USER)
     }
 
-    /// Vérifie si la page est exécutable (NX non positionné).
+    /// Checks if the page is executable (NX not set).
     #[inline(always)]
     pub const fn is_executable(self) -> bool {
         !self.contains(Self::NO_EXECUTE)
     }
 
-    /// Vérifie s'il s'agit d'une huge page.
+    /// Checks if this is a huge page.
     #[inline(always)]
     pub const fn is_huge(self) -> bool {
         self.contains(Self::HUGE_PAGE)
     }
 
-    /// Vérifie si la page est CoW.
+    /// Checks if the page is CoW.
     #[inline(always)]
     pub const fn is_cow(self) -> bool {
         self.contains(Self::COW)
     }
 
-    /// Vérifie si la page est verrouillée en RAM.
+    /// Checks if the page is pinned in RAM.
     #[inline(always)]
     pub const fn is_pinned(self) -> bool {
         self.contains(Self::PINNED)
@@ -797,36 +797,36 @@ impl fmt::Debug for PageFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZONE TYPE — Catégorie de zone mémoire
+// ZONE TYPE — Memory zone category
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Catégorie de zone mémoire physique.
+/// Category of physical memory zone.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(u8)]
 pub enum ZoneType {
-    /// Zone DMA — <16 MiB, pour les devices 32 bits legacy.
+    /// DMA zone — <16 MiB, for legacy 32-bit devices.
     Dma = 0,
-    /// Zone DMA32 — <4 GiB, pour les devices PCIe 32 bits.
+    /// DMA32 zone — <4 GiB, for 32-bit PCIe devices.
     Dma32 = 1,
-    /// Zone NORMAL — RAM principale (>= 4 GiB sur 64 bits, >= 896 MiB sur 32 bits).
+    /// NORMAL zone — Main RAM (>= 4 GiB on 64 bits, >= 896 MiB on 32 bits).
     Normal = 2,
-    /// Zone HIGH — Mémoire haute (32 bits uniquement, >896 MiB).
+    /// HIGH zone — High memory (32 bits only, >896 MiB).
     High = 3,
-    /// Zone MOVABLE — Pages déplaçables pour défragmenter les huge pages.
+    /// MOVABLE zone — Movable pages to defragment huge pages.
     Movable = 4,
 }
 
 impl ZoneType {
-    /// Retourne le nombre total de zones connues.
+    /// Returns the total number of known zones.
     pub const COUNT: usize = 5;
 
-    /// Retourne l'index numérique de la zone.
+    /// Returns the numerical index of the zone.
     #[inline(always)]
     pub const fn index(self) -> usize {
         self as usize
     }
 
-    /// Convertit un index en ZoneType (None si invalide).
+    /// Converts an index to ZoneType (None if invalid).
     #[inline(always)]
     pub const fn from_index(idx: usize) -> Option<ZoneType> {
         match idx {
@@ -839,7 +839,7 @@ impl ZoneType {
         }
     }
 
-    /// Détermine la zone appropriée pour une adresse physique donnée.
+    /// Determines the appropriate zone for a given physical address.
     #[inline]
     pub fn for_phys_addr(addr: PhysAddr) -> ZoneType {
         use super::constants::{ZONE_DMA32_END, ZONE_DMA_END};
@@ -855,34 +855,34 @@ impl ZoneType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOC FLAGS — Options d'allocation
+// ALLOC FLAGS — Allocation options
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux contrôlant le comportement de l'allocateur physique.
+/// Flags controlling physical allocator behavior.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct AllocFlags(u32);
 
 impl AllocFlags {
-    /// Aucun flag spécial.
+    /// No special flags.
     pub const NONE: AllocFlags = AllocFlags(0);
-    /// Ne pas bloquer si la mémoire est épuisée — retourne Err immédiatement.
+    /// Do not block if memory is exhausted — returns Err immediately.
     pub const NO_WAIT: AllocFlags = AllocFlags(1 << 0);
-    /// Allocation pour DMA (zone DMA < 16 MiB obligatoire).
+    /// Allocation for DMA (DMA zone < 16 MiB required).
     pub const DMA: AllocFlags = AllocFlags(1 << 1);
-    /// Allocation DMA32 (zone DMA32 < 4 GiB).
+    /// DMA32 allocation (DMA32 zone < 4 GiB).
     pub const DMA32: AllocFlags = AllocFlags(1 << 2);
-    /// Initialiser les pages à zéro avant de les retourner.
+    /// Zero initialize pages before returning them.
     pub const ZEROED: AllocFlags = AllocFlags(1 << 3);
-    /// Allocation urgente (utiliser le pool d'urgence si nécessaire).
+    /// Urgent allocation (use emergency pool if needed).
     pub const EMERGENCY: AllocFlags = AllocFlags(1 << 4);
-    /// Exécuter depuis un contexte atomic (pas de blocage autorisé).
+    /// Execute from an atomic context (no blocking allowed).
     pub const ATOMIC: AllocFlags = AllocFlags(Self::NO_WAIT.0 | 1 << 5);
-    /// Page de garde (ne jamais mapper en cache de TLB global).
+    /// Guard page (never map into global TLB cache).
     pub const GUARD: AllocFlags = AllocFlags(1 << 6);
-    /// Allocation MOVABLE (eligible à la migration inter-nœuds).
+    /// MOVABLE allocation (eligible for inter-node migration).
     pub const MOVABLE: AllocFlags = AllocFlags(1 << 7);
-    /// Verrouiller la page en RAM (ne pas permettre le swap).
+    /// Pin page in RAM (do not allow swap).
     pub const PIN: AllocFlags = AllocFlags(1 << 8);
 
     #[inline(always)]
@@ -900,7 +900,7 @@ impl AllocFlags {
         AllocFlags(self.0 | f.0)
     }
 
-    /// Zone requise par ces flags.
+    /// Zone required by these flags.
     #[inline]
     pub const fn required_zone(self) -> ZoneType {
         if self.contains(Self::DMA) {
@@ -930,25 +930,25 @@ impl fmt::Debug for AllocFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOC ERROR — Erreurs d'allocation
+// ALLOC ERROR — Allocation errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs pouvant survenir lors d'une allocation mémoire.
+/// Errors that can occur during memory allocation.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum AllocError {
-    /// Plus aucune mémoire libre dans la zone requise.
+    /// No free memory left in the requested zone.
     OutOfMemory,
-    /// Fragmentation : pas de bloc contigu suffisamment grand.
+    /// Fragmentation: no contiguous block large enough.
     Fragmentation,
-    /// Paramètres invalides (ordre nul, order trop grand, align invalide).
+    /// Invalid parameters (zero order, order too large, invalid align).
     InvalidParams,
-    /// L'allocateur n'est pas encore initialisé.
+    /// The allocator is not yet initialized.
     NotInitialized,
-    /// L'allocation aurait bloqué mais NO_WAIT était positionné.
+    /// Allocation would block but NO_WAIT was set.
     WouldBlock,
-    /// Zone mémoire demandée inexistante ou non initialisée.
+    /// Requested memory zone does not exist or is not initialized.
     ZoneUnavailable,
-    /// Dépassement de la limite de mémoire pour ce processus (cgroup).
+    /// Exceeded memory limit for this process (cgroup).
     LimitExceeded,
 }
 
@@ -967,7 +967,7 @@ impl fmt::Display for AllocError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS STATIQUES SUR LES TAILLES
+// STATIC SIZE CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _: () = assert!(

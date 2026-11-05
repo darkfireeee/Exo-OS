@@ -1,10 +1,10 @@
 // kernel/src/memory/dma/iommu/intel_vtd.rs
 //
-// Pilote Intel VT-d (Virtualization Technology for Directed I/O).
-// Implémente l'initialisation et la gestion des remapping tables Intel.
+// Intel VT-d (Virtualization Technology for Directed I/O) driver.
+// Implements initialization and management of Intel remapping tables.
 //
-// COUCHE 0 — aucune dépendance externe.
-// Référence : Intel VT-d Architecture Specification, Rev 3.4.
+// LAYER 0 — no external dependencies.
+// Reference: Intel VT-d Architecture Specification, Rev 3.4.
 
 use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -12,7 +12,7 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::DmaError;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRES VT-d (offsets dans le MMIO DMAR)
+// VT-d REGISTERS (offsets in DMAR MMIO)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod vtd_regs {
@@ -44,7 +44,7 @@ pub mod vtd_regs {
     pub const ICS: usize = 0x09C;
 }
 
-/// Bits du registre GCMD.
+/// GCMD register bits.
 pub mod gcmd_bits {
     pub const TE: u32 = 1 << 31; // Translation Enable
     pub const SRTP: u32 = 1 << 30; // Set Root Table Pointer
@@ -55,11 +55,11 @@ pub mod gcmd_bits {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ROOT TABLE & CONTEXT TABLE (format Intel)
+// ROOT TABLE & CONTEXT TABLE (Intel format)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée de la Root Table (256 entrées, une par bus PCI).
-/// Chaque entrée pointe sur une Context Table de 256 entrées.
+/// Root Table entry (256 entries, one per PCI bus).
+/// Each entry points to a Context Table of 256 entries.
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
 pub struct RootEntry {
@@ -86,7 +86,7 @@ impl RootEntry {
     }
 }
 
-/// La Root Table = 4096 octets = 256 × RootEntry.
+/// The Root Table = 4096 bytes = 256 × RootEntry.
 #[repr(C, align(4096))]
 pub struct RootTable {
     pub entries: [RootEntry; 256],
@@ -94,7 +94,7 @@ pub struct RootTable {
 
 impl RootTable {
     pub fn zero(&mut self) {
-        // SAFETY: RootEntry est Copy et 0-initialisable.
+        // SAFETY: RootEntry is Copy and zero-initializable.
         unsafe {
             core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
         }
@@ -102,7 +102,7 @@ impl RootTable {
     }
 }
 
-/// Entrée d'une Context Table (une par device:function).
+/// Context Table entry (one per device:function).
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
 pub struct ContextEntry {
@@ -122,7 +122,7 @@ impl ContextEntry {
         self.lo & Self::PRESENT != 0
     }
 
-    /// Configure pour un domaine traduit.
+    /// Configures for a translated domain.
     pub fn set_translated(&mut self, sl_phys: PhysAddr, domain_id: u16, aw: u8) {
         // AW (Address Width): 2=48-bit (4-level), 3=57-bit (5-level).
         // lo[63:12] = SL root table ptr, lo[3:2] = TT, lo[0] = P
@@ -137,7 +137,7 @@ impl ContextEntry {
     }
 }
 
-/// Context Table = 4096 octets = 256 × ContextEntry.
+/// Context Table = 4096 bytes = 256 × ContextEntry.
 #[repr(C, align(4096))]
 pub struct ContextTable {
     pub entries: [ContextEntry; 256],
@@ -145,7 +145,7 @@ pub struct ContextTable {
 
 impl ContextTable {
     pub fn zero(&mut self) {
-        // SAFETY: self.entries est un tableau contigu de 256 ContextEntry; write_bytes écrase proprement.
+        // SAFETY: self.entries is a contiguous array of 256 ContextEntry; write_bytes cleanly overwrites it.
         unsafe {
             core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 256);
         }
@@ -154,27 +154,27 @@ impl ContextTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONTRÔLEUR VT-d
+// VT-d CONTROLLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de remapping hardware units supportés.
+/// Maximum number of supported remapping hardware units.
 pub const MAX_DRHD: usize = 8;
 
-/// État d'une hardware unit VT-d.
+/// State of a VT-d hardware unit.
 pub struct DmarUnit {
-    /// Adresse MMIO base de cette DRHD.
+    /// Base MMIO address of this DRHD.
     pub mmio_base: u64,
-    /// Taille de la région MMIO (généralement 4096).
+    /// Size of the MMIO region (typically 4096).
     pub mmio_size: u64,
-    /// Capacités (registre CAP).
+    /// Capabilities (CAP register).
     pub cap: u64,
-    /// Capacités étendues (registre ECAP).
+    /// Extended capabilities (ECAP register).
     pub ecap: u64,
-    /// Root Table physique pour cette unit.
+    /// Physical Root Table for this unit.
     pub root_table_phys: AtomicU64,
-    /// Activé ?
+    /// Enabled?
     pub enabled: AtomicBool,
-    /// Unité initialisée ?
+    /// Unit initialized?
     pub initialized: AtomicBool,
 }
 
@@ -191,37 +191,37 @@ impl DmarUnit {
         }
     }
 
-    /// Lit un registre 32-bit MMIO DMAR.
+    /// Reads a 32-bit DMAR MMIO register.
     ///
     /// # Safety
-    /// `mmio_base` doit être mappé et accessible.
+    /// `mmio_base` must be mapped and accessible.
     unsafe fn read32(&self, offset: usize) -> u32 {
         let ptr = (self.mmio_base + offset as u64) as *const u32;
         core::ptr::read_volatile(ptr)
     }
 
-    /// Écrit un registre 32-bit MMIO DMAR.
+    /// Writes a 32-bit DMAR MMIO register.
     ///
     /// # Safety
-    /// `mmio_base` doit être mappé et accessible.
+    /// `mmio_base` must be mapped and accessible.
     unsafe fn write32(&self, offset: usize, val: u32) {
         let ptr = (self.mmio_base + offset as u64) as *mut u32;
         core::ptr::write_volatile(ptr, val);
     }
 
-    /// Écrit un registre 64-bit MMIO DMAR.
+    /// Writes a 64-bit DMAR MMIO register.
     ///
     /// # Safety
-    /// `mmio_base` doit être mappé et accessible. Nécessite une écriture 64-bit.
+    /// `mmio_base` must be mapped and accessible. Requires a 64-bit write.
     unsafe fn write64(&self, offset: usize, val: u64) {
         let ptr = (self.mmio_base + offset as u64) as *mut u64;
         core::ptr::write_volatile(ptr, val);
     }
 
-    /// Initialise cette DRHD unit (lit les capacités).
+    /// Initializes this DRHD unit (reads capabilities).
     ///
     /// # Safety
-    /// `mmio_base` est une adresse virtuelle valide mappée sur le MMIO DMAR.
+    /// `mmio_base` is a valid virtual address mapped to DMAR MMIO.
     pub unsafe fn init(&mut self, mmio_base: u64, mmio_size: u64) {
         self.mmio_base = mmio_base;
         self.mmio_size = mmio_size;
@@ -231,16 +231,16 @@ impl DmarUnit {
             (self.read32(vtd_regs::ECAP) as u64) | ((self.read32(vtd_regs::ECAP + 4) as u64) << 32);
     }
 
-    /// Configure la Root Table pour cette DRHD.
+    /// Configures the Root Table for this DRHD.
     ///
     /// # Safety
-    /// La Root Table doit être allocée et zéro-initialisée.
+    /// The Root Table must be allocated and zero-initialized.
     pub unsafe fn set_root_table(&self, rt_phys: PhysAddr) {
-        // Écrit l'adresse de la Root Table.
+        // Write the Root Table address.
         self.write64(vtd_regs::RTADDR, rt_phys.as_u64());
         // Set Root Table Pointer.
         self.write32(vtd_regs::GCMD, gcmd_bits::SRTP);
-        // Attendons que le hardware confirme (poll sur GSTS.RTPS).
+        // Wait for hardware confirmation (poll on GSTS.RTPS).
         let mut timeout = 1_000_000u32;
         while timeout > 0 {
             let gsts = self.read32(vtd_regs::GSTS);
@@ -253,10 +253,10 @@ impl DmarUnit {
             .store(rt_phys.as_u64(), Ordering::Release);
     }
 
-    /// Active la translation DMA sur cette DRHD.
+    /// Enables DMA translation on this DRHD.
     ///
     /// # Safety
-    /// La Root Table doit être correctement configurée avant l'activation.
+    /// The Root Table must be properly configured before activation.
     pub unsafe fn enable_translation(&self) {
         self.write32(vtd_regs::GCMD, gcmd_bits::TE);
         let mut timeout = 1_000_000u32;
@@ -270,10 +270,10 @@ impl DmarUnit {
         self.enabled.store(true, Ordering::Release);
     }
 
-    /// Invalide le contexte cache pour un device (BDF).
+    /// Invalidates context cache for a device (BDF).
     ///
     /// # Safety
-    /// Nécessite que la DRHD soit activée.
+    /// Requires the DRHD to be enabled.
     pub unsafe fn invalidate_context(&self, domain_id: u16, bus: u8, df: u8) {
         // CCMD: IWS=1, CIIG=00 (device-specific), DID, SID
         let ccmd: u64 = (1u64 << 63)              // ICC
@@ -281,7 +281,7 @@ impl DmarUnit {
                       | ((bus as u64) << 8)
                       | (df as u64);
         self.write64(vtd_regs::CCMD, ccmd);
-        // Attendre ICC = 0.
+        // Wait for ICC = 0.
         let mut timeout = 1_000_000u32;
         while timeout > 0 {
             let val =
@@ -295,7 +295,7 @@ impl DmarUnit {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GESTIONNAIRE GLOBAL VT-d
+// GLOBAL VT-d MANAGER
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct IntelVtd {
@@ -304,7 +304,7 @@ pub struct IntelVtd {
     initialized: AtomicBool,
 }
 
-// SAFETY: accès protected by AtomicBool + init order (single-threaded init).
+// SAFETY: access protected by AtomicBool + init order (single-threaded init).
 unsafe impl Sync for IntelVtd {}
 unsafe impl Send for IntelVtd {}
 
@@ -326,10 +326,10 @@ impl IntelVtd {
         }
     }
 
-    /// Enregistre une hardware DRHD unit.
+    /// Registers a hardware DRHD unit.
     ///
     /// # Safety
-    /// Appelé depuis le parseur ACPI DMAR, avant `global_init()`.
+    /// Called from the ACPI DMAR parser, before `global_init()`.
     pub unsafe fn register_drhd(&self, mmio_base: u64, mmio_size: u64) -> Result<(), DmaError> {
         let idx = self.count.load(Ordering::Relaxed) as usize;
         if idx >= MAX_DRHD {
@@ -342,10 +342,10 @@ impl IntelVtd {
         Ok(())
     }
 
-    /// Initialise globalement VT-d (après registration de toutes les DRHD).
+    /// Globally initializes VT-d (after registering all DRHDs).
     ///
     /// # Safety
-    /// Appelé une seule fois au boot.
+    /// Called only once at boot.
     pub unsafe fn global_init(&self) {
         self.initialized.store(true, Ordering::Release);
     }
@@ -358,14 +358,14 @@ impl IntelVtd {
         self.count.load(Ordering::Relaxed) as usize
     }
 
-    /// Invalide l'entrée IOTLB pour l'IOVA donnée dans le domaine `domain_id`
-    /// sur toutes les unités DRHD initialisées.
+    /// Invalidates the IOTLB entry for the given IOVA in domain `domain_id`
+    /// across all initialized DRHD units.
     ///
-    /// Utilise la Register-Based Invalidation Interface (CCMD + IOTLB_REG),
-    /// méthode synchrone garantissant la cohérence avant retour.
+    /// Uses the Register-Based Invalidation Interface (CCMD + IOTLB_REG),
+    /// a synchronous method guaranteeing consistency before returning.
     ///
     /// # Safety
-    /// CPL 0, VT-d initialisé.
+    /// CPL 0, VT-d initialized.
     pub unsafe fn flush_iotlb_domain(&self, domain_id: u16, _iova: u64) {
         if !self.initialized.load(Ordering::Acquire) {
             return;
@@ -377,14 +377,14 @@ impl IntelVtd {
                 continue;
             }
 
-            // Invalidation de contexte (domain-global) via CCMD.
+            // Context invalidation (domain-global) via CCMD.
             // DI = 0b01 = Domain-Selective invalidation.
             let ccmd: u64 = (1u64 << 63)              // ICC (Invalidation Context Cache)
                           | (0b01u64 << 61)            // Cireg = 01 (domain-selective)
                           | ((domain_id as u64) << 16);
             unit.write64(vtd_regs::CCMD, ccmd);
 
-            // Attendre fin de l'invalidation de contexte (ICC → 0).
+            // Wait for context invalidation completion (ICC → 0).
             let mut timeout = 1_000_000u32;
             while timeout > 0 {
                 let hi = unit.read32(vtd_regs::CCMD + 4) as u64;
@@ -394,16 +394,16 @@ impl IntelVtd {
                 timeout -= 1;
             }
 
-            // IOTLB invalidation : IOTLB_REG classiquement à ECAP[12:10]*16 + 8.
-            // Ici on utilise l'offset standard 0x108 (domaine-sélectif).
+            // IOTLB invalidation: IOTLB_REG typically at ECAP[12:10]*16 + 8.
+            // Here standard offset 0x108 (domain-selective) is used.
             // DI = 0b010 (IOTLB Domain-Selective), DID = domain_id.
             const IOTLB_REG_HI: usize = 0x10C;
             let iotlb_cmd: u32 = (1u32 << 31)                  // IVT = 1 (invalidate)
-                               | (0b010u32 << 4)               // IIRG = 010 = domain
-                               | ((domain_id as u32) << 16); // domain id
+                                | (0b010u32 << 4)               // IIRG = 010 = domain
+                                | ((domain_id as u32) << 16); // domain id
             unit.write32(IOTLB_REG_HI, iotlb_cmd);
 
-            // Attendre fin (IVT → 0).
+            // Wait for completion (IVT → 0).
             let mut timeout = 1_000_000u32;
             while timeout > 0 {
                 if unit.read32(IOTLB_REG_HI) & (1 << 31) == 0 {

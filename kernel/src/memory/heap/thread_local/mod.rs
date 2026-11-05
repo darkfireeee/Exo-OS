@@ -1,6 +1,6 @@
 // kernel/src/memory/heap/thread_local/mod.rs
 //
-// Module thread_local : cache per-CPU pour les allocations heap.
+// thread_local module: per-CPU cache for heap allocations.
 
 pub mod cache;
 pub mod drain;

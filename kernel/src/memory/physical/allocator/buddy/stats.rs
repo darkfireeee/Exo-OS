@@ -1,10 +1,10 @@
-//! # memory/physical/allocator/buddy/stats.rs — Statistiques et métriques de fragmentation
+//! # memory/physical/allocator/buddy/stats.rs — Statistics and fragmentation metrics
 //!
-//! Analyse de l'état de fragmentation et calcul des ratios de mémoire libre.
+//! Fragmentation state analysis and free memory ratio calculation.
 
 use crate::memory::core::{ZoneType, BUDDY_ORDER_COUNT};
 
-/// Statistiques d'une zone buddy.
+/// Statistics of a buddy zone.
 #[derive(Copy, Clone, Debug)]
 pub struct BuddyZoneStats {
     pub zone_type: ZoneType,
@@ -16,12 +16,12 @@ pub struct BuddyZoneStats {
     pub fail_count: usize,
     pub split_count: usize,
     pub merge_count: usize,
-    /// Nombre de blocs libres par ordre (0..BUDDY_ORDER_COUNT).
+    /// Number of free blocks per order (0..BUDDY_ORDER_COUNT).
     pub free_by_order: [usize; BUDDY_ORDER_COUNT],
 }
 
 impl BuddyZoneStats {
-    /// Pourcentage de mémoire libre (0.0-100.0).
+    /// Free memory percentage (0.0-100.0).
     pub fn free_percent(&self) -> f32 {
         if self.total_frames == 0 {
             return 0.0;
@@ -29,8 +29,8 @@ impl BuddyZoneStats {
         self.free_frames as f32 * 100.0 / self.total_frames as f32
     }
 
-    /// Taux de fragmentation (0.0 = aucune, 1.0 = maximale).
-    /// Mesure l'écart entre la mémoire libre totale et les blocs de grand ordre.
+    /// Fragmentation ratio (0.0 = none, 1.0 = maximum).
+    /// Measures the gap between total free memory and large-order blocks.
     pub fn fragmentation_ratio(&self) -> f32 {
         if self.free_frames == 0 {
             return 0.0;

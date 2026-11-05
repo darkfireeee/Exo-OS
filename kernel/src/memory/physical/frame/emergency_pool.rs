@@ -1,18 +1,18 @@
 #![allow(clippy::missing_safety_doc)]
 // kernel/src/memory/physical/frame/emergency_pool.rs
 //
-// EmergencyPool — EMERGENCY_POOL_SIZE (≥256) WaitNodes pré-alloués au BOOT.
-// Taille canonique: memory::core::constants::EMERGENCY_POOL_SIZE = 256.
-// RÈGLE EMERGENCY-01 : Initialisé AVANT tout autre module noyau.
+// EmergencyPool — EMERGENCY_POOL_SIZE (>=256) WaitNodes pre-allocated at BOOT.
+// Canonical size: memory::core::constants::EMERGENCY_POOL_SIZE = 256.
+// RULE EMERGENCY-01: Initialized BEFORE any other kernel module.
 //
-// Raison d'être :
-//   WaitQueue::wait() peut être appelé depuis un contexte de reclaim mémoire.
-//   Si on alloue depuis le heap pendant reclaim → deadlock récursif.
-//   Ce pool résout ce problème en fournissant des nœuds pré-alloués en
-//   statique .bss, jamais libérés, jamais compactés.
+// Rationale:
+//   WaitQueue::wait() can be called from a memory reclaim context.
+//   Allocating from the heap during reclaim -> recursive deadlock.
+//   This pool resolves this issue by providing pre-allocated nodes in
+//   static .bss, never freed, never compacted.
 //
-// Utilisateurs légitimes : scheduler/sync/wait_queue.rs UNIQUEMENT.
-// Couche 0 — aucune dépendance externe.
+// Legitimate users: scheduler/sync/wait_queue.rs ONLY.
+// Layer 0 — no external dependencies.
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
@@ -21,22 +21,22 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use crate::memory::core::constants::EMERGENCY_POOL_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WAIT NODE — nœud de wait queue
+// WAIT NODE — wait queue node
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// WaitNode — structure allouée depuis l'EmergencyPool pour les wait queues.
-/// Doit rester aussi petite que possible (vise 64 bytes = 1 cache line).
+/// WaitNode — structure allocated from EmergencyPool for wait queues.
+/// Must stay as small as possible (targets 64 bytes = 1 cache line).
 #[repr(C, align(64))]
 pub struct WaitNode {
-    /// Thread ID en attente (0 = nœud libre).
+    /// Waiting thread ID (0 = free node).
     pub thread_id: AtomicUsize,
-    /// Prochain nœud dans la liste chaînée (null = fin).
-    pub next: AtomicUsize, // *mut WaitNode comme usize
-    /// Résultat de réveil (0 = signalé proprement, autre = erreur/timeout).
+    /// Next node in the linked list (null = end).
+    pub next: AtomicUsize, // *mut WaitNode as usize
+    /// Wakeup result (0 = signaled cleanly, other = error/timeout).
     pub wakeup_result: AtomicUsize,
-    /// Timestamp d'entrée en attente (nanosecondes monotoniques, debug).
+    /// Wait entry timestamp (monotonic nanoseconds, debug).
     pub enqueue_ts: AtomicUsize,
-    /// Padding pour atteindre exactement 64 bytes.
+    /// Padding to reach exactly 64 bytes.
     _pad: [u8; 64 - 4 * core::mem::size_of::<AtomicUsize>()],
 }
 
@@ -50,10 +50,10 @@ const _: () = assert!(
 );
 
 impl WaitNode {
-    /// Constante de valeur NULL pour le champ `next`.
+    /// NULL pointer constant value for the `next` field.
     pub const NULL_PTR: usize = 0;
 
-    /// Crée un WaitNode vide (thread_id = 0 = libre).
+    /// Creates an empty WaitNode (thread_id = 0 = free).
     #[inline(always)]
     pub const fn new_free() -> Self {
         WaitNode {
@@ -65,14 +65,14 @@ impl WaitNode {
         }
     }
 
-    /// Vérifie si ce nœud est libre (non utilisé par une wait queue).
+    /// Checks whether this node is free (not used by a wait queue).
     #[inline(always)]
     pub fn is_free(&self) -> bool {
         self.thread_id.load(Ordering::Acquire) == 0
     }
 
-    /// Marque le nœud comme alloué pour le thread `tid`.
-    /// Retourne false si le nœud était déjà alloué (échec CAS).
+    /// Marks node as allocated for thread `tid`.
+    /// Returns false if node was already allocated (CAS failure).
     #[inline(always)]
     pub fn try_acquire(&self, tid: usize) -> bool {
         debug_assert_ne!(tid, 0, "thread_id 0 est réservé pour 'libre'");
@@ -81,37 +81,37 @@ impl WaitNode {
             .is_ok()
     }
 
-    /// Libère le nœud (remet thread_id à 0).
-    /// SAFETY: L'appelant doit garantir que plus aucune wait queue
-    ///         ne référence ce nœud.
+    /// Frees node (resets thread_id to 0).
+    /// SAFETY: Caller must guarantee no wait queue
+    ///         references this node anymore.
     #[inline(always)]
     pub unsafe fn release(&self) {
         self.next.store(Self::NULL_PTR, Ordering::Release);
         self.wakeup_result.store(0, Ordering::Release);
         self.enqueue_ts.store(0, Ordering::Release);
-        // Relâcher thread_id en dernier pour que is_free() soit cohérent
+        // Release thread_id last so that is_free() is consistent
         self.thread_id.store(0, Ordering::Release);
     }
 
-    /// Signale le thread en attente (réveille, code résultat = 0 = OK).
+    /// Signals waiting thread (wakes up, result code = 0 = OK).
     #[inline(always)]
     pub fn signal_ok(&self) {
         self.wakeup_result.store(0, Ordering::Release);
     }
 
-    /// Signale le thread avec un code d'erreur.
+    /// Signals thread with an error code.
     #[inline(always)]
     pub fn signal_err(&self, code: usize) {
         self.wakeup_result.store(code, Ordering::Release);
     }
 
-    /// Retourne le code de résultat du réveil.
+    /// Returns wakeup result code.
     #[inline(always)]
     pub fn result(&self) -> usize {
         self.wakeup_result.load(Ordering::Acquire)
     }
 
-    /// Retourne l'adresse de ce nœud comme usize (pour les linked-lists lock-free).
+    /// Returns address of this node as usize (for lock-free linked lists).
     #[inline(always)]
     pub fn as_usize_ptr(&self) -> usize {
         self as *const WaitNode as usize
@@ -119,39 +119,39 @@ impl WaitNode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMERGENCY POOL — pool statique de WaitNodes
+// EMERGENCY POOL — static pool of WaitNodes
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Le pool d'urgence global — alloué dans .bss, initialisé au boot.
+/// Global emergency pool — allocated in .bss, initialized at boot.
 ///
-/// RÈGLE EMERGENCY-01 : `init()` DOIT être appelé AVANT tout autre module.
-/// Si un appel à `acquire()` se produit avant `init()`, il panique en debug
-/// et retourne None en release (anti-crash).
+/// RULE EMERGENCY-01: `init()` MUST be called BEFORE any other module.
+/// If a call to `acquire()` occurs before `init()`, it panics in debug
+/// and returns None in release (anti-crash).
 pub struct EmergencyPool {
-    /// Tableau statique de WaitNodes — en .bss, jamais désalloué.
+    /// Static table of WaitNodes — in .bss, never deallocated.
     nodes: UnsafeCell<[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE]>,
-    /// Indicateur d'initialisation.
+    /// Initialization flag.
     initialized: AtomicBool,
-    /// Compteur d'allocations actuelles (telémétrie).
+    /// Current allocation count (telemetry).
     alloc_count: AtomicUsize,
-    /// Pic d'allocations simultanées (high watermark — telémétrie).
+    /// Peak concurrent allocations (high watermark — telemetry).
     peak_alloc: AtomicUsize,
-    /// Compteur d'échecs d'allocation (pool épuisé).
+    /// Allocation failure counter (pool exhausted).
     exhausted_count: AtomicUsize,
 }
 
-// SAFETY: EmergencyPool est thread-safe via ses AtomicBool/AtomicUsize internes.
-// L'accès aux WaitNodes est protégé par le protocole CAS de try_acquire/release.
+// SAFETY: EmergencyPool is thread-safe via its internal AtomicBool/AtomicUsize.
+// Access to WaitNodes is protected by the CAS protocol of try_acquire/release.
 unsafe impl Sync for EmergencyPool {}
 unsafe impl Send for EmergencyPool {}
 
 impl EmergencyPool {
-    /// Crée une instance non initialisée du pool.
-    /// DOIT être placée dans une statique (UnsafeCell nécessite Sync).
+    /// Creates an uninitialized instance of the pool.
+    /// MUST be placed in a static (UnsafeCell requires Sync).
     pub const fn new_uninit() -> Self {
         EmergencyPool {
             nodes: UnsafeCell::new(
-                // SAFETY: MaybeUninit::uninit() est safe en context const.
+                // SAFETY: MaybeUninit::uninit() is safe in const context.
                 [const { MaybeUninit::uninit() }; EMERGENCY_POOL_SIZE],
             ),
             initialized: AtomicBool::new(false),
@@ -161,35 +161,35 @@ impl EmergencyPool {
         }
     }
 
-    /// Initialise le pool — DOIT être appelé au boot en premier.
+    /// Initializes the pool — MUST be called first at boot.
     ///
     /// # Safety
-    /// Doit être appelé une seule fois, depuis un seul CPU (avant l'init SMP),
-    /// avant toute utilisation du pool. L'appel répété est no-op sécurisé.
+    /// Must be called once, from a single CPU (before SMP init),
+    /// before any use of the pool. Repeated call is a safe no-op.
     pub unsafe fn init(&self) {
         if self.initialized.load(Ordering::Acquire) {
-            return; // Déjà initialisé — idempotent
+            return; // Already initialized — idempotent
         }
 
         let nodes_ptr = self.nodes.get();
-        // SAFETY: Accès exclusif garanti par le protocole d'initialisation single-CPU.
-        // Les MaybeUninit sont écrits une seule fois ici avant tout accès concurrent.
+        // SAFETY: Exclusive access guaranteed by single-CPU initialization protocol.
+        // MaybeUninit entries are written once here before any concurrent access.
         for i in 0..EMERGENCY_POOL_SIZE {
             (*nodes_ptr)[i].write(WaitNode::new_free());
         }
 
-        // Barrière de publication : tous les writes aux nodes sont visibles
-        // avant que initialized passe à true.
+        // Publication barrier: all writes to nodes are visible
+        // before initialized becomes true.
         self.initialized.store(true, Ordering::Release);
     }
 
-    /// Alloue un WaitNode libre du pool pour le thread `thread_id`.
+    /// Allocates a free WaitNode from the pool for thread `thread_id`.
     ///
-    /// Retourne `None` si le pool est épuisé (toujours O(n) au pire mais
-    /// n=64, linéaire acceptable pour un path non-hot).
+    /// Returns `None` if the pool is exhausted (always O(n) in worst case but
+    /// n=64, linear acceptable for non-hot path).
     ///
     /// # Panics
-    /// En mode debug, panique si le pool n'est pas initialisé.
+    /// In debug mode, panics if the pool is not initialized.
     pub fn acquire(&self, thread_id: usize) -> Option<&WaitNode> {
         debug_assert!(
             self.initialized.load(Ordering::Acquire),
@@ -202,17 +202,17 @@ impl EmergencyPool {
 
         let nodes_ptr = self.nodes.get();
         let nodes: &[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE] =
-            // SAFETY: Après init(), tous les WaitNode sont initialisés (barrière Release).
+            // SAFETY: After init(), all WaitNodes are initialized (Release barrier).
             unsafe { &*nodes_ptr };
 
         for node_uninit in nodes.iter() {
-            // SAFETY: Tous les nœuds ont été initialisés dans init().
+            // SAFETY: All nodes were initialized in init().
             let node: &WaitNode = unsafe { node_uninit.assume_init_ref() };
             if node.try_acquire(thread_id) {
-                // Mise à jour du compteur et du peak atomiquement
+                // Atomically update count and peak
                 let prev = self.alloc_count.fetch_add(1, Ordering::Relaxed);
                 let new_count = prev + 1;
-                // Mettre à jour le peak si nécessaire (best-effort, pas de garantie exacte)
+                // Update peak if necessary (best-effort, no exact guarantee)
                 let mut peak = self.peak_alloc.load(Ordering::Relaxed);
                 while new_count > peak {
                     match self.peak_alloc.compare_exchange_weak(
@@ -229,22 +229,22 @@ impl EmergencyPool {
             }
         }
 
-        // Pool épuisé
+        // Pool exhausted
         self.exhausted_count.fetch_add(1, Ordering::Relaxed);
         None
     }
 
-    /// Libère un WaitNode précédemment acquis.
+    /// Releases a previously acquired WaitNode.
     ///
     /// # Safety
-    /// Le nœud DOIT avoir été obtenu via `acquire()` depuis ce pool.
-    /// Plus aucune wait queue ne doit référencer ce nœud au moment de l'appel.
+    /// The node MUST have been obtained via `acquire()` from this pool.
+    /// No wait queue must reference this node at the time of call.
     pub unsafe fn release(&self, node: &WaitNode) {
         debug_assert!(
             self.initialized.load(Ordering::Acquire),
             "EmergencyPool::release() appelé avant init()"
         );
-        // Vérifier que le nœud appartient bien à ce pool
+        // Verify that the node belongs to this pool
         debug_assert!(
             self.owns(node),
             "EmergencyPool::release() : nœud ne vient pas de ce pool"
@@ -254,7 +254,7 @@ impl EmergencyPool {
         self.alloc_count.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Vérifie si un `WaitNode` appartient à ce pool.
+    /// Checks whether a `WaitNode` belongs to this pool.
     #[inline]
     pub fn owns(&self, node: &WaitNode) -> bool {
         let pool_start = self.nodes.get() as usize;
@@ -264,7 +264,7 @@ impl EmergencyPool {
         node_addr >= pool_start && node_addr < pool_end
     }
 
-    /// Retourne les statistiques du pool (telémétrie).
+    /// Returns pool statistics (telemetry).
     #[inline]
     pub fn stats(&self) -> EmergencyPoolStats {
         EmergencyPoolStats {
@@ -276,33 +276,33 @@ impl EmergencyPool {
         }
     }
 
-    /// Retourne le nombre de nœuds actuellement alloués.
+    /// Returns number of currently allocated nodes.
     #[inline(always)]
     pub fn allocated_count(&self) -> usize {
         self.alloc_count.load(Ordering::Relaxed)
     }
 
-    /// Retourne `true` si le pool est initialisé.
+    /// Returns `true` if pool is initialized.
     #[inline(always)]
     pub fn is_initialized(&self) -> bool {
         self.initialized.load(Ordering::Acquire)
     }
 
-    /// Retourne `true` si le pool est épuisé (plus aucun nœud libre).
+    /// Returns `true` if pool is exhausted (no free nodes left).
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.alloc_count.load(Ordering::Relaxed) >= EMERGENCY_POOL_SIZE
     }
 
-    /// Compte les nœuds libres disponibles (O(n) — utiliser uniquement pour diagnostics).
+    /// Counts available free nodes (O(n) — use only for diagnostics).
     pub fn free_count(&self) -> usize {
         if !self.initialized.load(Ordering::Acquire) {
             return 0;
         }
         let nodes_ptr = self.nodes.get();
-        // SAFETY: Après init(), tous les nœuds sont initialisés.
+        // SAFETY: After init(), all nodes are initialized.
         let nodes: &[MaybeUninit<WaitNode>; EMERGENCY_POOL_SIZE] =
-            // SAFETY: nodes_ptr valide post-init(); accès immutable.
+            // SAFETY: nodes_ptr valid post-init(); immutable access.
             unsafe { &*nodes_ptr };
         nodes
             .iter()
@@ -312,7 +312,7 @@ impl EmergencyPool {
     }
 }
 
-/// Statistiques de l'EmergencyPool pour la télémétrie/debug.
+/// EmergencyPool statistics for telemetry/debug.
 #[derive(Copy, Clone, Debug)]
 pub struct EmergencyPoolStats {
     pub capacity: usize,
@@ -323,48 +323,48 @@ pub struct EmergencyPoolStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INSTANCE GLOBALE
+// GLOBAL INSTANCE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pool d'urgence global — DOIT être initialisé en premier au boot.
+/// Global emergency pool — MUST be initialized first at boot.
 ///
-/// RÈGLE EMERGENCY-01 : Appeler `EMERGENCY_POOL.init()` AVANT tout autre module.
-/// Voir le commentaire de module pour le raisonnement anti-deadlock.
+/// RULE EMERGENCY-01: Call `EMERGENCY_POOL.init()` BEFORE any other module.
+/// See module comments for anti-deadlock reasoning.
 pub static EMERGENCY_POOL: EmergencyPool = EmergencyPool::new_uninit();
 
-/// Initialise le pool d'urgence ET le SchedNodePool.
-/// SAFETY: Comme `EmergencyPool::init()` — voir sa documentation.
+/// Initializes the emergency pool AND the SchedNodePool.
+/// SAFETY: Same as `EmergencyPool::init()` — see its documentation.
 ///
-/// Doit être le PREMIER appel d'initialisation du kernel dans `kernel_init()`.
+/// Must be the FIRST kernel initialization call in `kernel_init()`.
 pub unsafe fn init() {
     EMERGENCY_POOL.init();
-    // Initialise le SchedNodePool (bitmap externe → tous blocs libres).
-    // RÈGLE WAITQ-01 : disponible avant toute création de wait queue.
+    // Initialize SchedNodePool (external bitmap -> all blocks free).
+    // RULE WAITQ-01: available before any wait queue creation.
     init_sched_pool();
 }
 
-/// Alloue un WaitNode depuis le pool global.
-/// Retourne `None` si le pool est épuisé (critic situation, kernel warning).
+/// Allocates a WaitNode from the global pool.
+/// Returns `None` if pool is exhausted (critical situation, kernel warning).
 #[inline]
 pub fn acquire(thread_id: usize) -> Option<&'static WaitNode> {
     EMERGENCY_POOL.acquire(thread_id)
 }
 
-/// Libère un WaitNode vers le pool global.
-/// SAFETY: Voir `EmergencyPool::release()`.
+/// Releases a WaitNode to the global pool.
+/// SAFETY: See `EmergencyPool::release()`.
 #[inline]
 pub unsafe fn release(node: &'static WaitNode) {
     EMERGENCY_POOL.release(node)
 }
 
-/// Retourne les statistiques du pool global.
+/// Returns global pool statistics.
 #[inline]
 pub fn stats() -> EmergencyPoolStats {
     EMERGENCY_POOL.stats()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS STATIQUES
+// STATIC CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _: () = assert!(
@@ -381,28 +381,28 @@ const _: () = assert!(
 );
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SCHED NODE POOL — pool de blocs bruts pour scheduler/sync/wait_queue.rs
+// SCHED NODE POOL — raw blocks pool for scheduler/sync/wait_queue.rs
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// Problème architectural :
-//   • EmergencyPool::WaitNode  utilise (thread_id: AtomicUsize) au byte 0
-//     pour gérer son propre état libre/occupé via CAS.
-//   • scheduler::sync::wait_queue::WaitNode  place (tcb: *mut TCB) au byte 0.
-//   • Ces deux définitions sont INCOMPATIBLES : écrire le TCB corrompt
-//     le champ de suivi de l'EmergencyPool.
+// Architectural issue:
+//   • EmergencyPool::WaitNode uses (thread_id: AtomicUsize) at byte 0
+//     to manage its own free/occupied state via CAS.
+//   • scheduler::sync::wait_queue::WaitNode places (tcb: *mut TCB) at byte 0.
+//   • These two definitions are INCOMPATIBLE: writing the TCB corrupts
+//     the tracking field of EmergencyPool.
 //
-// Solution :
-//   SchedNodePool gère 256 blocs de 64 bytes alignés 64 via un BITSET EXTERNE
-//   ([AtomicU64; 4]) — le pool ne touche JAMAIS au contenu des blocs.
-//   Le scheduler possède la totalité du bloc et y écrit sa propre structure.
+// Solution:
+//   SchedNodePool manages 256 64-byte blocks 64-aligned via an EXTERNAL BITSET
+//   ([AtomicU64; 4]) — the pool NEVER touches block contents.
+//   The scheduler owns the entirety of the block and writes its own structure into it.
 //
-// CAS lock-free O(1) pour alloc/free via trailing_zeros sur le bitset.
-// Initialisation : tous les bits à 1 = tous les blocs libres.
+// Lock-free O(1) CAS for alloc/free via trailing_zeros on bitset.
+// Initialization: all bits at 1 = all blocks free.
 //
-// RÈGLE WAITQ-01 : les blocs sont pré-alloués en .bss, zéro allocation heap.
+// RULE WAITQ-01: blocks are pre-allocated in .bss, zero heap allocation.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Nombre de blocs dans le SchedNodePool.
+/// Number of blocks in SchedNodePool.
 const SCHED_POOL_SIZE: usize = 256;
 const SCHED_POOL_WORDS: usize = SCHED_POOL_SIZE / 64;
 const _: () = assert!(
@@ -410,8 +410,8 @@ const _: () = assert!(
     "SCHED_POOL_SIZE doit être un multiple de 64"
 );
 
-/// Un bloc de mémoire opaque de 64 bytes aligné 64 — utilisé par le scheduler
-/// pour y construire son propre WaitNode (#[repr(C)]).
+/// An opaque 64-byte memory block 64-aligned — used by scheduler
+/// to construct its own WaitNode (#[repr(C)]).
 #[repr(C, align(64))]
 struct RawBlock64 {
     data: [u8; 64],
@@ -426,20 +426,20 @@ const _: () = assert!(
     "RawBlock64 doit être aligné 64 bytes"
 );
 
-/// Pool de blocs bruts pour scheduler/sync/wait_queue.rs.
+/// Raw blocks pool for scheduler/sync/wait_queue.rs.
 ///
-/// Utilise un bitmap [AtomicU64; 4] pour le suivi (bit N=1 ↔ bloc N libre).
-/// Dépendance zéro vers le scheduler ou les types du scheduler.
+/// Uses a bitmap [AtomicU64; 4] for tracking (bit N=1 <-> block N free).
+/// Zero dependencies towards scheduler or scheduler types.
 struct SchedNodePool {
-    /// 256 blocs de 64 bytes alignés — en .bss, jamais désalloués.
+    /// 256 aligned 64-byte blocks — in .bss, never deallocated.
     blocks: UnsafeCell<[RawBlock64; SCHED_POOL_SIZE]>,
-    /// Bitset libre : bit N = 1 → bloc N disponible.
-    /// Initialisé à u64::MAX pour chacun des 4 mots (tous libres).
+    /// Free bitset: bit N = 1 -> block N available.
+    /// Initialized to u64::MAX for each of the 4 words (all free).
     free_bits: [AtomicU64; SCHED_POOL_WORDS],
     initialized: AtomicBool,
-    /// Compteur d'allocations actives (diagnostic).
+    /// Active allocation counter (diagnostic).
     alloc_count: AtomicUsize,
-    /// Compteur de fois où le pool était épuisé (diagnostic).
+    /// Counter of times the pool was exhausted (diagnostic).
     exhausted: AtomicUsize,
 }
 
@@ -449,7 +449,7 @@ unsafe impl Send for SchedNodePool {}
 impl SchedNodePool {
     const fn new_uninit() -> Self {
         SchedNodePool {
-            // SAFETY: RawBlock64 = [u8; 64], tous-zéros valide + pas de drop.
+            // SAFETY: RawBlock64 = [u8; 64], all-zeros valid + no drop.
             blocks: UnsafeCell::new(unsafe { core::mem::zeroed() }),
             free_bits: [const { AtomicU64::new(0) }; SCHED_POOL_WORDS],
             initialized: AtomicBool::new(false),
@@ -458,14 +458,14 @@ impl SchedNodePool {
         }
     }
 
-    /// Initialise le pool (idempotent).
+    /// Initializes the pool (idempotent).
     ///
     /// # Safety
-    /// Appelé depuis un seul CPU avant tout accès concurrent.
+    /// Called from a single CPU before any concurrent access.
     unsafe fn init(&self) {
-        // Boot-idempotent : kernel_init() peut réappeler cette init après le
-        // chemin arch early. Aucun utilisateur scheduler ne doit encore tenir
-        // de bloc à ce stade, donc on republie explicitement tout le bitmap.
+        // Boot-idempotent: kernel_init() can re-call this init after the
+        // early arch path. No scheduler user should hold blocks yet
+        // at this stage, so we explicitly republish the entire bitmap.
         for word in &self.free_bits {
             word.store(u64::MAX, Ordering::Release);
         }
@@ -474,9 +474,9 @@ impl SchedNodePool {
         self.initialized.store(true, Ordering::Release);
     }
 
-    /// Alloue un bloc de 64 bytes, retourne null si épuisé.
+    /// Allocates a 64-byte block, returns null if exhausted.
     ///
-    /// CAS lock-free via trailing_zeros sur le bitset — O(1) armortized.
+    /// Lock-free CAS via trailing_zeros on the bitset — O(1) amortized.
     fn alloc(&self) -> *mut u8 {
         if !self.initialized.load(Ordering::Acquire) {
             return core::ptr::null_mut();
@@ -498,11 +498,11 @@ impl SchedNodePool {
                 ) {
                     Ok(_) => {
                         self.alloc_count.fetch_add(1, Ordering::Relaxed);
-                        // SAFETY: idx < SCHED_POOL_SIZE par construction, blocks initialisé.
+                        // SAFETY: idx < SCHED_POOL_SIZE by construction, blocks initialized.
                         let blocks_ptr = self.blocks.get();
                         return unsafe { (*blocks_ptr)[idx].data.as_mut_ptr() };
                     }
-                    Err(_) => continue, // retry CAS sur ce mot
+                    Err(_) => continue, // retry CAS on this word
                 }
             }
         }
@@ -510,20 +510,20 @@ impl SchedNodePool {
         core::ptr::null_mut()
     }
 
-    /// Libère un bloc précédemment alloué via `alloc()`.
+    /// Releases a block previously allocated via `alloc()`.
     ///
     /// # Safety
-    /// `ptr` doit être un pointeur retourné par `alloc()` de ce pool.
+    /// `ptr` must be a pointer returned by `alloc()` from this pool.
     unsafe fn free(&self, ptr: *mut u8) {
         if ptr.is_null() {
             return;
         }
-        // SAFETY: self.blocks est un UnsafeCell<[RawBlock64; N]> statique du pool ;
-        // on lit seulement l'adresse de base du tableau (pas de déréférence de
-        // contenu) pour la vérification de borne ci-dessous. Accès Ring 0.
+        // SAFETY: self.blocks is a static UnsafeCell<[RawBlock64; N]> of the pool;
+        // we only read base address of array (no dereferencing of content)
+        // for bounds check below. Ring 0 access.
         let blocks_base = unsafe { (*self.blocks.get()).as_ptr() as usize };
         let ptr_addr = ptr as usize;
-        // Vérification de borne (défensif)
+        // Bounds checking (defensive)
         let pool_size = core::mem::size_of::<[RawBlock64; SCHED_POOL_SIZE]>();
         if ptr_addr < blocks_base || ptr_addr >= blocks_base + pool_size {
             debug_assert!(false, "SchedNodePool::free() — pointeur hors bornes");
@@ -531,7 +531,7 @@ impl SchedNodePool {
         }
         let offset = ptr_addr - blocks_base;
         let idx = offset / 64;
-        // Remettre le bit à 1 (bloc libre) de façon atomique
+        // Atomically reset bit to 1 (free block)
         let word_idx = idx / 64;
         let bit = idx % 64;
         self.free_bits[word_idx].fetch_or(1u64 << bit, Ordering::Release);
@@ -539,13 +539,13 @@ impl SchedNodePool {
     }
 }
 
-/// Instance globale du SchedNodePool.
+/// Global instance of SchedNodePool.
 static SCHED_NODE_POOL: SchedNodePool = SchedNodePool::new_uninit();
 
-/// Initialise le SchedNodePool (appelé depuis memory::init() après EmergencyPool).
+/// Initializes SchedNodePool (called from memory::init() after EmergencyPool).
 ///
 /// # Safety
-/// Appelé une seule fois depuis le BSP avant tout usage du scheduler.
+/// Called once from BSP before any scheduler usage.
 pub unsafe fn init_sched_pool() {
     SCHED_NODE_POOL.init();
 }
@@ -554,53 +554,53 @@ pub unsafe fn init_sched_pool() {
 // C ABI EXPORTS — scheduler/sync/wait_queue.rs interface
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Ces fonctions `#[no_mangle] extern "C"` sont le pont FFI entre
-// scheduler/sync/wait_queue.rs (RÈGLE WAITQ-01 DOC3) et ce module.
+// These `#[no_mangle] extern "C"` functions are the FFI bridge between
+// scheduler/sync/wait_queue.rs (RULE WAITQ-01 DOC3) and this module.
 //
-// scheduler/ est Couche 1 et ne peut pas importer directement memory/.
-// La séparation est préservée : scheduler/ reçoit un pointeur opaque brut
-// qu'il cast vers sa propre définition de WaitNode.
+// scheduler/ is Layer 1 and cannot directly import memory/.
+// Separation is preserved: scheduler/ receives a raw opaque pointer
+// which it casts to its own definition of WaitNode.
 //
-// SYNCHRONISATION : si la taille du scheduler::WaitNode change au-delà de
-// 64 bytes, SCHED_POOL_SIZE ou la taille de RawBlock64 devront être augmentés.
+// SYNCHRONIZATION: if scheduler::WaitNode size changes beyond
+// 64 bytes, SCHED_POOL_SIZE or RawBlock64 size must be increased.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alloue un bloc de 64 bytes aligné de l'EmergencyPool pour le scheduler.
+/// Allocates an aligned 64-byte block from EmergencyPool for scheduler.
 ///
-/// Retourne `null` si le pool est épuisé.
+/// Returns `null` if pool is exhausted.
 ///
-/// ## Utilisateur
-/// `scheduler::sync::wait_queue::WaitNode::alloc()` — RÈGLE WAITQ-01.
+/// ## User
+/// `scheduler::sync::wait_queue::WaitNode::alloc()` — RULE WAITQ-01.
 ///
-/// ## Layout garanti
-/// Le bloc retourné fait exactement 64 bytes, aligné sur 64 bytes.
-/// Le scheduler y écrit sa propre struct WaitNode (#[repr(C)], ≤ 64 bytes).
+/// ## Guaranteed layout
+/// The returned block is exactly 64 bytes, aligned to 64 bytes.
+/// Scheduler writes its own struct WaitNode (#[repr(C)], <= 64 bytes).
 ///
 /// # Safety
-/// Appelé depuis code Ring 0, préemption désactivée recommandée.
-/// Le pointeur retourné est valide jusqu'à `emergency_pool_free_wait_node()`.
+/// Called from Ring 0 code, preemption disabled recommended.
+/// The returned pointer is valid until `emergency_pool_free_wait_node()`.
 #[no_mangle]
 pub unsafe extern "C" fn emergency_pool_alloc_wait_node() -> *mut u8 {
     SCHED_NODE_POOL.alloc()
 }
 
-/// Libère un bloc précédemment alloué par `emergency_pool_alloc_wait_node()`.
+/// Frees a block previously allocated by `emergency_pool_alloc_wait_node()`.
 ///
-/// ## Utilisateur
-/// `scheduler::sync::wait_queue::WaitNode::free()` — RÈGLE WAITQ-01.
+/// ## User
+/// `scheduler::sync::wait_queue::WaitNode::free()` — RULE WAITQ-01.
 ///
 /// # Safety
-/// `node` doit être un pointeur retourné par `emergency_pool_alloc_wait_node()`.
-/// Le bloc ne doit plus être dans aucune liste de wait queue.
+/// `node` must be a pointer returned by `emergency_pool_alloc_wait_node()`.
+/// Block must no longer be in any wait queue list.
 #[no_mangle]
 pub unsafe extern "C" fn emergency_pool_free_wait_node(node: *mut u8) {
     SCHED_NODE_POOL.free(node);
 }
 
-/// Réinitialise/publie le pool de blocs scheduler pendant la séquence de boot.
+/// Reinitializes/publishes scheduler blocks pool during boot sequence.
 ///
-/// Utilisé par `scheduler::sync::wait_queue::init()` comme garde-fou si le
-/// chemin arch early et `kernel_init()` ont été rejoués dans un ordre différent.
+/// Used by `scheduler::sync::wait_queue::init()` as safeguard if
+/// early arch path and `kernel_init()` were replayed in a different order.
 #[no_mangle]
 pub unsafe extern "C" fn emergency_pool_init_wait_node_pool() {
     init_sched_pool();

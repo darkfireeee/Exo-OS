@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/vma/mod.rs
 //
-// Module VMA — gestion des régions mémoire virtuelles.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// VMA module — virtual memory area management.
+// Layer 0 — no external dependency except `spin`.
 
 pub mod cow;
 pub mod descriptor;

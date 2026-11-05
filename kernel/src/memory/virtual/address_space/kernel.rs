@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/address_space/kernel.rs
 //
-// Espace d'adressage kernel — singleton partagé par tous les processus.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Kernel address space — singleton shared by all processes.
+// Layer 0 — no external dependencies except `spin`.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
@@ -14,14 +14,14 @@ use crate::memory::virt::page_table::x86_64::{phys_to_table_mut, phys_to_table_r
 use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ESPACE D'ADRESSAGE KERNEL
+// KERNEL ADDRESS SPACE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Espace d'adressage kernel global.
+/// Global kernel address space.
 ///
-/// Partagé par tous les processus (moitié haute de la PML4, indices 256..512).
-/// Thread-safe via des spinlocks séparés pour la partie vmalloc et la partie
-/// physmap (les deux sont les plus sollicitées concurrentiellement).
+/// Shared by all processes (upper half of PML4, indices 256..512).
+/// Thread-safe via separate spinlocks for the vmalloc part and the
+/// physmap part (the two most heavily contested concurrently).
 pub struct KernelAddressSpace {
     inner: Mutex<KernelAsInner>,
     initialized: AtomicBool,
@@ -29,9 +29,9 @@ pub struct KernelAddressSpace {
 }
 
 struct KernelAsInner {
-    /// Pointeur de bump pour les allocations vmalloc.
+    /// Bump pointer for vmalloc allocations.
     vmalloc_ptr: VirtAddr,
-    /// Statistiques.
+    /// Statistics.
     stats: KernelAsStats,
 }
 
@@ -44,8 +44,8 @@ struct KernelAsStats {
     unmap_calls: u64,
 }
 
-// SAFETY: KernelAddressSpace est thread-safe via son Mutex interne et des
-//         accès atomiques pour les champs non protégés.
+// SAFETY: KernelAddressSpace is thread-safe via its internal Mutex and
+//         atomic accesses for unprotected fields.
 unsafe impl Sync for KernelAddressSpace {}
 unsafe impl Send for KernelAddressSpace {}
 
@@ -72,27 +72,27 @@ impl KernelAddressSpace {
         }
     }
 
-    /// Initialise l'espace d'adressage kernel (boot-time, single-CPU).
+    /// Initializes the kernel address space (boot-time, single-CPU).
     ///
     /// # Safety
-    /// Doit être appelé UNE SEULE FOIS, avant tout autre thread.
+    /// Must be called EXACTLY ONCE, before any other thread.
     pub unsafe fn init(&self, pml4_phys: PhysAddr) {
         debug_assert!(!self.initialized.load(Ordering::Relaxed));
-        // SAFETY: Accès non-concurrent en single-CPU — ptr::write évite &mut T depuis &T.
+        // SAFETY: Non-concurrent access on single-CPU — ptr::write avoids &mut T from &T.
         let pml4_ptr = core::ptr::addr_of!(self.pml4_phys) as *mut PhysAddr;
         pml4_ptr.write(pml4_phys);
         self.initialized.store(true, Ordering::Release);
     }
 
-    /// Adresse physique de la PML4 kernel.
+    /// Physical address of the kernel PML4.
     pub fn pml4_phys(&self) -> PhysAddr {
         self.pml4_phys
     }
 
-    /// Mappe `frame` → `virt` avec les flags donnés dans l'espace kernel.
+    /// Maps `frame` → `virt` with given flags in kernel space.
     ///
     /// # Safety
-    /// `virt` doit être dans la moitié haute (>= 0xFFFF800000000000).
+    /// `virt` must be in the upper half (>= 0xFFFF800000000000).
     pub unsafe fn map<A: FrameAllocatorForWalk>(
         &self,
         virt: VirtAddr,
@@ -109,10 +109,10 @@ impl KernelAddressSpace {
         Ok(())
     }
 
-    /// Démappe `virt` dans l'espace kernel.
+    /// Unmaps `virt` in kernel space.
     ///
     /// # Safety
-    /// `virt` doit être dans la moitié haute.
+    /// `virt` must be in the upper half.
     pub unsafe fn unmap(&self, virt: VirtAddr) -> Option<Frame> {
         debug_assert!(virt.is_kernel());
         let mut walker = PageTableWalker::new(self.pml4_phys);
@@ -124,12 +124,12 @@ impl KernelAddressSpace {
         result
     }
 
-    /// Alloue une plage vmalloc et y mappe `n_pages` frames fournis.
+    /// Allocates a vmalloc range and maps `n_pages` provided frames into it.
     ///
-    /// Retourne l'adresse virtuelle de début.
+    /// Returns the starting virtual address.
     ///
     /// # Safety
-    /// Les frames doivent être valides et non corrompus.
+    /// Frames must be valid and uncorrupted.
     pub unsafe fn vmalloc<A: FrameAllocatorForWalk>(
         &self,
         frames: &[Frame],
@@ -139,7 +139,7 @@ impl KernelAddressSpace {
         let mut inner = self.inner.lock();
         let start = inner.vmalloc_ptr;
         let end = VirtAddr::new(start.as_u64() + (frames.len() * PAGE_SIZE) as u64);
-        // Vérifier que la plage est dans l'espace vmalloc
+        // Verify that the range is within vmalloc space
         if end.as_u64() > crate::memory::core::layout::MODULES_BASE.as_u64() {
             return Err(AllocError::OutOfMemory);
         }
@@ -160,10 +160,10 @@ impl KernelAddressSpace {
         Ok(start)
     }
 
-    /// Réserve une plage vmalloc sans la mapper.
+    /// Reserves a vmalloc range without mapping it.
     ///
-    /// Utilisé par les stacks noyau gardées : les pages de garde restent
-    /// non-présentes, puis les pages utiles sont mappées explicitement.
+    /// Used by guarded kernel stacks: guard pages remain
+    /// not present, then useful pages are mapped explicitly.
     pub fn reserve_vmalloc_pages(&self, n_pages: usize) -> Result<VirtAddr, AllocError> {
         if n_pages == 0 {
             return Err(AllocError::InvalidParams);
@@ -184,16 +184,16 @@ impl KernelAddressSpace {
         Ok(start)
     }
 
-    /// Copie les entrees PML4 noyau courantes dans un espace d'adressage cible.
+    /// Copies current kernel PML4 entries into a target address space.
     ///
-    /// Les processus utilisateur partagent les tables de la moitie haute avec le
-    /// noyau. Quand une nouvelle zone vmalloc est creee apres la construction
-    /// d'un CR3 utilisateur, son entree PML4 doit etre visible avant tout switch
-    /// vers ce CR3, car `context_switch_asm` charge CR3 avant la pile kernel.
+    /// User processes share upper half tables with the kernel. When a new
+    /// vmalloc region is created after the construction of a user CR3, its
+    /// PML4 entry must be visible before any switch to that CR3, because
+    /// `context_switch_asm` loads CR3 before the kernel stack.
     ///
     /// # Safety
-    /// `dst_pml4_phys` doit pointer vers une PML4 valide et exclusive au
-    /// processus cible pour son niveau racine.
+    /// `dst_pml4_phys` must point to a valid PML4 exclusive to the
+    /// target process for its root level.
     pub unsafe fn sync_kernel_half_into(&self, dst_pml4_phys: PhysAddr) {
         if dst_pml4_phys.as_u64() == 0 || dst_pml4_phys == self.pml4_phys {
             return;
@@ -206,8 +206,8 @@ impl KernelAddressSpace {
         }
     }
 
-    /// Publie les nouvelles entrees kernel dans le CR3 actif si on mappe depuis
-    /// un syscall/IRQ tourne sous CR3 userspace.
+    /// Publishes new kernel entries into active CR3 if mapping from
+    /// a syscall/IRQ running under userspace CR3.
     #[inline]
     fn sync_active_kernel_half(&self) {
         let active = read_cr3();
@@ -218,7 +218,7 @@ impl KernelAddressSpace {
         }
     }
 
-    /// Traduit une adresse virtuelle kernel en adresse physique.
+    /// Translates a kernel virtual address into a physical address.
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         let walker = PageTableWalker::new(self.pml4_phys);
         use crate::memory::virt::page_table::WalkResult;
@@ -232,5 +232,5 @@ impl KernelAddressSpace {
     }
 }
 
-/// Espace d'adressage kernel global (singleton).
+/// Global kernel address space (singleton).
 pub static KERNEL_AS: KernelAddressSpace = KernelAddressSpace::new();

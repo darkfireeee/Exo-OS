@@ -1,7 +1,7 @@
 // kernel/src/memory/huge_pages/thp.rs
 //
-// Transparent Huge Pages (THP) — allocation et gestion des pages 2 MiB.
-// COUCHE 0 — aucune dépendance externe.
+// Transparent Huge Pages (THP) — allocation and management of 2 MiB pages.
+// LAYER 0 — no external dependencies.
 
 use crate::memory::core::constants::{HUGE_PAGE_SIZE, PAGE_SIZE};
 use crate::memory::core::types::{AllocFlags, Frame, PhysAddr};
@@ -9,29 +9,29 @@ use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONFIGURATION THP
+// THP CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ordre buddy pour une page 2 MiB (2MiB / 4KiB = 512 = 2^9).
+/// Buddy order for a 2 MiB page (2MiB / 4KiB = 512 = 2^9).
 pub const HUGE_PAGE_ORDER: u32 = 9;
 
-/// Modes THP.
+/// THP modes.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum ThpMode {
-    /// THP désactivées.
+    /// THP disabled.
     Disabled = 0,
-    /// THP activées si possible (best-effort).
+    /// THP enabled if possible (best-effort).
     Madvise = 1,
-    /// THP activées systématiquement.
+    /// THP always enabled.
     Always = 2,
 }
 
-/// Configuration globale THP.
+/// Global THP configuration.
 pub struct ThpConfig {
     pub mode: spin::RwLock<ThpMode>,
     pub enabled: AtomicBool,
-    /// Seuil de VMAs (en pages) à partir duquel on tente un THP.
+    /// VMA threshold (in pages) from which THP is attempted.
     pub min_vma_size: AtomicU64,
 }
 
@@ -46,7 +46,7 @@ impl ThpConfig {
         ThpConfig {
             mode: spin::RwLock::new(ThpMode::Madvise),
             enabled: AtomicBool::new(true),
-            min_vma_size: AtomicU64::new(512), // au moins 2 MiB
+            min_vma_size: AtomicU64::new(512), // at least 2 MiB
         }
     }
 
@@ -64,7 +64,7 @@ impl ThpConfig {
 pub static THP_CONFIG: ThpConfig = ThpConfig::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES THP
+// THP STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct ThpStats {
@@ -96,11 +96,11 @@ impl ThpStats {
 pub static THP_STATS: ThpStats = ThpStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API THP
+// THP API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alloue une huge page 2 MiB (ordre 9 dans le buddy).
-/// Retourne le frame de base (aligné 2 MiB).
+/// Allocates a 2 MiB huge page (order 9 in buddy).
+/// Returns base frame (2 MiB aligned).
 pub fn alloc_huge_page(flags: AllocFlags) -> Option<Frame> {
     if !THP_CONFIG.is_enabled() {
         return None;
@@ -119,32 +119,32 @@ pub fn alloc_huge_page(flags: AllocFlags) -> Option<Frame> {
     }
 }
 
-/// Libère une huge page allouée par `alloc_huge_page`.
+/// Frees a huge page allocated by `alloc_huge_page`.
 ///
 /// # Safety
-/// `frame` doit avoir été alloué avec `alloc_huge_page`.
+/// `frame` must have been allocated with `alloc_huge_page`.
 pub unsafe fn free_huge_page(frame: Frame) {
     let _ = free_pages(frame, HUGE_PAGE_ORDER as usize);
     THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// Tente de diviser une huge page en 512 pages normales.
-/// Retourne les 512 frames.
+/// Attempts to split a huge page into 512 regular pages.
+/// Returns the 512 frames.
 ///
 /// # Safety
-/// `frame` doit être un frame de base de huge page (aligné 2 MiB).
+/// `frame` must be a base frame of a huge page (2 MiB aligned).
 ///
-/// # Propriété mémoire
-/// Le bloc order-9 reste "alloué" dans le buddy ; l'appelant est responsable de
-/// libérer chaque frame individuel (order-0) quand il n'en a plus besoin.
-/// Le buddy coalesera progressivement les frames libérés — sans `free_pages`
-/// ici, donc pas de double-ownership entre l'appelant et le buddy.
+/// # Memory ownership
+/// The order-9 block remains "allocated" in the buddy; the caller is responsible
+/// for freeing each individual frame (order-0) when no longer needed.
+/// The buddy will progressively coalesce freed frames — without `free_pages`
+/// here, thus no double-ownership between caller and buddy.
 pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
     THP_STATS.splits.fetch_add(1, Ordering::Relaxed);
     THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
-    // La huge page est physiquement contiguë — calculer les 512 frames de 4 KiB.
-    // NE PAS appeler free_pages : le bloc order-9 reste "en cours d'utilisation"
-    // du point de vue du buddy. L'appelant transfert la propriété en 512 frames.
+    // The huge page is physically contiguous — calculate the 512 4 KiB frames.
+    // DO NOT call free_pages: the order-9 block remains "in use"
+    // from buddy's perspective. The caller transfers ownership into 512 frames.
     let base = frame.phys_addr().as_u64();
     let mut frames = [Frame::from_phys_addr(PhysAddr::new(0)); 512];
     for i in 0..512usize {
@@ -153,16 +153,16 @@ pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
     frames
 }
 
-/// Tente de fusionner 512 pages 4KiB contigues en une huge page.
-/// Retourne `Some(frame_base)` si réussi.
+/// Attempts to merge 512 contiguous 4KiB pages into a huge page.
+/// Returns `Some(frame_base)` if successful.
 pub fn try_promote_to_huge(base: PhysAddr) -> Option<Frame> {
-    // Vérifie l'alignement 2 MiB.
+    // Verify 2 MiB alignment.
     if !base.as_u64().is_multiple_of(HUGE_PAGE_SIZE as u64) {
         return None;
     }
-    // Vérifie que toutes les pages sont dispos dans le buddy — non implémenté ici
-    // car nécessiterait de parcourir les free_lists, ce qui est géré par buddy.rs.
-    // On délègue : on essaie simplement d'allouer ordre-9.
+    // Verify all pages are available in buddy — not implemented here
+    // because it would require traversing free_lists, which is handled by buddy.rs.
+    // We delegate: simply attempt to allocate order-9.
     let frame = alloc_huge_page(AllocFlags::NONE)?;
     THP_STATS.promotions.fetch_add(1, Ordering::Relaxed);
     Some(frame)

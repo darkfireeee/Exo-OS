@@ -1,30 +1,30 @@
 // kernel/src/memory/utils/futex_table.rs
 //
 // ──────────────────────────────────────────────────────────────────────────────
-// TABLE FUTEX UNIQUE — SINGLETON GLOBAL  (RÈGLE : jamais dupliqué)
+// UNIQUE FUTEX TABLE — GLOBAL SINGLETON  (RULE: never duplicated)
 // ──────────────────────────────────────────────────────────────────────────────
 //
-// Architecture :
-//   • FUTEX_HASH_BUCKETS = 4096 buckets (constante de core/constants.rs).
-//     RÈGLE MEM-FUTEX (V-34) : ≥ 4096 + SipHash-keyed — anti-DoS par collision.
-//   • Hash = SipHash-1-3 keyed (graine initialisée depuis security::crypto::rng
-//     au boot step 18, via init_futex_seed()). Fallback FNV avant init.
-//   • Chaque bucket est une liste chaînée intrusive de FutexWaiter.
-//   • Le lock de bucket est un spin::Mutex<BucketInner>.
+// Architecture:
+//   • FUTEX_HASH_BUCKETS = 4096 buckets (constant from core/constants.rs).
+//     RULE MEM-FUTEX (V-34): >= 4096 + SipHash-keyed — anti-DoS via collision.
+//   • Hash = SipHash-1-3 keyed (seed initialized from security::crypto::rng
+//     at boot step 18, via init_futex_seed()). Fallback FNV before init.
+//   • Each bucket is an intrusive linked list of FutexWaiter.
+//   • Bucket lock is a spin::Mutex<BucketInner>.
 //
-// Opérations :
+// Operations:
 //   futex_wait(virt_addr, expected, tid, wake_fn)
-//     → si *virt_addr == expected : enfile le waiter et retourne Waiting
-//     → sinon : retourne ValueMismatch immédiatement
+//     -> if *virt_addr == expected: enqueues waiter and returns Waiting
+//     -> otherwise: returns ValueMismatch immediately
 //
-//   futex_wake(virt_addr, max_wakers) → réveille jusqu'à max_wakers threads
-//   futex_wake_n = futex_wake avec max_wakers = n
+//   futex_wake(virt_addr, max_wakers) -> wakes up to max_wakers threads
+//   futex_wake_n = futex_wake with max_wakers = n
 //   futex_requeue(src, dst, max_wake, max_requeue)
 //
-// La fonction de réveil `wake_fn` est fournie par le scheduler via injection de
-// fn pointer — memory/ ne dépend pas de scheduler/.
+// The wake-up function `wake_fn` is provided by the scheduler via injection of
+// fn pointer — memory/ does not depend on scheduler/.
 //
-// COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
@@ -32,15 +32,15 @@ use spin::Mutex;
 use crate::memory::core::constants::FUTEX_HASH_BUCKETS;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Type du callback de réveil
+// Wake callback type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Signature de la fonction de réveil fournie par le scheduler.
-/// `tid`  : identifiant du thread à réveiller.
-/// `code` : code de retour `futex_wait` vu par le thread réveillé (0 = ok).
+/// Signature of the wake-up function provided by the scheduler.
+/// `tid`: identifier of thread to wake up.
+/// `code`: return code for `futex_wait` seen by woken thread (0 = ok).
 pub type WakeFn = fn(tid: u64, code: i32);
 
-/// Implémentation no-op utilisée avant que le scheduler ne soit initialisé.
+/// No-op implementation used before scheduler is initialized.
 #[allow(dead_code)]
 fn nop_wake(_tid: u64, _code: i32) {}
 
@@ -48,22 +48,22 @@ fn nop_wake(_tid: u64, _code: i32) {}
 // Waiter
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un thread en attente sur une adresse futex.
+/// A thread waiting on a futex address.
 #[repr(C)]
 pub struct FutexWaiter {
-    /// Adresse virtuelle sur laquelle ce thread attend.
+    /// Virtual address on which this thread waits.
     pub virt_addr: u64,
-    /// Valeur attendue (vérifiée au moment de l'enfilement).
+    /// Expected value (checked upon enqueue).
     pub expected_val: u32,
-    /// Thread ID du waiter.
+    /// Waiter thread ID.
     pub tid: u64,
-    /// Fonction de réveil injectée par le scheduler.
+    /// Wake function injected by scheduler.
     pub wake_fn: WakeFn,
-    /// Code de retour à transmettre au thread à son réveil.
+    /// Return code transmitted to thread on wakeup.
     pub wake_code: i32,
-    /// Indicateur : le waiter a été réveillé / annulé.
+    /// Flag: waiter has been woken up / cancelled.
     pub woken: AtomicBool,
-    /// Lien dans la liste intrusive du bucket.
+    /// Link in the bucket intrusive list.
     pub next: Option<core::ptr::NonNull<FutexWaiter>>,
     _pad: [u8; 7],
 }
@@ -93,18 +93,18 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bucket de hash
+// Hash bucket
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Intérieur d'un bucket — liste chaînée de waiters.
+/// Bucket inner state — linked list of waiters.
 struct BucketInner {
-    /// Tête de la liste (pointeur brut vers FutexWaiter alloués par le caller).
+    /// List head (raw pointer to FutexWaiter allocated by caller).
     head: Option<core::ptr::NonNull<FutexWaiter>>,
-    /// Nombre de waiters dans ce bucket.
+    /// Number of waiters in this bucket.
     count: u32,
 }
 
-/// # SAFETY : accès protégé par Mutex.
+/// # SAFETY: access protected by Mutex.
 unsafe impl Send for BucketInner {}
 unsafe impl Sync for BucketInner {}
 
@@ -116,18 +116,18 @@ impl BucketInner {
         }
     }
 
-    /// Enfile `waiter` en tête de liste.
+    /// Enqueues `waiter` at head of list.
     ///
-    /// # Safety : `waiter` doit rester valide jusqu'à son défilement.
+    /// # Safety: `waiter` must remain valid until dequeued.
     unsafe fn push(&mut self, waiter: *mut FutexWaiter) {
         (*waiter).next = self.head;
         self.head = core::ptr::NonNull::new(waiter);
         self.count += 1;
     }
 
-    /// Supprime `waiter` de la liste. Returns `true` si trouvé.
+    /// Removes `waiter` from list. Returns `true` if found.
     ///
-    /// # Safety : `waiter` doit être dans cette liste.
+    /// # Safety: `waiter` must be in this list.
     unsafe fn remove(&mut self, waiter: *mut FutexWaiter) -> bool {
         let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
         let mut cur = self.head;
@@ -143,9 +143,9 @@ impl BucketInner {
         false
     }
 
-    /// Réveille jusqu'à `max` waiters pour `virt_addr`. Retourne le nombre réveillé.
+    /// Wakes up to `max` waiters for `virt_addr`. Returns number of woken waiters.
     ///
-    /// # Safety : les FutexWaiter pointés doivent rester valides pendant l'appel.
+    /// # Safety: pointed FutexWaiters must remain valid during call.
     unsafe fn wake(&mut self, virt_addr: u64, max: u32, wake_code: i32) -> u32 {
         let mut woken = 0u32;
         let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
@@ -156,11 +156,11 @@ impl BucketInner {
             let next = (*w).next;
 
             if (*w).virt_addr == virt_addr && !(*w).woken.load(Ordering::Acquire) {
-                // Retirer de la liste.
+                // Remove from list.
                 *prev = next;
                 self.count = self.count.saturating_sub(1);
 
-                // Marquer réveillé et appeler wake_fn.
+                // Mark woken and call wake_fn.
                 (*w).wake_code = wake_code;
                 (*w).woken.store(true, Ordering::Release);
                 ((*w).wake_fn)((*w).tid, wake_code);
@@ -178,10 +178,10 @@ impl BucketInner {
         woken
     }
 
-    /// Requeue jusqu'à `max_requeue` waiters de `src` vers un autre bucket `dst_inner`.
-    /// Retourne le nombre re-queued.
+    /// Requeues up to `max_requeue` waiters from `src` to another bucket `dst_inner`.
+    /// Returns number re-queued.
     ///
-    /// # Safety : pointeurs valides pendant l'opération.
+    /// # Safety: valid pointers during operation.
     unsafe fn requeue_to(
         &mut self,
         src_addr: u64,
@@ -198,11 +198,11 @@ impl BucketInner {
             let next = (*w).next;
 
             if (*w).virt_addr == src_addr && !(*w).woken.load(Ordering::Acquire) {
-                // Retirer de ce bucket.
+                // Remove from this bucket.
                 *prev = next;
                 self.count = self.count.saturating_sub(1);
 
-                // Mettre à jour l'adresse et pousser dans dst.
+                // Update address and push to dst.
                 (*w).virt_addr = dst_addr;
                 dst_inner.push(w);
 
@@ -219,7 +219,7 @@ impl BucketInner {
         requeued
     }
 
-    /// Requeue jusqu'à `max_requeue` waiters de `src_addr` vers `dst_addr` au sein du même bucket.
+    /// Requeues up to `max_requeue` waiters from `src_addr` to `dst_addr` within the same bucket.
     unsafe fn requeue_inplace(&mut self, src_addr: u64, dst_addr: u64, max_requeue: u32) -> u32 {
         let mut requeued = 0u32;
         let mut cur = self.head;
@@ -241,7 +241,7 @@ impl BucketInner {
     }
 }
 
-/// Un bucket public avec son Mutex.
+/// A public bucket with its Mutex.
 pub struct FutexBucket {
     inner: Mutex<BucketInner>,
 }
@@ -259,7 +259,7 @@ impl FutexBucket {
         }
     }
 
-    /// Nombre de waiters dans ce bucket.
+    /// Number of waiters in this bucket.
     #[inline]
     pub fn count(&self) -> u32 {
         self.inner.lock().count
@@ -267,7 +267,7 @@ impl FutexBucket {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales
+// Global statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -305,44 +305,40 @@ unsafe impl Sync for FutexStats {}
 pub static FUTEX_STATS: FutexStats = FutexStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table principale
+// Main table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// La table de hash des futex — singleton global.
-/// `FUTEX_HASH_BUCKETS = 4096` (core/constants.rs) — R\u00c8GLE MEM-FUTEX (V-34).
+/// Futex hash table — global singleton.
+/// `FUTEX_HASH_BUCKETS = 4096` (core/constants.rs) — RULE MEM-FUTEX (V-34).
 pub struct FutexHashTable {
     buckets: [FutexBucket; FUTEX_HASH_BUCKETS],
 }
 
-/// # SAFETY : buckets sont des Mutex protégeant des listes — Sync inhérent.
+/// # SAFETY: buckets are Mutexes protecting lists — inherently Sync.
 unsafe impl Sync for FutexHashTable {}
 
-// SAFETY: FutexBucket = Mutex<BucketInner>. spin::Mutex all-zeros = déverrouillé
-// (AtomicBool(0)). BucketInner all-zeros : head = None (0), count = 0 — état
-// initial valide identique à FutexBucket::new(). Rust ne supporte pas
-// [non_copy_expr; 4096] sans Copy, d'où l'initialisation par zeroed().
+// SAFETY: FutexBucket = Mutex<BucketInner>. spin::Mutex all-zeros = unlocked
+// (AtomicBool(0)). BucketInner all-zeros: head = None (0), count = 0 — valid
+// initial state identical to FutexBucket::new(). Rust does not support
+// [non_copy_expr; 4096] without Copy, hence zeroed() initialization.
 pub static FUTEX_TABLE: FutexHashTable = unsafe { core::mem::zeroed() };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hash
+// Hash — SipHash-1-3 keyed (RULE MEM-FUTEX / V-34)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Hash — SipHash-1-3 keyed (RÈGLE MEM-FUTEX / V-34)
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Graine de hash — 16 octets atomiques (2 × u64).
-// Initialisée à 0 ; set_futex_hash_seed() est appelé au boot step 18.
-// Avant l'init, le hash est SipHash avec clé = 0 (sous-optimal mais sûr au boot).
+// Hash seed — 16 atomic bytes (2 x u64).
+// Initialized to 0; set_futex_hash_seed() is called at boot step 18.
+// Before init, hash is SipHash with key = 0 (suboptimal but safe at boot).
 static FUTEX_SEED_K0: AtomicU64 = AtomicU64::new(0);
 static FUTEX_SEED_K1: AtomicU64 = AtomicU64::new(0);
 
-/// Indicateur : graine initialisée (atomique 8-bit — pas de dépendance spin::Once).
+/// Flag: seed initialized (atomic 8-bit — no spin::Once dependency).
 static FUTEX_SEED_SET: AtomicU8 = AtomicU8::new(0);
 
-/// Initialise la graine SipHash depuis security::crypto::rng (boot step 18).
-/// DOIT être appelée une seule fois, depuis le BSP, AVANT le démarrage des APs.
-/// Après cet appel, bucket_index() utilise SipHash-1-3 keyed.
+/// Initializes SipHash seed from security::crypto::rng (boot step 18).
+/// MUST be called once, from BSP, BEFORE APs are started.
+/// After this call, bucket_index() uses SipHash-1-3 keyed.
 pub fn init_futex_seed(key: [u8; 16]) {
     let k0 = u64::from_le_bytes(key[0..8].try_into().unwrap_or([0u8; 8]));
     let k1 = u64::from_le_bytes(key[8..16].try_into().unwrap_or([0u8; 8]));
@@ -351,8 +347,8 @@ pub fn init_futex_seed(key: [u8; 16]) {
     FUTEX_SEED_SET.store(1, Ordering::Release);
 }
 
-/// SipHash-1-3 pour un seul bloc de 8 octets (une adresse physique/virtuelle).
-/// Pas de dépendance externe — implémentation inline (no_std).
+/// SipHash-1-3 for a single 8-byte block (a physical/virtual address).
+/// No external dependencies — inline implementation (no_std).
 #[inline]
 fn siphash13(k0: u64, k1: u64, data: u64) -> u64 {
     macro_rules! sipround {
@@ -378,19 +374,19 @@ fn siphash13(k0: u64, k1: u64, data: u64) -> u64 {
     let mut v2 = k0 ^ 0x6c7967656e657261u64;
     let mut v3 = k1 ^ 0x7465646279746573u64;
 
-    // Compression — 1 round sur le seul bloc de 8 octets
+    // Compression — 1 round on the single 8-byte block
     let m = data;
     v3 ^= m;
     sipround!(v0, v1, v2, v3);
     v0 ^= m;
 
-    // Bloc final : (len % 256) << 56 = 0x0800000000000000 (len == 8)
+    // Final block: (len % 256) << 56 = 0x0800000000000000 (len == 8)
     let b: u64 = 0x0800_0000_0000_0000;
     v3 ^= b;
     sipround!(v0, v1, v2, v3);
     v0 ^= b;
 
-    // Finalisation — 3 rounds
+    // Finalization — 3 rounds
     v2 ^= 0xff;
     sipround!(v0, v1, v2, v3);
     sipround!(v0, v1, v2, v3);
@@ -399,17 +395,17 @@ fn siphash13(k0: u64, k1: u64, data: u64) -> u64 {
     v0 ^ v1 ^ v2 ^ v3
 }
 
-/// Hash d'une adresse virtuelle → index bucket [0, FUTEX_HASH_BUCKETS).
-/// Utilise SipHash-1-3 keyed si la graine est initialisée, FNV sinon (boot).
+/// Hash of a virtual address -> bucket index [0, FUTEX_HASH_BUCKETS).
+/// Uses SipHash-1-3 keyed if seed is initialized, FNV otherwise (boot).
 #[inline]
 fn bucket_index(virt_addr: u64) -> usize {
     if FUTEX_SEED_SET.load(Ordering::Acquire) != 0 {
-        // SipHash-1-3 keyed — anti-DoS (RÈGLE MEM-FUTEX / V-34)
+        // SipHash-1-3 keyed — anti-DoS (RULE MEM-FUTEX / V-34)
         let k0 = FUTEX_SEED_K0.load(Ordering::Relaxed);
         let k1 = FUTEX_SEED_K1.load(Ordering::Relaxed);
         (siphash13(k0, k1, virt_addr) as usize) & (FUTEX_HASH_BUCKETS - 1)
     } else {
-        // Fallback FNV-1a (avant init_futex_seed, pendant le boot early)
+        // Fallback FNV-1a (before init_futex_seed, during early boot)
         const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
         const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
         let mut h = FNV_OFFSET;
@@ -422,31 +418,31 @@ fn bucket_index(virt_addr: u64) -> usize {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Résultats
+// Results
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de `futex_wait`.
+/// Result of `futex_wait`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FutexWaitResult {
-    /// Thread enfilé avec succès — le scheduler doit le bloquer.
+    /// Thread enqueued successfully — scheduler must block it.
     Waiting,
-    /// `*virt_addr != expected` au moment du check — pas de blocage.
+    /// `*virt_addr != expected` at check time — no blocking.
     ValueMismatch,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enfile un waiter sur `virt_addr` si `*virt_addr == expected`.
+/// Enqueues a waiter on `virt_addr` if `*virt_addr == expected`.
 ///
-/// Le caller (syscall handler) :
-///   1. Appelle `futex_wait` : si `Waiting`, passe le thread en état BLOCKED.
-///   2. Réalloue le thread quand son `waiter.woken` devient `true`.
+/// Caller (syscall handler):
+///   1. Calls `futex_wait`: if `Waiting`, switches thread to BLOCKED state.
+///   2. Reallocates thread when its `waiter.woken` becomes `true`.
 ///
 /// # Safety
-/// - `waiter` doit pointer vers un FutexWaiter valide et non utilisé.
-/// - `virt_addr` doit être une adresse user valide pointant vers un `u32`.
+/// - `waiter` must point to a valid, unused FutexWaiter.
+/// - `virt_addr` must be a valid user address pointing to a `u32`.
 pub unsafe fn futex_wait(
     virt_addr: u64,
     expected: u32,
@@ -458,8 +454,8 @@ pub unsafe fn futex_wait(
     let idx = bucket_index(virt_addr);
     let mut bucket = FUTEX_TABLE.buckets[idx].inner.lock();
 
-    // Vérifier atomiquement la valeur *avant* de s'endormir (pour éviter
-    // la race condition entre lecture + enfilement).
+    // Atomically check value *before* sleeping (to avoid race condition
+    // between read + enqueue).
     if virt_addr == 0 || !virt_addr.is_multiple_of(4) || !crate::memory::core::address::is_user_canonical(virt_addr) {
         FUTEX_STATS.value_mismatches.fetch_add(1, Ordering::Relaxed);
         return FutexWaitResult::ValueMismatch;
@@ -470,7 +466,7 @@ pub unsafe fn futex_wait(
         return FutexWaitResult::ValueMismatch;
     }
 
-    // Initialiser le waiter.
+    // Initialize waiter.
     (*waiter).virt_addr = virt_addr;
     (*waiter).expected_val = expected;
     (*waiter).wake_fn = wake_fn;
@@ -479,7 +475,7 @@ pub unsafe fn futex_wait(
 
     bucket.push(waiter);
 
-    // Mise à jour stats bucket depth.
+    // Update bucket depth stats.
     let depth = bucket.count;
     drop(bucket);
     let prev_max = FUTEX_STATS.max_bucket_depth.load(Ordering::Relaxed);
@@ -490,12 +486,12 @@ pub unsafe fn futex_wait(
     FutexWaitResult::Waiting
 }
 
-/// Retire un waiter de sa liste (annulation de l'attente, ex. timeout).
+/// Removes a waiter from its list (cancelling wait, e.g. timeout).
 ///
-/// Doit être appelé avant de libérer la mémoire du waiter.
+/// Must be called before freeing waiter memory.
 ///
 /// # Safety
-/// `waiter` doit être dans la table.
+/// `waiter` must be in table.
 pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
     if waiter.is_null() {
         return;
@@ -511,13 +507,13 @@ pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
     FUTEX_STATS.timeouts.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Réveille jusqu'à `max` threads attendant sur `virt_addr`.
-/// Retourne le nombre de threads réveillés.
+/// Wakes up to `max` threads waiting on `virt_addr`.
+/// Returns number of woken threads.
 ///
-/// `wake_code` : valeur retournée par `futex_wait` au thread réveillé.
+/// `wake_code`: value returned by `futex_wait` to woken thread.
 ///
 /// # Safety
-/// l'appelant garantit que les waiters sont valides.
+/// Caller guarantees waiters are valid.
 pub unsafe fn futex_wake(virt_addr: u64, max: u32, wake_code: i32) -> u32 {
     FUTEX_STATS.wake_calls.fetch_add(1, Ordering::Relaxed);
     let idx = bucket_index(virt_addr);
@@ -529,20 +525,20 @@ pub unsafe fn futex_wake(virt_addr: u64, max: u32, wake_code: i32) -> u32 {
     woken
 }
 
-/// Réveille exactement `n` threads.
+/// Wakes exactly `n` threads.
 ///
 /// # Safety
-/// l'appelant garantit que les waiters sont valides.
+/// Caller guarantees waiters are valid.
 #[inline]
 pub unsafe fn futex_wake_n(virt_addr: u64, n: u32) -> u32 {
     futex_wake(virt_addr, n, 0)
 }
 
-/// Réveille `max_wake` threads sur `src_addr` et requeue `max_requeue` autres
-/// vers `dst_addr`.  Utile pour `pthread_cond_broadcast`.
+/// Wakes `max_wake` threads on `src_addr` and requeues `max_requeue` others
+/// to `dst_addr`. Useful for `pthread_cond_broadcast`.
 ///
 /// # Safety
-/// waiters valides.
+/// Valid waiters.
 pub unsafe fn futex_requeue(
     src_addr: u64,
     dst_addr: u64,
@@ -556,7 +552,7 @@ pub unsafe fn futex_requeue(
     let dst_idx = bucket_index(dst_addr);
 
     if src_idx == dst_idx {
-        // Même bucket : une seule acquisition.
+        // Same bucket: single acquisition.
         let mut bucket = FUTEX_TABLE.buckets[src_idx].inner.lock();
         let woken = bucket.wake(src_addr, max_wake, wake_code);
         let requeued = if src_addr != dst_addr {
@@ -570,8 +566,7 @@ pub unsafe fn futex_requeue(
         return (woken, requeued);
     }
 
-    // Deux buckets différents — lock toujours dans l'ordre d'index pour éviter
-    // les deadlocks.
+    // Two different buckets — always lock in index order to avoid deadlocks.
     let (lo, hi) = if src_idx < dst_idx {
         (src_idx, dst_idx)
     } else {
@@ -581,11 +576,11 @@ pub unsafe fn futex_requeue(
     let lo_guard = FUTEX_TABLE.buckets[lo].inner.lock();
     let hi_guard = FUTEX_TABLE.buckets[hi].inner.lock();
 
-    // Obtenir des pointeurs mutables — addr_of!(*guard) évite &T→*mut T (UB lint).
-    // Les deux guards protègent des buckets distincts (lo < hi), pas d'aliasing.
+    // Obtain mutable pointers — addr_of!(*guard) avoids &T->*mut T (UB lint).
+    // Both guards protect distinct buckets (lo < hi), no aliasing.
     let lo_ptr = core::ptr::addr_of!(*lo_guard) as *mut BucketInner;
     let hi_ptr = core::ptr::addr_of!(*hi_guard) as *mut BucketInner;
-    // SAFETY: lo_ptr/hi_ptr → buckets distincts (lo < hi), protégés par leurs guards — pas d'aliasing.
+    // SAFETY: lo_ptr/hi_ptr -> distinct buckets (lo < hi), protected by their guards — no aliasing.
     let (src_inner, dst_inner) = unsafe {
         if src_idx < dst_idx {
             (&mut *lo_ptr, &mut *hi_ptr)
@@ -604,42 +599,42 @@ pub unsafe fn futex_requeue(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Init futex table — structure déjà initialisée const, rien à faire.
+/// Init futex table — structure already initialized const, nothing to do.
 pub fn init() {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// sys_futex — point d'entrée du syscall FUTEX
+// sys_futex — FUTEX syscall entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Codes d'opération FUTEX (Linux-compatible).
+/// FUTEX operation codes (Linux-compatible).
 const FUTEX_WAIT: u32 = 0;
 const FUTEX_WAKE: u32 = 1;
 const FUTEX_REQUEUE: u32 = 3;
-/// Masque permettant de retirer le flag PRIVATE avant comparaison.
+/// Mask allowing removal of PRIVATE flag before comparison.
 const FUTEX_PRIVATE_FLAG: u32 = 128;
 
-/// Erreurs possibles de `sys_futex`.
+/// Possible errors from `sys_futex`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FutexError {
-    /// Opération inconnue ou non supportée.
+    /// Unknown or unsupported operation.
     InvalidOp,
-    /// Adresse uaddr invalide (non alignée sur 4 octets, hors espace user, nulle).
+    /// Invalid uaddr address (not 4-byte aligned, outside user space, null).
     InvalidAddr,
-    /// *uaddr != val au moment de FUTEX_WAIT.
+    /// *uaddr != val at FUTEX_WAIT time.
     ValueMismatch,
-    /// Attente interrompue (pas de sleep hook enregistré).
+    /// Wait interrupted (no sleep hook registered).
     Interrupted,
-    /// Timeout expiré.
+    /// Timeout expired.
     Timeout,
-    /// Allocation mémoire impossible.
+    /// Memory allocation impossible.
     NoMemory,
 }
 
 impl FutexError {
-    /// Traduit l'erreur en errno POSIX négatif.
+    /// Translates error to negative POSIX errno.
     pub fn to_kernel_errno(self) -> i64 {
         match self {
             FutexError::InvalidOp => -22,     // EINVAL
@@ -653,36 +648,36 @@ impl FutexError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hook de mise en sommeil (injecté par le scheduler)
+// Sleep hook (injected by scheduler)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Signature de la fonction de blocage fournie par le scheduler.
-/// `waiter`     : waiter enfilé dans la table futex.
-/// `timeout_ns` : délai maximum en nanosecondes (0 = infini).
-/// Retourne 0 si réveillé normalement, -EINTR si interrompu, -ETIMEDOUT si timeout.
+/// Signature of the blocking function provided by scheduler.
+/// `waiter`: waiter enqueued in futex table.
+/// `timeout_ns`: maximum timeout in nanoseconds (0 = infinite).
+/// Returns 0 if woken normally, -EINTR if interrupted, -ETIMEDOUT if timeout.
 pub type FutexSleepHook = fn(waiter: *mut FutexWaiter, timeout_ns: u64) -> i32;
 
 static FUTEX_SLEEP_HOOK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Enregistre la fonction de blocage fournie par le scheduler.
-/// Appelée lors de l'initialisation du scheduler.
+/// Registers the blocking function provided by scheduler.
+/// Called upon scheduler initialization.
 pub fn register_sleep_hook(hook: FutexSleepHook) {
     FUTEX_SLEEP_HOOK.store(hook as *mut (), Ordering::Release);
 }
 
-/// Retourne le hook enregistré, ou None si non défini.
+/// Returns registered hook, or None if undefined.
 fn get_sleep_hook() -> Option<FutexSleepHook> {
     let ptr = FUTEX_SLEEP_HOOK.load(Ordering::Acquire);
     if ptr.is_null() {
         None
     } else {
-        // SAFETY: Stocké via register_sleep_hook avec la bonne signature FutexSleepHook.
+        // SAFETY: Stored via register_sleep_hook with matching FutexSleepHook signature.
         Some(unsafe { core::mem::transmute::<*mut (), FutexSleepHook>(ptr) })
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Noop wake (utilisé par sys_futex pour FutexWaiter temporaire)
+// Noop wake (used by sys_futex for temporary FutexWaiter)
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn nop_wake_sys(_tid: u64, _code: i32) {}
@@ -691,16 +686,16 @@ fn nop_wake_sys(_tid: u64, _code: i32) {}
 // sys_futex
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Point d'entrée du syscall `futex(2)`.
+/// Entry point of `futex(2)` syscall.
 ///
-/// - `uaddr`   : adresse user de l'entier 32 bits sur lequel opérer.
-/// - `op`      : opération (FUTEX_WAIT/WAKE/REQUEUE + éventuellement PRIVATE).
-/// - `val`     : valeur attendue (FUTEX_WAIT) ou nombre de threads (FUTEX_WAKE).
-/// - `timeout` : timeout en ns (FUTEX_WAIT), ou max_requeue (FUTEX_REQUEUE).
-/// - `uaddr2`  : adresse de destination (FUTEX_REQUEUE).
-/// - `val3`    : max_requeue wake count (FUTEX_REQUEUE), non utilisé sinon.
+/// - `uaddr`: user address of 32-bit integer to operate on.
+/// - `op`: operation (FUTEX_WAIT/WAKE/REQUEUE + optionally PRIVATE).
+/// - `val`: expected value (FUTEX_WAIT) or thread count (FUTEX_WAKE).
+/// - `timeout`: timeout in ns (FUTEX_WAIT), or max_requeue (FUTEX_REQUEUE).
+/// - `uaddr2`: destination address (FUTEX_REQUEUE).
+/// - `val3`: max_requeue wake count (FUTEX_REQUEUE), unused otherwise.
 ///
-/// Retourne le nombre de threads réveillés (FUTEX_WAKE/REQUEUE) ou 0 (FUTEX_WAIT).
+/// Returns number of woken threads (FUTEX_WAKE/REQUEUE) or 0 (FUTEX_WAIT).
 pub fn sys_futex(
     uaddr: u64,
     op: u32,
@@ -709,7 +704,7 @@ pub fn sys_futex(
     uaddr2: u64,
     val3: u32,
 ) -> Result<i64, FutexError> {
-    // Validation stricte de l'adresse user (AUDIT-MEM2 / T4-003)
+    // Strict validation of user address (AUDIT-MEM2 / T4-003)
     if uaddr == 0
         || !uaddr.is_multiple_of(4)
         || !crate::memory::core::address::is_user_canonical(uaddr)
@@ -718,33 +713,33 @@ pub fn sys_futex(
         return Err(FutexError::InvalidAddr);
     }
 
-    // Retirer le flag PRIVATE — la table courante est déjà par-processus.
+    // Strip PRIVATE flag — current table is already per-process.
     let cmd = op & !FUTEX_PRIVATE_FLAG;
 
     match cmd {
         // ── FUTEX_WAIT ────────────────────────────────────────────────────
         FUTEX_WAIT => {
-            // Allouer un waiter sur la pile du présent thread.
+            // Allocate waiter on current thread stack.
             let mut waiter = FutexWaiter::new(uaddr, val, 0, nop_wake_sys);
 
-            // SAFETY: uaddr est une adresse user valide (supposé vérifié côté syscall).
+            // SAFETY: uaddr is a valid user address (presumed verified on syscall side).
             let result = unsafe { futex_wait(uaddr, val, &mut waiter, nop_wake_sys) };
 
             match result {
                 FutexWaitResult::ValueMismatch => Err(FutexError::ValueMismatch),
                 FutexWaitResult::Waiting => {
-                    // Appeler le hook du scheduler si disponible.
+                    // Call scheduler hook if available.
                     match get_sleep_hook() {
                         Some(sleep) => {
                             let rc = sleep(&mut waiter, timeout);
                             if rc == -4 {
-                                // EINTR — annuler l'attente
-                                // SAFETY: waiter est encore dans la table.
+                                // EINTR — cancel wait
+                                // SAFETY: waiter is still in table.
                                 unsafe { futex_cancel(&mut waiter) };
                                 Err(FutexError::Interrupted)
                             } else if rc == -110 {
                                 // ETIMEDOUT
-                                // SAFETY: waiter est encore dans la table (pas encore réveillé).
+                                // SAFETY: waiter is still in table (not yet woken).
                                 unsafe { futex_cancel(&mut waiter) };
                                 Err(FutexError::Timeout)
                             } else {
@@ -752,8 +747,8 @@ pub fn sys_futex(
                             }
                         }
                         None => {
-                            // Pas de scheduler : annuler et retourner EINTR.
-                            // SAFETY: waiter est encore dans la table.
+                            // No scheduler: cancel and return EINTR.
+                            // SAFETY: waiter is still in table.
                             unsafe { futex_cancel(&mut waiter) };
                             Err(FutexError::Interrupted)
                         }
@@ -764,8 +759,8 @@ pub fn sys_futex(
 
         // ── FUTEX_WAKE ────────────────────────────────────────────────────
         FUTEX_WAKE => {
-            // val = nombre max de threads à réveiller ; wake_code = 0.
-            // SAFETY: uaddr est une adresse user valide, vérifiée côté syscall.
+            // val = max threads to wake; wake_code = 0.
+            // SAFETY: uaddr is a valid user address, verified on syscall side.
             let woken = unsafe { futex_wake(uaddr, val, 0) };
             Ok(woken as i64)
         }
@@ -779,12 +774,12 @@ pub fn sys_futex(
             {
                 return Err(FutexError::InvalidAddr);
             }
-            // val  = max threads réveillés sur uaddr
-            // val3 = max threads requeueés vers uaddr2
-            // timeout (troisième arg Linux) = max_wake ; val3 = max_requeue
+            // val  = max threads woken on uaddr
+            // val3 = max threads requeued to uaddr2
+            // timeout (third Linux arg) = max_wake; val3 = max_requeue
             let max_wake = val;
             let max_requeue = val3;
-            // SAFETY: uaddr/uaddr2 sont des adresses user valides, vérifiées côté syscall.
+            // SAFETY: uaddr/uaddr2 are valid user addresses, verified on syscall side.
             let (woken, _requeued) =
                 unsafe { futex_requeue(uaddr, uaddr2, max_wake, max_requeue, 0) };
             Ok(woken as i64)

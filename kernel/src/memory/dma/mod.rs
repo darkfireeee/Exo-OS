@@ -1,15 +1,15 @@
 // kernel/src/memory/dma/mod.rs
 //
-// Module DMA complet — sous-système de Direct Memory Access Exo-OS.
+// Complete DMA module — Exo-OS Direct Memory Access subsystem.
 //
-// Architecture :
-//   core/      — types, descripteurs, mapping IOVA, interface wakeup
-//   iommu/     — domaines, tables de pages IOMMU, Intel VT-d, AMD-Vi
-//   channels/  — gestionnaire de canaux
-//   ops/       — memcpy, memset, scatter-gather
-//   completion/ — gestionnaire de complétion + réveil
-//   engines/   — pilotes matériels (I/OAT, DSA, AHCI, NVMe, VirtIO)
-//   stats/     — compteurs DMA par moteur
+// Architecture:
+//   core/       — types, descriptors, IOVA mapping, wakeup interface
+//   iommu/      — domains, IOMMU page tables, Intel VT-d, AMD-Vi
+//   channels/   — channel manager
+//   ops/        — memcpy, memset, scatter-gather
+//   completion/ — completion manager + wakeup
+//   engines/    — hardware drivers (I/OAT, DSA, AHCI, NVMe, VirtIO)
+//   stats/      — per-engine DMA counters
 
 pub mod channels;
 pub mod completion;
@@ -20,7 +20,7 @@ pub mod ops;
 pub mod stats;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RE-EXPORTS PUBLIQUES
+// PUBLIC RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use core::descriptor::{DmaDescriptor, SgEntry, DMA_DESCRIPTOR_TABLE};
@@ -52,16 +52,16 @@ pub use engines::{
 pub use stats::counters::{dump_dma_stats, DmaStats, DMA_STATS};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INITIALISATION DMA
+// DMA INITIALIZATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système DMA (Phase 1 : tables statiques).
-/// Appelé depuis `memory::init()` après l'allocateur physique.
+/// Initializes the DMA subsystem (Phase 1: static tables).
+/// Called from `memory::init()` after physical allocator.
 pub fn init() {
-    // Initialise la table IOMMU (domaine identité).
+    // Initialize IOMMU table (identity domain).
     IOMMU_DOMAINS.init();
-    // Initialise la table de descripteurs.
+    // Initialize descriptor table.
     DMA_DESCRIPTOR_TABLE.init();
-    // La table des canaux est déjà initialisée statiquement.
-    // Les pilotes IOMMU (VT-d, AMD-Vi) sont initialisés depuis le parseur ACPI.
+    // Channel table is already initialized statically.
+    // IOMMU drivers (VT-d, AMD-Vi) are initialized from ACPI parser.
 }

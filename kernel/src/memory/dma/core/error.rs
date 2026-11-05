@@ -1,37 +1,37 @@
 // kernel/src/memory/dma/core/error.rs
 //
-// Contexte enrichi d'erreurs DMA, descriptions statiques et compteurs globaux.
-// Complète les variants `DmaError` définis dans `types.rs`.
-// COUCHE 0 — aucune dépendance externe.
+// Enriched DMA error context, static descriptions, and global counters.
+// Complements `DmaError` variants defined in `types.rs`.
+// LAYER 0 — zero external dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONTEXTE D'ERREUR ENRICHI
+// ENRICHED ERROR CONTEXT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte complet d'une erreur DMA associant l'erreur à son origine.
+/// Full context of a DMA error associating the error with its origin.
 ///
-/// Utilisé par les handlers d'interruption et la completion manager pour
-/// propager en une seule valeur toutes les informations de diagnostic.
+/// Used by interrupt handlers and the completion manager to
+/// propagate all diagnostic information in a single value.
 #[derive(Copy, Clone, Debug)]
 pub struct DmaErrorContext {
-    /// Cause de l'erreur.
+    /// Cause of error.
     pub error: DmaError,
-    /// Canal DMA concerné.
+    /// Affected DMA channel.
     pub channel: DmaChannelId,
-    /// Transaction concernée (`DmaTransactionId::INVALID` si non applicable).
+    /// Affected transaction (`DmaTransactionId::INVALID` if not applicable).
     pub transaction: DmaTransactionId,
-    /// Timestamp TSC au moment de l'erreur (0 si non disponible).
+    /// TSC timestamp at error time (0 if not available).
     pub tsc: u64,
-    /// Adresse physique fautive (0 si non applicable — e.g. IOMMU fault).
+    /// Faulting physical address (0 if not applicable — e.g. IOMMU fault).
     pub fault_addr: u64,
 }
 
 impl DmaErrorContext {
-    /// Construit un contexte avec timestamp TSC courant.
+    /// Constructs a context with current TSC timestamp.
     #[inline]
     pub fn new(error: DmaError, channel: DmaChannelId, txn: DmaTransactionId) -> Self {
         DmaErrorContext {
@@ -43,26 +43,26 @@ impl DmaErrorContext {
         }
     }
 
-    /// Construit un contexte sans transaction associée.
+    /// Constructs a context without associated transaction.
     #[inline]
     pub fn channel_error(error: DmaError, channel: DmaChannelId) -> Self {
         Self::new(error, channel, DmaTransactionId::INVALID)
     }
 
-    /// Associe une adresse physique fautive (IOMMU fault).
+    /// Associates a faulting physical address (IOMMU fault).
     #[inline]
     pub fn with_fault_addr(mut self, addr: u64) -> Self {
         self.fault_addr = addr;
         self
     }
 
-    /// Retourne une description textuelle statique de l'erreur.
+    /// Returns a static text description of the error.
     #[inline]
     pub fn description(self) -> &'static str {
         self.error.description()
     }
 
-    /// `true` si l'erreur rend le canal inutilisable et nécessite une réinitialisation.
+    /// `true` if error renders the channel unusable and requires a reset.
     #[inline]
     pub fn is_fatal(self) -> bool {
         matches!(
@@ -71,7 +71,7 @@ impl DmaErrorContext {
         )
     }
 
-    /// `true` si l'erreur est transitoire (la prochaine requête peut réussir).
+    /// `true` if error is transient (next request may succeed).
     #[inline]
     pub fn is_transient(self) -> bool {
         matches!(
@@ -82,11 +82,11 @@ impl DmaErrorContext {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCRIPTIONS STATIQUES
+// STATIC DESCRIPTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl DmaError {
-    /// Retourne une chaîne de caractères statique décrivant l'erreur.
+    /// Returns a static string describing the error.
     pub const fn description(self) -> &'static str {
         match self {
             DmaError::NoChannel => "no DMA channel available",
@@ -104,13 +104,13 @@ impl DmaError {
         }
     }
 
-    /// `true` si l'erreur indique un problème matériel irrecupérable.
+    /// `true` if error indicates an unrecoverable hardware problem.
     #[inline]
     pub const fn is_hardware(self) -> bool {
         matches!(self, DmaError::HardwareError | DmaError::IommuFault)
     }
 
-    /// `true` si l'erreur peut être résolue en réessayant.
+    /// `true` if error can be resolved by retrying.
     #[inline]
     pub const fn is_retriable(self) -> bool {
         matches!(
@@ -121,12 +121,12 @@ impl DmaError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPTEURS GLOBAUX D'ERREURS
+// GLOBAL ERROR COUNTERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs globaux d'erreurs DMA — un compteur par variant + total.
+/// Global DMA error counters — one counter per variant + total.
 ///
-/// Permet au monitoring kernel de détecter des tendances sans accès aux logs.
+/// Allows kernel monitoring to detect trends without access to logs.
 pub struct DmaErrorCounters {
     pub no_channel: AtomicU64,
     pub out_of_memory: AtomicU64,
@@ -140,7 +140,7 @@ pub struct DmaErrorCounters {
     pub misaligned_buffer: AtomicU64,
     pub wrong_zone: AtomicU64,
     pub not_supported: AtomicU64,
-    /// Total toutes causes confondues.
+    /// Total across all causes.
     pub total: AtomicU64,
 }
 
@@ -169,7 +169,7 @@ impl DmaErrorCounters {
         }
     }
 
-    /// Incrémente le compteur correspondant à l'erreur.
+    /// Increments the counter corresponding to the error.
     pub fn record(&self, err: DmaError) {
         self.total.fetch_add(1, Ordering::Relaxed);
         let counter = match err {
@@ -189,22 +189,22 @@ impl DmaErrorCounters {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Retourne le total des erreurs enregistrées.
+    /// Returns total recorded errors.
     pub fn get_total(&self) -> u64 {
         self.total.load(Ordering::Relaxed)
     }
 
-    /// Retourne le nombre d'erreurs matérielles (fatal).
+    /// Returns number of hardware errors (fatal).
     pub fn hardware_total(&self) -> u64 {
         self.hardware_error.load(Ordering::Relaxed) + self.iommu_fault.load(Ordering::Relaxed)
     }
 
-    /// Retourne le nombre de timeouts.
+    /// Returns number of timeouts.
     pub fn timeout_total(&self) -> u64 {
         self.timeout.load(Ordering::Relaxed)
     }
 
-    /// Instantané des compteurs pour le monitoring.
+    /// Counter snapshot for monitoring.
     pub fn snapshot(&self) -> DmaErrorSnapshot {
         DmaErrorSnapshot {
             no_channel: self.no_channel.load(Ordering::Relaxed),
@@ -224,7 +224,7 @@ impl DmaErrorCounters {
     }
 }
 
-/// Instantané des compteurs d'erreurs (valeurs non-atomiques pour lecture cohérente).
+/// Snapshot of error counters (non-atomic values for consistent read).
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DmaErrorSnapshot {
     pub no_channel: u64,
@@ -242,31 +242,31 @@ pub struct DmaErrorSnapshot {
     pub total: u64,
 }
 
-/// Compteurs globaux d'erreurs DMA.
+/// Global DMA error counters.
 pub static DMA_ERROR_COUNTERS: DmaErrorCounters = DmaErrorCounters::new();
 
-/// Enregistre une erreur DMA dans les compteurs globaux.
+/// Records a DMA error in global counters.
 #[inline]
 pub fn record_error(err: DmaError) {
     DMA_ERROR_COUNTERS.record(err);
 }
 
-/// Enregistre un contexte d'erreur complet.
+/// Records a full error context.
 #[inline]
 pub fn record_error_ctx(ctx: &DmaErrorContext) {
     DMA_ERROR_COUNTERS.record(ctx.error);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITAIRES
+// UTILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le TSC courant via RDTSC (x86_64 seulement).
-/// Retourne 0 sur d'autres architectures.
+/// Reads current TSC via RDTSC (x86_64 only).
+/// Returns 0 on other architectures.
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: RDTSC disponible sur x86_64; non-sérialisé suffisant pour diagnostic.
+    // SAFETY: RDTSC available on x86_64; non-serializing sufficient for diagnostics.
     unsafe {
         let lo: u32;
         let hi: u32;

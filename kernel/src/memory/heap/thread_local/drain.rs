@@ -1,9 +1,9 @@
 // kernel/src/memory/heap/thread_local/drain.rs
 //
-// Drain des caches per-CPU — déclenché lors d'un context switch ou d'une
-// pression mémoire. Renvoie tous les objets en cache vers les pools SLUB.
+// Drain per-CPU caches — triggered upon context switch or
+// memory pressure. Returns all cached objects to SLUB pools.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -12,19 +12,19 @@ use crate::memory::heap::thread_local::cache::{CACHED_SIZE_CLASSES, CPU_CACHES, 
 use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES DE DRAIN
+// DRAIN STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DrainStats {
-    /// Nombre total d'opérations de drain déclenchées.
+    /// Total number of drain operations triggered.
     pub total_drains: AtomicU64,
-    /// Nombre d'objets rendus au SLUB en tout.
+    /// Number of objects returned to SLUB in total.
     pub objects_drained: AtomicU64,
-    /// Drains déclenchés par pression mémoire (OOM shrink).
+    /// Drains triggered by memory pressure (OOM shrink).
     pub pressure_drains: AtomicU64,
-    /// Drains déclenchés par context switch.
+    /// Drains triggered by context switch.
     pub context_switch_drains: AtomicU64,
-    /// Drains déclenchés explicitement (shutdown / quiesce).
+    /// Drains triggered explicitly (shutdown / quiesce).
     pub explicit_drains: AtomicU64,
 }
 
@@ -43,28 +43,28 @@ impl DrainStats {
 pub static DRAIN_STATS: DrainStats = DrainStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POLITIQUE DE DRAIN
+// DRAIN POLICY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique déterminant combien d'objets drainer par classe.
+/// Policy determining how many objects to drain per class.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum DrainPolicy {
-    /// Drain intégral : vide les deux magazines.
+    /// Full drain: empties both magazines.
     Full,
-    /// Drain partiel : vide seulement le magazine `prev` (le loaded reste intact).
+    /// Partial drain: empties only the `prev` magazine (`loaded` remains intact).
     Partial,
-    /// Drain d'urgence : vide tous les CPUs connues (requiert l'accès global).
+    /// Emergency drain: empties all known CPUs (requires global access).
     AllCpus,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FONCTIONS DE DRAIN
+// DRAIN FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compte le nombre d'objets drainés depuis un cache pour une classe donnée.
+/// Counts the number of drained objects from a cache for a given class.
 #[inline]
 fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> usize {
-    // SAFETY: cpu_id correspond au CPU courant; aucune préemption pendant le drain.
+    // SAFETY: cpu_id corresponds to current CPU; no preemption during drain.
     let cache = unsafe { CPU_CACHES.get_mut(cpu_id) };
     let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
     let mut count = 0usize;
@@ -72,16 +72,16 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
     match policy {
         DrainPolicy::Full | DrainPolicy::AllCpus => {
             while let Some(ptr) = cache.magazines[class_idx].loaded.pop() {
-                // SAFETY: ptr a été alloué par SLUB_CACHES[slub_idx].
+                // SAFETY: ptr was allocated by SLUB_CACHES[slub_idx].
                 unsafe {
                     SLUB_CACHES[slub_idx].free(ptr);
                 }
                 count += 1;
             }
             while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
-                // SAFETY: ptr alloué par SLUB_CACHES[slub_idx].
-                // FIX-HEAP-DRAIN-01 : l'appel free était resté en commentaire,
-                // provoquant une fuite mémoire de tous les objets de prev lors du drain.
+                // SAFETY: ptr allocated by SLUB_CACHES[slub_idx].
+                // FIX-HEAP-DRAIN-01: the free call remained commented out,
+                // causing memory leak of all prev objects during drain.
                 unsafe {
                     SLUB_CACHES[slub_idx].free(ptr);
                 }
@@ -90,7 +90,7 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
         }
         DrainPolicy::Partial => {
             while let Some(ptr) = cache.magazines[class_idx].prev.pop() {
-                // SAFETY: ptr alloué par SLUB_CACHES[slub_idx] (drain partial).
+                // SAFETY: ptr allocated by SLUB_CACHES[slub_idx] (partial drain).
                 unsafe {
                     SLUB_CACHES[slub_idx].free(ptr);
                 }
@@ -101,11 +101,11 @@ fn drain_class_inner(cpu_id: usize, class_idx: usize, policy: DrainPolicy) -> us
     count
 }
 
-/// Drain le cache per-CPU `cpu_id` selon la politique spécifiée.
+/// Drains per-CPU cache `cpu_id` according to specified policy.
 ///
 /// # Safety
-/// Doit être appelé depuis le CPU `cpu_id` (ou depuis un contexte où aucun autre
-/// thread ne peut accéder au cache de ce CPU).
+/// Must be called from CPU `cpu_id` (or from context where no other
+/// thread can access this CPU's cache).
 pub unsafe fn drain_cpu(cpu_id: usize, policy: DrainPolicy) {
     if cpu_id >= MAX_CPUS {
         return;
@@ -123,34 +123,34 @@ pub unsafe fn drain_cpu(cpu_id: usize, policy: DrainPolicy) {
         .fetch_add(total_objects, Ordering::Relaxed);
 }
 
-/// Drain déclenché lors d'un context switch.
+/// Drain triggered upon context switch.
 ///
 /// # Safety
-/// Même conditions que `drain_cpu`.
+/// Same conditions as `drain_cpu`.
 #[inline]
 pub unsafe fn drain_on_context_switch(cpu_id: usize) {
-    // Drain partiel sur context switch pour limiter la latence.
+    // Partial drain on context switch to limit latency.
     drain_cpu(cpu_id, DrainPolicy::Partial);
     DRAIN_STATS
         .context_switch_drains
         .fetch_add(1, Ordering::Relaxed);
 }
 
-/// Drain déclenché par pression mémoire (shrinker de l'OOM killer).
+/// Drain triggered by memory pressure (OOM killer shrinker).
 ///
 /// # Safety
-/// Même conditions que `drain_cpu`.
+/// Same conditions as `drain_cpu`.
 #[inline]
 pub unsafe fn drain_on_memory_pressure(cpu_id: usize) {
     drain_cpu(cpu_id, DrainPolicy::Full);
     DRAIN_STATS.pressure_drains.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Drain explicite de tous les CPUs actifs.
-/// Utilisé au shutdown ou lors d'un quiesce global.
+/// Explicit drain of all active CPUs.
+/// Used at shutdown or during global quiesce.
 ///
 /// # Safety
-/// Doit être appelé quand tous les CPUs sont quiescents (pas d'allocations en cours).
+/// Must be called when all CPUs are quiescent (no allocations in progress).
 pub unsafe fn drain_all_cpus() {
     for cpu_id in 0..MAX_CPUS {
         let cache = CPU_CACHES.get_mut(cpu_id);
@@ -170,11 +170,11 @@ pub unsafe fn drain_all_cpus() {
     DRAIN_STATS.explicit_drains.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Drain une seule classe de taille sur un CPU donné.
-/// Utile pour un drain ciblé (ex: libérer la pression sur une seule taille).
+/// Drains a single size class on a given CPU.
+/// Useful for targeted drain (e.g. relieve pressure on a single size).
 ///
 /// # Safety
-/// Même conditions que `drain_cpu`.
+/// Same conditions as `drain_cpu`.
 pub unsafe fn drain_cpu_class(cpu_id: usize, class_idx: usize, policy: DrainPolicy) {
     if cpu_id >= MAX_CPUS || class_idx >= CACHED_SIZE_CLASSES {
         return;
@@ -186,12 +186,12 @@ pub unsafe fn drain_cpu_class(cpu_id: usize, class_idx: usize, policy: DrainPoli
     DRAIN_STATS.total_drains.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Retourne le nombre total d'objets en cache sur tous les CPUs actifs.
-/// Ne nécessite pas de lock (lecture seule approximative).
+/// Returns total number of cached objects across all active CPUs.
+/// Does not require lock (approximate read-only).
 pub fn total_cached_objects() -> usize {
     let mut total = 0usize;
     for cpu_id in 0..MAX_CPUS {
-        // SAFETY: lecture approximative; on doit ignorer les races (stat non critique).
+        // SAFETY: approximate read; ignore races (non-critical stat).
         let cache = unsafe { CPU_CACHES.get_mut(cpu_id) };
         if cache.active {
             total += cache.total_cached();

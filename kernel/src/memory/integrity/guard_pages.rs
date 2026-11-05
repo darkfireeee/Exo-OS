@@ -1,20 +1,20 @@
 // kernel/src/memory/integrity/guard_pages.rs
 //
-// Guard pages — pages non-présentes insérées autour des stacks et des régions
-// heap sensibles pour détecter les débordements au moment de l'accès.
+// Guard pages — non-present pages inserted around stacks and sensitive
+// heap regions to detect overflows at the time of access.
 //
-// Architecture :
-//   - Chaque stack kernel CPU : 1 page garde BASSE (sous-débordement) + 1 page
-//     garde HAUTE (surdébordement).
-//   - Chaque allocation vmalloc > VMALLOC_GUARD_THRESHOLD : une page garde
-//     encadre la région.
-//   - Une page garde est une PTE PRESENT=0 avec un tag spécial dans les bits
-//     réservés (bits 11:9 = 0b111) pour la distinguer d'une page non-mappée.
+// Architecture:
+//   - Each kernel CPU stack: 1 LOW guard page (underflow) + 1 HIGH
+//     guard page (overflow).
+//   - Each vmalloc allocation > VMALLOC_GUARD_THRESHOLD: a guard page
+//     surrounds the region.
+//   - A guard page is a PRESENT=0 PTE with a special tag in reserved
+//     bits (bits 11:9 = 0b111) to distinguish it from an unmapped page.
 //
-// Détection : le fault handler appelle `is_guard_page_fault(virt)` pour
-//             décider si la #PF est une violation de guard → panic kernel.
+// Detection: the fault handler calls `is_guard_page_fault(virt)` to
+//            decide if the #PF is a guard violation -> kernel panic.
 //
-// COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no dependency on scheduler/process/ipc/fs.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -22,25 +22,25 @@ use spin::Mutex;
 use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tag dans les bits 11:9 d'une PTE marquée guard.
-/// bits 11:9 = 0b111 → valeur 7 décalée de 9 bits.
+/// Tag in bits 11:9 of a PTE marked guard.
+/// bits 11:9 = 0b111 -> value 7 shifted by 9 bits.
 pub const GUARD_PTE_TAG: u64 = 0b111 << 9;
-/// Masque des bits 11:9.
+/// Mask for bits 11:9.
 const GUARD_PTE_MASK: u64 = 0b111 << 9;
-/// Une entrée de page garde : PRESENT=0, tag=0b111. Doit être non-présente.
+/// A guard page entry: PRESENT=0, tag=0b111. Must be non-present.
 pub const GUARD_PTE_VALUE: u64 = GUARD_PTE_TAG;
 
-/// Seuil vmalloc au-dessus duquel des pages garde sont insérées.
+/// Vmalloc threshold above which guard pages are inserted.
 pub const VMALLOC_GUARD_THRESHOLD: usize = 4 * PAGE_SIZE;
 
-/// Nombre maximal de régions garde suivies.
+/// Maximum number of tracked guard regions.
 const MAX_GUARD_REGIONS: usize = 4096;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -76,36 +76,36 @@ unsafe impl Sync for GuardPageStats {}
 pub static GUARD_STATS: GuardPageStats = GuardPageStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Annuaire des régions garde
+// Guard Region Directory
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'une région garde.
+/// Identifier for a guard region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuardRegionId(pub u32);
 
-/// Type de région gardée.
+/// Type of guarded region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardRegionKind {
-    /// Stack d'un CPU (kernel).
+    /// CPU stack (kernel).
     KernelStack { cpu_id: u32 },
-    /// Stack kernel dédié à un thread.
+    /// Dedicated kernel thread stack.
     KernelThreadStack { tid: u64 },
-    /// Stack d'un thread user.
+    /// User thread stack.
     UserStack { tid: u64 },
-    /// Allocation vmalloc.
+    /// Vmalloc allocation.
     Vmalloc,
-    /// Région générique (heap, zone MMIO, etc.).
+    /// Generic region (heap, MMIO zone, etc.).
     Generic,
 }
 
-/// Descripteur d'une région garde.
+/// Descriptor for a guard region.
 #[derive(Debug, Clone, Copy)]
 pub struct GuardRegion {
-    /// Adresse virtuelle de début de la page garde inférieure.
+    /// Virtual start address of lower guard page.
     pub low_guard: u64,
-    /// Adresse virtuelle de début de la page garde supérieure.
+    /// Virtual start address of upper guard page.
     pub high_guard: u64,
-    /// Adresse de la région protégée (pour diagnostics).
+    /// Address of protected region (for diagnostics).
     pub region_start: u64,
     pub region_size: u64,
     pub kind: GuardRegionKind,
@@ -160,7 +160,7 @@ impl GuardRegionTable {
         self.regions.get_mut(id.0 as usize)
     }
 
-    /// Recherche si `virt` tombe dans une page garde enregistrée.
+    /// Checks if `virt` falls into a registered guard page.
     fn lookup(&self, virt: u64) -> Option<usize> {
         for i in 0..MAX_GUARD_REGIONS {
             let r = &self.regions[i];
@@ -181,48 +181,48 @@ impl GuardRegionTable {
 static GUARD_TABLE: Mutex<GuardRegionTable> = Mutex::new(GuardRegionTable::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Manipulation de PTEs pour les pages garde
+// PTE Manipulation for Guard Pages
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Écrit une PTE guard (non-présente avec tag) dans `pte_ptr`.
+/// Writes a guard PTE (non-present with tag) into `pte_ptr`.
 ///
 /// # Safety
-/// `pte_ptr` doit pointer vers l'entrée PTE niveau 1 valide (non OOM).
+/// `pte_ptr` must point to a valid level 1 PTE entry (non-OOM).
 pub unsafe fn write_guard_pte(pte_ptr: *mut u64) {
     pte_ptr.write_volatile(GUARD_PTE_VALUE);
-    // Invalider le TLB pour cette entrée.
-    // On ne connaît pas l'adresse virtuelle ici ; le caller doit appeler
-    // invlpg sur les pages concercées.
+    // Invalidate TLB for this entry.
+    // Virtual address is unknown here; caller must invoke
+    // invlpg on affected pages.
 }
 
-/// Retourne `true` si `pte` est une entrée guard (non-présente + tag correct).
+/// Returns `true` if `pte` is a guard entry (non-present + correct tag).
 #[inline]
 pub fn is_guard_pte(pte: u64) -> bool {
-    // PRESENT = 0 ET bits 11:9 = 0b111.
+    // PRESENT = 0 AND bits 11:9 = 0b111.
     (pte & 1 == 0) && (pte & GUARD_PTE_MASK == GUARD_PTE_TAG)
 }
 
-/// Efface une PTE guard (la remet à 0).
+/// Clears a guard PTE (resets to 0).
 ///
 /// # Safety
-/// `pte_ptr` doit être valide.
+/// `pte_ptr` must be valid.
 pub unsafe fn clear_guard_pte(pte_ptr: *mut u64) {
     pte_ptr.write_volatile(0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Enregistrement de régions garde
+// Guard Region Registration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre une région garde encadrant [`region_start`, `region_start + region_size`).
+/// Registers a guard region enclosing [`region_start`, `region_start + region_size`).
 ///
-/// Les pages garde sont placées immédiatement AVANT `region_start` (garde basse)
-/// et immédiatement APRÈS `region_start + region_size` (garde haute).
+/// Guard pages are placed immediately BEFORE `region_start` (low guard)
+/// and immediately AFTER `region_start + region_size` (high guard).
 ///
-/// Le caller est responsable d'appeler le page table walker pour écrire les PTEs.
-/// Cette fonction ne touche pas les PTEs ; elle maintient seulement l'annuaire.
+/// Caller is responsible for calling page table walker to write PTEs.
+/// This function does not touch PTEs; it only maintains the directory.
 ///
-/// Retourne `Some(GuardRegionId)` ou `None` si table pleine.
+/// Returns `Some(GuardRegionId)` or `None` if table full.
 pub fn register_guard_region(
     region_start: u64,
     region_size: u64,
@@ -263,8 +263,8 @@ pub fn register_guard_region(
     Some(GuardRegionId(slot as u32))
 }
 
-/// Désenregistre une région garde par son ID.
-/// Le caller doit nettoyer les PTEs correspondantes.
+/// Unregisters a guard region by its ID.
+/// Caller must clear corresponding PTEs.
 pub fn unregister_guard_region(id: GuardRegionId) -> bool {
     let mut table = GUARD_TABLE.lock();
     if let Some(region) = table.find_by_id(id) {
@@ -281,28 +281,28 @@ pub fn unregister_guard_region(id: GuardRegionId) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Détection au moment du page fault
+// Page Fault Detection
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une vérification guard au fault handler.
+/// Result of a guard verification in fault handler.
 #[derive(Debug, Clone, Copy)]
 pub enum GuardFaultResult {
-    /// Page guard confirmée → kernel panic.
+    /// Confirmed guard page -> kernel panic.
     GuardViolation {
         region_idx: usize,
         kind: GuardRegionKind,
     },
-    /// Pas une page guard → fault normal.
+    /// Not a guard page -> normal fault.
     NotGuard,
 }
 
-/// Appelé par le fault handler pour toute #PF.
-/// Si la page fautive est une page garde → `GuardViolation`.
+/// Called by fault handler for any #PF.
+/// If the faulting page is a guard page -> `GuardViolation`.
 ///
-/// `fault_virt` : CR2 (adresse linéaire fautive).
-/// `pte_value`  : valeur PTE lue depuis la page table (0 si absence).
+/// `fault_virt`: CR2 (faulting linear address).
+/// `pte_value`: PTE value read from page table (0 if absent).
 pub fn check_guard_fault(fault_virt: u64, pte_value: u64) -> GuardFaultResult {
-    // Vérification rapide sur le tag PTE.
+    // Fast check on PTE tag.
     if pte_value != 0 && !is_guard_pte(pte_value) {
         return GuardFaultResult::NotGuard;
     }
@@ -322,7 +322,7 @@ pub fn check_guard_fault(fault_virt: u64, pte_value: u64) -> GuardFaultResult {
     }
 }
 
-/// Gestionnaire de violation de page garde — déclenche un kernel panic.
+/// Guard page violation handler — triggers a kernel panic.
 pub fn guard_page_violation_handler(virt: u64, kind: GuardRegionKind) -> ! {
     GUARD_STATS
         .violations_detected
@@ -348,32 +348,32 @@ pub fn guard_page_violation_handler(virt: u64, kind: GuardRegionKind) -> ! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers stacks CPU
+// CPU Stack Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse canonique d'une stack kernel pour `cpu_id`.
-/// Convention : stacks à 0xFFFF_FF80_0000_0000 + cpu_id × 64 KiB.
+/// Canonical address of a kernel stack for `cpu_id`.
+/// Convention: stacks at 0xFFFF_FF80_0000_0000 + cpu_id * 64 KiB.
 const KERNEL_STACK_BASE: u64 = 0xFFFF_FF80_0000_0000;
-const KERNEL_STACK_SIZE: u64 = 64 * 1024; // 64 KiB par CPU
+const KERNEL_STACK_SIZE: u64 = 64 * 1024; // 64 KiB per CPU
 
-/// Retourne (stack_base, stack_size) pour `cpu_id`.
+/// Returns (stack_base, stack_size) for `cpu_id`.
 pub fn cpu_stack_range(cpu_id: u32) -> (u64, u64) {
     let base = KERNEL_STACK_BASE + cpu_id as u64 * KERNEL_STACK_SIZE;
     (base, KERNEL_STACK_SIZE)
 }
 
-/// Enregistre les pages garde pour la stack du CPU `cpu_id`.
-/// Returns `GuardRegionId` ou `None` si table pleine.
+/// Registers guard pages for CPU `cpu_id`'s stack.
+/// Returns `GuardRegionId` or `None` if table full.
 pub fn register_cpu_stack_guards(cpu_id: u32) -> Option<GuardRegionId> {
     let (base, size) = cpu_stack_range(cpu_id);
     register_guard_region(base, size, GuardRegionKind::KernelStack { cpu_id })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Init guard pages — enregistre les pages garde pour le BSP (cpu_id=0).
+/// Init guard pages — registers guard pages for BSP (cpu_id=0).
 pub fn init() {
     register_cpu_stack_guards(0);
 }

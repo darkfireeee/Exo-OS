@@ -1,24 +1,24 @@
 // kernel/src/memory/physical/frame/reclaim.rs
 //
-// Récupération (reclaim) de frames — implémentation de l'algorithme CLOCK
-// à deux mains (active list / inactive list).
+// Frame reclamation — two-handed CLOCK algorithm implementation
+// (active list / inactive list).
 //
-// Architecture :
-//   • LRU inactive list — candidats au swap.
-//   • LRU active   list — frames chauds, pas encore candidats.
-//   • `kswapd_reclaim(target)` — tente de libérer `target` frames.
-//   • Indicateur par-CPU `PF_MEMALLOC` — signale qu'un thread est déjà
-//     en train de reclaimer (évite la récursion).
-//   • `lru_add_new` / `lru_promote` / `lru_demote` — gestion des listes.
+// Architecture:
+//   • LRU inactive list — swap candidates.
+//   • LRU active   list — hot frames, not yet candidates.
+//   • `kswapd_reclaim(target)` — attempts to free `target` frames.
+//   • Per-CPU flag `PF_MEMALLOC` — indicates thread is already
+//     reclaiming (prevents recursion).
+//   • `lru_add_new` / `lru_promote` / `lru_demote` — list management.
 //
-// CLOCK-pro simplifié :
-//   1. Scanner `inactive` depuis le pointeur d'horloge.
-//   2. Frame ACCESSED → promouvoir en `active`, clear bit ACCESSED.
-//   3. Frame non ACCESSED → candidat au swap ou à la libération directe.
-//   4. Frame PINNED / DMA → sauter.
-//   5. Quand `active` déborde (> HIGH_WATER_ACTIVE), dégrader en `inactive`.
+// Simplified CLOCK-pro:
+//   1. Scan `inactive` from the clock hand.
+//   2. ACCESSED frame -> promote to `active`, clear ACCESSED bit.
+//   3. Non-ACCESSED frame -> candidate for swap or direct release.
+//   4. PINNED / DMA frame -> skip.
+//   5. When `active` overflows (> HIGH_WATER_ACTIVE), demote to `inactive`.
 //
-// Constantes calibrées pour un OS kernel no_std.
+// Calibrated constants for a no_std kernel OS.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -30,43 +30,43 @@ use crate::memory::physical::frame::descriptor::{FrameFlags, FRAME_DESCRIPTORS};
 use crate::memory::swap::backend::SWAP_BACKEND;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale de chaque liste LRU (en nombre de frames).
+/// Maximum size of each LRU list (in number of frames).
 pub const LRU_LIST_SIZE: usize = 8192;
 
-/// Seuil au-delà duquel on commence à dégrader des frames active → inactive.
+/// Threshold beyond which active -> inactive frames demotion begins.
 pub const HIGH_WATER_ACTIVE: usize = LRU_LIST_SIZE * 3 / 4;
 
-/// Taille de la table RECLAIM_FLAGS.
+/// Size of RECLAIM_FLAGS table.
 ///
-/// Alignée sur la constante canonique pour éviter une table reclaim plus large
-/// que le nombre réel de CPUs supportés par le noyau.
+/// Aligned on the canonical constant to avoid a reclaim table wider
+/// than the actual number of CPUs supported by the kernel.
 const RECLAIM_MAX_CPUS: usize = MAX_CPUS;
 const _: () = assert!(
     RECLAIM_MAX_CPUS >= MAX_CPUS,
     "RECLAIM_MAX_CPUS doit rester >= MAX_CPUS canonique"
 );
 
-/// Nombre max de frames à écrire en swap par cycle de reclaim.
+/// Maximum number of frames to write to swap per reclaim pass.
 pub const MAX_SWAP_PER_PASS: usize = 64;
 
-/// Bit PF_MEMALLOC dans le flags per-CPU (bit 0).
+/// PF_MEMALLOC bit in per-CPU flags (bit 0).
 const PF_MEMALLOC_BIT: u32 = 1 << 0;
-/// Bit PF_KSWAPD dans le flags per-CPU (bit 1).
+/// PF_KSWAPD bit in per-CPU flags (bit 1).
 #[allow(dead_code)]
 const PF_KSWAPD_BIT: u32 = 1 << 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FLAGS PAR-CPU
+// PER-CPU FLAGS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table de flags per-CPU pour les threads de reclaim.
+/// Per-CPU flags table for reclaim threads.
 static RECLAIM_FLAGS: [AtomicU32; RECLAIM_MAX_CPUS] =
     [const { AtomicU32::new(0) }; RECLAIM_MAX_CPUS];
 
-/// Marque le CPU courant comme étant en cours de reclaim (antirecursion).
+/// Marks current CPU as performing reclaim (antirecursion).
 #[inline]
 pub fn enter_memalloc(cpu_id: usize) {
     if cpu_id < RECLAIM_MAX_CPUS {
@@ -74,7 +74,7 @@ pub fn enter_memalloc(cpu_id: usize) {
     }
 }
 
-/// Enlève le marqueur PF_MEMALLOC du CPU courant.
+/// Clears PF_MEMALLOC marker on current CPU.
 #[inline]
 pub fn leave_memalloc(cpu_id: usize) {
     if cpu_id < RECLAIM_MAX_CPUS {
@@ -82,7 +82,7 @@ pub fn leave_memalloc(cpu_id: usize) {
     }
 }
 
-/// Retourne `true` si le CPU courant est en train de reclaimer.
+/// Returns `true` if current CPU is currently reclaiming.
 #[inline]
 pub fn in_memalloc(cpu_id: usize) -> bool {
     if cpu_id >= RECLAIM_MAX_CPUS {
@@ -92,10 +92,10 @@ pub fn in_memalloc(cpu_id: usize) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LISTES LRU (RING-BUFFER STATIQUE)
+// LRU LISTS (STATIC RING-BUFFER)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée d'une liste LRU.
+/// LRU list entry.
 #[derive(Copy, Clone)]
 struct LruEntry {
     pfn: u64,
@@ -111,10 +111,10 @@ impl LruEntry {
 
 struct LruList {
     entries: [LruEntry; LRU_LIST_SIZE],
-    head: usize, // prochain slot à insérer
-    tail: usize, // prochain slot à retirer (FIFO)
+    head: usize, // next slot to insert
+    tail: usize, // next slot to remove (FIFO)
     count: usize,
-    /// Pointeur d'horloge (scan CLOCK).
+    /// Clock pointer (CLOCK scan).
     clock: usize,
 }
 
@@ -139,7 +139,7 @@ impl LruList {
         true
     }
 
-    /// Retire la prochaine entrée valide depuis la queue (FIFO).
+    /// Removes next valid entry from queue (FIFO).
     fn pop(&mut self) -> Option<u64> {
         while self.count > 0 {
             let e = self.entries[self.tail];
@@ -153,7 +153,7 @@ impl LruList {
         None
     }
 
-    /// Marque l'entrée `pfn` comme invalide (retirement explicite).
+    /// Marks entry `pfn` as invalid (explicit removal).
     fn remove(&mut self, pfn: u64) {
         for e in self.entries.iter_mut() {
             if e.valid && e.pfn == pfn {
@@ -166,7 +166,7 @@ impl LruList {
         }
     }
 
-    /// Avance le pointeur d'horloge et retourne la prochaine entrée valide.
+    /// Advances clock pointer and returns next valid entry.
     fn clock_next(&mut self) -> Option<u64> {
         let start = self.clock;
         loop {
@@ -189,28 +189,28 @@ impl LruList {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATICS PROTÉGÉS PAR MUTEX
+// MUTEX-PROTECTED STATICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 static ACTIVE_LIST: Mutex<LruList> = Mutex::new(LruList::new());
 static INACTIVE_LIST: Mutex<LruList> = Mutex::new(LruList::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES DE RECLAIM
+// RECLAIM STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct ReclaimStats {
-    /// Frames libérés directement (frame_flags: FREE / non DIRTY).
+    /// Directly freed frames (frame_flags: FREE / non-DIRTY).
     pub freed_direct: AtomicU64,
-    /// Frames envoyés en swap puis libérés.
+    /// Frames swapped out then freed.
     pub swapped_out: AtomicU64,
-    /// Frames promus de inactive → active (bit ACCESSED).
+    /// Frames promoted from inactive -> active (ACCESSED bit).
     pub promoted: AtomicU64,
-    /// Frames dégradés de active → inactive.
+    /// Frames demoted from active -> inactive.
     pub demoted: AtomicU64,
-    /// Frames sautés (PINNED / DMA).
+    /// Skipped frames (PINNED / DMA).
     pub skipped: AtomicU64,
-    /// Nb de fois que le swap a échoué.
+    /// Number of times swap failed.
     pub swap_errors: AtomicU64,
 }
 
@@ -230,7 +230,7 @@ impl ReclaimStats {
 pub static RECLAIM_STATS: ReclaimStats = ReclaimStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RÉSULTAT DE RECLAIM
+// RECLAIM RESULT
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Debug)]
@@ -242,27 +242,27 @@ pub struct ReclaimResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE LRU
+// LRU PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ajoute un nouveau frame à la liste inactive (nouveau → inactif par défaut).
+/// Adds a new frame to the inactive list (new -> inactive by default).
 pub fn lru_add_new(frame: Frame) {
     let mut inactive = INACTIVE_LIST.lock();
     if !inactive.push(frame.pfn()) {
-        // Liste pleine — déclencher un mini-reclaim.
+        // List full — trigger mini-reclaim.
         drop(inactive);
         let _ = kswapd_reclaim(8, usize::MAX);
         let _ = INACTIVE_LIST.lock().push(frame.pfn());
     }
 }
 
-/// Retire un frame des deux listes LRU (lors de `free_page`).
+/// Removes a frame from both LRU lists (on `free_page`).
 pub fn lru_remove(frame: Frame) {
     ACTIVE_LIST.lock().remove(frame.pfn());
     INACTIVE_LIST.lock().remove(frame.pfn());
 }
 
-/// Promeut un frame de inactive → active (page fault d'accès).
+/// Promotes a frame from inactive -> active (access page fault).
 pub fn promote_to_active(frame: Frame) {
     let pfn = frame.pfn();
     {
@@ -273,7 +273,7 @@ pub fn promote_to_active(frame: Frame) {
     if pushed {
         RECLAIM_STATS.promoted.fetch_add(1, Ordering::Relaxed);
     }
-    // Si active déborde, dégrader le plus ancien en inactive.
+    // If active overflows, demote oldest to inactive.
     if ACTIVE_LIST.lock().len() > HIGH_WATER_ACTIVE {
         let victim = ACTIVE_LIST.lock().pop();
         if let Some(v) = victim {
@@ -283,7 +283,7 @@ pub fn promote_to_active(frame: Frame) {
     }
 }
 
-/// Dégrade un frame de active → inactive.
+/// Demotes a frame from active -> inactive.
 pub fn demote_to_inactive(frame: Frame) {
     let pfn = frame.pfn();
     ACTIVE_LIST.lock().remove(pfn);
@@ -292,7 +292,7 @@ pub fn demote_to_inactive(frame: Frame) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS FRAMES
+// FRAME HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline]
@@ -305,7 +305,7 @@ fn frame_is_reclaimable(pfn: u64) -> bool {
     let frame = frame_from_pfn(pfn);
     let desc = FRAME_DESCRIPTORS.get(frame);
     let flags = desc.flags();
-    // Ignorer les frames système (PINNED) ou DMA.
+    // Ignore system frames (PINNED) or DMA.
     !flags.contains(FrameFlags::PINNED) && !flags.contains(FrameFlags::DMA)
 }
 
@@ -330,17 +330,17 @@ fn frame_clear_accessed(pfn: u64) {
 // KSWAPD RECLAIM
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cœur de l'algorithme de reclaim.
+/// Core reclaim algorithm.
 ///
-/// Tente de libérer `target` frames en scannant la liste inactive.
-/// `cpu_id` est l'identifiant du CPU appelant (pour PF_MEMALLOC).
+/// Attempts to free `target` frames by scanning the inactive list.
+/// `cpu_id` is the identifier of calling CPU (for PF_MEMALLOC).
 ///
-/// ## Algorithme CLOCK à une main sur la liste inactive
-/// 1. Prendre prochain candidat via `clock_next()`.
-/// 2. Si le frame est ACCESSED → promouvoir en active, continuer.
-/// 3. Si le frame est PINNED / DMA → sauter.
-/// 4. Si le frame est DIRTY → swap out puis libérer.
-/// 5. Sinon → libérer directement.
+/// ## Single-handed CLOCK algorithm on inactive list
+/// 1. Take next candidate via `clock_next()`.
+/// 2. If frame is ACCESSED -> promote to active, continue.
+/// 3. If frame is PINNED / DMA -> skip.
+/// 4. If frame is DIRTY -> swap out then free.
+/// 5. Otherwise -> free directly.
 pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
     let mut result = ReclaimResult {
         freed: 0,
@@ -350,7 +350,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
     };
 
     if cpu_id < RECLAIM_MAX_CPUS && in_memalloc(cpu_id) {
-        // Récursion détectée — ne pas reclaimer.
+        // Recursion detected — do not reclaim.
         return result;
     }
 
@@ -364,7 +364,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
     while result.freed < target && passes < max_scan {
         passes += 1;
 
-        // Obtenir le PFN suivant dans la liste inactive via CLOCK.
+        // Obtain next PFN in inactive list via CLOCK.
         let pfn = {
             let mut inactive = INACTIVE_LIST.lock();
             inactive.clock_next()
@@ -372,17 +372,17 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
 
         let pfn = match pfn {
             Some(p) => p,
-            None => break, // liste vide
+            None => break, // list empty
         };
 
-        // Frame PINNED / DMA → sauter.
+        // PINNED / DMA frame -> skip.
         if !frame_is_reclaimable(pfn) {
             RECLAIM_STATS.skipped.fetch_add(1, Ordering::Relaxed);
             result.skipped += 1;
             continue;
         }
 
-        // Frame accédé récemment → promouvoir en active.
+        // Recently accessed frame -> promote to active.
         if frame_is_accessed(pfn) {
             frame_clear_accessed(pfn);
             let frame = frame_from_pfn(pfn);
@@ -392,15 +392,15 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
             continue;
         }
 
-        // Le frame est candidat à la libération ou au swap.
+        // Frame is candidate for free or swap.
         let frame = frame_from_pfn(pfn);
         let frame_flags = FRAME_DESCRIPTORS.get(frame).flags();
 
         if frame_flags.contains(FrameFlags::DIRTY) {
-            // Écrire en swap avant de libérer.
+            // Write to swap before freeing.
             let swap_written = unsafe { try_swap_out(frame) };
             if swap_written {
-                // Retirer de la liste inactive et libérer le frame physique.
+                // Remove from inactive list and free physical frame.
                 INACTIVE_LIST.lock().remove(pfn);
                 let _ = free_page(frame);
                 result.freed += 1;
@@ -412,14 +412,14 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
                 result.skipped += 1;
             }
         } else {
-            // Frame propre — libération directe.
+            // Clean frame — direct free.
             INACTIVE_LIST.lock().remove(pfn);
             let _ = free_page(frame);
             result.freed += 1;
             RECLAIM_STATS.freed_direct.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Gérer le débordement de la liste active.
+        // Handle active list overflow.
         if ACTIVE_LIST.lock().len() > HIGH_WATER_ACTIVE {
             let victim = ACTIVE_LIST.lock().pop();
             if let Some(v) = victim {
@@ -436,21 +436,21 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
     result
 }
 
-/// Tente d'écrire le frame dans le swap.
-/// Retourne `true` si l'écriture a réussi.
+/// Attempts to write frame to swap.
+/// Returns `true` if write succeeded.
 ///
 /// # Safety
-/// Accède à la physmap — requiert que PHYS_MAP_BASE soit initialisé.
+/// Accesses physmap — requires PHYS_MAP_BASE to be initialized.
 unsafe fn try_swap_out(frame: Frame) -> bool {
     let (dev_idx, slot) = match SWAP_BACKEND.alloc_slot() {
         Ok(pair) => pair,
         Err(_) => return false,
     };
-    // Écrire PAGE_SIZE octets depuis la physmap vers le swap device.
+    // Write PAGE_SIZE bytes from physmap to swap device.
     match SWAP_BACKEND.write_page(dev_idx, slot, frame.phys_addr()) {
         Ok(_) => true,
         Err(_) => {
-            // Libérer le slot si l'écriture échoue.
+            // Free slot if write fails.
             SWAP_BACKEND.free_slot(dev_idx, slot);
             false
         }
@@ -461,7 +461,7 @@ unsafe fn try_swap_out(frame: Frame) -> bool {
 // QUERY STATS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le nombre de frames dans chaque liste.
+/// Returns number of frames in each list.
 pub fn lru_counts() -> (usize, usize) {
     let active = ACTIVE_LIST.lock().len();
     let inactive = INACTIVE_LIST.lock().len();

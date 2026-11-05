@@ -1,10 +1,10 @@
 // kernel/src/memory/heap/thread_local/cache.rs
 //
-// Cache per-CPU pour les petites allocations heap.
-// Chaque CPU maintient une paire de magazines par classe de taille.
-// Hot path alloc/free entièrement sans lock.
+// Per-CPU cache for small heap allocations.
+// Each CPU maintains a magazine pair per size class.
+// Alloc/free hot path is entirely lock-free.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -14,27 +14,27 @@ use crate::memory::heap::allocator::size_classes::{heap_size_class_for, HEAP_SIZ
 use crate::memory::heap::thread_local::magazine::{CpuMagazinePair, MAGAZINE_SIZE};
 use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
-/// Nombre maximum de CPUs supportés.
+/// Maximum number of supported CPUs.
 pub use crate::memory::core::constants::MAX_CPUS;
 
-/// Assertion compile-time.
+/// Compile-time assertion.
 const _: () = assert!(
     MAX_CPUS == crate::memory::core::constants::MAX_CPUS,
     "heap cache MAX_CPUS doit correspondre à memory::core::constants::MAX_CPUS"
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES PAR CPU
+// PER-CPU STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques détaillées par CPU et par classe de taille.
+/// Detailed statistics per CPU and per size class.
 pub struct PerCpuCacheStats {
-    pub hits: AtomicU64,      // allocs servies par le cache local
-    pub misses: AtomicU64,    // allocs qui ont dû aller au SLUB
-    pub free_hits: AtomicU64, // frees absorbées par le cache local
-    pub free_miss: AtomicU64, // frees renvoyées au SLUB
-    pub drains: AtomicU64,    // nombre de drain complets (contexte switch, etc.)
-    pub refills: AtomicU64,   // nombre de refills depuis le SLUB
+    pub hits: AtomicU64,      // allocs served by local cache
+    pub misses: AtomicU64,    // allocs that had to go to SLUB
+    pub free_hits: AtomicU64, // frees absorbed by local cache
+    pub free_miss: AtomicU64, // frees returned to SLUB
+    pub drains: AtomicU64,    // number of complete drains (context switch, etc.)
+    pub refills: AtomicU64,   // number of refills from SLUB
 }
 
 impl PerCpuCacheStats {
@@ -51,36 +51,36 @@ impl PerCpuCacheStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CACHE PER-CPU (STRUCTURE PRINCIPALE)
+// PER-CPU CACHE (MAIN STRUCTURE)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de classes de taille couvertes par le cache per-CPU.
-/// On couvre uniquement les classes ≤ 2048 octets (SLUB path).
+/// Number of size classes covered by the per-CPU cache.
+/// Covers only classes <= 2048 bytes (SLUB path).
 pub const CACHED_SIZE_CLASSES: usize = 16;
 
-/// Cache per-CPU = tableau de paires de magazines, une par classe de taille.
+/// Per-CPU cache = array of magazine pairs, one per size class.
 ///
-/// Aligné sur 64 octets (évite les faux-partages entre CPUs dans un tableau).
+/// Aligned to 64 bytes (avoids false-sharing between CPUs in an array).
 #[repr(C, align(64))]
 pub struct PerCpuCache {
-    /// Paires de magazines pour chaque classe de taille.
+    /// Magazine pairs for each size class.
     pub magazines: [CpuMagazinePair; CACHED_SIZE_CLASSES],
-    /// CPU propriétaire de ce cache.
+    /// Owning CPU of this cache.
     cpu_id: u32,
-    /// Cache actif ? (faux tant que non initialisé).
+    /// Is cache active? (false as long as uninitialized).
     pub active: bool,
-    /// Statistiques.
+    /// Statistics.
     pub stats: PerCpuCacheStats,
-    /// Padding pour aligner à 64 * N.
+    /// Padding to align to 64 * N.
     _pad: [u8; 3],
 }
 
 impl PerCpuCache {
-    /// Construit un cache vide (sans initialisation runtime).
+    /// Builds an empty cache (without runtime initialization).
     pub const fn new_uninit() -> Self {
-        // On génère les 16 paires de magazines à la construction.
-        // Rust const fn ne permet pas encore les boucles sur [T; N] en stable,
-        // on initialise explicitement.
+        // We generate the 16 magazine pairs at construction.
+        // Rust const fn does not yet allow loops on [T; N] on stable,
+        // so we initialize explicitly.
         PerCpuCache {
             magazines: [
                 CpuMagazinePair::new(0),
@@ -107,7 +107,7 @@ impl PerCpuCache {
         }
     }
 
-    /// Initialise le cache pour un CPU donné.
+    /// Initializes the cache for a given CPU.
     pub fn init(&mut self, cpu_id: u32) {
         self.cpu_id = cpu_id;
         self.active = true;
@@ -117,10 +117,10 @@ impl PerCpuCache {
         }
     }
 
-    /// Alloue un objet de `size` octets depuis le cache per-CPU.
+    /// Allocates an object of `size` bytes from the per-CPU cache.
     ///
-    /// Retourne `None` si le cache est épuisé pour cette classe
-    /// (l'appelant doit alors appeler `alloc_slow`).
+    /// Returns `None` if the cache is exhausted for this class
+    /// (caller must then invoke `alloc_slow`).
     #[inline]
     pub fn alloc_fast(&mut self, size: usize) -> Option<NonNull<u8>> {
         if !self.active {
@@ -140,9 +140,9 @@ impl PerCpuCache {
         }
     }
 
-    /// Libère `ptr` (de taille `size`) dans le cache per-CPU.
+    /// Frees `ptr` (of size `size`) into the per-CPU cache.
     ///
-    /// Retourne `false` si le cache est saturé (l'appelant doit drainer).
+    /// Returns `false` if the cache is saturated (caller must drain).
     #[inline]
     pub fn free_fast(&mut self, ptr: NonNull<u8>, size: usize) -> bool {
         if !self.active {
@@ -165,9 +165,9 @@ impl PerCpuCache {
         }
     }
 
-    /// Chemin lent : recharge le magazine depuis le SLUB puis sert l'allocation.
+    /// Slow path: recharges magazine from SLUB then serves the allocation.
     pub fn alloc_slow(&mut self, _size: usize, class_idx: usize) -> Option<NonNull<u8>> {
-        // Remplit le magazine loaded depuis le SLUB (batch de MAGAZINE_SIZE/2).
+        // Fill loaded magazine from SLUB (batch of MAGAZINE_SIZE/2).
         let batch = MAGAZINE_SIZE / 2;
         let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
         let mut loaded = 0usize;
@@ -175,7 +175,7 @@ impl PerCpuCache {
         for _ in 0..batch {
             match SLUB_CACHES[slub_idx].alloc(AllocFlags::NONE) {
                 Ok(ptr) => {
-                    // Pousse directement dans le magazine prev (loaded est plein côté alloc).
+                    // Push directly into prev magazine (loaded is full on alloc side).
                     if !self.magazines[class_idx].prev.push(ptr) {
                         break;
                     }
@@ -189,7 +189,7 @@ impl PerCpuCache {
             return None;
         }
 
-        // Swap loaded ↔ prev pour remettre le prev rempli en position "loaded".
+        // Swap loaded <-> prev to put the filled prev into "loaded" position.
         core::mem::swap(
             &mut self.magazines[class_idx].loaded,
             &mut self.magazines[class_idx].prev,
@@ -199,24 +199,24 @@ impl PerCpuCache {
         self.magazines[class_idx].loaded.pop()
     }
 
-    /// Drain le magazine chargé vers le SLUB (appelé lors d'un context switch
-    /// ou quand le magazine est plein sur le chemin lent).
+    /// Drains the loaded magazine to SLUB (called during context switch
+    /// or when magazine is full on the slow path).
     pub fn drain_class(&mut self, class_idx: usize) {
         if class_idx >= CACHED_SIZE_CLASSES {
             return;
         }
         let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
 
-        // Vide loaded.
+        // Drain loaded.
         while let Some(ptr) = self.magazines[class_idx].loaded.pop() {
-            // SAFETY: ptr a été alloué par le SLUB correspondant.
+            // SAFETY: ptr was allocated by the corresponding SLUB.
             unsafe {
                 SLUB_CACHES[slub_idx].free(ptr);
             }
         }
-        // Vide prev.
+        // Drain prev.
         while let Some(ptr) = self.magazines[class_idx].prev.pop() {
-            // SAFETY: ptr alloqué par SLUB_CACHES[slub_idx] (magazine prev).
+            // SAFETY: ptr allocated by SLUB_CACHES[slub_idx] (prev magazine).
             unsafe {
                 SLUB_CACHES[slub_idx].free(ptr);
             }
@@ -224,69 +224,69 @@ impl PerCpuCache {
         self.stats.drains.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Drain toutes les classes (context switch complet).
+    /// Drains all classes (full context switch).
     pub fn drain_all(&mut self) {
         for i in 0..CACHED_SIZE_CLASSES {
             self.drain_class(i);
         }
     }
 
-    /// Nombre total d'objets en cache sur ce CPU.
+    /// Total number of cached objects on this CPU.
     pub fn total_cached(&self) -> usize {
         self.magazines.iter().map(|m| m.cached_count()).sum()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE GLOBALE DES CACHES PER-CPU
+// GLOBAL PER-CPU CACHE TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale : un cache par CPU.
-/// L'accès est protégé par le fait qu'un seul CPU accède à son propre cache.
-/// On utilise un `Mutex<()>` uniquement pour l'initialisation (une seule fois).
+/// Global table: one cache per CPU.
+/// Access is protected because each CPU only accesses its own cache.
+/// A `Mutex<()>` is used only for initialization (one-time).
 #[allow(dead_code)]
 pub struct PerCpuCacheTable {
     caches: [PerCpuCache; MAX_CPUS],
     init_lock: spin::Mutex<bool>,
 }
 
-// SAFETY: L'accès à `caches[cpu_id]` est exclusif à cpu_id (pas de partage inter-CPU).
+// SAFETY: Access to `caches[cpu_id]` is exclusive to cpu_id (no inter-CPU sharing).
 unsafe impl Sync for PerCpuCacheTable {}
 unsafe impl Send for PerCpuCacheTable {}
 
 impl PerCpuCacheTable {
     const fn new() -> Self {
-        // Initialise les MAX_CPUS caches statiquement.
-        // Rust ne permet pas encore `[expr; MAX_CPUS]` avec des types non-Copy complexes,
-        // on utilise une macro répétitive.
+        // Initialize the MAX_CPUS caches statically.
+        // Rust does not yet allow `[expr; MAX_CPUS]` with complex non-Copy types,
+        // so we use a repetitive macro/transmute approach.
         PerCpuCacheTable {
             caches: {
-                // SAFETY: La structure est entièrement initialisée par const fn.
-                // On va initialement mettre tous les champs à zéro via transmute d'un [u8] n'est
-                // pas disponible en const. On utilise une approche de copie de new_uninit.
+                // SAFETY: The structure is entirely initialized by const fn.
+                // We initially zero all fields via transmute since [u8] is
+                // not available in const. We use a copy of new_uninit approach.
                 //
-                // En Rust stable, on ne peut pas [PerCpuCache::new_uninit(); 256] si PerCpuCache
-                // n'est pas Copy. On l'initialise via MaybeUninit à l'init runtime.
-                // Pour contourner ce problème en const, on encode les MAX_CPUS entrées explicitement
-                // en déléguant à un helper qui retourne le tableau.
+                // In stable Rust, we cannot do [PerCpuCache::new_uninit(); 256] if PerCpuCache
+                // is not Copy. We initialize via MaybeUninit during runtime init.
+                // To bypass this in const, we encode the MAX_CPUS entries explicitly
+                // by delegating to a helper that returns the array.
                 //
-                // Astuce: const { ... } + unsafe transmute d'un tableau de zéros.
-                // SAFETY: Tous les AtomicXxx et primitifs s'initialisent proprement avec 0.
-                // `active: false` = 0u8 ✓, `cpu_id: 0` ✓, tous les AtomicU64 = 0 ✓.
-                // @rustc: `core::mem::MaybeUninit::zeroed().assume_init()` n'est pas const stable.
-                // On utilise donc une initialisation runtime déportée dans `init_cpu()`.
+                // Trick: const { ... } + unsafe transmute of a zeroed array.
+                // SAFETY: All AtomicXxx and primitives cleanly initialize with 0.
+                // `active: false` = 0u8 ok, `cpu_id: 0` ok, all AtomicU64 = 0 ok.
+                // @rustc: `core::mem::MaybeUninit::zeroed().assume_init()` is not const stable.
+                // We therefore use runtime initialization deferred to `init_cpu()`.
                 //
-                // SAFETY: zeros valides pour AtomicXxx et primitifs; init_cpu() surcharge ensuite.
+                // SAFETY: valid zeroes for AtomicXxx and primitives; init_cpu() overwrites afterward.
                 unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
             },
             init_lock: spin::Mutex::new(false),
         }
     }
 
-    /// Initialise le cache pour un CPU donné. Doit être appelé une seule fois par CPU.
+    /// Initializes cache for a given CPU. Must be called once per CPU.
     ///
     /// # Safety
-    /// Appelé depuis le code d'initialisation du CPU avant toute allocation.
+    /// Called from CPU initialization code before any allocation.
     pub unsafe fn init_cpu(&self, cpu_id: usize) {
         assert!(
             cpu_id < MAX_CPUS,
@@ -294,15 +294,15 @@ impl PerCpuCacheTable {
             cpu_id,
             MAX_CPUS
         );
-        // SAFETY: chaque CPU accède uniquement à son propre slot.
+        // SAFETY: each CPU accesses only its own slot.
         let cache_ptr = &self.caches[cpu_id] as *const PerCpuCache as *mut PerCpuCache;
         (*cache_ptr).init(cpu_id as u32);
     }
 
-    /// Accès mutable au cache du CPU courant.
+    /// Mutable access to current CPU's cache.
     ///
     /// # Safety
-    /// `cpu_id` doit correspondre au CPU courant. Pas de préemption pendant l'accès.
+    /// `cpu_id` must match current CPU. No preemption during access.
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut(&self, cpu_id: usize) -> &mut PerCpuCache {
@@ -311,21 +311,21 @@ impl PerCpuCacheTable {
     }
 }
 
-/// Table globale des caches per-CPU.
+/// Global table of per-CPU caches.
 pub static CPU_CACHES: PerCpuCacheTable = PerCpuCacheTable::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE SIMPLIFIÉE
+// SIMPLIFIED PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Chemin complet d'allocation avec cache per-CPU.
+/// Full allocation path with per-CPU cache.
 ///
-/// 1. Tente le cache (fast path — sans lock).
-/// 2. Si raté, refill depuis SLUB (slow path).
-/// 3. Si toujours rien, remonte l'erreur OOM.
+/// 1. Tries cache (fast path — lock-free).
+/// 2. If missed, refill from SLUB (slow path).
+/// 3. If still nothing, bubbles up OOM error.
 ///
 /// # Safety
-/// `cpu_id` doit être le CPU courant, sans préemption pendant l'appel.
+/// `cpu_id` must be current CPU, without preemption during call.
 pub unsafe fn cache_alloc(size: usize, cpu_id: usize) -> Option<NonNull<u8>> {
     let cache = CPU_CACHES.get_mut(cpu_id);
     if let Some(ptr) = cache.alloc_fast(size) {
@@ -337,30 +337,30 @@ pub unsafe fn cache_alloc(size: usize, cpu_id: usize) -> Option<NonNull<u8>> {
     cache.alloc_slow(size, class_idx)
 }
 
-/// Chemin complet de libération avec cache per-CPU.
+/// Full free path with per-CPU cache.
 ///
-/// 1. Tente de stocker dans le cache (fast path).
-/// 2. Si plein, drains la moitié vers le SLUB, puis réessaie.
+/// 1. Tries to store in cache (fast path).
+/// 2. If full, drains half to SLUB, then retries.
 ///
 /// # Safety
-/// `cpu_id` doit être le CPU courant, sans préemption pendant l'appel.
+/// `cpu_id` must be current CPU, without preemption during call.
 pub unsafe fn cache_free(ptr: NonNull<u8>, size: usize, cpu_id: usize) {
     let cache = CPU_CACHES.get_mut(cpu_id);
     if cache.free_fast(ptr, size) {
         return;
     }
 
-    // Slow path: drain la classe concernée puis on libère directement via SLUB.
+    // Slow path: drain relevant class then free directly via SLUB.
     if let Some(class_idx) = heap_size_class_for(size) {
         if class_idx < CACHED_SIZE_CLASSES {
             cache.drain_class(class_idx);
-            // Après drain, réessaie.
+            // After drain, retry.
             if cache.free_fast(ptr, size) {
                 return;
             }
         }
     }
-    // Dernier recours: libère directement via SLUB.
+    // Last resort: free directly via SLUB.
     if let Some(class_idx) = heap_size_class_for(size) {
         let slub_idx = HEAP_SIZE_CLASSES[class_idx].slab_idx;
         SLUB_CACHES[slub_idx].free(ptr);

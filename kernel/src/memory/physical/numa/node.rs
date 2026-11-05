@@ -1,50 +1,50 @@
 // kernel/src/memory/physical/numa/node.rs
 //
-// Nœuds NUMA — descripteurs, table globale et compteurs par nœud.
+// NUMA nodes — descriptors, global table, and per-node counters.
 //
-// Chaque nœud NUMA représente une banque mémoire locale à un ensemble de CPUs.
-// Cette couche maintient :
-//   • La liste des nœuds détectés (via ACPI SRAT à l'init).
-//   • Les plages d'adresses physiques appartenant à chaque nœud.
-//   • Les compteurs de pages libres / utilisées par nœud.
+// Each NUMA node represents a memory bank local to a set of CPUs.
+// This layer maintains:
+//   • The list of detected nodes (via ACPI SRAT at init).
+//   • Physical address ranges belonging to each node.
+//   • Free / used page counters per node.
 //
-// COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximal de nœuds NUMA.
+/// Maximum number of NUMA nodes.
 pub const MAX_NUMA_NODES: usize = 8;
-/// Nombre maximal de plages physiques par nœud.
+/// Maximum number of physical ranges per node.
 const MAX_RANGES_PER_NODE: usize = 16;
-/// ID invalide / sentinelle.
+/// Invalid / sentinel ID.
 pub const NUMA_NODE_INVALID: u32 = u32::MAX;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques par nœud
+// Per-node statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs live par nœud NUMA.
+/// Live counters per NUMA node.
 #[repr(C, align(64))]
 pub struct NumaNodeStats {
-    /// Pages totales dans ce nœud.
+    /// Total pages in this node.
     pub total_pages: AtomicU64,
-    /// Pages libres actuellement.
+    /// Currently free pages.
     pub free_pages: AtomicU64,
-    /// Pages utilisées (total - free).
+    /// Used pages (total - free).
     pub used_pages: AtomicU64,
-    /// Allocations locales réussies.
+    /// Successful local allocations.
     pub local_allocs: AtomicU64,
-    /// Allocations distantes (fallback).
+    /// Remote allocations (fallback).
     pub remote_allocs: AtomicU64,
-    /// Pages migrées vers ce nœud.
+    /// Pages migrated into this node.
     pub migrated_in: AtomicU64,
-    /// Pages migrées hors de ce nœud.
+    /// Pages migrated out of this node.
     pub migrated_out: AtomicU64,
     _pad: [u8; 8],
 }
@@ -85,14 +85,14 @@ impl NumaNodeStats {
 unsafe impl Sync for NumaNodeStats {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Plage physique appartenant à un nœud
+// Physical range belonging to a node
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une plage d'adresses physiques appartenant à un nœud NUMA.
+/// A physical address range belonging to a NUMA node.
 #[derive(Debug, Clone, Copy)]
 pub struct NumaPhysRange {
-    pub start: u64, // inclus
-    pub end: u64,   // exclus
+    pub start: u64, // inclusive
+    pub end: u64,   // exclusive
 }
 
 impl NumaPhysRange {
@@ -114,24 +114,24 @@ impl NumaPhysRange {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Descripteur de nœud NUMA
+// NUMA node descriptor
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur complet d'un nœud NUMA.
+/// Full descriptor of a NUMA node.
 #[repr(C, align(64))]
 pub struct NumaNode {
-    /// Identifiant unique du nœud (0..MAX_NUMA_NODES-1).
+    /// Unique node identifier (0..MAX_NUMA_NODES-1).
     pub id: u32,
-    /// Masque de CPUs locaux à ce nœud (bit i = CPU i).
+    /// Mask of CPUs local to this node (bit i = CPU i).
     pub cpu_mask: AtomicU64,
-    /// Nombre de plages physiques valides dans `ranges`.
+    /// Number of valid physical ranges in `ranges`.
     pub range_count: u32,
-    /// Actif (détecté à l'init ACPI SRAT).
+    /// Active (detected at ACPI SRAT init).
     pub active: AtomicBool,
     _pad1: [u8; 3],
-    /// Statistiques live.
+    /// Live statistics.
     pub stats: NumaNodeStats,
-    /// Plages physiques de ce nœud.
+    /// Physical ranges of this node.
     pub ranges: [NumaPhysRange; MAX_RANGES_PER_NODE],
     _pad2: [u8; 16],
 }
@@ -150,7 +150,7 @@ impl NumaNode {
         }
     }
 
-    /// Ajoute une plage physique.  Retourne `false` si table pleine.
+    /// Adds a physical range. Returns `false` if table is full.
     pub fn add_range(&mut self, start: u64, end: u64) -> bool {
         if self.range_count as usize >= MAX_RANGES_PER_NODE {
             return false;
@@ -167,7 +167,7 @@ impl NumaNode {
         true
     }
 
-    /// Retourne `true` si `phys` appartient à ce nœud.
+    /// Returns `true` if `phys` belongs to this node.
     pub fn owns_phys(&self, phys: u64) -> bool {
         for i in 0..self.range_count as usize {
             if self.ranges[i].contains_phys(phys) {
@@ -177,13 +177,13 @@ impl NumaNode {
         false
     }
 
-    /// Total de pages libres sur ce nœud.
+    /// Total free pages on this node.
     #[inline]
     pub fn free_pages(&self) -> u64 {
         self.stats.free_pages.load(Ordering::Relaxed)
     }
 
-    /// Total de pages dans ce nœud.
+    /// Total pages on this node.
     #[inline]
     pub fn total_pages(&self) -> u64 {
         self.stats.total_pages.load(Ordering::Relaxed)
@@ -193,10 +193,10 @@ impl NumaNode {
 unsafe impl Sync for NumaNode {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table globale des nœuds
+// Global node table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table centrale de tous les nœuds NUMA détectés.
+/// Central table of all detected NUMA nodes.
 pub struct NumaNodeTable {
     nodes: [NumaNode; MAX_NUMA_NODES],
     node_count: AtomicU32,
@@ -219,34 +219,34 @@ impl NumaNodeTable {
         }
     }
 
-    /// Enregistre un nœud NUMA.
-    /// `cpu_mask` : bitmask des CPUs locaux.
-    /// Returns l'id du nœud ou `NUMA_NODE_INVALID` si table pleine.
+    /// Registers a NUMA node.
+    /// `cpu_mask`: bitmask of local CPUs.
+    /// Returns node id or `NUMA_NODE_INVALID` if table is full.
     pub fn register_node(&self, cpu_mask: u64) -> u32 {
         let id = self.node_count.fetch_add(1, Ordering::AcqRel);
         if id as usize >= MAX_NUMA_NODES {
             self.node_count.fetch_sub(1, Ordering::Relaxed);
             return NUMA_NODE_INVALID;
         }
-        // SAFETY : accès par id unique (counter atomique), pas de race.
+        // SAFETY: accessed via unique id (atomic counter), no race.
         let node = unsafe { &mut *(core::ptr::addr_of!(self.nodes[id as usize]) as *mut NumaNode) };
         node.cpu_mask.store(cpu_mask, Ordering::Release);
         node.active.store(true, Ordering::Release);
         id
     }
 
-    /// Ajoute une plage physique au nœud `id`.
+    /// Adds a physical range to node `id`.
     pub fn add_range(&self, id: u32, start: u64, end: u64) -> bool {
         if id as usize >= MAX_NUMA_NODES {
             return false;
         }
-        // SAFETY : id < MAX_NUMA_NODES vérifié ci-dessus, addr_of! évite &T→*mut T.
-        // L'accès est mono-thread pendant l'initialisation SRAT.
+        // SAFETY: id < MAX_NUMA_NODES verified above, addr_of! avoids &T->*mut T.
+        // Access is single-threaded during SRAT initialization.
         let node = unsafe { &mut *(core::ptr::addr_of!(self.nodes[id as usize]) as *mut NumaNode) };
         node.add_range(start, end)
     }
 
-    /// Retourne le nœud owning `phys` ou `NUMA_NODE_INVALID`.
+    /// Returns node owning `phys` or `NUMA_NODE_INVALID`.
     pub fn node_for_phys(&self, phys: u64) -> u32 {
         let count = self.node_count.load(Ordering::Acquire) as usize;
         for i in 0..count {
@@ -257,7 +257,7 @@ impl NumaNodeTable {
         NUMA_NODE_INVALID
     }
 
-    /// Retourne le nœud local pour `cpu_id` (premier nœud dont le masque inclut cpu).
+    /// Returns local node for `cpu_id` (first node whose mask includes cpu).
     pub fn node_for_cpu(&self, cpu_id: u32) -> u32 {
         let count = self.node_count.load(Ordering::Acquire) as usize;
         let bit = 1u64 << (cpu_id & 63);
@@ -268,10 +268,10 @@ impl NumaNodeTable {
                 return i as u32;
             }
         }
-        0 // Fallback nœud 0
+        0 // Fallback node 0
     }
 
-    /// Accès à un nœud par id.
+    /// Access to a node by id.
     #[inline]
     pub fn get(&self, id: u32) -> Option<&NumaNode> {
         if id as usize >= MAX_NUMA_NODES {
@@ -285,7 +285,7 @@ impl NumaNodeTable {
         }
     }
 
-    /// Nombre de nœuds actifs.
+    /// Number of active nodes.
     #[inline]
     pub fn count(&self) -> u32 {
         self.node_count.load(Ordering::Acquire)
@@ -297,7 +297,7 @@ unsafe impl Sync for NumaNodeTable {}
 pub static NUMA_NODES: NumaNodeTable = NumaNodeTable::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales NUMA
+// NUMA global statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -321,19 +321,19 @@ unsafe impl Sync for NumaGlobalStats {}
 pub static NUMA_GLOBAL_STATS: NumaGlobalStats = NumaGlobalStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Init NUMA par défaut (UMA) : un unique nœud avec tous les CPUs + plage totale.
+/// Default NUMA init (UMA): a single node with all CPUs + total range.
 ///
-/// Dans un système NUMA réel, cette fonction est remplacée par le parseur ACPI
-/// SRAT qui appelle `NUMA_NODES.register_node()` + `add_range()` pour chaque
-/// nœud découvert.
+/// In a real NUMA system, this function is replaced by the ACPI SRAT parser
+/// which calls `NUMA_NODES.register_node()` + `add_range()` for each
+/// discovered node.
 ///
 /// # Safety
-/// Exécutable uniquement en CPL 0 pendant l'initialisation du noyau.
+/// Callable only in CPL 0 during kernel initialization.
 pub unsafe fn init() {
-    // Nœud 0 : tous les CPUs, plage 0..4GiB par défaut.
+    // Node 0: all CPUs, range 0..4GiB by default.
     let nid = NUMA_NODES.register_node(u64::MAX);
     NUMA_NODES.add_range(nid, 0x0000_0000, 0x1_0000_0000);
     NUMA_GLOBAL_STATS.total_nodes.store(1, Ordering::Relaxed);

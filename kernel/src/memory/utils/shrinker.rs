@@ -1,59 +1,59 @@
 // kernel/src/memory/utils/shrinker.rs
 //
-// Shrinker — table de rappels de shrinkage mémoire.
+// Shrinker — memory shrinkage callback table.
 //
-// Principe :
-//   Chaque sous-système détenant un cache (slab, dcache, inode cache, DMA
-//   pool, etc.) enregistre une `ShrinkerFn` qui, lorsqu'appelée, libère
-//   `target_pages` pages si possible et retourne le nombre effectivement libéré.
+// Principle:
+//   Each subsystem holding a cache (slab, dcache, inode cache, DMA
+//   pool, etc.) registers a `ShrinkerFn` which, when called, frees
+//   `target_pages` pages if possible and returns the count actually freed.
 //
-//   Le chemin de basse mémoire (low-memory path de l'OOM killer ou du buddy)
-//   appelle `run_shrinkers(target)` qui parcourt la table dans l'ordre
-//   d'enregistrement et cumule les pages libérées.
+//   The low-memory path (low-memory path of OOM killer or buddy)
+//   calls `run_shrinkers(target)` which traverses the table in
+//   registration order and accumulates freed pages.
 //
-// Design :
-//   • SHRINKER_TABLE : [Option<ShrinkerEntry>; MAX_SHRINKERS] = 32 slots.
-//   • Les shrinkers sont appelés dans l'ordre d'enregistrement (priority fifo).
-//   • Pas de lock pendant l'exécution des callbacks : la table est write-once
-//     (enregistrement uniquement à l'init) puis read-only pendant l'exploitation.
+// Design:
+//   • SHRINKER_TABLE: [Option<ShrinkerEntry>; MAX_SHRINKERS] = 32 slots.
+//   • Shrinkers are called in registration order (priority fifo).
+//   • No lock held during callback execution: table is write-once
+//     (registration only at init) then read-only during operation.
 //
-// COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Type fondamental
+// Fundamental type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type d'un callback shrinker.
-/// `target_pages` : nombre de pages à libérer.
-/// Retourne : nombre de pages effectivement libérées.
+/// Shrinker callback type.
+/// `target_pages`: number of pages to free.
+/// Returns: number of pages actually freed.
 pub type ShrinkerFn = fn(target_pages: u64) -> u64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de shrinkers enregistrables.
+/// Maximum number of registrable shrinkers.
 pub const MAX_SHRINKERS: usize = 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrée shrinker
+// Shrinker entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée dans la table de shrinkers.
+/// Entry in the shrinkers table.
 pub struct ShrinkerEntry {
-    /// Callback à appeler.
+    /// Callback to invoke.
     pub callback: ShrinkerFn,
-    /// Nom du sous-système (pour debug/stats), max 15 chars + NUL.
+    /// Subsystem name (for debug/stats), max 15 chars + NUL.
     pub name: [u8; 16],
-    /// L'entrée est active.
+    /// Entry is active.
     pub active: bool,
-    /// Priorité : les shrinkers de haute priorité sont appelés en premier.
-    /// Valeur plus petite = plus haute priorité.
+    /// Priority: high-priority shrinkers are called first.
+    /// Smaller value = higher priority.
     pub priority: u8,
-    /// Statistiques du shrinker.
+    /// Shrinker statistics.
     pub total_freed: AtomicU64,
     pub call_count: AtomicU64,
 }
@@ -80,7 +80,7 @@ unsafe impl Sync for ShrinkerEntry {}
 // Table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'un shrinker enregistré.
+/// Identifier of a registered shrinker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShrinkerId(pub usize);
 
@@ -102,18 +102,18 @@ impl ShrinkerTableInner {
 static SHRINKER_TABLE: Mutex<ShrinkerTableInner> = Mutex::new(ShrinkerTableInner::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales
+// Global statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
 pub struct ShrinkerStats {
-    /// Nombre total d'appels `run_shrinkers`.
+    /// Total count of `run_shrinkers` calls.
     pub run_count: AtomicU64,
-    /// Pages totales libérées par tous les shrinkers.
+    /// Total pages freed across all shrinkers.
     pub pages_freed: AtomicU64,
-    /// Nombre de fois ou l'objectif n'a pas pu être atteint.
+    /// Number of times the goal could not be reached.
     pub goal_missed: AtomicU64,
-    /// Nombre de shrinkers enregistrés.
+    /// Number of registered shrinkers.
     pub registered: AtomicUsize,
 }
 
@@ -132,13 +132,13 @@ unsafe impl Sync for ShrinkerStats {}
 pub static SHRINKER_STATS: ShrinkerStats = ShrinkerStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre un shrinker.
-/// `name` : slice d'octets du nom (jusqu'à 15).
-/// `priority` : 0 = le plus prioritaire.
-/// Retourne `Some(ShrinkerId)` ou `None` si table pleine.
+/// Registers a shrinker.
+/// `name`: byte slice of the name (up to 15).
+/// `priority`: 0 = highest priority.
+/// Returns `Some(ShrinkerId)` or `None` if table full.
 pub fn register_shrinker(callback: ShrinkerFn, name: &[u8], priority: u8) -> Option<ShrinkerId> {
     let mut table = SHRINKER_TABLE.lock();
     if table.count >= MAX_SHRINKERS {
@@ -155,7 +155,7 @@ pub fn register_shrinker(callback: ShrinkerFn, name: &[u8], priority: u8) -> Opt
     None
 }
 
-/// Désenregistre un shrinker par son ID.
+/// Unregisters a shrinker by its ID.
 pub fn unregister_shrinker(id: ShrinkerId) -> bool {
     let mut table = SHRINKER_TABLE.lock();
     if id.0 >= MAX_SHRINKERS {
@@ -170,15 +170,15 @@ pub fn unregister_shrinker(id: ShrinkerId) -> bool {
     false
 }
 
-/// Exécute les shrinkers dans l'ordre de priorité croissante jusqu'à avoir
-/// libéré `target_pages` pages ou épuisé tous les shrinkers.
+/// Runs shrinkers in increasing priority order until freeing
+/// `target_pages` pages or exhausting all shrinkers.
 ///
-/// Retourne le nombre total de pages libérées.
+/// Returns total number of freed pages.
 pub fn run_shrinkers(target_pages: u64) -> u64 {
     SHRINKER_STATS.run_count.fetch_add(1, Ordering::Relaxed);
 
-    // Construire un snapshot trié par priorité pour ne pas maintenir le lock
-    // pendant l'exécution des callbacks (qui peuvent allouer).
+    // Build snapshot sorted by priority to avoid holding the lock
+    // during callback execution (which may allocate).
     let mut snapshot: [Option<(u8, ShrinkerFn, usize)>; MAX_SHRINKERS] = [None; MAX_SHRINKERS];
     let mut snap_len = 0;
     {
@@ -192,7 +192,7 @@ pub fn run_shrinkers(target_pages: u64) -> u64 {
             }
         }
     }
-    // Trier par priorité croissante.
+    // Sort by increasing priority.
     for i in 0..snap_len {
         for j in i + 1..snap_len {
             if let (Some(a), Some(b)) = (snapshot[i], snapshot[j]) {
@@ -215,7 +215,7 @@ pub fn run_shrinkers(target_pages: u64) -> u64 {
             total_freed += freed;
             remaining = remaining.saturating_sub(freed);
 
-            // Mise à jour stats de l'entrée.
+            // Update entry stats.
             let table = SHRINKER_TABLE.lock();
             if let Some(ref e) = table.entries[idx] {
                 e.total_freed.fetch_add(freed, Ordering::Relaxed);
@@ -233,26 +233,26 @@ pub fn run_shrinkers(target_pages: u64) -> u64 {
     total_freed
 }
 
-/// Exécute les shrinkers avec un objectif minimal de `pages` pages ; ne s'arrête
-/// pas avant d'avoir tout essayé.
+/// Runs shrinkers with a minimal target of `pages` pages; does not
+/// stop until having tried everything.
 pub fn shrink_all(pages: u64) -> u64 {
     run_shrinkers(pages)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shrinkers built-in
+// Built-in shrinkers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Shrinker de secours no-op (enregistré en priorité basse pour les tests).
+/// Fallback no-op shrinker (registered at low priority for testing).
 fn nop_shrinker(_target: u64) -> u64 {
     0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn init() {
-    // Enregistrer le shrinker no-op comme dernier recours (priorité 255).
+    // Register no-op shrinker as last resort (priority 255).
     register_shrinker(nop_shrinker, b"nop", 255);
 }

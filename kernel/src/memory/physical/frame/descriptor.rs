@@ -1,60 +1,60 @@
 // kernel/src/memory/physical/frame/descriptor.rs
 //
-// FrameDesc — descripteur d'un frame physique.
-// Chaque frame physique dans le système a exactement un FrameDesc associé
-// dans le tableau global `FRAME_TABLE`.
-// Couche 0 — aucune dépendance externe.
+// FrameDesc — descriptor of a physical frame.
+// Each physical frame in the system has exactly one associated FrameDesc
+// in the global `FRAME_TABLE` array.
+// Layer 0 — no external dependencies.
 
 use crate::memory::core::types::ZoneType;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FRAME FLAGS — état et propriétés d'un frame
+// FRAME FLAGS — frame state and properties
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux d'état d'un frame physique.
-/// Représentés sur 16 bits pour tenir dans FrameDesc.
+/// State flags of a physical frame.
+/// Represented on 16 bits to fit inside FrameDesc.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct FrameFlags(u16);
 
 impl FrameFlags {
-    /// Frame libre (non alloué).
+    /// Free frame (not allocated).
     pub const FREE: FrameFlags = FrameFlags(1 << 0);
-    /// Frame alloué par le kernel.
+    /// Frame allocated by kernel.
     pub const KERNEL: FrameFlags = FrameFlags(1 << 1);
-    /// Frame alloué pour userspace.
+    /// Frame allocated for userspace.
     pub const USER: FrameFlags = FrameFlags(1 << 2);
-    /// Frame utilisé pour DMA (no-cache, no-swap, no-CoW).
+    /// Frame used for DMA (no-cache, no-swap, no-CoW).
     pub const DMA: FrameFlags = FrameFlags(1 << 3);
-    /// Frame verrouillé en RAM (ne pas swapper/migrer).
+    /// Frame locked in RAM (do not swap/migrate).
     pub const PINNED: FrameFlags = FrameFlags(1 << 4);
-    /// Frame Copy-on-Write (partagé entre processus, copie à l'écriture).
+    /// Copy-on-Write frame (shared between processes, copy on write).
     pub const COW: FrameFlags = FrameFlags(1 << 5);
-    /// Frame sale (modifié depuis la dernière synchronisation disque).
+    /// Dirty frame (modified since last disk synchronization).
     pub const DIRTY: FrameFlags = FrameFlags(1 << 6);
-    /// Frame accédé récemment (LRU clock bit).
+    /// Recently accessed frame (LRU clock bit).
     pub const ACCESSED: FrameFlags = FrameFlags(1 << 7);
-    /// Frame appartenant à une huge page (2 MiB).
+    /// Frame belonging to a huge page (2 MiB).
     pub const HUGE_PAGE: FrameFlags = FrameFlags(1 << 8);
-    /// Frame appartenant à une page de swap.
+    /// Frame belonging to a swap page.
     pub const SWAP: FrameFlags = FrameFlags(1 << 9);
-    /// Frame dans un per-CPU pool (hot cache).
+    /// Frame in a per-CPU pool (hot cache).
     pub const IN_CPU_POOL: FrameFlags = FrameFlags(1 << 10);
-    /// Frame partagé entre plusieurs processus (SHM/mmap).
+    /// Frame shared across multiple processes (SHM/mmap).
     pub const SHARED: FrameFlags = FrameFlags(1 << 11);
-    /// Frame en cours de migration inter-nœuds NUMA.
+    /// Frame currently migrating across NUMA nodes.
     pub const MIGRATING: FrameFlags = FrameFlags(1 << 12);
-    /// Frame réservé par le firmware/BIOS (jamais alloué).
+    /// Frame reserved by firmware/BIOS (never allocated).
     pub const RESERVED: FrameFlags = FrameFlags(1 << 13);
-    /// Frame de la liste LRU active (LRU policy).
+    /// Frame in active LRU list (LRU policy).
     pub const LRU_ACTIVE: FrameFlags = FrameFlags(1 << 14);
-    /// Frame de la liste LRU inactive.
+    /// Frame in inactive LRU list.
     pub const LRU_INACTIVE: FrameFlags = FrameFlags(1 << 15);
 
-    /// Frame DMA verrouillé (combinaison DMA + PINNED — V-05 / MEM-05).
-    /// Doit être positionné sur tout frame alloué pour DMA et effacé après
-    /// `wait_dma_complete()`. Protège contre le reclaim et le swap.
+    /// Locked DMA frame (combination DMA + PINNED — V-05 / MEM-05).
+    /// Must be set on any frame allocated for DMA and cleared after
+    /// `wait_dma_complete()`. Protects against reclaim and swap.
     pub const DMA_PINNED: FrameFlags = FrameFlags(Self::DMA.0 | Self::PINNED.0);
 
     pub const EMPTY: FrameFlags = FrameFlags(0);
@@ -84,39 +84,39 @@ impl FrameFlags {
 // FRAME DESCRIPTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur d'un frame physique.
+/// Descriptor of a physical frame.
 ///
-/// Doit tenir dans exactement 32 bytes pour que le tableau global
-/// `FRAME_TABLE[nr_frames]` reste cache-friendly (2 descripteurs par
-/// cache line de 64 bytes).
+/// Must fit in exactly 32 bytes so that the global table
+/// `FRAME_TABLE[nr_frames]` remains cache-friendly (2 descriptors per
+/// 64-byte cache line).
 ///
-/// Layout (32 bytes) :
-///   - refcount (4 bytes, AtomicU32) : compteur de références (CoW/SHM)
-///   - flags    (2 bytes, AtomicU16) : état et propriétés du frame
+/// Layout (32 bytes):
+///   - refcount (4 bytes, AtomicU32) : reference counter (CoW/SHM)
+///   - flags    (2 bytes, AtomicU16) : frame state and properties
 ///   - zone     (1 byte,  u8)        : ZoneType (Dma/Dma32/Normal/High/Movable)
-///   - numa_node(1 byte,  u8)        : nœud NUMA d'appartenance (0..MAX_NUMA_NODES)
-///   - order    (1 byte,  AtomicU8)  : ordre buddy (0=4KiB, 9=2MiB, ...)
-///     si > BUDDY_MAX_ORDER → dans pool DMA ou réservé
-///   - lru_gen  (1 byte,  AtomicU8)  : génération LRU (pour clock algorithm)
-///   - mapcount (2 bytes, AtomicU16) : nombre de page tables qui mappent ce frame
-///   - _pad     (20 bytes)           : alignement futur / 32 bytes total
+///   - numa_node(1 byte,  u8)        : owning NUMA node (0..MAX_NUMA_NODES)
+///   - order    (1 byte,  AtomicU8)  : buddy order (0=4KiB, 9=2MiB, ...)
+///     if > BUDDY_MAX_ORDER -> in DMA pool or reserved
+///   - lru_gen  (1 byte,  AtomicU8)  : LRU generation (for clock algorithm)
+///   - mapcount (2 bytes, AtomicU16) : number of page tables mapping this frame
+///   - _pad     (20 bytes)           : future alignment / 32 bytes total
 #[repr(C, align(32))]
 pub struct FrameDesc {
-    /// Compteur de références atomique — 0 = frame libre.
+    /// Atomic reference counter — 0 = free frame.
     pub refcount: AtomicU32,
-    /// Drapeaux d'état atomiques.
+    /// Atomic state flags.
     pub flags: AtomicU16,
-    /// Zone mémoire du frame.
+    /// Frame memory zone.
     pub zone: u8,
-    /// Nœud NUMA d'appartenance.
+    /// Owning NUMA node.
     pub numa_node: u8,
-    /// Ordre buddy courant (0..=12). BUDDY_MAX_ORDER+1 = hors-buddy.
+    /// Current buddy order (0..=12). BUDDY_MAX_ORDER+1 = outside buddy.
     pub order: AtomicU8,
-    /// Génération LRU (clock bit, incrémenté à chaque scan).
+    /// LRU generation (clock bit, incremented at each scan).
     pub lru_gen: AtomicU8,
-    /// Nombre de mappings actifs de ce frame (pour writable/COW accounting).
+    /// Active mappings count for this frame (for writable/COW accounting).
     pub mapcount: AtomicU16,
-    /// Réservé pour usage futur (padding à 32 bytes).
+    /// Reserved for future use (padding to 32 bytes).
     _pad: [u8; 20],
 }
 
@@ -130,7 +130,7 @@ const _: () = assert!(
 );
 
 impl FrameDesc {
-    /// Crée un FrameDesc libre dans la zone et le nœud NUMA indiqués.
+    /// Creates a free FrameDesc in the specified zone and NUMA node.
     #[inline]
     pub const fn new_free(zone: ZoneType, numa_node: u8) -> Self {
         FrameDesc {
@@ -145,13 +145,13 @@ impl FrameDesc {
         }
     }
 
-    /// Retourne la zone mémoire du frame.
+    /// Returns the frame's memory zone.
     #[inline(always)]
     pub fn zone_type(&self) -> ZoneType {
         ZoneType::from_index(self.zone as usize).unwrap_or(ZoneType::Normal)
     }
 
-    /// Retourne le nœud NUMA du frame.
+    /// Returns the frame's NUMA node.
     #[inline(always)]
     pub fn numa_node(&self) -> u8 {
         self.numa_node
@@ -159,33 +159,33 @@ impl FrameDesc {
 
     // ── Refcount ────────────────────────────────────────────────────────────
 
-    /// Retourne le refcount actuel.
+    /// Returns the current refcount.
     #[inline(always)]
     pub fn refcount(&self) -> u32 {
         self.refcount.load(Ordering::Relaxed)
     }
 
-    /// Incrémente le refcount de manière atomique.
-    /// Retourne le nouveau refcount.
+    /// Atomically increments the refcount.
+    /// Returns the new refcount.
     #[inline(always)]
     pub fn inc_ref(&self) -> u32 {
         self.refcount.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Décrémente le refcount de manière atomique.
-    /// Retourne `true` si le frame doit être libéré (refcount atteint 0).
+    /// Atomically decrements the refcount.
+    /// Returns `true` if the frame should be freed (refcount reached 0).
     ///
     /// # Safety – double-free guard
-    /// Si le refcount est déjà 0, la décrémentation serait un double-free.
-    /// On annule l'opération, on remet 0, et on retourne `false`.
-    /// En mode debug, panique immédiatement.
+    /// If the refcount is already 0, decrementing would be a double-free.
+    /// We cancel the operation, restore 0, and return `false`.
+    /// In debug mode, panics immediately.
     #[inline(always)]
     pub fn dec_ref(&self) -> bool {
         let prev = self.refcount.fetch_sub(1, Ordering::AcqRel);
         if prev == 0 {
-            // Double-free : on remet le compteur à 0 pour éviter le wrap u32::MAX
+            // Double-free: reset counter to 0 to prevent u32::MAX wrapping
             self.refcount.store(0, Ordering::Release);
-            // En debug : panique pour faciliter la détection
+            // In debug: panic to ease detection
             debug_assert!(
                 false,
                 "dec_ref avec refcount déjà à 0 — double-free détecté"
@@ -195,11 +195,11 @@ impl FrameDesc {
         prev == 1
     }
 
-    /// Fixe le refcount à une valeur arbitraire (boot uniquement).
+    /// Sets the refcount to an arbitrary value (boot only).
     ///
     /// # Safety
-    /// Doit être appelé uniquement pendant l'initialisation du frame table,
-    /// avant que d'autres CPUs aient accès au descripteur.
+    /// Must only be called during frame table initialization,
+    /// before other CPUs have access to the descriptor.
     #[inline(always)]
     pub unsafe fn set_refcount_init(&self, count: u32) {
         self.refcount.store(count, Ordering::Relaxed);
@@ -207,55 +207,55 @@ impl FrameDesc {
 
     // ── Flags ────────────────────────────────────────────────────────────────
 
-    /// Retourne les flags courants.
+    /// Returns current flags.
     #[inline(always)]
     pub fn flags(&self) -> FrameFlags {
         FrameFlags(self.flags.load(Ordering::Relaxed))
     }
 
-    /// Vérifie si un flag est présent.
+    /// Checks whether a flag is present.
     #[inline(always)]
     pub fn has_flag(&self, flag: FrameFlags) -> bool {
         self.flags().contains(flag)
     }
 
-    /// Positionne un flag atomiquement.
+    /// Sets a flag atomically.
     #[inline(always)]
     pub fn set_flag(&self, flag: FrameFlags) {
         self.flags.fetch_or(flag.bits(), Ordering::Relaxed);
     }
 
-    /// Efface un flag atomiquement.
+    /// Clears a flag atomically.
     #[inline(always)]
     pub fn clear_flag(&self, flag: FrameFlags) {
         self.flags.fetch_and(!flag.bits(), Ordering::Relaxed);
     }
 
-    /// Échange atomiquement les flags (retourne les anciens).
+    /// Atomically swaps flags (returns old ones).
     #[inline(always)]
     pub fn swap_flags(&self, new_flags: FrameFlags) -> FrameFlags {
         FrameFlags(self.flags.swap(new_flags.bits(), Ordering::AcqRel))
     }
 
-    /// Vérifie si le frame est libre.
+    /// Checks whether the frame is free.
     #[inline(always)]
     pub fn is_free(&self) -> bool {
         self.has_flag(FrameFlags::FREE)
     }
 
-    /// Vérifie si le frame est pinné (non-swappable).
+    /// Checks whether the frame is pinned (non-swappable).
     #[inline(always)]
     pub fn is_pinned(&self) -> bool {
         self.has_flag(FrameFlags::PINNED)
     }
 
-    /// Vérifie si le frame est CoW.
+    /// Checks whether the frame is CoW.
     #[inline(always)]
     pub fn is_cow(&self) -> bool {
         self.has_flag(FrameFlags::COW)
     }
 
-    /// Vérifie si le frame est réservé (firmware).
+    /// Checks whether the frame is reserved (firmware).
     #[inline(always)]
     pub fn is_reserved(&self) -> bool {
         self.has_flag(FrameFlags::RESERVED)
@@ -263,13 +263,13 @@ impl FrameDesc {
 
     // ── Order (buddy) ────────────────────────────────────────────────────────
 
-    /// Retourne l'ordre buddy courant.
+    /// Returns current buddy order.
     #[inline(always)]
     pub fn order(&self) -> u8 {
         self.order.load(Ordering::Relaxed)
     }
 
-    /// Fixe l'ordre buddy.
+    /// Sets buddy order.
     #[inline(always)]
     pub fn set_order(&self, order: u8) {
         self.order.store(order, Ordering::Relaxed);
@@ -277,27 +277,27 @@ impl FrameDesc {
 
     // ── Mapcount ─────────────────────────────────────────────────────────────
 
-    /// Retourne le nombre de mappings actifs.
+    /// Returns the number of active mappings.
     #[inline(always)]
     pub fn mapcount(&self) -> u16 {
         self.mapcount.load(Ordering::Relaxed)
     }
 
-    /// Incrémente le mapcount.
+    /// Increments mapcount.
     #[inline(always)]
     pub fn inc_mapcount(&self) -> u16 {
         self.mapcount.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Décrémente le mapcount. Retourne `true` si le mapcount atteint 0.
+    /// Decrements mapcount. Returns `true` if mapcount reaches 0.
     ///
     /// # Safety – underflow guard
-    /// Si mapcount est déjà 0, annule la décrémentation (remet 0) et retourne `false`.
+    /// If mapcount is already 0, cancels decrement (resets to 0) and returns `false`.
     #[inline(always)]
     pub fn dec_mapcount(&self) -> bool {
         let prev = self.mapcount.fetch_sub(1, Ordering::AcqRel);
         if prev == 0 {
-            // Underflow : remet 0 pour éviter le wrap vers u16::MAX
+            // Underflow: reset to 0 to prevent wrapping to u16::MAX
             self.mapcount.store(0, Ordering::Relaxed);
             debug_assert!(false, "mapcount underflow");
             return false;
@@ -307,13 +307,13 @@ impl FrameDesc {
 
     // ── LRU ─────────────────────────────────────────────────────────────────
 
-    /// Retourne la génération LRU courante.
+    /// Returns current LRU generation.
     #[inline(always)]
     pub fn lru_gen(&self) -> u8 {
         self.lru_gen.load(Ordering::Relaxed)
     }
 
-    /// Incrémente la génération LRU (saturation à u8::MAX).
+    /// Increments LRU generation (saturating at u8::MAX).
     #[inline(always)]
     pub fn touch_lru(&self) {
         let cur = self.lru_gen.load(Ordering::Relaxed);
@@ -322,16 +322,16 @@ impl FrameDesc {
         }
     }
 
-    /// Réinitialise la génération LRU à 0 (frame vieux → candidat éviction).
+    /// Resets LRU generation to 0 (old frame -> eviction candidate).
     #[inline(always)]
     pub fn reset_lru(&self) {
         self.lru_gen.store(0, Ordering::Relaxed);
     }
 
-    // ── Transition libre ↔ alloué ────────────────────────────────────────────
+    // ── Transition free <-> allocated ────────────────────────────────────────
 
-    /// Marque le frame comme alloué (retire FREE, incrémente refcount à 1).
-    /// Retourne false si le frame n'était pas libre (en debug: panique).
+    /// Marks the frame as allocated (clears FREE, increments refcount to 1).
+    /// Returns false if the frame was not free (in debug: panics).
     #[inline]
     pub fn mark_allocated(&self, kernel: bool) -> bool {
         let prev_flags = FrameFlags(
@@ -352,18 +352,18 @@ impl FrameDesc {
         true
     }
 
-    /// Marque le frame comme libre (remet les flags à FREE, refcount à 0).
+    /// Marks the frame as free (resets flags to FREE, refcount to 0).
     ///
     /// # Safety
-    /// L'appelant doit garantir que plus aucune référence n'existe.
-    /// Si refcount != 0 en release, refuse de marquer le frame libre pour éviter
-    /// un use-after-free (retourne sans modifier les flags).
+    /// Caller must guarantee no further reference exists.
+    /// If refcount != 0 in release, refuses to mark frame free to avoid
+    /// use-after-free (returns without modifying flags).
     #[inline]
     pub unsafe fn mark_free(&self) {
         let rc = self.refcount.load(Ordering::Acquire);
         if rc != 0 {
-            // Use-after-free potentiel : refcount non nul alors qu'on tente
-            // de libérer le frame. On refuse l'opération.
+            // Potential use-after-free: non-zero refcount when attempting
+            // to free frame. We refuse the operation.
             debug_assert_eq!(rc, 0, "mark_free avec refcount != 0");
             return;
         }
@@ -375,33 +375,33 @@ impl FrameDesc {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE GLOBALE DES DESCRIPTEURS DE FRAMES (FRAME_DESCRIPTORS)
+// GLOBAL FRAME DESCRIPTOR TABLE (FRAME_DESCRIPTORS)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Chaque frame physique a exactement un FrameDescEntry dans cette table.
-// Indexée par le PFN (Physical Frame Number).
+// Each physical frame has exactly one FrameDescEntry in this table.
+// Indexed by PFN (Physical Frame Number).
 //
-// Taille : MAX_PHYS_FRAMES × 2 octets = 4 MiB (pour 8 GiB max de RAM).
-// Stockée en BSS — zéro-initialisée au boot.
+// Size: MAX_PHYS_FRAMES x 2 bytes = 4 MiB (for 8 GiB max RAM).
+// Stored in BSS — zero-initialized at boot.
 //
-// Accès typiques :
-//   FRAME_DESCRIPTORS.get(frame).flags()           → lire les flags
-//   FRAME_DESCRIPTORS.get(frame).set_flag(f)       → poser un flag
-//   FRAME_DESCRIPTORS.get(frame).clear_flag(f)     → effacer un flag
-//   FRAME_DESCRIPTORS.get(frame).test_and_clear(f) → CAS atomique
+// Typical accesses:
+//   FRAME_DESCRIPTORS.get(frame).flags()           -> read flags
+//   FRAME_DESCRIPTORS.get(frame).set_flag(f)       -> set flag
+//   FRAME_DESCRIPTORS.get(frame).clear_flag(f)     -> clear flag
+//   FRAME_DESCRIPTORS.get(frame).test_and_clear(f) -> atomic CAS
 //
-// RÈGLE : Toujours vérifier que pfn < MAX_PHYS_FRAMES avant l'accès.
-//         Les frames au-delà de 8 GiB physiques ne sont pas couverts.
-//         Ces frames ne doivent pas être alloués (zone guard).
+// RULE: Always check that pfn < MAX_PHYS_FRAMES before access.
+//       Frames beyond 8 GiB physical are not covered.
+//       These frames must not be allocated (zone guard).
 
 use crate::memory::core::types::Frame;
 
-/// Nombre maximal de frames couverts par la table globale.
-/// 2^21 frames × 4 KiB/frame = 8 GiB RAM max.
+/// Maximum number of frames covered by the global table.
+/// 2^21 frames x 4 KiB/frame = 8 GiB RAM max.
 pub const MAX_PHYS_FRAMES: usize = 1 << 21;
 
-/// Entrée compacte de la table globale — 2 octets par frame.
-/// Contient uniquement les flags LRU/CoW/DIRTY/PINNED/DMA.
+/// Compact entry of the global table — 2 bytes per frame.
+/// Contains only LRU/CoW/DIRTY/PINNED/DMA flags.
 #[repr(transparent)]
 pub struct FrameDescEntry {
     flags: AtomicU16,
@@ -414,55 +414,55 @@ impl FrameDescEntry {
         }
     }
 
-    /// Retourne les flags courants.
+    /// Returns current flags.
     #[inline(always)]
     pub fn flags(&self) -> FrameFlags {
         FrameFlags(self.flags.load(Ordering::Relaxed))
     }
 
-    /// Pose un flag.
+    /// Sets a flag.
     #[inline(always)]
     pub fn set_flag(&self, f: FrameFlags) {
         self.flags.fetch_or(f.bits(), Ordering::Relaxed);
     }
 
-    /// Efface un flag.
+    /// Clears a flag.
     #[inline(always)]
     pub fn clear_flag(&self, f: FrameFlags) {
         self.flags.fetch_and(!f.bits(), Ordering::Relaxed);
     }
 
-    /// Test-and-clear atomique.
-    /// Retourne `true` si le flag était positionné avant l'effacement.
+    /// Atomic test-and-clear.
+    /// Returns `true` if flag was set before clearing.
     #[inline]
     pub fn test_and_clear(&self, f: FrameFlags) -> bool {
         let prev = self.flags.fetch_and(!f.bits(), Ordering::AcqRel);
         FrameFlags(prev).contains(f)
     }
 
-    /// Remplace les flags entièrement (retourne les anciens).
+    /// Replaces flags entirely (returns old ones).
     #[inline(always)]
     pub fn swap_flags(&self, new: FrameFlags) -> FrameFlags {
         FrameFlags(self.flags.swap(new.bits(), Ordering::AcqRel))
     }
 }
 
-/// Table globale de tous les descripteurs légers de frames physiques.
+/// Global table of all lightweight physical frame descriptors.
 pub struct FrameDescriptorTable {
     entries: [FrameDescEntry; MAX_PHYS_FRAMES],
 }
 
-// SAFETY: FrameDescEntry contient uniquement un AtomicU16,
-// qui est Send + Sync par nature. La table est donc Send + Sync.
+// SAFETY: FrameDescEntry only contains an AtomicU16,
+// which is Send + Sync by nature. The table is therefore Send + Sync.
 unsafe impl Sync for FrameDescriptorTable {}
 unsafe impl Send for FrameDescriptorTable {}
 
 impl FrameDescriptorTable {
-    /// Retourne une référence vers l'entrée pour le frame donné.
+    /// Returns a reference to the entry for the given frame.
     ///
     /// # Panics (debug)
-    /// Si `frame.pfn() >= MAX_PHYS_FRAMES`, panique en mode debug,
-    /// sature à `MAX_PHYS_FRAMES - 1` en mode release.
+    /// If `frame.pfn() >= MAX_PHYS_FRAMES`, panics in debug mode,
+    /// saturates to `MAX_PHYS_FRAMES - 1` in release mode.
     #[inline]
     pub fn get(&self, frame: Frame) -> &FrameDescEntry {
         let pfn = frame.pfn() as usize;
@@ -472,23 +472,23 @@ impl FrameDescriptorTable {
             pfn,
             MAX_PHYS_FRAMES
         );
-        // SAFETY: tableau[pfn] est valide pour pfn < MAX_PHYS_FRAMES.
+        // SAFETY: table[pfn] is valid for pfn < MAX_PHYS_FRAMES.
         &self.entries[pfn.min(MAX_PHYS_FRAMES - 1)]
     }
 
-    /// Retourne une référence directe (unsafe, sans vérification de bornes).
+    /// Returns a direct reference (unsafe, without bounds checking).
     ///
     /// # Safety
-    /// L'appelant doit garantir que `pfn < MAX_PHYS_FRAMES`.
+    /// Caller must guarantee `pfn < MAX_PHYS_FRAMES`.
     #[inline(always)]
     pub unsafe fn get_unchecked(&self, pfn: u64) -> &FrameDescEntry {
         &*self.entries.as_ptr().add(pfn as usize)
     }
 }
 
-/// Table globale des descripteurs de frames.
-/// En BSS — initialisée à zéro (tous les flags à 0 = EMPTY).
-/// À l'allocation d'un frame, `mark_allocated()` positionne les flags appropriés.
+/// Global frame descriptor table.
+/// In BSS — zero-initialized (all flags at 0 = EMPTY).
+/// Upon frame allocation, `mark_allocated()` sets the appropriate flags.
 pub static FRAME_DESCRIPTORS: FrameDescriptorTable = FrameDescriptorTable {
     entries: [const { FrameDescEntry::new() }; MAX_PHYS_FRAMES],
 };

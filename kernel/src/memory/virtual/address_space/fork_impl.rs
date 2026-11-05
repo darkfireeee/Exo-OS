@@ -1,13 +1,13 @@
 // kernel/src/memory/virtual/address_space/fork_impl.rs
 //
-// Implémentation de AddressSpaceCloner pour l'espace utilisateur.
-// CORRECTION P0-01 : débloque fork() en clonant l'espace d'adressage en CoW.
+// Implementation of AddressSpaceCloner for user space.
+// FIX P0-01: unblocks fork() by cloning address space in CoW.
 //
-// Cette implémentation :
-//   1. Alloue un nouveau PML4 pour le processus fils
-//   2. Copie les entrées kernel (PML4[256:512]) depuis le parent
-//   3. Copie les pages userspace et les marque CoW
-//   4. Fournit les primitives de libération pour les chemins d'erreur
+// This implementation:
+//   1. Allocates a new PML4 for the child process
+//   2. Copies kernel entries (PML4[256:512]) from parent
+//   3. Copies userspace pages and marks them CoW
+//   4. Provides release primitives for error paths
 
 use crate::memory::core::{AllocError, AllocFlags, Frame, PhysAddr};
 use crate::memory::cow::tracker::COW_TRACKER;
@@ -61,34 +61,34 @@ impl FrameAllocatorForWalk for ForkWalkAllocator {
     }
 }
 
-/// Résultat de la duplication CoW de l'espace d'adressage.
+/// Result of CoW address space duplication.
 pub struct ClonedAddressSpace {
-    /// CR3 du nouvel espace d'adressage (fils).
+    /// CR3 of the new address space (child).
     pub cr3: u64,
-    /// Pointeur opaque vers le UserAddressSpace fils.
+    /// Opaque pointer to the child UserAddressSpace.
     pub addr_space_ptr: usize,
 }
 
-/// Erreur de clonage de l'espace d'adressage.
+/// Error cloning the address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddrSpaceCloneError {
     OutOfMemory,
     InvalidSource,
 }
 
-/// Trait injecté dans process/ pour dupliquer un espace d'adressage en CoW.
+/// Trait injected into process/ to duplicate an address space in CoW.
 pub trait AddressSpaceCloner: Send + Sync {
-    /// Clone l'espace d'adressage référencé par `src_cr3`.
+    /// Clones address space referenced by `src_cr3`.
     fn clone_cow(
         &self,
         src_cr3: u64,
         src_space_ptr: usize,
     ) -> Result<ClonedAddressSpace, AddrSpaceCloneError>;
 
-    /// Flush le TLB d'un espace d'adressage après marquage CoW.
+    /// Flushes TLB of an address space after CoW marking.
     fn flush_tlb_after_fork(&self, cr3: u64);
 
-    /// Libère un espace d'adressage cloné (appelé sur erreur post-clone).
+    /// Releases a cloned address space (called on post-clone error).
     fn free_addr_space(&self, addr_space_ptr: usize);
 }
 
@@ -211,7 +211,7 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
     }
 }
 
-/// Instance statique du clonage d'espace d'adressage.
+/// Static instance for address space cloning.
 pub static KERNEL_AS_CLONER: KernelAddressSpaceCloner = KernelAddressSpaceCloner;
 
 unsafe fn clone_userspace_tables(
@@ -343,15 +343,15 @@ unsafe fn clone_pt(
 
 #[inline]
 fn shared_leaf_entry(src_entry: PageTableEntry) -> PageTableEntry {
-    // Une entrée devient CoW seulement si elle était inscriptible (ou déjà CoW).
-    // Les pages ELF RO ne doivent jamais porter FLAG_COW : le gestionnaire #PF
-    // traite ce flag comme une autorisation de copie puis rend la nouvelle page
-    // inscriptible. Le poser sur le code/rodata contournerait donc la protection
-    // de la VMA après un fork.
+    // An entry becomes CoW only if it was writable (or already CoW).
+    // ELF RO pages must never carry FLAG_COW: the #PF handler treats
+    // this flag as authorization to copy and then makes the new page
+    // writable. Setting it on code/rodata would bypass the VMA
+    // protection after a fork.
     //
-    // Chaque frame cloné reste suivi par COW_TRACKER, y compris les pages RO.
-    // `release_leaf_frame` s'appuie sur ce compteur, pas sur FLAG_COW, pour
-    // savoir si la dernière référence connue peut être libérée.
+    // Each cloned frame remains tracked by COW_TRACKER, including RO pages.
+    // `release_leaf_frame` relies on this counter, not FLAG_COW, to know
+    // whether the last known reference can be freed.
     if src_entry.is_present()
         && src_entry.is_user()
         && (src_entry.is_writable() || src_entry.is_cow())
@@ -444,18 +444,18 @@ fn release_leaf_frame(entry: PageTableEntry) {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);
-    // `remaining == 0` est la dernière référence explicitement suivie : la
-    // frame doit être libérée. `u32::MAX` signifie « non suivi » et n'est
-    // libérable que pour une entrée non-CoW ; une entrée CoW non suivie est
-    // volontairement conservée, car son partage ne peut pas être prouvé.
+    // `remaining == 0` is the last explicitly tracked reference: the
+    // frame must be freed. `u32::MAX` means "untracked" and is only
+    // freeable for a non-CoW entry; an untracked CoW entry is
+    // deliberately preserved, because its sharing cannot be proven.
     let will_free = remaining == 0 || (remaining == u32::MAX && !entry.is_cow());
     if will_free {
         let _ = buddy::free_pages(frame, 0);
     }
 }
 
-/// Un teardown ne doit jamais faire tomber à zéro le compteur d'une feuille
-/// encore marquée CoW.
+/// A teardown must never reduce to zero the count of a leaf
+/// still marked CoW.
 #[inline]
 #[allow(dead_code)]
 fn cow_teardown_underflow(entry: PageTableEntry, remaining: u32) -> bool {
@@ -515,8 +515,8 @@ mod tests {
 
     #[test]
     fn shared_entry_preserves_read_only_mapping_without_cow_flag() {
-        // Une page RO reste RO : FLAG_COW autoriserait par erreur une écriture
-        // via le handler de faute CoW après le fork.
+        // An RO page stays RO: FLAG_COW would mistakenly authorize a write
+        // via the CoW fault handler after the fork.
         let frame = Frame::containing(PhysAddr::new(0x24_000));
         let entry = PageTableEntry::new(
             frame,

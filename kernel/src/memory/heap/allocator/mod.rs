@@ -1,7 +1,7 @@
 // kernel/src/memory/heap/allocator/mod.rs
 //
-// Module allocator heap — dispatch SLUB + large + global allocator.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Heap allocator module — SLUB + large + global allocator dispatch.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod global;
 pub mod hybrid;

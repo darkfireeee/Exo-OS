@@ -1,8 +1,8 @@
 // kernel/src/memory/dma/completion/handler.rs
 //
-// Gestionnaire de complétion DMA — enregistre les transactions en attente
-// et déclenche le mécanisme de réveil via DmaWakeupHandler.
-// COUCHE 0 — aucune dépendance externe.
+// DMA completion manager — registers pending transactions
+// and triggers the wakeup mechanism via DmaWakeupHandler.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
@@ -10,13 +10,13 @@ use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use crate::memory::dma::core::wakeup_iface::wake_on_completion;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLOT D'ATTENTE
+// WAITING SLOT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de transactions en attente simultanément.
+/// Maximum number of concurrently pending transactions.
 pub const MAX_PENDING_COMPLETIONS: usize = 512;
 
-/// État d'un slot de completion.
+/// State of a completion slot.
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 enum SlotState {
@@ -26,22 +26,22 @@ enum SlotState {
     Consumed = 3,
 }
 
-/// Un slot de complétion pour une transaction DMA.
+/// A completion slot for a DMA transaction.
 #[repr(C, align(64))]
 struct CompletionSlot {
-    /// Identifiant de la transaction associée.
+    /// Identifier of the associated transaction.
     txn_id: DmaTransactionId,
-    /// ID du canal DMA.
+    /// DMA channel ID.
     channel_id: u32,
-    /// TID du thread qui attend ce résultat.
+    /// TID of the thread waiting for this result.
     waiter_tid: u64,
-    /// État du slot.
+    /// Slot state.
     state: AtomicU8,
-    /// Résultat de la transaction (0 = pas encore).
+    /// Transaction result (0 = not yet).
     result_ok: AtomicBool,
-    /// Octets transférés (succès) ou code d'erreur (erreur).
+    /// Transferred bytes (success) or error code (error).
     result_value: AtomicU64,
-    /// Timestamp de complétion (TSC).
+    /// Completion timestamp (TSC).
     complete_tsc: AtomicU64,
 }
 
@@ -70,7 +70,7 @@ impl CompletionSlot {
     }
 
     fn mark_waiting(&self, txn_id: DmaTransactionId, channel_id: u32, tid: u64) {
-        // SAFETY: Le slot est free (garantie par alloc).
+        // SAFETY: The slot is free (guaranteed by alloc).
         unsafe {
             let ptr = self as *const _ as *mut CompletionSlot;
             (*ptr).txn_id = txn_id;
@@ -121,26 +121,26 @@ impl CompletionSlot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GESTIONNAIRE DE COMPLÉTION
+// COMPLETION MANAGER
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DmaCompletionManager {
     slots: [CompletionSlot; MAX_PENDING_COMPLETIONS],
-    // Statistiques.
+    // Statistics.
     total_registered: AtomicU64,
     total_completed: AtomicU64,
     total_errors: AtomicU64,
 }
 
-// SAFETY: Les slots sont accédés via des atomiques — pas de lock global requis.
+// SAFETY: Slots are accessed via atomics — no global lock required.
 unsafe impl Sync for DmaCompletionManager {}
 unsafe impl Send for DmaCompletionManager {}
 
 impl DmaCompletionManager {
     const fn new() -> Self {
         DmaCompletionManager {
-            // On ne peut pas faire [CompletionSlot::new(); 512] sans Copy.
-            // On utilise MaybeUninit.
+            // We cannot do [CompletionSlot::new(); 512] without Copy.
+            // We use MaybeUninit.
             slots: unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             total_registered: AtomicU64::new(0),
             total_completed: AtomicU64::new(0),
@@ -148,12 +148,12 @@ impl DmaCompletionManager {
         }
     }
 
-    /// Enregistre une transaction en attente.
-    /// Doit être appelé après soumission au canal.
+    /// Registers a pending transaction.
+    /// Must be called after submission to the channel.
     pub fn register(&self, txn_id: DmaTransactionId, channel_id: u32, waiter_tid: u64) -> bool {
         for slot in self.slots.iter() {
             if slot.is_free() {
-                // CAS pour éviter une race avec un concurrent.
+                // CAS to prevent a race with a concurrent caller.
                 if slot
                     .state
                     .compare_exchange(
@@ -173,12 +173,12 @@ impl DmaCompletionManager {
         false
     }
 
-    /// Signale la complétion d'une transaction (appelé depuis le handler d'interruption DMA).
-    /// Réveille le waiter si le handler est enregistré.
+    /// Signals the completion of a transaction (called from the DMA interrupt handler).
+    /// Wakes up the waiter if the handler is registered.
     pub fn complete(&self, txn_id: DmaTransactionId, result: Result<usize, DmaError>) {
         for slot in self.slots.iter() {
             if slot.is_waiting() {
-                // On accède au txn_id en unsafe (champ non atomique).
+                // Access txn_id via unsafe (non-atomic field).
                 let slot_txn =
                     unsafe { *(slot as *const CompletionSlot as *const DmaTransactionId) };
                 if slot_txn == txn_id {
@@ -192,7 +192,7 @@ impl DmaCompletionManager {
                         Ok(_) => self.total_completed.fetch_add(1, Ordering::Relaxed),
                         Err(_) => self.total_errors.fetch_add(1, Ordering::Relaxed),
                     };
-                    // Réveille le waiter via l'interface de réveil.
+                    // Wake up the waiter via the wakeup interface.
                     wake_on_completion(waiter, txn_id, result);
                     return;
                 }
@@ -200,8 +200,8 @@ impl DmaCompletionManager {
         }
     }
 
-    /// Poll non-bloquant — vérifie si une transaction est terminée.
-    /// Retourne le résultat et libère le slot.
+    /// Non-blocking poll — checks if a transaction is completed.
+    /// Returns the result and frees the slot.
     pub fn poll(&self, txn_id: DmaTransactionId) -> Option<Result<usize, DmaError>> {
         for slot in self.slots.iter() {
             if slot.is_completed() {
@@ -217,7 +217,7 @@ impl DmaCompletionManager {
         None
     }
 
-    /// Alias de `poll` utilisé par le polling actif.
+    /// Alias of `poll` used by active polling.
     #[inline]
     pub fn query(&self, txn_id: DmaTransactionId) -> Option<Result<usize, DmaError>> {
         self.poll(txn_id)

@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/vma/cow.rs
 //
-// Copy-on-Write des VMAs — gestion du bris de CoW et de l'héritage au fork.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Copy-on-Write for VMAs — handling CoW breaks and inheritance on fork.
+// Layer 0 — no external dependency except `spin`.
 
 use super::descriptor::{VmaDescriptor, VmaFlags};
 use crate::memory::core::{AllocError, Frame, PageFlags, PAGE_SIZE};
@@ -9,7 +9,7 @@ use crate::memory::physical::frame::ref_count::{AtomicRefCount, RefCountDecResul
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES COW
+// COW STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct CowStats {
@@ -39,10 +39,10 @@ impl CowStats {
 pub static COW_STATS: CowStats = CowStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT D'ALLOCATION POUR COW
+// ALLOCATION TRAIT FOR COW
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait permettant au module CoW d'allouer/libérer des frames.
+/// Trait allowing the CoW module to allocate/free frames.
 pub trait CowFrameAllocator: Sync {
     fn alloc_zeroed(&self) -> Result<Frame, AllocError>;
     fn alloc_nonzeroed(&self) -> Result<Frame, AllocError>;
@@ -50,65 +50,65 @@ pub trait CowFrameAllocator: Sync {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BRIS DE COW (CoW break)
+// COW BREAK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un bris de CoW pour une page.
+/// Result of a CoW break for a page.
 pub enum CowBreakResult {
-    /// La page avait refcount=1 (exclusive) — il n'y a rien à copier,
-    /// il suffit de marquer la page en écriture.
+    /// Page had refcount=1 (exclusive) — nothing to copy,
+    /// simply mark the page writable.
     AlreadyExclusive(Frame),
-    /// Une copie a été réalisée — nouveau frame.
+    /// A copy was performed — new frame.
     Copied(Frame),
-    /// Le frame source était la zero_page — allouer une page zéro.
+    /// The source frame was zero_page — allocate a zeroed page.
     ZeroPage(Frame),
-    /// Erreur d'allocation.
+    /// Allocation error.
     Error(AllocError),
 }
 
-/// Effectue un bris de CoW pour `old_frame`.
+/// Performs a CoW break for `old_frame`.
 ///
 /// # Safety
-/// `old_frame` doit avoir été préalablement pin pour éviter la
-/// libération concurrente. Le TLB doit être invalidé par l'appelant.
+/// `old_frame` must have been pinned beforehand to avoid
+/// concurrent release. The TLB must be invalidated by the caller.
 pub unsafe fn cow_break<A: CowFrameAllocator>(
     old_frame: Frame,
     refcount: &AtomicRefCount,
     alloc: &A,
 ) -> CowBreakResult {
-    // Tenter de décrémenter : si refcount passe à 1, le frame devient exclusif.
+    // Attempt to decrement: if refcount becomes 1, the frame becomes exclusive.
     match refcount.dec() {
         RefCountDecResult::BecameExclusive => {
-            // Le frame est maintenant exclusif — plus de CoW, juste remettre en W.
+            // Frame is now exclusive — no more CoW, just set back to W.
             COW_STATS.breaks.fetch_add(1, Ordering::Relaxed);
             CowBreakResult::AlreadyExclusive(old_frame)
         }
         RefCountDecResult::StillShared => {
-            // Shared : allouer un nouveau frame et copier le contenu.
+            // Shared: allocate a new frame and copy contents.
             let new_frame = match alloc.alloc_nonzeroed() {
                 Ok(f) => f,
                 Err(e) => {
-                    // Remettre le refcount à son état précédent.
+                    // Restore refcount to its previous state.
                     refcount.inc();
                     return CowBreakResult::Error(e);
                 }
             };
-            // Copier le contenu de l'ancien frame vers le nouveau.
+            // Copy contents from old frame to new frame.
             let src = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
                 + old_frame.start_address().as_u64()) as *const u8;
             let dst = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
                 + new_frame.start_address().as_u64()) as *mut u8;
-            // SAFETY: src et dst sont des plages physiques valides mappées
-            //         dans le physmap. Taille = PAGE_SIZE octets.
+            // SAFETY: src and dst are valid physical ranges mapped
+            //         in the physmap. Size = PAGE_SIZE bytes.
             core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
             COW_STATS.breaks.fetch_add(1, Ordering::Relaxed);
             COW_STATS.fork_copies.fetch_add(1, Ordering::Relaxed);
             CowBreakResult::Copied(new_frame)
         }
         RefCountDecResult::ShouldFree => {
-            // Dernier référent — libérer le frame et prendre le nouveau.
-            // (Ce cas ne devrait pas arriver si on break sur refcount >= 2,
-            //  mais on le gère pour la robustesse.)
+            // Last referrer — free the frame and take the new one.
+            // (This case should not happen if breaking on refcount >= 2,
+            //  but handled for robustness.)
             alloc.free_frame(old_frame);
             match alloc.alloc_zeroed() {
                 Ok(f) => {
@@ -122,19 +122,19 @@ pub unsafe fn cow_break<A: CowFrameAllocator>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FORK : MARQUER UNE VMA COMME COW
+// FORK: MARK A VMA AS COW
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lors d'un fork, marquer une VMA comme CoW (désactiver l'écriture dans
-/// les tables de pages parent et enfant — le bris aura lieu au premier write).
+/// On fork, mark a VMA as CoW (disable writes in
+/// parent and child page tables — break will occur on first write).
 ///
-/// - Retire le flag WRITABLE des entrées PT parent.
-/// - Ajoute le flag COW aux entrées PT parent.
-/// - Le child héritera des mêmes entrées (copie de PML4 faite ailleurs).
+/// - Clears the WRITABLE flag from parent PT entries.
+/// - Adds the COW flag to parent PT entries.
+/// - Child will inherit the same entries (PML4 copy handled elsewhere).
 pub fn mark_vma_cow(vma: &mut VmaDescriptor) {
-    // La VMA n'est modifiable en écriture que via le trait PageTableWalker
-    // qui est appellé par le gestionnaire de fault. Ici on marque uniquement
-    // les flags du descripteur — le walk de table sera fait par address_space::fork().
+    // The VMA is only writable via the PageTableWalker trait
+    // which is called by the fault handler. Here we only mark
+    // the descriptor flags — the table walk will be done by address_space::fork().
     if vma.flags.contains(VmaFlags::WRITE) && !vma.flags.contains(VmaFlags::SHARED) {
         vma.flags |= VmaFlags::COW;
         vma.page_flags = vma.page_flags & !PageFlags::WRITABLE | PageFlags::COW;

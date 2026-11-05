@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/page_table/mod.rs
 //
-// Module page_table — tables de pages x86_64.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Module page_table — x86_64 page tables.
+// Layer 0 — no external dependency except `spin`.
 
 pub mod builder;
 pub mod kpti_split;

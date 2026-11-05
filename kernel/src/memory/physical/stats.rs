@@ -1,43 +1,43 @@
 // kernel/src/memory/physical/stats.rs
 //
 //
-// STATISTIQUES PHYSIQUES  wrappers vers le buddy allocator
+// PHYSICAL STATISTICS  wrappers towards the buddy allocator
 //
 //
-// Ce module expose les statistiques globales du sous-système physical memory.
-// Utilisé par syscall pour implémenter sysinfo/mem_info.
+// This module exposes global statistics of the physical memory subsystem.
+// Used by syscalls to implement sysinfo/mem_info.
 //
-// COUCHE 0  aucune dépendance externe.
+// LAYER 0  no external dependencies.
 
 use crate::memory::physical::BUDDY;
 
 pub use crate::memory::core::PAGE_SIZE;
 
-/// Retourne le nombre de pages physiques libres.
+/// Returns the number of free physical pages.
 #[inline]
 pub fn free_pages() -> usize {
     BUDDY.total_free_frames()
 }
 
-/// Retourne le nombre total de pages physiques gérées par le noyau.
+/// Returns the total number of physical pages managed by the kernel.
 #[inline]
 pub fn total_pages() -> usize {
     BUDDY.total_frames()
 }
 
-/// Retourne la quantité de mémoire libre en octets.
+/// Returns the amount of free memory in bytes.
 #[inline]
 pub fn free_bytes() -> usize {
     free_pages() * PAGE_SIZE
 }
 
-/// Retourne la quantité totale de mémoire physique en octets.
+/// Returns the total amount of physical memory in bytes.
 #[inline]
 pub fn total_bytes() -> usize {
     total_pages() * PAGE_SIZE
 }
 
-/// Retourne le nombre de pages utilisées (allouées).
+/// Returns the number of used (allocated) pages.
 #[inline]
 pub fn used_pages() -> usize {
     total_pages().saturating_sub(free_pages())

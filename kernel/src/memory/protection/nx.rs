@@ -1,14 +1,14 @@
 // kernel/src/memory/protection/nx.rs
 //
-// NX (No-Execute) bit management — EFER.NXE activation + application
-// stricte par zone mémoire.
+// NX (No-Execute) bit management — EFER.NXE activation + strict
+// enforcement per memory zone.
 //
-// Références : Intel SDM Vol.3A § 4.6 — "Access Rights" ; AMD APM Vol.2 § 5.6.
+// References: Intel SDM Vol.3A § 4.6 — "Access Rights"; AMD APM Vol.2 § 5.6.
 //
-// Règles architecture Exo-OS :
-//   COUCHE 0 — aucune dépendance vers scheduler/, process/, ipc/, fs/.
-//   Tous les accès MSRL passent par `asm!` inline.
-//   Pas de std ; spin = "0.9" uniquement pour les locks.
+// Exo-OS architecture rules:
+//   LAYER 0 — no dependency on scheduler/, process/, ipc/, fs/.
+//   All MSR accesses go through inline `asm!`.
+//   No std; spin = "0.9" only for locks.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -19,34 +19,34 @@ use crate::memory::core::layout::{
 use crate::memory::core::types::PageFlags;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes internes
+// Internal constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bit 11 du MSR_EFER = NXE (No-Execute Enable).
+/// Bit 11 of MSR_EFER = NXE (No-Execute Enable).
 const EFER_NXE_BIT: u64 = 1 << 11;
-/// Numéro du MSR EFER.
+/// MSR EFER number.
 const MSR_EFER: u32 = 0xC000_0080;
-/// Bit 63 d'une entrée de page table = XD/NX.
+/// Bit 63 of a page table entry = XD/NX.
 pub const PAGE_TABLE_NX_BIT: u64 = 1u64 << 63;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques NX
+// NX Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs opérationnels du sous-système NX.
+/// Operational counters for NX subsystem.
 #[repr(C)]
 pub struct NxStats {
-    /// Nombre de fois où EFER.NXE a été activé (doit rester à 1 après init).
+    /// Number of times EFER.NXE was enabled (must remain 1 after init).
     pub efer_nxe_enable_count: AtomicU64,
-    /// Violations NX capturées (#PF avec bit I/D = 1, execute = 1).
+    /// Captured NX violations (#PF with I/D bit = 1, execute = 1).
     pub violation_count: AtomicU64,
-    /// Pages balisées NX au cours de l'initialisation.
+    /// Pages marked NX during initialization.
     pub pages_marked_nx: AtomicU64,
-    /// Pages dont le flag NX a été levé explicitement (text segments).
+    /// Pages whose NX flag was explicitly cleared (text segments).
     pub pages_cleared_nx: AtomicU64,
-    /// Nombre d'appels à `nx_enforce_region`.
+    /// Number of calls to `nx_enforce_region`.
     pub region_enforce_calls: AtomicU64,
-    /// Tentatives de toggle NX alors qu'EFER.NXE est déjà actif.
+    /// Attempts to toggle NX when EFER.NXE is already active.
     pub redundant_enable: AtomicU64,
 }
 
@@ -63,34 +63,34 @@ impl NxStats {
     }
 }
 
-// SAFETY : tous les champs sont AtomicU64 → safe à partager entre CPUs.
+// SAFETY: all fields are AtomicU64 -> safe to share across CPUs.
 unsafe impl Sync for NxStats {}
 
 pub static NX_STATS: NxStats = NxStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// État du sous-système
+// Subsystem state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `true` une fois EFER.NXE activé sur le BSP.
+/// `true` once EFER.NXE is enabled on the BSP.
 static NX_ENABLED: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Politique régionale NX
+// Regional NX policy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique NX pour une plage d'adresses virtuelle.
+/// NX policy for a virtual address range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NxPolicy {
-    /// La plage est exécutable (code kernel / module).
+    /// Range is executable (kernel code / module).
     Executable,
-    /// La plage est non-exécutable (données, stack, heap, physmap, vmalloc data).
+    /// Range is non-executable (data, stack, heap, physmap, vmalloc data).
     NonExecutable,
-    /// La plage est non-présente / non concernée.
+    /// Range is non-present / not affected.
     Absent,
 }
 
-/// Règle régionale statique : [start_virt, end_virt) → NxPolicy.
+/// Static regional rule: [start_virt, end_virt) -> NxPolicy.
 #[derive(Debug, Clone, Copy)]
 pub struct NxRegionRule {
     pub start: u64,
@@ -98,40 +98,40 @@ pub struct NxRegionRule {
     pub policy: NxPolicy,
 }
 
-/// Table de politiques NX compilée statiquement (.rodata).
-/// RÈGLE IA-KERNEL-01 : table .rodata, pas de génération runtime.
+/// Statically compiled NX policy table (.rodata).
+/// RULE IA-KERNEL-01: .rodata table, no runtime generation.
 static NX_REGION_RULES: [NxRegionRule; 6] = [
-    // Physmap — données mappées, jamais exécutables.
+    // Physmap — mapped data, never executable.
     NxRegionRule {
         start: PHYS_MAP_BASE.as_u64(),
         end: PHYS_MAP_END.as_u64(),
         policy: NxPolicy::NonExecutable,
     },
-    // Vmalloc — allocations dynamiques noyau, données.
+    // Vmalloc — kernel dynamic allocations, data.
     NxRegionRule {
         start: VMALLOC_BASE.as_u64(),
         end: VMALLOC_END.as_u64(),
         policy: NxPolicy::NonExecutable,
     },
-    // Heap noyau — jamais exécutable.
+    // Kernel heap — never executable.
     NxRegionRule {
         start: KERNEL_HEAP_START.as_u64(),
         end: KERNEL_HEAP_START.as_u64() + 0x0000_0100_0000_0000,
         policy: NxPolicy::NonExecutable,
     },
-    // Stacks CPU (fixe 64 KiB par CPU, 256 CPUs max = 16 MiB total).
+    // CPU stacks (fixed 64 KiB per CPU, 256 CPUs max = 16 MiB total).
     NxRegionRule {
         start: 0xFFFF_FF80_0000_0000,
         end: 0xFFFF_FF80_0100_0000,
         policy: NxPolicy::NonExecutable,
     },
-    // Code noyau (segments .text/.init).
+    // Kernel code (.text/.init segments).
     NxRegionRule {
         start: 0xFFFF_FFFF_8000_0000,
         end: 0xFFFF_FFFF_A000_0000,
         policy: NxPolicy::Executable,
     },
-    // Données noyau (.data/.bss/.rodata).
+    // Kernel data (.data/.bss/.rodata).
     NxRegionRule {
         start: 0xFFFF_FFFF_A000_0000,
         end: 0xFFFF_FFFF_C000_0000,
@@ -140,13 +140,13 @@ static NX_REGION_RULES: [NxRegionRule; 6] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Lecture / écriture MSR EFER via asm! inline
+// Read / write MSR EFER via inline asm!
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le MSR identifié par `msr`.
+/// Reads the MSR identified by `msr`.
 ///
 /// # Safety
-/// Doit être exécuté en CPL 0 (ring 0).
+/// Must be executed in CPL 0 (ring 0).
 #[inline(always)]
 unsafe fn rdmsr(msr: u32) -> u64 {
     let lo: u32;
@@ -161,10 +161,10 @@ unsafe fn rdmsr(msr: u32) -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
 
-/// Écrit `val` dans le MSR identifié par `msr`.
+/// Writes `val` into the MSR identified by `msr`.
 ///
 /// # Safety
-/// Doit être exécuté en CPL 0.  Modifier EFER mal peut rendre le CPU inutilisable.
+/// Must be executed in CPL 0. Modifying EFER incorrectly can render the CPU unusable.
 #[inline(always)]
 unsafe fn wrmsr(msr: u32, val: u64) {
     let lo = val as u32;
@@ -179,17 +179,17 @@ unsafe fn wrmsr(msr: u32, val: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Active `EFER.NXE` sur le CPU courant.
+/// Enables `EFER.NXE` on current CPU.
 ///
-/// Doit être appelé sur **chaque** CPU (BSP puis APs) avant l'activation des
-/// page tables NX.  Idempotent : si déjà activé, incrémente `redundant_enable`.
+/// Must be called on **each** CPU (BSP then APs) before activating
+/// NX page tables. Idempotent: if already enabled, increments `redundant_enable`.
 ///
 /// # Safety
-/// Doit être exécuté en CPL 0 avec les interruptions désactivées si le switch
-/// de page table suit immédiatement.
+/// Must be executed in CPL 0 with interrupts disabled if page table
+/// switch follows immediately.
 pub unsafe fn enable_nx() {
     let efer = rdmsr(MSR_EFER);
     if efer & EFER_NXE_BIT != 0 {
@@ -203,7 +203,7 @@ pub unsafe fn enable_nx() {
     NX_ENABLED.store(true, Ordering::Release);
 }
 
-/// Vérifie qu'EFER.NXE est actif sur le CPU courant.
+/// Verifies that EFER.NXE is active on current CPU.
 ///
 /// # Safety
 /// CPL 0.
@@ -212,13 +212,13 @@ pub unsafe fn is_nx_active() -> bool {
     rdmsr(MSR_EFER) & EFER_NXE_BIT != 0
 }
 
-/// Retourne `true` si le sous-système NX a été initialisé.
+/// Returns `true` if the NX subsystem has been initialized.
 #[inline]
 pub fn nx_enabled() -> bool {
     NX_ENABLED.load(Ordering::Acquire)
 }
 
-/// Détermine la politique NX d'une adresse virtuelle selon la table régionale.
+/// Determines the NX policy of a virtual address according to regional table.
 #[inline]
 pub fn nx_policy_for(virt: u64) -> NxPolicy {
     for rule in &NX_REGION_RULES {
@@ -226,12 +226,12 @@ pub fn nx_policy_for(virt: u64) -> NxPolicy {
             return rule.policy;
         }
     }
-    // Par défaut : données — non exécutable (secure by default).
+    // Default: data — non-executable (secure by default).
     NxPolicy::NonExecutable
 }
 
-/// Retourne les flags `PageFlags` appropriés pour l'adresse `virt` :
-/// - NX activé sauf si la région est exécutable et NX est actif.
+/// Returns appropriate `PageFlags` for virtual address `virt`:
+/// - NX enabled unless the region is executable and NX is active.
 #[inline]
 pub fn nx_page_flags(virt: u64, flags: PageFlags) -> PageFlags {
     if !nx_enabled() {
@@ -244,16 +244,16 @@ pub fn nx_page_flags(virt: u64, flags: PageFlags) -> PageFlags {
     }
 }
 
-/// Applique la politique NX sur une plage de pages en page-table walk.
+/// Enforces NX policy on a range of pages during page-table walk.
 ///
-/// Cette fonction parcourt [`count`] pages à partir de `base_virt` et force
-/// le bit NX selon `NX_REGION_RULES`.  Le caller fournit un closure qui reçoit
-/// l'adresse virtuelle et retourne `Option<*mut u64>` pointant sur l'entrée
-/// PTE (niveau 1) en mémoire.
+/// This function walks [`count`] pages starting from `base_virt` and forces
+/// the NX bit according to `NX_REGION_RULES`. The caller provides a closure that
+/// receives the virtual address and returns `Option<*mut u64>` pointing to the
+/// PTE entry (level 1) in memory.
 ///
 /// # Safety
-/// - Les PTEs doivent être valides et en mémoire non-paginée.
-/// - Doit être appelé avec EFER.NXE actif.
+/// - PTEs must be valid and in non-paged memory.
+/// - Must be called with EFER.NXE active.
 pub unsafe fn nx_enforce_region<F>(base_virt: u64, count: usize, pte_resolver: F)
 where
     F: Fn(u64) -> Option<*mut u64>,
@@ -266,7 +266,7 @@ where
         let vaddr = base_virt + i * PAGE_SIZE as u64;
         if let Some(pte_ptr) = pte_resolver(vaddr) {
             let pte = pte_ptr.read_volatile();
-            // Si l'entrée n'est pas présente, skip.
+            // If entry is not present, skip.
             if pte & 1 == 0 {
                 continue;
             }
@@ -283,7 +283,7 @@ where
             };
             if new_pte != pte {
                 pte_ptr.write_volatile(new_pte);
-                // Invalider TLB pour cette page.
+                // Invalidate TLB for this page.
                 core::arch::asm!(
                     "invlpg [{addr}]",
                     addr = in(reg) vaddr as usize,
@@ -294,29 +294,28 @@ where
     }
 }
 
-/// Gestionnaire appelé par le fault handler (#PF) lorsqu'une violation NX
-/// est détectée (fault_flags indique un accès exécution sur page NX).
+/// Handler called by fault handler (#PF) when an NX violation is detected
+/// (fault_flags indicates execute access on NX page).
 ///
-/// Incrémente `violation_count` et retourne `false` pour signaler au handler
-/// principal qu'il doit déclencher un kernel panic ou tuer le processus.
+/// Increments `violation_count` and returns `false` to signal main handler
+/// that it must trigger a kernel panic or terminate process.
 #[inline]
 pub fn nx_handle_violation(fault_virt: u64, fault_ip: u64) -> bool {
     NX_STATS.violation_count.fetch_add(1, Ordering::Relaxed);
-    // Log (via serial / ring-buffer) sans appel scheduler.
-    // Format minimal pour ring 0 pré-console.
+    // Log (via serial / ring-buffer) without scheduler call.
+    // Minimal format for pre-console ring 0.
     let _ = fault_virt;
     let _ = fault_ip;
-    false // non récupérable → caller doit panic!
+    false // non-recoverable -> caller must panic!
 }
 
-/// Initialisation du sous-système NX.
-/// Doit être la première fonction appelée sur le BSP avant le mapping des
-/// page tables définitives.
+/// NX subsystem initialization.
+/// Must be first function called on BSP before mapping final page tables.
 ///
 /// # Safety
-/// CPL 0, interruptions désactivées recommandé.
+/// CPL 0, interrupts disabled recommended.
 pub unsafe fn init() {
     enable_nx();
-    // Vérification de cohérence post-activation.
+    // Post-activation consistency check.
     debug_assert!(is_nx_active(), "NX: EFER.NXE non actif après enable_nx()");
 }

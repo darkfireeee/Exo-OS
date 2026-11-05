@@ -1,7 +1,7 @@
 // kernel/src/memory/swap/policy.rs
 //
-// Politique de swapping — décide quelles pages évincer (LRU / CLOCK-Pro).
-// COUCHE 0 — aucune dépendance externe.
+// Swapping policy — decides which pages to evict (LRU / CLOCK-Pro).
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -9,13 +9,13 @@ use spin::Mutex;
 use crate::memory::core::types::PhysAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALGORITHME LRU-CLOCK (approximation LRU par bit Accessed)
+// LRU-CLOCK ALGORITHM (LRU approximation via Accessed bit)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de frames dans la liste de candidats à l'éviction.
+/// Maximum number of frames in the eviction candidate list.
 pub const EVICT_CANDIDATE_LIST_SIZE: usize = 1024;
 
-/// Statistiques du swapper.
+/// Swapper statistics.
 pub struct SwapPolicyStats {
     pub pages_evicted: AtomicU64,
     pub pages_reclaimed: AtomicU64,
@@ -43,18 +43,18 @@ impl SwapPolicyStats {
 pub static SWAP_POLICY_STATS: SwapPolicyStats = SwapPolicyStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GESTIONNAIRE DE LISTE D'ÉVICTION (CLOCK)
+// EVICTION LIST MANAGER (CLOCK)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Candidat à l'éviction dans la liste CLOCK.
+/// Candidate for eviction in the CLOCK list.
 #[derive(Copy, Clone, Debug)]
 pub struct EvictCandidate {
     pub phys: PhysAddr,
-    /// Address space associé (opaque, encodé en u64).
+    /// Associated address space (opaque, encoded as u64).
     pub as_id: u64,
-    /// Adresse virtuelle dans l'address space.
+    /// Virtual address in the address space.
     pub virt_addr: u64,
-    /// Génération LRU (de FrameDesc::lru_gen).
+    /// LRU generation (from FrameDesc::lru_gen).
     pub lru_gen: u8,
 }
 
@@ -70,7 +70,7 @@ impl EvictCandidate {
     }
 }
 
-/// Liste CLOCK pour l'algorithme d'éviction.
+/// CLOCK list for the eviction algorithm.
 pub struct ClockEvictList {
     inner: Mutex<ClockEvictListInner>,
 }
@@ -81,7 +81,7 @@ struct ClockEvictListInner {
     count: usize,
 }
 
-// SAFETY: ClockEvictList est protégé par Mutex.
+// SAFETY: ClockEvictList is protected by Mutex.
 unsafe impl Sync for ClockEvictList {}
 unsafe impl Send for ClockEvictList {}
 
@@ -96,13 +96,13 @@ impl ClockEvictList {
         }
     }
 
-    /// Ajoute un candidat à la liste (si non pleine).
+    /// Adds a candidate to the list (if not full).
     pub fn add(&self, candidate: EvictCandidate) {
         let mut inner = self.inner.lock();
         if inner.count >= EVICT_CANDIDATE_LIST_SIZE {
             return;
         }
-        // Insère à la position suivante disponible.
+        // Insert at the next available slot.
         for slot in inner.candidates.iter_mut() {
             if !slot.is_valid() {
                 *slot = candidate;
@@ -112,8 +112,8 @@ impl ClockEvictList {
         }
     }
 
-    /// Sélectionne la prochaine victime via CLOCK.
-    /// Retourne `None` si la liste est vide ou toutes les pages sont "accédées".
+    /// Selects the next victim via CLOCK.
+    /// Returns `None` if the list is empty or all pages are "accessed".
     pub fn next_victim(&self) -> Option<EvictCandidate> {
         let mut inner = self.inner.lock();
         if inner.count == 0 {
@@ -135,11 +135,11 @@ impl ClockEvictList {
                 continue;
             }
 
-            // Vérifie le bit Accessed dans le FrameDesc.
-            // (En vrai on vérifierait aussi le PTE Accessed bit).
+            // Checks the Accessed bit in the FrameDesc.
+            // (In practice one would also check the PTE Accessed bit).
             let candidate = *c;
 
-            // Sélectionne cette victime.
+            // Selects this victim.
             inner.candidates[idx] = EvictCandidate::EMPTY;
             inner.count -= 1;
             SWAP_POLICY_STATS
@@ -160,17 +160,17 @@ impl ClockEvictList {
 pub static EVICT_LIST: ClockEvictList = ClockEvictList::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POLITIQUE D'ÉVICTION
+// EVICTION POLICY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Watermarks pour déclencher le swapping.
+/// Watermarks to trigger swapping.
 #[derive(Copy, Clone, Debug)]
 pub struct SwapWatermarks {
-    /// Pages libres minimales avant déclenchement du kswapd.
+    /// Minimum free pages before triggering kswapd.
     pub low: u64,
-    /// Pages libres "saines" (pas de swap).
+    /// "Healthy" free pages (no swap).
     pub high: u64,
-    /// Pages libres d'urgence (passe en mode OOM-kill si en-dessous).
+    /// Emergency free pages (switches to OOM-kill mode if below).
     pub critical: u64,
 }
 
@@ -185,13 +185,13 @@ impl SwapWatermarks {
 pub static SWAP_WATERMARKS: spin::RwLock<SwapWatermarks> =
     spin::RwLock::new(SwapWatermarks::DEFAULT);
 
-/// Évalue si le swapping doit être déclenché.
+/// Evaluates whether swapping should be triggered.
 pub fn should_swap(free_pages: u64) -> bool {
     let wm = SWAP_WATERMARKS.read();
     free_pages < wm.low
 }
 
-/// Évalue si la situation est critique (OOM).
+/// Evaluates whether the situation is critical (OOM).
 pub fn is_critical(free_pages: u64) -> bool {
     let wm = SWAP_WATERMARKS.read();
     free_pages < wm.critical

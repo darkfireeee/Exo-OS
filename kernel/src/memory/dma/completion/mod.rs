@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/completion/mod.rs
 //
-// Module completion DMA.
+// DMA completion module.
 
 pub mod handler;
 pub mod polling;

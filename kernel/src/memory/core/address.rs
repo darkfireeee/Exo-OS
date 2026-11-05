@@ -1,7 +1,7 @@
 // kernel/src/memory/core/address.rs
 //
-// Translations d'adresses, assertions d'alignement, utilitaires.
-// Couche 0 — aucune dépendance externe.
+// Address translations, alignment assertions, utilities.
+// Layer 0 — no external dependencies.
 
 use super::constants::{HUGE_PAGE_SHIFT, HUGE_PAGE_SIZE, PAGE_SHIFT, PAGE_SIZE};
 use super::layout::{
@@ -10,17 +10,17 @@ use super::layout::{
 use super::types::{Frame, Page, PhysAddr, VirtAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRANSLATIONS PHYSIQUE ↔ VIRTUEL (via la région physmap du noyau)
+// PHYSICAL ↔ VIRTUAL TRANSLATIONS (via the kernel physmap region)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traduit une adresse physique en adresse virtuelle via la physmap directe.
+/// Translates a physical address to a virtual address via direct physmap.
 ///
-/// La physmap mappe l'intégralité de la RAM physique à PHYS_MAP_BASE en
-/// lecture/écriture (mode kernel uniquement). Toujours valide pendant
-/// l'exécution du noyau après init_phys_map().
+/// The physmap maps the entirety of physical RAM to PHYS_MAP_BASE as
+/// read/write (kernel mode only). Always valid during kernel execution
+/// after init_phys_map().
 ///
 /// # Panics
-/// En mode debug, panique si l'adresse dépasse PHYS_MAP_SIZE.
+/// In debug mode, panics if the address exceeds PHYS_MAP_SIZE.
 #[inline(always)]
 pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
     debug_assert!(
@@ -29,14 +29,14 @@ pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
         phys.as_u64(),
         PHYS_MAP_SIZE
     );
-    // SAFETY: physmap initialisée au boot; offset dans l'espace canonique kernel.
+    // SAFETY: physmap initialized at boot; offset in the canonical kernel space.
     unsafe { VirtAddr::new_unchecked(PHYS_MAP_BASE.as_u64() + phys.as_u64()) }
 }
 
-/// Traduit une adresse virtuelle physmap en adresse physique.
+/// Translates a physmap virtual address to a physical address.
 ///
 /// # Panics
-/// En mode debug, panique si l'adresse n'est pas dans la physmap.
+/// In debug mode, panics if the address is outside the physmap.
 #[inline(always)]
 pub fn virt_to_phys_physmap(virt: VirtAddr) -> PhysAddr {
     debug_assert!(
@@ -47,11 +47,11 @@ pub fn virt_to_phys_physmap(virt: VirtAddr) -> PhysAddr {
     PhysAddr::new(virt.as_u64() - PHYS_MAP_BASE.as_u64())
 }
 
-/// Traduit une adresse virtuelle kernel (section .text/.data/.bss) en physique.
-/// Applicable uniquement pour les adresses dans le mapping kernel direct.
+/// Translates a kernel virtual address (.text/.data/.bss section) to physical.
+/// Only applicable for addresses in the direct kernel mapping.
 ///
 /// # Panics
-/// En mode debug, panique si l'adresse précède KERNEL_PHYS_OFFSET.
+/// In debug mode, panics if the address precedes KERNEL_PHYS_OFFSET.
 #[inline(always)]
 pub fn kernel_virt_to_phys(virt: VirtAddr) -> PhysAddr {
     debug_assert!(
@@ -62,146 +62,146 @@ pub fn kernel_virt_to_phys(virt: VirtAddr) -> PhysAddr {
     PhysAddr::new(virt.as_u64() - KERNEL_PHYS_OFFSET.as_u64())
 }
 
-/// Traduit une adresse physique kernel en adresse virtuelle .text/.data.
+/// Translates a kernel physical address to a .text/.data virtual address.
 #[inline(always)]
 pub fn kernel_phys_to_virt(phys: PhysAddr) -> VirtAddr {
-    // SAFETY: Arithmétique sur l'espace d'adressage canonique.
+    // SAFETY: Arithmetic on the canonical address space.
     unsafe { VirtAddr::new_unchecked(phys.as_u64() + KERNEL_PHYS_OFFSET.as_u64()) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS D'ALIGNEMENT
+// ALIGNMENT CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie que `size` est non nul et puissance de 2.
+/// Checks that `size` is non-zero and a power of 2.
 #[inline(always)]
 pub const fn is_power_of_two(size: usize) -> bool {
     size != 0 && (size & (size - 1)) == 0
 }
 
-/// Arrondit `value` vers le bas au multiple de `align`.
-/// `align` doit être une puissance de 2.
+/// Rounds `value` down to a multiple of `align`.
+/// `align` must be a power of 2.
 #[inline(always)]
 pub const fn align_down(value: usize, align: usize) -> usize {
     debug_assert!(is_power_of_two(align));
     value & !(align - 1)
 }
 
-/// Arrondit `value` vers le haut au multiple de `align`.
-/// `align` doit être une puissance de 2.
+/// Rounds `value` up to a multiple of `align`.
+/// `align` must be a power of 2.
 #[inline(always)]
 pub const fn align_up(value: usize, align: usize) -> usize {
     debug_assert!(is_power_of_two(align));
     (value + align - 1) & !(align - 1)
 }
 
-/// Vérifie si `value` est aligné sur `align`.
+/// Checks if `value` is aligned to `align`.
 #[inline(always)]
 pub const fn is_aligned(value: usize, align: usize) -> bool {
     (value & (align - 1)) == 0
 }
 
-/// Arrondit vers le bas à la page.
+/// Rounds down to page boundary.
 #[inline(always)]
 pub const fn page_align_down(value: usize) -> usize {
     align_down(value, PAGE_SIZE)
 }
 
-/// Arrondit vers le haut à la page.
+/// Rounds up to page boundary.
 #[inline(always)]
 pub const fn page_align_up(value: usize) -> usize {
     align_up(value, PAGE_SIZE)
 }
 
-/// Nombre de pages nécessaires pour couvrir `size` octets.
+/// Number of pages required to cover `size` bytes.
 #[inline(always)]
 pub const fn pages_for(size: usize) -> usize {
     (size + PAGE_SIZE - 1) >> PAGE_SHIFT
 }
 
-/// Nombre de huge pages (2 MiB) nécessaires pour couvrir `size` octets.
+/// Number of huge pages (2 MiB) required to cover `size` bytes.
 #[inline(always)]
 pub const fn huge_pages_for(size: usize) -> usize {
     (size + HUGE_PAGE_SIZE - 1) >> HUGE_PAGE_SHIFT
 }
 
-/// Octets → pages (arrondi au-dessus).
+/// Bytes → pages (rounded up).
 #[inline(always)]
 pub const fn bytes_to_pages(bytes: usize) -> usize {
     pages_for(bytes)
 }
 
-/// Pages → octets.
+/// Pages → bytes.
 #[inline(always)]
 pub const fn pages_to_bytes(pages: usize) -> usize {
     pages << PAGE_SHIFT
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CALCULS SUR FRAMES / PAGES
+// CALCULATIONS ON FRAMES / PAGES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le Frame contenant l'adresse physique `addr`.
+/// Returns the Frame containing physical address `addr`.
 #[inline(always)]
 pub const fn frame_containing(addr: PhysAddr) -> Frame {
     Frame::containing(addr)
 }
 
-/// Retourne la Page contenant l'adresse virtuelle `addr`.
+/// Returns the Page containing virtual address `addr`.
 #[inline(always)]
 pub const fn page_containing(addr: VirtAddr) -> Page {
     Page::containing(addr)
 }
 
-/// Retourne l'adresse physique d'un PFN.
+/// Returns the physical address of a PFN.
 #[inline(always)]
 pub const fn pfn_to_phys(pfn: u64) -> PhysAddr {
     PhysAddr::new(pfn << PAGE_SHIFT as u64)
 }
 
-/// Retourne le PFN d'une adresse physique (arrondi au-dessous).
+/// Returns the PFN of a physical address (rounded down).
 #[inline(always)]
 pub const fn phys_to_pfn(addr: PhysAddr) -> u64 {
     addr.as_u64() >> PAGE_SHIFT as u64
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CANONICALISATION x86_64
+// x86_64 CANONICALIZATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Canonicalise une adresse virtuelle 64 bits (sign-extension bit 47).
-/// Requis avant tout chargement dans CR3 ou accès à la table des pages.
+/// Canonicalizes a 64-bit virtual address (sign-extension bit 47).
+/// Required before any loading into CR3 or page table access.
 #[inline(always)]
 pub const fn canonicalize(addr: u64) -> u64 {
-    // Shift gauche 16, puis arithmetic shift droit 16 = sign-extend bit 47
+    // Shift left 16, then arithmetic shift right 16 = sign-extend bit 47
     (((addr << 16) as i64) >> 16) as u64
 }
 
-/// Vérifie si une adresse est canonique selon les règles x86_64.
-/// Les adresses non canoniques déclenchent un #GP fault.
+/// Checks if an address is canonical according to x86_64 rules.
+/// Non-canonical addresses trigger a #GP fault.
 #[inline(always)]
 pub const fn is_canonical(addr: u64) -> bool {
     let extended = canonicalize(addr);
     extended == addr
 }
 
-/// Vérifie si un pointeur est utilisable comme adresse noyau canonique.
+/// Checks if a pointer is usable as a canonical kernel address.
 #[inline(always)]
 pub const fn is_kernel_canonical(addr: u64) -> bool {
     is_canonical(addr) && addr >= 0xFFFF_8000_0000_0000
 }
 
-/// Vérifie si un pointeur est utilisable comme adresse utilisateur canonique.
+/// Checks if a pointer is usable as a canonical user address.
 #[inline(always)]
 pub const fn is_user_canonical(addr: u64) -> bool {
     is_canonical(addr) && addr < 0x0000_8000_0000_0000
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PLAGES D'ADRESSES
+// ADDRESS RANGES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Plage d'adresses physiques [start, end).
+/// Physical address range [start, end).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct PhysRange {
     pub start: PhysAddr,
@@ -209,7 +209,7 @@ pub struct PhysRange {
 }
 
 impl PhysRange {
-    /// Crée une plage [start, start + size).
+    /// Creates a range [start, start + size).
     #[inline(always)]
     pub const fn new(start: PhysAddr, size: usize) -> Self {
         PhysRange {
@@ -218,43 +218,43 @@ impl PhysRange {
         }
     }
 
-    /// Crée une plage [start, end).
+    /// Creates a range [start, end).
     #[inline(always)]
     pub const fn from_range(start: PhysAddr, end: PhysAddr) -> Self {
         PhysRange { start, end }
     }
 
-    /// Taille en octets.
+    /// Size in bytes.
     #[inline(always)]
     pub const fn size(self) -> usize {
         (self.end.as_u64() - self.start.as_u64()) as usize
     }
 
-    /// Nombre de pages dans la plage (arrondi au-dessus).
+    /// Number of pages in the range (rounded up).
     #[inline(always)]
     pub fn page_count(self) -> usize {
         pages_for(self.size())
     }
 
-    /// Vérifie si la plage contient `addr`.
+    /// Checks if the range contains `addr`.
     #[inline(always)]
     pub const fn contains(self, addr: PhysAddr) -> bool {
         addr.as_u64() >= self.start.as_u64() && addr.as_u64() < self.end.as_u64()
     }
 
-    /// Vérifie si la plage est vide.
+    /// Checks if the range is empty.
     #[inline(always)]
     pub const fn is_empty(self) -> bool {
         self.start.as_u64() >= self.end.as_u64()
     }
 
-    /// Vérifie si deux plages se chevauchent.
+    /// Checks if two ranges overlap.
     #[inline(always)]
     pub const fn overlaps(self, other: PhysRange) -> bool {
         self.start.as_u64() < other.end.as_u64() && other.start.as_u64() < self.end.as_u64()
     }
 
-    /// Alignement de start vers le bas sur une page.
+    /// Alignment of start downwards to a page.
     #[inline(always)]
     pub fn page_aligned(self) -> PhysRange {
         PhysRange {
@@ -264,7 +264,7 @@ impl PhysRange {
     }
 }
 
-/// Plage d'adresses virtuelles [start, end).
+/// Virtual address range [start, end).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct VirtRange {
     pub start: VirtAddr,
@@ -272,7 +272,7 @@ pub struct VirtRange {
 }
 
 impl VirtRange {
-    /// Crée une plage [start, start + size).
+    /// Creates a range [start, start + size).
     #[inline(always)]
     pub const fn new(start: VirtAddr, size: usize) -> Self {
         VirtRange {
@@ -281,37 +281,37 @@ impl VirtRange {
         }
     }
 
-    /// Crée une plage [start, end).
+    /// Creates a range [start, end).
     #[inline(always)]
     pub const fn from_range(start: VirtAddr, end: VirtAddr) -> Self {
         VirtRange { start, end }
     }
 
-    /// Taille en octets.
+    /// Size in bytes.
     #[inline(always)]
     pub const fn size(self) -> usize {
         (self.end.as_u64() - self.start.as_u64()) as usize
     }
 
-    /// Nombre de pages dans la plage.
+    /// Number of pages in the range.
     #[inline(always)]
     pub fn page_count(self) -> usize {
         pages_for(self.size())
     }
 
-    /// Vérifie si la plage contient `addr`.
+    /// Checks if the range contains `addr`.
     #[inline(always)]
     pub const fn contains(self, addr: VirtAddr) -> bool {
         addr.as_u64() >= self.start.as_u64() && addr.as_u64() < self.end.as_u64()
     }
 
-    /// Vérifie si les deux plages se chevauchent.
+    /// Checks if the two ranges overlap.
     #[inline(always)]
     pub const fn overlaps(self, other: VirtRange) -> bool {
         self.start.as_u64() < other.end.as_u64() && other.start.as_u64() < self.end.as_u64()
     }
 
-    /// Aligne les bornes sur des pages.
+    /// Aligns boundaries to pages.
     #[inline(always)]
     pub fn page_aligned(self) -> VirtRange {
         VirtRange {
@@ -320,13 +320,13 @@ impl VirtRange {
         }
     }
 
-    /// Vérifie si la plage est entièrement dans l'espace noyau.
+    /// Checks if the range is entirely in kernel space.
     #[inline(always)]
     pub const fn is_kernel(self) -> bool {
         self.start.is_kernel() && self.end.is_kernel()
     }
 
-    /// Vérifie si la plage est entièrement dans l'espace utilisateur.
+    /// Checks if the range is entirely in user space.
     #[inline(always)]
     pub const fn is_user(self) -> bool {
         self.start.is_user() && self.end.is_user()
@@ -334,10 +334,10 @@ impl VirtRange {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS HEAP NOYAU
+// KERNEL HEAP HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie si une adresse virtuelle appartient au heap kernel.
+/// Checks if a virtual address belongs to the kernel heap.
 #[inline(always)]
 pub fn in_kernel_heap(addr: VirtAddr) -> bool {
     addr >= KERNEL_HEAP_START
@@ -345,16 +345,16 @@ pub fn in_kernel_heap(addr: VirtAddr) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TESTS INLINE (vérifiables en mode debug)
+// INLINE TESTS (verifiable in debug mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Exécute les assertions de cohérence du module address au boot.
+/// Executes consistency assertions for the address module at boot.
 pub fn assert_invariants() {
-    // Cohérence PAGE_SIZE / PAGE_SHIFT
+    // PAGE_SIZE / PAGE_SHIFT consistency
     debug_assert_eq!(1usize << PAGE_SHIFT, PAGE_SIZE);
-    // Cohérence HUGE_PAGE_SIZE / HUGE_PAGE_SHIFT
+    // HUGE_PAGE_SIZE / HUGE_PAGE_SHIFT consistency
     debug_assert_eq!(1usize << HUGE_PAGE_SHIFT, HUGE_PAGE_SIZE);
-    // La physmap commence dans l'espace noyau
+    // The physmap starts in kernel space
     debug_assert!(PHYS_MAP_BASE.is_kernel());
     // align_down(0, PAGE_SIZE) == 0
     debug_assert_eq!(page_align_down(0), 0);
@@ -370,15 +370,15 @@ pub fn assert_invariants() {
     debug_assert_eq!(pages_for(PAGE_SIZE), 1);
     // pages_for(PAGE_SIZE + 1) == 2
     debug_assert_eq!(pages_for(PAGE_SIZE + 1), 2);
-    // canonicalize préserve les adresses canoniques
+    // canonicalize preserves canonical addresses
     debug_assert_eq!(canonicalize(0xFFFF_8000_0000_0000), 0xFFFF_8000_0000_0000);
     debug_assert_eq!(canonicalize(0x0000_7FFF_FFFF_FFFF), 0x0000_7FFF_FFFF_FFFF);
-    // Une adresse non-canonique doit être détectée
+    // A non-canonical address must be detected
     debug_assert!(!is_canonical(0x0001_0000_0000_0000));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS STATIQUES
+// STATIC CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _: () = assert!(

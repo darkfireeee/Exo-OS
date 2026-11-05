@@ -1,8 +1,8 @@
 // kernel/src/memory/virtual/page_table/walker.rs
 //
-// Walker de table de pages — parcours récursif PML4→PDPT→PD→PT.
-// Gestion du walk avec allocation à la demande ou read-only.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Page table walker — recursive traversal PML4→PDPT→PD→PT.
+// Handles walking with on-demand allocation or read-only mode.
+// Layer 0 — no external dependency except `spin`.
 
 use crate::memory::core::{AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr};
 use crate::memory::virt::page_table::x86_64::{
@@ -11,34 +11,34 @@ use crate::memory::virt::page_table::x86_64::{
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RÉSULTAT D'UN WALK
+// WALK RESULT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat du parcours d'une table de pages jusqu'à une feuille.
+/// Result of walking a page table down to a leaf.
 #[derive(Debug)]
 pub enum WalkResult {
-    /// Feuille trouvée (PT entré + index).
+    /// Leaf found (PT entry + index).
     Leaf {
         entry: PageTableEntry,
         level: PageTableLevel,
     },
-    /// Page non présente à ce niveau.
+    /// Page not present at this level.
     NotMapped,
-    /// Huge page (2 MiB ou 1 GiB) détectée avant d'atteindre le niveau 1.
+    /// Huge page (2 MiB or 1 GiB) detected before reaching level 1.
     HugePage {
         entry: PageTableEntry,
         level: PageTableLevel,
     },
-    /// Erreur lors de l'allocation d'un niveau intermédiaire.
+    /// Error during intermediate level allocation.
     AllocError(AllocError),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT D'ALLOCATION POUR LE WALKER
+// ALLOCATION TRAIT FOR WALKER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Permet au walker d'allouer des tables intermédiaires sans dépendre
-/// directement du buddy allocator (inversion de dépendance).
+/// Allows the walker to allocate intermediate tables without depending
+/// directly on the buddy allocator (dependency inversion).
 pub trait FrameAllocatorForWalk {
     fn alloc_frame(&self, flags: AllocFlags) -> Result<Frame, AllocError>;
     fn free_frame(&self, frame: Frame);
@@ -48,29 +48,29 @@ pub trait FrameAllocatorForWalk {
 // WALKER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Walker de table de pages x86_64.
-/// Parcourt les 4 niveaux pour trouver ou créer une mapping.
+/// x86_64 page table walker.
+/// Traverses all 4 levels to find or create a mapping.
 pub struct PageTableWalker {
     pml4_phys: PhysAddr,
 }
 
 impl PageTableWalker {
-    /// Crée un walker pour la PML4 à `pml4_phys`.
+    /// Creates a walker for the PML4 at `pml4_phys`.
     pub fn new(pml4_phys: PhysAddr) -> Self {
         PageTableWalker { pml4_phys }
     }
 
-    /// Walk en lecture seule jusqu'à la feuille pour `virt`.
-    /// Ne crée aucun niveau intermédiaire.
+    /// Read-only walk down to the leaf for `virt`.
+    /// Does not create any intermediate level.
     pub fn walk_read(&self, virt: VirtAddr) -> WalkResult {
-        // SAFETY: pml4_phys est une PML4 valide initialisée avant tout walk.
+        // SAFETY: pml4_phys is a valid PML4 initialized before any walk.
         let pml4 = unsafe { phys_to_table_ref(self.pml4_phys) };
         let l4_entry = pml4[virt.p4_index()];
         if !l4_entry.is_present() {
             return WalkResult::NotMapped;
         }
 
-        // SAFETY: l4_entry.phys_addr() pointe sur un PDPT valide.
+        // SAFETY: l4_entry.phys_addr() points to a valid PDPT.
         let pdpt = unsafe { phys_to_table_ref(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
         if !l3_entry.is_present() {
@@ -83,7 +83,7 @@ impl PageTableWalker {
             };
         }
 
-        // SAFETY: l3_entry.phys_addr() pointe sur un PD valide.
+        // SAFETY: l3_entry.phys_addr() points to a valid PD.
         let pd = unsafe { phys_to_table_ref(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
         if !l2_entry.is_present() {
@@ -96,7 +96,7 @@ impl PageTableWalker {
             };
         }
 
-        // SAFETY: l2_entry.phys_addr() pointe sur un PT valide.
+        // SAFETY: l2_entry.phys_addr() points to a valid PT.
         let pt = unsafe { phys_to_table_ref(l2_entry.phys_addr()) };
         let l1_entry = pt[virt.p1_index()];
         if !l1_entry.is_present() {
@@ -108,10 +108,10 @@ impl PageTableWalker {
         }
     }
 
-    /// Mappe `virt` → `frame` avec les flags donnés.
+    /// Maps `virt` → `frame` with the given flags.
     ///
-    /// Crée les niveaux intermédiaires manquants en utilisant `alloc`.
-    /// Retourne `AllocError` si une page intermédiaire ne peut pas être allouée.
+    /// Creates missing intermediate levels using `alloc`.
+    /// Returns `AllocError` if an intermediate page cannot be allocated.
     pub fn map<A: FrameAllocatorForWalk>(
         &mut self,
         virt: VirtAddr,
@@ -119,19 +119,19 @@ impl PageTableWalker {
         flags: PageFlags,
         alloc: &A,
     ) -> Result<(), AllocError> {
-        // SAFETY: pml4_phys est une PML4 valide (initialisée avant).
+        // SAFETY: pml4_phys is a valid PML4 (initialized beforehand).
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
 
         let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, flags)?;
-        // SAFETY: l3_phys pointe sur un PDPT valide ou fraîchement alloué.
+        // SAFETY: l3_phys points to a valid or freshly allocated PDPT.
         let pdpt = unsafe { phys_to_table_mut(l3_phys) };
 
         let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, flags)?;
-        // SAFETY: l2_phys pointe sur un PD valide ou fraîchement alloué.
+        // SAFETY: l2_phys points to a valid or freshly allocated PD.
         let pd = unsafe { phys_to_table_mut(l2_phys) };
 
         let l1_phys = self.ensure_table(pd, virt.p2_index(), alloc, flags)?;
-        // SAFETY: l1_phys pointe sur un PT valide ou fraîchement alloué.
+        // SAFETY: l1_phys points to a valid or freshly allocated PT.
         let pt = unsafe { phys_to_table_mut(l1_phys) };
 
         let idx = virt.p1_index();
@@ -141,10 +141,10 @@ impl PageTableWalker {
         Ok(())
     }
 
-    /// Mappe une huge page 2 MiB au niveau PD.
+    /// Maps a 2 MiB huge page at the PD level.
     ///
-    /// Utilisé pour la physmap kernel: les tables intermédiaires sont créées
-    /// normalement, mais la feuille est une entrée PD avec le bit PS.
+    /// Used for kernel physmap: intermediate tables are created
+    /// normally, but the leaf is a PD entry with the PS bit.
     pub fn map_huge_2m<A: FrameAllocatorForWalk>(
         &mut self,
         virt: VirtAddr,
@@ -159,15 +159,15 @@ impl PageTableWalker {
 
         let table_flags = flags.clear(PageFlags::HUGE_PAGE);
         let huge_flags = flags.set(PageFlags::HUGE_PAGE);
-        // SAFETY: pml4_phys est une PML4 valide.
+        // SAFETY: pml4_phys is a valid PML4.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
 
         let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, table_flags)?;
-        // SAFETY: l3_phys pointe sur un PDPT valide ou fraîchement alloué.
+        // SAFETY: l3_phys points to a valid or freshly allocated PDPT.
         let pdpt = unsafe { phys_to_table_mut(l3_phys) };
 
         let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, table_flags)?;
-        // SAFETY: l2_phys pointe sur un PD valide ou fraîchement alloué.
+        // SAFETY: l2_phys points to a valid or freshly allocated PD.
         let pd = unsafe { phys_to_table_mut(l2_phys) };
 
         let entry = &mut pd[virt.p2_index()];
@@ -178,42 +178,42 @@ impl PageTableWalker {
         Ok(())
     }
 
-    /// Démappate `virt`.
+    /// Unmaps `virt`.
     ///
-    /// Retourne le frame précédemment mappé, ou `None` si non mappé.
-    /// Retourne également `None` si une huge page est rencontrée en chemin
-    /// (utiliser un démappate spécifique huge page dans ce cas).
+    /// Returns the previously mapped frame, or `None` if not mapped.
+    /// Also returns `None` if a huge page is encountered along the way
+    /// (use a huge-page specific unmap in that case).
     pub fn unmap(&mut self, virt: VirtAddr) -> Option<Frame> {
-        // SAFETY: pml4_phys est une PML4 valide.
+        // SAFETY: pml4_phys is a valid PML4.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
         let l4_entry = pml4[virt.p4_index()];
         if !l4_entry.is_present() {
             return None;
         }
 
-        // SAFETY: l4_entry.phys_addr() est un PDPT valide.
+        // SAFETY: l4_entry.phys_addr() is a valid PDPT.
         let pdpt = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
         if !l3_entry.is_present() {
             return None;
         }
-        // Une huge page 1 GiB : on ne peut pas décomposer en 4 KiB ici
+        // 1 GiB huge page: cannot be decomposed into 4 KiB here
         if l3_entry.is_huge() {
             return None;
         }
 
-        // SAFETY: l3_entry.phys_addr() est un PD valide.
+        // SAFETY: l3_entry.phys_addr() is a valid PD.
         let pd = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
         if !l2_entry.is_present() {
             return None;
         }
-        // Une huge page 2 MiB : idem
+        // 2 MiB huge page: same
         if l2_entry.is_huge() {
             return None;
         }
 
-        // SAFETY: l2_entry.phys_addr() est un PT valide.
+        // SAFETY: l2_entry.phys_addr() is a valid PT.
         let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         let l1_idx = virt.p1_index();
         let old = pt[l1_idx];
@@ -224,9 +224,9 @@ impl PageTableWalker {
         old.frame()
     }
 
-    /// Modifie les flags d'un mapping existant.
+    /// Modifies the flags of an existing mapping.
     pub fn remap_flags(&mut self, virt: VirtAddr, new_flags: PageFlags) -> Result<(), AllocError> {
-        // SAFETY: pml4_phys est une PML4 valide.
+        // SAFETY: pml4_phys is a valid PML4.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
         let l4_entry = pml4[virt.p4_index()];
         if !l4_entry.is_present() {
@@ -240,7 +240,7 @@ impl PageTableWalker {
         if !l3_entry.is_present() {
             return Err(AllocError::InvalidParams);
         }
-        // Huge page 1 GiB : cette fonction ne gère que les mappings 4 KiB
+        // 1 GiB huge page: this function only manages 4 KiB mappings
         if l3_entry.is_huge() {
             return Err(AllocError::InvalidParams);
         }
@@ -252,7 +252,7 @@ impl PageTableWalker {
         if !l2_entry.is_present() {
             return Err(AllocError::InvalidParams);
         }
-        // Huge page 2 MiB : idem
+        // 2 MiB huge page: same
         if l2_entry.is_huge() {
             return Err(AllocError::InvalidParams);
         }
@@ -270,11 +270,11 @@ impl PageTableWalker {
         Ok(())
     }
 
-    /// Déplace une PTE feuille 4 KiB de `src` vers `dst` sans copier le frame.
+    /// Moves a 4 KiB leaf PTE from `src` to `dst` without copying the frame.
     ///
-    /// Les niveaux intermédiaires de destination sont alloués avant de modifier
-    /// la source, donc un échec d'allocation ne perd pas le mapping d'origine.
-    /// Retourne `Ok(false)` si `src` n'est pas résident (demand paging).
+    /// Destination intermediate levels are allocated before modifying
+    /// the source, so an allocation failure does not lose the original mapping.
+    /// Returns `Ok(false)` if `src` is not resident (demand paging).
     pub fn move_leaf<A: FrameAllocatorForWalk>(
         &mut self,
         src: VirtAddr,
@@ -288,7 +288,7 @@ impl PageTableWalker {
         let Some(src_entry_ptr) = self.leaf_entry_ptr(src) else {
             return Ok(false);
         };
-        // SAFETY: le pointeur vient de leaf_entry_ptr() et pointe vers une PTE 4 KiB.
+        // SAFETY: the pointer comes from leaf_entry_ptr() and points to a 4 KiB PTE.
         let old_entry = unsafe { *src_entry_ptr };
         if !old_entry.is_present() {
             return Ok(false);
@@ -296,19 +296,19 @@ impl PageTableWalker {
 
         let page_flags = old_entry.to_page_flags();
 
-        // SAFETY: pml4_phys est une PML4 valide.
+        // SAFETY: pml4_phys is a valid PML4.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
 
         let l3_phys = self.ensure_table(pml4, dst.p4_index(), alloc, page_flags)?;
-        // SAFETY: l3_phys pointe vers une table valide.
+        // SAFETY: l3_phys points to a valid table.
         let pdpt = unsafe { phys_to_table_mut(l3_phys) };
 
         let l2_phys = self.ensure_table(pdpt, dst.p3_index(), alloc, page_flags)?;
-        // SAFETY: l2_phys pointe vers une table valide.
+        // SAFETY: l2_phys points to a valid table.
         let pd = unsafe { phys_to_table_mut(l2_phys) };
 
         let l1_phys = self.ensure_table(pd, dst.p2_index(), alloc, page_flags)?;
-        // SAFETY: l1_phys pointe vers une table valide.
+        // SAFETY: l1_phys points to a valid table.
         let pt = unsafe { phys_to_table_mut(l1_phys) };
 
         let dst_entry = &mut pt[dst.p1_index()];
@@ -317,31 +317,31 @@ impl PageTableWalker {
         }
 
         *dst_entry = old_entry;
-        // SAFETY: src_entry_ptr pointe toujours vers la PTE source; les tables
-        // intermédiaires restent vivantes pendant toute la vie de l'AS.
+        // SAFETY: src_entry_ptr still points to the source PTE; intermediate
+        // tables remain alive throughout the lifetime of the AS.
         unsafe {
             (*src_entry_ptr).clear();
         }
         Ok(true)
     }
 
-    /// Lit la valeur brute de la PTE feuille 4 KiB pour `virt`.
-    /// Retourne `0` si la page n'est pas mappée ou si une huge page est rencontrée.
+    /// Reads the raw value of the 4 KiB leaf PTE for `virt`.
+    /// Returns `0` if the page is not mapped or if a huge page is encountered.
     pub fn read_pte_raw(&self, virt: VirtAddr) -> u64 {
         let Some(entry_ptr) = self.leaf_entry_ptr(virt) else {
             return 0;
         };
-        // SAFETY: `entry_ptr` pointe vers une PTE 4 KiB valide tant que la table existe.
+        // SAFETY: `entry_ptr` points to a valid 4 KiB PTE as long as the table exists.
         unsafe { (*entry_ptr).raw() }
     }
 
-    /// Effectue un compare/exchange atomique sur une PTE feuille 4 KiB.
+    /// Performs an atomic compare-and-swap on a 4 KiB leaf PTE.
     ///
-    /// Retourne `Err(actual_raw)` si l'entrée n'est plus égale à `expected`,
-    /// ou `Err(0)` si aucune PTE feuille n'existe pour cette adresse.
+    /// Returns `Err(actual_raw)` if the entry is no longer equal to `expected`,
+    /// or `Err(0)` if no leaf PTE exists for this address.
     ///
     /// # Safety
-    /// L'accès à la PTE doit respecter les invariants de synchronisation des tables de pages.
+    /// Accessing the PTE must respect page table synchronization invariants.
     pub unsafe fn compare_exchange_leaf_raw(
         &self,
         virt: VirtAddr,
@@ -359,31 +359,31 @@ impl PageTableWalker {
         }
     }
 
-    // ─── helper : s'assure qu'un niveau intermédiaire existe ─────────────────
+    // ─── helper: ensures an intermediate level exists ─────────────────────────
 
     fn leaf_entry_ptr(&self, virt: VirtAddr) -> Option<*mut PageTableEntry> {
-        // SAFETY: `pml4_phys` référence une hiérarchie valide pendant la vie de l'AS.
+        // SAFETY: `pml4_phys` references a valid hierarchy during the lifetime of the AS.
         let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
         let l4_entry = pml4[virt.p4_index()];
         if !l4_entry.is_present() {
             return None;
         }
 
-        // SAFETY: l'entrée présente pointe vers un PDPT valide.
+        // SAFETY: the present entry points to a valid PDPT.
         let pdpt = unsafe { phys_to_table_mut(l4_entry.phys_addr()) };
         let l3_entry = pdpt[virt.p3_index()];
         if !l3_entry.is_present() || l3_entry.is_huge() {
             return None;
         }
 
-        // SAFETY: l'entrée présente pointe vers un PD valide.
+        // SAFETY: the present entry points to a valid PD.
         let pd = unsafe { phys_to_table_mut(l3_entry.phys_addr()) };
         let l2_entry = pd[virt.p2_index()];
         if !l2_entry.is_present() || l2_entry.is_huge() {
             return None;
         }
 
-        // SAFETY: l'entrée présente pointe vers un PT valide.
+        // SAFETY: the present entry points to a valid PT.
         let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         Some((&mut pt[virt.p1_index()]) as *mut PageTableEntry)
     }
@@ -397,8 +397,8 @@ impl PageTableWalker {
     ) -> Result<PhysAddr, AllocError> {
         let entry = &mut parent[idx];
         if entry.is_present() {
-            // Si l'entrée pointe vers une huge page (2 MiB / 1 GiB),
-            // on ne peut pas la traiter comme une table intermédiaire.
+            // If the entry points to a huge page (2 MiB / 1 GiB),
+            // it cannot be treated as an intermediate table.
             if entry.is_huge() {
                 return Err(AllocError::InvalidParams);
             }
@@ -410,11 +410,11 @@ impl PageTableWalker {
             }
             return Ok(entry.phys_addr());
         }
-        // Allouer un nouveau frame pour la table intermédiaire
+        // Allocate a new frame for the intermediate table
         let new_frame = alloc.alloc_frame(AllocFlags::ZEROED)?;
         let new_phys = new_frame.start_address();
-        // Initialiser à zéro (ZEROED flag garantit les 4 KiB à 0)
-        // Écrire l'entrée avec droits minimaux (PRESENT | WRITABLE | USER si user)
+        // Initialize to zero (ZEROED flag guarantees 4 KiB at 0)
+        // Write the entry with minimal rights (PRESENT | WRITABLE | USER if user)
         let parent_flags = PageTableEntry::FLAG_PRESENT
             | PageTableEntry::FLAG_WRITABLE
             | if flags.contains(PageFlags::USER) {
@@ -428,10 +428,10 @@ impl PageTableWalker {
 
     #[inline]
     fn upgrade_table_entry_permissions(entry: &mut PageTableEntry, leaf_flags: PageFlags) {
-        // Les bits U/S et R/W des niveaux intermediaires restreignent toutes
-        // les feuilles du sous-arbre. La feuille garde la politique fine
-        // read-only/NX; les tables doivent seulement ne pas bloquer une page
-        // legitime user ou writable plus bas.
+        // U/S and R/W bits of intermediate levels restrict all
+        // leaves in the subtree. The leaf maintains the fine-grained
+        // read-only/NX policy; tables only need not block a legitimate
+        // user or writable page further down.
         if leaf_flags.contains(PageFlags::WRITABLE) {
             entry.set_flag(PageTableEntry::FLAG_WRITABLE);
         }

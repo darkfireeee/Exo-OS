@@ -1,8 +1,8 @@
 // kernel/src/memory/dma/engines/ioat.rs
 //
 // Intel I/OAT DMA Engine (Crystal Beach / Xeon series).
-// Ref : Intel I/OAT DMA Engine User Guide, Doc #322931.
-// Couche 0 — no_std kernel, accès MMIO via raw pointers.
+// Ref: Intel I/OAT DMA Engine User Guide, Doc #322931.
+// Layer 0 — no_std kernel, MMIO access via raw pointers.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -13,10 +13,10 @@ use crate::memory::dma::stats::counters::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRES MMIO IOAT (offset depuis MMIO base)
+// IOAT MMIO REGISTERS (offset from MMIO base)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Offsets des registres I/OAT channel 0 (CB3+).
+/// Register offsets for I/OAT channel 0 (CB3+).
 #[allow(dead_code)]
 mod regs {
     pub const CHANCMD: usize = 0x04; // Channel Command (u8)
@@ -35,48 +35,48 @@ mod regs {
     pub const DCACTRL: usize = 0xB0; // DCA Control (u32)
 }
 
-/// Bits du Channel Status Register.
+/// Channel Status Register bits.
 #[allow(dead_code)]
 mod chansts {
-    pub const ACTIVE: u64 = 0x0; // Canal actif (bits 4:0)
-    pub const DONE: u64 = 0x1; // Dernier descripteur complété
-    pub const SUSPENDED: u64 = 0x2; // Canal suspendu
-    pub const HALTED: u64 = 0x3; // Erreur fatale
-    pub const ARMED: u64 = 0x4; // En attente d'un descripteur
+    pub const ACTIVE: u64 = 0x0; // Active channel (bits 4:0)
+    pub const DONE: u64 = 0x1; // Last descriptor completed
+    pub const SUSPENDED: u64 = 0x2; // Channel suspended
+    pub const HALTED: u64 = 0x3; // Fatal error
+    pub const ARMED: u64 = 0x4; // Awaiting a descriptor
     pub const STATUS_MASK: u64 = 0x7;
 }
 
-/// Bits du Channel Control Register.
+/// Channel Control Register bits.
 #[allow(dead_code)]
 mod chanctrl {
-    pub const INT_DISABLE: u16 = 1 << 0; // Désactive les interruptions
-    pub const ERR_INT: u16 = 1 << 2; // Erreur → interruption
-    pub const ANY_ERR_ABORT: u16 = 1 << 3; // Annule en cas d'erreur
+    pub const INT_DISABLE: u16 = 1 << 0; // Disable interrupts
+    pub const ERR_INT: u16 = 1 << 2; // Error -> interrupt
+    pub const ANY_ERR_ABORT: u16 = 1 << 3; // Abort on any error
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCRIPTEUR I/OAT (CB3)
+// I/OAT DESCRIPTOR (CB3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur I/OAT DMA Engine version CB3 (DMA Copy).
+/// I/OAT DMA Engine descriptor version CB3 (DMA Copy).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy)]
 pub struct IoatDescriptor {
-    /// Longueur du transfert en octets (bits 0:23), flags (bits 24:31).
+    /// Transfer length in bytes (bits 0:23), flags (bits 24:31).
     pub size_flags: u32,
-    /// Adresse physique destination (64 bits).
+    /// Destination physical address (64 bits).
     pub dst_lo: u32,
     pub dst_hi: u32,
-    /// Adresse physique source (64 bits).
+    /// Source physical address (64 bits).
     pub src_lo: u32,
     pub src_hi: u32,
-    /// Adresse du descripteur suivant (NULL = fin de liste).
+    /// Next descriptor address (NULL = end of list).
     pub next_lo: u32,
     pub next_hi: u32,
-    /// Adresse du completion record (64 bits).
+    /// Completion record address (64 bits).
     pub cmp_lo: u32,
     pub cmp_hi: u32,
-    /// Flags de contrôle supplémentaires (CB3: reserved).
+    /// Additional control flags (CB3: reserved).
     pub ctrl_result: u32,
     pub reserved: u32,
     pub user_data: u64,
@@ -87,13 +87,13 @@ impl IoatDescriptor {
     pub const FLAG_DST_SNOOP: u32 = 1 << 25; // Destination snooping
     pub const FLAG_SRC_SNOOP: u32 = 1 << 26; // Source snooping
     pub const FLAG_CMP_ADDR: u32 = 1 << 27; // Write completion address
-    pub const FLAG_FENCE: u32 = 1 << 28; // Memory fence après copie
-    pub const FLAG_NULL: u32 = 1 << 31; // Descripteur nul (NOP)
+    pub const FLAG_FENCE: u32 = 1 << 28; // Memory fence after copy
+    pub const FLAG_NULL: u32 = 1 << 31; // Null descriptor (NOP)
 
-    /// Crée un descripteur de copie DMA.
+    /// Creates a DMA copy descriptor.
     pub fn new_copy(src: PhysAddr, dst: PhysAddr, size: u32) -> Self {
         IoatDescriptor {
-            size_flags: size & 0x00FF_FFFF, // bits 23:0 = taille
+            size_flags: size & 0x00FF_FFFF, // bits 23:0 = size
             dst_lo: dst.as_u64() as u32,
             dst_hi: (dst.as_u64() >> 32) as u32,
             src_lo: src.as_u64() as u32,
@@ -108,13 +108,13 @@ impl IoatDescriptor {
         }
     }
 
-    /// Chaîne ce descripteur au suivant.
+    /// Chains this descriptor to the next.
     pub fn set_next(&mut self, next_phys: PhysAddr) {
         self.next_lo = next_phys.as_u64() as u32;
         self.next_hi = (next_phys.as_u64() >> 32) as u32;
     }
 
-    /// Définit l'adresse de completion record.
+    /// Sets the completion record address.
     pub fn set_completion_addr(&mut self, cmp_phys: PhysAddr) {
         self.cmp_lo = cmp_phys.as_u64() as u32;
         self.cmp_hi = (cmp_phys.as_u64() >> 32) as u32;
@@ -123,21 +123,21 @@ impl IoatDescriptor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RING DE DESCRIPTEURS IOAT
+// IOAT DESCRIPTOR RING
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille du ring de descripteurs I/OAT (doit être une puissance de 2).
+/// Size of the I/OAT descriptor ring (must be a power of 2).
 pub const IOAT_RING_SIZE: usize = 256;
 
-/// Ring de descripteurs I/OAT.
+/// I/OAT descriptor ring.
 struct IoatRing {
     descs: [IoatDescriptor; IOAT_RING_SIZE],
-    /// Completion records (un par slot, 64-bit aligned).
+    /// Completion records (one per slot, 64-bit aligned).
     #[allow(dead_code)]
     cmp: [u64; IOAT_RING_SIZE],
-    head: u16,  // prochain slot à écrire
-    tail: u16,  // prochain slot à compléter
-    count: u16, // descripteurs in-flight
+    head: u16,  // next slot to write
+    tail: u16,  // next slot to complete
+    count: u16, // in-flight descriptors
 }
 
 impl IoatRing {
@@ -175,18 +175,18 @@ impl IoatRing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTEUR IOAT
+// IOAT ENGINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Moteur I/OAT DMA.
+/// I/OAT DMA engine.
 pub struct IoatEngine {
-    /// Base MMIO du canal 0.
+    /// MMIO base of channel 0.
     mmio_base: AtomicU64,
-    /// Moteur présent et initialisé.
+    /// Engine present and initialized.
     present: AtomicBool,
-    /// Identifiant stats.
+    /// Stats identifier.
     engine_id: AtomicU32,
-    /// Ring de descripteurs.
+    /// Descriptor ring.
     ring: Mutex<IoatRing>,
 }
 
@@ -200,9 +200,9 @@ impl IoatEngine {
         }
     }
 
-    /// Lit un registre 8 bits.
+    /// Reads an 8-bit register.
     ///
-    /// # Safety : `mmio_base` doit être l'adresse MMIO valide et mappée.
+    /// # Safety: `mmio_base` must be a valid and mapped MMIO address.
     unsafe fn read8(&self, offset: usize) -> u8 {
         let base = self.mmio_base.load(Ordering::Relaxed) as *const u8;
         base.add(offset).read_volatile()
@@ -215,55 +215,55 @@ impl IoatEngine {
         base.add(offset / 2).read_volatile()
     }
 
-    /// Lit un registre 32 bits.
+    /// Reads a 32-bit register.
     unsafe fn read32(&self, offset: usize) -> u32 {
         let base = self.mmio_base.load(Ordering::Relaxed) as *const u32;
         base.add(offset / 4).read_volatile()
     }
 
-    /// Écrit un registre 16 bits.
+    /// Writes a 16-bit register.
     unsafe fn write16(&self, offset: usize, val: u16) {
         let base = self.mmio_base.load(Ordering::Relaxed) as *mut u16;
         base.add(offset / 2).write_volatile(val);
     }
 
-    /// Écrit un registre 32 bits.
+    /// Writes a 32-bit register.
     #[allow(dead_code)]
     unsafe fn write32(&self, offset: usize, val: u32) {
         let base = self.mmio_base.load(Ordering::Relaxed) as *mut u32;
         base.add(offset / 4).write_volatile(val);
     }
 
-    /// Lit le statut du canal.
+    /// Reads the channel status.
     unsafe fn chan_status(&self) -> u64 {
         let lo = self.read32(regs::CHANSTS_LO) as u64;
         let hi = self.read32(regs::CHANSTS_HI) as u64;
         lo | (hi << 32)
     }
 
-    /// Initialise le canal I/OAT.
+    /// Initializes the I/OAT channel.
     ///
     /// # Safety
-    /// CPL 0, `mmio_base` valide et mappée en WB.
+    /// CPL 0, `mmio_base` valid and mapped in WB.
     pub unsafe fn init(&self, mmio_base: u64) -> bool {
         self.mmio_base.store(mmio_base, Ordering::Release);
 
-        // 1. Lire la capacité de transfert (XFERCAP).
+        // 1. Read transfer capability (XFERCAP).
         let xfercap = self.read8(regs::XFERCAP);
         if xfercap == 0 {
             return false;
-        } // Contrôleur absent ou invalid
+        } // Controller absent or invalid
 
-        // 2. Désactiver les interruptions, activer l'arrêt sur erreur.
+        // 2. Disable interrupts, enable stop on error.
         let ctrl = chanctrl::INT_DISABLE | chanctrl::ANY_ERR_ABORT;
         self.write16(regs::CHANCTRL, ctrl);
 
-        // 3. Réinitialiser le canal (RESET = 0x20 dans CHANCMD).
+        // 3. Reset channel (RESET = 0x20 in CHANCMD).
         let cmd_offs = regs::CHANCMD;
         let base = mmio_base as *mut u8;
         base.add(cmd_offs).write_volatile(0x20); // CHANCMD_RESET
 
-        // 4. Attendre la fin du reset (max 1000 lectures).
+        // 4. Wait for reset completion (max 1000 reads).
         for _ in 0..1000 {
             let status = self.chan_status() & chansts::STATUS_MASK;
             if status != chansts::HALTED {
@@ -277,13 +277,13 @@ impl IoatEngine {
         true
     }
 
-    /// Soumet une copie DMA.
+    /// Submits a DMA copy.
     ///
-    /// `src` / `dst` : adresses physiques. `size` en octets (≤ 4 MiB par desc.).
-    /// Retourne l'index du slot ou None si ring plein.
+    /// `src` / `dst`: physical addresses. `size` in bytes (<= 4 MiB per desc.).
+    /// Returns the slot index or None if ring is full.
     ///
     /// # Safety
-    /// adresses physiques valides, mappées en physmap.
+    /// Valid physical addresses, mapped in physmap.
     pub unsafe fn submit_copy(&self, src: PhysAddr, dst: PhysAddr, size: u32) -> Option<u16> {
         if !self.present.load(Ordering::Acquire) {
             return None;
@@ -296,16 +296,16 @@ impl IoatEngine {
         let slot = ring.head;
         let next_slot = (slot + 1) as usize % IOAT_RING_SIZE;
 
-        // Construire le descripteur.
+        // Build descriptor.
         ring.descs[slot as usize] = IoatDescriptor::new_copy(src, dst, size);
 
-        // Adresse physique du completion record pour ce slot.
-        // En production, les records sont dans une page physique dédiée allouée à l'init.
-        // Ici : utiliser l'adresse du champ cmp[] via physmap — simplifié pour init.
+        // Physical address of the completion record for this slot.
+        // In production, records are in a dedicated physical page allocated at init.
+        // Here: use address of cmp[] field via physmap — simplified for init.
         ring.count += 1;
         ring.head = next_slot as u16;
 
-        // Bump DMACOUNT pour déclencher le moteur (registre 16 bits du nombre de descs).
+        // Bump DMACOUNT to trigger the engine (16-bit register of desc count).
         self.write16(regs::DMACOUNT, ring.count);
 
         let eid = self.engine_id.load(Ordering::Relaxed) as usize;
@@ -314,10 +314,10 @@ impl IoatEngine {
         Some(slot)
     }
 
-    /// Sonde les compléments — retourne le nombre de transferts terminés.
+    /// Polls completions — returns the number of completed transfers.
     ///
     /// # Safety
-    /// appelé depuis un contexte non-préemptible (IRQ off ou spinlock).
+    /// Called from a non-preemptible context (IRQ off or spinlock).
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -337,7 +337,7 @@ impl IoatEngine {
         }
 
         if state == chansts::HALTED {
-            // Erreur fatale — reset du canal.
+            // Fatal error — reset the channel.
             let base = self.mmio_base.load(Ordering::Relaxed) as *mut u8;
             base.add(regs::CHANCMD).write_volatile(0x20); // RESET
             let mut ring = self.ring.lock();
@@ -352,32 +352,32 @@ impl IoatEngine {
     }
 }
 
-// SAFETY: IoatEngine utilise un Mutex interne et des accès atomiques.
+// SAFETY: IoatEngine uses an internal Mutex and atomic accesses.
 unsafe impl Sync for IoatEngine {}
 
-/// Instance globale du moteur I/OAT.
+/// Global instance of the I/OAT engine.
 pub static IOAT_ENGINE: IoatEngine = IoatEngine::new();
 
-/// Initialise le moteur I/OAT.
+/// Initializes the I/OAT engine.
 ///
 /// # Safety
-/// `mmio_base` = base du BAR MMIO PCI du contrôleur I/OAT.
+/// `mmio_base` = base of the PCI MMIO BAR of the I/OAT controller.
 pub unsafe fn ioat_init(mmio_base: u64) -> bool {
     IOAT_ENGINE.init(mmio_base)
 }
 
-/// Soumet une copie DMA via I/OAT.
+/// Submits a DMA copy via I/OAT.
 ///
 /// # Safety
-/// adresses physiques valides.
+/// Valid physical addresses.
 pub unsafe fn ioat_submit(src: PhysAddr, dst: PhysAddr, size: u32) -> Option<u16> {
     IOAT_ENGINE.submit_copy(src, dst, size)
 }
 
-/// Sonde les compléments I/OAT.
+/// Polls I/OAT completions.
 ///
 /// # Safety
-/// contexte non-préemptible.
+/// Non-preemptible context.
 pub unsafe fn ioat_poll() -> usize {
     IOAT_ENGINE.poll()
 }

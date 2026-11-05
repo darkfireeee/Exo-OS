@@ -1,29 +1,29 @@
 // kernel/src/memory/heap/thread_local/magazine.rs
 //
-// Magazine cache per-CPU — tampon de frames pré-alloués pour éviter les locks.
-// Inspiré du magazine protocol de Solaris/Bonwick.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Per-CPU magazine cache — pre-allocated frames buffer to avoid locks.
+// Inspired by the Solaris/Bonwick magazine protocol.
+// Layer 0 — no external dependencies except `spin`.
 
 use core::ptr::NonNull;
 
-/// Taille d'un magazine (objets en cache par CPU).
+/// Size of a magazine (objects cached per CPU).
 pub const MAGAZINE_SIZE: usize = 64;
 
-/// Un magazine = tableau de pointeurs vers des objets libres pré-alloués.
+/// A magazine = array of pointers to pre-allocated free objects.
 ///
-/// Deux magazines par CPU : un "full" (prêt à distribuer) et un "empty"
-/// (prêt à être rempli). Le swap entre les deux est atomique O(1).
+/// Two magazines per CPU: one "loaded" (ready to allocate) and one "prev"
+/// (ready to be filled). The swap between them is atomic O(1).
 #[repr(C, align(64))]
 pub struct Magazine {
-    /// Tableau d'objets libres (index 0..count-1 sont valides).
+    /// Array of free objects (indices 0..count-1 are valid).
     objects: [*mut u8; MAGAZINE_SIZE],
-    /// Nombre d'objets actuellement dans le magazine.
+    /// Number of objects currently in the magazine.
     count: usize,
-    /// Classe de taille de ce magazine.
+    /// Size class of this magazine.
     pub size_class: usize,
 }
 
-// SAFETY: Magazine est utilisé par un seul CPU à la fois (per-CPU).
+// SAFETY: Magazine is used by a single CPU at a time (per-CPU).
 unsafe impl Send for Magazine {}
 unsafe impl Sync for Magazine {}
 
@@ -36,8 +36,8 @@ impl Magazine {
         }
     }
 
-    /// Retire un objet du magazine (O(1)).
-    /// Retourne `None` si le magazine est vide.
+    /// Pops an object from the magazine (O(1)).
+    /// Returns `None` if the magazine is empty.
     #[inline]
     pub fn pop(&mut self) -> Option<NonNull<u8>> {
         if self.count == 0 {
@@ -47,8 +47,8 @@ impl Magazine {
         NonNull::new(self.objects[self.count])
     }
 
-    /// Pousse un objet dans le magazine (O(1)).
-    /// Retourne `false` si le magazine est plein.
+    /// Pushes an object into the magazine (O(1)).
+    /// Returns `false` if the magazine is full.
     #[inline]
     pub fn push(&mut self, ptr: NonNull<u8>) -> bool {
         if self.count >= MAGAZINE_SIZE {
@@ -78,16 +78,16 @@ impl Magazine {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PAIRE DE MAGAZINES PAR CPU
+// PER-CPU MAGAZINE PAIR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paire de magazines per-CPU pour une classe de taille.
+/// Per-CPU magazine pair for a size class.
 ///
-/// Protocol :
-/// 1. Alloc : pop() sur `loaded`. Si vide, swap loaded↔prev et pop sur nouveau loaded.
-///    Si toujours vide, aller au dépôt central.
-/// 2. Free  : push() sur `loaded`. Si plein, swap loaded↔prev et push sur nouveau loaded.
-///    Si toujours plein, rendre prev au dépôt et allouer un nouveau.
+/// Protocol:
+/// 1. Alloc: pop() on `loaded`. If empty, swap loaded<->prev and pop on new loaded.
+///    If still empty, fall back to central depot.
+/// 2. Free: push() on `loaded`. If full, swap loaded<->prev and push on new loaded.
+///    If still full, return prev to depot and allocate a new one.
 pub struct CpuMagazinePair {
     pub loaded: Magazine,
     pub prev: Magazine,
@@ -101,31 +101,31 @@ impl CpuMagazinePair {
         }
     }
 
-    /// Alloue un objet via le magazine.
-    /// Retourne `None` si les deux magazines sont vides (refill nécessaire).
+    /// Allocates an object via the magazine.
+    /// Returns `None` if both magazines are empty (refill required).
     #[inline]
     pub fn alloc(&mut self) -> Option<NonNull<u8>> {
         if let Some(p) = self.loaded.pop() {
             return Some(p);
         }
-        // Swap et réessayer
+        // Swap and retry
         core::mem::swap(&mut self.loaded, &mut self.prev);
         self.loaded.pop()
     }
 
-    /// Libère un objet via le magazine.
-    /// Retourne `false` si les deux magazines sont pleins (drain nécessaire).
+    /// Frees an object via the magazine.
+    /// Returns `false` if both magazines are full (drain required).
     #[inline]
     pub fn free(&mut self, ptr: NonNull<u8>) -> bool {
         if self.loaded.push(ptr) {
             return true;
         }
-        // Swap et réessayer
+        // Swap and retry
         core::mem::swap(&mut self.loaded, &mut self.prev);
         self.loaded.push(ptr)
     }
 
-    /// Retourne le nombre total d'objets en cache sur ce CPU.
+    /// Returns the total number of cached objects on this CPU.
     #[inline]
     pub fn cached_count(&self) -> usize {
         self.loaded.len() + self.prev.len()

@@ -1,9 +1,9 @@
 // kernel/src/memory/dma/core/descriptor.rs
 //
-// Descripteur de transaction DMA — structure principale manipulée par les
-// engines et canaux DMA.
+// DMA transaction descriptor — main structure manipulated by
+// DMA engines and channels.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — zero external dependencies.
 
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{
@@ -16,20 +16,20 @@ use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 // SCATTER-GATHER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Maximum d'entrées scatter-gather par transaction.
+/// Maximum scatter-gather entries per transaction.
 pub const MAX_SG_ENTRIES: usize = 32;
 
-/// Une entrée scatter-gather : (adresse_physique, longueur).
+/// A scatter-gather entry: (physical_address, length).
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct SgEntry {
-    /// Adresse physique du fragment.
+    /// Physical address of the fragment.
     pub phys: PhysAddr,
-    /// Longueur du fragment en octets.
+    /// Length of the fragment in bytes.
     pub len: u32,
-    /// Offset par rapport à la page de base.
+    /// Offset relative to base page.
     pub page_offset: u16,
-    /// Réservé.
+    /// Reserved.
     pub _pad: [u8; 2],
 }
 
@@ -52,78 +52,78 @@ impl SgEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCRIPTEUR PRINCIPAL
+// MAIN DESCRIPTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur complet d'une transaction DMA.
-/// Taille cible : 256 octets pour tenir dans 4 lignes de cache.
+/// Full descriptor of a DMA transaction.
+/// Target size: 256 bytes to fit into 4 cache lines.
 #[repr(C, align(64))]
 pub struct DmaDescriptor {
-    // ── Identité ──────────────────────────────────────────────────────────────
-    /// Identifiant unique de la transaction.
+    // ── Identity ──────────────────────────────────────────────────────────────
+    /// Unique transaction identifier.
     pub txn_id: DmaTransactionId,
-    /// Canal DMA associé.
+    /// Associated DMA channel.
     pub channel_id: u32,
-    /// Thread/processus demandeur (pour le wakeup à la fin).
+    /// Requesting thread/process (for completion wakeup).
     pub requester_tid: u64,
 
-    // ── Paramètres du transfert ───────────────────────────────────────────────
-    /// Direction du transfert.
+    // ── Transfer parameters ───────────────────────────────────────────────────
+    /// Transfer direction.
     pub direction: DmaDirection,
-    /// Priorité.
+    /// Priority.
     pub priority: DmaPriority,
-    /// Flags de mapping.
+    /// Mapping flags.
     pub map_flags: DmaMapFlags,
-    /// Domaine IOMMU (0 = domaine système).
+    /// IOMMU domain (0 = system domain).
     pub iommu_domain: u32,
 
     // ── Source ────────────────────────────────────────────────────────────────
-    /// Adresse source (physique) — valide si src_sg_count == 0.
+    /// Source address (physical) — valid if src_sg_count == 0.
     pub src_phys: PhysAddr,
-    /// IOVA source mappée par IOMMU.
+    /// Source IOVA mapped by IOMMU.
     pub src_iova: IovaAddr,
-    /// Nombre d'entrées SG source (0 = adresse unique).
+    /// Number of source SG entries (0 = single address).
     pub src_sg_count: u16,
 
     // ── Destination ───────────────────────────────────────────────────────────
-    /// Adresse destination (physique) — valide si dst_sg_count == 0.
+    /// Destination address (physical) — valid if dst_sg_count == 0.
     pub dst_phys: PhysAddr,
-    /// IOVA destination mappée par IOMMU.
+    /// Destination IOVA mapped by IOMMU.
     pub dst_iova: IovaAddr,
-    /// Nombre d'entrées SG destination (0 = adresse unique).
+    /// Number of destination SG entries (0 = single address).
     pub dst_sg_count: u16,
 
-    // ── Taille ────────────────────────────────────────────────────────────────
-    /// Taille total du transfert en octets.
+    // ── Size ──────────────────────────────────────────────────────────────────
+    /// Total transfer size in bytes.
     pub transfer_size: usize,
-    /// Octets effectivement transférés (mis à jour par l'engine).
+    /// Bytes effectively transferred (updated by engine).
     pub bytes_done: AtomicU64,
 
-    // ── État ──────────────────────────────────────────────────────────────────
-    /// État courant de la transaction.
+    // ── State ─────────────────────────────────────────────────────────────────
+    /// Current transaction state.
     pub state: AtomicU8,
-    /// Code d'erreur (valide si state == Error).
+    /// Error code (valid if state == Error).
     pub error: AtomicU8,
-    /// Timestamp de soumission (TSC cycles).
+    /// Submission timestamp (TSC cycles).
     pub submit_tsc: AtomicU64,
-    /// Timestamp de completion (TSC cycles).
+    /// Completion timestamp (TSC cycles).
     pub done_tsc: AtomicU64,
 
     // ── Scatter-Gather ────────────────────────────────────────────────────────
-    /// Table SG source.
+    /// Source SG table.
     pub src_sg: [SgEntry; MAX_SG_ENTRIES],
-    /// Table SG destination.
+    /// Destination SG table.
     pub dst_sg: [SgEntry; MAX_SG_ENTRIES],
 
-    /// Padding pour aligner à 64.
+    /// Padding to align to 64.
     _pad: [u8; 6],
 }
 
-// Vérification de taille : <= 2048 octets (SG tables incluses, 2×32×16 = 1024 + headers).
+// Size check: <= 2048 bytes (SG tables included, 2×32×16 = 1024 + headers).
 const _: () = assert!(core::mem::size_of::<DmaDescriptor>() <= 2048);
 
 impl DmaDescriptor {
-    /// Construit un descripteur vide avec l'ID fourni.
+    /// Constructs an empty descriptor with the provided ID.
     pub fn new(txn_id: DmaTransactionId, channel_id: u32, requester_tid: u64) -> Self {
         DmaDescriptor {
             txn_id,
@@ -151,7 +151,7 @@ impl DmaDescriptor {
         }
     }
 
-    // ── Accesseurs d'état ─────────────────────────────────────────────────────
+    // ── State accessors ───────────────────────────────────────────────────────
 
     #[inline]
     pub fn state(&self) -> DmaTransactionState {
@@ -192,9 +192,9 @@ impl DmaDescriptor {
         )
     }
 
-    // ── Configuration SG ─────────────────────────────────────────────────────
+    // ── SG Configuration ─────────────────────────────────────────────────────
 
-    /// Ajoute une entrée SG source.
+    /// Adds a source SG entry.
     pub fn add_src_sg(&mut self, phys: PhysAddr, len: u32) -> bool {
         let idx = self.src_sg_count as usize;
         if idx >= MAX_SG_ENTRIES {
@@ -211,7 +211,7 @@ impl DmaDescriptor {
         true
     }
 
-    /// Ajoute une entrée SG destination.
+    /// Adds a destination SG entry.
     pub fn add_dst_sg(&mut self, phys: PhysAddr, len: u32) -> bool {
         let idx = self.dst_sg_count as usize;
         if idx >= MAX_SG_ENTRIES {
@@ -227,7 +227,7 @@ impl DmaDescriptor {
         true
     }
 
-    /// Configure un transfert simple (src unique → dst unique).
+    /// Configures a simple transfer (single src -> single dst).
     pub fn setup_simple(&mut self, src: PhysAddr, dst: PhysAddr, size: usize, dir: DmaDirection) {
         self.src_phys = src;
         self.dst_phys = dst;
@@ -237,14 +237,14 @@ impl DmaDescriptor {
         self.dst_sg_count = 0;
     }
 
-    /// Configure un transfert FILL (memset DMA) : remplit `size` octets à `dst`
-    /// avec le motif `value`.
+    /// Configures a FILL transfer (DMA memset): fills `size` bytes at `dst`
+    /// with the pattern `value`.
     ///
-    /// Convention Exo-OS : `src_phys` encode la valeur de remplissage
-    /// (bits [7:0]) pour les moteurs I/OAT/DSA qui utilisent un pattern fill.
-    /// `src_sg_count == 0` et `src_iova == 0` indiquent le mode FILL.
+    /// Exo-OS convention: `src_phys` encodes fill value
+    /// (bits [7:0]) for I/OAT/DSA engines using pattern fill.
+    /// `src_sg_count == 0` and `src_iova == 0` indicate FILL mode.
     pub fn setup_fill(&mut self, dst: PhysAddr, value: u8, size: usize) {
-        // Encoder la valeur de fill dans src_phys.0 (les 8 bits de poids faible).
+        // Encode fill value into src_phys.0 (low 8 bits).
         self.src_phys = PhysAddr::new(value as u64);
         self.dst_phys = dst;
         self.transfer_size = size;
@@ -255,26 +255,26 @@ impl DmaDescriptor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE TRANSACTION (RING BUFFER DE DESCRIPTEURS LIBRES)
+// TRANSACTION TABLE (FREE DESCRIPTOR RING BUFFER)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de transactions DMA simultanées gérées par le système.
+/// Maximum number of concurrent DMA transactions managed by the system.
 pub const MAX_DMA_TRANSACTIONS: usize = 512;
 
-/// Table globale des descripteurs DMA réutilisables.
+/// Global table of reusable DMA descriptors.
 pub struct DmaDescriptorTable {
     slots: spin::Mutex<DmaDescriptorTableInner>,
 }
 
 struct DmaDescriptorTableInner {
-    free_list: [u16; MAX_DMA_TRANSACTIONS], // indices libres
+    free_list: [u16; MAX_DMA_TRANSACTIONS], // free indices
     free_head: usize,
     free_count: usize,
-    /// Stockage des descripteurs (MaybeUninit pour éviter l'initialisation).
+    /// Descriptor storage (MaybeUninit to avoid initialization).
     storage: [core::mem::MaybeUninit<DmaDescriptor>; MAX_DMA_TRANSACTIONS],
 }
 
-// SAFETY: DmaDescriptorTable est protégé par un spin::Mutex.
+// SAFETY: DmaDescriptorTable is protected by a spin::Mutex.
 unsafe impl Sync for DmaDescriptorTable {}
 unsafe impl Send for DmaDescriptorTable {}
 
@@ -288,7 +288,7 @@ impl DmaDescriptorTable {
     const fn new() -> Self {
         DmaDescriptorTable {
             slots: spin::Mutex::new(DmaDescriptorTableInner {
-                // Initialise free_list[i] = i.
+                // Initialize free_list[i] = i.
                 free_list: [0u16; MAX_DMA_TRANSACTIONS],
                 free_head: 0,
                 free_count: 0,
@@ -297,7 +297,7 @@ impl DmaDescriptorTable {
         }
     }
 
-    /// Initialise la table (appel unique au boot).
+    /// Initializes table (single call at boot).
     pub fn init(&self) {
         let mut inner = self.slots.lock();
         for i in 0..MAX_DMA_TRANSACTIONS {
@@ -307,7 +307,7 @@ impl DmaDescriptorTable {
         inner.free_count = MAX_DMA_TRANSACTIONS;
     }
 
-    /// Alloue un descripteur depuis le pool.
+    /// Allocates a descriptor from the pool.
     #[allow(clippy::mut_from_ref)]
     pub fn alloc_descriptor(
         &self,
@@ -325,18 +325,18 @@ impl DmaDescriptorTable {
 
         let txn_id = DmaTransactionId::generate();
         let desc_ptr = inner.storage[idx].as_mut_ptr();
-        // SAFETY: Le slot est libre (free_list garantit l'unicité).
+        // SAFETY: Slot is free (free_list guarantees uniqueness).
         unsafe {
             desc_ptr.write(DmaDescriptor::new(txn_id, channel_id, requester_tid));
             Some(&mut *(desc_ptr))
         }
     }
 
-    /// Libère un descripteur (ne doit être appelé qu'après is_done()).
+    /// Frees a descriptor (must only be called after is_done()).
     ///
     /// # Safety
-    /// `idx` doit être l'index du descripteur dans le storage.
-    /// Le descripteur doit être dans un état terminal (Done/Error/Cancelled).
+    /// `idx` must be the descriptor index in storage.
+    /// Descriptor must be in a terminal state (Done/Error/Cancelled).
     pub unsafe fn free_descriptor(&self, idx: usize) {
         let mut inner = self.slots.lock();
         let tail = (inner.free_head + inner.free_count) % MAX_DMA_TRANSACTIONS;

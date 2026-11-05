@@ -1,13 +1,13 @@
 // kernel/src/memory/virtual/fault/demand_paging.rs
 //
-// Demand paging — alloue et mappe une page au premier accès.
-//   - Anonymous  : zero-fill garanti (frame neuf du buddy + ZEROED flag)
-//   - File       : délègue au FileFaultProvider enregistré (trait Couche 0)
-//   - Device     : mappe la page physique fournie par DeviceFaultProvider
-//   - Shared     : zero-fill avec marqueur COW si partageable
-//   - Direct     : déjà mappé, ne devrait jamais arriver ici
+// Demand paging — allocates and maps a page on first access.
+//   - Anonymous: guaranteed zero-fill (fresh frame from buddy + ZEROED flag)
+//   - File:      delegates to registered FileFaultProvider (Layer 0 trait)
+//   - Device:    maps the physical page supplied by DeviceFaultProvider
+//   - Shared:    zero-fill with COW marker if shareable
+//   - Direct:    already mapped, should never reach here
 //
-// Couche 0 — aucune dépendance scheduler/process/ipc/fs.
+// Layer 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -17,7 +17,7 @@ use crate::memory::core::{Frame, PageFlags, VirtAddr, PAGE_SIZE};
 use crate::memory::virt::vma::{VmaBacking, VmaDescriptor, VmaFlags};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES DE DEMAND PAGING
+// DEMAND PAGING STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DemandPagingStats {
@@ -27,11 +27,11 @@ pub struct DemandPagingStats {
     pub shared_faults: AtomicU64,
     pub oom_count: AtomicU64,
     pub map_errors: AtomicU64,
-    /// Total de pages allouées en zero-fill.
+    /// Total pages allocated as zero-fill.
     pub zero_fill_pages: AtomicU64,
-    /// Pages fournies par le FileFaultProvider.
+    /// Pages supplied by FileFaultProvider.
     pub file_filled_pages: AtomicU64,
-    /// Pages fournies par le DeviceFaultProvider.
+    /// Pages supplied by DeviceFaultProvider.
     pub device_pages: AtomicU64,
 }
 
@@ -60,21 +60,21 @@ impl DemandPagingStats {
 pub static DEMAND_PAGING_STATS: DemandPagingStats = DemandPagingStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT FileFaultProvider (Couche 0 — injection de dépendance)
+// FileFaultProvider TRAIT (Layer 0 — dependency injection)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fournisseur de contenu pour les pages file-backed.
+/// Content provider for file-backed pages.
 ///
-/// Implémenté par la couche VFS/page-cache hors Couche 0.
-/// Enregistré via `register_file_fault_provider()`.
+/// Implemented by the VFS/page-cache layer outside Layer 0.
+/// Registered via `register_file_fault_provider()`.
 ///
-/// Contrat :
-///   - `file_id`   : identifiant opaque du fichier (fourni par `VmaDescriptor.file_id`)
-///   - `file_offset` : offset dans le fichier (en octets, aligné PAGE_SIZE)
-///   - `dest_frame`  : frame physique destination, déjà alloué
+/// Contract:
+///   - `file_id`:     opaque file identifier (supplied by `VmaDescriptor.file_id`)
+///   - `file_offset`: offset in file (in bytes, PAGE_SIZE aligned)
+///   - `dest_frame`:  destination physical frame, already allocated
 ///
-/// L'implémentation doit remplir exactement PAGE_SIZE octets dans `dest_frame`.
-/// Retourne `Ok(())` si le contenu a été chargé, `Err(_)` sinon.
+/// The implementation must fill exactly PAGE_SIZE bytes into `dest_frame`.
+/// Returns `Ok(())` if content was loaded, `Err(_)` otherwise.
 pub trait FileFaultProvider: Sync {
     fn load_file_page(
         &self,
@@ -84,54 +84,54 @@ pub trait FileFaultProvider: Sync {
     ) -> Result<(), crate::memory::core::AllocError>;
 }
 
-/// Fournisseur de frames pour les pages device-backed.
+/// Frame provider for device-backed pages.
 ///
-/// Enregistré via `register_device_fault_provider()`.
+/// Registered via `register_device_fault_provider()`.
 ///
-/// L'implémentation retourne le frame physique correspondant à
-/// (device_id, offset) sans allouer de nouvelle mémoire physique.
+/// The implementation returns the physical frame corresponding to
+/// (device_id, offset) without allocating new physical memory.
 pub trait DeviceFaultProvider: Sync {
     fn get_device_page(&self, device_id: u64, offset: u64) -> Option<Frame>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRES GLOBAUX (atomic pointer, Couche 0 safe)
+// GLOBAL REGISTRIES (atomic pointer, Layer 0 safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::sync::atomic::AtomicPtr;
 
-/// Fournisseur de pages file-backed globalement enregistré.
-/// Initialement nul (Couche 0 fonctionne sans lui — zero-fill fallback).
+/// Globally registered file-backed page provider.
+/// Initially null (Layer 0 works without it — zero-fill fallback).
 static FILE_FAULT_PROVIDER: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
-/// Vtable stockée séparément (fat pointer).
+/// Vtable stored separately (fat pointer).
 static FILE_FAULT_VTABLE: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Fournisseur de pages device-backed.
+/// Device-backed page provider.
 static DEVICE_FAULT_PROVIDER: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 static DEVICE_FAULT_VTABLE: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Enregistre un fournisseur de pages file-backed.
+/// Registers a file-backed page provider.
 ///
-/// Doit être appelé une seule fois depuis la couche VFS (après init mémoire).
+/// Must be called once from the VFS layer (after memory init).
 ///
 /// # Safety
-/// Appel single-threaded pendant l'init VFS.
+/// Single-threaded call during VFS init.
 pub unsafe fn register_file_fault_provider(data_ptr: *const (), vtable: *const ()) {
     FILE_FAULT_PROVIDER.store(data_ptr as *mut (), Ordering::Release);
     FILE_FAULT_VTABLE.store(vtable as *mut (), Ordering::Release);
 }
 
-/// Enregistre un fournisseur de frames device-backed.
+/// Registers a device-backed frame provider.
 ///
 /// # Safety
-/// Appel single-threaded pendant l'init drivers.
+/// Single-threaded call during drivers init.
 pub unsafe fn register_device_fault_provider(data_ptr: *const (), vtable: *const ()) {
     DEVICE_FAULT_PROVIDER.store(data_ptr as *mut (), Ordering::Release);
     DEVICE_FAULT_VTABLE.store(vtable as *mut (), Ordering::Release);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER INTERNE : allouer + mapper une page zéro
+// INTERNAL HELPER: allocate + map zero page
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
@@ -165,17 +165,17 @@ fn alloc_zero_map<A: FaultAllocator>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HANDLER PRINCIPAL
+// MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traite un fault de demand paging (page non présente, accès légitime sur VMA valide).
+/// Handles a demand paging fault (page not present, legitimate access on valid VMA).
 ///
-/// Dispatche selon `vma.backing` :
-/// - `Anonymous` : zero-fill garanti
-/// - `File`      : lecture via FileFaultProvider (fallback zero-fill si non enregistré)
-/// - `Device`    : map frame physique fourni par DeviceFaultProvider
-/// - `Shared`    : zero-fill + flags COW pour partage futur
-/// - `Direct`    : erreur (ne doit pas arriver ici)
+/// Dispatches according to `vma.backing`:
+/// - `Anonymous`: guaranteed zero-fill
+/// - `File`:      read via FileFaultProvider (fallback zero-fill if not registered)
+/// - `Device`:    map physical frame supplied by DeviceFaultProvider
+/// - `Shared`:    zero-fill + COW flags for future sharing
+/// - `Direct`:    error (should not reach here)
 pub fn handle_demand_paging<A: FaultAllocator>(
     ctx: &FaultContext,
     vma: &VmaDescriptor,
@@ -184,7 +184,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
     let page_addr = VirtAddr::new(ctx.fault_addr.as_u64() & !(PAGE_SIZE as u64 - 1));
 
     match vma.backing {
-        // ── ANONYMOUS : zero-fill ────────────────────────────────────────────
+        // ── ANONYMOUS: zero-fill ─────────────────────────────────────────────
         VmaBacking::Anonymous => {
             DEMAND_PAGING_STATS
                 .anon_faults
@@ -196,7 +196,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
             result
         }
 
-        // ── FILE-BACKED : FileFaultProvider ou zero-fill ─────────────────────
+        // ── FILE-BACKED: FileFaultProvider or zero-fill ──────────────────────
         VmaBacking::File => {
             DEMAND_PAGING_STATS
                 .file_faults
@@ -206,7 +206,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
             let vtable = FILE_FAULT_VTABLE.load(Ordering::Acquire);
 
             if !data_ptr.is_null() && !vtable.is_null() {
-                // Fournisseur enregistré — allouer un frame vide et le remplir.
+                // Registered provider — allocate empty frame and fill it.
                 let frame = match alloc.alloc_nonzeroed() {
                     Ok(f) => f,
                     Err(_) => {
@@ -219,12 +219,12 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                     }
                 };
 
-                // Calcul de l'offset fichier depuis le debut de la VMA.
+                // Compute file offset from the beginning of the VMA.
                 let vma_offset = page_addr.as_u64().saturating_sub(vma.start.as_u64());
                 let file_offset = vma.file_offset.saturating_add(vma_offset);
 
-                // Reconstruction du fat pointer et appel au provider.
-                // SAFETY: ptrs valides, enregistrés par register_file_fault_provider.
+                // Reconstruct fat pointer and call provider.
+                // SAFETY: valid ptrs, registered by register_file_fault_provider.
                 let fat: (*const (), *const ()) = (data_ptr as *const (), vtable as *const ());
                 let provider: &dyn FileFaultProvider = unsafe { core::mem::transmute(fat) };
                 match provider.load_file_page(vma.inode_id, file_offset, frame) {
@@ -249,8 +249,8 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                         }
                     }
                     Err(_) => {
-                        // Erreur I/O : ne jamais remplacer silencieusement du
-                        // code ou des données file-backed par une page zéro.
+                        // I/O error: never silently replace file-backed
+                        // code or data with a zero page.
                         alloc.free_frame(frame);
                         FaultResult::Segfault {
                             addr: ctx.fault_addr,
@@ -258,7 +258,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                     }
                 }
             } else {
-                // Pas de fournisseur — zero-fill (acceptable pendant boot).
+                // No provider — zero-fill (acceptable during boot).
                 let result = alloc_zero_map(page_addr, vma.page_flags, alloc);
                 if result.is_handled() {
                     vma.record_fault();
@@ -267,7 +267,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
             }
         }
 
-        // ── DEVICE : frame fourni par DeviceFaultProvider ───────────────────
+        // ── DEVICE: frame provided by DeviceFaultProvider ───────────────────
         VmaBacking::Device => {
             DEMAND_PAGING_STATS
                 .device_faults
@@ -283,7 +283,7 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                 let fat: (*const (), *const ()) = (data_ptr as *const (), vtable as *const ());
                 let provider: &dyn DeviceFaultProvider = unsafe { core::mem::transmute(fat) };
                 if let Some(dev_frame) = provider.get_device_page(vma.inode_id, device_offset) {
-                    // Mapper avec flags device (no-cache, no-exec, présent).
+                    // Map with device flags (no-cache, no-exec, present).
                     let dev_flags = vma.page_flags | PageFlags::PRESENT | PageFlags::NO_CACHE;
                     DEMAND_PAGING_STATS
                         .device_pages
@@ -303,13 +303,13 @@ pub fn handle_demand_paging<A: FaultAllocator>(
                         }
                     }
                 } else {
-                    // Device ne fournit pas ce frame → SEGFAULT.
+                    // Device does not provide this frame → SEGFAULT.
                     FaultResult::Segfault {
                         addr: ctx.fault_addr,
                     }
                 }
             } else {
-                // Pas de provider device → zero-fill (config incomplète).
+                // No device provider → zero-fill (incomplete config).
                 let result = alloc_zero_map(page_addr, vma.page_flags, alloc);
                 if result.is_handled() {
                     vma.record_fault();
@@ -318,13 +318,13 @@ pub fn handle_demand_paging<A: FaultAllocator>(
             }
         }
 
-        // ── SHARED : zero-fill + COW pour partage ────────────────────────────
+        // ── SHARED: zero-fill + COW for sharing ─────────────────────────────
         VmaBacking::Shared => {
             DEMAND_PAGING_STATS
                 .shared_faults
                 .fetch_add(1, Ordering::Relaxed);
-            // Shared anonymous : zero-fill, mais les flags doivent rester COW
-            // pour que la copie se déclenche si l'un des partageants écrit.
+            // Shared anonymous: zero-fill, but flags must remain COW
+            // so copying is triggered if any sharer writes.
             let shared_flags = if vma.flags.contains(VmaFlags::WRITE) {
                 vma.page_flags | PageFlags::COW
             } else {
@@ -337,11 +337,11 @@ pub fn handle_demand_paging<A: FaultAllocator>(
             result
         }
 
-        // ── DIRECT : déjà mappé, ne doit pas arriver ici ────────────────────
+        // ── DIRECT: already mapped, should not reach here ───────────────────
         VmaBacking::Direct => {
-            // Le mapping physique direct aurait dû être établi à la création
-            // de la VMA (mmap avec MAP_FIXED + physaddr). Un fault ici est
-            // une incohérence : renvoyer SEGFAULT.
+            // Direct physical mapping should have been established upon VMA
+            // creation (mmap with MAP_FIXED + physaddr). A fault here is
+            // an inconsistency: return SEGFAULT.
             FaultResult::Segfault {
                 addr: ctx.fault_addr,
             }

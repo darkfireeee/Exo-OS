@@ -1,26 +1,26 @@
 // kernel/src/memory/dma/core/types.rs
 //
-// Types fondamentaux DMA — partagés par tous les sous-modules DMA.
-// COUCHE 0 — zéro dépendance externe.
+// Fundamental DMA types — shared by all DMA sub-modules.
+// LAYER 0 — zero external dependencies.
 
 use crate::memory::core::constants::PAGE_SIZE;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IDENTIFIANTS
+// IDENTIFIERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant unique d'un canal DMA (index global dans la table des canaux).
+/// Unique identifier of a DMA channel (global index in channel table).
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(transparent)]
 pub struct DmaChannelId(pub u32);
 
-/// Identifiant d'un domaine IOMMU.
+/// Identifier of an IOMMU domain.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(transparent)]
 pub struct IommuDomainId(pub u32);
 
-/// Identifiant d'une transaction DMA en cours.
+/// Identifier of an ongoing DMA transaction.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(transparent)]
 pub struct DmaTransactionId(pub u64);
@@ -28,7 +28,7 @@ pub struct DmaTransactionId(pub u64);
 impl DmaTransactionId {
     pub const INVALID: Self = DmaTransactionId(0);
 
-    /// Génère un ID unique via compteur atomique global.
+    /// Generates a unique ID via global atomic counter.
     pub fn generate() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         DmaTransactionId(COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -36,11 +36,11 @@ impl DmaTransactionId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADRESSE DMA (IOVA)
+// DMA ADDRESS (IOVA)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse I/O virtuelle (IOVA) vue par le périphérique après translation IOMMU.
-/// À distinguer de `PhysAddr` (vue CPU).
+/// I/O virtual address (IOVA) as seen by device after IOMMU translation.
+/// Distinct from `PhysAddr` (CPU view).
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(transparent)]
 pub struct IovaAddr(pub u64);
@@ -73,53 +73,53 @@ impl IovaAddr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DIRECTION DE TRANSFERT
+// TRANSFER DIRECTION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Direction d'un transfert DMA.
+/// Direction of a DMA transfer.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum DmaDirection {
-    /// Device → RAM (lecture par le CPU, écriture par le device).
+    /// Device -> RAM (CPU read, device write).
     ToDevice = 0,
-    /// RAM → Device (lecture par le device, écriture CPU).
+    /// RAM -> Device (device read, CPU write).
     FromDevice = 1,
-    /// Bidirectionnel.
+    /// Bidirectional.
     Bidirection = 2,
-    /// Aucun mouvement (memset, test).
+    /// No movement (memset, test).
     None = 3,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FLAGS DE MAPPING DMA
+// DMA MAPPING FLAGS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags modifiant le comportement d'un mapping DMA.
+/// Flags modifying DMA mapping behavior.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct DmaMapFlags(pub u32);
 
 impl DmaMapFlags {
     pub const NONE: Self = DmaMapFlags(0);
-    /// Le mapping doit être dans les 16 premiers MiB (DMA ISA legacy).
+    /// Mapping must be within first 16 MiB (legacy ISA DMA).
     pub const DMA16: Self = DmaMapFlags(1 << 0);
-    /// Le mapping doit rester sous 4 GiB (DMA32).
+    /// Mapping must stay below 4 GiB (DMA32).
     pub const DMA32: Self = DmaMapFlags(1 << 1);
-    /// Le buffer est contigu physiquement (pas de scatter-gather).
+    /// Buffer is physically contiguous (no scatter-gather).
     pub const CONTIGUOUS: Self = DmaMapFlags(1 << 2);
-    /// Cache cohérence forcée (flush/invalidate autour des transferts).
+    /// Forced cache coherence (flush/invalidate around transfers).
     pub const CACHE_SYNC: Self = DmaMapFlags(1 << 3);
-    /// Ne pas insérer dans la table IOMMU (raw passthrough).
+    /// Do not insert into IOMMU table (raw passthrough).
     pub const BYPASS_IOMMU: Self = DmaMapFlags(1 << 4);
-    /// Buffer permanent (ne pas ré-allouer à chaque transfert).
+    /// Permanent buffer (do not re-allocate at each transfer).
     pub const PERSISTENT: Self = DmaMapFlags(1 << 5);
-    /// Lecture seule pour le device.
+    /// Read-only for device.
     pub const READ_ONLY: Self = DmaMapFlags(1 << 6);
-    /// Écriture seule pour le device.
+    /// Write-only for device.
     pub const WRITE_ONLY: Self = DmaMapFlags(1 << 7);
-    /// Invalide le cache après transfert → Device (for_cpu flush).
+    /// Invalidates cache after transfer -> Device (for_cpu flush).
     pub const SYNC_FOR_CPU: Self = DmaMapFlags(1 << 8);
-    /// Flush le cache avant transfert → Device (for_device flush).
+    /// Flushes cache before transfer -> Device (for_device flush).
     pub const SYNC_FOR_DEV: Self = DmaMapFlags(1 << 9);
 
     #[inline]
@@ -144,34 +144,34 @@ impl core::ops::BitOr for DmaMapFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT D'UNE TRANSACTION
+// TRANSACTION STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État d'une transaction DMA.
+/// State of a DMA transaction.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum DmaTransactionState {
-    /// Slot libre.
+    /// Free slot.
     Free = 0,
-    /// Transaction créée mais pas encore soumise.
+    /// Transaction created but not yet submitted.
     Pending = 1,
-    /// Transaction soumise au contrôleur.
+    /// Transaction submitted to controller.
     Submitted = 2,
-    /// Transfert en cours d'exécution.
+    /// Transfer currently executing.
     Running = 3,
-    /// Transfert terminé avec succès.
+    /// Transfer completed successfully.
     Done = 4,
-    /// Transfert terminé avec une erreur.
+    /// Transfer completed with an error.
     Error = 5,
-    /// Transaction annulée.
+    /// Transaction cancelled.
     Cancelled = 6,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PRIORITÉ DE CANAL
+// CHANNEL PRIORITY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Priorité d'un canal DMA (pour l'ordonnancement des requêtes).
+/// Priority of a DMA channel (for request scheduling).
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(u8)]
 pub enum DmaPriority {
@@ -182,10 +182,10 @@ pub enum DmaPriority {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CAPACITÉS D'UN CANAL
+// CHANNEL CAPABILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacités déclarées par un canal DMA (bitfield).
+/// Capabilities advertised by a DMA channel (bitfield).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct DmaCapabilities(pub u32);
@@ -217,35 +217,35 @@ impl DmaCapabilities {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ERREURS DMA
+// DMA ERRORS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs spécifiques au sous-système DMA.
+/// Specific errors for DMA subsystem.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum DmaError {
-    /// Pas de canal DMA disponible.
+    /// No DMA channel available.
     NoChannel = 0,
-    /// Mémoire DMA insuffisante.
+    /// Out of DMA memory.
     OutOfMemory = 1,
-    /// Paramètres invalides (taille, alignement…).
+    /// Invalid parameters (size, alignment...).
     InvalidParams = 2,
-    /// Timeout lors d'un transfert.
+    /// Transfer timeout.
     Timeout = 3,
-    /// Erreur matérielle (bus, parity…).
+    /// Hardware error (bus, parity...).
     HardwareError = 4,
-    /// Erreur IOMMU (mapping refusé, faute de page).
+    /// IOMMU error (mapping denied, page fault).
     IommuFault = 5,
-    /// Canal non initialisé.
+    /// Channel not initialized.
     NotInitialized = 6,
-    /// Transaction déjà soumise.
+    /// Transaction already submitted.
     AlreadySubmitted = 7,
-    /// Transaction annulée.
+    /// Transaction cancelled.
     Cancelled = 8,
-    /// Buffer non aligné sur la granularité requise.
+    /// Buffer misaligned for required granularity.
     MisalignedBuffer = 9,
-    /// Adresse non dans la zone DMA requise.
+    /// Address not in required DMA zone.
     WrongZone = 10,
-    /// Opération non supportée par ce canal.
+    /// Operation not supported by this channel.
     NotSupported = 11,
 }

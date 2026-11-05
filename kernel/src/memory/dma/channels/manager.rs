@@ -1,8 +1,8 @@
 // kernel/src/memory/dma/channels/manager.rs
 //
-// Gestionnaire de canaux DMA — tient la table des canaux enregistrés,
-// orchestre l'allocation de canaux pour les périphériques demandeurs.
-// COUCHE 0 — aucune dépendance externe.
+// DMA channel manager — maintains the table of registered channels,
+// orchestrates channel allocation for requesting devices.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -11,14 +11,14 @@ use crate::memory::dma::core::types::DmaTransactionId;
 use crate::memory::dma::core::types::{DmaCapabilities, DmaChannelId, DmaError, DmaPriority};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_DMA_CHANNELS: usize = 128;
 pub const CHANNEL_QUEUE_DEPTH: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT D'UN CANAL
+// CHANNEL STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -33,10 +33,10 @@ pub enum ChannelState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCRIPTEUR DE CANAL
+// CHANNEL DESCRIPTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'un canal DMA.
+/// DMA channel statistics.
 pub struct ChannelStats {
     pub submitted: AtomicU64,
     pub completed: AtomicU64,
@@ -57,7 +57,7 @@ impl ChannelStats {
     }
 }
 
-/// File d'attente des transactions d'un canal (ring buffer).
+/// Channel transaction queue (ring buffer).
 struct ChannelQueue {
     txns: [DmaTransactionId; CHANNEL_QUEUE_DEPTH],
     head: usize,
@@ -108,29 +108,29 @@ impl ChannelQueue {
     }
 }
 
-/// Un canal DMA.
+/// A DMA channel.
 #[repr(C, align(64))]
 pub struct DmaChannel {
-    /// Identifiant du canal.
+    /// Channel identifier.
     pub id: DmaChannelId,
-    /// Capacités déclarées par ce canal.
+    /// Capabilities declared by this channel.
     pub capabilities: DmaCapabilities,
-    /// Priorité du canal.
+    /// Channel priority.
     pub priority: DmaPriority,
-    /// État courant.
+    /// Current state.
     state: AtomicU32, // ChannelState as u32
-    /// Ce canal est actif (enregistré) ?
+    /// Is this channel active (registered)?
     pub registered: AtomicBool,
-    /// Affinité CPU recommandée (u8::MAX = aucune préférence).
+    /// Recommended CPU affinity (u8::MAX = no preference).
     pub cpu_affinity: u8,
     _pad: [u8; 2],
-    /// File d'attente des transactions.
+    /// Transaction queue.
     queue: Mutex<ChannelQueue>,
-    /// Statistiques.
+    /// Statistics.
     pub stats: ChannelStats,
-    /// Nom du canal (pour debug/dmesg).
+    /// Channel name (for debug/dmesg).
     pub name: [u8; 32],
-    /// Pointeur vers la structure matérielle privée (opaque, encodé en usize).
+    /// Pointer to private hardware structure (opaque, encoded as u64).
     hw_private: AtomicU64,
 }
 
@@ -151,7 +151,7 @@ impl DmaChannel {
         }
     }
 
-    // ── État ─────────────────────────────────────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────────────
 
     pub fn state(&self) -> ChannelState {
         match self.state.load(Ordering::Acquire) {
@@ -173,13 +173,13 @@ impl DmaChannel {
         self.registered.load(Ordering::Acquire) && matches!(self.state(), ChannelState::Idle)
     }
 
-    // ── Capacités ────────────────────────────────────────────────────────────
+    // ── Capabilities ───────────────────────────────────────────────────────────
 
     pub fn supports(&self, cap: DmaCapabilities) -> bool {
         self.capabilities.has(cap)
     }
 
-    // ── Queue ─────────────────────────────────────────────────────────────────
+    // ── Queue ──────────────────────────────────────────────────────────────────
 
     pub fn enqueue(&self, txn: DmaTransactionId) -> Result<(), DmaError> {
         let mut q = self.queue.lock();
@@ -199,7 +199,7 @@ impl DmaChannel {
         self.queue.lock().len()
     }
 
-    // ── Nom ──────────────────────────────────────────────────────────────────
+    // ── Name ───────────────────────────────────────────────────────────────────
 
     pub fn set_name(&mut self, name: &[u8]) {
         let len = name.len().min(31);
@@ -214,7 +214,7 @@ impl DmaChannel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DES CANAUX
+// CHANNEL TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct DmaChannelManager {
@@ -225,13 +225,13 @@ pub struct DmaChannelManager {
     stats_allocation_fails: AtomicU64,
 }
 
-// SAFETY: DmaChannelManager est protégé par les Mutex internes des canaux.
+// SAFETY: DmaChannelManager is protected by the internal Mutexes of channels.
 unsafe impl Sync for DmaChannelManager {}
 unsafe impl Send for DmaChannelManager {}
 
 impl DmaChannelManager {
     const fn new() -> Self {
-        // Initialise les 128 canaux statiquement.
+        // Statically initializes the 128 channels.
         macro_rules! ch {
             ($i:expr) => {
                 DmaChannel::new_free($i)
@@ -375,10 +375,10 @@ impl DmaChannelManager {
         }
     }
 
-    /// Enregistre un canal sur un slot libre.
+    /// Registers a channel on a free slot.
     ///
     /// # Safety
-    /// Appelé depuis l'init du driver DMA, avant le premier transfert.
+    /// Called from the DMA driver init, before the first transfer.
     pub unsafe fn register_channel(
         &self,
         caps: DmaCapabilities,
@@ -405,7 +405,7 @@ impl DmaChannelManager {
         Ok(DmaChannelId(count as u32))
     }
 
-    /// Alloue le premier canal disponible supportant `required_caps` et `min_priority`.
+    /// Allocates the first available channel supporting `required_caps` and `min_priority`.
     pub fn alloc_channel(
         &self,
         required_caps: DmaCapabilities,
@@ -423,14 +423,14 @@ impl DmaChannelManager {
         None
     }
 
-    /// Libère un canal après l'utilisation.
+    /// Releases a channel after use.
     pub fn free_channel(&self, id: DmaChannelId) {
         if (id.0 as usize) < MAX_DMA_CHANNELS {
             self.channels[id.0 as usize].set_state(ChannelState::Idle);
         }
     }
 
-    /// Accès à un canal par ID.
+    /// Access to a channel by ID.
     pub fn channel(&self, id: DmaChannelId) -> Option<&DmaChannel> {
         if (id.0 as usize) < MAX_DMA_CHANNELS {
             let ch = &self.channels[id.0 as usize];

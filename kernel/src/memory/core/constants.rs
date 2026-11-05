@@ -1,190 +1,190 @@
 // kernel/src/memory/core/constants.rs
 //
-// Constantes fondamentales de gestion mémoire — Exo-OS Couche 0
-// Aucune dépendance externe. Toutes les valeurs sont des constantes
-// de compilation vérifiées statiquement.
+// Fundamental memory management constants — Exo-OS Layer 0
+// No external dependencies. All values are statically verified
+// compile-time constants.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAILLES DE PAGES
+// PAGE SIZES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'une page standard (4 KiB)
+/// Standard page size (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Décalage (shift) d'une page standard
+/// Standard page shift
 pub const PAGE_SHIFT: usize = 12;
 
-/// Masque pour extraire l'offset dans une page
+/// Mask to extract offset within a page
 pub const PAGE_MASK: usize = PAGE_SIZE - 1;
 
-/// Taille d'une huge page (2 MiB)
+/// Huge page size (2 MiB)
 pub const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
 
-/// Décalage d'une huge page (21 bits)
+/// Huge page shift (21 bits)
 pub const HUGE_PAGE_SHIFT: usize = 21;
 
-/// Masque pour extraire l'offset dans une huge page
+/// Mask to extract offset within a huge page
 pub const HUGE_PAGE_MASK: usize = HUGE_PAGE_SIZE - 1;
 
-/// Taille d'une gigapage (1 GiB)
+/// Gigapage size (1 GiB)
 pub const GIGA_PAGE_SIZE: usize = 1024 * 1024 * 1024;
 
-/// Décalage d'une gigapage (30 bits)
+/// Gigapage shift (30 bits)
 pub const GIGA_PAGE_SHIFT: usize = 30;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LIGNE DE CACHE
+// CACHE LINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'une ligne de cache x86_64 (64 octets)
+/// x86_64 cache line size (64 bytes)
 pub const CACHE_LINE_SIZE: usize = 64;
 
-/// Décalage d'une ligne de cache
+/// Cache line shift
 pub const CACHE_LINE_SHIFT: usize = 6;
 
-/// Masque d'alignement cache-line
+/// Cache line alignment mask
 pub const CACHE_LINE_MASK: usize = CACHE_LINE_SIZE - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BUDDY ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ordre maximum du buddy allocator (2^12 = 4096 pages = 16 MiB)
+/// Maximum order of the buddy allocator (2^12 = 4096 pages = 16 MiB)
 pub const BUDDY_MAX_ORDER: usize = 12;
 
-/// Nombre de niveaux du buddy allocator
+/// Number of buddy allocator levels
 pub const BUDDY_ORDER_COUNT: usize = BUDDY_MAX_ORDER + 1;
 
-/// Taille maximale allouée par le buddy (en pages)
+/// Maximum size allocated by buddy (in pages)
 pub const BUDDY_MAX_PAGES: usize = 1 << BUDDY_MAX_ORDER;
 
-/// Taille maximale allouée par le buddy (en octets)
+/// Maximum size allocated by buddy (in bytes)
 pub const BUDDY_MAX_BYTES: usize = BUDDY_MAX_PAGES * PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SLAB ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de classes de taille du slab allocator
+/// Number of size classes in slab allocator
 pub const SLAB_NR_SIZE_CLASSES: usize = 16;
 
-/// Taille minimale d'un objet slab (alignée sur 8 octets)
+/// Minimum slab object size (8-byte aligned)
 pub const SLAB_MIN_OBJ_SIZE: usize = 8;
 
-/// Taille maximale d'un objet slab (2 KiB — au-delà → buddy)
+/// Maximum slab object size (2 KiB — beyond this -> buddy)
 pub const SLAB_MAX_OBJ_SIZE: usize = 2048;
 
-/// Nombre maximum d'objets par slab page
+/// Maximum number of objects per slab page
 pub const SLAB_MAX_OBJS_PER_PAGE: usize = PAGE_SIZE / SLAB_MIN_OBJ_SIZE;
 
-/// Seuil : au-dessus de cette taille, le slab dispatch vers buddy direct
+/// Threshold: above this size, slab dispatches directly to buddy
 pub const SLAB_LARGE_THRESHOLD: usize = SLAB_MAX_OBJ_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PER-CPU POOLS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de frames dans chaque per-CPU pool
+/// Number of frames in each per-CPU pool
 pub const PER_CPU_POOL_SIZE: usize = 512;
 
-/// Seuil de réapprovisionnement du per-CPU pool (25%)
+/// Refill threshold for per-CPU pool (25%)
 pub const PER_CPU_REFILL_THRESHOLD: usize = PER_CPU_POOL_SIZE / 4;
 
-/// Seuil de vidange du per-CPU pool (75%)
+/// Drain threshold for per-CPU pool (75%)
 pub const PER_CPU_DRAIN_THRESHOLD: usize = (PER_CPU_POOL_SIZE * 3) / 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EMERGENCY POOL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de WaitNodes pré-alloués au boot dans l'EmergencyPool
-/// DOIT être initialisé AVANT tout autre module noyau (RÈGLE EMERGENCY-01)
-/// RÈGLE SCHED-POOL (V-12) : ≥ 256 — sinon DoS par épuisement trivial.
+/// Number of WaitNodes pre-allocated at boot in EmergencyPool
+/// MUST be initialized BEFORE any other kernel module (RULE EMERGENCY-01)
+/// RULE SCHED-POOL (V-12): >= 256 — otherwise trivial exhaustion DoS.
 pub const EMERGENCY_POOL_SIZE: usize = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TLB SHOOTDOWN
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Timeout d'un TLB shootdown IPI (cycles ~100µs à 3 GHz)
+/// TLB shootdown IPI timeout (cycles ~100µs at 3 GHz)
 pub const TLB_SHOOTDOWN_TIMEOUT_CYCLES: u64 = 300_000;
 
-/// Nombre maximum de CPUs supportés
+/// Maximum number of supported CPUs
 pub const MAX_CPUS: usize = 256;
 
-/// Nombre maximum de nœuds NUMA supportés
+/// Maximum number of supported NUMA nodes
 pub const MAX_NUMA_NODES: usize = 8;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZONES MÉMOIRE
+// MEMORY ZONES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fin de la zone DMA (<16 MiB — devices 32 bits legacy)
+/// End of DMA zone (<16 MiB — legacy 32-bit devices)
 pub const ZONE_DMA_END: usize = 16 * 1024 * 1024;
 
-/// Fin de la zone DMA32 (<4 GiB — devices PCIe 32 bits)
+/// End of DMA32 zone (<4 GiB — 32-bit PCIe devices)
 pub const ZONE_DMA32_END: usize = 4 * 1024 * 1024 * 1024;
 
-/// Début de la zone NORMAL (>= 4 GiB sur systèmes 64 bits)
+/// Start of NORMAL zone (>= 4 GiB on 64-bit systems)
 pub const ZONE_NORMAL_START: usize = ZONE_DMA32_END;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DMA
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'un DMA ring (512 descripteurs, puissance de 2 obligatoire)
+/// Size of DMA ring (512 descriptors, power of two mandatory)
 pub const DMA_RING_SIZE: usize = 512;
 
-/// Masque du DMA ring
+/// DMA ring mask
 pub const DMA_RING_MASK: usize = DMA_RING_SIZE - 1;
 
-/// Timeout de completion DMA (cycles ~500ns à 3 GHz)
+/// DMA completion timeout (cycles ~500ns at 3 GHz)
 pub const DMA_COMPLETION_TIMEOUT_CYCLES: u64 = 1_500;
 
-/// Taille maximale d'un transfert DMA continu
+/// Maximum size of continuous DMA transfer
 pub const DMA_MAX_TRANSFER_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IPC RING (partagé avec ipc/ via memory/utils/)
+// IPC RING (shared with ipc/ via memory/utils/)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'un ring IPC (puissance de 2 obligatoire)
+/// IPC ring size (power of two mandatory)
 pub const IPC_RING_SIZE: usize = 4096;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HEAP KERNEL
+// KERNEL HEAP
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille du TLS cache du heap kernel (hot path <25 cycles)
+/// Kernel heap TLS cache size (hot path <25 cycles)
 pub const HEAP_TLS_CACHE_SIZE: usize = 64;
 
-/// Taille d'un magazine (batch alloc/free)
+/// Magazine size (batch alloc/free)
 pub const HEAP_MAGAZINE_SIZE: usize = 128;
 
-/// Seuil de vidange du TLS cache vers pool global
+/// TLS cache drain threshold to global pool
 pub const HEAP_TLS_DRAIN_COUNT: usize = HEAP_TLS_CACHE_SIZE / 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STACK CANARY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valeur initiale du canary de pile noyau (pattern aléatoire compilée)
-/// Remplacée au boot par une valeur lue depuis RDRAND ou RDSEED
+/// Initial value of kernel stack canary (compiled random pattern)
+/// Replaced at boot by a value read from RDRAND or RDSEED
 pub const STACK_CANARY_INITIAL: u64 = 0x_DEAD_BEEF_CAFE_BABE;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FUTEX
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de buckets dans la futex hash table (doit être puissance de 2).
-/// RÈGLE MEM-FUTEX (V-34) : ≥ 4096 + SipHash-keyed — anti-DoS par collision.
+/// Number of buckets in futex hash table (must be power of two).
+/// RULE MEM-FUTEX (V-34): >= 4096 + SipHash-keyed — anti-DoS via collision.
 pub const FUTEX_HASH_BUCKETS: usize = 4096;
 
-/// Masque pour le hash de la futex table
+/// Mask for futex table hash
 pub const FUTEX_HASH_MASK: usize = FUTEX_HASH_BUCKETS - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VÉRIFICATIONS STATIQUES
+// STATIC CHECKS
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _: () = assert!(

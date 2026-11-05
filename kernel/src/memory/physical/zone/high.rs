@@ -1,20 +1,20 @@
 // kernel/src/memory/physical/zone/high.rs
 //
-// Zone HIGH — mémoire haute sur systèmes 32 bits (>896 MiB).
-// Sur x86_64, cette zone est vide (tous les frames sont accessibles directement).
-// Conservée pour compatibilité architecturale.
-// Couche 0 — aucune dépendance externe.
+// HIGH Zone — high memory on 32-bit systems (>896 MiB).
+// On x86_64, this zone is empty (all frames are directly accessible).
+// Preserved for architectural compatibility.
+// Layer 0 — no external dependencies.
 
 use super::ZoneDescriptor;
 use crate::memory::core::{PhysAddr, ZoneType};
 
-/// Zone HIGH — mémoire haute 32 bits uniquement (vide sur x86_64).
+/// HIGH Zone — 32-bit high memory only (empty on x86_64).
 pub struct HighZone {
     pub desc: ZoneDescriptor,
 }
 
 impl HighZone {
-    /// Crée une zone HIGH vide (x86_64 — toujours vide).
+    /// Creates an empty HIGH zone (x86_64 — always empty).
     pub const fn new_empty(numa_node: u8) -> Self {
         HighZone {
             desc: ZoneDescriptor::new(
@@ -28,7 +28,7 @@ impl HighZone {
         }
     }
 
-    /// Sur x86_64, la zone HIGH est toujours vide.
+    /// On x86_64, the HIGH zone is always empty.
     #[inline(always)]
     pub const fn is_empty_on_x86_64() -> bool {
         true

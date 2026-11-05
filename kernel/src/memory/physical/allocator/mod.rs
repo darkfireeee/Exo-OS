@@ -1,7 +1,7 @@
 // kernel/src/memory/physical/allocator/mod.rs
 //
-// Module allocator — regroupe tous les allocateurs de pages physiques.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Allocator module — aggregates all physical page allocators.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod bitmap;
 pub mod buddy;
@@ -11,7 +11,7 @@ pub mod slab;
 pub mod slub;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RE-EXPORTS PRINCIPAUX
+// MAIN RE-EXPORTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use numa_hints::{cpu_numa_node, numa_distance, set_numa_topology, NumaNode, SizeClass};
@@ -37,44 +37,44 @@ pub use slub::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INIT GLOBALE DES ALLOCATEURS
+// GLOBAL ALLOCATOR INIT
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::memory::core::{Frame, PhysAddr, PAGE_SIZE};
 
-/// Ordre d'initialisation des allocateurs (appelé depuis memory::init()).
+/// Initialization order of allocators (called from memory::init()).
 ///
-/// 1. EmergencyPool (déjà initialisé avant tout — RÈGLE EMERGENCY-01)
+/// 1. EmergencyPool (already initialized before anything else — EMERGENCY-01 RULE)
 /// 2. BitmapAllocator (early boot)
-/// 3. BuddyAllocator  (après init physmap)
-/// 4. SlabAllocator   (après buddy)
-/// 5. SlubAllocator   (optionnel, remplace slab en production)
-/// 6. NumaAllocator   (après topologie ACPI)
+/// 3. BuddyAllocator  (after physmap init)
+/// 4. SlabAllocator   (after buddy)
+/// 5. SlubAllocator   (optional, replaces slab in production)
+/// 6. NumaAllocator   (after ACPI topology)
 pub fn init_phase1_bitmap(phys_start: PhysAddr, phys_end: PhysAddr) {
-    // SAFETY: Single-CPU, avant init SMP, appelé une seule fois.
+    // SAFETY: Single-CPU, before SMP init, called only once.
     unsafe {
         BOOTSTRAP_BITMAP.init(phys_start, phys_end);
     }
 }
 
 pub fn init_phase2_free_region(start: PhysAddr, end: PhysAddr) {
-    // SAFETY: Single-CPU, appelé depuis le parser E820/UEFI map.
+    // SAFETY: Single-CPU, called from E820/UEFI map parser.
     unsafe {
         BOOTSTRAP_BITMAP.add_free_region(start, end);
     }
 }
 
-/// Initialise la zone DMA32 du buddy allocator (couvre la RAM < 4 GiB).
+/// Initializes DMA32 zone of buddy allocator (covers RAM < 4 GiB).
 ///
-/// Doit être appelé APRÈS init_phase1_bitmap+init_phase2_free_region,
-/// et AVANT init_phase3_slab_slub. La physmap doit être mappée.
+/// Must be called AFTER init_phase1_bitmap+init_phase2_free_region,
+/// and BEFORE init_phase3_slab_slub. Physmap must be mapped.
 ///
-/// `bitmap_buf` / `bitmap_words` : buffer statique fourni par l'appelant
-/// pour stocker le bitmap de disponibilité (1 bit par page de la zone).
-/// Pour couvrir 4 GiB : 16384 u64 × 8 = 128 KiB.
+/// `bitmap_buf` / `bitmap_words`: static buffer provided by caller
+/// to store availability bitmap (1 bit per zone page).
+/// To cover 4 GiB: 16384 u64 × 8 = 128 KiB.
 ///
 /// # Safety
-/// - Single-CPU, physmap opérationnelle, appelé une seule fois.
+/// - Single-CPU, operational physmap, called only once.
 pub unsafe fn init_phase2b_buddy_zone(
     phys_start: PhysAddr,
     phys_end: PhysAddr,
@@ -83,7 +83,7 @@ pub unsafe fn init_phase2b_buddy_zone(
 ) {
     use crate::memory::core::constants::ZONE_DMA32_END;
     use crate::memory::core::ZoneType;
-    // Clamp à la limite DMA32 (< 4 GiB)
+    // Clamp to DMA32 limit (< 4 GiB)
     let dma32_end = PhysAddr::new(phys_end.as_u64().min(ZONE_DMA32_END as u64));
     if phys_start >= dma32_end {
         return;
@@ -98,11 +98,11 @@ pub unsafe fn init_phase2b_buddy_zone(
     BUDDY.mark_initialized();
 }
 
-/// Ajoute une région de RAM libre au buddy allocator (phase 2b).
-/// Appeler pour chaque région E820/UEFI utilisable, après init_phase2b_buddy_zone.
+/// Adds a free RAM region to buddy allocator (phase 2b).
+/// Call for each usable E820/UEFI region, after init_phase2b_buddy_zone.
 ///
 /// # Safety
-/// - Zone buddy initialisée, physmap opérationnelle, single-CPU.
+/// - Buddy zone initialized, physmap operational, single-CPU.
 pub unsafe fn init_phase2b_buddy_free_region(start: PhysAddr, end: PhysAddr) {
     let mut cursor = start.as_u64();
     let end = end.as_u64();
@@ -129,7 +129,7 @@ pub unsafe fn init_phase2b_buddy_free_region(start: PhysAddr, end: PhysAddr) {
     }
 }
 
-/// Initialise le SLUB/Slab après que le buddy soit opérationnel.
+/// Initializes SLUB/Slab after buddy is operational.
 pub fn init_phase3_slab_slub() {
     slab_init_all();
     slub_init_all();

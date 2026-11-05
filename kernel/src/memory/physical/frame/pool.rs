@@ -1,9 +1,9 @@
 // kernel/src/memory/physical/frame/pool.rs
 //
 // Per-CPU frame pools + EmergencyPool tie-in.
-// Les per-CPU pools servent à accélérer les allocations de frames en
-// évitant les contentions sur le buddy global (512 frames par CPU).
-// Couche 0 — aucune dépendance externe.
+// Per-CPU pools accelerate frame allocations by
+// avoiding contention on the global buddy (512 frames per CPU).
+// Layer 0 — no external dependencies.
 
 use crate::memory::core::{
     AllocError, AllocFlags, Frame, PhysAddr, MAX_CPUS, PER_CPU_DRAIN_THRESHOLD, PER_CPU_POOL_SIZE,
@@ -16,57 +16,57 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 // PER-CPU FRAME POOL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pool de frames par CPU — lock-free, taille fixe.
+/// Per-CPU frame pool — lock-free, fixed size.
 ///
-/// Principe :
-///   Chaque CPU maintient un tableau circulaire de `PER_CPU_POOL_SIZE` frames.
-///   Allocation locale : O(1), sans verrou, sans cache miss cross-CPU.
-///   Quand le pool tombe sous `PER_CPU_REFILL_THRESHOLD`, il est réapprovisionné
-///   depuis le buddy global.
-///   Quand le pool dépasse `PER_CPU_DRAIN_THRESHOLD`, l'excès est rendu au buddy.
+/// Principle:
+///   Each CPU maintains a circular buffer of `PER_CPU_POOL_SIZE` frames.
+///   Local allocation: O(1), lockless, no cross-CPU cache misses.
+///   When the pool drops below `PER_CPU_REFILL_THRESHOLD`, it is refilled
+///   from the global buddy.
+///   When the pool exceeds `PER_CPU_DRAIN_THRESHOLD`, the excess is returned to buddy.
 ///
-/// Thread-safety :
-///   Un seul thread (le CPU propriétaire) accède à ce pool en mode normal.
-///   Le compteur `count` est atomique pour les statsthreads d'observation.
+/// Thread-safety:
+///   A single thread (owning CPU) accesses this pool in normal mode.
+///   The `count` counter is atomic for observer stats threads.
 ///
-/// RÈGLE NO-ALLOC : Ce code est appelé avec préemption potentiellement désactivée
-///   → aucun `Vec`, `Box`, `Arc` — uniquement des tableaux statiques.
+/// RULE NO-ALLOC: This code is called with preemption potentially disabled
+///   -> no `Vec`, `Box`, `Arc` — only static arrays.
 #[repr(C, align(64))]
 pub struct PerCpuFramePool {
-    /// Tableau circulaire des frames disponibles (PFNs).
-    /// UnsafeCell car modifié uniquement par le CPU propriétaire.
+    /// Circular buffer of available frames (PFNs).
+    /// UnsafeCell because modified only by owning CPU.
     frames: UnsafeCell<[u64; PER_CPU_POOL_SIZE]>,
-    /// Index de production (prochaine case libre).
+    /// Production index (next free slot).
     head: AtomicUsize,
-    /// Index de consommation (prochain frame à allouer).
+    /// Consumption index (next frame to allocate).
     tail: AtomicUsize,
-    /// Compteur de frames disponibles snapshot (approximation).
+    /// Available frames count snapshot (approximation).
     count: AtomicUsize,
-    /// CPU ID propriétaire de ce pool (-1 = non initialisé).
+    /// CPU ID owning this pool (usize::MAX = uninitialized).
     cpu_id: AtomicUsize,
-    /// Statistiques d'allocation depuis ce pool.
+    /// Allocation hits statistics from this pool.
     alloc_hits: AtomicU64,
-    /// Statistiques d'échecs (pool vide → fallback buddy).
+    /// Allocation misses statistics (empty pool -> fallback buddy).
     alloc_misses: AtomicU64,
-    /// Statistiques de réapprovisionnements.
+    /// Refills statistics.
     refills: AtomicU64,
-    /// Statistiques de vidanges.
+    /// Drains statistics.
     drains: AtomicU64,
-    /// Padding pour occuper exactement 2 cache lines (128 bytes).
+    /// Padding to occupy exactly 2 cache lines (128 bytes).
     _pad: [u8; 64],
 }
 
-// Calcul du padding : on ajuste pour un align total de 128 bytes.
-// Le compilateur vérifiera la taille via l'assertion statique ci-dessous.
-// Note : UnsafeCell<[u64; 512]> = 4096 bytes — la struct sera grande.
+// Padding calculation: adjusted for 128 bytes total alignment.
+// The compiler checks the size via the static assertion below.
+// Note: UnsafeCell<[u64; 512]> = 4096 bytes — struct will be large.
 
-// SAFETY: PerCpuFramePool est accédé uniquement par son CPU propriétaire
-// en mode normal. Les compteurs atomiques permettent l'observation externe.
+// SAFETY: PerCpuFramePool is accessed only by its owning CPU
+// in normal mode. Atomic counters allow external observation.
 unsafe impl Sync for PerCpuFramePool {}
 unsafe impl Send for PerCpuFramePool {}
 
 impl PerCpuFramePool {
-    /// Crée un pool vide non initialisé.
+    /// Creates an empty uninitialized pool.
     pub const fn new_uninit() -> Self {
         PerCpuFramePool {
             frames: UnsafeCell::new([0u64; PER_CPU_POOL_SIZE]),
@@ -82,11 +82,11 @@ impl PerCpuFramePool {
         }
     }
 
-    /// Initialise le pool pour un CPU donné.
+    /// Initializes pool for a given CPU.
     ///
     /// # Safety
-    /// Doit être appelé une fois, uniquement par le CPU `cpu_id`,
-    /// pendant l'init SMP avant tout accès concurrent.
+    /// Must be called once, only by CPU `cpu_id`,
+    /// during SMP init before any concurrent access.
     pub unsafe fn init(&self, cpu_id: usize) {
         self.cpu_id.store(cpu_id, Ordering::Release);
         self.head.store(0, Ordering::Relaxed);
@@ -94,10 +94,10 @@ impl PerCpuFramePool {
         self.count.store(0, Ordering::Relaxed);
     }
 
-    /// Alloue un frame depuis le pool.
-    /// Retourne `None` si le pool est vide (fallback vers buddy).
+    /// Allocates a frame from the pool.
+    /// Returns `None` if pool is empty (fallback to buddy).
     ///
-    /// RÈGLE NO-ALLOC : appelé depuis hot path, pas d'allocation.
+    /// RULE NO-ALLOC: called from hot path, no allocation.
     #[inline(always)]
     pub fn pop(&self) -> Option<Frame> {
         let count = self.count.load(Ordering::Relaxed);
@@ -106,7 +106,7 @@ impl PerCpuFramePool {
             return None;
         }
 
-        // SAFETY: count > 0 → head != tail, accès exclusif par ce CPU.
+        // SAFETY: count > 0 -> head != tail, exclusive access by this CPU.
         let frames_ptr = self.frames.get();
         let tail = self.tail.load(Ordering::Relaxed);
         let pfn = unsafe { (*frames_ptr)[tail % PER_CPU_POOL_SIZE] };
@@ -117,8 +117,8 @@ impl PerCpuFramePool {
         Some(Frame::containing(PhysAddr::new(pfn << 12)))
     }
 
-    /// Dépose un frame libéré dans le pool (retour depuis buddy ou kfree).
-    /// Retourne `false` si le pool est plein (fallback vers buddy global).
+    /// Deposits a freed frame into the pool (return from buddy or kfree).
+    /// Returns `false` if pool is full (fallback to global buddy).
     #[inline(always)]
     pub fn push(&self, frame: Frame) -> bool {
         let count = self.count.load(Ordering::Relaxed);
@@ -128,7 +128,7 @@ impl PerCpuFramePool {
 
         let frames_ptr = self.frames.get();
         let head = self.head.load(Ordering::Relaxed);
-        // SAFETY: count < PER_CPU_POOL_SIZE ⇒ accès dans [0,SIZE); pas d'autre producteur.
+        // SAFETY: count < PER_CPU_POOL_SIZE => access within [0,SIZE); no other producer.
         unsafe {
             (*frames_ptr)[head % PER_CPU_POOL_SIZE] = frame.pfn();
         }
@@ -138,37 +138,37 @@ impl PerCpuFramePool {
         true
     }
 
-    /// Vérifie si le pool nécessite un réapprovisionnement.
+    /// Checks whether the pool requires refilling.
     #[inline(always)]
     pub fn needs_refill(&self) -> bool {
         self.count.load(Ordering::Relaxed) < PER_CPU_REFILL_THRESHOLD
     }
 
-    /// Vérifie si le pool doit être partiellement vidangé.
+    /// Checks whether the pool should be partially drained.
     #[inline(always)]
     pub fn needs_drain(&self) -> bool {
         self.count.load(Ordering::Relaxed) > PER_CPU_DRAIN_THRESHOLD
     }
 
-    /// Retourne le nombre actuel de frames disponibles.
+    /// Returns current number of available frames.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.count.load(Ordering::Relaxed)
     }
 
-    /// Retourne `true` si le pool est vide.
+    /// Returns `true` if pool is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.count.load(Ordering::Relaxed) == 0
     }
 
-    /// Retourne `true` si le pool est plein.
+    /// Returns `true` if pool is full.
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.count.load(Ordering::Relaxed) >= PER_CPU_POOL_SIZE
     }
 
-    /// Retourne les statistiques de ce pool.
+    /// Returns statistics for this pool.
     pub fn stats(&self) -> PerCpuPoolStats {
         PerCpuPoolStats {
             cpu_id: self.cpu_id.load(Ordering::Relaxed),
@@ -181,9 +181,9 @@ impl PerCpuFramePool {
         }
     }
 
-    /// Réapprovisionne le pool depuis un itérateur de frames.
-    /// S'arrête quand le pool est plein ou l'itérateur épuisé.
-    /// Retourne le nombre de frames ajoutés.
+    /// Refills pool from an iterator of frames.
+    /// Stops when pool is full or iterator exhausted.
+    /// Returns number of added frames.
     pub fn refill(&self, frames: impl Iterator<Item = Frame>) -> usize {
         let mut count = 0;
         for frame in frames {
@@ -200,11 +200,11 @@ impl PerCpuFramePool {
         count
     }
 
-    /// Vidange partiellement le pool (retourne les frames en excès).
-    /// Appelle `drain_fn` pour chaque frame à retourner au buddy.
-    /// Retourne le nombre de frames vidangés.
+    /// Partially drains the pool (returns excess frames).
+    /// Calls `drain_fn` for each frame to return to buddy.
+    /// Returns number of drained frames.
     pub fn drain(&self, drain_fn: impl FnMut(Frame)) -> usize {
-        let target = PER_CPU_POOL_SIZE / 2; // Vidanger jusqu'à 50% plein
+        let target = PER_CPU_POOL_SIZE / 2; // Drain down to 50% full
         let current = self.count.load(Ordering::Relaxed);
         if current <= target {
             return 0;
@@ -231,16 +231,16 @@ impl PerCpuFramePool {
     }
 }
 
-/// Calcul de constante du padding.
+/// Padding constant calculation.
 const _PAD_POOL: usize = {
-    // On vise 128 bytes pour les champs non-frames
-    // frames (UnsafeCell<[u64; 512]>) = 4096 bytes — hors padding
-    // Reste des champs : head, tail, count, cpu_id (4×8) + stats (4×8) = 64 bytes
-    // Padding pour aligner à 128 bytes = 128 - 64 = 64 bytes
+    // We target 128 bytes for non-frame fields
+    // frames (UnsafeCell<[u64; 512]>) = 4096 bytes — outside padding
+    // Remaining fields: head, tail, count, cpu_id (4x8) + stats (4x8) = 64 bytes
+    // Padding to align to 128 bytes = 128 - 64 = 64 bytes
     64
 };
 
-/// Statistiques d'un per-CPU pool.
+/// Per-CPU pool statistics.
 #[derive(Copy, Clone, Debug)]
 pub struct PerCpuPoolStats {
     pub cpu_id: usize,
@@ -253,7 +253,7 @@ pub struct PerCpuPoolStats {
 }
 
 impl PerCpuPoolStats {
-    /// Taux de hit du cache (0.0 - 1.0).
+    /// Cache hit rate (0.0 - 1.0).
     pub fn hit_rate(&self) -> f64 {
         let total = self.alloc_hits + self.alloc_misses;
         if total == 0 {
@@ -265,18 +265,18 @@ impl PerCpuPoolStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE GLOBALE DES PER-CPU POOLS
+// GLOBAL PER-CPU POOLS TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale des per-CPU pools — MAX_CPUS entrées statiques.
+/// Global table of per-CPU pools — MAX_CPUS static entries.
 pub struct PerCpuPoolTable {
     pools: [PerCpuFramePool; MAX_CPUS],
     nr_cpus: AtomicUsize,
-    initialized: AtomicUsize, // bitmask (atomique, max 256 CPUs sur u64×4)
+    initialized: AtomicUsize, // bitmask (atomic, max 256 CPUs on u64x4)
 }
 
-// SAFETY: PerCpuPoolTable est thread-safe via ses AtomicUsize internes
-// et le protocole d'accès exclusif par CPU.
+// SAFETY: PerCpuPoolTable is thread-safe via its internal AtomicUsize
+// and exclusive per-CPU access protocol.
 unsafe impl Sync for PerCpuPoolTable {}
 unsafe impl Send for PerCpuPoolTable {}
 
@@ -295,62 +295,62 @@ impl PerCpuPoolTable {
         }
     }
 
-    /// Initialise le pool d'un CPU.
+    /// Initializes a CPU's pool.
     ///
     /// # Safety
-    /// Voir `PerCpuFramePool::init()`. Doit être appelé lors de l'initialisation du CPU `cpu_id`.
+    /// See `PerCpuFramePool::init()`. Must be called during CPU `cpu_id` initialization.
     pub unsafe fn init_cpu(&self, cpu_id: usize) {
         debug_assert!(cpu_id < MAX_CPUS, "cpu_id hors limites");
         self.pools[cpu_id].init(cpu_id);
         self.nr_cpus.fetch_max(cpu_id + 1, Ordering::Relaxed);
-        // Marquer comme initialisé (bitmask single-word : couvre les CPUs 0..usize::BITS)
-        // A_FAIRE: passer à [AtomicUsize; MAX_CPUS/usize::BITS] pour supporter MAX_CPUS > 64
-        // Note de sûreté : les CPUs ≥ usize::BITS ne seront pas marqués dans le bitmask
-        // mais leur pool sera quand même vide (count = 0) et donc safe.
+        // Mark as initialized (single-word bitmask: covers CPUs 0..usize::BITS)
+        // TODO: switch to [AtomicUsize; MAX_CPUS/usize::BITS] to support MAX_CPUS > 64
+        // Safety note: CPUs >= usize::BITS won't be marked in bitmask
+        // but their pool will still be empty (count = 0) and therefore safe.
         if cpu_id < usize::BITS as usize {
             self.initialized.fetch_or(1 << cpu_id, Ordering::Release);
         }
     }
 
-    /// Accès au pool d'un CPU donné.
+    /// Access to a given CPU's pool.
     ///
     /// # Panics (debug)
-    /// Panique si `cpu_id >= MAX_CPUS`.
+    /// Panics if `cpu_id >= MAX_CPUS`.
     #[inline(always)]
     pub fn get(&self, cpu_id: usize) -> &PerCpuFramePool {
         debug_assert!(cpu_id < MAX_CPUS);
         &self.pools[cpu_id]
     }
 
-    /// Alloue depuis le pool du CPU courant.
-    /// `cpu_id` doit être l'ID du CPU en cours d'exécution.
+    /// Allocates from current CPU's pool.
+    /// `cpu_id` must be the ID of the currently executing CPU.
     #[inline(always)]
     pub fn alloc_from_cpu(&self, cpu_id: usize, _flags: AllocFlags) -> Result<Frame, AllocError> {
-        self.get(cpu_id).pop().ok_or(AllocError::WouldBlock) // Signale le besoin de fallback buddy
+        self.get(cpu_id).pop().ok_or(AllocError::WouldBlock) // Signals need for buddy fallback
     }
 
-    /// Libère un frame vers le pool du CPU courant.
-    /// Retourne `false` si le pool est plein (frame doit retourner au buddy).
+    /// Releases a frame to current CPU's pool.
+    /// Returns `false` if pool is full (frame must return to buddy).
     #[inline(always)]
     pub fn free_to_cpu(&self, cpu_id: usize, frame: Frame) -> bool {
         self.get(cpu_id).push(frame)
     }
 
-    /// Retourne le nombre de CPUs initialisés.
+    /// Returns the number of initialized CPUs.
     #[inline(always)]
     pub fn nr_cpus(&self) -> usize {
         self.nr_cpus.load(Ordering::Relaxed)
     }
 }
 
-/// Table globale des per-CPU pools.
-/// Initialisée pendant l'init SMP, avant le scheduling.
+/// Global table of per-CPU pools.
+/// Initialized during SMP init, before scheduling.
 pub static PER_CPU_POOLS: PerCpuPoolTable = PerCpuPoolTable::new();
 
-/// Initialise le pool du CPU `cpu_id`.
+/// Initializes CPU `cpu_id`'s pool.
 ///
 /// # Safety
-/// Comme `PerCpuFramePool::init()`. Doit être appelé lors de l'initialisation du CPU `cpu_id`.
+/// Same as `PerCpuFramePool::init()`. Must be called during CPU `cpu_id` initialization.
 pub unsafe fn init_cpu_pool(cpu_id: usize) {
     PER_CPU_POOLS.init_cpu(cpu_id);
 }

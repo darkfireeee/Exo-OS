@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/address_space/tlb.rs
 //
-// Gestion du TLB (Translation Lookaside Buffer) — invalidations locales et IPI.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// TLB (Translation Lookaside Buffer) management — local invalidations and IPI.
+// Layer 0 — no external dependencies except `spin`.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
@@ -12,24 +12,24 @@ use crate::memory::virt::page_table::x86_64::invlpg;
 const TLB_MASK_BITS: usize = u64::BITS as usize;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPE D'INVALIDATION TLB
+// TLB INVALIDATION TYPE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type d'invalidation TLB demandée.
+/// Requested TLB invalidation type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlbFlushType {
-    /// Une seule page.
+    /// A single page.
     Single(VirtAddr),
-    /// Plage contiguë de pages.
+    /// Contiguous range of pages.
     Range { start: VirtAddr, end: VirtAddr },
-    /// Toutes les entrées non-globales (CR3 reload).
+    /// All non-global entries (CR3 reload).
     All,
-    /// Toutes les entrées incluant les globales (CR4.PGE toggle).
+    /// All entries including global ones (CR4.PGE toggle).
     Global,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES TLB
+// TLB STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct TlbStats {
@@ -59,23 +59,23 @@ impl TlbStats {
 pub static TLB_STATS: TlbStats = TlbStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INVALIDATION TLB LOCALE
+// LOCAL TLB INVALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Invalide une seule entrée TLB pour `addr` sur le CPU courant.
+/// Invalidates a single TLB entry for `addr` on current CPU.
 ///
 /// # Safety
-/// `addr` doit être une adresse canonique x86_64.
+/// `addr` must be a canonical x86_64 address.
 #[inline]
 pub unsafe fn flush_single(addr: VirtAddr) {
     invlpg(addr);
     TLB_STATS.single_flushes.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Invalide toutes les entrées TLB non-globales (reload de CR3).
+/// Invalidates all non-global TLB entries (CR3 reload).
 ///
 /// # Safety
-/// La PML4 active doit rester valide après cette opération.
+/// The active PML4 must remain valid after this operation.
 #[inline]
 pub unsafe fn flush_all() {
     let cr3: u64;
@@ -84,11 +84,11 @@ pub unsafe fn flush_all() {
     TLB_STATS.full_flushes.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Invalide toutes les entrées TLB incluant les globales (via CR4.PGE toggle).
+/// Invalidates all TLB entries including globals (via CR4.PGE toggle).
 ///
 /// # Safety
-/// Désactive temporairement la pagination (CR4.PGE=0 → 1).
-/// Doit être exécuté avec les interruptions désactivées.
+/// Temporarily disables paging (CR4.PGE=0 → 1).
+/// Must be executed with interrupts disabled.
 #[inline]
 pub unsafe fn flush_all_including_global() {
     let cr4: u64;
@@ -98,10 +98,10 @@ pub unsafe fn flush_all_including_global() {
     TLB_STATS.full_flushes.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Invalide une plage de pages sur le CPU courant.
+/// Invalidates a range of pages on current CPU.
 ///
 /// # Safety
-/// Chaque adresse dans [start..end) doit être une adresse canonique.
+/// Each address in [start..end) must be a canonical address.
 pub unsafe fn flush_range(start: VirtAddr, end: VirtAddr) {
     let mut addr = start.as_u64() & !(PAGE_SIZE as u64 - 1);
     let end_addr = (end.as_u64() + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
@@ -116,15 +116,15 @@ pub unsafe fn flush_range(start: VirtAddr, end: VirtAddr) {
 // TLB SHOOTDOWN IPI
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pending TLB shootdown — une opération à exécuter sur les CPUs cibles.
+/// Pending TLB shootdown — an operation to execute on target CPUs.
 pub struct TlbShootdownRequest {
     pub flush_type: TlbFlushType,
-    pub base_cpu: usize,      // CPU logique correspondant au bit 0 du masque
-    pub window_mask: u64,     // Fenetre de 64 CPUs cibles
-    pub completed: AtomicU64, // Bitmask des CPUs ayant termine
+    pub base_cpu: usize,      // Logical CPU corresponding to mask bit 0
+    pub window_mask: u64,     // Window of 64 target CPUs
+    pub completed: AtomicU64, // Bitmask of CPUs that finished
 }
 
-/// File d'attente de TLB shootdowns globale.
+/// Global TLB shootdown queue.
 pub struct TlbShootdownQueue {
     inner: Mutex<TlbShootdownInner>,
     pending: AtomicUsize,
@@ -185,12 +185,12 @@ impl TlbShootdownQueue {
         }
     }
 
-    /// Soumet une demande de TLB shootdown.
-    /// Envoie un IPI aux CPUs cibles (via le vecteur IPI_TLB_SHOOTDOWN).
+    /// Submits a TLB shootdown request.
+    /// Sends an IPI to target CPUs (via IPI_TLB_SHOOTDOWN vector).
     ///
     /// # Safety
-    /// `window_mask` doit être un masque valide des CPUs actifs dans la
-    /// fenetre `[base_cpu, base_cpu + 64)`.
+    /// `window_mask` must be a valid mask of active CPUs in
+    /// window `[base_cpu, base_cpu + 64)`.
     pub unsafe fn request(&self, flush_type: TlbFlushType, base_cpu: usize, window_mask: u64) {
         {
             let mut inner = self.inner.lock();
@@ -218,17 +218,17 @@ impl TlbShootdownQueue {
             inner.tail = 1;
             self.pending.store(1, Ordering::Release);
         }
-        // Envoyer l'IPI (le vecteur sera configuré par le sous-système APIC).
-        // Pour ne pas créer de dépendance circulaire Couche 0, l'IPI est envoyé
-        // via un pointeur de fonction enregistré au boot.
+        // Send IPI (vector will be configured by APIC subsystem).
+        // To avoid creating a circular Layer 0 dependency, the IPI is sent
+        // via a function pointer registered at boot.
         Self::send_tlb_ipi(base_cpu, window_mask);
         TLB_STATS.ipi_sent.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Handler exécuté sur chaque CPU cible en réception de l'IPI TLB.
+    /// Handler executed on each target CPU upon receiving TLB IPI.
     ///
     /// # Safety
-    /// Doit être appelé depuis le handler d'interruption APIC.
+    /// Must be called from APIC interrupt handler.
     pub unsafe fn handle_remote(&self, cpu_id: u8) {
         if self.pending.load(Ordering::Acquire) == 0 {
             return;
@@ -253,7 +253,7 @@ impl TlbShootdownQueue {
                 TlbFlushType::Global => flush_all_including_global(),
             }
         }
-        // V-04 — Signaler que ce CPU a complété son flush (pour shootdown_sync).
+        // V-04 — Signal that this CPU completed its flush (for shootdown_sync).
         let seq = TLB_SHOOTDOWN_SEQ.load(Ordering::Acquire);
         if (cpu_id as usize) < MAX_CPUS {
             TLB_SHOOTDOWN_ACK[cpu_id as usize].store(seq, Ordering::Release);
@@ -272,43 +272,43 @@ impl TlbShootdownQueue {
 static TLB_IPI_SENDER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// V-04 — COMPLETION TRACKING POUR SHOOTDOWN SYNCHRONE
+// V-04 — COMPLETION TRACKING FOR SYNCHRONOUS SHOOTDOWN
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numéro de séquence global de shootdown TLB (monotone croissant).
+/// Global TLB shootdown sequence number (monotonically increasing).
 pub static TLB_SHOOTDOWN_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// ACK par CPU — chaque CPU écrit la dernière séquence traitée.
+/// ACK per CPU — each CPU writes the last processed sequence.
 pub static TLB_SHOOTDOWN_ACK: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// Enregistre la fonction d'envoi d'IPI TLB (fournie par le sous-système APIC).
+/// Registers the TLB IPI sender function (provided by APIC subsystem).
 ///
 /// # Safety
-/// `func` doit être une fonction valide prenant une fenetre de CPUs
-/// `(base_cpu, cpu_mask)` en paramètre.
+/// `func` must be a valid function taking a CPU window
+/// `(base_cpu, cpu_mask)` as parameter.
 pub unsafe fn register_tlb_ipi_sender(func: unsafe fn(usize, u64)) {
     TLB_IPI_SENDER.store(func as usize, Ordering::SeqCst);
 }
 
-/// File de TLB shootdown globale.
+/// Global TLB shootdown queue.
 pub static TLB_QUEUE: TlbShootdownQueue = TlbShootdownQueue::new();
 
-/// Performe un TLB shootdown asynchrone sur les CPUs donnés (fire-and-forget).
+/// Performs asynchronous TLB shootdown on given CPUs (fire-and-forget).
 ///
 /// # Safety
-/// `cpu_mask` est un masque valide, interruptions non désactivées.
+/// `cpu_mask` is a valid mask, interrupts not disabled.
 pub unsafe fn shootdown(flush_type: TlbFlushType, cpu_mask: u64) {
     TLB_QUEUE.request(flush_type, 0, cpu_mask);
 }
 
-/// Performe un TLB shootdown SYNCHRONE sur tous les CPUs actifs.
+/// Performs a SYNCHRONOUS TLB shootdown across all active CPUs.
 ///
-/// Avance le numéro de séquence, envoie les IPIs, puis attend que chaque CPU
-/// cible ait mis à jour son ACK (V-04 : TLB shootdown complété avant free_pages).
+/// Advances the sequence number, sends IPIs, then waits until each target
+/// CPU has updated its ACK (V-04: TLB shootdown completed before free_pages).
 ///
 /// # Safety
-/// Ne pas appeler depuis un contexte IRQ. `cpu_count` doit refléter le
-/// nombre réel de CPUs actifs (max [`MAX_CPUS`]).
+/// Do not call from an IRQ context. `cpu_count` must reflect the
+/// actual number of active CPUs (max [`MAX_CPUS`]).
 pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     if cpu_count == 0 {
         return;
@@ -325,10 +325,10 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
     let n = (cpu_count as usize).min(MAX_CPUS);
     let current_cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
 
-    // Avancer la séquence — les CPUs devront ACK avec >= target_seq.
+    // Advance sequence — CPUs must ACK with >= target_seq.
     let target_seq = TLB_SHOOTDOWN_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // TLB-01: l'émetteur purge d'abord son propre TLB.
+    // TLB-01: sender purges its own TLB first.
     match flush_type {
         TlbFlushType::Single(addr) => flush_single(addr),
         TlbFlushType::Range { start, end } => flush_range(start, end),
@@ -347,12 +347,12 @@ pub unsafe fn shootdown_sync(flush_type: TlbFlushType, cpu_count: u32) {
             remote_mask &= !(1u64 << (current_cpu - base_cpu));
         }
 
-        // Envoyer les IPIs uniquement aux CPUs distants de cette fenetre.
+        // Send IPIs only to remote CPUs in this window.
         if remote_mask != 0 {
             TLB_QUEUE.request(flush_type, base_cpu, remote_mask);
         }
 
-        // Attendre la fenetre courante avant de reutiliser le slot coalesce.
+        // Wait for current window before reusing coalesce slot.
         wait_for_acks(base_cpu, n, target_seq);
         base_cpu += TLB_MASK_BITS;
     }

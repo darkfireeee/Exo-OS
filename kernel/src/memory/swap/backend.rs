@@ -1,18 +1,18 @@
 // kernel/src/memory/swap/backend.rs
 //
-// Backend de swap — gère les dispositifs de swap (partition ou fichier).
-// Couche 0 — aucune dépendance vers fs/process/scheduler.
-// L'intégration avec le FS se fait via le trait `SwapDevice`.
+// Swap backend — manages swap devices (partition or file).
+// Layer 0 — no dependencies towards fs/process/scheduler.
+// Integration with the FS is done via the `SwapDevice` trait.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::memory::core::types::PhysAddr;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT D'ABSTRACTION DU DISPOSITIF SWAP
+// SWAP DEVICE ABSTRACTION TRAIT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'un slot swap (index d'une page dans le swap).
+/// Swap slot identifier (index of a page in the swap).
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 #[repr(transparent)]
 pub struct SwapSlot(pub u64);
@@ -29,36 +29,36 @@ impl SwapSlot {
     }
 }
 
-/// Trait d'abstraction d'un dispositif swap.
-/// Implémenté par le sous-système FS/block layer, mais défini ici (Couche 0).
+/// Swap device abstraction trait.
+/// Implemented by the FS/block layer subsystem, but defined here (Layer 0).
 pub trait SwapDevice: Send + Sync {
-    /// Lit une page swap depuis le dispositif vers la mémoire physique `dst`.
+    /// Reads a swap page from the device into physical memory `dst`.
     ///
     /// # Safety
-    /// `dst` doit être un frame physique valide.
+    /// `dst` must be a valid physical frame.
     unsafe fn read_page(&self, slot: SwapSlot, dst: PhysAddr) -> Result<(), SwapError>;
 
-    /// Écrit une page swap depuis la mémoire physique `src` vers le dispositif.
+    /// Writes a swap page from physical memory `src` to the device.
     ///
     /// # Safety
-    /// `src` doit être un frame physique valide.
+    /// `src` must be a valid physical frame.
     unsafe fn write_page(&self, slot: SwapSlot, src: PhysAddr) -> Result<(), SwapError>;
 
-    /// Alloue un slot libre dans le dispositif.
+    /// Allocates a free slot in the device.
     fn alloc_slot(&self) -> Option<SwapSlot>;
 
-    /// Libère un slot (la page a été rechargée définitivement en RAM).
+    /// Frees a slot (the page has been permanently reloaded into RAM).
     fn free_slot(&self, slot: SwapSlot);
 
-    /// Retourne la capacité totale en pages.
+    /// Returns total capacity in pages.
     fn capacity_pages(&self) -> u64;
 
-    /// Retourne le nombre de pages libres.
+    /// Returns the number of free pages.
     fn free_pages(&self) -> u64;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ERREURS SWAP
+// SWAP ERRORS
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -74,24 +74,24 @@ pub enum SwapError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRE DES DISPOSITIFS SWAP
+// SWAP DEVICE REGISTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_SWAP_DEVICES: usize = 8;
 
-/// Table des dispositifs swap enregistrés.
+/// Table of registered swap devices.
 pub struct SwapBackendRegistry {
     devices: [Option<&'static dyn SwapDevice>; MAX_SWAP_DEVICES],
     count: AtomicU32,
     enabled: AtomicBool,
-    // Statistiques globales.
+    // Global statistics.
     pub stats_reads: AtomicU64,
     pub stats_writes: AtomicU64,
     pub stats_errors: AtomicU64,
     pub stats_slots_freed: AtomicU64,
 }
 
-// SAFETY: devices est protected by AtomicU32 (write-once per slot during init).
+// SAFETY: devices is protected by AtomicU32 (write-once per slot during init).
 unsafe impl Sync for SwapBackendRegistry {}
 unsafe impl Send for SwapBackendRegistry {}
 
@@ -108,16 +108,16 @@ impl SwapBackendRegistry {
         }
     }
 
-    /// Enregistre un dispositif swap.
+    /// Registers a swap device.
     ///
     /// # Safety
-    /// `device` doit avoir une durée de vie statique.
+    /// `device` must have a static lifetime.
     pub unsafe fn register(&self, device: &'static dyn SwapDevice) -> Result<(), SwapError> {
         let idx = self.count.load(Ordering::Relaxed) as usize;
         if idx >= MAX_SWAP_DEVICES {
             return Err(SwapError::DeviceFull);
         }
-        // SAFETY: addr_of! évite &T→*mut T ; write-once par slot garanti par count atomique.
+        // SAFETY: addr_of! avoids &T->*mut T; write-once per slot guaranteed by atomic count.
         let ptr = core::ptr::addr_of!(self.devices[idx]) as *mut Option<&'static dyn SwapDevice>;
         core::ptr::write(ptr, Some(device));
         self.count.fetch_add(1, Ordering::Release);
@@ -129,7 +129,7 @@ impl SwapBackendRegistry {
         self.enabled.load(Ordering::Acquire)
     }
 
-    /// Alloue un slot sur le premier dispositif ayant de l'espace.
+    /// Allocates a slot on the first device with space available.
     pub fn alloc_slot(&self) -> Result<(usize, SwapSlot), SwapError> {
         let count = self.count.load(Ordering::Acquire) as usize;
         for i in 0..count {
@@ -142,7 +142,7 @@ impl SwapBackendRegistry {
         Err(SwapError::NoSlot)
     }
 
-    /// Libère un slot sur le dispositif `dev_idx`.
+    /// Frees a slot on device `dev_idx`.
     pub fn free_slot(&self, dev_idx: usize, slot: SwapSlot) {
         if dev_idx < MAX_SWAP_DEVICES {
             if let Some(dev) = self.devices[dev_idx] {
@@ -152,10 +152,10 @@ impl SwapBackendRegistry {
         }
     }
 
-    /// Lit une page depuis le swap.
+    /// Reads a page from swap.
     ///
     /// # Safety
-    /// `dst` doit être un frame physique valide.
+    /// `dst` must be a valid physical frame.
     pub unsafe fn read_page(
         &self,
         dev_idx: usize,
@@ -178,10 +178,10 @@ impl SwapBackendRegistry {
         res
     }
 
-    /// Écrit une page vers le swap.
+    /// Writes a page to swap.
     ///
     /// # Safety
-    /// `src` doit être un frame physique valide.
+    /// `src` must be a valid physical frame.
     pub unsafe fn write_page(
         &self,
         dev_idx: usize,
@@ -204,7 +204,7 @@ impl SwapBackendRegistry {
         res
     }
 
-    /// Capacité totale en pages (somme de tous les dispositifs).
+    /// Total capacity in pages (sum of all devices).
     pub fn total_capacity(&self) -> u64 {
         let count = self.count.load(Ordering::Acquire) as usize;
         (0..count)
@@ -213,7 +213,7 @@ impl SwapBackendRegistry {
             .sum()
     }
 
-    /// Pages libres totales.
+    /// Total free pages.
     pub fn total_free(&self) -> u64 {
         let count = self.count.load(Ordering::Acquire) as usize;
         (0..count)
@@ -226,11 +226,11 @@ impl SwapBackendRegistry {
 pub static SWAP_BACKEND: SwapBackendRegistry = SwapBackendRegistry::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENTRÉE SWAP (dans la table des pages)
+// SWAP ENTRY (in the page table)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Encodage d'une entrée swap dans le PTE (non présent avec info swap).
-/// Format : bits [63:12] = slot, bits [11:9] = dev_idx, bit [0] = 0 (non présent).
+/// Encoding of a swap entry in the PTE (not present with swap info).
+/// Format: bits [63:12] = slot, bits [11:9] = dev_idx, bit [0] = 0 (not present).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct SwapPte(pub u64);
@@ -239,9 +239,9 @@ impl SwapPte {
     pub const SWAP_FLAG: u64 = 0b10; // bit 1 = swap marker (bit 0 = 0 = not present)
 
     pub fn encode(dev_idx: usize, slot: SwapSlot) -> Self {
-        // FIX-SWAP-SWAP-PTE-01 : dev_idx doit être en bits [11:9] comme documenté.
-        // L'ancien décalage (<< 1) écrasait SWAP_FLAG (bit 1) et causait
-        // dev_idx(encode(0, s)) == 1 (round-trip faux).
+        // FIX-SWAP-SWAP-PTE-01: dev_idx must be in bits [11:9] as documented.
+        // The old shift (<< 1) overwrote SWAP_FLAG (bit 1) and caused
+        // dev_idx(encode(0, s)) == 1 (false round-trip).
         let s = (slot.as_u64() << 12) | ((dev_idx as u64 & 0x7) << 9) | Self::SWAP_FLAG;
         SwapPte(s)
     }

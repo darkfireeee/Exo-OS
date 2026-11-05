@@ -1,24 +1,24 @@
 // kernel/src/memory/swap/cluster.rs
 //
-// Regroupement d'I/O swap en clusters séquentiels.
+// Swap I/O grouping into sequential clusters.
 //
-// Motivation : soumettre 8 pages au swap en une seule opération séquentielle
-// de 32 KiB est bien plus efficace que 8 I/O de 4 KiB individuelles.
+// Motivation: submitting 8 pages to swap in a single sequential 32 KiB operation
+// is far more efficient than 8 individual 4 KiB I/Os.
 //
-// Architecture :
-//   • `SwapCluster` — groupe de CLUSTER_SIZE slots consécutifs sur un device.
-//   • `ClusterQueue` — file d'attente de clusters prêts à être écrits.
-//   • `ClusterAccumulator` — accumule les slots en entrée jusqu'à former
-//     un cluster complet, puis le pousse dans la `ClusterQueue`.
-//   • `ClusterManager` — point d'entrée global.
-//   • `CLUSTER_MANAGER` — instance statique.
+// Architecture:
+//   • `SwapCluster` — group of CLUSTER_SIZE consecutive slots on a device.
+//   • `ClusterQueue` — queue of clusters ready to be written.
+//   • `ClusterAccumulator` — accumulates incoming slots until forming
+//     a full cluster, then pushes it into `ClusterQueue`.
+//   • `ClusterManager` — global entry point.
+//   • `CLUSTER_MANAGER` — static instance.
 //
-// Flux typique :
-//   1. `CLUSTER_MANAGER.add_page(dev_idx, slot, pfn)` — appelé par reclaim.
-//   2. Quand CLUSTER_SIZE pages sont accumulées, un cluster est formé.
-//   3. `CLUSTER_MANAGER.flush()` — force l'écriture même si cluster partiel.
-//   4. `CLUSTER_MANAGER.next_cluster()` — retourne le prochain cluster à écrire
-//      (appelé par le thread swap pour effectuer les I/O réelles).
+// Typical flow:
+//   1. `CLUSTER_MANAGER.add_page(dev_idx, slot, pfn)` — called by reclaim.
+//   2. When CLUSTER_SIZE pages are accumulated, a cluster is formed.
+//   3. `CLUSTER_MANAGER.flush()` — forces write even if cluster is partial.
+//   4. `CLUSTER_MANAGER.next_cluster()` — returns the next cluster to write
+//      (called by swap thread to perform actual I/Os).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -26,23 +26,23 @@ use spin::Mutex;
 use crate::memory::swap::backend::SwapSlot;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de pages par cluster (8 × 4 KiB = 32 KiB par I/O).
+/// Number of pages per cluster (8 x 4 KiB = 32 KiB per I/O).
 pub const CLUSTER_SIZE: usize = 8;
 
-/// Nombre maximum de clusters dans la queue prête à être écrite.
+/// Maximum number of clusters in the queue ready to be written.
 pub const MAX_CLUSTER_QUEUE: usize = 256;
 
-/// Nombre maximum d'accumulateurs per-device (1 accumulateur = 1 cluster en cours).
-pub const MAX_SWAP_DEVICES: usize = 8; // doit correspondre à swap/backend.rs
+/// Maximum number of per-device accumulators (1 accumulator = 1 cluster in progress).
+pub const MAX_SWAP_DEVICES: usize = 8; // must match swap/backend.rs
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SWAP CLUSTER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une entrée dans un cluster — un slot de swap et son PFN source.
+/// An entry in a cluster — a swap slot and its source PFN.
 #[derive(Copy, Clone, Debug)]
 pub struct ClusterEntry {
     pub slot: SwapSlot,
@@ -56,14 +56,14 @@ impl ClusterEntry {
     };
 }
 
-/// Un cluster de `CLUSTER_SIZE` pages à écrire séquentiellement.
+/// A cluster of `CLUSTER_SIZE` pages to write sequentially.
 #[derive(Copy, Clone)]
 pub struct SwapCluster {
-    /// Indice du device de swap cible.
+    /// Target swap device index.
     pub dev_idx: u8,
-    /// Les entrées du cluster.
+    /// Cluster entries.
     pub entries: [ClusterEntry; CLUSTER_SIZE],
-    /// Nombre d'entrées valides dans ce cluster (1..=CLUSTER_SIZE).
+    /// Number of valid entries in this cluster (1..=CLUSTER_SIZE).
     pub count: u8,
 }
 
@@ -76,13 +76,13 @@ impl SwapCluster {
         }
     }
 
-    /// Retourne les entrées valides.
+    /// Returns valid entries.
     #[inline]
     pub fn valid_entries(&self) -> &[ClusterEntry] {
         &self.entries[..self.count as usize]
     }
 
-    /// Taille totale en octets de ce cluster.
+    /// Total size in bytes of this cluster.
     #[inline]
     pub fn byte_size(&self) -> usize {
         self.count as usize * crate::memory::core::constants::PAGE_SIZE
@@ -90,13 +90,13 @@ impl SwapCluster {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLUSTER QUEUE (RING-BUFFER STATIQUE)
+// CLUSTER QUEUE (STATIC RING-BUFFER)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ClusterQueue {
     buf: [SwapCluster; MAX_CLUSTER_QUEUE],
-    head: usize, // producteur
-    tail: usize, // consommateur
+    head: usize, // producer
+    tail: usize, // consumer
     count: usize,
 }
 
@@ -137,12 +137,12 @@ impl ClusterQueue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ACCUMULATEUR PAR DEVICE
+// PER-DEVICE ACCUMULATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct Accumulator {
     cluster: SwapCluster,
-    /// True si cet accumulateur est actif pour un device.
+    /// True if this accumulator is active for a device.
     active: bool,
 }
 
@@ -154,8 +154,8 @@ impl Accumulator {
         }
     }
 
-    /// Ajoute une entrée à l'accumulateur en cours.
-    /// Retourne `Some(cluster)` si le cluster est maintenant complet.
+    /// Adds an entry to the current accumulator.
+    /// Returns `Some(cluster)` if the cluster is now complete.
     fn add_entry(&mut self, dev_idx: u8, entry: ClusterEntry) -> Option<SwapCluster> {
         if !self.active {
             self.cluster = SwapCluster::new();
@@ -177,8 +177,8 @@ impl Accumulator {
         }
     }
 
-    /// Vide l'accumulateur partiellement rempli (flush forcé).
-    /// Retourne `Some(cluster)` s'il y avait des entrées en attente.
+    /// Flushes partially filled accumulator (forced flush).
+    /// Returns `Some(cluster)` if there were pending entries.
     fn flush(&mut self) -> Option<SwapCluster> {
         if !self.active || self.cluster.count == 0 {
             return None;
@@ -194,17 +194,17 @@ impl Accumulator {
 // CLUSTER MANAGER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du gestionnaire de clusters.
+/// Cluster manager statistics.
 pub struct ClusterStats {
-    /// Total de clusters complets formés.
+    /// Total full clusters formed.
     pub clusters_formed: AtomicU64,
-    /// Total de clusters partiels flushés.
+    /// Total partial clusters flushed.
     pub partial_flushes: AtomicU64,
-    /// Total d'entrées ajoutées.
+    /// Total entries added.
     pub pages_added: AtomicU64,
-    /// Clusters perdus (queue pleine).
+    /// Lost clusters (queue full).
     pub queue_overflows: AtomicU64,
-    /// Clusters prélevés par le thread d'I/O.
+    /// Clusters consumed by the I/O thread.
     pub clusters_consumed: AtomicU64,
 }
 
@@ -248,10 +248,10 @@ impl ClusterManager {
         }
     }
 
-    /// Ajoute une page au cluster en cours de formation pour `dev_idx`.
-    /// Si un cluster se complète, il est poussé dans la queue de sortie.
+    /// Adds a page to the cluster being formed for `dev_idx`.
+    /// If a cluster becomes full, it is pushed to the output queue.
     ///
-    /// Retourne `true` si l'entrée a été acceptée (echec si `dev_idx` hors limites).
+    /// Returns `true` if the entry was accepted (failure if `dev_idx` is out of bounds).
     pub fn add_page(&self, dev_idx: usize, slot: SwapSlot, src_pfn: u64) -> bool {
         if dev_idx >= MAX_SWAP_DEVICES {
             return false;
@@ -263,7 +263,7 @@ impl ClusterManager {
         let mut inner = self.inner.lock();
 
         if let Some(cluster) = inner.accumulators[dev_idx].add_entry(dev_idx as u8, entry) {
-            // Cluster complet — pousser dans la queue.
+            // Full cluster — push to queue.
             if !inner.queue.push(cluster) {
                 self.stats.queue_overflows.fetch_add(1, Ordering::Relaxed);
             } else {
@@ -273,8 +273,8 @@ impl ClusterManager {
         true
     }
 
-    /// Flush forcé de tous les accumulateurs partiels.
-    /// Typiquement appelé lors d'un arrêt ou d'un reclaim urgent.
+    /// Forced flush of all partial accumulators.
+    /// Typically called upon shutdown or urgent reclaim.
     pub fn flush_all(&self) {
         let mut inner = self.inner.lock();
         let r = &mut *inner;
@@ -289,7 +289,7 @@ impl ClusterManager {
         }
     }
 
-    /// Flush forcé de l'accumulateur pour un device donné.
+    /// Forced flush of the accumulator for a given device.
     pub fn flush_device(&self, dev_idx: usize) -> bool {
         if dev_idx >= MAX_SWAP_DEVICES {
             return false;
@@ -306,8 +306,8 @@ impl ClusterManager {
         false
     }
 
-    /// Retourne le prochain cluster prêt à être écrit sur le device de swap.
-    /// Appelé par le thread d'I/O swap.
+    /// Returns the next cluster ready to be written to the swap device.
+    /// Called by the swap I/O thread.
     pub fn next_cluster(&self) -> Option<SwapCluster> {
         let mut inner = self.inner.lock();
         let c = inner.queue.pop();
@@ -317,13 +317,13 @@ impl ClusterManager {
         c
     }
 
-    /// Nombre de clusters en attente d'écriture.
+    /// Number of clusters awaiting write.
     #[inline]
     pub fn pending_count(&self) -> usize {
         self.inner.lock().queue.len()
     }
 
-    /// Nombre de pages en attente dans les accumulateurs (pas encore dans la queue).
+    /// Number of pages pending in accumulators (not yet in queue).
     pub fn buffered_pages(&self) -> usize {
         let inner = self.inner.lock();
         inner
@@ -340,5 +340,5 @@ impl ClusterManager {
     }
 }
 
-/// Instance globale du gestionnaire de clusters swap.
+/// Global instance of swap cluster manager.
 pub static CLUSTER_MANAGER: ClusterManager = ClusterManager::new();

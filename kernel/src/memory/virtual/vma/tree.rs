@@ -1,9 +1,9 @@
 // kernel/src/memory/virtual/vma/tree.rs
 //
-// Arbre AVL des VMAs — structure d'index par adresse virtuelle.
-// Permet de trouver la VMA contenant une adresse en O(log n).
-// Taille maximale : MAX_VMAS_PER_PROCESS VMAs par processus.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// AVL tree of VMAs — indexing structure by virtual address.
+// Allows finding the VMA containing an address in O(log n).
+// Maximum size: MAX_VMAS_PER_PROCESS VMAs per process.
+// Layer 0 — no external dependency except `spin`.
 
 use super::cow::mark_vma_cow;
 use super::descriptor::{VmaDescriptor, VmaFlags};
@@ -12,22 +12,22 @@ use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ARBRE AVL DE VMAS
+// VMA AVL TREE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de VMAs par processus (limite kernel).
+/// Maximum number of VMAs per process (kernel limit).
 pub const MAX_VMAS_PER_PROCESS: usize = 65536;
 
-/// Arbre AVL des VMAs d'un espace d'adressage.
+/// AVL tree of VMAs for an address space.
 ///
-/// Les noeuds sont des pointeurs vers des VmaDescriptor alloués par le heap kernel.
-/// Une VMA insérée appartient à l'arbre jusqu'à `remove()` ou `Drop`.
+/// Nodes are pointers to VmaDescriptors allocated on the kernel heap.
+/// An inserted VMA belongs to the tree until `remove()` or `Drop`.
 pub struct VmaTree {
     root: *mut VmaDescriptor,
     count: usize,
 }
 
-// SAFETY: VmaTree est protégé par le verrou de l'address space parent.
+// SAFETY: VmaTree is protected by the parent address space lock.
 unsafe impl Send for VmaTree {}
 unsafe impl Sync for VmaTree {}
 
@@ -45,7 +45,7 @@ impl VmaTree {
         }
     }
 
-    /// Nombre de VMAs dans l'arbre.
+    /// Number of VMAs in the tree.
     pub fn len(&self) -> usize {
         self.count
     }
@@ -53,27 +53,27 @@ impl VmaTree {
         self.count == 0
     }
 
-    /// Cherche la VMA contenant `addr`.
+    /// Finds the VMA containing `addr`.
     ///
-    /// Retourne un pointeur vers le VmaDescriptor ou `None`.
+    /// Returns a pointer to the VmaDescriptor or `None`.
     pub fn find(&self, addr: VirtAddr) -> Option<&VmaDescriptor> {
-        // SAFETY: Tous les nœuds de l'arbre sont des VmaDescriptor valides.
+        // SAFETY: All nodes in the tree are valid VmaDescriptors.
         unsafe { Self::find_node(self.root, addr) }
     }
 
-    /// Cherche la VMA contenant `addr` (mutable).
+    /// Finds the VMA containing `addr` (mutable).
     pub fn find_mut(&mut self, addr: VirtAddr) -> Option<&mut VmaDescriptor> {
-        // SAFETY: Accès exclusif (verrou parent).
+        // SAFETY: Exclusive access (parent lock).
         unsafe { Self::find_node_mut(self.root, addr) }
     }
 
-    /// Insère un nouveau descripteur VMA dans l'arbre.
+    /// Inserts a new VMA descriptor into the tree.
     ///
-    /// Retourne `false` si une VMA existante chevauche la plage.
+    /// Returns `false` if an existing VMA overlaps the range.
     ///
     /// # Safety
-    /// `vma` doit pointer sur un VmaDescriptor valide et non encore
-    /// inséré dans un autre arbre.
+    /// `vma` must point to a valid VmaDescriptor not already
+    /// inserted into another tree.
     pub unsafe fn insert(&mut self, vma: *mut VmaDescriptor) -> bool {
         if self.count >= MAX_VMAS_PER_PROCESS {
             return false;
@@ -91,11 +91,11 @@ impl VmaTree {
         }
     }
 
-    /// Retire un descripteur VMA de l'arbre (par adresse de départ).
+    /// Removes a VMA descriptor from the tree (by start address).
     ///
-    /// Retourne le pointeur vers le descripteur retiré, ou `None`.
+    /// Returns a pointer to the removed descriptor, or `None`.
     pub fn remove(&mut self, start: VirtAddr) -> Option<*mut VmaDescriptor> {
-        // SAFETY: Accès exclusif.
+        // SAFETY: Exclusive access.
         let removed = unsafe { Self::remove_node(&mut self.root, start) };
         if removed.is_some() {
             self.count = self.count.saturating_sub(1);
@@ -103,32 +103,32 @@ impl VmaTree {
         removed
     }
 
-    /// Trouve la VMA qui précède immédiatement `addr` (le plus grand `end` <= `addr`).
+    /// Finds the VMA immediately preceding `addr` (largest `end` <= `addr`).
     pub fn find_prev(&self, addr: VirtAddr) -> Option<&VmaDescriptor> {
-        // SAFETY: root pointe dans le pool statique de VmaDescriptor; pas d'alias &mut actif.
+        // SAFETY: root points into the static pool of VmaDescriptors; no active &mut alias.
         unsafe { Self::find_prev_node(self.root, addr) }
     }
 
-    /// Itère sur toutes les VMAs dans l'ordre croissant.
+    /// Iterates over all VMAs in ascending order.
     pub fn iter(&self) -> VmaTreeIter<'_> {
         let stack = [core::ptr::null_mut::<VmaDescriptor>(); 64];
         let depth = 0usize;
         VmaTreeIter::new(self.root, stack, depth)
     }
 
-    /// Applique `f` à chaque VMA sous accès exclusif.
+    /// Applies `f` to each VMA under exclusive access.
     pub fn for_each_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut VmaDescriptor),
     {
-        // SAFETY: l'appelant détient `&mut self`, donc aucun autre accès aux noeuds.
+        // SAFETY: Caller holds `&mut self`, so no other access to nodes.
         unsafe { Self::for_each_mut_node(self.root, &mut f) };
     }
 
-    /// Clone les métadonnées VMA pour fork().
+    /// Clones VMA metadata for fork().
     ///
-    /// Les VMAs DONTCOPY ne sont pas héritées. Les VMAs privées writables sont
-    /// marquées COW dans le fils pour rester cohérentes avec les PTEs partagées.
+    /// DONTCOPY VMAs are not inherited. Private writable VMAs are
+    /// marked COW in the child to remain consistent with shared PTEs.
     pub fn clone_for_fork(&self) -> Option<VmaTree> {
         let mut new_tree = VmaTree::new();
         for vma in self.iter() {
@@ -147,7 +147,7 @@ impl VmaTree {
                 }
             };
 
-            // SAFETY: raw vient d'une allocation unique et n'est dans aucun arbre.
+            // SAFETY: raw comes from a unique allocation and is not in any tree.
             if !unsafe { new_tree.insert(raw) } {
                 free_vma_descriptor(raw);
                 new_tree.clear_owned();
@@ -158,13 +158,13 @@ impl VmaTree {
     }
 
     fn clear_owned(&mut self) {
-        // SAFETY: `self` possède tous les noeuds encore attachés à `root`.
+        // SAFETY: `self` owns all nodes still attached to `root`.
         unsafe { drop_subtree(self.root) };
         self.root = core::ptr::null_mut();
         self.count = 0;
     }
 
-    // ─── helpers de l'arbre AVL ──────────────────────────────────────────────
+    // ─── AVL tree helpers ────────────────────────────────────────────────────
 
     unsafe fn find_node<'a>(
         mut node: *mut VmaDescriptor,
@@ -211,7 +211,7 @@ impl VmaTree {
         }
         let n = &mut *node;
         let vma_ref = &*vma;
-        // Chevauchement : rejeter
+        // Overlap: reject
         if vma_ref.start.as_u64() < n.end.as_u64() && vma_ref.end.as_u64() > n.start.as_u64() {
             return false;
         }
@@ -252,14 +252,14 @@ impl VmaTree {
             }
             res
         } else {
-            // Nœud trouvé
+            // Node found
             let removed = *root;
             if n.rb_left.is_null() {
                 *root = n.rb_right;
             } else if n.rb_right.is_null() {
                 *root = n.rb_left;
             } else {
-                // Deux enfants : trouver le successeur inorder (min du sous-arbre droit)
+                // Two children: find inorder successor (min of right subtree)
                 let succ = Self::min_node(n.rb_right);
                 let right_sub = Self::remove_min(n.rb_right);
                 (*succ).rb_left = n.rb_left;
@@ -407,7 +407,7 @@ fn alloc_vma_descriptor(desc: VmaDescriptor) -> Option<*mut VmaDescriptor> {
     if raw.is_null() {
         return None;
     }
-    // SAFETY: `raw` est unique et assez grand pour VmaDescriptor.
+    // SAFETY: `raw` is unique and large enough for VmaDescriptor.
     unsafe {
         raw.write(desc);
     }
@@ -418,7 +418,7 @@ fn free_vma_descriptor(ptr: *mut VmaDescriptor) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: ptr vient de Box::into_raw ou de alloc_vma_descriptor.
+    // SAFETY: ptr comes from Box::into_raw or alloc_vma_descriptor.
     unsafe {
         drop(Box::from_raw(ptr));
     }
@@ -439,7 +439,7 @@ unsafe fn drop_subtree(node: *mut VmaDescriptor) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ITÉRATEUR IN-ORDER
+// IN-ORDER ITERATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct VmaTreeIter<'a> {
@@ -455,12 +455,12 @@ impl<'a> VmaTreeIter<'a> {
             depth: 0,
             _marker: core::marker::PhantomData,
         };
-        // Pousser jusqu'au nœud le plus à gauche
+        // Push down to the leftmost node
         let mut cur = root;
         while !cur.is_null() && iter.depth < 64 {
             iter.stack[iter.depth] = cur;
             iter.depth += 1;
-            // SAFETY: cur est un VmaDescriptor valide.
+            // SAFETY: cur is a valid VmaDescriptor.
             cur = unsafe { (*cur).rb_left };
         }
         iter
@@ -476,9 +476,9 @@ impl<'a> Iterator for VmaTreeIter<'a> {
         }
         self.depth -= 1;
         let node = self.stack[self.depth];
-        // SAFETY: node est un VmaDescriptor valide.
+        // SAFETY: node is a valid VmaDescriptor.
         let result = unsafe { &*node };
-        // Pousser le sous-arbre droit
+        // Push the right subtree
         let mut cur = unsafe { (*node).rb_right };
         while !cur.is_null() && self.depth < 64 {
             self.stack[self.depth] = cur;

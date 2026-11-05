@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/stats/mod.rs
 //
-// Module stats DMA — compteurs de débit, latence, erreurs.
+// DMA stats module — throughput, latency, error counters.
 
 pub mod counters;
 

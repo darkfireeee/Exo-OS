@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/ops/mod.rs
 //
-// Module ops DMA — memcpy, memset, scatter_gather.
+// DMA ops module — memcpy, memset, scatter_gather.
 
 pub mod cyclic;
 pub mod interleaved;

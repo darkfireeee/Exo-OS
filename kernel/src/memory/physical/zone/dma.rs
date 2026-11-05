@@ -1,25 +1,25 @@
 // kernel/src/memory/physical/zone/dma.rs
 //
-// Zone DMA — mémoire physique < 16 MiB.
-// Réservée aux devices legacy 32 bits (ISA DMA, vieux contrôleurs PCI).
-// Couche 0 — aucune dépendance externe.
+// DMA Zone — physical memory < 16 MiB.
+// Reserved for legacy 32-bit devices (ISA DMA, old PCI controllers).
+// Layer 0 — no external dependencies.
 
 use super::ZoneDescriptor;
 use crate::memory::core::{PhysAddr, ZoneType, ZONE_DMA_END};
 
-/// Zone DMA — adresses physiques [0, 16 MiB).
+/// DMA Zone — physical addresses [0, 16 MiB).
 pub struct DmaZone {
     pub desc: ZoneDescriptor,
 }
 
 impl DmaZone {
-    /// Crée la zone DMA pour le nœud NUMA `numa_node`.
-    /// `mem_end` est la fin effective de la RAM DMA détectée par l'E820.
-    /// Elle est plafonnée à ZONE_DMA_END (16 MiB).
+    /// Creates DMA zone for NUMA node `numa_node`.
+    /// `mem_end` is the effective end of DMA RAM detected by E820.
+    /// It is capped at ZONE_DMA_END (16 MiB).
     pub const fn new(numa_node: u8, mem_end_phys: PhysAddr, reserved_frames: usize) -> Self {
-        // La zone DMA commence toujours à 0 (les premiers 16 MiB)
-        // On réserve les 4 premiers KiB (page nulle) pour éviter NULL == valid address
-        let phys_start = PhysAddr::new(4096); // Réserver la page 0
+        // DMA zone always starts at 0 (first 16 MiB)
+        // We reserve the first 4 KiB (null page) to avoid NULL == valid address
+        let phys_start = PhysAddr::new(4096); // Reserve page 0
         let phys_end = PhysAddr::new(if mem_end_phys.as_u64() < ZONE_DMA_END as u64 {
             mem_end_phys.as_u64()
         } else {
@@ -43,12 +43,12 @@ impl DmaZone {
         }
     }
 
-    /// Vérifie si une adresse physique peut appartenir à la zone DMA.
+    /// Checks whether a physical address can belong to the DMA zone.
     #[inline(always)]
     pub const fn is_dma_addr(addr: PhysAddr) -> bool {
         addr.as_usize() < ZONE_DMA_END
     }
 
-    /// Taille maximale de la zone en octets.
+    /// Maximum zone size in bytes.
     pub const MAX_SIZE: usize = ZONE_DMA_END;
 }

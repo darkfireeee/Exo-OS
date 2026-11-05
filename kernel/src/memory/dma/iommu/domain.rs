@@ -1,10 +1,10 @@
 // kernel/src/memory/dma/iommu/domain.rs
 //
-// Domaines IOMMU — isolation entre périphériques et espaces d'adressage.
-// Un domaine regroupe un ensemble de périphériques partageant le même
-// espace IOVA et les mêmes tables de pages IOMMU.
+// IOMMU domains — isolation between devices and address spaces.
+// A domain groups a set of devices sharing the same
+// IOVA space and the same IOMMU page tables.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -13,37 +13,37 @@ use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{DmaError, IommuDomainId, IovaAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_DOMAINS: usize = 256;
 pub const MAX_DEVICES_PER_DOMAIN: usize = 64;
-/// ID du domaine identité (passthrough — pas de translation).
+/// Identity domain ID (passthrough — no translation).
 pub const IDENTITY_DOMAIN_ID: IommuDomainId = IommuDomainId(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPES DE DOMAINE
+// DOMAIN TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type de domaine IOMMU.
+/// IOMMU domain type.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(u8)]
 pub enum DomainType {
-    /// Identité : IOVA == PhysAddr (passthrough total).
+    /// Identity: IOVA == PhysAddr (total passthrough).
     Identity = 0,
-    /// Traduction complète via tables de pages IOMMU.
+    /// Full translation via IOMMU page tables.
     Translated = 1,
-    /// Traduction partielle (hôte + passthrough sélectif).
+    /// Partial translation (host + selective passthrough).
     Hybrid = 2,
-    /// Domaine de blocage : tous les accès DMA sont refusés.
+    /// Blocked domain: all DMA accesses are denied.
     Blocked = 3,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IDENTIFIANT DE PÉRIPHÉRIQUE (BDF)
+// DEVICE IDENTIFIER (BDF)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant PCI d'un périphérique (Bus:Device:Function).
+/// PCI identifier of a device (Bus:Device:Function).
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 #[repr(C)]
 pub struct PciBdf {
@@ -69,10 +69,10 @@ impl PciBdf {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOMAINE IOMMU
+// IOMMU DOMAIN
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'un domaine IOMMU.
+/// IOMMU domain statistics.
 pub struct DomainStats {
     pub mappings_created: AtomicU64,
     pub mappings_freed: AtomicU64,
@@ -91,28 +91,28 @@ impl DomainStats {
     }
 }
 
-/// Un domaine IOMMU.
+/// An IOMMU domain.
 #[repr(C, align(64))]
 pub struct IommuDomain {
-    /// Identifiant unique.
+    /// Unique identifier.
     pub id: IommuDomainId,
-    /// Type de domaine.
+    /// Domain type.
     pub domain_type: DomainType,
-    /// Adresse physique de la table de pages IOMMU (PML4 ou équivalent).
+    /// Physical address of the IOMMU page table (PML4 or equivalent).
     pub page_table: AtomicU64,
-    /// Actif ?
+    /// Active?
     pub active: AtomicBool,
-    /// Nombre de périphériques attachés.
+    /// Number of attached devices.
     pub device_count: AtomicU32,
-    /// Périphériques BDF attachés à ce domaine.
+    /// BDF devices attached to this domain.
     devices: Mutex<[Option<PciBdf>; MAX_DEVICES_PER_DOMAIN]>,
-    /// Statistiques.
+    /// Statistics.
     pub stats: DomainStats,
-    /// Compteur d'allocations IOVA dans ce domaine.
+    /// IOVA allocation counter in this domain.
     pub iova_counter: AtomicU64,
-    /// Base IOVA de ce domaine.
+    /// IOVA base of this domain.
     pub iova_base: u64,
-    /// Taille max de l'espace IOVA.
+    /// Max size of IOVA space.
     pub iova_limit: u64,
     _pad: [u8; 4],
 }
@@ -155,7 +155,7 @@ impl IommuDomain {
         }
     }
 
-    /// Attache un périphérique à ce domaine.
+    /// Attaches a device to this domain.
     pub fn attach_device(&self, bdf: PciBdf) -> Result<(), DmaError> {
         let mut devs = self.devices.lock();
         if let Some(slot) = devs.iter_mut().find(|s| s.is_none()) {
@@ -167,7 +167,7 @@ impl IommuDomain {
         }
     }
 
-    /// Détache un périphérique.
+    /// Detaches a device.
     pub fn detach_device(&self, bdf: PciBdf) {
         let mut devs = self.devices.lock();
         for slot in devs.iter_mut() {
@@ -179,7 +179,7 @@ impl IommuDomain {
         }
     }
 
-    /// Alloue une IOVA dans ce domaine (bump + alignement sur PAGE_SIZE).
+    /// Allocates an IOVA in this domain (bump + alignment on PAGE_SIZE).
     pub fn alloc_iova(&self, size: usize) -> Option<IovaAddr> {
         use crate::memory::core::constants::PAGE_SIZE;
         let size_aligned = ((size + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
@@ -188,14 +188,14 @@ impl IommuDomain {
         if new > self.iova_limit {
             return None;
         }
-        // CAS pour atomicité.
+        // CAS for atomicity.
         match self
             .iova_counter
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Relaxed)
         {
             Ok(_) => Some(IovaAddr::new(old)),
             Err(_) => {
-                // Réessai simple — en cas de contention on incrémente directement.
+                // Simple retry — under contention increment directly.
                 let base = self
                     .iova_counter
                     .fetch_add(size_aligned as u64, Ordering::Relaxed);
@@ -207,7 +207,7 @@ impl IommuDomain {
         }
     }
 
-    /// Retourne l'adresse physique de la table de pages IOMMU.
+    /// Returns the physical address of the IOMMU page table.
     pub fn page_table_phys(&self) -> Option<PhysAddr> {
         let p = self.page_table.load(Ordering::Acquire);
         if p == 0 {
@@ -217,10 +217,10 @@ impl IommuDomain {
         }
     }
 
-    /// Définit la table de pages (unsafe — doit être appelé depuis init IOMMU).
+    /// Sets the page table (unsafe — must be called from IOMMU init).
     ///
     /// # Safety
-    /// `phys` doit pointer une table de pages IOMMU valide et alignée sur PAGE_SIZE.
+    /// `phys` must point to a valid IOMMU page table aligned on PAGE_SIZE.
     pub unsafe fn set_page_table(&self, phys: PhysAddr) {
         self.page_table.store(phys.as_u64(), Ordering::Release);
     }
@@ -237,7 +237,7 @@ impl IommuDomain {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE GLOBALE DES DOMAINES
+// GLOBAL DOMAIN TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct IommuDomainTable {
@@ -249,7 +249,7 @@ struct IommuDomainTableInner {
     slots: [Option<IommuDomain>; MAX_DOMAINS],
 }
 
-// SAFETY: IommuDomainTable est protégé par Mutex.
+// SAFETY: IommuDomainTable is protected by Mutex.
 unsafe impl Sync for IommuDomainTable {}
 unsafe impl Send for IommuDomainTable {}
 
@@ -271,14 +271,14 @@ impl IommuDomainTable {
         }
     }
 
-    /// Initialise le domaine identité.
+    /// Initializes the identity domain.
     pub fn init(&self) {
         let mut inner = self.domains.lock();
         inner.slots[0] = Some(IommuDomain::new_identity());
         self.count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Crée un nouveau domaine traduit.
+    /// Creates a new translated domain.
     pub fn create_domain(
         &self,
         domain_type: DomainType,
@@ -290,8 +290,8 @@ impl IommuDomainTable {
             return Err(DmaError::OutOfMemory);
         }
 
-        // Réutiliser l'index de slot comme DomainId garantit un identifiant borné
-        // et recyclable, compatible avec les tables statiques indexées par domain_id.
+        // Reusing the slot index as DomainId guarantees a bounded and recyclable
+        // identifier, compatible with static tables indexed by domain_id.
         let (slot_idx, slot) = inner
             .slots
             .iter_mut()
@@ -306,7 +306,7 @@ impl IommuDomainTable {
         Ok(id)
     }
 
-    /// Détruit un domaine traduit et libère son slot pour réutilisation.
+    /// Destroys a translated domain and frees its slot for reuse.
     pub fn destroy_domain(&self, id: IommuDomainId) -> bool {
         if id == IDENTITY_DOMAIN_ID || id.0 as usize >= MAX_DOMAINS {
             return false;
@@ -325,7 +325,7 @@ impl IommuDomainTable {
         true
     }
 
-    /// Accès en lecture seule à un domaine.
+    /// Read-only access to a domain.
     pub fn with_domain<T, F: FnOnce(&IommuDomain) -> T>(
         &self,
         id: IommuDomainId,
@@ -340,7 +340,7 @@ impl IommuDomainTable {
         None
     }
 
-    /// Accès mutable à un domaine (pour initialisation).
+    /// Mutable access to a domain (for initialization).
     pub fn with_domain_mut<T, F: FnOnce(&mut IommuDomain) -> T>(
         &self,
         id: IommuDomainId,

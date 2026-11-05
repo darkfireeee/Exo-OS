@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/address_space/mod.rs
 //
-// Module address_space — espaces d'adressage kernel et utilisateur.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// address_space module — kernel and user address spaces.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod fork_impl;
 pub mod kernel;

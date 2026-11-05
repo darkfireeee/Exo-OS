@@ -1,19 +1,19 @@
 // kernel/src/memory/cow/breaker.rs
 //
-// Rupture CoW (Copy-on-Write break) — copie physique d'un frame partagé.
+// CoW break (Copy-on-Write break) — physical copy of a shared frame.
 //
-// Quand un processus tente d'écrire sur une page marquée `COW` et
-// partagée (refcount ≥ 2), le page fault handler appelle `break_cow`.
-// Cette fonction :
-//   1. Alloue un nouveau frame physique exclusif.
-//   2. Copie le contenu de l'ancien frame vers le nouveau (physmap).
-//   3. Décrémente le refcount de l'ancien frame via `COW_TRACKER`.
-//   4. Retourne le nouveau frame (le caller doit mettre à jour le PTE).
+// When a process attempts to write to a page marked `COW` and
+// shared (refcount >= 2), the page fault handler calls `break_cow`.
+// This function:
+//   1. Allocates a new exclusive physical frame.
+//   2. Copies the content of the old frame to the new one (physmap).
+//   3. Decrements the refcount of the old frame via `COW_TRACKER`.
+//   4. Returns the new frame (caller must update the PTE).
 //
-// Si le frame est déjà exclusif (refcount == 1), la copie est évitée
-// et le même frame est retourné après vérification.
+// If the frame is already exclusive (refcount == 1), copying is avoided
+// and the same frame is returned after verification.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::Ordering;
 
@@ -24,35 +24,35 @@ use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::physical::allocator::{alloc_page, free_page};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RÉSULTAT D'UNE RUPTURE CoW
+// CoW BREAK RESULT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de `break_cow`.
+/// Result of `break_cow`.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum CowBreakOutcome {
-    /// Nouvelle copie allouée. Le frame retourné remplace l'ancien dans le PTE.
+    /// New copy allocated. The returned frame replaces the old one in the PTE.
     Copied(Frame),
-    /// Le frame était déjà exclusif (refcount == 1) — aucune copie nécessaire.
-    /// Le même frame peut être utilisé en écriture directement.
+    /// Frame was already exclusive (refcount == 1) — no copy needed.
+    /// The same frame can be used for writing directly.
     AlreadyExclusive(Frame),
-    /// Allocation de la nouvelle copie a échoué (OOM).
+    /// Allocation of new copy failed (OOM).
     Oom,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES
+// STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::sync::atomic::AtomicU64;
 
 pub struct CowBreakerStats {
-    /// Ruptures CoW effectuées (copie physique réalisée).
+    /// CoW breaks performed (physical copy completed).
     pub breaks: AtomicU64,
-    /// Frames qui étaient déjà exclusifs (zéro copy).
+    /// Frames that were already exclusive (zero copy).
     pub already_excl: AtomicU64,
-    /// Échecs OOM lors de la rupture.
+    /// OOM failures during break.
     pub oom_failures: AtomicU64,
-    /// Octets copiés au total via les ruptures CoW.
+    /// Total bytes copied via CoW breaks.
     pub bytes_copied: AtomicU64,
 }
 
@@ -76,32 +76,32 @@ impl CowBreakerStats {
 pub static COW_BREAKER_STATS: CowBreakerStats = CowBreakerStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RUPTURE CoW
+// CoW BREAK
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Brise le partage CoW sur `frame` et retourne le frame exclusif résultant.
+/// Breaks CoW sharing on `frame` and returns the resulting exclusive frame.
 ///
-/// ## Algorithme
-/// 1. Consulter `COW_TRACKER` pour le refcount actuel.
-/// 2. Si refcount == 1  → retourner `AlreadyExclusive(frame)`.
-/// 3. Allouer un nouveau frame via `alloc_page(AllocFlags::NONE)`.
-/// 4. Copier PAGE_SIZE octets de `frame` vers le nouveau via physmap.
-/// 5. Décrémenter le refcount de `frame` via `COW_TRACKER.dec(frame)`.
-/// 6. Retourner `Copied(new_frame)`.
+/// ## Algorithm
+/// 1. Query `COW_TRACKER` for current refcount.
+/// 2. If refcount <= 1 -> return `AlreadyExclusive(frame)`.
+/// 3. Allocate a new frame via `alloc_page(AllocFlags::NONE)`.
+/// 4. Copy PAGE_SIZE bytes from `frame` to the new one via physmap.
+/// 5. Decrement the refcount of `frame` via `COW_TRACKER.dec(frame)`.
+/// 6. Return `Copied(new_frame)`.
 ///
-/// ## Post-conditions pour le caller
-/// - L'ancien `frame` a son refcount décrémenté d'une unité.
-/// - Si `COW_TRACKER.dec()` retourne 0, libérer l'ancien frame.
-/// - Mettre à jour le PTE pour pointer vers `new_frame`.
-/// - Effacer le bit `COW` dans les flags du PTE de cette copie.
+/// ## Post-conditions for the caller
+/// - The old `frame` has its refcount decremented by one.
+/// - If `COW_TRACKER.dec()` returns 0, free the old frame.
+/// - Update the PTE to point to `new_frame`.
+/// - Clear the `COW` bit in the PTE flags of this copy.
 ///
 /// # Safety
-/// - Les deux adresses physiques (src et dst) doivent être dans la physmap.
-/// - La physmap (`PHYS_MAP_BASE`) doit être initialisée avant l'appel.
+/// - Both physical addresses (src and dst) must be in the physmap.
+/// - The physmap (`PHYS_MAP_BASE`) must be initialized before calling.
 pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
     let refcount = COW_TRACKER.ref_count(frame);
 
-    // Si le frame est déjà exclusif, pas de copie nécessaire.
+    // If the frame is already exclusive, no copy is necessary.
     if refcount <= 1 {
         COW_BREAKER_STATS
             .already_excl
@@ -109,7 +109,7 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
         return CowBreakOutcome::AlreadyExclusive(frame);
     }
 
-    // Allouer un nouveau frame (non zéro — on va le remplir immédiatement).
+    // Allocate a new frame (non-zero — we will fill it immediately).
     let new_frame = match alloc_page(AllocFlags::NONE) {
         Ok(f) => f,
         Err(_) => {
@@ -120,19 +120,19 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
         }
     };
 
-    // Copier le contenu de l'ancien frame vers le nouveau via la physmap directe.
+    // Copy content of old frame to new frame via direct physmap.
     let phys_base = PHYS_MAP_BASE.as_u64();
     let src = (phys_base + frame.phys_addr().as_u64()) as *const u8;
     let dst = (phys_base + new_frame.phys_addr().as_u64()) as *mut u8;
 
-    // SAFETY: La physmap couvre toute la RAM. PAGE_SIZE est fixe (4096).
-    // Les frames ne se chevauchent jamais (chacun est à une adresse distincte).
+    // SAFETY: The physmap covers all RAM. PAGE_SIZE is fixed (4096).
+    // Frames never overlap (each is at a distinct address).
     core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
 
-    // Décrémenter le refcount de l'ancien frame.
+    // Decrement refcount of old frame.
     let new_rc = COW_TRACKER.dec(frame);
     if new_rc == 0 {
-        // Dernier référent parti — libérer l'ancien frame.
+        // Last referrer gone — free old frame.
         let _ = free_page(frame);
     }
 
@@ -144,11 +144,11 @@ pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
     CowBreakOutcome::Copied(new_frame)
 }
 
-/// Variante "best-effort" : si OOM, retourner une erreur sans paniquer.
-/// Identique à `break_cow` mais retourne un `Result`.
+/// "Best-effort" variant: on OOM, return an error without panicking.
+/// Identical to `break_cow` but returns a `Result`.
 ///
 /// # Safety
-/// Mêmes préconditions que `break_cow`.
+/// Same preconditions as `break_cow`.
 #[inline]
 pub unsafe fn try_break_cow(frame: Frame) -> Result<Frame, AllocError> {
     match break_cow(frame) {

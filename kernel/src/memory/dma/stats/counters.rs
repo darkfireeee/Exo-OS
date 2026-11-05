@@ -1,40 +1,40 @@
 // kernel/src/memory/dma/stats/counters.rs
 //
-// Compteurs de statistiques DMA — débit, latence, erreurs, timeouts.
-// Couche 0 — aucune dépendance externe sauf `core`.
+// DMA statistics counters — throughput, latency, errors, timeouts.
+// Layer 0 — no external dependencies except `core`.
 //
-// Chaque moteur DMA dispose de son propre jeu de compteurs, plus un
-// compteur global agrégé. Tous les accès sont atomiques (relaxed pour
-// les compteurs de perf, AcqRel pour les erreurs fatales).
+// Each DMA engine has its own set of counters, plus an
+// aggregated global counter. All accesses are atomic (relaxed for
+// performance counters, AcqRel for fatal errors).
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES PAR MOTEUR
+// PER-ENGINE STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'un moteur DMA individuel.
+/// Statistics of an individual DMA engine.
 #[repr(C, align(64))]
 pub struct DmaEngineStats {
-    /// Nombre de transferts soumis.
+    /// Number of submitted transfers.
     pub submitted: AtomicU64,
-    /// Nombre de transferts complétés avec succès.
+    /// Number of successfully completed transfers.
     pub completed: AtomicU64,
-    /// Nombre d'erreurs hard (ECC, timeout IOMMU, etc.).
+    /// Number of hard errors (ECC, IOMMU timeout, etc.).
     pub errors: AtomicU64,
-    /// Nombre de timeouts (annulation forcée).
+    /// Number of timeouts (forced cancellation).
     pub timeouts: AtomicU64,
-    /// Octets transférés (DMA → RAM ou RAM → device).
+    /// Bytes transferred (DMA → RAM or RAM → device).
     pub bytes_tx: AtomicU64,
-    /// Octets reçus (device → RAM).
+    /// Bytes received (device → RAM).
     pub bytes_rx: AtomicU64,
-    /// Latence cumulée en cycles TSC (pour calcul de moyenne).
+    /// Cumulative latency in TSC cycles (for average computation).
     pub latency_sum_cycles: AtomicU64,
-    /// Latence max observée en cycles TSC.
+    /// Maximum observed latency in TSC cycles.
     pub latency_max_cycles: AtomicU64,
-    /// Nombre de transactions en flight (en cours).
+    /// Number of in-flight transactions (in progress).
     pub in_flight: AtomicU32,
-    /// Nombre de re-soumissions (retry après erreur transitoire).
+    /// Number of re-submissions (retry after transient error).
     pub retries: AtomicU32,
 }
 
@@ -60,18 +60,18 @@ impl DmaEngineStats {
         }
     }
 
-    /// Enregistre la soumission d'un transfert.
+    /// Records transfer submission.
     #[inline]
     pub fn on_submit(&self) {
         self.submitted.fetch_add(1, Ordering::Relaxed);
         self.in_flight.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Enregistre la complétion d'un transfert.
+    /// Records transfer completion.
     ///
-    /// `bytes`      : nombre d'octets transférés.
-    /// `is_write`   : true = DMA depuis RAM (TX), false = vers RAM (RX).
-    /// `latency_cy` : latence en cycles TSC.
+    /// `bytes`:      number of bytes transferred.
+    /// `is_write`:   true = DMA from RAM (TX), false = to RAM (RX).
+    /// `latency_cy`: latency in TSC cycles.
     #[inline]
     pub fn on_complete(&self, bytes: u64, is_write: bool, latency_cy: u64) {
         self.completed.fetch_add(1, Ordering::Relaxed);
@@ -83,7 +83,7 @@ impl DmaEngineStats {
         }
         self.latency_sum_cycles
             .fetch_add(latency_cy, Ordering::Relaxed);
-        // Mise à jour latence max (compare-and-swap loop).
+        // Update max latency (compare-and-swap loop).
         let mut cur = self.latency_max_cycles.load(Ordering::Relaxed);
         while latency_cy > cur {
             match self.latency_max_cycles.compare_exchange_weak(
@@ -98,27 +98,27 @@ impl DmaEngineStats {
         }
     }
 
-    /// Enregistre une erreur de transfert.
+    /// Records a transfer error.
     #[inline]
     pub fn on_error(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Enregistre un timeout.
+    /// Records a timeout.
     #[inline]
     pub fn on_timeout(&self) {
         self.timeouts.fetch_add(1, Ordering::AcqRel);
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Enregistre une re-soumission.
+    /// Records a re-submission.
     #[inline]
     pub fn on_retry(&self) {
         self.retries.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Latence moyenne en cycles (0 si aucune complétion).
+    /// Average latency in cycles (0 if no completions).
     pub fn avg_latency_cycles(&self) -> u64 {
         let completed = self.completed.load(Ordering::Relaxed);
         if completed == 0 {
@@ -129,27 +129,27 @@ impl DmaEngineStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES GLOBALES DMA
+// GLOBAL DMA STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de moteurs DMA trackés.
+/// Maximum number of tracked DMA engines.
 pub const MAX_DMA_ENGINES: usize = 16;
 
-/// Statistiques globales DMA, agrégées sur tous les moteurs.
+/// Global DMA statistics, aggregated across all engines.
 pub struct DmaStats {
-    /// Statistiques par moteur (index = engine_id).
+    /// Per-engine statistics (index = engine_id).
     pub engines: [DmaEngineStats; MAX_DMA_ENGINES],
-    /// Nombre de moteurs actifs.
+    /// Number of active engines.
     pub active_engines: AtomicU32,
-    /// Compteur global d'erreurs fatales IOMMU.
+    /// Global counter of fatal IOMMU errors.
     pub iommu_faults: AtomicU64,
-    /// Nombre de TLB flush IOMMU effectués.
+    /// Number of IOMMU TLB flushes performed.
     pub iommu_tlb_flushes: AtomicU64,
-    /// Nombre de domain resets.
+    /// Number of domain resets.
     pub domain_resets: AtomicU64,
 }
 
-// SAFETY: DmaStats n'est accessible que via des méthodes atomiques.
+// SAFETY: DmaStats is only accessible via atomic methods.
 unsafe impl Sync for DmaStats {}
 
 impl Default for DmaStats {
@@ -169,20 +169,20 @@ impl DmaStats {
         }
     }
 
-    /// Retourne les stats d'un moteur par son ID.
+    /// Returns engine stats by its ID.
     #[inline]
     pub fn engine(&self, id: usize) -> Option<&DmaEngineStats> {
         self.engines.get(id)
     }
 
-    /// Enregistre un moteur actif supplémentaire.
+    /// Registers an additional active engine.
     #[inline]
     pub fn register_engine(&self) -> usize {
         let id = self.active_engines.fetch_add(1, Ordering::AcqRel) as usize;
         id.min(MAX_DMA_ENGINES - 1)
     }
 
-    /// Compteurs agrégés de tous les moteurs actifs.
+    /// Aggregated counters of all active engines.
     pub fn total_submitted(&self) -> u64 {
         let n = self.active_engines.load(Ordering::Relaxed) as usize;
         self.engines[..n.min(MAX_DMA_ENGINES)]
@@ -216,14 +216,14 @@ impl DmaStats {
     }
 }
 
-/// Instance globale des statistiques DMA.
+/// Global DMA statistics instance.
 pub static DMA_STATS: DmaStats = DmaStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FONCTIONS HELPER GLOBALES
+// GLOBAL HELPER FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre une soumission pour le moteur `engine_id`.
+/// Records a submission for engine `engine_id`.
 #[inline]
 pub fn dma_stat_submit(engine_id: usize) {
     if let Some(e) = DMA_STATS.engine(engine_id) {
@@ -231,7 +231,7 @@ pub fn dma_stat_submit(engine_id: usize) {
     }
 }
 
-/// Enregistre une complétion pour le moteur `engine_id`.
+/// Records a completion for engine `engine_id`.
 #[inline]
 pub fn dma_stat_complete(engine_id: usize, bytes: u64, is_write: bool, latency_cy: u64) {
     if let Some(e) = DMA_STATS.engine(engine_id) {
@@ -239,7 +239,7 @@ pub fn dma_stat_complete(engine_id: usize, bytes: u64, is_write: bool, latency_c
     }
 }
 
-/// Enregistre une erreur pour le moteur `engine_id`.
+/// Records an error for engine `engine_id`.
 #[inline]
 pub fn dma_stat_error(engine_id: usize) {
     if let Some(e) = DMA_STATS.engine(engine_id) {
@@ -247,7 +247,7 @@ pub fn dma_stat_error(engine_id: usize) {
     }
 }
 
-/// Enregistre un timeout pour le moteur `engine_id`.
+/// Records a timeout for engine `engine_id`.
 #[inline]
 pub fn dma_stat_timeout(engine_id: usize) {
     if let Some(e) = DMA_STATS.engine(engine_id) {
@@ -255,7 +255,7 @@ pub fn dma_stat_timeout(engine_id: usize) {
     }
 }
 
-/// Ajoute des octets transférés pour le moteur `engine_id`.
+/// Adds transferred bytes for engine `engine_id`.
 #[inline]
 pub fn dma_bytes_transferred(engine_id: usize, bytes: u64, is_write: bool) {
     if let Some(e) = DMA_STATS.engine(engine_id) {
@@ -267,8 +267,8 @@ pub fn dma_bytes_transferred(engine_id: usize, bytes: u64, is_write: bool) {
     }
 }
 
-/// Dump des stats globales (pour diagnostic).
-/// Retourne (submitted, completed, errors, bytes_total, iommu_faults).
+/// Dumps global stats (for diagnostics).
+/// Returns (submitted, completed, errors, bytes_total, iommu_faults).
 #[inline]
 pub fn dump_dma_stats() -> (u64, u64, u64, u64, u64) {
     (

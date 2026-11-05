@@ -1,32 +1,32 @@
 // kernel/src/memory/dma/core/wakeup_iface.rs
 //
-// Interface de réveil DMA — RÈGLE ARCHITECTURALE CRITIQUE.
+// DMA wakeup interface — CRITICAL ARCHITECTURAL RULE.
 //
-// Le sous-système DMA (Couche 0) doit pouvoir réveiller des processus
-// au terme d'un transfert SANS dépendre de process/ ou scheduler/.
-// On résout cela par inversion de dépendance :
-//   — DMA définit le trait `DmaWakeupHandler` ici (Couche 0).
-//   — process/ implémente ce trait et l'enregistre via `register_wakeup_handler()`.
+// The DMA subsystem (Layer 0) must be able to wake up processes
+// upon transfer completion WITHOUT depending on process/ or scheduler/.
+// This is resolved via dependency inversion:
+//   — DMA defines the `DmaWakeupHandler` trait here (Layer 0).
+//   — process/ implements this trait and registers it via `register_wakeup_handler()`.
 //
-// COUCHE 0 — aucune dépendance vers scheduler/ipc/fs/process.
+// LAYER 0 — no dependencies towards scheduler/ipc/fs/process.
 
 use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRAIT DE RÉVEIL
+// WAKEUP TRAIT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait que le sous-système process/ doit implémenter pour recevoir les
-/// notifications de fin de transfert DMA.
+/// Trait that the process/ subsystem must implement to receive
+/// DMA transfer completion notifications.
 ///
-/// Ce trait est intentionnellement minimal pour limiter le couplage.
+/// This trait is intentionally minimal to limit coupling.
 pub trait DmaWakeupHandler: Send + Sync {
-    /// Réveille le waiter associé à `tid` lorsqu'une transaction DMA se termine.
+    /// Wakes the waiter associated with `tid` when a DMA transaction completes.
     ///
-    /// `tid` — identifiant du thread/processus à réveiller.
-    /// `txn_id` — transaction terminée.
-    /// `result` — `Ok(bytes_transferred)` ou `Err(DmaError)`.
+    /// `tid` — identifier of thread/process to wake.
+    /// `txn_id` — completed transaction.
+    /// `result` — `Ok(bytes_transferred)` or `Err(DmaError)`.
     fn wake_on_completion(
         &self,
         tid: u64,
@@ -34,17 +34,17 @@ pub trait DmaWakeupHandler: Send + Sync {
         result: Result<usize, DmaError>,
     );
 
-    /// Notifie qu'une erreur fatale s'est produite sur un canal.
-    /// Tous les waiters sur ce canal doivent être débloqués avec une erreur.
+    /// Notifies that a fatal error occurred on a channel.
+    /// All waiters on this channel must be unblocked with an error.
     fn wake_all_on_error(&self, channel_id: u32, error: DmaError);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HANDLER PAR DÉFAUT (NO-OP)
+// DEFAULT HANDLER (NO-OP)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Handler no-op utilisé avant l'enregistrement depuis process/.
-/// Log via le compteur d'appels perdus pour détecter les notifications orphelines.
+/// No-op handler used before registration from process/.
+/// Logs via lost calls counter to detect orphan notifications.
 struct NopWakeupHandler {
     lost_wakeups: AtomicUsize,
 }
@@ -68,27 +68,27 @@ static NOP_HANDLER: NopWakeupHandler = NopWakeupHandler {
     lost_wakeups: AtomicUsize::new(0),
 };
 
-/// Retourne le nombre de wakeups perdus (handler non encore enregistré).
+/// Returns the number of lost wakeups (handler not yet registered).
 pub fn lost_wakeup_count() -> usize {
     NOP_HANDLER.lost_wakeups.load(Ordering::Relaxed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTRE GLOBAL DU HANDLER
+// GLOBAL HANDLER REGISTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pointeur atomique vers le handler actif.
-/// Encode `*const dyn DmaWakeupHandler` via deux mots (fat pointer = 2 × usize).
+/// Atomic pointer to active handler.
+/// Encodes `*const dyn DmaWakeupHandler` via two words (fat pointer = 2 × usize).
 ///
-/// En no_std/bare-metal on encode le fat pointer comme deux AtomicUsize adjacents.
-/// Le registre est write-once : on ne supporte pas de swap dynamique.
+/// In no_std/bare-metal the fat pointer is encoded as two adjacent AtomicUsize.
+/// The registry is write-once: dynamic swapping is not supported.
 struct WakeupHandlerSlot {
     data: AtomicUsize,
     vtbl: AtomicUsize,
     registered: AtomicUsize, // 0=nop, 1=real handler
 }
 
-// SAFETY: Le slot est write-once; les lectures sont protégées par la barrière Acquire.
+// SAFETY: Slot is write-once; reads are protected by Acquire fence.
 unsafe impl Sync for WakeupHandlerSlot {}
 
 static WAKEUP_SLOT: WakeupHandlerSlot = WakeupHandlerSlot {
@@ -97,12 +97,12 @@ static WAKEUP_SLOT: WakeupHandlerSlot = WakeupHandlerSlot {
     registered: AtomicUsize::new(0),
 };
 
-/// Enregistre le handler de réveil DMA.
+/// Registers the DMA wakeup handler.
 ///
 /// # Safety
-/// - Doit être appelé une seule fois, au boot, depuis process/ ou le kernel init.
-/// - `handler` doit avoir une durée de vie statique (`'static`).
-/// - Aucune transaction DMA ne doit être en cours lors de l'appel.
+/// - Must be called exactly once, at boot, from process/ or kernel init.
+/// - `handler` must have static lifetime (`'static`).
+/// - No DMA transaction may be in progress during the call.
 pub unsafe fn register_wakeup_handler(handler: &'static dyn DmaWakeupHandler) {
     let fat: (*const (), *const ()) = core::mem::transmute(handler);
     WAKEUP_SLOT.data.store(fat.0 as usize, Ordering::Release);
@@ -110,7 +110,7 @@ pub unsafe fn register_wakeup_handler(handler: &'static dyn DmaWakeupHandler) {
     WAKEUP_SLOT.registered.store(1, Ordering::Release);
 }
 
-/// Récupère le handler actif (nop si non enregistré).
+/// Retrieves active handler (nop if not registered).
 #[inline]
 fn active_handler() -> &'static dyn DmaWakeupHandler {
     if WAKEUP_SLOT.registered.load(Ordering::Acquire) == 0 {
@@ -118,7 +118,7 @@ fn active_handler() -> &'static dyn DmaWakeupHandler {
     }
     let data = WAKEUP_SLOT.data.load(Ordering::Acquire) as *const ();
     let vtbl = WAKEUP_SLOT.vtbl.load(Ordering::Acquire) as *const ();
-    // SAFETY: Le fat pointer a été stocké correctement via register_wakeup_handler().
+    // SAFETY: Fat pointer was properly stored via register_wakeup_handler().
     unsafe {
         let fat: (*const (), *const ()) = (data, vtbl);
         core::mem::transmute::<(*const (), *const ()), &'static dyn DmaWakeupHandler>(fat)
@@ -126,22 +126,22 @@ fn active_handler() -> &'static dyn DmaWakeupHandler {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FONCTIONS PUBLIQUES
+// PUBLIC FUNCTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Réveille un thread/processus après completion d'une transaction DMA.
+/// Wakes a thread/process after completion of a DMA transaction.
 #[inline]
 pub fn wake_on_completion(tid: u64, txn_id: DmaTransactionId, result: Result<usize, DmaError>) {
     active_handler().wake_on_completion(tid, txn_id, result);
 }
 
-/// Réveille tous les waiters d'un canal sur erreur fatale.
+/// Wakes all waiters on a channel upon fatal error.
 #[inline]
 pub fn wake_all_on_error(channel_id: u32, error: DmaError) {
     active_handler().wake_all_on_error(channel_id, error);
 }
 
-/// Indique si un handler réel a été enregistré.
+/// Indicates whether a real handler has been registered.
 #[inline]
 pub fn has_real_handler() -> bool {
     WAKEUP_SLOT.registered.load(Ordering::Relaxed) != 0

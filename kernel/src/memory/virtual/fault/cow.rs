@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/fault/cow.rs
 //
-// CoW fault handler — gère un write sur une page marquée Copy-on-Write.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// CoW fault handler — handles a write to a Copy-on-Write marked page.
+// Layer 0 — no external dependencies except `spin`.
 
 use super::handler::FaultAllocator;
 use super::{FaultContext, FaultResult};
@@ -19,7 +19,7 @@ unsafe fn flush_cow_tlb(page_addr: VirtAddr) {
     );
 }
 
-/// Traite un CoW fault (write sur page en lecture seule avec flag COW).
+/// Handles a CoW fault (write to a read-only page with COW flag).
 pub fn handle_cow_fault<A: FaultAllocator>(
     ctx: &FaultContext,
     vma: &VmaDescriptor,
@@ -34,7 +34,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
         None => match alloc.translate(page_addr) {
             Some(phys) => crate::memory::core::Frame::containing(phys),
             None => {
-                // Page pas encore mappée + flag COW → demand paging d'abord.
+                // Page not yet mapped + COW flag → demand paging first.
                 return super::demand_paging::handle_demand_paging(ctx, vma, alloc);
             }
         },
@@ -58,7 +58,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
                     let _ = COW_TRACKER.dec(old_frame);
                 }
                 vma.record_cow_break();
-                // SAFETY: adresse canonique.
+                // SAFETY: canonical address.
                 unsafe {
                     flush_cow_tlb(page_addr);
                 }
@@ -67,7 +67,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             Err(actual_raw) => {
                 let actual = PageTableEntry::from_raw(actual_raw);
                 if actual.is_present() && !actual.is_cow() {
-                    // Un autre CPU a déjà restauré l'écriture en place.
+                    // Another CPU already restored write in place.
                     unsafe {
                         flush_cow_tlb(page_addr);
                     }
@@ -77,8 +77,8 @@ pub fn handle_cow_fault<A: FaultAllocator>(
         }
     }
 
-    // La page est encore partagée : copier vers un nouveau frame puis publier
-    // le PTE par CAS pour sérialiser les fautes concurrentes.
+    // Page is still shared: copy to a new frame then publish
+    // the PTE via CAS to serialize concurrent faults.
     let new_frame = match alloc.alloc_nonzeroed() {
         Ok(f) => f,
         Err(_) => {
@@ -88,18 +88,18 @@ pub fn handle_cow_fault<A: FaultAllocator>(
         }
     };
 
-    // Copier les données de l'ancien frame vers le nouveau.
-    // SAFETY: Les deux frames sont mappés dans le physmap kernel.
+    // Copy data from old frame to new.
+    // SAFETY: Both frames are mapped in the kernel physmap.
     unsafe {
         let src = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
             + old_frame.start_address().as_u64()) as *const u8;
         let dst = (crate::memory::core::layout::PHYS_MAP_BASE.as_u64()
             + new_frame.start_address().as_u64()) as *mut u8;
-        // SAFETY: src et dst sont des frames physiques distincts, taille PAGE_SIZE.
+        // SAFETY: src and dst are distinct physical frames, size PAGE_SIZE.
         core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
     }
 
-    // Remap la page avec les nouveaux flags (writable, supprimer COW).
+    // Remap page with new flags (writable, clear COW).
     let new_raw = PageTableEntry::from_page_flags(new_frame, writable_flags).raw();
     match alloc.compare_exchange_pte_raw(page_addr, old_raw, new_raw) {
         Ok(_) => {
@@ -108,7 +108,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
                 alloc.free_frame(old_frame);
             }
             vma.record_cow_break();
-            // SAFETY: adresse canonique.
+            // SAFETY: canonical address.
             unsafe {
                 flush_cow_tlb(page_addr);
             }
@@ -118,7 +118,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
             alloc.free_frame(new_frame);
             let actual = PageTableEntry::from_raw(actual_raw);
             if actual.is_present() {
-                // Un autre CPU a probablement gagné la course et a déjà cassé le CoW.
+                // Another CPU probably won the race and already broke CoW.
                 unsafe {
                     flush_cow_tlb(page_addr);
                 }

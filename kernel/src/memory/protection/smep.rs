@@ -2,37 +2,37 @@
 //
 // SMEP — Supervisor Mode Execution Prevention (Intel + AMD).
 //
-// La CPU refuse l'exécution de code en espace user (adresses canoniques basses)
-// lorsque la CPL est 0 et CR4.SMEP = 1.
+// The CPU refuses execution of code in user space (low canonical addresses)
+// when CPL is 0 and CR4.SMEP = 1.
 //
-// Références :
+// References:
 //   Intel SDM Vol.3A § 4.6.2 — "Supervisor-Mode Execution Prevention"
 //   AMD APM Vol.2 § 5.16 — "Supervisor Mode Execution Prevention"
 //
-// Couche 0 : pas de dépendance vers scheduler/process/ipc/fs.
+// Layer 0: no dependency on scheduler/process/ipc/fs.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bits CR4
+// CR4 Bits
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// CR4 bit 20 — SMEP.
 pub const CR4_SMEP_BIT: u64 = 1 << 20;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques SMEP
+// SMEP Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
 pub struct SmepStats {
-    /// Nombre d'activations de SMEP.
+    /// Number of SMEP activations.
     pub enable_count: AtomicU64,
-    /// Nombre de désactivations temporaires (légitimes, ex. pour copie user).
+    /// Number of temporary deactivations (legitimate, e.g. for user copy).
     pub disable_count: AtomicU64,
-    /// Violations détectées par le fault handler.
+    /// Violations detected by fault handler.
     pub violation_count: AtomicU64,
-    /// Appels redondants à `enable_smep` alors que déjà actif.
+    /// Redundant calls to `enable_smep` when already active.
     pub redundant_enable: AtomicU64,
 }
 
@@ -51,16 +51,16 @@ unsafe impl Sync for SmepStats {}
 pub static SMEP_STATS: SmepStats = SmepStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// État
+// State
 // ─────────────────────────────────────────────────────────────────────────────
 
 static SMEP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Lecture / écriture CR4
+// Read / write CR4
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit CR4.
+/// Reads CR4.
 ///
 /// # Safety
 /// CPL 0.
@@ -75,10 +75,10 @@ unsafe fn read_cr4() -> u64 {
     val
 }
 
-/// Écrit CR4.
+/// Writes CR4.
 ///
 /// # Safety
-/// CPL 0. Une valeur incorrecte peut rendre le système instable.
+/// CPL 0. An incorrect value can make the system unstable.
 #[inline(always)]
 unsafe fn write_cr4(val: u64) {
     core::arch::asm!(
@@ -89,14 +89,14 @@ unsafe fn write_cr4(val: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Teste le support SMEP via CPUID (feuille 7, sous-feuille 0, EBX bit 7).
+/// Tests SMEP support via CPUID (leaf 7, subleaf 0, EBX bit 7).
 #[inline]
 pub fn smep_supported() -> bool {
     let ebx_r: u64;
-    // SAFETY: CPUID disponible sur x86_64; xchg préserve rbx réservé par LLVM.
+    // SAFETY: CPUID available on x86_64; xchg preserves rbx reserved by LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -115,7 +115,7 @@ pub fn smep_supported() -> bool {
     ebx & (1 << 7) != 0
 }
 
-/// Active SMEP sur le CPU courant (CR4.SMEP = 1).
+/// Enables SMEP on current CPU (CR4.SMEP = 1).
 /// Idempotent.
 ///
 /// # Safety
@@ -134,13 +134,13 @@ pub unsafe fn enable_smep() {
     SMEP_ACTIVE.store(true, Ordering::Release);
 }
 
-/// Désactive temporairement SMEP — DANGER, usage très restreint.
+/// Temporarily disables SMEP — DANGER, very restricted usage.
 ///
-/// Retourne `true` si SMEP était actif (→ caller doit appeler `restore_smep`).
-/// Usage légitime : copie noyau→user en monde pré-SMAP, chemin debug uniquement.
+/// Returns `true` if SMEP was active (-> caller must call `restore_smep`).
+/// Legitimate usage: kernel->user copy in pre-SMAP world, debug path only.
 ///
 /// # Safety
-/// CPL 0. La fenêtre de désactivation doit être la plus courte possible.
+/// CPL 0. The deactivation window must be as short as possible.
 pub unsafe fn disable_smep() -> bool {
     let cr4 = read_cr4();
     if cr4 & CR4_SMEP_BIT == 0 {
@@ -152,7 +152,7 @@ pub unsafe fn disable_smep() -> bool {
     true
 }
 
-/// Réactive SMEP si `was_active` est `true`.
+/// Re-enables SMEP if `was_active` is `true`.
 ///
 /// # Safety
 /// CPL 0.
@@ -163,7 +163,7 @@ pub unsafe fn restore_smep(was_active: bool) {
     }
 }
 
-/// Retourne `true` si SMEP est actuellement actif sur ce CPU.
+/// Returns `true` if SMEP is currently active on this CPU.
 ///
 /// # Safety
 /// CPL 0.
@@ -172,8 +172,8 @@ pub unsafe fn smep_active() -> bool {
     read_cr4() & CR4_SMEP_BIT != 0
 }
 
-/// Gère une violation SMEP détectée par le fault handler.
-/// Incrémente `violation_count` et retourne `false` (non récupérable).
+/// Handles an SMEP violation detected by the fault handler.
+/// Increments `violation_count` and returns `false` (non-recoverable).
 #[inline]
 pub fn smep_handle_violation(fault_ip: u64) -> bool {
     SMEP_STATS.violation_count.fetch_add(1, Ordering::Relaxed);
@@ -181,12 +181,12 @@ pub fn smep_handle_violation(fault_ip: u64) -> bool {
     false
 }
 
-/// Guard RAII : désactive SMEP à la construction, le restaure au drop.
+/// RAII Guard: disables SMEP upon construction, restores it upon drop.
 ///
-/// `SmepGuard::new()` retourne `None` si SMEP n'était pas actif.
+/// `SmepGuard::new()` returns `None` if SMEP was not active.
 ///
 /// # Safety
-/// Le caller garantit que l'exécution user-code est intentionnelle.
+/// Caller guarantees that user-code execution is intentional.
 pub struct SmepGuard {
     was_active: bool,
 }
@@ -202,12 +202,12 @@ impl SmepGuard {
 
 impl Drop for SmepGuard {
     fn drop(&mut self) {
-        // SAFETY: restore_smep restaure CR4.SMEP; was_active provient de smep_enable().
+        // SAFETY: restore_smep restores CR4.SMEP; was_active comes from smep_enable().
         unsafe { restore_smep(self.was_active) };
     }
 }
 
-/// Initialisation du sous-système SMEP (appelé sur BSP + chaque AP).
+/// SMEP subsystem initialization (called on BSP + each AP).
 ///
 /// # Safety
 /// CPL 0.

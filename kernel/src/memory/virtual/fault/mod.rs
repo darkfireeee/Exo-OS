@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/fault/mod.rs
 //
-// Module fault — gestionnaire de page faults.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// fault module — page fault handler.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod cow;
 pub mod demand_paging;
@@ -12,10 +12,10 @@ use crate::memory::core::VirtAddr;
 use crate::memory::virt::vma::VmaDescriptor;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPES PARTAGÉS
+// SHARED TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cause d'un page fault.
+/// Cause of a page fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultCause {
     Read,
@@ -23,18 +23,18 @@ pub enum FaultCause {
     Execute,
 }
 
-/// Contexte d'un page fault (construit depuis le handler d'interruption).
+/// Context of a page fault (built from the interrupt handler).
 pub struct FaultContext {
-    /// Adresse virtuelle fautive (contenu de CR2).
+    /// Faulting virtual address (content of CR2).
     pub fault_addr: VirtAddr,
-    /// Cause du fault.
+    /// Cause of fault.
     pub cause: FaultCause,
-    /// Bit P de l'error-code x86: true signifie protection fault sur une
-    /// traduction deja presente, pas demand paging.
+    /// P bit of x86 error-code: true means protection fault on an
+    /// already present translation, not demand paging.
     pub present: bool,
-    /// Fault depuis le mode kernel (Ring 0) ?
+    /// Fault from kernel mode (Ring 0)?
     pub from_kernel: bool,
-    /// Pointeur vers la VMA de l'espace utilisateur (lookup déjà fait, facultatif).
+    /// Pointer to user space VMA (lookup already performed, optional).
     vma_ptr: *const VmaDescriptor,
 }
 
@@ -59,12 +59,12 @@ impl FaultContext {
         self
     }
 
-    /// Retourne le VmaDescriptor si disponible dans le contexte.
+    /// Returns the VmaDescriptor if available in context.
     pub fn find_vma(&self, addr: VirtAddr) -> Option<&VmaDescriptor> {
         if self.vma_ptr.is_null() {
             return None;
         }
-        // SAFETY: vma_ptr est valide si fourni par l'address space.
+        // SAFETY: vma_ptr is valid if provided by the address space.
         let vma = unsafe { &*self.vma_ptr };
         if vma.contains(addr) {
             Some(vma)
@@ -74,21 +74,21 @@ impl FaultContext {
     }
 }
 
-/// Résultat du traitement d'un page fault.
+/// Result of handling a page fault.
 #[derive(Debug)]
 pub enum FaultResult {
-    /// Fault résolu, reprise de l'exécution.
+    /// Fault resolved, resume execution.
     Handled,
-    /// Segmentation fault — envoyer SIGSEGV.
+    /// Segmentation fault — send SIGSEGV.
     Segfault { addr: VirtAddr },
-    /// Out of memory — tuer le processus.
+    /// Out of memory — kill process.
     Oom { addr: VirtAddr },
-    /// Fault kernel non récupérable — panic.
+    /// Unrecoverable kernel fault — panic.
     KernelFault { addr: VirtAddr },
 }
 
 impl FaultResult {
-    /// Retourne `true` si le fault a été résolu avec succès.
+    /// Returns `true` if fault was handled successfully.
     #[inline]
     pub fn is_handled(&self) -> bool {
         matches!(self, FaultResult::Handled)

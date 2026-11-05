@@ -1,6 +1,6 @@
 // kernel/src/memory/dma/iommu/mod.rs
 //
-// Module IOMMU — domaines, tables de pages, pilotes Intel VT-d et AMD IOMMU.
+// IOMMU module — domains, page tables, Intel VT-d and AMD IOMMU drivers.
 
 pub mod amd_iommu;
 pub mod domain;

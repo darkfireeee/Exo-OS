@@ -1,18 +1,18 @@
 // kernel/src/memory/physical/numa/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Module NUMA — topologie mémoire NUMA, nœuds, distances, politique, migration
+// NUMA Module — NUMA memory topology, nodes, distances, policy, migration
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Sous-modules :
-//   node       — descripteurs de nœuds, table NUMA_NODES, compteurs
-//   distance   — table de distances SLIT, closest_node(), numa_distance()
-//   policy     — NumaPolicy, NumaNodeMask, politiques par thread
-//   migration  — migration de pages entre nœuds
+// Sub-modules:
+//   node       — node descriptors, NUMA_NODES table, counters
+//   distance   — SLIT distance table, closest_node(), numa_distance()
+//   policy     — NumaPolicy, NumaNodeMask, per-thread policies
+//   migration  — page migration between nodes
 //
-// Re-exports vers memory::numa (via memory/numa.rs qui fait `pub use crate::memory::physical::numa::*;`).
+// Re-exports to memory::numa (via memory/numa.rs which does `pub use crate::memory::physical::numa::*;`).
 //
-// COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod distance;
@@ -21,34 +21,34 @@ pub mod node;
 pub mod policy;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports publics
+// Public re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Table globale des nœuds NUMA actifs.
+// Global table of active NUMA nodes.
 pub use node::{
     NumaGlobalStats, NumaNode, NumaNodeStats, NumaNodeTable, NumaPhysRange, MAX_NUMA_NODES,
     NUMA_GLOBAL_STATS, NUMA_NODES, NUMA_NODE_INVALID,
 };
 
-// Distances inter-nœuds et helper de nœud le plus proche.
+// Inter-node distances and closest node helper.
 pub use distance::{
     closest_node, numa_distance, numa_same_node, NumaDistanceTable, NUMA_DISTANCE,
     NUMA_DISTANCE_FAR, NUMA_DISTANCE_LOCAL, NUMA_DISTANCE_REMOTE,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise la topologie NUMA : nœuds + table de distances.
+/// Initializes NUMA topology: nodes + distance table.
 ///
-/// - Enregistre le nœud 0 (BSP) par défaut.
-/// - Initialise la table de distances avec les valeurs SLIT par défaut
-///   (distance locale = 10, distante = 20).
+/// - Registers node 0 (BSP) by default.
+/// - Initializes distance table with default SLIT values
+///   (local distance = 10, remote = 20).
 ///
 /// # Safety
-/// Appelé une seule fois depuis `memory::init()` (Phase 8), en mode Ring 0,
-/// avant l'activation des APs.
+/// Called exactly once from `memory::init()` (Phase 8), in Ring 0,
+/// prior to AP activation.
 pub unsafe fn init() {
     distance::init();
 }

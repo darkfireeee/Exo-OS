@@ -1,18 +1,18 @@
 // kernel/src/memory/physical/numa/policy.rs
 //
-// Politique d'allocation NUMA par processus / thread.
+// NUMA allocation policy per process / thread.
 //
-// Chaque thread possède une `NumaPolicy` stockée dans son TCB (par process/).
-// Ce module définit les types de politique et les helpers d'application
-// sans dépendre de process/ (inversion de dépendance via trait).
+// Each thread possesses a `NumaPolicy` stored in its TCB (by process/).
+// This module defines policy types and application helpers
+// without depending on process/ (dependency inversion via trait).
 //
-// Types de politique :
-//   • Default        — allouer sur le nœud local du CPU courant
-//   • Bind(mask)     — allouer exclusivement sur les nœuds du masque
-//   • Preferred(nid) — préférer le nœud `nid`, fallback sur les autres
-//   • Interleave(mask) — round-robin entre les nœuds du masque
+// Policy types:
+//   • Default        — allocate on local node of current CPU
+//   • Bind(mask)     — allocate exclusively on mask nodes
+//   • Preferred(nid) — prefer node `nid`, fallback on others
+//   • Interleave(mask) — round-robin across mask nodes
 //
-// COUCHE 0 — pas de dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;
@@ -21,10 +21,10 @@ use super::distance::closest_node;
 use super::node::{MAX_NUMA_NODES, NUMA_NODES, NUMA_NODE_INVALID};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Type NumaPolicy
+// NumaPolicy Type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Masque de nœuds NUMA (un bit par nœud, bit i = nœud i).
+/// NUMA node mask (one bit per node, bit i = node i).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NumaNodeMask(pub u64);
 
@@ -53,7 +53,7 @@ impl NumaNodeMask {
         self.0 == 0
     }
 
-    /// Premier nœud du masque.
+    /// First node in mask.
     #[inline]
     pub fn first_set(&self) -> Option<u32> {
         if self.0 == 0 {
@@ -62,33 +62,33 @@ impl NumaNodeMask {
         Some(self.0.trailing_zeros())
     }
 
-    /// Nombre de nœuds dans le masque.
+    /// Number of nodes in mask.
     #[inline]
     pub fn count(&self) -> u32 {
         self.0.count_ones()
     }
 }
 
-/// Politique d'allocation NUMA.
+/// NUMA allocation policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumaPolicy {
-    /// Allouer sur le nœud local du CPU courant.
+    /// Allocate on local node of current CPU.
     Default,
-    /// Allouer exclusivement sur les nœuds du masque.
-    /// Échec si aucun nœud du masque n'a de mémoire.
+    /// Allocate exclusively on nodes in mask.
+    /// Fails if no node in mask has memory.
     Bind(NumaNodeMask),
-    /// Préférer le nœud `nid`, fallback sur les autres par distance croissante.
+    /// Prefer node `nid`, fallback on others by increasing distance.
     Preferred(u32),
-    /// Round-robin entre les nœuds du masque.
+    /// Round-robin across nodes in mask.
     Interleave(NumaNodeMask),
 }
 
 impl NumaPolicy {
-    /// Sélectionne le nœud cible compte tenu du CPU courant et du compteur
-    /// interleave du thread.
+    /// Selects target node taking into account current CPU and
+    /// thread interleave counter.
     ///
-    /// `cpu_id` : CPU courant pour déterminer le nœud local.
-    /// `interleave_counter` : compteur dédié à la politique Interleave.
+    /// `cpu_id`: current CPU to determine local node.
+    /// `interleave_counter`: counter dedicated to Interleave policy.
     pub fn select_node(&self, cpu_id: u32, interleave_counter: u64) -> u32 {
         match self {
             NumaPolicy::Default => {
@@ -99,7 +99,7 @@ impl NumaPolicy {
                 if mask.is_empty() {
                     return NUMA_NODE_INVALID;
                 }
-                // Parcourir les nœuds du masque par distance croissante.
+                // Iterate mask nodes by increasing distance.
                 let origin = NUMA_NODES.node_for_cpu(cpu_id);
                 let (sorted, len) = super::distance::NUMA_DISTANCE.sorted_nodes_from(origin);
                 for &nid in &sorted[..len] {
@@ -114,13 +114,13 @@ impl NumaPolicy {
                 NUMA_NODE_INVALID
             }
             NumaPolicy::Preferred(preferred_nid) => {
-                // Essayer le nœud préféré d'abord.
+                // Try preferred node first.
                 if let Some(node) = NUMA_NODES.get(*preferred_nid) {
                     if node.free_pages() > 0 {
                         return *preferred_nid;
                     }
                 }
-                // Fallback par distance depuis le nœud préféré.
+                // Fallback by distance from preferred node.
                 closest_node(*preferred_nid, 1)
             }
             NumaPolicy::Interleave(mask) => {
@@ -129,7 +129,7 @@ impl NumaPolicy {
                 }
                 let count = mask.count();
                 let slot = (interleave_counter % count as u64) as u32;
-                // Trouver le `slot`-ième bit du masque.
+                // Find `slot`-th bit in mask.
                 let mut cur = 0u32;
                 for nid in 0..MAX_NUMA_NODES as u32 {
                     if mask.contains(nid) {
@@ -146,10 +146,10 @@ impl NumaPolicy {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Politique système par défaut
+// Default system policy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique du kernel (tous les threads héritent si non définie).
+/// Kernel policy (all threads inherit if not defined).
 static SYSTEM_NUMA_POLICY: RwLock<NumaPolicy> = RwLock::new(NumaPolicy::Default);
 
 #[inline]
@@ -162,7 +162,7 @@ pub fn set_system_policy(policy: NumaPolicy) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -190,10 +190,10 @@ unsafe impl Sync for NumaPolicyStats {}
 pub static NUMA_POLICY_STATS: NumaPolicyStats = NumaPolicyStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sélection de nœud avec tracking stats
+// Node selection with stats tracking
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sélectionne le nœud cible selon `policy` et enregistre les stats.
+/// Selects target node according to `policy` and records stats.
 pub fn select_node(policy: &NumaPolicy, cpu_id: u32, interleave_ctr: u64) -> u32 {
     let nid = policy.select_node(cpu_id, interleave_ctr);
     match policy {
@@ -222,18 +222,18 @@ pub fn select_node(policy: &NumaPolicy, cpu_id: u32, interleave_ctr: u64) -> u32
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait d'injection pour le scheduler
+// Injection trait for scheduler
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait que le scheduler doit implémenter pour fournir le nœud NUMA courant.
-/// Permet à memory/ de rester en Couche 0.
+/// Trait that scheduler must implement to provide current NUMA node.
+/// Allows memory/ to remain in Layer 0.
 pub trait NumaCpuProvider {
     fn current_cpu_id(&self) -> u32;
     fn thread_interleave_counter(&self) -> u64;
     fn thread_numa_policy(&self) -> NumaPolicy;
 }
 
-/// Implémentation BSP statique (avant scheduler).
+/// Static BSP implementation (before scheduler).
 pub struct BspNumaProvider;
 impl NumaCpuProvider for BspNumaProvider {
     fn current_cpu_id(&self) -> u32 {
@@ -248,9 +248,9 @@ impl NumaCpuProvider for BspNumaProvider {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn init() {
-    // Politique système déjà Default.
+    // System policy already Default.
 }

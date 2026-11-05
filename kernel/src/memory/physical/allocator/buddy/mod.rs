@@ -1,19 +1,19 @@
-//! # memory/physical/allocator/buddy/mod.rs — Allocateur physique principal Buddy O(log n)
+//! # memory/physical/allocator/buddy/mod.rs — Main Buddy physical allocator O(log n)
 //!
-//! Implémentation classique du système de buddy avec free-lists par ordre.
-//! Couche 0 — aucune dépendance externe.
+//! Classical implementation of buddy system with per-order free-lists.
+//! Layer 0 — no external dependencies.
 //!
-//! Principe :
-//!   La RAM est divisée en blocs de taille 2^order × PAGE_SIZE.
-//!   Chaque ordre dispose d'une free-list doublement chaînée.
-//!   Allocation  : parcours des ordres de bas en haut jusqu'au premier
-//!                 bloc disponible, puis division des blocs supérieurs.
-//!   Libération  : recherche du buddy et fusion récursive (coalescing).
+//! Principle:
+//!   RAM is divided into blocks of size 2^order × PAGE_SIZE.
+//!   Each order has a doubly-linked free-list.
+//!   Allocation : traverse orders bottom-up to first available block,
+//!                then split higher-order blocks.
+//!   Free       : locate buddy and perform recursive coalescing.
 //!
-//! Invariants :
-//!   - Un bloc d'ordre k a une adresse alignée sur 2^k pages.
-//!   - Le buddy d'un bloc d'adresse P est P ⊕ (1 << k).
-//!   - Jamais de fragmentation externe au-delà de 1 bloc de chaque ordre.
+//! Invariants:
+//!   - An order-k block has an address aligned to 2^k pages.
+//!   - The buddy of block with address P is P ⊕ (1 << k).
+//!   - Never any external fragmentation beyond 1 block of each order.
 
 pub mod node;
 pub mod stats;
@@ -26,23 +26,23 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::memory::core::{AllocError, AllocFlags, Frame, PhysAddr, ZoneType, PAGE_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOCATEUR BUDDY GLOBAL — couvre toutes les zones
+// GLOBAL BUDDY ALLOCATOR — covers all zones
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Allocateur buddy global couvrant toutes les zones et tous les nœuds NUMA.
+/// Global buddy allocator covering all zones and NUMA nodes.
 ///
-/// Routage des allocations selon les flags :
+/// Allocation routing according to flags:
 ///   - AllocFlags::DMA    → BuddyZone DMA
 ///   - AllocFlags::DMA32  → BuddyZone DMA32
 ///   - Default           → BuddyZone Normal (NUMA-preferred)
 pub struct GlobalBuddyAllocator {
-    // Une zone par ZoneType par nœud NUMA
-    // Simplifié : tableau [ZoneType::COUNT] (NUMA node 0 par défaut pour l'instant)
+    // One zone per ZoneType per NUMA node
+    // Simplified: array [ZoneType::COUNT] (NUMA node 0 by default for now)
     zones: [BuddyZone; 4], // DMA, DMA32, Normal, Movable
     initialized: AtomicBool,
 }
 
-// SAFETY: GlobalBuddyAllocator est thread-safe via ses spinlocks internes.
+// SAFETY: GlobalBuddyAllocator is thread-safe via its internal spinlocks.
 unsafe impl Sync for GlobalBuddyAllocator {}
 unsafe impl Send for GlobalBuddyAllocator {}
 
@@ -60,8 +60,8 @@ impl GlobalBuddyAllocator {
         }
     }
 
-    /// Alloue `2^order` pages contiguës selon les flags.
-    /// Sélectionne automatiquement la zone appropriée.
+    /// Allocates `2^order` contiguous pages according to flags.
+    /// Automatically selects appropriate zone.
     #[inline]
     pub fn alloc_pages(&self, order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
         debug_assert!(
@@ -72,7 +72,7 @@ impl GlobalBuddyAllocator {
         let zone_idx = self.zone_index_for(flags);
         let result = self.zones[zone_idx].alloc_pages(order, flags);
 
-        // Fallback vers zone supérieure si la zone cible est épuisée
+        // Fallback to higher zone if target zone is exhausted
         if result.is_err() && !flags.contains(AllocFlags::DMA) {
             for fallback_idx in (zone_idx + 1)..4 {
                 let r = self.zones[fallback_idx].alloc_pages(order, flags);
@@ -82,7 +82,7 @@ impl GlobalBuddyAllocator {
             }
         }
 
-        // Fallback vers zone inférieure (Normal → DMA32 sur systèmes avec < 4 GiB RAM).
+        // Fallback to lower zone (Normal -> DMA32 on systems with < 4 GiB RAM).
         if result.is_err() && zone_idx > 1 {
             for fallback_idx in (1..zone_idx).rev() {
                 let r = self.zones[fallback_idx].alloc_pages(order, flags);
@@ -95,11 +95,11 @@ impl GlobalBuddyAllocator {
         result
     }
 
-    /// Libère un bloc de `2^order` pages.
+    /// Frees a block of `2^order` pages.
     #[inline]
     pub fn free_pages(&self, frame: Frame, order: usize) -> Result<(), AllocError> {
         let phys = frame.start_address();
-        // Déterminer la zone d'appartenance
+        // Determine enclosing zone
         for zone in &self.zones {
             if zone.is_initialized() && zone.phys_start <= phys && phys < zone.phys_end {
                 return zone.free_pages(frame, order);
@@ -108,7 +108,7 @@ impl GlobalBuddyAllocator {
         Err(AllocError::ZoneUnavailable)
     }
 
-    /// Alloue depuis le nœud NUMA demandé.
+    /// Allocates from requested NUMA node.
     pub fn alloc_on_node(
         &self,
         order: usize,
@@ -120,7 +120,7 @@ impl GlobalBuddyAllocator {
             "GlobalBuddyAllocator non initialisé"
         );
 
-        // Phase 1 : essai dans les zones NUMA-locales.
+        // Phase 1: attempt in NUMA-local zones.
         for zone in &self.zones {
             if !zone.is_initialized() {
                 continue;
@@ -133,7 +133,7 @@ impl GlobalBuddyAllocator {
             }
         }
 
-        // Phase 2 : fallback global (allocation cross-NUMA).
+        // Phase 2: global fallback (cross-NUMA allocation).
         self.alloc_pages(order, flags)
     }
 
@@ -143,11 +143,11 @@ impl GlobalBuddyAllocator {
             ZoneType::Dma => 0,
             ZoneType::Dma32 => 1,
             ZoneType::Movable => 3,
-            _ => 2, // Normal par défaut
+            _ => 2, // Normal by default
         }
     }
 
-    /// Retourne le nombre total de frames libres dans toutes les zones.
+    /// Returns total number of free frames across all zones.
     pub fn total_free_frames(&self) -> usize {
         self.zones
             .iter()
@@ -156,7 +156,7 @@ impl GlobalBuddyAllocator {
             .sum()
         }
 
-    /// Retourne le nombre total de frames physiques gérées (libres + utilisées).
+    /// Returns total number of managed physical frames (free + used).
     pub fn total_frames(&self) -> usize {
         self.zones
             .iter()
@@ -165,16 +165,16 @@ impl GlobalBuddyAllocator {
             .sum()
     }
 
-    /// Marque l'allocateur comme initialisé.
+    /// Marks allocator as initialized.
     pub fn mark_initialized(&self) {
         self.initialized.store(true, Ordering::Release);
     }
 
-    /// Initialise une zone de l'allocateur (appelé au boot, single-CPU).
+    /// Initializes an allocator zone (called at boot, single-CPU).
     ///
     /// # Safety
-    /// - Doit être appelé UNE SEULE FOIS par zone, avant SMP.
-    /// - `bitmap_buf` doit être valide pour `bitmap_words` × 8 bytes.
+    /// - Must be called EXACTLY ONCE per zone, before SMP.
+    /// - `bitmap_buf` must be valid for `bitmap_words` × 8 bytes.
     pub unsafe fn init_zone(
         &self,
         zone_type: ZoneType,
@@ -194,11 +194,11 @@ impl GlobalBuddyAllocator {
         );
     }
 
-    /// Ajoute une plage de frames libres aux zones initialisées qui couvrent cette plage.
+    /// Adds a free frame range to initialized zones covering this range.
     ///
     /// # Safety
-    /// - Zones concernées doivent être initialisées.
-    /// - La plage ne doit pas contenir de mémoire kernel active.
+    /// - Concerned zones must be initialized.
+    /// - Range must not contain active kernel memory.
     pub unsafe fn add_free_zone_region(&self, start: PhysAddr, end: PhysAddr) {
         for zone in &self.zones {
             if !zone.is_initialized() {
@@ -210,7 +210,7 @@ impl GlobalBuddyAllocator {
             let re = end.as_u64();
             if rs >= ze || re <= zs {
                 continue;
-            } // pas d'overlap
+            } // no overlap
             let cs = rs.max(zs);
             let ce = re.min(ze);
             if cs >= ce {
@@ -222,7 +222,7 @@ impl GlobalBuddyAllocator {
         }
     }
 
-    /// Retourne une référence à la zone pour un type donné.
+    /// Returns reference to zone for given type.
     pub fn zone(&self, zone_type: ZoneType) -> Option<&BuddyZone> {
         let idx = match zone_type {
             ZoneType::Dma => 0,
@@ -239,49 +239,49 @@ impl GlobalBuddyAllocator {
         }
     }
 
-    /// Accès mutant à une zone (initialisation uniquement).
+    /// Mutable access to a zone (initialization only).
     ///
     /// # Safety
-    /// Doit être appelé uniquement pendant l'init, en single-CPU.
+    /// Must be called only during init, in single-CPU.
     pub unsafe fn zone_mut(&self, zone_type: ZoneType) -> Option<&BuddyZone> {
         self.zone(zone_type)
     }
 }
 
-/// Allocateur buddy global.
+/// Global buddy allocator.
 pub static BUDDY: GlobalBuddyAllocator = GlobalBuddyAllocator::new();
 
-/// Alloue `2^order` pages physiques contiguës.
+/// Allocates `2^order` contiguous physical pages.
 #[inline(always)]
 pub fn alloc_pages(order: usize, flags: AllocFlags) -> Result<Frame, AllocError> {
     BUDDY.alloc_pages(order, flags)
 }
 
-/// Libère un bloc de `2^order` pages.
+/// Frees a block of `2^order` pages.
 #[inline(always)]
 pub fn free_pages(frame: Frame, order: usize) -> Result<(), AllocError> {
     BUDDY.free_pages(frame, order)
 }
 
-/// Alloue exactement 1 page physique (ordre 0).
+/// Allocates exactly 1 physical page (order 0).
 #[inline(always)]
 pub fn alloc_page(flags: AllocFlags) -> Result<Frame, AllocError> {
     alloc_pages(0, flags)
 }
 
-/// Libère exactement 1 page physique.
+/// Frees exactly 1 physical page.
 #[inline(always)]
 pub fn free_page(frame: Frame) -> Result<(), AllocError> {
     free_pages(frame, 0)
 }
 
-/// Réserve un frame physique contre toute libération/réallocation buddy.
+/// Reserves a physical frame against any buddy freeing/reallocation.
 #[inline(always)]
 pub fn reserve_frame(frame: Frame) {
     reserve_frame_descriptor(frame);
 }
 
-/// Réserve une série de frames physiques contiguës.
+/// Reserves a series of contiguous physical frames.
 #[inline(always)]
 pub fn reserve_frames(frames: &[Frame]) {
     for &frame in frames {
@@ -289,13 +289,13 @@ pub fn reserve_frames(frames: &[Frame]) {
     }
 }
 
-/// Désépingle un frame physique précédemment réservé.
+/// Unpins a previously reserved physical frame.
 #[inline(always)]
 pub fn unreserve_frame(frame: Frame) {
     unreserve_frame_descriptor(frame);
 }
 
-/// Désépingle une série de frames physiques.
+/// Unpins a series of physical frames.
 #[inline(always)]
 pub fn unreserve_frames(frames: &[Frame]) {
     for &frame in frames {

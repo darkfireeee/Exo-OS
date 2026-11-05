@@ -1,21 +1,21 @@
-//! # memory/physical/allocator/buddy/node.rs — Structure des nœuds et niveaux de free-list
+//! # memory/physical/allocator/buddy/node.rs — Node structure and free-list levels
 //!
-//! Nœuds doublement chaînés stockés in-place dans les pages physiques libres
-//! et gestion de l'alignement/traduction d'adresses en physmap.
+//! Doubly linked nodes stored in-place within free physical pages
+//! and alignment/address translation management via physmap.
 
 use core::ptr::null_mut;
 use core::sync::atomic::AtomicUsize;
 use crate::memory::core::{PAGE_SIZE, PhysAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FREE LIST NODE — nœud de liste chaînée dans un buddy bloc libre
+// FREE LIST NODE — linked list node in a free buddy block
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nœud de liste chaînée embedding dans un bloc libre.
-/// Stocké directement dans les premiers octets du bloc (page physique libre).
+/// Linked list node embedded in a free block.
+/// Stored directly in the first bytes of the block (free physical page).
 ///
-/// SAFETY: Ce nœud est lisible uniquement quand le bloc est LIBRE.
-/// Dès qu'un bloc est alloué, son contenu est indéfini pour l'allocateur.
+/// SAFETY: This node is readable only when the block is FREE.
+/// Once a block is allocated, its contents are undefined for the allocator.
 #[repr(C)]
 pub struct FreeNode {
     pub next: *mut FreeNode,
@@ -25,10 +25,10 @@ pub struct FreeNode {
 }
 
 impl FreeNode {
-    /// Initialise le nœud sentinelle ou autonome.
+    /// Initializes the sentinel or standalone node.
     ///
     /// # Safety
-    /// Le pointeur `ptr` doit être valide et correctement aligné.
+    /// The pointer `ptr` must be valid and properly aligned.
     #[inline]
     pub unsafe fn init(ptr: *mut FreeNode, order: u8) {
         (*ptr).next = ptr;
@@ -36,10 +36,10 @@ impl FreeNode {
         (*ptr).order = order;
     }
 
-    /// Insère un nœud après la tête de liste donnée.
+    /// Inserts a node after the given list head.
     ///
     /// # Safety
-    /// `list_head` et `node` doivent être des pointeurs valides et déréférençables.
+    /// `list_head` and `node` must be valid and dereferenceable pointers.
     #[inline]
     pub unsafe fn insert_after(list_head: *mut FreeNode, node: *mut FreeNode) {
         let next = (*list_head).next;
@@ -49,10 +49,10 @@ impl FreeNode {
         (*list_head).next = node;
     }
 
-    /// Retire le nœud de sa liste doublement chaînée.
+    /// Removes the node from its doubly linked list.
     ///
     /// # Safety
-    /// `node` doit être un pointeur valide actuellement inséré dans une liste.
+    /// `node` must be a valid pointer currently inserted in a list.
     #[inline]
     pub unsafe fn remove(node: *mut FreeNode) {
         let prev = (*node).prev;
@@ -63,10 +63,10 @@ impl FreeNode {
         (*node).prev = node;
     }
 
-    /// Vérifie si la liste est vide.
+    /// Checks if the list is empty.
     ///
     /// # Safety
-    /// `list_head` doit être null ou un pointeur valide vers une sentinelle de liste.
+    /// `list_head` must be null or a valid pointer to a list sentinel.
     #[inline]
     pub unsafe fn is_empty(list_head: *const FreeNode) -> bool {
         if list_head.is_null() {
@@ -75,10 +75,10 @@ impl FreeNode {
         core::ptr::eq((*list_head).next, list_head)
     }
 
-    /// Retire et renvoie le premier élément de la liste.
+    /// Removes and returns the first element of the list.
     ///
     /// # Safety
-    /// `list_head` doit pointer vers une sentinelle de liste valide.
+    /// `list_head` must point to a valid list sentinel.
     #[inline]
     pub unsafe fn pop(list_head: *mut FreeNode) -> Option<*mut FreeNode> {
         if Self::is_empty(list_head) {
@@ -91,15 +91,15 @@ impl FreeNode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BUDDY ORDER LEVEL — une free-list pour un ordre donné
+// BUDDY ORDER LEVEL — one free-list for a given order
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tête de free-list pour un ordre donné.
+/// Free-list head for a given order.
 #[repr(C, align(64))]
 pub struct BuddyOrderLevel {
-    /// Tête sentinelle (nœud vide — next/prev pointent vers elle-même si vide).
+    /// Sentinel head (empty node — next/prev point to itself if empty).
     pub head: FreeNode,
-    /// Nombre de blocs libres à cet ordre.
+    /// Number of free blocks at this order.
     pub count: AtomicUsize,
 }
 
@@ -122,10 +122,10 @@ impl BuddyOrderLevel {
         }
     }
 
-    /// Initialise la sentinelle (ne peut pas être fait en const, besoin de pointeur).
+    /// Initializes sentinel (cannot be done in const, requires pointer).
     ///
     /// # Safety
-    /// `self` doit être pinned ou stocké à une adresse mémoire finale stable.
+    /// `self` must be pinned or stored at a stable final memory address.
     pub unsafe fn init(&mut self) {
         let h = &mut self.head as *mut FreeNode;
         (*h).next = h;
@@ -134,29 +134,29 @@ impl BuddyOrderLevel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITAIRES INTERNES (bridge physmap direct)
+// INTERNAL UTILITIES (direct physmap bridge)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traduit une adresse physique en pointeur virtuel pour accéder aux FreeNodes.
-/// Utilise la physmap directe (PHYS_MAP_BASE + phys).
+/// Translates a physical address to a virtual pointer to access FreeNodes.
+/// Uses direct physmap (PHYS_MAP_BASE + phys).
 #[inline(always)]
 pub fn phys_to_virt_buddy(phys: PhysAddr) -> usize {
     use crate::memory::core::layout::PHYS_MAP_BASE;
     PHYS_MAP_BASE.as_usize() + phys.as_usize()
 }
 
-/// Traduit un pointeur virtuel (dans la physmap) en adresse physique.
+/// Translates a virtual pointer (in physmap) to a physical address.
 #[inline(always)]
 pub fn virt_to_phys_buddy(virt: usize) -> PhysAddr {
     use crate::memory::core::layout::PHYS_MAP_BASE;
     PhysAddr::new((virt - PHYS_MAP_BASE.as_usize()) as u64)
 }
 
-/// Remplit une plage de pages de zéros.
+/// Fills a page range with zeroes.
 ///
 /// # Safety
-/// `phys` doit être l'adresse de `2^order` pages allouées exclusivement
-/// par l'appelant. La physmap doit être accessible.
+/// `phys` must be the address of `2^order` pages allocated exclusively
+/// by caller. Physmap must be accessible.
 #[inline]
 pub unsafe fn zero_pages(phys: PhysAddr, order: usize) {
     let size = PAGE_SIZE << order;

@@ -1,14 +1,14 @@
 // kernel/src/memory/virtual/mmap.rs
 //
 // ──────────────────────────────────────────────────────────────────────────────
-// IMPLÉMENTATION DE MMAP / MUNMAP / MPROTECT / BRK
+// IMPLEMENTATION OF MMAP / MUNMAP / MPROTECT / BRK
 // ──────────────────────────────────────────────────────────────────────────────
 //
-// Implémente les appels système de gestion de mémoire virtuelle utilisateur.
-// La couche syscall injecte un pointeur de fonction vers l'espace d'adressage
-// courant via `register_current_as_getter()`.
+// Implements user virtual memory management system calls.
+// The syscall layer injects a function pointer to the current
+// address space via `register_current_as_getter()`.
 //
-// COUCHE 0 — aucune dépendance scheduler/process/ipc/fs.
+// LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicPtr, Ordering};
@@ -18,30 +18,30 @@ use crate::memory::virt::address_space::{UserAddressSpace, USER_MMAP_BASE};
 use crate::memory::virt::vma::{VmaBacking, VmaDescriptor, VmaFlags};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs
+// Errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs possibles des opérations mmap/munmap/mprotect/brk.
+/// Possible errors for mmap/munmap/mprotect/brk operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MmapError {
-    /// Longueur invalide (0 ou dépassement).
+    /// Invalid length (0 or overflow).
     InvalidLength,
-    /// Adresse invalide ou non alignée.
+    /// Invalid or unaligned address.
     InvalidAddress,
-    /// Plus d'espace virtuel disponible.
+    /// Out of virtual memory space.
     OutOfVirtualMemory,
-    /// Aucun espace d'adressage courant (getter non enregistré ou null).
+    /// No current address space (getter not registered or null).
     NoAddressSpace,
-    /// Échec d'allocation mémoire.
+    /// Memory allocation failure.
     AllocFailed,
-    /// Région non mappée.
+    /// Region not mapped.
     NotMapped,
-    /// Permission refusée.
+    /// Permission denied.
     PermissionDenied,
 }
 
 impl MmapError {
-    /// Traduit l'erreur en errno POSIX négatif.
+    /// Translates the error into a negative POSIX errno.
     pub fn to_kernel_errno(self) -> i64 {
         match self {
             MmapError::InvalidLength => -22,      // EINVAL
@@ -55,43 +55,43 @@ impl MmapError {
     }
 }
 
-/// Résultat interne du chemin mremap sans copie.
+/// Internal result of zero-copy mremap path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MremapZeroCopy {
-    /// La VMA a été déplacée par déplacement des PTEs.
+    /// The VMA was moved by moving PTEs.
     Moved(usize),
-    /// Le cas demandé exige le fallback compatibilité par copie.
+    /// The requested case requires the copy compatibility fallback.
     Unsupported,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Injection du getter de l'espace d'adressage courant (COUCHE 0 pattern)
+// Injection of current address space getter (LAYER 0 pattern)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Signature de la fonction retournant le UserAddressSpace du thread courant.
+/// Signature of function returning the current thread's UserAddressSpace.
 pub type CurrentAsGetterFn = fn() -> *mut UserAddressSpace;
 
-/// Pointeur de fonction enregistré par la couche supérieure (scheduler/process).
+/// Function pointer registered by the upper layer (scheduler/process).
 static CURRENT_AS_FN: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Enregistre la fonction qui retourne l'espace d'adressage du thread courant.
-/// Doit être appelée par le scheduler lors de son initialisation.
+/// Registers the function returning the current thread's address space.
+/// Must be called by the scheduler during its initialization.
 pub fn register_current_as_getter(f: CurrentAsGetterFn) {
     CURRENT_AS_FN.store(f as *mut (), Ordering::Release);
 }
 
-/// Obtient un pointeur vers l'espace d'adressage utilisateur courant.
+/// Gets a pointer to the current user address space.
 fn get_current_user_as() -> Option<*mut UserAddressSpace> {
     let ptr = CURRENT_AS_FN.load(Ordering::Acquire);
     if !ptr.is_null() {
-        // SAFETY: Enregistré via register_current_as_getter avec la bonne signature.
+        // SAFETY: Registered via register_current_as_getter with expected signature.
         let f: CurrentAsGetterFn = unsafe { core::mem::transmute(ptr) };
         let as_ptr = f();
         if !as_ptr.is_null() {
             return Some(as_ptr);
         }
     }
-    // Fallback direct via le PCB du thread courant
+    // Direct fallback via current thread's PCB
     let tcb_raw = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_raw == 0 {
         return None;
@@ -108,45 +108,45 @@ fn get_current_user_as() -> Option<*mut UserAddressSpace> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes POSIX (prot / map flags)
+// POSIX constants (prot / map flags)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Protection en lecture (PROT_READ).
+/// Read protection (PROT_READ).
 const PROT_READ: u32 = 1;
-/// Protection en écriture (PROT_WRITE).
+/// Write protection (PROT_WRITE).
 const PROT_WRITE: u32 = 2;
-/// Protection en exécution (PROT_EXEC).
+/// Execute protection (PROT_EXEC).
 const PROT_EXEC: u32 = 4;
 const KNOWN_PROT: u32 = PROT_READ | PROT_WRITE | PROT_EXEC;
 
-/// Mapping partagé (MAP_SHARED).
+/// Shared mapping (MAP_SHARED).
 const MAP_SHARED: u32 = 0x01;
-/// Mapping privé (MAP_PRIVATE).
+/// Private mapping (MAP_PRIVATE).
 #[allow(dead_code)]
 const MAP_PRIVATE: u32 = 0x02;
-/// Adresse fixée (MAP_FIXED).
+/// Fixed address (MAP_FIXED).
 const MAP_FIXED: u32 = 0x10;
-/// Mapping anonyme (MAP_ANONYMOUS / MAP_ANON).
+/// Anonymous mapping (MAP_ANONYMOUS / MAP_ANON).
 const MAP_ANON: u32 = 0x20;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers de conversion de flags
+// Flag conversion helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit les protections POSIX en flags de page x86.
+/// Converts POSIX protections to x86 page flags.
 fn prot_to_page_flags(prot: u32) -> PageFlags {
     let mut f = PageFlags::PRESENT | PageFlags::USER;
     if prot & PROT_WRITE != 0 {
         f |= PageFlags::WRITABLE;
     }
-    // NX par défaut sauf si PROT_EXEC explicite
+    // NX by default unless explicit PROT_EXEC
     if prot & PROT_EXEC == 0 {
         f |= PageFlags::NO_EXECUTE;
     }
     f
 }
 
-/// Convertit les flags POSIX (prot + map_flags) en VmaFlags.
+/// Converts POSIX flags (prot + map_flags) to VmaFlags.
 fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
     let mut f = VmaFlags::NONE;
     if prot & PROT_READ != 0 {
@@ -185,16 +185,16 @@ fn validate_prot(prot: u32) -> Result<(), MmapError> {
 // do_mmap
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mappe une région mémoire dans l'espace utilisateur courant.
+/// Maps a memory region in the current user address space.
 ///
-/// - `addr`  : adresse souhaitée (0 = noyau choisit).
-/// - `len`   : taille en octets (arrondie au multiple de PAGE_SIZE).
-/// - `prot`  : PROT_READ | PROT_WRITE | PROT_EXEC.
-/// - `flags` : MAP_ANON | MAP_PRIVATE | MAP_SHARED | MAP_FIXED.
-/// - `_fd`   : descripteur de fichier (ignoré — seuls les mappings anonymes sont supportés).
-/// - `_off`  : offset dans le fichier (ignoré).
+/// - `addr`:  desired address (0 = kernel chooses).
+/// - `len`:   size in bytes (rounded up to multiple of PAGE_SIZE).
+/// - `prot`:  PROT_READ | PROT_WRITE | PROT_EXEC.
+/// - `flags`: MAP_ANON | MAP_PRIVATE | MAP_SHARED | MAP_FIXED.
+/// - `_fd`:   file descriptor (ignored — only anonymous mappings are supported).
+/// - `_off`:  offset in file (ignored).
 ///
-/// Retourne l'adresse virtuelle de début de la région (comme usize).
+/// Returns the starting virtual address of the region (as usize).
 pub fn do_mmap(
     addr: u64,
     len: usize,
@@ -204,12 +204,12 @@ pub fn do_mmap(
     _off: u64,
 ) -> Result<usize, MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
-    // SAFETY: le pointeur est valide tant qu'on traite le syscall de ce thread.
+    // SAFETY: the pointer is valid as long as this thread's syscall is being handled.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
     do_mmap_in_as(user_as, addr, len, prot, flags)
 }
 
-/// Variante explicite pour les serveurs Ring1 autorisés à gérer un AS cible.
+/// Explicit variant for Ring1 servers authorized to manage a target AS.
 pub fn do_mmap_in_as(
     user_as: &UserAddressSpace,
     addr: u64,
@@ -222,12 +222,12 @@ pub fn do_mmap_in_as(
     }
     validate_prot(prot)?;
 
-    // Alignement sur PAGE_SIZE
+    // Alignment to PAGE_SIZE
     let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
     user_as.stats.mmap_calls.fetch_add(1, Ordering::Relaxed);
 
-    // Recherche d'un gap virtuel libre
+    // Search for a free virtual gap
     let fixed = flags & MAP_FIXED != 0;
     let base = if fixed {
         if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
@@ -250,7 +250,7 @@ pub fn do_mmap_in_as(
         .as_u64()
         .checked_add(len_aligned as u64)
         .ok_or(MmapError::OutOfVirtualMemory)?;
-    // T4-002 FIX: Vérification stricte des bornes utilisateurs (jamais dans la moitié noyau)
+    // T4-002 FIX: Strict check of user bounds (never in kernel half)
     if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
         return Err(MmapError::InvalidAddress);
     }
@@ -259,7 +259,7 @@ pub fn do_mmap_in_as(
     let page_flags = prot_to_page_flags(prot);
     let vma_flags = prot_to_vma_flags(prot, flags) | VmaFlags::ANONYMOUS;
 
-    // Allouer et insérer le descripteur VMA
+    // Allocate and insert VMA descriptor
     let vma = Box::new(VmaDescriptor::new(
         start,
         end,
@@ -269,11 +269,11 @@ pub fn do_mmap_in_as(
     ));
     let vma_ptr = Box::into_raw(vma);
 
-    // SAFETY: vma_ptr est valide, non-null, exclusif.
+    // SAFETY: vma_ptr is valid, non-null, exclusive.
     let inserted = unsafe { user_as.insert_vma(vma_ptr) };
     if !inserted {
-        // Libérer si l'insertion échoue (ex: chevauchement avec MAP_FIXED)
-        // SAFETY: nous sommes les seuls propriétaires.
+        // Free if insertion fails (e.g. overlap with MAP_FIXED)
+        // SAFETY: we are the exclusive owners.
         let _ = unsafe { Box::from_raw(vma_ptr) };
         return Err(MmapError::InvalidAddress);
     }
@@ -285,20 +285,20 @@ pub fn do_mmap_in_as(
 // do_munmap
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dé-mappe la région virtuelle débutant à `addr`.
+/// Unmaps the virtual region starting at `addr`.
 ///
-/// `addr` doit être aligné sur PAGE_SIZE.
-/// Démappe toutes les PTEs présentes dans la VMA et libère leurs frames physiques.
+/// `addr` must be aligned to PAGE_SIZE.
+/// Unmaps all PTEs present in the VMA and frees their physical frames.
 ///
-/// V-04 : TLB shootdown synchrone (tous CPUs) AVANT free_page.
+/// V-04: Synchronous TLB shootdown (all CPUs) BEFORE free_page.
 pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
-    // SAFETY: user_as_ptr est non-null (garanti par get_current_user_as) et vit le temps du syscall.
+    // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
     do_munmap_in_as(user_as, addr)
 }
 
-/// Démappe une VMA dans un espace d'adressage explicite.
+/// Unmaps a VMA in an explicit address space.
 pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), MmapError> {
     if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
@@ -309,23 +309,23 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
     match user_as.remove_vma(VirtAddr::new(addr)) {
         None => Err(MmapError::NotMapped),
         Some(vma_ptr) => {
-            // Récupérer les bornes et le backing de la VMA avant de libérer le descripteur.
+            // Retrieve VMA bounds and backing before freeing the descriptor.
             let (vma_start, vma_end, vma_backing) = unsafe {
                 let vma = &*vma_ptr;
                 (vma.start, vma.end, vma.backing)
             };
 
-            // Libérer le VmaDescriptor alloué par do_mmap / do_brk.
-            // SAFETY: le pointeur est valide et nous sommes les propriétaires.
+            // Free VmaDescriptor allocated by do_mmap / do_brk.
+            // SAFETY: the pointer is valid and we are the owners.
             let _ = unsafe { Box::from_raw(vma_ptr) };
 
-            // V-04 : traiter les pages par lots pour limiter la taille du buffer.
-            //   1. Démappe les PTEs (flush TLB local intégré via unmap_page).
-            //   2. TLB shootdown synchrone vers tous les CPUs actifs.
-            //   3. Libère les frames physiques accumulés.
-            // Cette séparation garantit qu'aucun CPUs ne peut accéder à un frame
-            // après sa libération via un entrée TLB périmée (V-04).
-            const BATCH: usize = 64; // 64 × 4 KiB = 256 KiB par lot
+            // V-04: process pages in batches to bound buffer size.
+            //   1. Unmap PTEs (integrated local TLB flush via unmap_page).
+            //   2. Synchronous TLB shootdown across all active CPUs.
+            //   3. Free accumulated physical frames.
+            // This separation guarantees no CPU can access a frame
+            // after its release via a stale TLB entry (V-04).
+            const BATCH: usize = 64; // 64 × 4 KiB = 256 KiB per batch
             let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
 
             let mut cursor = vma_start.as_u64();
@@ -335,9 +335,9 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
                 ); BATCH];
                 let mut count = 0usize;
 
-                // Phase 1 : démappe jusqu'à BATCH pages (flush local intégré).
+                // Phase 1: unmap up to BATCH pages (integrated local flush).
                 while cursor < vma_end.as_u64() && count < BATCH {
-                    // SAFETY: adresses user canoniques.
+                    // SAFETY: canonical user addresses.
                     if let Some(f) = unsafe { user_as.unmap_page(VirtAddr::new(cursor)) } {
                         frames[count] = f;
                         count += 1;
@@ -349,14 +349,14 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
                     continue;
                 }
 
-                // Phase 2 : TLB shootdown synchrone (tous CPUs) — V-04.
+                // Phase 2: synchronous TLB shootdown (all CPUs) — V-04.
                 let batch_start = VirtAddr::new(
                     vma_start
                         .as_u64()
                         .max(cursor - (count as u64 * PAGE_SIZE as u64)),
                 );
                 let batch_end = VirtAddr::new(cursor);
-                // SAFETY: plage canonique user, appelé hors IRQ.
+                // SAFETY: canonical user range, called outside IRQ.
                 unsafe {
                     crate::memory::virt::shootdown_sync(
                         crate::memory::virt::TlbFlushType::Range {
@@ -367,8 +367,8 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
                     );
                 }
 
-                // Phase 3 : libérer les frames (TLBs déjà invalidés partout).
-                // T4-001 FIX : Ne JAMAIS libérer les frames des VMA Shared/Device/Direct au buddy allocator.
+                // Phase 3: free frames (TLBs already invalidated everywhere).
+                // T4-001 FIX: NEVER free Shared/Device/Direct VMA frames to buddy allocator.
                 if vma_backing == VmaBacking::Anonymous {
                     for i in 0..count {
                         let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
@@ -387,18 +387,18 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
 // do_mprotect
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Modifie les permissions d'une région mémoire existante.
+/// Modifies permissions of an existing memory region.
 ///
-/// `addr` doit être aligné sur PAGE_SIZE et correspondre au début d'une VMA.
-/// Met à jour les PTEs déjà présentes en table de pages ET invalide le TLB.
+/// `addr` must be aligned to PAGE_SIZE and match the start of a VMA.
+/// Updates PTEs already present in page table AND invalidates TLB.
 pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
-    // SAFETY: user_as_ptr est non-null (garanti par get_current_user_as) et vit le temps du syscall.
+    // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
     do_mprotect_in_as(user_as, addr, len, prot)
 }
 
-/// Modifie les permissions d'une région dans un espace d'adressage explicite.
+/// Modifies permissions of a region in an explicit address space.
 pub fn do_mprotect_in_as(
     user_as: &UserAddressSpace,
     addr: u64,
@@ -417,7 +417,7 @@ pub fn do_mprotect_in_as(
         .find_vma(VirtAddr::new(addr))
         .ok_or(MmapError::NotMapped)?;
 
-    // SAFETY: La VMA est valide et protégée par le verrou de l'address space.
+    // SAFETY: The VMA is valid and protected by the address space lock.
     let vma: &mut VmaDescriptor = unsafe { &mut *(vma_const_ptr as *mut VmaDescriptor) };
 
     let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
@@ -432,10 +432,10 @@ pub fn do_mprotect_in_as(
 
     let new_page_flags = prot_to_page_flags(prot);
 
-    // Mettre à jour les flags de page dans la VMA (pour les futurs demand-faults).
+    // Update page flags in VMA (for future demand-faults).
     vma.page_flags = new_page_flags;
 
-    // Mettre à jour les flags VMA (READ/WRITE/EXEC uniquement).
+    // Update VMA flags (READ/WRITE/EXEC only).
     let perm_mask = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::EXEC;
     let keep = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
     let mut new_perm = VmaFlags::NONE;
@@ -450,9 +450,9 @@ pub fn do_mprotect_in_as(
     }
     vma.flags = keep | new_perm;
 
-    // Appliquer les nouveaux flags sur les PTEs déjà présentes dans la table.
-    // Les pages non encore faultées (demand paging) reçoivent une Err ignorée :
-    // elles hériteront des nouveaux flags lors de leur prochain fault via vma.page_flags.
+    // Apply new flags to PTEs already present in the table.
+    // Pages not yet faulted (demand paging) receive an Err which is ignored:
+    // they will inherit the new flags on their next fault via vma.page_flags.
     let mut walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
     let mut cursor = range_start.as_u64();
     while cursor < range_end.as_u64() {
@@ -472,15 +472,15 @@ pub fn do_mprotect_in_as(
         } else {
             new_page_flags
         };
-        // remap_flags → Err si page absente (demand paging) → ignoré intentionnellement.
+        // remap_flags → Err if page absent (demand paging) → intentionally ignored.
         let _ = walker.remap_flags(va, pte_flags);
         cursor += PAGE_SIZE as u64;
     }
 
-    // Invalider le TLB pour toute la plage modifiée, y compris si l'AS cible
-    // tourne sur un autre CPU.
+    // Invalidate TLB for the entire modified range, including if target AS
+    // runs on another CPU.
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
-    // SAFETY: adresses user canoniques dans [range_start, range_end), hors IRQ.
+    // SAFETY: canonical user addresses in [range_start, range_end), outside IRQ.
     unsafe {
         crate::memory::virt::shootdown_sync(
             crate::memory::virt::TlbFlushType::Range {
@@ -498,12 +498,12 @@ pub fn do_mprotect_in_as(
 // do_mremap_zero_copy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Déplace une VMA complète par déplacement de PTEs, sans recopier les données.
+/// Moves a complete VMA by moving PTEs, without copying data.
 ///
-/// Ce chemin couvre le cas critique des allocateurs : une région anonyme privée
-/// entière est agrandie/déplacée avec `MREMAP_MAYMOVE`. Les cas partiels ou
-/// `MREMAP_DONTUNMAP` restent traités par le fallback de compatibilité côté
-/// syscall, car ils nécessitent une sémantique de splitting/aliasing séparée.
+/// This path covers the critical allocator case: an entire private anonymous
+/// region is expanded/relocated with `MREMAP_MAYMOVE`. Partial cases or
+/// `MREMAP_DONTUNMAP` remain handled by the compatibility fallback on the
+/// syscall side, as they require separate splitting/aliasing semantics.
 pub fn do_mremap_zero_copy(
     old_addr: u64,
     old_len: usize,
@@ -539,11 +539,11 @@ pub fn do_mremap_zero_copy(
     let old_start = VirtAddr::new(old_addr);
 
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
-    // SAFETY: le pointeur est valide tant qu'on traite le syscall de ce thread.
+    // SAFETY: the pointer is valid as long as this thread's syscall is being handled.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
 
     let old_vma_ptr = user_as.find_vma(old_start).ok_or(MmapError::NotMapped)?;
-    // SAFETY: pointeur de VMA issu de l'AS courant; lecture instantanée des métadonnées.
+    // SAFETY: VMA pointer from current AS; instantaneous metadata read.
     let old_vma = unsafe { &*old_vma_ptr };
     if old_vma.start.as_u64() != old_addr || old_vma.size() != old_len_aligned {
         return Ok(MremapZeroCopy::Unsupported);
@@ -571,9 +571,9 @@ pub fn do_mremap_zero_copy(
 
     let new_vma = Box::new(moved_vma);
     let new_vma_ptr = Box::into_raw(new_vma);
-    // SAFETY: new_vma_ptr est une allocation fraîche non encore attachée.
+    // SAFETY: new_vma_ptr is a fresh allocation not yet attached.
     if !unsafe { user_as.insert_vma(new_vma_ptr) } {
-        // SAFETY: insertion échouée, donc l'arbre n'a pas pris la propriété.
+        // SAFETY: insertion failed, so the tree did not take ownership.
         let _ = unsafe { Box::from_raw(new_vma_ptr) };
         return Err(MmapError::InvalidAddress);
     }
@@ -625,7 +625,7 @@ pub fn do_mremap_zero_copy(
         .checked_add(old_len_aligned as u64)
         .ok_or(MmapError::OutOfVirtualMemory)?;
     let old_end = VirtAddr::new(old_end_raw);
-    // SAFETY: plages user canoniques, hors IRQ.
+    // SAFETY: canonical user ranges, outside IRQ.
     unsafe {
         crate::memory::virt::shootdown_sync(
             crate::memory::virt::TlbFlushType::Range {
@@ -650,8 +650,8 @@ pub fn do_mremap_zero_copy(
 // do_brk
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fallback historique pour les espaces sans image ELF publiée. Les processus
-/// normaux utilisent `UserAddressSpace::heap_start`, initialisé par le loader.
+/// Historical fallback for spaces without a published ELF image. Normal
+/// processes use `UserAddressSpace::heap_start`, initialized by the loader.
 const BRK_BASE: u64 = 0x0000_0001_0000_0000; // 4 GiB
 
 fn align_up_page(addr: u64) -> Option<u64> {
@@ -659,16 +659,16 @@ fn align_up_page(addr: u64) -> Option<u64> {
     addr.checked_add(mask).map(|value| value & !mask)
 }
 
-/// Étend ou réduit le heap utilisateur (per-process via `UserAddressSpace`).
+/// Expands or shrinks user heap (per-process via `UserAddressSpace`).
 ///
-/// - `addr == 0` : retourne le break courant.
-/// - `addr != 0` : déplace le break vers `addr` (arrondi au prochain multiple
-///   de PAGE_SIZE) et crée uniquement la portion de VMA réellement nouvelle.
+/// - `addr == 0`: returns current break.
+/// - `addr != 0`: moves break to `addr` (rounded up to next multiple
+///   of PAGE_SIZE) and only creates the genuinely new VMA portion.
 ///
-/// Retourne la nouvelle valeur du break.
+/// Returns the new break value.
 pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
-    // SAFETY: user_as_ptr est non-null (garanti par get_current_user_as) et vit le temps du syscall.
+    // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
 
     let heap_base = match user_as.heap_start.load(Ordering::Acquire) {
@@ -720,17 +720,17 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
         ));
         let vma_ptr = Box::into_raw(vma);
 
-        // SAFETY: vma_ptr valide, non-null, exclusif — issu de Box::into_raw.
+        // SAFETY: vma_ptr is valid, non-null, exclusive — coming from Box::into_raw.
         let inserted = unsafe { user_as.insert_vma(vma_ptr) };
         if !inserted {
-            // SAFETY: vma_ptr est encore exclusif — insert_vma a échoué, on reprend la propriété.
+            // SAFETY: vma_ptr is still exclusive — insert_vma failed, reclaim ownership.
             let _ = unsafe { Box::from_raw(vma_ptr) };
             return Err(MmapError::OutOfVirtualMemory);
         }
     }
-    // Réduction : on ne retire pas les VMAs (comportement Linux sur shrink).
+    // Shrink: VMAs are not removed (Linux behavior on shrink).
 
-    // Mettre à jour le break per-process (pas de state global).
+    // Update per-process break (no global state).
     user_as.heap_end.store(new_brk, Ordering::Release);
     Ok(new_brk)
 }
@@ -739,22 +739,22 @@ pub fn do_brk(addr: u64) -> Result<u64, MmapError> {
 // map_shm_into_process  —  P1-02
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs spécifiques au mappage SHM dans un espace d'adressage.
+/// Errors specific to SHM mapping in an address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShmMapError {
-    /// Aucun espace d'adressage cible disponible.
+    /// No target address space available.
     NoAddressSpace,
-    /// Plus d'espace virtuel disponible dans l'espace cible.
+    /// Out of virtual memory in target space.
     OutOfVirtualMemory,
-    /// Échec de l'allocation ou mappage d'une frame.
+    /// Frame allocation or mapping failure.
     AllocFailed,
-    /// Région SHM invalide ou inactive.
+    /// Invalid or inactive SHM region.
     InvalidRegion,
-    /// Permission refusée (intersection vide).
+    /// Permission denied (empty intersection).
     PermissionDenied,
 }
 
-/// Métadonnées minimales d'une région SHM fournies par la couche IPC.
+/// Minimal SHM region metadata provided by the IPC layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShmRegionInfo {
     pub n_pages: usize,
@@ -773,7 +773,7 @@ pub type ShmRegisterMappingFn = fn(
     n_pages: usize,
 ) -> Result<usize, ShmMapError>;
 
-/// Callbacks IPC nécessaires pour mapper une région SHM sans importer IPC dans memory/.
+/// IPC callbacks necessary to map an SHM region without importing IPC into memory/.
 #[derive(Clone, Copy)]
 pub struct ShmProviderFns {
     pub region_info: ShmRegionInfoFn,
@@ -807,7 +807,7 @@ fn shm_provider() -> Option<ShmProviderFns> {
         return None;
     }
     Some(ShmProviderFns {
-        // SAFETY: enregistré exclusivement via register_shm_provider avec les signatures attendues.
+        // SAFETY: registered exclusively via register_shm_provider with expected signatures.
         region_info: unsafe { core::mem::transmute::<*mut (), ShmRegionInfoFn>(region_info) },
         page_phys: unsafe { core::mem::transmute::<*mut (), ShmPagePhysFn>(page_phys) },
         release_region: unsafe { core::mem::transmute::<*mut (), ShmReleaseRegionFn>(release_region) },
@@ -815,19 +815,19 @@ fn shm_provider() -> Option<ShmProviderFns> {
     })
 }
 
-/// Résultat d'un mappage SHM dans un espace d'adressage.
+/// Result of an SHM mapping into an address space.
 pub struct ShmMapIntoResult {
-    /// Adresse virtuelle de base du mapping dans l'espace cible.
+    /// Base virtual address of the mapping in the target space.
     pub virt_base: u64,
-    /// Nombre de pages effectivement mappées.
+    /// Number of pages actually mapped.
     pub n_pages: usize,
-    /// Index du mapping dans SHM_MAPPING_TABLE (pour shm_unmap).
+    /// Mapping index in SHM_MAPPING_TABLE (for shm_unmap).
     pub mapping_idx: usize,
 }
 
 fn free_removed_vma(user_as: &UserAddressSpace, start: VirtAddr) {
     if let Some(vma_ptr) = user_as.remove_vma(start) {
-        // SAFETY: remove_vma() transfère la propriété du descripteur à l'appelant.
+        // SAFETY: remove_vma() transfers descriptor ownership to the caller.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
 }
@@ -842,25 +842,25 @@ fn rollback_shm_into_process(user_as: &UserAddressSpace, virt_base: VirtAddr, n_
     free_removed_vma(user_as, virt_base);
 }
 
-/// Mappe une région SHM existante dans l'espace d'adressage d'un processus.
+/// Maps an existing SHM region into a process's address space.
 ///
-/// ## Opérations
-/// 1. Trouve un gap virtuel libre dans `user_as` (ou utilise `hint_virt`)
-/// 2. Enregistre une VMA de type `VmaBacking::Shared`
-/// 3. Mappe chaque frame physique SHM via `user_as.map_page()` (NO_COW)
-/// 4. Enregistre le mapping via le provider SHM injecté par la couche IPC
+/// ## Operations
+/// 1. Finds a free virtual gap in `user_as` (or uses `hint_virt`)
+/// 2. Registers a VMA of type `VmaBacking::Shared`
+/// 3. Maps each SHM physical frame via `user_as.map_page()` (NO_COW)
+/// 4. Registers the mapping via the SHM provider injected by the IPC layer
 ///
 /// ## Safety
-/// `user_as` doit être un pointeur valide vers un `UserAddressSpace` actif.
-/// Les frames SHM sont fournies par le provider enregistré et ne sont jamais
-/// libérées tant qu'au moins un mapping reste actif.
+/// `user_as` must be a valid pointer to an active `UserAddressSpace`.
+/// SHM frames are provided by the registered provider and are never
+/// freed while at least one mapping remains active.
 ///
 /// ## Arguments
-/// - `user_as`   : espace d'adressage du processus cible
-/// - `desc_idx`  : index opaque de la région SHM côté provider
-/// - `pid`       : PID du processus (pour les hooks VMM)
-/// - `hint_virt` : adresse virtuelle souhaitée (0 = auto)
-/// - `writable`  : autoriser l'écriture dans le mapping
+/// - `user_as`:   address space of the target process
+/// - `desc_idx`:  opaque index of the SHM region on provider side
+/// - `pid`:       process PID (for VMM hooks)
+/// - `hint_virt`: desired virtual address (0 = auto)
+/// - `writable`:  allow writing to the mapping
 pub fn map_shm_into_process(
     user_as: &UserAddressSpace,
     desc_idx: usize,
@@ -873,7 +873,7 @@ pub fn map_shm_into_process(
 
     let provider = shm_provider().ok_or(ShmMapError::InvalidRegion)?;
 
-    // ── 1. Lire les métadonnées de la région SHM ──────────────────────────
+    // ── 1. Read SHM region metadata ───────────────────────────────────────
     let info = (provider.region_info)(desc_idx, writable)?;
     let n_pages = info.n_pages;
     let size_bytes = info.size_bytes;
@@ -885,7 +885,7 @@ pub fn map_shm_into_process(
 
     let size_aligned = (size_bytes + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
-    // ── 2. Trouver un gap virtuel libre ───────────────────────────────────
+    // ── 2. Find a free virtual gap ────────────────────────────────────────
     let hint = if hint_virt != 0 {
         Some(VirtAddr::new(hint_virt))
     } else {
@@ -898,20 +898,20 @@ pub fn map_shm_into_process(
 
     let virt_end = VirtAddr::new(virt_base.as_u64() + size_aligned as u64);
 
-    // ── 3. Construire les flags de la VMA ────────────────────────────────
+    // ── 3. Build VMA flags ────────────────────────────────────────────────
     let vma_flags = if writable {
         VmaFlags::READ | VmaFlags::WRITE | VmaFlags::SHARED
     } else {
         VmaFlags::READ | VmaFlags::SHARED
     };
-    // NO_COW sur les pages SHM (partagées, pas de copy-on-write)
+    // NO_COW on SHM pages (shared, no copy-on-write)
     let page_flags = if writable {
         PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE
     } else {
         PageFlags::PRESENT | PageFlags::USER | PageFlags::NO_EXECUTE
     };
 
-    // ── 4. Insérer la VMA ─────────────────────────────────────────────────
+    // ── 4. Insert VMA ─────────────────────────────────────────────────────
     let vma = Box::new(VmaDescriptor::new(
         virt_base,
         virt_end,
@@ -920,18 +920,18 @@ pub fn map_shm_into_process(
         VmaBacking::Shared,
     ));
     let vma_ptr = Box::into_raw(vma);
-    // SAFETY: vma_ptr est valide, non-null, exclusif.
+    // SAFETY: vma_ptr is valid, non-null, exclusive.
     let inserted = unsafe { user_as.insert_vma(vma_ptr) };
     if !inserted {
-        // SAFETY: on récupère la propriété que l'on avait.
+        // SAFETY: reclaim the ownership we had.
         let _ = unsafe { Box::from_raw(vma_ptr) };
         (provider.release_region)(desc_idx);
         return Err(ShmMapError::OutOfVirtualMemory);
     }
 
-    // ── 5. Mapper les frames physiques SHM ──────────────────────────────
-    // Allocateur de tables intermédiaires (PT/PD/PDPT) uniquement —
-    // les frames de données viennent du pool SHM.
+    // ── 5. Map SHM physical frames ────────────────────────────────────────
+    // Allocator for intermediate tables (PT/PD/PDPT) only —
+    // data frames come from the SHM pool.
     struct PtAllocOnly;
     impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
         fn alloc_frame(
@@ -955,8 +955,8 @@ pub fn map_shm_into_process(
             };
             let frame = Frame::containing(crate::memory::core::PhysAddr::new(phys));
             let virt = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
-            // SAFETY: virt est dans l'espace user du processus cible,
-            // frame est une page SHM allouée et initialisée.
+            // SAFETY: virt is in target process's user space,
+            // frame is an allocated and initialized SHM page.
             if unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }.is_err() {
                 rollback_shm_into_process(user_as, virt_base, i);
                 (provider.release_region)(desc_idx);
@@ -965,7 +965,7 @@ pub fn map_shm_into_process(
         }
     }
 
-    // ── 6. Enregistrer dans SHM_MAPPING_TABLE ────────────────────────────
+    // ── 6. Register in SHM_MAPPING_TABLE ──────────────────────────────────
     let mapping_idx = (provider.register_mapping)(desc_idx, pid, virt_base.as_u64(), writable, n_pages)
         .inspect_err(|_| {
             rollback_shm_into_process(user_as, virt_base, n_pages);

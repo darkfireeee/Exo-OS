@@ -1,14 +1,14 @@
 // kernel/src/memory/dma/channels/channel.rs
 //
-// Ring buffer producer/consumer pour canaux DMA individuels.
+// Producer/consumer ring buffer for individual DMA channels.
 //
-// Ce module implémente le mécanisme bas niveau d'un canal DMA :
-//   - Le producteur (driver) dépose des transactions via `submit()`.
-//   - Le consommateur (moteur DMA / IRQ handler) retire via `consume()`.
-//   - Ring buffer lock-free single-producer/single-consumer (SPSC).
-//   - Backpressure : `submit()` retourne Err si le ring est plein.
+// This module implements the low-level mechanism of a DMA channel:
+//   - The producer (driver) posts transactions via `submit()`.
+//   - The consumer (DMA engine / IRQ handler) retrieves via `consume()`.
+//   - Lock-free single-producer/single-consumer (SPSC) ring buffer.
+//   - Backpressure: `submit()` returns Err if the ring is full.
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -19,36 +19,36 @@ use crate::memory::dma::core::types::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Profondeur du ring buffer d'un canal (power of 2 pour masque rapide).
+/// Depth of a channel's ring buffer (power of 2 for fast masking).
 pub const CHANNEL_RING_SIZE: usize = 128;
 const RING_MASK: usize = CHANNEL_RING_SIZE - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMMANDE DMA
+// DMA COMMAND
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une commande de transfert dans le ring buffer.
+/// A transfer command in the ring buffer.
 ///
-/// Format compact (64 bytes) pour tenir dans une cache line.
+/// Compact format (64 bytes) to fit in a cache line.
 #[repr(C, align(64))]
 #[derive(Copy, Clone)]
 pub struct DmaCommand {
-    /// Transaction parente (pour signalement de completion/erreur).
+    /// Parent transaction (for completion/error notification).
     pub txn_id: DmaTransactionId,
-    /// Adresse physique source.
+    /// Source physical address.
     pub src_phys: PhysAddr,
-    /// Adresse physique de destination.
+    /// Destination physical address.
     pub dst_phys: PhysAddr,
-    /// Longueur du transfert en octets.
+    /// Transfer length in bytes.
     pub len: u32,
-    /// Direction du transfert.
+    /// Transfer direction.
     pub direction: u8, // DmaDirection as u8
-    /// Flags de mapping DMA.
+    /// DMA mapping flags.
     pub flags: u32, // DmaMapFlags.0
-    /// Padding pour exactement 64 bytes.
+    /// Padding to reach exactly 64 bytes.
     _pad: [u8; 7],
 }
 
@@ -102,42 +102,42 @@ impl DmaCommand {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RING BUFFER SPSC
+// SPSC RING BUFFER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ring buffer SPSC (Single-Producer/Single-Consumer) pour commandes DMA.
+/// SPSC (Single-Producer/Single-Consumer) ring buffer for DMA commands.
 ///
-/// ## Garanties
-/// - `submit()` peut être appelé depuis n'importe quel contexte (même IRQ)
-///   par **un seul** producteur à la fois.
-/// - `consume()` est appelé uniquement par le moteur DMA ou le handler IRQ,
-///   par **un seul** consommateur à la fois.
-/// - Aucun verrou requis pour les opérations normales (lock-free SPSC).
+/// ## Guarantees
+/// - `submit()` can be called from any context (even IRQ)
+///   by **a single** producer at a time.
+/// - `consume()` is called only by the DMA engine or the IRQ handler,
+///   by **a single** consumer at a time.
+/// - No locks required for normal operations (lock-free SPSC).
 ///
-/// ## Débordement
-/// Si le ring est plein, `submit()` retourne `Err(DmaError::OutOfMemory)`.
-/// Le producteur est responsable de la gestion de la backpressure.
+/// ## Overflow
+/// If the ring is full, `submit()` returns `Err(DmaError::OutOfMemory)`.
+/// The producer is responsible for handling backpressure.
 pub struct DmaChannelRing {
-    /// Canal propriétaire de ce ring.
+    /// Channel owning this ring.
     pub channel_id: DmaChannelId,
-    /// Commandes dans le ring.
-    /// UnsafeCell pour la mutation SPSC sans verrou.
+    /// Commands in the ring.
+    /// UnsafeCell for SPSC mutation without locks.
     ring: UnsafeCell<[DmaCommand; CHANNEL_RING_SIZE]>,
-    /// Index du prochain slot d'écriture (producteur).
+    /// Next write slot index (producer).
     head: AtomicU32,
-    /// Index du prochain slot de lecture (consommateur).
+    /// Next read slot index (consumer).
     tail: AtomicU32,
-    /// Ring actif (peut recevoir des soumissions).
+    /// Ring active (can receive submissions).
     active: AtomicBool,
-    /// Statistiques.
+    /// Statistics.
     pub submitted: AtomicU64,
     pub consumed: AtomicU64,
     pub dropped_full: AtomicU64,
     pub errors_injected: AtomicU64,
 }
 
-// SAFETY : SPSC garanti par convention. head modifié uniquement par le producteur,
-// tail uniquement par le consommateur. Pas d'accès concurrent aux mêmes slots.
+// SAFETY: SPSC guaranteed by convention. head modified only by the producer,
+// tail only by the consumer. No concurrent access to the same slots.
 unsafe impl Sync for DmaChannelRing {}
 unsafe impl Send for DmaChannelRing {}
 
@@ -156,12 +156,12 @@ impl DmaChannelRing {
         }
     }
 
-    /// Active ce ring (autorise les soumissions).
+    /// Activates this ring (allows submissions).
     pub fn activate(&self) {
         self.active.store(true, Ordering::Release);
     }
 
-    /// Désactive ce ring (rejette les nouvelles soumissions).
+    /// Deactivates this ring (rejects new submissions).
     pub fn deactivate(&self) {
         self.active.store(false, Ordering::Release);
     }
@@ -170,14 +170,14 @@ impl DmaChannelRing {
         self.active.load(Ordering::Acquire)
     }
 
-    // ── Producteur ───────────────────────────────────────────────────────────
+    // ── Producer ─────────────────────────────────────────────────────────────
 
-    /// Soumet une commande DMA dans le ring.
+    /// Submits a DMA command into the ring.
     ///
-    /// # Erreurs
-    /// - `DmaError::NotInitialized` : ring inactif.
-    /// - `DmaError::OutOfMemory` : ring plein (backpressure).
-    /// - `DmaError::InvalidParams` : commande non valide.
+    /// # Errors
+    /// - `DmaError::NotInitialized`: inactive ring.
+    /// - `DmaError::OutOfMemory`: ring full (backpressure).
+    /// - `DmaError::InvalidParams`: invalid command.
     pub fn submit(&self, cmd: DmaCommand) -> Result<(), DmaError> {
         if !self.is_active() {
             return Err(DmaError::NotInitialized);
@@ -189,14 +189,14 @@ impl DmaChannelRing {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Acquire);
 
-        // Ring plein : head - tail >= CHANNEL_RING_SIZE.
+        // Ring full: head - tail >= CHANNEL_RING_SIZE.
         if (head.wrapping_sub(tail)) as usize >= CHANNEL_RING_SIZE {
             self.dropped_full.fetch_add(1, Ordering::Relaxed);
             return Err(DmaError::OutOfMemory);
         }
 
         let slot = (head as usize) & RING_MASK;
-        // SAFETY: head % SIZE ∈ [0,SIZE); pas de consommateur concurrent (tail != head+1 vérifié).
+        // SAFETY: head % SIZE ∈ [0,SIZE); no concurrent consumer (tail != head+1 checked).
         unsafe {
             (*self.ring.get())[slot] = cmd;
         }
@@ -208,25 +208,25 @@ impl DmaChannelRing {
         Ok(())
     }
 
-    // ── Consommateur ─────────────────────────────────────────────────────────
+    // ── Consumer ─────────────────────────────────────────────────────────────
 
-    /// Retire la prochaine commande du ring.
+    /// Retrieves the next command from the ring.
     ///
-    /// Retourne `None` si le ring est vide.
-    /// Appelé depuis le contexte IRQ / moteur DMA.
+    /// Returns `None` if the ring is empty.
+    /// Called from IRQ / DMA engine context.
     pub fn consume(&self) -> Option<DmaCommand> {
         let tail = self.tail.load(Ordering::Relaxed);
         let head = self.head.load(Ordering::Acquire);
 
         if tail == head {
-            return None; // Ring vide.
+            return None; // Ring empty.
         }
 
         let slot = (tail as usize) & RING_MASK;
-        // SAFETY: tail < head, producteur n'écrit plus à `tail`.
+        // SAFETY: tail < head, producer no longer writes to `tail`.
         let cmd = unsafe { (*self.ring.get())[slot] };
 
-        // SAFETY: slot nettoyé visible avant incrément tail (Release); consommateur unique.
+        // SAFETY: cleared slot visible before tail increment (Release); single consumer.
         unsafe {
             (*self.ring.get())[slot] = DmaCommand::EMPTY;
         }
@@ -235,9 +235,8 @@ impl DmaChannelRing {
         Some(cmd)
     }
 
-    /// Consomme jusqu'à `max` commandes en une passe.
-    /// Retourne le slice des commandes consommées dans `out_buf`.
-    /// Retourne le nombre de commandes écrites dans `out_buf`.
+    /// Consumes up to `out_buf.len()` commands in a single pass.
+    /// Returns the number of commands written to `out_buf`.
     pub fn consume_batch(&self, out_buf: &mut [DmaCommand]) -> usize {
         let mut count = 0;
         while count < out_buf.len() {
@@ -252,9 +251,9 @@ impl DmaChannelRing {
         count
     }
 
-    // ── Observateurs ─────────────────────────────────────────────────────────
+    // ── Observers ────────────────────────────────────────────────────────────
 
-    /// Nombre approximatif de commandes en attente dans le ring.
+    /// Approximate number of pending commands in the ring.
     pub fn pending(&self) -> usize {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);

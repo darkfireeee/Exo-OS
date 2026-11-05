@@ -1,26 +1,26 @@
 // kernel/src/memory/physical/allocator/numa_hints.rs
 //
-// Types et topologie NUMA — données de boot, aucune heuristique IA.
-// Couche 0 — aucune dépendance externe.
+// NUMA types and topology — boot data, no AI heuristics.
+// Layer 0 — no external dependencies.
 //
-// Ce module remplace l'ancien ai_hints.rs. Il conserve uniquement :
-//   • NumaNode / SizeClass : types NUMA fondamentaux
-//   • NUMA_DISTANCE_TABLE   : distances inter-nœuds (ACPI SLIT)
-//   • CPU_TO_NUMA + TOPO_READY : mapping CPU→nœud fourni par ACPI/SRAT au boot
-//   • numa_distance / cpu_numa_node / set_numa_topology : API publique
+// This module replaces the old ai_hints.rs. It retains only:
+//   • NumaNode / SizeClass : fundamental NUMA types
+//   • NUMA_DISTANCE_TABLE   : inter-node distances (ACPI SLIT)
+//   • CPU_TO_NUMA + TOPO_READY : CPU->node mapping provided by ACPI/SRAT at boot
+//   • numa_distance / cpu_numa_node / set_numa_topology : public API
 //
-// Ce qui a été retiré par rapport à ai_hints.rs :
-//   • NUMA_HINT_TABLE (table de lookup per-cpu/size-class → heuristique AI)
-//   • hint_numa_node() (requête IA)
+// What was removed compared to ai_hints.rs:
+//   • NUMA_HINT_TABLE (per-cpu/size-class lookup table -> AI heuristic)
+//   • hint_numa_node() (AI request)
 //   • HINTS_ENABLED / HintStats / HINT_STATS / set_hints_enabled() / stats()
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPES NUMA
+// NUMA TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant d'un nœud NUMA.
+/// NUMA node identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct NumaNode(u8);
@@ -44,38 +44,38 @@ impl NumaNode {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CLASSE DE TAILLE
+// SIZE CLASS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Classe de taille d'allocation (index 0..=N_SIZE_CLASSES-1).
+/// Allocation size class (index 0..=N_SIZE_CLASSES-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SizeClass {
-    /// 4 KiB  (ordre 0)
+    /// 4 KiB  (order 0)
     Page0 = 0,
-    /// 8 KiB  (ordre 1)
+    /// 8 KiB  (order 1)
     Page1 = 1,
-    /// 16 KiB (ordre 2)
+    /// 16 KiB (order 2)
     Page2 = 2,
-    /// 32 KiB (ordre 3)
+    /// 32 KiB (order 3)
     Page3 = 3,
-    /// 64 KiB (ordre 4)
+    /// 64 KiB (order 4)
     Page4 = 4,
-    /// 128 KiB (ordre 5)
+    /// 128 KiB (order 5)
     Page5 = 5,
-    /// 256 KiB (ordre 6)
+    /// 256 KiB (order 6)
     Page6 = 6,
-    /// 512 KiB (ordre 7)
+    /// 512 KiB (order 7)
     Page7 = 7,
-    /// 1 MiB  (ordre 8)
+    /// 1 MiB  (order 8)
     Page8 = 8,
-    /// 2 MiB  (ordre 9)
+    /// 2 MiB  (order 9)
     Page9 = 9,
-    /// 4 MiB  (ordre 10)
+    /// 4 MiB  (order 10)
     Page10 = 10,
-    /// 8 MiB  (ordre 11)
+    /// 8 MiB  (order 11)
     Page11 = 11,
-    /// 16 MiB (ordre 12)
+    /// 16 MiB (order 12)
     Page12 = 12,
 }
 
@@ -109,11 +109,11 @@ impl SizeClass {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE DISTANCE NUMA
+// NUMA DISTANCE TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// distance[src][dst] → coût relatif (1=local, 2=1 hop, 3=2 hops, 4=très éloigné).
-/// Basée sur les valeurs ACPI SLIT normalisées à [1..=4].
+/// distance[src][dst] -> relative cost (1=local, 2=1 hop, 3=2 hops, 4=very far).
+/// Based on ACPI SLIT values normalized to [1..=4].
 static NUMA_DISTANCE_TABLE: [[u8; NumaNode::MAX_NODES]; NumaNode::MAX_NODES] = [
     // Node 0    1    2    3    4    5    6    7
     [1, 2, 3, 3, 4, 4, 4, 4], // From 0
@@ -127,20 +127,20 @@ static NUMA_DISTANCE_TABLE: [[u8; NumaNode::MAX_NODES]; NumaNode::MAX_NODES] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TOPOLOGIE (donnée de boot, initiée une seule fois)
+// TOPOLOGY (boot data, initialized once)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mapping CPU → nœud NUMA renseigné au boot par ACPI/SRAT.
-/// LOCK-FREE : lecture sûre dès que `TOPO_READY` = true.
+/// CPU -> NUMA node mapping populated at boot by ACPI/SRAT.
+/// LOCK-FREE: safe read as soon as `TOPO_READY` = true.
 static CPU_TO_NUMA: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
 
 static TOPO_READY: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE
+// PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne la distance NUMA entre deux nœuds (1=local, ..., 4=très éloigné).
+/// Returns NUMA distance between two nodes (1=local, ..., 4=very far).
 #[inline]
 pub fn numa_distance(from: NumaNode, to: NumaNode) -> u8 {
     let f = from.as_usize().min(NumaNode::MAX_NODES - 1);
@@ -148,17 +148,17 @@ pub fn numa_distance(from: NumaNode, to: NumaNode) -> u8 {
     NUMA_DISTANCE_TABLE[f][t]
 }
 
-/// Retourne le nœud NUMA actuellement affecté à ce CPU.
+/// Returns NUMA node currently assigned to this CPU.
 #[inline]
 pub fn cpu_numa_node(cpu: u8) -> NumaNode {
     let node = CPU_TO_NUMA[cpu as usize].load(Ordering::Relaxed);
     NumaNode::new(node)
 }
 
-/// Enregistre la topologie NUMA réelle (appelé UNE SEULE FOIS par le parser ACPI/SRAT).
+/// Registers actual NUMA topology (called EXACTLY ONCE by ACPI/SRAT parser).
 ///
 /// # Safety
-/// Doit être appelé avant tout accès multi-CPU (pendant l'init single-CPU).
+/// Must be called before any multi-CPU access (during single-CPU init).
 pub unsafe fn set_numa_topology(cpu_to_node: &[u8]) {
     debug_assert!(
         !TOPO_READY.load(Ordering::Relaxed),

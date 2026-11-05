@@ -1,7 +1,7 @@
 // kernel/src/memory/virtual/address_space/user.rs
 //
-// Espace d'adressage utilisateur — un par processus.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// User address space — one per process.
+// Layer 0 — no external dependencies except `spin`.
 
 use crate::memory::core::{
     layout::{USER_END, USER_STACK_TOP},
@@ -14,14 +14,14 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ESPACE D'ADRESSAGE UTILISATEUR
+// USER ADDRESS SPACE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Constantes de layout par défaut pour l'espace utilisateur.
+/// Default layout constants for user space.
 pub const USER_MMAP_BASE: u64 = 0x0000_7F00_0000_0000;
 pub const USER_STACK_SIZE: u64 = 8 * 1024 * 1024; // 8 MiB
 
-/// Statistiques de l'espace d'adressage utilisateur.
+/// Statistics of user address space.
 pub struct UserAsStats {
     pub page_faults: AtomicU64,
     pub cow_breaks: AtomicU64,
@@ -48,35 +48,35 @@ impl UserAsStats {
     }
 }
 
-/// Espace d'adressage d'un processus utilisateur.
+/// Address space of a user process.
 pub struct UserAddressSpace {
     inner: Mutex<UserAsInner>,
     pub stats: UserAsStats,
     pml4_phys: PhysAddr,
-    /// ID de processus associé (pour le TLB shootdown ciblé).
+    /// Associated process ID (for targeted TLB shootdown).
     pub pid: u64,
-    /// Base ELF du heap utilisateur. 0 signifie qu'aucun ELF n'a encore publié
-    /// son break initial et que le fallback historique de brk() doit être utilisé.
+    /// ELF base of user heap. 0 indicates that no ELF has published its
+    /// initial break yet and the historical brk() fallback must be used.
     pub heap_start: AtomicU64,
-    /// Break courant absolu du heap utilisateur.
+    /// Current absolute break of user heap.
     pub heap_end: AtomicU64,
 }
 
 #[allow(dead_code)]
 struct UserAsInner {
     vma_tree: VmaTree,
-    mmap_hint: VirtAddr, // Hint pour mmap (bump)
+    mmap_hint: VirtAddr, // Hint for mmap (bump)
     stack_bottom: VirtAddr,
 }
 
-// SAFETY: UserAddressSpace est thread-safe via son Mutex interne.
+// SAFETY: UserAddressSpace is thread-safe via its internal Mutex.
 unsafe impl Sync for UserAddressSpace {}
 unsafe impl Send for UserAddressSpace {}
 
 impl UserAddressSpace {
-    /// Crée un nouvel espace d'adressage utilisateur vide.
+    /// Creates a new empty user address space.
     ///
-    /// Le `pml4_phys` doit avoir déjà été construit (clone des entrées kernel).
+    /// `pml4_phys` must have already been constructed (cloned kernel entries).
     pub fn new(pml4_phys: PhysAddr, pid: u64) -> Self {
         let stack_bottom = VirtAddr::new(USER_STACK_TOP.as_u64() - USER_STACK_SIZE);
         UserAddressSpace {
@@ -93,20 +93,20 @@ impl UserAddressSpace {
         }
     }
 
-    /// Addresse physique de la PML4 de cet espace.
+    /// Physical address of this space's PML4.
     pub fn pml4_phys(&self) -> PhysAddr {
         self.pml4_phys
     }
 
-    /// Initialise les bornes brk de cet espace après chargement ELF.
+    /// Initializes brk bounds of this space after ELF loading.
     #[inline]
     pub fn init_heap_bounds(&self, brk_start: u64) {
         self.heap_start.store(brk_start, Ordering::Release);
         self.heap_end.store(brk_start, Ordering::Release);
     }
 
-    /// Retourne la première adresse non couverte par des VMA HEAP dans
-    /// `[start, end)`. `None` signale qu'une VMA non-heap occupe la plage.
+    /// Returns the first address not covered by HEAP VMAs in
+    /// `[start, end)`. `None` indicates a non-heap VMA occupies the range.
     pub fn heap_covered_end_from(&self, start: VirtAddr, end: VirtAddr) -> Option<VirtAddr> {
         let inner = self.inner.lock();
         let mut cursor = start.as_u64();
@@ -130,10 +130,10 @@ impl UserAddressSpace {
         Some(end)
     }
 
-    /// Mappe `virt` → `frame` directement (sans VMA — pour le loader ELF).
+    /// Maps `virt` → `frame` directly (without VMA — for the ELF loader).
     ///
     /// # Safety
-    /// `virt` doit être dans l'espace user (< USER_END).
+    /// `virt` must be in user space (< USER_END).
     pub unsafe fn map_page<A: FrameAllocatorForWalk>(
         &self,
         virt: VirtAddr,
@@ -151,13 +151,13 @@ impl UserAddressSpace {
         Ok(())
     }
 
-    /// Mappe `virt` -> `frame` sans invalider le TLB.
+    /// Maps `virt` -> `frame` without invalidating the TLB.
     ///
     /// # Safety
-    /// a utiliser uniquement pour une plage userspace fraichement
-    /// reservee, avant publication de la VMA et avant tout acces utilisateur a
-    /// cette plage. Les chemins qui remplacent ou demappent une page doivent
-    /// continuer a utiliser `map_page()` ou faire leur propre invalidation.
+    /// Use only for a freshly reserved userspace range, before
+    /// publishing the VMA and before any user access to this range.
+    /// Paths that replace or unmap a page must continue using
+    /// `map_page()` or perform their own invalidation.
     pub unsafe fn map_page_unflushed<A: FrameAllocatorForWalk>(
         &self,
         virt: VirtAddr,
@@ -165,8 +165,8 @@ impl UserAddressSpace {
         flags: PageFlags,
         alloc: &A,
     ) -> Result<(), AllocError> {
-        // PATCH-MEM-01: assert dur (pas debug_assert) — en release la corruption
-        // serait silencieuse si virt >= USER_END (ecrase l'espace noyau).
+        // PATCH-MEM-01: hard assert (not debug_assert) — in release, corruption
+        // would be silent if virt >= USER_END (overwriting kernel space).
         assert!(
             virt.as_u64() < USER_END.as_u64(),
             "map_page_unflushed: adresse hors espace utilisateur: {:#x} >= USER_END {:#x}",
@@ -178,10 +178,10 @@ impl UserAddressSpace {
         Ok(())
     }
 
-    /// Démappe `virt` (sans VMA).
+    /// Unmaps `virt` (without VMA).
     ///
     /// # Safety
-    /// `virt` doit être dans l'espace d'adressage utilisateur de cette table.
+    /// `virt` must be in the user address space of this table.
     pub unsafe fn unmap_page(&self, virt: VirtAddr) -> Option<Frame> {
         let mut walker = PageTableWalker::new(self.pml4_phys);
         let result = walker.unmap(virt);
@@ -191,7 +191,7 @@ impl UserAddressSpace {
         result
     }
 
-    /// Traduit une adresse virtuelle user en physique.
+    /// Translates a user virtual address into physical.
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         let walker = PageTableWalker::new(self.pml4_phys);
         match walker.walk_read(virt) {
@@ -203,13 +203,13 @@ impl UserAddressSpace {
         }
     }
 
-    /// Trouve la VMA contenant `addr`.
+    /// Finds the VMA containing `addr`.
     pub fn find_vma(&self, addr: VirtAddr) -> Option<*const VmaDescriptor> {
         let inner = self.inner.lock();
         inner.vma_tree.find(addr).map(|v| v as *const _)
     }
 
-    /// Ajoute des flags à la VMA contenant `addr` (PROC-VMA / V-17).
+    /// Adds flags to the VMA containing `addr` (PROC-VMA / V-17).
     pub fn set_vma_flags(&self, addr: VirtAddr, extra: VmaFlags) -> bool {
         let mut inner = self.inner.lock();
         if let Some(vma) = inner.vma_tree.find_mut(addr) {
@@ -220,13 +220,13 @@ impl UserAddressSpace {
         }
     }
 
-    /// Marque toutes les VMAs privées writables comme CoW après fork().
+    /// Marks all private writable VMAs as CoW after fork().
     pub fn mark_all_writable_vmas_cow(&self) {
         let mut inner = self.inner.lock();
         inner.vma_tree.for_each_mut(mark_vma_cow);
     }
 
-    /// Clone les métadonnées internes du parent vers l'enfant de fork().
+    /// Clones internal metadata from parent to fork() child.
     pub fn clone_inner_for_fork(&self, child: &UserAddressSpace) -> bool {
         let src = self.inner.lock();
         let Some(cloned_tree) = src.vma_tree.clone_for_fork() else {
@@ -242,11 +242,11 @@ impl UserAddressSpace {
         true
     }
 
-    /// Enregistre une nouvelle VMA dans l'espace d'adressage.
+    /// Registers a new VMA in the address space.
     ///
     /// # Safety
-    /// Le descripteur doit avoir été alloué par le slab et l'appelant
-    /// cède la propriété au VmaTree.
+    /// The descriptor must have been allocated by the slab and the caller
+    /// yields ownership to the VmaTree.
     pub unsafe fn insert_vma(&self, vma: *mut VmaDescriptor) -> bool {
         let mut inner = self.inner.lock();
         let result = inner.vma_tree.insert(vma);
@@ -256,7 +256,7 @@ impl UserAddressSpace {
         result
     }
 
-    /// Retire la VMA commençant à `start`.
+    /// Removes the VMA starting at `start`.
     pub fn remove_vma(&self, start: VirtAddr) -> Option<*mut VmaDescriptor> {
         let mut inner = self.inner.lock();
         let result = inner.vma_tree.remove(start);
@@ -266,7 +266,7 @@ impl UserAddressSpace {
         result
     }
 
-    /// Cherche un gap libre de `size` octets dans l'espace user.
+    /// Searches for a free gap of `size` bytes in user space.
     pub fn find_free_gap(&self, size: usize, hint: Option<VirtAddr>) -> Option<VirtAddr> {
         let inner = self.inner.lock();
         let hint_addr = hint.unwrap_or(inner.mmap_hint);
@@ -274,22 +274,22 @@ impl UserAddressSpace {
             &inner.vma_tree,
             size,
             hint_addr,
-            VirtAddr::new(PAGE_SIZE as u64), // min = 4 KiB (éviter NULL)
+            VirtAddr::new(PAGE_SIZE as u64), // min = 4 KiB (avoid NULL)
             USER_END,
         )
     }
 
-    /// Incrémente le compteur de page faults.
+    /// Increments page faults counter.
     pub fn record_fault(&self) {
         self.stats.page_faults.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Incrémente le compteur de CoW breaks.
+    /// Increments CoW breaks counter.
     pub fn record_cow_break(&self) {
         self.stats.cow_breaks.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Nombre de VMAs dans cet espace.
+    /// Number of VMAs in this space.
     pub fn vma_count(&self) -> usize {
         self.inner.lock().vma_tree.len()
     }

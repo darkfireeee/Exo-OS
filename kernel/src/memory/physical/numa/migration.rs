@@ -1,18 +1,18 @@
 // kernel/src/memory/physical/numa/migration.rs
 //
-// Migration de pages NUMA — déplace les frames entre nœuds pour améliorer
-// la localité des accès.
+// NUMA page migration — moves frames between nodes to improve
+// access locality.
 //
-// Algorithme :
-//   1. Allouer une frame destination sur le nœud cible.
-//   2. Copier le contenu de la frame source (via physmap).
-//   3. Mettre à jour la PTE de la VMA concernée (atomic TLB shootdown).
-//   4. Libérer la frame source.
+// Algorithm:
+//   1. Allocate a destination frame on target node.
+//   2. Copy contents from source frame (via physmap).
+//   3. Update PTE of affected VMA (atomic TLB shootdown).
+//   4. Free source frame.
 //
-// Le caller fournit le contexte d'adresse (page table root) via trait.
-// Pas d'appel direct au scheduler (couche 0).
+// Caller provides address context (page table root) via trait.
+// No direct call to scheduler (layer 0).
 //
-// Couche 0 — aucune dépendance scheduler/process/ipc/fs.
+// Layer 0 — no scheduler/process/ipc/fs dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -23,7 +23,7 @@ use crate::memory::core::types::{AllocFlags, Frame, PhysAddr};
 use crate::memory::physical::allocator::buddy::free_pages;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -31,11 +31,11 @@ pub struct MigrationStats {
     pub migrations_attempted: AtomicU64,
     pub migrations_succeeded: AtomicU64,
     pub migrations_failed: AtomicU64,
-    /// Nombre de pages déplacées entre nœuds distincts.
+    /// Number of pages moved between distinct nodes.
     pub pages_moved: AtomicU64,
-    /// Optimisations : page déjà sur le bon nœud.
+    /// Optimizations: page already on target node.
     pub already_local: AtomicU64,
-    /// Échecs d'allocation sur le nœud cible.
+    /// Allocation failures on target node.
     pub alloc_failures: AtomicU64,
 }
 
@@ -56,52 +56,52 @@ unsafe impl Sync for MigrationStats {}
 pub static MIGRATION_STATS: MigrationStats = MigrationStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait d'injection page-table — évite dépendance vers virtual/
+// Page-table injection trait — avoids dependency on virtual/
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait implémenté par `virtual::address_space::user::UserAddressSpace`.
-/// memory/ définit l'interface, virtual/ l'implémente.
+/// Trait implemented by `virtual::address_space::user::UserAddressSpace`.
+/// memory/ defines the interface, virtual/ implements it.
 pub trait MigrationPageTableOps {
-    /// Recherche et retourne la PTE courante pour `virt_addr` dans ce context.
-    /// Retourne `None` si non mappé.
+    /// Looks up and returns current PTE for `virt_addr` in this context.
+    /// Returns `None` if not mapped.
     fn get_pte(&self, virt_addr: u64) -> Option<u64>;
 
-    /// Remplace atomiquement la PTE pour `virt_addr` par `new_pte`.
-    /// Retourne `Ok(old_pte)` ou `Err(())` si impossible.
+    /// Atomically replaces PTE for `virt_addr` with `new_pte`.
+    /// Returns `Ok(old_pte)` or `Err(())` if unable.
     #[allow(clippy::result_unit_err)]
     fn swap_pte(&self, virt_addr: u64, new_pte: u64) -> Result<u64, ()>;
 
-    /// Port de TLB shootdown pour cette zone d'adressage.
+    /// TLB shootdown port for this address space.
     fn flush_tlb(&self, virt_addr: u64);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Résultat de migration
+// Migration result
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrateResult {
-    /// Migration réussie — `new_frame` est la frame destination.
+    /// Migration successful — `new_frame` is the destination frame.
     Success { new_frame: Frame },
-    /// Page déjà sur le bon nœud.
+    /// Page already on target node.
     AlreadyLocal,
-    /// Allocation échouée sur le nœud cible.
+    /// Allocation failed on target node.
     AllocFailed,
-    /// Impossible de mettre à jour la PTE.
+    /// Unable to update PTE.
     PteUpdateFailed,
-    /// Paramètres invalides.
+    /// Invalid arguments.
     InvalidArgs,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Copie de frame via physmap
+// Frame copy via physmap
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Copie exactement une frame (PAGE_SIZE octets) de `src_frame` vers `dst_frame`
-/// en passant par le physmap noyau.
+/// Copies exactly one frame (PAGE_SIZE bytes) from `src_frame` to `dst_frame`
+/// via the kernel physmap.
 ///
 /// # Safety
-/// Les deux frames doivent être valides et non partagées (pas d'alias actif).
+/// Both frames must be valid and unshared (no active aliases).
 unsafe fn copy_frame(src: Frame, dst: Frame) {
     let src_virt = phys_to_virt(PhysAddr::new(src.start_address().as_u64())).as_ptr::<u8>();
     let dst_virt = phys_to_virt(PhysAddr::new(dst.start_address().as_u64())).as_mut_ptr::<u8>();
@@ -109,27 +109,27 @@ unsafe fn copy_frame(src: Frame, dst: Frame) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Nœud d'une frame
+// Frame node
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le nœud NUMA propriétaire de `frame`.
+/// Returns the NUMA node owner of `frame`.
 #[inline]
 pub fn frame_node(frame: Frame) -> u32 {
     NUMA_NODES.node_for_phys(frame.start_address().as_u64())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// migrate_page — déplace une frame vers `target_node`
+// migrate_page — moves a frame to `target_node`
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Migre le contenu de `src_frame` vers un frame allouée sur `target_node`.
+/// Migrates contents of `src_frame` to a frame allocated on `target_node`.
 ///
-/// Si `pt_ops` est `Some`, met à jour la PTE correspondant à `virt_addr` dans
-/// l'espace d'adressage fourni et flush le TLB.
+/// If `pt_ops` is `Some`, updates PTE corresponding to `virt_addr` in
+/// provided address space and flushes TLB.
 ///
 /// # Safety
-/// - La frame source ne doit pas être accédée pendant la copie.
-/// - La PTE doit être verrouillée / protégée par le caller.
+/// - Source frame must not be accessed during copy.
+/// - PTE must be locked / protected by caller.
 pub unsafe fn migrate_page<P: MigrationPageTableOps>(
     src_frame: Frame,
     target_node: u32,
@@ -140,7 +140,7 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         .migrations_attempted
         .fetch_add(1, Ordering::Relaxed);
 
-    // Vérifier si déjà local.
+    // Check if already local.
     let src_node = frame_node(src_frame);
     if src_node == target_node {
         MIGRATION_STATS
@@ -149,7 +149,7 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         return MigrateResult::AlreadyLocal;
     }
 
-    // Allouer frame destination sur target_node.
+    // Allocate destination frame on target_node.
     let dst_frame = match alloc_pages_on_node(target_node, 0, AllocFlags::NONE) {
         Some(f) => f,
         None => {
@@ -163,21 +163,21 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         }
     };
 
-    // Copier le contenu.
+    // Copy content.
     copy_frame(src_frame, dst_frame);
 
-    // Mettre à jour la PTE si contexte fourni.
+    // Update PTE if context provided.
     if let (Some(virt), Some(ops)) = (virt_addr, pt_ops) {
-        // Construire la nouvelle PTE avec les mêmes flags que l'ancienne.
+        // Build new PTE with same flags as old.
         if let Some(old_pte) = ops.get_pte(virt) {
-            // Masque des flags : conserver tous les bits sauf la pfn.
+            // Flags mask: preserve all bits except pfn.
             const PFN_MASK: u64 = !0x0FFF_FFFF_FFFF_F000; // bits 11:0 + 63:48
             let flags = old_pte & PFN_MASK;
             let new_pfn = (dst_frame.start_address().as_u64() >> 12) << 12;
             let new_pte = new_pfn | flags;
 
             if ops.swap_pte(virt, new_pte).is_err() {
-                // Rollback : libérer la frame destination.
+                // Rollback: free destination frame.
                 let _ = free_pages(dst_frame, 0);
                 MIGRATION_STATS
                     .migrations_failed
@@ -188,10 +188,10 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
         }
     }
 
-    // Libérer la frame source.
+    // Free source frame.
     let _ = free_pages(src_frame, 0);
 
-    // Mise à jour des stats des nœuds.
+    // Update node stats.
     if let Some(src_n) = NUMA_NODES.get(src_node) {
         src_n.stats.migrated_out.fetch_add(1, Ordering::Relaxed);
         src_n.stats.record_free();
@@ -210,10 +210,10 @@ pub unsafe fn migrate_page<P: MigrationPageTableOps>(
     }
 }
 
-/// Helper : allocation de page ordonnée sur un nœud NUMA spécifique.
-/// Délègue à `BUDDY.alloc_on_node(order, flags, numa_node)`.
+/// Helper: ordered page allocation on a specific NUMA node.
+/// Delegates to `BUDDY.alloc_on_node(order, flags, numa_node)`.
 ///
-/// # Safety : appelé depuis migrate_page, CPL 0.
+/// # Safety: called from migrate_page, CPL 0.
 unsafe fn alloc_pages_on_node(node_id: u32, order: u32, flags: AllocFlags) -> Option<Frame> {
     use crate::memory::physical::BUDDY;
     // alloc_on_node(order: usize, flags: AllocFlags, numa_node: u8) → Result
@@ -223,16 +223,16 @@ unsafe fn alloc_pages_on_node(node_id: u32, order: u32, flags: AllocFlags) -> Op
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Migration en lot (batch)
+// Batch migration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Migre jusqu'à `max_pages` frames vers `target_node` depuis la liste fournie.
-/// Retourne le nombre de pages migrées avec succès.
+/// Migrates up to `max_pages` frames to `target_node` from provided list.
+/// Returns number of successfully migrated pages.
 ///
 /// # Safety
-/// Les frames doivent être valides, non aliasées pendant l'opération.
+/// Frames must be valid, unaliased during operation.
 pub unsafe fn migrate_pages_batch<P: MigrationPageTableOps>(
-    frames: &[(Frame, Option<u64>)], // (frame, virt_addr optionnelle)
+    frames: &[(Frame, Option<u64>)], // (frame, optional virt_addr)
     target_node: u32,
     max_pages: usize,
     pt_ops: Option<&P>,
@@ -241,7 +241,7 @@ pub unsafe fn migrate_pages_batch<P: MigrationPageTableOps>(
     for &(frame, virt) in frames.iter().take(max_pages) {
         match migrate_page(frame, target_node, virt, pt_ops) {
             MigrateResult::Success { .. } => count += 1,
-            MigrateResult::AlreadyLocal => count += 1, // déjà optimal
+            MigrateResult::AlreadyLocal => count += 1, // already optimal
             _ => {}
         }
     }
@@ -249,9 +249,9 @@ pub unsafe fn migrate_pages_batch<P: MigrationPageTableOps>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn init() {
-    // Aucune structure à initialiser pour ce module.
+    // No structures to initialize for this module.
 }

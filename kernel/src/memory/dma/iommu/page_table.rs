@@ -1,43 +1,43 @@
 // kernel/src/memory/dma/iommu/page_table.rs
 //
-// Tables de pages IOMMU (Intel VT-d / AMD-Vi format unifié côté abstraction).
-// L'implémentation concrète hardware est dans intel_vtd.rs / amd_iommu.rs.
-// Ce fichier fournit la logique d'arbre de pages portable.
+// IOMMU page tables (unified format for Intel VT-d / AMD-Vi on abstraction side).
+// The concrete hardware implementation is in intel_vtd.rs / amd_iommu.rs.
+// This file provides portable page tree logic.
 //
-// Format : 4 niveaux (L4/L3/L2/L1), 512 entrées par niveau, 4096 octets par table.
-// COUCHE 0 — aucune dépendance externe.
+// Format: 4 levels (L4/L3/L2/L1), 512 entries per level, 4096 bytes per table.
+// LAYER 0 — no external dependencies.
 
 use crate::memory::core::address::phys_to_virt;
 use crate::memory::core::types::PhysAddr;
 use crate::memory::dma::core::types::{DmaError, IovaAddr};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENTRÉE DE TABLE IOMMU
+// IOMMU TABLE ENTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags d'une entrée de table IOMMU.
+/// Flags of an IOMMU table entry.
 pub mod iommu_entry_flags {
-    /// Entrée présente.
+    /// Present entry.
     pub const PRESENT: u64 = 1 << 0;
-    /// Lecture autorisée (device → mémoire).
+    /// Read allowed (device → memory).
     pub const READ: u64 = 1 << 1;
-    /// Écriture autorisée (mémoire → device).
+    /// Write allowed (memory → device).
     pub const WRITE: u64 = 1 << 2;
-    /// Cache ignoré (device coherency bypass).
-    // FIX-IOMMU-SNP-01 : le bit Snoop du PTE VT-d est le bit 11 (DMA_PTE_SNP),
-    // pas le bit 3 (réservé).
+    /// Cache ignored (device coherency bypass).
+    // FIX-IOMMU-SNP-01: the Snoop bit of VT-d PTE is bit 11 (DMA_PTE_SNP),
+    // not bit 3 (reserved).
     pub const SNOOP: u64 = 1 << 11;
     /// Huge page (2MiB).
     pub const HUGE: u64 = 1 << 7;
-    /// Accessed (matériel).
+    /// Accessed (hardware).
     pub const ACCESSED: u64 = 1 << 8;
-    /// Dirty (matériel).
+    /// Dirty (hardware).
     pub const DIRTY: u64 = 1 << 9;
-    /// Masque de l'adresse physique du frame pointé.
+    /// Mask of physical address of the target frame.
     pub const PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 }
 
-/// Une entrée de table IOMMU (64 bits).
+/// An IOMMU table entry (64 bits).
 #[repr(transparent)]
 #[derive(Copy, Clone)]
 pub struct IommuEntry(u64);
@@ -57,7 +57,7 @@ impl IommuEntry {
     pub fn phys(self) -> PhysAddr {
         PhysAddr::new(self.0 & iommu_entry_flags::PHYS_MASK)
     }
-    /// Construit une entrée pointant sur une table de niveau inférieur.
+    /// Constructs an entry pointing to a lower-level table.
     #[inline]
     pub fn table_entry(phys: PhysAddr) -> Self {
         IommuEntry(
@@ -67,7 +67,7 @@ impl IommuEntry {
                 | iommu_entry_flags::WRITE,
         )
     }
-    /// Construit une entrée feuille (page 4KiB).
+    /// Constructs a leaf entry (4KiB page).
     #[inline]
     pub fn leaf_entry(phys: PhysAddr, read: bool, write: bool) -> Self {
         let mut flags = iommu_entry_flags::PRESENT;
@@ -86,48 +86,48 @@ impl IommuEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE PAGES IOMMU (512 ENTRÉES, 4KiB)
+// IOMMU PAGE TABLE (512 ENTRIES, 4KiB)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une table de pages IOMMU (4096 octets, 512 entrées 64-bit).
+/// An IOMMU page table (4096 bytes, 512 64-bit entries).
 #[repr(C, align(4096))]
 pub struct IommuPageTable {
     entries: [IommuEntry; 512],
 }
 
 impl IommuPageTable {
-    /// Retourne l'adresse physique de cette table via le physmap.
+    /// Returns the physical address of this table via the physmap.
     pub fn phys_addr(&self) -> PhysAddr {
         use crate::memory::core::address::virt_to_phys_physmap;
         let virt = crate::memory::core::types::VirtAddr::new(self as *const _ as u64);
         virt_to_phys_physmap(virt)
     }
 
-    /// Index IOMMU de l'IOVA au niveau `level` (0=L1, 3=L4).
+    /// IOMMU index of IOVA at level `level` (0=L1, 3=L4).
     #[inline]
     pub fn index(iova: IovaAddr, level: u8) -> usize {
         ((iova.as_u64() >> (12 + level as u64 * 9)) & 0x1FF) as usize
     }
 
-    /// Retourne l'entrée à l'index `idx`.
+    /// Returns the entry at index `idx`.
     #[inline]
     pub fn entry(&self, idx: usize) -> IommuEntry {
-        // SAFETY: idx < 512, lecture de mémoire valide.
+        // SAFETY: idx < 512, valid memory read.
         unsafe { core::ptr::read_volatile(&self.entries[idx]) }
     }
 
-    /// Écrit l'entrée à l'index `idx` de manière atomique.
+    /// Writes the entry at index `idx` atomically.
     #[inline]
     pub fn set_entry(&mut self, idx: usize, entry: IommuEntry) {
-        // SAFETY: idx < 512, écriture dans la table mappée.
+        // SAFETY: idx < 512, write into mapped table.
         unsafe {
             core::ptr::write_volatile(&mut self.entries[idx], entry);
         }
     }
 
-    /// Zéro-remplit toute la table.
+    /// Zeroes the entire table.
     pub fn zero(&mut self) {
-        // SAFETY: La table est entièrement initialisée.
+        // SAFETY: The table is fully initialized.
         unsafe {
             core::ptr::write_bytes(self.entries.as_mut_ptr(), 0, 512);
         }
@@ -135,31 +135,31 @@ impl IommuPageTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARCHEUR DE TABLE IOMMU
+// IOMMU TABLE WALKER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait d'allocateur de frames pour les tables IOMMU (inversion de dépendance).
+/// Frame allocator trait for IOMMU tables (dependency inversion).
 pub trait IommuFrameAlloc {
     fn alloc_table(&mut self) -> Option<PhysAddr>;
     fn free_table(&mut self, phys: PhysAddr);
 }
 
-/// Résultat d'un walk IOMMU.
+/// Result of an IOMMU walk.
 pub enum IommuWalkResult {
-    /// Mapping feuille trouvé.
+    /// Leaf mapping found.
     Leaf { phys: PhysAddr, huge: bool },
-    /// Adresse non mappée.
+    /// Address not mapped.
     NotMapped,
-    /// Erreur d'allocation lors d'un map.
+    /// Allocation error during mapping.
     AllocError,
 }
 
-/// Configure un mapping IOVA → PhysAddr dans la table enracinée à `root`.
+/// Configures an IOVA → PhysAddr mapping in the table rooted at `root`.
 ///
-/// Crée les tables intermédiaires si nécessaire via `alloc`.
+/// Creates intermediate tables if necessary via `alloc`.
 ///
 /// # Safety
-/// `root` doit pointer une table de pages IOMMU valide et mappée dans le physmap.
+/// `root` must point to a valid IOMMU page table mapped in the physmap.
 pub unsafe fn iommu_map<A: IommuFrameAlloc>(
     root: PhysAddr,
     iova: IovaAddr,
@@ -188,10 +188,10 @@ pub unsafe fn iommu_map<A: IommuFrameAlloc>(
     Ok(())
 }
 
-/// Supprime un mapping IOVA de la table.
+/// Removes an IOVA mapping from the table.
 ///
 /// # Safety
-/// `root` doit pointer une table de pages IOMMU valide.
+/// `root` must point to a valid IOMMU page table.
 pub unsafe fn iommu_unmap(root: PhysAddr, iova: IovaAddr) -> Result<(), DmaError> {
     let l4 = &mut *(phys_to_virt(root).as_u64() as *mut IommuPageTable);
     let l4_idx = IommuPageTable::index(iova, 3);
@@ -220,10 +220,10 @@ pub unsafe fn iommu_unmap(root: PhysAddr, iova: IovaAddr) -> Result<(), DmaError
     Ok(())
 }
 
-/// Parcourt la table en lecture seule pour `iova`.
+/// Walks the table read-only for `iova`.
 ///
 /// # Safety
-/// `root` doit pointer une table valide.
+/// `root` must point to a valid table.
 pub unsafe fn iommu_walk(root: PhysAddr, iova: IovaAddr) -> IommuWalkResult {
     let l4 = &*(phys_to_virt(root).as_u64() as *const IommuPageTable);
     let e4 = l4.entry(IommuPageTable::index(iova, 3));
@@ -260,8 +260,8 @@ pub unsafe fn iommu_walk(root: PhysAddr, iova: IovaAddr) -> IommuWalkResult {
     }
 }
 
-/// Assure qu'une table de niveau inférieur existe à l'entrée `idx` de `parent`.
-/// La crée via `alloc` si absente.
+/// Ensures that a lower-level table exists at entry `idx` of `parent`.
+/// Creates it via `alloc` if absent.
 unsafe fn ensure_table<A: IommuFrameAlloc>(
     parent: &mut IommuPageTable,
     idx: usize,
@@ -271,9 +271,9 @@ unsafe fn ensure_table<A: IommuFrameAlloc>(
     if entry.is_present() {
         return Ok(entry.phys());
     }
-    // Alloue une nouvelle table.
+    // Allocate a new table.
     let phys = alloc.alloc_table().ok_or(DmaError::OutOfMemory)?;
-    // Zéro-remplit la nouvelle table.
+    // Zero the new table.
     let table = &mut *(phys_to_virt(phys).as_u64() as *mut IommuPageTable);
     table.zero();
     parent.set_entry(idx, IommuEntry::table_entry(phys));

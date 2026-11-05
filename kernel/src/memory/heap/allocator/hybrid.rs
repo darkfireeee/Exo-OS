@@ -1,8 +1,8 @@
 // kernel/src/memory/heap/allocator/hybrid.rs
 //
-// Allocateur heap hybride — dispatch entre SLUB (<= 2 KiB) et large (> 2 KiB).
-// Interface unique pour le heap kernel.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Hybrid heap allocator — dispatch between SLUB (<= 2 KiB) and large (> 2 KiB).
+// Single interface for the kernel heap.
+// Layer 0 — no external dependencies except `spin`.
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,7 +12,7 @@ use crate::memory::core::{AllocError, AllocFlags};
 use crate::memory::physical::allocator::slub::SLUB_CACHES;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES
+// STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct HybridAllocStats {
@@ -46,10 +46,10 @@ impl HybridAllocStats {
 pub static HEAP_STATS: HybridAllocStats = HybridAllocStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOCATEUR HYBRIDE
+// HYBRID ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mode d'allocateur utilisé (SLUB ou Large).
+/// Allocator backend used (SLUB or Large).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocBackend {
     Slub,
@@ -62,16 +62,16 @@ pub fn init() {
     HYBRID_ENABLED.store(true, Ordering::Release);
 }
 
-/// Retourne vrai quand l'allocateur heap kernel accepte les allocations.
+/// Returns true when the kernel heap allocator accepts allocations.
 #[inline]
 pub fn is_heap_ready() -> bool {
     HYBRID_ENABLED.load(Ordering::Acquire)
 }
 
-/// Alloue `size` octets avec `align` minimum.
+/// Allocates `size` bytes with minimum `align`.
 ///
-/// - Si size <= 2048 : utilise SLUB.
-/// - Sinon : utilise le large allocator (vmalloc).
+/// - If size <= 2048: uses SLUB.
+/// - Otherwise: uses large allocator (vmalloc).
 pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
     if !HYBRID_ENABLED.load(Ordering::Acquire) {
         return Err(AllocError::NotInitialized);
@@ -79,10 +79,10 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
 
     let user_size = if size == 0 { 8 } else { size };
 
-    // T5-001 FIX : Si l'alignement demandé excède 64 bytes, router vers vmalloc
-    // qui garantit un alignement sur PAGE_SIZE (4096 bytes).
+    // T5-001 FIX: If requested alignment exceeds 64 bytes, route to vmalloc
+    // which guarantees PAGE_SIZE (4096 bytes) alignment.
     if user_size <= HEAP_LARGE_THRESHOLD && align <= 64 {
-        // Petite allocation via SLUB
+        // Small allocation via SLUB
         let sc_entry = heap_size_class_for(user_size).ok_or(AllocError::InvalidParams)?;
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
         match SLUB_CACHES[slab_idx].alloc(flags) {
@@ -94,9 +94,9 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
                 Ok(ptr)
             }
             Err(_e) => {
-                // Fallback de robustesse: si SLUB n'est pas encore prêt ou échoue
-                // ponctuellement, tenter l'allocateur large pour éviter un panic
-                // précoce durant le boot.
+                // Robustness fallback: if SLUB is not yet ready or fails
+                // intermittently, attempt large allocator to avoid early panic
+                // during boot.
                 match crate::memory::heap::large::vmalloc::kalloc(user_size, flags) {
                     Ok(ptr) => {
                         HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
@@ -113,7 +113,7 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
             }
         }
     } else {
-        // Grande allocation via le large allocator
+        // Large allocation via large allocator
         match crate::memory::heap::large::vmalloc::kalloc(user_size, flags) {
             Ok(ptr) => {
                 HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
@@ -130,16 +130,16 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
     }
 }
 
-/// Libère un pointeur alloué par `alloc`.
+/// Frees a pointer allocated by `alloc`.
 ///
 /// # Safety
-/// `ptr` doit avoir été alloué par `alloc()` avec la même `size`.
-/// Ne plus être utilisé après cet appel.
+/// `ptr` must have been allocated by `alloc()` with the same `size`.
+/// Must not be used after this call.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     let user_size = if size == 0 { 8 } else { size };
 
-    // Si le pointeur correspond à un bloc vmalloc (incluant fallback small->large),
-    // il doit être libéré via kfree indépendamment de la taille demandée.
+    // If the pointer corresponds to a vmalloc block (including small->large fallback),
+    // it must be freed via kfree regardless of requested size.
     if let Some(usable) = crate::memory::heap::large::vmalloc::kalloc_usable_size(ptr) {
         crate::memory::heap::large::vmalloc::kfree(ptr, usable);
         HEAP_STATS.large_frees.fetch_add(1, Ordering::Relaxed);
@@ -157,8 +157,8 @@ pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
         let slab_idx = HEAP_SIZE_CLASSES[sc_entry].slab_idx;
         SLUB_CACHES[slab_idx].free(ptr);
         HEAP_STATS.small_frees.fetch_add(1, Ordering::Relaxed);
-        // Décrémenter de façon simple; la stat peut brièvement sous-estimer sous
-        // contention mais jamais provoquer de comportement incorrect.
+        // Decrement simply; stats may briefly underestimate under
+        // contention but never cause incorrect behavior.
         HEAP_STATS
             .current_inuse
             .fetch_sub(user_size as u64, Ordering::Relaxed);

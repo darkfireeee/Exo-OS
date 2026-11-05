@@ -1,14 +1,14 @@
 // kernel/src/memory/dma/channels/priority.rs
 //
-// Ordonnancement par priorité des canaux DMA — files RT vs best-effort.
+// Priority scheduling for DMA channels — RT vs best-effort queues.
 //
-// Architecture :
-//   - 4 niveaux de priorité : Low, Normal, High, Realtime (depuis DmaPriority).
-//   - Une file circulaire dédiée par niveau (CHANNEL_QUEUE_DEPTH entrées/niveau).
-//   - Le scheduler DMA dépile toujours dans l'ordre décroissant de priorité.
-//   - Les transactions RT ont une deadline (time-to-live en passes de scheduler).
+// Architecture:
+//   - 4 priority levels: Low, Normal, High, Realtime (from DmaPriority).
+//   - A dedicated circular queue per level (CHANNEL_QUEUE_DEPTH entries/level).
+//   - The DMA scheduler always dequeues in decreasing order of priority.
+//   - RT transactions have a deadline (time-to-live in scheduler passes).
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -16,31 +16,31 @@ use spin::Mutex;
 use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaPriority, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de niveaux de priorité (Low=0, Normal=1, High=2, Realtime=3).
+/// Number of priority levels (Low=0, Normal=1, High=2, Realtime=3).
 pub const PRIORITY_LEVELS: usize = 4;
 
-/// Profondeur de chaque file de priorité (en transactions).
+/// Depth of each priority queue (in transactions).
 pub const PRIORITY_QUEUE_DEPTH: usize = 64;
 
-/// Nombre de passes avant qu'une transaction best-effort soit promue
-/// pour éviter la famine (starvation prevention).
+/// Number of passes before a best-effort transaction is promoted
+/// to prevent starvation.
 pub const STARVATION_THRESHOLD: u32 = 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENTRÉE DE FILE DE PRIORITÉ
+// PRIORITY QUEUE ENTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée dans une file de priorité.
+/// Entry in a priority queue.
 #[derive(Copy, Clone)]
 struct PrioEntry {
-    /// Transaction DMA associée.
+    /// Associated DMA transaction.
     txn_id: DmaTransactionId,
-    /// Canal DMA demandeur.
+    /// Requesting DMA channel.
     channel_id: DmaChannelId,
-    /// Nombre de passes de scheduler écoulées sans être dépilée (anti-famine).
+    /// Number of scheduler passes elapsed without being dequeued (starvation prevention).
     age_passes: u32,
 }
 
@@ -58,7 +58,7 @@ impl PrioEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FILE CIRCULAIRE PAR NIVEAU
+// CIRCULAR QUEUE PER LEVEL
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct PrioQueue {
@@ -118,7 +118,7 @@ impl PrioQueue {
         self.count == 0
     }
 
-    /// Incrémente l'âge de toutes les entrées (anti-famine).
+    /// Increments the age of all entries (starvation prevention).
     fn age_all(&mut self) {
         let mut idx = self.head;
         for _ in 0..self.count {
@@ -129,10 +129,10 @@ impl PrioQueue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SCHEDULER MULTI-PRIORITÉS
+// MULTI-PRIORITY SCHEDULER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du scheduler de priorité.
+/// Priority scheduler statistics.
 pub struct PrioritySchedulerStats {
     pub enqueued: [AtomicU64; PRIORITY_LEVELS],
     pub dequeued: [AtomicU64; PRIORITY_LEVELS],
@@ -169,7 +169,7 @@ impl PrioritySchedulerStats {
 
 struct PrioritySchedulerInner {
     queues: [PrioQueue; PRIORITY_LEVELS],
-    /// Nombre de passes depuis la dernière anti-famine sweep.
+    /// Number of passes since the last starvation prevention sweep.
     pass_counter: u32,
 }
 
@@ -196,16 +196,16 @@ impl PrioritySchedulerInner {
     }
 }
 
-/// Scheduler multi-priorité pour transactions DMA.
+/// Multi-priority scheduler for DMA transactions.
 ///
-/// Thread-safe via spinlock. Toutes les opérations sont O(1) sauf
-/// le sweep anti-famine qui est O(PRIORITY_QUEUE_DEPTH * PRIORITY_LEVELS).
+/// Thread-safe via spinlock. All operations are O(1) except
+/// the starvation prevention sweep which is O(PRIORITY_QUEUE_DEPTH * PRIORITY_LEVELS).
 pub struct PriorityScheduler {
     inner: Mutex<PrioritySchedulerInner>,
     pub stats: PrioritySchedulerStats,
 }
 
-// SAFETY: PriorityScheduler est protégé par un Mutex.
+// SAFETY: PriorityScheduler is protected by a Mutex.
 unsafe impl Sync for PriorityScheduler {}
 unsafe impl Send for PriorityScheduler {}
 
@@ -223,9 +223,9 @@ impl PriorityScheduler {
         }
     }
 
-    /// Enfile une transaction avec la priorité donnée.
+    /// Enqueues a transaction with the given priority.
     ///
-    /// Retourne `Err(DmaError::OutOfMemory)` si la file de ce niveau est pleine.
+    /// Returns `Err(DmaError::OutOfMemory)` if the queue for this level is full.
     pub fn enqueue(
         &self,
         txn_id: DmaTransactionId,
@@ -248,22 +248,22 @@ impl PriorityScheduler {
         Ok(())
     }
 
-    /// Défile la prochaine transaction selon la priorité la plus haute.
+    /// Dequeues the next transaction according to highest priority.
     ///
-    /// Vérifie d'abord les entrées vieillies (anti-famine) pour les niveaux basses,
-    /// puis dépile de la file de plus haute priorité non vide.
+    /// First checks aged entries (starvation prevention) for lower levels,
+    /// then dequeues from the highest non-empty priority queue.
     ///
-    /// Retourne `None` si aucune transaction n'est en attente.
+    /// Returns `None` if no transaction is pending.
     pub fn dequeue(&self) -> Option<(DmaTransactionId, DmaChannelId, DmaPriority)> {
         let mut inner = self.inner.lock();
 
-        // Anti-famine : toutes les N passes, promouvoir les anciennes entrées.
+        // Starvation prevention: every N passes, promote old entries.
         inner.pass_counter = inner.pass_counter.wrapping_add(1);
         if inner.pass_counter.is_multiple_of(STARVATION_THRESHOLD) {
             self.check_starvation(&mut inner);
         }
 
-        // Dépiler dans l'ordre décroissant de priorité (3 = Realtime → 0 = Low).
+        // Dequeue in descending priority order (3 = Realtime -> 0 = Low).
         for level in (0..PRIORITY_LEVELS).rev() {
             if let Some(entry) = inner.queues[level].pop() {
                 let prio = match level {
@@ -279,13 +279,13 @@ impl PriorityScheduler {
         None
     }
 
-    /// Retourne le nombre total de transactions en attente.
+    /// Returns the total number of pending transactions.
     pub fn total_pending(&self) -> usize {
         let inner = self.inner.lock();
         inner.queues.iter().map(|q| q.len()).sum()
     }
 
-    /// Retourne le nombre de transactions en attente par niveau.
+    /// Returns the number of pending transactions per level.
     pub fn pending_by_level(&self) -> [usize; PRIORITY_LEVELS] {
         let inner = self.inner.lock();
         [
@@ -296,17 +296,17 @@ impl PriorityScheduler {
         ]
     }
 
-    // ── Anti-famine ─────────────────────────────────────────────────────────
+    // ── Starvation Prevention ───────────────────────────────────────────────
 
-    /// Vérifie si des entrées basse priorité sont trop vieilles et les promeut.
+    /// Checks if low-priority entries are too old and promotes them.
     fn check_starvation(&self, inner: &mut PrioritySchedulerInner) {
-        // Pour chaque niveau < Realtime, chercher des entrées âgées.
+        // For each level < Realtime, look for aged entries.
         for src_level in 0..PRIORITY_LEVELS - 1 {
             let dst_level = (src_level + 1).min(PRIORITY_LEVELS - 1);
-            // Âge de toutes les entrées du niveau source.
+            // Age all entries of the source level.
             inner.queues[src_level].age_all();
 
-            // Promouvoir les entrées qui ont dépassé le seuil.
+            // Promote entries that exceeded the threshold.
             let src_len = inner.queues[src_level].len();
             let mut promoted_count = 0;
             for _ in 0..src_len {
@@ -320,12 +320,12 @@ impl PriorityScheduler {
                         if inner.queues[dst_level].push(entry) {
                             promoted_count += 1;
                         } else {
-                            // File destination pleine — remettre à la source.
+                            // Destination queue full — put back into source.
                             inner.queues[src_level].push(entry);
                         }
                     }
                 } else {
-                    break; // Entrées restantes non âgées, FIFO garanti.
+                    break; // Remaining entries not aged, FIFO preserved.
                 }
             }
             if promoted_count > 0 {
@@ -337,5 +337,5 @@ impl PriorityScheduler {
     }
 }
 
-/// Instance globale du scheduler de priorité DMA.
+/// Global instance of the DMA priority scheduler.
 pub static DMA_PRIORITY_SCHEDULER: PriorityScheduler = PriorityScheduler::new();

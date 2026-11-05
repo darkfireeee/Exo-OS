@@ -1,8 +1,8 @@
 // kernel/src/memory/virtual/page_table/builder.rs
 //
-// Builder de table de pages — construction incrémentale d'une PML4.
-// Interface fluente pour les mappings kernel et user au boot.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Page table builder — incremental construction of a PML4.
+// Fluent interface for kernel and user mappings at boot.
+// Layer 0 — no external dependency except `spin`.
 
 use crate::memory::core::{
     AllocError, AllocFlags, Frame, PageFlags, PhysAddr, VirtAddr, HUGE_PAGE_SIZE, PAGE_SIZE,
@@ -11,10 +11,10 @@ use crate::memory::virt::page_table::walker::{FrameAllocatorForWalk, PageTableWa
 use crate::memory::virt::page_table::x86_64::{phys_to_table_mut, read_cr3};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BUILDER DE TABLE DE PAGES
+// PAGE TABLE BUILDER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Builder permettant de construire une table de pages complète.
+/// Builder allowing the construction of a complete page table.
 pub struct PageTableBuilder<'a, A: FrameAllocatorForWalk> {
     pml4_phys: PhysAddr,
     alloc: &'a A,
@@ -22,7 +22,7 @@ pub struct PageTableBuilder<'a, A: FrameAllocatorForWalk> {
 }
 
 impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
-    /// Crée un builder avec une PML4 fraîchement allouée.
+    /// Creates a builder with a freshly allocated PML4.
     pub fn new(alloc: &'a A) -> Result<Self, AllocError> {
         let pml4_frame = alloc.alloc_frame(AllocFlags::ZEROED)?;
         let pml4_phys = pml4_frame.start_address();
@@ -33,7 +33,7 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         })
     }
 
-    /// Crée un builder sur une PML4 existante.
+    /// Creates a builder on an existing PML4.
     pub fn from_existing(pml4_phys: PhysAddr, alloc: &'a A) -> Self {
         PageTableBuilder {
             pml4_phys,
@@ -42,7 +42,7 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         }
     }
 
-    /// Mappe une seule page.
+    /// Maps a single page.
     pub fn map_page(
         &mut self,
         virt: VirtAddr,
@@ -53,7 +53,7 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         Ok(self)
     }
 
-    /// Mappe une plage physique contiguë vers une plage virtuelle contiguë.
+    /// Maps a contiguous physical range to a contiguous virtual range.
     pub fn map_range(
         &mut self,
         virt_start: VirtAddr,
@@ -71,8 +71,8 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         Ok(self)
     }
 
-    /// Mappe tout le physmap kernel (PHYS_MAP_BASE → physique 0).
-    /// `phys_size` est la taille totale de RAM détectée.
+    /// Maps the entire kernel physmap (PHYS_MAP_BASE → physical 0).
+    /// `phys_size` is the total detected RAM size.
     pub fn map_physmap(&mut self, phys_size: u64) -> Result<&mut Self, AllocError> {
         let phys_map_base = crate::memory::core::layout::PHYS_MAP_BASE;
         let flags = PageFlags::KERNEL_DATA;
@@ -99,21 +99,21 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         Ok(self)
     }
 
-    /// Clone les entrées kernel (PML4[256..512]) depuis la PML4 active.
-    /// Utilisé pour créer l'espace utilisateur qui partage le noyau.
+    /// Clones kernel entries (PML4[256..512]) from the active PML4.
+    /// Used to create user space sharing the kernel.
     ///
-    /// Le kernel actuel est encore linké et exécuté dans la fenêtre basse
-    /// identity-map (à partir de 1 MiB). Les CR3 userspace doivent donc aussi
-    /// contenir l'image noyau basse en pages supervisor, sinon le premier
-    /// `context_switch_asm` faute immédiatement après `mov cr3`.
+    /// The current kernel is still linked and executed in the low identity-map
+    /// window (starting at 1 MiB). Userspace CR3s must therefore also
+    /// contain the low kernel image in supervisor pages, otherwise the first
+    /// `context_switch_asm` faults immediately after `mov cr3`.
     ///
     /// # Safety
-    /// Doit être appelé quand la PML4 active est complète et valide.
+    /// Must be called when the active PML4 is complete and valid.
     pub unsafe fn copy_kernel_entries(&mut self) -> Result<&mut Self, AllocError> {
         let current_pml4_phys = read_cr3();
         let current_pml4 = phys_to_table_mut(current_pml4_phys);
         let new_pml4 = phys_to_table_mut(self.pml4_phys);
-        // Entrées kernel : indices 256..512 (moitié haute de l'espace 48 bits)
+        // Kernel entries: indices 256..512 (upper half of the 48-bit address space)
         for i in 256..512 {
             new_pml4[i] = current_pml4[i];
         }
@@ -122,12 +122,12 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         Ok(self)
     }
 
-    /// Réinstalle les mappings supervisor de l'image noyau basse dans cette PML4.
+    /// Reinstalls supervisor mappings for the low kernel image in this PML4.
     ///
-    /// Le noyau exécute encore ses chemins syscall/IRQ dans la fenêtre basse
-    /// identity-map. Cette primitive est volontairement idempotente: elle
-    /// réécrit les PTE noyau attendues sans toucher aux segments user qui sont
-    /// placés hors de l'image noyau.
+    /// The kernel still executes its syscall/IRQ paths in the low identity-map
+    /// window. This primitive is deliberately idempotent: it rewrites
+    /// the expected kernel PTEs without touching user segments placed
+    /// outside the kernel image.
     pub fn remap_low_kernel_identity(&mut self) -> Result<&mut Self, AllocError> {
         self.map_low_kernel_identity()?;
         Ok(self)
@@ -164,7 +164,7 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         let data_end_page = Self::page_align_up(data_end);
         let bss_end_page = Self::page_align_up(bss_end);
 
-        // En-tête avant .text mappé en données (non-exécutable, respect W^X).
+        // Header before .text mapped as data (non-executable, respecting W^X).
         self.map_identity_range(image_start, text_start, PageFlags::KERNEL_DATA)?;
         self.map_identity_range(text_start, text_end, PageFlags::KERNEL_CODE)?;
         self.map_identity_range(text_end_page, rodata_start, PageFlags::KERNEL_DATA)?;
@@ -178,9 +178,9 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
             self.map_identity_range(bss_end_page, kernel_end, PageFlags::KERNEL_DATA)?;
         }
 
-        // Le noyau courant utilise encore les fenêtres MMIO basses héritées du
-        // boot pour LAPIC/IOAPIC, et certains chemins timer restent actifs sous
-        // CR3 userspace avant un éventuel switch KPTI complet.
+        // The current kernel still uses the low MMIO windows inherited from
+        // boot for LAPIC/IOAPIC, and some timer paths remain active under
+        // userspace CR3 before a potential full KPTI switch.
         self.map_identity_range(0xFEC0_0000, 0xFEC0_1000, PageFlags::KERNEL_DMA)?;
         self.map_identity_range(0xFED0_0000, 0xFED0_1000, PageFlags::KERNEL_DMA)?;
         self.map_identity_range(0xFEE0_0000, 0xFEE0_1000, PageFlags::KERNEL_DMA)?;
@@ -221,10 +221,10 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         addr.saturating_add(page_mask) & !page_mask
     }
 
-    /// Efface la moitié utilisateur de la PML4 (indices 0..256).
+    /// Clears the user half of the PML4 (indices 0..256).
     ///
     /// # Safety
-    /// `pml4_phys` pointe sur une PML4 valide.
+    /// `pml4_phys` points to a valid PML4.
     pub unsafe fn clear_user_entries(&mut self) -> &mut Self {
         let pml4 = phys_to_table_mut(self.pml4_phys);
         for i in 0..256 {
@@ -233,12 +233,12 @@ impl<'a, A: FrameAllocatorForWalk> PageTableBuilder<'a, A> {
         self
     }
 
-    /// Retourne l'adresse physique de la PML4 construite.
+    /// Returns the physical address of the constructed PML4.
     pub fn pml4_phys(&self) -> PhysAddr {
         self.pml4_phys
     }
 
-    /// Consomme le builder et retourne la PML4.
+    /// Consumes the builder and returns the PML4.
     pub fn build(self) -> PhysAddr {
         self.pml4_phys
     }

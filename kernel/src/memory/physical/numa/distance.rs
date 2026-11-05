@@ -1,50 +1,50 @@
 // kernel/src/memory/physical/numa/distance.rs
 //
-// Table des distances NUMA — coût d'accès entre nœuds.
+// NUMA distance table — access cost between nodes.
 //
-// La table est issue du ACPI SLIT (System Locality Information Table).
-// En l'absence de SLIT, la table est initialisée avec des valeurs par défaut :
+// The table is derived from the ACPI SLIT (System Locality Information Table).
+// In the absence of SLIT, the table is initialized with default values:
 //   • distance(i, i) = 10 (local)
-//   • distance(i, j) = 20 (distant, horizon 1 hop)
+//   • distance(i, j) = 20 (remote, 1 hop horizon)
 //
-// RÈGLE IA-KERNEL-01 : la table est stockée en .rodata-like via un static ;
-// aucune génération runtime de politique d'allocation.
+// AI-KERNEL-01 RULE: the table is stored in .rodata-like via a static;
+// no runtime generation of allocation policy.
 //
-// Couche 0 — pas de dépendance scheduler/process/ipc/fs.
+// Layer 0 — no scheduler/process/ipc/fs dependency.
 
 use core::sync::atomic::AtomicBool;
 
 use super::node::{MAX_NUMA_NODES, NUMA_NODES};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes de distance
+// Distance constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Distance locale (même nœud) selon ACPI NUMA standard.
+/// Local distance (same node) per standard NUMA ACPI.
 pub const NUMA_DISTANCE_LOCAL: u8 = 10;
-/// Distance distante (1 hop) par défaut.
+/// Remote distance (1 hop) by default.
 pub const NUMA_DISTANCE_REMOTE: u8 = 20;
-/// Distance maximale réaliste (2 hops sur une topologie ring).
+/// Maximum realistic distance (2 hops on a ring topology).
 pub const NUMA_DISTANCE_FAR: u8 = 40;
-/// Valeur sentinelle : nœud inaccessible.
+/// Sentinel value: unreachable node.
 pub const NUMA_DISTANCE_UNREACHABLE: u8 = u8::MAX;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table des distances
+// Distance table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table symétrique MAX_NUMA_NODES × MAX_NUMA_NODES de distances uint8.
+/// Symmetric MAX_NUMA_NODES × MAX_NUMA_NODES table of uint8 distances.
 pub struct NumaDistanceTable {
-    /// Valeurs : `dist[from][to]`.
+    /// Values: `dist[from][to]`.
     dist: [[u8; MAX_NUMA_NODES]; MAX_NUMA_NODES],
     #[allow(dead_code)]
     initialized: AtomicBool,
 }
 
 impl NumaDistanceTable {
-    /// Construit la table avec les valeurs par défaut.
+    /// Constructs table with default values.
     const fn default_init() -> Self {
-        // Initialisation : locale=10, distante=20.
+        // Initialization: local=10, remote=20.
         let mut dist = [[NUMA_DISTANCE_REMOTE; MAX_NUMA_NODES]; MAX_NUMA_NODES];
         let mut i = 0;
         while i < MAX_NUMA_NODES {
@@ -57,7 +57,7 @@ impl NumaDistanceTable {
         }
     }
 
-    /// Retourne la distance entre `from` et `to`.
+    /// Returns the distance between `from` and `to`.
     #[inline]
     pub fn get(&self, from: u32, to: u32) -> u8 {
         if from as usize >= MAX_NUMA_NODES || to as usize >= MAX_NUMA_NODES {
@@ -66,19 +66,19 @@ impl NumaDistanceTable {
         self.dist[from as usize][to as usize]
     }
 
-    /// Met à jour la distance (depuis le parseur ACPI SLIT).
+    /// Updates distance (from ACPI SLIT parser).
     ///
     /// # Safety
-    /// Appelé en initialisation single-threaded.
+    /// Called during single-threaded initialization.
     pub unsafe fn set(&mut self, from: u32, to: u32, distance: u8) {
         if (from as usize) < MAX_NUMA_NODES && (to as usize) < MAX_NUMA_NODES {
             self.dist[from as usize][to as usize] = distance;
-            self.dist[to as usize][from as usize] = distance; // symétrie
+            self.dist[to as usize][from as usize] = distance; // symmetry
         }
     }
 
-    /// Retourne l'identifiant du nœud le plus proche de `origin`
-    /// parmi les nœuds actifs ayant au moins `min_free_pages` pages libres.
+    /// Returns the identifier of the closest node to `origin`
+    /// among active nodes having at least `min_free_pages` free pages.
     pub fn closest_node_with_memory(&self, origin: u32, min_free_pages: u64) -> u32 {
         let node_count = NUMA_NODES.count();
         let mut best_dist = NUMA_DISTANCE_UNREACHABLE;
@@ -98,8 +98,8 @@ impl NumaDistanceTable {
         best_node
     }
 
-    /// Retourne la liste triée des nœuds par distance croissante depuis `origin`.
-    /// Retourne un tableau de (node_id, distance) et sa longueur valide.
+    /// Returns sorted list of nodes by increasing distance from `origin`.
+    /// Returns an array of (node_id, distance) and its valid length.
     pub fn sorted_nodes_from(&self, origin: u32) -> ([u32; MAX_NUMA_NODES], usize) {
         let node_count = NUMA_NODES.count() as usize;
         let mut ids: [u32; MAX_NUMA_NODES] = [super::node::NUMA_NODE_INVALID; MAX_NUMA_NODES];
@@ -114,7 +114,7 @@ impl NumaDistanceTable {
             }
         }
 
-        // Tri à bulles (len ≤ 8 → O(n²) acceptable).
+        // Bubble sort (len <= 8 -> O(n²) acceptable).
         for i in 0..len {
             for j in i + 1..len {
                 if dists[j] < dists[i] {
@@ -130,38 +130,38 @@ impl NumaDistanceTable {
 
 unsafe impl Sync for NumaDistanceTable {}
 
-/// Table des distances statique globale.
+/// Global static distance table.
 pub static NUMA_DISTANCE: NumaDistanceTable = NumaDistanceTable::default_init();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers publics
+// Public helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne la distance entre deux nœuds NUMA.
+/// Returns the distance between two NUMA nodes.
 #[inline]
 pub fn numa_distance(from: u32, to: u32) -> u8 {
     NUMA_DISTANCE.get(from, to)
 }
 
-/// Retourne `true` si `from` et `to` sont le même nœud (distance locale).
+/// Returns `true` if `from` and `to` are the same node (local distance).
 #[inline]
 pub fn numa_same_node(from: u32, to: u32) -> bool {
     from == to
 }
 
-/// Retourne le nœud le plus proche disposant de mémoire.
+/// Returns closest node with available memory.
 #[inline]
 pub fn closest_node(origin: u32, min_free: u64) -> u32 {
     NUMA_DISTANCE.closest_node_with_memory(origin, min_free)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Init table des distances — déjà initialisée avec default_init().
-/// Le parseur ACPI SLIT peut appeler `NUMA_DISTANCE.set()` pour mettre à jour.
+/// Init distance table — already initialized with default_init().
+/// ACPI SLIT parser can call `NUMA_DISTANCE.set()` to update.
 pub fn init() {
-    // Table déjà initialisée constexpr.
-    // Si ACPI SLIT présent : appeler NUMA_DISTANCE.set() pour chaque entrée.
+    // Table already initialized constexpr.
+    // If ACPI SLIT present: call NUMA_DISTANCE.set() for each entry.
 }

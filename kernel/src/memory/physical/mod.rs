@@ -1,7 +1,7 @@
 // kernel/src/memory/physical/mod.rs
 //
-// Module physical — gestion de la mémoire physique.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Physical module — physical memory management.
+// Layer 0 — no external dependencies except `spin`.
 
 pub mod allocator;
 pub mod frame;
@@ -26,7 +26,7 @@ pub use zone::{
     ZoneDescriptor, ZoneStats,
 };
 
-// Allocateurs
+// Allocators
 pub use allocator::{
     alloc_page, alloc_pages, free_page, free_pages, init_phase1_bitmap, init_phase2_free_region,
     init_phase3_slab_slub, init_phase4_numa, slab_alloc, slab_free, slab_init_all, slub_alloc,

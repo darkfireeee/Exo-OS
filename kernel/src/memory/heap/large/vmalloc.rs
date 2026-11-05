@@ -1,11 +1,11 @@
 // kernel/src/memory/heap/large/vmalloc.rs
 //
-// Allocateur pour grandes allocations kernel (> 2048 octets).
-// Utilise l'espace VMALLOC_BASE → VMALLOC_BASE + VMALLOC_SIZE.
-// Chaque allocation est préfixée par un VmallocHeader (64 bytes, cacheline-aligned).
+// Allocator for large kernel allocations (> 2048 bytes).
+// Uses the space VMALLOC_BASE -> VMALLOC_BASE + VMALLOC_SIZE.
+// Each allocation is prefixed by a VmallocHeader (64 bytes, cacheline-aligned).
 //
-// COUCHE 0 — aucune dépendance sur scheduler/ipc/fs/process.
-// Seule dépendance interne : physical::allocator::buddy, core::layout, core::types.
+// LAYER 0 — no dependencies on scheduler/ipc/fs/process.
+// Only internal dependency: physical::allocator::buddy, core::layout, core::types.
 
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -19,35 +19,35 @@ use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HEADER DE CHAQUE ALLOCATION VMALLOC
+// VMALLOC ALLOCATION HEADER
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Magic pour détecter la corruption ou le double-free.
+/// Magic to detect corruption or double-free.
 const VMALLOC_MAGIC: u64 = 0xDEAD_BEEF_CAFE_BABE;
-/// Flag indiquant que le header est valide (non libéré).
+/// Flag indicating header is valid (not freed).
 const HEADER_ALIVE: u32 = 0xAB_CD_12_34;
-/// Flag d'un header libéré.
+/// Flag for a freed header.
 const HEADER_FREED: u32 = 0xDE_AD_00_00;
 
-/// Entête précédant chaque allocation vmalloc.
-/// Taille: 64 octets (une ligne de cache), toujours alignée sur 64.
+/// Header preceding each vmalloc allocation.
+/// Size: 64 bytes (one cache line), always aligned to 64.
 #[repr(C, align(64))]
 pub struct VmallocHeader {
-    /// Magic anti-corruption.
+    /// Anti-corruption magic.
     magic: u64,
-    /// Taille demandée par l'appelant (sans l'en-tête).
+    /// Requested size by caller (excluding header).
     user_size: usize,
-    /// Nombre de pages réellement allouées (includes header pages).
+    /// Actual number of allocated pages (includes header pages).
     page_count: usize,
-    /// Alignement demandé (power of 2).
+    /// Requested alignment (power of 2).
     alignment: usize,
-    /// État (HEADER_ALIVE / HEADER_FREED).
+    /// State (HEADER_ALIVE / HEADER_FREED).
     state: u32,
-    /// Ordre buddy de l'allocation physique sous-jacente.
+    /// Buddy order of underlying physical allocation.
     buddy_order: u32,
-    /// Adresse physique du premier frame.
+    /// Physical address of first frame.
     phys_base: u64,
-    /// Padding pour atteindre exactement 64 octets.
+    /// Padding to reach exactly 64 bytes.
     _pad: [u8; 16],
 }
 
@@ -131,10 +131,10 @@ impl VmallocRegistry {
 static VMALLOC_REGISTRY: Mutex<VmallocRegistry> = Mutex::new(VmallocRegistry::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOCATEUR VMALLOC INTERNE
+// INTERNAL VMALLOC ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques de l'allocateur vmalloc.
+/// Statistics for the vmalloc allocator.
 pub struct VmallocStats {
     pub alloc_count: AtomicU64,
     pub free_count: AtomicU64,
@@ -164,20 +164,20 @@ impl VmallocStats {
 pub static VMALLOC_STATS: VmallocStats = VmallocStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE
+// PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule le nombre de pages nécessaires pour `size` octets + le header.
+/// Calculates the number of pages required for `size` bytes + header.
 #[inline]
 fn pages_needed(size: usize, align: usize) -> usize {
-    // Le header occupe au minimum 64 octets (une cacheline / 1 page quand align ≥ PAGE_SIZE).
+    // Header occupies at least 64 bytes (one cache line / 1 page when align >= PAGE_SIZE).
     let total = size
         .saturating_add(core::mem::size_of::<VmallocHeader>())
         .saturating_add(align.saturating_sub(1));
     (total + PAGE_SIZE - 1) / PAGE_SIZE
 }
 
-/// Calcule l'ordre buddy minimal pour couvrir `pages` pages.
+/// Calculates the minimum buddy order to cover `pages` pages.
 #[inline]
 fn order_for_pages(pages: usize) -> u32 {
     let mut order = 0u32;
@@ -219,12 +219,12 @@ fn header_metadata_valid(header: &VmallocHeader, header_addr: u64) -> bool {
     header.page_count <= (1usize << header.buddy_order)
 }
 
-/// Alloue `size` octets avec `alignment` (puissance de 2, au minimum 8).
-/// L'allocation est bornée par des pages entières.
+/// Allocates `size` bytes with `alignment` (power of 2, minimum 8).
+/// Allocation is bounded by full pages.
 ///
-/// # Erreurs
-/// - `AllocError::OutOfMemory` — plus de frames disponibles.
-/// - `AllocError::InvalidParams` — taille nulle ou alignment non puissance de 2.
+/// # Errors
+/// - `AllocError::OutOfMemory` — no frames available.
+/// - `AllocError::InvalidParams` — zero size or alignment not a power of 2.
 pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
     if size == 0 {
         return Err(AllocError::InvalidParams);
@@ -238,19 +238,19 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
     let pages = pages_needed(size, align);
     let order = order_for_pages(pages);
 
-    // Alloue les frames physiques via buddy.
+    // Allocate physical frames via buddy.
     let frame = alloc_pages(order as usize, flags)?;
     let phys_base = frame.phys_addr();
 
-    // Obtient l'adresse virtuelle via le physmap.
+    // Obtain virtual address via physmap.
     let virt_base = phys_to_virt(phys_base);
 
-    // SAFETY: Le physmap couvre intégralement la RAM physique.
-    // `virt_base` est le début de la région mappée pour ces frames.
+    // SAFETY: The physmap completely covers physical RAM.
+    // `virt_base` is the start of the mapped region for these frames.
     let header_ptr = virt_base.as_u64() as *mut VmallocHeader;
 
-    // Initialise le header.
-    // SAFETY: La région est fraîchement allouée, non initialisée → on peut écrire.
+    // Initialize header.
+    // SAFETY: Region is freshly allocated, uninitialized -> safe to write.
     unsafe {
         header_ptr.write(VmallocHeader {
             magic: VMALLOC_MAGIC,
@@ -264,7 +264,7 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
         });
     }
 
-    // L'objet utilisateur commence juste après l'en-tête.
+    // User object begins right after header.
     let user_ptr = virt_base.as_u64() + core::mem::size_of::<VmallocHeader>() as u64;
 
     if !VMALLOC_REGISTRY.lock().insert(user_ptr, virt_base.as_u64()) {
@@ -273,7 +273,7 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
         return Err(AllocError::OutOfMemory);
     }
 
-    // Mise à jour des statistiques.
+    // Update statistics.
     VMALLOC_STATS.alloc_count.fetch_add(1, Ordering::Relaxed);
     VMALLOC_STATS
         .bytes_inuse
@@ -285,24 +285,24 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
         VMALLOC_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
     }
 
-    // Zéro-remplit si demandé.
+    // Zero-fill if requested.
     if flags.contains(AllocFlags::ZEROED) {
-        // SAFETY: Toute la région allouée est valide; user_ptr + size < fin de la région.
+        // SAFETY: Entire allocated region is valid; user_ptr + size < end of region.
         unsafe {
             core::ptr::write_bytes(user_ptr as *mut u8, 0, size);
         }
     }
 
-    // SAFETY: buddy a retourné un frame valide, user_ptr est non-nul.
+    // SAFETY: buddy returned a valid frame, user_ptr is non-null.
     Ok(unsafe { NonNull::new_unchecked(user_ptr as *mut u8) })
 }
 
-/// Libère une allocation créée par `kalloc`.
+/// Frees an allocation created by `kalloc`.
 ///
 /// # Safety
-/// `ptr` doit avoir été retourné par `kalloc` et ne pas avoir déjà été libéré.
+/// `ptr` must have been returned by `kalloc` and not already freed.
 pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
-    // Retrouve le header qui précède la zone utilisateur.
+    // Find the header preceding the user area.
     let user_addr = ptr.as_ptr() as u64;
     if user_addr < core::mem::size_of::<VmallocHeader>() as u64 {
         VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
@@ -314,17 +314,17 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
     };
     let header_ptr = header_addr as *mut VmallocHeader;
 
-    // SAFETY: Le header est à l'adresse attendue dans le physmap.
+    // SAFETY: The header is at expected address in physmap.
     let header = &mut *header_ptr;
 
-    // Vérifie le magic.
+    // Verify magic.
     if header.magic != VMALLOC_MAGIC {
         VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
-        // Ne pas continuer : heap corrompu, on laisse vivre le leak plutôt que panick.
+        // Do not continue: corrupt heap, leave leak rather than panic.
         return;
     }
 
-    // Vérifie l'état.
+    // Verify state.
     if header.state == HEADER_FREED {
         VMALLOC_STATS.double_free.fetch_add(1, Ordering::Relaxed);
         return;
@@ -339,21 +339,21 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
     let buddy_order = header.buddy_order;
     let phys_base = PhysAddr::new(header.phys_base);
 
-    // Marque comme libéré avant d'appeler buddy (fence mémoire).
+    // Mark as freed before calling buddy (memory fence).
     header.state = HEADER_FREED;
     core::sync::atomic::fence(Ordering::Release);
     let _ = VMALLOC_REGISTRY.lock().remove(user_addr);
 
-    // Empoisonne la zone utilisateur (aide à détecter les UAF).
+    // Poison user zone (helps detect UAF).
     core::ptr::write_bytes(user_addr as *mut u8, 0xAB, user_size);
 
-    // Libère les frames physiques via buddy.
+    // Free physical frames via buddy.
     if free_pages(Frame::from_phys_addr(phys_base), buddy_order as usize).is_err() {
         VMALLOC_STATS.corruption.fetch_add(1, Ordering::Relaxed);
         return;
     }
 
-    // Mise à jour des statistiques.
+    // Update statistics.
     VMALLOC_STATS.free_count.fetch_add(1, Ordering::Relaxed);
     VMALLOC_STATS
         .bytes_inuse
@@ -363,10 +363,10 @@ pub unsafe fn kfree(ptr: NonNull<u8>, _hint_size: usize) {
         .fetch_sub(page_count as u64, Ordering::Relaxed);
 }
 
-/// Réalloue `ptr` avec une nouvelle taille.
+/// Reallocates `ptr` with a new size.
 ///
 /// # Safety
-/// `ptr` doit être valide (retourné par `kalloc`).
+/// `ptr` must be valid (returned by `kalloc`).
 pub unsafe fn krealloc(
     ptr: NonNull<u8>,
     _old_size: usize,
@@ -392,7 +392,7 @@ pub unsafe fn krealloc(
     let old_pages = header.page_count;
     let new_pages = pages_needed(new_size, header.alignment);
     if old_pages == new_pages {
-        // Met à jour user_size dans le header.
+        // Update user_size in header.
         header.user_size = new_size;
         if new_size >= old_user_size {
             VMALLOC_STATS
@@ -414,11 +414,11 @@ pub unsafe fn krealloc(
     Ok(new_ptr)
 }
 
-/// Retourne la taille utilisateur de l'allocation pointée par `ptr`,
-/// ou `None` si le header est corrompu.
+/// Returns user size of allocation pointed to by `ptr`,
+/// or `None` if header is corrupt.
 ///
 /// # Safety
-/// `ptr` doit être une adresse retournée par `kalloc`.
+/// `ptr` must be an address returned by `kalloc`.
 pub unsafe fn kalloc_usable_size(ptr: NonNull<u8>) -> Option<usize> {
     let user_addr = ptr.as_ptr() as u64;
     if user_addr < core::mem::size_of::<VmallocHeader>() as u64 {

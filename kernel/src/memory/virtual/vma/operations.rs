@@ -1,27 +1,27 @@
 // kernel/src/memory/virtual/vma/operations.rs
 //
-// Opérations sur les VMAs : mmap, munmap, mprotect, split, merge.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Operations on VMAs: mmap, munmap, mprotect, split, merge.
+// Layer 0 — no external dependency except `spin`.
 
 use super::descriptor::{VmaBacking, VmaDescriptor, VmaFlags};
 use super::tree::VmaTree;
 use crate::memory::core::{AllocError, PageFlags, VirtAddr, PAGE_SIZE};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PARAMÈTRES D'ALLOCATION VMA
+// VMA ALLOCATION PARAMETERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres pour créer une nouvelle VMA.
+/// Parameters to create a new VMA.
 #[derive(Debug, Clone)]
 pub struct VmaAllocParams {
-    pub hint_addr: Option<VirtAddr>, // Adresse souhaitée (peut être ignorée)
+    pub hint_addr: Option<VirtAddr>, // Desired address (can be ignored)
     pub size: usize,
     pub flags: VmaFlags,
     pub page_flags: PageFlags,
     pub backing: VmaBacking,
     pub inode_id: u64,
     pub file_offset: u64,
-    pub fixed: bool, // MAP_FIXED : utiliser hint_addr exactement
+    pub fixed: bool, // MAP_FIXED: use hint_addr exactly
 }
 
 impl VmaAllocParams {
@@ -40,13 +40,13 @@ impl VmaAllocParams {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GESTION DES GAPS (plages libres)
+// GAP MANAGEMENT (free ranges)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Recherche un gap disponible dans l'arbre pour une VMA de `size` octets.
+/// Searches for an available gap in the tree for a VMA of `size` bytes.
 ///
-/// Stratégie : first-fit en partant de `hint_start`, puis depuis `min_addr`
-/// si non trouvé.
+/// Strategy: first-fit starting from `hint_start`, then from `min_addr`
+/// if not found.
 pub fn find_gap(
     tree: &VmaTree,
     size: usize,
@@ -64,11 +64,11 @@ pub fn find_gap(
             min_addr
         };
 
-    // Essai à partir du hint
+    // Try starting from hint
     if let Some(addr) = scan_gap(tree, start_hint, max_addr, aligned_size) {
         return Some(addr);
     }
-    // Essai depuis min_addr
+    // Try from min_addr
     if start_hint.as_u64() > min_addr.as_u64() {
         return scan_gap(tree, min_addr, start_hint, aligned_size);
     }
@@ -78,19 +78,19 @@ pub fn find_gap(
 fn scan_gap(tree: &VmaTree, from: VirtAddr, to: VirtAddr, size: usize) -> Option<VirtAddr> {
     let mut cursor = align_up_addr(from, PAGE_SIZE);
     for vma in tree.iter() {
-        // Gap entre cursor et début de cette VMA
+        // Gap between cursor and start of this VMA
         if vma.start.as_u64() > cursor.as_u64() {
             let gap = (vma.start.as_u64() - cursor.as_u64()) as usize;
             if gap >= size && cursor.as_u64() + size as u64 <= to.as_u64() {
                 return Some(cursor);
             }
         }
-        // Avancer après la fin de cette VMA
+        // Advance past end of this VMA
         if vma.end.as_u64() > cursor.as_u64() {
             cursor = VirtAddr::new(vma.end.as_u64());
         }
     }
-    // Gap après toutes les VMAs
+    // Gap after all VMAs
     if cursor.as_u64() + size as u64 <= to.as_u64() {
         return Some(cursor);
     }
@@ -102,20 +102,20 @@ fn align_up_addr(addr: VirtAddr, align: usize) -> VirtAddr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SPLIT D'UNE VMA
+// VMA SPLIT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un split de VMA.
+/// Result of a VMA split.
 pub struct SplitResult {
-    /// Partie gauche (start..split_point).
+    /// Left part (start..split_point).
     pub left: VmaDescriptor,
-    /// Partie droite (split_point..end).
+    /// Right part (split_point..end).
     pub right: VmaDescriptor,
 }
 
-/// Divise `vma` en deux à l'adresse `split_point`.
+/// Splits `vma` in two at address `split_point`.
 ///
-/// `split_point` doit être aligné sur PAGE_SIZE et dans [start..end).
+/// `split_point` must be aligned to PAGE_SIZE and within [start..end).
 pub fn split_vma(vma: &VmaDescriptor, split_point: VirtAddr) -> Result<SplitResult, AllocError> {
     let sp = split_point.as_u64();
     if sp <= vma.start.as_u64() || sp >= vma.end.as_u64() {
@@ -132,8 +132,8 @@ pub fn split_vma(vma: &VmaDescriptor, split_point: VirtAddr) -> Result<SplitResu
         vma.page_flags,
         vma.backing,
     );
-    // Propager l'association fichier : left part depuis vma.start, donc
-    // son file_offset est identique à celui de la VMA d'origine.
+    // Propagate file association: left starts from vma.start, so
+    // its file_offset is identical to that of the original VMA.
     left.inode_id = vma.inode_id;
     left.file_offset = vma.file_offset;
 
@@ -149,17 +149,17 @@ pub fn split_vma(vma: &VmaDescriptor, split_point: VirtAddr) -> Result<SplitResu
 // MPROTECT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de mprotect : VMAs à insérer après la transformation.
+/// Result of mprotect: VMAs to insert after transformation.
 pub struct MprotectResult {
-    /// VMA avant la plage modifiée (peut être None si start == vma.start).
+    /// VMA before the modified range (can be None if start == vma.start).
     pub before: Option<VmaDescriptor>,
-    /// VMA modifiée (la plage [start..end) avec les nouveaux flags).
+    /// Modified VMA (the range [start..end) with new flags).
     pub middle: VmaDescriptor,
-    /// VMA après la plage modifiée (peut être None si end == vma.end).
+    /// VMA after the modified range (can be None if end == vma.end).
     pub after: Option<VmaDescriptor>,
 }
 
-/// Applique une modification de flags sur la plage [start..end) d'une VMA.
+/// Applies a flags modification on the range [start..end) of a VMA.
 pub fn mprotect_vma(
     vma: &VmaDescriptor,
     start: VirtAddr,
@@ -170,7 +170,7 @@ pub fn mprotect_vma(
         return Err(AllocError::InvalidParams);
     }
 
-    // Calculer les offsets fichier pour chaque fragment.
+    // Compute file offsets for each fragment.
     let before = if start.as_u64() > vma.start.as_u64() {
         let mut d = VmaDescriptor::new(vma.start, start, vma.flags, vma.page_flags, vma.backing);
         d.inode_id = vma.inode_id;
@@ -201,10 +201,10 @@ pub fn mprotect_vma(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VALIDATION DE VMAS
+// VMA VALIDATION
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valide la cohérence d'un VmaDescriptor avant insertion.
+/// Validates consistency of a VmaDescriptor prior to insertion.
 pub fn validate_vma(vma: &VmaDescriptor) -> Result<(), AllocError> {
     let start = vma.start.as_u64();
     let end = vma.end.as_u64();

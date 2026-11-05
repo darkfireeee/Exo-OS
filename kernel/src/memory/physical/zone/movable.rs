@@ -1,24 +1,24 @@
 // kernel/src/memory/physical/zone/movable.rs
 //
-// Zone MOVABLE — pages déplaçables pour la défragmentation des huge pages.
-// Les pages MOVABLE peuvent être migrées vers d'autres nœuds NUMA ou
-// consolidées pour former des 2MiB/1GiB huge pages.
-// Couche 0 — aucune dépendance externe.
+// MOVABLE Zone — movable pages for huge pages defragmentation.
+// MOVABLE pages can be migrated towards other NUMA nodes or
+// consolidated to form 2MiB/1GiB huge pages.
+// Layer 0 — no external dependencies.
 
 use super::ZoneDescriptor;
 use crate::memory::core::{PhysAddr, ZoneType};
 
-/// Zone MOVABLE — allocation de pages migratables.
+/// MOVABLE Zone — allocatable migratable pages.
 ///
-/// Les pages allouées dans cette zone peuvent être migrées par le
-/// compacteur de mémoire. Idéal pour les allocations MOVABLE du userspace.
+/// Pages allocated in this zone can be migrated by the
+/// memory compactor. Ideal for userspace MOVABLE allocations.
 pub struct MovableZone {
     pub desc: ZoneDescriptor,
 }
 
 impl MovableZone {
-    /// Crée la zone MOVABLE.
-    /// `phys_start`/`phys_end` sont configurés par le policy NUMA au boot.
+    /// Creates the MOVABLE zone.
+    /// `phys_start`/`phys_end` are configured by NUMA policy at boot.
     pub const fn new(
         numa_node: u8,
         phys_start: PhysAddr,
@@ -42,7 +42,7 @@ impl MovableZone {
         }
     }
 
-    /// Crée une zone MOVABLE vide (pas configurée).
+    /// Creates an empty MOVABLE zone (not configured).
     pub const fn new_empty(numa_node: u8) -> Self {
         MovableZone {
             desc: ZoneDescriptor::new(

@@ -1,17 +1,17 @@
 // kernel/src/memory/virtual/vma/descriptor.rs
 //
-// Descripteur de VMA (Virtual Memory Area).
-// Représente une région de l'espace d'adressage virtuel d'un processus.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// VMA (Virtual Memory Area) descriptor.
+// Represents a region of a process's virtual address space.
+// Layer 0 — no external dependency except `spin`.
 
 use crate::memory::core::{PageFlags, VirtAddr, VirtRange};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FLAGS DE VMA
+// VMA FLAGS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags décrivant le type et les propriétés d'une VMA.
+/// Flags describing the type and properties of a VMA.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct VmaFlags(u32);
@@ -25,16 +25,16 @@ impl VmaFlags {
     pub const ANONYMOUS: VmaFlags = VmaFlags(1 << 4);
     pub const STACK: VmaFlags = VmaFlags(1 << 5);
     pub const HEAP: VmaFlags = VmaFlags(1 << 6);
-    pub const FIXED: VmaFlags = VmaFlags(1 << 7); // Adresse fixée (MAP_FIXED)
-    pub const GROWSDOWN: VmaFlags = VmaFlags(1 << 8); // Pile qui croît vers le bas
-    pub const COW: VmaFlags = VmaFlags(1 << 9); // Copy-on-Write actif
+    pub const FIXED: VmaFlags = VmaFlags(1 << 7); // Fixed address (MAP_FIXED)
+    pub const GROWSDOWN: VmaFlags = VmaFlags(1 << 8); // Stack that grows downward
+    pub const COW: VmaFlags = VmaFlags(1 << 9); // Active Copy-on-Write
     pub const LOCKED: VmaFlags = VmaFlags(1 << 10); // mlock
     pub const HUGETLB: VmaFlags = VmaFlags(1 << 11); // Huge pages TLB
-    pub const IO: VmaFlags = VmaFlags(1 << 12); // Mapping I/O (non-cacheable)
-    pub const KERNEL: VmaFlags = VmaFlags(1 << 13); // VMA kernel
+    pub const IO: VmaFlags = VmaFlags(1 << 12); // I/O mapping (non-cacheable)
+    pub const KERNEL: VmaFlags = VmaFlags(1 << 13); // Kernel VMA
     pub const DONTEXPAND: VmaFlags = VmaFlags(1 << 14); // Non-expandable
-    pub const WIPEONFORK: VmaFlags = VmaFlags(1 << 15); // Effacer au fork
-    pub const DONTCOPY: VmaFlags = VmaFlags(1 << 16); // Non copié au fork (SignalTcb)
+    pub const WIPEONFORK: VmaFlags = VmaFlags(1 << 15); // Clear on fork
+    pub const DONTCOPY: VmaFlags = VmaFlags(1 << 16); // Not copied on fork (SignalTcb)
 
     pub const fn contains(self, other: VmaFlags) -> bool {
         (self.0 & other.0) == other.0
@@ -42,7 +42,7 @@ impl VmaFlags {
     pub const fn bits(self) -> u32 {
         self.0
     }
-    /// Construit un VmaFlags depuis une valeur brute.
+    /// Constructs VmaFlags from a raw value.
     pub const fn from_bits(v: u32) -> Self {
         VmaFlags(v)
     }
@@ -68,60 +68,60 @@ impl core::fmt::Debug for VmaFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TYPE DE BACKING (source des pages)
+// BACKING TYPE (page source)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Source des pages d'une VMA.
+/// Source of pages for a VMA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VmaBacking {
-    /// Pages anonymes (zéro-fill à la demande).
+    /// Anonymous pages (zero-filled on demand).
     Anonymous = 0,
-    /// Fichier mappé en mémoire (file-backed).
+    /// Memory-mapped file (file-backed).
     File = 1,
-    /// Mapping de périphérique (device memory).
+    /// Device memory mapping.
     Device = 2,
-    /// Pages kernel directement mappées (pas de demand paging).
+    /// Directly mapped kernel pages (no demand paging).
     Direct = 3,
-    /// Segment partagé (IPC shared memory).
+    /// Shared memory segment (IPC shared memory).
     Shared = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DESCRIPTEUR DE VMA
+// VMA DESCRIPTOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur complet d'une VMA.
-/// Cette structure est la seule source de vérité pour les propriétés d'une région.
+/// Full descriptor of a VMA.
+/// This structure is the single source of truth for a region's properties.
 ///
-/// Allouée dans le slab allocator (< 2 KiB).
+/// Allocated in the slab allocator (< 2 KiB).
 #[repr(C, align(64))]
 pub struct VmaDescriptor {
-    // ── Limites virtuelles ──────────────────────────────────────────────────
-    /// Début de la région (inclus, aligné sur PAGE_SIZE).
+    // ── Virtual limits ──────────────────────────────────────────────────────
+    /// Region start (inclusive, aligned to PAGE_SIZE).
     pub start: VirtAddr,
-    /// Fin de la région (exclus, aligné sur PAGE_SIZE).
+    /// Region end (exclusive, aligned to PAGE_SIZE).
     pub end: VirtAddr,
 
-    // ── Propriétés ──────────────────────────────────────────────────────────
+    // ── Properties ──────────────────────────────────────────────────────────
     pub flags: VmaFlags,
     pub page_flags: PageFlags,
     pub backing: VmaBacking,
 
-    // ── Fichier backing (si VmaBacking::File) ───────────────────────────────
-    /// Inode ID (0 = pas de fichier).
+    // ── Backing file (if VmaBacking::File) ───────────────────────────────────
+    /// Inode ID (0 = no file).
     pub inode_id: u64,
-    /// Offset dans le fichier.
+    /// Offset within the file.
     pub file_offset: u64,
 
-    // ── Statistiques ────────────────────────────────────────────────────────
+    // ── Statistics ──────────────────────────────────────────────────────────
     pub pages_resident: AtomicU32,
     pub pages_swapped: AtomicU32,
     pub page_faults: AtomicU64,
     pub cow_breaks: AtomicU32,
 
-    // ── Arbre AVL (liens internes) ───────────────────────────────────────────
-    /// Prochain nœud (ordre adresse croissante).
+    // ── AVL tree (internal links) ────────────────────────────────────────────
+    /// Next node (ascending address order).
     pub(crate) rb_left: *mut VmaDescriptor,
     pub(crate) rb_right: *mut VmaDescriptor,
     pub(crate) rb_height: i32,
@@ -129,13 +129,13 @@ pub struct VmaDescriptor {
     pub _pad: [u8; 4],
 }
 
-// SAFETY: VmaDescriptor est un RON (Record Of Non-moveable), protégé par
-//         le verrou de l'address space parent.
+// SAFETY: VmaDescriptor is a RON (Record Of Non-moveable), protected by
+//         the parent address space lock.
 unsafe impl Send for VmaDescriptor {}
 unsafe impl Sync for VmaDescriptor {}
 
 impl VmaDescriptor {
-    /// Crée un descripteur VMA avec les paramètres de base.
+    /// Creates a VMA descriptor with basic parameters.
     pub const fn new(
         start: VirtAddr,
         end: VirtAddr,
@@ -162,43 +162,43 @@ impl VmaDescriptor {
         }
     }
 
-    /// Retourne la taille en octets de la VMA.
+    /// Returns the size in bytes of the VMA.
     #[inline]
     pub fn size(&self) -> usize {
         (self.end.as_u64() - self.start.as_u64()) as usize
     }
 
-    /// Retourne le nombre de pages de la VMA.
+    /// Returns the number of pages in the VMA.
     #[inline]
     pub fn n_pages(&self) -> usize {
         self.size() / crate::memory::core::PAGE_SIZE
     }
 
-    /// Vérifie si l'adresse virtuelle est dans cette VMA.
+    /// Checks whether the virtual address falls within this VMA.
     #[inline]
     pub fn contains(&self, addr: VirtAddr) -> bool {
         addr.as_u64() >= self.start.as_u64() && addr.as_u64() < self.end.as_u64()
     }
 
-    /// Retourne la plage virtuelle de cette VMA.
+    /// Returns the virtual range of this VMA.
     #[inline]
     pub fn range(&self) -> VirtRange {
         VirtRange::from_range(self.start, self.end)
     }
 
-    /// Incrémente le compteur de page faults.
+    /// Increments the page fault counter.
     #[inline]
     pub fn record_fault(&self) {
         self.page_faults.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Incrémente le compteur de CoW breaks.
+    /// Increments the CoW break counter.
     #[inline]
     pub fn record_cow_break(&self) {
         self.cow_breaks.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Vérifie si cette VMA peut être fusionnée avec `other` (adjacence + même flags).
+    /// Checks whether this VMA can be merged with `other` (adjacency + identical flags).
     pub fn can_merge_with(&self, other: &VmaDescriptor) -> bool {
         self.end == other.start
             && self.flags == other.flags

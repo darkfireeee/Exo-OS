@@ -1,16 +1,16 @@
 // kernel/src/memory/dma/completion/polling.rs
 //
-// Polling haute fréquence pour la complétion DMA.
+// High-frequency polling for DMA completion.
 //
-// Utilisé quand un thread kernel doit attendre la fin d'un transfert DMA
-// sans passer par le mécanisme de wakeup (contextes sans scheduler actif :
-// init, early_boot, drivers embarqués).
+// Used when a kernel thread must wait for the completion of a DMA transfer
+// without going through the wakeup mechanism (contexts without active scheduler:
+// init, early_boot, embedded drivers).
 //
-// Deux modes :
-//   - `spin_poll` : spin actif jusqu'à complétion ou timeout (TSC-based).
-//   - `yield_poll` : même chose mais avec `pause` (REPNE) entre les lectures.
+// Two modes:
+//   - `spin_poll`: busy spin until completion or timeout (TSC-based).
+//   - `yield_poll`: same but with `pause` (REPNE) between reads.
 //
-// COUCHE 0 — aucune dépendance externe. Pas de scheduler::sleep().
+// LAYER 0 — no external dependencies. No scheduler::sleep().
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,49 +18,49 @@ use crate::memory::dma::completion::handler::DMA_COMPLETION;
 use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Timeout par défaut en cycles TSC (~10 ms sur 3 GHz).
+/// Default timeout in TSC cycles (~10 ms at 3 GHz).
 pub const DEFAULT_POLL_TIMEOUT_CYCLES: u64 = 30_000_000;
 
-/// Timeout long pour les transferts DMA de gros volumes (~1 s sur 3 GHz).
+/// Long timeout for large DMA transfers (~1 s at 3 GHz).
 pub const LONG_POLL_TIMEOUT_CYCLES: u64 = 3_000_000_000;
 
-/// Nombre de lectures TSC sans `pause` avant d'insérer un `pause`.
+/// Number of TSC reads without `pause` before inserting a `pause`.
 const SPIN_BATCH_SIZE: u32 = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RÉSULTAT DU POLLING
+// POLLING RESULT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une opération de polling.
+/// Result of a polling operation.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum PollResult {
-    /// Transfert terminé avec succès. Octets transférés.
+    /// Transfer completed successfully. Transferred bytes.
     Done(usize),
-    /// Transfert terminé avec erreur.
+    /// Transfer completed with error.
     Error(DmaError),
-    /// Timeout expiré sans complétion.
+    /// Timeout expired without completion.
     Timeout,
-    /// La transaction n'est pas dans la table de complétion.
+    /// Transaction is not in the completion table.
     NotFound,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES DE POLLING
+// POLLING STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct PollStats {
-    /// Polls ayant réussi (Done).
+    /// Successful polls (Done).
     pub successes: AtomicU64,
-    /// Polls ayant échoué (Error).
+    /// Failed polls (Error).
     pub errors: AtomicU64,
-    /// Polls ayant expiré.
+    /// Expired polls.
     pub timeouts: AtomicU64,
-    /// Cycles TSC totaux consommés par les polls réussis.
+    /// Total TSC cycles consumed by successful polls.
     pub cycles_total: AtomicU64,
-    /// Cycles TSC max sur un poll réussi (worst-case latency).
+    /// Maximum TSC cycles on a successful poll (worst-case latency).
     pub cycles_max: AtomicU64,
 }
 
@@ -79,28 +79,28 @@ impl PollStats {
 pub static POLL_STATS: PollStats = PollStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTEUR DE POLLING
+// POLLING ENGINE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Polling DMA en spin actif.
+/// Busy-spin DMA polling.
 ///
-/// Tourne jusqu'à ce que :
-///   - La transaction soit marquée `Done`/`Error` dans `DMA_COMPLETION`,
-///   - Ou que `timeout_cycles` cycles TSC se soient écoulés.
+/// Spins until:
+///   - The transaction is marked `Done`/`Error` in `DMA_COMPLETION`,
+///   - Or `timeout_cycles` TSC cycles have elapsed.
 ///
-/// # Paramètres
-/// - `txn_id` : transaction à attendre.
-/// - `timeout_cycles` : durée max en cycles TSC (0 = pas de timeout).
+/// # Parameters
+/// - `txn_id`: transaction to wait for.
+/// - `timeout_cycles`: max duration in TSC cycles (0 = no timeout).
 ///
-/// # Contexte
-/// Peut être appelé avec interruptions désactivées.
-/// Ne doit PAS être appelé depuis un contexte d'interruption (récursion).
+/// # Context
+/// Can be called with interrupts disabled.
+/// Must NOT be called from an interrupt context (recursion).
 pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
     let start = read_tsc();
     let mut batch = 0u32;
 
     loop {
-        // Interroger l'état dans la completion table.
+        // Query state in the completion table.
         match DMA_COMPLETION.query(txn_id) {
             Some(Ok(bytes)) => {
                 let elapsed = read_tsc().wrapping_sub(start);
@@ -108,7 +108,7 @@ pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
                 POLL_STATS
                     .cycles_total
                     .fetch_add(elapsed, Ordering::Relaxed);
-                // Mise à jour du max sans verrou (approximation acceptable).
+                // Update max without lock (acceptable approximation).
                 let old_max = POLL_STATS.cycles_max.load(Ordering::Relaxed);
                 if elapsed > old_max {
                     POLL_STATS.cycles_max.store(elapsed, Ordering::Relaxed);
@@ -120,7 +120,7 @@ pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
                 return PollResult::Error(err);
             }
             None => {
-                // Transaction non encore complétée — vérifier timeout.
+                // Transaction not yet completed — check timeout.
                 if timeout_cycles > 0 {
                     let elapsed = read_tsc().wrapping_sub(start);
                     if elapsed >= timeout_cycles {
@@ -131,9 +131,9 @@ pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
             }
         }
 
-        // `pause` toutes les SPIN_BATCH_SIZE itérations pour éviter de saturer
-        // le port d'exécution des charges mémoire et permettre la progression
-        // du thread producteur (hyper-threading).
+        // `pause` every SPIN_BATCH_SIZE iterations to avoid saturating
+        // the memory load execution port and allow progress of
+        // the producer thread (hyper-threading).
         batch += 1;
         if batch >= SPIN_BATCH_SIZE {
             batch = 0;
@@ -142,12 +142,12 @@ pub fn spin_poll(txn_id: DmaTransactionId, timeout_cycles: u64) -> PollResult {
     }
 }
 
-/// Variante de `spin_poll` avec un nombre limité d'itérations.
+/// Variant of `spin_poll` with a bounded number of iterations.
 ///
-/// Retourne `PollResult::Timeout` si la transaction n'est pas terminée
-/// après `max_iters` lectures, sans tenir compte du TSC.
+/// Returns `PollResult::Timeout` if the transaction is not completed
+/// after `max_iters` reads, without taking TSC into account.
 ///
-/// Utile dans les contextes où lire le TSC est interdit.
+/// Useful in contexts where reading the TSC is prohibited.
 pub fn bounded_poll(txn_id: DmaTransactionId, max_iters: u32) -> PollResult {
     for i in 0..max_iters {
         match DMA_COMPLETION.query(txn_id) {
@@ -169,27 +169,27 @@ pub fn bounded_poll(txn_id: DmaTransactionId, max_iters: u32) -> PollResult {
     PollResult::Timeout
 }
 
-/// Polling avec timeout par défaut (`DEFAULT_POLL_TIMEOUT_CYCLES`).
+/// Polling with default timeout (`DEFAULT_POLL_TIMEOUT_CYCLES`).
 #[inline]
 pub fn poll(txn_id: DmaTransactionId) -> PollResult {
     spin_poll(txn_id, DEFAULT_POLL_TIMEOUT_CYCLES)
 }
 
-/// Polling avec timeout long (gros transferts).
+/// Polling with long timeout (large transfers).
 #[inline]
 pub fn poll_long(txn_id: DmaTransactionId) -> PollResult {
     spin_poll(txn_id, LONG_POLL_TIMEOUT_CYCLES)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UTILITAIRES
+// UTILITIES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le TSC.
+/// Reads the TSC.
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: rdtsc disponible sur tout x86_64; options(nostack, nomem) correctes.
+    // SAFETY: rdtsc available on all x86_64; options(nostack, nomem) correct.
     unsafe {
         let lo: u32;
         let hi: u32;
@@ -207,11 +207,11 @@ fn read_tsc() -> u64 {
     }
 }
 
-/// Instruction `pause` (REPNE NOP) — réduit la contention sur le cache cohérence.
+/// Instruction `pause` (REPNE NOP) — reduces cache coherence contention.
 #[inline(always)]
 fn cpu_pause() {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: pause disponible sur x86_64; réduit la contention de cohérence cache.
+    // SAFETY: pause available on x86_64; reduces cache coherence contention.
     unsafe {
         core::arch::asm!("pause", options(nostack, nomem, preserves_flags));
     }

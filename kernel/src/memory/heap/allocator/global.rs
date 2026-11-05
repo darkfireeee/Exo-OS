@@ -1,8 +1,8 @@
 // kernel/src/memory/heap/allocator/global.rs
 //
-// Allocateur global Rust (#[global_allocator]) pour le kernel.
-// Délègue vers l'allocateur hybride (SLUB + large).
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Rust global allocator (#[global_allocator]) for the kernel.
+// Delegates to the hybrid allocator (SLUB + large).
+// Layer 0 — no external dependencies except `spin`.
 
 use super::hybrid;
 use crate::memory::core::AllocFlags;
@@ -12,18 +12,18 @@ use core::alloc::{GlobalAlloc, Layout};
 // GLOBAL ALLOCATOR
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Allocateur global Rust pour le kernel.
+/// Rust global allocator for the kernel.
 ///
-/// Enregistré via `#[global_allocator]` dans lib.rs.
-/// Toutes les allocations Box, Vec, String (si utilisées) passeront ici.
+/// Registered via `#[global_allocator]` in lib.rs.
+/// All Box, Vec, String allocations (if used) will pass through here.
 ///
-/// Note : dans le kernel Exo-OS, l'utilisation de Box/Vec est interdite dans
-/// les chemins no-alloc (IRQ, preempt-disabled). Ces allocations sont tolérées
-/// uniquement dans les contextes de démarrage et de gestion de processus.
+/// Note: in the Exo-OS kernel, use of Box/Vec is forbidden in
+/// no-alloc paths (IRQ, preempt-disabled). These allocations are tolerated
+/// only in boot contexts and process management.
 pub struct KernelAllocator;
 
-// SAFETY: KernelAllocator est thread-safe — délègue à hybrid::alloc/free
-//         qui sont eux-mêmes thread-safe (SLUB utilise des spinlocks internes).
+// SAFETY: KernelAllocator is thread-safe — delegates to hybrid::alloc/free
+//         which are themselves thread-safe (SLUB uses internal spinlocks).
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match hybrid::alloc(layout.size(), layout.align(), AllocFlags::NONE) {
@@ -53,7 +53,7 @@ unsafe impl GlobalAlloc for KernelAllocator {
         if ptr.is_null() {
             return self.alloc(layout);
         }
-        // Allouer le nouveau bloc
+        // Allocate the new block
         let new_layout = match Layout::from_size_align(new_size, layout.align()) {
             Ok(l) => l,
             Err(_) => return core::ptr::null_mut(),
@@ -62,16 +62,16 @@ unsafe impl GlobalAlloc for KernelAllocator {
         if new_ptr.is_null() {
             return core::ptr::null_mut();
         }
-        // Copier les données
+        // Copy the data
         let copy_size = layout.size().min(new_size);
-        // SAFETY: ptr est valide (alloué précédemment), copy_size <= les deux tailles.
+        // SAFETY: ptr is valid (previously allocated), copy_size <= both sizes.
         core::ptr::copy_nonoverlapping(ptr, new_ptr, copy_size);
-        // Libérer l'ancien bloc
+        // Free the old block
         self.dealloc(ptr, layout);
         new_ptr
     }
 }
 
-/// Instance globale de l'allocateur kernel.
+/// Global instance of the kernel allocator.
 #[cfg_attr(not(test), global_allocator)]
 pub static KERNEL_ALLOCATOR: KernelAllocator = KernelAllocator;

@@ -1,17 +1,17 @@
 // kernel/src/memory/dma/channels/affinity.rs
 //
-// Affinité CPU/NUMA des canaux DMA.
+// CPU/NUMA affinity of DMA channels.
 //
-// Permet d'associer chaque canal DMA à :
-//   - un CPU préféré (pour affinité d'interruption et per-CPU pools),
-//   - un nœud NUMA (pour privilégier la RAM locale),
-//   - un masque CPU (pour les IRQ multi-CPU).
+// Allows associating each DMA channel with:
+//   - a preferred CPU (for interrupt affinity and per-CPU pools),
+//   - a NUMA node (to favor local RAM),
+//   - a CPU mask (for multi-CPU IRQs).
 //
-// Le gestionnaire de canaux consulte ces affinités lors de l'allocation
-// d'un canal pour une requête sur un CPU donné, afin de minimiser la
-// latence de la transaction (données locales + IRQ traitée sur le bon CPU).
+// The channel manager consults these affinities when allocating
+// a channel for a request on a given CPU, in order to minimize
+// transaction latency (local data + IRQ handled on the right CPU).
 //
-// COUCHE 0 — aucune dépendance externe.
+// LAYER 0 — zero external dependencies.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
@@ -19,36 +19,36 @@ use crate::memory::dma::channels::manager::MAX_DMA_CHANNELS;
 use crate::memory::dma::core::types::DmaChannelId;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valeur sentinelle : aucune affinité CPU définie.
+/// Sentinel value: no CPU affinity defined.
 pub const CPU_AFFINITY_NONE: u8 = u8::MAX;
 
-/// Valeur sentinelle : aucun nœud NUMA préféré.
+/// Sentinel value: no preferred NUMA node.
 pub const NUMA_NODE_NONE: u8 = u8::MAX;
 
-/// Nombre maximum de CPUs trackés dans le masque (bits).
+/// Maximum number of CPUs tracked in mask (bits).
 pub const MAX_AFFINITY_CPUS: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENTRÉE D'AFFINITÉ
+// AFFINITY ENTRY
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Affinité CPU/NUMA d'un canal DMA.
+/// CPU/NUMA affinity of a DMA channel.
 #[repr(C, align(16))]
 struct AffinityEntry {
-    /// CPU préféré pour IRQ et traitement des completions (255 = aucun).
+    /// Preferred CPU for IRQ and completion processing (255 = none).
     preferred_cpu: AtomicU8,
-    /// Nœud NUMA préféré pour les allocations mémoire (255 = aucun).
+    /// Preferred NUMA node for memory allocations (255 = none).
     numa_node: AtomicU8,
-    /// Masque des CPUs autorisés à traiter les IRQ de ce canal (64 bits max).
-    /// Bit i = 1 → CPU i peut traiter les interruptions de ce canal.
-    /// 0 = non configuré (tous les CPUs autorisés).
+    /// Mask of CPUs allowed to handle IRQs for this channel (64 bits max).
+    /// Bit i = 1 -> CPU i can handle interrupts for this channel.
+    /// 0 = unconfigured (all CPUs allowed).
     cpu_mask: AtomicU64,
-    /// Nombre de fois que ce canal a été sélectionné depuis son CPU préféré.
+    /// Number of times this channel was selected from its preferred CPU.
     local_hits: AtomicU32,
-    /// Nombre de fois que ce canal a été sélectionné depuis un CPU non-préféré.
+    /// Number of times this channel was selected from a non-preferred CPU.
     remote_hits: AtomicU32,
 }
 
@@ -65,20 +65,20 @@ impl AffinityEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE D'AFFINITÉS
+// AFFINITY TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table d'affinités CPU/NUMA pour tous les canaux DMA enregistrés.
+/// CPU/NUMA affinity table for all registered DMA channels.
 ///
-/// Indexée par `DmaChannelId.0`. Thread-safe : chaque champ est atomique.
+/// Indexed by `DmaChannelId.0`. Thread-safe: each field is atomic.
 pub struct DmaAffinityTable {
     entries: [AffinityEntry; MAX_DMA_CHANNELS],
-    /// Statistiques globales.
+    /// Global statistics.
     pub stats_local_total: AtomicU64,
     pub stats_remote_total: AtomicU64,
 }
 
-// SAFETY: DmaAffinityTable utilise uniquement des atomiques.
+// SAFETY: DmaAffinityTable uses only atomics.
 unsafe impl Sync for DmaAffinityTable {}
 unsafe impl Send for DmaAffinityTable {}
 
@@ -99,9 +99,9 @@ impl DmaAffinityTable {
 
     // ── Configuration ────────────────────────────────────────────────────────
 
-    /// Définit le CPU préféré d'un canal.
+    /// Sets preferred CPU of a channel.
     ///
-    /// `cpu` = `CPU_AFFINITY_NONE` pour supprimer la préférence.
+    /// `cpu` = `CPU_AFFINITY_NONE` to clear preference.
     pub fn set_preferred_cpu(&self, channel: DmaChannelId, cpu: u8) {
         if (channel.0 as usize) < MAX_DMA_CHANNELS {
             self.entries[channel.0 as usize]
@@ -110,7 +110,7 @@ impl DmaAffinityTable {
         }
     }
 
-    /// Définit le nœud NUMA préféré d'un canal.
+    /// Sets preferred NUMA node of a channel.
     pub fn set_numa_node(&self, channel: DmaChannelId, node: u8) {
         if (channel.0 as usize) < MAX_DMA_CHANNELS {
             self.entries[channel.0 as usize]
@@ -119,9 +119,9 @@ impl DmaAffinityTable {
         }
     }
 
-    /// Définit le masque CPU pour les IRQ de ce canal.
+    /// Sets CPU mask for IRQs of this channel.
     ///
-    /// `mask` = 0 → tous les CPUs sont autorisés (aucune contrainte).
+    /// `mask` = 0 -> all CPUs are allowed (no constraint).
     pub fn set_cpu_mask(&self, channel: DmaChannelId, mask: u64) {
         if (channel.0 as usize) < MAX_DMA_CHANNELS {
             self.entries[channel.0 as usize]
@@ -130,9 +130,9 @@ impl DmaAffinityTable {
         }
     }
 
-    // ── Lecture ──────────────────────────────────────────────────────────────
+    // ── Read ─────────────────────────────────────────────────────────────────
 
-    /// Retourne le CPU préféré d'un canal (ou `CPU_AFFINITY_NONE`).
+    /// Returns preferred CPU of a channel (or `CPU_AFFINITY_NONE`).
     pub fn preferred_cpu(&self, channel: DmaChannelId) -> u8 {
         if (channel.0 as usize) >= MAX_DMA_CHANNELS {
             return CPU_AFFINITY_NONE;
@@ -142,7 +142,7 @@ impl DmaAffinityTable {
             .load(Ordering::Relaxed)
     }
 
-    /// Retourne le nœud NUMA préféré d'un canal (ou `NUMA_NODE_NONE`).
+    /// Returns preferred NUMA node of a channel (or `NUMA_NODE_NONE`).
     pub fn numa_node(&self, channel: DmaChannelId) -> u8 {
         if (channel.0 as usize) >= MAX_DMA_CHANNELS {
             return NUMA_NODE_NONE;
@@ -152,7 +152,7 @@ impl DmaAffinityTable {
             .load(Ordering::Relaxed)
     }
 
-    /// Retourne le masque CPU d'un canal (0 = aucune contrainte).
+    /// Returns CPU mask of a channel (0 = no constraint).
     pub fn cpu_mask(&self, channel: DmaChannelId) -> u64 {
         if (channel.0 as usize) >= MAX_DMA_CHANNELS {
             return 0;
@@ -162,12 +162,12 @@ impl DmaAffinityTable {
             .load(Ordering::Relaxed)
     }
 
-    // ── Sélection avec accounting ────────────────────────────────────────────
+    // ── Selection with accounting ────────────────────────────────────────────
 
-    /// Indique qu'un canal a été utilisé depuis `cpu_id` (pour statistiques).
+    /// Records that a channel was used from `cpu_id` (for statistics).
     ///
-    /// Met à jour les compteurs `local_hits` / `remote_hits` selon que
-    /// `cpu_id` correspond au CPU préféré du canal ou non.
+    /// Updates `local_hits` / `remote_hits` counters depending on whether
+    /// `cpu_id` matches the channel's preferred CPU or not.
     pub fn record_usage(&self, channel: DmaChannelId, cpu_id: u8) {
         if (channel.0 as usize) >= MAX_DMA_CHANNELS {
             return;
@@ -183,17 +183,17 @@ impl DmaAffinityTable {
         }
     }
 
-    // ── Sélection du meilleur canal pour un CPU donné ────────────────────────
+    // ── Selection of best channel for a given CPU ────────────────────────────
 
-    /// Retourne l'indice du canal le plus proche de `cpu_id` parmi les canaux
-    /// dont les IDs sont listés dans `candidates`.
+    /// Returns index of the channel closest to `cpu_id` among channels
+    /// whose IDs are listed in `candidates`.
     ///
-    /// Critères de sélection (ordre décroissant de priorité) :
-    ///   1. Canal dont `preferred_cpu == cpu_id` (match exact).
-    ///   2. Canal dont `cpu_mask` contient `cpu_id` (affinité partielle).
-    ///   3. Canal sans affinité définie (fallback).
+    /// Selection criteria (descending priority order):
+    ///   1. Channel where `preferred_cpu == cpu_id` (exact match).
+    ///   2. Channel whose `cpu_mask` contains `cpu_id` (partial affinity).
+    ///   3. Channel with no defined affinity (fallback).
     ///
-    /// Retourne `None` si `candidates` est vide.
+    /// Returns `None` if `candidates` is empty.
     pub fn best_for_cpu(
         &self,
         candidates: &[DmaChannelId],
@@ -213,7 +213,7 @@ impl DmaAffinityTable {
 
             if pref != CPU_AFFINITY_NONE && pref == cpu_id {
                 best_exact = Some(ch);
-                break; // Match parfait, pas besoin de continuer.
+                break; // Perfect match, no need to continue.
             }
             if mask != 0 && mask & (1u64 << (cpu_id as u64)) != 0 && best_partial.is_none() {
                 best_partial = Some(ch);
@@ -226,7 +226,7 @@ impl DmaAffinityTable {
         best_exact.or(best_partial).or(best_any)
     }
 
-    /// Taux de localité global : proportion des accès depuis le CPU préféré.
+    /// Global locality rate: proportion of accesses from preferred CPU.
     pub fn locality_rate(&self) -> u32 {
         let local = self.stats_local_total.load(Ordering::Relaxed);
         let remote = self.stats_remote_total.load(Ordering::Relaxed);
@@ -238,5 +238,5 @@ impl DmaAffinityTable {
     }
 }
 
-/// Table d'affinités DMA globale.
+/// Global DMA affinity table.
 pub static DMA_AFFINITY: DmaAffinityTable = DmaAffinityTable::new();

@@ -1,6 +1,6 @@
 // kernel/src/memory/cow/mod.rs
 //
-// Module CoW — Copy-on-Write.
+// CoW module — Copy-on-Write.
 
 pub mod breaker;
 pub mod tracker;
@@ -8,10 +8,10 @@ pub mod tracker;
 pub use breaker::{break_cow, try_break_cow, CowBreakOutcome, CowBreakerStats, COW_BREAKER_STATS};
 pub use tracker::{CowTracker, COW_TABLE_SIZE, COW_TRACKER};
 
-/// Initialise le suivi CoW pendant le boot mémoire.
+/// Initializes CoW tracking during memory boot.
 ///
-/// La table est statique ; ce hook documente et fige l'ordre d'initialisation
-/// après SLUB, avant les sous-systèmes qui peuvent créer des mappings CoW.
+/// The table is static; this hook documents and freezes the initialization order
+/// after SLUB, before subsystems that can create CoW mappings.
 #[inline]
 pub fn init() {
     let _ = COW_TRACKER

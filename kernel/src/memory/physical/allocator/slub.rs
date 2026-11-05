@@ -1,9 +1,9 @@
 // kernel/src/memory/physical/allocator/slub.rs
 //
-// Allocateur SLUB — variante optimisée du slab avec fragmentation réduite.
-// Utilise des slabs partiels sur des pages complètes, sans coloration de cache
-// mais avec une gestion plus fine des slabs partiels via une liste unique.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// SLUB allocator — optimized slab variant with reduced fragmentation.
+// Uses partial slabs on full pages, without cache coloring
+// but with finer partial slab management via a single list.
+// Layer 0 — no external dependencies except `spin`.
 
 use core::mem;
 use core::ptr::NonNull;
@@ -29,29 +29,29 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HEADER DE SLUB (compact, 32 octets)
+// SLUB HEADER (compact, 32 bytes)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Header SLUB — plus compact que SlabHeader (32 octets vs 64).
-/// Stocké au début de chaque page de slub.
+/// SLUB header — more compact than SlabHeader (32 bytes vs 64).
+/// Stored at beginning of each slub page.
 ///
-/// La freelist est encodée directement : chaque objet libre sur 8 octets
-/// préfixe un pointeur XOR-encodé (XOR avec une clé par slub) pour
-/// résister aux attaques de type use-after-free.
+/// The freelist is encoded directly: each free object prefixes an 8-byte
+/// XOR-encoded pointer (XOR with a per-slub key) to
+/// resist use-after-free attacks.
 #[repr(C, align(32))]
 struct SlubHeader {
-    /// Tête de la freelist (encodée XOR).
+    /// Head of freelist (XOR-encoded).
     freelist: *mut u8,
-    /// Clé XOR pour encoder/décoder la freelist.
+    /// XOR key to encode/decode freelist.
     freelist_key: usize,
-    /// Objets actifs dans ce slub.
+    /// Active objects in this slub.
     inuse: u16,
-    /// Objets totaux.
+    /// Total objects.
     total: u16,
-    /// Index de classe de taille.
+    /// Size class index.
     class_idx: u8,
     _pad: [u8; 3],
-    /// Lien suivant/précédent dans la liste partielle.
+    /// Next/previous link in partial list.
     next: *mut SlubHeader,
     prev: *mut SlubHeader,
 }
@@ -59,24 +59,24 @@ struct SlubHeader {
 const _: () = assert!(mem::size_of::<SlubHeader>() <= 64, "SlubHeader trop grand");
 
 impl SlubHeader {
-    /// Encode/décode un pointeur de freelist avec XOR.
+    /// Encodes/decodes a freelist pointer with XOR.
     #[inline]
     fn encode_ptr(ptr: *mut u8, key: usize) -> *mut u8 {
         ((ptr as usize) ^ key) as *mut u8
     }
 
-    /// Lire le prochain élément de la freelist (décode XOR).
+    /// Reads next element from freelist (XOR-decodes).
     ///
-    /// SAFETY: `obj` est un pointeur valide vers un objet libre de ce slub.
+    /// SAFETY: `obj` is a valid pointer to a free object in this slub.
     #[inline]
     unsafe fn read_next(&self, obj: *mut u8) -> *mut u8 {
         let raw = core::ptr::read(obj as *const *mut u8);
         Self::encode_ptr(raw, self.freelist_key)
     }
 
-    /// Écrire le lien suivant dans la freelist d'un objet (encode XOR).
+    /// Writes next link in an object's freelist (XOR-encodes).
     ///
-    /// SAFETY: `obj` est un pointeur valide vers un objet libre de ce slub.
+    /// SAFETY: `obj` is a valid pointer to a free object in this slub.
     #[inline]
     unsafe fn write_next(&self, obj: *mut u8, next: *mut u8) {
         let encoded = Self::encode_ptr(next, self.freelist_key);
@@ -85,7 +85,7 @@ impl SlubHeader {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CACHE SLUB
+// SLUB CACHE
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct SlubCacheStats {
@@ -130,18 +130,18 @@ pub struct SlubCache {
 }
 
 struct SlubCacheInner {
-    /// Liste partielle : slubs avec des objets libres ET alloués.
+    /// Partial list: slubs with both free AND allocated objects.
     partial: *mut SlubHeader,
     partial_count: usize,
-    /// Liste vide : slubs entièrement libres.
+    /// Empty list: completely free slubs.
     empty: *mut SlubHeader,
     empty_count: usize,
-    /// Nombre de slubs complets (sans pointeur — on ne les suit pas).
+    /// Number of full slubs (without pointer — not tracked).
     full_count: usize,
-    // Note : plus de vmalloc_bump — adresse virtuelle dérivée de phys via physmap
+    // Note: no more vmalloc_bump — virtual address derived from phys via physmap
 }
 
-// SAFETY: SlubCache est protégé par son Mutex interne.
+// SAFETY: SlubCache is protected by its internal Mutex.
 unsafe impl Sync for SlubCache {}
 unsafe impl Send for SlubCache {}
 
@@ -165,7 +165,7 @@ impl SlubCache {
         self.enabled.store(true, Ordering::Release);
     }
 
-    /// Alloue un objet de ce cache SLUB.
+    /// Allocates an object from this SLUB cache.
     pub fn alloc(&self, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err(AllocError::NotInitialized);
@@ -195,7 +195,7 @@ impl SlubCache {
             }
         };
 
-        // T5-002 FIX : Si ZEROED est requis, zéroifier l'objet alloué.
+        // T5-002 FIX: If ZEROED is requested, zero the allocated object.
         if flags.contains(AllocFlags::ZEROED) {
             unsafe {
                 core::ptr::write_bytes(ptr.as_ptr(), 0, self.info.size);
@@ -204,10 +204,10 @@ impl SlubCache {
         Ok(ptr)
     }
 
-    /// Libère un objet de ce cache SLUB.
+    /// Frees an object from this SLUB cache.
     ///
     /// # Safety
-    /// `ptr` doit avoir été alloué via ce cache et ne plus être utilisé.
+    /// `ptr` must have been allocated via this cache and no longer be used.
     pub unsafe fn free(&self, ptr: NonNull<u8>) {
         let mut inner = self.inner.lock();
         let page_start = ptr.as_ptr() as usize & !(PAGE_SIZE - 1);
@@ -228,7 +228,7 @@ impl SlubCache {
         // leave evidence when this object is allocated again.
         core::ptr::write_bytes(ptr.as_ptr(), SLUB_FREE_POISON, self.info.size);
 
-        // SAFETY: header pointe sur un SlubHeader géré par ce cache.
+        // SAFETY: header points to a SlubHeader managed by this cache.
         (*header).write_next(ptr.as_ptr(), (*header).freelist);
         (*header).freelist = ptr.as_ptr();
         (*header).inuse -= 1;
@@ -239,12 +239,12 @@ impl SlubCache {
 
         let r = &mut *inner;
         if inuse == 0 {
-            // SAFETY: header ptr valide; listes manipulées sous verrou cache.
+            // SAFETY: valid header ptr; lists manipulated under cache lock.
             unsafe {
                 if was_full {
-                    // FIX-SLUB-FREE-01 : si total==1 (classe 2048), le slub n'était
-                    // pas dans partial mais dans full_count. slub_list_remove sur
-                    // un nœud absent écrasait partial à null (perte de tous les partiels).
+                    // FIX-SLUB-FREE-01: if total==1 (class 2048), slub was
+                    // not in partial but in full_count. slub_list_remove on
+                    // an absent node cleared partial to null (loss of all partials).
                     r.full_count = r.full_count.saturating_sub(1);
                 } else {
                     slub_list_remove(header, &mut r.partial, &mut r.partial_count);
@@ -254,9 +254,9 @@ impl SlubCache {
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
             self.stats.frees.fetch_add(1, Ordering::Relaxed);
         } else if inuse + 1 == total {
-            // Était plein (sans liste), maintenant partiel
+            // Was full (unlisted), now partial
             r.full_count = r.full_count.saturating_sub(1);
-            // SAFETY: header ptr valide; slub était plein, passage vers partiel sous verrou.
+            // SAFETY: valid header ptr; slub was full, moving to partial under lock.
             unsafe {
                 slub_list_push_front(header, &mut r.partial, &mut r.partial_count);
             }
@@ -268,15 +268,15 @@ impl SlubCache {
         }
     }
 
-    // ─── helpers privés ─────────────────────────────────────────────────────
+    // ─── private helpers ────────────────────────────────────────────────────
 
     fn alloc_partial(&self, inner: &mut SlubCacheInner) -> Option<NonNull<u8>> {
         while !inner.partial.is_null() {
             let h = inner.partial;
-            // SAFETY: inner.partial pointe sur un SlubHeader valide.
+            // SAFETY: inner.partial points to a valid SlubHeader.
             let header = unsafe { &mut *h };
             if header.freelist.is_null() {
-                // Slab sans objet libre mais encore dans partial : l'isoler.
+                // Slab with no free object but still in partial: isolate it.
                 unsafe {
                     slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
                 }
@@ -292,7 +292,7 @@ impl SlubCache {
                     "SLUB freelist object escaped cache layout: {:p}",
                     obj
                 );
-                // Isoler le slab dont la freelist est corrompue pour ne pas bloquer le cache.
+                // Isolate slab with corrupted freelist to avoid blocking the cache.
                 header.freelist = core::ptr::null_mut();
                 unsafe {
                     slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
@@ -303,8 +303,8 @@ impl SlubCache {
             if unsafe { !self.free_poison_is_intact(obj) } {
                 self.stats.use_after_free.fetch_add(1, Ordering::Relaxed);
                 debug_assert!(false, "SLUB free object payload modified: {:p}", obj);
-                // Retirer l'objet altéré de la freelist et le réparer si son pointeur next est valide,
-                // sinon isoler le slab.
+                // Remove altered object from freelist and repair if its next pointer is valid,
+                // otherwise isolate the slab.
                 let next = unsafe { header.read_next(obj) };
                 if next.is_null()
                     || unsafe { self.object_belongs_to_slub(h as *const SlubHeader, next) }
@@ -327,13 +327,13 @@ impl SlubCache {
                 continue;
             }
 
-            // SAFETY: header est valide, obj pointe sur un objet libre encodé XOR.
+            // SAFETY: header is valid, obj points to a XOR-encoded free object.
             let next = unsafe { header.read_next(obj) };
             header.freelist = next;
             header.inuse += 1;
 
             if header.inuse == header.total {
-                // SAFETY: h = partial non-null (inuse == total); retrait de la liste partielle.
+                // SAFETY: h = non-null partial (inuse == total); removal from partial list.
                 unsafe {
                     slub_list_remove(h, &mut inner.partial, &mut inner.partial_count);
                 }
@@ -349,7 +349,7 @@ impl SlubCache {
             return None;
         }
         let h = inner.empty;
-        // SAFETY: empty non-null (vérifié); déplacement vers partial sous verrou.
+        // SAFETY: non-null empty (verified); moving to partial under lock.
         unsafe {
             slub_list_remove(h, &mut inner.empty, &mut inner.empty_count);
             slub_list_push_front(h, &mut inner.partial, &mut inner.partial_count);
@@ -359,12 +359,12 @@ impl SlubCache {
 
     fn create_new_slub(&self, inner: &mut SlubCacheInner) -> Result<NonNull<u8>, AllocError> {
         let phys = alloc_slab_backing_page()?;
-        // Adresse virtuelle = physmap directe (PHYS_MAP_BASE + phys).
-        // La physmap couvre l'intégralité de la RAM physique sans mapping supplémentaire.
+        // Virtual address = direct physmap (PHYS_MAP_BASE + phys).
+        // Physmap covers all physical RAM without additional mapping.
         let virt_base = crate::memory::core::layout::PHYS_MAP_BASE.as_u64() + phys.as_u64();
-        let _ = phys; // phys est désormais encodé dans virt_base
+        let _ = phys; // phys is now encoded in virt_base
 
-        // Générer une clé XOR pseudo-aléatoire basée sur l'adresse virtuelle
+        // Generate pseudo-random XOR key based on virtual address
         let key = (virt_base as usize).wrapping_mul(0x9e3779b97f4a7c15);
 
         let header_end = mem::size_of::<SlubHeader>();
@@ -376,9 +376,9 @@ impl SlubCache {
             return Err(AllocError::InvalidParams);
         }
 
-        // SAFETY: virt_base pointe sur une page valide fraîchement mappée.
+        // SAFETY: virt_base points to a valid freshly mapped page.
         unsafe {
-            // Construire la freelist XOR-encodée
+            // Build XOR-encoded freelist
             for i in 0..n_objs {
                 let obj = (virt_base as usize + first_off + i * self.info.size) as *mut u8;
                 let next = if i + 1 < n_objs {
@@ -480,7 +480,7 @@ fn align_up_slub(val: usize, align: usize) -> usize {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OPÉRATIONS SUR LES LISTES
+// LIST OPERATIONS
 // ─────────────────────────────────────────────────────────────────────────────
 
 unsafe fn slub_list_push_front(
@@ -517,7 +517,7 @@ unsafe fn slub_list_remove(node: *mut SlubHeader, head: &mut *mut SlubHeader, co
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE GLOBALE DE CACHES SLUB
+// GLOBAL SLUB CACHE TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
 macro_rules! slub_caches_init {
@@ -549,10 +549,10 @@ pub fn alloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> 
     SLUB_CACHES[idx].alloc(flags)
 }
 
-/// Libère un objet précédemment alloué via `alloc()`.
+/// Frees an object previously allocated via `alloc()`.
 ///
 /// # Safety
-/// `ptr` doit avoir été alloué via `alloc()` avec la même `size`.
+/// `ptr` must have been allocated via `alloc()` with the same `size`.
 pub unsafe fn free(ptr: NonNull<u8>, size: usize) {
     if let Some(idx) = size_class_for(size) {
         SLUB_CACHES[idx].free(ptr);

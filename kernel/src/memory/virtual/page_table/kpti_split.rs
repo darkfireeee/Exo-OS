@@ -1,10 +1,10 @@
 // kernel/src/memory/virtual/page_table/kpti_split.rs
 //
-// KPTI (Kernel Page-Table Isolation) — tables de pages noyau/user séparées.
-// Mitigation Meltdown : le noyau a deux PML4 distincts.
-//   - kernel_pml4 : PML4 complète noyau (active pendant les syscalls/interruptions)
-//   - user_pml4   : PML4 minimale user (active en espace user, sans mappings kernel)
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// KPTI (Kernel Page-Table Isolation) — separated kernel/user page tables.
+// Meltdown mitigation: the kernel has two distinct PML4s.
+//   - kernel_pml4: full kernel PML4 (active during syscalls/interrupts)
+//   - user_pml4:   minimal user PML4 (active in user space, without kernel mappings)
+// Layer 0 — no external dependency except `spin`.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,17 +20,17 @@ extern "C" {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT KPTI
+// KPTI STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État KPTI par CPU.
+/// Per-CPU KPTI state.
 #[repr(C, align(64))]
 pub struct KptiState {
-    /// PML4 noyau (utilisée pendant les exceptions/syscalls).
+    /// Kernel PML4 (used during exceptions/syscalls).
     pub kernel_pml4: PhysAddr,
-    /// PML4 user minimal (utilisée en espace user).
+    /// Minimal user PML4 (used in user space).
     pub user_pml4: PhysAddr,
-    /// Stub de retour interprocesseur (trampoline).
+    /// Interprocessor return stub (trampoline).
     pub trampoline_phys: PhysAddr,
 }
 
@@ -44,14 +44,14 @@ impl KptiState {
     }
 }
 
-/// Table KPTI globale (une entrée par CPU, MAX_CPUS=256).
+/// Global KPTI table (one entry per CPU, MAX_CPUS=256).
 pub struct KptiTable {
     states: [KptiState; 256],
     enabled: AtomicBool,
 }
 
-// SAFETY: KptiTable accède aux states de manière non concurrente (chaque CPU
-//         accède uniquement à sa propre entrée).
+// SAFETY: KptiTable accesses states non-concurrently (each CPU
+//         only accesses its own entry).
 unsafe impl Sync for KptiTable {}
 
 impl Default for KptiTable {
@@ -79,11 +79,11 @@ impl KptiTable {
         self.enabled.store(true, Ordering::Release);
     }
 
-    /// Enregistre les PML4 pour un CPU donné.
+    /// Registers the PML4s for a given CPU.
     ///
     /// # Safety
-    /// `cpu_id < 256`, `kernel_pml4` et `user_pml4` sont des PML4
-    /// valides allouées avant cet appel.
+    /// `cpu_id < 256`, `kernel_pml4` and `user_pml4` are valid PML4s
+    /// allocated before this call.
     pub unsafe fn register_cpu(
         &self,
         cpu_id: usize,
@@ -92,17 +92,17 @@ impl KptiTable {
         trampoline: PhysAddr,
     ) {
         debug_assert!(cpu_id < 256);
-        // SAFETY: Accès exclusif pendant l'init CPU (single-CPU path).
+        // SAFETY: Exclusive access during CPU init (single-CPU path).
         let state = &self.states[cpu_id] as *const KptiState as *mut KptiState;
         (*state).kernel_pml4 = kernel_pml4;
         (*state).user_pml4 = user_pml4;
         (*state).trampoline_phys = trampoline;
     }
 
-    /// Switch vers la PML4 noyau pour ce CPU.
+    /// Switches to the kernel PML4 for this CPU.
     ///
     /// # Safety
-    /// Doit être appelé en entrée de syscall/exception avec KPTI actif.
+    /// Must be called at syscall/exception entry with KPTI active.
     #[inline]
     pub unsafe fn switch_to_kernel(&self, cpu_id: usize) {
         if !self.is_enabled() {
@@ -116,10 +116,10 @@ impl KptiTable {
         write_cr3(pml4);
     }
 
-    /// Switch vers la PML4 user pour ce CPU.
+    /// Switches to the user PML4 for this CPU.
     ///
     /// # Safety
-    /// Doit être appelé en sortie de syscall/exception (avant iret/sysret).
+    /// Must be called at syscall/exception exit (before iret/sysret).
     #[inline]
     pub unsafe fn switch_to_user(&self, cpu_id: usize) {
         if !self.is_enabled() {
@@ -133,7 +133,7 @@ impl KptiTable {
         write_cr3(pml4);
     }
 
-    /// Retourne les PML4 pour un CPU.
+    /// Returns the PML4s for a CPU.
     pub fn get_pml4s(&self, cpu_id: usize) -> Option<(PhysAddr, PhysAddr)> {
         if cpu_id >= 256 {
             return None;
@@ -146,7 +146,7 @@ impl KptiTable {
         }
     }
 
-    /// Retourne le CR3 user (physique) pour un CPU donné.
+    /// Returns the user CR3 (physical) for a given CPU.
     #[inline]
     pub fn user_cr3_for_cpu(&self, cpu_id: usize) -> Option<u64> {
         if cpu_id >= 256 {
@@ -161,23 +161,23 @@ impl KptiTable {
     }
 }
 
-/// Table KPTI globale.
+/// Global KPTI table.
 pub static KPTI: KptiTable = KptiTable::new();
 
-/// Helper public: retourne le CR3 user (physique) du CPU donné.
+/// Public helper: returns the user CR3 (physical) of the given CPU.
 #[inline]
 pub fn user_cr3_for_cpu(cpu_id: usize) -> Option<u64> {
     KPTI.user_cr3_for_cpu(cpu_id)
 }
 
-/// Synchronise l'entree PML4 user couvrant `virt` dans une shadow KPTI.
+/// Synchronizes the user PML4 entry covering `virt` into a KPTI shadow.
 ///
-/// Les niveaux inferieurs restent partages avec la table source pour l'espace
-/// utilisateur. Cette operation est donc suffisante quand le demand paging cree
-/// une nouvelle entree PML4 apres la construction initiale du shadow.
+/// Lower levels remain shared with the source table for user space.
+/// This operation is therefore sufficient when demand paging creates
+/// a new PML4 entry after the initial construction of the shadow.
 ///
 /// # Safety
-/// `source_pml4_phys` et `user_pml4_phys` doivent pointer vers des PML4 valides.
+/// `source_pml4_phys` and `user_pml4_phys` must point to valid PML4s.
 pub unsafe fn sync_user_pml4_entry(
     source_pml4_phys: PhysAddr,
     user_pml4_phys: PhysAddr,
@@ -194,17 +194,17 @@ pub unsafe fn sync_user_pml4_entry(
     Ok(())
 }
 
-/// Synchronise TOUTES les entrées PML4 de la moitié user (0..255) depuis la PML4
-/// du processus vers la shadow KPTI per-CPU.
+/// Synchronizes ALL PML4 entries in the user half (0..255) from the process PML4
+/// to the per-CPU KPTI shadow.
 ///
-/// La shadow user étant PARTAGÉE par tous les processus d'un CPU, ses entrées
-/// user doivent refléter le processus courant à chaque changement de CR3. Sans
-/// cette resynchronisation au switch, une page demand-paged pour un processus A
-/// disparaît de la shadow dès qu'un processus B s'exécute puis rend la main à A
-/// → boucle de #PF (cf. bootstrap init après fork).
+/// Because the user shadow is SHARED across all processes on a CPU, its user
+/// entries must reflect the current process at each CR3 change. Without this
+/// resynchronization upon switching, a page demand-paged for process A
+/// disappears from the shadow as soon as process B runs and yields back to A
+/// → #PF loop (cf. init bootstrap after fork).
 ///
 /// # Safety
-/// `source_pml4_phys` et `user_pml4_phys` pointent vers des PML4 valides (ring0).
+/// `source_pml4_phys` and `user_pml4_phys` point to valid PML4s (ring0).
 #[inline]
 pub unsafe fn sync_user_region_to_shadow(source_pml4_phys: PhysAddr, user_pml4_phys: PhysAddr) {
     if source_pml4_phys.as_u64() == 0 || user_pml4_phys.as_u64() == 0 {
@@ -222,18 +222,18 @@ pub unsafe fn sync_user_region_to_shadow(source_pml4_phys: PhysAddr, user_pml4_p
     }
 }
 
-/// Construit une PML4 user shadow à partir de la PML4 source du thread.
+/// Builds a shadow user PML4 from the thread's source PML4.
 ///
-/// La table user conserve:
-/// - la moitié user (entrées PML4 0..255)
-/// - les pages supervisor minimales nécessaires aux transitions ring3→ring0
+/// The user table retains:
+/// - the user half (PML4 entries 0..255)
+/// - the minimal supervisor pages necessary for ring3→ring0 transitions
 ///
-/// Aucune entrée kernel haute entière (dont PML4[511]) n'est copiée : seules les
-/// pages d'entrée syscall/exception, IDT/TSS/per-CPU et piles d'entrée strictement
-/// nécessaires sont remappées explicitement, sans bit USER.
+/// No full upper kernel entry (including PML4[511]) is copied: only the
+/// syscall/exception entry pages, IDT/TSS/per-CPU and strictly necessary
+/// entry stacks are explicitly remapped, without the USER bit.
 ///
 /// # Safety
-/// Doit être appelé en ring0 quand `source_pml4_phys` référence une PML4 valide.
+/// Must be called in ring0 when `source_pml4_phys` references a valid PML4.
 pub unsafe fn build_user_shadow_pml4(
     source_pml4_phys: PhysAddr,
     cpu_id: usize,
@@ -246,7 +246,7 @@ pub unsafe fn build_user_shadow_pml4(
     let kernel_pml4 = phys_to_table_ref(source_pml4_phys);
     let user_pml4 = phys_to_table_mut(user_pml4_phys);
 
-    // Copier les entrées user-space (0..255)
+    // Copy user-space entries (0..255)
     for i in 0..256 {
         user_pml4[i] = kernel_pml4[i];
     }
@@ -265,10 +265,10 @@ pub unsafe fn build_user_shadow_pml4(
         false,
         true,
     )?;
-    // Tous les handlers installés dans l'IDT doivent être exécutables pendant
-    // que CR3 pointe encore vers la PML4 user: exceptions 0..31, IRQ 32..47,
-    // IPIs, spurious IRQ et vecteurs ExoPhoenix. La source canonique est l'IDT,
-    // ce qui évite d'oublier un nouveau stub lors d'un ajout de vecteur.
+    // All handlers installed in the IDT must be executable while
+    // CR3 still points to the user PML4: exceptions 0..31, IRQ 32..47,
+    // IPIs, spurious IRQ and ExoPhoenix vectors. The canonical source is the IDT,
+    // avoiding forgetting a new stub when adding a vector.
     map_idt_handler_pages(source_pml4_phys, user_pml4)?;
 
     map_transition_page(
@@ -461,11 +461,11 @@ unsafe fn kernel_virt_to_phys(kernel_pml4_phys: PhysAddr, virt: u64) -> Option<P
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPER : Vérification CPU KPTI
+// HELPER: KPTI CPU verification
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie si le CPU courant supporte et requiert KPTI.
-/// Retourne false si Meltdown n'affecte pas ce CPU (AMD, post-2018 Intel).
+/// Checks if the current CPU supports and requires KPTI.
+/// Returns false if Meltdown does not affect this CPU (AMD, post-2018 Intel).
 pub fn should_enable_kpti() -> bool {
     let Some(features) = cpu_features_or_none() else {
         return true;

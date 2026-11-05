@@ -1,17 +1,17 @@
 // kernel/src/memory/huge_pages/hugetlbfs.rs
 //
-// Hugetlbfs — pool de huge pages 1 GiB pré-réservées.
-// Couche 0 — aucune dépendance externe sauf `spin`.
+// Hugetlbfs — pool of pre-reserved 1 GiB huge pages.
+// Layer 0 — no external dependencies except `spin`.
 //
-// Principe :
-//   Un pool statique de HUGETLB_MAX_PAGES huge pages (configurable) est
-//   réservé au boot. Les allocations viennent de ce pool — contrairement
-//   aux THP qui utilisent le buddy dynamiquement.
-//   Cela garantit la disponibilité des huge pages même sous pression mémoire.
+// Principle:
+//   A static pool of HUGETLB_MAX_POOL huge pages (configurable) is
+//   reserved at boot. Allocations come from this pool — unlike
+//   THP which uses buddy dynamically.
+//   This guarantees huge pages availability even under memory pressure.
 //
-// Tailles supportées :
-//   2 MiB (ordre 9)  — interopérable avec thp.rs
-//   1 GiB (ordre 18) — pages gigantesques (processeurs récents)
+// Supported sizes:
+//   2 MiB (order 9)  — interoperable with thp.rs
+//   1 GiB (order 18) — gigantic pages (recent processors)
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -20,26 +20,26 @@ use crate::memory::core::{AllocFlags, Frame, PhysAddr, PAGE_SIZE};
 use crate::memory::physical::allocator::buddy::{alloc_pages, free_pages};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ordre buddy pour une huge page 1 GiB (1 GiB / 4 KiB = 262144 = 2^18).
+/// Buddy order for a 1 GiB huge page (1 GiB / 4 KiB = 262144 = 2^18).
 pub const GIGA_PAGE_ORDER: u32 = 18;
 
-/// Capacité maximale du pool hugetlb statique.
+/// Maximum capacity of static hugetlb pool.
 pub const HUGETLB_MAX_POOL: usize = 512;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLOT DU POOL
+// POOL SLOT
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'une huge page dans le pool.
+/// Huge page size in the pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HugeTlbSize {
-    /// Page de 2 MiB (ordre 9).
+    /// 2 MiB page (order 9).
     TwoMiB = 9,
-    /// Page de 1 GiB (ordre 18).
+    /// 1 GiB page (order 18).
     OneGiB = 18,
 }
 
@@ -54,14 +54,14 @@ impl HugeTlbSize {
     }
 }
 
-/// Slot dans le pool hugetlb.
+/// Slot in the hugetlb pool.
 #[derive(Clone, Copy)]
 struct HugeTlbSlot {
-    /// Adresse physique du frame (0 si libre).
+    /// Physical address of frame (0 if free).
     phys: u64,
-    /// Taille (ordre buddy).
+    /// Size (buddy order).
     order: u8,
-    /// Slot occupé (true = alloué à un appelant).
+    /// Slot occupied (true = allocated to a caller).
     occupied: bool,
 }
 
@@ -74,20 +74,20 @@ impl HugeTlbSlot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATISTIQUES HUGETLB
+// HUGETLB STATISTICS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du pool hugetlb.
+/// Statistics of hugetlb pool.
 pub struct HugeTlbStats {
-    /// Nombre de slots dans le pool (taille configurable au boot).
+    /// Number of slots in the pool (configurable size at boot).
     pub pool_size: AtomicU32,
-    /// Nombre de slots actuellement alloués.
+    /// Number of slots currently allocated.
     pub in_use: AtomicU32,
-    /// Nombre total d'allocations réussies.
+    /// Total number of successful allocations.
     pub alloc_success: AtomicU64,
-    /// Nombre d'allocations échouées (pool épuisé).
+    /// Number of failed allocations (pool exhausted).
     pub alloc_fail: AtomicU64,
-    /// Nombre total de libérations.
+    /// Total number of frees.
     pub frees: AtomicU64,
 }
 
@@ -112,12 +112,12 @@ impl HugeTlbStats {
 pub static HUGETLB_STATS: HugeTlbStats = HugeTlbStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POOL HUGETLB
+// HUGETLB POOL
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct HugeTlbPoolInner {
     slots: [HugeTlbSlot; HUGETLB_MAX_POOL],
-    count: usize, // nombre de slots initialisés
+    count: usize, // number of initialized slots
 }
 
 impl HugeTlbPoolInner {
@@ -129,7 +129,7 @@ impl HugeTlbPoolInner {
     }
 }
 
-/// Pool hugetlb global.
+/// Global hugetlb pool.
 pub struct HugeTlbPool {
     inner: Mutex<HugeTlbPoolInner>,
     initialized: AtomicBool,
@@ -149,10 +149,10 @@ impl HugeTlbPool {
         }
     }
 
-    /// Initialise le pool en pré-allouant `n_2mib` pages 2 MiB et `n_1gib` pages 1 GiB.
+    /// Initializes pool by pre-allocating `n_2mib` 2 MiB pages and `n_1gib` 1 GiB pages.
     ///
     /// # Safety
-    /// CPL 0, appelé une seule fois au boot.
+    /// CPL 0, called once at boot.
     pub unsafe fn init(&self, n_2mib: usize, n_1gib: usize) {
         if self.initialized.swap(true, Ordering::AcqRel) {
             return;
@@ -160,7 +160,7 @@ impl HugeTlbPool {
         let total = (n_2mib + n_1gib).min(HUGETLB_MAX_POOL);
         let mut inner = self.inner.lock();
 
-        // Pré-allouer les pages 2 MiB.
+        // Pre-allocate 2 MiB pages.
         let alloc_2mib = n_2mib.min(total);
         for _ in 0..alloc_2mib {
             if inner.count >= HUGETLB_MAX_POOL {
@@ -176,11 +176,11 @@ impl HugeTlbPool {
                     };
                     inner.count += 1;
                 }
-                Err(_) => break, // mémoire insuffisante — on s'arrête
+                Err(_) => break, // insufficient memory — stop
             }
         }
 
-        // Pré-allouer les pages 1 GiB.
+        // Pre-allocate 1 GiB pages.
         let alloc_1gib = n_1gib.min(HUGETLB_MAX_POOL - inner.count);
         for _ in 0..alloc_1gib {
             if inner.count >= HUGETLB_MAX_POOL {
@@ -205,11 +205,11 @@ impl HugeTlbPool {
             .store(inner.count as u32, Ordering::Relaxed);
     }
 
-    /// Alloue une huge page du pool.
+    /// Allocates a huge page from the pool.
     ///
-    /// Préfère les pages libres correspondant à `size`. Si le pool est épuisé
-    /// pour la taille demandée, retourne `None` (jamais de fallback buddy depuis
-    /// hugetlb — c'est la responsabilité de l'appelant).
+    /// Prefers free pages matching `size`. If the pool is exhausted
+    /// for requested size, returns `None` (never buddy fallback from
+    /// hugetlb — that is the caller's responsibility).
     pub fn alloc(&self, size: HugeTlbSize) -> Option<Frame> {
         if !self.initialized.load(Ordering::Acquire) {
             return None;
@@ -233,10 +233,10 @@ impl HugeTlbPool {
         None
     }
 
-    /// Libère une huge page vers le pool.
+    /// Frees a huge page back to the pool.
     ///
     /// # Safety
-    /// `frame` doit avoir été alloué via `HugeTlbPool::alloc`.
+    /// `frame` must have been allocated via `HugeTlbPool::alloc`.
     pub unsafe fn free(&self, frame: Frame, size: HugeTlbSize) {
         let phys = frame.start_address().as_u64();
         let mut inner = self.inner.lock();
@@ -251,12 +251,12 @@ impl HugeTlbPool {
                 return;
             }
         }
-        // Frame non trouvé dans le pool — libérer dans le buddy (ne devrait pas arriver).
+        // Frame not found in pool — free into buddy (should not happen).
         let _ = free_pages(frame, size.order());
         HUGETLB_STATS.frees.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Retourne le nombre de slots libres pour la taille donnée.
+    /// Returns number of free slots for the given size.
     pub fn free_count(&self, size: HugeTlbSize) -> usize {
         if !self.initialized.load(Ordering::Acquire) {
             return 0;
@@ -268,8 +268,8 @@ impl HugeTlbPool {
             .count()
     }
 
-    /// Ajuste dynamiquement la taille du pool.
-    /// Alloue ou libère des slots pour atteindre `target_count` pour `size`.
+    /// Dynamically resizes the pool.
+    /// Allocates or frees slots to reach `target_count` for `size`.
     ///
     /// # Safety
     /// CPL 0.
@@ -280,7 +280,7 @@ impl HugeTlbPool {
         }
 
         if current_free < target_count {
-            // Agrandir : allouer des pages supplémentaires.
+            // Enlarge: allocate additional pages.
             let to_alloc = target_count - current_free;
             let mut inner = self.inner.lock();
             for _ in 0..to_alloc {
@@ -302,7 +302,7 @@ impl HugeTlbPool {
                 }
             }
         } else {
-            // Réduire : libérer des pages inutilisées.
+            // Shrink: free unused pages.
             let to_free = current_free - target_count;
             let mut freed = 0usize;
             let mut inner = self.inner.lock();
@@ -325,56 +325,56 @@ impl HugeTlbPool {
     }
 }
 
-/// Instance globale du pool hugetlb.
+/// Global instance of hugetlb pool.
 pub static HUGETLB_POOL: HugeTlbPool = HugeTlbPool::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE
+// PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alloue une huge page 2 MiB depuis le pool hugetlb.
+/// Allocates a 2 MiB huge page from hugetlb pool.
 #[inline]
 pub fn hugetlb_alloc_2mib() -> Option<Frame> {
     HUGETLB_POOL.alloc(HugeTlbSize::TwoMiB)
 }
 
-/// Alloue une huge page 1 GiB depuis le pool hugetlb.
+/// Allocates a 1 GiB huge page from hugetlb pool.
 #[inline]
 pub fn hugetlb_alloc_1gib() -> Option<Frame> {
     HUGETLB_POOL.alloc(HugeTlbSize::OneGiB)
 }
 
-/// Libère une huge page 2 MiB vers le pool.
+/// Frees a 2 MiB huge page back to the pool.
 ///
 /// # Safety
-/// `frame` doit avoir été alloué via `hugetlb_alloc_2mib`.
+/// `frame` must have been allocated via `hugetlb_alloc_2mib`.
 #[inline]
 pub unsafe fn hugetlb_free_2mib(frame: Frame) {
     HUGETLB_POOL.free(frame, HugeTlbSize::TwoMiB);
 }
 
-/// Libère une huge page 1 GiB vers le pool.
+/// Frees a 1 GiB huge page back to the pool.
 ///
 /// # Safety
-/// `frame` doit avoir été alloué via `hugetlb_alloc_1gib`.
+/// `frame` must have been allocated via `hugetlb_alloc_1gib`.
 #[inline]
 pub unsafe fn hugetlb_free_1gib(frame: Frame) {
     HUGETLB_POOL.free(frame, HugeTlbSize::OneGiB);
 }
 
-/// Retourne le nombre de huge pages 2 MiB disponibles dans le pool.
+/// Returns number of available 2 MiB huge pages in pool.
 #[inline]
 pub fn hugetlb_free_2mib_count() -> usize {
     HUGETLB_POOL.free_count(HugeTlbSize::TwoMiB)
 }
 
-/// Retourne le nombre de huge pages 1 GiB disponibles dans le pool.
+/// Returns number of available 1 GiB huge pages in pool.
 #[inline]
 pub fn hugetlb_free_1gib_count() -> usize {
     HUGETLB_POOL.free_count(HugeTlbSize::OneGiB)
 }
 
-/// Initialise le pool hugetlb au boot.
+/// Initializes hugetlb pool at boot.
 ///
 /// # Safety
 /// CPL 0.

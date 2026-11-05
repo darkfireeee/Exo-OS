@@ -1,17 +1,17 @@
 // kernel/src/memory/dma/completion/wakeup.rs
 //
-// Réveil de waiter sur complétion DMA.
+// Waiter wakeup on DMA completion.
 //
-// Ce module est la couche "haute" de notification : il associe un TID
-// à une transaction en cours et déclenche le réveil via le handler enregistré
-// par process/ (`DmaWakeupHandler`).
+// This module is the "upper" notification layer: it associates a TID
+// with an in-flight transaction and triggers wakeup via the handler registered
+// by process/ (`DmaWakeupHandler`).
 //
-// Différence avec `core/wakeup_iface.rs` :
-//   - `wakeup_iface.rs` définit le **trait** (Couche 0, interface minimale).
-//   - `completion/wakeup.rs` gère la **table de waiters** et orchestre la
-//     notification depuis le DmaCompletionManager lors d'une IRQ DMA.
+// Difference with `core/wakeup_iface.rs`:
+//   - `wakeup_iface.rs` defines the **trait** (Layer 0, minimal interface).
+//   - `completion/wakeup.rs` manages the **waiters table** and orchestrates
+//     notification from the DmaCompletionManager during a DMA IRQ.
 //
-// COUCHE 0 — aucune dépendance externe vers process/scheduler.
+// LAYER 0 — no external dependencies on process/scheduler.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
@@ -19,14 +19,14 @@ use crate::memory::dma::core::types::{DmaChannelId, DmaError, DmaTransactionId};
 use crate::memory::dma::core::wakeup_iface::wake_on_completion;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille de la table de waiters (transactions en attente de complétion).
+/// Size of the waiters table (transactions awaiting completion).
 pub const WAKEUP_TABLE_SIZE: usize = 512;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ÉTAT D'UN WAITER
+// WAITER STATE
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -37,22 +37,22 @@ enum WaiterState {
     Completed = 2,
 }
 
-/// Un waiter enregistré pour une transaction DMA.
+/// A registered waiter for a DMA transaction.
 ///
-/// Alloué statiquement — pas de Box, pas de Vec.
+/// Statically allocated — no Box, no Vec.
 #[repr(C, align(64))]
 pub struct WaiterSlot {
-    /// Transaction attendue.
+    /// Expected transaction.
     txn_id: DmaTransactionId,
-    /// Canal DMA.
+    /// DMA channel.
     channel_id: DmaChannelId,
-    /// TID du thread/processus qui attend (opaque, interprété par process/).
+    /// TID of the thread/process waiting (opaque, interpreted by process/).
     waiter_tid: AtomicU64,
-    /// État du waiter.
+    /// Waiter state.
     state: AtomicU8,
-    /// Résultat disponible (true = succès).
+    /// Available result (true = success).
     result_ok: AtomicBool,
-    /// Octets transférés (OK) ou code d'erreur (Err).
+    /// Transferred bytes (OK) or error code (Err).
     result_val: AtomicU64,
     _pad: [u8; 6],
 }
@@ -84,10 +84,10 @@ impl WaiterSlot {
             && self.txn_id.0 == txn_id.0
     }
 
-    /// Marque le slot comme attendant une transaction.
+    /// Marks the slot as waiting for a transaction.
     ///
     /// # Safety
-    /// Doit être appelé uniquement sur un slot `Free`.
+    /// Must be called only on a `Free` slot.
     unsafe fn mark_waiting(&self, txn_id: DmaTransactionId, channel_id: DmaChannelId, tid: u64) {
         let ptr = self as *const _ as *mut WaiterSlot;
         (*ptr).txn_id = txn_id;
@@ -99,7 +99,7 @@ impl WaiterSlot {
             .store(WaiterState::Waiting as u8, Ordering::Release);
     }
 
-    /// Complète le slot avec un résultat.
+    /// Completes the slot with a result.
     fn complete(&self, result: Result<usize, DmaError>) {
         match result {
             Ok(bytes) => {
@@ -115,7 +115,7 @@ impl WaiterSlot {
             .store(WaiterState::Completed as u8, Ordering::Release);
     }
 
-    /// Libère le slot (retour à l'état Free).
+    /// Releases the slot (returns to Free state).
     fn release(&self) {
         self.state.store(WaiterState::Free as u8, Ordering::Release);
     }
@@ -144,27 +144,27 @@ impl WaiterSlot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TABLE DE WAITERS
+// WAITERS TABLE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale des waiters DMA.
+/// Global DMA waiters table.
 ///
-/// Alloue un slot par transaction en attente. Quand l'IRQ DMA arrive,
-/// `notify_completion` retrouve le slot, appelle le WakeupHandler,
-/// puis libère le slot.
+/// Allocates one slot per pending transaction. When the DMA IRQ arrives,
+/// `notify_completion` finds the slot, calls the WakeupHandler,
+/// then frees the slot.
 pub struct DmaWakeupTable {
     slots: [WaiterSlot; WAKEUP_TABLE_SIZE],
-    /// Nombre de slots actuellement occupés.
+    /// Number of currently occupied slots.
     pub active_count: core::sync::atomic::AtomicU32,
-    /// Wakeups délivrés avec succès.
+    /// Successfully delivered wakeups.
     pub delivered: AtomicU64,
-    /// Notifications orphelines (transaction inconnue).
+    /// Orphan notifications (unknown transaction).
     pub orphans: AtomicU64,
-    /// Timeouts détectés lors du nettoyage.
+    /// Timeouts detected during cleanup.
     pub timeouts: AtomicU64,
 }
 
-// SAFETY: Les slots sont accédés via CAS sur state (Waiting → Completed).
+// SAFETY: Slots are accessed via CAS on state (Waiting -> Completed).
 unsafe impl Sync for DmaWakeupTable {}
 unsafe impl Send for DmaWakeupTable {}
 
@@ -185,16 +185,16 @@ impl DmaWakeupTable {
         }
     }
 
-    /// Enregistre un waiter pour `txn_id`.
+    /// Registers a waiter for `txn_id`.
     ///
-    /// Le thread identifié par `tid` sera réveillé par `DmaWakeupHandler`
-    /// lors de la complétion de la transaction.
+    /// The thread identified by `tid` will be awakened by `DmaWakeupHandler`
+    /// upon completion of the transaction.
     ///
-    /// Retourne `false` si la table est pleine.
+    /// Returns `false` if the table is full.
     pub fn register(&self, txn_id: DmaTransactionId, channel_id: DmaChannelId, tid: u64) -> bool {
         for slot in self.slots.iter() {
             if slot.is_free() {
-                // Tenter une CAS Free → Waiting pour éviter les courses.
+                // Attempt a CAS Free -> Waiting to prevent races.
                 if slot
                     .state
                     .compare_exchange(
@@ -205,7 +205,7 @@ impl DmaWakeupTable {
                     )
                     .is_ok()
                 {
-                    // SAFETY: On vient de passer le CAS, on est l'unique propriétaire.
+                    // SAFETY: We just passed the CAS, we are the sole owner.
                     unsafe {
                         slot.mark_waiting(txn_id, channel_id, tid);
                     }
@@ -217,13 +217,13 @@ impl DmaWakeupTable {
         false
     }
 
-    /// Notifie la complétion d'une transaction et réveille le waiter.
+    /// Notifies the completion of a transaction and wakes up the waiter.
     ///
-    /// Appelé depuis le handler d'interruption DMA.
-    /// Recherche le slot correspondant à `txn_id`, appelle `wake_on_completion`,
-    /// puis libère le slot.
+    /// Called from the DMA interrupt handler.
+    /// Finds the slot corresponding to `txn_id`, calls `wake_on_completion`,
+    /// then frees the slot.
     ///
-    /// Retourne `true` si un waiter a été trouvé et notifié.
+    /// Returns `true` if a waiter was found and notified.
     pub fn notify_completion(
         &self,
         txn_id: DmaTransactionId,
@@ -234,7 +234,7 @@ impl DmaWakeupTable {
                 let tid = slot.waiter_tid.load(Ordering::Acquire);
                 slot.complete(result);
 
-                // Appel vers le WakeupHandler enregistré par process/.
+                // Call into the WakeupHandler registered by process/.
                 wake_on_completion(tid, txn_id, result);
 
                 self.delivered.fetch_add(1, Ordering::Relaxed);
@@ -247,26 +247,26 @@ impl DmaWakeupTable {
         false
     }
 
-    /// Nombre de waiters actifs.
+    /// Number of active waiters.
     pub fn active(&self) -> u32 {
         self.active_count.load(Ordering::Relaxed)
     }
 }
 
-/// Table de wakeup DMA globale.
+/// Global DMA wakeup table.
 pub static DMA_WAKEUP_TABLE: DmaWakeupTable = DmaWakeupTable::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API PUBLIQUE
+// PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre un waiter pour une transaction DMA.
+/// Registers a waiter for a DMA transaction.
 #[inline]
 pub fn register_wakeup(txn_id: DmaTransactionId, channel_id: DmaChannelId, tid: u64) -> bool {
     DMA_WAKEUP_TABLE.register(txn_id, channel_id, tid)
 }
 
-/// Notifie la complétion d'une transaction (appelé par IRQ handler).
+/// Notifies transaction completion (called by IRQ handler).
 #[inline]
 pub fn notify_completion(txn_id: DmaTransactionId, result: Result<usize, DmaError>) -> bool {
     DMA_WAKEUP_TABLE.notify_completion(txn_id, result)

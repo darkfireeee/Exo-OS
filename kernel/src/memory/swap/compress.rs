@@ -1,25 +1,25 @@
 // kernel/src/memory/swap/compress.rs
 //
-// Compression/décompression de pages swap — implémentation zswap light.
+// Swap page compression/decompression — zswap light implementation.
 //
-// Fournit un cache en RAM de pages compressées (zswap pool) pour retarder
-// les I/O vers le périphérique de swap ou les éviter entièrement.
+// Provides an in-RAM cache of compressed pages (zswap pool) to delay
+// I/O towards the swap device or avoid them entirely.
 //
-// Architecture :
-//   • `CompressBackend` trait — interface de compression/décompression.
-//   • `Lz4Lite` — algorithme LZ77 simplifié sans dépendance externe.
-//   • `ZswapSlot` — entrée du pool (données compressées + métadonnées).
-//   • `ZswapPool` — tableau statique de slots, protégé par Mutex.
-//   • `ZSWAP_POOL` — instance globale unique.
+// Architecture:
+//   • `CompressBackend` trait — compression/decompression interface.
+//   • `Lz4Lite` — simplified LZ77 algorithm without external dependencies.
+//   • `ZswapSlot` — pool entry (compressed data + metadata).
+//   • `ZswapPool` — static table of slots, protected by Mutex.
+//   • `ZSWAP_POOL` — unique global instance.
 //
-// Le format de compression LZ77-lite :
-//   Flux d'tokens :
-//     [0b0_LLLLLLL] literal  : L+1 octets littéraux suivent (1..128).
-//     [0b1_LLLOOO | OO_OOOOOO | OOOOOOOO] match : offset 13 bits, len 3+L octets (3..10).
-//   Si la sortie dépasse ZSWAP_SLOT_SIZE → échec (page non compressible).
+// The LZ77-lite compression format:
+//   Token stream:
+//     [0b0_LLLLLLL] literal  : L+1 literal bytes follow (1..128).
+//     [0b1_LLLOOO | OO_OOOOOO | OOOOOOOO] match: offset 13 bits, len 3+L bytes (3..10).
+//   If output exceeds ZSWAP_SLOT_SIZE -> failure (non-compressible page).
 //
-// Taille max d'un slot compressé : ZSWAP_SLOT_SIZE = 3072 octets (75 % de 4 KiB).
-// Au-delà, la page est rejetée vers le swap device classique.
+// Max size of a compressed slot: ZSWAP_SLOT_SIZE = 3072 bytes (75% of 4 KiB).
+// Beyond that, the page is rejected towards the classic swap device.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
@@ -29,16 +29,16 @@ use lz4_flex::block::{compress_into, decompress_into};
 use crate::memory::core::constants::PAGE_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale du buffer compressé accepté (75 % de PAGE_SIZE).
+/// Maximum accepted compressed buffer size (75% of PAGE_SIZE).
 pub const ZSWAP_SLOT_SIZE: usize = 3072;
 
-/// Nombre de slots dans le pool zswap.
+/// Number of slots in the zswap pool.
 pub const MAX_ZSWAP_SLOTS: usize = 4096;
 
-/// Taille du hash de validation (CRC32-like XOR fold).
+/// Validation hash size (CRC32-like XOR fold).
 #[allow(dead_code)]
 const CHECKSUM_SIZE: usize = 4;
 
@@ -46,14 +46,14 @@ const CHECKSUM_SIZE: usize = 4;
 // TRAIT COMPRESSBACKEND
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Interface de compression/décompression.
+/// Compression/decompression interface.
 pub trait CompressBackend {
-    /// Compresse `src` (PAGE_SIZE octets) dans `dst`.
-    /// Retourne `Some(len)` si réussi, `None` si la page n'est pas compressible.
+    /// Compresses `src` (PAGE_SIZE bytes) into `dst`.
+    /// Returns `Some(len)` if successful, `None` if the page is not compressible.
     fn compress(src: &[u8], dst: &mut [u8]) -> Option<usize>;
 
-    /// Décompresse `src` (données compressées) dans `dst` (PAGE_SIZE octets).
-    /// Retourne `true` si réussi.
+    /// Decompresses `src` (compressed data) into `dst` (PAGE_SIZE bytes).
+    /// Returns `true` if successful.
     fn decompress(src: &[u8], dst: &mut [u8]) -> bool;
 }
 
@@ -61,23 +61,23 @@ pub trait CompressBackend {
 // LZ4LITE — via crate lz4_flex (block mode, no_std)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// RÈGLE CRYPTO-CRATES : JAMAIS d'implémentation from scratch.
-// Crate : lz4_flex v0.11.x, default-features = false
+// CRYPTO-CRATES RULE: NEVER implement from scratch.
+// Crate: lz4_flex v0.11.x, default-features = false
 //   - LZ4 block format pure Rust, no_std + alloc
-//   - Conforme au format LZ4 block officiel
+//   - Compliant with official LZ4 block format
 
 pub struct Lz4Lite;
 
 impl CompressBackend for Lz4Lite {
-    /// Compresse `src` (PAGE_SIZE octets) dans `dst` via lz4_flex.
-    /// Retourne `Some(len)` si réussi, `None` si la page n'est pas compressible.
+    /// Compresses `src` (PAGE_SIZE bytes) into `dst` via lz4_flex.
+    /// Returns `Some(len)` if successful, `None` if the page is not compressible.
     fn compress(src: &[u8], dst: &mut [u8]) -> Option<usize> {
         debug_assert_eq!(src.len(), PAGE_SIZE);
         compress_into(src, dst).ok()
     }
 
-    /// Décompresse `src` vers `dst` (PAGE_SIZE octets) via lz4_flex.
-    /// Retourne `true` si la décompression a rempli exactement PAGE_SIZE.
+    /// Decompresses `src` towards `dst` (PAGE_SIZE bytes) via lz4_flex.
+    /// Returns `true` if decompression filled exactly PAGE_SIZE.
     fn decompress(src: &[u8], dst: &mut [u8]) -> bool {
         debug_assert_eq!(dst.len(), PAGE_SIZE);
         match decompress_into(src, dst) {
@@ -88,20 +88,20 @@ impl CompressBackend for Lz4Lite {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SLOTS ZSWAP
+// ZSWAP SLOTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un slot du pool zswap. Taille fixe = ZSWAP_SLOT_SIZE + métadonnées.
+/// A slot in the zswap pool. Fixed size = ZSWAP_SLOT_SIZE + metadata.
 pub struct ZswapSlot {
-    /// Données compressées.
+    /// Compressed data.
     data: [u8; ZSWAP_SLOT_SIZE],
-    /// Longueur réelle des données compressées (0 = libre).
+    /// Actual length of compressed data (0 = free).
     compressed_len: u16,
-    /// PFN d'origine de la page (identifiant).
+    /// Origin PFN of the page (identifier).
     pub orig_pfn: u64,
-    /// Ce slot est-il occupé ?
+    /// Is this slot occupied?
     pub valid: AtomicBool,
-    /// XOR-fold CRC16 des données décompressées pour validation.
+    /// XOR-fold CRC16 of decompressed data for validation.
     checksum: u16,
 }
 
@@ -117,7 +117,7 @@ impl ZswapSlot {
     }
 }
 
-/// Calcule un CRC16 XOR-fold simple sur `data`.
+/// Calculates a simple CRC16 XOR-fold on `data`.
 fn xor_checksum(data: &[u8]) -> u16 {
     let mut acc = 0xFFFFu16;
     for &b in data {
@@ -131,27 +131,27 @@ fn xor_checksum(data: &[u8]) -> u16 {
 // ZSWAP POOL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une tentative de compression/stockage.
+/// Result of a compression/storage attempt.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ZswapStoreResult {
-    /// Stocké avec succès, index du slot retourné.
+    /// Stored successfully, slot index returned.
     Stored(usize),
-    /// Page non compressible (ratio > 75 %).
+    /// Non-compressible page (ratio > 75%).
     NotCompressible,
-    /// Pool plein.
+    /// Pool full.
     PoolFull,
 }
 
-/// Résultat d'une récupération depuis le pool zswap.
+/// Result of a retrieval from the zswap pool.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ZswapLoadResult {
-    /// Décompressé avec succès dans le buffer fourni.
+    /// Decompressed successfully into the provided buffer.
     Ok,
-    /// Slot introuvable pour ce PFN.
+    /// Slot not found for this PFN.
     NotFound,
-    /// Données corrompues (checksum mismatch).
+    /// Corrupted data (checksum mismatch).
     Corrupt,
-    /// Erreur de décompression.
+    /// Decompression error.
     DecompressError,
 }
 
@@ -161,10 +161,10 @@ struct ZswapPoolInner {
     count: usize,
 }
 
-/// Pool de pages compressées en RAM.
+/// Pool of compressed pages in RAM.
 pub struct ZswapPool {
     inner: Mutex<()>,
-    /// Statistiques.
+    /// Statistics.
     pub stored: AtomicU64,
     pub evicted: AtomicU64,
     pub decomp_ok: AtomicU64,
@@ -172,7 +172,7 @@ pub struct ZswapPool {
     pub compress_fail: AtomicU64,
 }
 
-// Tableau statique global des slots.
+// Global static array of slots.
 static mut ZSWAP_SLOTS: [ZswapSlot; MAX_ZSWAP_SLOTS] =
     [const { ZswapSlot::new() }; MAX_ZSWAP_SLOTS];
 
@@ -205,12 +205,12 @@ impl ZswapPool {
         }
     }
 
-    /// Compresse et stocke la page identifiée par `pfn`.
-    /// `page_data` doit faire exactement PAGE_SIZE octets.
+    /// Compresses and stores the page identified by `pfn`.
+    /// `page_data` must be exactly PAGE_SIZE bytes.
     pub fn store(&self, pfn: u64, page_data: &[u8]) -> ZswapStoreResult {
         debug_assert_eq!(page_data.len(), PAGE_SIZE);
 
-        // Compresser dans un buffer temporaire sur la pile.
+        // Compress into a temporary buffer on the stack.
         let mut tmp = [0u8; ZSWAP_SLOT_SIZE];
         let compressed_len = match Lz4Lite::compress(page_data, &mut tmp) {
             Some(n) => n,
@@ -228,7 +228,7 @@ impl ZswapPool {
         let csum = xor_checksum(page_data);
         let _guard = self.inner.lock();
 
-        // Trouver un slot libre (scan linéaire).
+        // Find a free slot (linear scan).
         let slots = zswap_slots_mut();
         for (idx, slot) in slots.iter_mut().enumerate() {
             if !slot.valid.load(Ordering::Acquire) {
@@ -245,8 +245,8 @@ impl ZswapPool {
         ZswapStoreResult::PoolFull
     }
 
-    /// Décompresse la page `pfn` depuis le pool dans `out` (PAGE_SIZE octets).
-    /// Libère le slot après récupération.
+    /// Decompresses page `pfn` from the pool into `out` (PAGE_SIZE bytes).
+    /// Frees the slot after retrieval.
     pub fn load(&self, pfn: u64, out: &mut [u8]) -> ZswapLoadResult {
         debug_assert_eq!(out.len(), PAGE_SIZE);
         let _guard = self.inner.lock();
@@ -265,7 +265,7 @@ impl ZswapPool {
                     self.decomp_fail.fetch_add(1, Ordering::Relaxed);
                     return ZswapLoadResult::Corrupt;
                 }
-                // Libérer le slot.
+                // Free the slot.
                 slot.valid.store(false, Ordering::Release);
                 slot.compressed_len = 0;
                 self.decomp_ok.fetch_add(1, Ordering::Relaxed);
@@ -276,7 +276,7 @@ impl ZswapPool {
         ZswapLoadResult::NotFound
     }
 
-    /// Invalide (expulse) le slot associé à `pfn` sans décompresser.
+    /// Invalidates (evicts) the slot associated with `pfn` without decompressing.
     pub fn evict(&self, pfn: u64) -> bool {
         let _guard = self.inner.lock();
         let slots = zswap_slots_mut();
@@ -291,7 +291,7 @@ impl ZswapPool {
         false
     }
 
-    /// Nombre de slots occupés.
+    /// Number of occupied slots.
     pub fn occupancy(&self) -> usize {
         let _guard = self.inner.lock();
         let slots = zswap_slots_mut();
@@ -302,5 +302,5 @@ impl ZswapPool {
     }
 }
 
-/// Instance globale du pool zswap.
+/// Global instance of the zswap pool.
 pub static ZSWAP_POOL: ZswapPool = ZswapPool::new();

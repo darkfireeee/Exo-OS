@@ -1,7 +1,7 @@
 // kernel/src/memory/dma/engines/virtio_dma.rs
 //
-// Moteur DMA VirtIO (virtqueue split ring, spécification VirtIO 1.1, §2.6).
-// Couche 0 — no_std, aucun heap, statique uniquement.
+// VirtIO DMA engine (virtqueue split ring, VirtIO 1.1 specification, §2.6).
+// Layer 0 — no_std, no heap, static only.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
@@ -12,46 +12,46 @@ use crate::memory::dma::stats::counters::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES VIRTIO
+// VIRTIO CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille de la virtqueue (doit être une puissance de 2, max 32768).
+/// Virtqueue size (must be a power of 2, max 32768).
 pub const VIRTQ_SIZE: usize = 256;
 
-// Flags de descripteur (VirtIO §2.6.5).
+// Descriptor flags (VirtIO §2.6.5).
 #[allow(dead_code)]
 mod desc_flags {
-    /// Descripteur en lecture seule pour le device (write = 0 par défaut).
-    pub const NEXT: u16 = 1 << 0; // Chaîn next.
-    pub const WRITE: u16 = 1 << 1; // Device écrit (sinon device lit).
-    pub const INDIRECT: u16 = 1 << 2; // Descripteur de table indirecte.
+    /// Read-only descriptor for device (write = 0 by default).
+    pub const NEXT: u16 = 1 << 0; // Chain next.
+    pub const WRITE: u16 = 1 << 1; // Device writes (otherwise device reads).
+    pub const INDIRECT: u16 = 1 << 2; // Indirect table descriptor.
 }
 
-// Flags de l'available ring.
+// Available ring flags.
 #[allow(dead_code)]
 mod avail_flags {
     pub const NO_INTERRUPT: u16 = 1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STRUCTURES VIRTQUEUE SPLIT RING
+// VIRTQUEUE SPLIT RING STRUCTURES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur de virtqueue (16 bytes).
+/// Virtqueue descriptor (16 bytes).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VirtqDesc {
-    /// Adresse physique du buffer.
+    /// Buffer physical address.
     pub addr: u64,
-    /// Longueur du buffer.
+    /// Buffer length.
     pub len: u32,
     /// Flags (desc_flags).
     pub flags: u16,
-    /// Index du prochain descripteur (si NEXT).
+    /// Next descriptor index (if NEXT).
     pub next: u16,
 }
 
-/// Available Ring (place des buffers disponibles pour le device).
+/// Available Ring (places buffers available for the device).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct VirtqAvail {
@@ -61,17 +61,17 @@ pub struct VirtqAvail {
     pub used_event: u16,
 }
 
-/// Élément du Used Ring.
+/// Used Ring element.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct VirtqUsedElem {
-    /// Index du descripteur de tête.
+    /// Head descriptor index.
     pub id: u32,
-    /// Nombre d'octets écrits par le device.
+    /// Number of bytes written by device.
     pub len: u32,
 }
 
-/// Used Ring (retour du device).
+/// Used Ring (returns from device).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct VirtqUsed {
@@ -82,19 +82,19 @@ pub struct VirtqUsed {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIRTQUEUE INTERNE
+// INTERNAL VIRTQUEUE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État interne de la virtqueue.
+/// Internal state of the virtqueue.
 struct VirtqState {
     desc: [VirtqDesc; VIRTQ_SIZE],
     avail: VirtqAvail,
     used: VirtqUsed,
-    /// Bitmap des descripteurs libres (bit=1 → libre).
+    /// Free descriptor bitmap (bit=1 -> free).
     free_bitmap: [u64; VIRTQ_SIZE / 64],
-    /// Indice Our last_used_idx pour la sonde de la used ring.
+    /// Our last_used_idx index for probing the used ring.
     last_used: u16,
-    /// Taille de données par slot (pour les stats).
+    /// Data size per slot (for stats).
     slot_bytes: [u32; VIRTQ_SIZE],
     slot_write: [bool; VIRTQ_SIZE],
 }
@@ -118,14 +118,14 @@ impl VirtqState {
             desc: [VirtqDesc::default(); VIRTQ_SIZE],
             avail,
             used,
-            free_bitmap: [!0u64; VIRTQ_SIZE / 64], // tous libres
+            free_bitmap: [!0u64; VIRTQ_SIZE / 64], // all free
             last_used: 0,
             slot_bytes: [0; VIRTQ_SIZE],
             slot_write: [false; VIRTQ_SIZE],
         }
     }
 
-    /// Alloue un index de descripteur libre. Retourne None si la virtqueue est pleine.
+    /// Allocates a free descriptor index. Returns None if virtqueue is full.
     fn alloc_desc(&mut self) -> Option<u16> {
         for (i, word) in self.free_bitmap.iter_mut().enumerate() {
             if *word != 0 {
@@ -137,16 +137,16 @@ impl VirtqState {
         None
     }
 
-    /// Libère un index de descripteur.
+    /// Frees a descriptor index.
     fn free_desc(&mut self, idx: u16) {
         let i = (idx as usize) / 64;
         let b = (idx as usize) % 64;
         self.free_bitmap[i] |= 1u64 << b;
     }
 
-    /// Soumet un buffer (1 descripteur → addresse physique + longueur).
+    /// Submits a buffer (1 descriptor -> physical address + length).
     ///
-    /// `write` = le device écrit dans ce buffer (lecture du point de vue host).
+    /// `write` = device writes to this buffer (read from host perspective).
     fn submit_buf(&mut self, phys: PhysAddr, len: u32, write: bool) -> Option<u16> {
         let idx = self.alloc_desc()?;
         self.desc[idx as usize] = VirtqDesc {
@@ -158,29 +158,29 @@ impl VirtqState {
         self.slot_bytes[idx as usize] = len;
         self.slot_write[idx as usize] = write;
 
-        // Placer dans l'available ring.
+        // Place in the available ring.
         let ai = (self.avail.idx as usize) % VIRTQ_SIZE;
         self.avail.ring[ai] = idx;
-        // Mémoire ordering : update idx après le ring.
+        // Memory ordering: update idx after the ring.
         core::sync::atomic::fence(Ordering::Release);
         self.avail.idx = self.avail.idx.wrapping_add(1);
         Some(idx)
     }
 
-    /// Vérifie et consomme les entrées du used ring.
+    /// Checks and consumes entries from the used ring.
     fn poll_used(&mut self) -> (usize, usize, usize) {
         let mut ok = 0usize;
         let mut err = 0usize;
         let mut total_bytes = 0usize;
 
-        // Ordering acquire pour voir les writes du device.
+        // Acquire ordering to see device writes.
         core::sync::atomic::fence(Ordering::Acquire);
         while self.last_used != self.used.idx {
             let ui = (self.last_used as usize) % VIRTQ_SIZE;
             let elem = self.used.ring[ui];
             self.last_used = self.last_used.wrapping_add(1);
             let desc_idx = elem.id as u16;
-            // len == 0 peut indiquer une erreur selon le device.
+            // len == 0 may indicate an error depending on the device.
             if elem.len > 0 || !self.slot_write[desc_idx as usize] {
                 ok += 1;
                 total_bytes += elem.len as usize;
@@ -194,7 +194,7 @@ impl VirtqState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MMIO VIRTIO
+// VIRTIO MMIO
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[allow(dead_code)]
@@ -227,7 +227,7 @@ mod virtio_mmio {
     pub const STATUS: usize = 0x070;
 }
 
-/// Bits de status (§3.1).
+/// Status bits (§3.1).
 #[allow(dead_code)]
 mod status {
     pub const ACKNOWLEDGE: u32 = 1;
@@ -238,7 +238,7 @@ mod status {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTEUR VIRTIO DMA
+// VIRTIO DMA ENGINE
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct VirtioDmaEngine {
@@ -266,12 +266,12 @@ impl VirtioDmaEngine {
         ((self.mmio_base.load(Ordering::Relaxed) + off as u64) as *mut u32).write_volatile(v);
     }
 
-    /// Initialise le périphérique VirtIO MMIO.
+    /// Initializes the VirtIO MMIO device.
     ///
     /// # Safety
-    /// `mmio_base` identité-mappé en CPL 0.
+    /// `mmio_base` identity-mapped in CPL 0.
     pub unsafe fn init(&self, mmio_base: u64) -> bool {
-        // Vérifier magic value.
+        // Check magic value.
         let magic = ((mmio_base + virtio_mmio::MAGIC as u64) as *const u32).read_volatile();
         if magic != 0x74726976 {
             return false;
@@ -279,17 +279,17 @@ impl VirtioDmaEngine {
 
         self.mmio_base.store(mmio_base, Ordering::Release);
 
-        // Séquence d'initialisation §3.1.
+        // Initialization sequence §3.1.
         self.write32(virtio_mmio::STATUS, 0); // Reset.
         self.write32(virtio_mmio::STATUS, status::ACKNOWLEDGE);
         self.write32(virtio_mmio::STATUS, status::ACKNOWLEDGE | status::DRIVER);
-        // Pas de feature negotiation ici (pas de supported feature bits BLK spécifiques).
+        // No feature negotiation here (no supported BLK specific feature bits).
         self.write32(
             virtio_mmio::STATUS,
             status::ACKNOWLEDGE | status::DRIVER | status::FEATURES_OK,
         );
 
-        // Configurer la queue 0.
+        // Configure queue 0.
         self.write32(virtio_mmio::QUEUE_SEL, 0);
         let qmax = self.read32(virtio_mmio::QUEUE_NUM_MAX);
         if qmax == 0 {
@@ -298,12 +298,12 @@ impl VirtioDmaEngine {
         let qsize = (VIRTQ_SIZE as u32).min(qmax);
         self.write32(virtio_mmio::QUEUE_NUM, qsize);
 
-        // Adresse physique du descriptor table (identité-mappé).
+        // Physical address of descriptor table (identity-mapped).
         let st = self.state.lock();
         let desc_phys = &st.desc as *const _ as u64;
         drop(st);
 
-        // PFN = adresse physique / 4096.
+        // PFN = physical address / 4096.
         self.write32(virtio_mmio::QUEUE_PFN, (desc_phys >> 12) as u32);
         self.write32(virtio_mmio::QUEUE_ALIGN, 4096);
 
@@ -319,12 +319,12 @@ impl VirtioDmaEngine {
         true
     }
 
-    /// Soumet un buffer pour le device (transfer DMA).
+    /// Submits a buffer for the device (DMA transfer).
     ///
-    /// `write` = vrai si le device doit écrire dans `phys` (lecture côté host).
+    /// `write` = true if device should write to `phys` (read from host perspective).
     ///
     /// # Safety
-    /// `phys` valide pour toute la durée du transfert.
+    /// `phys` valid for the entire duration of the transfer.
     pub unsafe fn submit(&self, phys: PhysAddr, len: u32, write: bool) -> bool {
         if !self.present.load(Ordering::Acquire) {
             return false;
@@ -333,7 +333,7 @@ impl VirtioDmaEngine {
         let ok = st.submit_buf(phys, len, write).is_some();
         drop(st);
         if ok {
-            // Notifier le device (queue 0).
+            // Notify the device (queue 0).
             self.write32(virtio_mmio::QUEUE_NOTIFY, 0);
             let eid = self.engine_id.load(Ordering::Relaxed) as usize;
             dma_stat_submit(eid);
@@ -341,10 +341,10 @@ impl VirtioDmaEngine {
         ok
     }
 
-    /// Sonde le used ring.
+    /// Polls the used ring.
     ///
     /// # Safety
-    /// contexte non-préemptible.
+    /// Non-preemptible context.
     pub unsafe fn poll(&self) -> usize {
         if !self.present.load(Ordering::Acquire) {
             return 0;
@@ -363,32 +363,32 @@ impl VirtioDmaEngine {
     }
 }
 
-// SAFETY: VirtioDmaEngine utilise Mutex + atomics.
+// SAFETY: VirtioDmaEngine uses Mutex + atomics.
 unsafe impl Sync for VirtioDmaEngine {}
 
-/// Instance globale du moteur VirtIO DMA.
+/// Global instance of the VirtIO DMA engine.
 pub static VIRTIO_DMA: VirtioDmaEngine = VirtioDmaEngine::new_uninit();
 
-/// Initialise le moteur VirtIO DMA.
+/// Initializes the VirtIO DMA engine.
 ///
 /// # Safety
-/// MMIO valide.
+/// Valid MMIO.
 pub unsafe fn virtio_dma_init(mmio_base: u64) -> bool {
     VIRTIO_DMA.init(mmio_base)
 }
 
-/// Soumet un buffer VirtIO.
+/// Submits a VirtIO buffer.
 ///
 /// # Safety
-/// `phys` valide.
+/// Valid `phys`.
 pub unsafe fn virtio_dma_submit(phys: PhysAddr, len: u32, write: bool) -> bool {
     VIRTIO_DMA.submit(phys, len, write)
 }
 
-/// Sonde les compléments VirtIO.
+/// Polls VirtIO completions.
 ///
 /// # Safety
-/// contexte non-préemptible.
+/// Non-preemptible context.
 pub unsafe fn virtio_dma_poll() -> usize {
     VIRTIO_DMA.poll()
 }

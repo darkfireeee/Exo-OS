@@ -1,7 +1,7 @@
 // kernel/src/memory/physical/zone/mod.rs
 //
-// Zones mémoire physiques — Exo-OS Couche 0.
-// Chaque zone est une partition de la RAM avec ses propres contraintes.
+// Physical memory zones — Exo-OS Layer 0.
+// Each zone is a RAM partition with its own constraints.
 
 pub mod dma;
 pub mod dma32;
@@ -13,47 +13,47 @@ use crate::memory::core::{AllocFlags, Frame, PhysAddr, ZoneType, ZONE_DMA32_END,
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZONE DESCRIPTOR — structure commune à toutes les zones
+// ZONE DESCRIPTOR — common structure across all zones
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur d'une zone mémoire — statistiques et limites.
+/// Memory zone descriptor — statistics and limits.
 ///
-/// Partagé entre toutes les zones, complété par leur module spécifique.
+/// Shared across all zones, extended by their specific module.
 #[repr(C, align(64))]
 pub struct ZoneDescriptor {
-    /// Type de cette zone.
+    /// Type of this zone.
     pub zone_type: ZoneType,
-    /// Nœud NUMA d'appartenance.
+    /// Owning NUMA node.
     pub numa_node: u8,
     /// Padding.
     _pad0: [u8; 6],
-    /// Adresse physique de début de zone.
+    /// Physical start address of the zone.
     pub phys_start: PhysAddr,
-    /// Adresse physique de fin de zone (exclusive).
+    /// Physical end address of the zone (exclusive).
     pub phys_end: PhysAddr,
-    /// Nombre total de frames dans cette zone.
+    /// Total number of frames in this zone.
     pub total_frames: usize,
-    /// Nombre de frames libres actuellement.
+    /// Currently free frames count.
     free_frames: AtomicUsize,
-    /// Nombre de frames réservés (firmware/BIOS).
+    /// Reserved frames count (firmware/BIOS).
     pub reserved_frames: usize,
-    /// Nombre d'allocations réussies depuis cette zone.
+    /// Successful allocation count from this zone.
     alloc_success: AtomicU64,
-    /// Nombre d'échecs d'allocation dans cette zone.
+    /// Failed allocation count in this zone.
     alloc_failures: AtomicU64,
-    /// Nombre de libérations effectuées dans cette zone.
+    /// Free operations count performed in this zone.
     free_count: AtomicU64,
-    /// Watermark bas : sous ce seuil, kswapd se réveille.
+    /// Low watermark: below this threshold, kswapd wakes up.
     pub watermark_low: usize,
-    /// Watermark minimum : sous ce seuil, seulement les allocs urgentes passent.
+    /// Minimum watermark: below this threshold, only emergency allocations pass.
     pub watermark_min: usize,
-    /// Watermark haut : au-dessus, kswapd s'arrête.
+    /// High watermark: above this threshold, kswapd stops.
     pub watermark_high: usize,
-    /// Padding pour atteindre 128 bytes.
-    /// Calcul : 128 - 1(zone_type) - 1(numa_node) - 6(_pad0)
-    ///          - 16(phys_start+phys_end) - 24(total+free+reserved frames)
-    ///          - 24(alloc_success+alloc_failures+free_count)
-    ///          - 24(watermark_low+min+high) = 128 - 96 = 32
+    /// Padding to reach 128 bytes.
+    /// Calculation: 128 - 1(zone_type) - 1(numa_node) - 6(_pad0)
+    ///             - 16(phys_start+phys_end) - 24(total+free+reserved frames)
+    ///             - 24(alloc_success+alloc_failures+free_count)
+    ///             - 24(watermark_low+min+high) = 128 - 96 = 32
     _pad1: [u8; 32],
 }
 
@@ -63,7 +63,7 @@ const _: () = assert!(
 );
 
 impl ZoneDescriptor {
-    /// Crée un descripteur de zone.
+    /// Creates a zone descriptor.
     pub const fn new(
         zone_type: ZoneType,
         numa_node: u8,
@@ -95,52 +95,52 @@ impl ZoneDescriptor {
         }
     }
 
-    /// Retourne le nombre de frames libres.
+    /// Returns the number of free frames.
     #[inline(always)]
     pub fn free_frames(&self) -> usize {
         self.free_frames.load(Ordering::Relaxed)
     }
 
-    /// Décrémente le compteur de frames libres (après allocation).
+    /// Decrements free frames counter (after allocation).
     #[inline(always)]
     pub fn dec_free(&self, count: usize) {
         self.free_frames.fetch_sub(count, Ordering::Relaxed);
         self.alloc_success.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Incrémente le compteur de frames libres (après libération).
+    /// Increments free frames counter (after release).
     #[inline(always)]
     pub fn inc_free(&self, count: usize) {
         self.free_frames.fetch_add(count, Ordering::Relaxed);
         self.free_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Signale un échec d'allocation.
+    /// Records an allocation failure.
     #[inline(always)]
     pub fn record_failure(&self) {
         self.alloc_failures.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Vérifie si un frame appartient à cette zone.
+    /// Checks whether a frame belongs to this zone.
     #[inline(always)]
     pub fn contains(&self, frame: Frame) -> bool {
         let addr = frame.start_address();
         addr >= self.phys_start && addr < self.phys_end
     }
 
-    /// Vérifie si la zone est sous le watermark minimum.
+    /// Checks whether the zone is below the minimum watermark.
     #[inline(always)]
     pub fn is_below_watermark_min(&self) -> bool {
         self.free_frames() < self.watermark_min
     }
 
-    /// Vérifie si la zone est sous le watermark bas (kswapd doit se réveiller).
+    /// Checks whether the zone is below the low watermark (kswapd must wake up).
     #[inline(always)]
     pub fn is_below_watermark_low(&self) -> bool {
         self.free_frames() < self.watermark_low
     }
 
-    /// Statistiques de cette zone.
+    /// Statistics for this zone.
     pub fn stats(&self) -> ZoneStats {
         ZoneStats {
             zone_type: self.zone_type,
@@ -155,7 +155,7 @@ impl ZoneDescriptor {
     }
 }
 
-/// Statistiques d'une zone mémoire.
+/// Memory zone statistics.
 #[derive(Copy, Clone, Debug)]
 pub struct ZoneStats {
     pub zone_type: ZoneType,
@@ -169,7 +169,7 @@ pub struct ZoneStats {
 }
 
 impl ZoneStats {
-    /// Pourcentage de mémoire libre (0-100).
+    /// Free memory percentage (0-100).
     pub fn free_percent(&self) -> u32 {
         if self.total_frames == 0 {
             return 0;
@@ -179,18 +179,18 @@ impl ZoneStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZONE REGISTRY — registre global des zones
+// ZONE REGISTRY — global zone registry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sélectionne la zone appropriée pour les flags d'allocation donnés.
+/// Selects the appropriate zone for the given allocation flags.
 #[inline]
 pub fn zone_for_flags(flags: AllocFlags) -> ZoneType {
     flags.required_zone()
 }
 
-/// Détermine si une adresse physique peut satisfaire des flags d'allocation.
+/// Determines whether a physical address can satisfy allocation flags.
 ///
-/// Par exemple, une allocation DMA exige une adresse < 16 MiB.
+/// For example, a DMA allocation requires an address < 16 MiB.
 #[inline]
 pub fn addr_satisfies_flags(addr: PhysAddr, flags: AllocFlags) -> bool {
     let required = zone_for_flags(flags);
@@ -198,7 +198,7 @@ pub fn addr_satisfies_flags(addr: PhysAddr, flags: AllocFlags) -> bool {
         ZoneType::Dma => addr.as_usize() < ZONE_DMA_END,
         ZoneType::Dma32 => addr.as_usize() < ZONE_DMA32_END,
         ZoneType::Movable => true, // Any address can be movable
-        _ => true,                 // Normal/High : pas de contrainte d'adresse basse
+        _ => true,                 // Normal/High: no low address constraint
     }
 }
 

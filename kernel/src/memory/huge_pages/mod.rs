@@ -1,6 +1,6 @@
 // kernel/src/memory/huge_pages/mod.rs
 //
-// Module huge_pages — THP + hugetlbfs + split PDE.
+// huge_pages module — THP + hugetlbfs + PDE split.
 
 pub mod hugetlbfs;
 pub mod split;

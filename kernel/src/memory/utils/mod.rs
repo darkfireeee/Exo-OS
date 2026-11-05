@@ -1,6 +1,6 @@
 // kernel/src/memory/utils/mod.rs
 //
-// Module utils — futex table (UNIQUE), OOM killer, shrinker.
+// Utils module — futex table (UNIQUE), OOM killer, shrinker.
 
 pub mod futex_table;
 pub mod oom_killer;
@@ -25,7 +25,7 @@ pub use shrinker::{
     ShrinkerId, ShrinkerStats, MAX_SHRINKERS, SHRINKER_STATS,
 };
 
-/// Initialise tous les utilitaires mémoire.
+/// Initializes all memory utilities.
 pub fn init() {
     futex_table::init();
     oom_killer::init();

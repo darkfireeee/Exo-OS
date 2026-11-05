@@ -1,6 +1,6 @@
 // kernel/src/memory/heap/large/mod.rs
 //
-// Module "large" : allocateur vmalloc pour allocations > 2048 octets.
+// "large" module: vmalloc allocator for allocations > 2048 bytes.
 
 pub mod vmalloc;
 
