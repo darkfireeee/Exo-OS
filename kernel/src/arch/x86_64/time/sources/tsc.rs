@@ -1,32 +1,32 @@
 // kernel/src/arch/x86_64/time/sources/tsc.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Source TSC — capacités, invariance, VM-aware, IA32_TSC_ADJUST
+// TSC source — capabilities, invariance, VM-aware, IA32_TSC_ADJUST
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Invariant TSC (RÈGLE TIME-04)
-//   TSC invariant = rate constant sur tous les C-states et Turbo boost.
-//   Bit 8 d'EDX de CPUID 0x80000007 → InvariantTSC.
-//   Rating 400 si invariant, 50 si non-invariant.
+// ## Invariant TSC (RULE TIME-04)
+//   Invariant TSC = constant rate across all C-states and Turbo boost.
+//   Bit 8 of EDX in CPUID 0x80000007 -> InvariantTSC.
+//   Rating 400 if invariant, 50 if non-invariant.
 //
 // ## IA32_TSC_ADJUST MSR (Intel SDM Vol.3 § 17.15)
-//   MSR 0x3B = décalage logiciel que le firmware/OS peut ajouter au TSC.
-//   La valeur brute = RDTSC + IA32_TSC_ADJUST.
-//   À lire au boot pour détecter un décalage non nul (BIOS errata / live migration).
+//   MSR 0x3B = software offset that firmware/OS can add to the TSC.
+//   Raw value = RDTSC + IA32_TSC_ADJUST.
+//   To be read at boot to detect non-zero offset (BIOS errata / live migration).
 //
 // ## IA32_TSC_AUX MSR (0xC0000103)
-//   Contient le CPU_ID (core + socket) encodé par l'OS ou le firmware.
-//   Accessible via RDTSCP : renvoie (TSC, TSC_AUX), garantie atomique.
+//   Contains the CPU_ID (core + socket) encoded by OS or firmware.
+//   Accessible via RDTSCP: returns (TSC, TSC_AUX), atomic guarantee.
 //
-// ## Détection VM
-//   KVM   : CPUID 0x40000001 bit 9 (KVM_FEATURE_CLOCKSOURCE2)
+// ## VM Detection
+//   KVM     : CPUID 0x40000001 bit 9 (KVM_FEATURE_CLOCKSOURCE2)
 //   Hyper-V : CPUID 0x40000003 bit 20 (HV_FEATURE_TSC_INVARIANT)
-//   VMware : CPUID 0x40000010 (VMware Timing Leaf)
+//   VMware  : CPUID 0x40000010 (VMware Timing Leaf)
 //   Generic : CPUID 0x1 ECX bit 31 (Hypervisor Present)
 //
 // ## RDTSCP
-//   Instruction sérialisante (comme LFENCE + RDTSC) + IA32_TSC_AUX → sûr en SMP.
-//   Disponible depuis Intel Nehalem / AMD Barcelona.
+//   Serializing instruction (like LFENCE + RDTSC) + IA32_TSC_AUX -> safe in SMP.
+//   Available since Intel Nehalem / AMD Barcelona.
 // ════════════════════════════════════════════════════════════════════════════════
 
 use super::ClockSource;
@@ -37,35 +37,35 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 const MSR_IA32_TSC_ADJUST: u32 = 0x0000_003B;
 #[allow(dead_code)]
 const MSR_IA32_TSC_AUX: u32 = 0xC000_0103;
-/// Max leaf pour CPUID standard (feuille 0).
+/// Max leaf for standard CPUID (leaf 0).
 const CPUID_MAX_STD_LEAF: u32 = 0x0000_0000;
 /// CPUID extended features.
 #[allow(dead_code)]
 const CPUID_EXTENDED_FEAT: u32 = 0x8000_0007;
 
-// ── Capacités TSC ─────────────────────────────────────────────────────────────
+// ── TSC capabilities ──────────────────────────────────────────────────────────
 
-/// Capacités complètes du TSC détectées au boot.
+/// Complete TSC capabilities detected at boot.
 #[derive(Debug, Clone, Copy)]
 pub struct TscCapabilities {
-    /// TSC invariant (CPUID 0x80000007 EDX bit 8).
+    /// Invariant TSC (CPUID 0x80000007 EDX bit 8).
     pub invariant: bool,
-    /// RDTSCP disponible (CPUID 0x80000001 EDX bit 27).
+    /// RDTSCP available (CPUID 0x80000001 EDX bit 27).
     pub rdtscp: bool,
-    /// TSC_DEADLINE disponible (CPUID 0x1 ECX bit 24).
+    /// TSC_DEADLINE available (CPUID 0x1 ECX bit 24).
     pub tsc_deadline: bool,
-    /// IA32_TSC_ADJUST MSR présent et non nul (= BIOS a décalé le TSC).
+    /// IA32_TSC_ADJUST MSR present and non-zero (= BIOS offset the TSC).
     pub tsc_adjust_nonzero: bool,
-    /// Valeur de IA32_TSC_ADJUST lue au boot.
+    /// IA32_TSC_ADJUST value read at boot.
     pub tsc_adjust_value: i64,
-    /// VM/hyperviseur détecté.
+    /// VM/hypervisor detected.
     pub hypervisor: bool,
-    /// Type d'hyperviseur.
+    /// Hypervisor type.
     pub hypervisor_type: HypervisorType,
 }
 
 impl TscCapabilities {
-    /// Valeur initiale (tout à false, à initialiser en appelant `detect()`).
+    /// Initial value (all false, to initialize by calling `detect()`).
     pub const fn uninit() -> Self {
         TscCapabilities {
             invariant: false,
@@ -78,7 +78,7 @@ impl TscCapabilities {
         }
     }
 
-    /// Détecte toutes les capacités TSC du CPU courant.
+    /// Detects all TSC capabilities for the current CPU.
     pub fn detect() -> Self {
         let invariant = check_tsc_invariant();
         let rdtscp = check_rdtscp();
@@ -96,10 +96,10 @@ impl TscCapabilities {
         }
     }
 
-    /// Rating conditionnel selon les capacités.
-    ///   - Invariant + non-hyperviseur → 400
-    ///   - Invariant + hyperviseur     → 350 (TSC scaling VM possible)
-    ///   - Non-invariant               → 50  (instable avec C-states)
+    /// Conditional rating based on capabilities.
+    ///   - Invariant + non-hypervisor -> 400
+    ///   - Invariant + hypervisor     -> 350 (VM TSC scaling possible)
+    ///   - Non-invariant              -> 50  (unstable with C-states)
     pub fn rating(&self) -> u32 {
         if self.invariant {
             if self.hypervisor {
@@ -113,9 +113,9 @@ impl TscCapabilities {
     }
 }
 
-// ── Hyperviseur ───────────────────────────────────────────────────────────────
+// ── Hypervisor ────────────────────────────────────────────────────────────────
 
-/// Type d'hyperviseur détecté.
+/// Detected hypervisor type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HypervisorType {
     None,
@@ -137,19 +137,19 @@ impl HypervisorType {
     }
 }
 
-// ── Globales ──────────────────────────────────────────────────────────────────
+// ── Globals ───────────────────────────────────────────────────────────────────
 
-/// Capacités TSC initialisées une fois au boot.
+/// TSC capabilities initialized once at boot.
 static TSC_CAPS_INVARIANT: AtomicBool = AtomicBool::new(false);
 static TSC_CAPS_RDTSCP: AtomicBool = AtomicBool::new(false);
 static TSC_CAPS_HYPERVISOR: AtomicBool = AtomicBool::new(false);
 static TSC_CAPS_RATING: AtomicU32 = AtomicU32::new(0);
 static TSC_CAPS_ADJUST: AtomicU64 = AtomicU64::new(0);
-/// `true` si `init_tsc_source()` a été appelé.
+/// `true` if `init_tsc_source()` has been called.
 static TSC_SOURCE_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Initialise les capacités TSC et met à jour les globales.
-/// À appeler une seule fois depuis `time_init()`.
+/// Initializes TSC capabilities and updates globals.
+/// To be called once from `time_init()`.
 pub fn init_tsc_source() {
     if TSC_SOURCE_INIT_DONE.swap(true, Ordering::Relaxed) {
         return;
@@ -163,21 +163,21 @@ pub fn init_tsc_source() {
     TSC_CAPS_RDTSCP.store(caps.rdtscp && rdtscp_usable, Ordering::Relaxed);
     TSC_CAPS_HYPERVISOR.store(caps.hypervisor, Ordering::Relaxed);
     TSC_CAPS_RATING.store(caps.rating(), Ordering::Relaxed);
-    // IA32_TSC_ADJUST en valeur brute (bit pattern de l'i64).
+    // IA32_TSC_ADJUST as raw value (bit pattern of i64).
     TSC_CAPS_ADJUST.store(caps.tsc_adjust_value as u64, Ordering::Relaxed);
 }
 
-/// Indique si RDTSCP est utilisable sur le CPU courant.
+/// Indicates whether RDTSCP is usable on the current CPU.
 ///
-/// Avant `init_tsc_source()`, on retourne `false` volontairement : le chemin
-/// RDTSC sérialisé est disponible sur tout x86_64 et évite d'exécuter une
-/// instruction optionnelle tant que CPUID n'a pas été propagé dans les atomics.
+/// Before `init_tsc_source()`, returns `false` deliberately: the
+/// serialized RDTSC path is available across all x86_64 and avoids executing an
+/// optional instruction before CPUID has been propagated to atomics.
 #[inline(always)]
 pub fn rdtscp_available() -> bool {
     TSC_SOURCE_INIT_DONE.load(Ordering::Relaxed) && TSC_CAPS_RDTSCP.load(Ordering::Relaxed)
 }
 
-// ── Source TSC ClockSource ─────────────────────────────────────────────────────
+// ── TSC ClockSource source ────────────────────────────────────────────────────
 
 pub struct TscSource;
 
@@ -189,7 +189,7 @@ impl ClockSource for TscSource {
     fn rating(&self) -> u32 {
         let r = TSC_CAPS_RATING.load(Ordering::Relaxed);
         if r == 0 {
-            // Fallback si init_tsc_source() non encore appelé.
+            // Fallback if init_tsc_source() not yet called.
             if check_tsc_invariant() {
                 400
             } else {
@@ -214,17 +214,17 @@ impl ClockSource for TscSource {
 
     fn available(&self) -> bool {
         true
-    } // TSC toujours présent sur x86_64
+    } // TSC is always present on x86_64
 }
 
-// ── Lecture TSC ───────────────────────────────────────────────────────────────
+// ── TSC reading ───────────────────────────────────────────────────────────────
 
-/// Lecture TSC via RDTSC (non-sérialisante).
+/// TSC read via RDTSC (non-serializing).
 #[inline(always)]
 pub fn rdtsc_read() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: RDTSC non-privilégié sur x86_64.
+    // SAFETY: RDTSC is non-privileged on x86_64.
     unsafe {
         core::arch::asm!(
             "rdtsc",
@@ -236,14 +236,14 @@ pub fn rdtsc_read() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lecture TSC via RDTSCP (sérialisante + IA32_TSC_AUX dans ECX).
-/// Garantit que toutes les instructions précédentes sont complètes avant la lecture.
+/// TSC read via RDTSCP (serializing + IA32_TSC_AUX in ECX).
+/// Guarantees that all preceding instructions are completed before reading.
 #[inline]
 pub fn rdtscp_read() -> u64 {
     let lo: u32;
     let hi: u32;
-    let _aux: u32; // TSC_AUX (CPU ID), ignoré ici — utilisé par percpu::sync.
-                   // SAFETY: RDTSCP disponible si check_rdtscp() == true.
+    let _aux: u32; // TSC_AUX (CPU ID), ignored here — used by percpu::sync.
+                   // SAFETY: RDTSCP available if check_rdtscp() == true.
     unsafe {
         core::arch::asm!(
             "rdtscp",
@@ -256,24 +256,24 @@ pub fn rdtscp_read() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lecture ordonnée du TSC avec l'ID CPU logique associé.
+/// Ordered TSC read with associated logical CPU ID.
 ///
-/// RDTSCP donne le TSC et `TSC_AUX` atomiquement quand le CPU l'annonce. Sur les
-/// CPU/QEMU sans RDTSCP, on utilise LFENCE+RDTSC+LFENCE et on relit `GS:cpu_id`
-/// avant/après pour éviter d'appliquer l'offset d'un autre CPU si le thread a
-/// migré entre la lecture du TSC et l'échantillonnage per-CPU.
+/// RDTSCP provides TSC and `TSC_AUX` atomically when advertised by CPU. On
+/// CPUs/QEMU without RDTSCP, LFENCE+RDTSC+LFENCE is used and `GS:cpu_id` is re-read
+/// before/after to prevent applying another CPU's offset if the thread migrated
+/// between the TSC read and per-CPU sampling.
 #[inline(always)]
 pub fn read_ordered_with_cpu() -> (u64, u32) {
     loop {
         let cpu_before = crate::arch::x86_64::smp::percpu::current_cpu_id();
-        // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
-        // disponible en x86_64 (SSE2 baseline).
+        // SAFETY: LFENCE serializes pipeline, no memory effect; always
+        // available on x86_64 (SSE2 baseline).
         unsafe {
             core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
         }
         let tsc = rdtsc_read();
-        // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
-        // disponible en x86_64 (SSE2 baseline).
+        // SAFETY: LFENCE serializes pipeline, no memory effect; always
+        // available on x86_64 (SSE2 baseline).
         unsafe {
             core::arch::asm!("lfence", options(nostack, nomem, preserves_flags));
         }
@@ -285,31 +285,31 @@ pub fn read_ordered_with_cpu() -> (u64, u32) {
     }
 }
 
-/// Lecture avec LFENCE pré/post pour sérialisation totale (mesure précise).
+/// Read with pre/post LFENCE for full serialization (precise measurement).
 #[inline]
 pub fn rdtsc_serialized() -> u64 {
-    // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
-    // disponible en x86_64 (SSE2 baseline).
+    // SAFETY: LFENCE serializes pipeline, no memory effect; always
+    // available on x86_64 (SSE2 baseline).
     unsafe {
         core::arch::asm!("lfence", options(nostack, nomem));
     }
     let t = rdtsc_read();
-    // SAFETY: LFENCE sérialise le pipeline, aucun effet mémoire ; toujours
-    // disponible en x86_64 (SSE2 baseline).
+    // SAFETY: LFENCE serializes pipeline, no memory effect; always
+    // available on x86_64 (SSE2 baseline).
     unsafe {
         core::arch::asm!("lfence", options(nostack, nomem));
     }
     t
 }
 
-// ── Détection des capacités ───────────────────────────────────────────────────
+// ── Capabilities detection ────────────────────────────────────────────────────
 
-/// Vérifie si le TSC est invariant via CPUID 0x80000007 EDX bit 8.
-/// TSC invariant = rate constant à travers tous les C-states et Turbo Boost.
+/// Checks whether TSC is invariant via CPUID 0x80000007 EDX bit 8.
+/// Invariant TSC = constant rate across all C-states and Turbo Boost.
 pub fn check_tsc_invariant() -> bool {
     let edx: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -325,11 +325,11 @@ pub fn check_tsc_invariant() -> bool {
     (edx & (1 << 8)) != 0
 }
 
-/// Vérifie si RDTSCP est disponible (CPUID 0x80000001 EDX bit 27).
+/// Checks whether RDTSCP is available (CPUID 0x80000001 EDX bit 27).
 pub fn check_rdtscp() -> bool {
     let max_ext: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -346,8 +346,8 @@ pub fn check_rdtscp() -> bool {
         return false;
     }
     let edx: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -363,11 +363,11 @@ pub fn check_rdtscp() -> bool {
     (edx & (1 << 27)) != 0
 }
 
-/// Vérifie si TSC_DEADLINE est disponible (CPUID 0x1 ECX bit 24).
+/// Checks whether TSC_DEADLINE is available (CPUID 0x1 ECX bit 24).
 pub fn check_tsc_deadline() -> bool {
     let ecx: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -383,13 +383,13 @@ pub fn check_tsc_deadline() -> bool {
     (ecx & (1 << 24)) != 0
 }
 
-/// Détecte si on s'exécute sous hyperviseur et lequel.
-/// Retourne (is_hypervisor, HypervisorType).
+/// Detects if running under a hypervisor and which one.
+/// Returns (is_hypervisor, HypervisorType).
 pub fn detect_hypervisor() -> (bool, HypervisorType) {
-    // Bit 31 de ECX de CPUID 0x1 = Hypervisor Present.
+    // Bit 31 of ECX of CPUID 0x1 = Hypervisor Present.
     let ecx: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -406,10 +406,10 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
         return (false, HypervisorType::None);
     }
 
-    // Lire la signature hyperviseur depuis la feuille 0x40000000.
+    // Read hypervisor signature from leaf 0x40000000.
     let (ebx, ecx_leaf, edx): (u32, u32, u32);
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -425,13 +425,13 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
         );
     }
 
-    // KVM : "KVMKVMKVM\0\0\0" en EBX+ECX+EDX
+    // KVM : "KVMKVMKVM\0\0\0" in EBX+ECX+EDX
     // Hyper-V : "Microsoft Hv"
     // VMware  : "VMwareVMware"
     let sig = [ebx, ecx_leaf, edx];
-    // SAFETY: `sig` est un [u32; 3] = 12 octets contigus sur la pile ; on le
-    // réinterprète comme &[u8; 12] pour comparer la signature hyperviseur. La
-    // durée de vie du slice est bornée à celle de `sig` (même scope).
+    // SAFETY: `sig` is [u32; 3] = 12 contiguous bytes on stack; reinterpreted
+    // as &[u8; 12] to compare hypervisor signature. Lifetime of slice is bounded
+    // to that of `sig` (same scope).
     let sig_bytes = unsafe { core::slice::from_raw_parts(sig.as_ptr() as *const u8, 12) };
 
     if sig_bytes.starts_with(b"KVMKVM") {
@@ -447,19 +447,19 @@ pub fn detect_hypervisor() -> (bool, HypervisorType) {
 
 // ── IA32_TSC_ADJUST MSR ───────────────────────────────────────────────────────
 
-/// Lit le MSR IA32_TSC_ADJUST (MSR 0x3B).
+/// Reads IA32_TSC_ADJUST MSR (MSR 0x3B).
 ///
-/// Retourne 0 si la lecture échoue (GP fault sur vieux CPU sans ce MSR).
-/// Sur les CPU modernes, ce MSR est toujours présent (disponible depuis Ivy Bridge).
+/// Returns 0 if read fails (GP fault on old CPUs lacking this MSR).
+/// On modern CPUs, this MSR is always present (available since Ivy Bridge).
 pub fn read_tsc_adjust_msr() -> i64 {
-    // Vérifier que CPUID 0x7 annonce IA32_TSC_ADJUST (EBX bit 1).
+    // Verify that CPUID 0x7 advertises IA32_TSC_ADJUST (EBX bit 1).
     if !cpuid_tsc_adjust_supported() {
         return 0;
     }
 
     let lo: u32;
     let hi: u32;
-    // SAFETY: RDMSR est privilégié (CPL=0 requis — nous sommes en kernel).
+    // SAFETY: RDMSR is privileged (CPL=0 required — we are in kernel).
     unsafe {
         core::arch::asm!(
             "rdmsr",
@@ -473,8 +473,8 @@ pub fn read_tsc_adjust_msr() -> i64 {
     raw as i64
 }
 
-/// Écrit IA32_TSC_ADJUST pour neutraliser un décalage BIOS.
-/// Uniquement en CPL=0 (kernel). Ne jamais appeler depuis le userespace.
+/// Writes IA32_TSC_ADJUST to neutralize BIOS offset.
+/// Ring 0 (kernel) only. Never call from userspace.
 pub fn write_tsc_adjust_msr(value: i64) {
     if !cpuid_tsc_adjust_supported() {
         return;
@@ -482,7 +482,7 @@ pub fn write_tsc_adjust_msr(value: i64) {
     let raw = value as u64;
     let lo = raw as u32;
     let hi = (raw >> 32) as u32;
-    // SAFETY: lecture matérielle x86_64 sans effet mémoire (Ring 0).
+    // SAFETY: x86_64 hardware write without memory side-effects (Ring 0).
     unsafe {
         core::arch::asm!(
             "wrmsr",
@@ -494,11 +494,11 @@ pub fn write_tsc_adjust_msr(value: i64) {
     }
 }
 
-/// Vérifie si IA32_TSC_ADJUST est supporté (CPUID 0x7.0 EBX bit 1).
+/// Checks whether IA32_TSC_ADJUST is supported (CPUID 0x7.0 EBX bit 1).
 pub fn cpuid_tsc_adjust_supported() -> bool {
     let max_leaf: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -515,8 +515,8 @@ pub fn cpuid_tsc_adjust_supported() -> bool {
         return false;
     }
     let ebx: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -534,13 +534,13 @@ pub fn cpuid_tsc_adjust_supported() -> bool {
     (ebx & (1 << 1)) != 0
 }
 
-// ── CPUID leaf 0x15 disponibilité ─────────────────────────────────────────────
+// ── CPUID leaf 0x15 availability ──────────────────────────────────────────────
 
-/// Vérifie si CPUID leaf 0x15 est disponible pour la calibration nominale.
+/// Checks whether CPUID leaf 0x15 is available for nominal calibration.
 pub fn cpuid_tsc_available() -> bool {
     let max_leaf: u32;
-    // SAFETY: CPUID est une instruction non privilégiée et sans effet
-    // mémoire ; le préambule xchg rbx préserve le registre réservé LLVM.
+    // SAFETY: CPUID is a non-privileged instruction without memory effects;
+    // preamble xchg rbx preserves LLVM reserved register.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -556,14 +556,14 @@ pub fn cpuid_tsc_available() -> bool {
     max_leaf >= 0x15
 }
 
-// ── API publique ─────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
-/// Retourne le rating TSC courant (depuis les globales).
+/// Returns current TSC rating (from globals).
 pub fn tsc_rating() -> u32 {
     TscSource.rating()
 }
 
-/// Retourne `true` si le TSC est invariant (depuis les globales si init fait).
+/// Returns `true` if TSC is invariant (from globals if init done).
 pub fn tsc_is_invariant() -> bool {
     if TSC_SOURCE_INIT_DONE.load(Ordering::Relaxed) {
         TSC_CAPS_INVARIANT.load(Ordering::Relaxed)
@@ -572,17 +572,17 @@ pub fn tsc_is_invariant() -> bool {
     }
 }
 
-/// Retourne `true` si on est sous hyperviseur.
+/// Returns `true` if running under hypervisor.
 pub fn tsc_under_hypervisor() -> bool {
     TSC_CAPS_HYPERVISOR.load(Ordering::Relaxed)
 }
 
-/// Retourne la valeur de IA32_TSC_ADJUST lue au boot.
+/// Returns IA32_TSC_ADJUST value read at boot.
 pub fn tsc_adjust_value() -> i64 {
     TSC_CAPS_ADJUST.load(Ordering::Relaxed) as i64
 }
 
-/// Retourne la fréquence TSC en Hz.
+/// Returns TSC frequency in Hz.
 pub fn tsc_freq_hz() -> u64 {
     crate::arch::x86_64::cpu::tsc::tsc_hz()
 }

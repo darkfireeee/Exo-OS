@@ -1,21 +1,21 @@
 // kernel/src/arch/x86_64/time/drift/mod.rs
 //
-// Sous-module de correction de dérive TSC.
+// TSC drift correction sub-module.
 //
-// Ce module implémente le mécanisme de correction long terme de la dérive
-// du TSC (crystal aging, variation thermique, migration P-state).
+// This module implements the long-term correction mechanism for TSC drift
+// (crystal aging, thermal variation, P-state migration).
 //
-// Architecture :
-//   pll.rs       — Software PLL : lisse les corrections ±500 ppm max (RÈGLE DRIFT-PLL-01)
-//   periodic.rs  — Thread de recalibration périodique (RÈGLE DRIFT-PREEMPT-01 / DRIFT-CIRCULAR-01)
+// Architecture:
+//   pll.rs       — Software PLL: smooths corrections ±500 ppm max (RULE DRIFT-PLL-01)
+//   periodic.rs  — Periodic recalibration thread (RULE DRIFT-PREEMPT-01 / DRIFT-CIRCULAR-01)
 //
-// Usage :
-//   Appelé depuis time_init() pour initialiser, puis drift_tick() depuis tick.rs.
+// Usage:
+//   Called from time_init() to initialize, then drift_tick() from tick.rs.
 
 pub mod periodic;
 pub mod pll;
 
-// Ré-exports publics pour time_init() et tick.rs.
+// Public re-exports for time_init() and tick.rs.
 pub use periodic::{
     drift_fail_count, drift_init, drift_last_applied_hz, drift_last_measured_hz,
     drift_monotone_fixes, drift_recal_count, drift_snapshot, drift_tick, update_cpu_load,

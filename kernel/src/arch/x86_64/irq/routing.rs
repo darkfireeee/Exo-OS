@@ -1,14 +1,14 @@
 //! # arch/x86_64/irq/routing.rs
 //!
-//! Routage IRQ complet GI-03 avec dispatch ISR, sys_irq_register, ack_irq, watchdog.
-//! Source : ExoOS_Driver_Framework_v10.md §3.1-3.5, GI-03_Drivers_IRQ_DMA.md
+//! Complete GI-03 IRQ routing with ISR dispatch, sys_irq_register, ack_irq, watchdog.
+//! Source: ExoOS_Driver_Framework_v10.md §3.1-3.5, GI-03_Drivers_IRQ_DMA.md
 //!
-//! Zéro simplification, Zéro stub, 100% conforme.
+//! Zero simplification, zero stub, 100% compliant.
 
 use super::types::*;
 use core::sync::atomic::Ordering;
 
-// Dépendances de l'OS (process, IPC, APIC, IOAPIC)
+// OS dependencies (process, IPC, APIC, IOAPIC)
 use crate::arch::x86_64::apic::io_apic;
 use crate::arch::x86_64::apic::local_apic;
 use crate::drivers::device_server_ipc;
@@ -114,7 +114,7 @@ fn sys_irq_register_common(
         return Err(IrqError::OwnerPidDead);
     }
 
-    // OBLIGATOIRE : irq_save() AVANT write() (cf DRV-45 v8)
+    // MANDATORY: irq_save() BEFORE write() (see DRV-45 v8)
     let _irq_guard = crate::arch::x86_64::irq_save();
     let mut table = IRQ_TABLE.write();
 
@@ -155,7 +155,7 @@ fn sys_irq_register_common(
         }
     }
 
-    // CORR-51: Purger les handlers de PIDs morts
+    // CORR-51: Purge handlers of dead PIDs
     {
         let mut handlers = route.handlers.write();
         handlers.retain(|h| {
@@ -174,11 +174,11 @@ fn sys_irq_register_common(
             return Err(IrqError::HandlerLimitReached);
         }
 
-        // Reset handlers obsolètes du même PID
+        // Reset obsolete handlers of the same PID
         handlers.retain(|h| h.owner_pid != owner_pid);
     }
 
-    // FIX-99 v8 : reset overflow_count sur re-registration.
+    // FIX-99 v8: reset overflow_count on re-registration.
     route.overflow_count.store(0, Ordering::Relaxed);
     if route.pending_acks.load(Ordering::Acquire) == 0 {
         route.handled_count.store(0, Ordering::Relaxed);
@@ -206,7 +206,7 @@ fn sys_irq_register_common(
         }
     }
 
-    // Configuration de l'IOAPIC matérielle selon le type
+    // Hardware IOAPIC configuration according to type
     if route.source_kind.needs_ioapic_mask() {
         if let Some(reg_params) = ioapic_route {
             if !io_apic::route_irq(
@@ -240,7 +240,7 @@ pub fn ack_irq_syscall(vector: IrqVector) -> Result<(), IrqError> {
         None => return Err(IrqError::NotRegistered),
     };
 
-    // AUDIT-IRQ1 : mise à jour saturante pour éviter le wrap de pending_acks à u32::MAX
+    // AUDIT-IRQ1: saturating update to avoid pending_acks wrapping to u32::MAX
     let prev = match route.pending_acks.fetch_update(
         Ordering::AcqRel,
         Ordering::Acquire,
@@ -308,7 +308,7 @@ pub fn ack_irq_canonical(
         route.handled_count.fetch_add(1, Ordering::AcqRel);
     }
 
-    // AUDIT-IRQ1 : mise à jour saturante pour éviter le wrap de pending_acks
+    // AUDIT-IRQ1: saturating update to avoid pending_acks wrapping
     let prev = match route.pending_acks.fetch_update(
         Ordering::AcqRel,
         Ordering::Acquire,
@@ -395,10 +395,10 @@ pub fn revoke_all_irq(owner_pid: IrqOwnerPid) -> Result<(), IrqError> {
     Ok(())
 }
 
-/// Réinitialise les watchdogs IRQ après un cycle ExoPhoenix.
+/// Resets IRQ watchdogs after an ExoPhoenix cycle.
 ///
-/// Les IRQ peuvent rester masquées pendant le gel/restauration ; conserver un
-/// `masked_since` ancien déclencherait des alarmes artificielles au wake.
+/// IRQs can remain masked during freeze/restore; keeping an
+/// old `masked_since` would trigger artificial alarms on wakeup.
 pub fn reset_all_masked_since() {
     let table = IRQ_TABLE.read();
     for (_, route_opt) in table.iter() {
@@ -423,19 +423,19 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
     let route = match table.get(irq_vector) {
         Some(r) => r,
         None => {
-            // FIX-108: EOI LAPIC OBLIGATOIRE, sinon blocage définitif du core APIC
+            // FIX-108: MANDATORY LAPIC EOI, otherwise permanent stall of APIC core
             local_apic::eoi();
             return;
         }
     };
 
-    // ÉTAPE 1 : VÉRIFICATION BLACKLIST EN PREMIER (FIX-92 v8)
+    // STEP 1: BLACKLIST CHECK FIRST (FIX-92 v8)
     if route.overflow_count.load(Ordering::Relaxed) >= MAX_OVERFLOWS {
-        local_apic::eoi(); // TOUJOURS
+        local_apic::eoi(); // ALWAYS
         return;
     }
 
-    // ÉTAPE 2: EOI / Masking exact selon le mode
+    // STEP 2: Exact EOI / masking depending on mode
     match route.source_kind {
         IrqSourceKind::IoApicLevel => {
             if let Some(gsi) = route.gsi {
@@ -459,7 +459,7 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
         }
     }
 
-    // ÉTAPE 3: Collecte handlers sans alloc
+    // STEP 3: Collect handlers without allocation
     let mut eps: [Option<IpcEndpoint>; MAX_HANDLERS_PER_IRQ] = [None; MAX_HANDLERS_PER_IRQ];
     let mut n_eps = 0usize;
 
@@ -494,7 +494,7 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
 
     let wg = route.dispatch_generation.fetch_add(1, Ordering::AcqRel) + 1;
 
-    // ÉTAPE 4: Mise à jour pending acks et détection storm
+    // STEP 4: Update pending acks and storm detection
     if route.source_kind == IrqSourceKind::IoApicLevel {
         route.pending_acks.store(n, Ordering::Release);
     } else {
@@ -563,7 +563,7 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
         }
     }
 
-    // ÉTAPE 5: Dispatch notifications (en ISR c'est un push non bloquant dans la MQ)
+    // STEP 5: Dispatch notifications (in ISR, this is a non-blocking push into MQ)
     for ep in eps.iter().take(n_eps).flatten() {
         let _ = ipc::send_irq_notification(ep, irq_vector.as_u8(), wg);
     }

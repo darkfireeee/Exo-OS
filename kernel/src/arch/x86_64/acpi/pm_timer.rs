@@ -1,33 +1,33 @@
 //! # arch/x86_64/acpi/pm_timer.rs — ACPI Power Management Timer
 //!
-//! Le PM Timer est un timer hardware à 3.579545 MHz accessible via I/O ports.
-//! Il est utilisé en dernier recours pour la calibration TSC quand ni le PIT
-//! ni le HPET ne sont disponibles (laptops modernes, UEFI).
+//! The PM Timer is a 3.579545 MHz hardware timer accessible via I/O ports.
+//! It is used as a last resort for TSC calibration when neither the PIT
+//! nor the HPET are available (modern laptops, UEFI).
 //!
-//! ## Accès
-//! Via un port I/O 32 bits (PMTMR_BLKX dans la FADT, offset variable).
-//! Compteur 24 bits ou 32 bits selon le chipset (bit 8 du FADT flags).
+//! ## Access
+//! Via a 32-bit I/O port (PMTMR_BLK in the FADT, variable offset).
+//! 24-bit or 32-bit counter depending on the chipset (bit 8 of FADT flags).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-/// Fréquence du PM Timer : 3.579545 MHz exactement
+/// PM Timer frequency: exactly 3.579545 MHz
 pub const PM_TIMER_FREQ_HZ: u32 = 3_579_545;
 
-/// Masque 24 bits (compteur débordant à 0xFFFFFF si non 32 bits)
+/// 24-bit mask (counter overflowing at 0xFFFFFF if not 32-bit)
 const PM_TMR_MASK_24: u32 = 0x00FF_FFFF;
 const PM_TMR_MASK_32: u32 = 0xFFFF_FFFF;
 
 static PM_TMR_PORT: AtomicU32 = AtomicU32::new(0);
 static PM_TMR_32BIT: AtomicBool = AtomicBool::new(false);
 
-// ── Structure FADT (minimal) ──────────────────────────────────────────────────
+// ── FADT Structure (minimal) ──────────────────────────────────────────────────
 
-/// FADT (Fixed ACPI Description Table) — champs minimaux pour pm_timer_blk
+/// FADT (Fixed ACPI Description Table) — minimal fields for pm_timer_blk
 #[repr(C, packed)]
 #[allow(dead_code)]
 struct FadtMinimal {
-    // SdtHeader (36 octets) + champs FADT
-    // _header (36 bytes) — on lit directement après le header
+    // SdtHeader (36 bytes) + FADT fields
+    // _header (36 bytes) — read directly after header
     firmware_ctrl: u32,       // +36
     dsdt_addr: u32,           // +40
     _reserved1: u8,           // +44
@@ -43,13 +43,13 @@ struct FadtMinimal {
     pm1a_ctl_blk: u32,        // +64
     pm1b_ctl_blk: u32,        // +68
     pm2_ctl_blk: u32,         // +72
-    pm_tmr_blk: u32,          // +76 ← port I/O PM Timer
+    pm_tmr_blk: u32,          // +76 ← PM Timer I/O port
     gpe0_blk: u32,            // +80
     gpe1_blk: u32,            // +84
     pm1_evt_len: u8,          // +88
     pm1_ctl_len: u8,          // +89
     pm2_ctl_len: u8,          // +90
-    pm_tmr_len: u8,           // +91 (doit être 4)
+    pm_tmr_len: u8,           // +91 (must be 4)
     gpe0_blk_len: u8,         // +92
     gpe1_blk_len: u8,         // +93
     gpe1_base: u8,            // +94
@@ -65,19 +65,19 @@ struct FadtMinimal {
     century: u8,              // +108
     iapc_boot_arch: u16,      // +109
     _reserved2: u8,           // +111
-    flags: u32,               // +112 — bit 8 = TMR_VAL_EXT (32 bits)
+    flags: u32,               // +112 — bit 8 = TMR_VAL_EXT (32-bit)
 }
 
 const FADT_HEADER_SIZE: usize = 36;
-const FADT_PM_TMR_BLK_OFF: usize = FADT_HEADER_SIZE + 40; // offset 76 depuis début FADT
+const FADT_PM_TMR_BLK_OFF: usize = FADT_HEADER_SIZE + 40; // offset 76 from start of FADT
 const FADT_FLAGS_OFF: usize = FADT_HEADER_SIZE + 76; // offset 112
 const FADT_TMR_VAL_EXT: u32 = 1 << 8;
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ───────────────────────────────────────────────────────────
 
-/// Initialise le PM Timer depuis la table FADT
+/// Initializes the PM Timer from the FADT table
 ///
-/// Appelé par `init_acpi()` après localisation de la table FACP/FADT.
+/// Called by `init_acpi()` after locating the FACP/FADT table.
 pub fn init_pm_timer(fadt_phys: u64) -> bool {
     use super::parser::acpi_read_unaligned;
     if fadt_phys == 0 {
@@ -100,9 +100,9 @@ pub fn init_pm_timer(fadt_phys: u64) -> bool {
     true
 }
 
-// ── Lecture du Timer ──────────────────────────────────────────────────────────
+// ── Timer Read ────────────────────────────────────────────────────────────────
 
-/// Lit la valeur courante du PM Timer
+/// Reads the current value of the PM Timer
 #[inline]
 pub fn pm_timer_read() -> u32 {
     let port = PM_TMR_PORT.load(Ordering::Relaxed) as u16;
@@ -110,7 +110,7 @@ pub fn pm_timer_read() -> u32 {
         return 0;
     }
 
-    // SAFETY: port I/O PM Timer validé à l'init
+    // SAFETY: PM Timer I/O port validated at init
     let val = unsafe { super::super::inl(port) };
     if PM_TMR_32BIT.load(Ordering::Relaxed) {
         val & PM_TMR_MASK_32
@@ -119,7 +119,7 @@ pub fn pm_timer_read() -> u32 {
     }
 }
 
-/// Lit le PM Timer avec gestion du wrap (compteur 24 bits)
+/// Reads the PM Timer with wrap handling (24-bit counter)
 pub fn pm_timer_read_wrapped() -> u64 {
     static WRAP_COUNT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     static LAST_VAL: AtomicU32 = AtomicU32::new(0);
@@ -141,9 +141,9 @@ pub fn pm_timer_read_wrapped() -> u64 {
     wraps * (mask as u64 + 1) + current as u64
 }
 
-/// Délai actif via PM Timer (en millisecondes)
+/// Busy-wait delay via PM Timer (in milliseconds)
 ///
-/// Précis à ±1 tick (~280ns à 3.58 MHz).
+/// Accurate to ±1 tick (~280ns at 3.58 MHz).
 pub fn pm_timer_delay_ms(ms: u32) {
     if PM_TMR_PORT.load(Ordering::Relaxed) == 0 {
         return;
@@ -175,22 +175,22 @@ pub fn pm_timer_delay_ms(ms: u32) {
     }
 }
 
-/// Retourne une mesure de ms depuis le boot (via PM Timer)
+/// Returns a measurement in ms since boot (via PM Timer)
 pub fn pm_timer_read_ms() -> u64 {
     let ticks = pm_timer_read_wrapped();
     ticks * 1000 / PM_TIMER_FREQ_HZ as u64
 }
 
-/// `true` si le PM Timer est disponible
+/// `true` if PM Timer is available
 pub fn pm_timer_available() -> bool {
     PM_TMR_PORT.load(Ordering::Relaxed) != 0
 }
 
-/// Retourne `true` si le PM Timer est en mode 32 bits (sinon 24 bits).
+/// Returns `true` if PM Timer is in 32-bit mode (otherwise 24-bit).
 #[inline]
 pub fn pm_timer_is_32bit() -> bool {
     PM_TMR_32BIT.load(Ordering::Relaxed)
 }
 
-// ── Port I/O (accès depuis pm_timer) ─────────────────────────────────────────
-// Petit shim inline plutôt que d'appeler super::super::x86_64::inl directement
+// ── I/O Port (access from pm_timer) ───────────────────────────────────────────
+// Small inline shim rather than calling super::super::x86_64::inl directly

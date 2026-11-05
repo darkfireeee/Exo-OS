@@ -1,7 +1,7 @@
-//! # arch/x86_64/virt — Détection et support hyperviseur
+//! # arch/x86_64/virt — Hypervisor detection and support
 //!
-//! Détecte si Exo-OS tourne sous un hyperviseur (VMware, KVM, Hyper-V, Xen...)
-//! et adapte le comportement (APIC, TSC, mémoire volée).
+//! Detects if Exo-OS is running under a hypervisor (VMware, KVM, Hyper-V, Xen...)
+//! and adapts behavior accordingly (APIC, TSC, stolen memory).
 
 pub mod detect;
 pub mod paravirt;

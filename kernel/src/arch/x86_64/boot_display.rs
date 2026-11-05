@@ -1,7 +1,7 @@
-//! # boot_display.rs — Façade de boot visible (VGA + framebuffer)
+//! # boot_display.rs — Visible Boot Facade (VGA + Framebuffer)
 //!
-//! Conserve le fallback VGA historique et bascule sur le framebuffer dès que
-//! `arch_boot_init()` a rendu des infos d'écran fiables.
+//! Keeps the historical VGA fallback and switches to the framebuffer as soon as
+//! `arch_boot_init()` provides reliable screen information.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -33,7 +33,7 @@ fn draw_vga_shell() {
 
     let title = vga_early::attr(vga_early::WHITE, vga_early::BLUE);
     for col in 0..80 {
-        // SAFETY: accès VGA 80x25 classique via le buffer texte identity-mappé.
+        // SAFETY: standard 80x25 VGA access via the identity-mapped text buffer.
         unsafe {
             let offset = col * 2;
             let ptr = (0xB8000 + offset) as *mut u8;
@@ -59,13 +59,13 @@ fn draw_vga_shell() {
     VGA_STAGE_ROW.store(9, Ordering::Release);
 }
 
-/// Affiche l'écran de boot initial.
+/// Displays the initial boot screen.
 pub fn boot_screen() {
     terminal::debug_write(b"boot_display: boot screen\n");
     draw_vga_shell();
 }
 
-/// Attache la console framebuffer si le bootloader en fournit une.
+/// Attaches the framebuffer console if the bootloader provides one.
 pub fn attach_framebuffer(boot_info: &BootInfo) -> bool {
     let attached = framebuffer_early::init_from_boot_info(boot_info);
     if attached {
@@ -76,7 +76,7 @@ pub fn attach_framebuffer(boot_info: &BootInfo) -> bool {
     attached
 }
 
-/// Affiche l'avancement d'un module réellement initialisé.
+/// Displays progress for a genuinely initialized module.
 pub fn stage_ok(label: &str) {
     debug_line(b"boot_display: stage ok ", label);
     let row = VGA_STAGE_ROW.fetch_add(1, Ordering::AcqRel);
@@ -89,7 +89,7 @@ pub fn stage_ok(label: &str) {
     framebuffer_early::stage_ok(label);
 }
 
-/// Clôt l'affichage de boot.
+/// Closes the boot display.
 pub fn boot_complete() {
     terminal::debug_write(b"boot_display: boot complete\n");
     vga_early::set_cursor(0, 23);
@@ -98,7 +98,7 @@ pub fn boot_complete() {
     framebuffer_early::boot_complete();
 }
 
-/// Affiche un statut explicite pour le passage kernel -> userspace.
+/// Displays an explicit status for the kernel -> userspace transition.
 pub fn userspace_status(title: &str, detail: &str, hint: &str) {
     debug_line(b"boot_display: userspace ", title);
     debug_line(b"boot_display: detail ", detail);

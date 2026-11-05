@@ -1,28 +1,28 @@
-//! # arch/x86_64/virt/stolen_time.rs — Temps volé par l'hyperviseur
+//! # arch/x86_64/virt/stolen_time.rs — Time stolen by the hypervisor
 //!
-//! Le "stolen time" est le temps CPU consommé par l'hyperviseur ou par d'autres
-//! VMs pendant que cette VM était supposément en exécution.
+//! "Stolen time" is CPU time consumed by the hypervisor or other
+//! VMs while this VM was supposed to be executing.
 //!
 //! ## KVM Steal Time
-//! KVM implémente via une structure partagée par page (MSR_KVM_STEAL_TIME).
-//! La VM lit `steal` (u64, nanoseconds cumulées) pour estimer l'overhead hyperviseur.
+//! KVM implements this via a per-page shared structure (MSR_KVM_STEAL_TIME).
+//! The VM reads `steal` (u64, accumulated nanoseconds) to estimate hypervisor overhead.
 
 use super::super::cpu::msr;
 use crate::scheduler::smp::topology::MAX_CPUS;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// MSR KVM Steal Time
+/// KVM Steal Time MSR
 const MSR_KVM_STEAL_TIME: u32 = 0x4b564d03;
 const KVM_STEAL_TIME_ENABLE: u64 = 1;
 
-/// Structure KVM Steal Time (partagée entre le host et le guest)
+/// KVM Steal Time structure (shared between host and guest)
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(64))]
 pub struct KvmStealTime {
-    pub steal: u64,   // temps volé en ns (accumulé)
-    pub version: u32, // incrémenté par le host avant/après update (odd = update en cours)
+    pub steal: u64,   // stolen time in ns (accumulated)
+    pub version: u32, // incremented by host before/after update (odd = update in progress)
     pub flags: u32,
-    pub preempted: u8, // 1 si le vCPU est préempté par le host
+    pub preempted: u8, // 1 if vCPU is preempted by host
     _pad: [u8; 47],
 }
 
@@ -39,10 +39,10 @@ impl KvmStealTime {
     }
 }
 
-/// Taille de la table stolen-time KVM.
+/// Size of KVM stolen-time table.
 ///
-/// Alignée sur la valeur canonique du scheduler pour éviter toute divergence
-/// silencieuse entre les tables par CPU.
+/// Aligned with the canonical scheduler value to avoid any silent
+/// divergence between per-CPU tables.
 const STOLEN_TIME_MAX_CPUS: usize = MAX_CPUS;
 const _: () = assert!(
     STOLEN_TIME_MAX_CPUS >= MAX_CPUS,
@@ -59,11 +59,11 @@ static STEAL_TIME_TABLE: StealTimeTable =
 static TOTAL_STOLEN_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_STEAL_NS: AtomicU64 = AtomicU64::new(0);
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
-/// Enregistre la page steal time pour le CPU `cpu_id` auprès de KVM
+/// Registers the steal time page for CPU `cpu_id` with KVM
 ///
-/// Appelé depuis `init_percpu_for_bsp/ap()` si KVM steal time est disponible.
+/// Called from `init_percpu_for_bsp/ap()` if KVM steal time is available.
 pub fn init_steal_time_for_cpu(cpu_id: u32) {
     use super::detect::{hypervisor_type, kvm_has_steal_time, HypervisorType};
     if !(hypervisor_type() == HypervisorType::Kvm && kvm_has_steal_time()) {
@@ -74,33 +74,33 @@ pub fn init_steal_time_for_cpu(cpu_id: u32) {
     }
 
     let phys_addr = &STEAL_TIME_TABLE.0[cpu_id as usize] as *const KvmStealTime as u64;
-    // L'adresse doit être physique et alignée 64 octets (garantie par #[repr(align(64))])
-    // SAFETY: MSR_KVM_STEAL_TIME write depuis Ring 0 en mode KVM
+    // Address must be physical and 64-byte aligned (guaranteed by #[repr(align(64))])
+    // SAFETY: MSR_KVM_STEAL_TIME write from Ring 0 in KVM mode
     unsafe {
         msr::write_msr(MSR_KVM_STEAL_TIME, phys_addr | KVM_STEAL_TIME_ENABLE);
     }
 }
 
-// ── Lecture ───────────────────────────────────────────────────────────────────
+// ── Reading ───────────────────────────────────────────────────────────────────
 
-/// Lit la valeur de steal time en nanosecondes pour le CPU `cpu_id`
+/// Reads steal time value in nanoseconds for CPU `cpu_id`
 ///
-/// Utilise une lecture atomique stable (version field pair = données cohérentes).
+/// Uses stable atomic read (even version field = coherent data).
 pub fn read_steal_ns(cpu_id: u32) -> u64 {
     if cpu_id as usize >= STOLEN_TIME_MAX_CPUS {
         return 0;
     }
     let st = &STEAL_TIME_TABLE.0[cpu_id as usize];
 
-    // Lire version paire (host a terminé l'update)
+    // Read even version (host completed update)
     loop {
-        // SAFETY: lecture volatile de la structure partagée
+        // SAFETY: volatile read of shared structure
         let ver_before = unsafe { core::ptr::read_volatile(&st.version) };
         if ver_before & 1 != 0 {
             core::hint::spin_loop();
             continue;
         }
-        // SAFETY: même structure KVM partagée, seqlock : version paire garantit données cohérentes.
+        // SAFETY: same shared KVM structure, seqlock: even version guarantees coherent data.
         let steal = unsafe { core::ptr::read_volatile(&st.steal) };
         let ver_after = unsafe { core::ptr::read_volatile(&st.version) };
         if ver_before == ver_after {
@@ -109,7 +109,7 @@ pub fn read_steal_ns(cpu_id: u32) -> u64 {
     }
 }
 
-/// Met à jour le compteur total de temps volé (appelé depuis le timer tick)
+/// Updates total stolen time counter (called from timer tick)
 pub fn update_stolen_time(cpu_id: u32) {
     let current = read_steal_ns(cpu_id);
     let prev = LAST_STEAL_NS.swap(current, Ordering::AcqRel);
@@ -118,16 +118,16 @@ pub fn update_stolen_time(cpu_id: u32) {
     }
 }
 
-/// Retourne le temps total volé en nanosecondes (depuis le boot)
+/// Returns total stolen time in nanoseconds (since boot)
 pub fn stolen_time_ns() -> u64 {
     TOTAL_STOLEN_NS.load(Ordering::Relaxed)
 }
 
-/// Retourne `true` si le vCPU courant est actuellement préempté par l'hyperviseur
+/// Returns `true` if current vCPU is currently preempted by hypervisor
 pub fn is_preempted(cpu_id: u32) -> bool {
     if cpu_id as usize >= STOLEN_TIME_MAX_CPUS {
         return false;
     }
-    // SAFETY: lecture volatile du champ preempted
+    // SAFETY: volatile read of preempted field
     unsafe { core::ptr::read_volatile(&STEAL_TIME_TABLE.0[cpu_id as usize].preempted) != 0 }
 }

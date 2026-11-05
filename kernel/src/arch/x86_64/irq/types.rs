@@ -1,9 +1,9 @@
 //! # arch/x86_64/irq/types.rs
 //!
-//! Types canoniques GI-03 Driver Framework v10 pour le routage IRQ.
-//! Source unique de vérité : ExoOS_Driver_Framework_v10.md §3.1
+//! Canonical types for GI-03 Driver Framework v10 IRQ routing.
+//! Single source of truth: ExoOS_Driver_Framework_v10.md §3.1
 //!
-//! Implémentation stricte avec state machine complète et `spin::RwLock`.
+//! Strict implementation with complete state machine and `spin::RwLock`.
 //! 0 TODO, 0 stubs.
 
 use alloc::vec::Vec;
@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 pub use exo_types::IpcEndpoint;
 use spin::RwLock;
 
-/// Constantes ISR critiques (GI-03 §2.4, CORR-04, FIX-109)
+/// Critical ISR constants (GI-03 §2.4, CORR-04, FIX-109)
 pub const MAX_HANDLERS_PER_IRQ: usize = 8;
 pub const MAX_PENDING_ACKS: u32 = 4096;
 pub const MAX_OVERFLOWS: u32 = 5;
@@ -117,7 +117,7 @@ pub struct IrqHandler {
 pub struct IrqRoute {
     pub irq_line: IrqVector,
     pub source_kind: IrqSourceKind,
-    /// Pour IOAPIC unmask depuis ACK handler
+    /// For IOAPIC unmask from ACK handler
     pub gsi: Option<u32>,
 
     pub handlers: RwLock<Vec<IrqHandler>>,

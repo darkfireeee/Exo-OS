@@ -1,35 +1,35 @@
 // kernel/src/arch/x86_64/time/mod.rs
 //
 // ════════════════════════════════════════════════════════════════════════════
-// Module Time — Timekeeping unifié pour Exo-OS
+// Time Module — Unified timekeeping for Exo-OS
 // ════════════════════════════════════════════════════════════════════════════
 //
 // ## Architecture
 //
 //   time/
-//   ├── ktime.rs          — Horloge monotone seqlock (ktime_get_ns) — primitif universel
-//   ├── sources/          — Abstraction sources d'horloge (HPET, PM Timer, TSC, PIT)
-//   ├── calibration/      — Calibration TSC multi-source avec fenêtre temporelle réelle
-//   ├── drift/            — Correction dérive TSC (software PLL ±500 ppm)
-//   └── percpu/           — Offsets TSC per-CPU pour SMP
+//   ├── ktime.rs          — Monotonic seqlock clock (ktime_get_ns) — universal primitive
+//   ├── sources/          — Clock sources abstraction (HPET, PM Timer, TSC, PIT)
+//   ├── calibration/      — Multi-source TSC calibration with real-time window
+//   ├── drift/            — TSC drift correction (software PLL ±500 ppm)
+//   └── percpu/           — Per-CPU TSC offsets for SMP
 //
-// ## Règles critiques
-//   ARCH-TIME-01 : scheduler/timer/clock.rs DOIT déléguer à ktime_get_ns()
-//   ARCH-TIME-02 : Seule source de temps autorisée depuis le kernel
-//   ARCH-TIME-03 : Seqlock obligatoire pour les horloges globales
-//   ARCH-TIME-04 : ktime ne régresse JAMAIS
+// ## Critical Rules
+//   ARCH-TIME-01: scheduler/timer/clock.rs MUST delegate to ktime_get_ns()
+//   ARCH-TIME-02: Sole authorized time source within kernel
+//   ARCH-TIME-03: Mandatory seqlock for global clocks
+//   ARCH-TIME-04: ktime NEVER regresses
 //
-// ## Point d'entrée
-//   `time_init()` remplace la Phase 2c de kernel_init() :
-//     - init_hpet_post_memory()     → HPET remappage UC + activation compteur
-//     - calibrate_tsc()             → fenêtre multi-source + fallback chain
-//     - pll_init(hz)                → software PLL initialisé
-//     - init_ktime(tsc_now, 0, hz)  → seqlock activé
+// ## Entry Point
+//   `time_init()` replaces Phase 2c of kernel_init():
+//     - init_hpet_post_memory()     → HPET UC remapping + counter activation
+//     - calibrate_tsc()             → multi-source window + fallback chain
+//     - pll_init(hz)                → software PLL initialized
+//     - init_ktime(tsc_now, 0, hz)  → seqlock activated
 //     - clock::init(hz)             → scheduler clock compatibility shim
-//     - init_bsp_percpu()           → offset BSP = 0
+//     - init_bsp_percpu()           → BSP offset = 0
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Sous-modules ──────────────────────────────────────────────────────────────
+// ── Submodules ────────────────────────────────────────────────────────────────
 
 pub mod calibration;
 pub mod drift;
@@ -37,9 +37,9 @@ pub mod ktime;
 pub mod percpu;
 pub mod sources;
 
-// ── Ré-exports fondamentaux ───────────────────────────────────────────────────
+// ── Fundamental Re-exports ────────────────────────────────────────────────────
 
-// Primitif universel d'horloge — le seul chemin d'accès au temps depuis le kernel.
+// Universal clock primitive — the sole path for accessing time within the kernel.
 pub use ktime::{
     ktime_contention_count, ktime_deadline_ms, ktime_deadline_ns, ktime_deadline_us,
     ktime_elapsed_ns, ktime_elapsed_us, ktime_get_ns, ktime_get_wall_ns, ktime_initialized,
@@ -47,64 +47,64 @@ pub use ktime::{
     tsc_offset, KtimeSnapshot,
 };
 
-// ── Initialisation ────────────────────────────────────────════════════════────
+// ── Initialization ────────────────────────────────────────════════════════────
 
-/// Initialise tout le système de timekeeping.
+/// Initializes the entire timekeeping system.
 ///
-/// Remplace la Phase 2c de `kernel_init()`.
+/// Replaces Phase 2c of `kernel_init()`.
 ///
-/// ## Séquence d'initialisation
-/// 1. **HPET post-memory** : remappage UC + activation du compteur HPET.
-///    Doit être fait après `hybrid::init()` (buddy allocator opérationnel pour map_4k_page).
-/// 2. **Calibration TSC** : fenêtre multi-source avec chaîne de fallback complète.
-///    Écrit sur port 0xE9 la source utilisée pour faciliter le diagnostic.
-/// 3. **Software PLL** : initialisation avec la fréquence calibrée.
-/// 4. **Per-CPU BSP** : offset TSC du BSP (CPU 0) = 0 (référence absolue).
-/// 5. **KtimeState seqlock** : active l'horloge monotone.
-/// 6. **Scheduler clock shim** : compatibilité avec les consommateurs existants.
+/// ## Initialization Sequence
+/// 1. **HPET post-memory**: UC remapping + activation of HPET counter.
+///    Must be done after `hybrid::init()` (buddy allocator operational for map_4k_page).
+/// 2. **TSC calibration**: multi-source window with full fallback chain.
+///    Writes to port 0xE9 the source used to facilitate diagnostics.
+/// 3. **Software PLL**: initialization with calibrated frequency.
+/// 4. **Per-CPU BSP**: BSP (CPU 0) TSC offset = 0 (absolute reference).
+/// 5. **KtimeState seqlock**: activates the monotonic clock.
+/// 6. **Scheduler clock shim**: compatibility with existing consumers.
 ///
 /// # Safety
-/// - Doit être appelé UNE SEULE FOIS depuis le BSP.
-/// - Doit être appelé APRÈS `hybrid::init()` (besoin de l'allocateur buddy).
-/// - Doit être appelé AVANT `scheduler::init()` (tick handler appelle ktime).
+/// - Must be called ONCE from BSP.
+/// - Must be called AFTER `hybrid::init()` (buddy allocator required).
+/// - Must be called BEFORE `scheduler::init()` (tick handler calls ktime).
 #[allow(unused_must_use)]
 pub unsafe fn time_init() {
-    // ── Étape 1 : HPET remappage UC + activation ──────────────────────────────
+    // ── Step 1: HPET UC remapping + activation ────────────────────────────────
     let _ = crate::arch::x86_64::acpi::hpet::init_hpet_post_memory();
 
-    // ── Étape 2 : Calibration TSC via fenêtre temporelle réelle ───────────────
+    // ── Step 2: TSC calibration via real-time window ──────────────────────────
     let tsc_hz = calibration::calibrate_tsc();
 
-    // ── Étape 3 : Software PLL initialisé avec fréquence calibrée ─────────────
+    // ── Step 3: Software PLL initialized with calibrated frequency ────────────
     drift::drift_init(tsc_hz);
 
-    // ── Étape 4 : Offset BSP = 0 (référence SMP) ──────────────────────────────
+    // ── Step 4: BSP offset = 0 (SMP reference) ────────────────────────────────
     percpu::init_bsp_percpu();
 
-    // ── Étape 5 : Lire TSC d'ancrage ─────────────────────────────────────────
+    // ── Step 5: Read anchor TSC ───────────────────────────────────────────────
     let tsc_now = rdtscp_init();
 
-    // ── Étape 6 : Initialiser le seqlock ktime ────────────────────────────────
+    // ── Step 6: Initialize ktime seqlock ──────────────────────────────────────
     ktime::init_ktime(tsc_now, 0, tsc_hz);
 
-    // ── Étape 7 : Scheduler clock compatibility shim ─────────────────────────
+    // ── Step 7: Scheduler clock compatibility shim ────────────────────────────
     crate::scheduler::timer::clock::init(tsc_hz);
 
-    // ── Log diagnostic ────────────────────────────────────────────────────────
+    // ── Diagnostic log ────────────────────────────────────────────────────────
     debug_log_time_init(tsc_hz);
 }
 
-// ── Primitives locales ────────────────────────────────────────────────────────
+// ── Local Primitives ──────────────────────────────────────────────────────────
 
-/// Lit le TSC avec sérialisation complète (RDTSCP + LFENCE).
-/// Utilisé uniquement pour l'ancrage initial dans `time_init()`.
+/// Reads TSC with full serialization (RDTSCP + LFENCE).
+/// Used strictly for initial anchor in `time_init()`.
 #[inline(always)]
 unsafe fn rdtscp_init() -> u64 {
     let lo: u32;
     let hi: u32;
-    // FIX TCG: utilise RDTSC simple (sans RDTSCP ni LFENCE) pour compatibilité QEMU TCG.
-    // RDTSCP peut bloquer sur QEMU TCG si ECX (TSC_AUX) n'est pas initialisé.
-    // LFENCE peut aussi être très lente dans certains modes TCG.
+    // FIX TCG: uses plain RDTSC (without RDTSCP or LFENCE) for QEMU TCG compatibility.
+    // RDTSCP can block on QEMU TCG if ECX (TSC_AUX) is uninitialized.
+    // LFENCE can also be very slow in certain TCG modes.
     core::arch::asm!(
         "rdtsc",
         out("eax") lo,
@@ -114,7 +114,7 @@ unsafe fn rdtscp_init() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Émet "[TIME-INIT hz=XXXXXXXXXXXXXXXX]\n" sur port 0xE9 pour diagnostic QEMU.
+/// Emits "[TIME-INIT hz=XXXXXXXXXXXXXXXX]\n" to port 0xE9 for QEMU diagnostics.
 unsafe fn debug_log_time_init(tsc_hz: u64) {
     #[inline(always)]
     unsafe fn out(b: u8) {
@@ -123,7 +123,7 @@ unsafe fn debug_log_time_init(tsc_hz: u64) {
     for &b in b"[TIME-INIT hz=" {
         out(b);
     }
-    // Écrire tsc_hz en décimal (max 11 digits pour 10 GHz).
+    // Write tsc_hz in decimal (max 11 digits for 10 GHz).
     let mut buf = [0u8; 20];
     let mut n = tsc_hz;
     let mut i = 19usize;

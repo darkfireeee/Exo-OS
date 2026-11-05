@@ -1,38 +1,38 @@
 // kernel/src/arch/x86_64/sched_iface.rs
 //
 // ═════════════════════════════════════════════════════════════════════════════
-// PONT ARCHITECTURE ↔ SCHEDULER — x86_64 (C ABI exports)
+// ARCHITECTURE ↔ SCHEDULER BRIDGE — x86_64 (C ABI exports)
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// ## Rôle
+// ## Role
 //
-// Ce module exporte les fonctions `#[no_mangle] extern "C"` attendues par
-// `scheduler/` via `extern "C"` FFI. Il constitue le seul point de couplage
-// entre les couches :
+// This module exports the `#[no_mangle] extern "C"` functions expected by
+// `scheduler/` via `extern "C"` FFI. It constitutes the only coupling point
+// between layers:
 //
-//   arch/ (transverse, peut appeler n'importe quelle couche)
-//        ↓ exports C ABI
-//   scheduler/ (Couche 1 — NE peut PAS importer arch/ directement, utilise FFI)
+//   arch/ (cross-cutting, can call any layer)
+//        ↓ C ABI exports
+//   scheduler/ (Layer 1 — CANNOT import arch/ directly, uses FFI)
 //
-// ## Fonctions exportées
+// ## Exported Functions
 //
 //   arch_send_reschedule_ipi(target_cpu: u32)
-//       Envoie un IPI reschedule au CPU logique `target_cpu`.
-//       Utilisé par `scheduler::smp::migration` pour déclencher un reschedule
-//       sur le CPU de destination après migration de thread.
+//       Sends a reschedule IPI to logical CPU `target_cpu`.
+//       Used by `scheduler::smp::migration` to trigger a reschedule
+//       on the destination CPU after thread migration.
 //
 //   arch_set_cpu_pstate(cpu: u32, pstate: u32)
-//       Configure le P-state du CPU `cpu` via MSR_IA32_PERF_CTL (0x199).
-//       RÈGLE : MSR writes étant CPU-locaux, l'effet n'est garanti que si
-//       `cpu == arch_current_cpu()`. Pour un CPU distant, une IPI de type
-//       "pstate change" devrait être envoyée — implémentation future.
+//       Configures the P-state of CPU `cpu` via MSR_IA32_PERF_CTL (0x199).
+//       RULE: MSR writes being CPU-local, the effect is only guaranteed if
+//       `cpu == arch_current_cpu()`. For a remote CPU, a "pstate change"
+//       IPI should be sent — future implementation.
 //
-// ## Règles (DOC3)
-//   SCHED-01 : scheduler/ est Couche 1 — ne peut pas importer arch/ directement.
-//   Le pont FFI ici préserve cette séparation.
+// ## Rules (DOC3)
+//   SCHED-01: scheduler/ is Layer 1 — cannot import arch/ directly.
+//   The FFI bridge here preserves this separation.
 //
-// ## Synchronisation avec scheduler/
-//   Si la signature change ici → mettre à jour simultanément :
+// ## Synchronization with scheduler/
+//   If a signature changes here → update simultaneously:
 //     scheduler/smp/migration.rs    (arch_send_reschedule_ipi)
 //     scheduler/energy/frequency.rs (arch_set_cpu_pstate)
 // ═════════════════════════════════════════════════════════════════════════════
@@ -44,18 +44,18 @@ use super::smp::percpu;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes MSR
+// MSR Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Intel MSR IA32_PERF_CTL — bits [7:0] = target P-state
-/// Écriture = demande de changement de fréquence/voltage au matériel
+/// Write = request frequency/voltage change to hardware
 const MSR_IA32_PERF_CTL: u32 = 0x0000_0199;
 
-/// Intel MSR IA32_PERF_STATUS — bits [15:8] = P-state courant
+/// Intel MSR IA32_PERF_STATUS — bits [15:8] = current P-state
 #[allow(dead_code)]
 const MSR_IA32_PERF_STATUS: u32 = 0x0000_0198;
 
-/// Masque du P-state dans PERF_CTL (bits [7:0])
+/// P-state mask in PERF_CTL (bits [7:0])
 const PERF_CTL_PSTATE_MASK: u64 = 0xFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,39 +76,39 @@ pub fn pstate_changes() -> u64 {
 // arch_send_reschedule_ipi — C ABI export
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie un IPI reschedule au CPU logique `target_cpu`.
+/// Sends a reschedule IPI to logical CPU `target_cpu`.
 ///
-/// Séquence :
-/// 1. Lire le LAPIC ID du CPU cible dans `PER_CPU_TABLE[target_cpu]`.
-/// 2. Appeler `apic::ipi::send_ipi_reschedule(lapic_id)`.
+/// Sequence:
+/// 1. Read target CPU's LAPIC ID in `PER_CPU_TABLE[target_cpu]`.
+/// 2. Call `apic::ipi::send_ipi_reschedule(lapic_id)`.
 ///
-/// ## Règle de sécurité
-/// Ne rien faire si `target_cpu >= MAX_CPUS` ou si le CPU n'est pas en ligne.
-/// Ne pas envoyer une IPI à soi-même (le scheduler vérifie déjà cette condition,
-/// mais on l'ajoute ici en défense).
+/// ## Safety Rule
+/// Do nothing if `target_cpu >= MAX_CPUS` or if CPU is not online.
+/// Do not send an IPI to self (the scheduler already checks this condition,
+/// but added here as defense-in-depth).
 ///
-/// ## Utilisateur
-/// `scheduler::smp::migration::request_migration()` — déclenche le reschedule
-/// sur le CPU de destination après avoir mis en file d'attente la migration.
+/// ## Caller
+/// `scheduler::smp::migration::request_migration()` — triggers reschedule
+/// on destination CPU after enqueuing migration.
 ///
 /// # Safety
-/// Appelé par le scheduler lors d'une demande de migration de thread.
+/// Called by the scheduler upon thread migration request.
 #[no_mangle]
 pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
-    // Borne supérieure : ne pas accéder hors du tableau
+    // Upper bound: do not access outside table
     if target_cpu as usize >= percpu::MAX_CPUS {
         return;
     }
 
-    // Lire les données per-CPU du CPU cible
+    // Read per-CPU data of target CPU
     let cpu_data = percpu::per_cpu(target_cpu as usize);
 
-    // Vérifier que le CPU est en ligne
+    // Check that CPU is online
     if !cpu_data.online {
         return;
     }
 
-    // Éviter l'auto-IPI (inutile et peut causer des latences sur certains APIC)
+    // Avoid self-IPI (unnecessary and can cause latency on certain APICs)
     let local_id = percpu::current_cpu_id();
     if target_cpu == local_id {
         return;
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
 
     let lapic_id = cpu_data.lapic_id as u32;
 
-    // Envoyer l'IPI reschedule (voir arch/x86_64/apic/ipi.rs)
+    // Send reschedule IPI (see arch/x86_64/apic/ipi.rs)
     apic::ipi::send_ipi_reschedule(lapic_id);
     RESCHEDULE_IPIS_SENT.fetch_add(1, Ordering::Relaxed);
 }
@@ -125,67 +125,67 @@ pub unsafe extern "C" fn arch_send_reschedule_ipi(target_cpu: u32) {
 // arch_set_cpu_pstate — C ABI export
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configure le P-state du CPU `cpu` via MSR_IA32_PERF_CTL.
+/// Configures the P-state of CPU `cpu` via MSR_IA32_PERF_CTL.
 ///
 /// ## P-state encoding (Intel ACPI/HWP)
-/// - `pstate = 0`  → Performance maximale (fréquence turbo si disponible)
-/// - `pstate = N`  → Décrémentation fréquence (N * 100 MHz typiquement)
-/// - Valeur écrite dans PERF_CTL bits [7:0] = ratio fréquence × 100 MHz
+/// - `pstate = 0`  → Maximum performance (turbo frequency if available)
+/// - `pstate = N`  → Frequency decrementation (N * 100 MHz typically)
+/// - Value written to PERF_CTL bits [7:0] = frequency ratio × 100 MHz
 ///
-/// ## Limitation MSR locale
-/// MSR_IA32_PERF_CTL est un registre LOCAL au CPU : la valeur écrite n'affecte
-/// que le CPU qui exécute l'instruction WRMSR.
+/// ## Local MSR Limitation
+/// MSR_IA32_PERF_CTL is a LOCAL CPU register: the written value affects
+/// only the CPU executing the WRMSR instruction.
 ///
-/// Si `cpu != arch_current_cpu()` → l'écriture est ignorée (avertissement de bord).
-/// Le scheduler/energy/frequency.rs doit s'assurer d'appeler cette fonction
-/// depuis le CPU cible (via le tick handler qui s'exécute sur chaque CPU).
+/// If `cpu != arch_current_cpu()` → write is ignored (edge case warning).
+/// scheduler/energy/frequency.rs must ensure calling this function
+/// from the target CPU (via tick handler running on each CPU).
 ///
-/// ## Utilisateur
-/// `scheduler::energy::frequency::set_pstate()` — appelé depuis le tick handler
-/// ou le gouverneur d'énergie s'exécutant sur le CPU cible.
+/// ## Caller
+/// `scheduler::energy::frequency::set_pstate()` — called from tick handler
+/// or energy governor running on target CPU.
 ///
 /// # Safety
-/// L'appelant doit garantir que l'exécution a lieu sur le processeur cible.
+/// Caller must ensure execution takes place on target processor.
 #[no_mangle]
 pub unsafe extern "C" fn arch_set_cpu_pstate(cpu: u32, pstate: u32) {
-    // Vérification de borne
+    // Bound check
     if cpu as usize >= percpu::MAX_CPUS {
         return;
     }
 
-    // Vérifier que c'est bien un CPU en ligne
+    // Verify CPU is online
     let cpu_data = percpu::per_cpu(cpu as usize);
     if !cpu_data.online {
         return;
     }
 
-    // MSR_IA32_PERF_CTL est spécifique à Intel SpeedStep.
-    // Évite un #GP sur AMD ou hyperviseurs tiers.
+    // MSR_IA32_PERF_CTL is specific to Intel SpeedStep.
+    // Avoids #GP on AMD or third-party hypervisors.
     if cpu_features().vendor != CpuVendor::Intel {
         return;
     }
 
-    // MSR_IA32_PERF_CTL est un registre local au CPU exécutant.
-    // Si cpu != current_cpu, ignorer pour éviter de modifier la fréquence du mauvais cœur.
+    // MSR_IA32_PERF_CTL is a local register to the executing CPU.
+    // If cpu != current_cpu, ignore to avoid modifying the wrong core's frequency.
     let local_id = percpu::current_cpu_id();
     if cpu != local_id {
         return;
     }
 
-    // Garder uniquement les bits valides du P-state (bits [7:0])
+    // Keep only valid P-state bits (bits [7:0])
     let pstate_val = (pstate as u64) & PERF_CTL_PSTATE_MASK;
 
-    // Lire le PERF_CTL courant pour ne modifier que les bits de P-state
-    // et préserver les autres bits (bit 16 = IDA Disengage sur certains Intel)
+    // Read current PERF_CTL to modify only P-state bits
+    // and preserve other bits (bit 16 = IDA Disengage on some Intels)
     //
-    // SAFETY: RDMSR depuis Ring 0 — MSR_IA32_PERF_CTL supporté sur tout Intel
-    // avec SpeedStep. Sur AMD, le MSR est différent (PERF_CTL = 0xC001_0062)
-    // mais la logique d'appel du scheduler est la même.
-    // On masque les bits [7:0] et on écrit le nouveau P-state.
+    // SAFETY: RDMSR from Ring 0 — MSR_IA32_PERF_CTL supported on all Intel
+    // with SpeedStep. On AMD, MSR is different (PERF_CTL = 0xC001_0062)
+    // but scheduler calling logic is identical.
+    // Mask bits [7:0] and write new P-state.
     let current = msr::read_msr(MSR_IA32_PERF_CTL);
     let new_val = (current & !PERF_CTL_PSTATE_MASK) | pstate_val;
 
-    // SAFETY: WRMSR depuis Ring 0 — modifie uniquement la fréquence cible
+    // SAFETY: WRMSR from Ring 0 — modifies only target frequency
     msr::write_msr(MSR_IA32_PERF_CTL, new_val);
     PSTATE_CHANGES.fetch_add(1, Ordering::Relaxed);
 }

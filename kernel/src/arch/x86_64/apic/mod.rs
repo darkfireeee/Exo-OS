@@ -1,12 +1,12 @@
 //! # arch/x86_64/apic — Advanced Programmable Interrupt Controller
 //!
-//! Gestion complète du LAPIC (Local APIC) et de l'I/O APIC pour Exo-OS.
+//! Complete management of LAPIC (Local APIC) and I/O APIC for Exo-OS.
 //!
-//! ## Sous-modules
-//! - `local_apic` : LAPIC MMIO + x2APIC MSR
-//! - `io_apic`    : I/O APIC MMIO, redirection table
-//! - `x2apic`     : détection + bascule x2APIC
-//! - `ipi`        : envoi d'IPIs vers les autres CPUs
+//! ## Submodules
+//! - `local_apic`: LAPIC MMIO + x2APIC MSR
+//! - `io_apic`: I/O APIC MMIO, redirection table
+//! - `x2apic`: detection + switch to x2APIC
+//! - `ipi`: sending IPIs to other CPUs
 
 pub mod io_apic;
 pub mod ipi;
@@ -21,13 +21,13 @@ pub use local_apic::{init_local_apic, lapic_id, ApicMode};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-/// Mode APIC courant du système
+/// Current APIC mode of the system
 static APIC_MODE: AtomicU8 = AtomicU8::new(local_apic::ApicMode::XApic as u8);
 
 #[inline(always)]
 fn detect_apic_mode() -> ApicMode {
     let features = super::cpu::features::cpu_features();
-    // SAFETY: IA32_APIC_BASE MSR est lisible en ring0.
+    // SAFETY: IA32_APIC_BASE MSR is readable in ring 0.
     let apic_base = unsafe { super::cpu::msr::read_msr(super::cpu::msr::MSR_IA32_APIC_BASE) };
     let x2apic_enabled = (apic_base & (1 << 10)) != 0;
 
@@ -38,35 +38,35 @@ fn detect_apic_mode() -> ApicMode {
     }
 }
 
-/// Initialise l'APIC system complet (BSP only — appelé depuis boot/early_init)
+/// Initializes the entire APIC system (BSP only — called from boot/early_init)
 ///
-/// Séquence :
-/// 1. Détecter le support x2APIC (CPUID)
-/// 2. Activer LAPIC (x2APIC ou xAPIC MMIO)
-/// 3. Configurer le vecteur spurious
-/// 4. Mettre en place le timer LAPIC
+/// Sequence:
+/// 1. Detect x2APIC support (CPUID)
+/// 2. Enable LAPIC (x2APIC or xAPIC MMIO)
+/// 3. Configure spurious vector
+/// 4. Set up LAPIC timer
 pub fn init_apic_system() {
     let features = super::cpu::features::cpu_features();
 
     match detect_apic_mode() {
         ApicMode::X2Apic => {
-            // Déjà en x2APIC (firmware) : on normalise l'état LVT.
+            // Already in x2APIC (firmware): normalize LVT state.
             x2apic::mask_all_lvt_x2apic();
             APIC_MODE.store(ApicMode::X2Apic as u8, Ordering::Release);
         }
         ApicMode::XApic => {
-            // init_local_apic() : active xAPIC + masque TOUS les LVT (LINT0, THERMAL, PERF, CMCI,
-            // ERROR). Sans cela, le BIOS QEMU peut laisser LINT0 avec vecteur 0x8E non-masqué :
-            // quand le PIC envoie une IRQ, LINT0 délivre vecteur 0x8E → IDT[0x8E] absent → #GP.
+            // init_local_apic(): enables xAPIC + masks ALL LVTs (LINT0, THERMAL, PERF, CMCI,
+            // ERROR). Without this, QEMU BIOS may leave LINT0 with unmasked vector 0x8E:
+            // when PIC sends an IRQ, LINT0 delivers vector 0x8E → missing IDT[0x8E] → #GP.
             local_apic::init_local_apic();
             APIC_MODE.store(ApicMode::XApic as u8, Ordering::Release);
         }
     }
 
-    // Configurer vecteur spurious (0xFF) + soft-enable LAPIC
+    // Configure spurious vector (0xFF) + soft-enable LAPIC
     local_apic::set_spurious_vector(super::idt::VEC_SPURIOUS);
 
-    // Timer : utiliser TSC-Deadline si disponible, sinon one-shot
+    // Timer: use TSC-Deadline if available, otherwise one-shot
     if features.has_tsc_deadline() {
         local_apic::timer_init_tsc_deadline(super::idt::VEC_IRQ_TIMER);
     } else {
@@ -74,11 +74,11 @@ pub fn init_apic_system() {
     }
 }
 
-/// Initialise le LAPIC de l'AP courant (appelé depuis smp/init)
+/// Initializes current AP's LAPIC (called from smp/init)
 pub fn init_ap_local_apic() {
     match apic_mode() {
         ApicMode::X2Apic => {
-            // AP déjà en x2APIC si le mode global est x2APIC.
+            // AP already in x2APIC if global mode is x2APIC.
             x2apic::mask_all_lvt_x2apic();
         }
         ApicMode::XApic => {
@@ -96,13 +96,13 @@ pub fn apic_mode() -> ApicMode {
     }
 }
 
-/// Retourne `true` si x2APIC est actif
+/// Returns `true` if x2APIC is active
 #[inline(always)]
 pub fn is_x2apic() -> bool {
     apic_mode() == ApicMode::X2Apic
 }
 
-/// EOI avec dispatch automatique xAPIC/x2APIC
+/// EOI with automatic xAPIC/x2APIC dispatch
 #[inline(always)]
 pub fn eoi() {
     if is_x2apic() {

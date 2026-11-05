@@ -1,18 +1,18 @@
-//! # arch/x86_64/boot/multiboot2.rs — Parseur Multiboot2
+//! # arch/x86_64/boot/multiboot2.rs — Multiboot2 Parser
 //!
-//! Parse les tags Multiboot2 pour extraire :
-//! - La memory map (mémoire disponible, réservée, ACPI, etc.)
-//! - L'adresse RSDP
-//! - Le nom du bootloader
-//! - La command line
+//! Parses Multiboot2 tags to extract:
+//! - Memory map (available memory, reserved, ACPI, etc.)
+//! - RSDP address
+//! - Bootloader name
+//! - Command line
 //!
-//! ## Format Multiboot2
-//! Structure à l'adresse passée par le bootloader :
-//! - `total_size` (u32) + `reserved` (u32) = 8 octets header
-//! - Tags de longueur variable, alignés sur 8 octets
-//! - Tag type 0 = fin de liste
+//! ## Multiboot2 Format
+//! Structure at the address passed by the bootloader:
+//! - `total_size` (u32) + `reserved` (u32) = 8 header bytes
+//! - Variable-length tags, aligned on 8 bytes
+//! - Tag type 0 = end of list
 
-// ── Types de tags Multiboot2 ──────────────────────────────────────────────────
+// ── Multiboot2 Tag Types ──────────────────────────────────────────────────
 
 const TAG_END: u32 = 0;
 const TAG_CMDLINE: u32 = 1;
@@ -56,7 +56,7 @@ struct Mb2Tag {
     size: u32,
 }
 
-/// Entrée de la memory map Multiboot2
+/// Multiboot2 memory map entry
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct MmapEntry {
@@ -66,19 +66,19 @@ pub struct MmapEntry {
     pub _reserved: u32,
 }
 
-/// Informations extraites de la structure Multiboot2
+/// Information extracted from the Multiboot2 structure
 #[derive(Debug, Clone, Copy)]
 pub struct Multiboot2Info {
     pub rsdp_phys: u64,
     pub total_memory_kb: u64,
-    pub cmdline_ptr: u64, // pointeur vers la string null-terminée
+    pub cmdline_ptr: u64, // pointer to null-terminated string
     pub bootloader_ptr: u64,
-    pub mmap_ptr: u64, // pointeur vers le first MmapEntry
+    pub mmap_ptr: u64, // pointer to the first MmapEntry
     pub mmap_count: u32,
     pub framebuffer_phys_addr: u64,
     pub framebuffer_width: u32,
     pub framebuffer_height: u32,
-    pub framebuffer_stride: u32, // pixels par ligne
+    pub framebuffer_stride: u32, // pixels per line
     pub framebuffer_bpp: u32,
     pub framebuffer_format: MultibootFramebufferFormat,
     pub framebuffer_size_bytes: u64,
@@ -87,7 +87,7 @@ pub struct Multiboot2Info {
     pub module_cmdline_ptr: u64,
 }
 
-/// Format de pixel rapporté par le tag framebuffer Multiboot2.
+/// Pixel format reported by the Multiboot2 framebuffer tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultibootFramebufferFormat {
     None,
@@ -119,30 +119,30 @@ impl Multiboot2Info {
     }
 }
 
-// ── Parseur ───────────────────────────────────────────────────────────────────
+// ── Parser ───────────────────────────────────────────────────────────────────
 
-/// Parse la structure Multiboot2 à l'adresse physique `mb2_phys`
+/// Parses the Multiboot2 structure at physical address `mb2_phys`
 ///
 /// # Safety
-/// L'adresse doit être valide et en mémoire identity-mappée.
+/// The address must be valid and in identity-mapped memory.
 pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
     let mut info = Multiboot2Info::zeroed();
     if mb2_phys == 0 {
         return info;
     }
 
-    // SAFETY: adresse passée par le BSP bootloader, identity-mappée
+    // SAFETY: address passed by BSP bootloader, identity-mapped
     let header = unsafe { &*(mb2_phys as *const Mb2Header) };
     let total_size = header.total_size as usize;
     if total_size < 8 {
         return info;
     }
 
-    let mut offset: usize = 8; // après le header Mb2Header
+    let mut offset: usize = 8; // after Mb2Header
 
     while offset + 8 <= total_size {
         let tag_addr = mb2_phys as usize + offset;
-        // SAFETY: offset dans la structure Multiboot2 (total_size vérifié)
+        // SAFETY: offset within the Multiboot2 structure (total_size checked)
         let tag = unsafe { &*(tag_addr as *const Mb2Tag) };
         if tag.tag_type == TAG_END {
             break;
@@ -153,7 +153,7 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
             break;
         }
 
-        let data_addr = tag_addr + 8; // après les 8 octets type+size
+        let data_addr = tag_addr + 8; // after 8 bytes type+size
 
         match tag.tag_type {
             TAG_CMDLINE => {
@@ -174,8 +174,8 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
                 }
             }
             TAG_BASIC_MEMINFO => {
-                // u32 mem_lower (KiB en dessous de 1MiB) + u32 mem_upper (KiB au-dessus)
-                // SAFETY: taille fixe connue
+                // u32 mem_lower (KiB below 1MiB) + u32 mem_upper (KiB above)
+                // SAFETY: known fixed size
                 let lower = unsafe { core::ptr::read_volatile(data_addr as *const u32) } as u64;
                 let upper =
                     unsafe { core::ptr::read_volatile((data_addr + 4) as *const u32) } as u64;
@@ -183,7 +183,7 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
             }
             TAG_MMAP => {
                 // u32 entry_size + u32 entry_version + entries...
-                // SAFETY: data_addr est dans la zone de tag MB2 validée (tag_size > 8) ; lecture volatile de u32 alignée.
+                // SAFETY: data_addr is within the validated MB2 tag region (tag_size > 8); volatile read of aligned u32.
                 let entry_size =
                     unsafe { core::ptr::read_volatile(data_addr as *const u32) } as usize;
                 if entry_size < core::mem::size_of::<MmapEntry>() {
@@ -195,10 +195,10 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
                 info.mmap_ptr = entries_start as u64;
                 info.mmap_count = n_entries as u32;
 
-                // Calculer total mémoire disponible
+                // Compute total available memory
                 for i in 0..n_entries {
                     let entry_addr = entries_start + i * entry_size;
-                    // SAFETY: index dans la table mémoire
+                    // SAFETY: index in the memory table
                     let entry = unsafe { &*(entry_addr as *const MmapEntry) };
                     if entry.entry_type == MMAP_AVAILABLE {
                         info.total_memory_kb += entry.length / 1024;
@@ -209,9 +209,9 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
                 info.rsdp_phys = data_addr as u64;
             }
             TAG_FRAMEBUFFER if tag_size >= 30 => {
-                // SAFETY: le tag a déjà été validé contre total_size.
+                // SAFETY: the tag was already validated against total_size.
                 let fb_addr = unsafe { core::ptr::read_unaligned(data_addr as *const u64) };
-                // SAFETY: offsets fixes dans le tag framebuffer MB2.
+                // SAFETY: fixed offsets in the MB2 framebuffer tag.
                 let fb_pitch =
                     unsafe { core::ptr::read_unaligned((data_addr + 8) as *const u32) };
                 let fb_width =
@@ -225,7 +225,7 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
                 let bytes_per_pixel = ((fb_bpp as u32).saturating_add(7) / 8).max(1);
 
                 let fb_format = if fb_type == 1 && tag_size >= 36 {
-                    // Direct RGB: 6 bytes supplémentaires.
+                    // Direct RGB: 6 additional bytes.
                     let red_pos =
                         unsafe { core::ptr::read_unaligned((data_addr + 24) as *const u8) };
                     let red_size =
@@ -276,19 +276,19 @@ pub fn parse_multiboot2(mb2_phys: u64) -> Multiboot2Info {
             _ => {}
         }
 
-        // Aligner l'offset suivant sur 8 octets
+        // Align next offset to 8 bytes
         offset += (tag_size + 7) & !7;
     }
 
     info
 }
 
-/// Retourne un slice des entrées memory map depuis un `Multiboot2Info`
+/// Returns a slice of memory map entries from a `Multiboot2Info`
 pub fn mmap_entries(info: &Multiboot2Info) -> &'static [MmapEntry] {
     if info.mmap_ptr == 0 || info.mmap_count == 0 {
         return &[];
     }
-    // SAFETY: adresses validées lors du parsing
+    // SAFETY: addresses validated during parsing
     unsafe {
         core::slice::from_raw_parts(info.mmap_ptr as *const MmapEntry, info.mmap_count as usize)
     }

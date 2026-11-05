@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch::x86_64::{apic, halt_cpu, idt, memory_iface, paging, read_cr2, read_cr3, smp};
 use core::concat;
 
-// ── Macros ASM pour les stubs d'interruption ──────────────────────────────────
+// ── ASM Macros for Interrupt Stubs ───────────────────────────────────────────
 
 macro_rules! define_exception_handler_errcode {
     ($name:ident, $rust_handler:ident) => {
@@ -13,17 +13,17 @@ macro_rules! define_exception_handler_errcode {
             concat!(".global ", stringify!($name)),
             concat!(".type ", stringify!($name), ", @function"),
             concat!(stringify!($name), ":"),
-            // À l'entrée du handler, le CPU a pousé (de bas à haut) :
+            // On handler entry, the CPU pushed (from low to high):
             // [rsp+ 0] = error_code
             // [rsp+ 8] = RIP
             // [rsp+16] = CS  ← RPL bits [1:0] = ring level
             // [rsp+24] = RFLAGS
-            // [rsp+32] = RSP  (si changement Ring 3→Ring 0)
-            // [rsp+40] = SS   (si changement Ring 3→Ring 0)
+            // [rsp+32] = RSP  (if Ring 3 → Ring 0 switch)
+            // [rsp+40] = SS   (if Ring 3 → Ring 0 switch)
             "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
-            "jz   1f",                      // ZF=1 ⇒ Ring 0 (kernel), sauter swapgs
+            "jz   1f",                      // ZF=1 ⇒ Ring 0 (kernel), skip swapgs
             "swapgs",
-            "mov  gs:[0x50], rax", // préserver rax pendant le switch CR3
+            "mov  gs:[0x50], rax", // preserve rax during CR3 switch
             "mov  rax, gs:[0x40]", // kpti_kernel_cr3
             "test rax, rax",
             "jz   3f",
@@ -31,7 +31,7 @@ macro_rules! define_exception_handler_errcode {
             "3:",
             "mov  rax, gs:[0x50]",
             "1:",
-            // Sauvegarder registres callee-saved + scratch
+            // Save callee-saved + scratch registers
             "push rax",
             "push rbx",
             "push rcx",
@@ -47,15 +47,15 @@ macro_rules! define_exception_handler_errcode {
             "push r13",
             "push r14",
             "push r15",
-            // ExceptionFrame* dans rdi. Le CPU peut entrer ici avec une pile
-            // dont l'alignement n'est pas celui attendu par l'ABI SysV; aligner
-            // la pile d'appel Rust sans déplacer la frame que le handler reçoit.
+            // ExceptionFrame* in rdi. The CPU may enter here with a stack
+            // alignment differing from SysV ABI requirements; align the Rust
+            // call stack without moving the frame that the handler receives.
             "mov  rdi, rsp",
             "mov  r12, rsp",
             "and  rsp, -16",
             concat!("call ", stringify!($rust_handler)),
             "mov  rsp, r12",
-            // Restaurer registres
+            // Restore registers
             "pop  r15",
             "pop  r14",
             "pop  r13",
@@ -71,11 +71,11 @@ macro_rules! define_exception_handler_errcode {
             "pop  rcx",
             "pop  rbx",
             "pop  rax",
-            // Dépiler error_code
+            // Pop error_code
             "add  rsp, 8",
-            // Après add rsp,8 : [rsp+0]=RIP, [rsp+8]=CS, [rsp+16]=RFLAGS
-            // Vérifier CS RPL pour le SWAPGS de sortie
-            "test qword ptr [rsp + 8], 3", // CS & 3 != 0 ⇒ retour Ring 3
+            // After add rsp,8: [rsp+0]=RIP, [rsp+8]=CS, [rsp+16]=RFLAGS
+            // Check CS RPL for exit SWAPGS
+            "test qword ptr [rsp + 8], 3", // CS & 3 != 0 ⇒ return Ring 3
             "jz   2f",
             "mov  gs:[0x50], rax",
             "mov  rax, gs:[0x48]", // kpti_user_cr3
@@ -91,25 +91,25 @@ macro_rules! define_exception_handler_errcode {
     };
 }
 
-/// Génère un stub d'entrée exception SANS error code (pousse 0 synthétique)
+/// Generates an exception entry stub WITHOUT error code (pushes synthetic 0)
 ///
-/// Après "push 0" (synthetic error_code), la pile est identique au cas errcode :
-/// [rsp+ 0] = 0  (erreur synthétique)
+/// After "push 0" (synthetic error_code), the stack layout is identical to the errcode case:
+/// [rsp+ 0] = 0  (synthetic error)
 /// [rsp+ 8] = RIP
-/// [rsp+16] = CS  ← mêmes offsets que le cas errcode
+/// [rsp+16] = CS  ← same offsets as errcode case
 macro_rules! define_exception_handler_no_errcode {
     ($name:ident, $rust_handler:ident) => {
         core::arch::global_asm!(
             concat!(".global ", stringify!($name)),
             concat!(".type ", stringify!($name), ", @function"),
             concat!(stringify!($name), ":"),
-            // Pousser 0 comme error_code synthétique
+            // Push 0 as synthetic error_code
             "push 0",
             // [rsp+ 0]=0, [rsp+ 8]=RIP, [rsp+16]=CS, [rsp+24]=RFLAGS ...
             "test qword ptr [rsp + 16], 3", // CS & 3 != 0 ⇒ Ring 3
             "jz   1f",
             "swapgs",
-            "mov  gs:[0x50], rax", // préserver rax pendant le switch CR3
+            "mov  gs:[0x50], rax", // preserve rax during CR3 switch
             "mov  rax, gs:[0x40]", // kpti_kernel_cr3
             "test rax, rax",
             "jz   3f",
@@ -153,7 +153,7 @@ macro_rules! define_exception_handler_no_errcode {
             "pop  rbx",
             "pop  rax",
             "add  rsp, 8",
-            // Après add rsp,8 : [rsp+0]=RIP, [rsp+8]=CS
+            // After add rsp,8: [rsp+0]=RIP, [rsp+8]=CS
             "test qword ptr [rsp + 8], 3", // CS RPL bits
             "jz   2f",
             "mov  gs:[0x50], rax",
@@ -170,7 +170,7 @@ macro_rules! define_exception_handler_no_errcode {
     };
 }
 
-// Stubs ASM pour toutes les exceptions
+// ASM stubs for all exceptions
 define_exception_handler_no_errcode!(exc_divide_error_handler, do_divide_error);
 define_exception_handler_no_errcode!(exc_debug_handler, do_debug);
 define_exception_handler_no_errcode!(exc_nmi_handler, do_nmi);
@@ -192,7 +192,7 @@ define_exception_handler_no_errcode!(exc_simd_fp_handler, do_simd_fp);
 define_exception_handler_no_errcode!(exc_virtualization_handler, do_virtualization);
 define_exception_handler_errcode!(exc_ctrl_protection_handler, do_ctrl_protection);
 
-// IRQ et IPI
+// IRQ and IPI
 define_exception_handler_no_errcode!(irq_timer_handler, do_irq_timer);
 define_exception_handler_no_errcode!(irq_1_handler, do_irq_1);
 define_exception_handler_no_errcode!(irq_2_handler, do_irq_2);

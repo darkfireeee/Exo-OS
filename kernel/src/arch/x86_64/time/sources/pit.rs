@@ -1,107 +1,107 @@
 // kernel/src/arch/x86_64/time/sources/pit.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Source PIT — Programmable Interval Timer 8254 (fallback ultime)
+// PIT source — Programmable Interval Timer 8254 (ultimate fallback)
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Architecture PIT (Intel 8254)
-//   Fréquence d'entrée : 14.31818 MHz / 12 = 1.193182 MHz.
-//   3 canaux :
-//     Canal 0 (0x40) : générateur d'IRQ0 (timer système). Mode 3 par défaut.
-//     Canal 1 (0x41) : DRAM refresh (obsolète, ignoré).
-//     Canal 2 (0x42) : PC speaker / calibration TSC.
-//   Port de contrôle : 0x43 (OCW).
-//   Port gate/status  : 0x61 (bits 0 et 1 contrôlent canal 2, bit 5 = OUT2).
+// ## PIT Architecture (Intel 8254)
+//   Input frequency: 14.31818 MHz / 12 = 1.193182 MHz.
+//   3 channels:
+//     Channel 0 (0x40): IRQ0 generator (system timer). Mode 3 by default.
+//     Channel 1 (0x41): DRAM refresh (obsolete, ignored).
+//     Channel 2 (0x42): PC speaker / TSC calibration.
+//   Control port: 0x43 (OCW).
+//   Gate/status port: 0x61 (bits 0 and 1 control channel 2, bit 5 = OUT2).
 //
-// ## Modes d'opération (canal 2 pour calibration)
-//   Mode 0 (One-Shot) : compte de N à 0, OUTPUT passe haut quand done.
-//     → Utilisé pour la calibration TSC : attendre bit 5 du port 0x61.
-//   Mode 2 (Rate Generator) : recharge automatique, périodique.
-//   Mode 3 (Square Wave) : carré symétrique (mode par défaut du canal 0).
+// ## Operation modes (channel 2 for calibration)
+//   Mode 0 (One-Shot): counts down from N to 0, OUTPUT goes HIGH when done.
+//     -> Used for TSC calibration: wait for bit 5 of port 0x61.
+//   Mode 2 (Rate Generator): automatic reload, periodic.
+//   Mode 3 (Square Wave): symmetric square wave (default mode for channel 0).
 //
-// ## Commande OCW (0x43)
-//   Bits [7:6] : canal (00=0, 01=1, 10=2, 11=readback)
-//   Bits [5:4] : mode accès (01=LSB, 10=MSB, 11=LSB puis MSB)
-//   Bits [3:1] : mode opération (000=0, 001=1, 010=2, 011=3, 100=4, 101=5)
-//   Bit  [0]   : format (0=binaire, 1=BCD)
+// ## OCW Command (0x43)
+//   Bits [7:6]: channel (00=0, 01=1, 10=2, 11=readback)
+//   Bits [5:4]: access mode (01=LSB, 10=MSB, 11=LSB then MSB)
+//   Bits [3:1]: operating mode (000=0, 001=1, 010=2, 011=3, 100=4, 101=5)
+//   Bit  [0]  : format (0=binary, 1=BCD)
 //
-//   Exemple : 0xB0 = 1011_0000 = canal 2, LSB+MSB, mode 0, binaire
-//             0x34 = 0011_0100 = canal 0, LSB+MSB, mode 2, binaire
+//   Example: 0xB0 = 1011_0000 = channel 2, LSB+MSB, mode 0, binary
+//            0x34 = 0011_0100 = channel 0, LSB+MSB, mode 2, binary
 //
-// ## Détection QEMU/KVM (RÈGLE PIT-QEMU-01)
-//   Sur QEMU TCG (émulation pure), le PIT est émulé mais peut avancer très lentement
-//   selon le host. Sur QEMU KVM, il est émulé par le kernel → timing correct.
-//   Détection : comparer un busy-wait très court (1000 ticks PIT) avec la durée
-//   TSC mesurée. Si TSC n'a pas avancé après 100 µs équivalent → QEMU TCG suspecté.
+// ## QEMU/KVM detection (RULE PIT-QEMU-01)
+//   On QEMU TCG (pure emulation), the PIT is emulated but can progress very slowly
+//   depending on host. On QEMU KVM, it is emulated by the kernel -> accurate timing.
+//   Detection: compare a very short busy-wait (1000 PIT ticks) with the measured
+//   TSC duration. If TSC has not advanced after 100 µs equivalent -> QEMU TCG suspected.
 //
-// ## Qualité de calibration
-//   Le PIT est peu précis (fréquence ±50 ppm) et le busy-wait est perturbé par
-//   les IRQs si les interruptions ne sont pas masquées (CLI).
-//   Rating 50 (minimum acceptable pour la calibration de fallback).
-//   Si le PIT ne répond pas après 200M iters → retourner None (QEMU TCG).
+// ## Calibration quality
+//   The PIT has low accuracy (frequency ±50 ppm) and busy-waiting is perturbed by
+//   IRQs if interrupts are not masked (CLI).
+//   Rating 50 (acceptable minimum for fallback calibration).
+//   If the PIT does not respond after 200M iters -> return None (QEMU TCG).
 // ════════════════════════════════════════════════════════════════════════════════
 
 use super::ClockSource;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-// ── Ports PIT ─────────────────────────────────────────────────────────────────
+// ── PIT ports ─────────────────────────────────────────────────────────────────
 
-const PIT_CHANNEL0: u16 = 0x40; // Canal 0 (timer système, IRQ0)
+const PIT_CHANNEL0: u16 = 0x40; // Channel 0 (system timer, IRQ0)
 #[allow(dead_code)]
-const PIT_CHANNEL1: u16 = 0x41; // Canal 1 (DRAM refresh, ignoré)
-const PIT_CHANNEL2: u16 = 0x42; // Canal 2 (speaker / calibration)
-const PIT_CONTROL: u16 = 0x43; // Register de contrôle (OCW)
-const PIT_GATE: u16 = 0x61; // Port speaker/gate pour canal 2
+const PIT_CHANNEL1: u16 = 0x41; // Channel 1 (DRAM refresh, ignored)
+const PIT_CHANNEL2: u16 = 0x42; // Channel 2 (speaker / calibration)
+const PIT_CONTROL: u16 = 0x43; // Control register (OCW)
+const PIT_GATE: u16 = 0x61; // Speaker/gate port for channel 2
 
-// ── Bits du port 0x61 ─────────────────────────────────────────────────────────
+// ── Port 0x61 bits ────────────────────────────────────────────────────────────
 
-const PIT_GATE61_GATE2: u8 = 1 << 0; // 1 = Gate canal 2 activé
-const PIT_GATE61_SPKR: u8 = 1 << 1; // 1 = Canal 2 connecté au speaker
-const PIT_GATE61_OUT2: u8 = 1 << 5; // 1 = Sortie canal 2 à HIGH (fin one-shot)
+const PIT_GATE61_GATE2: u8 = 1 << 0; // 1 = Channel 2 gate enabled
+const PIT_GATE61_SPKR: u8 = 1 << 1; // 1 = Channel 2 connected to speaker
+const PIT_GATE61_OUT2: u8 = 1 << 5; // 1 = Channel 2 output is HIGH (end of one-shot)
 
-// ── Commandes OCW ─────────────────────────────────────────────────────────────
+// ── OCW commands ──────────────────────────────────────────────────────────────
 
-/// Canal 2, LSB+MSB, Mode 0 (one-shot), Binaire.
+/// Channel 2, LSB+MSB, Mode 0 (one-shot), Binary.
 const PIT_OCW_CH2_MODE0: u8 = 0xB0;
-/// Canal 0, LSB+MSB, Mode 2 (rate generator), Binaire.
+/// Channel 0, LSB+MSB, Mode 2 (rate generator), Binary.
 const PIT_OCW_CH0_MODE2: u8 = 0x34;
-/// Canal 2, Latch commande (pour lire la valeur courante).
+/// Channel 2, Latch command (to read current value).
 const PIT_OCW_CH2_LATCH: u8 = 0x80;
 
-// ── Constantes de calibration ─────────────────────────────────────────────────
+// ── Calibration constants ─────────────────────────────────────────────────────
 
-/// Fréquence PIT en Hz (fixe par spec ISA 8254).
+/// PIT frequency in Hz (fixed per ISA 8254 spec).
 pub const PIT_FREQ_HZ: u64 = 1_193_182;
-/// Ticks PIT pour ≈10ms de mesure (PIT_FREQ_HZ / 100 = 11931).
+/// PIT ticks for ≈10ms measurement (PIT_FREQ_HZ / 100 = 11931).
 const PIT_COUNT_10MS: u16 = 11_931;
-/// Borne TSC de secours pour attendre la fin d'un one-shot de 10 ms.
-/// 200 M cycles couvrent au moins 20 ms jusque 10 GHz meme avant calibration.
+/// Fallback TSC bound for awaiting completion of a 10 ms one-shot.
+/// 200 M cycles cover at least 20 ms up to 10 GHz even before calibration.
 const PIT_WAIT_TIMEOUT_FALLBACK_CYCLES: u64 = 200_000_000;
 
-// ── État PIT ──────────────────────────────────────────────────────────────────
+// ── PIT state ─────────────────────────────────────────────────────────────────
 
-/// État de la dernière calibration PIT.
+/// State of last PIT calibration.
 #[derive(Debug, Clone, Copy)]
 pub struct PitCalibrationResult {
-    /// Fréquence TSC estimée via PIT (Hz).
+    /// Estimated TSC frequency via PIT (Hz).
     pub tsc_hz: u64,
-    /// Ticks TSC mesurés pendant PIT_COUNT_10MS ticks PIT.
+    /// Measured TSC ticks during PIT_COUNT_10MS PIT ticks.
     pub tsc_delta: u64,
-    /// `true` si la mesure est dans les limites de confiance.
+    /// `true` if measurement is within confidence bounds.
     pub valid: bool,
-    /// Indicateur de qualité : 0 (invalide) à 100 (parfait).
+    /// Quality indicator: 0 (invalid) to 100 (perfect).
     pub quality: u8,
-    /// QEMU TCG suspecté (PIT bloqué ou drift anormal).
+    /// Suspected QEMU TCG (blocked PIT or abnormal drift).
     pub qemu_tcg_suspect: bool,
 }
 
-// ── Globales ──────────────────────────────────────────────────────────────────
+// ── Globals ───────────────────────────────────────────────────────────────────
 
 static PIT_QEMU_TCG_DETECTED: AtomicBool = AtomicBool::new(false);
 static PIT_LAST_QUALITY: AtomicU32 = AtomicU32::new(0);
 static PIT_CALIBRATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
-// ── Source PIT ClockSource ────────────────────────────────────────────────────
+// ── PIT ClockSource source ────────────────────────────────────────────────────
 
 pub struct PitSource;
 
@@ -110,7 +110,7 @@ impl ClockSource for PitSource {
         "PIT"
     }
     fn rating(&self) -> u32 {
-        // Rating réduit à 30 si QEMU TCG détecté (signal non fiable).
+        // Reduced rating to 30 if QEMU TCG detected (unreliable signal).
         if PIT_QEMU_TCG_DETECTED.load(Ordering::Relaxed) {
             30
         } else {
@@ -119,7 +119,7 @@ impl ClockSource for PitSource {
     }
 
     fn read(&self) -> u64 {
-        // Latch canal 2, lire LSB+MSB (mode compteur décrémenté).
+        // Latch channel 2, read LSB+MSB (down-counter mode).
         read_latch_ch2() as u64
     }
 
@@ -132,10 +132,10 @@ impl ClockSource for PitSource {
     }
 }
 
-// ── Lecture PIT ───────────────────────────────────────────────────────────────
+// ── PIT read ──────────────────────────────────────────────────────────────────
 
-/// Lit la valeur latched du canal 2 (count courant).
-/// Envoie la commande de latch puis lit LSB+MSB.
+/// Reads latched value of channel 2 (current count).
+/// Sends latch command then reads LSB+MSB.
 pub fn read_latch_ch2() -> u16 {
     unsafe {
         outb_raw(PIT_CONTROL, PIT_OCW_CH2_LATCH);
@@ -147,8 +147,8 @@ pub fn read_latch_ch2() -> u16 {
     }
 }
 
-/// Lit la valeur du canal 2 sans latch (lecture en cours d'opération).
-/// Peut produire des valeurs instables si le compteur se modifie entre les lectures.
+/// Reads channel 2 value without latch (reading during operation).
+/// May produce unstable values if counter changes between reads.
 pub fn read_ch2_raw() -> u16 {
     unsafe {
         let lo = inb_raw(PIT_CHANNEL2);
@@ -157,42 +157,42 @@ pub fn read_ch2_raw() -> u16 {
     }
 }
 
-// ── Configuration PIT ─────────────────────────────────────────────────────────
+// ── PIT configuration ─────────────────────────────────────────────────────────
 
-/// Configure le canal 2 en mode 0 (one-shot) avec la durée donnée.
-/// Le canal 2 est utilisé pour la calibration TSC (pas d'IRQ — lecture polling).
+/// Configures channel 2 in mode 0 (one-shot) with the given count.
+/// Channel 2 is used for TSC calibration (no IRQ — polled reading).
 ///
-/// # Sécurité
-/// Cette fonction modifie les ports I/O PIT. Ne pas appeler depuis un contexte
-/// où les interruptions sont actives (CLI requis avant calibration).
+/// # Safety
+/// This function modifies PIT I/O ports. Do not call from a context
+/// where interrupts are active (CLI required before calibration).
 pub fn setup_ch2_oneshot(count: u16) {
     unsafe {
-        // Désactiver gate canal 2 pendant la configuration.
+        // Disable channel 2 gate during configuration.
         let gate = inb_raw(PIT_GATE);
         outb_raw(PIT_GATE, gate & !(PIT_GATE61_GATE2 | PIT_GATE61_SPKR));
         io_delay();
 
-        // Configurer canal 2 : mode 0, LSB+MSB, binaire.
+        // Configure channel 2: mode 0, LSB+MSB, binary.
         outb_raw(PIT_CONTROL, PIT_OCW_CH2_MODE0);
         io_delay();
 
-        // Charger le compteur LSB puis MSB.
+        // Load counter: LSB then MSB.
         outb_raw(PIT_CHANNEL2, (count & 0xFF) as u8);
         io_delay();
         outb_raw(PIT_CHANNEL2, (count >> 8) as u8);
         io_delay();
 
-        // Activer gate canal 2 (démarre le comptage).
+        // Enable channel 2 gate (starts counting).
         let gate2 = inb_raw(PIT_GATE);
         outb_raw(PIT_GATE, (gate2 | PIT_GATE61_GATE2) & !PIT_GATE61_SPKR);
         io_delay();
     }
 }
 
-/// Attend la fin du one-shot canal 2 (bit 5 du port 0x61 = OUT2 = HIGH).
-/// Retourne `true` si la fin est détectée, `false` si timeout (QEMU TCG).
+/// Waits for channel 2 one-shot completion (port 0x61 bit 5 = OUT2 = HIGH).
+/// Returns `true` if completion is detected, `false` on timeout (QEMU TCG).
 ///
-/// Timeout : fenêtre temporelle bornée à ~20 ms via le TSC.
+/// Timeout: time window bounded to ~20 ms via TSC.
 pub fn wait_ch2_done() -> bool {
     let timeout_cycles = crate::arch::x86_64::cpu::tsc::tsc_us_to_cycles(20_000)
         .max(PIT_WAIT_TIMEOUT_FALLBACK_CYCLES);
@@ -210,7 +210,7 @@ pub fn wait_ch2_done() -> bool {
     }
 }
 
-/// Désactive le canal 2 (gate bas + speaker muet).
+/// Disables channel 2 (gate low + speaker muted).
 pub fn disable_ch2() {
     unsafe {
         let gate = inb_raw(PIT_GATE);
@@ -218,8 +218,8 @@ pub fn disable_ch2() {
     }
 }
 
-/// Configure le canal 0 en mode 2 (rate generator) avec le diviseur donné.
-/// Diviseur 0 = 65536 (max, ≈ 18.2 Hz tick rate).
+/// Configures channel 0 in mode 2 (rate generator) with the given divisor.
+/// Divisor 0 = 65536 (max, ≈ 18.2 Hz tick rate).
 pub fn setup_ch0_rate(divisor: u16) {
     unsafe {
         outb_raw(PIT_CONTROL, PIT_OCW_CH0_MODE2);
@@ -233,20 +233,20 @@ pub fn setup_ch0_rate(divisor: u16) {
 
 // ── Calibration ───────────────────────────────────────────────────────────────
 
-/// Calibre la fréquence TSC en utilisant le PIT canal 2.
+/// Calibrates TSC frequency using PIT channel 2.
 ///
-/// Procédure :
-///   1. CLI (appelant doit avoir désactivé les interruptions)
-///   2. Configurer canal 2 en one-shot ~10ms (11931 ticks)
-///   3. Lire TSC de départ (LFENCE + RDTSC)
-///   4. Attendre OUT2 = HIGH ou timeout 200M iters
-///   5. Lire TSC de fin (RDTSCP + LFENCE)
-///   6. Calculer fréquence TSC = delta_tsc × PIT_FREQ_HZ / 11931
+/// Procedure:
+///   1. CLI (caller must have disabled interrupts)
+///   2. Configure channel 2 in one-shot ~10ms (11931 ticks)
+///   3. Read starting TSC (LFENCE + RDTSC)
+///   4. Await OUT2 = HIGH or timeout 200M iters
+///   5. Read ending TSC (RDTSCP + LFENCE)
+///   6. Compute TSC frequency = delta_tsc × PIT_FREQ_HZ / 11931
 ///
-/// Retourne `None` si le PIT ne répond pas (QEMU TCG) ou mesure invalide.
+/// Returns `None` if PIT does not respond (QEMU TCG) or invalid measurement.
 ///
-/// RÈGLE PIT-QEMU-01 : fonction peut bloquer sur QEMU TCG — appelant doit
-/// s'assurer d'un fallback dans la chaîne de calibration.
+/// RULE PIT-QEMU-01: function may block on QEMU TCG — caller must
+/// ensure fallback in calibration chain.
 pub fn calibrate_tsc_via_pit() -> Option<u64> {
     PIT_CALIBRATION_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -264,20 +264,20 @@ pub fn calibrate_tsc_via_pit() -> Option<u64> {
     }
 }
 
-/// Exécute la calibration PIT interne et retourne le résultat détaillé.
+/// Executes internal PIT calibration and returns detailed result.
 pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
-    // Setup canal 2.
+    // Setup channel 2.
     setup_ch2_oneshot(count);
 
-    // Lire TSC de départ (sérialisé via LFENCE).
+    // Read start TSC (serialized via LFENCE).
     let tsc_start = tsc_serialized_start();
 
-    // Attendre fin du one-shot.
+    // Await end of one-shot.
     let done = wait_ch2_done();
     disable_ch2();
 
     if !done {
-        // QEMU TCG suspect (timeout).
+        // Suspected QEMU TCG (timeout).
         return PitCalibrationResult {
             tsc_hz: 0,
             tsc_delta: 0,
@@ -287,7 +287,7 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
         };
     }
 
-    // Lire TSC de fin (RDTSCP + LFENCE).
+    // Read end TSC (RDTSCP + LFENCE).
     let tsc_end = tsc_serialized_end();
     let tsc_delta = tsc_end.wrapping_sub(tsc_start);
 
@@ -301,14 +301,14 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
         };
     }
 
-    // Calcul de la fréquence : tsc_hz = tsc_delta × PIT_FREQ_HZ / count
+    // Compute frequency: tsc_hz = tsc_delta × PIT_FREQ_HZ / count
     let tsc_hz_raw = (tsc_delta as u128 * PIT_FREQ_HZ as u128 / count as u128) as u64;
 
-    // Validation plage physique.
+    // Validate physical range.
     let valid = (100_000_000..=10_000_000_000).contains(&tsc_hz_raw);
 
-    // Indicateur de qualité : dépend de la valeur de tsc_delta.
-    // Un delta trop petit (< 100_000 cycles) → mesure peu précise.
+    // Quality indicator: depends on tsc_delta value.
+    // Too small delta (< 100_000 cycles) -> imprecise measurement.
     let quality = if !valid {
         0
     } else if tsc_delta < 100_000 {
@@ -316,10 +316,10 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
     } else if tsc_delta < 1_000_000 {
         60
     } else {
-        85 // PIT maximum quality (inférieur à HPET car moins précis)
+        85 // PIT maximum quality (lower than HPET because less accurate)
     };
 
-    // Détection QEMU TCG : si tsc_hz < 200 MHz → très probablement TCG.
+    // QEMU TCG detection: if tsc_hz < 200 MHz -> very likely TCG.
     let qemu_tcg_suspect = valid && tsc_hz_raw < 200_000_000;
 
     PitCalibrationResult {
@@ -331,17 +331,17 @@ pub fn run_pit_calibration(count: u16) -> PitCalibrationResult {
     }
 }
 
-// ── Détection QEMU ────────────────────────────────────────────────────────────
+// ── QEMU detection ────────────────────────────────────────────────────────────
 
-/// Retourne `true` si QEMU TCG a été détecté lors des calibrations PIT.
+/// Returns `true` if QEMU TCG was detected during PIT calibrations.
 pub fn qemu_tcg_detected() -> bool {
     PIT_QEMU_TCG_DETECTED.load(Ordering::Relaxed)
 }
 
-/// Tente de détecter QEMU TCG via KVM CPUID leaf 0x40000001.
-/// KVM réel : bit 0 de EAX = "KVM_FEATURE_CLOCKSOURCE". TCG : CPUID retourne 0.
+/// Attempts to detect QEMU TCG via KVM CPUID leaf 0x40000001.
+/// Real KVM: bit 0 of EAX = "KVM_FEATURE_CLOCKSOURCE". TCG: CPUID returns 0.
 pub fn detect_kvm_vs_tcg() -> bool {
-    // Vérifier hyperviseur présent.
+    // Check hypervisor presence.
     let ecx: u32;
     unsafe {
         core::arch::asm!(
@@ -357,9 +357,9 @@ pub fn detect_kvm_vs_tcg() -> bool {
     }
     if (ecx & (1 << 31)) == 0 {
         return false;
-    } // Pas d'hyperviseur.
+    } // No hypervisor.
 
-    // KVM leaf 0x40000001 → EAX = KVM features.
+    // KVM leaf 0x40000001 -> EAX = KVM features.
     let eax: u32;
     unsafe {
         core::arch::asm!(
@@ -373,18 +373,18 @@ pub fn detect_kvm_vs_tcg() -> bool {
             options(nostack, nomem)
         );
     }
-    // Bit 0 = KVM_FEATURE_CLOCKSOURCE (KVM réel).
+    // Bit 0 = KVM_FEATURE_CLOCKSOURCE (real KVM).
     (eax & 1) != 0
 }
 
-/// Retourne l'indicateur de qualité de la dernière calibration PIT (0-100).
+/// Returns quality indicator of last PIT calibration (0-100).
 pub fn last_calibration_quality() -> u8 {
     PIT_LAST_QUALITY.load(Ordering::Relaxed) as u8
 }
 
-// ── Primitives I/O ────────────────────────────────────────────────────────────
+// ── I/O primitives ────────────────────────────────────────────────────────────
 
-/// Écriture I/O octet.
+/// Byte I/O write.
 #[inline(always)]
 unsafe fn outb_raw(port: u16, val: u8) {
     unsafe {
@@ -397,7 +397,7 @@ unsafe fn outb_raw(port: u16, val: u8) {
     }
 }
 
-/// Lecture I/O octet.
+/// Byte I/O read.
 #[inline(always)]
 unsafe fn inb_raw(port: u16) -> u8 {
     let val: u8;
@@ -412,7 +412,7 @@ unsafe fn inb_raw(port: u16) -> u8 {
     val
 }
 
-/// Délai I/O (port 0x80 write, ≈1µs sur ISA bus).
+/// I/O delay (port 0x80 write, ≈1µs on ISA bus).
 #[inline(always)]
 unsafe fn io_delay() {
     unsafe {
@@ -420,7 +420,7 @@ unsafe fn io_delay() {
     }
 }
 
-/// Lecture TSC sérialisée (LFENCE avant RDTSC).
+/// Serialized TSC read (LFENCE before RDTSC).
 #[inline(always)]
 fn tsc_serialized_start() -> u64 {
     let lo: u32;
@@ -437,7 +437,7 @@ fn tsc_serialized_start() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lecture TSC sérialisée de fin de mesure.
+/// Serialized TSC read at end of measurement.
 #[inline(always)]
 fn tsc_serialized_end() -> u64 {
     super::tsc::read_ordered_with_cpu().0

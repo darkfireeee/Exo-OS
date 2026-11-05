@@ -1,15 +1,15 @@
-//! # arch/x86_64/smp/init.rs — Démarrage des Application Processors
+//! # arch/x86_64/smp/init.rs — Application Processor Startup
 //!
-//! Implémente la séquence de démarrage SMP :
-//! 1. BSP envoie INIT IPI à chaque AP
-//! 2. BSP attend 10ms (ACPI spec)
-//! 3. BSP envoie STARTUP IPI × 2 (avec adresse du trampoline)
-//! 4. AP exécute le trampoline (mode réel → 64 bits)
-//! 5. AP appelle `ap_entry()` pour initialiser ses structures et rejoindre le scheduler
+//! Implements the SMP boot sequence:
+//! 1. BSP sends INIT IPI to each AP
+//! 2. BSP waits 10ms (ACPI spec)
+//! 3. BSP sends STARTUP IPI × 2 (with trampoline address)
+//! 4. AP executes trampoline (real mode → 64-bit)
+//! 5. AP calls `ap_entry()` to initialize its structures and join the scheduler
 //!
 //! ## Trampoline
-//! Le code assembleur du trampoline est dans `boot/trampoline_asm.rs`.
-//! Il est copié à l'adresse 0x6000 (page trampoline = 6).
+//! The trampoline assembly code resides in `boot/trampoline_asm.rs`.
+//! It is copied to address 0x6000 (trampoline page = 6).
 
 use super::super::acpi::madt;
 use super::super::apic::ipi;
@@ -17,20 +17,20 @@ use super::super::cpu::tsc;
 use super::percpu;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Adresse physique du trampoline AP (doit être < 1 MiB, aligné sur page)
+/// Physical address of AP trampoline (must be < 1 MiB, page-aligned)
 pub const TRAMPOLINE_PHYS: u64 = 0x6000;
-pub const TRAMPOLINE_PAGE: u8 = 6; // SIPI vector = adresse / 4096
+pub const TRAMPOLINE_PAGE: u8 = 6; // SIPI vector = address / 4096
 
-/// Délais ACPI SMP (Intel MP Spec Section B.4)
-const INIT_IPI_DELAY_MS: u64 = 10; // 10ms après INIT IPI
-const STARTUP_IPI_DELAY_MS: u64 = 1; // 1ms entre les deux SIPI
-const AP_STARTUP_TIMEOUT_MS: u64 = 100; // timeout d'attente par AP
+/// ACPI SMP delays (Intel MP Spec Section B.4)
+const INIT_IPI_DELAY_MS: u64 = 10; // 10ms after INIT IPI
+const STARTUP_IPI_DELAY_MS: u64 = 1; // 1ms between the two SIPIs
+const AP_STARTUP_TIMEOUT_MS: u64 = 100; // timeout waiting for each AP
 
 static SMP_BOOT_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Retourne le nombre de CPUs logical online
+/// Returns the number of logical CPUs online
 pub fn smp_cpu_count() -> u32 {
     percpu::cpu_count()
 }
@@ -40,32 +40,32 @@ pub fn smp_boot_complete() -> bool {
     SMP_BOOT_DONE.load(Ordering::Acquire)
 }
 
-// ── Handshake BSP ↔ AP ───────────────────────────────────────────────────────
+// ── BSP ↔ AP Handshake ───────────────────────────────────────────────────────
 
-/// Zone de handshake dans le trampoline (offset 0x10 depuis le début du trampoline)
+/// Handshake area within the trampoline (offset 0x10 from trampoline start)
 ///
-/// L'AP écrit `AP_ALIVE_MAGIC` ici pour signaler sa présence au BSP.
+/// The AP writes `AP_ALIVE_MAGIC` here to report its presence to the BSP.
 const AP_ALIVE_MAGIC: u32 = 0xA1_1A_1A_A1;
-const HANDSHAKE_OFFSET: u64 = 0x10; // offset dans le trampoline
+const HANDSHAKE_OFFSET: u64 = 0x10; // offset within trampoline
 
 fn write_trampoline_u32(offset: u64, val: u32) {
-    // SAFETY: trampoline mappé en identité, offset validé
+    // SAFETY: identity-mapped trampoline, validated offset
     unsafe {
         core::ptr::write_volatile((TRAMPOLINE_PHYS + offset) as *mut u32, val);
     }
 }
 
 fn read_trampoline_u32(offset: u64) -> u32 {
-    // SAFETY: trampoline mappé en identité
+    // SAFETY: identity-mapped trampoline
     unsafe { core::ptr::read_volatile((TRAMPOLINE_PHYS + offset) as *const u32) }
 }
 
-// ── Démarrage des APs ─────────────────────────────────────────────────────────
+// ── AP Startup ────────────────────────────────────────────────────────────────
 
-/// Démarre tous les APs listés dans la MADT
+/// Starts all APs listed in MADT
 ///
-/// Appelé par le BSP depuis `boot::early_init` après init mémoire.
-/// Chaque AP démarré incrémente `ONLINE_CPU_COUNT` et appelle `percpu::init_percpu_for_ap`.
+/// Called by BSP from `boot::early_init` after memory initialization.
+/// Each started AP increments `ONLINE_CPU_COUNT` and calls `percpu::init_percpu_for_ap`.
 pub fn smp_boot_aps(madt_info: &madt::MadtInfo, bsp_lapic_id: u32) {
     let n = madt_info.cpu_count;
     let apic_ids = &madt_info.apic_ids;
@@ -81,23 +81,23 @@ pub fn smp_boot_aps(madt_info: &madt::MadtInfo, bsp_lapic_id: u32) {
     SMP_BOOT_DONE.store(true, Ordering::Release);
 }
 
-/// Séquence INIT → SIPI → SIPI pour un AP
+/// INIT → SIPI → SIPI sequence for an AP
 fn boot_ap(dest_apic_id: u8) {
-    // 1. Préparer zone de handshake
+    // 1. Prepare handshake area
     write_trampoline_u32(HANDSHAKE_OFFSET, 0);
 
     // 2. INIT IPI
     ipi::send_init_ipi(dest_apic_id);
     tsc::tsc_delay_ms(INIT_IPI_DELAY_MS);
 
-    // 3. Premier SIPI
+    // 3. First SIPI
     ipi::send_startup_ipi(dest_apic_id, TRAMPOLINE_PAGE);
     tsc::tsc_delay_ms(STARTUP_IPI_DELAY_MS);
 
-    // 4. Deuxième SIPI (certains chipsets nécessitent deux SIPIs)
+    // 4. Second SIPI (certain chipsets require two SIPIs)
     ipi::send_startup_ipi(dest_apic_id, TRAMPOLINE_PAGE);
 
-    // 5. Attendre que l'AP signale sa présence
+    // 5. Wait for AP to report its presence
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(AP_STARTUP_TIMEOUT_MS);
     loop {
         let sig = read_trampoline_u32(HANDSHAKE_OFFSET);
@@ -106,22 +106,22 @@ fn boot_ap(dest_apic_id: u8) {
             break;
         }
         if tsc::read_tsc() > deadline {
-            // AP non-réactif : ignorer (peut être absent ou désactivé dans MADT)
+            // Non-responsive AP: ignore (may be absent or disabled in MADT)
             break;
         }
         core::hint::spin_loop();
     }
 }
 
-// ── Point d'entrée AP ─────────────────────────────────────────────────────────
+// ── AP Entry Point ────────────────────────────────────────────────────────────
 
-/// Point d'entrée Rust pour chaque AP
+/// Rust entry point for each AP
 ///
-/// Appelé depuis le trampoline assembleur après la transition en 64 bits.
-/// À ce stade : paging activé, pile dédiée, GDT/IDT déjà en place depuis BSP.
+/// Called from assembly trampoline after transition to 64-bit mode.
+/// At this stage: paging enabled, dedicated stack, GDT/IDT already set up from BSP.
 ///
 /// # Safety
-/// Appelé uniquement depuis le trampoline, en contexte monothread pour ce CPU.
+/// Called strictly from trampoline, in single-threaded context for this CPU.
 #[no_mangle]
 pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: u64) -> ! {
     while !super::super::arch_initialized() {
@@ -134,64 +134,64 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 2. GDT per-CPU + TSS
     super::super::gdt::init_gdt_for_cpu(cpu_id as usize, kernel_stack_top);
 
-    // 3. IDT (partagée — juste LIDT)
+    // 3. IDT (shared — just LIDT)
     super::super::idt::load_idt();
 
-    // 3b. SYSCALL/SYSRET MSRs (STAR/LSTAR/SFMASK) sur chaque AP.
-    // Doit être fait avant STI pour éviter un CPU AP sans chemin syscall configuré.
+    // 3b. SYSCALL/SYSRET MSRs (STAR/LSTAR/SFMASK) on each AP.
+    // Must be done before STI to avoid an AP CPU running without configured syscall path.
     super::super::syscall::init_syscall();
 
     // 4. LAPIC AP
     super::super::apic::init_ap_local_apic();
 
-    // 5. TSC calibration basique (TSC invariant → pas de recalibration)
+    // 5. Basic TSC calibration (invariant TSC → no recalibration)
     tsc::init_tsc(cpu_id);
 
     // 6. FPU
     super::super::cpu::fpu::init_fpu_for_cpu();
 
-    // FIX-SMP-RACE (rapport_analyse §5.3 + CVE-EXO-001) :
-    // Le spin-wait SECURITY_READY était positionné APRÈS les appels 6b et 6c,
-    // laissant une fenêtre où les APs modifiaient les structures scheduler
-    // partagées pendant que security_init() (BSP) pouvait encore les lire
-    // pour initialiser les tables de capabilities ou les hooks zero-trust.
+    // FIX-SMP-RACE (analysis_report §5.3 + CVE-EXO-001):
+    // The SECURITY_READY spin-wait was placed AFTER calls 6b and 6c,
+    // leaving a window where APs modified shared scheduler structures
+    // while security_init() (BSP) could still read them
+    // to initialize capability tables or zero-trust hooks.
     //
-    // Correction : spin ici, avant toute modification de structure partagée.
-    // Les APs n'ont pas besoin d'IPC ni de capabilities pour les étapes
-    // qui suivent — mais la règle BOOT-SEC (V-26) exige quand même qu'ils
-    // attendent SECURITY_READY avant de toucher au scheduler partagé.
+    // Fix: spin here, prior to any modification of shared structures.
+    // APs do not require IPC or capabilities for the steps that follow —
+    // but the BOOT-SEC rule (V-26) still requires them to wait for
+    // SECURITY_READY before touching the shared scheduler.
     //
-    // Note : publish_current_boot_idle() et scheduler::init_ap() accèdent
-    // à des runqueues per-CPU (couche 1) et non à security/ (couche 2b),
-    // donc la dépendance est directionnelle. On garde le spin ici par
-    // précaution car security_init() phase 5 installe des hooks scheduler
+    // Note: publish_current_boot_idle() and scheduler::init_ap() access
+    // per-CPU runqueues (layer 1) and not security/ (layer 2b),
+    // so the dependency is directional. We keep the spin here as a
+    // precaution because security_init() phase 5 installs scheduler hooks
     // (exokairos budget init, exoargos PMC hooks).
     while !crate::security::is_security_ready() {
         core::hint::spin_loop();
     }
 
-    // 6b. Publier un TCB idle de bootstrap pour cet AP après SECURITY_READY.
-    // L'AP exécute déjà sa boucle `hlt`; ce TCB représente donc le contexte
-    // courant du CPU jusqu'au premier vrai switch scheduler.
+    // 6b. Publish a bootstrap idle TCB for this AP after SECURITY_READY.
+    // The AP already executes its `hlt` loop; this TCB thus represents the
+    // current CPU context until the first real scheduler switch.
     let _ = crate::scheduler::core::publish_current_boot_idle(cpu_id, kernel_stack_top);
 
-    // 6c. Initialisation locale scheduler AP (lazy FPU + compteurs tick).
+    // 6c. Local AP scheduler initialization (lazy FPU + tick counters).
     crate::scheduler::init_ap(cpu_id);
 
-    // 7. Mitigations spectre (IBRS/STIBP/SSBD + KPTI) sur cet AP.
-    // FIX-AUDIT-V020-P0-1 : la section était vide — seul le BSP appliquait les
-    // mitigations (early_init.rs). Les APs exécutaient donc du code Ring 0 sans
-    // IBRS/SSBD ni KPTI, exposant le kernel à Spectre v2/v4 cross-process via les
-    // cœurs secondaires. apply_mitigations_ap() effectue les écritures MSR/CR4
-    // per-CPU (IA32_SPEC_CTRL, SMEP/SMAP) et construit la shadow PML4 KPTI propre
-    // à ce cœur (kpti::init_kpti → register_cpu(cpu_id, ...)).
+    // 7. Spectre mitigations (IBRS/STIBP/SSBD + KPTI) on this AP.
+    // FIX-AUDIT-V020-P0-1: section was empty — only BSP applied
+    // mitigations (early_init.rs). APs were executing Ring 0 code without
+    // IBRS/SSBD or KPTI, exposing kernel to cross-process Spectre v2/v4 via
+    // secondary cores. apply_mitigations_ap() performs per-CPU MSR/CR4 writes
+    // (IA32_SPEC_CTRL, SMEP/SMAP) and builds the core-specific shadow PML4 KPTI
+    // (kpti::init_kpti → register_cpu(cpu_id, ...)).
     crate::arch::x86_64::spectre::apply_mitigations_ap();
 
-    // 9. Activer les interruptions et entrer dans la boucle idle scheduler
-    // SAFETY: toutes les structures sont initialisées sur cet AP
+    // 9. Enable interrupts and enter scheduler idle loop
+    // SAFETY: all structures are initialized on this AP
     core::arch::asm!("sti", options(nostack, nomem));
 
-    // Boucle idle (scheduler::idle::run() sera appelé lors de l'intégration)
+    // Idle loop (scheduler::idle::run() will be called during integration)
     loop {
         core::arch::asm!("hlt", options(nostack, nomem));
     }

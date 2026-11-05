@@ -1,97 +1,97 @@
 // kernel/src/arch/x86_64/time/percpu/sync.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Synchronisation du TSC inter-processeurs (SMP boot)
+// Inter-processor TSC synchronization (SMP boot)
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Problème
-//   Sur les systèmes multi-socket et après INIT/SIPI, les CPU peuvent avoir
-//   des valeurs TSC différentes. Lire RDTSC sur le CPU 2 peut retourner
-//   une valeur décalée de ±50 000 ns par rapport au BSP.
+// ## Problem
+//   On multi-socket systems and after INIT/SIPI, CPUs can hold different
+//   TSC values. Reading RDTSC on CPU 2 might return a value shifted
+//   by ±50,000 ns relative to the BSP.
 //
-//   RÈGLE TSC-SYNC-01 : Mesurer le décalage TSC de chaque AP (Application Processor)
-//     par rapport au BSP (Bootstrap Processor) au démarrage SMP.
+//   RULE TSC-SYNC-01: Measure the TSC offset of each AP (Application Processor)
+//     relative to the BSP (Bootstrap Processor) during SMP boot.
 //
-// ## Méthode : IPI Round-Trip Timing
-//   1. BSP note tsc_bsp_start = RDTSCP()
-//   2. BSP envoie un IPI à l'AP
-//   3. AP répond avec sa valeur tsc_ap = RDTSCP() dès réception de l'IPI
-//   4. BSP note tsc_bsp_end = RDTSCP()
-//   5. Propagation estimée = (tsc_bsp_end - tsc_bsp_start) / 2
-//   6. Offset = tsc_ap - (tsc_bsp_start + propagation) [en cycles TSC]
+// ## Method: IPI Round-Trip Timing
+//   1. BSP records tsc_bsp_start = RDTSCP()
+//   2. BSP sends an IPI to the AP
+//   3. AP responds with its value tsc_ap = RDTSCP() upon receiving the IPI
+//   4. BSP records tsc_bsp_end = RDTSCP()
+//   5. Estimated propagation = (tsc_bsp_end - tsc_bsp_start) / 2
+//   6. Offset = tsc_ap - (tsc_bsp_start + propagation) [in TSC cycles]
 //
-//   Pour ktime : si offset > 0 → AP est en avance → on soustrait l'offset.
-//               si offset < 0 → AP est en retard  → on ajoute |offset|.
+//   For ktime: if offset > 0 -> AP is ahead  -> subtract offset.
+//              if offset < 0 -> AP is behind -> add |offset|.
 //
-// ## Alternative sur processeurs modernes
-//   Sur Intel multi-socket avec TSC_ADJUST MSR (Skylake+), les offsets sont
-//   gérés par le firmware (BIOS reset TSC à 0 via INIT). Dans ce cas,
-//   on vérifie la cohérence et on adopte l'offset BIOS si < seuil.
+// ## Modern processor alternative
+//   On multi-socket Intel with TSC_ADJUST MSR (Skylake+), offsets are
+//   managed by firmware (BIOS resets TSC to 0 via INIT). In this case,
+//   we verify consistency and adopt the BIOS offset if < threshold.
 //
-// ## Limitation Phase 1
-//   L'infrastructure IPI (LAPIC ICR) n'est pas encore disponible.
-//   On utilise un mécanisme simplifié : le BSP lit le TSC juste avant le
-//   déverrouillage de l'AP, l'AP lit le sien juste après le wake-up.
-//   La précision est ~100–500 ns (suffisant pour corriger des skews de µs).
+// ## Phase 1 Limitation
+//   IPI infrastructure (LAPIC ICR) is not yet available.
+//   We use a simplified mechanism: the BSP reads TSC right before
+//   unlocking the AP, the AP reads its own right after wake-up.
+//   Precision is ~100–500 ns (sufficient to correct microsecond skews).
 //
 // ════════════════════════════════════════════════════════════════════════════════
 
 use crate::arch::x86_64::time::ktime;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de CPU supportés.
+/// Maximum number of supported CPUs.
 const MAX_CPUS: usize = 256;
-/// Seuil d'offset TSC au-dessus duquel on loggue un avertissement (100 µs en cycles à 3 GHz).
-const OFFSET_WARN_CYCLES: u64 = 300_000; // ~100 µs à 3 GHz
-/// Nombre de mesures répétées pour la précision de la synchronisation.
+/// TSC offset threshold above which a warning is logged (100 µs in cycles at 3 GHz).
+const OFFSET_WARN_CYCLES: u64 = 300_000; // ~100 µs at 3 GHz
+/// Number of repeated measurements for synchronization precision.
 const SYNC_ITERATIONS: usize = 10;
 
-// ── Zone de communication inter-CPU ──────────────────────────────────────────
+// ── Inter-CPU communication area ──────────────────────────────────────────────
 //
-// Ces tableaux sont partagés entre BSP et APs pendant la procédure de sync.
-// Utilisation : chaque AP écrit dans la case de son CPU ID.
+// These arrays are shared between BSP and APs during the sync procedure.
+// Usage: each AP writes into the slot corresponding to its CPU ID.
 
-/// TSC de l'AP au moment du wake-up (écrit par l'AP, lu par le BSP).
+/// AP TSC at the moment of wake-up (written by AP, read by BSP).
 static AP_TSC: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// Signal BSP → AP : le BSP a noté tsc_start, l'AP peut lire son TSC.
+/// Signal BSP -> AP: BSP recorded tsc_start, AP can read its TSC.
 static BSP_READY: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
-/// TSC du BSP juste avant d'envoyer le signal à l'AP.
+/// BSP TSC right before sending signal to AP.
 static BSP_TSC_BEFORE: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// TSC du BSP juste après confirmation de l'AP.
+/// BSP TSC right after confirmation from AP.
 static BSP_TSC_AFTER: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// Confirmation que l'AP a terminé sa mesure.
+/// Confirmation that AP has finished its measurement.
 static AP_DONE: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
-// ── Mesure depuis le BSP ──────────────────────────────────────────────────────
+// ── Measurement from BSP ──────────────────────────────────────────────────────
 
-/// Mesure le décalage TSC d'un AP par rapport au BSP et le stocke dans ktime.
+/// Measures the TSC offset of an AP relative to the BSP and stores it in ktime.
 ///
-/// Doit être appelé depuis le BSP (CPU 0) pendant la procédure de boot SMP,
-/// après que l'AP a été wake-up mais avant qu'il ne commence à exécuter du code
-/// non-synchronisé.
+/// Must be called from the BSP (CPU 0) during SMP boot procedure,
+/// after the AP was woken up but before it begins executing unsynchronized
+/// code.
 ///
-/// # Paramètres
-///   `ap_cpu_id` : ID du CPU AP à mesurer (1..255)
+/// # Parameters
+///   `ap_cpu_id`: AP CPU ID to measure (1..255)
 ///
-/// # Comportement
-///   Exécute SYNC_ITERATIONS mesures et prend la médiane pour réduire le jitter.
-///   Stocke l'offset via `ktime::store_tsc_offset(ap_cpu_id, offset_signed)`.
+/// # Behavior
+///   Runs SYNC_ITERATIONS measurements and takes the median to reduce jitter.
+///   Stores offset via `ktime::store_tsc_offset(ap_cpu_id, offset_signed)`.
 ///
 /// # Safety
-///   Unsafe : accès direct aux MSR TSC, coordination avec l'AP via atomics partagés.
+///   Unsafe: direct access to TSC MSRs, coordination with AP via shared atomics.
 pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
     if ap_cpu_id as usize >= MAX_CPUS {
         return;
     }
     let idx = ap_cpu_id as usize;
 
-    // Reset des signaux de communication.
+    // Reset communication signals.
     BSP_READY[idx].store(false, Ordering::Release);
     AP_TSC[idx].store(0, Ordering::Release);
     AP_DONE[idx].store(false, Ordering::Release);
@@ -99,89 +99,89 @@ pub unsafe fn measure_tsc_offset_for_ap(ap_cpu_id: u32) {
     let mut samples: [i64; SYNC_ITERATIONS] = [0; SYNC_ITERATIONS];
 
     for i in 0..SYNC_ITERATIONS {
-        // Étape 1 : BSP note tsc_before juste avant le signal.
+        // Step 1: BSP records tsc_before right before signal.
         let tsc_before = rdtscp();
         BSP_TSC_BEFORE[idx].store(tsc_before, Ordering::Release);
 
-        // Étape 2 : Signaler à l'AP qu'il peut lire son TSC.
+        // Step 2: Signal AP that it can read its TSC.
         BSP_READY[idx].store(true, Ordering::Release);
 
-        // Étape 3 : Attendre que l'AP ait lu son TSC.
+        // Step 3: Wait for AP to read its TSC.
         let mut timeout = 0u64;
         while !AP_DONE[idx].load(Ordering::Acquire) {
             core::arch::asm!("pause", options(nostack, nomem));
             timeout += 1;
             if timeout > 10_000_000 {
-                // L'AP ne répond pas — probablement pas encore en ligne.
+                // AP is not responding — likely not yet online.
                 return;
             }
         }
 
-        // Étape 4 : BSP note tsc_after.
+        // Step 4: BSP records tsc_after.
         let tsc_after = rdtscp();
         BSP_TSC_AFTER[idx].store(tsc_after, Ordering::Release);
 
         let ap_tsc = AP_TSC[idx].load(Ordering::Acquire);
 
-        // Étape 5 : Calcul de l'offset.
+        // Step 5: Offset calculation.
         // propagation_half = (tsc_after - tsc_before) / 2
         let propagation_half = (tsc_after.wrapping_sub(tsc_before)) / 2;
-        // Référence BSP au moment de la lecture AP = tsc_before + propagation_half
+        // BSP reference at moment of AP reading = tsc_before + propagation_half
         let bsp_ref = tsc_before.wrapping_add(propagation_half);
-        // offset = ap_tsc - bsp_ref (signé : positif = AP en avance)
-        // Utilise wrapping_sub pour éviter l'overflow signé si le TSC dépasse 2^63 - 1
+        // offset = ap_tsc - bsp_ref (signed: positive = AP ahead)
+        // Uses wrapping_sub to avoid signed overflow if TSC exceeds 2^63 - 1
         let offset = ap_tsc.wrapping_sub(bsp_ref) as i64;
         samples[i] = offset;
 
-        // Reset pour la prochaine itération.
+        // Reset for next iteration.
         BSP_READY[idx].store(false, Ordering::Release);
         AP_DONE[idx].store(false, Ordering::Release);
     }
 
-    // Calculer la médiane des échantillons.
+    // Calculate median of samples.
     let offset_median = median_i64(&mut samples[..]);
 
-    // Avertissement si l'offset est anormalement grand.
+    // Warning if offset is abnormally large.
     if offset_median.unsigned_abs() > OFFSET_WARN_CYCLES {
         log_tsc_skew_warning(ap_cpu_id, offset_median);
     }
 
-    // Stocker l'offset signé (cycles TSC).
-    // offset > 0  : l'AP est en avance → ktime soustrait ce delta.
-    // offset < 0  : l'AP est en retard  → ktime ajoute |delta|.
+    // Store signed offset (TSC cycles).
+    // offset > 0  : AP is ahead  -> ktime subtracts this delta.
+    // offset < 0  : AP is behind -> ktime adds |delta|.
     ktime::store_tsc_offset(ap_cpu_id as usize, offset_median);
 }
 
-// ── Côté AP ───────────────────────────────────────────────────────────────────
+// ── AP side ───────────────────────────────────────────────────────────────────
 
-/// Exécuté par l'AP lors du boot SMP pour répondre au BSP.
+/// Executed by the AP during SMP boot to respond to the BSP.
 ///
 /// # Safety
-/// Doit être appelé exclusivement par le processeur AP actif au cours de la phase de démarrage SMP.
+/// Must be called exclusively by the active AP processor during the SMP boot phase.
 ///
-/// Appelé depuis le code d'init AP (arch/x86_64/smp/ap_entry.rs ou équivalent)
-/// après la configuration des registres de base (GDT/IDT/paging) mais avant
-/// l'intégration dans le scheduler.
+/// Called from AP init code (arch/x86_64/smp/ap_entry.rs or equivalent)
+/// after basic registers setup (GDT/IDT/paging) but before
+/// scheduler integration.
 ///
-/// RÈGLE TSC-SYNC-01 : L'AP doit attendre le signal BSP_READY avant de lire son TSC.
+/// RULE TSC-SYNC-01: AP must await BSP_READY signal before reading its TSC.
 pub unsafe fn ap_sync_tsc_response(ap_cpu_id: u32) {
     if ap_cpu_id as usize >= MAX_CPUS {
         return;
     }
     let idx = ap_cpu_id as usize;
 
-    // Attendre que le BSP soit prêt.
+    // Wait for BSP to be ready.
     let mut timeout = 0u64;
     while !BSP_READY[idx].load(Ordering::Acquire) {
         core::arch::asm!("pause", options(nostack, nomem));
         timeout += 1;
         if timeout > 50_000_000 {
-            // BSP ne signal pas — timeout → on abandonne la sync.
+            // BSP did not signal — timeout -> abandon sync.
             return;
         }
     }
 
-    // Lire le TSC de l'AP dès réception du signal.
+    // Read AP TSC upon signal reception.
     let ap_tsc = rdtscp();
     AP_TSC[idx].store(ap_tsc, Ordering::Release);
     AP_DONE[idx].store(true, Ordering::Release);
@@ -189,25 +189,25 @@ pub unsafe fn ap_sync_tsc_response(ap_cpu_id: u32) {
 
 // ── BSP init ──────────────────────────────────────────────────────────────────
 
-/// Initialise les données per-CPU du BSP (CPU 0).
-/// L'offset du BSP est toujours 0 (référence).
+/// Initializes BSP per-CPU data (CPU 0).
+/// BSP offset is always 0 (reference).
 pub fn init_bsp_percpu() {
-    // SAFETY: cpu_id = 0, offset = 0. BSP est toujours la référence.
+    // SAFETY: cpu_id = 0, offset = 0. BSP is always the reference.
     unsafe {
         ktime::store_tsc_offset(0, 0);
     }
 }
 
-/// Vérifie si la synchronisation TSC a été effectuée pour un CPU donné.
+/// Checks whether TSC synchronization was performed for a given CPU.
 pub fn tsc_synced(cpu_id: u32) -> bool {
     cpu_id == 0 || ktime::tsc_offset_valid(cpu_id as usize)
 }
 
-// ── Utilitaires ───────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
-/// Calcule la médiane d'un tableau d'entiers signés (tri in-place).
+/// Computes median of a signed integer array (in-place sort).
 fn median_i64(samples: &mut [i64]) -> i64 {
-    // Tri par insertion — tableau petit (SYNC_ITERATIONS = 10).
+    // Insertion sort — small array (SYNC_ITERATIONS = 10).
     for i in 1..samples.len() {
         let key = samples[i];
         let mut j = i;
@@ -224,23 +224,23 @@ fn median_i64(samples: &mut [i64]) -> i64 {
     if n % 2 == 1 {
         samples[n / 2]
     } else {
-        // Moyenne des deux médianes (sans overflow).
+        // Average of two medians (without overflow).
         let a = samples[n / 2 - 1];
         let b = samples[n / 2];
         a / 2 + b / 2 + (a % 2 + b % 2) / 2
     }
 }
 
-/// Émet une trace port 0xE9 pour signaler un skew TSC anormal.
+/// Emits port 0xE9 trace to signal abnormal TSC skew.
 fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
-    // Port 0xE9 = canal de debug QEMU.
-    // Format : "[TSC-SKEW cpu=XX off=XXXXXXXX]\n"
+    // Port 0xE9 = QEMU debug channel.
+    // Format: "[TSC-SKEW cpu=XX off=XXXXXXXX]\n"
     unsafe {
         let buf = b"[TSC-SKEW cpu=";
         for &b in buf {
             core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem));
         }
-        // cpu_id decimal simple (0–255)
+        // Simple decimal cpu_id (0–255)
         let d2 = (cpu_id / 100) as u8 + b'0';
         let d1 = ((cpu_id / 10) % 10) as u8 + b'0';
         let d0 = (cpu_id % 10) as u8 + b'0';
@@ -251,7 +251,7 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
         for &b in buf2 {
             core::arch::asm!("out 0xe9, al", in("al") b, options(nostack, nomem));
         }
-        // offset en hex (16 chiffres).
+        // offset in hex (16 digits).
         let val = offset_cycles as u64;
         for shift in (0..64).step_by(4).rev() {
             let nib = ((val >> (60 - shift)) & 0xF) as u8;
@@ -267,7 +267,7 @@ fn log_tsc_skew_warning(cpu_id: u32, offset_cycles: i64) {
     }
 }
 
-/// Lit le TSC avec sérialisation, sans supposer RDTSCP disponible.
+/// Reads TSC with serialization, without assuming RDTSCP is available.
 #[inline(always)]
 fn rdtscp() -> u64 {
     crate::arch::x86_64::time::sources::tsc::read_ordered_with_cpu().0

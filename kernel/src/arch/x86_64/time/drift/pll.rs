@@ -1,69 +1,69 @@
 // kernel/src/arch/x86_64/time/drift/pll.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Software PLL — Correction lissée de la dérive TSC
+// Software PLL — Smoothed correction of TSC drift
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Problème
-//   Le TSC oscille légèrement selon la température, la charge CPU, les transitions
-//   P-state. Si on applique brutalement une nouvelle fréquence TSC mesurée, le
-//   temps applicatif saute (en avant ou en arrière si la correction est trop forte).
+// ## Problem
+//   TSC fluctuates slightly with temperature, CPU load, and P-state transitions.
+//   Abruptly applying a newly measured TSC frequency causes application time to jump
+//   (forwards or backwards if correction is too large).
 //
-// ## Solution : Software PLL (Phase-Locked Loop)
-//   Filtre passe-bas : correction fractionnelle limitée à ±500 ppm par cycle.
-//   Convergence progressive sur plusieurs cycles si la dérive est importante.
-//   Formule : new_hz = current_hz + clamp(measured_hz - current_hz, -MAX_ADJ, +MAX_ADJ)
+// ## Solution: Software PLL (Phase-Locked Loop)
+//   Low-pass filter: fractional correction limited to ±500 ppm per cycle.
+//   Progressive convergence over multiple cycles if drift is significant.
+//   Formula: new_hz = current_hz + clamp(measured_hz - current_hz, -MAX_ADJ, +MAX_ADJ)
 //
-// ## Garanties
-//   RÈGLE DRIFT-PLL-01       : correction max ±500 ppm par recalibration
-//   RÈGLE DRIFT-MONOTONE-01  : ktime ne régresse jamais après correction
-//   RÈGLE ARCH-TIME-04       : monotonie stricte garantie
+// ## Guarantees
+//   RULE DRIFT-PLL-01      : maximum correction ±500 ppm per recalibration
+//   RULE DRIFT-MONOTONE-01 : ktime never regresses after correction
+//   RULE ARCH-TIME-04      : strict monotonicity guaranteed
 //
-// ## Résolution temporelle après correction
-//   À 3 GHz TSC : ±500 ppm = ±1.5 MHz → ±0.5 ns/µs d'erreur résiduelle
-//   Convergence complète si dérive ≤ 500 ppm : 1 cycle de recalibration
-//   Convergence si dérive = 5000 ppm : 10 cycles × 30s = 5 minutes
+// ## Temporal resolution after correction
+//   At 3 GHz TSC: ±500 ppm = ±1.5 MHz -> ±0.5 ns/µs residual error
+//   Complete convergence if drift <= 500 ppm: 1 recalibration cycle
+//   Convergence if drift = 5000 ppm: 10 cycles * 30s = 5 minutes
 // ════════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
-// ── Constantes PLL ────────────────────────────────────────────────────────────
+// ── PLL constants ─────────────────────────────────────────────────────────────
 
-/// Correction maximale par cycle de recalibration : 500 ppm.
-/// Pour TSC à 3 GHz : 500 ppm × 3_000_000_000 Hz = 1_500 Hz max de correction.
+/// Maximum correction per recalibration cycle: 500 ppm.
+/// For 3 GHz TSC: 500 ppm * 3_000_000_000 Hz = 1_500 Hz max correction.
 const MAX_ADJ_PPM: u64 = 500;
 
-/// Coefficient de filtrage passe-bas (0–1000 en millièmes).
-/// 750 = 75% de la correction appliquée immédiatement (convergence rapide).
-/// Valeur plus faible = plus de lissage, convergence plus lente.
+/// Low-pass filter coefficient (0–1000 in thousandths).
+/// 750 = 75% of correction applied immediately (fast convergence).
+/// Lower value = more smoothing, slower convergence.
 const FILTER_COEFF_MILLI: u64 = 750;
 
-/// Nombre de mesures consécutives concordantes requis pour activer la correction.
-/// Évite les corrections sur des mesures aberrantes isolées.
+/// Number of consecutive consistent measurements required to activate correction.
+/// Prevents corrections on isolated anomalous measurements.
 #[allow(dead_code)]
 const CONVERGENCE_THRESHOLD: u32 = 2;
 
-// ── État PLL ──────────────────────────────────────────────────────────────────
+// ── PLL state ─────────────────────────────────────────────────────────────────
 
-/// État interne de la boucle PLL.
+/// Internal state of the PLL loop.
 struct PllState {
-    /// Fréquence de référence courante (Hz) — base du calcul de correction.
+    /// Current reference frequency (Hz) — base for correction calculation.
     current_hz: AtomicU64,
-    /// Erreur de phase accumulée (en nano-ppm, signé) — intégration PI controller.
+    /// Accumulated phase error (in nano-ppm, signed) — PI controller integration.
     #[allow(dead_code)]
     phase_error_nppm: AtomicI64,
-    /// Nombre de mesures concordantes consécutives observées.
+    /// Number of consecutive consistent measurements observed.
     #[allow(dead_code)]
     converge_count: AtomicU64,
-    /// Somme des N dernières mesures pour calcul de moyenne glissante.
+    /// Sum of the N last measurements for moving average computation.
     measure_sum: AtomicU64,
-    /// Nombre de mesures dans la somme glissante.
+    /// Number of measurements in moving average sum.
     measure_count: AtomicU64,
-    /// Dernier ajustement appliqué (en Hz, signé via cast).
+    /// Last adjustment applied (in Hz, signed via cast).
     last_adj_hz: AtomicI64,
-    /// `true` si la PLL est en état de lock (dérive < LOCK_THRESHOLD_PPM).
+    /// `true` if PLL is locked (drift < LOCK_THRESHOLD_PPM).
     locked: AtomicBool,
-    /// Compteur total de corrections appliquées depuis le boot.
+    /// Total count of corrections applied since boot.
     total_corrections: AtomicU64,
 }
 
@@ -84,17 +84,17 @@ impl PllState {
 
 static PLL: PllState = PllState::new();
 
-/// Seuil de dérive en ppm en deçà duquel la PLL est considérée "locked".
+/// Drift threshold in ppm below which the PLL is considered "locked".
 const LOCK_THRESHOLD_PPM: u64 = 100;
 
-/// Fenêtre de moyenne glissante (N dernières mesures).
+/// Moving average window (last N measurements).
 const MOVING_AVG_WINDOW: u64 = 5;
 
-// ── API principale ────────────────────────────────────────────────────────────
+// ── Main API ──────────────────────────────────────────────────────────────────
 
-/// Initialise la PLL avec la fréquence calibrée au boot.
+/// Initializes the PLL with the frequency calibrated at boot.
 ///
-/// Doit être appelé depuis `time_init()` après la calibration initiale.
+/// Must be called from `time_init()` after initial calibration.
 pub fn pll_init(initial_hz: u64) {
     PLL.current_hz.store(initial_hz, Ordering::Release);
     PLL.measure_sum
@@ -104,29 +104,29 @@ pub fn pll_init(initial_hz: u64) {
     PLL.locked.store(false, Ordering::Release);
 }
 
-/// Soumet une nouvelle mesure de fréquence TSC et calcule la correction lissée.
+/// Submits a new TSC frequency measurement and computes smoothed correction.
 ///
-/// RÈGLE DRIFT-PLL-01 : correction max ±500 ppm par appel.
-/// RÈGLE DRIFT-MONOTONE-01 : retourne (ns_now, new_hz) tel que ns_now >= ns_précédent.
+/// RULE DRIFT-PLL-01: max correction ±500 ppm per call.
+/// RULE DRIFT-MONOTONE-01: returns (ns_now, new_hz) such that ns_now >= ns_previous.
 ///
 /// # Arguments
-/// - `measured_hz`  : fréquence TSC mesurée par la calibration courante
-/// - `tsc_now`      : valeur TSC lue DIRECTEMENT (pas via ktime_get_ns)
-/// - `ref_ns_anchor`: ns correspondant à `tsc_now` (calculé par le thread drift)
+/// - `measured_hz`: TSC frequency measured by current calibration
+/// - `tsc_now`: TSC value read DIRECTLY (not via ktime_get_ns)
+/// - `ref_ns_anchor`: ns corresponding to `tsc_now` (computed by drift thread)
 ///
-/// # Retourne
-/// `(ns_anchor_corrigé, new_tsc_hz)` à passer à `update_ktime_anchor()`.
+/// # Returns
+/// `(corrected_ns_anchor, new_tsc_hz)` to pass to `update_ktime_anchor()`.
 ///
-/// RÈGLE DRIFT-CIRCULAR-01 : N'appelle PAS ktime_get_ns() ici.
+/// RULE DRIFT-CIRCULAR-01: Do NOT call ktime_get_ns() here.
 pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, u64) {
-    // ── Mise à jour moyenne glissante ──────────────────────────────────────────
+    // ── Moving average update ─────────────────────────────────────────────────
     let old_sum = PLL.measure_sum.load(Ordering::Relaxed);
     let old_count = PLL
         .measure_count
         .load(Ordering::Relaxed)
         .min(MOVING_AVG_WINDOW);
 
-    // Expulser la plus ancienne mesure de la fenêtre si fenêtre pleine.
+    // Expel oldest measurement from window if window full.
     let new_sum = if old_count >= MOVING_AVG_WINDOW {
         let oldest_approx = old_sum / old_count;
         old_sum
@@ -140,33 +140,33 @@ pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, 
     PLL.measure_sum.store(new_sum, Ordering::Relaxed);
     PLL.measure_count.store(new_count, Ordering::Relaxed);
 
-    // Fréquence lissée = moyenne glissante des N dernières mesures.
+    // Smoothed frequency = moving average of last N measurements.
     let smoothed_hz = new_sum / new_count;
 
-    // ── Calcul de la correction ────────────────────────────────────────────────
+    // ── Correction computation ────────────────────────────────────────────────
     let current_hz = PLL.current_hz.load(Ordering::Relaxed);
     if current_hz == 0 {
         return (ref_ns_anchor, measured_hz);
     }
 
-    // Erreur brute (signée).
+    // Raw error (signed).
     let error_hz: i64 = smoothed_hz as i64 - current_hz as i64;
 
-    // Limite de correction : MAX_ADJ_PPM × current_hz / 1_000_000.
+    // Correction limit: MAX_ADJ_PPM * current_hz / 1_000_000.
     let max_adj_hz = ((current_hz as u128 * MAX_ADJ_PPM as u128) / 1_000_000) as i64;
-    let max_adj_hz = max_adj_hz.max(1); // Au moins 1 Hz de correction possible.
+    let max_adj_hz = max_adj_hz.max(1); // At least 1 Hz correction possible.
 
-    // Clamp de l'erreur à ±MAX_ADJ_PPM.
+    // Clamp error to ±MAX_ADJ_PPM.
     let clamped_error = error_hz.clamp(-max_adj_hz, max_adj_hz);
 
-    // Filtre passe-bas : appliquer FILTER_COEFF % de la correction.
+    // Low-pass filter: apply FILTER_COEFF % of correction.
     let adj_hz = (clamped_error * FILTER_COEFF_MILLI as i64) / 1000;
 
-    // Nouvelle fréquence après correction (ne pas dépasser les limites absolues).
+    // New frequency after correction (do not exceed absolute bounds).
     let new_hz_signed = current_hz as i64 + adj_hz;
     let new_hz = (new_hz_signed.max(500_000_000) as u64).min(10_000_000_000);
 
-    // ── Vérification convergence ────────────────────────────────────────────────
+    // ── Convergence check ─────────────────────────────────────────────────────
     let deviation_ppm = if new_hz > 0 {
         (error_hz.unsigned_abs() as u128 * 1_000_000 / new_hz as u128) as u64
     } else {
@@ -183,39 +183,39 @@ pub fn pll_update(measured_hz: u64, _tsc_now: u64, ref_ns_anchor: u64) -> (u64, 
     PLL.current_hz.store(new_hz, Ordering::Release);
     PLL.total_corrections.fetch_add(1, Ordering::Relaxed);
 
-    // ── Recalcul de ns_anchor pour garantir la monotonie ─────────────────────
-    // Si on change tsc_hz, le calcul ns = tsc_delta × 1e9 / hz change.
-    // Il faut recalculer ns_anchor à partir du tsc_now actuel et de la nouvelle hz.
-    // RÈGLE DRIFT-MONOTONE-01 : ns_anchor_new >= ns_anchor_old.
-    let ns_anchor_new = ref_ns_anchor; // Le caller calcule déjà ns_now correctement.
+    // ── Recalculate ns_anchor to guarantee monotonicity ───────────────────────
+    // If tsc_hz changes, calculation ns = tsc_delta * 1e9 / hz changes.
+    // Must recalculate ns_anchor from current tsc_now and new hz.
+    // RULE DRIFT-MONOTONE-01: ns_anchor_new >= ns_anchor_old.
+    let ns_anchor_new = ref_ns_anchor; // Caller already calculates ns_now correctly.
 
     (ns_anchor_new, new_hz)
 }
 
-/// Retourne `true` si la PLL est en état de lock (dérive < 100 ppm).
+/// Returns `true` if PLL is locked (drift < 100 ppm).
 #[inline(always)]
 pub fn pll_locked() -> bool {
     PLL.locked.load(Ordering::Relaxed)
 }
 
-/// Retourne la fréquence courante selon la PLL (Hz).
+/// Returns current frequency according to PLL (Hz).
 #[inline(always)]
 pub fn pll_current_hz() -> u64 {
     PLL.current_hz.load(Ordering::Relaxed)
 }
 
-/// Retourne le dernier ajustement appliqué (Hz, signé).
+/// Returns last applied adjustment (Hz, signed).
 #[inline(always)]
 pub fn pll_last_adj_hz() -> i64 {
     PLL.last_adj_hz.load(Ordering::Relaxed)
 }
 
-/// Retourne le nombre total de corrections PLL depuis le boot.
+/// Returns total count of PLL corrections since boot.
 pub fn pll_correction_count() -> u64 {
     PLL.total_corrections.load(Ordering::Relaxed)
 }
 
-/// Snapshot complet de l'état PLL pour diagnostic.
+/// Complete snapshot of PLL state for diagnostics.
 pub struct PllSnapshot {
     pub current_hz: u64,
     pub last_adj_hz: i64,

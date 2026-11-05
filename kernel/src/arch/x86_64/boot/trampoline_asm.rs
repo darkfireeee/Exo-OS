@@ -1,158 +1,158 @@
-//! # arch/x86_64/boot/trampoline_asm.rs — Trampoline SMP (Real Mode → 64 bits)
+//! # arch/x86_64/boot/trampoline_asm.rs — SMP Trampoline (Real Mode → 64-bit)
 //!
-//! Le trampoline est un bloc de code 16 bits copié à l'adresse physique 0x6000
-//! (page d'INIT SIPI = 6). Les APs reçoivent le SIPI avec cette page et commencent
-//! l'exécution en mode réel à 0x6000:0x0000 = 0x6000 physique.
+//! The trampoline is a 16-bit code block copied to physical address 0x6000
+//! (INIT SIPI page = 6). APs receive SIPI with this page and begin
+//! execution in real mode at 0x6000:0x0000 = physical 0x6000.
 //!
 //! ## Transition
-//! 1. Mode réel (16 bits) : charger GDT temporaire + activer PE
-//! 2. Mode protégé (32 bits) : sauter en 32 bits
-//! 3. Activer Long Mode (EFER.LMA) + activer paging avec PML4 du BSP
-//! 4. Sauter en 64 bits
-//! 5. Charger la pile dédiée per-AP
-//! 6. Appeler `ap_entry(cpu_id, lapic_id, kernel_stack_top)`
+//! 1. Real mode (16-bit): load temporary GDT + enable PE
+//! 2. Protected mode (32-bit): jump to 32-bit
+//! 3. Enable Long Mode (EFER.LMA) + enable paging with BSP PML4
+//! 4. Jump to 64-bit
+//! 5. Load dedicated per-AP stack
+//! 6. Call `ap_entry(cpu_id, lapic_id, kernel_stack_top)`
 //!
-//! ## Layout en mémoire (relatif à 0x6000)
+//! ## Memory Layout (relative to 0x6000)
 //! ```
-//! 0x0000 : code 16 bits
-//! 0x0010 : u32 handshake (BSP attend ici la signature `AP_ALIVE_MAGIC`)
-//! 0x0020 : u64 pml4_phys (adresse du PML4 du BSP, remplie par install_trampoline)
-//! 0x0028 : u32 cpu_count (compteur — rempli dynamiquement)
-//! 0x0030 : code 32 bits
-//! 0x0080 : code 64 bits
+//! 0x0000 : 16-bit code
+//! 0x0010 : u32 handshake (BSP waits here for `AP_ALIVE_MAGIC` signature)
+//! 0x0020 : u64 pml4_phys (BSP PML4 address, filled by install_trampoline)
+//! 0x0028 : u32 cpu_count (counter — dynamically filled)
+//! 0x0030 : 32-bit code
+//! 0x0080 : 64-bit code
 //! ```
 
 use super::super::smp::init::TRAMPOLINE_PHYS;
 
-// ── Image binaire du trampoline ───────────────────────────────────────────────
+// ── Trampoline Binary Image ───────────────────────────────────────────────
 
-// Le trampoline est écrit entièrement en `global_asm!`.
-// Il sera linké dans la section `.trampoline` et copié à 0x6000 au runtime.
+// The trampoline is written entirely in `global_asm!`.
+// It is linked into the `.trampoline` section and copied to 0x6000 at runtime.
 
 core::arch::global_asm!(
-    // ── Section trampoline (16 bits) ─────────────────────────────────────────
+    // ── Trampoline section (16-bit) ─────────────────────────────────────────
     ".section .trampoline, \"awx\"",
     ".code16",
     ".global trampoline_start",
     "trampoline_start:",
-    // Configurer les segments 16 bits
+    // Configure 16-bit segments
     "cli",
     "xor ax, ax",
     "mov ds, ax",
     "mov es, ax",
     "mov ss, ax",
-    // Charger la GDTR temporaire 32 bits (offset 0x50 dans le trampoline)
+    // Load temporary 32-bit GDTR (offset 0x50 in trampoline)
     "lgdt [0x6050]",
-    // Activer Protected Mode (CR0.PE)
+    // Enable Protected Mode (CR0.PE)
     "mov eax, cr0",
     "or eax, 1",
     "mov cr0, eax",
-    // Sauter en 32 bits (sélecteur 0x08 = KERNEL_CS)
-    // LLVM assembler ne supporte pas `ljmp imm16, imm16` en AT&T syntax.
-    // Encodage manuel : opcode EA + offset16-LE + seg16-LE = EA 80 60 08 00
+    // Jump to 32-bit (selector 0x08 = KERNEL_CS)
+    // LLVM assembler does not support `ljmp imm16, imm16` in AT&T syntax.
+    // Manual encoding: opcode EA + offset16-LE + seg16-LE = EA 80 60 08 00
     ".byte 0xEA, 0x80, 0x60, 0x08, 0x00", // ljmp 0x08:0x6080
-    // ── Section 32 bits ────────────────────────────────────────────────────
+    // ── 32-bit section ────────────────────────────────────────────────────
     ".code32",
-    ".balign 0x80", // Aligner sur 0x80 = offset 0x80 depuis trampoline_start
-    // Charger segments 32 bits
+    ".balign 0x80", // Align to 0x80 = offset 0x80 from trampoline_start
+    // Load 32-bit segments
     "mov ax, 0x10", // KERNEL_DS = 0x10
     "mov ds, ax",
     "mov ss, ax",
     "mov es, ax",
     "mov fs, ax",
     "mov gs, ax",
-    // Activer PAE (CR4.PAE, bit 5)
+    // Enable PAE (CR4.PAE, bit 5)
     "mov eax, cr4",
-    "or eax, 0x620", // PAE(5) + OSFXSR(9) + OSXMMEXCPT(10) basiques
+    "or eax, 0x620", // basic PAE(5) + OSFXSR(9) + OSXMMEXCPT(10)
     "mov cr4, eax",
-    // Charger le PML4 du BSP (adresse 64 bits lue depuis l'offset 0x6020)
-    "mov eax, [0x6020]", // adresse basse du PML4 (64 bits, mais en dessous de 4GiB au boot)
+    // Load BSP PML4 (64-bit address read from offset 0x6020)
+    "mov eax, [0x6020]", // low address of PML4 (64-bit, but below 4GiB at boot)
     "mov cr3, eax",
-    // Activer Long Mode dans EFER (MSR 0xC0000080)
+    // Enable Long Mode in EFER (MSR 0xC0000080)
     "mov ecx, 0xC0000080",
     "rdmsr",
     "or eax, 0x900", // LME(8) + NXE(11)
     "wrmsr",
-    // Activer Paging (CR0.PG) + Protection (déjà fait mais répéter est safe)
+    // Enable Paging (CR0.PG) + Protection (already done but repeating is safe)
     "mov eax, cr0",
     "or eax, 0x80000001",
     "mov cr0, eax",
-    // Sauter en 64 bits (sélecteur 0x08 = KERNEL_CS64)
-    // LLVM assembler ne supporte pas `ljmp imm16, imm32` en AT&T syntax.
-    // Encodage manuel (mode 32 bits) : EA + offset32-LE + seg16-LE
+    // Jump to 64-bit (selector 0x08 = KERNEL_CS64)
+    // LLVM assembler does not support `ljmp imm16, imm32` in AT&T syntax.
+    // Manual encoding (32-bit mode): EA + offset32-LE + seg16-LE
     ".byte 0xEA, 0xC0, 0x60, 0x00, 0x00, 0x08, 0x00", // ljmp 0x08:0x60C0
-    // ── Section 64 bits ────────────────────────────────────────────────────
+    // ── 64-bit section ────────────────────────────────────────────────────
     ".code64",
-    ".balign 0x40", // aligner sur 0xC0
-    // Charger la pile dédiée AP (adresse dans l'offset 0x6038 — rempli au runtime)
+    ".balign 0x40", // align to 0xC0
+    // Load dedicated AP stack (address at offset 0x6038 — filled at runtime)
     "mov rsp, [rip + 0f]",
     "jmp 1f",
-    "0: .quad 0", // placeholder — rempli par install_trampoline per-AP
+    "0: .quad 0", // placeholder — filled by install_trampoline per-AP
     "1:",
-    // Lire le cpu_id depuis l'offset 0x6028
+    // Read cpu_id from offset 0x6028
     "mov edi, [0x6028]", // cpu_id (argument 1)
     "mov esi, [0x602C]", // lapic_id (argument 2)
     "mov rdx, rsp",      // kernel_stack_top (argument 3)
-    // Aligner la pile sur 16 octets
+    // Align stack to 16 bytes
     "and rsp, -16",
-    // Appeler ap_entry (symbol défini dans smp/init.rs)
+    // Call ap_entry (symbol defined in smp/init.rs)
     "call ap_entry",
-    // Ne doit jamais retourner — halt si ça arrive
+    // Must never return — halt if it occurs
     "2: hlt",
     "jmp 2b",
-    // ── GDT temporaire (partagée boot) ─────────────────────────────────────
+    // ── Temporary GDT (shared boot) ─────────────────────────────────────
     ".balign 8",
     ".global trampoline_gdt",
     "trampoline_gdt:",
     ".quad 0",                  // null
     ".quad 0x00AF9A000000FFFF", // KERNEL_CS64 : Long mode, executable
-    ".quad 0x00CF92000000FFFF", // KERNEL_DS32 : data 32 bits
+    ".quad 0x00CF92000000FFFF", // KERNEL_DS32 : 32-bit data
     ".global trampoline_gdtr",
     "trampoline_gdtr:",
     ".word 23",         // limit = 3 * 8 - 1
-    ".long 0x6050 + 8", // base = adresse de trampoline_gdt
+    ".long 0x6050 + 8", // base = trampoline_gdt address
     ".global trampoline_end",
     "trampoline_end:",
     ".size trampoline_start, trampoline_end - trampoline_start",
-    ".previous", // retour à .text
+    ".previous", // return to .text
 );
 
-// Exports linker
+// Linker exports
 extern "C" {
     static trampoline_start: u8;
     static trampoline_end: u8;
 }
 
-// ── Installation du trampoline ────────────────────────────────────────────────
+// ── Trampoline Installation ────────────────────────────────────────────────
 
-/// Copie le trampoline à 0x6000 et configure les pointeurs PML4
+/// Copies the trampoline to 0x6000 and configures PML4 pointers
 ///
-/// Appelé par `early_init` avant `smp_boot_aps()`.
+/// Called by `early_init` before `smp_boot_aps()`.
 pub fn install_trampoline() {
-    // SAFETY: trampoline_start/end sont définis par le linker dans .trampoline
+    // SAFETY: trampoline_start/end are defined by the linker in .trampoline
     let src: *const u8 = unsafe { &trampoline_start };
     let end: *const u8 = unsafe { &trampoline_end };
     let size = unsafe { end.offset_from(src) as usize };
 
     let dst = TRAMPOLINE_PHYS as *mut u8;
 
-    // SAFETY: 0x6000 est dans le Low Memory libre, identity-mappé
+    // SAFETY: 0x6000 is in free low memory, identity-mapped
     unsafe {
         core::ptr::copy_nonoverlapping(src, dst, size);
     }
 
-    // Écrire le PML4 courant dans l'offset 0x20 du trampoline
+    // Write current PML4 to trampoline offset 0x20
     let pml4_phys: u64;
-    // SAFETY: lecture CR3 — adresse physique du PML4 courant
+    // SAFETY: CR3 read — physical address of current PML4
     unsafe {
         core::arch::asm!("mov {}, cr3", out(reg) pml4_phys, options(nostack, nomem));
     }
     let pml4_slot = (TRAMPOLINE_PHYS + 0x20) as *mut u64;
-    // SAFETY: offset dans le trampoline copié
+    // SAFETY: offset in copied trampoline
     unsafe {
         core::ptr::write_volatile(pml4_slot, pml4_phys & 0xFFFF_FFFF_F000);
     }
 
-    // Écrire le GDTR pointant vers trampoline_gdt (offset 0x50)
-    // La GDT temporaire est déjà dans le trampoline copié
+    // Write GDTR pointing to trampoline_gdt (offset 0x50)
+    // The temporary GDT is already in the copied trampoline
 }

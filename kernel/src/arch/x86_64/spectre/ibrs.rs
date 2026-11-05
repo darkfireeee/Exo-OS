@@ -1,10 +1,10 @@
 //! # arch/x86_64/spectre/ibrs.rs — IBRS / IBPB / STIBP (Spectre variant 2/3a)
 //!
-//! - **IBRS** (Indirect Branch Restricted Speculation) : restreint la prédiction
-//!   de branches indirectes. Mode ENHANCED_IBRS si disponible (permanent).
-//! - **IBPB** (Indirect Branch Predictor Barrier) : vide le prédicteur de branches.
-//!   Doit être émis lors du passage kernel → userspace (process différent).
-//! - **STIBP** (Single Thread Indirect Branch Predictors) : isole les HyperThreads.
+//! - **IBRS** (Indirect Branch Restricted Speculation): restricts indirect branch
+//!   prediction. ENHANCED_IBRS mode if available (permanent).
+//! - **IBPB** (Indirect Branch Predictor Barrier): flushes branch predictor.
+//!   Must be issued during kernel → userspace transition (different process).
+//! - **STIBP** (Single Thread Indirect Branch Predictors): isolates HyperThreads.
 
 use super::super::cpu::msr::{
     self, MSR_IA32_PRED_CMD, MSR_IA32_SPEC_CTRL, PRED_CMD_IBPB, SPEC_CTRL_IBRS, SPEC_CTRL_STIBP,
@@ -22,18 +22,18 @@ pub fn stibp_enabled() -> bool {
     STIBP_ENABLED.load(Ordering::Relaxed)
 }
 
-/// Initialise les mitigations IBRS/STIBP
+/// Initializes IBRS/STIBP mitigations
 ///
-/// Appelé depuis `apply_mitigations_bsp/ap()`.
+/// Called from `apply_mitigations_bsp/ap()`.
 pub fn init_ibrs() {
     let features = super::super::cpu::features::cpu_features();
     if !features.has_spec_ctrl() {
         return;
     }
 
-    // Enhanced IBRS (toujours activé, pas besoin de le réactiver à chaque switch)
+    // Enhanced IBRS (always enabled, no need to re-enable on each switch)
     if features.ibrs_all() {
-        // SAFETY: MSR_IA32_SPEC_CTRL bit IBRS — disponible (CPUID 7.0 EDX[26])
+        // SAFETY: MSR_IA32_SPEC_CTRL bit IBRS — available (CPUID 7.0 EDX[26])
         unsafe {
             msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_IBRS);
         }
@@ -41,15 +41,15 @@ pub fn init_ibrs() {
         IBRS_ENABLED.store(true, Ordering::Release);
     } else if features.has_ibrs() {
         IBRS_ENABLED.store(true, Ordering::Release);
-        // IBRS classique : activé/désactivé à chaque switch kernel/user
-        // Pour l'instant : activation globale (pénalité perf acceptable)
-        // SAFETY: MSR_IA32_SPEC_CTRL write depuis Ring 0
+        // Classic IBRS: enabled/disabled on each kernel/user switch
+        // Currently: global activation (acceptable performance penalty)
+        // SAFETY: MSR_IA32_SPEC_CTRL write from Ring 0
         unsafe {
             msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_IBRS);
         }
     }
 
-    // STIBP : activer si CPU SMT et STIBP disponible
+    // STIBP: enable if CPU SMT and STIBP available
     if features.has_stibp() {
         // SAFETY: MSR_IA32_SPEC_CTRL bit STIBP
         unsafe {
@@ -59,61 +59,61 @@ pub fn init_ibrs() {
     }
 }
 
-/// Active IBRS manuellement (mode non-enhanced — appelé au retour kernel depuis user)
+/// Enables IBRS manually (non-enhanced mode — called on kernel return from user)
 #[inline]
 pub fn apply_ibrs() {
     if EIBRS_ACTIVE.load(Ordering::Relaxed) {
         return;
-    } // Enhanced IBRS toujours actif
+    } // Enhanced IBRS always active
     if !IBRS_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    // SAFETY: MSR write depuis Ring 0 — séquence mitigations switch
+    // SAFETY: MSR write from Ring 0 — switch mitigation sequence
     unsafe {
         msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_IBRS);
     }
 }
 
-/// Active STIBP
+/// Enables STIBP
 #[inline]
 pub fn apply_stibp() {
     if !STIBP_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    // SAFETY: MSR write depuis Ring 0
+    // SAFETY: MSR write from Ring 0
     unsafe {
         msr::set_msr_bits(MSR_IA32_SPEC_CTRL, SPEC_CTRL_STIBP);
     }
 }
 
-/// Flush le prédicteur de branches indirectes (IBPB)
+/// Flushes indirect branch predictor (IBPB)
 ///
-/// ## Quand l'appeler
-/// - Lors du context switch vers un process différent (IBPB flush inter-process)
-/// - Toujours coûteux (~150–300 cycles) — limiter aux switchs de domaine sécurité
+/// ## When to call
+/// - On context switch to a different process (inter-process IBPB flush)
+/// - Consistently costly (~150–300 cycles) — restrict to security domain switches
 #[inline]
 pub fn flush_ibpb() {
     let features = super::super::cpu::features::cpu_features();
     if !features.has_ibpb() {
         return;
     }
-    // SAFETY: MSR_IA32_PRED_CMD write depuis Ring 0 — flush IBPB
+    // SAFETY: MSR_IA32_PRED_CMD write from Ring 0 — IBPB flush
     unsafe {
         msr::write_msr(MSR_IA32_PRED_CMD, PRED_CMD_IBPB);
     }
 }
 
-/// Flush le microcode store buffer (VERW — MDS mitigation)
+/// Flushes microcode store buffer (VERW — MDS mitigation)
 ///
-/// Mitigue MDS (Microarchitectural Data Sampling) : Fallout, RIDL, ZombieLoad.
-/// Séquence : `VERW mem16` avec un sélecteur sûr (User DS).
+/// Mitigates MDS (Microarchitectural Data Sampling): Fallout, RIDL, ZombieLoad.
+/// Sequence: `VERW mem16` with a safe selector (User DS).
 #[inline]
 pub fn flush_mds() {
     let features = super::super::cpu::features::cpu_features();
     if !features.has_md_clear() {
         return;
     }
-    // SAFETY: VERW avec le sélecteur USER_DS — flush des store buffers
+    // SAFETY: VERW with USER_DS selector — store buffers flush
     unsafe {
         let ds_sel: u16 = super::super::gdt::GDT_USER_DS;
         core::arch::asm!(

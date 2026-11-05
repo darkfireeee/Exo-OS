@@ -1,11 +1,11 @@
-//! # arch/x86_64/exceptions — Sous-système de gestion des exceptions et interruptions CPU
+//! # arch/x86_64/exceptions — CPU Exception and Interrupt Handling Subsystem
 //!
-//! Organisation modulaire ségréguée :
-//! - `frame`      : Registres sauvegardés ExceptionFrame, ponts scheduler, signaux, stats
-//! - `stubs`      : Stubs d'assemblage bas niveau (global_asm!) pour IDT
-//! - `cpu_faults` : Exceptions matérielles processeur (GPF, Double Fault, UD, NM...)
-//! - `page_fault` : Gestionnaire #PF, résolution CoW, demand paging et synchronisation KPTI
-//! - `irq`        : Routage des IRQ périphériques et IPIs inter-cœurs APIC
+//! Segregated modular organization:
+//! - `frame`      : Saved registers ExceptionFrame, scheduler bridges, signals, stats
+//! - `stubs`      : Low-level assembly stubs (global_asm!) for IDT
+//! - `cpu_faults` : Hardware processor exceptions (GPF, Double Fault, UD, NM...)
+//! - `page_fault` : #PF handler, CoW resolution, demand paging, and KPTI synchronization
+//! - `irq`        : Peripheral IRQ and inter-core APIC IPI routing
 
 pub mod frame;
 pub mod stubs;

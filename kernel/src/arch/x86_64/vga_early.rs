@@ -1,27 +1,27 @@
 // kernel/src/arch/x86_64/vga_early.rs
 //
-// Affichage VGA texte 80×25 minimal — disponible dès le boot (avant drivers).
+// Minimal 80×25 VGA text display — available from boot (before drivers).
 //
-// Accès direct au buffer VGA physique 0xB8000 via l'identity map 0..1 GiB
-// mise en place par le trampoline bootloader. Aucune initialisation requise.
+// Direct access to physical VGA buffer 0xB8000 via the 0..1 GiB identity map
+// set up by the bootloader trampoline. No initialization required.
 //
-// Utilisé pour :
-//   - Afficher l'état de boot sur l'écran (Phase 1 "tester graphique")
-//   - Afficher les exceptions fatales (panic visible à l'écran)
-//   - Remplace les simples probes port 0xE9 pour la visibilité utilisateur
+// Used for:
+//   - Displaying boot status on screen (Phase 1 "graphical tester")
+//   - Displaying fatal exceptions (panic visible on screen)
+//   - Replaces simple port 0xE9 probes for user visibility
 //
-// Couche 0 — aucune dépendance externe.
+// Layer 0 — no external dependencies.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Buffer VGA texte physique 0xB8000 — accessible via identity map.
+/// Physical 0xB8000 VGA text buffer — accessible via identity map.
 const VGA_BASE: usize = 0xB8000;
 const VGA_COLS: usize = 80;
 const VGA_ROWS: usize = 25;
 
-// ── Couleurs ──────────────────────────────────────────────────────────────────
+// ── Colors ────────────────────────────────────────────────────────────────────
 pub const BLACK: u8 = 0;
 pub const BLUE: u8 = 1;
 pub const GREEN: u8 = 2;
@@ -38,24 +38,24 @@ pub const LIGHT_RED: u8 = 12;
 pub const YELLOW: u8 = 14;
 pub const WHITE: u8 = 15;
 
-/// Construit un attribut VGA : fond × 16 + texte.
+/// Constructs a VGA attribute: background × 16 + foreground.
 #[inline(always)]
 pub const fn attr(fg: u8, bg: u8) -> u8 {
     (bg << 4) | (fg & 0x0F)
 }
 
-// ── Position curseur ──────────────────────────────────────────────────────────
+// ── Cursor position ───────────────────────────────────────────────────────────
 
 static VGA_COL: AtomicUsize = AtomicUsize::new(0);
 static VGA_ROW: AtomicUsize = AtomicUsize::new(0);
 
-// ── Accès buffer ─────────────────────────────────────────────────────────────
+// ── Buffer access ─────────────────────────────────────────────────────────────
 
-/// Écrit une cellule VGA (char + attribut) à la position (col, row).
+/// Writes a VGA cell (char + attribute) at position (col, row).
 ///
-/// SAFETY: VGA_BASE est dans l'identity map (trampoline 0..1 GiB) toujours
-///         active pendant le boot. Valide dès `_start64` jusqu'au premier
-///         remap explicite de cette région (jamais fait en Phase 1).
+/// SAFETY: VGA_BASE is in the identity map (trampoline 0..1 GiB) always
+///         active during boot. Valid from `_start64` until the first
+///         explicit remap of this region (never done in Phase 1).
 #[inline(always)]
 unsafe fn put_cell(col: usize, row: usize, ch: u8, attribute: u8) {
     if col >= VGA_COLS || row >= VGA_ROWS {
@@ -67,12 +67,12 @@ unsafe fn put_cell(col: usize, row: usize, ch: u8, attribute: u8) {
     core::ptr::write_volatile(ptr.add(1), attribute);
 }
 
-/// Efface tout l'écran avec l'attribut donné.
+/// Clears the entire screen with the given attribute.
 pub fn clear(background: u8) {
     let attribute = attr(LIGHT_GRAY, background);
     for row in 0..VGA_ROWS {
         for col in 0..VGA_COLS {
-            // SAFETY: voir put_cell
+            // SAFETY: see put_cell
             unsafe {
                 put_cell(col, row, b' ', attribute);
             }
@@ -82,21 +82,21 @@ pub fn clear(background: u8) {
     VGA_ROW.store(0, Ordering::Relaxed);
 }
 
-/// Fait défiler l'écran d'une ligne vers le haut et efface la dernière ligne.
+/// Scrolls the screen up by one line and clears the last line.
 fn scroll(attribute: u8) {
     // SAFETY: VGA_BASE accessible via identity map
     unsafe {
         let base = VGA_BASE as *mut u8;
-        // Copier lignes 1..ROWS vers 0..ROWS-1
+        // Copy lines 1..ROWS to 0..ROWS-1
         core::ptr::copy(base.add(VGA_COLS * 2), base, (VGA_ROWS - 1) * VGA_COLS * 2);
-        // Effacer la dernière ligne
+        // Clear the last line
         for col in 0..VGA_COLS {
             put_cell(col, VGA_ROWS - 1, b' ', attribute);
         }
     }
 }
 
-/// Écrit un caractère à la position courante du curseur.
+/// Writes a character at the current cursor position.
 pub fn write_char(ch: u8, attribute: u8) {
     let col = VGA_COL.load(Ordering::Relaxed);
     let row = VGA_ROW.load(Ordering::Relaxed);
@@ -124,7 +124,7 @@ pub fn write_char(ch: u8, attribute: u8) {
         }
         _ => {
             let ch_out = if (0x20..0x7F).contains(&ch) { ch } else { b'?' };
-            // SAFETY: voir put_cell
+            // SAFETY: see put_cell
             unsafe {
                 put_cell(col, row, ch_out, attribute);
             }
@@ -145,14 +145,14 @@ pub fn write_char(ch: u8, attribute: u8) {
     }
 }
 
-/// Écrit une chaîne à la position courante.
+/// Writes a string at the current position.
 pub fn write_str(s: &str, attribute: u8) {
     for byte in s.bytes() {
         write_char(byte, attribute);
     }
 }
 
-/// Écrit une ligne centrée horizontalement (80 colonnes).
+/// Writes a horizontally centered line (80 columns).
 pub fn write_centered(s: &str, attribute: u8) {
     let len = s.len().min(VGA_COLS);
     let pad = (VGA_COLS - len) / 2;
@@ -164,11 +164,11 @@ pub fn write_centered(s: &str, attribute: u8) {
     }
     VGA_COL.store(pad, Ordering::Relaxed);
     write_str(s, attribute);
-    // Passer à la ligne suivante
+    // Move to next line
     write_char(b'\n', attribute);
 }
 
-/// Écrit une ligne horizontale (caractère '─' = 0xC4 en CP437).
+/// Writes a horizontal line (character '─' = 0xC4 in CP437).
 pub fn write_hline(attribute: u8) {
     let row = VGA_ROW.load(Ordering::Relaxed);
     for col in 0..VGA_COLS {
@@ -179,13 +179,13 @@ pub fn write_hline(attribute: u8) {
     write_char(b'\n', attribute);
 }
 
-/// Place le curseur à une position absolue.
+/// Sets the cursor to an absolute position.
 pub fn set_cursor(col: usize, row: usize) {
     VGA_COL.store(col.min(VGA_COLS - 1), Ordering::Relaxed);
     VGA_ROW.store(row.min(VGA_ROWS - 1), Ordering::Relaxed);
 }
 
-/// Ecrit un u32 en décimal.
+/// Writes a u32 in decimal.
 pub fn write_u32(mut n: u32, attribute: u8) {
     if n == 0 {
         write_char(b'0', attribute);
@@ -203,24 +203,24 @@ pub fn write_u32(mut n: u32, attribute: u8) {
     }
 }
 
-// ── Écran de boot Phase 1 ─────────────────────────────────────────────────────
+// ── Phase 1 boot screen ───────────────────────────────────────────────────────
 
-/// Affiche l'écran de démarrage Exo-OS au boot.
+/// Displays the Exo-OS startup screen at boot.
 ///
-/// Appelé depuis `kernel_main` juste après le marqueur port 0xE9 'K'.
-/// Visible sur la fenêtre QEMU (VGA std) dès les premières instructions.
+/// Called from `kernel_main` right after the port 0xE9 'K' marker.
+/// Visible on the QEMU window (std VGA) from the first instructions.
 pub fn boot_screen() {
     clear(BLACK);
 
-    // Ligne de titre — fond bleu, texte blanc
+    // Title line — blue background, white text
     let title_attr = attr(WHITE, BLUE);
     let normal_attr = attr(LIGHT_GRAY, BLACK);
     let ok_attr = attr(LIGHT_GREEN, BLACK);
     let warn_attr = attr(YELLOW, BLACK);
     let cyan_attr = attr(LIGHT_CYAN, BLACK);
 
-    // ── En-tête ────────────────────────────────────────────────────────────────
-    // Ligne 0 : titre plein écran
+    // ── Header ────────────────────────────────────────────────────────────────────
+    // Line 0: full screen title
     for col in 0..VGA_COLS {
         unsafe {
             put_cell(col, 0, b' ', title_attr);
@@ -229,17 +229,17 @@ pub fn boot_screen() {
     set_cursor(0, 0);
     write_centered("  Exo-OS v0.1  --  Kernel Phase 1  ", title_attr);
 
-    // Ligne 1 : vide
+    // Line 1: empty
     write_char(b'\n', normal_attr);
 
-    // ── Version ────────────────────────────────────────────────────────────────
+    // ── Version ───────────────────────────────────────────────────────────────────
     write_str(
         "  Architecture : x86_64   Platform : QEMU Q35   RAM : 256 MiB\n",
         cyan_attr,
     );
     write_char(b'\n', normal_attr);
 
-    // ── Sous-systemes Phase 1 ──────────────────────────────────────────────────
+    // ── Phase 1 subsystems ────────────────────────────────────────────────────────
     write_str("  Phase 1 — Memoire virtuelle et heap kernel\n", warn_attr);
     write_hline(attr(DARK_GRAY, BLACK));
 
@@ -266,14 +266,14 @@ pub fn boot_screen() {
     write_str("  Booting kernel subsystems...\n", cyan_attr);
 }
 
-/// Met à jour l'affichage boot avec le statut final.
+/// Updates the boot display with the final status.
 ///
-/// Appelé depuis `kernel_main` après que `kernel_init()` est terminé.
+/// Called from `kernel_main` after `kernel_init()` has completed.
 pub fn boot_complete() {
     let ok_attr = attr(LIGHT_GREEN, BLACK);
     let cyan_attr = attr(LIGHT_CYAN, BLACK);
 
-    // Aller à la fin de l'écran
+    // Go to the end of the screen
     set_cursor(0, VGA_ROWS - 3);
     write_hline(attr(DARK_GRAY, BLACK));
     write_centered("[ Exo-OS Phase 1 complete - scheduler running ]", ok_attr);

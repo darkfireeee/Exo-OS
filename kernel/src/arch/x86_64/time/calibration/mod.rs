@@ -1,45 +1,45 @@
 // kernel/src/arch/x86_64/time/calibration/mod.rs
 //
 // ════════════════════════════════════════════════════════════════════════════
-// Orchestration de la calibration TSC — chaîne de fallback complète
+// TSC calibration orchestration — complete fallback chain
 // ════════════════════════════════════════════════════════════════════════════
 //
-// ## Responsabilités
-//   1. Initialiser les sources d'horloge (init_sources) avant toute mesure.
-//   2. Orchestrer la chaîne de fallback complète avec diagnostic.
-//   3. Propager la fréquence calibrée vers cpu::tsc et sources::tsc.
-//   4. Exposer une API riche pour monitoring, drift, re-calibration per-CPU.
+// ## Responsibilities
+//   1. Initialize clock sources (init_sources) before any measurement.
+//   2. Orchestrate the complete fallback chain with diagnostics.
+//   3. Propagate the calibrated frequency to cpu::tsc and sources::tsc.
+//   4. Expose a rich API for monitoring, drift, and per-CPU recalibration.
 //
-// ## Chaîne de fallback (rating décroissant)
-//   1. HPET window 1ms × 10 samples    (rating 300) — MMIO, précision ±0.05%
+// ## Fallback chain (descending rating)
+//   1. HPET window 1ms × 10 samples    (rating 300) — MMIO, accuracy ±0.05%
 //   2. PM Timer window 1ms × 10 samples(rating 200) — port I/O, ±0.05%
-//   3. CPUID leaf 0x15                 (rating 150) — nominal fabricant
-//   4. CPUID leaf 0x16                 (rating 100) — fréquence base MHz
-//   5. KVM/QEMU CPUID hypervisor TSC   (rating  80) — paravirtualisé
-//   6. PIT one-shot 1ms × 10 samples   (rating  50) — héritage x86
-//   7. Fallback 3 GHz                  (rating  10) — dernier recours
+//   3. CPUID leaf 0x15                 (rating 150) — manufacturer nominal
+//   4. CPUID leaf 0x16                 (rating 100) — base frequency MHz
+//   5. KVM/QEMU CPUID hypervisor TSC   (rating  80) — paravirtualized
+//   6. PIT one-shot 1ms × 10 samples   (rating  50) — legacy x86
+//   7. Fallback 3 GHz                  (rating  10) — last resort
 //
-// ## Règles respectées
-//   CAL-FALLBACK-01 : chaque fallback est tracé (port 0xE9 + log interne).
-//   CAL-WINDOW-01   : condition de sortie = ticks source temps réel, jamais itérations.
-//   CAL-CLI-01      : cli/sti par sample 1ms, pas sur fenêtre 10ms globale.
-//   CAL-RDTSCP-01   : RDTSCP pour fin de mesure (sérialisation out-of-order).
-//   SCHED-INIT-01   : calibrate_tsc() NE reçoit PAS tsc_hz en paramètre.
-//   TIME-01         : TSC_HZ propagé via cpu::tsc::set_tsc_hz() (atomic Release).
-//   TIME-02         : jamais while iter < N pour mesure temporelle.
+// ## Rules adhered to
+//   CAL-FALLBACK-01 : each fallback is traced (port 0xE9 + internal log).
+//   CAL-WINDOW-01   : exit condition = real-time source ticks, never iterations.
+//   CAL-CLI-01      : cli/sti per 1ms sample, not across overall 10ms window.
+//   CAL-RDTSCP-01   : RDTSCP for measurement end (out-of-order serialization).
+//   SCHED-INIT-01   : calibrate_tsc() does NOT receive tsc_hz as parameter.
+//   TIME-01         : TSC_HZ propagated via cpu::tsc::set_tsc_hz() (atomic Release).
+//   TIME-02         : never while iter < N for time measurements.
 //
-// ## Utilisation type
+// ## Typical usage
 //   ```rust
-//   // Dans time_init() :
+//   // In time_init() :
 //   let hz = calibration::calibrate_tsc();
-//   // → appelle sources::init_sources() en interne
-//   // → retourne toujours une valeur dans [100 MHz, 10 GHz]
+//   // → calls sources::init_sources() internally
+//   // → always returns a value in [100 MHz, 10 GHz]
 //
-//   // Diagnostic post-boot :
+//   // Post-boot diagnostic :
 //   let detail = calibration::last_calibration_result();
 //   let (hz, source_tag, confidence, seq) = calibration::calibration_stats();
 //
-//   // Re-calibration post-APIC (per-CPU safe) :
+//   // Post-APIC recalibration (per-CPU safe) :
 //   let new_hz = calibration::recalibrate_tsc();
 //   ```
 // ════════════════════════════════════════════════════════════════════════════
@@ -52,36 +52,36 @@ use super::sources;
 use crate::arch::x86_64::cpu::tsc as cpu_tsc;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
-// Ré-exports publics pour les modules consommateurs (drift, percpu, ktime).
+// Public re-exports for consumer modules (drift, percpu, ktime).
 pub use window::{mean_and_variance, CalibrationResult, CalibrationSample, CalibrationSource};
 
-// ── État global de calibration ────────────────────────────────────────────────
+// ── Global calibration state ─────────────────────────────────────────────────
 
-/// Fréquence TSC calibrée en Hz (atomique, mise à jour en Release).
+/// Calibrated TSC frequency in Hz (atomic, updated with Release ordering).
 static LAST_TSC_HZ: AtomicU64 = AtomicU64::new(0);
 
-/// Indice de la source utilisée pour la dernière calibration (CalibSource discriminant).
+/// Index of the source used for the last calibration (CalibSource discriminant).
 static LAST_SOURCE: AtomicU8 = AtomicU8::new(CalibSource::None as u8);
 
-/// Rating de la dernière source utilisée (0–300).
+/// Rating of the last used source (0–300).
 static LAST_RATING: AtomicU32 = AtomicU32::new(0);
 
-/// Compteur de séquence de calibration (incrémenté à chaque calibrate_tsc() ou recalibrate).
+/// Calibration sequence counter (incremented on each calibrate_tsc() or recalibrate).
 static CALIB_SEQ: AtomicU32 = AtomicU32::new(0);
 
-/// Nombre de re-calibrations effectuées post-boot (recalibrate_tsc()).
+/// Number of recalibrations performed post-boot (recalibrate_tsc()).
 static RECALIB_COUNT: AtomicU32 = AtomicU32::new(0);
 
-/// Niveau de confiance de la dernière calibration (0–100).
+/// Confidence level of the last calibration (0–100).
 static LAST_CONFIDENCE: AtomicU8 = AtomicU8::new(0);
 
-/// Garde : sources::init_sources() déjà appelé ?
+/// Guard: sources::init_sources() already called?
 static SOURCES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-// ── Types exportés ────────────────────────────────────────────────────────────
+// ── Exported types ───────────────────────────────────────────────────────────
 
-/// Source utilisée pour la calibration TSC.
-/// Sérialisable en u8 pour le stockage atomique.
+/// Source used for TSC calibration.
+/// Serializable to u8 for atomic storage.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum CalibSource {
@@ -96,7 +96,7 @@ pub enum CalibSource {
 }
 
 impl CalibSource {
-    /// Rating de précision décroissant : HPET meilleur, Fallback pire.
+    /// Descending precision rating: HPET best, Fallback worst.
     #[inline(always)]
     pub fn rating(self) -> u32 {
         match self {
@@ -111,7 +111,7 @@ impl CalibSource {
         }
     }
 
-    /// Vrai si la source implique une mesure réelle (fenêtre temporelle).
+    /// True if the source involves real measurement (time window).
     #[inline(always)]
     pub fn is_measured(self) -> bool {
         matches!(
@@ -120,7 +120,7 @@ impl CalibSource {
         )
     }
 
-    /// Vrai si la source est fiable pour le drift compensation.
+    /// True if the source is reliable for drift compensation.
     #[inline(always)]
     pub fn is_trusted(self) -> bool {
         matches!(
@@ -132,7 +132,7 @@ impl CalibSource {
         )
     }
 
-    /// Étiquette ASCII courte pour le port 0xE9 / logs.
+    /// Short ASCII label for port 0xE9 / logs.
     #[inline(always)]
     pub fn tag(self) -> &'static [u8] {
         match self {
@@ -162,90 +162,90 @@ impl CalibSource {
     }
 }
 
-/// Résultat enrichi d'une calibration TSC.
-/// Stocké en cache pour les consommateurs (drift, percpu, monitoring).
+/// Enriched result of a TSC calibration.
+/// Cached for consumers (drift, percpu, monitoring).
 #[derive(Clone, Copy, Debug)]
 pub struct CalibratedTsc {
-    /// Fréquence TSC en Hz, arrondie à 100 kHz.
+    /// TSC frequency in Hz, rounded to 100 kHz.
     pub tsc_hz: u64,
-    /// Source utilisée pour la calibration.
+    /// Source used for calibration.
     pub source: CalibSource,
-    /// Niveau de confiance 0–100 (100 = HPET mesure parfaite).
+    /// Confidence level 0–100 (100 = HPET perfect measurement).
     pub confidence: u8,
-    /// Variance inter-samples en Hz² (0 si source nominale CPUID/Fallback).
+    /// Inter-sample variance in Hz² (0 if nominal CPUID/Fallback source).
     pub variance_hz2: u64,
-    /// Nombre de samples valides utilisés pour la moyenne (0 si nominal).
+    /// Number of valid samples used for mean (0 if nominal).
     pub valid_samples: u8,
-    /// Durée de calibration en millisecondes (approximative via TSC).
+    /// Calibration duration in milliseconds (approximate via TSC).
     pub duration_tsc_cycles: u64,
-    /// Vrai si le TSC est invariant (CPUID 0x80000007[8]).
+    /// True if TSC is invariant (CPUID 0x80000007[8]).
     pub tsc_invariant: bool,
-    /// Séquence de calibration (monotone croissante).
+    /// Calibration sequence (monotonically increasing).
     pub seq: u32,
 }
 
 impl CalibratedTsc {
-    /// Retourne `true` si le résultat est utilisable en production.
+    /// Returns `true` if the result is usable in production.
     #[inline(always)]
     pub fn is_production_grade(&self) -> bool {
         self.confidence >= 80 && self.source.is_measured()
     }
 
-    /// Retourne `true` si le résultat nécessite une re-calibration post-APIC.
+    /// Returns `true` if the result requires post-APIC recalibration.
     #[inline(always)]
     pub fn needs_recalibration(&self) -> bool {
         !self.source.is_measured()
     }
 }
 
-// ── Point d'entrée principal ──────────────────────────────────────────────────
+// ── Main entry point ──────────────────────────────────────────────────────────
 
-/// Calibre la fréquence TSC via la chaîne de fallback complète.
+/// Calibrates the TSC frequency via the complete fallback chain.
 ///
-/// ## Garanties
-/// - Retourne TOUJOURS une valeur dans [100 MHz, 10 GHz] (jamais 0).
-/// - Appelle `sources::init_sources()` exactement une fois (idempotent).
-/// - Propage la fréquence dans `cpu_tsc::set_tsc_hz()` (atomic Release).
-/// - Met à jour `sources::update_source_rating(Tsc, rating)`.
-/// - Thread-safe (atomics Release/Acquire), mais conçu pour BSP uniquement.
+/// ## Guarantees
+/// - ALWAYS returns a value in [100 MHz, 10 GHz] (never 0).
+/// - Calls `sources::init_sources()` exactly once (idempotent).
+/// - Propagates frequency to `cpu_tsc::set_tsc_hz()` (atomic Release).
+/// - Updates `sources::update_source_rating(Tsc, rating)`.
+/// - Thread-safe (atomics Release/Acquire), but designed for BSP only.
 ///
-/// ## RÈGLE SCHED-INIT-01
-/// Ne reçoit AUCUN paramètre tsc_hz. La fréquence vient exclusivement
-/// de la calibration — jamais d'un paramètre externe.
+/// ## RULE SCHED-INIT-01
+/// Receives NO tsc_hz parameter. Frequency comes exclusively
+/// from calibration — never from an external parameter.
 pub fn calibrate_tsc() -> u64 {
     let result = run_calibration_chain();
     commit_calibration_result(&result);
     result.tsc_hz
 }
 
-/// Version riche : retourne le `CalibratedTsc` complet pour monitoring/drift.
+/// Rich version: returns full `CalibratedTsc` for monitoring/drift.
 pub fn calibrate_tsc_detail() -> CalibratedTsc {
     let result = run_calibration_chain();
     commit_calibration_result(&result);
     result
 }
 
-// ── Re-calibration post-APIC ──────────────────────────────────────────────────
+// ── Post-APIC recalibration ───────────────────────────────────────────────────
 
-/// Re-calibre le TSC après initialisation de l'APIC/HPET.
+/// Recalibrates TSC after APIC/HPET initialization.
 ///
-/// Post-APIC, les timers sont plus stables → meilleure précision.
-/// Applique une validation : si le nouveau Hz diffère de >50% de l'ancien,
-/// la re-calibration est rejetée (protection contre mesures fantaisistes).
+/// Post-APIC, timers are more stable -> better precision.
+/// Applies validation: if new Hz differs by >50% from old,
+/// recalibration is rejected (protection against erratic measurements).
 ///
-/// Retourne la nouvelle fréquence TSC (ou l'ancienne si rejetée).
+/// Returns the new TSC frequency (or old one if rejected).
 pub fn recalibrate_tsc() -> u64 {
     let old_hz = LAST_TSC_HZ.load(Ordering::Acquire);
     RECALIB_COUNT.fetch_add(1, Ordering::Relaxed);
 
     let result = run_calibration_chain();
 
-    // Validation de cohérence : ±50% par rapport à l'ancienne valeur.
+    // Consistency check: ±50% relative to old value.
     if old_hz > 0 {
         let lo = old_hz / 2;
         let hi = old_hz.saturating_add(old_hz / 2);
         if result.tsc_hz < lo || result.tsc_hz > hi {
-            // Re-calibration rejetée — conserver l'ancienne valeur.
+            // Recalibration rejected — keep old value.
             e9_tag(b"RECAL-REJECT");
             return old_hz;
         }
@@ -255,29 +255,29 @@ pub fn recalibrate_tsc() -> u64 {
     result.tsc_hz
 }
 
-// ── Chaîne de fallback interne ────────────────────────────────────────────────
+// ── Internal fallback chain ───────────────────────────────────────────────────
 
-/// Cœur de la calibration — exécute la chaîne de fallback et construit le `CalibratedTsc`.
+/// Calibration core — executes the fallback chain and constructs `CalibratedTsc`.
 ///
-/// ## Ordre de priorité :
-///   1. HPET window    (source matérielle haute précision)
-///   2. PM Timer       (source ACPI stable)
-///   3. CPUID 0x15     (ratio TSC/cristal, instantané sous QEMU/KVM)
-///   4. CPUID 0x16     (base MHz — moins précis)
-///   5. CPUID best     (cross-check nominal)
+/// ## Priority order:
+///   1. HPET window    (high precision hardware source)
+///   2. PM Timer       (stable ACPI source)
+///   3. CPUID 0x15     (TSC/crystal ratio, instantaneous under QEMU/KVM)
+///   4. CPUID 0x16     (base MHz — less precise)
+///   5. CPUID best     (nominal cross-check)
 ///   6. KVM/QEMU CPUID hypervisor TSC
-///   7. PIT driver     (fallback port I/O)
-///   8. 3 GHz fallback (dernier recours)
+///   7. PIT driver     (port I/O fallback)
+///   8. 3 GHz fallback (last resort)
 fn run_calibration_chain() -> CalibratedTsc {
     let seq = CALIB_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let tsc_invariant = cpu_tsc::tsc_invariant();
 
-    // ── FIX ARCH : initialiser les sources AVANT toute mesure ────────────────
+    // ── ARCH FIX: initialize sources BEFORE any measurement ──────────────────
     ensure_sources_initialized();
 
     let start_cycles = cpu_tsc::read_tsc();
 
-    // ── Tentative 1 : HPET window (MMIO, précision haute) ──────────────────
+    // ── Attempt 1: HPET window (MMIO, high precision) ──────────────────────
     if sources::hpet::available() {
         let hpet_hz = sources::hpet::freq_hz();
         if let Some(hz) = window::calibrate_tsc_via_hpet(hpet_hz) {
@@ -299,7 +299,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         e9_tag(b"CAL:HPET-FAIL");
     }
 
-    // ── Tentative 2 : ACPI PM Timer (port I/O, stable sous VM) ─────────────
+    // ── Attempt 2: ACPI PM Timer (port I/O, stable under VM) ───────────────
     if sources::pm_timer::available() || sources::pm_timer::auto_detect() {
         if let Some(hz) = window::calibrate_tsc_via_pm_timer() {
             if validation::hz_in_range(hz) {
@@ -320,13 +320,13 @@ fn run_calibration_chain() -> CalibratedTsc {
         e9_tag(b"CAL:PMT-FAIL");
     }
 
-    // ── Tentative 3 : CPUID leaf 0x15 (TSC/Crystal ratio) ─────────────────
-    // Source nominale instantanée — pas de MMIO, pas de busy-poll.
-    // Intel Core gen 6+ et Atom : ratio TSC/cristal exact.
-    // PRIORITÉ : essayé EN PREMIER car :
-    //   1. Ne bloque jamais (pas de boucle d'attente)
-    //   2. Fonctionne sous virtualisation (QEMU -cpu host, KVM, VMware)
-    //   3. Plus précis qu'une mesure sur fenêtre courte (résolution exacte)
+    // ── Attempt 3: CPUID leaf 0x15 (TSC/Crystal ratio) ─────────────────────
+    // Instantaneous nominal source — no MMIO, no busy-polling.
+    // Intel Core gen 6+ and Atom: exact TSC/crystal ratio.
+    // PRIORITY: attempted FIRST because:
+    //   1. Never blocks (no wait loop)
+    //   2. Works under virtualization (QEMU -cpu host, KVM, VMware)
+    //   3. More precise than a short window measurement (exact resolution)
     if let Some(hz) = cpuid_nominal::cpuid_tsc_hz() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
@@ -334,7 +334,7 @@ fn run_calibration_chain() -> CalibratedTsc {
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Cpuid15,
-                confidence: 85, // nominal = très fiable sur Intel gen6+
+                confidence: 85, // nominal = very reliable on Intel gen6+
                 variance_hz2: 0,
                 valid_samples: 0,
                 duration_tsc_cycles: duration,
@@ -344,8 +344,8 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 4 : CPUID leaf 0x16 (fréquence de base CPU) ─────────────
-    // Résolution limitée : multiple de 1 MHz. Pas de boucle → instantané.
+    // ── Attempt 4: CPUID leaf 0x16 (CPU base frequency) ────────────────────
+    // Limited resolution: multiple of 1 MHz. No loop -> instantaneous.
     if let Some(hz) = cpuid_nominal::cpuid_tsc_hz_leaf16() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
@@ -353,7 +353,7 @@ fn run_calibration_chain() -> CalibratedTsc {
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Cpuid16,
-                confidence: 70, // moins précis — résolution 1 MHz
+                confidence: 70, // less precise — 1 MHz resolution
                 variance_hz2: 0,
                 valid_samples: 0,
                 duration_tsc_cycles: duration,
@@ -363,15 +363,15 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 5 : meilleure estimation CPUID (cross-check 0x15/0x16) ───
-    // cpuid_best_estimate() croise les deux feuilles CPUID pour affiner.
+    // ── Attempt 5: best CPUID estimate (cross-check 0x15/0x16) ─────────────
+    // cpuid_best_estimate() cross-references both CPUID leaves to refine.
     if let Some(hz) = cpuid_nominal::cpuid_best_estimate() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
             e9_tag_hz(b"CAL:CPUID-BEST", hz);
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
-                source: CalibSource::Cpuid15, // meilleure estimation via CPUID
+                source: CalibSource::Cpuid15, // best estimate via CPUID
                 confidence: 65,
                 variance_hz2: 0,
                 valid_samples: 0,
@@ -382,7 +382,7 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 6 : KVM/QEMU hypervisor TSC frequency ─────────────────────
+    // ── Attempt 6: KVM/QEMU hypervisor TSC frequency ───────────────────────
     if let Some(hz) = cpuid_nominal::hypervisor_tsc_hz() {
         if validation::hz_in_range(hz) {
             let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
@@ -400,9 +400,9 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
     }
 
-    // ── Tentative 7 : PIT one-shot via cpu_tsc driver (port I/O, fiable QEMU) ──
-    // Sur QEMU TCG, le PIT canal 2 est bien simulé (port I/O, pas MMIO).
-    // Retourne 0 si PIT inactif ou I/O trop lent (QEMU TCG 10K iter × inb).
+    // ── Attempt 7: PIT one-shot via cpu_tsc driver (port I/O, reliable on QEMU) ──
+    // On QEMU TCG, PIT channel 2 is well simulated (port I/O, not MMIO).
+    // Returns 0 if PIT inactive or I/O too slow (QEMU TCG 10K iter * inb).
     {
         let hz = cpu_tsc::calibrate_tsc_with_pit();
         if hz > 0 && validation::hz_in_range(hz) {
@@ -411,9 +411,9 @@ fn run_calibration_chain() -> CalibratedTsc {
             return CalibratedTsc {
                 tsc_hz: round_hz(hz),
                 source: CalibSource::Pit,
-                confidence: 55, // PIT mesuré sur fenêtre ~10ms = fiable
+                confidence: 55, // PIT measured on ~10ms window = reliable
                 variance_hz2: 0,
-                valid_samples: 1, // mesure unique = 10ms
+                valid_samples: 1, // single measurement = 10ms
                 duration_tsc_cycles: duration,
                 tsc_invariant,
                 seq,
@@ -421,9 +421,8 @@ fn run_calibration_chain() -> CalibratedTsc {
         }
         e9_tag(b"CAL:PIT-DRV-FAIL");
 
-        // Bring-up pragmatique : si PIT driver échoue, on évite les chemins
-        // de calibration coûteux/fragiles restants et on bascule immédiatement
-        // sur le fallback 3 GHz pour ne pas bloquer le boot.
+        // Pragmatic bring-up: if PIT driver fails, avoid remaining costly/fragile
+        // calibration paths and immediately fall back to 3 GHz to avoid blocking boot.
         e9_tag_hz(b"CAL:FB3G", 3_000_000_000u64);
         let duration = cpu_tsc::read_tsc().wrapping_sub(start_cycles);
         CalibratedTsc {
@@ -439,58 +438,58 @@ fn run_calibration_chain() -> CalibratedTsc {
     }
 }
 
-// ── Propagation du résultat ───────────────────────────────────────────────────
+// ── Result propagation ────────────────────────────────────────────────────────
 
-/// Propage le résultat de calibration vers les modules dépendants.
+/// Propagates calibration result to dependent modules.
 ///
-/// Effets :
-///   - `cpu_tsc::set_tsc_hz(hz)` → met à jour TSC_HZ, TSC_KHZ, TSC_CALIBRATED
-///   - `sources::update_source_rating(Tsc, rating)` → upgrade TSC en source de runtime
-///   - Mise à jour des atomics LAST_* pour le diagnostic
+/// Effects:
+///   - `cpu_tsc::set_tsc_hz(hz)` -> updates TSC_HZ, TSC_KHZ, TSC_CALIBRATED
+///   - `sources::update_source_rating(Tsc, rating)` -> upgrades TSC to runtime source
+///   - Updates LAST_* atomics for diagnostics
 fn commit_calibration_result(r: &CalibratedTsc) {
-    // 1. Propager vers cpu::tsc (atomics de base pour tsc_hz(), tsc_cycles_to_ns(), etc.)
+    // 1. Propagate to cpu::tsc (base atomics for tsc_hz(), tsc_cycles_to_ns(), etc.)
     cpu_tsc::set_tsc_hz(r.tsc_hz);
 
-    // 2. Upgrader le rating TSC dans le registre de sources.
-    // Après calibration, le TSC devient la meilleure source de runtime.
-    let tsc_runtime_rating = 400u32; // TSC invariant calibré = meilleure source runtime
+    // 2. Upgrade TSC rating in sources registry.
+    // After calibration, TSC becomes the best runtime source.
+    let tsc_runtime_rating = 400u32; // Calibrated invariant TSC = best runtime source
     sources::update_source_rating(sources::SourceId::Tsc, tsc_runtime_rating);
 
-    // 3. Sauvegarder le résultat pour last_calibration_result() / calibration_stats().
+    // 3. Save result for last_calibration_result() / calibration_stats().
     LAST_TSC_HZ.store(r.tsc_hz, Ordering::Release);
     LAST_SOURCE.store(r.source as u8, Ordering::Release);
     LAST_RATING.store(r.source.rating(), Ordering::Release);
     LAST_CONFIDENCE.store(r.confidence, Ordering::Release);
 }
 
-// ── Initialisation des sources ────────────────────────────────────────────────
+// ── Sources initialization ────────────────────────────────────────────────────
 
-/// Garantit que `sources::init_sources()` est appelé exactement une fois.
+/// Ensures that `sources::init_sources()` is called exactly once.
 ///
-/// Idempotent : peut être appelé depuis recalibrate_tsc() sans double-init.
-/// `sources::init_sources()` initialise :
-///   - sources/hpet.rs::HPET_BASE_ADDR  (depuis acpi/hpet.rs::HPET_BASE)
-///   - sources/hpet.rs::HPET_FREQ_HZ    (depuis acpi/hpet.rs::HPET_PERIOD_FS)
-///   - sources/pm_timer.rs::PM_BASE_PORT (depuis ACPI FADT)
-///   - sources/pit.rs::PIT initialisé
-///   - sources/tsc.rs::init_tsc_source() (détection invariant, hyperviseur, etc.)
+/// Idempotent: can be called from recalibrate_tsc() without double-init.
+/// `sources::init_sources()` initializes:
+///   - sources/hpet.rs::HPET_BASE_ADDR  (from acpi/hpet.rs::HPET_BASE)
+///   - sources/hpet.rs::HPET_FREQ_HZ    (from acpi/hpet.rs::HPET_PERIOD_FS)
+///   - sources/pm_timer.rs::PM_BASE_PORT (from ACPI FADT)
+///   - sources/pit.rs::PIT initialized
+///   - sources/tsc.rs::init_tsc_source() (invariant detection, hypervisor, etc.)
 #[inline]
 fn ensure_sources_initialized() {
-    // compare_exchange(false → true) : atomique, un seul thread gagne.
+    // compare_exchange(false -> true): atomic, only one thread wins.
     if SOURCES_INITIALIZED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         .is_ok()
     {
         sources::init_sources();
     }
-    // Sinon : déjà initialisé, on continue sans double-init.
+    // Otherwise: already initialized, continue without double-init.
 }
 
-// ── API de diagnostic ─────────────────────────────────────────────────────────
+// ── Diagnostic API ───────────────────────────────────────────────────────────
 
-/// Retourne le résultat complet de la dernière calibration.
+/// Returns the complete result of the last calibration.
 ///
-/// Retourne `None` si `calibrate_tsc()` n'a jamais été appelé.
+/// Returns `None` if `calibrate_tsc()` was never called.
 pub fn last_calibration_result() -> Option<CalibratedTsc> {
     let hz = LAST_TSC_HZ.load(Ordering::Acquire);
     if hz == 0 {
@@ -501,21 +500,21 @@ pub fn last_calibration_result() -> Option<CalibratedTsc> {
         tsc_hz: hz,
         source: CalibSource::from_u8(LAST_SOURCE.load(Ordering::Relaxed)),
         confidence: LAST_CONFIDENCE.load(Ordering::Relaxed),
-        variance_hz2: 0, // non stocké globalement (disponible via calibrate_tsc_detail)
+        variance_hz2: 0, // not stored globally (available via calibrate_tsc_detail)
         valid_samples: if CalibSource::from_u8(LAST_SOURCE.load(Ordering::Relaxed)).is_measured() {
             window::N_SAMPLES as u8
         } else {
             0
         },
-        duration_tsc_cycles: 0, // non stocké globalement
+        duration_tsc_cycles: 0, // not stored globally
         tsc_invariant: cpu_tsc::tsc_invariant(),
         seq,
     })
 }
 
-/// Retourne un tuple de statistiques compactes pour le monitoring.
+/// Returns a tuple of compact statistics for monitoring.
 ///
-/// Retourne `(tsc_hz, calib_seq, confidence, recalib_count)`.
+/// Returns `(tsc_hz, calib_seq, confidence, recalib_count)`.
 pub fn calibration_stats() -> (u64, u32, u8, u32) {
     (
         LAST_TSC_HZ.load(Ordering::Relaxed),
@@ -525,50 +524,50 @@ pub fn calibration_stats() -> (u64, u32, u8, u32) {
     )
 }
 
-/// Retourne le rating de la dernière source utilisée (0–300).
+/// Returns the rating of the last used source (0–300).
 pub fn last_source_rating() -> u32 {
     LAST_RATING.load(Ordering::Relaxed)
 }
 
-/// Retourne `true` si la dernière calibration a utilisé HPET (mesure physique HQ).
+/// Returns `true` if the last calibration used HPET (HQ physical measurement).
 pub fn calibrated_with_hpet() -> bool {
     CalibSource::from_u8(LAST_SOURCE.load(Ordering::Relaxed)) == CalibSource::Hpet
 }
 
-/// Retourne `true` si le TSC a été calibré avec une source de mesure réelle.
-/// Faux si CPUID nominal ou fallback 3GHz.
+/// Returns `true` if the TSC was calibrated with a real measurement source.
+/// False if nominal CPUID or 3GHz fallback.
 pub fn calibrated_with_real_measurement() -> bool {
     CalibSource::from_u8(LAST_SOURCE.load(Ordering::Relaxed)).is_measured()
 }
 
-/// Retourne `true` si une re-calibration post-APIC est recommandée.
+/// Returns `true` if post-APIC recalibration is recommended.
 pub fn should_recalibrate() -> bool {
     !calibrated_with_real_measurement()
 }
 
-/// Retourne le nombre de re-calibrations effectuées.
+/// Returns the number of recalibrations performed.
 pub fn recalibration_count() -> u32 {
     RECALIB_COUNT.load(Ordering::Relaxed)
 }
 
-// ── Utilitaires ───────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
-/// Arrondit la fréquence TSC au multiple de 100 kHz le plus proche.
+/// Rounds the TSC frequency to the nearest multiple of 100 kHz.
 ///
-/// Réduit le bruit de mesure sub-100kHz sans perte de précision observable.
-/// Exemple : 2_999_937_012 → 3_000_000_000 (valeur typique i7 3GHz).
+/// Reduces sub-100kHz measurement noise without observable precision loss.
+/// Example: 2_999_937_012 -> 3_000_000_000 (typical value for i7 3GHz).
 #[inline(always)]
 pub fn round_hz(hz: u64) -> u64 {
     (hz + 50_000) / 100_000 * 100_000
 }
 
-/// Émet un tag ASCII sur le port de debug 0xE9.
+/// Emits an ASCII tag to debug port 0xE9.
 ///
-/// Format de sortie: `[tag]` — visible avec QEMU `-debugcon stdio` ou
+/// Output format: `[tag]` — visible with QEMU `-debugcon stdio` or
 /// `-debugcon file:/tmp/e9.txt`.
 ///
-/// ## Règle CAL-FALLBACK-01
-/// Chaque étape de la chaîne de fallback DOIT appeler cette fonction.
+/// ## Rule CAL-FALLBACK-01
+/// Each step of the fallback chain MUST call this function.
 #[inline]
 fn e9_tag(tag: &[u8]) {
     #[inline(always)]
@@ -620,10 +619,10 @@ fn e9_tag_hz(tag: &[u8], hz: u64) {
     }
 }
 
-// ── Compatibilité et ré-exports hérités ──────────────────────────────────────
+// ── Compatibility and legacy re-exports ───────────────────────────────────────
 
-/// Compatibilité avec l'ancien code qui appelait `debug_log_source(tag)`.
-/// Redirige vers `e9_tag()`.
+/// Compatibility with legacy code calling `debug_log_source(tag)`.
+/// Redirects to `e9_tag()`.
 #[inline(always)]
 #[allow(dead_code)]
 fn debug_log_source(tag: &[u8]) {

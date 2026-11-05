@@ -1,27 +1,27 @@
 //! # arch/x86_64/apic/local_apic.rs — Local APIC (xAPIC MMIO)
 //!
-//! Implémente l'accès au Local APIC via MMIO (mode xAPIC, base 0xFEE00000)
-//! et les primitives partagées avec x2APIC (via MSR).
+//! Implements Local APIC access via MMIO (xAPIC mode, base 0xFEE00000)
+//! and primitives shared with x2APIC (via MSR).
 //!
-//! ## Registres LAPIC (offset depuis LAPIC_BASE)
-//! Les registres sont tous 32 bits, alignés sur 16 octets.
+//! ## LAPIC Registers (offset from LAPIC_BASE)
+//! Registers are all 32-bit, 16-byte aligned.
 
 use super::super::cpu::{msr, tsc};
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
-// ── Adresse MMIO LAPIC ────────────────────────────────────────────────────────
+// ── LAPIC MMIO Address ────────────────────────────────────────────────────────
 
-/// Adresse MMIO par défaut du Local APIC (peut être relue depuis MSR_IA32_APICBASE)
+/// Default Local APIC MMIO address (can be re-read from MSR_IA32_APICBASE)
 pub const LAPIC_DEFAULT_BASE: u64 = 0xFEE0_0000;
 
-/// Base physique LAPIC actuelle (peut différer après remapping ACPI).
+/// Current LAPIC physical base (may differ after ACPI remapping).
 static LAPIC_PHYS_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
-/// Base virtuelle utilisée par les accès MMIO.
+/// Virtual base used by MMIO accesses.
 ///
-/// Avant l'init mémoire complète, elle reste l'adresse physique basse héritée
-/// des mappings boot. Après `init_lapic_fixmap_post_memory()`, elle pointe dans
-/// la fixmap noyau haute, partagée par les CR3 userspace.
+/// Before full memory init, it remains the low physical address inherited
+/// from boot mappings. After `init_lapic_fixmap_post_memory()`, it points into
+/// the high kernel fixmap, shared across userspace CR3s.
 static LAPIC_MMIO_BASE: AtomicUsize = AtomicUsize::new(LAPIC_DEFAULT_BASE as usize);
 static LAPIC_TIMER_OWNER: AtomicU8 = AtomicU8::new(LapicTimerOwner::None as u8);
 static SCHEDULER_TIMER_USES_TSC_DEADLINE: AtomicU8 = AtomicU8::new(0);
@@ -33,7 +33,7 @@ fn lapic_uses_fixmap() -> bool {
         >= crate::memory::core::layout::FIXMAP_BASE.as_u64() as usize
 }
 
-// ── Offsets des registres LAPIC ───────────────────────────────────────────────
+// ── LAPIC Register Offsets ───────────────────────────────────────────────────
 
 pub const LAPIC_ID: u32 = 0x020; // LAPIC ID
 pub const LAPIC_VER: u32 = 0x030; // Version
@@ -50,8 +50,8 @@ pub const LAPIC_TMR0: u32 = 0x180; // Trigger Mode Register
 pub const LAPIC_IRR0: u32 = 0x200; // Interrupt Request Register
 pub const LAPIC_ESR: u32 = 0x280; // Error Status Register
 pub const LAPIC_LVT_CMCI: u32 = 0x2F0; // LVT CMCI
-pub const LAPIC_ICR_LOW: u32 = 0x300; // Interrupt Command Register (faible)
-pub const LAPIC_ICR_HIGH: u32 = 0x310; // Interrupt Command Register (haut)
+pub const LAPIC_ICR_LOW: u32 = 0x300; // Interrupt Command Register (low)
+pub const LAPIC_ICR_HIGH: u32 = 0x310; // Interrupt Command Register (high)
 pub const LAPIC_LVT_TIMER: u32 = 0x320; // LVT Timer
 pub const LAPIC_LVT_THERMAL: u32 = 0x330; // LVT Thermal Sensor
 pub const LAPIC_LVT_PERF: u32 = 0x340; // LVT Performance Counter
@@ -62,12 +62,12 @@ pub const LAPIC_TIMER_ICR: u32 = 0x380; // Timer Initial Count
 pub const LAPIC_TIMER_CCR: u32 = 0x390; // Timer Current Count
 pub const LAPIC_TIMER_DCR: u32 = 0x3E0; // Timer Divide Configuration
 
-// ── Bits du registre SIVR ─────────────────────────────────────────────────────
+// ── SIVR Register Bits ────────────────────────────────────────────────────────
 
 pub const SIVR_APIC_ENABLE: u32 = 1 << 8;
 pub const SIVR_FOCUS_DISABLE: u32 = 1 << 9;
 
-// ── Timer modes (bits 17:18 du LVT_TIMER) ────────────────────────────────────
+// ── Timer modes (bits 17:18 of LVT_TIMER) ─────────────────────────────────────
 
 pub const TIMER_MODE_ONESHOT: u32 = 0b00 << 17;
 pub const TIMER_MODE_PERIODIC: u32 = 0b01 << 17;
@@ -89,7 +89,7 @@ pub const ICR_TRIGGER_LEVEL: u32 = 1 << 15;
 
 pub const ICR_PENDING: u32 = 1 << 12; // Delivery Status
 
-// ── Mode de fonctionnement ────────────────────────────────────────────────────
+// ── Operating Mode ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ApicMode {
@@ -118,21 +118,21 @@ impl LapicTimerOwner {
     }
 }
 
-// ── Lecture / écriture MMIO ───────────────────────────────────────────────────
+// ── MMIO Read / Write ─────────────────────────────────────────────────────────
 
-/// Lit un registre LAPIC (xAPIC MMIO)
+/// Reads a LAPIC register (xAPIC MMIO)
 #[inline(always)]
 pub fn lapic_read(reg: u32) -> u32 {
     let base = LAPIC_MMIO_BASE.load(Ordering::Relaxed);
-    // SAFETY: base LAPIC validée lors de l'init, registre est un offset connu
+    // SAFETY: LAPIC base validated during init, register is a known offset
     unsafe { read_volatile((base + reg as usize) as *const u32) }
 }
 
-/// Écrit un registre LAPIC (xAPIC MMIO)
+/// Writes a LAPIC register (xAPIC MMIO)
 #[inline(always)]
 pub fn lapic_write(reg: u32, val: u32) {
     let base = LAPIC_MMIO_BASE.load(Ordering::Relaxed);
-    // SAFETY: base LAPIC validée lors de l'init, écriture sur registre connu
+    // SAFETY: LAPIC base validated during init, write to known register
     unsafe {
         write_volatile((base + reg as usize) as *mut u32, val);
     }
@@ -147,12 +147,12 @@ const APICBASE_EXTD: u64 = 1 << 10; // x2APIC
 const APICBASE_ENABLE: u64 = 1 << 11;
 const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ───────────────────────────────────────────────────────────
 
-/// Active le LAPIC en mode xAPIC (MMIO)
+/// Enables LAPIC in xAPIC mode (MMIO)
 pub fn enable_xapic() {
-    // 1. Lire APICBASE pour confirmer l'adresse et activer
-    // SAFETY: MSR IA32_APICBASE est lisible depuis Ring 0
+    // 1. Read APICBASE to confirm address and enable
+    // SAFETY: MSR IA32_APICBASE is readable from Ring 0
     let apicbase = unsafe { msr::read_msr(MSR_IA32_APICBASE) };
     let lapic_addr = apicbase & APICBASE_ADDR_MASK;
 
@@ -163,18 +163,18 @@ pub fn enable_xapic() {
         }
     }
 
-    // 2. Assurer que APIC est activé (bit 11) sans x2APIC (bit 10)
+    // 2. Ensure APIC is enabled (bit 11) without x2APIC (bit 10)
     let new_base = (apicbase & !APICBASE_EXTD) | APICBASE_ENABLE;
-    // SAFETY: écriture APICBASE pour activer le LAPIC en mode xAPIC
+    // SAFETY: APICBASE write to enable LAPIC in xAPIC mode
     unsafe {
         msr::write_msr(MSR_IA32_APICBASE, new_base);
     }
 
     // 3. Soft-enable via SIVR (bit 8)
-    // configure_spurious() sera appelé séparément
+    // configure_spurious() will be called separately
 }
 
-/// Configure la base LAPIC (remapping ACPI possible)
+/// Configures LAPIC base (ACPI remapping possible)
 pub fn set_lapic_base(phys_addr: u64) {
     LAPIC_PHYS_BASE.store(phys_addr as usize, Ordering::Release);
     if !lapic_uses_fixmap() {
@@ -182,12 +182,12 @@ pub fn set_lapic_base(phys_addr: u64) {
     }
 }
 
-/// Remappe le LAPIC dans la fixmap noyau haute après l'init mémoire.
+/// Remaps the LAPIC into high kernel fixmap after memory init.
 ///
-/// Les chemins IRQ/IPI peuvent s'exécuter sous un CR3 userspace. Utiliser
-/// l'adresse physique basse 0xFEE0_0000 dépend alors d'un identity-map bas qui
-/// n'est pas une garantie architecturale du modèle userspace. La fixmap fait du
-/// LAPIC un mapping noyau global copié dans tous les nouveaux CR3.
+/// IRQ/IPI paths can execute under a userspace CR3. Using the low physical
+/// address 0xFEE0_0000 then depends on a low identity-map that is not an
+/// architectural guarantee of the userspace model. The fixmap makes the
+/// LAPIC a global kernel mapping copied into all new CR3s.
 pub fn init_lapic_fixmap_post_memory() -> bool {
     use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
     use crate::memory::core::{fixmap_slot_addr, Frame, PageFlags, PhysAddr, FIXMAP_LAPIC};
@@ -206,11 +206,11 @@ pub fn init_lapic_fixmap_post_memory() -> bool {
 
     if KERNEL_AS.translate(fix_virt).is_none() {
         let frame = Frame::containing(page_phys);
-        // SAFETY: mapping MMIO noyau dans une adresse fixmap haute réservée.
+        // SAFETY: kernel MMIO mapping into a reserved high fixmap address.
         if unsafe { KERNEL_AS.map(fix_virt, frame, flags, &KERNEL_FAULT_ALLOC) }.is_err() {
             return false;
         }
-        // SAFETY: invalidation locale du slot fixmap nouvellement installé.
+        // SAFETY: local invalidation of the newly installed fixmap slot.
         unsafe {
             tlb::flush_single(fix_virt);
         }
@@ -223,13 +223,13 @@ pub fn init_lapic_fixmap_post_memory() -> bool {
     true
 }
 
-/// Retourne l'ID LAPIC du CPU courant
+/// Returns current CPU's LAPIC ID
 #[inline]
 pub fn lapic_id() -> u32 {
     lapic_read(LAPIC_ID) >> 24
 }
 
-/// Configure le vecteur d'interruption spurious et active le LAPIC (soft-enable)
+/// Configures spurious interrupt vector and enables LAPIC (soft-enable)
 pub fn set_spurious_vector(vector: u8) {
     let svr = lapic_read(LAPIC_SIVR);
     lapic_write(
@@ -240,43 +240,43 @@ pub fn set_spurious_vector(vector: u8) {
 
 // ── EOI ───────────────────────────────────────────────────────────────────────
 
-/// Envoie l'End Of Interrupt (EOI) au LAPIC
+/// Sends End Of Interrupt (EOI) to the LAPIC
 ///
-/// DOIT être appelé depuis le handler IRQ avant toute opération longue.
+/// MUST be called from the IRQ handler before any lengthy operation.
 #[inline(always)]
 pub fn eoi() {
     lapic_write(LAPIC_EOI, 0);
 }
 
-// ── Timer LAPIC ───────────────────────────────────────────────────────────────
+// ── LAPIC Timer ───────────────────────────────────────────────────────────────
 
-/// Initialise le timer LAPIC en mode TSC-Deadline
+/// Initializes the LAPIC timer in TSC-Deadline mode
 ///
-/// LAPIC lève l'interruption quand TSC >= IA32_TSC_DEADLINE.
-/// Rechargement explicite à chaque handler.
+/// LAPIC raises interrupt when TSC >= IA32_TSC_DEADLINE.
+/// Explicit reload in each handler.
 pub fn timer_init_tsc_deadline(vector: u8) {
     // Mode TSC-Deadline (bits 17:18 = 0b10) + unmasked
     lapic_write(LAPIC_LVT_TIMER, TIMER_MODE_TSC_DEADLINE | (vector as u32));
-    // Pas de diviseur ni de compteur initial en mode TSC-Deadline
+    // No divider or initial counter in TSC-Deadline mode
 }
 
-/// Initialise le timer LAPIC en mode one-shot (fallback si TSC-Deadline indisponible)
+/// Initializes LAPIC timer in one-shot mode (fallback if TSC-Deadline unavailable)
 pub fn timer_init_oneshot(vector: u8) {
     lapic_write(LAPIC_LVT_TIMER, TIMER_MODE_ONESHOT | (vector as u32));
-    lapic_write(LAPIC_TIMER_DCR, 0x3); // Diviseur /16
+    lapic_write(LAPIC_TIMER_DCR, 0x3); // /16 divider
     TIMER_CALIBRATED.store(false, Ordering::Release);
 }
 
-/// Programme la prochaine deadline TSC-Deadline
+/// Programs the next TSC-Deadline deadline
 #[inline]
 pub fn timer_set_deadline(deadline_tsc: u64) {
-    // SAFETY: WRMSR IA32_TSC_DEADLINE est sûr depuis Ring 0 si CPUID a validé le support
+    // SAFETY: WRMSR IA32_TSC_DEADLINE is safe from Ring 0 if CPUID validated support
     unsafe {
         msr::write_msr(msr::MSR_TSC_DEADLINE, deadline_tsc);
     }
 }
 
-/// Programme le timer one-shot pour N µs
+/// Programs the one-shot timer for N µs
 pub fn timer_oneshot_us(us: u64) {
     let ticks_per_us = TIMER_TICKS_PER_US.load(Ordering::Relaxed);
     if ticks_per_us == 0 {
@@ -293,7 +293,7 @@ fn has_tsc_deadline_timer() -> bool {
         .is_some_and(|features| features.has_tsc_deadline())
 }
 
-/// Retourne vrai quand le LAPIC timer est réservé au tick scheduler.
+/// Returns true when the LAPIC timer is reserved for the scheduler tick.
 #[inline]
 pub fn scheduler_timer_active() -> bool {
     lapic_timer_owner() == LapicTimerOwner::SchedulerTick
@@ -328,11 +328,11 @@ pub fn claim_lapic_timer(owner: LapicTimerOwner) -> bool {
     }
 }
 
-/// Configure le LAPIC timer comme source du tick scheduler.
+/// Configures the LAPIC timer as the scheduler tick source.
 ///
-/// Le LAPIC ne fournit qu'un seul timer local. Après cette activation, les
-/// watchdogs doivent être servis par le tick scheduler ou par un autre vecteur,
-/// sans réécrire LVT_TIMER.
+/// The LAPIC provides only one local timer. After this activation, watchdogs
+/// must be serviced by the scheduler tick or by another vector,
+/// without rewriting LVT_TIMER.
 pub fn init_scheduler_timer(vector: u8) {
     LAPIC_TIMER_OWNER.store(LapicTimerOwner::SchedulerTick as u8, Ordering::Release);
     let uses_tsc_deadline = has_tsc_deadline_timer();
@@ -345,7 +345,7 @@ pub fn init_scheduler_timer(vector: u8) {
     rearm_scheduler_timer_tick();
 }
 
-/// Réarme le prochain tick scheduler en mode one-shot/TSC-deadline.
+/// Rearms the next scheduler tick in one-shot/TSC-deadline mode.
 #[inline]
 pub fn rearm_scheduler_timer_tick() {
     if !scheduler_timer_active() {
@@ -366,41 +366,41 @@ pub fn rearm_scheduler_timer_tick() {
     }
 }
 
-/// Lit le compteur courant du timer LAPIC (mode one-shot/periodic)
+/// Reads current LAPIC timer counter (one-shot/periodic mode)
 #[inline]
 pub fn timer_current_count() -> u32 {
     lapic_read(LAPIC_TIMER_CCR)
 }
 
-/// Calibration du timer LAPIC via le TSC (appelé après init TSC)
+/// Calibrates LAPIC timer via TSC (called after TSC init)
 ///
-/// Mesure le nombre de ticks LAPIC / µs en laissant tourner ~1ms.
+/// Measures LAPIC ticks / µs by running for ~1ms.
 pub fn calibrate_lapic_timer() {
     if TIMER_CALIBRATED.load(Ordering::Acquire) {
         return;
     }
 
-    // 1. Configurer timer en one-shot avec comput max
-    lapic_write(LAPIC_LVT_TIMER, TIMER_MODE_ONESHOT | 0xFF); // vecteur 0xFF (masqué)
+    // 1. Configure timer in one-shot with max count
+    lapic_write(LAPIC_LVT_TIMER, TIMER_MODE_ONESHOT | 0xFF); // vector 0xFF (masked)
     lapic_write(LAPIC_TIMER_DCR, 0x3); // /16
     lapic_write(LAPIC_TIMER_ICR, 0xFFFF_FFFF);
 
-    // 2. Attendre 1ms via TSC
+    // 2. Wait 1ms via TSC
     super::super::cpu::tsc::tsc_delay_ms(1);
 
-    // 3. Lire le décompte
+    // 3. Read count
     let remaining = lapic_read(LAPIC_TIMER_CCR);
     let elapsed_ticks = 0xFFFF_FFFFu32.saturating_sub(remaining);
-    // ticks_per_ms = elapsed_ticks ; ticks_per_us = elapsed_ticks / 1000
+    // ticks_per_ms = elapsed_ticks; ticks_per_us = elapsed_ticks / 1000
     let ticks_per_us = elapsed_ticks / 1000;
     TIMER_TICKS_PER_US.store(ticks_per_us, Ordering::Release);
     TIMER_TICKSPER_MS.store(elapsed_ticks, Ordering::Release);
     TIMER_CALIBRATED.store(true, Ordering::Release);
 }
 
-// ── Envoi IPI via ICR (xAPIC) ─────────────────────────────────────────────────
+// ── Send IPI via ICR (xAPIC) ─────────────────────────────────────────────────
 
-/// Attend que le Previous IPI soit livré (Poll Delivery Status bit 12)
+/// Waits for previous IPI to be delivered (Poll Delivery Status bit 12)
 #[inline]
 fn icr_wait_delivery() {
     loop {
@@ -412,19 +412,19 @@ fn icr_wait_delivery() {
     }
 }
 
-/// Envoie un IPI à destination d'un APIC ID spécifique
+/// Sends an IPI to a specific APIC ID
 pub fn send_ipi(dest_apic_id: u8, vector: u8, delivery_mode: u32) {
     icr_wait_delivery();
-    // Écrire la partie haute en premier (destination)
+    // Write high part first (destination)
     lapic_write(LAPIC_ICR_HIGH, (dest_apic_id as u32) << 24);
-    // Puis partie basse (déclenchement)
+    // Then low part (trigger)
     lapic_write(
         LAPIC_ICR_LOW,
         ICR_LEVEL_ASSERT | delivery_mode | (vector as u32),
     );
 }
 
-/// Broadcast IPI vers tous les CPUs SAUF soi-même
+/// Broadcasts IPI to all CPUs EXCEPT self
 pub fn broadcast_ipi_except_self(vector: u8) {
     icr_wait_delivery();
     lapic_write(LAPIC_ICR_HIGH, 0);
@@ -434,7 +434,7 @@ pub fn broadcast_ipi_except_self(vector: u8) {
     );
 }
 
-/// Envoi INIT IPI (pour SMP AP startup)
+/// Sends INIT IPI (for SMP AP startup)
 pub fn send_init_ipi(dest_apic_id: u8) {
     icr_wait_delivery();
     lapic_write(LAPIC_ICR_HIGH, (dest_apic_id as u32) << 24);
@@ -444,7 +444,7 @@ pub fn send_init_ipi(dest_apic_id: u8) {
     );
 }
 
-/// Envoi STARTUP IPI (pour SMP AP startup à l'adresse `page`)
+/// Sends STARTUP IPI (for SMP AP startup at address `page`)
 pub fn send_startup_ipi(dest_apic_id: u8, page: u8) {
     icr_wait_delivery();
     lapic_write(LAPIC_ICR_HIGH, (dest_apic_id as u32) << 24);
@@ -454,23 +454,23 @@ pub fn send_startup_ipi(dest_apic_id: u8, page: u8) {
     );
 }
 
-/// Initialise le LAPIC complet pour le CPU courant
+/// Initializes complete LAPIC for current CPU
 ///
-/// Appelé à la fois par le BSP et par chaque AP.
+/// Called both by BSP and each AP.
 pub fn init_local_apic() {
     enable_xapic();
-    // Masquer tous les LVT entries sauf ce qui sera configuré
-    lapic_write(LAPIC_LVT_THERMAL, 0x0001_0000); // masqué
-    lapic_write(LAPIC_LVT_PERF, 0x0001_0000); // masqué
-    lapic_write(LAPIC_LVT_CMCI, 0x0001_0000); // masqué
-                                              // LINT0 / LINT1 : dépendent de la topologie (ACPI MADT)
-    lapic_write(LAPIC_LVT_LINT0, 0x0001_0000); // masqué par défaut
-    lapic_write(LAPIC_LVT_LINT1, 0x0000_0400); // NMI non-masqué
-    lapic_write(LAPIC_LVT_ERROR, 0x0000_00FE); // erreur vecteur 0xFE
-                                               // Effacer ESR (écrire 0 d'abord pour certains chipsets)
+    // Mask all LVT entries except what will be configured
+    lapic_write(LAPIC_LVT_THERMAL, 0x0001_0000); // masked
+    lapic_write(LAPIC_LVT_PERF, 0x0001_0000); // masked
+    lapic_write(LAPIC_LVT_CMCI, 0x0001_0000); // masked
+                                              // LINT0 / LINT1: depend on topology (ACPI MADT)
+    lapic_write(LAPIC_LVT_LINT0, 0x0001_0000); // masked by default
+    lapic_write(LAPIC_LVT_LINT1, 0x0000_0400); // NMI unmasked
+    lapic_write(LAPIC_LVT_ERROR, 0x0000_00FE); // error vector 0xFE
+                                               // Clear ESR (write 0 first for some chipsets)
     lapic_write(LAPIC_ESR, 0);
     lapic_write(LAPIC_ESR, 0);
-    // Task Priority : accepter toutes les interruptions
+    // Task Priority: accept all interrupts
     lapic_write(LAPIC_TPR, 0);
 }
 
@@ -481,7 +481,7 @@ static TIMER_TICKSPER_MS: AtomicU32 = AtomicU32::new(0);
 static TIMER_CALIBRATED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// Fréquence du timer LAPIC en ticks/µs (après calibration)
+/// LAPIC timer frequency in ticks/µs (after calibration)
 pub fn lapic_timer_freq_us() -> u32 {
     TIMER_TICKS_PER_US.load(Ordering::Relaxed)
 }

@@ -1,42 +1,42 @@
-//! # arch/x86_64/virt/paravirt.rs — Opérations paravirtualisées
+//! # arch/x86_64/virt/paravirt.rs — Paravirtualized operations
 //!
-//! Remplace certaines opérations coûteuses (EOI, TLB flush) par des versions
-//! paravirtualisées plus efficaces quand disponibles (principalement KVM).
+//! Replaces certain costly operations (EOI, TLB flush) with more efficient
+//! paravirtualized versions when available (principally KVM).
 
 use super::super::cpu::msr;
 use super::detect::{hypervisor_type, kvm_has_pv_eoi, kvm_has_pv_tlb_flush, HypervisorType};
 
-/// MSR KVM PV EOI
+/// KVM PV EOI MSR
 const MSR_KVM_PV_EOI_EN: u32 = 0x4b564d04;
 const KVM_PV_EOI_ENABLED: u64 = 1;
 
-/// EOI paravirtualisé (KVM PV EOI si disponible, sinon LAPIC MMIO)
+/// Paravirtualized EOI (KVM PV EOI if available, otherwise LAPIC MMIO)
 ///
-/// KVM PV EOI évite un VMEXIT en utilisant un bit dans une page partagée.
+/// KVM PV EOI avoids a VMEXIT by using a bit in a shared page.
 #[inline]
 pub fn paravirt_eoi() {
     if hypervisor_type() == HypervisorType::Kvm && kvm_has_pv_eoi() {
-        // PV EOI : écrire 0 dans la page partagée KVM
-        // (intégration complète lors de l'init KVM steal-time page)
-        // Pour l'instant : fallback EOI LAPIC
+        // PV EOI: write 0 into KVM shared page
+        // (full integration during KVM steal-time page init)
+        // For now: LAPIC EOI fallback
         super::super::apic::eoi();
     } else {
         super::super::apic::eoi();
     }
 }
 
-/// TLB flush paravirtualisé
+/// Paravirtualized TLB flush
 ///
-/// KVM PV TLB flush évite le VMEXIT en utilisant un hypercall allégé.
+/// KVM PV TLB flush avoids VMEXIT using a lightweight hypercall.
 #[inline]
 pub fn paravirt_tlb_flush() {
     if hypervisor_type() == HypervisorType::Kvm && kvm_has_pv_tlb_flush() {
         // KVM PV TLB flush via VMCALL
-        // SAFETY: VMCALL depuis Ring 0 en mode paravirtualisé KVM
+        // SAFETY: VMCALL from Ring 0 in KVM paravirtualized mode
         unsafe {
             core::arch::asm!(
                 "vmcall",
-                in("eax") 0u32, // KVM_HC_FLUSH_TLB = 0 (non-standard, dépend de la version KVM)
+                in("eax") 0u32, // KVM_HC_FLUSH_TLB = 0 (non-standard, depends on KVM version)
                 options(nostack, nomem),
             );
         }
@@ -45,14 +45,14 @@ pub fn paravirt_tlb_flush() {
     }
 }
 
-/// Configure PV EOI (une fois par CPU, après init LAPIC)
+/// Configures PV EOI (once per CPU, after LAPIC init)
 ///
-/// Enregistre la page partagée PV EOI dans le MSR KVM.
+/// Registers the PV EOI shared page in KVM MSR.
 pub fn init_pv_eoi(_pv_eoi_page_phys: u64) {
     if !(hypervisor_type() == HypervisorType::Kvm && kvm_has_pv_eoi()) {
         return;
     }
-    // SAFETY: MSR_KVM_PV_EOI_EN write depuis Ring 0 sur CPU en mode KVM
+    // SAFETY: MSR_KVM_PV_EOI_EN write from Ring 0 on CPU in KVM mode
     unsafe {
         msr::write_msr(MSR_KVM_PV_EOI_EN, _pv_eoi_page_phys | KVM_PV_EOI_ENABLED);
     }

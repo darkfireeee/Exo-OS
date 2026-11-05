@@ -6,9 +6,9 @@ use crate::arch::x86_64::{apic, halt_cpu, idt, memory_iface, paging, read_cr2, r
 
 #[no_mangle]
 pub unsafe extern "C" fn do_divide_error(frame: *mut ExceptionFrame) {
-    // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
-    // unique pour ce contexte d'exception. Sa durée de vie est garantie par la
-    // frame de pile que le CPU a poussée avant l'appel au handler.
+    // SAFETY: `frame` is a non-null pointer passed by the ASM stub, 16-byte aligned,
+    // unique for this exception context. Its lifetime is guaranteed by the
+    // stack frame pushed by the CPU prior to calling the handler.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[0].fetch_add(1, Ordering::Relaxed);
 
@@ -23,7 +23,7 @@ pub unsafe extern "C" fn do_divide_error(frame: *mut ExceptionFrame) {
 /// Handler #DB — Debug exception
 #[no_mangle]
 pub unsafe extern "C" fn do_debug(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[1].fetch_add(1, Ordering::Relaxed);
 
@@ -37,12 +37,12 @@ pub unsafe extern "C" fn do_debug(frame: *mut ExceptionFrame) {
 
 /// Handler #NMI — Non-Maskable Interrupt
 ///
-/// NMI utilise IST2 (pile dédiée indépendante de la pile courante).
-/// NE PAS appeler de code qui pourrait provoquer une exception.
+/// NMI uses IST2 (dedicated stack independent of current stack).
+/// DO NOT call code that could trigger an exception.
 #[no_mangle]
 pub unsafe extern "C" fn do_nmi(frame: *mut ExceptionFrame) {
-    // SAFETY: `frame` est fourni par le stub d'interruption NMI sur IST2, pointe
-    // vers une ExceptionFrame valide construite par le CPU à l'entrée du handler.
+    // SAFETY: `frame` is provided by the NMI interrupt stub on IST2, points
+    // to a valid ExceptionFrame constructed by CPU on entry to handler.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[2].fetch_add(1, Ordering::Relaxed);
     NMI_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn do_nmi(frame: *mut ExceptionFrame) {
 /// Handler #BP — Breakpoint (INT3)
 #[no_mangle]
 pub unsafe extern "C" fn do_breakpoint(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[3].fetch_add(1, Ordering::Relaxed);
 
@@ -65,13 +65,13 @@ pub unsafe extern "C" fn do_breakpoint(frame: *mut ExceptionFrame) {
         // SIGTRAP
         exception_return_to_user(frame);
     }
-    // Kernel : kprobe ou debug noyau
+    // Kernel: kprobe or kernel debug
 }
 
 /// Handler #OF — Overflow (INTO)
 #[no_mangle]
 pub unsafe extern "C" fn do_overflow(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[4].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn do_overflow(frame: *mut ExceptionFrame) {
 /// Handler #BR — Bound Range Exceeded
 #[no_mangle]
 pub unsafe extern "C" fn do_bound_range(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[5].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -99,34 +99,34 @@ pub unsafe extern "C" fn do_bound_range(frame: *mut ExceptionFrame) {
 /// Handler #UD — Invalid Opcode
 #[no_mangle]
 pub unsafe extern "C" fn do_invalid_opcode(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[6].fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
-        // DIAG-UD1 (bisect mort d'init) : dump complet AVANT de livrer SIGILL —
-        // rip + ripb (octets in-memory : `0f 0b` = ud2 compilé, octets aléatoires
-        // = saut corrompu #25) + pile (chaîne de return addresses).
+        // DIAG-UD1 (bisect init termination): complete dump BEFORE delivering SIGILL —
+        // rip + ripb (in-memory bytes: `0f 0b` = compiled ud2, random bytes
+        // = corrupted jump #25) + stack (return address chain).
         diag_user_exception_dump(b"<UD1 ", frame);
-        // FIX-UD-SIGILL : livrer réellement SIGILL. Sans ça, on retournait au RIP
-        // fautif tel quel → l'instruction invalide (typiquement `ud2` d'un panic
-        // Rust côté serveur) re-déclenche immédiatement #UD → livelock noyau
-        // (boucle do_invalid_opcode → iretq → même opcode) gelant tout le système.
-        // Comme #PF/#GP, on met SIGILL en attente puis on repasse en Ring 3 : le
-        // signal est délivré (handler ou terminaison) au lieu de boucler.
+        // FIX-UD-SIGILL: actually deliver SIGILL. Without this, returning to the
+        // faulting RIP as-is → invalid instruction (typically server-side Rust panic
+        // `ud2`) re-triggers #UD immediately → kernel livelock
+        // (do_invalid_opcode loop → iretq → same opcode) freezing the entire system.
+        // Like #PF/#GP, we queue SIGILL then return to Ring 3: the
+        // signal is delivered (handler or termination) instead of looping.
         queue_signal_for_current(crate::process::signal::Signal::SIGILL);
         exception_return_to_user(frame);
     } else {
-        // Vérifier si c'est une instruction XTEST (TSX) — retpoline parfois génère #UD
-        // Pour l'instant : kernel panic
+        // Check if it is an XTEST instruction (TSX) — retpoline sometimes generates #UD
+        // For now: kernel panic
         kernel_panic_exception("Invalid Opcode kernel", frame);
     }
 }
 
 /// Handler #NM — Device Not Available (FPU lazy)
 ///
-/// Déclenché quand CR0.TS=1 et qu'un thread tente d'utiliser la FPU.
-/// scheduler/fpu/lazy.rs gère la logique — arch/ gère l'exception.
+/// Triggered when CR0.TS=1 and a thread attempts to use the FPU.
+/// scheduler/fpu/lazy.rs manages the logic — arch/ handles the exception.
 #[no_mangle]
 pub unsafe extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
     let _ = frame;
@@ -135,12 +135,12 @@ pub unsafe extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
 
     let tcb_ptr = current_tcb_raw_checked();
 
-    // Déléguer au scheduler (RÈGLE FPU-02 DOC3) :
-    //   • Efface CR0.TS (autorise l'accès FPU/SIMD).
-    //   • Appelle xrstor pour restaurer le contexte FPU du thread courant.
-    //   • Met à jour fpu_loaded = true dans le TCB.
-    // Si tcb_ptr == 0 (boot / idle) : simple clts sans xrstor.
-    // SAFETY: sched_fpu_handle_nm() est thread-safe pour le CPU courant.
+    // Delegate to scheduler (RULE FPU-02 DOC3):
+    //   • Clears CR0.TS (allows FPU/SIMD access).
+    //   • Calls xrstor to restore current thread FPU context.
+    //   • Updates fpu_loaded = true in TCB.
+    // If tcb_ptr == 0 (boot / idle): simple clts without xrstor.
+    // SAFETY: sched_fpu_handle_nm() is thread-safe for current CPU.
     unsafe {
         sched_fpu_handle_nm(tcb_ptr as *mut u8);
     }
@@ -148,20 +148,20 @@ pub unsafe extern "C" fn do_device_not_avail(frame: *mut ExceptionFrame) {
 
 /// Handler #DF — Double Fault
 ///
-/// Utilise IST1 (pile dédiée). Si on arrive ici, la pile kernel principale
-/// est probablement corrompue ou overflow.
+/// Uses IST1 (dedicated stack). If we arrive here, main kernel stack
+/// is likely corrupted or overflowed.
 ///
-/// NE PAS allouer, NE PAS prendre de verrous.
+/// DO NOT allocate, DO NOT acquire locks.
 #[no_mangle]
 pub unsafe extern "C" fn do_double_fault(frame: *mut ExceptionFrame) {
-    // DIAG: marqueur brut inconditionnel à l'entrée (#DF sur IST1).
-    // SAFETY: port E9, sans effet mémoire.
+    // DIAG: unconditional raw marker on entry (#DF on IST1).
+    // SAFETY: port E9, no memory side effects.
     unsafe { core::arch::asm!("out 0xE9, al", in("al") b'D', options(nomem, nostack)) };
     EXC_COUNTERS[8].fetch_add(1, Ordering::Relaxed);
     df_debug_write(b"\n[#DF] double fault");
     if !frame.is_null() {
-        // SAFETY: frame non-null (vérifié) ; ExceptionFrame construite par le CPU
-        // sur la pile IST du #DF, valide pour lecture pendant le handler.
+        // SAFETY: frame non-null (verified); ExceptionFrame constructed by CPU
+        // on IST stack of #DF, valid for reading during handler.
         let frame = unsafe { &*frame };
         df_debug_field(b" rip=0x", frame.rip);
         df_debug_field(b" cs=0x", frame.cs);
@@ -175,9 +175,9 @@ pub unsafe extern "C" fn do_double_fault(frame: *mut ExceptionFrame) {
     );
     df_debug_write(b"\n");
 
-    // RÈGLE NO-ALLOC : cette fonction ne peut faire aucune allocation
-    // Elle ne peut qu'arrêter le CPU
-    // SAFETY: situation non-récupérable — halt immédiat
+    // NO-ALLOC RULE: this function cannot perform any allocation
+    // It can only halt the CPU
+    // SAFETY: unrecoverable situation — immediate halt
     crate::arch::x86_64::halt_cpu();
 }
 
@@ -208,7 +208,7 @@ pub fn df_debug_field(label: &[u8], value: u64) {
 /// Handler #TS — Invalid TSS
 #[no_mangle]
 pub unsafe extern "C" fn do_invalid_tss(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[10].fetch_add(1, Ordering::Relaxed);
     kernel_panic_exception("Invalid TSS", frame);
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn do_invalid_tss(frame: *mut ExceptionFrame) {
 /// Handler #NP — Segment Not Present
 #[no_mangle]
 pub unsafe extern "C" fn do_segment_not_present(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[11].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn do_segment_not_present(frame: *mut ExceptionFrame) {
 /// Handler #SS — Stack Fault
 #[no_mangle]
 pub unsafe extern "C" fn do_stack_fault(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[12].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -245,17 +245,17 @@ pub unsafe extern "C" fn do_stack_fault(frame: *mut ExceptionFrame) {
 /// Handler #GP — General Protection Fault
 #[no_mangle]
 pub unsafe extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[13].fetch_add(1, Ordering::Relaxed);
     GP_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
 
     if frame.from_userspace() {
-        // DIAG-GP1 (bisect mort d'init) : dump complet du #GP userspace.
+        // DIAG-GP1 (bisect init termination): complete dump of userspace #GP.
         diag_user_exception_dump(b"<GP1 ", frame);
-        // FIX-GP-SIGSEGV : un #GP Ring 3 doit livrer SIGSEGV. L'ancien code ne
-        // posait AUCUN signal et retournait à la même instruction → #GP en
-        // boucle (livelock silencieux). Même traitement que #PF/#UD.
+        // FIX-GP-SIGSEGV: Ring 3 #GP must deliver SIGSEGV. The old code set
+        // NO signal and returned to same instruction → #GP in a
+        // loop (silent livelock). Same handling as #PF/#UD.
         queue_signal_for_current(crate::process::signal::Signal::SIGSEGV);
         exception_return_to_user(frame);
     } else {
@@ -266,7 +266,7 @@ pub unsafe extern "C" fn do_general_protection(frame: *mut ExceptionFrame) {
 
 #[no_mangle]
 pub unsafe extern "C" fn do_x87_fp(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[16].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -280,7 +280,7 @@ pub unsafe extern "C" fn do_x87_fp(frame: *mut ExceptionFrame) {
 /// Handler #AC — Alignment Check
 #[no_mangle]
 pub unsafe extern "C" fn do_alignment_check(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[17].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -293,20 +293,20 @@ pub unsafe extern "C" fn do_alignment_check(frame: *mut ExceptionFrame) {
 
 /// Handler #MC — Machine Check
 ///
-/// Utilise IST3 (pile dédiée).
-/// Ne peut pas se récupérer. Arrêt immédiat.
+/// Uses IST3 (dedicated stack).
+/// Cannot be recovered. Immediate halt.
 #[no_mangle]
 pub unsafe extern "C" fn do_machine_check(_frame: *mut ExceptionFrame) {
     EXC_COUNTERS[18].fetch_add(1, Ordering::Relaxed);
     MC_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: machine check = hardware non-récupérable
+    // SAFETY: machine check = unrecoverable hardware failure
     crate::arch::x86_64::halt_cpu();
 }
 
 /// Handler #XM — SIMD FP Exception
 #[no_mangle]
 pub unsafe extern "C" fn do_simd_fp(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[19].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -320,7 +320,7 @@ pub unsafe extern "C" fn do_simd_fp(frame: *mut ExceptionFrame) {
 /// Handler #VE — Virtualization Exception
 #[no_mangle]
 pub unsafe extern "C" fn do_virtualization(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[20].fetch_add(1, Ordering::Relaxed);
     if frame.from_userspace() {
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn do_virtualization(frame: *mut ExceptionFrame) {
 /// Handler #CP — Control Protection Exception (CET)
 #[no_mangle]
 pub unsafe extern "C" fn do_ctrl_protection(frame: *mut ExceptionFrame) {
-    // SAFETY: identique à do_divide_error — pointeur valide passé par le stub ASM.
+    // SAFETY: identical to do_divide_error — valid pointer passed by ASM stub.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[21].fetch_add(1, Ordering::Relaxed);
     crate::security::exocage::cp_handler(frame as *mut ExceptionFrame as usize, frame.error_code);

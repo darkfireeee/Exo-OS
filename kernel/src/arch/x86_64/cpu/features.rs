@@ -1,35 +1,35 @@
-//! # cpu/features.rs — Détection CPUID et feature flags
+//! # cpu/features.rs — CPUID Detection and Feature Flags
 //!
-//! Détecte toutes les extensions CPU x86_64 nécessaires au noyau Exo-OS.
-//! La structure `CpuFeatures` est un singleton global initialisé au boot.
+//! Detects all x86_64 CPU extensions required by the Exo-OS kernel.
+//! The `CpuFeatures` struct is a global singleton initialized at boot.
 //!
 //! ## Design
-//! - La détection se fait une seule fois via `detect()` au boot
-//! - Les accès ultérieurs lisent depuis `CPU_FEATURES` (static)
-//! - Aucune allocation dynamique
+//! - Detection is performed once via `detect()` at boot
+//! - Subsequent accesses read from `CPU_FEATURES` (static)
+//! - No dynamic allocation
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ── CPUID wrappers ────────────────────────────────────────────────────────────
 
-/// Exécute CPUID avec leaf `leaf` et subleaf 0
+/// Executes CPUID with leaf `leaf` and subleaf 0
 #[inline]
 fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
     cpuid_ex(leaf, 0)
 }
 
-/// Exécute CPUID avec leaf et subleaf explicites
-/// Utilise le pattern xchg pour contourner la restriction LLVM sur rbx.
+/// Executes CPUID with explicit leaf and subleaf
+/// Uses the xchg pattern to work around the LLVM restriction on rbx.
 #[inline]
 fn cpuid_ex(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (eax, ecx, edx): (u32, u32, u32);
     let ebx_result: u64;
-    // SAFETY: CPUID non-privilégiée; xchg préserve rbx réservé par LLVM (mode PIC).
+    // SAFETY: Unprivileged CPUID; xchg preserves rbx reserved by LLVM (PIC mode).
     unsafe {
         core::arch::asm!(
-            "xchg {tmp:r}, rbx",   // sauvegarde rbx dans tmp, met 0 dans rbx
-            "cpuid",               // résultat EBX dans rbx
-            "xchg {tmp:r}, rbx",   // restaure rbx, tmp contient maintenant EBX cpuid
+            "xchg {tmp:r}, rbx",   // save rbx into tmp, put 0 in rbx
+            "cpuid",               // EBX result in rbx
+            "xchg {tmp:r}, rbx",   // restore rbx, tmp now contains cpuid EBX
             inout("eax") leaf    => eax,
             inout("ecx") subleaf => ecx,
             out("edx") edx,
@@ -40,9 +40,9 @@ fn cpuid_ex(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     (eax, ebx_result as u32, ecx, edx)
 }
 
-// ── Drapeaux feature (bitfield u64×4) ────────────────────────────────────────
+// ── Feature flags (bitfield u64×4) ────────────────────────────────────────
 
-/// Ensemble de feature flags CPU compressés en 4 × u64 bitfields
+/// Set of CPU feature flags compressed into 4 × u64 bitfields
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CpuFeatureFlags {
     /// Leaf 1 ECX
@@ -63,13 +63,13 @@ pub struct CpuFeatureFlags {
     pub extleaf8_ebx: u32,
     /// Leaf 0xD subleaf 0 EAX (XSAVE component bitmap)
     pub xsave_features: u32,
-    /// Max CPUID basic leaf supporté
+    /// Max basic CPUID leaf supported
     pub max_basic_leaf: u32,
-    /// Max CPUID extended leaf supporté
+    /// Max extended CPUID leaf supported
     pub max_ext_leaf: u32,
 }
 
-// ── Bits d'intérêt dans Leaf 1 ECX ───────────────────────────────────────────
+// ── Bits of interest in Leaf 1 ECX ───────────────────────────────────────────
 const LEAF1_ECX_SSE3: u32 = 1 << 0;
 const LEAF1_ECX_PCLMUL: u32 = 1 << 1;
 const LEAF1_ECX_VMX: u32 = 1 << 5;
@@ -94,7 +94,7 @@ const LEAF1_ECX_F16C: u32 = 1 << 29;
 const LEAF1_ECX_RDRAND: u32 = 1 << 30;
 const LEAF1_ECX_HYPERVISOR: u32 = 1 << 31;
 
-// ── Bits d'intérêt dans Leaf 1 EDX ───────────────────────────────────────────
+// ── Bits of interest in Leaf 1 EDX ───────────────────────────────────────────
 const LEAF1_EDX_FPU: u32 = 1 << 0;
 #[allow(dead_code)]
 const LEAF1_EDX_MSR: u32 = 1 << 5;
@@ -124,7 +124,7 @@ const LEAF1_EDX_SSE: u32 = 1 << 25;
 const LEAF1_EDX_SSE2: u32 = 1 << 26;
 const LEAF1_EDX_HTT: u32 = 1 << 28; // Hyper-Threading
 
-// ── Bits d'intérêt dans Leaf 7 EBX ───────────────────────────────────────────
+// ── Bits of interest in Leaf 7 EBX ───────────────────────────────────────────
 const LEAF7_EBX_FSGSBASE: u32 = 1 << 0;
 #[allow(dead_code)]
 const LEAF7_EBX_TSC_ADJ: u32 = 1 << 1;
@@ -168,10 +168,10 @@ const LEAF7_EBX_AVX512BW: u32 = 1 << 30;
 #[allow(dead_code)]
 const LEAF7_EBX_AVX512VL: u32 = 1 << 31;
 
-// ── Bits d'intérêt dans Leaf 1 ECX (suite) ─────────────────────────────────
+// ── Bits of interest in Leaf 1 ECX (continued) ─────────────────────────────────
 const LEAF1_ECX_PCID: u32 = 1 << 17; // Process-Context Identifiers
 
-// ── Bits d'intérêt dans Leaf 7 ECX ───────────────────────────────────────────
+// ── Bits of interest in Leaf 7 ECX ───────────────────────────────────────────
 const LEAF7_ECX_UMIP: u32 = 1 << 2;
 const LEAF7_ECX_PKU: u32 = 1 << 3;
 #[allow(dead_code)]
@@ -181,7 +181,7 @@ const LEAF7_ECX_CET_SS: u32 = 1 << 7;
 const LEAF7_ECX_LA57: u32 = 1 << 16; // 5-level paging
 const LEAF7_ECX_PKS: u32 = 1 << 31; // Protection Keys for Supervisor
 
-// ── Bits d'intérêt dans Leaf 7 EDX ───────────────────────────────────────────
+// ── Bits of interest in Leaf 7 EDX ───────────────────────────────────────────
 const LEAF7_EDX_ARCH_CAP: u32 = 1 << 29;
 const LEAF7_EDX_SPEC_CTRL: u32 = 1 << 26;
 const LEAF7_EDX_STIBP: u32 = 1 << 27;
@@ -189,7 +189,7 @@ const LEAF7_EDX_FLUSH_CMD: u32 = 1 << 28;
 const LEAF7_EDX_SSBD: u32 = 1 << 31;
 const LEAF7_EDX_MD_CLEAR: u32 = 1 << 10; // MD_CLEAR (VERW flushes buffers)
 
-// ── Bits d'intérêt dans Extended Leaf 80000001 EDX ───────────────────────────
+// ── Bits of interest in Extended Leaf 80000001 EDX ───────────────────────────
 const EXT1_EDX_SYSCALL: u32 = 1 << 11;
 const EXT1_EDX_NX: u32 = 1 << 20;
 const EXT1_EDX_PDPE1GB: u32 = 1 << 26; // 1 GB huge pages
@@ -197,15 +197,15 @@ const EXT1_EDX_RDTSCP: u32 = 1 << 27;
 #[allow(dead_code)]
 const EXT1_EDX_LM: u32 = 1 << 29; // Long Mode (64-bit)
 
-// ── Bits d'intérêt dans Extended Leaf 80000001 ECX (AMD) ─────────────────────
-const EXT1_ECX_IBRS_AMD: u32 = 1 << 14; // AMD : IBRS/IBPB (CPUID_80000001_ECX)
-const EXT1_ECX_IBPB_AMD: u32 = 1 << 12; // AMD : IBPB standalone
-const EXT1_ECX_VIRT_SSBD: u32 = 1 << 25; // AMD : Virtualized SSBD
+// ── Bits of interest in Extended Leaf 80000001 ECX (AMD) ─────────────────────
+const EXT1_ECX_IBRS_AMD: u32 = 1 << 14; // AMD: IBRS/IBPB (CPUID_80000001_ECX)
+const EXT1_ECX_IBPB_AMD: u32 = 1 << 12; // AMD: IBPB standalone
+const EXT1_ECX_VIRT_SSBD: u32 = 1 << 25; // AMD: Virtualized SSBD
 const EXT8_EBX_NOREPLAY: u32 = 1 << 6; // AMD: no rogue data cache replay / RDCL-like immunity
 
-// ── Structure CpuFeatures ─────────────────────────────────────────────────────
+// ── CpuFeatures Structure ─────────────────────────────────────────────────────
 
-/// Informations CPU collectées au boot
+/// CPU information collected at boot
 #[derive(Debug, Clone)]
 pub struct CpuFeatures {
     flags: CpuFeatureFlags,
@@ -214,23 +214,23 @@ pub struct CpuFeatures {
 
     /// Stepping (model bits [3:0])
     pub stepping: u8,
-    /// Model CPU
+    /// CPU Model
     pub model: u8,
-    /// Family CPU
+    /// CPU Family
     pub family: u8,
-    /// Nombre de threads logiques sur ce CPU physique
+    /// Number of logical threads on this physical CPU
     pub logical_cpus: u8,
-    /// Taille de la xsave area (en bytes)
+    /// XSAVE area size (in bytes)
     pub xsave_area_size: u32,
 
-    /// Chaîne fabricant (12 chars)
+    /// Vendor string (12 chars)
     pub vendor_string: [u8; 12],
 
-    /// Architecture capacity flags (MSR_IA32_ARCH_CAP lu si disponible)
+    /// Architecture capacity flags (MSR_IA32_ARCH_CAP read if available)
     pub arch_cap: u64,
 }
 
-/// Vendor CPU détecté
+/// Detected CPU vendor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CpuVendor {
     Intel,
@@ -239,10 +239,10 @@ pub enum CpuVendor {
 }
 
 impl CpuFeatures {
-    /// Détecte toutes les features du CPU courant via CPUID
-    /// Doit être appelé depuis le BSP au boot, avant tout autre code.
+    /// Detects all features of the current CPU via CPUID
+    /// Must be called from the BSP at boot, before any other code.
     pub fn detect() -> Self {
-        // Leaf 0 : vendor string + max basic leaf
+        // Leaf 0: vendor string + max basic leaf
         let (max_basic, ebx, ecx, edx) = cpuid(0);
         let vendor_string = [
             ebx as u8,
@@ -267,7 +267,7 @@ impl CpuFeatures {
             CpuVendor::Unknown
         };
 
-        // Leaf 1 : feature flags de base + modèle
+        // Leaf 1: basic feature flags + model
         let (eax1, ebx1, ecx1, edx1) = cpuid(1);
 
         let stepping = (eax1 & 0xF) as u8;
@@ -287,7 +287,7 @@ impl CpuFeatures {
         };
         let logical_cpus = ((ebx1 >> 16) & 0xFF) as u8;
 
-        // Leaf 7 subleaf 0 : nouveaux features (SMEP, SMAP, AVX2…)
+        // Leaf 7 subleaf 0: new features (SMEP, SMAP, AVX2…)
         let (leaf7_ebx, leaf7_ecx, leaf7_edx) = if max_basic >= 7 {
             let (_, b, c, d) = cpuid_ex(7, 0);
             (b, c, d)
@@ -319,16 +319,16 @@ impl CpuFeatures {
                 512
             }
         } else {
-            512 // FXSAVE taille par défaut
+            512 // FXSAVE default size
         };
 
-        // Lecture MSR_IA32_ARCH_CAP si disponible.
-        // Sous les tests host/userspace, RDMSR provoquerait un #GP, donc on
-        // conserve une valeur neutre. Le vrai boot bare-metal garde la lecture.
+        // Read MSR_IA32_ARCH_CAP if available.
+        // Under host/userspace tests, RDMSR would trigger a #GP, so we
+        // preserve a neutral value. Real bare-metal boot keeps the read.
         let arch_cap = if leaf7_edx & LEAF7_EDX_ARCH_CAP != 0 {
             #[cfg(target_os = "none")]
             {
-                // SAFETY: ARCH_CAP MSR disponible si CPUID l'indique sur le kernel bare-metal.
+                // SAFETY: ARCH_CAP MSR available if CPUID indicates it on bare-metal kernel.
                 unsafe { super::msr::read_msr(super::msr::MSR_IA32_ARCH_CAP) }
             }
             #[cfg(not(target_os = "none"))]
@@ -368,7 +368,7 @@ impl CpuFeatures {
         }
     }
 
-    // ── Accesseurs features ───────────────────────────────────────────────────
+    // ── Feature Accessors ───────────────────────────────────────────────────
 
     #[inline(always)]
     pub fn has_apic(&self) -> bool {
@@ -540,95 +540,95 @@ impl CpuFeatures {
     }
 
     /// CET Shadow Stack — CPUID leaf 7, sub-leaf 0, ECX bit 7.
-    /// FIX-CET-01 : requis pour conditionner la sauvegarde de MSR_IA32_PL0_SSP.
+    /// FIX-CET-01: required to condition saving MSR_IA32_PL0_SSP.
     #[inline(always)]
     pub fn has_cet_ss(&self) -> bool {
         self.flags.leaf7_ecx & (1 << 7) != 0
     }
 
-    // ── Méthodes spécifiques Spectre / MDS ───────────────────────────────────
-    /// PCID (Process-Context Identifiers) — nécessaire pour KPTI no-flush
+    // ── Spectre / MDS Specific Methods ───────────────────────────────────
+    /// PCID (Process-Context Identifiers) — required for KPTI no-flush
     #[inline(always)]
     pub fn has_pcid(&self) -> bool {
         self.flags.leaf1_ecx & LEAF1_ECX_PCID != 0
     }
-    /// IBRS (Indirect Branch Restricted Speculation) — Intel ou AMD
+    /// IBRS (Indirect Branch Restricted Speculation) — Intel or AMD
     #[inline(always)]
     pub fn has_ibrs(&self) -> bool {
         self.flags.leaf7_edx & LEAF7_EDX_SPEC_CTRL != 0
             || self.flags.extleaf1_ecx & EXT1_ECX_IBRS_AMD != 0
     }
-    /// IBPB (Indirect Branch Predictor Barrier) — Intel ou AMD
+    /// IBPB (Indirect Branch Predictor Barrier) — Intel or AMD
     #[inline(always)]
     pub fn has_ibpb(&self) -> bool {
         self.flags.leaf7_edx & LEAF7_EDX_SPEC_CTRL != 0
             || self.flags.extleaf1_ecx & EXT1_ECX_IBPB_AMD != 0
     }
-    /// MD_CLEAR : VERW flush les buffers micro-architecturaux (MDS mitigation)
+    /// MD_CLEAR: VERW flushes micro-architectural buffers (MDS mitigation)
     #[inline(always)]
     pub fn has_md_clear(&self) -> bool {
         self.flags.leaf7_edx & LEAF7_EDX_MD_CLEAR != 0
     }
-    /// VIRT_SSBD (AMD) : Virtualized Speculative Store Bypass Disable
+    /// VIRT_SSBD (AMD): Virtualized Speculative Store Bypass Disable
     #[inline(always)]
     pub fn has_virt_ssbd(&self) -> bool {
         self.flags.extleaf1_ecx & EXT1_ECX_VIRT_SSBD != 0
     }
 
-    /// CPU non vulnérable à Meltdown (Rogue Data Cache Load)
+    /// CPU not vulnerable to Meltdown (Rogue Data Cache Load)
     #[inline(always)]
     pub fn rdcl_no(&self) -> bool {
         self.arch_cap & super::msr::ARCH_CAP_RDCL_NO != 0
     }
 
-    /// AMD CPUID Fn8000_0008_EBX[6] indique l'absence de replay de cache
-    /// exploitable pour les variantes RDCL documentées côté AMD.
+    /// AMD CPUID Fn8000_0008_EBX[6] indicates absence of exploitable
+    /// cache replay for RDCL variants documented on AMD side.
     #[inline(always)]
     pub fn amd_noreplay(&self) -> bool {
         self.flags.extleaf8_ebx & EXT8_EBX_NOREPLAY != 0
     }
 
-    /// CPU non vulnérable à Spectre v4 SSB
+    /// CPU not vulnerable to Spectre v4 SSB
     #[inline(always)]
     pub fn ssb_no(&self) -> bool {
         self.arch_cap & super::msr::ARCH_CAP_SSB_NO != 0
     }
 
-    /// IBRS always-on supporté
+    /// IBRS always-on supported
     #[inline(always)]
     pub fn ibrs_all(&self) -> bool {
         self.arch_cap & super::msr::ARCH_CAP_IBRS_ALL != 0
     }
 
-    /// Retourne la taille de l'XSAVE area en bytes
+    /// Returns the size of the XSAVE area in bytes
     #[inline(always)]
     pub fn xsave_size(&self) -> u32 {
         self.xsave_area_size
     }
 
-    /// L'OS est exécuté dans un hyperviseur
+    /// OS is running inside a hypervisor
     #[inline(always)]
     pub fn in_vm(&self) -> bool {
         self.is_hypervisor()
     }
 }
 
-// ── CPU_FEATURES singleton ────────────────────────────────────────────────────
+// ── CPU_FEATURES Singleton ────────────────────────────────────────────────────
 
-/// Singleton global des features CPU — initialisé par `init_cpu_features()`
+/// Global CPU features singleton — initialized by `init_cpu_features()`
 ///
-/// ⚠️ Accès avant `init_cpu_features()` = undefined behavior.
-///    Le padding est toujours 0 avant init — tous `has_*()` retournent false.
+/// ⚠️ Access before `init_cpu_features()` = undefined behavior.
+///    Padding is always 0 before init — all `has_*()` return false.
 pub static CPU_FEATURES: CpuFeaturesCell = CpuFeaturesCell::new();
 
-/// Enveloppe thread-safe (lecture seule après init) pour CpuFeatures
+/// Thread-safe wrapper (read-only after init) for CpuFeatures
 pub struct CpuFeaturesCell {
     initialized: AtomicBool,
-    // Utilise UnsafeCell pour initialisation unique au boot
+    // Uses UnsafeCell for one-time initialization at boot
     inner: core::cell::UnsafeCell<CpuFeatures>,
 }
 
-// SAFETY: CpuFeaturesCell est read-only après init — send/sync sont sûrs
+// SAFETY: CpuFeaturesCell is read-only after init — Send/Sync are safe
 unsafe impl Send for CpuFeaturesCell {}
 unsafe impl Sync for CpuFeaturesCell {}
 
@@ -662,7 +662,7 @@ impl CpuFeaturesCell {
         }
     }
 
-    /// Initialise le singleton. Doit être appelé UNE SEULE FOIS depuis le BSP.
+    /// Initializes the singleton. Must be called EXACTLY ONCE from the BSP.
     pub fn init(&self) {
         if self
             .initialized
@@ -670,38 +670,38 @@ impl CpuFeaturesCell {
             .is_ok()
         {
             let features = CpuFeatures::detect();
-            // SAFETY: seul écrivain (BSP avant APs); compare_exchange garantit l'unicité.
+            // SAFETY: sole writer (BSP before APs); compare_exchange ensures uniqueness.
             unsafe {
                 *self.inner.get() = features;
             }
         }
     }
 
-    /// Retourne la référence aux features détectées
+    /// Returns reference to detected features
     ///
     /// # Panics
-    /// Panic en debug si appelé avant `init()`.
+    /// Panics in debug if called before `init()`.
     #[inline(always)]
     pub fn get(&self) -> &CpuFeatures {
         debug_assert!(
             self.initialized.load(Ordering::Acquire),
             "CPU_FEATURES: accès avant init()"
         );
-        // SAFETY: après init() l'inner est read-only — aucune mutation possible
+        // SAFETY: after init() inner is read-only — no mutation possible
         unsafe { &*self.inner.get() }
     }
 
-    /// Retourne `true` si les features CPU ont déjà été initialisées.
+    /// Returns `true` if CPU features have already been initialized.
     #[inline(always)]
     pub fn is_initialized(&self) -> bool {
         self.initialized.load(Ordering::Acquire)
     }
 
-    /// Variante non panicante : `None` si l'init n'a pas encore eu lieu.
+    /// Non-panicking variant: `None` if init has not occurred yet.
     #[inline(always)]
     pub fn get_if_initialized(&self) -> Option<&CpuFeatures> {
         if self.is_initialized() {
-            // SAFETY: après init() l'inner est read-only — aucune mutation possible.
+            // SAFETY: after init() inner is read-only — no mutation possible.
             Some(unsafe { &*self.inner.get() })
         } else {
             None
@@ -718,15 +718,15 @@ impl core::ops::Deref for CpuFeaturesCell {
     }
 }
 
-// ── Point d'entrée init ───────────────────────────────────────────────────────
+// ── Init Entry Point ───────────────────────────────────────────────────────
 
-/// Initialise la détection CPU — appelé depuis `early_init.rs` au boot BSP
+/// Initializes CPU detection — called from `early_init.rs` at BSP boot
 pub fn init_cpu_features() {
     CPU_FEATURES.init();
 
     let f = CPU_FEATURES.get();
 
-    // Validation des features obligatoires pour Exo-OS x86_64
+    // Validation of mandatory features for Exo-OS x86_64
     assert!(f.has_sse2(), "FATAL: SSE2 requis (x86_64 ABI baseline)");
     assert!(f.has_fxsr(), "FATAL: FXSR requis pour context switch FPU");
     assert!(f.has_syscall(), "FATAL: SYSCALL/SYSRET requis");
@@ -734,45 +734,45 @@ pub fn init_cpu_features() {
     assert!(f.has_apic(), "FATAL: LAPIC requis");
 }
 
-/// Raccourci pour `CPU_FEATURES.get()` — utilisation depuis early_init et autres modules
+/// Shortcut for `CPU_FEATURES.get()` — used by early_init and other modules
 ///
-/// Panics en debug si appelé avant `init_cpu_features()`.
+/// Panics in debug if called before `init_cpu_features()`.
 #[inline(always)]
 pub fn cpu_features() -> &'static CpuFeatures {
     CPU_FEATURES.get()
 }
 
-/// Retourne les features CPU si elles sont disponibles dans le contexte courant.
+/// Returns CPU features if available in the current context.
 ///
-/// - bare-metal (`target_os = "none"`) : exige l'initialisation normale et
-///   conserve le contrat strict du boot ;
-/// - tests/host : retourne `None` tant que `init_cpu_features()` n'a pas été
-///   appelé, ce qui permet aux chemins de fallback de rester sûrs.
+/// - bare-metal (`target_os = "none"`): requires normal initialization and
+///   preserves the strict boot contract;
+/// - tests/host: returns `None` as long as `init_cpu_features()` has not been
+///   called, allowing fallback paths to remain safe.
 #[cfg(target_os = "none")]
 #[inline(always)]
 pub fn cpu_features_or_none() -> Option<&'static CpuFeatures> {
     Some(CPU_FEATURES.get())
 }
 
-/// Variante host/test de `cpu_features_or_none()`.
+/// Host/test variant of `cpu_features_or_none()`.
 #[cfg(not(target_os = "none"))]
 #[inline(always)]
 pub fn cpu_features_or_none() -> Option<&'static CpuFeatures> {
     CPU_FEATURES.get_if_initialized()
 }
 
-// ── Instrumentation CPUID ─────────────────────────────────────────────────────
+// ── CPUID Instrumentation ─────────────────────────────────────────────────────
 
 static CPUID_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Retourne le nombre d'appels CPUID depuis le boot (instrumentation)
+/// Returns the number of CPUID calls since boot (instrumentation)
 pub fn cpuid_call_count() -> u64 {
     CPUID_CALL_COUNT.load(Ordering::Relaxed)
 }
 
-/// Affiche un résumé des features détectées (pour le journal de boot)
+/// Prints a summary of detected features (for boot log)
 pub fn log_cpu_features(features: &CpuFeatures) {
-    // Le résumé est construit sous forme de flags actifs
-    // (pas d'allocation — utilise un buffer statique)
-    let _ = features; // utilisé par le caller pour formatter dans le log
+    // The summary is constructed as active flags
+    // (no allocation — uses a static buffer)
+    let _ = features; // used by caller for log formatting
 }

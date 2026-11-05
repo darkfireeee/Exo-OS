@@ -1,42 +1,42 @@
 // kernel/src/arch/x86_64/time/ktime.rs
 //
 // ════════════════════════════════════════════════════════════════════════════
-// KtimeState — Horloge monotone avec seqlock ISR-safe
+// KtimeState — Monotonic clock with ISR-safe seqlock
 // ════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE TIME-SEQLOCK-01 : ktime_get_ns() utilise un seqlock.
-//   - ISR peut appeler ktime_get_ns() sans lock => retry si write en cours.
-//   - Jamais de Mutex ici — ktime_get_ns() doit être wait-free.
-//   - RÈGLE TIME-01 (FIX) : struct ktime jamais mise à jour en 2 writes sans seqlock.
+// RULE TIME-SEQLOCK-01: ktime_get_ns() uses a seqlock.
+//   - ISR can call ktime_get_ns() without locks => retry if write in progress.
+//   - Never use a Mutex here — ktime_get_ns() must be wait-free.
+//   - RULE TIME-01 (FIX): struct ktime never updated in 2 writes without seqlock.
 //
-// Algorithme seqlock :
-//   Lecteur : lit seq1 → s'assure que seq1 est pair → lit données → lit seq2
-//             → si seq1 != seq2 : retry (write est arrivé entre temps)
-//   Écrivain : seq++ (impair = écriture en cours) → maj données → seq++
+// Seqlock algorithm:
+//   Reader: reads seq1 -> ensures seq1 is even -> reads data -> reads seq2
+//           -> if seq1 != seq2: retry (write occurred in between)
+//   Writer: seq++ (odd = write in progress) -> update data -> seq++
 //
-// RÈGLE ARCH-TIME-04 : ktime ne régresse JAMAIS.
-//   Si drift correction baisse tsc_hz, ns_base est ajusté en compensation.
+// RULE ARCH-TIME-04: ktime NEVER regresses.
+//   If drift correction lowers tsc_hz, ns_base is adjusted in compensation.
 // ════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 // ── KtimeState ────────────────────────────────────────────────────────────────
 
-/// État global de l'horloge monotone.
+/// Global state of the monotonic clock.
 ///
-/// RÈGLE TIME-SEQLOCK-01 : Alignée sur une cache line pour éviter le false sharing.
-/// Toute lecture doit passer par `ktime_get_ns()` — jamais d'accès direct.
+/// RULE TIME-SEQLOCK-01: Cache-line aligned to prevent false sharing.
+/// All reads must go through `ktime_get_ns()` — never access directly.
 #[repr(C, align(64))]
 struct KtimeState {
-    /// Seqlock counter : pair = état stable, impair = write en cours.
+    /// Seqlock counter: even = stable state, odd = write in progress.
     seq: AtomicU64,
-    /// Valeur TSC au dernier point d'ancrage (tsc_base).
+    /// TSC value at the last anchor point (tsc_base).
     tsc_base: AtomicU64,
-    /// Nanosecondes au dernier point d'ancrage (ns_base).
+    /// Nanoseconds at the last anchor point (ns_base).
     ns_base: AtomicU64,
-    /// Fréquence TSC actuelle en Hz (mise à jour par drift correction).
+    /// Current TSC frequency in Hz (updated by drift correction).
     tsc_hz: AtomicU64,
-    /// Padding pour compléter la cache line (64 - 4×8 = 32 bytes).
+    /// Padding to complete the cache line (64 - 4×8 = 32 bytes).
     _pad: [u8; 32],
 }
 
@@ -46,25 +46,25 @@ impl KtimeState {
             seq: AtomicU64::new(0),
             tsc_base: AtomicU64::new(0),
             ns_base: AtomicU64::new(0),
-            tsc_hz: AtomicU64::new(3_000_000_000), // Fallback 3 GHz avant calibration
+            tsc_hz: AtomicU64::new(3_000_000_000), // Fallback 3 GHz before calibration
             _pad: [0u8; 32],
         }
     }
 }
 
-/// Instance globale — initialisée UNE SEULE FOIS par `init_ktime()`.
+/// Global instance — initialized ONCE by `init_ktime()`.
 static KTIME_STATE: KtimeState = KtimeState::new();
 
-// ── Lecture ISR-safe ──────────────────────────────────────────────────────────
+// ── ISR-safe read ────────────────────────────────────────────────────────────
 
-/// Retourne le temps monotone en nanosecondes depuis le boot.
+/// Returns the monotonic time in nanoseconds since boot.
 ///
-/// ISR-safe : wait-free, pas de lock, pas d'alloc.
-/// Seqlock : retry si un write est en cours (rare — < 100ns).
-/// Cycles typiques : 15-50 cycles sur CPU moderne.
+/// ISR-safe: wait-free, no lock, no alloc.
+/// Seqlock: retry if a write is in progress (rare — < 100ns).
+/// Typical cycles: 15-50 cycles on modern CPU.
 ///
-/// RÈGLE ARCH-TIME-02 : Seule source de temps autorisée depuis le kernel.
-/// RÈGLE TIME-SEQLOCK-01 : Garantit la cohérence même entre ISR et thread.
+/// RULE ARCH-TIME-02: Only authorized time source from the kernel.
+/// RULE TIME-SEQLOCK-01: Guarantees consistency even between ISR and thread.
 #[inline(always)]
 fn apply_tsc_offset(tsc_now: u64, tsc_offset: i64) -> u64 {
     if tsc_offset >= 0 {
@@ -74,113 +74,113 @@ fn apply_tsc_offset(tsc_now: u64, tsc_offset: i64) -> u64 {
     }
 }
 
-/// Retourne le temps monotone en nanosecondes depuis le boot.
+/// Returns the monotonic time in nanoseconds since boot.
 ///
-/// ISR-safe : wait-free, pas de lock, pas d'alloc.
-/// Seqlock : retry si un write est en cours (rare — < 100ns).
-/// Cycles typiques : 15-50 cycles sur CPU moderne.
+/// ISR-safe: wait-free, no lock, no alloc.
+/// Seqlock: retry if a write is in progress (rare — < 100ns).
+/// Typical cycles: 15-50 cycles on modern CPU.
 ///
-/// RÈGLE ARCH-TIME-02 : Seule source de temps autorisée depuis le kernel.
-/// RÈGLE TIME-SEQLOCK-01 : Garantit la cohérence même entre ISR et thread.
+/// RULE ARCH-TIME-02: Only authorized time source from the kernel.
+/// RULE TIME-SEQLOCK-01: Guarantees consistency even between ISR and thread.
 #[inline(always)]
 pub fn ktime_get_ns() -> u64 {
     loop {
-        // 1. Lire seq AVANT — doit être pair (état stable).
+        // 1. Read seq BEFORE — must be even (stable state).
         let seq1 = KTIME_STATE.seq.load(Ordering::Acquire);
         if seq1 & 1 != 0 {
-            // Impair = write en cours → spin_loop et retry.
+            // Odd = write in progress -> spin_loop and retry.
             core::hint::spin_loop();
             continue;
         }
 
-        // 2. Lire le TSC courant via la meilleure primitive CPU disponible.
+        // 2. Read current TSC via the best available CPU primitive.
         let (tsc_now, coreid) = super::sources::tsc::read_ordered_with_cpu();
 
-        // 3. Lire les composants de l'anchor.
+        // 3. Read anchor components.
         let tsc_base = KTIME_STATE.tsc_base.load(Ordering::Acquire);
         let ns_base = KTIME_STATE.ns_base.load(Ordering::Acquire);
         let tsc_hz = KTIME_STATE.tsc_hz.load(Ordering::Acquire);
 
-        // 4. Vérifier l'intégrité : seq n'a pas changé pendant notre lecture.
+        // 4. Verify integrity: seq did not change during our read.
         let seq2 = KTIME_STATE.seq.load(Ordering::Acquire);
         if seq1 != seq2 {
-            // Un write s'est intercalé → retry.
+            // A write intervened -> retry.
             core::hint::spin_loop();
             continue;
         }
 
-        // 5. Calcul final — seqlock garantit la cohérence.
+        // 5. Final calculation — seqlock guarantees consistency.
         if tsc_hz == 0 {
             return 0;
         }
 
-        // Appliquer l'offset per-CPU si SMP est initialisé.
+        // Apply per-CPU offset if SMP is initialized.
         let tsc_offset = super::percpu::tsc_offset(coreid as usize);
         let tsc_adjusted = apply_tsc_offset(tsc_now, tsc_offset);
 
         let tsc_delta = tsc_adjusted.wrapping_sub(tsc_base);
-        // ns = tsc_delta * 1_000_000_000 / tsc_hz — u128 pour éviter l'overflow.
+        // ns = tsc_delta * 1_000_000_000 / tsc_hz — u128 to prevent overflow.
         let ns_delta = (tsc_delta as u128).saturating_mul(1_000_000_000) / (tsc_hz as u128);
 
         return ns_base.wrapping_add(ns_delta as u64);
     }
 }
 
-// ── Mise à jour de l'anchor ───────────────────────────────────────────────────
+// ── Anchor update ────────────────────────────────────────────────────────────
 
-/// Initialise l'état de l'horloge (appelé UNE FOIS depuis `time_init()`).
+/// Initializes the clock state (called ONCE from `time_init()`).
 ///
 /// # Safety
-/// Doit être appelé une seule fois, avant tout appel à `ktime_get_ns()`.
+/// Must be called once, before any call to `ktime_get_ns()`.
 pub(crate) unsafe fn init_ktime(tsc_now: u64, ns_start: u64, tsc_hz: u64) {
-    // Seq impair = write en cours (transitoire — personne ne lit encore).
+    // Odd seq = write in progress (transient — nobody is reading yet).
     KTIME_STATE.seq.store(1, Ordering::Release);
     KTIME_STATE.tsc_base.store(tsc_now, Ordering::Release);
     KTIME_STATE.ns_base.store(ns_start, Ordering::Release);
     KTIME_STATE.tsc_hz.store(tsc_hz, Ordering::Release);
-    // Seq pair = état stable.
+    // Even seq = stable state.
     KTIME_STATE.seq.store(2, Ordering::Release);
 }
 
-/// Met à jour le point d'ancrage de l'horloge (appelé par drift correction).
+/// Updates the clock anchor point (called by drift correction).
 ///
-/// RÈGLE TIME-ANCHOR-01 : NE PAS appeler ktime_get_ns() ici.
-///   → Lire HPET et TSC directement pour éviter la dépendance circulaire.
-/// RÈGLE DRIFT-MONOTONE-01 : ns_now >= ns_actuel (horloge ne régresse pas).
+/// RULE TIME-ANCHOR-01: DO NOT call ktime_get_ns() here.
+///   -> Read HPET and TSC directly to avoid circular dependency.
+/// RULE DRIFT-MONOTONE-01: ns_now >= ns_current (clock does not regress).
 pub(crate) fn update_ktime_anchor(tsc_now: u64, ns_now: u64, new_tsc_hz: u64) {
-    // Vérification monotonie (RÈGLE ARCH-TIME-04).
+    // Monotonicity check (RULE ARCH-TIME-04).
     let ns_current = KTIME_STATE.ns_base.load(Ordering::Relaxed);
     if ns_now < ns_current {
-        // Ne jamais faire reculer l'horloge — utiliser au minimum ns_current.
-        let _ = ns_current; // La guard est vérifiée en amont par apply_drift_correction().
+        // Never step the clock backwards — use at least ns_current.
+        let _ = ns_current; // Guard is verified upstream by apply_drift_correction().
         return;
     }
 
-    // Seq impair = write en cours.
+    // Odd seq = write in progress.
     KTIME_STATE.seq.fetch_add(1, Ordering::Release);
 
-    // Barrière : empêche le réordonnancement des stores suivants avant le seq impair.
+    // Barrier: prevents reordering of subsequent stores before odd seq.
     core::sync::atomic::fence(Ordering::Release);
 
     KTIME_STATE.tsc_base.store(tsc_now, Ordering::Relaxed);
     KTIME_STATE.ns_base.store(ns_now, Ordering::Relaxed);
     KTIME_STATE.tsc_hz.store(new_tsc_hz, Ordering::Relaxed);
 
-    // Barrière : rendre les stores visibles avant de repasser à pair.
+    // Barrier: make stores visible before returning to even.
     core::sync::atomic::fence(Ordering::Release);
 
-    // Seq pair = état stable.
+    // Even seq = stable state.
     KTIME_STATE.seq.fetch_add(1, Ordering::Release);
 }
 
-// ── Wall clock (temps réel UNIX) ─────────────────────────────────────────────
+// ── Wall clock (UNIX real-time) ──────────────────────────────────────────────
 
-/// Retourne le temps Unix en nanosecondes depuis l'epoch (1970-01-01 00:00:00 UTC).
+/// Returns Unix time in nanoseconds since the epoch (1970-01-01 00:00:00 UTC).
 ///
-/// Dépend de `set_wall_time()` ayant été appelé depuis la lecture RTC ou NTP.
-/// Avant la synchronisation : retourne le temps monotone (comme si boot = epoch 0).
+/// Depends on `set_wall_time()` having been called from RTC or NTP reading.
+/// Before synchronization: returns monotonic time (as if boot = epoch 0).
 ///
-/// ISR-safe, seqlock sur WALL_STATE.
+/// ISR-safe, seqlock on WALL_STATE.
 pub fn ktime_get_wall_ns() -> u64 {
     loop {
         let seq1 = WALL_STATE.seq.load(Ordering::Acquire);
@@ -198,19 +198,19 @@ pub fn ktime_get_wall_ns() -> u64 {
     }
 }
 
-/// Retourne le décalage epoch UNIX en ns (wall_ns = mono_ns + rtoffset_ns).
+/// Returns the UNIX epoch offset in ns (wall_ns = mono_ns + rtoffset_ns).
 #[inline(always)]
 pub fn ktime_rtoffset_ns() -> u64 {
     WALL_STATE.rtoffset_ns.load(Ordering::Acquire)
 }
 
-/// Synchronise l'horloge réelle avec une valeur d'epoch UNIX fournie.
+/// Synchronizes the real-time clock with a provided UNIX epoch value.
 ///
-/// Appelé depuis le syscall `settimeofday` ou depuis la lecture RTC au boot.
-/// Met à jour l'offset UNIX dans WALL_STATE via seqlock.
+/// Called from the `settimeofday` syscall or from RTC reading at boot.
+/// Updates the UNIX offset in WALL_STATE via seqlock.
 ///
 /// # Safety
-/// Doit être appelé depuis Ring 0 avec les droits appropriés (CAP_TIME).
+/// Must be called from Ring 0 with appropriate privileges (CAP_TIME).
 pub unsafe fn set_wall_time(epoch_unix_ns: u64) {
     let mono_now = ktime_get_ns();
     let new_offset = epoch_unix_ns.wrapping_sub(mono_now);
@@ -225,46 +225,46 @@ pub unsafe fn set_wall_time(epoch_unix_ns: u64) {
     WALL_STATE.seq.fetch_add(1, Ordering::Release);
 }
 
-// ── Durées relatives ──────────────────────────────────────────────────────────
+// ── Relative durations ───────────────────────────────────────────────────────
 
-/// Temps écoulé en ns depuis `start_ns` (obtenu via `ktime_get_ns()`).
+/// Elapsed time in ns since `start_ns` (obtained via `ktime_get_ns()`).
 #[inline(always)]
 pub fn ktime_elapsed_ns(start_ns: u64) -> u64 {
     ktime_get_ns().wrapping_sub(start_ns)
 }
 
-/// Temps écoulé en µs depuis `start_ns`.
+/// Elapsed time in µs since `start_ns`.
 #[inline(always)]
 pub fn ktime_elapsed_us(start_ns: u64) -> u64 {
     ktime_elapsed_ns(start_ns) / 1_000
 }
 
-/// Retourne `true` si `deadline_ns` est atteinte ou dépassée.
+/// Returns `true` if `deadline_ns` is reached or exceeded.
 #[inline(always)]
 pub fn ktime_past(deadline_ns: u64) -> bool {
     ktime_get_ns() >= deadline_ns
 }
 
-/// Retourne `false` si `deadline_ns` n'est pas encore atteinte.
-/// Utiliser dans les boucles de timeout : `while ktime_not_past(dl) { ... }`.
+/// Returns `false` if `deadline_ns` has not yet been reached.
+/// Use in timeout loops: `while ktime_not_past(dl) { ... }`.
 #[inline(always)]
 pub fn ktime_not_past(deadline_ns: u64) -> bool {
     ktime_get_ns() < deadline_ns
 }
 
-/// Construit une deadline absolue à partir de maintenant + durée en ns.
+/// Constructs an absolute deadline from now + duration in ns.
 #[inline(always)]
 pub fn ktime_deadline_ns(duration_ns: u64) -> u64 {
     ktime_get_ns().saturating_add(duration_ns)
 }
 
-/// Construit une deadline absolue à partir de maintenant + durée en µs.
+/// Constructs an absolute deadline from now + duration in µs.
 #[inline(always)]
 pub fn ktime_deadline_us(duration_us: u64) -> u64 {
     ktime_deadline_ns(duration_us.saturating_mul(1_000))
 }
 
-/// Construit une deadline absolue à partir de maintenant + durée en ms.
+/// Constructs an absolute deadline from now + duration in ms.
 #[inline(always)]
 pub fn ktime_deadline_ms(duration_ms: u64) -> u64 {
     ktime_deadline_ns(duration_ms.saturating_mul(1_000_000))
@@ -272,21 +272,21 @@ pub fn ktime_deadline_ms(duration_ms: u64) -> u64 {
 
 // ── Per-CPU TSC offset management ─────────────────────────────────────────────
 
-/// Nombre maximum de CPUs logiques (identique à smp::topology::MAX_CPUS).
+/// Maximum number of logical CPUs (identical to smp::topology::MAX_CPUS).
 const MAX_CPUS: usize = 256;
 
-/// TSC offset de chaque CPU logique, mesuré depuis le BSP au boot SMP.
-/// offset[cpu] = TSC_AP_au_boot - TSC_BSP_au_boot (delta de synchronisation).
-/// ktime_get_ns() applique : tsc_adj = rdtscp() - offset[coreid].
+/// TSC offset of each logical CPU, measured from BSP at SMP boot.
+/// offset[cpu] = TSC_AP_at_boot - TSC_BSP_at_boot (synchronization delta).
+/// ktime_get_ns() applies: tsc_adj = rdtscp() - offset[coreid].
 static TSC_OFFSETS: [AtomicI64; MAX_CPUS] = [const { AtomicI64::new(0) }; MAX_CPUS];
 
-/// Validité des offsets : bit i = true → CPU i a son offset mesuré.
+/// Offset validity: bit i = true -> CPU i has its offset measured.
 static TSC_OFFSET_VALID: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 
-/// Enregistre l'offset TSC d'un CPU AP (appelé depuis percpu::sync).
+/// Records the TSC offset of an AP CPU (called from percpu::sync).
 ///
 /// # Safety
-/// `cpu_id` doit être dans [1, MAX_CPUS). Appelé une seule fois par CPU au boot SMP.
+/// `cpu_id` must be in [1, MAX_CPUS). Called once per CPU at SMP boot.
 pub unsafe fn store_tsc_offset(cpu_id: usize, offset: i64) {
     if cpu_id == 0 || cpu_id >= MAX_CPUS {
         return;
@@ -295,7 +295,7 @@ pub unsafe fn store_tsc_offset(cpu_id: usize, offset: i64) {
     TSC_OFFSET_VALID[cpu_id].store(true, Ordering::Release);
 }
 
-/// Retourne l'offset TSC d'un CPU (0 si BSP ou non encore mesuré).
+/// Returns the TSC offset of a CPU (0 if BSP or not yet measured).
 #[inline(always)]
 pub fn tsc_offset(cpu_id: usize) -> i64 {
     if cpu_id >= MAX_CPUS {
@@ -308,43 +308,43 @@ pub fn tsc_offset(cpu_id: usize) -> i64 {
     }
 }
 
-/// Retourne `true` si l'offset TSC du CPU donné est disponible.
+/// Returns `true` if the TSC offset of the given CPU is available.
 pub fn tsc_offset_valid(cpu_id: usize) -> bool {
     cpu_id < MAX_CPUS && TSC_OFFSET_VALID[cpu_id].load(Ordering::Relaxed)
 }
 
-/// Invalide tous les offsets (utilisé pour reset au reboot SMP).
+/// Invalidates all offsets (used for reset on SMP reboot).
 ///
 /// # Safety
-/// Doit être appelé exclusivement par le BSP en phase mono-cœur d'initialisation SMP.
+/// Must be called exclusively by the BSP during the single-core phase of SMP initialization.
 pub unsafe fn reset_tsc_offsets() {
     for i in 0..MAX_CPUS {
         TSC_OFFSETS[i].store(0, Ordering::Relaxed);
         TSC_OFFSET_VALID[i].store(false, Ordering::Relaxed);
     }
-    TSC_OFFSET_VALID[0].store(true, Ordering::Relaxed); // BSP : offset 0 valide.
+    TSC_OFFSET_VALID[0].store(true, Ordering::Relaxed); // BSP: offset 0 valid.
 }
 
-// ── Accesseurs diagnostics ─────────────────────────────────────────────────────
+// ── Diagnostic accessors ──────────────────────────────────────────────────────
 
-/// Fréquence TSC actuelle dans KtimeState (Hz).
+/// Current TSC frequency in KtimeState (Hz).
 #[inline(always)]
 pub fn ktime_tsc_hz() -> u64 {
     KTIME_STATE.tsc_hz.load(Ordering::Relaxed)
 }
 
-/// `true` si ktime est initialisé (init_ktime() a été appelé).
+/// `true` if ktime is initialized (`init_ktime()` was called).
 #[inline(always)]
 pub fn ktime_initialized() -> bool {
     KTIME_STATE.seq.load(Ordering::Relaxed) >= 2
 }
 
-/// Nombre de retries seqlock depuis le boot (indicateur de contention).
+/// Number of seqlock retries since boot (contention indicator).
 pub fn ktime_contention_count() -> u64 {
     KTIME_RETRIES.load(Ordering::Relaxed)
 }
 
-/// Snapshot immutable de l'état ktime pour debug/profiling.
+/// Immutable snapshot of ktime state for debug/profiling.
 pub struct KtimeSnapshot {
     pub seq: u64,
     pub tsc_base: u64,
@@ -405,13 +405,13 @@ mod tests {
 
 // ── WallState (wall clock state) ─────────────────────────────────────────────
 
-/// Cache line dédiée au wall clock pour éviter la contention avec ktime monotone.
+/// Dedicated cache line for wall clock to prevent contention with monotonic ktime.
 #[repr(C, align(64))]
 struct WallState {
     seq: AtomicU64,
     rtoffset_ns: AtomicU64,  // wall = mono + rtoffset
-    mono_at_set: AtomicU64,  // mono_ns au dernier set_wall_time()
-    epoch_at_set: AtomicU64, // epoch Unix ns au dernier set_wall_time()
+    mono_at_set: AtomicU64,  // mono_ns at last set_wall_time()
+    epoch_at_set: AtomicU64, // Unix epoch ns at last set_wall_time()
     _pad: [u8; 32],
 }
 

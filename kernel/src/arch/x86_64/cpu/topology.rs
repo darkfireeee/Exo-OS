@@ -1,55 +1,55 @@
-//! # cpu/topology.rs — Topologie CPU (cores, HT, NUMA)
+//! # cpu/topology.rs — CPU Topology (Cores, HT, NUMA)
 //!
-//! Détecte la topologie physique du système via CPUID et ACPI.
-//! Structure : Package → Core → Thread (SMT)
+//! Detects physical system topology via CPUID and ACPI.
+//! Structure: Package → Core → Thread (SMT)
 //!
-//! Supporte jusqu'à 256 CPUs logiques (MAX_CPUS).
+//! Supports up to 256 logical CPUs (MAX_CPUS).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de CPUs logiques supportés
+/// Maximum number of supported logical CPUs
 pub const MAX_CPUS: usize = 256;
 
-/// Nombre maximum de packages NUMA
+/// Maximum number of NUMA packages
 pub const MAX_PACKAGES: usize = 16;
 
-/// Nombre maximum de nœuds NUMA
+/// Maximum number of NUMA nodes
 pub const MAX_NUMA_NODES: usize = 16;
 
-// ── Identifiants CPU ──────────────────────────────────────────────────────────
+// ── CPU Identifiers ──────────────────────────────────────────────────────────
 
-/// Identifiant CPU logique (0-based, attribué par l'OS)
+/// Logical CPU identifier (0-based, assigned by the OS)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CpuId(pub u32);
 
-/// APIC ID physique (lu depuis CPUID leaf 1 EBX[31:24] ou x2APIC)
+/// Physical APIC ID (read from CPUID leaf 1 EBX[31:24] or x2APIC)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ApicId(pub u32);
 
-/// Package ID (socket physique)
+/// Package ID (physical socket)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PackageId(pub u32);
 
-/// Core ID (dans le package)
+/// Core ID (within package)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CoreId(pub u32);
 
-/// Nœud NUMA
+/// NUMA Node
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NumaNode(pub u32);
 
-// ── Descripteur d'un CPU logique ─────────────────────────────────────────────
+// ── Logical CPU Descriptor ─────────────────────────────────────────────
 
-/// Informations topologiques d'un CPU logique
+/// Topological information for a logical CPU
 #[derive(Debug, Clone, Copy)]
 pub struct CpuDescriptor {
     pub cpu_id: CpuId,
     pub apic_id: ApicId,
     pub package_id: PackageId,
     pub core_id: CoreId,
-    pub smt_id: u32, // Thread ID dans le core (0 ou 1 pour HT)
+    pub smt_id: u32, // Thread ID in core (0 or 1 for HT)
     pub numa_node: NumaNode,
     pub online: bool,
 }
@@ -68,36 +68,36 @@ impl CpuDescriptor {
     }
 }
 
-// ── Table globale de topologie ────────────────────────────────────────────────
+// ── Global Topology Table ────────────────────────────────────────────────
 
-/// Table des descripteurs CPU (indexée par cpu_id)
+/// CPU descriptor table (indexed by cpu_id)
 static mut CPU_DESCRIPTORS: [CpuDescriptor; MAX_CPUS] = [CpuDescriptor::zero(); MAX_CPUS];
 
-/// Nombre de CPUs logiques détectés (en ligne + hors ligne)
+/// Number of detected logical CPUs (online + offline)
 static CPU_COUNT_TOTAL: AtomicU32 = AtomicU32::new(0);
 
-/// Nombre de CPUs logiques en ligne
+/// Number of online logical CPUs
 static CPU_COUNT_ONLINE: AtomicU32 = AtomicU32::new(0);
 
-/// Nombre de packages (sockets) physiques
+/// Number of physical packages (sockets)
 static PACKAGE_COUNT: AtomicU32 = AtomicU32::new(1);
 
-/// Nombre de cores physiques par package (maximum)
+/// Maximum physical cores per package
 #[allow(dead_code)]
 static CORES_PER_PACKAGE: AtomicU32 = AtomicU32::new(1);
 
-/// SMT actif (Hyper-Threading)
+/// SMT active (Hyper-Threading)
 static SMT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Nombre de nœuds NUMA détectés
+/// Number of detected NUMA nodes
 static NUMA_NODE_COUNT: AtomicU32 = AtomicU32::new(1);
 
-/// Topologie initialisée
+/// Topology initialized
 static TOPOLOGY_READY: AtomicBool = AtomicBool::new(false);
 
-// ── Détection topologie via CPUID leaf 0xB / 0x1F ────────────────────────────
+// ── Topology Detection via CPUID leaf 0xB / 0x1F ────────────────────────────
 
-/// Niveau de topologie CPUID (leaf 0xB / 0x1F)
+/// CPUID topology level (leaf 0xB / 0x1F)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TopoLevel {
     Invalid = 0,
@@ -121,18 +121,18 @@ impl TopoLevel {
     }
 }
 
-/// Détecte les bits de shift de topologie depuis CPUID leaf 0xB ou 0x1F
+/// Detects topology shift bits from CPUID leaf 0xB or 0x1F
 ///
-/// Retourne `(smt_shift, core_shift, package_shift)` — shifts pour extraire
-/// les IDs de l'APIC ID.
+/// Returns `(smt_shift, core_shift, package_shift)` — shifts for extracting
+/// IDs from APIC ID.
 fn detect_topo_shifts(prefer_leaf_1f: bool) -> (u32, u32, u32) {
     let leaf = if prefer_leaf_1f { 0x1F } else { 0x0B };
 
-    // Vérifier que la leaf est supportée (EBX != 0 pour subleaf 0)
+    // Check if leaf is supported (EBX != 0 for subleaf 0)
     let (_eax0, ebx0, _ecx0, _edx0) = {
         let (eax, ecx, edx): (u32, u32, u32);
         let ebx_r: u64;
-        // SAFETY: CPUID non-privilégié ; xchg pour préserver rbx (réservé par LLVM)
+        // SAFETY: Unprivileged CPUID; xchg to preserve rbx (reserved by LLVM)
         unsafe {
             core::arch::asm!(
                 "xchg {tmp:r}, rbx",
@@ -149,7 +149,7 @@ fn detect_topo_shifts(prefer_leaf_1f: bool) -> (u32, u32, u32) {
     };
 
     if ebx0 == 0 {
-        return (0, 1, 8); // fallback basique
+        return (0, 1, 8); // basic fallback
     }
 
     let mut smt_shift = 0u32;
@@ -157,7 +157,7 @@ fn detect_topo_shifts(prefer_leaf_1f: bool) -> (u32, u32, u32) {
 
     for subleaf in 0..8u32 {
         let (eax, ecx): (u32, u32);
-        // SAFETY: CPUID non-privilégié ; xchg pour préserver rbx
+        // SAFETY: Unprivileged CPUID; xchg to preserve rbx
         unsafe {
             core::arch::asm!(
                 "xchg {tmp:r}, rbx",
@@ -189,14 +189,14 @@ fn detect_topo_shifts(prefer_leaf_1f: bool) -> (u32, u32, u32) {
     (smt_shift, core_shift, package_shift)
 }
 
-/// Parse la topologie du BSP depuis CPUID
+/// Parses BSP topology from CPUID
 fn parse_bsp_topology() -> CpuDescriptor {
     use super::features::cpu_features_or_none;
 
-    // Lire APIC ID (32 bits si x2APIC, 8 bits sinon)
+    // Read APIC ID (32 bits if x2APIC, 8 bits otherwise)
     let apic_id = if cpu_features_or_none().is_some_and(|features| features.has_x2apic()) {
         let (_eax, _ecx, edx): (u32, u32, u32);
-        // SAFETY: CPUID 0xB non-privilégié ; xchg pour préserver rbx
+        // SAFETY: CPUID 0xB unprivileged; xchg to preserve rbx
         unsafe {
             core::arch::asm!(
                 "xchg {tmp:r}, rbx",
@@ -212,7 +212,7 @@ fn parse_bsp_topology() -> CpuDescriptor {
         edx
     } else {
         let ebx_r: u64;
-        // SAFETY: CPUID 1 non-privilégié ; xchg pour préserver rbx
+        // SAFETY: CPUID 1 unprivileged; xchg to preserve rbx
         unsafe {
             core::arch::asm!(
                 "xchg {tmp:r}, rbx",
@@ -231,7 +231,7 @@ fn parse_bsp_topology() -> CpuDescriptor {
 
     let prefer_1f = {
         let eax: u32;
-        // SAFETY: CPUID 0 non-privilégié ; xchg pour préserver rbx
+        // SAFETY: CPUID 0 unprivileged; xchg to preserve rbx
         unsafe {
             core::arch::asm!(
                 "xchg {tmp:r}, rbx",
@@ -259,20 +259,20 @@ fn parse_bsp_topology() -> CpuDescriptor {
         package_id: PackageId(package_id),
         core_id: CoreId(core_id),
         smt_id,
-        numa_node: NumaNode(0), // sera mis à jour par ACPI SRAT
+        numa_node: NumaNode(0), // will be updated by ACPI SRAT
         online: true,
     }
 }
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
-/// Initialise la topologie CPU pour le BSP (CPU 0)
+/// Initializes CPU topology for BSP (CPU 0)
 ///
-/// Les APs seront ajoutés via `register_ap()` lors de leur démarrage.
+/// APs will be added via `register_ap()` when booted.
 pub fn init_topology() {
     let bsp = parse_bsp_topology();
 
-    // SAFETY: appelé une seule fois depuis le BSP avant démarrage des APs
+    // SAFETY: called once from BSP before booting APs
     unsafe {
         CPU_DESCRIPTORS[0] = bsp;
     }
@@ -282,14 +282,14 @@ pub fn init_topology() {
     TOPOLOGY_READY.store(true, Ordering::Release);
 }
 
-/// Enregistre un AP lors de son démarrage
+/// Registers an AP upon boot
 ///
-/// Appelé depuis le code de boot AP avec l'APIC ID du processeur.
+/// Called from AP boot code with the processor's APIC ID.
 pub fn register_ap(apic_id: ApicId, numa_node: NumaNode) -> CpuId {
     let idx = CPU_COUNT_TOTAL.fetch_add(1, Ordering::AcqRel) as usize;
 
     if idx >= MAX_CPUS {
-        // Dépassement — ignorer ce CPU
+        // Overflow — ignore this CPU
         CPU_COUNT_TOTAL.fetch_sub(1, Ordering::Relaxed);
         crate::arch::x86_64::terminal::debug_write(b"register_ap: trop de CPUs\n");
         crate::arch::x86_64::halt_cpu();
@@ -315,18 +315,18 @@ pub fn register_ap(apic_id: ApicId, numa_node: NumaNode) -> CpuId {
         online: true,
     };
 
-    // SAFETY: idx unique (atomique), pas de course car chaque AP s'enregistre une fois
+    // SAFETY: unique idx (atomic), no data race as each AP registers once
     unsafe {
         CPU_DESCRIPTORS[idx] = desc;
     }
     CPU_COUNT_ONLINE.fetch_add(1, Ordering::AcqRel);
 
-    // Mettre à jour le nombre de packages si nouveau
+    // Update package count if new
     if package_id + 1 > PACKAGE_COUNT.load(Ordering::Relaxed) {
         PACKAGE_COUNT.store(package_id + 1, Ordering::Relaxed);
     }
 
-    // Détecter SMT si smt_id > 0
+    // Detect SMT if smt_id > 0
     if smt_id > 0 {
         SMT_ACTIVE.store(true, Ordering::Relaxed);
     }
@@ -334,102 +334,102 @@ pub fn register_ap(apic_id: ApicId, numa_node: NumaNode) -> CpuId {
     CpuId(idx as u32)
 }
 
-// ── Accesseurs ────────────────────────────────────────────────────────────────
+// ── Accessors ────────────────────────────────────────────────────────────────
 
-/// Retourne le descripteur d'un CPU logique
+/// Returns the descriptor of a logical CPU
 ///
-/// Retourne `None` si `cpu_id` >= nombre de CPUs.
+/// Returns `None` if `cpu_id` >= CPU count.
 pub fn cpu_descriptor(cpu_id: CpuId) -> Option<&'static CpuDescriptor> {
     let idx = cpu_id.0 as usize;
     if idx >= CPU_COUNT_TOTAL.load(Ordering::Relaxed) as usize {
         return None;
     }
-    // SAFETY: idx < CPU_COUNT_TOTAL — écrit avant d'incrémenter le compteur
+    // SAFETY: idx < CPU_COUNT_TOTAL — written before incrementing the counter
     Some(unsafe { &CPU_DESCRIPTORS[idx] })
 }
 
-/// Nombre total de CPUs logiques (en ligne + hors ligne)
+/// Total number of logical CPUs (online + offline)
 #[inline(always)]
 pub fn cpu_count_total() -> u32 {
     CPU_COUNT_TOTAL.load(Ordering::Relaxed)
 }
 
-/// Nombre de CPUs logiques en ligne
+/// Number of online logical CPUs
 #[inline(always)]
 pub fn cpu_count_online() -> u32 {
     CPU_COUNT_ONLINE.load(Ordering::Relaxed)
 }
 
-/// Nombre de packages physiques
+/// Number of physical packages
 #[inline(always)]
 pub fn package_count() -> u32 {
     PACKAGE_COUNT.load(Ordering::Relaxed)
 }
 
-/// SMT (Hyper-Threading) actif
+/// SMT (Hyper-Threading) active
 #[inline(always)]
 pub fn smt_active() -> bool {
     SMT_ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Nombre de nœuds NUMA
+/// Number of NUMA nodes
 #[inline(always)]
 pub fn numa_node_count() -> u32 {
     NUMA_NODE_COUNT.load(Ordering::Relaxed)
 }
 
-/// Met à jour le nombre de nœuds NUMA (depuis ACPI SRAT)
+/// Updates NUMA node count (from ACPI SRAT)
 pub fn set_numa_node_count(count: u32) {
     NUMA_NODE_COUNT.store(count, Ordering::Release);
 }
 
-/// Met à jour le nœud NUMA d'un CPU (depuis ACPI SRAT/SLIT)
+/// Updates NUMA node of a CPU (from ACPI SRAT/SLIT)
 pub fn update_numa_node(cpu_id: CpuId, node: NumaNode) {
     let idx = cpu_id.0 as usize;
     if idx >= CPU_COUNT_TOTAL.load(Ordering::Relaxed) as usize {
         return;
     }
-    // SAFETY: idx dans les bornes, update NUMA ponctuel depuis boot single-thread
+    // SAFETY: idx within bounds, one-off NUMA update from single-thread boot
     unsafe {
         CPU_DESCRIPTORS[idx].numa_node = node;
     }
 }
 
-/// Retourne l'identifiant CPU logique courant.
+/// Returns the current logical CPU identifier.
 ///
-/// RDTSCP n'est pas garanti sous QEMU/TCG. Le chemin stable du noyau est le
-/// slot per-CPU GS, maintenu par l'initialisation SMP et les stubs syscall/IRQ.
+/// RDTSCP is not guaranteed under QEMU/TCG. The kernel's stable path is the
+/// per-CPU GS slot, maintained by SMP initialization and syscall/IRQ stubs.
 #[inline(always)]
 pub fn current_cpu_id() -> CpuId {
     CpuId(crate::arch::x86_64::smp::percpu::current_cpu_id())
 }
 
-// ── Matrice de distance NUMA ──────────────────────────────────────────────────
+// ── NUMA Distance Matrix ──────────────────────────────────────────────────
 
-/// Matrice de distance NUMA (index: [from_node][to_node])
-/// Valeur 10 = local, >10 = remote (ACPI SLIT standard)
+/// NUMA distance matrix (index: [from_node][to_node])
+/// Value 10 = local, >10 = remote (ACPI SLIT standard)
 static mut NUMA_DISTANCE: [[u8; MAX_NUMA_NODES]; MAX_NUMA_NODES] =
     [[10u8; MAX_NUMA_NODES]; MAX_NUMA_NODES];
 
-/// Retourne la distance NUMA entre deux nœuds
+/// Returns the NUMA distance between two nodes
 pub fn numa_distance(from: NumaNode, to: NumaNode) -> u8 {
     let f = from.0 as usize;
     let t = to.0 as usize;
     if f >= MAX_NUMA_NODES || t >= MAX_NUMA_NODES {
         return 255;
     }
-    // SAFETY: indices bornés, lecture seule après init
+    // SAFETY: bounded indices, read-only after init
     unsafe { NUMA_DISTANCE[f][t] }
 }
 
-/// Configure la matrice de distance NUMA depuis ACPI SLIT
+/// Configures the NUMA distance matrix from ACPI SLIT
 pub fn set_numa_distance(from: NumaNode, to: NumaNode, dist: u8) {
     let f = from.0 as usize;
     let t = to.0 as usize;
     if f >= MAX_NUMA_NODES || t >= MAX_NUMA_NODES {
         return;
     }
-    // SAFETY: appelé une seule fois depuis boot BSP (parsing ACPI)
+    // SAFETY: called once from BSP boot (ACPI parsing)
     unsafe {
         NUMA_DISTANCE[f][t] = dist;
     }

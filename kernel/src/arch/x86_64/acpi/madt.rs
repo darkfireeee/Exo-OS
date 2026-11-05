@@ -1,28 +1,28 @@
 //! # arch/x86_64/acpi/madt.rs — Multiple APIC Description Table
 //!
-//! Parse la MADT pour extraire :
-//! - Les LAPIC IDs de chaque CPU logique
-//! - Les I/O APIC (base MMIO + GSI base)
-//! - Les interruption source overrides (ISA IRQ → GSI)
-//! - L'adresse LAPIC override (si différente de 0xFEE00000)
+//! Parses the MADT to extract:
+//! - LAPIC IDs of each logical CPU
+//! - I/O APICs (MMIO base + GSI base)
+//! - Interrupt source overrides (ISA IRQ → GSI)
+//! - LAPIC address override (if different from 0xFEE00000)
 //!
-//! ## Format MADT
-//! Header SdtHeader + LAPIC_ADDR (32 bits) + FLAGS (32 bits)
-//! + liste de structures de longueur variable (type, length, ...)
+//! ## MADT Format
+//! SdtHeader + LAPIC_ADDR (32-bit) + FLAGS (32-bit)
+//! + list of variable-length structures (type, length, ...)
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-// ── Structures MADT ───────────────────────────────────────────────────────────
+// ── MADT Structures ───────────────────────────────────────────────────────────
 
-/// En-tête MADT (après SdtHeader)
+/// MADT header (after SdtHeader)
 #[repr(C, packed)]
 #[allow(dead_code)]
 struct MadtHeader {
-    lapic_addr: u32, // Adresse physique LAPIC (généralement 0xFEE00000)
+    lapic_addr: u32, // LAPIC physical address (usually 0xFEE00000)
     flags: u32,      // bit 0 = dual 8259 present
 }
 
-/// Types d'entrées MADT
+/// MADT entry types
 const MADT_TYPE_LAPIC: u8 = 0;
 const MADT_TYPE_IOAPIC: u8 = 1;
 const MADT_TYPE_INT_SRC_OVER: u8 = 2;
@@ -35,7 +35,7 @@ const MADT_TYPE_X2APIC: u8 = 9;
 #[allow(dead_code)]
 const MADT_TYPE_X2APIC_NMI: u8 = 10;
 
-/// Entrée LAPIC (type 0) — CPU logique
+/// LAPIC entry (type 0) — logical CPU
 #[repr(C, packed)]
 struct MadtLapic {
     acpi_processor_id: u8,
@@ -43,7 +43,7 @@ struct MadtLapic {
     flags: u32, // bit 0 = enabled, bit 1 = online capable
 }
 
-/// Entrée IOAPIC (type 1)
+/// IOAPIC entry (type 1)
 #[repr(C, packed)]
 struct MadtIoApic {
     ioapic_id: u8,
@@ -52,12 +52,12 @@ struct MadtIoApic {
     gsi_base: u32,
 }
 
-/// Interrupt Source Override (type 2) — remapping ISA IRQ → GSI
+/// Interrupt Source Override (type 2) — ISA IRQ → GSI remapping
 #[repr(C, packed)]
 struct MadtIntSrcOvr {
-    bus: u8,    // Bus source (0 = ISA)
-    source: u8, // IRQ source (ISA IRQ 0–15)
-    gsi: u32,   // GSI destination
+    bus: u8,    // Source bus (0 = ISA)
+    source: u8, // Source IRQ (ISA IRQ 0–15)
+    gsi: u32,   // Destination GSI
     flags: u16, // bit 0:1 = polarity, bit 2:3 = trigger mode
 }
 
@@ -65,10 +65,10 @@ struct MadtIntSrcOvr {
 #[repr(C, packed)]
 struct MadtLapicAddrOvr {
     _reserved: u16,
-    addr: u64, // Nouvelle adresse physique LAPIC
+    addr: u64, // New LAPIC physical address
 }
 
-/// Entrée x2APIC (type 9) — CPU avec UID > 255
+/// x2APIC entry (type 9) — CPU with UID > 255
 #[repr(C, packed)]
 struct MadtX2Apic {
     _reserved: u16,
@@ -77,22 +77,22 @@ struct MadtX2Apic {
     acpi_processor_uid: u32,
 }
 
-// ── Résultats de parsing MADT ─────────────────────────────────────────────────
+// ── MADT Parsing Results ───────────────────────────────────────────────────────
 
-/// Informations extraites de la MADT
+/// Information extracted from MADT
 #[derive(Debug, Clone, Copy)]
 pub struct MadtInfo {
-    /// Nombre de CPUs logiques online
+    /// Number of online logical CPUs
     pub cpu_count: u32,
-    /// APIC IDs des CPUs (max 256)
+    /// CPU APIC IDs (max 256)
     pub apic_ids: [u32; 256],
-    /// Adresse physique LAPIC (peut être override)
+    /// LAPIC physical address (can be overridden)
     pub lapic_phys: u64,
-    /// Nombre d'I/O APICs
+    /// Number of I/O APICs
     pub ioapic_count: u32,
-    /// GSI mappings pour les IRQ ISA (IRQ 0–15 → GSI)
+    /// GSI mappings for ISA IRQs (IRQ 0–15 → GSI)
     pub isa_irq_gsi: [u32; 16],
-    /// Flags de polarité/trigger ISA (1 bit polarity, 1 bit trigger par IRQ)
+    /// ISA polarity/trigger flags (1 bit polarity, 1 bit trigger per IRQ)
     pub isa_irq_flags: [u16; 16],
 }
 
@@ -103,7 +103,7 @@ impl MadtInfo {
             apic_ids: [0u32; 256],
             lapic_phys: 0xFEE0_0000,
             ioapic_count: 0,
-            isa_irq_gsi: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], // ISA: GSI=IRQ par défaut
+            isa_irq_gsi: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], // ISA: GSI=IRQ by default
             isa_irq_flags: [0u16; 16],
         }
     }
@@ -111,16 +111,16 @@ impl MadtInfo {
 
 static MADT_CPU_COUNT: AtomicU32 = AtomicU32::new(0);
 
-/// Retourne le nombre de CPUs détectés dans la MADT
+/// Returns the number of CPUs detected in the MADT
 pub fn madt_cpu_count() -> u32 {
     MADT_CPU_COUNT.load(Ordering::Relaxed)
 }
 
-// ── Parseur principal ─────────────────────────────────────────────────────────
+// ── Main Parser ───────────────────────────────────────────────────────────────
 
-/// Parse la MADT à partir de son adresse physique
+/// Parses the MADT from its physical address
 ///
-/// Appelé par `init_acpi()` après avoir localisé la table.
+/// Called by `init_acpi()` after locating the table.
 pub fn parse_madt(madt_phys: u64) -> MadtInfo {
     let mut info = MadtInfo::default();
 
@@ -136,20 +136,20 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
     let madt_len = header.length as usize;
 
     let madt_base_offset = core::mem::size_of::<SdtHeader>();
-    // Sanity : besoin d'au moins SdtHeader + lapic_addr(4) + flags(4) = 44 octets
+    // Sanity: need at least SdtHeader + lapic_addr(4) + flags(4) = 44 bytes
     if madt_len < madt_base_offset + 8 || madt_len > 65536 {
         return info;
     }
 
-    // Lire LAPIC addr (offset 36, u32, potentiellement non-aligné)
-    // read_unaligned obligatoire : Rust ≥1.82 vérifie l'alignement dans read_volatile
+    // Read LAPIC addr (offset 36, u32, potentially unaligned)
+    // read_unaligned mandatory: Rust ≥1.82 checks alignment in read_volatile
     let Some(lapic_addr) = acpi_read_unaligned::<u32>(madt_phys + madt_base_offset as u64) else {
         return info;
     };
     let lapic_addr = lapic_addr as u64;
     info.lapic_phys = lapic_addr;
 
-    // Itérer les entrées (offset 44 = SdtHeader(36) + lapic_addr(4) + flags(4))
+    // Iterate entries (offset 44 = SdtHeader(36) + lapic_addr(4) + flags(4))
     let mut offset = madt_base_offset + 8;
 
     while offset + 2 <= madt_len {
@@ -178,7 +178,7 @@ pub fn parse_madt(madt_phys: u64) -> MadtInfo {
                     offset += entry_len;
                     continue;
                 }
-                // Lecture des champs packed via ptr::read pour éviter UB sur références non-alignées
+                // Read packed fields via ptr::read to avoid UB on unaligned references
                 let _acpi_proc_id = unsafe { *base };
                 let apic_id = unsafe { *base.add(1) };
                 let flags = unsafe { core::ptr::read_unaligned(base.add(2) as *const u32) };

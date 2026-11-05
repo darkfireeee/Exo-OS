@@ -1,6 +1,6 @@
 //! # arch/x86_64/acpi — ACPI (Advanced Configuration and Power Interface)
 //!
-//! Parseur minimal des tables ACPI nécessaires au démarrage du kernel :
+//! Minimal ACPI table parser required for kernel startup:
 //! - RSDP → XSDT/RSDT
 //! - MADT (SMP topology, LAPIC IDs, IOAPIC)
 //! - HPET (High Precision Event Timer)

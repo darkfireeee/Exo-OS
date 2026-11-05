@@ -13,8 +13,8 @@ pub fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
     if tcb_raw == 0 {
         return;
     }
-    // SAFETY: tcb_raw != 0 vérifié ; pointe vers le TCB du thread courant publié
-    // par le scheduler pour ce CPU, vivant pendant le handler.
+    // SAFETY: tcb_raw != 0 verified; points to the current thread's TCB published
+    // by the scheduler for this CPU, alive during the handler.
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let mut user_cr3 = tcb.kpti_user_cr3();
     if user_cr3 == 0 {
@@ -36,7 +36,7 @@ pub fn sync_kpti_user_fault_mapping(_fault_addr: u64, source_cr3: u64) {
     if k == 0 || u == 0 || k == u {
         return;
     }
-    // SAFETY: k/u = PML4 valides (ring0).
+    // SAFETY: k/u = valid PML4s (ring0).
     unsafe {
         crate::memory::virt::page_table::kpti_split::sync_user_region_to_shadow(
             crate::memory::core::PhysAddr::new(k),
@@ -62,8 +62,8 @@ pub fn debug_user_page_fault(
     let mut pid = 0u64;
     let mut tcb_cr3 = 0u64;
     if tcb_ptr != 0 {
-        // SAFETY: tcb_ptr != 0 vérifié ; pointe vers le TCB du thread courant
-        // publié par le scheduler pour ce CPU (chemin debug uniquement).
+        // SAFETY: tcb_ptr != 0 verified; points to the current thread's TCB
+        // published by the scheduler for this CPU (debug path only).
         unsafe {
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
             pid = tcb.pid.0 as u64;
@@ -85,8 +85,8 @@ pub fn debug_user_page_fault(
     }
 
     let walk_cr3 = if !user_as_for_fault.is_null() {
-        // SAFETY: pointeur non-null (vérifié), désigne l'UserAddressSpace du
-        // processus en faute, vivant le temps du handler (chemin debug).
+        // SAFETY: non-null pointer (verified), designates the UserAddressSpace of
+        // the faulting process, alive for the duration of the handler (debug path).
         let user_as = unsafe { &*user_as_for_fault };
         user_as.pml4_phys().as_u64()
     } else {
@@ -120,8 +120,8 @@ pub fn debug_user_page_fault(
         frame.rip < crate::memory::core::layout::USER_END.as_u64() && (rip_pte & 1) != 0;
     if rip_bytes_valid {
         for i in 0..8u64 {
-            // SAFETY: rip_bytes_valid garantit frame.rip < USER_END et PTE présente
-            // (rip_pte & 1) ; lecture volatile d'octets user mappés (chemin debug).
+            // SAFETY: rip_bytes_valid guarantees frame.rip < USER_END and PTE present
+            // (rip_pte & 1); volatile read of mapped user bytes (debug path).
             let byte = unsafe { core::ptr::read_volatile((frame.rip + i) as *const u8) };
             rip_bytes |= (byte as u64) << (i * 8);
         }
@@ -177,49 +177,49 @@ pub fn debug_user_page_fault(
 }
 
 
-/// Handler #PF — Page Fault
+/// #PF Handler — Page Fault
 ///
-/// Dispatcher vers les handlers de la couche memory/ :
+/// Dispatcher to memory/ subsystem handlers:
 /// - CoW break              → memory::virt::fault::cow
 /// - Demand paging          → memory::virt::fault::demand_paging
 /// - Swap-in                → memory::virt::fault::swap_in
-/// - Violation d'accès      → SIGSEGV (Ring 3) ou KernelFault (Ring 0)
+/// - Access violation       → SIGSEGV (Ring 3) or KernelFault (Ring 0)
 ///
-/// ## Intégration memory/ (RÈGLE MEM-01 DOC2)
-/// `memory::virt::fault::handler::handle_page_fault()` est le seul point
-/// d'entrée pour tous les faults. Il prend un `FaultContext` construit ici
-/// et un `FaultAllocator` (implémenté par `KernelFaultAllocator`).
+/// ## Memory/ integration (RULE MEM-01 DOC2)
+/// `memory::virt::fault::handler::handle_page_fault()` is the single entry
+/// point for all faults. It takes a `FaultContext` constructed here
+/// and a `FaultAllocator` (implemented by `KernelFaultAllocator`).
 ///
-/// ## Intégration process/ (RÈGLE DOC1)
-/// Quand process/ sera intégré, l'allocateur utilisera l'espace d'adressage
-/// du processus courant. Pour l'instant, `KernelFaultAllocator` est utilisé.
+/// ## Process/ integration (RULE DOC1)
+/// When process/ is integrated, the allocator will use the address space
+/// of the current process. Currently, `KernelFaultAllocator` is used.
 /// # Safety
-/// `frame` doit être un pointeur valide vers une ExceptionFrame allouée par le stub ASM.
+/// `frame` must be a valid pointer to an ExceptionFrame allocated by the ASM stub.
 #[no_mangle]
 pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
-    // SAFETY: `frame` est un pointeur non-null passé par le stub ASM, aligné 16 B,
-    // unique pour ce contexte d'exception.
+    // SAFETY: `frame` is a non-null pointer passed by the ASM stub, 16-byte aligned,
+    // unique for this exception context.
     let frame = unsafe { &mut *frame };
     EXC_COUNTERS[14].fetch_add(1, Ordering::Relaxed);
     crate::arch::x86_64::paging::inc_page_fault();
 
-    // CR2 contient l'adresse virtuelle qui a causé le fault.
+    // CR2 contains the virtual address that caused the fault.
     let fault_addr_raw = crate::arch::x86_64::read_cr2();
     let error_code = frame.error_code;
-    // Décomposition de l'error code x86_64 :
-    // bit 0 = P  (page présente — protection violation)
-    // bit 1 = W  (écriture)
-    // bit 2 = U  (depuis Ring 3)
-    // bit 3 = RSVD (bit réservé corrompu dans le PTE)
+    // Decomposition of the x86_64 error code:
+    // bit 0 = P  (page present — protection violation)
+    // bit 1 = W  (write)
+    // bit 2 = U  (from Ring 3)
+    // bit 3 = RSVD (reserved bit corrupted in the PTE)
     // bit 4 = I  (instruction fetch)
     // bit 5 = PK (protection key violation)
     let is_present = error_code & 1 != 0;
     let is_write = error_code & 2 != 0;
     let _is_user = error_code & 4 != 0;
     let is_instr_fetch = error_code & 16 != 0;
-    let _ = is_present; // Utilisé implicitement via FaultCause + FaultContext
+    let _ = is_present; // Used implicitly via FaultCause + FaultContext
 
-    // Construire le FaultContext
+    // Build FaultContext
     use crate::arch::x86_64::memory_iface::{UserFaultAllocator, KERNEL_FAULT_ALLOC};
     use crate::memory::core::VirtAddr;
     use crate::memory::virt::fault::{FaultCause, FaultContext, FaultResult};
@@ -241,27 +241,27 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     if fault_addr.is_user() {
         let tcb_raw = current_tcb_raw_checked();
         if tcb_raw != 0 {
-            // SAFETY: tcb_raw != 0 vérifié ; TCB du thread courant publié par le
-            // scheduler pour ce CPU, vivant pendant le handler de #PF.
+            // SAFETY: tcb_raw != 0 verified; current thread's TCB published by the
+            // scheduler for this CPU, alive during the #PF handler.
             let tcb =
                 unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
-            // FIX-CR3-FAULT-RESYNC : au bootstrap, une faute Ring 3 peut survenir
-            // alors que le CR3 matériel ne correspond pas à l'espace d'adressage du
-            // thread courant (`tcb.cr3_phys`, source de vérité maintenue par
-            // create/execve). On recharge alors le bon CR3 : la résolution de faute
-            // (demand-paging dans l'AS du thread) ET la reprise (iretq, KPTI off) se
-            // font dès lors dans la bonne table → fin de la boucle de #PF d'init.
+            // FIX-CR3-FAULT-RESYNC: at bootstrap, a Ring 3 fault can occur
+            // while the hardware CR3 does not correspond to the address space of the
+            // current thread (`tcb.cr3_phys`, source of truth maintained by
+            // create/execve). We then reload the proper CR3: fault resolution
+            // (demand-paging in the thread's AS) AND resumption (iretq, KPTI off)
+            // will then happen in the right table → terminates the init #PF loop.
             if frame.from_userspace() && tcb.cr3_phys != 0 {
                 const CR3_MASK: u64 = 0x000F_FFFF_FFFF_F000;
                 let hw_cr3: u64;
-                // SAFETY: lecture CR3, ring0.
+                // SAFETY: read CR3, ring0.
                 unsafe {
                     core::arch::asm!("mov {}, cr3", out(reg) hw_cr3, options(nostack, nomem));
                 }
                 if hw_cr3 & CR3_MASK != tcb.cr3_phys & CR3_MASK {
-                    // SAFETY: tcb.cr3_phys est une PML4 valide du thread courant ;
-                    // les pages noyau (code/pile/handler) sont mappées dans toutes
-                    // les AS, le switch est donc sûr pendant le handler.
+                    // SAFETY: tcb.cr3_phys is a valid PML4 of the current thread;
+                    // kernel pages (code/stack/handler) are mapped in all
+                    // ASes, so the switch is safe during the handler.
                     unsafe {
                         core::arch::asm!("mov cr3, {}", in(reg) tcb.cr3_phys & CR3_MASK, options(nostack, nomem));
                     }
@@ -272,9 +272,9 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             {
                 let as_ptr = pcb.address_space_ptr();
                 if !as_ptr.is_null() {
-                    // SAFETY: as_ptr non-null (vérifié), publié par lifecycle/create
-                    // comme UserAddressSpace du PCB trouvé ; le PCB est vivant dans
-                    // PROCESS_REGISTRY pendant le handler.
+                    // SAFETY: as_ptr non-null (verified), published by lifecycle/create
+                    // as UserAddressSpace of the found PCB; the PCB is alive in
+                    // PROCESS_REGISTRY during the handler.
                     let user_as = unsafe { &*(as_ptr as *const UserAddressSpace) };
                     user_as_for_fault = user_as as *const UserAddressSpace;
                     user_as.record_fault();
@@ -297,13 +297,13 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         );
     }
 
-    // Dispatcher vers le sous-système memory/
+    // Dispatch to the memory/ subsystem
     //
-    // Une faute sur une adresse userspace peut arriver avec CS=kernel pendant
-    // un copy_from_user/copy_to_user ou une lecture d'argv. Elle reste une faute
-    // de l'espace utilisateur courant: si une VMA existe, on la résout via le
-    // même chemin demand-paging/CoW qu'une faute Ring 3, puis on reprend
-    // l'instruction noyau qui accédait au pointeur user.
+    // A fault on a userspace address can occur with CS=kernel during
+    // a copy_from_user/copy_to_user or an argv read. It remains a fault
+    // of the current user address space: if a VMA exists, we resolve it via
+    // the same demand-paging/CoW path as a Ring 3 fault, then resume
+    // the kernel instruction that accessed the user pointer.
     let resolve_as_user = fault_addr.is_user()
         && !user_as_for_fault.is_null()
         && (frame.from_userspace() || user_vma_found);
@@ -312,8 +312,8 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
     }
 
     let result = if resolve_as_user {
-        // SAFETY: resolve_as_user implique user_as_for_fault non-null ; pointe vers
-        // l'UserAddressSpace du processus en faute, vivant pendant le handler.
+        // SAFETY: resolve_as_user implies non-null user_as_for_fault; points to
+        // the UserAddressSpace of the faulting process, alive during the handler.
         let user_as = unsafe { &*user_as_for_fault };
         let user_alloc = UserFaultAllocator::new(user_as);
         crate::memory::virt::fault::handler::handle_page_fault(&ctx, &user_alloc)
@@ -324,22 +324,22 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         FaultResult::Handled => {
             if resolve_as_user {
                 let source_cr3 = if !user_as_for_fault.is_null() {
-                    // SAFETY: pointeur non-null (vérifié) ; UserAddressSpace du
-                    // processus en faute, vivant pendant le handler.
+                    // SAFETY: non-null pointer (verified); UserAddressSpace of the
+                    // faulting process, alive during the handler.
                     unsafe { (&*user_as_for_fault).pml4_phys().as_u64() }
                 } else {
                     0
                 };
                 sync_kpti_user_fault_mapping(fault_addr_raw, source_cr3);
             }
-            // Fault résolu (demand paging, CoW, swap-in) — reprendre l'exécution.
+            // Fault resolved (demand paging, CoW, swap-in) — resume execution.
             if frame.from_userspace() {
                 exception_return_to_user_after_recovered_fault(frame);
             }
-            // En mode kernel : retour direct via IRETQ (stub ASM)
+            // In kernel mode: direct return via IRETQ (ASM stub)
         }
         FaultResult::Segfault { addr } => {
-            // Violation d'accès mémoire.
+            // Memory access violation.
             let _ = addr;
             if frame.from_userspace() {
                 // Notify ExoShield NGAV of the memory access violation.
@@ -354,8 +354,8 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                 } else {
                     0u32
                 };
-                // DIAG-25 : tracer le segfault userspace (PID + CR2 + RIP) pour
-                // confirmer/localiser le crash post-fork d'ipc_router (#25).
+                // DIAG-25: trace userspace segfault (PID + CR2 + RIP) to
+                // confirm/locate post-fork crash in ipc_router (#25).
                 {
                     let out = crate::arch::x86_64::terminal::debug_write;
                     out(b"<SEGV pid=");
@@ -392,14 +392,14 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(frame.rsp));
                     out(b" err=");
                     out(&hex(error_code));
-                    // DIAG-25 : octets in-memory à RIP (la page RIP est présente —
-                    // l'instruction a été fetchée avant la faute data). Comparer au
-                    // binaire statique → détecte une corruption du .text d'init.
+                    // DIAG-25: in-memory bytes at RIP (RIP page is present —
+                    // instruction was fetched before the data fault). Compare to
+                    // static binary → detects corruption of init .text.
                     out(b" ripb=");
                     let mut rb = 0u64;
-                    // SAFETY: lecture GARDÉE — uniquement si RIP est une adresse user
-                    // plausible. Sinon lire (p.ex. RIP=0x130) re-fault en KERNEL et
-                    // déclenche une résurrection ExoPhoenix (perte du dump #25).
+                    // SAFETY: GUARDED read — only if RIP is a plausible user
+                    // address. Otherwise reading (e.g. RIP=0x130) re-faults in KERNEL
+                    // and triggers an ExoPhoenix resurrection (loss of dump #25).
                     if (0x1000..0x0000_8000_0000_0000).contains(&frame.rip) {
                         for bi in 0..8u64 {
                             let byte =
@@ -408,8 +408,8 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                         }
                     }
                     out(&hex(rb));
-                    // DIAG-25 : contexte GP complet — révèle si les registres d'init
-                    // sont corrompus (zéro / stale / décalés) au resume post-fork.
+                    // DIAG-25: full GP context — reveals if init registers
+                    // are corrupted (zero / stale / shifted) at post-fork resume.
                     out(b" rax=");
                     out(&hex(frame.rax));
                     out(b" rbx=");
@@ -424,10 +424,10 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(frame.rdi));
                     out(b" rbp=");
                     out(&hex(frame.rbp));
-                    // DIAG-V8 (SEGV run 9) : r8-r15 absents du dump — le
-                    // registre BASE de l'instruction fautive est probablement
-                    // parmi eux (ex: mov rax,[rbx-0x82] avec rbx rechargé à 0
-                    // depuis une page de pile volée/vidée).
+                    // DIAG-V8 (SEGV run 9): r8-r15 absent from dump — the
+                    // BASE register of the faulting instruction is probably
+                    // among them (e.g.: mov rax,[rbx-0x82] with rbx reloaded to 0
+                    // from a stolen/cleared stack page).
                     out(b" r8=");
                     out(&hex(frame.r8));
                     out(b" r9=");
@@ -450,14 +450,14 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(frame.ss));
                     out(b" rfl=");
                     out(&hex(frame.rflags));
-                    // DIAG-V9 (SEGV run 10 — console lossy) : le dump du run 10 a
-                    // PERDU sa queue (mots 8-15 de stk + ret0= + cs16=) car la
-                    // console E9 boude en fin de ligne longue. ret0 est LA donnée
-                    // décisive (adresse de retour du call/jmp vers NULL, directement
-                    // addr2line-able) → on l'imprime DÈS MAINTENANT, avant les 16
-                    // mots de pile, pour qu'elle survive à toute troncature.
+                    // DIAG-V9 (SEGV run 10 — lossy console): run 10 dump
+                    // LOST its tail (words 8-15 of stk + ret0= + cs16=) because the
+                    // E9 console drops characters at the end of long lines. ret0 is
+                    // THE decisive datum (return address of the call/jmp to NULL,
+                    // directly addr2line-able) → printed RIGHT NOW, before the 16
+                    // stack words, so it survives any truncation.
                     if frame.rip == 0 && (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
-                        // SAFETY: RSP user plausible ; lecture volatile.
+                        // SAFETY: plausible user RSP; volatile read.
                         let ret0 = unsafe {
                             core::ptr::read_volatile(frame.rsp as *const u64)
                         };
@@ -467,8 +467,8 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                             out(b" cs16=");
                             let base = ret0.saturating_sub(16);
                             for bi in 0..16u64 {
-                                // SAFETY: ret0 dans la plage binaire user (mappée,
-                                // exécutée juste avant le call).
+                                // SAFETY: ret0 within user binary range (mapped,
+                                // executed right before the call).
                                 let byte = unsafe {
                                     core::ptr::read_volatile((base + bi) as *const u8)
                                 };
@@ -477,14 +477,14 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                             }
                         }
                     }
-                    // DIAG-V9 : rdx du run 10 = 0x1000001ce5b (adresse .text) —
-                    // si rdx pointe dans le binaire, dumper 8 octets à rdx : le
-                    // décodage de ces octets identifie si le flux d'instructions
-                    // était déjà corrompu (garbage) au moment du saut vers 0.
+                    // DIAG-V9: run 10 rdx = 0x1000001ce5b (.text address) —
+                    // if rdx points into the binary, dump 8 bytes at rdx: decoding
+                    // these bytes identifies if the instruction stream was already
+                    // corrupted (garbage) when jumping to 0.
                     if (0x1000_0000_0000..0x1001_0000_0000).contains(&frame.rdx) {
                         out(b" rdx8=");
                         for bi in 0..8u64 {
-                            // SAFETY: rdx dans la plage binaire user (mappée).
+                            // SAFETY: rdx within user binary range (mapped).
                             let byte = unsafe {
                                 core::ptr::read_volatile((frame.rdx + bi) as *const u8)
                             };
@@ -492,12 +492,12 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                             out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
                         }
                     }
-                    // DIAG-25 : 8 mots de la pile user à RSP — révèle la chaîne de
-                    // retour (d'où provient le saut vers le RIP corrompu).
+                    // DIAG-25: 8 words from user stack at RSP — reveals the return
+                    // chain (where the jump to corrupted RIP originates).
                     out(b" stk=");
                     if (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
                         for wi in 0..16u64 {
-                            // SAFETY: RSP user plausible ; KPTI off ; lecture volatile.
+                            // SAFETY: plausible user RSP; KPTI off; volatile read.
                             let w = unsafe {
                                 core::ptr::read_volatile((frame.rsp + wi * 8) as *const u64)
                             };
@@ -505,9 +505,9 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                             out(b" ");
                         }
                     }
-                    // (DIAG-NULLCALL bisect run 6 — ret0/cs16 déplacés EN TÊTE du
-                    // dump par FIX-V9 ci-dessus pour survivre à la troncature de la
-                    // console lossy ; l'ancien bloc tail est retiré.)
+                    // (DIAG-NULLCALL bisect run 6 — ret0/cs16 moved to the HEAD of the
+                    // dump by FIX-V9 above to survive truncation on lossy consoles;
+                    // former tail block is removed.)
                     out(b">\n");
                 }
                 crate::security::shield_feed::push_event(
@@ -526,7 +526,7 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
         }
         FaultResult::Oom { addr } => {
             if frame.from_userspace() {
-                // Out of memory — OOM killer notifié côté userspace.
+                // Out of memory — OOM killer notified userspace side.
                 let _ = addr;
                 queue_signal_for_current(crate::process::signal::Signal::SIGKILL);
                 exception_return_to_user(frame);
@@ -535,15 +535,15 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
             }
         }
         FaultResult::KernelFault { addr } => {
-            // Fault kernel — consulter la table de fixup P1-03.
-            // Si copy_from/to_user_safe est en cours sur ce CPU, signaler
-            // le fault plutôt que paniquer (la copie retournera EFAULT).
+            // Kernel fault — consult fixup table P1-03.
+            // If copy_from/to_user_safe is in progress on this CPU, signal
+            // the fault rather than panic (copy will return EFAULT).
             let _ = addr;
             let cpu_id = crate::arch::x86_64::cpu::topology::current_cpu_id().0 as usize;
             if crate::syscall::fixup::fixup_lookup(cpu_id).is_some() {
                 crate::syscall::fixup::fixup_signal_fault(cpu_id);
-                // Retour normal — la boucle de copie verra FAULTED=true
-                // et retournera false → EFAULT côté syscall.
+                // Normal return — copy loop will see FAULTED=true
+                // and return false → EFAULT on syscall side.
             } else {
                 kernel_panic_exception("#PF kernel : non récupérable", frame);
             }

@@ -1,43 +1,43 @@
 // kernel/src/arch/x86_64/time/sources/mod.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Registre des sources d'horloge — sélection dynamique et monitoring
+// Clock source registry — dynamic selection and monitoring
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Sources disponibles (par ordre de préférence décroissante)
+// ## Available sources (in decreasing order of preference)
 //
-//   1. TSC invariant (rating 400 / 350 avec hyperviseur)
-//      Meilleur résolution (cycle CPU), pas d'accès HW à chaque lecture.
-//      Nécessite calibration préalable et synchronisation SMP.
+//   1. Invariant TSC (rating 400 / 350 with hypervisor)
+//      Best resolution (CPU cycle), no HW access on each read.
+//      Requires prior calibration and SMP synchronization.
 //
-//   2. HPET 64-bit (rating 320 / 300 si 32-bit)
-//      Bonne précision (~14.318 MHz), MMIO UC sans overhead I/O.
-//      Source de référence pour la calibration du TSC.
+//   2. 64-bit HPET (rating 320 / 300 if 32-bit)
+//      Good precision (~14.318 MHz), UC MMIO without I/O overhead.
+//      Reference source for TSC calibration.
 //
-//   3. PM Timer ACPI (rating 200)
-//      Disponible sur tous les PC ACPI. Fréquence fixe 3.579545 MHz.
-//      Anti-glitch triple lecture. Fallback si HPET absent.
+//   3. ACPI PM Timer (rating 200)
+//      Available on all ACPI PCs. Fixed frequency 3.579545 MHz.
+//      Triple-read anti-glitch. Fallback if HPET is missing.
 //
-//   4. PIT 8254 (rating 50)
-//      Héritage ISA. Toujours présent sur x86. Seulement pour last-resort.
-//      Peut ne pas fonctionner sur QEMU TCG.
+//   4. 8254 PIT (rating 50)
+//      ISA legacy. Always present on x86. Only for last-resort.
+//      May not work on QEMU TCG.
 //
-// ## Sélection de la meilleure source
-//   `best_source_for_calibration()` : retourne la source la plus fiable
-//   disponible pour calibrer le TSC (HPET > PM Timer > PIT > None).
+// ## Selection of the best source
+//   `best_source_for_calibration()`: returns the most reliable available source
+//   to calibrate the TSC (HPET > PM Timer > PIT > None).
 //
-//   `best_runtime_source()` : retourne la source à utiliser en runtime pour
-//   lire le temps courant (TSC > HPET > PM Timer > PIT).
+//   `best_runtime_source()`: returns the source to use at runtime to
+//   read current time (TSC > HPET > PM Timer > PIT).
 //
-// ## Monitoring de santé
-//   Chaque source a un `SourceStatus` : Available, Degraded, Unavailable.
-//   `source_health_check()` lit les sources et compare les valeurs pour
-//   détecter les dérives ou défaillances.
+// ## Health monitoring
+//   Each source has a `SourceStatus`: Available, Degraded, Unavailable.
+//   `source_health_check()` reads sources and compares values to
+//   detect drift or failures.
 //
-// ## Règles
-//   RÈGLE TIME-04 : TSC invariant vérifié avant utilisation.
-//   RÈGLE TIME-08 : delta HPET via wrapping_sub.
-//   RÈGLE PIT-QEMU-01 : PIT non disponible marqué Degraded sur QEMU TCG.
+// ## Rules
+//   RULE TIME-04: Invariant TSC checked before use.
+//   RULE TIME-08: HPET delta via wrapping_sub.
+//   RULE PIT-QEMU-01: Unavailable PIT marked Degraded on QEMU TCG.
 // ════════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -49,22 +49,22 @@ pub mod tsc;
 
 // ── Trait ClockSource ─────────────────────────────────────────────────────────
 
-/// Trait commun pour toutes les sources d'horloge matérielle.
+/// Common trait for all hardware clock sources.
 pub trait ClockSource {
     fn name(&self) -> &'static str;
-    /// Priorité de sélection : plus haute → source préférée.
+    /// Selection priority: higher -> preferred source.
     fn rating(&self) -> u32;
-    /// Lit la valeur brute du compteur (en ticks).
+    /// Reads the raw counter value (in ticks).
     fn read(&self) -> u64;
-    /// Fréquence en Hz.
+    /// Frequency in Hz.
     fn freq_hz(&self) -> u64;
-    /// Indique si la source est disponible et fonctionnelle.
+    /// Indicates whether the source is available and functional.
     fn available(&self) -> bool;
 }
 
-// ── Identifiant de source ─────────────────────────────────────────────────────
+// ── Source identifier ─────────────────────────────────────────────────────────
 
-/// Identifiant énuméré des sources d'horloge.
+/// Enumerated identifier of clock sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceId {
     Tsc,
@@ -85,7 +85,7 @@ impl SourceId {
         }
     }
 
-    /// Rating par défaut de la source.
+    /// Default rating of the source.
     pub fn default_rating(self) -> u32 {
         match self {
             SourceId::Tsc => 400,
@@ -97,18 +97,18 @@ impl SourceId {
     }
 }
 
-// ── Statut de source ──────────────────────────────────────────────────────────
+// ── Source status ─────────────────────────────────────────────────────────────
 
-/// Statut opérationnel d'une source d'horloge.
+/// Operational status of a clock source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceStatus {
-    /// Disponible et validée.
+    /// Available and validated.
     Available,
-    /// Disponible mais avec des anomalies (drift, glitches).
+    /// Available but with anomalies (drift, glitches).
     Degraded,
-    /// Non disponible (hardware absent ou init échoué).
+    /// Not available (missing hardware or failed init).
     Unavailable,
-    /// Pas encore testée.
+    /// Not yet tested.
     Untested,
 }
 
@@ -127,9 +127,9 @@ impl SourceStatus {
     }
 }
 
-// ── Registre de sources ───────────────────────────────────────────────────────
+// ── Source registry ───────────────────────────────────────────────────────────
 
-/// Entrée du registre de sources.
+/// Source registry entry.
 #[derive(Debug, Clone, Copy)]
 pub struct SourceEntry {
     pub id: SourceId,
@@ -147,17 +147,17 @@ impl SourceEntry {
     }
 }
 
-// Registre global de 4 sources.
+// Global registry of 4 sources.
 const NUM_SOURCES: usize = 4;
 static REGISTRY: [AtomicU32; NUM_SOURCES * 2] = [const { AtomicU32::new(0) }; NUM_SOURCES * 2];
 
-/// Index des sources dans REGISTRY.
+/// Source index in REGISTRY.
 const IDX_TSC: usize = 0;
 const IDX_HPET: usize = 1;
 const IDX_PMTIMER: usize = 2;
 const IDX_PIT: usize = 3;
 
-// Encodage : index*2 = status, index*2+1 = rating.
+// Encoding: index*2 = status, index*2+1 = rating.
 fn read_entry(idx: usize) -> SourceEntry {
     let ids = [
         SourceId::Tsc,
@@ -191,23 +191,23 @@ fn write_entry(idx: usize, status: SourceStatus, rating: u32) {
     REGISTRY[idx * 2 + 1].store(rating, Ordering::Relaxed);
 }
 
-// ── Initialisation du registre ────────────────────────────────────────────────
+// ── Registry initialization ───────────────────────────────────────────────────
 
 static REGISTRY_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Initialise et probe toutes les sources disponibles.
-/// À appeler depuis `time_init()` après initialisation ACPI et TSC.
+/// Initializes and probes all available sources.
+/// To be called from `time_init()` after ACPI and TSC initialization.
 pub fn init_sources() {
     if REGISTRY_INIT_DONE.swap(true, Ordering::Relaxed) {
         return;
     }
 
-    // TSC : toujours présent ; invariant détermine le rating.
+    // TSC: always present; invariant determines rating.
     tsc::init_tsc_source();
     let tsc_rating = tsc::tsc_rating();
     write_entry(IDX_TSC, SourceStatus::Available, tsc_rating);
 
-    // HPET : disponible si `hpet_available()`.
+    // HPET: available if `hpet_available()`.
     hpet::init_hpet_source();
     if hpet::available() {
         let r = if hpet::HpetSource.available() {
@@ -220,14 +220,14 @@ pub fn init_sources() {
         write_entry(IDX_HPET, SourceStatus::Unavailable, 0);
     }
 
-    // PM Timer : disponible si le port est non-nul.
+    // PM Timer: available if port is non-zero.
     if pm_timer::available() || pm_timer::auto_detect() {
         write_entry(IDX_PMTIMER, SourceStatus::Available, 200);
     } else {
         write_entry(IDX_PMTIMER, SourceStatus::Unavailable, 0);
     }
 
-    // PIT : toujours présent en théorie, mais on teste d'abord.
+    // PIT: always present in theory, but tested first.
     let pit_status = if pit::qemu_tcg_detected() {
         SourceStatus::Degraded
     } else {
@@ -236,10 +236,10 @@ pub fn init_sources() {
     write_entry(IDX_PIT, pit_status, pit::PitSource.rating());
 }
 
-// ── Sélection de source ───────────────────────────────────────────────────────
+// ── Source selection ──────────────────────────────────────────────────────────
 
-/// Retourne la meilleure source pour la calibration du TSC (PAS le TSC lui-même).
-/// Ordre : HPET > PM Timer > PIT > None.
+/// Returns the best source for TSC calibration (NOT the TSC itself).
+/// Order: HPET > PM Timer > PIT > None.
 pub fn best_source_for_calibration() -> SourceId {
     if read_entry(IDX_HPET).status.is_usable() {
         return SourceId::Hpet;
@@ -253,8 +253,8 @@ pub fn best_source_for_calibration() -> SourceId {
     SourceId::None
 }
 
-/// Retourne la meilleure source pour la lecture du temps en runtime.
-/// Ordre : TSC > HPET > PM Timer > PIT.
+/// Returns the best source for reading time at runtime.
+/// Order: TSC > HPET > PM Timer > PIT.
 pub fn best_runtime_source() -> SourceId {
     let tsc = read_entry(IDX_TSC);
     if tsc.status.is_usable() && tsc.rating >= 350 {
@@ -272,7 +272,7 @@ pub fn best_runtime_source() -> SourceId {
     SourceId::None
 }
 
-/// Lit la valeur courante de la source demandée (en ticks bruts).
+/// Reads current value of the requested source (in raw ticks).
 pub fn read_source(id: SourceId) -> u64 {
     match id {
         SourceId::Tsc => tsc::rdtsc_read(),
@@ -283,7 +283,7 @@ pub fn read_source(id: SourceId) -> u64 {
     }
 }
 
-/// Retourne la fréquence en Hz de la source demandée.
+/// Returns the frequency in Hz of the requested source.
 pub fn source_freq_hz(id: SourceId) -> u64 {
     match id {
         SourceId::Tsc => tsc::tsc_freq_hz(),
@@ -294,13 +294,13 @@ pub fn source_freq_hz(id: SourceId) -> u64 {
     }
 }
 
-// ── Monitoring de santé ───────────────────────────────────────────────────────
+// ── Health monitoring ─────────────────────────────────────────────────────────
 
-/// Compteur de health checks effectués.
+/// Count of performed health checks.
 static HEALTH_CHECK_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Effectue une vérification croisée entre HPET et PM Timer.
-/// Retourne `true` si les deux sources sont cohérentes (divergence < 1%).
+/// Performs a cross-check between HPET and PM Timer.
+/// Returns `true` if both sources are consistent (divergence < 1%).
 pub fn source_health_check() -> bool {
     HEALTH_CHECK_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -308,16 +308,16 @@ pub fn source_health_check() -> bool {
     let pm_ok = read_entry(IDX_PMTIMER).status.is_usable();
 
     if !hpet_ok || !pm_ok {
-        // Pas assez de sources pour la cross-vérification.
+        // Not enough sources for cross-verification.
         return true;
     }
 
-    // Mesurer un intervalle avec les deux sources simultanément.
+    // Measure an interval with both sources simultaneously.
     let hpet_start = hpet::read();
     let pm_start = pm_timer::read();
 
-    // Attendre ~100 µs (mesure approximative via spin_loop).
-    // Pas de vrai wait ici car cette fonction est appelée periodiquement.
+    // Wait ~100 µs (approximate measurement via spin_loop).
+    // No real wait here because this function is called periodically.
     let hpet_end = hpet::read();
     let pm_end = pm_timer::read();
 
@@ -325,10 +325,10 @@ pub fn source_health_check() -> bool {
     let pm_delta = pm_timer::delta(pm_start, pm_end);
 
     if hpet_delta == 0 || pm_delta == 0 {
-        return true; // Pas assez de temps écoulé.
+        return true; // Not enough time elapsed.
     }
 
-    // Convertir en nanosecondes pour comparer.
+    // Convert to nanoseconds for comparison.
     let hpet_ns = hpet::ticks_to_ns(hpet_delta);
     let pm_ns = pm_timer::ticks_to_ns(pm_delta);
 
@@ -336,12 +336,12 @@ pub fn source_health_check() -> bool {
         return true;
     }
 
-    // Divergence en centièmes de % = |hpet_ns - pm_ns| × 10000 / pm_ns.
+    // Divergence in hundredths of % = |hpet_ns - pm_ns| × 10000 / pm_ns.
     let diff = hpet_ns.abs_diff(pm_ns);
     let divergence_x100 = (diff as u128 * 10_000) / pm_ns as u128;
 
     if divergence_x100 > 500 {
-        // Divergence > 5% → marquer HPET comme dégradé.
+        // Divergence > 5% -> mark HPET as degraded.
         write_entry(
             IDX_HPET,
             SourceStatus::Degraded,
@@ -353,7 +353,7 @@ pub fn source_health_check() -> bool {
     true
 }
 
-/// Met à jour le statut d'une source (pour les mises à jour dynamiques).
+/// Updates status of a source (for dynamic updates).
 pub fn update_source_status(id: SourceId, status: SourceStatus) {
     let idx = match id {
         SourceId::Tsc => IDX_TSC,
@@ -366,7 +366,7 @@ pub fn update_source_status(id: SourceId, status: SourceStatus) {
     write_entry(idx, status, current_rating);
 }
 
-/// Met à jour le rating d'une source (ex: TSC upgrader après calibration réussie).
+/// Updates rating of a source (e.g., upgrade TSC after successful calibration).
 pub fn update_source_rating(id: SourceId, rating: u32) {
     let idx = match id {
         SourceId::Tsc => IDX_TSC,
@@ -379,7 +379,7 @@ pub fn update_source_rating(id: SourceId, rating: u32) {
     write_entry(idx, current_status, rating);
 }
 
-/// Retourne toutes les entrées du registre (pour diagnostics).
+/// Returns all registry entries (for diagnostics).
 pub fn all_entries() -> [SourceEntry; NUM_SOURCES] {
     [
         read_entry(IDX_TSC),
@@ -389,7 +389,7 @@ pub fn all_entries() -> [SourceEntry; NUM_SOURCES] {
     ]
 }
 
-/// Retourne le nombre de sources usables (Available ou Degraded).
+/// Returns the number of usable sources (Available or Degraded).
 pub fn usable_source_count() -> u8 {
     let entries = all_entries();
     entries.iter().filter(|e| e.status.is_usable()).count() as u8

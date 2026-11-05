@@ -3,38 +3,38 @@ use super::*;
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch::x86_64::{apic, halt_cpu, idt, memory_iface, paging, read_cr2, read_cr3, smp};
 
-// ── Ponts C ABI vers le scheduler (RÈGLE FPU-02 + RÈGLE IPI-01 DOC3) ─────────
+// ── C ABI Bridges to Scheduler (RULE FPU-02 + RULE IPI-01 DOC3) ─────────
 //
-// arch/ ne peut pas importer scheduler/ directement (éviter cycle de dépendance
-// Rust crate-level). Les deux fonctions ci-dessous sont exportées par le
-// scheduler via `#[no_mangle] pub unsafe extern "C"` et résolues à l'édition
-// des liens.
+// arch/ cannot import scheduler/ directly (to avoid Rust crate-level dependency
+// cycle). The functions below are exported by the
+// scheduler via `#[no_mangle] pub unsafe extern "C"` and resolved at link
+// time.
 //
-// sched_fpu_handle_nm   — scheduler/fpu/lazy.rs     — handler #NM (FPU lazy)
-// sched_ipi_reschedule  — scheduler/timer/tick.rs   — IPI reschedule
+// sched_fpu_handle_nm   — scheduler/fpu/lazy.rs     — #NM handler (lazy FPU)
+// sched_ipi_reschedule  — scheduler/timer/tick.rs   — reschedule IPI
 extern "C" {
-    /// Gère l'exception #NM (Device Not Available) pour le TCB courant.
-    /// Efface CR0.TS et restaure le contexte FPU via xrstor.
-    /// `tcb_ptr` = GS:[0x20] (current_tcb). Si null → simple clts.
+    /// Handles the #NM (Device Not Available) exception for current TCB.
+    /// Clears CR0.TS and restores FPU context via xrstor.
+    /// `tcb_ptr` = GS:[0x20] (current_tcb). If null → simple clts.
     pub fn sched_fpu_handle_nm(tcb_ptr: *mut u8);
-    /// Positionne NEED_RESCHED sur le thread courant suite à un IPI reschedule.
-    /// `tcb_ptr` = GS:[0x20] (current_tcb). Si null → ignoré.
+    /// Sets NEED_RESCHED on current thread following a reschedule IPI.
+    /// `tcb_ptr` = GS:[0x20] (current_tcb). If null → ignored.
     pub fn sched_ipi_reschedule(tcb_ptr: *mut u8);
-    /// Tick du scheduler timer : avance les quantum, décide préemption.
+    /// Scheduler timer tick: advances quanta, decides preemption.
     /// `cpu_id` = GS:[0x10], `current` = GS:[0x20].
     pub fn scheduler_tick(cpu_id: u32, current: *mut u8);
-    /// Pont arch/→process/ : livraison signaux au retour exception Ring 3.
-    /// `tcb_ptr` = GS:[0x20], `excframe` = &mut ExceptionFrame courant.
+    /// Bridge arch/ → process/: signal delivery upon Ring 3 exception return.
+    /// `tcb_ptr` = GS:[0x20], `excframe` = current &mut ExceptionFrame.
     pub fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excframe: *mut u8);
 }
 
-// ── Frame d'exception ─────────────────────────────────────────────────────────
+// ── Exception Frame ─────────────────────────────────────────────────────────
 
-/// Registres sauvegardés par le CPU + l'ASM de stub lors d'une exception
+/// Registers saved by CPU + stub ASM during an exception
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct ExceptionFrame {
-    // Registres sauvegardés par l'ASM stub (caller-saved)
+    // Registers saved by ASM stub (caller-saved)
     pub r15: u64,
     pub r14: u64,
     pub r13: u64,
@@ -51,25 +51,25 @@ pub struct ExceptionFrame {
     pub rbx: u64,
     pub rax: u64,
 
-    // Poussés par le stub ou le CPU selon l'exception
+    // Pushed by stub or CPU depending on the exception
     pub error_code: u64,
 
-    // Poussés automatiquement par le CPU
+    // Pushed automatically by CPU
     pub rip: u64,
     pub cs: u64,
     pub rflags: u64,
-    pub rsp: u64, // Présent uniquement si changement de niveau de privilège
-    pub ss: u64,  // Idem
+    pub rsp: u64, // Present only if privilege level changed
+    pub ss: u64,  // Same
 }
 
 impl ExceptionFrame {
-    /// Retourne `true` si l'exception vient de Ring 3 (userspace)
+    /// Returns `true` if exception came from Ring 3 (userspace)
     #[inline(always)]
     pub fn from_userspace(&self) -> bool {
         (self.cs & 3) == 3
     }
 
-    /// Retourne `true` si l'exception vient du kernel (Ring 0)
+    /// Returns `true` if exception came from kernel (Ring 0)
     #[inline(always)]
     pub fn from_kernel(&self) -> bool {
         (self.cs & 3) == 0
@@ -77,12 +77,12 @@ impl ExceptionFrame {
 }
 
 
-// ── Handlers Rust d'exceptions ────────────────────────────────────────────────
+// ── Exception Rust Handlers ────────────────────────────────────────────────
 
 #[inline(always)]
 pub fn current_tcb_raw_checked() -> u64 {
-    // SAFETY: la lecture vérifie d'abord que MSR_GS_BASE pointe sur la zone
-    // per-CPU kernel avant de toucher `gs:[0x20]`.
+    // SAFETY: read first verifies MSR_GS_BASE points to kernel per-CPU
+    // area before touching `gs:[0x20]`.
     unsafe { crate::arch::x86_64::smp::percpu::try_read_current_tcb().unwrap_or(0) }
 }
 
@@ -91,18 +91,18 @@ pub fn current_cpu_id_checked() -> u32 {
     crate::arch::x86_64::smp::percpu::try_current_cpu_id().unwrap_or(0)
 }
 
-/// Retour vers userspace après exception depuis Ring 3
+/// Return to userspace after exception from Ring 3
 ///
-/// ## RÈGLE SIGNAL-01 (DOC1)
-/// Point d'orchestration des signaux après préemption ou exception.
-/// Vérifie `signal_pending` dans le TCB et orchestre la livraison.
-/// La livraison effective est déléguée à `process::signal::delivery`.
+/// ## RULE SIGNAL-01 (DOC1)
+/// Orchestration point for signals after preemption or exception.
+/// Checks `signal_pending` in TCB and orchestrates delivery.
+/// Actual delivery is delegated to `process::signal::delivery`.
 pub fn exception_return_to_user_inner(frame: &mut ExceptionFrame, allow_resched: bool) {
     let tcb_ptr = current_tcb_raw_checked();
     if tcb_ptr == 0 {
         return;
     }
-    // SAFETY: proc_signal_on_exception_return thread-safe; exclu par cli implicite dans handler.
+    // SAFETY: proc_signal_on_exception_return thread-safe; excluded by implicit cli in handler.
     unsafe {
         proc_signal_on_exception_return(
             tcb_ptr as *mut u8,
@@ -111,31 +111,31 @@ pub fn exception_return_to_user_inner(frame: &mut ExceptionFrame, allow_resched:
     }
 
     if allow_resched {
-        // Les IRQ timer/IPI ne font que poser NEED_RESCHED. Le retour Ring3 est le
-        // point stable où l'on peut basculer vers un autre thread, en conservant la
-        // frame d'exception sur la pile kernel du thread préempté.
-        // SAFETY: appelé au retour d'IRQ, point de préemption stable ; la frame
-        // d'exception reste sur la pile kernel du thread préempté pendant le switch.
+        // Timer/IPI IRQs only assert NEED_RESCHED. Ring 3 return is the
+        // stable point where switching to another thread is possible, keeping the
+        // exception frame on the preempted thread's kernel stack.
+        // SAFETY: called at IRQ return, stable preemption point; the exception
+        // frame stays on the preempted thread's kernel stack during switch.
         unsafe {
             let _ = crate::scheduler::core::switch::schedule_current_if_needed();
         }
     }
 }
 
-/// Retour normal depuis une exception Ring 3.
+/// Normal return from a Ring 3 exception.
 #[inline]
 pub fn exception_return_to_user(frame: &mut ExceptionFrame) {
     exception_return_to_user_inner(frame, true);
 }
 
-/// Retourne d'une faute récupérée sans commuter de thread entre la réparation
-/// de PTE et le rejeu de l'instruction fautive.
+/// Returns from a recovered fault without switching threads between PTE
+/// fixup and replay of the faulting instruction.
 ///
-/// Une écriture de pile CoW peut avoir fauté au milieu d'un `call`. Replanifier
-/// ici laisse l'enfant progresser pendant que le parent possède encore la frame
-/// d'exception qui doit rejouer ce `call`; le retour d'adresse restait alors nul
-/// dans le dump #25. Les signaux continuent à être délivrés, seule la préemption
-/// est différée jusqu'au prochain point d'entrée noyau sûr.
+/// A CoW stack write may have faulted in the middle of a `call`. Rescheduling
+/// here lets the child progress while the parent still owns the exception
+/// frame that must replay this `call`; return address remained null
+/// in dump #25. Signals continue to be delivered, only preemption
+/// is deferred until next safe kernel entry point.
 #[inline]
 pub fn exception_return_to_user_after_recovered_fault(frame: &mut ExceptionFrame) {
     exception_return_to_user_inner(frame, false);
@@ -144,28 +144,27 @@ pub fn exception_return_to_user_after_recovered_fault(frame: &mut ExceptionFrame
 #[inline]
 pub fn queue_signal_for_current(sig: crate::process::signal::Signal) {
     let tcb_raw = current_tcb_raw_checked();
-    // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14) : le #GP1 identique
-    // bit-pour-bit d'un run à l'autre, sans jamais un seul <SG pid=... k=...>
-    // (imprimé par deliver_one avant toute action), prouve que la livraison
+    // DIAG-V14-SIGTRACE (bisect #GP1 livelock, run 13/14): bit-for-bit identical #GP1
+    // from one run to another, without ever a single <SG pid=... k=...>
+    // (printed by deliver_one before any action), proves that delivery
     if tcb_raw == 0 {
         return;
     }
-    // SAFETY: tcb_raw != 0 vérifié ; pointe vers le TCB du thread courant publié
-    // par le scheduler pour ce CPU, vivant pendant le handler.
+    // SAFETY: verified tcb_raw != 0; points to current thread TCB published
+    // by scheduler for this CPU, alive during handler.
     let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
     let pid = crate::process::core::pid::Pid(tcb.pid.0);
     let _ = crate::process::signal::delivery::send_signal_to_pid(pid, sig);
 }
 
-/// DIAG-UD1/GP1 (bisect mort d'init) : dump complet d'une exception fatale
-/// userspace — même format que le marqueur <SEGV> DIAG-25 de do_page_fault :
-/// pid, rip, rsp, ripb (8 octets IN-MÉMOIRE à RIP : `0f 0b` en tête = vrai
-/// `ud2` compilé ; octets aléatoires = saut indirect corrompu #25), registres
-/// clés et 8 mots de pile user (chaîne de return addresses).
+/// DIAG-UD1/GP1 (bisect init termination): complete dump of fatal userspace
+/// exception — same format as <SEGV> DIAG-25 marker from do_page_fault:
+/// pid, rip, rsp, ripb (8 IN-MEMORY bytes at RIP: leading `0f 0b` = genuine
+/// compiled `ud2`; random bytes = corrupted indirect jump #25), key
+/// registers, and 8 user stack words (return address chain).
 ///
-/// Lectures volatiles guardées : uniquement si l'adresse est une plage user
-/// plausible — une lecture non gardée re-fauterait en kernel et détruirait le
-/// dump.
+/// Guarded volatile reads: only if address is in plausible user range —
+/// unguarded read would re-fault in kernel and corrupt the dump.
 pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     let out = crate::arch::x86_64::terminal::debug_write;
     let hex = |val: u64| {
@@ -182,10 +181,10 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     };
 
     out(tag);
-    // PID décimal du thread courant.
+    // Decimal PID of current thread.
     let tcb_raw = current_tcb_raw_checked();
     let mut v = if tcb_raw != 0 {
-        // SAFETY: tcb_raw != 0 vérifié ; TCB courant publié par le scheduler.
+        // SAFETY: verified tcb_raw != 0; current TCB published by scheduler.
         unsafe {
             (*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock))
                 .pid
@@ -211,7 +210,7 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     out(&hex(frame.rip));
     out(b" rsp=");
     out(&hex(frame.rsp));
-    // Octets à RIP : lecture protégée par fixup pour éviter un #PF nested (T1-025 FIX).
+    // Bytes at RIP: protected by fixup to avoid nested #PF (T1-025 FIX).
     let mut rb = 0u64;
     let cpu = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
     if frame.rip >= 0x1000 && frame.rip < 0x0000_8000_0000_0000 {
@@ -234,10 +233,10 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     out(&hex(frame.rdi));
     out(b" rbp=");
     out(&hex(frame.rbp));
-    // DIAG-V8 (SEGV run 9) : r8-r15 étaient absents du dump — le registre
-    // BASE de l'instruction fautive ([rbx-0x82]/[rbp-0x82]/[r8..15+disp]) est
-    // probablement parmi eux. Sans eux, impossible de trancher entre « retour
-    // syscall -11 déréférencé » et « pointeur rechargé d'une pile zéroée ».
+    // DIAG-V8 (SEGV run 9): r8-r15 were missing from dump — faulting
+    // instruction BASE register ([rbx-0x82]/[rbp-0x82]/[r8..15+disp]) is
+    // likely among them. Without them, impossible to distinguish between "dereferenced
+    // syscall return -11" and "pointer reloaded from zeroed stack".
     out(b" r8=");
     out(&hex(frame.r8));
     out(b" r9=");
@@ -254,7 +253,7 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
     out(&hex(frame.r14));
     out(b" r15=");
     out(&hex(frame.r15));
-    // 8 mots de pile user à RSP : la chaîne de return addresses — protégée par fixup (T1-025 FIX).
+    // 8 user stack words at RSP: return address chain — protected by fixup (T1-025 FIX).
     out(b" stk=");
     if frame.rsp >= 0x1000 && frame.rsp < 0x0000_8000_0000_0000 {
         let mut words = [0u64; 8];
@@ -265,7 +264,7 @@ pub fn diag_user_exception_dump(tag: &[u8], frame: &ExceptionFrame) {
             }
         }
     }
-    // DIAG-UD1/SEGV étendu (run 5) : 16 octets à RDI — protégés par fixup (T1-025 FIX).
+    // Extended DIAG-UD1/SEGV (run 5): 16 bytes at RDI — protected by fixup (T1-025 FIX).
     out(b" rdib=");
     if frame.rdi >= 0x1000 && frame.rdi < 0x0000_8000_0000_0000 {
         let mut bytes = [0u8; 16];
@@ -298,7 +297,7 @@ pub fn debug_hex64(value: u64) {
 #[cfg(all(debug_assertions, exo_kernel_trace))]
 pub fn debug_read_cr3() -> u64 {
     let cr3: u64;
-    // SAFETY: lecture de CR3 en Ring 0, instruction sans effet mémoire.
+    // SAFETY: reading CR3 in Ring 0, memory-effect-free instruction.
     unsafe {
         core::arch::asm!(
             "mov {v}, cr3",
@@ -312,11 +311,11 @@ pub fn debug_read_cr3() -> u64 {
 
 // ── Kernel Panic ──────────────────────────────────────────────────────────────
 
-/// Affiche les informations de l'exception et arrête le CPU
+/// Prints exception info and halts the CPU
 ///
-/// # RÈGLE NO-ALLOC
-/// Cette fonction ne peut PAS allouer de mémoire.
-/// Elle affiche uniquement les registres depuis la frame.
+/// # NO-ALLOC RULE
+/// This function CANNOT allocate memory.
+/// It displays registers from the frame only.
 #[cold]
 #[inline(never)]
 pub fn kernel_panic_exception(msg: &str, frame: &mut ExceptionFrame) {
@@ -324,22 +323,22 @@ pub fn kernel_panic_exception(msg: &str, frame: &mut ExceptionFrame) {
         return;
     }
 
-    // Dans une implémentation complète : écrire sur un port série ou VGA buffer.
-    // Pour l'instant : consommer les paramètres pour éviter les warnings.
+    // In a full implementation: write to serial port or VGA buffer.
+    // For now: consume parameters to avoid warnings.
     let _ = msg;
     let _ = frame;
 
-    // Broadcaster l'IPI panic vers tous les APs pour les arrêter.
-    // SAFETY: situation non-récupérable ; broadcast_ipi_panic() n'alloue pas.
+    // Broadcast panic IPI to all APs to stop them.
+    // SAFETY: unrecoverable situation; broadcast_ipi_panic() does not allocate.
     crate::arch::x86_64::apic::ipi::broadcast_ipi_panic();
 
-    // SAFETY: situation non-récupérable — HLT en boucle.
+    // SAFETY: unrecoverable situation — infinite HLT loop.
     crate::arch::x86_64::halt_cpu()
 }
 
-// ── Instrumentations ──────────────────────────────────────────────────────────
+// ── Instrumentation ──────────────────────────────────────────────────────────
 
-/// Compteurs per-vecteur (vecteurs 0–31 seulement ici)
+/// Per-vector counters (vectors 0–31 only here)
 pub static EXC_COUNTERS: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
 
 pub static NMI_COUNT: AtomicU64 = AtomicU64::new(0);

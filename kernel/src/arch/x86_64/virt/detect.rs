@@ -1,8 +1,8 @@
-//! # arch/x86_64/virt/detect.rs — Détection hyperviseur via CPUID
+//! # arch/x86_64/virt/detect.rs — Hypervisor detection via CPUID
 //!
-//! La feuille CPUID 0x40000000 est réservée aux hyperviseurs :
-//! - EBX/ECX/EDX contiennent la signature ASCII (12 caractères)
-//! - Exemples :
+//! CPUID leaf 0x40000000 is reserved for hypervisors:
+//! - EBX/ECX/EDX contain the ASCII signature (12 characters)
+//! - Examples:
 //!   - "KVMKVMKVM" = KVM
 //!   - "VMwareVMware" = VMware
 //!   - "Microsoft Hv" = Hyper-V
@@ -11,7 +11,7 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-/// Types d'hyperviseurs reconnus
+/// Recognized hypervisor types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HypervisorType {
@@ -27,7 +27,7 @@ pub enum HypervisorType {
 
 static HYPERVISOR: AtomicU8 = AtomicU8::new(0);
 
-/// Retourne le type d'hyperviseur détecté
+/// Returns detected hypervisor type
 pub fn hypervisor_type() -> HypervisorType {
     match HYPERVISOR.load(Ordering::Relaxed) {
         0 => HypervisorType::None,
@@ -41,23 +41,23 @@ pub fn hypervisor_type() -> HypervisorType {
     }
 }
 
-/// Retourne `true` si on tourne sous un hyperviseur
+/// Returns `true` if running under a hypervisor
 pub fn is_virtual() -> bool {
     hypervisor_type() != HypervisorType::None
 }
 
-/// Détecte l'hyperviseur via la feuille CPUID 0x40000000
+/// Detects hypervisor via CPUID leaf 0x40000000
 ///
-/// Appelé une seule fois au boot depuis `boot::early_init`.
+/// Called once at boot from `boot::early_init`.
 pub fn detect_hypervisor() -> HypervisorType {
-    // Vérifier d'abord le bit hypervisor dans CPUID.1.ECX bit 31
+    // First check hypervisor bit in CPUID.1.ECX bit 31
     let (_, _, ecx, _) = cpuid(1, 0);
     if ecx & (1 << 31) == 0 {
         HYPERVISOR.store(HypervisorType::None as u8, Ordering::Release);
         return HypervisorType::None;
     }
 
-    // Lire la signature hyperviseur à la feuille 0x40000000
+    // Read hypervisor signature at leaf 0x40000000
     let (_, ebx, ecx, edx) = cpuid(0x4000_0000, 0);
 
     let sig = [
@@ -101,7 +101,7 @@ pub fn detect_hypervisor() -> HypervisorType {
 fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (eax, _ebx, ecx, edx): (u32, u32, u32, u32);
     let ebx_r: u64;
-    // SAFETY: CPUID non-privilégiée; xchg préserve rbx réservé par LLVM.
+    // SAFETY: CPUID is non-privileged; xchg preserves rbx reserved by LLVM.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -120,17 +120,17 @@ fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
 
 // ── KVM PV Features ───────────────────────────────────────────────────────────
 
-/// Feuille CPUID KVM pour les features paravirt : 0x40000001
+/// KVM CPUID leaf for paravirtual features: 0x40000001
 const KVM_CPUID_FEATURES: u32 = 0x4000_0001;
 
-// Bits des features KVM
+// KVM feature bits
 #[allow(dead_code)]
 const KVM_FEATURE_CLOCKSOURCE2: u32 = 1 << 3;
 const KVM_FEATURE_STEAL_TIME: u32 = 1 << 5;
 const KVM_FEATURE_PV_EOI: u32 = 1 << 6;
 const KVM_FEATURE_PV_TLB_FLUSH: u32 = 1 << 9;
 
-/// Retourne les features KVM disponibles (feuille 0x40000001 EAX)
+/// Returns available KVM features (leaf 0x40000001 EAX)
 pub fn kvm_features() -> u32 {
     if hypervisor_type() != HypervisorType::Kvm {
         return 0;

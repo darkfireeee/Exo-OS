@@ -1,90 +1,90 @@
 // kernel/src/arch/x86_64/time/calibration/cpuid_nominal.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Calibration TSC nominale via CPUID  — Intel leaf 0x15 / 0x16, AMD leaf 0x80000019
+// Nominal TSC calibration via CPUID — Intel leaf 0x15 / 0x16, AMD leaf 0x80000019
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Sources de fréquence nominale (sans timer externe)
+// ## Nominal frequency sources (without external timer)
 //
 //   CPUID leaf 0x15  (Intel Skylake+, 2015)
-//     EAX = dénominateur ratio TSC/cristal
-//     EBX = numérateur  ratio TSC/cristal
-//     ECX = fréquence cristal en Hz (0 si non fournie → 24 MHz fallback Intel)
-//     TSC_Hz = crystal_hz × EBX / EAX
+//     EAX = denominator of TSC/crystal ratio
+//     EBX = numerator of TSC/crystal ratio
+//     ECX = crystal frequency in Hz (0 if not provided -> 24 MHz Intel fallback)
+//     TSC_Hz = crystal_hz * EBX / EAX
 //
 //   CPUID leaf 0x16  (Intel Skylake+)
-//     EAX[15:0] = fréquence de base CPU en MHz
-//     Moins précis que 0x15, utilisé comme fallback CPUID ou cross-check.
+//     EAX[15:0] = CPU base frequency in MHz
+//     Less precise than 0x15, used as CPUID fallback or cross-check.
 //
 //   CPUID leaf 0x80000019  (AMD Family 17h+, Zen)
-//     CurrUcodeRev / Core Performance Boost → TSC nominal en MHz (bits 31:16 ECX)
-//     Ou via MSR 0xC0010064 (P-state 0) → FID/DID → fréquence TSC
+//     CurrUcodeRev / Core Performance Boost -> nominal TSC in MHz (bits 31:16 ECX)
+//     Or via MSR 0xC0010064 (P-state 0) -> FID/DID -> TSC frequency
 //
-// ## Crystals Intel référence (ECX = 0 dans leaf 0x15)
+// ## Intel reference crystals (ECX = 0 in leaf 0x15)
 //   Skylake / Kaby Lake / Coffee Lake   : 24 000 000 Hz
 //   Atom Goldmont / Silvermont          : 19 200 000 Hz
 //   Atom Gemini Lake / Tremont          : 19 200 000 Hz
-//   Tiger Lake / Alder Lake             : 38 400 000 Hz (nouveaux SoC)
-//   Latence MMIO ICH/FCH               : non concerné ici
+//   Tiger Lake / Alder Lake             : 38 400 000 Hz (newer SoCs)
+//   MMIO ICH/FCH latency                : not relevant here
 //
-// ## Rating : 150 — nomination fabricant, sans dérive mesurable
-//   Avantage : pas besoin de HPET/PM Timer → boot très rapidement
-//   Inconvénient : ne mesure pas la dérive réelle du TSC en environnement hostile
-//     (VM, Turbo Boost désactivé, CPPC activé, etc.)
+// ## Rating : 150 — manufacturer nominal, without measurable drift
+//   Advantage : no need for HPET/PM Timer -> boots very fast
+//   Drawback  : does not measure real TSC drift in hostile environments
+//     (VM, Turbo Boost disabled, CPPC enabled, etc.)
 //
-// ## Précision : ±0.01% si cristal référence fourni, ±1% si ECX=0 et fallback 24 MHz
+// ## Accuracy : ±0.01% if reference crystal provided, ±1% if ECX=0 and fallback 24 MHz
 // ════════════════════════════════════════════════════════════════════════════════
 
-// ── Constantes cristaux de référence Intel ────────────────────────────────────
+// ── Intel reference crystal constants ─────────────────────────────────────────
 
-/// Fréquence cristal standard Intel 24 MHz (Skylake, Kaby Lake, Coffee Lake…)
+/// Standard Intel 24 MHz crystal frequency (Skylake, Kaby Lake, Coffee Lake...)
 pub const CRYSTAL_FREQ_24MHZ: u64 = 24_000_000;
-/// Fréquence cristal standard Intel 19.2 MHz (Atom Goldmont, Silvermont)
+/// Standard Intel 19.2 MHz crystal frequency (Atom Goldmont, Silvermont)
 pub const CRYSTAL_FREQ_192MHZ: u64 = 19_200_000;
-/// Fréquence cristal standard Intel 38.4 MHz (Tiger Lake, Alder Lake SoC)
+/// Standard Intel 38.4 MHz crystal frequency (Tiger Lake, Alder Lake SoC)
 pub const CRYSTAL_FREQ_384MHZ: u64 = 38_400_000;
-/// Fréquence cristal AMD Zen (généralement 100 MHz / divider → TSC via MSRC001_00[6B:64])
+/// AMD Zen crystal frequency (typically 100 MHz / divider -> TSC via MSRC001_00[6B:64])
 pub const CRYSTAL_FREQ_100MHZ: u64 = 100_000_000;
 
-/// Fréquence minimum acceptable pour un TSC nominal [100 MHz].
+/// Minimum acceptable frequency for nominal TSC [100 MHz].
 pub const TSC_MIN_HZ: u64 = 100_000_000;
-/// Fréquence maximum acceptable pour un TSC nominal [10 GHz].
+/// Maximum acceptable frequency for nominal TSC [10 GHz].
 pub const TSC_MAX_HZ: u64 = 10_000_000_000;
 const KVM_TSC_FREQ_LEAF: u32 = 0x4000_0010;
 
-// ── Résultats détaillés ────────────────────────────────────────────────────────
+// ── Detailed results ──────────────────────────────────────────────────────────
 
-/// Résultat complet de la lecture CPUID leaf 0x15.
+/// Complete result of reading CPUID leaf 0x15.
 #[derive(Debug, Clone, Copy)]
 pub struct CpuidLeaf15Result {
-    /// Dénominateur du ratio cristal/TSC (EAX).
+    /// Denominator of crystal/TSC ratio (EAX).
     pub denominator: u32,
-    /// Numérateur du ratio cristal/TSC (EBX).
+    /// Numerator of crystal/TSC ratio (EBX).
     pub numerator: u32,
-    /// Fréquence cristal en Hz (ECX, 0 si non fournie).
+    /// Crystal frequency in Hz (ECX, 0 if not provided).
     pub crystal_hz: u32,
-    /// Fréquence cristal effective utilisée (après fallback si ECX=0).
+    /// Effective crystal frequency used (after fallback if ECX=0).
     pub crystal_used: u64,
-    /// Fréquence TSC calculée, 0 si invalide.
+    /// Calculated TSC frequency, 0 if invalid.
     pub tsc_hz: u64,
-    /// Source du cristal utilisée.
+    /// Crystal source used.
     pub crystal_src: CrystalSource,
 }
 
-/// Source de la fréquence cristal.
+/// Source of the crystal frequency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrystalSource {
-    /// ECX fourni par CPUID (le plus fiable).
+    /// ECX provided by CPUID (most reliable).
     CpuidEcx,
-    /// Valeur standard 24 MHz (Skylake, KBL, CFL déduite depuis CPUID brand).
+    /// Standard 24 MHz value (Skylake, KBL, CFL inferred from CPUID brand).
     Standard24Mhz,
-    /// Valeur standard 19.2 MHz (Atom Goldmont/Silvermont).
+    /// Standard 19.2 MHz value (Atom Goldmont/Silvermont).
     Standard192Mhz,
-    /// Valeur standard 38.4 MHz (Tiger Lake, Alder Lake).
+    /// Standard 38.4 MHz value (Tiger Lake, Alder Lake).
     Standard384Mhz,
-    /// Valeur par défaut Intel (24 MHz, pour CPUs non identifiés).
+    /// Default Intel value (24 MHz, for unidentified CPUs).
     DefaultIntel24Mhz,
-    /// Leaf 0x15 non disponible.
+    /// Leaf 0x15 not available.
     NotAvailable,
 }
 
@@ -101,34 +101,34 @@ impl CrystalSource {
     }
 }
 
-/// Résultat de la lecture CPUID leaf 0x16.
+/// Result of reading CPUID leaf 0x16.
 #[derive(Debug, Clone, Copy)]
 pub struct CpuidLeaf16Result {
-    /// Fréquence de base CPU en MHz (EAX[15:0]).
+    /// CPU base frequency in MHz (EAX[15:0]).
     pub base_mhz: u32,
-    /// Fréquence max (Turbo) en MHz (EBX[15:0]).
+    /// Max (Turbo) frequency in MHz (EBX[15:0]).
     pub max_mhz: u32,
-    /// Fréquence bus en MHz (ECX[15:0]).
+    /// Bus frequency in MHz (ECX[15:0]).
     pub bus_mhz: u32,
-    /// Fréquence TSC déduite (= base_mhz × 1_000_000).
+    /// Inferred TSC frequency (= base_mhz * 1_000_000).
     pub tsc_hz: u64,
 }
 
-// ── API principale ─────────────────────────────────────────────────────────────
+// ── Main API ──────────────────────────────────────────────────────────────────
 
-/// Tente de lire la fréquence TSC nominale via CPUID leaf 0x15.
+/// Attempts to read the nominal TSC frequency via CPUID leaf 0x15.
 ///
-/// Algorithme :
-///   1. Vérifier que leaf 0x15 est supportée (max_leaf >= 0x15)
-///   2. Lire EAX (dénominateur), EBX (numérateur), ECX (crystal_hz)
-///   3. Si ECX == 0 → détecter le cristal depuis le modèle CPU
-///   4. Calculer : tsc_hz = crystal_hz × EBX / EAX
-///   5. Valider la plage [100 MHz, 10 GHz]
+/// Algorithm:
+///   1. Check that leaf 0x15 is supported (max_leaf >= 0x15)
+///   2. Read EAX (denominator), EBX (numerator), ECX (crystal_hz)
+///   3. If ECX == 0 -> detect crystal from CPU model
+///   4. Compute: tsc_hz = crystal_hz * EBX / EAX
+///   5. Validate range [100 MHz, 10 GHz]
 ///
-/// RÈGLE CALIBRATION-CPUID-01 : Si EAX=0 ou EBX=0, leaf 0x15 invalide → None.
-/// RÈGLE CALIBRATION-CPUID-02 : Si ECX=0, détecter le cristal par modèle CPU.
+/// RULE CALIBRATION-CPUID-01: If EAX=0 or EBX=0, leaf 0x15 invalid -> None.
+/// RULE CALIBRATION-CPUID-02: If ECX=0, detect crystal by CPU model.
 ///
-/// Retourne `None` si leaf 0x15 non disponible ou données invalides.
+/// Returns `None` if leaf 0x15 not available or data invalid.
 pub fn cpuid_tsc_hz() -> Option<u64> {
     let result = cpuid_leaf15_full()?;
     if result.tsc_hz == 0 {
@@ -138,15 +138,15 @@ pub fn cpuid_tsc_hz() -> Option<u64> {
     }
 }
 
-/// Variante retournant le résultat complet avec diagnostic.
+/// Variant returning complete result with diagnostics.
 pub fn cpuid_tsc_hz_detailed() -> Option<CpuidLeaf15Result> {
     cpuid_leaf15_full()
 }
 
-/// Tente de lire la fréquence de base via CPUID leaf 0x16.
+/// Attempts to read the base frequency via CPUID leaf 0x16.
 ///
-/// Retourne la fréquence de base CPU × 1_000_000 (conversion MHz → Hz).
-/// Précision ±1 MHz (arrondi au MHz fabricant).
+/// Returns CPU base frequency × 1_000_000 (conversion MHz → Hz).
+/// Accuracy ±1 MHz (rounded to manufacturer MHz).
 pub fn cpuid_tsc_hz_leaf16() -> Option<u64> {
     let result = cpuid_leaf16_full()?;
     if result.tsc_hz == 0 {
@@ -156,22 +156,22 @@ pub fn cpuid_tsc_hz_leaf16() -> Option<u64> {
     }
 }
 
-/// Variante retournant le résultat complet leaf 0x16.
+/// Variant returning complete leaf 0x16 result.
 pub fn cpuid_leaf16_detailed() -> Option<CpuidLeaf16Result> {
     cpuid_leaf16_full()
 }
 
-/// Vérifie si CPUID leaf 0x15 est disponible.
+/// Checks if CPUID leaf 0x15 is available.
 pub fn cpuid_leaf15_available() -> bool {
     max_cpuid_leaf() >= 0x15
 }
 
-/// Vérifie si CPUID leaf 0x16 est disponible.
+/// Checks if CPUID leaf 0x16 is available.
 pub fn cpuid_leaf16_available() -> bool {
     max_cpuid_leaf() >= 0x16
 }
 
-/// Retourne la meilleure estimation CPUID disponible (0x15 > 0x16 > None).
+/// Returns the best available CPUID estimate (0x15 > 0x16 > None).
 pub fn cpuid_best_estimate() -> Option<u64> {
     if let Some(hz) = cpuid_tsc_hz() {
         return Some(hz);
@@ -179,11 +179,11 @@ pub fn cpuid_best_estimate() -> Option<u64> {
     cpuid_tsc_hz_leaf16()
 }
 
-/// Tente de lire la fréquence TSC publiée par l'hyperviseur KVM/QEMU.
+/// Attempts to read the TSC frequency published by the KVM/QEMU hypervisor.
 ///
-/// Leaf 0x4000_0010 : EAX = TSC frequency en kHz. Cette source évite le
-/// fallback fixe lorsque QEMU expose une fréquence paravirtualisée mais ne
-/// fournit pas les leaves fabricants 0x15/0x16.
+/// Leaf 0x4000_0010: EAX = TSC frequency in kHz. This source avoids fixed
+/// fallback when QEMU exposes a paravirtualized frequency without
+/// providing manufacturer leaves 0x15/0x16.
 pub fn hypervisor_tsc_hz() -> Option<u64> {
     if max_hypervisor_leaf() < KVM_TSC_FREQ_LEAF {
         return None;
@@ -200,9 +200,9 @@ pub fn hypervisor_tsc_hz() -> Option<u64> {
     }
 }
 
-// ── Implémentation interne leaf 0x15 ─────────────────────────────────────────
+// ── Internal leaf 0x15 implementation ────────────────────────────────────────
 
-/// Lit CPUID leaf 0x15 et calcule la fréquence TSC complète.
+/// Reads CPUID leaf 0x15 and calculates the complete TSC frequency.
 fn cpuid_leaf15_full() -> Option<CpuidLeaf15Result> {
     if max_cpuid_leaf() < 0x15 {
         return None;
@@ -210,7 +210,7 @@ fn cpuid_leaf15_full() -> Option<CpuidLeaf15Result> {
 
     let (eax, ebx, ecx) = read_cpuid_leaf_15();
 
-    // EAX ou EBX nul = leaf invalide ou non implémentée sur ce CPU.
+    // EAX or EBX zero = leaf invalid or unimplemented on this CPU.
     if eax == 0 || ebx == 0 {
         return None;
     }
@@ -219,7 +219,7 @@ fn cpuid_leaf15_full() -> Option<CpuidLeaf15Result> {
     let (crystal_hz, crystal_src) = if ecx_hz > 0 {
         (ecx_hz, CrystalSource::CpuidEcx)
     } else {
-        // ECX = 0 : détecter la fréquence cristal depuis le modèle CPU.
+        // ECX = 0: detect crystal frequency from CPU model.
         detect_crystal_from_model()
     };
 
@@ -245,7 +245,7 @@ fn cpuid_leaf15_full() -> Option<CpuidLeaf15Result> {
     })
 }
 
-/// Lit CPUID leaf 0x16 et construit le résultat.
+/// Reads CPUID leaf 0x16 and constructs the result.
 fn cpuid_leaf16_full() -> Option<CpuidLeaf16Result> {
     if max_cpuid_leaf() < 0x16 {
         return None;
@@ -271,39 +271,39 @@ fn cpuid_leaf16_full() -> Option<CpuidLeaf16Result> {
     })
 }
 
-// ── Détection du cristal par modèle CPU ───────────────────────────────────────
+// ── Crystal detection by CPU model ────────────────────────────────────────────
 
-/// Détecte la fréquence cristal depuis l'identifiant de modèle CPUID.
+/// Detects crystal frequency from CPUID model identifier.
 ///
-/// Algorithme :
-///   1. Lire EAX de CPUID leaf 1 → Family/Model/Stepping
-///   2. Identifier la famille de CPU
-///   3. Retourner la fréquence cristal connue pour cette famille
+/// Algorithm:
+///   1. Read EAX of CPUID leaf 1 -> Family/Model/Stepping
+///   2. Identify CPU family
+///   3. Return known crystal frequency for this family
 ///
-/// RÈGLE CALIBRATION-CPUID-02 : fallback si ECX de leaf 0x15 est nul.
+/// RULE CALIBRATION-CPUID-02: fallback if ECX of leaf 0x15 is zero.
 fn detect_crystal_from_model() -> (u64, CrystalSource) {
     let (family, model, _stepping) = read_cpu_family_model();
 
-    // Famille Intel = 6 (tous les Core, Atom modernes).
+    // Intel family = 6 (all modern Core, Atom).
     if family == 6 {
         return intel_crystal_by_model(model);
     }
 
-    // AMD : family 0x17 (Zen), 0x19 (Zen 3), 0x1A (Zen 4)
-    // AMD n'implémente généralement pas leaf 0x15 avec EBX, mais par précaution :
+    // AMD: family 0x17 (Zen), 0x19 (Zen 3), 0x1A (Zen 4)
+    // AMD generally does not implement leaf 0x15 with EBX, but as precaution:
     if family >= 0x17 {
-        // AMD Zen+ utilise 100 MHz reference → Crystal n'est pas pertinent ici
-        // mais si leaf 0x15 est présente avec EBX/EAX valides, le cristal est ~100 MHz.
-        return (CRYSTAL_FREQ_100MHZ, CrystalSource::Standard24Mhz); // notation approximative
+        // AMD Zen+ uses 100 MHz reference -> Crystal is not relevant here
+        // but if leaf 0x15 is present with valid EBX/EAX, crystal is ~100 MHz.
+        return (CRYSTAL_FREQ_100MHZ, CrystalSource::Standard24Mhz); // approximate notation
     }
 
-    // Fallback Intel générique : 24 MHz.
+    // Generic Intel fallback: 24 MHz.
     (CRYSTAL_FREQ_24MHZ, CrystalSource::DefaultIntel24Mhz)
 }
 
-/// Identifie le cristal Intel par numéro de modèle (Family 6).
+/// Identifies Intel crystal by model number (Family 6).
 fn intel_crystal_by_model(model: u32) -> (u64, CrystalSource) {
-    // Référence Intel Developer Manual Volume 3B, Table 18-2.
+    // Intel Developer Manual Volume 3B reference, Table 18-2.
     match model {
         // Skylake-S/H/U (0x4E, 0x5E) — Kaby Lake (0x8E, 0x9E) — Coffee Lake (0x9E)
         // Whiskey Lake (0x8E) — Comet Lake (0xA5, 0xA6) — Rocket Lake (0xA7)
@@ -321,23 +321,23 @@ fn intel_crystal_by_model(model: u32) -> (u64, CrystalSource) {
         0x5C | 0x7A => (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz),
         // Atom Tremont (0x86, Elkhart Lake 0x96, Jasper Lake 0x9C)
         0x86 | 0x96 | 0x9C => (CRYSTAL_FREQ_192MHZ, CrystalSource::Standard192Mhz),
-        // Haswell (0x3C, 0x3F), Broadwell (0x47, 0x4F) — pas de crystal 0x15 valide
-        // mais si EBX/EAX valides, on suppose 25 MHz (fréquence BCLK standard).
+        // Haswell (0x3C, 0x3F), Broadwell (0x47, 0x4F) — no valid crystal 0x15
+        // but if EBX/EAX valid, assume 25 MHz (standard BCLK frequency).
         0x3C | 0x3F | 0x47 | 0x4F => {
-            // Avant Skylake, 0x15 est rarement valide — si on arrive ici, fallback.
+            // Before Skylake, 0x15 is rarely valid — fallback if reached here.
             (CRYSTAL_FREQ_24MHZ, CrystalSource::DefaultIntel24Mhz)
         }
-        // Tout autre modèle Intel Family 6 → 24 MHz par défaut (meilleur choix conservateur).
+        // Any other Intel Family 6 model -> 24 MHz default (conservative best choice).
         _ => (CRYSTAL_FREQ_24MHZ, CrystalSource::DefaultIntel24Mhz),
     }
 }
 
-// ── Primitives CPUID bas niveau ───────────────────────────────────────────────
+// ── Low-level CPUID primitives ────────────────────────────────────────────────
 
-/// Retourne le max leaf CPUID standard supporté.
+/// Returns the maximum standard CPUID leaf supported.
 fn max_cpuid_leaf() -> u32 {
     let max: u32;
-    // SAFETY: CPUID leaf 0, non-privilégié.
+    // SAFETY: CPUID leaf 0, unprivileged.
     unsafe {
         core::arch::asm!(
             "push rbx", "cpuid", "pop rbx",
@@ -350,10 +350,10 @@ fn max_cpuid_leaf() -> u32 {
     max
 }
 
-/// Retourne le max leaf CPUID hyperviseur supporté.
+/// Returns the maximum hypervisor CPUID leaf supported.
 fn max_hypervisor_leaf() -> u32 {
     let max: u32;
-    // SAFETY: CPUID leaf hyperviseur, non-privilégié.
+    // SAFETY: Hypervisor CPUID leaf, unprivileged.
     unsafe {
         core::arch::asm!(
             "push rbx", "cpuid", "pop rbx",
@@ -371,7 +371,7 @@ fn read_cpuid_leaf(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let ebx_out: u32;
     let ecx_out: u32;
     let edx_out: u32;
-    // SAFETY: CPUID non-privilégié. RBX est préservé car réservé par LLVM en PIC.
+    // SAFETY: CPUID is unprivileged. RBX is preserved as it is reserved by LLVM in PIC mode.
     unsafe {
         core::arch::asm!(
             "push rbx",
@@ -388,14 +388,14 @@ fn read_cpuid_leaf(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     (eax_out, ebx_out, ecx_out, edx_out)
 }
 
-/// Lit CPUID leaf 0x15 en préservant rbx.
-/// Retourne (EAX=denominator, EBX=numerator, ECX=crystal_hz).
+/// Reads CPUID leaf 0x15 preserving rbx.
+/// Returns (EAX=denominator, EBX=numerator, ECX=crystal_hz).
 fn read_cpuid_leaf_15() -> (u32, u32, u32) {
     let eax_out: u32;
     let ebx_out: u32;
     let ecx_out: u32;
-    // SAFETY: CPUID non-privilégié. push rbx / pop rbx préserve le callee-saved rbx
-    //         sans perturber le compilateur (stack frame manuelle, outside llvm).
+    // SAFETY: CPUID is unprivileged. push rbx / pop rbx preserves callee-saved rbx
+    //         without interfering with compiler (manual stack frame, outside llvm).
     unsafe {
         core::arch::asm!(
             "push rbx",
@@ -412,8 +412,8 @@ fn read_cpuid_leaf_15() -> (u32, u32, u32) {
     (eax_out, ebx_out, ecx_out)
 }
 
-/// Lit CPUID leaf 0x16 en préservant rbx.
-/// Retourne (EAX=base_mhz, EBX=max_mhz, ECX=bus_mhz).
+/// Reads CPUID leaf 0x16 preserving rbx.
+/// Returns (EAX=base_mhz, EBX=max_mhz, ECX=bus_mhz).
 fn read_cpuid_leaf_16() -> (u32, u32, u32) {
     let eax_out: u32;
     let ebx_out: u32;
@@ -434,9 +434,9 @@ fn read_cpuid_leaf_16() -> (u32, u32, u32) {
     (eax_out, ebx_out, ecx_out)
 }
 
-/// Lit Family/Model/Stepping depuis CPUID leaf 1 EAX.
+/// Reads Family/Model/Stepping from CPUID leaf 1 EAX.
 ///
-/// Format Intel EAX leaf 1 :
+/// Intel EAX leaf 1 format:
 ///   [3:0]   Stepping ID
 ///   [7:4]   Model
 ///   [11:8]  Family ID
@@ -445,7 +445,7 @@ fn read_cpuid_leaf_16() -> (u32, u32, u32) {
 ///   [27:20] Extended Family ID
 fn read_cpu_family_model() -> (u32, u32, u32) {
     let eax: u32;
-    // SAFETY: CPUID leaf 1, non-privilégié.
+    // SAFETY: CPUID leaf 1, unprivileged.
     unsafe {
         core::arch::asm!(
             "push rbx", "cpuid", "pop rbx",
@@ -461,13 +461,13 @@ fn read_cpu_family_model() -> (u32, u32, u32) {
     let ext_model = (eax >> 16) & 0xF;
     let ext_family = (eax >> 20) & 0xFF;
 
-    // Intel/AMD : family réelle = base_family + ext_family (si base_family = 0xF ou 0x6)
+    // Intel/AMD: real family = base_family + ext_family (if base_family = 0xF or 0x6)
     let family = if base_family == 0xF {
         base_family + ext_family
     } else {
         base_family
     };
-    // Model réel = (ext_model << 4) | base_model  (si family == 6 ou 0xF)
+    // Real model = (ext_model << 4) | base_model  (if family == 6 or 0xF)
     let model = if base_family == 6 || base_family == 0xF {
         (ext_model << 4) | base_model
     } else {
@@ -477,19 +477,19 @@ fn read_cpu_family_model() -> (u32, u32, u32) {
     (family, model, stepping)
 }
 
-// ── Utilitaires exportés ──────────────────────────────────────────────────────
+// ── Exported utilities ────────────────────────────────────────────────────────
 
-/// Retourne la fréquence cristal détectée pour le CPU courant sans calculer TSC.
-/// Utile pour le diagnostic système.
+/// Returns the detected crystal frequency for current CPU without calculating TSC.
+/// Useful for system diagnostics.
 pub fn detect_crystal_hz() -> u64 {
     let (hz, _src) = detect_crystal_from_model();
     hz
 }
 
-/// Vérifie si le TSC nominal est cohérent avec la plage attendue pour la
-/// fréquence de base CPU annoncée par leaf 0x16.
+/// Checks if nominal TSC is consistent with the expected range for the
+/// CPU base frequency announced by leaf 0x16.
 ///
-/// Retourne `true` si les deux sources sont cohérentes (écart < 5%).
+/// Returns `true` if both sources are consistent (delta < 5%).
 pub fn cross_check_0x15_vs_0x16() -> bool {
     let hz15 = match cpuid_tsc_hz() {
         Some(v) => v,
@@ -504,16 +504,16 @@ pub fn cross_check_0x15_vs_0x16() -> bool {
     }
     let diff = hz15.abs_diff(hz16);
     let pct_x100 = (diff as u128 * 10_000) / hz16 as u128;
-    pct_x100 <= 500 // ≤ 5% d'écart acceptable
+    pct_x100 <= 500 // <= 5% acceptable delta
 }
 
-/// Vérifie la disponibilité complète du chemin CPUID nominal.
-/// Retourne true si au moins leaf 0x15 ou 0x16 peut fournir une fréquence.
+/// Checks complete availability of the nominal CPUID path.
+/// Returns true if at least leaf 0x15 or 0x16 can provide a frequency.
 pub fn cpuid_nominal_available() -> bool {
     cpuid_tsc_hz().is_some() || cpuid_tsc_hz_leaf16().is_some()
 }
 
-/// Retourne un label lisible de la source CPUID disponible.
+/// Returns a human-readable label of the available CPUID source.
 pub fn cpuid_source_label() -> &'static str {
     if cpuid_leaf15_available() {
         if let Some(r) = cpuid_leaf15_full() {
@@ -528,12 +528,12 @@ pub fn cpuid_source_label() -> &'static str {
     "CPUID-N/A"
 }
 
-/// Retourne la famille étendue du CPU (pour diagnostics).
+/// Returns the extended CPU family (for diagnostics).
 pub fn cpu_extended_family() -> u32 {
     read_cpu_family_model().0
 }
 
-/// Retourne le modèle étendu du CPU (pour diagnostics).
+/// Returns the extended CPU model (for diagnostics).
 pub fn cpu_extended_model() -> u32 {
     read_cpu_family_model().1
 }

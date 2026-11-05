@@ -1,26 +1,26 @@
 //! # arch/x86_64/idt.rs — Interrupt Descriptor Table
 //!
-//! Gère l'IDT partagée (256 entrées × 16 bytes = 4 KiB).
-//! Enregistre les handlers pour :
-//! - Vecteurs 0–31 : exceptions CPU
-//! - Vecteurs 32–47: IRQ hardware (remappées depuis APIC)
-//! - Vecteurs 48+  : interruptions logicielles et IPIs
+//! Manages the shared IDT (256 entries × 16 bytes = 4 KiB).
+//! Registers handlers for:
+//! - Vectors 0–31: CPU exceptions
+//! - Vectors 32–47: hardware IRQs (remapped from APIC)
+//! - Vectors 48+: software interrupts and IPIs
 //!
-//! ## IST Assignments (voir tss.rs)
-//! - #DF (vecteur 8)  → IST4 (Double Fault)
-//! - #NMI(vecteur 2)  → IST3 (NMI fallback)
-//! - 0xF0/0xF1/0xF2   → IST1 (ExoPhoenix critiques)
+//! ## IST Assignments (see tss.rs)
+//! - #DF (vector 8)  → IST4 (Double Fault)
+//! - #NMI (vector 2) → IST3 (NMI fallback)
+//! - 0xF0/0xF1/0xF2  → IST1 (critical ExoPhoenix)
 //!
-//! #PF et #DB utilisent la pile kernel du thread courant, pas une IST. Le
-//! retour d'exception peut livrer un signal ou déclencher un reschedule; la
-//! frame sauvegardée doit donc rester dans la pile du TCB courant.
+//! #PF and #DB use the current thread's kernel stack, not an IST.
+//! Exception return may deliver a signal or trigger a reschedule; the
+//! saved frame must therefore remain in the current TCB stack.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::gdt::GDT_KERNEL_CS;
 use super::tss::{IST_DOUBLE_FAULT, IST_EXOPHOENIX_IPI, IST_MACHINE_CHECK, IST_NMI};
 
-// ── Vecteurs d'exception ──────────────────────────────────────────────────────
+// ── Exception Vectors ────────────────────────────────────────────────────────
 
 pub const EXC_DIVIDE_ERROR: u8 = 0;
 pub const EXC_DEBUG: u8 = 1;
@@ -47,7 +47,7 @@ pub const EXC_HYPERVISOR_INJ: u8 = 28;
 pub const EXC_VMM_COMM: u8 = 29;
 pub const EXC_SECURITY: u8 = 30;
 
-/// Premier vecteur IRQ hardware (après les 32 exceptions)
+/// First hardware IRQ vector (after the 32 exceptions)
 pub const IRQ_BASE: u8 = 32;
 pub const FIRST_USER_IRQ_VECTOR: u8 = IRQ_BASE;
 pub const IDT_ENTRY_COUNT: usize = 256;
@@ -61,64 +61,64 @@ const _: () = assert!(
     "x86_64 IDT must contain 256 entries"
 );
 
-/// Vecteur IRQ timer (APIC Local Timer)
+/// Timer IRQ vector (Local APIC Timer)
 pub const VEC_IRQ_TIMER: u8 = IRQ_BASE;
 
-/// Vecteur IPI reschedule (scheduler)
+/// Reschedule IPI vector (scheduler)
 pub const VEC_IPI_RESCHEDULE: u8 = 0xE0;
 
-/// Vecteur IPI wakeup (scheduler)
+/// Wakeup IPI vector (scheduler)
 pub const VEC_IPI_WAKEUP: u8 = 0xE1;
 
-/// Vecteur IPI TLB shootdown
+/// TLB shootdown IPI vector
 pub const VEC_IPI_TLB_SHOOTDOWN: u8 = 0xE2;
 
-/// Vecteur IPI hotplug CPU
+/// CPU hotplug IPI vector
 pub const VEC_IPI_CPU_HOTPLUG: u8 = 0xE3;
 
-/// Vecteur ExoPhoenix Freeze (réservé)
+/// ExoPhoenix Freeze vector (reserved)
 pub const VEC_EXOPHOENIX_FREEZE: u8 = 0xF0;
 
-/// Vecteur ExoPhoenix PMC snapshot (réservé)
+/// ExoPhoenix PMC snapshot vector (reserved)
 pub const VEC_EXOPHOENIX_PMC: u8 = 0xF1;
 
-/// Vecteur ExoPhoenix TLB flush (réservé)
+/// ExoPhoenix TLB flush vector (reserved)
 pub const VEC_EXOPHOENIX_TLB: u8 = 0xF2;
 
-/// Retourne `true` si `vector` appartient aux vecteurs réservés ExoPhoenix.
+/// Returns `true` if `vector` belongs to the ExoPhoenix reserved vectors.
 #[inline(always)]
 pub const fn is_exophoenix_reserved_vector(vector: u8) -> bool {
     vector == VEC_EXOPHOENIX_FREEZE || vector == VEC_EXOPHOENIX_PMC || vector == VEC_EXOPHOENIX_TLB
 }
 
-/// Vecteur IPI panic broadcast
+/// Panic broadcast IPI vector
 pub const VEC_IPI_PANIC: u8 = 0xFE;
 
-/// Vecteur spurious APIC (doit être 0xFF côté APIC)
+/// APIC spurious vector (must be 0xFF on the APIC side)
 pub const VEC_SPURIOUS: u8 = 0xFF;
 
-// ── Descripteur IDT ───────────────────────────────────────────────────────────
+// ── IDT Descriptor ───────────────────────────────────────────────────────────
 
-/// Drapeaux du descripteur IDT (Type + DPL + P)
+/// IDT descriptor flags (Type + DPL + P)
 #[derive(Clone, Copy)]
 pub struct IdtEntryFlags(u8);
 
 impl IdtEntryFlags {
-    /// Interrupt gate 64-bit (IF=0 à l'entrée — interruptions désactivées)
+    /// 64-bit interrupt gate (IF=0 on entry — interrupts disabled)
     pub const INTERRUPT_GATE: Self = Self(0x8E); // P=1, DPL=0, Type=0xE
-    /// Trap gate 64-bit (IF inchangé — interruptions restent actives)
+    /// 64-bit trap gate (IF unchanged — interrupts remain enabled)
     pub const TRAP_GATE: Self = Self(0x8F); // P=1, DPL=0, Type=0xF
-    /// Trap gate accessible depuis Ring 3 (pour INT3, syscall soft)
+    /// Trap gate accessible from Ring 3 (for INT3, software syscall)
     pub const TRAP_GATE_USER: Self = Self(0xEF); // P=1, DPL=3, Type=0xF
 }
 
-/// Entrée IDT 64-bit (16 bytes)
+/// 64-bit IDT entry (16 bytes)
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct IdtEntry {
     offset_lo: u16,  // handler[15:0]
     selector: u16,   // code segment selector
-    ist: u8,         // IST index (0 = pas d'IST, 1-7 = IST1-IST7)
+    ist: u8,         // IST index (0 = no IST, 1-7 = IST1-IST7)
     flags: u8,       // type + DPL + P
     offset_mid: u16, // handler[31:16]
     offset_hi: u32,  // handler[63:32]
@@ -131,19 +131,19 @@ impl IdtEntry {
             offset_lo: 0,
             selector: 0,
             ist: 0,
-            flags: 0, // P=0 → entrée non présente
+            flags: 0, // P=0 → entry not present
             offset_mid: 0,
             offset_hi: 0,
             _reserved: 0,
         }
     }
 
-    /// Crée une entrée IDT pour un handler
+    /// Creates an IDT entry for a handler
     ///
-    /// `handler`  : pointeur vers la fonction ASM d'entrée
-    /// `selector` : sélecteur CS (GDT_KERNEL_CS)
-    /// `ist`      : index IST (0 = pile normale, 1-7 = IST dédié)
-    /// `flags`    : IdtEntryFlags
+    /// `handler`: pointer to entry ASM function
+    /// `selector`: CS selector (GDT_KERNEL_CS)
+    /// `ist`: IST index (0 = normal stack, 1-7 = dedicated IST)
+    /// `flags`: IdtEntryFlags
     pub fn new(handler: u64, selector: u16, ist: u8, flags: IdtEntryFlags) -> Self {
         Self {
             offset_lo: (handler & 0xFFFF) as u16,
@@ -156,27 +156,27 @@ impl IdtEntry {
         }
     }
 
-    /// Retourne l'adresse complète du handler
+    /// Returns the full handler address
     pub fn handler_addr(&self) -> u64 {
         (self.offset_lo as u64) | ((self.offset_mid as u64) << 16) | ((self.offset_hi as u64) << 32)
     }
 
-    /// Retourne `true` si l'entrée est présente (P=1)
+    /// Returns `true` if the entry is present (P=1)
     pub fn is_present(&self) -> bool {
         self.flags & 0x80 != 0
     }
 }
 
-// ── Table IDT ─────────────────────────────────────────────────────────────────
+// ── IDT Table ─────────────────────────────────────────────────────────────────
 
-/// IDT globale (partagée entre les CPUs — les handlers sont identiques)
-/// L'IDT est read-only après init, donc le partage est safe.
+/// Global IDT (shared between CPUs — handlers are identical)
+/// The IDT is read-only after init, so sharing is safe.
 #[repr(C, align(16))]
 pub struct InterruptDescriptorTable {
     entries: [IdtEntry; IDT_ENTRY_COUNT],
 }
 
-/// Registre IDTR
+/// IDTR register
 #[repr(C, packed)]
 struct IdtRegister {
     limit: u16,
@@ -190,14 +190,14 @@ impl InterruptDescriptorTable {
         }
     }
 
-    /// Installe un handler pour un vecteur donné
+    /// Installs a handler for a given vector
     fn set_handler(&mut self, vector: u8, handler: u64, ist: u8, flags: IdtEntryFlags) {
         self.entries[vector as usize] = IdtEntry::new(handler, GDT_KERNEL_CS, ist, flags);
     }
 
-    /// Met à jour l'index IST d'une entrée existante.
+    /// Updates the IST index of an existing entry.
     ///
-    /// `ist` est l'index matériel 1..=7 (0 = pas d'IST).
+    /// `ist` is the hardware index 1..=7 (0 = no IST).
     fn set_stack_index(&mut self, vector: u8, ist: u8) {
         self.entries[vector as usize].ist = ist & 0x7;
     }
@@ -231,9 +231,9 @@ fn idt_fingerprint() -> u64 {
     hash
 }
 
-// ── Handlers ASM externes ─────────────────────────────────────────────────────
+// ── External ASM Handlers ─────────────────────────────────────────────────────
 
-// Ces fonctions sont définies dans les fichiers .s ou exceptions.rs
+// These functions are defined in .s files or exceptions.rs
 // via `core::arch::global_asm!` / `extern "C"`
 extern "C" {
     // Exceptions
@@ -258,7 +258,7 @@ extern "C" {
     fn exc_virtualization_handler();
     fn exc_ctrl_protection_handler();
 
-    // IRQ hardware (timer, clavier, etc.)
+    // Hardware IRQs (timer, keyboard, etc.)
     fn irq_timer_handler();
     fn irq_1_handler();
     fn irq_2_handler();
@@ -284,22 +284,22 @@ extern "C" {
     fn ipi_cpu_hotplug_handler();
     fn ipi_panic_handler();
 
-    // ExoPhoenix handlers dédiés
+    // Dedicated ExoPhoenix handlers
     fn exophoenix_freeze_handler();
     fn exophoenix_pmc_handler();
     fn exophoenix_tlb_handler();
 }
 
-// ── Initialisation IDT ────────────────────────────────────────────────────────
+// ── IDT Initialization ───────────────────────────────────────────────────────
 
-/// Initialise l'IDT globale avec tous les handlers
+/// Initializes the global IDT with all handlers
 ///
-/// Doit être appelé une seule fois depuis le BSP.
+/// Must be called once from the BSP.
 pub fn init_idt() {
-    // SAFETY: appelé une seule fois depuis le BSP en single-thread
+    // SAFETY: called once from the BSP in single-threaded mode
     let idt = unsafe { &mut *core::ptr::addr_of_mut!(IDT) };
 
-    // ── Exceptions (vecteurs 0–31) ────────────────────────────────────────────
+    // ── Exceptions (vectors 0–31) ─────────────────────────────────────────────
     idt.set_handler(
         EXC_DIVIDE_ERROR,
         exc_divide_error_handler as *const () as u64,
@@ -383,25 +383,25 @@ pub fn init_idt() {
         0,
         IdtEntryFlags::TRAP_GATE,
     );
-    // FIX-25 (CRITIQUE) : #PF utilise la pile kernel du thread courant (rsp0),
-    // PAS une IST partagée.
+    // FIX-25 (CRITICAL): #PF uses the current thread's kernel stack (rsp0),
+    // NOT a shared IST.
     //
-    // L'ancien FIX-PF-IST (#PF → IST_PAGE_FAULT) introduisait une corruption
-    // inter-thread = cause racine de #25 (init crash post-fork) : une IST est
-    // PAR-CPU, NON par-thread et NON ré-entrante. Le CPU recharge rsp = sommet de
-    // l'IST à CHAQUE #PF, indépendamment du rsp courant. Donc :
-    //   • un #PF imbriqué (le handler touche de la mémoire user — livraison de
-    //     signal sur la pile user, copy_from_user — qui faute) écrase la frame du
-    //     #PF externe ; et
-    //   • si le handler #PF se replanifie / est co-planifié (init + enfant fork
-    //     démon-pageant en parallèle au boot), le #PF de l'autre thread réutilise
-    //     la MÊME pile IST depuis son sommet et écrase la frame de faute sauvegardée
-    //     du premier → IRETQ restaure un RIP/RSP/registres garbage → SIGSEGV à des
-    //     sites variables (symptôme exact de #25, reproduit 2026-06-21).
-    // Les ISTs sont réservées à #DF/#NMI/#MCE. Avec rsp0, le #PF est ré-entrant
-    // (empile sur la pile du thread, qui descend). Le risque historique (#PF sur
-    // pile kernel débordée → #DF) reste couvert : #DF a SA PROPRE IST
-    // (IST_DOUBLE_FAULT) → traité, jamais de triple fault.
+    // The previous FIX-PF-IST (#PF → IST_PAGE_FAULT) introduced inter-thread
+    // corruption = root cause of #25 (init crash post-fork): an IST is
+    // PER-CPU, NOT per-thread, and NOT re-entrant. The CPU reloads rsp = top
+    // of the IST on EVERY #PF, regardless of current rsp. Therefore:
+    //   • a nested #PF (the handler touches user memory — signal delivery
+    //     on user stack, copy_from_user — which faults) clobbers the frame of the
+    //     outer #PF; and
+    //   • if the #PF handler reschedules / is co-scheduled (init + fork child
+    //     page-faulting daemon in parallel at boot), the other thread's #PF reuses
+    //     the SAME IST stack from its top and overwrites the saved fault frame
+    //     of the first → IRETQ restores garbage RIP/RSP/registers → SIGSEGV at
+    //     variable sites (exact symptom of #25, reproduced 2026-06-21).
+    // ISTs are reserved for #DF/#NMI/#MCE. With rsp0, #PF is re-entrant
+    // (pushes onto the thread stack, which grows downward). The historical risk
+    // (#PF on overflowing kernel stack → #DF) remains covered: #DF has ITS OWN
+    // IST (IST_DOUBLE_FAULT) → handled, never triple faults.
     idt.set_handler(
         EXC_PAGE_FAULT,
         exc_page_fault_handler as *const () as u64,
@@ -445,7 +445,7 @@ pub fn init_idt() {
         IdtEntryFlags::TRAP_GATE,
     );
 
-    // ── IRQ hardware (vecteurs 32+) ───────────────────────────────────────────
+    // ── Hardware IRQs (vectors 32+) ───────────────────────────────────────────
     idt.set_handler(
         VEC_IRQ_TIMER,
         irq_timer_handler as *const () as u64,
@@ -606,17 +606,17 @@ pub fn init_idt() {
     IDT_INITIALIZED.store(true, Ordering::Release);
 }
 
-/// Charge l'IDT sur le CPU courant (LIDT)
+/// Loads the IDT on the current CPU (LIDT)
 ///
-/// Doit être appelé après `init_idt()` sur chaque CPU.
+/// Must be called after `init_idt()` on each CPU.
 pub fn load_idt() {
     let idtr = IdtRegister {
         limit: (core::mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
-        // SAFETY: IDT est une static — son adresse est stable
+        // SAFETY: IDT is a static — its address is stable
         base: idt_entries_ptr() as u64,
     };
 
-    // SAFETY: idtr pointe vers une IDT valide avec tous les handlers présents
+    // SAFETY: idtr points to a valid IDT with all handlers present
     unsafe {
         core::arch::asm!(
             "lidt [{idtr}]",
@@ -626,7 +626,7 @@ pub fn load_idt() {
     }
 }
 
-/// Retourne `true` si l'IDT a été initialisée
+/// Returns `true` if the IDT has been initialized
 #[inline(always)]
 pub fn idt_ready() -> bool {
     IDT_INITIALIZED.load(Ordering::Relaxed)
@@ -642,9 +642,9 @@ pub fn idt_integrity_ok() -> bool {
     sealed != 0 && idt_ready() && sealed == idt_fingerprint()
 }
 
-/// Retourne le handler address pour le vecteur `vector` (debugging)
+/// Returns the handler address for vector `vector` (debugging)
 pub fn get_handler_addr(vector: u8) -> Option<u64> {
-    // SAFETY: IDT read-only après init
+    // SAFETY: IDT is read-only after init
     let entry = unsafe { &*idt_entries_ptr().add(vector as usize) };
     if entry.is_present() {
         Some(entry.handler_addr())
@@ -673,19 +673,19 @@ pub fn exophoenix_tlb_handler_addr() -> u64 {
     get_handler_addr(VEC_EXOPHOENIX_TLB).unwrap_or(0)
 }
 
-// ── Instrumentation IDT ───────────────────────────────────────────────────────
+// ── IDT Instrumentation ──────────────────────────────────────────────────────
 
-/// Compteurs d'interruptions par vecteur (256 entrées)
+/// Interrupt counters per vector (256 entries)
 static IRQ_COUNTERS: [core::sync::atomic::AtomicU64; IDT_ENTRY_COUNT] =
     [const { core::sync::atomic::AtomicU64::new(0) }; IDT_ENTRY_COUNT];
 
-/// Incrémente le compteur pour le vecteur donné (appelé depuis les handlers)
+/// Increments counter for the given vector (called from handlers)
 #[inline(always)]
 pub fn irq_counter_inc(vector: u8) {
     IRQ_COUNTERS[vector as usize].fetch_add(1, Ordering::Relaxed);
 }
 
-/// Retourne le compteur d'interruptions pour un vecteur donné
+/// Returns interrupt counter for a given vector
 pub fn irq_counter(vector: u8) -> u64 {
     IRQ_COUNTERS[vector as usize].load(Ordering::Relaxed)
 }

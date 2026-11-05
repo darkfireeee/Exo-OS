@@ -1,7 +1,7 @@
-//! # arch/x86_64 — Implémentation architecture x86_64
+//! # arch/x86_64 — x86_64 Architecture Implementation
 //!
-//! Point d'entrée de toute la logique spécifique à x86_64.
-//! Exporte les primitives utilisées par les couches supérieures.
+//! Entry point for all x86_64-specific logic.
+//! Exports primitives used by higher layers.
 
 pub mod acpi;
 pub mod apic;
@@ -15,7 +15,7 @@ pub mod idt;
 pub mod irq;
 pub mod memory_iface;
 pub mod paging;
-pub mod sched_iface; // Pont FFI arch → scheduler (C ABI exports)
+pub mod sched_iface; // FFI bridge arch → scheduler (C ABI exports)
 pub mod smp;
 pub mod spectre;
 pub mod syscall;
@@ -30,24 +30,24 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use super::ArchInfo;
 use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 
-// ── Constantes globales ───────────────────────────────────────────────────────
+// ── Global Constants ─────────────────────────────────────────────────────────
 
-/// Taille de page standard (4 KiB)
+/// Standard page size (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Première adresse canonique du high-half noyau.
+/// First canonical address of the kernel high-half.
 pub use crate::arch::constants::KERNEL_BASE;
 
-/// Adresse de link de l'image noyau.
+/// Link address of the kernel image.
 pub const KERNEL_IMAGE_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 
-/// Limite supérieure de la mémoire physique addressable (48 bits PA)
+/// Upper limit of addressable physical memory (48 bits PA)
 pub const MAX_PHYS_ADDR: u64 = (1u64 << 48) - 1;
 
-/// Niveaux de page tables (PML4 → PDPT → PD → PT)
+/// Page table levels (PML4 → PDPT → PD → PT)
 pub const PAGE_TABLE_LEVELS: usize = 4;
 
-// ── État global de l'architecture ────────────────────────────────────────────
+// ── Global Architecture State ───────────────────────────────────────────────
 
 static ARCH_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -61,7 +61,7 @@ pub fn arch_initialized() -> bool {
     ARCH_INITIALIZED.load(Ordering::Acquire)
 }
 
-/// Collecte les informations d'architecture post-init
+/// Collects architecture information post-init
 pub fn arch_info() -> ArchInfo {
     let features = cpu_features_or_none();
     ArchInfo {
@@ -73,30 +73,30 @@ pub fn arch_info() -> ArchInfo {
     }
 }
 
-/// Arrête le CPU courant (halt irréversible)
+/// Halts the current CPU (irreversible halt)
 ///
 /// # SAFETY
-/// Appelé uniquement depuis le kernel panic handler ou idle loop.
+/// Called only from the kernel panic handler or idle loop.
 #[inline(never)]
 pub fn halt_cpu() -> ! {
     loop {
-        // SAFETY: cli+hlt atomique; IF=0 donc jamais réveillé — boucle infinie intentionnelle.
+        // SAFETY: atomic cli+hlt; IF=0 so never awakened — intentional infinite loop.
         unsafe {
             core::arch::asm!("cli", "hlt", options(nomem, nostack));
         }
     }
 }
 
-/// Boucle idle de fin de boot avec scheduler et IRQ actifs.
+/// End-of-boot idle loop with active scheduler and IRQs.
 ///
-/// A utiliser apres `kernel_init()`: le TCB idle de boot est publie, les run
-/// queues existent, et les kthreads/processus en attente doivent pouvoir prendre
-/// le CPU. Contrairement a `halt_cpu()`, cette boucle garde les interruptions
-/// actives et tente un scheduling explicite avant chaque `hlt`.
+/// To be used after `kernel_init()`: the boot idle TCB is published, run
+/// queues exist, and waiting kthreads/processes must be able to take
+/// the CPU. Unlike `halt_cpu()`, this loop keeps interrupts
+/// active and attempts explicit scheduling before each `hlt`.
 pub fn run_scheduler_idle() -> ! {
     loop {
-        // SAFETY: a ce stade l'IDT/LAPIC sont initialises. Garder IF=1 permet
-        // au timer, au clavier PS/2 et aux IPIs scheduler de reveiller le BSP.
+        // SAFETY: at this stage the IDT/LAPIC are initialized. Keeping IF=1 allows
+        // the timer, PS/2 keyboard, and scheduler IPIs to wake the BSP.
         unsafe {
             enable_interrupts();
         }
@@ -111,15 +111,15 @@ pub fn run_scheduler_idle() -> ! {
             continue;
         }
 
-        // SAFETY: attente idle interruptible. `sti` couvre le cas ou un appelant
-        // a coupe IF juste avant d'entrer ici; HLT se reveille sur la prochaine IRQ.
+        // SAFETY: interruptible idle wait. `sti` covers the case where a caller
+        // cleared IF right before entering here; HLT wakes up on the next IRQ.
         unsafe {
             core::arch::asm!("sti", "hlt", options(nomem, nostack));
         }
     }
 }
 
-/// Retard spin-loop courte (en nanosecondes approximatif)
+/// Short spin-loop delay (in approximate nanoseconds)
 #[inline(always)]
 pub fn spin_delay_cycles(cycles: u64) {
     let start = cpu::tsc::read_tsc();
@@ -128,37 +128,37 @@ pub fn spin_delay_cycles(cycles: u64) {
     }
 }
 
-/// Barrière mémoire complète (mfence)
+/// Full memory barrier (mfence)
 #[inline(always)]
 pub fn memory_barrier() {
-    // SAFETY: instruction architecturale sans effet de bord dangereux
+    // SAFETY: architectural instruction without hazardous side effects
     unsafe {
         core::arch::asm!("mfence", options(nostack, preserves_flags));
     }
 }
 
-/// Barrière lecture (lfence)
+/// Read barrier (lfence)
 #[inline(always)]
 pub fn load_fence() {
-    // SAFETY: idem
+    // SAFETY: same as above
     unsafe {
         core::arch::asm!("lfence", options(nostack, preserves_flags));
     }
 }
 
-/// Barrière écriture (sfence)
+/// Write barrier (sfence)
 #[inline(always)]
 pub fn store_fence() {
-    // SAFETY: idem
+    // SAFETY: same as above
     unsafe {
         core::arch::asm!("sfence", options(nostack, preserves_flags));
     }
 }
 
-/// Invalide une ligne TLB pour l'adresse virtuelle donnée
+/// Invalidates a TLB line for the given virtual address
 #[inline(always)]
 pub fn invlpg(virt_addr: u64) {
-    // SAFETY: invlpg est sûr — ne fait qu'invalider une entrée TLB locale
+    // SAFETY: invlpg is safe — only invalidates a local TLB entry
     unsafe {
         core::arch::asm!(
             "invlpg [{addr}]",
@@ -168,91 +168,91 @@ pub fn invlpg(virt_addr: u64) {
     }
 }
 
-/// Lit CR3 (Physical address de PML4 + flags PCID)
+/// Reads CR3 (PML4 Physical address + PCID flags)
 #[inline(always)]
 pub fn read_cr3() -> u64 {
     let val: u64;
-    // SAFETY: lecture de CR3 — privilège requis Ring 0 garanti par contexte noyau
+    // SAFETY: reading CR3 — required Ring 0 privilege guaranteed by kernel context
     unsafe {
         core::arch::asm!("mov {val}, cr3", val = out(reg) val, options(nostack, nomem));
     }
     val
 }
 
-/// Écrit CR3 (déclenche TLB flush si PCID != 0 et bit 63 = 0)
+/// Writes CR3 (triggers TLB flush if PCID != 0 and bit 63 = 0)
 ///
 /// # SAFETY
-/// L'appelant doit garantir que `cr3_val` pointe vers une PML4 valide
-/// et que l'adresse de retour reste mappée dans le nouveau table.
+/// Caller must ensure that `cr3_val` points to a valid PML4
+/// and that the return address remains mapped in the new table.
 #[inline(always)]
 pub unsafe fn write_cr3(cr3_val: u64) {
-    // SAFETY: vérification déléguée à l'appelant
+    // SAFETY: verification delegated to caller
     unsafe {
         core::arch::asm!("mov cr3, {val}", val = in(reg) cr3_val, options(nostack, nomem));
     }
 }
 
-/// Lit CR2 (adresse de faute page)
+/// Reads CR2 (page fault address)
 #[inline(always)]
 pub fn read_cr2() -> u64 {
     let val: u64;
-    // SAFETY: lecture registre de contrôle — aucun effet de bord
+    // SAFETY: reading control register — no side effects
     unsafe {
         core::arch::asm!("mov {val}, cr2", val = out(reg) val, options(nostack, nomem));
     }
     val
 }
 
-/// Lit CR4 (flags de contrôle avancés)
+/// Reads CR4 (advanced control flags)
 #[inline(always)]
 pub fn read_cr4() -> u64 {
     let val: u64;
-    // SAFETY: lecture registre de contrôle
+    // SAFETY: reading control register
     unsafe {
         core::arch::asm!("mov {val}, cr4", val = out(reg) val, options(nostack, nomem));
     }
     val
 }
 
-/// Écrit CR4
+/// Writes CR4
 ///
 /// # SAFETY
-/// L'appelant est responsable de ne pas désactiver des protections critiques
-/// (SMEP, SMAP, PCIDE, etc.) sans les avoir correctement désactivées avant.
+/// Caller is responsible for not disabling critical protections
+/// (SMEP, SMAP, PCIDE, etc.) without having properly disabled them beforehand.
 #[inline(always)]
 pub unsafe fn write_cr4(cr4_val: u64) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!("mov cr4, {val}", val = in(reg) cr4_val, options(nostack, nomem));
     }
 }
 
-/// Active les interruptions (sti)
+/// Enables interrupts (sti)
 ///
 /// # SAFETY
-/// L'appelant doit s'assurer que IDT et pile IST sont correctement configurés.
+/// Caller must ensure that IDT and IST stack are properly configured.
 #[inline(always)]
 pub unsafe fn enable_interrupts() {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!("sti", options(nostack, nomem));
     }
 }
 
-/// Désactive les interruptions (cli)
+/// Disables interrupts (cli)
 #[inline(always)]
 pub fn disable_interrupts() {
-    // SAFETY: cli est sûr en Ring 0 — ne fait que modifier IF dans RFLAGS
+    // SAFETY: cli is safe in Ring 0 — only modifies IF in RFLAGS
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
     }
 }
 
-/// Lit RFLAGS
+/// Reads RFLAGS
 #[inline(always)]
 pub fn read_rflags() -> u64 {
     let flags: u64;
-    // SAFETY: lecture registre d'état — aucun effet de bord
+    // SAFETY: reading status register — no side effects
     unsafe {
         core::arch::asm!(
             "pushfq",
@@ -264,7 +264,7 @@ pub fn read_rflags() -> u64 {
     flags
 }
 
-/// Section critique : désactive les interruptions et retourne l'état RFLAGS précédent
+/// Critical section: disables interrupts and returns previous RFLAGS state
 #[must_use]
 #[inline(always)]
 #[cfg(all(test, not(target_os = "none")))]
@@ -272,7 +272,7 @@ pub fn irq_save() -> u64 {
     0
 }
 
-/// Section critique : désactive les interruptions et retourne l'état RFLAGS précédent
+/// Critical section: disables interrupts and returns previous RFLAGS state
 #[must_use]
 #[inline(always)]
 #[cfg(not(all(test, not(target_os = "none"))))]
@@ -282,16 +282,16 @@ pub fn irq_save() -> u64 {
     flags
 }
 
-/// Restaure l'état d'interruption depuis des RFLAGS sauvegardés
+/// Restores interrupt state from saved RFLAGS
 #[inline(always)]
 #[cfg(all(test, not(target_os = "none")))]
 pub fn irq_restore(_flags: u64) {}
 
-/// Restaure l'état d'interruption depuis des RFLAGS sauvegardés
+/// Restores interrupt state from saved RFLAGS
 #[inline(always)]
 #[cfg(not(all(test, not(target_os = "none"))))]
 pub fn irq_restore(flags: u64) {
-    // SAFETY: restauration d'un état RFLAGS précédemment sauvegardé — sûr
+    // SAFETY: restoring previously saved RFLAGS state — safe
     unsafe {
         core::arch::asm!(
             "push {flags}",
@@ -302,14 +302,14 @@ pub fn irq_restore(flags: u64) {
     }
 }
 
-/// Effectue un OUT byte vers un port I/O
+/// Performs an OUT byte to an I/O port
 ///
 /// # SAFETY
-/// L'appelant garantit que `port` est un port I/O valide et que
-/// l'écriture à cet instant est cohérente avec le driver.
+/// Caller guarantees that `port` is a valid I/O port and that
+/// writing at this moment is coherent with the driver.
 #[inline(always)]
 pub unsafe fn outb(port: u16, val: u8) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "out dx, al",
@@ -320,14 +320,14 @@ pub unsafe fn outb(port: u16, val: u8) {
     }
 }
 
-/// Effectue un IN byte depuis un port I/O
+/// Performs an IN byte from an I/O port
 ///
 /// # SAFETY
-/// L'appelant garantit que `port` est un port I/O valide.
+/// Caller guarantees that `port` is a valid I/O port.
 #[inline(always)]
 pub unsafe fn inb(port: u16) -> u8 {
     let val: u8;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "in al, dx",
@@ -339,13 +339,13 @@ pub unsafe fn inb(port: u16) -> u8 {
     val
 }
 
-/// OUT dword vers port I/O
+/// OUT dword to I/O port
 ///
 /// # SAFETY
-/// Idem outb.
+/// Same as outb.
 #[inline(always)]
 pub unsafe fn outl(port: u16, val: u32) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "out dx, eax",
@@ -356,14 +356,14 @@ pub unsafe fn outl(port: u16, val: u32) {
     }
 }
 
-/// IN dword depuis port I/O
+/// IN dword from I/O port
 ///
 /// # SAFETY
-/// Idem inb.
+/// Same as inb.
 #[inline(always)]
 pub unsafe fn inl(port: u16) -> u32 {
     let val: u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "in eax, dx",
@@ -375,19 +375,19 @@ pub unsafe fn inl(port: u16) -> u32 {
     val
 }
 
-/// Délai I/O (~1-4µs) — écriture sur port 0x80 (port debug POST)
+/// I/O delay (~1-4µs) — write to port 0x80 (POST debug port)
 #[inline(always)]
 pub fn io_delay() {
-    // SAFETY: port 0x80 est le port debug BIOS/POST — écriture sans effet
+    // SAFETY: port 0x80 is the BIOS/POST debug port — harmless write
     unsafe {
         outb(0x80, 0x00);
     }
 }
 
-/// Primitive de pause CPU utilisée par les boucles lock-free / fast IPC.
+/// CPU pause primitive used by lock-free loops / fast IPC.
 #[no_mangle]
 pub extern "C" fn arch_cpu_relax() {
-    // SAFETY: `pause` est une instruction hint sans effet de bord architectural.
+    // SAFETY: `pause` is a hint instruction without architectural side effects.
     unsafe {
         core::arch::asm!("pause", options(nostack, nomem, preserves_flags));
     }

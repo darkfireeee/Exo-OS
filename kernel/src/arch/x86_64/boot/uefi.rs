@@ -1,10 +1,10 @@
-//! # arch/x86_64/boot/uefi.rs — Support protocole UEFI (memory map)
+//! # arch/x86_64/boot/uefi.rs — UEFI Protocol Support (Memory Map)
 //!
-//! Exo-OS peut être démarré via UEFI (directement ou via un bootloader UEFI
-//! comme GRUB2 EFI ou Limine). Dans ce cas, la memory map est fournie par
-//! ExitBootServices() sous forme d'une table de descripteurs EFI.
+//! Exo-OS can be booted via UEFI (directly or via a UEFI bootloader
+//! such as GRUB2 EFI or Limine). In this case, the memory map is provided by
+//! ExitBootServices() as an EFI descriptor table.
 
-// ── Types mémoire EFI ─────────────────────────────────────────────────────────
+// ── EFI Memory Types ─────────────────────────────────────────────────────────
 
 pub const EFI_CONVENTIONAL_MEMORY: u32 = 7;
 pub const EFI_LOADER_CODE: u32 = 1;
@@ -18,14 +18,14 @@ pub const EFI_ACPI_RECLAIM: u32 = 9;
 pub const EFI_ACPI_MEMORY_NVS: u32 = 10;
 pub const EFI_MEMORY_MAPPED_IO: u32 = 11;
 
-/// Attributs EFI Memory
+/// EFI Memory Attributes
 pub const EFI_MEMORY_WB: u64 = 1 << 3; // Write-Back
 pub const EFI_MEMORY_WC: u64 = 1 << 1; // Write-Combine
 pub const EFI_MEMORY_UC: u64 = 1 << 0; // Uncacheable
 
-// ── Descripteur EFI Memory ────────────────────────────────────────────────────
+// ── EFI Memory Descriptor ────────────────────────────────────────────────────
 
-/// EFI_MEMORY_DESCRIPTOR (taille variable selon firmware, desc_size indique la taille réelle)
+/// EFI_MEMORY_DESCRIPTOR (variable size depending on firmware, desc_size indicates actual size)
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct EfiMemoryDescriptor {
@@ -38,7 +38,7 @@ pub struct EfiMemoryDescriptor {
 }
 
 impl EfiMemoryDescriptor {
-    /// `true` si la région est de la RAM conventionnelle utilisable
+    /// `true` if region is usable conventional RAM
     pub fn is_usable(&self) -> bool {
         matches!(
             self.mem_type,
@@ -50,20 +50,20 @@ impl EfiMemoryDescriptor {
         )
     }
 
-    /// Taille de la région en octets
+    /// Region size in bytes
     pub fn size_bytes(&self) -> u64 {
         self.number_of_pages * 4096
     }
 }
 
-// ── Memory map UEFI ───────────────────────────────────────────────────────────
+// ── UEFI Memory Map ───────────────────────────────────────────────────────────
 
-/// Memory map UEFI — référence à la table fournie par le bootloader
+/// UEFI Memory Map — reference to the table provided by the bootloader
 #[derive(Debug, Clone, Copy)]
 pub struct UefiMemoryMap {
-    pub base_addr: u64,    // Adresse physique du premier descripteur
-    pub map_size: u64,     // Taille totale en octets
-    pub desc_size: u32,    // Taille d'un descripteur (peut différer de sizeof EfiMemoryDescriptor)
+    pub base_addr: u64,    // Physical address of first descriptor
+    pub map_size: u64,     // Total size in bytes
+    pub desc_size: u32,    // Descriptor size (may differ from sizeof EfiMemoryDescriptor)
     pub desc_version: u32, // Version (1)
     pub total_memory_kb: u64,
     pub entry_count: u32,
@@ -81,7 +81,7 @@ impl UefiMemoryMap {
         }
     }
 
-    /// Itère les descripteurs EFI
+    /// Iterates over EFI descriptors
     pub fn iter(&self) -> UefiMemMapIterator {
         UefiMemMapIterator {
             map: *self,
@@ -103,18 +103,18 @@ impl Iterator for UefiMemMapIterator {
             return None;
         }
         let addr = self.map.base_addr + self.offset;
-        // SAFETY: adresse dans la memory map UEFI, taille desc_size validée
+        // SAFETY: address in UEFI memory map, desc_size validated
         let desc = unsafe { core::ptr::read_volatile(addr as *const EfiMemoryDescriptor) };
         self.offset += self.map.desc_size as u64;
         Some(desc)
     }
 }
 
-// ── Parseur ───────────────────────────────────────────────────────────────────
+// ── Parser ───────────────────────────────────────────────────────────────────
 
-/// Construit un `UefiMemoryMap` depuis les paramètres de ExitBootServices
+/// Constructs a `UefiMemoryMap` from ExitBootServices parameters
 ///
-/// Appelé depuis le bootloader stub ou depuis le tag Multiboot2 EFI.
+/// Called from the bootloader stub or from the Multiboot2 EFI tag.
 pub fn parse_uefi_memmap(
     map_addr: u64,
     map_size: u64,
@@ -134,7 +134,7 @@ pub fn parse_uefi_memmap(
         },
     };
 
-    // Calculer la mémoire disponible totale
+    // Compute total available memory
     let mut total_kb: u64 = 0;
     for desc in uefi.iter() {
         if desc.is_usable() {

@@ -1,13 +1,13 @@
-//! # framebuffer_early.rs — Console framebuffer minimale de boot
+//! # framebuffer_early.rs — Minimal Early Boot Framebuffer Console
 //!
-//! Chemin de boot graphique utilisé après `arch_boot_init()`, quand :
-//! - la carte framebuffer a été récupérée depuis Multiboot2 ou exo-boot ;
-//! - l'espace d'adressage kernel est prêt à mapper une fenêtre MMIO dédiée.
+//! Graphical boot path used after `arch_boot_init()`, when:
+//! - the framebuffer map was retrieved from Multiboot2 or exo-boot;
+//! - the kernel address space is ready to map a dedicated MMIO window.
 //!
-//! Contraintes :
-//! - zéro allocation ;
-//! - fallback VGA inchangé si aucun framebuffer n'est disponible ;
-//! - rendu simple, lisible et stable sous QEMU `-vga std`.
+//! Constraints:
+//! - zero allocations;
+//! - VGA fallback unchanged if no framebuffer is available;
+//! - simple, readable, and stable rendering under QEMU `-vga std`.
 
 use spin::Mutex;
 
@@ -99,8 +99,8 @@ impl Framebuffer {
             .saturating_mul(bpp);
         let addr = (self.virt_addr as usize).saturating_add(offset);
 
-        // SAFETY: le framebuffer est mappé page par page par `map_framebuffer_window()`;
-        // `x`/`y` sont bornés à `width`/`height`, donc l'offset reste dans la fenêtre mappée.
+        // SAFETY: the framebuffer is mapped page-by-page by `map_framebuffer_window()`;
+        // `x`/`y` are bounded by `width`/`height`, so the offset remains inside the mapped window.
         unsafe {
             match bpp {
                 4 => core::ptr::write_volatile(addr as *mut u32, pixel),
@@ -282,9 +282,9 @@ fn map_framebuffer_window(info: &BootInfo) -> Option<u64> {
             continue;
         }
 
-        // SAFETY: `virt` vise une fenêtre kernel dédiée au framebuffer de boot,
-        // `phys` pointe vers une page framebuffer/MMIO reportée par le bootloader,
-        // et `KERNEL_AS` est déjà initialisé par `arch_boot_init()`.
+        // SAFETY: `virt` targets a kernel window dedicated to the boot framebuffer,
+        // `phys` points to a framebuffer/MMIO page reported by the bootloader,
+        // and `KERNEL_AS` is already initialized by `arch_boot_init()`.
         unsafe {
             KERNEL_AS
                 .map(virt, Frame::containing(phys), flags, &KERNEL_FAULT_ALLOC)
@@ -382,8 +382,8 @@ fn render_screen(state: &ConsoleState) {
 
     let rows = state.stage_count;
     for idx in 0..rows {
-        // Les libellés sont redessinés lors des mises à jour directes ; au redraw initial,
-        // on affiche juste le panneau d'arrière-plan.
+        // Labels are redrawn during direct updates; on initial redraw,
+        // only the background panel is displayed.
         let y = STAGE_START_Y + idx * STAGE_ROW_HEIGHT;
         let left = fb.width.saturating_sub(STAGE_PANEL_WIDTH) / 2;
         fb.fill_rect(left, y, STAGE_PANEL_WIDTH, 18, panel_color(fb));
@@ -391,7 +391,7 @@ fn render_screen(state: &ConsoleState) {
     }
 }
 
-/// Active le framebuffer de boot si le bootloader en a fourni un.
+/// Activates the boot framebuffer if the bootloader provided one.
 pub fn init_from_boot_info(info: &BootInfo) -> bool {
     let bpp_bytes = ((info.framebuffer_bpp as usize).saturating_add(7) / 8).max(1);
     let needed_bytes = (info.framebuffer_height as usize)
@@ -430,7 +430,7 @@ pub fn init_from_boot_info(info: &BootInfo) -> bool {
     true
 }
 
-/// `true` si la console framebuffer est active.
+/// `true` if the framebuffer console is active.
 pub fn is_active() -> bool {
     let state = CONSOLE.lock();
     state.fb.is_present() && !state.ring1_owner
@@ -441,7 +441,7 @@ pub fn deactivate_for_userspace() {
     CONSOLE.lock().ring1_owner = true;
 }
 
-/// Informations stables du framebuffer de boot pour le serveur Ring1.
+/// Stable boot framebuffer information for the Ring1 server.
 pub fn user_framebuffer_info() -> Option<(u64, u32, u32, u32, u32, u32, u64)> {
     let state = CONSOLE.lock();
     let fb = state.fb;
@@ -459,7 +459,7 @@ pub fn user_framebuffer_info() -> Option<(u64, u32, u32, u32, u32, u32, u64)> {
     ))
 }
 
-/// `true` si la plage physique demandée reste dans le framebuffer de boot.
+/// `true` if the requested physical range remains within the boot framebuffer.
 pub fn user_framebuffer_contains(phys_addr: u64, size: u64) -> bool {
     if size == 0 {
         return false;
@@ -479,7 +479,7 @@ pub fn user_framebuffer_contains(phys_addr: u64, size: u64) -> bool {
     phys_addr >= fb.phys_addr && request_end <= fb_end
 }
 
-/// Affiche un message de progression dans la liste des modules.
+/// Displays a progress message in the module list.
 pub fn stage_ok(label: &str) {
     let mut state = CONSOLE.lock();
     let fb = state.fb;
@@ -491,7 +491,7 @@ pub fn stage_ok(label: &str) {
     state.stage_count = state.stage_count.saturating_add(1);
 }
 
-/// Affiche l'écran final de boot.
+/// Displays the final boot screen.
 pub fn boot_complete() {
     let state = CONSOLE.lock();
     let fb = state.fb;
@@ -509,7 +509,7 @@ pub fn boot_complete() {
     fb.draw_text_centered(y + 8, "EXO-OS KERNEL BOOT COMPLETE", BODY_SCALE, ok, panel);
 }
 
-/// Affiche le statut du handoff userspace sans masquer les modules deja OK.
+/// Displays the userspace handoff status without hiding modules that are already OK.
 pub fn userspace_status(title: &str, detail: &str, hint: &str) {
     let state = CONSOLE.lock();
     let fb = state.fb;

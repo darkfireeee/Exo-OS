@@ -1,10 +1,10 @@
 //! # arch/x86_64/spectre/retpoline.rs — Retpoline (Spectre variant 2)
 //!
-//! La retpoline remplace les indirect calls/jumps par une construction qui
-//! empêche la prédiction spéculative de branche indirecte :
+//! Retpoline replaces indirect calls/jumps with a construct that
+//! prevents speculative branch prediction on indirect branches:
 //!
 //! ```asm
-//! ; retpoline sequence pour CALL [rax]
+//! ; retpoline sequence for CALL [rax]
 //! call set_up_target
 //! capture_spec:
 //!     pause
@@ -15,17 +15,17 @@
 //!     ret
 //! ```
 //!
-//! En pratique, avec Rust/LLVM ≥ 15 : `-Ztarget-feature=+retpoline-indirect-calls`
-//! ce module expose uniquement les macros et helpers pour les cas manuels (ASM).
+//! In practice, with Rust/LLVM ≥ 15: `-Ztarget-feature=+retpoline-indirect-calls`
+//! this module only exposes macros and helpers for manual cases (ASM).
 
-/// Appel indirect via retpoline vers un pointeur de fonction
+/// Indirect call via retpoline to a function pointer
 ///
-/// Usage : quand on ne peut pas utiliser l'attribut Rust `-Zretpoline`.
-/// Nécessaire pour les call gates du kernel.
+/// Usage: when the Rust `-Zretpoline` attribute cannot be used.
+/// Required for kernel call gates.
 #[macro_export]
 macro_rules! retpoline_call {
     ($target:expr) => {
-        // SAFETY: $target = ptr de fonction valide; retpoline empêche la prédiction spéculative.
+        // SAFETY: $target = valid function ptr; retpoline prevents speculative prediction.
         unsafe {
             core::arch::asm!(
                 "call 2f",
@@ -43,11 +43,11 @@ macro_rules! retpoline_call {
     }
 }
 
-/// Jump indirect via retpoline
+/// Indirect jump via retpoline
 #[macro_export]
 macro_rules! retpoline_jmp {
     ($target:expr) => {
-        // SAFETY: $target est une adresse valide
+        // SAFETY: $target is a valid address
         unsafe {
             core::arch::asm!(
                 "call 2f",
@@ -65,12 +65,12 @@ macro_rules! retpoline_jmp {
     }
 }
 
-// Stub retpoline dans le code ASM global (appelable depuis l'ASM de stubs)
+// Retpoline stub in global ASM code (callable from stub ASM)
 //
-// Expose `__x86_indirect_thunk_rax` et `__x86_indirect_thunk_r11`
-// compatibles avec la convention GCC retpoline.
+// Exposes `__x86_indirect_thunk_rax` and `__x86_indirect_thunk_r11`
+// compatible with the GCC retpoline convention.
 core::arch::global_asm!(
-    // Thunk pour RAX
+    // Thunk for RAX
     ".global __x86_indirect_thunk_rax",
     ".type __x86_indirect_thunk_rax, @function",
     "__x86_indirect_thunk_rax:",
@@ -80,7 +80,7 @@ core::arch::global_asm!(
     "    jmp 2b",
     "1:  mov [rsp], rax",
     "    ret",
-    // Thunk pour R11
+    // Thunk for R11
     ".global __x86_indirect_thunk_r11",
     ".type __x86_indirect_thunk_r11, @function",
     "__x86_indirect_thunk_r11:",

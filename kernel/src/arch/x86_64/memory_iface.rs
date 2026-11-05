@@ -1,13 +1,13 @@
 // kernel/src/arch/x86_64/memory_iface.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// PONT ARCHITECTURE ↔ MÉMOIRE — x86_64
+// ARCHITECTURE ↔ MEMORY BRIDGE — x86_64
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module est le point d'intégration bidirectionnel entre le sous-système
-// arch/ et le sous-système memory/ (Couche 0).
+// This module is the bidirectional integration point between the
+// arch/ subsystem and the memory/ subsystem (Layer 0).
 //
-// ## Points d'intégration
+// ## Integration Points
 //
 // ### arch/ → memory/
 //   `exceptions::do_page_fault`
@@ -16,18 +16,18 @@
 //       → `memory::virt::address_space::tlb::TLB_QUEUE.handle_remote(cpu_id)`
 //
 // ### memory/ → arch/
-//   TLB IPI : `memory::virt::address_space::tlb::register_tlb_ipi_sender()`
-//   ← arch enregistre `send_tlb_ipi_to_mask` au boot (via `init_memory_integration()`)
-//   Pattern function-pointer : évite la dépendance circulaire Couche 0.
+//   TLB IPI: `memory::virt::address_space::tlb::register_tlb_ipi_sender()`
+//   ← arch registers `send_tlb_ipi_to_mask` at boot (via `init_memory_integration()`)
+//   Function-pointer pattern: avoids circular Layer 0 dependency.
 //
 // ### arch boot → memory init
-//   `boot::memory_map::init_memory_subsystem()` → démarre la séquence d'init
-//   du sous-système mémoire avec la carte E820 du bootloader.
+//   `boot::memory_map::init_memory_subsystem()` → starts the init sequence
+//   of the memory subsystem using the bootloader's E820 map.
 //
-// ## Règles architecture (DOC2)
-//   MEM-01 : memory/ peut importer arch/ pour instructions ASM (autorisé).
-//   TLB-01 : flush_local → IPI synchrone ACK → free_pages (jamais l'inverse).
-//   MEM-04 : Les frames NE sont JAMAIS libérées avant ACK de tous les CPUs cibles.
+// ## Architecture Rules (DOC2)
+//   MEM-01: memory/ may import arch/ for ASM instructions (authorized).
+//   TLB-01: flush_local → synchronous IPI ACK → free_pages (never the reverse).
+//   MEM-04: Frames are NEVER freed before ACK from all target CPUs.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -38,23 +38,23 @@ use crate::memory::virt::fault::handler::FaultAllocator;
 use crate::memory::virt::page_table::{FrameAllocatorForWalk, PageTableWalker};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vecteur IPI TLB shootdown (voir IDT du kernel).
+/// TLB shootdown IPI vector (see kernel IDT).
 pub const IPI_TLB_SHOOTDOWN_VECTOR: u8 = super::idt::VEC_IPI_TLB_SHOOTDOWN;
 
-/// Nombre maximum de CPUs supportés (correspond à percpu::MAX_CPUS).
+/// Maximum number of supported CPUs (corresponds to percpu::MAX_CPUS).
 const MAX_CPUS: usize = super::smp::percpu::MAX_CPUS;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INSTRUCTIONS CPU BAS NIVEAU — exportées vers memory/
+// LOW-LEVEL CPU INSTRUCTIONS — exported to memory/
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le contenu de CR2 (adresse virtuelle fautive du dernier #PF).
+/// Returns the content of CR2 (faulting virtual address of last #PF).
 ///
 /// # Safety
-/// CPL 0 uniquement.
+/// CPL 0 only.
 #[inline(always)]
 pub unsafe fn read_cr2() -> u64 {
     let val: u64;
@@ -66,10 +66,10 @@ pub unsafe fn read_cr2() -> u64 {
     val
 }
 
-/// Recharge CR3 avec la valeur actuelle (flush TLB non-global).
+/// Reloads CR3 with the current value (non-global TLB flush).
 ///
 /// # Safety
-/// CPL 0. Les page tables actives doivent rester valides.
+/// CPL 0. Active page tables must remain valid.
 #[inline(always)]
 pub unsafe fn flush_cr3() {
     let cr3: u64;
@@ -85,10 +85,10 @@ pub unsafe fn flush_cr3() {
     );
 }
 
-/// Bascule vers un nouvel espace d'adressage en chargeant `pml4_phys` dans CR3.
+/// Switches to a new address space by loading `pml4_phys` into CR3.
 ///
 /// # Safety
-/// CPL 0. `pml4_phys` doit être la physaddr d'une PML4 valide, alignée sur 4 KiB.
+/// CPL 0. `pml4_phys` must be the physical address of a valid PML4, 4 KiB aligned.
 #[inline(always)]
 pub unsafe fn switch_cr3(pml4_phys: u64) {
     core::arch::asm!(
@@ -98,10 +98,10 @@ pub unsafe fn switch_cr3(pml4_phys: u64) {
     );
 }
 
-/// Invalide une entrée TLB pour `addr` sur le CPU courant (INVLPG).
+/// Invalidates a TLB entry for `addr` on the current CPU (INVLPG).
 ///
 /// # Safety
-/// `addr` doit être une adresse canonique x86_64.
+/// `addr` must be a canonical x86_64 address.
 #[inline(always)]
 pub unsafe fn flush_tlb_single(addr: u64) {
     core::arch::asm!(
@@ -111,10 +111,10 @@ pub unsafe fn flush_tlb_single(addr: u64) {
     );
 }
 
-/// Invalide une plage d'entrées TLB [start, end) sur le CPU courant.
+/// Invalidates a range of TLB entries [start, end) on the current CPU.
 ///
 /// # Safety
-/// Toutes les adresses dans [start, end) doivent être canoniques.
+/// All addresses in [start, end) must be canonical.
 #[inline]
 pub unsafe fn flush_tlb_range(start: u64, end: u64) {
     const PAGE: u64 = 0x1000;
@@ -126,10 +126,10 @@ pub unsafe fn flush_tlb_range(start: u64, end: u64) {
     }
 }
 
-/// Flush TLB global (toggle CR4.PGE) — invalide même les entrées globales.
+/// Global TLB flush (toggles CR4.PGE) — invalidates even global entries.
 ///
 /// # Safety
-/// CPL 0. Doit être exécuté avec interruptions désactivées.
+/// CPL 0. Must be executed with interrupts disabled.
 #[inline]
 pub unsafe fn flush_tlb_global() {
     let cr4: u64;
@@ -144,7 +144,7 @@ pub unsafe fn flush_tlb_global() {
         v = in(reg) cr4 & !(1u64 << 7),
         options(nostack, nomem),
     );
-    // Rétablir CR4.PGE — force le flush des entrées globales
+    // Restore CR4.PGE — forces flush of global entries
     core::arch::asm!(
         "mov cr4, {v}",
         v = in(reg) cr4,
@@ -153,40 +153,40 @@ pub unsafe fn flush_tlb_global() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENVOI D'IPI TLB SHOOTDOWN
+// TLB SHOOTDOWN IPI SENDING
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie un IPI TLB shootdown à tous les CPUs du masque.
+/// Sends a TLB shootdown IPI to all CPUs in the mask.
 ///
-/// Pour chaque bit `i` de `cpu_mask`, récupère le `lapic_id` du CPU
-/// `base_cpu + i` depuis la table per-CPU et envoie un IPI via l'APIC actif.
+/// For each bit `i` of `cpu_mask`, retrieves the `lapic_id` of CPU
+/// `base_cpu + i` from the per-CPU table and sends an IPI via the active APIC.
 ///
 /// # Note
-/// Le CPU courant est exclu : le flush local a déjà été effectué par l'émetteur
-/// avant l'appel (règle TLB-01 DOC2 : flush_local PUIS IPI synchrone).
+/// The current CPU is excluded: local flush was already performed by caller
+/// before the call (rule TLB-01 DOC2: flush_local THEN synchronous IPI).
 ///
 /// # Safety
-/// - Doit être appelé depuis memory/ après dépôt de la requête dans `TLB_QUEUE`.
-/// - `cpu_mask` doit représenter uniquement les CPUs actuellement en ligne
-///   dans la fenetre `[base_cpu, base_cpu + 64)`.
+/// - Must be called from memory/ after submitting the request to `TLB_QUEUE`.
+/// - `cpu_mask` must represent only CPUs currently online
+///   in the window `[base_cpu, base_cpu + 64)`.
 unsafe fn send_tlb_ipi_to_mask(base_cpu: usize, cpu_mask: u64) {
     use super::apic::{self, local_apic, x2apic};
     use super::smp::percpu;
 
     let current = percpu::current_cpu_id() as usize;
 
-    // Itérer sur les 64 bits possibles de la fenetre.
+    // Iterate over the 64 possible bits of the window.
     for bit in 0..64usize {
         if cpu_mask & (1u64 << bit) == 0 {
             continue;
         }
         let cpu_idx = base_cpu + bit;
-        // Pas de self-IPI TLB — le flush local a déjà été effectué par l'émetteur
+        // No TLB self-IPI — local flush was already performed by caller
         if cpu_idx == current || cpu_idx >= MAX_CPUS {
             continue;
         }
         let lapic_id = percpu::per_cpu(cpu_idx).lapic_id as u32;
-        // Envoi IPI fixe TLB shootdown (règle TLB-01 DOC2)
+        // Send fixed TLB shootdown IPI (rule TLB-01 DOC2)
         if apic::is_x2apic() {
             x2apic::send_ipi_x2apic(lapic_id, IPI_TLB_SHOOTDOWN_VECTOR, 0);
         } else if lapic_id <= u8::MAX as u32 {
@@ -200,39 +200,39 @@ unsafe fn send_tlb_ipi_to_mask(base_cpu: usize, cpu_mask: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INITIALISATION DE L'INTÉGRATION ARCH ↔ MEMORY
+// ARCH ↔ MEMORY INTEGRATION INITIALIZATION
 // ─────────────────────────────────────────────────────────────────────────────
 
 static MEMORY_INTEGRATION_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Initialise l'intégration bidirectionnelle entre arch/ et memory/.
+/// Initializes bidirectional integration between arch/ and memory/.
 ///
-/// Doit être appelé UNE SEULE FOIS depuis le BSP, après l'initialisation
-/// du Local APIC et avant le démarrage des APs.
+/// Must be called ONCE from the BSP, after Local APIC initialization
+/// and before AP boot.
 ///
-/// ## Opérations
-/// 1. Enregistre `send_tlb_ipi_to_mask` comme fonction d'envoi d'IPI TLB
-///    auprès de `memory::virt::address_space::tlb::register_tlb_ipi_sender()`.
-///    Ce pattern function-pointer rompt la dépendance circulaire car
-///    memory/ (Couche 0) ne peut pas importer arch/ directement pour l'IPI.
-/// 2. (Futur) Enregistre le callback arch pour le per-CPU frame pool init.
+/// ## Operations
+/// 1. Registers `send_tlb_ipi_to_mask` as TLB IPI sending function
+///    with `memory::virt::address_space::tlb::register_tlb_ipi_sender()`.
+///    This function-pointer pattern breaks the circular dependency because
+///    memory/ (Layer 0) cannot import arch/ directly for IPIs.
+/// 2. (Future) Registers arch callback for per-CPU frame pool init.
 ///
 /// # Safety
-/// CPL 0. APIC initialisé. memory::virt::address_space déjà initialisé.
+/// CPL 0. APIC initialized. memory::virt::address_space already initialized.
 pub unsafe fn init_memory_integration() {
     if MEMORY_INTEGRATION_DONE.swap(true, Ordering::SeqCst) {
         return; // Idempotent
     }
 
-    // Enregistrer l'envoyeur d'IPI TLB auprès du sous-système TLB shootdown.
+    // Register the TLB IPI sender with the TLB shootdown subsystem.
     crate::memory::virt::address_space::tlb::register_tlb_ipi_sender(send_tlb_ipi_to_mask);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOCATEUR FAULT USERSPACE (UserFaultAllocator)
+// USERSPACE FAULT ALLOCATOR (UserFaultAllocator)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// FaultAllocator lie a l'espace d'adressage du processus courant.
+/// FaultAllocator bound to the current process address space.
 pub struct UserFaultAllocator<'a> {
     user_as: &'a UserAddressSpace,
 }
@@ -270,7 +270,7 @@ impl FaultAllocator for UserFaultAllocator<'_> {
     }
 
     fn map_page(&self, virt: VirtAddr, frame: Frame, flags: PageFlags) -> Result<(), AllocError> {
-        // SAFETY: do_page_fault ne construit cet allocateur que pour l'AS courant.
+        // SAFETY: do_page_fault constructs this allocator only for the current AS.
         unsafe { self.user_as.map_page(virt, frame, flags, self) }
     }
 
@@ -291,29 +291,29 @@ impl FaultAllocator for UserFaultAllocator<'_> {
 
     fn compare_exchange_pte_raw(&self, virt: VirtAddr, current: u64, new: u64) -> Result<(), u64> {
         let walker = PageTableWalker::new(self.user_as.pml4_phys());
-        // SAFETY: `virt` designe une PTE feuille dans l'espace utilisateur courant.
+        // SAFETY: `virt` designates a leaf PTE in the current user space.
         unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ALLOCATEUR FAULT KERNEL (KernelFaultAllocator)
+// KERNEL FAULT ALLOCATOR (KernelFaultAllocator)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Implémentation de `FaultAllocator` + `FrameAllocatorForWalk` pour le kernel.
+/// Implementation of `FaultAllocator` + `FrameAllocatorForWalk` for the kernel.
 ///
-/// Utilisée par `do_page_fault` (exceptions.rs) pour dispatcher vers
+/// Used by `do_page_fault` (exceptions.rs) to dispatch to
 /// `memory::virt::fault::handler::handle_page_fault()`.
 ///
 /// ## Limitation
-/// Mappe uniquement dans l'espace d'adressage kernel global (`KERNEL_AS`).
-/// Les faults Ring 3 passent par `UserFaultAllocator`.
+/// Maps only into the global kernel address space (`KERNEL_AS`).
+/// Ring 3 faults go through `UserFaultAllocator`.
 ///
-/// # Safety de l'implémentation
-/// - `map_page` appelle `KERNEL_AS.map()` qui est `unsafe` car elle modifie
-///   les page tables. Elle est safe dans ce contexte car on mappe toujours
-///   une adresse canonique noyau depuis le fault handler.
-/// - `remap_flags` utilise `PageTableWalker` directement (opération lock-free).
+/// # Implementation Safety
+/// - `map_page` calls `KERNEL_AS.map()` which is `unsafe` because it modifies
+///   page tables. It is safe in this context because we always map a
+///   canonical kernel address from the fault handler.
+/// - `remap_flags` uses `PageTableWalker` directly (lock-free operation).
 pub struct KernelFaultAllocator;
 
 impl FrameAllocatorForWalk for KernelFaultAllocator {
@@ -343,7 +343,7 @@ impl FaultAllocator for KernelFaultAllocator {
     }
 
     fn map_page(&self, virt: VirtAddr, frame: Frame, flags: PageFlags) -> Result<(), AllocError> {
-        // SAFETY: virt doit être une adresse canonique ; l'allocateur est valide.
+        // SAFETY: virt must be a canonical address; the allocator is valid.
         unsafe { crate::memory::virt::address_space::KERNEL_AS.map(virt, frame, flags, self) }
     }
 
@@ -370,39 +370,39 @@ impl FaultAllocator for KernelFaultAllocator {
         let walker = crate::memory::virt::page_table::PageTableWalker::new(
             crate::memory::virt::address_space::KERNEL_AS.pml4_phys(),
         );
-        // SAFETY: `virt` désigne une PTE feuille déjà présente sur l'espace noyau.
+        // SAFETY: `virt` designates a leaf PTE already present in kernel space.
         unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }
     }
 }
 
-/// Instance globale de l'allocateur kernel pour le fault handler.
+/// Global kernel allocator instance for the fault handler.
 ///
-/// Zéro overhead : pas d'état, toutes les opérations délèguent vers les
-/// allocateurs globaux memory/ et KERNEL_AS.
+/// Zero overhead: stateless, all operations delegate to
+/// memory/ and KERNEL_AS global allocators.
 pub static KERNEL_FAULT_ALLOC: KernelFaultAllocator = KernelFaultAllocator;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VMM HOOKS POUR SHM  —  P1-02
+// VMM HOOKS FOR SHM  —  P1-02
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Ces deux fonctions sont enregistrées auprès de ipc::shared_memory::mapping
-// via ipc_install_vmm_hooks() au boot (Phase 6, lib.rs).
+// These two functions are registered with ipc::shared_memory::mapping
+// via ipc_install_vmm_hooks() at boot (Phase 6, lib.rs).
 //
-// Elles permettent à shm_map() de mapper des pages physiques SHM dans
-// l'espace d'adressage d'un processus cible identifié par son PID.
+// They allow shm_map() to map physical SHM pages into
+// the address space of a target process identified by its PID.
 //
-// Signature imposée par MapPageFn / UnmapPageFn dans mapping.rs :
+// Signature required by MapPageFn / UnmapPageFn in mapping.rs:
 //   map_page_fn  : unsafe fn(phys: u64, virt: u64, flags: u32, pid: u32) -> i32
 //   unmap_page_fn: unsafe fn(virt: u64, pid: u32) -> i32
 
-/// Hook VMM — mappe `phys` → `virt` dans l'espace d'adressage du processus `pid`.
+/// VMM Hook — maps `phys` → `virt` in the address space of process `pid`.
 ///
-/// Utilisé par shm_map() et map_shm_into_process() pour les mappages SHM.
+/// Used by shm_map() and map_shm_into_process() for SHM mappings.
 ///
 /// # Safety
-/// `phys` doit être une frame physique SHM valide.
-/// `virt` doit être une adresse user canonique alignée sur PAGE_SIZE.
-/// `pid`  doit correspondre à un processus actif avec un addr_space_ptr valide.
+/// `phys` must be a valid SHM physical frame.
+/// `virt` must be a canonical user address aligned to PAGE_SIZE.
+/// `pid` must correspond to an active process with a valid addr_space_ptr.
 pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i32 {
     use crate::memory::core::AllocError;
     use crate::memory::core::{Frame, PageFlags, PhysAddr, VirtAddr};
@@ -411,7 +411,7 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
     use crate::process::core::pid::Pid;
     use crate::process::PROCESS_REGISTRY;
 
-    // Retrouver l'espace d'adressage du processus cible par PID
+    // Retrieve target process address space by PID
     let pcb = match PROCESS_REGISTRY.find_by_pid(Pid(pid)) {
         Some(p) => p,
         None => return -3, // ESRCH
@@ -420,12 +420,12 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
         .address_space
         .load(core::sync::atomic::Ordering::Acquire);
     if as_ptr == 0 {
-        return -12; // ENOMEM — espace non initialisé
+        return -12; // ENOMEM — uninitialized address space
     }
     let user_as =
         unsafe { &*(as_ptr as *const crate::memory::virt::address_space::UserAddressSpace) };
 
-    // Traduire les flags (MapPageFn utilise u32 simple) en PageFlags kernel
+    // Translate flags (MapPageFn uses simple u32) into kernel PageFlags
     // flags & 0x1 = READ, flags & 0x2 = WRITE
     let page_flags = if flags & 0x2 != 0 {
         PageFlags::PRESENT | PageFlags::WRITABLE | PageFlags::USER | PageFlags::NO_EXECUTE
@@ -433,7 +433,7 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
         PageFlags::PRESENT | PageFlags::USER | PageFlags::NO_EXECUTE
     };
 
-    // Allocateur de tables intermédiaires uniquement (les frames viennent du pool SHM)
+    // Intermediate table allocator only (frames come from the SHM pool)
     struct PtOnly;
     impl FrameAllocatorForWalk for PtOnly {
         fn alloc_frame(&self, f: crate::memory::AllocFlags) -> Result<Frame, AllocError> {
@@ -453,11 +453,11 @@ pub unsafe fn shm_vmm_map_page(phys: u64, virt: u64, flags: u32, pid: u32) -> i3
     }
 }
 
-/// Hook VMM — démappe `virt` dans l'espace d'adressage du processus `pid`.
+/// VMM Hook — unmaps `virt` in the address space of process `pid`.
 ///
 /// # Safety
-/// `virt` doit être une adresse user canonique préalablement mappée.
-/// `pid`  doit correspondre à un processus actif.
+/// `virt` must be a previously mapped canonical user address.
+/// `pid` must correspond to an active process.
 pub unsafe fn shm_vmm_unmap_page(virt: u64, pid: u32) -> i32 {
     use crate::memory::core::VirtAddr;
     use crate::process::core::pid::Pid;

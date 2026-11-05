@@ -1,32 +1,32 @@
 //! # arch/x86_64/smp/hotplug.rs — CPU Hotplug (online/offline)
 //!
-//! Permet de mettre des CPUs en ligne ou hors ligne à chaud.
-//! Utilisé pour la gestion de l'énergie et les migrations SMP.
+//! Allows bringing CPUs online or offline dynamically.
+//! Used for power management and SMP migrations.
 //!
-//! ## Séquence offline
-//! 1. Migrer tous les threads du CPU vers d'autres CPUs
-//! 2. Envoyer IPI_CPU_HOTPLUG au CPU cible
-//! 3. Le CPU cible entre en boucle halt et se déclare offline
-//! 4. BSP attend la confirmation dans `CPU_ONLINE_MASK`
+//! ## Offline Sequence
+//! 1. Migrate all threads from the CPU to other CPUs
+//! 2. Send IPI_CPU_HOTPLUG to the target CPU
+//! 3. Target CPU enters a halt loop and declares itself offline
+//! 4. BSP waits for confirmation in `CPU_ONLINE_MASK`
 //!
-//! ## Séquence online
-//! 1. Envoyer INIT + SIPI si le CPU est totalement froid
-//! 2. (Alternative) Réveiller depuis la boucle halt via IPI wakeup
-//!    si le CPU était juste en veille légère
+//! ## Online Sequence
+//! 1. Send INIT + SIPI if the CPU is cold
+//! 2. (Alternative) Wake up from the halt loop via IPI wakeup
+//!    if the CPU was only in shallow sleep
 
 use super::super::apic::ipi;
 use super::super::cpu::tsc;
 use crate::arch::x86_64::cpu::topology::MAX_CPUS;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ── Masque de CPUs online ─────────────────────────────────────────────────────
+// ── Online CPU Mask ──────────────────────────────────────────────────────────
 
-/// Nombre de mots u64 nécessaires pour le bitmask online.
+/// Number of u64 words required for the online bitmask.
 const ONLINE_MASK_WORDS: usize = MAX_CPUS.div_ceil(64);
 
-/// Bitmask des CPUs online — bit N = CPU N online.
-/// Tableau d'AtomicU64 : supporte jusqu'à MAX_CPUS CPUs.
-/// [0] bit 0 = BSP toujours online (initial).
+/// Bitmask of online CPUs — bit N = CPU N online.
+/// AtomicU64 array: supports up to MAX_CPUS CPUs.
+/// [0] bit 0 = BSP always online (initial).
 static CPU_ONLINE_MASK: [AtomicU64; ONLINE_MASK_WORDS] = [
     AtomicU64::new(1), // bit 0 = BSP
     AtomicU64::new(0),
@@ -34,13 +34,13 @@ static CPU_ONLINE_MASK: [AtomicU64; ONLINE_MASK_WORDS] = [
     AtomicU64::new(0),
 ];
 
-/// Assertion compile-time : tableau dimensionné correctement.
+/// Compile-time assertion: array correctly sized.
 const _: () = assert!(
     ONLINE_MASK_WORDS == MAX_CPUS.div_ceil(64),
     "CPU_ONLINE_MASK mal dimensionné pour MAX_CPUS"
 );
 
-/// Retourne `true` si le CPU `cpu_id` est online
+/// Returns `true` if CPU `cpu_id` is online
 #[inline]
 pub fn cpu_is_online(cpu_id: u32) -> bool {
     let id = cpu_id as usize;
@@ -52,7 +52,7 @@ pub fn cpu_is_online(cpu_id: u32) -> bool {
     CPU_ONLINE_MASK[word].load(Ordering::Acquire) & (1u64 << bit) != 0
 }
 
-/// Marque un CPU comme online
+/// Marks a CPU as online
 #[inline]
 pub fn set_cpu_online(cpu_id: u32) {
     let id = cpu_id as usize;
@@ -64,7 +64,7 @@ pub fn set_cpu_online(cpu_id: u32) {
     CPU_ONLINE_MASK[word].fetch_or(1u64 << bit, Ordering::AcqRel);
 }
 
-/// Marque un CPU comme offline
+/// Marks a CPU as offline
 #[inline]
 pub fn set_cpu_offline(cpu_id: u32) {
     let id = cpu_id as usize;
@@ -76,7 +76,7 @@ pub fn set_cpu_offline(cpu_id: u32) {
     CPU_ONLINE_MASK[word].fetch_and(!(1u64 << bit), Ordering::AcqRel);
 }
 
-/// Retourne le nombre de CPUs online
+/// Returns the number of online CPUs
 pub fn online_cpu_count() -> u32 {
     CPU_ONLINE_MASK
         .iter()
@@ -84,25 +84,25 @@ pub fn online_cpu_count() -> u32 {
         .sum()
 }
 
-/// Retourne `true` si au moins `count` CPUs sont online.
+/// Returns `true` if at least `count` CPUs are online.
 pub fn all_cpus_online(count: u32) -> bool {
     online_cpu_count() >= count
 }
 
-// ── Mise en ligne / hors ligne ─────────────────────────────────────────────────
+// ── Online / Offline Transition ───────────────────────────────────────────────
 
-/// Tente de mettre un CPU en ligne
+/// Attempts to bring a CPU online
 ///
-/// Si le CPU était en boucle halt, envoie un IPI wakeup.
-/// Si le CPU était froid, lance la séquence INIT+SIPI.
+/// If the CPU was in a halt loop, sends an IPI wakeup.
+/// If the CPU was cold, initiates the INIT+SIPI sequence.
 ///
-/// Retourne `true` si le CPU est online après 100ms.
+/// Returns `true` if the CPU is online after 100ms.
 pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
     if cpu_is_online(cpu_id) {
         return true;
     }
 
-    // Tenter un IPI wakeup d'abord (CPU en halt léger)
+    // Attempt an IPI wakeup first (CPU in shallow halt)
     ipi::send_ipi_wakeup(lapic_id);
 
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(100);
@@ -113,7 +113,7 @@ pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
         tsc::tsc_delay_us(1000); // 1ms poll
     }
 
-    // CPU ne répond pas : séquence boot complète
+    // CPU not responding: full boot sequence
     ipi::send_init_ipi(lapic_id as u8);
     tsc::tsc_delay_ms(10);
     ipi::send_startup_ipi(lapic_id as u8, super::init::TRAMPOLINE_PAGE);
@@ -131,19 +131,19 @@ pub fn cpu_online(cpu_id: u32, lapic_id: u32) -> bool {
     false
 }
 
-/// Met un CPU hors ligne
+/// Takes a CPU offline
 ///
-/// Envoie un IPI HOTPLUG au CPU cible, puis attend sa confirmation.
-/// Le CPU cible appelle `hotplug_cpu_halt()` en réponse.
+/// Sends an IPI HOTPLUG to target CPU, then awaits its confirmation.
+/// Target CPU calls `hotplug_cpu_halt()` in response.
 ///
-/// Retourne `true` si le CPU est offline après 500ms.
+/// Returns `true` if the CPU is offline after 500ms.
 pub fn cpu_offline(cpu_id: u32, lapic_id: u32) -> bool {
     if !cpu_is_online(cpu_id) {
         return true;
     }
     if cpu_id == 0 {
         return false;
-    } // BSP ne peut pas se mettre offline
+    } // BSP cannot take itself offline
 
     ipi::send_ipi_cpu_hotplug(lapic_id);
 
@@ -158,29 +158,29 @@ pub fn cpu_offline(cpu_id: u32, lapic_id: u32) -> bool {
     false
 }
 
-/// Handler hotplug appelé par l'AP ciblé lors de la réception de l'IPI
+/// Hotplug handler called by target AP upon receiving the IPI
 ///
-/// L'AP se déclare offline et entre en boucle halt.
-/// Il peut être réveillé ultérieurement par un IPI wakeup.
+/// The AP declares itself offline and enters a halt loop.
+/// It can be woken up later by an IPI wakeup.
 pub fn hotplug_cpu_halt(cpu_id: u32) -> ! {
-    // Masquer toutes les interruptions locales sauf l'IPI wakeup
-    // SAFETY: désactivation interruptions sur ce CPU avant halt
+    // Mask all local interrupts except IPI wakeup
+    // SAFETY: interrupt disabling on this CPU before halt
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
     }
 
     set_cpu_offline(cpu_id);
 
-    // Boucle halt (réactivable par IPI wakeup + STI dans le handler)
+    // Halt loop (reactivatable via IPI wakeup + STI in the handler)
     loop {
-        // SAFETY: halt sûr — seule sortie = NMI ou IPI wakeup (si STI pré-halt)
+        // SAFETY: safe halt — only exit = NMI or IPI wakeup (if pre-halt STI)
         unsafe {
             core::arch::asm!("sti\n\thlt\n\tcli", options(nostack, nomem));
         }
     }
 }
 
-/// Retourne le masque de bits des CPUs online (64 premiers CPUs)
+/// Returns the bitmask of online CPUs (first 64 CPUs)
 pub fn online_mask() -> u64 {
     CPU_ONLINE_MASK[0].load(Ordering::Acquire)
 }

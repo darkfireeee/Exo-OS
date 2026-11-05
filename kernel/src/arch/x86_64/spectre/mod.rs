@@ -1,6 +1,6 @@
-//! # arch/x86_64/spectre — Mitigations CPU (Spectre/Meltdown/MDS)
+//! # arch/x86_64/spectre — CPU Mitigations (Spectre/Meltdown/MDS)
 //!
-//! Regroupe toutes les mitigations contre les vulnérabilités microarchitecturales :
+//! Collects all mitigations against microarchitectural vulnerabilities:
 //! - `kpti`       : Kernel Page-Table Isolation (Meltdown)
 //! - `retpoline`  : Retpoline (Spectre variant 2)
 //! - `ssbd`       : Speculative Store Bypass Disable (Spectre variant 4)
@@ -17,29 +17,29 @@ pub use ssbd::{apply_ssbd_for_thread, ssbd_enabled};
 
 use super::cpu::features;
 
-/// Applique toutes les mitigations disponibles sur le CPU courant
+/// Applies all available mitigations on the current CPU
 ///
-/// Appelé lors de l'init de chaque CPU (BSP et APs).
+/// Called during initialization of each CPU (BSP and APs).
 pub fn apply_mitigations_bsp() {
     let feat = features::cpu_features();
 
-    // KPTI si Meltdown possible et pas RDCL_NO
+    // KPTI if Meltdown possible and not RDCL_NO
     if !feat.rdcl_no() {
         kpti::init_kpti();
     }
 
-    // IBRS/STIBP si disponibles
+    // IBRS/STIBP if available
     if feat.has_spec_ctrl() {
         ibrs::init_ibrs();
     }
 
-    // SSBD si disponible
+    // SSBD if available
     if feat.has_ssbd() {
         ssbd::init_ssbd();
     }
 }
 
-/// Applique les mitigations sur un AP (après avoir chargé le contexte CPU)
+/// Applies mitigations on an AP (after loading CPU context)
 pub fn apply_mitigations_ap() {
     apply_mitigations_bsp();
 }

@@ -1,47 +1,47 @@
 // kernel/src/arch/x86_64/time/sources/hpet.rs
 //
 // ════════════════════════════════════════════════════════════════════════════════
-// Source HPET — capacités, largeur compteur, guard overflow, delta safe
+// HPET source — capabilities, counter width, overflow guard, safe delta
 // ════════════════════════════════════════════════════════════════════════════════
 //
-// ## Architecture HPET (High Precision Event Timer)
-//   Spécification Intel IA-PC HPET Architecture Specification 1.0a
-//   Base MMIO : lue depuis la table ACPI HPET (signature "HPET"), base_address.
+// ## HPET Architecture (High Precision Event Timer)
+//   Intel IA-PC HPET Architecture Specification 1.0a
+//   MMIO base: read from the ACPI HPET table (signature "HPET"), base_address.
 //
-//   Registres (offset depuis Base) :
+//   Registers (offset from Base):
 //     0x000 : General Capabilities and ID Register (64-bit, RO)
-//       [63:32] clock period en femtosecondes (COUNTER_CLK_PERIOD)
+//       [63:32] clock period in femtoseconds (COUNTER_CLK_PERIOD)
 //       [31:16] Vendor ID
 //       [12]    3-bit rev (bits 12..8 = REV_ID)
-//       [13]    COUNT_SIZE_CAP : 1 = compteur 64-bit, 0 = compteur 32-bit
-//       [7..5]  NUM_TIM_CAP : nombre de timers - 1
+//       [13]    COUNT_SIZE_CAP: 1 = 64-bit counter, 0 = 32-bit counter
+//       [7..5]  NUM_TIM_CAP: number of timers - 1
 //       [0]     REV_ID (bits 7:0)
 //     0x010 : General Configuration Register (64-bit, RW)
-//       bit 0  = ENABLE_CNF (1 = compteur actif)
+//       bit 0  = ENABLE_CNF (1 = counter active)
 //       bit 1  = LEG_RT_CNF (Legacy Routing Config)
 //     0x020 : General Interrupt Status Register (64-bit, RW)
-//     0x0F0 : Main Counter Value Register (64-bit, RO — lis deux fois si 32-bit)
+//     0x0F0 : Main Counter Value Register (64-bit, RO — read twice if 32-bit)
 //     0x100 : Timer N Configuration Register (timers 0..31)
 //
-// ## Largeur du compteur (RÈGLE TIME-08)
-//   COUNT_SIZE_CAP=1 → 64-bit : rollover toutes les ~42 milliards d'années.
-//   COUNT_SIZE_CAP=0 → 32-bit : rollover toutes les 2^32 / freq ≈ 300 secondes
-//     à 14.318 MHz (fréquence PIT-compatible HPET).
-//   → Utiliser wrapping_sub() systématiquement pour les deux cas.
-//   → Pour 32-bit, détecter un overflow (bit_64 XOR bit_32 read) et incrémenter
-//     un compteur de wraps.
+// ## Counter width (RULE TIME-08)
+//   COUNT_SIZE_CAP=1 -> 64-bit: rollover every ~42 billion years.
+//   COUNT_SIZE_CAP=0 -> 32-bit: rollover every 2^32 / freq ≈ 300 seconds
+//     at 14.318 MHz (PIT-compatible HPET frequency).
+//   -> Use wrapping_sub() systematically for both cases.
+//   -> For 32-bit, detect an overflow (bit_64 XOR bit_32 read) and increment
+//     a wrap counter.
 //
 // ## Minimum Delta (Intel HPET spec §2.2)
-//   La valeur de comparaison pour les one-shot timers doit être au moins
+//   Comparison value for one-shot timers must be at least
 //   MIN_DELTA_TICKS > current counter + minimum_delta.
-//   Typiquement ≥ 100 ticks HPET (≈ 7 µs à 14.318 MHz).
+//   Typically >= 100 HPET ticks (≈ 7 µs at 14.318 MHz).
 // ════════════════════════════════════════════════════════════════════════════════
 
 use super::ClockSource;
 use crate::arch::x86_64::acpi::hpet as hpet_acpi;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-// ── Offsets registres HPET ────────────────────────────────────────────────────
+// ── HPET register offsets ─────────────────────────────────────────────────────
 
 const HPET_REG_CAP_ID: u64 = 0x000; // Capabilities and ID (RO)
 #[allow(dead_code)]
@@ -50,7 +50,7 @@ const HPET_REG_CONFIG: u64 = 0x010; // General Configuration (RW)
 const HPET_REG_INT_STATUS: u64 = 0x020; // General Interrupt Status (RW)
 const HPET_REG_COUNTER: u64 = 0x0F0; // Main Counter Value (RO)
 
-// ── Bits du registre CAP_ID ───────────────────────────────────────────────────
+// ── CAP_ID register bits ──────────────────────────────────────────────────────
 
 const CAP_COUNT_SIZE_CAP: u64 = 1 << 13; // 1 = 64-bit counter
 const CAP_CLK_PERIOD_SHIFT: u32 = 32; // bits 63:32 = clock period femtos
@@ -62,33 +62,33 @@ const CAP_REV_ID_MASK: u64 = 0x00FF; // bits 7:0
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Période HPET minimum légale selon la spec : 100 femtosecondes (10 GHz max).
+/// Legal minimum HPET period according to spec: 100 femtoseconds (10 GHz max).
 const HPET_MIN_PERIOD_FEMTOS: u64 = 100;
-/// Période HPET maximum raisonnable : 100 ns = 100_000 femtos (10 MHz min).
+/// Reasonable maximum HPET period: 100 ns = 100_000 femtos (10 MHz min).
 const HPET_MAX_PERIOD_FEMTOS: u64 = 100_000_000;
-/// Minimum delta pour les comparateurs HPET (ticks).
+/// Minimum delta for HPET comparators (ticks).
 const HPET_MIN_DELTA_TICKS: u32 = 100;
-/// Femtosecondes par seconde.
+/// Femtoseconds per second.
 const FEMTOS_PER_SEC: u64 = 1_000_000_000_000_000;
 
-// ── Capacités HPET ───────────────────────────────────────────────────────────
+// ── HPET capabilities ─────────────────────────────────────────────────────────
 
-/// Capacités complètes du HPET détectées au boot.
+/// Full HPET capabilities detected at boot.
 #[derive(Debug, Clone, Copy)]
 pub struct HpetCapabilities {
-    /// `true` si le compteur est 64-bit, `false` si 32-bit.
+    /// `true` if counter is 64-bit, `false` if 32-bit.
     pub counter_64bit: bool,
-    /// Fréquence en Hz (= 10^15 / period_femtos).
+    /// Frequency in Hz (= 10^15 / period_femtos).
     pub freq_hz: u64,
-    /// Période du compteur en femtosecondes (depuis registre CAP_ID bits 63:32).
+    /// Counter period in femtoseconds (from CAP_ID register bits 63:32).
     pub period_femtos: u64,
-    /// Nombre de timers disponibles (0-based dans CAP, affiché +1).
+    /// Number of available timers (0-based in CAP, displayed +1).
     pub num_timers: u8,
-    /// Vendor ID depuis le registre CAP.
+    /// Vendor ID from CAP register.
     pub vendor_id: u16,
     /// Revision ID.
     pub rev_id: u8,
-    /// Base MMIO adresse physique.
+    /// MMIO base physical address.
     pub base_addr: u64,
 }
 
@@ -105,7 +105,7 @@ impl HpetCapabilities {
         }
     }
 
-    /// Vérifie que les capacités sont valides.
+    /// Verifies whether capabilities are valid.
     pub fn is_valid(&self) -> bool {
         self.period_femtos >= HPET_MIN_PERIOD_FEMTOS
             && self.period_femtos <= HPET_MAX_PERIOD_FEMTOS
@@ -113,21 +113,21 @@ impl HpetCapabilities {
     }
 }
 
-// ── Globales HPET ─────────────────────────────────────────────────────────────
+// ── HPET globals ──────────────────────────────────────────────────────────────
 
 static HPET_IS_64BIT: AtomicBool = AtomicBool::new(false);
 static HPET_FREQ_HZ: AtomicU64 = AtomicU64::new(0);
 static HPET_BASE_ADDR: AtomicU64 = AtomicU64::new(0);
-/// Compteur d'overflows 32-bit (incrémenté à chaque rollover détecté).
+/// 32-bit overflow counter (incremented on each detected rollover).
 static HPET_OVF_COUNT: AtomicU64 = AtomicU64::new(0);
-/// Dernière valeur 32-bit observée (pour détection de rollover).
+/// Last observed 32-bit value (for rollover detection).
 static HPET_LAST_32: AtomicU32 = AtomicU32::new(0);
 static HPET_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
-/// Initialise les capacités HPET depuis les registres MMIO.
-/// À appeler une fois depuis `time_init()`, après `acpi::hpet::init()`.
+/// Initializes HPET capabilities from MMIO registers.
+/// To be called once from `time_init()`, after `acpi::hpet::init()`.
 pub fn init_hpet_source() {
     if HPET_INIT_DONE.swap(true, Ordering::Relaxed) {
         return;
@@ -136,11 +136,11 @@ pub fn init_hpet_source() {
     let base = hpet_acpi::hpet_virt_base();
     if base == 0 {
         return;
-    } // HPET non disponible.
+    } // HPET not available.
 
     HPET_BASE_ADDR.store(base, Ordering::Relaxed);
 
-    // Lire CAP_ID pour extraire la période et la largeur du compteur.
+    // Read CAP_ID to extract period and counter width.
     let cap = mmio_read64(base + HPET_REG_CAP_ID);
     let period_femtos = cap >> CAP_CLK_PERIOD_SHIFT;
     let is_64bit = (cap & CAP_COUNT_SIZE_CAP) != 0;
@@ -150,14 +150,14 @@ pub fn init_hpet_source() {
     HPET_IS_64BIT.store(is_64bit, Ordering::Relaxed);
     HPET_FREQ_HZ.store(freq_hz, Ordering::Relaxed);
 
-    // Initialiser LAST_32 avec la valeur actuelle.
+    // Initialize LAST_32 with the current value.
     if !is_64bit {
         let initial = mmio_read64(base + HPET_REG_COUNTER) as u32;
         HPET_LAST_32.store(initial, Ordering::Relaxed);
     }
 }
 
-/// Retourne les capacités HPET en lisant les globales.
+/// Returns HPET capabilities by reading globals.
 pub fn hpet_capabilities() -> HpetCapabilities {
     let base = HPET_BASE_ADDR.load(Ordering::Relaxed);
     if base == 0 {
@@ -182,7 +182,7 @@ pub fn hpet_capabilities() -> HpetCapabilities {
     }
 }
 
-// ── Source HPET ClockSource ───────────────────────────────────────────────────
+// ── HPET ClockSource source ───────────────────────────────────────────────────
 
 pub struct HpetSource;
 
@@ -216,13 +216,13 @@ impl ClockSource for HpetSource {
     }
 }
 
-// ── Lecture compteur ──────────────────────────────────────────────────────────
+// ── Counter reading ───────────────────────────────────────────────────────────
 
-/// Lit le compteur HPET courant.
+/// Reads current HPET counter.
 ///
-/// Pour HPET 32-bit : détecte les overflows et retourne un compteur étendu 64-bit.
-/// Pour HPET 64-bit : lecture directe.
-/// RÈGLE TIME-08 : toujours wrapping_sub pour les deltas.
+/// For 32-bit HPET: detects overflows and returns an extended 64-bit counter.
+/// For 64-bit HPET: direct read.
+/// RULE TIME-08: always wrapping_sub for deltas.
 #[inline]
 pub fn read_counter_extended() -> u64 {
     let base = HPET_BASE_ADDR.load(Ordering::Relaxed);
@@ -231,40 +231,40 @@ pub fn read_counter_extended() -> u64 {
     }
 
     if HPET_IS_64BIT.load(Ordering::Relaxed) {
-        // 64-bit : lecture directe, pas d'overflow possible.
+        // 64-bit: direct read, no overflow possible.
         mmio_read64(base + HPET_REG_COUNTER)
     } else {
-        // 32-bit : détecter rollover.
+        // 32-bit: detect rollover.
         read_32bit_extended(base)
     }
 }
 
-/// Lecture 32-bit avec gestion overflow.
-/// Incrémente HPET_OVF_COUNT à chaque rollover et retourne un compteur 64-bit étendu.
+/// 32-bit read with overflow handling.
+/// Increments HPET_OVF_COUNT on each rollover and returns an extended 64-bit counter.
 fn read_32bit_extended(base: u64) -> u64 {
     let raw = mmio_read64(base + HPET_REG_COUNTER) as u32;
     let prev = HPET_LAST_32.load(Ordering::Relaxed);
 
-    // Rollover détecté : raw < prev (le compteur a wrappé).
+    // Rollover detected: raw < prev (the counter wrapped).
     if raw < prev {
         HPET_OVF_COUNT.fetch_add(1, Ordering::Relaxed);
     }
     HPET_LAST_32.store(raw, Ordering::Relaxed);
 
     let ovf = HPET_OVF_COUNT.load(Ordering::Relaxed);
-    // Reconstituer le compteur 64-bit : (overflows << 32) | raw.
+    // Reconstruct 64-bit counter: (overflows << 32) | raw.
     (ovf << 32) | raw as u64
 }
 
-// ── Primitives exposées ───────────────────────────────────────────────────────
+// ── Exposed primitives ────────────────────────────────────────────────────────
 
-/// Lit le compteur HPET courant (wrapper pour l'API publique).
+/// Reads current HPET counter (wrapper for public API).
 #[inline(always)]
 pub fn read() -> u64 {
     read_counter_extended()
 }
 
-/// Fréquence HPET en Hz.
+/// HPET frequency in Hz.
 #[inline(always)]
 pub fn freq_hz() -> u64 {
     let hz = HPET_FREQ_HZ.load(Ordering::Relaxed);
@@ -275,21 +275,21 @@ pub fn freq_hz() -> u64 {
     }
 }
 
-/// `true` si le HPET est actif et initialisé.
+/// `true` if HPET is active and initialized.
 #[inline(always)]
 pub fn available() -> bool {
     hpet_acpi::hpet_available()
 }
 
-/// Delta de ticks HPET entre `start` et `now`, avec gestion du rollover.
-/// RÈGLE TIME-08 : wrapping_sub obligatoire.
+/// HPET tick delta between `start` and `now`, handling rollover.
+/// RULE TIME-08: wrapping_sub required.
 #[inline(always)]
 pub fn delta(start: u64, now: u64) -> u64 {
     now.wrapping_sub(start)
 }
 
-/// Convertit des ticks HPET en nanosecondes.
-/// Utilise la formule : ns = ticks × 10^6 / period_femtos.
+/// Converts HPET ticks to nanoseconds.
+/// Uses the formula: ns = ticks × 10^6 / period_femtos.
 /// (ticks / freq_hz × 10^9 = ticks × period_femtos / 10^6)
 pub fn ticks_to_ns(ticks: u64) -> u64 {
     let period = {
@@ -308,7 +308,7 @@ pub fn ticks_to_ns(ticks: u64) -> u64 {
     ns as u64
 }
 
-/// Convertit des nanosecondes en ticks HPET.
+/// Converts nanoseconds to HPET ticks.
 pub fn ns_to_ticks(ns: u64) -> u64 {
     let period = {
         let base = HPET_BASE_ADDR.load(Ordering::Relaxed);
@@ -324,8 +324,8 @@ pub fn ns_to_ticks(ns: u64) -> u64 {
     (ns as u128 * 1_000_000 / period as u128) as u64
 }
 
-/// Attend `ns` nanosecondes en busy-waiting sur le compteur HPET.
-/// RÈGLE CAL-CLI-01 : utilisé uniquement lors de la calibration (CLI actif ≤1ms).
+/// Waits `ns` nanoseconds in busy-waiting on the HPET counter.
+/// RULE CAL-CLI-01: only used during calibration (CLI active <= 1ms).
 pub fn hpet_wait_ns(ns: u64) {
     if !available() {
         return;
@@ -337,26 +337,26 @@ pub fn hpet_wait_ns(ns: u64) {
     }
 }
 
-/// Retourne le nombre d'overflows 32-bit détectés depuis le boot.
+/// Returns the number of 32-bit overflows detected since boot.
 pub fn overflow_count() -> u64 {
     HPET_OVF_COUNT.load(Ordering::Relaxed)
 }
 
-/// Vérifie que le minimum delta est satisfait pour un comparateur HPET.
+/// Checks that minimum delta is satisfied for an HPET comparator.
 pub fn check_minimum_delta(current: u64, target: u64) -> bool {
     target.wrapping_sub(current) >= HPET_MIN_DELTA_TICKS as u64
 }
 
 // ── MMIO primitives ───────────────────────────────────────────────────────────
 
-/// Lecture MMIO 64-bit non-cacheable (volatile read).
+/// 64-bit non-cacheable MMIO read (volatile read).
 #[inline(always)]
 fn mmio_read64(addr: u64) -> u64 {
-    // SAFETY: addr est une adresse HPET MMIO valide, Uncacheable.
+    // SAFETY: addr is a valid HPET MMIO address, Uncacheable.
     unsafe { (addr as *const u64).read_volatile() }
 }
 
-/// Écriture MMIO 64-bit non-cacheable (volatile write).
+/// 64-bit non-cacheable MMIO write (volatile write).
 #[inline(always)]
 #[allow(dead_code)]
 fn mmio_write64(addr: u64, val: u64) {

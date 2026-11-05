@@ -1,22 +1,22 @@
-//! # arch/x86_64/smp/percpu.rs — Données per-CPU (GS segment)
+//! # arch/x86_64/smp/percpu.rs — Per-CPU Data (GS Segment)
 //!
-//! Chaque CPU possède une zone de données privée accessible via le registre GS.
-//! Le layout GS est FIXE et partagé entre l'ASM (syscall_entry_asm, exception stubs)
-//! et le code Rust.
+//! Each CPU possesses a private data area accessible via the GS register.
+//! The GS layout is FIXED and shared between ASM (syscall_entry_asm, exception stubs)
+//! and Rust code.
 //!
-//! ## Layout GS (offsets fixes — NE PAS changer sans mettre à jour les stubs ASM)
+//! ## GS Layout (fixed offsets — DO NOT change without updating ASM stubs)
 //! ```
-//! gs:[0x00]  = u64 : kernel_rsp    — pile syscall du thread courant (RSP kernel)
-//! gs:[0x08]  = u64 : user_rsp      — RSP userspace sauvegardé lors d'un syscall
-//! gs:[0x10]  = u64 : cpu_id        — identifiant logique du CPU (0-based)
-//! gs:[0x18]  = u64 : lapic_id      — APIC ID du CPU courant
-//! gs:[0x20]  = u64 : current_tcb   — pointeur TCB du thread courant
-//! gs:[0x28]  = u64 : idle_rsp      — RSP de la pile idle de ce CPU
-//! gs:[0x30]  = u64 : preempt_shadow — miroir du compteur canonique scheduler
-//! gs:[0x38]  = u64 : irq_depth     — profondeur d'imbrication IRQ
-//! gs:[0x40]  = u64 : kpti_kernel_cr3 — CR3 kernel pour l'entrée syscall
-//! gs:[0x48]  = u64 : kpti_user_cr3   — CR3 user pour la sortie syscall
-//! gs:[0x50]  = u64 : syscall_scratch — scratch ASM pendant switch CR3
+//! gs:[0x00]  = u64 : kernel_rsp    — syscall stack of current thread (kernel RSP)
+//! gs:[0x08]  = u64 : user_rsp      — userspace RSP saved during syscall
+//! gs:[0x10]  = u64 : cpu_id        — logical CPU identifier (0-based)
+//! gs:[0x18]  = u64 : lapic_id      — current CPU APIC ID
+//! gs:[0x20]  = u64 : current_tcb   — current thread TCB pointer
+//! gs:[0x28]  = u64 : idle_rsp      — idle stack RSP for this CPU
+//! gs:[0x30]  = u64 : preempt_shadow — shadow mirror of canonical scheduler counter
+//! gs:[0x38]  = u64 : irq_depth     — IRQ nesting depth
+//! gs:[0x40]  = u64 : kpti_kernel_cr3 — kernel CR3 for syscall entry
+//! gs:[0x48]  = u64 : kpti_user_cr3   — user CR3 for syscall exit
+//! gs:[0x50]  = u64 : syscall_scratch — ASM scratch during CR3 switch
 //! ```
 
 use crate::arch::x86_64::cpu::msr;
@@ -25,51 +25,51 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const MAX_CPUS: usize = 256;
 
-// ── Compteur de CPUs en ligne ─────────────────────────────────────────────────
+// ── Online CPU Counter ────────────────────────────────────────────────────────
 
 static ONLINE_CPU_COUNT: AtomicU32 = AtomicU32::new(0);
 
-/// Retourne le nombre de CPUs actuellement initialisés (BSP + APs signalés)
+/// Returns the number of currently initialized CPUs (BSP + reported APs)
 #[inline(always)]
 pub fn cpu_count() -> u32 {
     ONLINE_CPU_COUNT.load(Ordering::Acquire)
 }
 
-// ── Structure PerCpuData ──────────────────────────────────────────────────────
+// ── PerCpuData Structure ──────────────────────────────────────────────────────
 
-/// Données per-CPU — stockées dans la section .percpu ou dans un tableau statique
+/// Per-CPU data — stored in .percpu section or in a static table
 ///
-/// Alignée sur 64 octets pour éviter le false-sharing entre CPUs.
+/// Aligned to 64 bytes to prevent false sharing between CPUs.
 #[repr(C, align(64))]
 pub struct PerCpuData {
-    // Champs accédés depuis l'ASM — offsets FIXES (voir module doc)
+    // Fields accessed from ASM — FIXED offsets (see module doc)
     pub kernel_rsp: u64,      // 0x00
     pub user_rsp: u64,        // 0x08
     pub cpu_id: u64,          // 0x10
     pub lapic_id: u64,        // 0x18
-    pub current_tcb: u64,     // 0x20 (pointeur opaque, cast vers TCB extern)
+    pub current_tcb: u64,     // 0x20 (opaque pointer, cast to extern TCB)
     pub idle_rsp: u64,        // 0x28
-    pub preempt_shadow: u64,  // 0x30 miroir du compteur canonique scheduler
+    pub preempt_shadow: u64,  // 0x30 mirror of canonical scheduler counter
     pub irq_depth: u64,       // 0x38
     pub kpti_kernel_cr3: u64, // 0x40
     pub kpti_user_cr3: u64,   // 0x48
     pub syscall_scratch: u64, // 0x50
 
-    // Données Rust (offsets non contraints par l'ASM)
+    // Rust data (offsets unconstrained by ASM)
     pub online: bool,
     pub bsp: bool,
     pub nmi_in_progress: bool,
 
-    /// Compteur de context switches sur ce CPU
+    /// Context switch counter on this CPU
     pub ctx_switch_count: u64,
-    /// Compteurs IRQ par vecteur (256 entrées, partagé avec idt::irq_counter)
+    /// IRQ counters per vector (256 entries, shared with idt::irq_counter)
     pub irq_counts: [u64; 256],
-    /// Horodatage TSC du dernier context switch
+    /// TSC timestamp of last context switch
     pub last_switch_tsc: u64,
-    /// Horodatage TSC du dernier tick timer
+    /// TSC timestamp of last timer tick
     pub last_tick_tsc: u64,
 
-    _pad: [u8; 0], // garantit l'alignement 64
+    _pad: [u8; 0], // guarantees 64-byte alignment
 }
 
 const _: () = assert!(
@@ -112,22 +112,22 @@ impl PerCpuData {
     }
 }
 
-// ── Tableau global des données per-CPU ───────────────────────────────────────
+// ── Global Per-CPU Data Table ─────────────────────────────────────────────────
 
-/// Tableau statique — un PerCpuData par CPU possible
+/// Static table — one PerCpuData per potential CPU
 ///
-/// Initialisé à zéro au boot, puis configuré par `init_percpu_for_bsp/ap`.
-/// Place dans `.data.percpu` pour rester hors de `.rodata`: ces slots sont
-/// mutables par construction et participent au chemin syscall/IRQ.
+/// Zero-initialized at boot, then configured by `init_percpu_for_bsp/ap`.
+/// Placed in `.data.percpu` to remain outside `.rodata`: these slots are
+/// mutable by design and take part in the syscall/IRQ path.
 #[repr(align(64))]
 struct PerCpuTable(UnsafeCell<[PerCpuData; MAX_CPUS]>);
 
-// SAFETY: les acces mutables sont disciplines par CPU via `per_cpu_mut()`.
+// SAFETY: mutable accesses are disciplined per-CPU via `per_cpu_mut()`.
 unsafe impl Sync for PerCpuTable {}
 
 #[link_section = ".data.percpu"]
 static PER_CPU_TABLE: PerCpuTable = PerCpuTable(
-    // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valide pour #[repr(C,align(64))] zeros-init.
+    // SAFETY: [0u8; size_of::<[PerCpuData; MAX_CPUS]>] valid for #[repr(C,align(64))] zeros-init.
     UnsafeCell::new(unsafe {
         core::mem::transmute::<[u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()], [PerCpuData; MAX_CPUS]>(
             [0u8; core::mem::size_of::<[PerCpuData; MAX_CPUS]>()],
@@ -151,32 +151,32 @@ fn per_cpu_ptr(cpu_id: usize) -> *mut PerCpuData {
     }
 }
 
-// ── Accès par CPU ID ──────────────────────────────────────────────────────────
+// ── Access by CPU ID ──────────────────────────────────────────────────────────
 
-/// Retourne une référence immuable aux données du CPU `cpu_id`
+/// Returns an immutable reference to data for CPU `cpu_id`
 ///
 /// # Panics
-/// Si `cpu_id >= MAX_CPUS`.
+/// If `cpu_id >= MAX_CPUS`.
 #[inline]
 pub fn per_cpu(cpu_id: usize) -> &'static PerCpuData {
-    // SAFETY: lecture partagee d'un slot per-CPU. Les mutations de ce slot sont
-    // reservees au CPU proprietaire ou aux phases d'initialisation exclusives.
+    // SAFETY: shared read of a per-CPU slot. Mutations of this slot are
+    // reserved for the owner CPU or exclusive initialization phases.
     unsafe { &*per_cpu_ptr(cpu_id) }
 }
 
-/// Retourne une référence mutable aux données du CPU `cpu_id`
+/// Returns a mutable reference to data for CPU `cpu_id`
 ///
 /// # Safety
-/// L'appelant doit garantir qu'aucun autre contexte n'accède simultanément
-/// aux données de ce CPU (invariant respecté car chaque CPU accède à ses propres données).
+/// Caller must guarantee that no other context simultaneously accesses
+/// this CPU's data (invariant upheld as each CPU accesses its own data).
 #[inline]
 pub unsafe fn per_cpu_mut(cpu_id: usize) -> &'static mut PerCpuData {
-    // SAFETY: PER_CPU_TABLE est un tableau statique mutable via UnsafeCell ;
-    // chaque CPU accede exclusivement a sa propre entree.
+    // SAFETY: PER_CPU_TABLE is a static table mutable via UnsafeCell;
+    // each CPU exclusively accesses its own entry.
     &mut *per_cpu_ptr(cpu_id)
 }
 
-/// Retourne l'ID du CPU courant en lisant GS:[0x10]
+/// Returns current CPU ID by reading GS:[0x10]
 #[inline]
 pub fn current_cpu_id() -> u32 {
     #[cfg(test)]
@@ -186,7 +186,7 @@ pub fn current_cpu_id() -> u32 {
     #[cfg(not(test))]
     {
         let id: u64;
-        // SAFETY: GS:[0x10] est initialisé lors de l'init percpu de ce CPU
+        // SAFETY: GS:[0x10] is initialized during percpu init of this CPU
         unsafe {
             core::arch::asm!("mov {}, gs:[0x10]", out(reg) id, options(nostack, nomem));
         }
@@ -209,8 +209,8 @@ pub fn is_kernel_percpu_gs_base(gs_base: u64) -> bool {
 
 #[inline(always)]
 pub fn try_current_cpu_id() -> Option<u32> {
-    // SAFETY: lecture de MSR privilégiée en Ring 0. On vérifie la base GS avant
-    // tout accès `gs:[...]` afin d'éviter une faute récursive en handler.
+    // SAFETY: privileged MSR read in Ring 0. We verify GS base before
+    // any `gs:[...]` access to avoid a recursive fault in handler.
     let gs_base = unsafe { msr::read_msr(msr::MSR_GS_BASE) };
     if !is_kernel_percpu_gs_base(gs_base) {
         return None;
@@ -219,25 +219,25 @@ pub fn try_current_cpu_id() -> Option<u32> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// C ABI EXPORT — scheduler/core/preempt.rs interface (RÈGLE SCHED-01 DOC3)
+// C ABI EXPORT — scheduler/core/preempt.rs interface (RULE SCHED-01 DOC3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne l'ID logique du CPU courant (C ABI export).
+/// Returns logical ID of current CPU (C ABI export).
 ///
-/// Appelé depuis `scheduler::core::preempt` pour accéder au compteur per-CPU.
-/// Lit GS:[0x10] sans verrou (atomique par nature per-CPU).
+/// Called from `scheduler::core::preempt` to access per-CPU counter.
+/// Reads GS:[0x10] lock-free (inherently atomic per-CPU).
 ///
 /// # Safety
-/// GS doit être initialisé sur ce CPU (garanti après `init_percpu_for_bsp/ap`).
+/// GS must be initialized on this CPU (guaranteed after `init_percpu_for_bsp/ap`).
 #[no_mangle]
 pub unsafe extern "C" fn arch_current_cpu() -> u32 {
     current_cpu_id()
 }
 
-/// Publie le miroir du compteur de préemption canonique dans GS:[0x30].
+/// Publishes canonical preemption counter mirror into GS:[0x30].
 ///
-/// Ce slot existe uniquement pour le code ASM bas niveau; la source de vérité
-/// reste `scheduler::core::preempt::PREEMPT_COUNT`.
+/// This slot exists strictly for low-level ASM code; the source of truth
+/// remains `scheduler::core::preempt::PREEMPT_COUNT`.
 #[no_mangle]
 pub extern "C" fn arch_set_preempt_count_shadow(depth: i32) {
     #[cfg(test)]
@@ -247,7 +247,7 @@ pub extern "C" fn arch_set_preempt_count_shadow(depth: i32) {
     #[cfg(not(test))]
     {
         let value = depth.max(0) as u64;
-        // SAFETY: GS pointe sur le slot per-CPU courant; offset 0x30 = preempt_shadow.
+        // SAFETY: GS points to current per-CPU slot; offset 0x30 = preempt_shadow.
         unsafe {
             core::arch::asm!(
                 "mov gs:[0x30], {}",
@@ -258,19 +258,19 @@ pub extern "C" fn arch_set_preempt_count_shadow(depth: i32) {
     }
 }
 
-/// Retourne une référence aux données per-CPU du CPU courant
+/// Returns a reference to per-CPU data of current CPU
 ///
 /// # Safety
-/// Doit être appelé depuis le contexte de ce CPU uniquement.
+/// Must be called from the context of this CPU only.
 #[inline]
 pub fn current_per_cpu() -> &'static PerCpuData {
     per_cpu(current_cpu_id() as usize)
 }
 
-/// Écrit le pointeur TCB courant dans `gs:[0x20]`.
+/// Writes current TCB pointer into `gs:[0x20]`.
 ///
-/// Appelé par le scheduler juste après un context switch, afin que le
-/// chemin syscall/exception retrouve toujours le bon thread courant.
+/// Called by scheduler immediately after a context switch, ensuring
+/// syscall/exception path always finds the proper current thread.
 #[inline(always)]
 pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBlock) {
     #[cfg(test)]
@@ -280,8 +280,8 @@ pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBloc
     #[cfg(not(test))]
     {
         let tcb_ptr = tcb as u64;
-        // SAFETY: GS pointe sur une zone per-CPU valide initialisée au boot.
-        // L'offset 0x20 correspond au champ `current_tcb` du layout PerCpuData.
+        // SAFETY: GS points to a valid per-CPU area initialized at boot.
+        // Offset 0x20 corresponds to `current_tcb` field of PerCpuData layout.
         unsafe {
             core::arch::asm!(
                 "mov gs:[0x20], {}",
@@ -292,12 +292,12 @@ pub fn set_current_tcb(tcb: *mut crate::scheduler::core::task::ThreadControlBloc
     }
 }
 
-/// Lit la valeur courante du slot `gs:[0x20]` (`current_tcb`).
+/// Reads current value of slot `gs:[0x20]` (`current_tcb`).
 ///
-/// Utile pour instrumentation/debug et tests P2-7.
+/// Useful for instrumentation/debug and P2-7 tests.
 ///
 /// # Safety
-/// GS doit déjà pointer sur une zone per-CPU valide.
+/// GS must already point to a valid per-CPU area.
 #[inline(always)]
 pub unsafe fn read_current_tcb() -> u64 {
     #[cfg(test)]
@@ -316,15 +316,15 @@ pub unsafe fn read_current_tcb() -> u64 {
     }
 }
 
-/// Lit `current_tcb` uniquement si GS pointe sur une zone per-CPU kernel valide.
+/// Reads `current_tcb` only if GS points to a valid kernel per-CPU area.
 ///
-/// Les handlers d'exception peuvent être appelés dans des fenêtres sensibles
-/// (retour syscall/KPTI, faute noyau imbriquée). Dans ces chemins, lire
-/// directement `gs:[0x20]` peut transformer la faute initiale en cascade sur
-/// `CR2=0x20`. Cette API rend le contrat explicite.
+/// Exception handlers can be invoked in sensitive windows
+/// (syscall/KPTI return, nested kernel fault). In those paths, reading
+/// `gs:[0x20]` directly could cascade the initial fault into
+/// `CR2=0x20`. This API makes the contract explicit.
 ///
 /// # Safety
-/// Exécutable uniquement depuis Ring 0 en contexte où RDMSR est autorisé.
+/// Executable strictly from Ring 0 in contexts where RDMSR is permitted.
 #[inline(always)]
 pub unsafe fn try_read_current_tcb() -> Option<u64> {
     let gs_base = unsafe { msr::read_msr(msr::MSR_GS_BASE) };
@@ -334,14 +334,14 @@ pub unsafe fn try_read_current_tcb() -> Option<u64> {
     Some(unsafe { read_current_tcb() })
 }
 
-/// Met à jour le slot `gs:[0x00]` avec la pile kernel du thread entrant.
+/// Updates slot `gs:[0x00]` with the incoming thread's kernel stack.
 ///
-/// INVARIANT P1-5 : appelé dans `context_switch()` après chaque sélection
-/// du thread suivant, avant reprise d'exécution userspace/syscall.
+/// INVARIANT P1-5: called in `context_switch()` after each selection
+/// of next thread, before resuming userspace/syscall execution.
 ///
 /// # Safety
-/// `kstack_top` doit être une adresse de pile kernel valide pour le thread
-/// courant (alignement ABI, mapping kernel présent).
+/// `kstack_top` must be a valid kernel stack address for the current
+/// thread (ABI alignment, kernel mapping present).
 #[inline(always)]
 pub unsafe fn set_kernel_rsp(kstack_top: u64) {
     #[cfg(test)]
@@ -358,12 +358,12 @@ pub unsafe fn set_kernel_rsp(kstack_top: u64) {
     }
 }
 
-/// Lit la valeur courante du slot `gs:[0x00]`.
+/// Reads current value of slot `gs:[0x00]`.
 ///
-/// Utile pour instrumentation/debug et préparation des tests P2-7.
+/// Useful for instrumentation/debug and P2-7 test preparation.
 ///
 /// # Safety
-/// GS doit déjà pointer sur une zone per-CPU valide.
+/// GS must already point to a valid per-CPU area.
 #[inline(always)]
 pub unsafe fn read_kernel_rsp() -> u64 {
     #[cfg(test)]
@@ -378,7 +378,7 @@ pub unsafe fn read_kernel_rsp() -> u64 {
     }
 }
 
-/// Publie les CR3 utilisés par le stub syscall KPTI.
+/// Publishes CR3 values used by KPTI syscall stub.
 #[inline(always)]
 pub fn set_kpti_cr3_slots(kernel_cr3: u64, user_cr3: u64) {
     #[cfg(test)]
@@ -387,8 +387,8 @@ pub fn set_kpti_cr3_slots(kernel_cr3: u64, user_cr3: u64) {
     }
     #[cfg(not(test))]
     {
-        // SAFETY: GS pointe sur une zone per-CPU valide. Les offsets 0x40/0x48
-        // sont lus directement par syscall_entry_asm avant/après le handler Rust.
+        // SAFETY: GS points to a valid per-CPU area. Offsets 0x40/0x48
+        // are read directly by syscall_entry_asm before/after Rust handler.
         unsafe {
             core::arch::asm!(
                 "mov gs:[0x40], {kernel}",
@@ -401,32 +401,32 @@ pub fn set_kpti_cr3_slots(kernel_cr3: u64, user_cr3: u64) {
     }
 }
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
-/// Initialise les données per-CPU pour le BSP (CPU 0)
+/// Initializes per-CPU data for BSP (CPU 0)
 ///
-/// Appelé depuis `boot::early_init` avant tout autre usage de GS.
+/// Called from `boot::early_init` before any other use of GS.
 pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
-    // SAFETY: accès exclusif au CPU 0 lors du boot (APs pas encore démarrés)
+    // SAFETY: exclusive access to CPU 0 during boot (APs not yet started)
     let data = unsafe { per_cpu_mut(0) };
     data.cpu_id = 0;
     data.lapic_id = lapic_id as u64;
-    // NOTE P1-5: initialisation du thread de boot uniquement.
-    // Après le premier context switch, `set_kernel_rsp()` maintient
-    // l'invariant gs:[0x00] == pile kernel du thread courant.
+    // NOTE P1-5: boot thread initialization only.
+    // After first context switch, `set_kernel_rsp()` maintains
+    // invariant gs:[0x00] == kernel stack of current thread.
     data.kernel_rsp = kernel_stack_top;
     data.online = true;
     data.bsp = true;
 
-    // Pointer GS_BASE vers l'alias physmap de cette structure.
+    // Point GS_BASE to physmap alias of this structure.
     let addr = data as *const PerCpuData as u64;
-    // SAFETY: MSR_GS_BASE write depuis Ring 0
+    // SAFETY: MSR_GS_BASE write from Ring 0
     unsafe {
         msr::write_msr(msr::MSR_GS_BASE, addr);
     }
-    // MSR_KERNEL_GS_BASE contient le GS userspace "shadow".
-    // Au boot il n'existe pas encore de TLS userspace valide, donc la valeur
-    // initiale doit rester nulle et surtout pas pointer vers la zone per-CPU.
+    // MSR_KERNEL_GS_BASE contains userspace "shadow" GS.
+    // At boot no valid userspace TLS exists yet, so initial value
+    // must remain zero and specifically not point to per-CPU area.
     // SAFETY: MSR_KERNEL_GS_BASE write
     unsafe {
         msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
@@ -434,25 +434,25 @@ pub fn init_percpu_for_bsp(kernel_stack_top: u64, lapic_id: u32) {
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
 
-/// Initialise les données per-CPU pour un AP
+/// Initializes per-CPU data for an AP
 ///
-/// Appelé depuis le trampoline AP, avant l'activation du scheduler.
+/// Called from AP trampoline, before scheduler activation.
 pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
     if cpu_id as usize >= MAX_CPUS {
         return;
     }
-    // SAFETY: cpu_id unique, AP initialise ses propres données
+    // SAFETY: unique cpu_id, AP initializes its own data
     let data = unsafe { per_cpu_mut(cpu_id as usize) };
     data.cpu_id = cpu_id as u64;
     data.lapic_id = lapic_id as u64;
-    // NOTE P1-5: valeur initiale pour le thread AP d'amorçage.
-    // Le scheduler rafraîchit ensuite ce slot via `set_kernel_rsp()`.
+    // NOTE P1-5: initial value for bootstrap AP thread.
+    // Scheduler refreshes this slot subsequently via `set_kernel_rsp()`.
     data.kernel_rsp = kernel_stack_top;
     data.online = true;
     data.bsp = false;
 
     let addr = data as *const PerCpuData as u64;
-    // SAFETY: MSR writes depuis Ring 0 sur l'AP courant
+    // SAFETY: MSR writes from Ring 0 on current AP
     unsafe {
         msr::write_msr(msr::MSR_GS_BASE, addr);
         msr::write_msr(msr::MSR_KERNEL_GS_BASE, 0);
@@ -460,45 +460,45 @@ pub fn init_percpu_for_ap(cpu_id: u32, kernel_stack_top: u64, lapic_id: u32) {
     ONLINE_CPU_COUNT.fetch_add(1, Ordering::Release);
 }
 
-// ── Préemption ────────────────────────────────────────────────────────────────
+// ── Preemption ────────────────────────────────────────────────────────────────
 
-/// Désactive la préemption (incrémente preempt_count)
+/// Disables preemption (increments preempt_count)
 #[inline]
 #[deprecated(note = "utiliser scheduler::core::preempt::PreemptGuard")]
 pub fn preempt_disable() {
     crate::scheduler::core::preempt::preempt_disable_for_arch_compat();
 }
 
-/// Active la préemption (décrémente preempt_count)
+/// Enables preemption (decrements preempt_count)
 #[inline]
 #[deprecated(note = "utiliser le Drop de scheduler::core::preempt::PreemptGuard")]
 pub fn preempt_enable() {
     crate::scheduler::core::preempt::preempt_enable_for_arch_compat();
 }
 
-/// Retourne `true` si la préemption est désactivée sur le CPU courant
+/// Returns `true` if preemption is disabled on current CPU
 #[inline]
 #[deprecated(note = "utiliser scheduler::core::preempt::is_preempt_disabled")]
 pub fn preempt_is_disabled() -> bool {
     preempt_is_disabled_canonical()
 }
 
-/// Lecture canonique de l'état de préemption.
+/// Canonical read of preemption state.
 #[inline]
 pub fn preempt_is_disabled_canonical() -> bool {
     crate::scheduler::core::preempt::is_preempt_disabled()
 }
 
-// ── Préparation P2-7 : test gabarit kernel_rsp ──────────────────────────────
+// ── P2-7 Preparation: kernel_rsp template test ───────────────────────────────
 
 #[cfg(test)]
 mod p2_7_gs_tests {
     use super::*;
 
-    /// P2-7 / Test 1 — gs:[0x20] current_tcb : écriture puis relecture.
+    /// P2-7 / Test 1 — gs:[0x20] current_tcb: write then read back.
     ///
-    /// Nécessite Ring 0 + GS per-CPU initialisé → ignoré sur host.
-    /// Exécuter sous QEMU via le harness kernel.
+    /// Requires Ring 0 + initialized per-CPU GS → ignored on host.
+    /// Run under QEMU via kernel harness.
     #[test]
     #[cfg_attr(not(target_os = "none"), ignore = "P2-7: Ring 0 + GS requis")]
     fn current_tcb_write_read_roundtrip() {
@@ -522,9 +522,9 @@ mod p2_7_gs_tests {
         }
     }
 
-    /// P2-7 / Test 2 — gs:[0x00] kernel_rsp : invariant mis à jour au switch.
+    /// P2-7 / Test 2 — gs:[0x00] kernel_rsp: invariant updated upon switch.
     ///
-    /// Nécessite Ring 0 + GS per-CPU initialisé → ignoré sur host.
+    /// Requires Ring 0 + initialized per-CPU GS → ignored on host.
     #[test]
     #[cfg_attr(not(target_os = "none"), ignore = "P2-7: Ring 0 + GS requis")]
     fn kernel_rsp_updated_on_switch() {
@@ -547,7 +547,7 @@ mod p2_7_gs_tests {
                 "gs:[0x00] doit changer après switch vers thread B"
             );
 
-            // Vérifie que les deux slots sont indépendants
+            // Verify that both slots are independent
             set_current_tcb(fake_tcb as *mut crate::scheduler::core::task::ThreadControlBlock);
             assert_ne!(
                 read_kernel_rsp(),

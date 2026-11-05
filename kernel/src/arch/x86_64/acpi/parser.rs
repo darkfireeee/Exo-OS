@@ -1,20 +1,20 @@
-//! # arch/x86_64/acpi/parser.rs — Parseur RSDP / XSDT / RSDT
+//! # arch/x86_64/acpi/parser.rs — RSDP / XSDT / RSDT Parser
 //!
-//! Localise et parse les tables ACPI racines pour découvrir
-//! les tables filles (MADT, HPET, FADT, SRAT, etc.).
+//! Locates and parses root ACPI tables to discover
+//! child tables (MADT, HPET, FADT, SRAT, etc.).
 //!
-//! ## Séquence de découverte
-//! 1. Localiser le RSDP dans le segment EBDA (0xE0000–0xFFFFF)
-//!    ou passé par le bootloader (Multiboot2 / UEFI)
-//! 2. Lire la version : ACPI 1.0 → RSDT (32 bits), ACPI 2.0+ → XSDT (64 bits)
-//! 3. Itérer les entrées pour localiser chaque table par signature 4-octet
+//! ## Discovery Sequence
+//! 1. Locate RSDP in EBDA segment (0xE0000–0xFFFFF)
+//!    or passed by bootloader (Multiboot2 / UEFI)
+//! 2. Read version: ACPI 1.0 → RSDT (32-bit), ACPI 2.0+ → XSDT (64-bit)
+//! 3. Iterate entries to locate each table by 4-byte signature
 
 use core::ptr::{read_unaligned, read_volatile};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::core::{layout, phys_to_virt, PhysAddr};
 
-// ── Structures ACPI ───────────────────────────────────────────────────────────
+// ── ACPI Structures ───────────────────────────────────────────────────────────
 
 /// Root System Description Pointer (RSDP) — ACPI 2.0+
 #[derive(Debug, Clone, Copy)]
@@ -24,15 +24,15 @@ pub struct Rsdp {
     pub checksum: u8,
     pub oem_id: [u8; 6],
     pub revision: u8,   // 0 = ACPI 1.0, 2 = ACPI 2.0+
-    pub rsdt_addr: u32, // Adresse physique RSDT (32 bits)
-    // Champs ACPI 2.0+ (revision >= 2)
+    pub rsdt_addr: u32, // Physical address of RSDT (32-bit)
+    // ACPI 2.0+ fields (revision >= 2)
     pub length: u32,
-    pub xsdt_addr: u64, // Adresse physique XSDT (64 bits)
+    pub xsdt_addr: u64, // Physical address of XSDT (64-bit)
     pub ext_checksum: u8,
     pub _reserved: [u8; 3],
 }
 
-/// System Description Table Header (commun à toutes les tables)
+/// System Description Table Header (common to all tables)
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct SdtHeader {
@@ -52,16 +52,16 @@ impl SdtHeader {
         core::str::from_utf8(&self.signature).unwrap_or("????")
     }
 
-    /// Valide le checksum : somme de tous les octets = 0 mod 256
+    /// Validates checksum: sum of all bytes = 0 mod 256
     pub fn valid_checksum(&self) -> bool {
         let len = self.length as usize;
-        // SAFETY: structure en mémoire ACPI, longueur validée par le parseur ACPI avant tout appel.
+        // SAFETY: structure in ACPI memory, length validated by ACPI parser before any call.
         let bytes = unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, len) };
         bytes.iter().fold(0u8, |acc, b| acc.wrapping_add(*b)) == 0
     }
 }
 
-// ── Informations globales ACPI ────────────────────────────────────────────────
+// ── Global ACPI Information ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct AcpiInfo {
@@ -91,7 +91,7 @@ impl AcpiInfo {
 }
 
 static ACPI_INFO_ADDR: AtomicU64 = AtomicU64::new(0);
-// Stockage statique de AcpiInfo (initialisé une seule fois au boot)
+// Static storage for AcpiInfo (initialized once at boot)
 struct AcpiInfoCell(core::cell::UnsafeCell<AcpiInfo>);
 unsafe impl Sync for AcpiInfoCell {}
 
@@ -128,37 +128,37 @@ pub(crate) fn acpi_read_unaligned<T: Copy>(phys: u64) -> Option<T> {
     Some(unsafe { read_unaligned(ptr) })
 }
 
-/// Retourne l'AcpiInfo globale (valide après `init_acpi()`)
+/// Returns global AcpiInfo (valid after `init_acpi()`)
 pub fn acpi_info() -> &'static AcpiInfo {
-    // SAFETY: initialisé avant toute utilisation des structures ACPI
+    // SAFETY: initialized before any use of ACPI structures
     unsafe { &*ACPI_INFO.0.get() }
 }
 
-/// Retourne `true` si ACPI a été initialisé avec succès
+/// Returns `true` if ACPI was successfully initialized
 ///
-/// Vérifié via ACPI_INFO_ADDR != 0 (mis à jour par `init_acpi_from_rsdp()`).
+/// Checked via ACPI_INFO_ADDR != 0 (updated by `init_acpi_from_rsdp()`).
 #[inline(always)]
 pub fn acpi_available() -> bool {
     ACPI_INFO_ADDR.load(Ordering::Relaxed) != 0
 }
 
-// ── Localisation RSDP ─────────────────────────────────────────────────────────
+// ── RSDP Location ─────────────────────────────────────────────────────────────
 
 const RSDP_SIGNATURE: &[u8; 8] = b"RSD PTR ";
 
-/// Recherche le RSDP dans une plage mémoire (scan octet par octet, aligné 16)
+/// Searches for RSDP within a memory range (byte-by-byte scan, 16-byte aligned)
 fn find_rsdp_in_range(start: u64, end: u64) -> Option<u64> {
-    let mut addr = start & !15; // aligné 16
+    let mut addr = start & !15; // 16-byte aligned
     while addr + 20 <= end {
         let ptr = addr as *const [u8; 8];
-        // SAFETY: adresse dans Low Memory (EBDA / ROM BIOS) — mapped identity
+        // SAFETY: address in Low Memory (EBDA / ROM BIOS) — identity mapped
         let sig = unsafe { read_volatile(ptr) };
         if &sig == RSDP_SIGNATURE {
-            // SAFETY: addr est aligné 16 B et dans Low Memory identity-mapped ;
-            // on vient de vérifier la signature, la structure Rsdp commence ici.
+            // SAFETY: addr is 16-byte aligned and in identity-mapped Low Memory;
+            // signature was just verified, the Rsdp structure begins here.
             let _rsdp = unsafe { &*(addr as *const Rsdp) };
-            // Valider le checksum des 20 premiers octets
-            // SAFETY: même invariant — 20 B dès `addr` sont lisibles (addr+20 <= end vérifié).
+            // Validate checksum of first 20 bytes
+            // SAFETY: same invariant — 20 B starting at `addr` are readable (addr+20 <= end checked).
             let bytes20 = unsafe { core::slice::from_raw_parts(addr as *const u8, 20) };
             let sum = bytes20.iter().fold(0u8, |a, b| a.wrapping_add(*b));
             if sum == 0 {
@@ -170,10 +170,10 @@ fn find_rsdp_in_range(start: u64, end: u64) -> Option<u64> {
     None
 }
 
-/// Localise le RSDP dans l'EBDA et la ROM zone BIOS
+/// Locates RSDP in EBDA and BIOS ROM area
 pub fn find_rsdp() -> Option<u64> {
-    // 1. Chercher dans l'EBDA (Extended BIOS Data Area)
-    // SAFETY: accès Low Memory — identity-mapped par le boot
+    // 1. Search in EBDA (Extended BIOS Data Area)
+    // SAFETY: Low Memory access — identity-mapped by boot
     let ebda_segment = unsafe { read_volatile(0x40E as *const u16) } as u64;
     let ebda_base = ebda_segment << 4;
     if (0x80000..0xA0000).contains(&ebda_base) {
@@ -181,21 +181,21 @@ pub fn find_rsdp() -> Option<u64> {
             return Some(a);
         }
     }
-    // 2. Zone ROM BIOS 0xE0000–0xFFFFF
+    // 2. BIOS ROM area 0xE0000–0xFFFFF
     find_rsdp_in_range(0xE0000, 0x100000)
 }
 
-// ── Initialisation principale ─────────────────────────────────────────────────
+// ── Main Initialization ───────────────────────────────────────────────────────
 
-/// Initialise ACPI depuis une adresse RSDP connue (passée par le bootloader)
+/// Initializes ACPI from a known RSDP address (passed by bootloader)
 ///
-/// Appelé depuis `boot::early_init` avec l'adresse RSDP fournie par Multiboot2 / UEFI.
+/// Called from `boot::early_init` with the RSDP address provided by Multiboot2 / UEFI.
 pub fn init_acpi_from_rsdp(rsdp_phys: u64) {
     if !acpi_phys_accessible(rsdp_phys, 20) {
         return;
     }
-    // SAFETY: ACPI_INFO est une UnsafeCell statique, initialisée une seule fois lors du boot
-    // (pas de reentrée possible : appelé un seul fois avant tout SMP).
+    // SAFETY: ACPI_INFO is a static UnsafeCell, initialized once during boot
+    // (no reentrancy possible: called once before any SMP).
     let info = unsafe { &mut *ACPI_INFO.0.get() };
     info.rsdp_phys = rsdp_phys;
 
@@ -222,14 +222,14 @@ pub fn init_acpi_from_rsdp(rsdp_phys: u64) {
     ACPI_INFO_ADDR.store(rsdp_phys, Ordering::Release);
 }
 
-/// Initialise ACPI en auto-détection (scan EBDA/ROM si pas de pointeur bootloader)
+/// Initializes ACPI via auto-detection (scan EBDA/ROM if no bootloader pointer)
 pub fn init_acpi() -> Option<AcpiInfo> {
     let rsdp_addr = find_rsdp()?;
     init_acpi_from_rsdp(rsdp_addr);
     Some(*acpi_info())
 }
 
-// ── Parseur XSDT ─────────────────────────────────────────────────────────────
+// ── XSDT Parser ───────────────────────────────────────────────────────────────
 
 fn parse_xsdt(xsdt_phys: u64, info: &mut AcpiInfo) {
     let Some(header) = acpi_read_unaligned::<SdtHeader>(xsdt_phys) else {
@@ -270,7 +270,7 @@ fn parse_rsdt(rsdt_phys: u64, info: &mut AcpiInfo) {
     }
 
     let header_size = core::mem::size_of::<SdtHeader>();
-    // Guard contre underflow (debug mode) et tables corrompues
+    // Guard against underflow (debug mode) and corrupted tables
     if (length as usize) <= header_size || length > 4096 {
         return;
     }

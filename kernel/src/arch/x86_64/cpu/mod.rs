@@ -1,13 +1,13 @@
-//! # arch/x86_64/cpu — Sous-module CPU
+//! # arch/x86_64/cpu — CPU Submodule
 //!
-//! Ce module regroupe les primitives matérielles CPU x86_64.
-//! - `features` : détection CPUID, feature flags
-//! - `msr`      : lecture/écriture MSR (Model-Specific Registers)
-//! - `fpu`      : instructions ASM brutes XSAVE/XRSTOR/FXSAVE
+//! This module groups x86_64 CPU hardware primitives.
+//! - `features` : CPUID detection, feature flags
+//! - `msr`      : reading/writing MSRs (Model-Specific Registers)
+//! - `fpu`      : raw ASM instructions XSAVE/XRSTOR/FXSAVE
 //! - `tsc`      : TSC calibration, rdtsc wrapper
-//! - `topology` : topologie CPU (cores, HT, NUMA)
+//! - `topology` : CPU topology (cores, HT, NUMA)
 //!
-//! ⚠️ Ce module NE contient PAS la logique d'état FPU (→ scheduler/fpu/)
+//! ⚠️ This module does NOT contain FPU state logic (→ scheduler/fpu/)
 
 pub mod features;
 pub mod fpu;

@@ -1,22 +1,22 @@
 // kernel/src/arch/x86_64/boot/memory_map.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// PONT CARTE MÉMOIRE BOOT ↔ MEMORY/ — x86_64
+// BOOT MEMORY MAP BRIDGE ↔ MEMORY/ — x86_64
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module traduit la mémoire physique décrite par le bootloader (Multiboot2
-// ou UEFI) en appels vers le sous-système memory/ pour démarrer les allocateurs.
+// This module translates the physical memory described by the bootloader (Multiboot2
+// or UEFI) into calls to the memory/ subsystem to initialize allocators.
 //
-// ## Séquence d'initialisation (règle MEM-02, DOC2)
+// ## Initialization Sequence (Rule MEM-02, DOC2)
 //
-//   1. EmergencyPool::init()           — PREMIER, avant tout allocateur
-//   2. init_memory_subsystem_multiboot2() ou init_memory_subsystem_uefi()
+//   1. EmergencyPool::init()           — FIRST, before any allocator
+//   2. init_memory_subsystem_multiboot2() or init_memory_subsystem_uefi()
 //      a. init_phase1_bitmap(total_phys_start, total_phys_end)
-//      b. Pour chaque région `Usable` de la E820 :
+//      b. For each `Usable` region in E820:
 //         init_phase2_free_region(start, end)
-//   3. init_phase3_slab_slub()         — après physmap
-//   4. init_phase4_numa(nodes_mask)    — après topologie ACPI
-//   5. KernelAddressSpace::init()      — PML4 kernel
+//   3. init_phase3_slab_slub()         — after physmap
+//   4. init_phase4_numa(nodes_mask)    — after ACPI topology
+//   5. KernelAddressSpace::init()      — kernel PML4
 //   6. memory_iface::init_memory_integration() — IPI TLB sender
 
 use crate::arch::x86_64::boot::multiboot2::{MmapEntry, Multiboot2Info, MMAP_AVAILABLE};
@@ -40,16 +40,16 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BITMAP STATIQUE POUR LE BUDDY ALLOCATOR (zone DMA32 — <4 GiB)
+// STATIC BITMAP FOR BUDDY ALLOCATOR (DMA32 zone — <4 GiB)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Couvre jusqu'à 4 GiB de RAM :
-//   - Pages max : 4 GiB / 4 KiB = 1 048 576 pages
-//   - Mots u64  : ceil(1 048 576 / 64) = 16 384 → 128 KiB en .bss
+// Covers up to 4 GiB of RAM:
+//   - Max pages: 4 GiB / 4 KiB = 1,048,576 pages
+//   - u64 words: ceil(1,048,576 / 64) = 16,384 → 128 KiB in .bss
 //
-// Alloué en .bss (zero-init par le bootloader). BuddyZone::init() le
-// réinitialise à 0xFF…FF (all-allocated) puis add_free_range() efface
-// les bits des pages réellement libres.
+// Allocated in .bss (zero-initialized by bootloader). BuddyZone::init()
+// resets it to 0xFF…FF (all-allocated) then add_free_range() clears
+// bits of genuinely free pages.
 const BUDDY_DMA32_BITMAP_WORDS: usize = 16_384;
 static mut BUDDY_DMA32_BITMAP: [u64; BUDDY_DMA32_BITMAP_WORDS] = [0u64; BUDDY_DMA32_BITMAP_WORDS];
 
@@ -59,18 +59,18 @@ fn buddy_dma32_bitmap_ptr() -> *mut u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FOURNISSEUR DE PAGES PHYSIQUES POUR LE SLAB (bootstrap)
+// PHYSICAL PAGE PROVIDER FOR SLAB (bootstrap)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Implémentation de SlabPageProvider utilisant le buddy dès qu'il est prêt,
-/// avec fallback bootstrap bitmap uniquement si le buddy n'est pas initialisé.
+/// Implementation of SlabPageProvider using buddy as soon as ready,
+/// with bootstrap bitmap fallback only if buddy is not yet initialized.
 ///
-/// Cela évite que SLUB et vmalloc allouent en parallèle dans deux pools
-/// physiques indépendants une fois le boot avancé.
+/// This prevents SLUB and vmalloc from allocating in parallel across two
+/// independent physical pools once boot advances.
 struct KernelSlabProvider;
 
-// SAFETY: KernelSlabProvider est un ZST ; les backends physiques appelés sont
-// thread-safe chacun selon leurs invariants internes.
+// SAFETY: KernelSlabProvider is a ZST; the invoked physical backends are
+// each thread-safe according to their internal invariants.
 unsafe impl Sync for KernelSlabProvider {}
 
 impl SlabPageProvider for KernelSlabProvider {
@@ -93,7 +93,7 @@ impl SlabPageProvider for KernelSlabProvider {
     }
 }
 
-/// Instance statique du provider (durée de vie 'static requise par slab).
+/// Static provider instance ('static lifetime required by slab).
 static KERNEL_SLAB_PROVIDER: KernelSlabProvider = KernelSlabProvider;
 
 struct BootPageTableAllocator;
@@ -125,7 +125,7 @@ fn install_extended_physmap(phys_end: PhysAddr) {
     if result.is_err() {
         crate::arch::x86_64::halt_cpu();
     }
-    // SAFETY: réécrire CR3 avec la PML4 active force un flush TLB après extension.
+    // SAFETY: rewriting CR3 with active PML4 forces a TLB flush after extension.
     unsafe {
         write_cr3(active);
     }
@@ -215,8 +215,8 @@ unsafe fn install_fresh_high_physmap<A: FrameAllocatorForWalk>(
     }
 
     if has_delayed_p4_256 {
-        // Basculer l'entrée partagée boot PML4[256] en dernier: les nouvelles
-        // tables high-half mappent déjà le frame PML4 actif via PHYS_MAP_BASE.
+        // Switch shared boot entry PML4[256] last: new high-half
+        // tables already map active PML4 frame via PHYS_MAP_BASE.
         pml4[256] = table_pointer_entry(delayed_p4_256);
     }
     Ok(())
@@ -230,62 +230,62 @@ fn table_pointer_entry(phys: PhysAddr) -> PageTableEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LIMITES PHYSIQUES DU SYSTÈME
+// SYSTEM PHYSICAL BOUNDS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse physique de début de la RAM identifiée.
-/// Réservée jusqu'à 1 MiB pour le legacy BIOS/ISA.
+/// Physical start address of identified RAM.
+/// Reserved up to 1 MiB for legacy BIOS/ISA.
 pub const PHYS_MEMORY_START: u64 = 0x0010_0000; // 1 MiB
 
-/// Adresse physique maximale supportée (48 bits x86_64 PA).
+/// Maximum supported physical address (48-bit x86_64 PA).
 pub const PHYS_MEMORY_MAX: u64 = (1u64 << 48) - 1;
 
-// ── Fin physique du kernel (binaire + pile de boot) ───────────────────────────
-/// Retourne l'adresse physique page-alignée juste après la pile de boot du BSP.
+// ── Physical kernel end (binary + boot stack) ─────────────────────────────────
+/// Returns page-aligned physical address immediately following BSP boot stack.
 ///
-/// **Le kernel occupe physiquement** `PHYS_MEMORY_START .. kernel_physical_end()`.
-/// Aucune de ces pages ne doit être déclarée libre au bitmap/buddy.
+/// **The kernel physically occupies** `PHYS_MEMORY_START .. kernel_physical_end()`.
+/// None of these pages may be declared free to the bitmap/buddy.
 ///
-/// Utilise le symbole linker `_exo_boot_stack_top` (défini dans main.rs).
-/// Ce symbole marque la fin de la section `.boot_stack` (la mémoire la plus haute
-/// utilisée par le kernel binaire + sa pile d'amorçage).
+/// Uses linker symbol `_exo_boot_stack_top` (defined in main.rs).
+/// This symbol marks the end of `.boot_stack` section (highest memory
+/// used by binary kernel + its bootstrap stack).
 #[inline]
 fn kernel_physical_end() -> u64 {
     extern "C" {
         static _exo_boot_stack_top: u8;
     }
-    // &raw const ne déréférence pas le pointeur — pas d'accès à la valeur.
-    // Pas de unsafe nécessaire : l'opération ne lit pas la mémoire.
+    // &raw const does not dereference the pointer — no value access.
+    // No unsafe needed: operation does not read memory.
     let top = &raw const _exo_boot_stack_top as u64;
-    // Arrondir au-dessus à la prochaine page (garde une marge de sécurité).
+    // Round up to next page (keeps a safety margin).
     (top + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CARTE MÉMOIRE RAPPORTÉE AU KERNEL
+// MEMORY MAP REPORTED TO KERNEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de régions mémoire dans la carte E820 (couvre les cas réels).
+/// Maximum number of memory regions in E820 map (covers real-world cases).
 pub const MAX_MEMORY_REGIONS: usize = 256;
 
-/// Type de région mémoire (aligné sur E820 / UEFI map).
+/// Memory region type (aligned with E820 / UEFI map).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRegionType {
-    /// RAM utilisable.
+    /// Usable RAM.
     Usable,
-    /// Réservée (firmware, BIOS, DMA réservé).
+    /// Reserved (firmware, BIOS, reserved DMA).
     Reserved,
-    /// ACPI reclaimable (peut être libérée après parse ACPI).
+    /// ACPI reclaimable (can be freed after ACPI parse).
     AcpiReclaimable,
-    /// ACPI NVS (non volatile storage — ne jamais libérer).
+    /// ACPI NVS (non-volatile storage — never free).
     AcpiNvs,
-    /// Défectueuse (erreurs mémoire détectées par le firmware).
+    /// Bad/defective (memory errors detected by firmware).
     Bad,
-    /// Image du kernel (chargée par le bootloader).
+    /// Kernel image (loaded by bootloader).
     KernelImage,
 }
 
-/// Région de la carte mémoire physique.
+/// Physical memory map region.
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
     pub base: u64,
@@ -305,35 +305,35 @@ impl MemoryRegion {
     }
 }
 
-/// Carte mémoire statique (construite au boot, immutable ensuite).
+/// Static memory map (built at boot, immutable afterwards).
 pub static mut MEMORY_MAP: [MemoryRegion; MAX_MEMORY_REGIONS] = [MemoryRegion {
     base: 0,
     size: 0,
     region_type: MemoryRegionType::Reserved,
 }; MAX_MEMORY_REGIONS];
 
-/// Nombre de régions valides dans `MEMORY_MAP`.
+/// Number of valid regions in `MEMORY_MAP`.
 pub static mut MEMORY_REGION_COUNT: usize = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INIT DEPUIS MULTIBOOT2
+// INIT FROM MULTIBOOT2
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système mémoire à partir d'une structure Multiboot2.
+/// Initializes the memory subsystem from a Multiboot2 structure.
 ///
-/// Lit les entrées MmapEntry et appelle les phases d'init du buddy allocator.
+/// Reads MmapEntry entries and invokes buddy allocator init phases.
 ///
 /// # Safety
-/// - Doit être appelé UNE SEULE FOIS depuis le BSP, avant SMP.
-/// - `info.mmap_ptr` doit pointer sur un tableau valide de `info.mmap_count` MmapEntry.
-/// - EmergencyPool doit avoir été initialisé avant cet appel (RÈGLE MEM-02).
+/// - Must be called EXACTLY ONCE from BSP, before SMP.
+/// - `info.mmap_ptr` must point to a valid array of `info.mmap_count` MmapEntry.
+/// - EmergencyPool must have been initialized before this call (RULE MEM-02).
 pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     debug_assert!(info.mmap_count > 0, "Multiboot2 : mmap vide");
     debug_assert!(info.mmap_ptr != 0, "Multiboot2 : mmap_ptr nul");
 
-    // ── Phase 1 : détecter la plage physique totale ───────────────────────────
+    // ── Phase 1: detect total physical range ──────────────────────────────────
 
-    // SAFETY: mmap_ptr et mmap_count validés par le parseur multiboot2.
+    // SAFETY: mmap_ptr and mmap_count validated by multiboot2 parser.
     let entries =
         core::slice::from_raw_parts(info.mmap_ptr as *const MmapEntry, info.mmap_count as usize);
 
@@ -345,7 +345,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
         let base = entry.base_addr;
         let end = base + entry.length;
 
-        // Filtrer les régions sous 1 MiB (legacy BIOS / ISA)
+        // Filter regions below 1 MiB (legacy BIOS / ISA)
         if end <= PHYS_MEMORY_START {
             continue;
         }
@@ -358,7 +358,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
             phys_end = end;
         }
 
-        // Remplir MEMORY_MAP
+        // Populate MEMORY_MAP
         if region_count < MAX_MEMORY_REGIONS {
             let rtype = e820_type_to_region_type(entry.entry_type);
             MEMORY_MAP[region_count] = MemoryRegion {
@@ -373,15 +373,15 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     MEMORY_REGION_COUNT = region_count;
 
     if phys_start == u64::MAX || phys_end == 0 {
-        // Aucune RAM trouvée — situation non récupérable
+        // No RAM found — unrecoverable condition
         crate::arch::x86_64::halt_cpu();
     }
 
-    // Aligner sur des pages
+    // Align to pages
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
     let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
-    // ── Phase 1 : initialiser le bitmap allocateur ────────────────────────────
+    // ── Phase 1: initialize allocator bitmap ──────────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
     let (mod_start_raw, mod_end_raw) =
@@ -389,7 +389,7 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     let mod_start = align_down(mod_start_raw, PAGE_SIZE as u64);
     let mod_end = align_up(mod_end_raw, PAGE_SIZE as u64);
 
-    // ── Phase 2 : libérer toutes les régions utilisables ─────────────────────
+    // ── Phase 2: free all usable regions ──────────────────────────────────────
     for entry in entries {
         if entry.entry_type != MMAP_AVAILABLE {
             continue;
@@ -413,19 +413,19 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     }
     install_extended_physmap(phys_end_pa);
 
-    // ── Phase 2b : Initialiser le buddy allocator (zone DMA32, < 4 GiB) ──────
-    // Requis par vmalloc/kalloc (allocations > 2 KiB : stacks kernel, etc.).
-    // La physmap doit être opérationnelle (mappée dans main.rs trampoline).
-    // SAFETY: Single-CPU. BUDDY_DMA32_BITMAP est 'static (BSS, durée de vie infinie).
-    //         init_phase2b_buddy_zone initialise la zone puis mark_initialized().
+    // ── Phase 2b: Initialize buddy allocator (DMA32 zone, < 4 GiB) ───────────
+    // Required by vmalloc/kalloc (allocations > 2 KiB: kernel stacks, etc.).
+    // Physmap must be operational (mapped in main.rs trampoline).
+    // SAFETY: Single-CPU. BUDDY_DMA32_BITMAP is 'static (BSS, infinite lifetime).
+    //         init_phase2b_buddy_zone initializes zone then mark_initialized().
     init_phase2b_buddy_zone(
         phys_start_pa,
         phys_end_pa,
-        // SAFETY: mutable static dans BSS, durée de vie 'static ≥ celle du buddy.
+        // SAFETY: mutable static in BSS, 'static lifetime ≥ buddy lifetime.
         buddy_dma32_bitmap_ptr(),
         BUDDY_DMA32_BITMAP_WORDS,
     );
-    // Peupler le buddy avec les mêmes régions libres que le bitmap.
+    // Populate buddy with same free regions as bitmap.
     for entry in entries {
         if entry.entry_type != MMAP_AVAILABLE {
             continue;
@@ -449,32 +449,32 @@ pub unsafe fn init_memory_subsystem_multiboot2(info: &Multiboot2Info) {
     }
     assert_buddy_has_free_frames("multiboot2");
 
-    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
-    // SAFETY: le fournisseur est 'static et Sync.
-    //         Il utilise le buddy dès qu'il est prêt, et ne retombe
-    //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
-    //         Doit être appelé AVANT init_phase3_slab_slub().
+    // ── Phase 2.5: Register page provider for slab/slub ───────────────────────
+    // SAFETY: provider is 'static and Sync.
+    //         It uses buddy as soon as ready, and only falls back
+    //         to bootstrap bitmap prior to buddy initialization.
+    //         Must be called BEFORE init_phase3_slab_slub().
     register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
-    // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
+    // ── Phase 3: Slab / SLUB ──────────────────────────────────────────────────
     init_phase3_slab_slub();
 
-    // ── Phase 4 : NUMA (nœud 0 par défaut si pas encore de topologie ACPI) ───
-    init_phase4_numa(0b0000_0001); // nœud 0 actif
+    // ── Phase 4: NUMA (node 0 by default if no ACPI topology yet) ─────────────
+    init_phase4_numa(0b0000_0001); // node 0 active
 }
 
-/// Initialise le sous-système mémoire à partir d'une UEFI memory map.
+/// Initializes the memory subsystem from an UEFI memory map.
 ///
-/// Convertit les descripteurs EFI en régions mémoire et appelle les phases
-/// d'init du buddy allocator.
+/// Converts EFI descriptors into memory regions and calls buddy
+/// allocator init phases.
 ///
 /// # Safety
-/// Mêmes contraintes que `init_memory_subsystem_multiboot2`.
+/// Same constraints as `init_memory_subsystem_multiboot2`.
 pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     let mut phys_start = u64::MAX;
     let mut phys_end = 0u64;
     let mut region_count = 0usize;
 
-    // ── Première passe : détecter les bornes et remplir MEMORY_MAP ────────────
+    // ── First pass: detect bounds and populate MEMORY_MAP ─────────────────────
     for desc in uefi_map.iter() {
         let base = desc.physical_start;
         let end = base + desc.number_of_pages * PAGE_SIZE as u64;
@@ -511,10 +511,10 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
     let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
-    // ── Phase 1 : bitmap allocateur ──────────────────────────────────────────
+    // ── Phase 1: allocator bitmap ─────────────────────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
-    // ── Phase 2 : libérer les régions conventionnelles ────────────────────────
+    // ── Phase 2: free conventional regions ────────────────────────────────────
     for desc in uefi_map.iter() {
         if !desc.is_usable() {
             continue;
@@ -537,7 +537,7 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         });
     }
     install_extended_physmap(phys_end_pa);
-    // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
+    // ── Phase 2b: Buddy allocator (DMA32 zone, < 4 GiB) ──────────────────────
     init_phase2b_buddy_zone(
         phys_start_pa,
         phys_end_pa,
@@ -563,18 +563,18 @@ pub unsafe fn init_memory_subsystem_uefi(uefi_map: &UefiMemoryMap) {
         });
     }
     assert_buddy_has_free_frames("uefi");
-    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ─────────
+    // ── Phase 2.5: Register page provider for slab/slub ───────────────────────
     register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
-    // ── Phase 3 & 4 ──────────────────────────────────────────────────────────
+    // ── Phase 3 & 4 ───────────────────────────────────────────────────────────
     init_phase3_slab_slub();
     init_phase4_numa(0b0000_0001);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HELPERS PRIVÉS
+// PRIVATE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit un type E820 (Multiboot2) en MemoryRegionType.
+/// Converts an E820 type (Multiboot2) to MemoryRegionType.
 #[inline]
 fn e820_type_to_region_type(e820_type: u32) -> MemoryRegionType {
     match e820_type {
@@ -587,10 +587,10 @@ fn e820_type_to_region_type(e820_type: u32) -> MemoryRegionType {
     }
 }
 
-/// Convertit un type UEFI en MemoryRegionType.
+/// Converts an UEFI type to MemoryRegionType.
 #[inline]
 fn uefi_type_to_region_type(uefi_type: u32) -> MemoryRegionType {
-    // Types UEFI Memory (EFI_MEMORY_TYPE)
+    // UEFI Memory types (EFI_MEMORY_TYPE)
     match uefi_type {
         7 => MemoryRegionType::Usable,          // EfiConventionalMemory
         9 => MemoryRegionType::AcpiReclaimable, // EfiACPIReclaimMemory
@@ -600,23 +600,23 @@ fn uefi_type_to_region_type(uefi_type: u32) -> MemoryRegionType {
     }
 }
 
-/// Arrondit `n` vers le haut à l'alignement `align` (doit être une puissance de 2).
+/// Rounds `n` up to alignment `align` (must be a power of 2).
 #[inline]
 const fn align_up(n: u64, align: u64) -> u64 {
     (n + align - 1) & !(align - 1)
 }
 
-/// Arrondit `n` vers le bas à l'alignement `align` (doit être une puissance de 2).
+/// Rounds `n` down to alignment `align` (must be a power of 2).
 #[inline]
 const fn align_down(n: u64, align: u64) -> u64 {
     n & !(align - 1)
 }
 
-/// Applique `f(start, end)` sur les sous-ranges utilisables, en excluant
-/// explicitement la SSR ExoPhoenix [SSR_BASE, SSR_BASE + SSR_SIZE).
+/// Applies `f(start, end)` on usable subranges, explicitly excluding
+/// the ExoPhoenix SSR [SSR_BASE, SSR_BASE + SSR_SIZE).
 ///
-/// Règle doc: cette exclusion doit s'appliquer AVANT toute insertion dans
-/// les allocateurs bitmap/buddy pour éviter l'allocation accidentelle de la SSR.
+/// Doc rule: this exclusion must be applied BEFORE any insertion into
+/// bitmap/buddy allocators to avoid accidental allocation of the SSR.
 #[inline]
 fn for_each_usable_subrange_excluding_ssr(start: u64, end: u64, mut f: impl FnMut(u64, u64)) {
     if start >= end {
@@ -626,25 +626,25 @@ fn for_each_usable_subrange_excluding_ssr(start: u64, end: u64, mut f: impl FnMu
     let ssr_start = ssr::SSR_BASE;
     let ssr_end = ssr::SSR_BASE + ssr::SSR_SIZE as u64;
 
-    // Pas de recouvrement avec SSR
+    // No overlap with SSR
     if end <= ssr_start || start >= ssr_end {
         f(start, end);
         return;
     }
 
-    // Partie basse avant SSR
+    // Lower part before SSR
     if start < ssr_start {
         f(start, ssr_start);
     }
 
-    // Partie haute après SSR
+    // Upper part after SSR
     if end > ssr_end {
         f(ssr_end, end);
     }
 }
 
-/// Applique `f(start, end)` sur les sous-ranges utilisables, en excluant à la fois
-/// la SSR ExoPhoenix et la plage du module Multiboot2 (ramdisk rootfs).
+/// Applies `f(start, end)` on usable subranges, excluding both
+/// the ExoPhoenix SSR and the Multiboot2 module range (rootfs ramdisk).
 #[inline]
 fn for_each_usable_subrange_excluding_reserved(
     start: u64,
@@ -669,32 +669,32 @@ fn for_each_usable_subrange_excluding_reserved(
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INIT DEPUIS EXO-BOOT (UEFI natif)
+// INIT FROM EXO-BOOT (native UEFI)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Magic 64-bit du BootInfo exo-boot ("EXOOS_BO" en LE).
+/// 64-bit magic of exo-boot BootInfo ("EXOOS_BO" in LE).
 pub const EXOBOOT_BOOT_INFO_MAGIC: u64 = 0x4F42_5F53_4F4F_5845;
 
-/// Magic 32-bit transmis en EAX → RDI par exo-boot avant `kernel_main`.
-/// Synchronisé avec exo-boot/src/kernel_loader/handoff.rs::EXOBOOT_MAGIC_U32.
+/// 32-bit magic passed in EAX → RDI by exo-boot before `kernel_main`.
+/// Synchronized with exo-boot/src/kernel_loader/handoff.rs::EXOBOOT_MAGIC_U32.
 pub const EXOBOOT_MAGIC_U32: u32 = 0x4F4F_5845;
 
-// ── Shims repr(C) pour lire le BootInfo d'exo-boot ───────────────────────────
+// ── repr(C) shims to read exo-boot BootInfo ──────────────────────────────────
 
-/// Région mémoire exo-boot — layout repr(C), 24 bytes.
-/// Miroir exact de `exo-boot::memory::map::MemoryRegion`.
+/// exo-boot memory region — repr(C) layout, 24 bytes.
+/// Exact mirror of `exo-boot::memory::map::MemoryRegion`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ExoMemRegion {
-    base: u64,   // octet  0
-    length: u64, // octet  8
-    kind: u32,   // octet 16 (MemoryKind repr u32)
-    _pad: u32,   // octet 20 (padding → taille totale 24)
+    base: u64,   // byte  0
+    length: u64, // byte  8
+    kind: u32,   // byte 16 (MemoryKind repr u32)
+    _pad: u32,   // byte 20 (padding → total size 24)
 }
 
-/// En-tête minimal du BootInfo exo-boot.
-/// Miroir partiel de `exo-boot::kernel_loader::handoff::BootInfo` repr(C, align(4096)).
-/// Seuls les champs utilisés sont modélisés ; les champs suivants sont ignorés.
+/// Minimal header of exo-boot BootInfo.
+/// Partial mirror of `exo-boot::kernel_loader::handoff::BootInfo` repr(C, align(4096)).
+/// Only used fields are modeled; subsequent fields are ignored.
 #[repr(C, align(4096))]
 struct ExoBootInfo {
     magic: u64,                          // offset   0
@@ -732,39 +732,39 @@ struct ExoBootInfo {
     ahci_controller_phys: u64, // offset 6416
 }
 
-/// Convertit `MemoryKind` exo-boot (repr u32) en `MemoryRegionType` kernel.
+/// Converts exo-boot `MemoryKind` (repr u32) to kernel `MemoryRegionType`.
 #[inline]
 fn exo_kind_to_region_type(kind: u32) -> MemoryRegionType {
     match kind {
         1 => MemoryRegionType::Usable,          // Usable
         2 | 3 => MemoryRegionType::KernelImage, // KernelCode / KernelData
-        4 => MemoryRegionType::Usable,          // BootloaderReclaimable → au kernel
-        5 => MemoryRegionType::Reserved,        // PageTables (jusqu'à re-init kernel)
+        4 => MemoryRegionType::Usable,          // BootloaderReclaimable → to kernel
+        5 => MemoryRegionType::Reserved,        // PageTables (until kernel re-init)
         6 => MemoryRegionType::AcpiReclaimable, // AcpiReclaimable
         7 => MemoryRegionType::AcpiNvs,         // AcpiNvs
         8 => MemoryRegionType::Reserved,        // Reserved
         9 => MemoryRegionType::Reserved,        // Framebuffer
         10 => MemoryRegionType::Reserved,       // Mmio
-        _ => MemoryRegionType::Reserved,        // Unknown / autres
+        _ => MemoryRegionType::Reserved,        // Unknown / others
     }
 }
 
-/// Initialise le sous-système mémoire depuis le BootInfo fourni par exo-boot.
+/// Initializes the memory subsystem from BootInfo provided by exo-boot.
 ///
-/// `boot_info_phys` est la valeur transmise par exo-boot dans `mb2_info` (RSI de
-/// `kernel_main`), soit l'adresse physique identité-mappée du BootInfo.
+/// `boot_info_phys` is the value passed by exo-boot in `mb2_info` (RSI of
+/// `kernel_main`), namely the identity-mapped physical address of BootInfo.
 ///
 /// # Safety
-/// - `boot_info_phys` doit pointer sur un BootInfo exo-boot valide et aligné sur 4096.
-/// - EmergencyPool doit avoir été initialisé avant (RÈGLE MEM-02).
-/// - Appel unique depuis le BSP, avant SMP.
+/// - `boot_info_phys` must point to a valid, 4096-aligned exo-boot BootInfo.
+/// - EmergencyPool must have been initialized beforehand (RULE MEM-02).
+/// - Unique call from BSP, before SMP.
 pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     debug_assert!(boot_info_phys != 0, "exo-boot: adresse BootInfo nulle");
 
-    // SAFETY: boot_info_phys est identité-mappé (0–4 GiB, couvert par les tables exo-boot).
+    // SAFETY: boot_info_phys is identity-mapped (0–4 GiB, covered by exo-boot tables).
     let bi = &*(boot_info_phys as *const ExoBootInfo);
 
-    // Valider le magic avant tout accès supplémentaire
+    // Validate magic before any additional access
     if bi.magic != EXOBOOT_BOOT_INFO_MAGIC {
         crate::arch::x86_64::halt_cpu();
     }
@@ -774,7 +774,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     let mut phys_end = 0u64;
     let mut region_count = 0usize;
 
-    // ── Première passe : bornes physiques + remplissage MEMORY_MAP ────────────
+    // ── First pass: physical bounds + populating MEMORY_MAP ────────────────────
     for i in 0..count {
         let r = &bi.memory_regions[i];
         if r.length == 0 {
@@ -815,10 +815,10 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     let phys_start_pa = PhysAddr::new(align_up(phys_start, PAGE_SIZE as u64));
     let phys_end_pa = PhysAddr::new(align_down(phys_end, PAGE_SIZE as u64));
 
-    // ── Phase 1 : bitmap allocateur ──────────────────────────────────────────
+    // ── Phase 1: allocator bitmap ─────────────────────────────────────────────
     init_phase1_bitmap(phys_start_pa, phys_end_pa);
 
-    // ── Phase 2 : libérer les régions utilisables ─────────────────────────────
+    // ── Phase 2: free usable regions ──────────────────────────────────────────
     for i in 0..count {
         let r = &bi.memory_regions[i];
         if r.length == 0 {
@@ -848,7 +848,7 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     }
     install_extended_physmap(phys_end_pa);
 
-    // ── Phase 2b : Buddy allocator (zone DMA32, < 4 GiB) ─────────────────────
+    // ── Phase 2b: Buddy allocator (DMA32 zone, < 4 GiB) ──────────────────────
     init_phase2b_buddy_zone(
         phys_start_pa,
         phys_end_pa,
@@ -880,15 +880,15 @@ pub unsafe fn init_memory_subsystem_exoboot(boot_info_phys: u64) {
     }
     assert_buddy_has_free_frames("boot-info");
 
-    // ── Phase 2.5 : Enregistrer le fournisseur de pages pour slab/slub ───────
-    // SAFETY: le fournisseur est 'static et Sync.
-    //         Il utilise le buddy dès qu'il est prêt, et ne retombe
-    //         sur le bitmap bootstrap qu'avant l'initialisation du buddy.
+    // ── Phase 2.5: Register page provider for slab/slub ───────────────────────
+    // SAFETY: provider is 'static and Sync.
+    //         It uses buddy as soon as ready, and only falls back
+    //         to bootstrap bitmap prior to buddy initialization.
     register_slab_page_provider(&KERNEL_SLAB_PROVIDER as *const dyn SlabPageProvider);
 
-    // ── Phase 3 : Slab / SLUB ─────────────────────────────────────────────────
+    // ── Phase 3: Slab / SLUB ──────────────────────────────────────────────────
     init_phase3_slab_slub();
 
-    // ── Phase 4 : NUMA (nœud 0 par défaut, topologie affinée après ACPI) ─────
+    // ── Phase 4: NUMA (node 0 by default, topology refined after ACPI) ────────
     init_phase4_numa(0b0000_0001);
 }

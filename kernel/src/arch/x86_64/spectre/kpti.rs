@@ -1,27 +1,27 @@
 //! # arch/x86_64/spectre/kpti.rs — Kernel Page-Table Isolation
 //!
-//! KPTI isole les tables de pages kernel/user pour mitiger Meltdown :
-//! - Le kernel utilise `cr3_kernel` (accès complet)
-//! - L'userspace utilise `cr3_user`   (seulement les stubs de syscall/exception mappés)
+//! KPTI isolates kernel/user page tables to mitigate Meltdown:
+//! - Kernel uses `cr3_kernel` (full access)
+//! - Userspace uses `cr3_user` (only mapped syscall/exception stubs)
 //!
-//! ## Implémentation
-//! Le changement de CR3 se fait dans `switch_asm.s` (entre PUSH/POP des registres).
-//! Ce module gère uniquement la détection, l'état global, et les helpers de switch.
+//! ## Implementation
+//! CR3 switching is performed in `switch_asm.s` (between register PUSH/POP).
+//! This module exclusively handles detection, global state, and switch helpers.
 
 use crate::arch::x86_64::smp::percpu;
 use crate::arch::x86_64::smp::percpu::MAX_CPUS;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-// ── État global KPTI ──────────────────────────────────────────────────────────
+// ── Global KPTI State ─────────────────────────────────────────────────────────
 
 static KPTI_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Retourne `true` si KPTI est activé sur ce système
+/// Returns `true` if KPTI is enabled on this system
 pub fn kpti_enabled() -> bool {
     KPTI_ENABLED.load(Ordering::Relaxed)
 }
 
-// ── Bit PCID ─────────────────────────────────────────────────────────────────
+// ── PCID Bits ─────────────────────────────────────────────────────────────────
 
 const CR3_PCID_MASK: u64 = 0xFFF;
 const CR3_NO_FLUSH_BIT: u64 = 1u64 << 63;
@@ -29,13 +29,13 @@ const CR3_NO_FLUSH_BIT: u64 = 1u64 << 63;
 pub const PCID_KERNEL: u64 = 0;
 pub const PCID_USER: u64 = 1;
 
-// ── CR3 per-CPU — FIX-KPTI-01 : remplace les deux AtomicU64 globaux ──────────
+// ── Per-CPU CR3 — FIX-KPTI-01: replaces the two global AtomicU64s ────────────
 //
-// AVANT (BUG) :
-//   static CURRENT_CR3_KERNEL: AtomicU64 = AtomicU64::new(0); // 1 seul pour tous
-//   static CURRENT_CR3_USER:   AtomicU64 = AtomicU64::new(0); // 1 seul pour tous
+// BEFORE (BUG):
+//   static CURRENT_CR3_KERNEL: AtomicU64 = AtomicU64::new(0); // single one for all
+//   static CURRENT_CR3_USER:   AtomicU64 = AtomicU64::new(0); // single one for all
 //
-// APRÈS : un slot de 128 octets par CPU → pas de false sharing, pas de race SMP.
+// AFTER: one 128-byte slot per CPU → no false sharing, no SMP race.
 
 #[repr(C, align(128))]
 struct Cr3Slot {
@@ -64,8 +64,8 @@ fn current_cpu_slot() -> &'static Cr3Slot {
     &CR3_PER_CPU[cpu_id.min(MAX_CPUS - 1)]
 }
 
-/// Enregistre le couple (cr3_kernel, cr3_user) pour le thread courant sur CE CPU.
-/// Doit être appelé après chaque context switch (FIX-KPTI-01).
+/// Records the pair (cr3_kernel, cr3_user) for the current thread on THIS CPU.
+/// Must be called after each context switch (FIX-KPTI-01).
 pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     if !kpti_enabled() {
         percpu::set_kpti_cr3_slots(0, 0);
@@ -76,13 +76,13 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     slot.user.store(cr3_user, Ordering::Release);
     percpu::set_kpti_cr3_slots(cr3_kernel & !CR3_PCID_MASK, cr3_user & !CR3_PCID_MASK);
 
-    // FIX-KPTI-SHADOW-SYNC : la shadow user KPTI est PARTAGÉE par CPU ; sa moitié
-    // user doit refléter le processus courant à chaque switch, sinon une page
-    // demand-paged pour le processus A disparaît dès que B s'exécute puis rend la
-    // main à A → boucle de #PF (bootstrap init après fork).
+    // FIX-KPTI-SHADOW-SYNC: the KPTI user shadow is SHARED per CPU; its user
+    // half must reflect the current process at each switch, otherwise a page
+    // demand-paged for process A disappears as soon as B executes then returns
+    // control to A → #PF loop (bootstrap init after fork).
     //
-    // Cible = la shadow per-CPU RÉELLE utilisée par le trampoline d'entrée
-    // (kpti_split::user_cr3_for_cpu) ; `cr3_user` du TCB peut être 0 (PID 1).
+    // Target = the ACTUAL per-CPU shadow used by entry trampoline
+    // (kpti_split::user_cr3_for_cpu); TCB's `cr3_user` can be 0 (PID 1).
     const PML4_PHYS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
     let k = cr3_kernel & PML4_PHYS_MASK;
     let cpu_id = percpu::current_cpu_id() as usize;
@@ -93,7 +93,7 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     for u in candidates {
         if k != 0 && u != 0 && k != u && u != synced {
             synced = u;
-            // SAFETY: k/u référencent des PML4 valides (process / shadow per-CPU).
+            // SAFETY: k/u reference valid PML4s (process / per-CPU shadow).
             unsafe {
                 crate::memory::virt::page_table::kpti_split::sync_user_region_to_shadow(
                     crate::memory::core::PhysAddr::new(k),
@@ -104,22 +104,22 @@ pub fn set_current_cr3(cr3_kernel: u64, cr3_user: u64) {
     }
 }
 
-/// Retourne le CR3 user (shadow KPTI) actuellement publié pour CE CPU, soit
-/// celui sur lequel le thread courant s'exécute réellement en Ring 3.
+/// Returns user CR3 (shadow KPTI) currently published for THIS CPU, i.e.
+/// the one on which current thread actually executes in Ring 3.
 ///
-/// Utilisé comme source de vérité par la synchronisation de fautes quand le TCB
-/// ne porte pas (encore) son `kpti_user_cr3` — ex. PID 1 créé par le handoff.
+/// Used as source of truth by fault synchronization when TCB
+/// does not (yet) carry its `kpti_user_cr3` — e.g. PID 1 created by handoff.
 #[inline]
 pub fn current_user_cr3() -> u64 {
     current_cpu_slot().user.load(Ordering::Acquire) & !CR3_PCID_MASK
 }
 
-// ── Switch Kernel → User CR3 ─────────────────────────────────────────────────
+// ── Kernel → User CR3 Switch ─────────────────────────────────────────────────
 
-/// Bascule vers les tables de pages user (à exécuter avant IRETQ vers Ring 3)
+/// Switches to user page tables (to execute before IRETQ to Ring 3)
 ///
 /// # Safety
-/// Exécutable uniquement depuis Ring 0 juste avant le retour vers userspace.
+/// Executable strictly from Ring 0 right before returning to userspace.
 #[inline]
 pub unsafe fn kpti_switch_to_user() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) {
@@ -140,10 +140,10 @@ pub unsafe fn kpti_switch_to_user() {
     core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, nomem));
 }
 
-/// Bascule vers les tables de pages kernel (au retour vers Ring 0)
+/// Switches to kernel page tables (on return to Ring 0)
 ///
 /// # Safety
-/// Exécutable uniquement depuis Ring 0 lors de l'entrée dans le noyau.
+/// Executable strictly from Ring 0 upon entering kernel.
 #[inline]
 pub unsafe fn kpti_switch_to_kernel() {
     if !KPTI_ENABLED.load(Ordering::Relaxed) {
@@ -164,35 +164,35 @@ pub unsafe fn kpti_switch_to_kernel() {
     core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nostack, nomem));
 }
 
-// ── Initialisation ────────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
-/// Active KPTI (appelé depuis `apply_mitigations_bsp()`)
+/// Enables KPTI (called from `apply_mitigations_bsp()`)
 pub fn init_kpti() {
     let features = super::super::cpu::features::cpu_features();
 
-    // Activer SMEP si disponible (empêche le kernel d'exécuter du code user)
+    // Enable SMEP if available (prevents kernel from executing user code)
     if features.has_smep() {
         let mut cr4: u64;
-        // SAFETY: lecture CR4
+        // SAFETY: read CR4
         unsafe {
             core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem));
         }
         cr4 |= 1 << 20; // SMEP
-                        // SAFETY: écriture CR4 — activation SMEP
+                        // SAFETY: write CR4 — enable SMEP
         unsafe {
             core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem));
         }
     }
 
-    // Activer SMAP si disponible (empêche le kernel d'accéder aux données user sans STAC/CLAC)
+    // Enable SMAP if available (prevents kernel from accessing user data without STAC/CLAC)
     if features.has_smap() {
         let mut cr4: u64;
-        // SAFETY: lecture CR4
+        // SAFETY: read CR4
         unsafe {
             core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nostack, nomem));
         }
         cr4 |= 1 << 21; // SMAP
-                        // SAFETY: écriture CR4 — activation SMAP
+                        // SAFETY: write CR4 — enable SMAP
         unsafe {
             core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack, nomem));
         }
@@ -224,7 +224,7 @@ pub fn init_kpti() {
             }
             crate::memory::virt::page_table::kpti_split::KPTI.enable();
             KPTI_ENABLED.store(true, Ordering::Release);
-            // FIX-KPTI-01 : initialiser le slot per-CPU lors de l'activation.
+            // FIX-KPTI-01: initialize per-CPU slot upon activation.
             set_current_cr3(kernel_pml4_phys.as_u64(), user_pml4_phys.as_u64());
         }
         Err(_) => {

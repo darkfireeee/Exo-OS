@@ -1,56 +1,56 @@
-//! # arch/x86_64/boot/early_init.rs — Initialisation architecture précoce
+//! # arch/x86_64/boot/early_init.rs — Early Architecture Initialization
 //!
-//! Premier code Rust exécuté après le passage 64 bits du bootloader.
-//! Cette fonction est appelée depuis le point d'entrée ASM (`_start` ou `kernel_start`).
+//! First Rust code executed after the bootloader transitions to 64-bit mode.
+//! This function is called from the ASM entry point (`_start` or `kernel_start`).
 //!
-//! ## Invariants d'entrée
-//! - Mode long 64 bits actif
-//! - Paging identité (1:1) sur les 4 premiers GiB (ou selon Multiboot2/UEFI)
-//! - GDT temporaire du bootloader chargée
-//! - IDT vide (ou absente)
-//! - Interruptions désactivées (EFLAGS.IF = 0)
+//! ## Entry Invariants
+//! - 64-bit long mode active
+//! - Identity paging (1:1) over the first 4 GiB (or per Multiboot2/UEFI)
+//! - Temporary bootloader GDT loaded
+//! - IDT empty (or absent)
+//! - Interrupts disabled (EFLAGS.IF = 0)
 //!
-//! ## Ce que fait early_init
-//! 1. Détecter les fonctionnalités CPU
-//! 2. Charger la GDT per-CPU BSP
-//! 3. Charger l'IDT
-//! 4. Initier TSS + IST stacks
+//! ## What early_init does
+//! 1. Detect CPU features
+//! 2. Load BSP per-CPU GDT
+//! 3. Load IDT
+//! 4. Initialize TSS + IST stacks
 //! 5. Init per-CPU / GS
-//! 6. Initialiser le TSC
-//! 7. Détection hyperviseur
+//! 6. Initialize TSC
+//! 7. Hypervisor detection
 //! 8. Init ACPI (RSDP → MADT → HPET)
 //! 9. Init APIC
 //! 10. Init FPU / SSE / AVX
-//! 11. Appliquer les mitigations Spectre/Meltdown
-//! 12. Boot des APs (SMP)
-//! 13. Retourner → kernel_main()
+//! 11. Apply Spectre/Meltdown mitigations
+//! 12. Boot APs (SMP)
+//! 13. Return → kernel_main()
 
-// ── Pile de boot du BSP ───────────────────────────────────────────────────────
+// ── BSP Boot Stack ───────────────────────────────────────────────────────────
 
-// La pile de boot BSP (64 KiB) est définie dans main.rs via global_asm! sous
-// la section .boot_stack (type @nobits, non stockée dans l'image).
-// Le symbole `_exo_boot_stack_top` est le sommet (adresse de fin) de la pile ;
-// c'est l'adresse chargée dans RSP par `_start` au tout début du boot.
+// The BSP boot stack (64 KiB) is defined in main.rs via global_asm! under
+// the .boot_stack section (type @nobits, not stored in the image).
+// The `_exo_boot_stack_top` symbol is the top (end address) of the stack;
+// this is the address loaded into RSP by `_start` at the very beginning of boot.
 
 extern "C" {
-    /// Sommet de la pile de boot BSP (adresse de fin + 1 de la section .boot_stack).
-    /// Défini par le global_asm! dans main.rs.
+    /// Top of BSP boot stack (end address + 1 of the .boot_stack section).
+    /// Defined by global_asm! in main.rs.
     static _exo_boot_stack_top: u8;
 }
 
-/// Retourne l'adresse du sommet de la pile de boot BSP.
+/// Returns the top address of the BSP boot stack.
 ///
-/// Utilisé pour initialiser RSP0 dans la TSS avant le premier task switch.
+/// Used to initialize RSP0 in the TSS before the first task switch.
 pub fn boot_stack_top() -> u64 {
-    // &raw const est stable depuis Rust 1.82 et ne requière pas unsafe.
-    // _exo_boot_stack_top est défini dans main.rs (global_asm!),
-    // jamais nul, valide pour toute la durée de vie du kernel.
+    // &raw const is stable since Rust 1.82 and does not require unsafe.
+    // _exo_boot_stack_top is defined in main.rs (global_asm!),
+    // never null, valid for the entire kernel lifetime.
     &raw const _exo_boot_stack_top as u64
 }
 
-// ── Informations de boot passées au kernel principal ──────────────────────────
+// ── Boot Information Passed to Main Kernel ───────────────────────────────────
 
-/// Informations de boot rassemblées par early_init
+/// Boot information gathered by early_init
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum BootFramebufferFormat {
@@ -60,7 +60,7 @@ pub enum BootFramebufferFormat {
     None = 0xFFFF_FFFF,
 }
 
-/// Informations de boot rassemblées par early_init
+/// Boot information gathered by early_init
 #[derive(Debug, Clone, Copy)]
 pub struct BootInfo {
     pub rsdp_phys: u64,
@@ -104,33 +104,33 @@ impl BootInfo {
     }
 }
 
-// ── Point d'entrée principal de l'initialisation arch ────────────────────────
+// ── Main Arch Initialization Entry Point ─────────────────────────────────────
 
-/// Initialisation complète de l'architecture x86_64
+/// Full initialization of the x86_64 architecture
 ///
-/// Appelée depuis `kernel_start` (entrée ASM) avec :
-/// - `mb2_magic` : magic Multiboot2 (0x36d76289) ou 0 si UEFI
-/// - `mb2_info`  : pointeur vers la structure Multiboot2 (ou 0)
-/// - `rsdp_phys` : adresse physique RSDP (passée par le bootloader, 0 = auto-scan)
+/// Called from `kernel_start` (ASM entry) with:
+/// - `mb2_magic`: Multiboot2 magic (0x36d76289) or 0 if UEFI
+/// - `mb2_info`: pointer to Multiboot2 structure (or 0)
+/// - `rsdp_phys`: RSDP physical address (passed by bootloader, 0 = auto-scan)
 ///
 /// # Safety
-/// Préconditions : Ring 0, interruptions off, mode long 64 bits.
+/// Preconditions: Ring 0, interrupts disabled, 64-bit long mode.
 pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> BootInfo {
     super::super::disable_interrupts();
 
-    // Sonde de debug inline pour chaque étape (port 0xE9)
+    // Inline debug probe for each step (port 0xE9)
     macro_rules! probe {
         ($b:expr) => {
             core::arch::asm!("out 0xe9, al", in("al") $b as u8, options(nostack, nomem));
         }
     }
 
-    // ── Étape 1 : Détecter fonctionnalités CPU ────────────────────────────────
+    // ── Step 1: Detect CPU features ──────────────────────────────────────────
     probe!(b'1');
     super::super::cpu::features::init_cpu_features();
     let features = super::super::cpu::features::cpu_features();
 
-    // Assertions critiques (init_cpu_features() en fait déjà certaines)
+    // Critical assertions (init_cpu_features() already checks some)
     if !features.has_sse2() {
         crate::arch::x86_64::terminal::debug_write(b"early_init: SSE2 requis\n");
         crate::arch::x86_64::halt_cpu();
@@ -141,41 +141,41 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     }
     super::super::cpu::msr::configure_pat();
 
-    // ── Étape 2 : GDT per-CPU BSP ────────────────────────────────────────────
+    // ── Step 2: BSP per-CPU GDT ──────────────────────────────────────────────
     probe!(b'2');
     let kernel_stack_top = boot_stack_top();
     super::super::gdt::init_gdt_for_cpu(0, kernel_stack_top);
 
-    // ── Étape 3 : IDT ─────────────────────────────────────────────────────────
+    // ── Step 3: IDT ───────────────────────────────────────────────────────────
     probe!(b'3');
     super::super::idt::init_idt();
     super::super::idt::load_idt();
     super::super::irq::pic::remap_and_mask();
 
-    // ── Étape 4 : TSS per-CPU BSP (IST stacks) ────────────────────────────────
-    // (déjà fait dans init_gdt_for_cpu qui appelle init_tss_for_cpu + load_tss)
+    // ── Step 4: BSP per-CPU TSS (IST stacks) ──────────────────────────────────
+    // (already done in init_gdt_for_cpu which calls init_tss_for_cpu + load_tss)
     probe!(b'4');
 
-    // ── Étape 5 : Per-CPU data / GS ───────────────────────────────────────────
+    // ── Step 5: Per-CPU data / GS ─────────────────────────────────────────────
     probe!(b'5');
-    let lapic_id_bsp = 0; // BSP est CPU 0 ; LAPIC ID sera mis à jour après init APIC
+    let lapic_id_bsp = 0; // BSP is CPU 0; LAPIC ID will be updated after APIC init
     super::super::smp::percpu::init_percpu_for_bsp(kernel_stack_top, lapic_id_bsp);
 
-    // ── Étape 6 : TSC ──────────────────────────────────────────────────────────
+    // ── Step 6: TSC ───────────────────────────────────────────────────────────
     probe!(b'6');
     super::super::cpu::tsc::init_tsc(0);
 
-    // ── Étape 7 : FPU / SSE / AVX ────────────────────────────────────────────
+    // ── Step 7: FPU / SSE / AVX ──────────────────────────────────────────────
     probe!(b'7');
     super::super::cpu::fpu::init_fpu_for_cpu();
     crate::security::exoargos::init_pmu();
 
-    // ── Étape 8 : Détection hyperviseur ──────────────────────────────────────
+    // ── Step 8: Hypervisor detection ─────────────────────────────────────────
     probe!(b'8');
     let hv = super::super::virt::detect::detect_hypervisor();
     let _ = hv;
 
-    // ── Étape 9 : ACPI ────────────────────────────────────────────────────────
+    // ── Step 9: ACPI ──────────────────────────────────────────────────────────
     probe!(b'9');
     let mut boot_info = BootInfo::zeroed();
 
@@ -215,26 +215,26 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         super::super::acpi::pm_timer::init_pm_timer(acpi.fadt_phys);
     }
 
-    // ── Étape 10 : APIC ──────────────────────────────────────────────────────
+    // ── Step 10: APIC ─────────────────────────────────────────────────────────
     probe!(b'a');
     super::super::apic::init_apic_system();
     if acpi.madt_phys != 0 {
         super::super::apic::io_apic::init_all_ioapics();
     }
 
-    // Recalibrer le timer LAPIC après le TSC
+    // Recalibrate LAPIC timer after TSC
     probe!(b'b');
     super::super::apic::local_apic::calibrate_lapic_timer();
 
-    // ── Intégration arch ↔ memory : enregistrement sender IPI TLB ──────────────
+    // ── Arch ↔ memory integration: register TLB IPI sender ────────────────────
     probe!(b'c');
     super::super::memory_iface::init_memory_integration();
 
-    // ── Étape 11 : Init SYSCALL interface ────────────────────────────────────
+    // ── Step 11: Init SYSCALL interface ──────────────────────────────────────
     probe!(b'd');
     super::super::syscall::init_syscall();
 
-    // ── Étape 12 : Multiboot2 / UEFI ─────────────────────────────────────────
+    // ── Step 12: Multiboot2 / UEFI ───────────────────────────────────────────
     probe!(b'e');
     if mb2_magic == 0x36d76289 && mb2_info != 0 {
         boot_info.multiboot2_magic = mb2_magic;
@@ -264,45 +264,45 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         };
         boot_info.framebuffer_size_bytes = mb2.framebuffer_size_bytes;
 
-        // ── Init sous-système mémoire physique (E820) ──────────────────────────────────
-        // Règle MEM-02 DOC2 : EmergencyPool EN PREMIER avant tout allocateur
+        // ── Physical memory subsystem init (E820) ─────────────────────────────────────
+        // Rule MEM-02 DOC2: EmergencyPool FIRST before any allocator
         crate::memory::physical::frame::emergency_pool::init();
-        // Phases 1→4 : bitmap | free_regions | slab | NUMA (depuis carte E820)
+        // Phases 1→4: bitmap | free_regions | slab | NUMA (from E820 map)
         super::memory_map::init_memory_subsystem_multiboot2(&mb2);
 
-        // ── Init espace d'adressage kernel ──────────────────────────────────────
-        // Enregistre la PML4 courante (déjà configurée par le bootloader)
+        // ── Kernel address space init ─────────────────────────────────────────────────
+        // Registers current PML4 (already configured by bootloader)
         crate::memory::virt::address_space::KERNEL_AS.init(
             crate::memory::core::types::PhysAddr::new(super::super::read_cr3()),
         );
         crate::memory::virt::fault::swap_in::register_backend_swap_provider();
 
-        // ── Protections mémoire hardware (NX / SMEP / SMAP / PKU) ──────────────
-        // Activées après l'init complète du sous-système mémoire (DOC2 §2.3)
+        // ── Hardware memory protections (NX / SMEP / SMAP / PKU) ──────────────────────
+        // Enabled after complete memory subsystem init (DOC2 §2.3)
         crate::memory::protection::init();
     } else if mb2_magic == super::memory_map::EXOBOOT_MAGIC_U32 && mb2_info != 0 {
-        // ── Chemin exo-boot UEFI ─────────────────────────────────────────────
-        // `mb2_info` = adresse physique du BootInfo exo-boot (identité-mappée).
+        // ── exo-boot UEFI path ───────────────────────────────────────────────
+        // `mb2_info` = physical address of exo-boot BootInfo (identity-mapped).
         // `mb2_magic` = EXOBOOT_MAGIC_U32 (0x4F4F_5845 "EXOO").
         //
-        // RÈGLE MEM-02 : EmergencyPool EN PREMIER.
+        // RULE MEM-02: EmergencyPool FIRST.
         crate::memory::physical::frame::emergency_pool::init();
 
-        // Init sous-système mémoire depuis la carte mémoire exo-boot
+        // Init memory subsystem from exo-boot memory map
         super::memory_map::init_memory_subsystem_exoboot(mb2_info);
 
-        // Lire RSDP du BootInfo (offset 6200)
+        // Read RSDP from BootInfo (offset 6200)
         let rsdp_from_bi = core::ptr::read_volatile((mb2_info + 6200) as *const u64);
         if rsdp_from_bi != 0 {
             super::super::acpi::parser::init_acpi_from_rsdp(rsdp_from_bi);
             boot_info.rsdp_phys = rsdp_from_bi;
         } else if rsdp != 0 {
-            // Utilise l'adresse passée en paramètre (rsdp_phys = RDX = 0 depuis _start,
-            // mais arch_boot_init peut avoir fait un scan ACPI avant ce bloc)
+            // Use address passed as parameter (rsdp_phys = RDX = 0 from _start,
+            // but arch_boot_init may have performed an ACPI scan before this block)
             boot_info.rsdp_phys = rsdp;
         }
 
-        // Layout exo-boot synchronisé avec docs/exo-boot/BOOTINFO.md :
+        // exo-boot layout synchronized with docs/exo-boot/BOOTINFO.md:
         // 6160..6199 = FramebufferInfo repr(C).
         boot_info.framebuffer_phys_addr = core::ptr::read_volatile((mb2_info + 6160) as *const u64);
         boot_info.framebuffer_width = core::ptr::read_volatile((mb2_info + 6168) as *const u32);
@@ -319,13 +319,13 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         boot_info.framebuffer_size_bytes =
             core::ptr::read_volatile((mb2_info + 6192) as *const u64);
 
-        // Enregistre la PML4 courante (configurée par exo-boot)
+        // Registers current PML4 (configured by exo-boot)
         crate::memory::virt::address_space::KERNEL_AS.init(
             crate::memory::core::types::PhysAddr::new(super::super::read_cr3()),
         );
         crate::memory::virt::fault::swap_in::register_backend_swap_provider();
 
-        // Protections mémoire hardware (NX / SMEP / SMAP)
+        // Hardware memory protections (NX / SMEP / SMAP)
         crate::memory::protection::init();
     } else {
         crate::arch::x86_64::terminal::debug_write(b"early_init: boot protocol non supporte\n");
@@ -352,15 +352,15 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         }
     }
 
-    // ── Étape 12b : Mitigations Spectre/Meltdown ─────────────────────────────
-    // KPTI peut construire des shadow page tables et allouer des frames ; il faut
-    // donc attendre que le sous-système mémoire et la PML4 kernel soient prêts.
+    // ── Step 12b: Spectre/Meltdown Mitigations ───────────────────────────────
+    // KPTI can construct shadow page tables and allocate frames; we must
+    // therefore wait until the memory subsystem and kernel PML4 are ready.
     probe!(b'f');
     super::super::spectre::apply_mitigations_bsp();
 
-    // ── Étape 13b : Security init (SECURITY_READY) ─────────────────────────
-    // Libère les APs du spin-wait BOOT-SEC dans smp/init.rs.
-    // L'appel est idempotent côté boot flow: kernel_init() vérifie aussi ce flag.
+    // ── Step 13b: Security init (SECURITY_READY) ───────────────────────────
+    // Releases APs from BOOT-SEC spin-wait in smp/init.rs.
+    // The call is idempotent on the boot flow side: kernel_init() also checks this flag.
     probe!(b'g');
     if !crate::security::is_security_ready() {
         let mut kaslr_entropy =
@@ -376,7 +376,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     }
     super::super::mark_arch_initialized();
 
-    // ── Étape 14 : SMP — boot des APs ────────────────────────────────────────
+    // ── Step 14: SMP — boot APs ──────────────────────────────────────────────
     probe!(b'h');
     if let Some(ref madt) = madt_info {
         if madt.cpu_count > 1 {
@@ -391,6 +391,6 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
         crate::arch::x86_64::halt_cpu();
     }
 
-    probe!(b'i'); // arch_boot_init terminé
+    probe!(b'i'); // arch_boot_init completed
     boot_info
 }

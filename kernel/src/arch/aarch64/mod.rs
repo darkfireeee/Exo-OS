@@ -1,60 +1,60 @@
-//! # arch/aarch64 — Placeholder AArch64
+//! # arch/aarch64 — AArch64 Placeholder
 //!
-//! Module d'architecture minimal pour les cibles AArch64 (ARMv8-A 64 bits).
+//! Minimal architecture module for AArch64 targets (64-bit ARMv8-A).
 //!
-//! ## État
-//! ExoOS v0.2.0 ne declare pas AArch64 comme cible de boot supportee : pas de
-//! VBAR/EL1 complet, pas de GIC/APIC equivalent, pas de SMP ni ABI syscall
-//! AArch64. Les primitives ci-dessous restent localisees pour un futur port ;
-//! le refus de cible se fait au niveau crate, pas dans ce module.
+//! ## Status
+//! ExoOS v0.2.0 does not declare AArch64 as a supported boot target: no
+//! full VBAR/EL1, no GIC/APIC equivalent, no SMP or AArch64 syscall ABI.
+//! The primitives below remain localized for a future port;
+//! target rejection happens at the crate level, not in this module.
 
-// ── Primitives de base ────────────────────────────────────────────────────────
+// ── Basic Primitives ─────────────────────────────────────────────────────────
 
-/// Lit le compteur de temps (CNTVCT_EL0)
+/// Reads the time counter (CNTVCT_EL0)
 #[inline(always)]
 pub fn read_tsc() -> u64 {
     let val: u64;
-    // SAFETY: CNTVCT_EL0 est lisible depuis EL0/EL1 sans restriction
+    // SAFETY: CNTVCT_EL0 is readable from EL0/EL1 without restriction
     unsafe {
         core::arch::asm!("mrs {}, cntvct_el0", out(reg) val, options(nostack, nomem));
     }
     val
 }
 
-/// Arrête le CPU (WFI — Wait For Interrupt)
+/// Halts the CPU (WFI — Wait For Interrupt)
 #[inline(always)]
 pub fn halt_cpu() -> ! {
     loop {
-        // SAFETY: WFI est une instruction d'attente — sortie par interruption
+        // SAFETY: WFI is a wait instruction — wake up on interrupt
         unsafe {
             core::arch::asm!("wfi", options(nostack, nomem));
         }
     }
 }
 
-/// Désactive les interruptions (DAIF.I = 1)
+/// Disables interrupts (DAIF.I = 1)
 #[inline(always)]
 pub fn irq_disable() {
-    // SAFETY: écriture du registre DAIF depuis EL1
+    // SAFETY: writing DAIF register from EL1
     unsafe {
         core::arch::asm!("msr daifset, #2", options(nostack, nomem));
     }
 }
 
-/// Active les interruptions (DAIF.I = 0)
+/// Enables interrupts (DAIF.I = 0)
 #[inline(always)]
 pub fn irq_enable() {
-    // SAFETY: écriture du registre DAIF depuis EL1
+    // SAFETY: writing DAIF register from EL1
     unsafe {
         core::arch::asm!("msr daifclr, #2", options(nostack, nomem));
     }
 }
 
-/// Sauvegarde et désactive les interruptions
+/// Saves and disables interrupts
 #[inline(always)]
 pub fn irq_save() -> u64 {
     let daif: u64;
-    // SAFETY: lecture DAIF
+    // SAFETY: reading DAIF
     unsafe {
         core::arch::asm!("mrs {}, daif", out(reg) daif, options(nostack, nomem));
     }
@@ -62,46 +62,46 @@ pub fn irq_save() -> u64 {
     daif
 }
 
-/// Restaure l'état des interruptions
+/// Restores interrupt state
 #[inline(always)]
 pub fn irq_restore(daif: u64) {
-    // SAFETY: restauration DAIF précédemment sauvegardé
+    // SAFETY: restoring previously saved DAIF
     unsafe {
         core::arch::asm!("msr daif, {}", in(reg) daif, options(nostack, nomem));
     }
 }
 
-/// Barrière mémoire complète (DMB ISH)
+/// Full memory barrier (DMB ISH)
 #[inline(always)]
 pub fn memory_barrier() {
-    // SAFETY: instruction barrière — aucun effet de bord sur l'état CPU
+    // SAFETY: barrier instruction — no side effects on CPU state
     unsafe {
         core::arch::asm!("dmb ish", options(nostack));
     }
 }
 
-/// Barrière de charge (DMB ISHLD)
+/// Load barrier (DMB ISHLD)
 #[inline(always)]
 pub fn load_fence() {
-    // SAFETY: barrière load-load
+    // SAFETY: load-load barrier
     unsafe {
         core::arch::asm!("dmb ishld", options(nostack));
     }
 }
 
-/// Barrière d'écriture (DMB ISHST)
+/// Store barrier (DMB ISHST)
 #[inline(always)]
 pub fn store_fence() {
-    // SAFETY: barrière store-store
+    // SAFETY: store-store barrier
     unsafe {
         core::arch::asm!("dmb ishst", options(nostack));
     }
 }
 
-/// Invalide une page TLB à l'adresse virtuelle donnée
+/// Invalidates a TLB page at the given virtual address
 #[inline(always)]
 pub fn flush_tlb_page(virt_addr: u64) {
-    // SAFETY: TLBI VAAE1IS invalide une entrée TLB EL1 partagée
+    // SAFETY: TLBI VAAE1IS invalidates a shared EL1 TLB entry
     unsafe {
         core::arch::asm!(
             "tlbi vaae1is, {}",
@@ -113,16 +113,16 @@ pub fn flush_tlb_page(virt_addr: u64) {
     }
 }
 
-/// Invalide tout le TLB EL1 (toutes les ASID)
+/// Invalidates the entire EL1 TLB (all ASIDs)
 #[inline(always)]
 pub fn flush_tlb() {
-    // SAFETY: TLBI VMALLE1IS vide tout le TLB EL1
+    // SAFETY: TLBI VMALLE1IS flushes the entire EL1 TLB
     unsafe {
         core::arch::asm!("tlbi vmalle1is", "dsb ish", "isb", options(nostack, nomem),);
     }
 }
 
-/// Délai actif en cycles (basé sur CNTVCT_EL0)
+/// Active busy-wait delay in cycles (based on CNTVCT_EL0)
 pub fn spin_delay_cycles(cycles: u64) {
     let start = read_tsc();
     while read_tsc().wrapping_sub(start) < cycles {
@@ -134,7 +134,7 @@ pub fn spin_delay_cycles(cycles: u64) {
 
 use super::ArchInfo;
 
-/// Retourne les informations d'architecture AArch64
+/// Returns AArch64 architecture information
 pub fn arch_info() -> ArchInfo {
     ArchInfo {
         cpu_count: 1,
@@ -145,10 +145,10 @@ pub fn arch_info() -> ArchInfo {
     }
 }
 
-/// Lit la fréquence du compteur générique (CNTFRQ_EL0)
+/// Reads the generic counter frequency (CNTFRQ_EL0)
 fn read_cntfrq() -> u64 {
     let val: u32;
-    // SAFETY: CNTFRQ_EL0 lisible depuis EL0/EL1
+    // SAFETY: CNTFRQ_EL0 readable from EL0/EL1
     unsafe {
         core::arch::asm!("mrs {:x}, cntfrq_el0", out(reg) val, options(nostack, nomem));
     }

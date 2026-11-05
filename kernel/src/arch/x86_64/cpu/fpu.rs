@@ -1,20 +1,20 @@
-//! # cpu/fpu.rs — Instructions ASM brutes XSAVE/XRSTOR/FXSAVE
+//! # cpu/fpu.rs — Raw ASM XSAVE/XRSTOR/FXSAVE Instructions
 //!
-//! ⚠️ Ce module contient UNIQUEMENT les instructions matérielles FPU.
-//!    La logique d'état (quand sauvegarder, flag lazy_fpu_used, etc.)
-//!    est dans `scheduler/fpu/` — NE PAS dupliquer ici.
+//! ⚠️ This module contains ONLY hardware FPU instructions.
+//!    State logic (when to save, lazy_fpu_used flag, etc.)
+//!    is in `scheduler/fpu/` — DO NOT duplicate here.
 //!
-//! ## Implémentation
-//! - `fxsave` / `fxrstor` : fallback 512 bytes (FXSAVE area)
-//! - `xsave`  / `xrstor`  : XSAVE complet (taille détectée via CPUID)
-//! - `xsaveopt`           : optimisé (ne sauvegarde que les composants dirty)
-//! - `xsavec`             : compacté (ne sauvegarde que les composants actifs)
+//! ## Implementation
+//! - `fxsave` / `fxrstor` : 512-byte fallback (FXSAVE area)
+//! - `xsave`  / `xrstor`  : Full XSAVE (size detected via CPUID)
+//! - `xsaveopt`           : Optimized (saves only dirty components)
+//! - `xsavec`             : Compacted (saves only active components)
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-// ── Constantes XSAVE ─────────────────────────────────────────────────────────
+// ── XSAVE Constants ─────────────────────────────────────────────────────────
 
-/// Composants XSAVE supportés (XCR0 bits)
+/// Supported XSAVE components (XCR0 bits)
 pub const XSAVE_X87: u64 = 1 << 0; // x87 FPU
 pub const XSAVE_SSE: u64 = 1 << 1; // XMM0–15
 pub const XSAVE_AVX: u64 = 1 << 2; // YMM0–15 (upper 128)
@@ -26,47 +26,47 @@ pub const XSAVE_AVX512_HI16: u64 = 1 << 7; // ZMM16–31
 pub const XSAVE_PT: u64 = 1 << 8; // Intel PT
 pub const XSAVE_PKRU: u64 = 1 << 9; // Protection Keys
 
-/// Masque historique minimal strict — x87 + SSE uniquement.
+/// Minimal strict historical mask — x87 + SSE only.
 pub const XSAVE_MASK_X87_SSE_ONLY: u64 = XSAVE_X87 | XSAVE_SSE;
 
-/// Masque XSAVE minimal Exo-OS — x87 + SSE + AVX.
+/// Minimal Exo-OS XSAVE mask — x87 + SSE + AVX.
 ///
-/// Ce masque décrit le contrat de contexte quand AVX est disponible. L'init
-/// CPU garde la vérification CPUID/XCR0 avant d'activer réellement AVX.
+/// This mask describes the context contract when AVX is available. CPU
+/// init keeps the CPUID/XCR0 check prior to actually enabling AVX.
 pub const XSAVE_MASK_MINIMAL: u64 = XSAVE_X87 | XSAVE_SSE | XSAVE_AVX;
 
-/// Masque XSAVE complet — tout ce que l'OS supporte
+/// Complete XSAVE mask — everything supported by the OS
 pub const XSAVE_MASK_ALL: u64 = 0xFFFF_FFFF_FFFF_FFFFu64;
 
-/// Taille FXSAVE area fixe
+/// Fixed FXSAVE area size
 pub const FXSAVE_AREA_SIZE: usize = 512;
 
-/// Taille maximale XSAVE area (AVX-512 + PT + PKRU)
+/// Maximum XSAVE area size (AVX-512 + PT + PKRU)
 pub const XSAVE_AREA_MAX: usize = 2696;
 
-/// Alignement requis pour FXSAVE/XSAVE area
+/// Alignment required for FXSAVE/XSAVE area
 pub const FPU_AREA_ALIGN: usize = 64;
 
-// ── Taille XSAVE déterminée au runtime ───────────────────────────────────────
+// ── Runtime-Determined XSAVE Size ───────────────────────────────────────
 
 static XSAVE_AREA_SIZE_RUNTIME: AtomicU32 = AtomicU32::new(512);
 
-/// Retourne la taille de l'XSAVE area détectée au boot
+/// Returns the XSAVE area size detected at boot
 #[inline(always)]
 pub fn xsave_area_size() -> usize {
     XSAVE_AREA_SIZE_RUNTIME.load(Ordering::Relaxed) as usize
 }
 
-/// Configure la taille XSAVE runtime (appelé depuis early_init)
+/// Configures runtime XSAVE size (called from early_init)
 pub fn set_xsave_area_size(size: u32) {
     XSAVE_AREA_SIZE_RUNTIME.store(size, Ordering::Release);
 }
 
-// ── Alignement statique pour FPU area ────────────────────────────────────────
+// ── Static Alignment for FPU Area ────────────────────────────────────────
 
-/// Structure d'état FPU alignée 64 bytes (FXSAVE ou XSAVE area)
-/// Le champ `data` est sur-dimensionné pour couvrir tous les cas.
-/// L'allocateur kernel doit allouer avec alignement 64.
+/// 64-byte aligned FPU state structure (FXSAVE or XSAVE area)
+/// The `data` field is oversized to cover all cases.
+/// The kernel allocator must allocate with 64-byte alignment.
 #[repr(C, align(64))]
 pub struct FpuRawArea {
     pub data: [u8; XSAVE_AREA_MAX],
@@ -82,15 +82,15 @@ impl FpuRawArea {
 
 // ── FXSAVE / FXRSTOR ─────────────────────────────────────────────────────────
 
-/// Sauvegarde l'état FPU/SSE via FXSAVE (512 bytes)
+/// Saves FPU/SSE state via FXSAVE (512 bytes)
 ///
 /// # SAFETY
-/// - `dst` doit être aligné sur 16 bytes minimum (64 recommandé)
-/// - `dst` doit pointer vers au moins 512 bytes valides et accessibles
-/// - Le CPU doit supporter FXSR (CPUID.EDX[24]) — vérifier avant appel
+/// - `dst` must be aligned to at least 16 bytes (64 recommended)
+/// - `dst` must point to at least 512 valid, accessible bytes
+/// - The CPU must support FXSR (CPUID.EDX[24]) — check prior to call
 #[inline(always)]
 pub unsafe fn fxsave(dst: *mut u8) {
-    // SAFETY: délégué à l'appelant — dst aligné et valide
+    // SAFETY: delegated to caller — dst aligned and valid
     unsafe {
         core::arch::asm!(
             "fxsave64 [{dst}]",
@@ -100,14 +100,14 @@ pub unsafe fn fxsave(dst: *mut u8) {
     }
 }
 
-/// Restaure l'état FPU/SSE depuis une FXSAVE area
+/// Restores FPU/SSE state from an FXSAVE area
 ///
 /// # SAFETY
-/// - `src` doit être une FXSAVE area valide préalablement sauvegardée
-/// - Alignement 16 bytes minimum requis
+/// - `src` must be a valid previously saved FXSAVE area
+/// - Minimum 16-byte alignment required
 #[inline(always)]
 pub unsafe fn fxrstor(src: *const u8) {
-    // SAFETY: délégué à l'appelant — src est une zone fxsave valide
+    // SAFETY: delegated to caller — src is a valid fxsave area
     unsafe {
         core::arch::asm!(
             "fxrstor64 [{src}]",
@@ -119,21 +119,21 @@ pub unsafe fn fxrstor(src: *const u8) {
 
 // ── XSAVE / XRSTOR ───────────────────────────────────────────────────────────
 
-/// Sauvegarde l'état FPU étendu via XSAVE
+/// Saves extended FPU state via XSAVE
 ///
-/// Sauvegarde tous les composants dont le bit est 1 dans `rfbm` (Request Feature BitMap).
-/// Utiliser `XSAVE_MASK_ALL` pour tout sauvegarder.
+/// Saves all components whose bit is 1 in `rfbm` (Request Feature BitMap).
+/// Use `XSAVE_MASK_ALL` to save everything.
 ///
 /// # SAFETY
-/// - `dst` doit être aligné sur 64 bytes
-/// - `dst` doit pointer vers au moins `xsave_area_size()` bytes valides
-/// - Le CPU doit supporter XSAVE (CPUID.ECX[26])
-/// - OSXSAVE doit être activé dans CR4 (CR4.OSXSAVE = 1)
+/// - `dst` must be aligned to 64 bytes
+/// - `dst` must point to at least `xsave_area_size()` valid bytes
+/// - CPU must support XSAVE (CPUID.ECX[26])
+/// - OSXSAVE must be enabled in CR4 (CR4.OSXSAVE = 1)
 #[inline(always)]
 pub unsafe fn xsave(dst: *mut u8, rfbm: u64) {
     let rfbm_lo = rfbm as u32;
     let rfbm_hi = (rfbm >> 32) as u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xsave64 [{dst}]",
@@ -145,17 +145,17 @@ pub unsafe fn xsave(dst: *mut u8, rfbm: u64) {
     }
 }
 
-/// Restaure l'état FPU étendu via XRSTOR
+/// Restores extended FPU state via XRSTOR
 ///
 /// # SAFETY
-/// - `src` doit être une XSAVE area valide sauvegardée par `xsave()`
-/// - Alignement 64 bytes requis
-/// - Le composant header (offset 512) doit être cohérent
+/// - `src` must be a valid XSAVE area saved by `xsave()`
+/// - 64-byte alignment required
+/// - The header component (offset 512) must be consistent
 #[inline(always)]
 pub unsafe fn xrstor(src: *const u8, rfbm: u64) {
     let rfbm_lo = rfbm as u32;
     let rfbm_hi = (rfbm >> 32) as u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xrstor64 [{src}]",
@@ -167,18 +167,18 @@ pub unsafe fn xrstor(src: *const u8, rfbm: u64) {
     }
 }
 
-/// Sauvegarde via XSAVEOPT (ne sauvegarde que les composants modifiés)
+/// Saves via XSAVEOPT (saves only modified components)
 ///
-/// Plus rapide que XSAVE si peu de composants ont été modifiés depuis la dernière restore.
+/// Faster than XSAVE if few components were modified since the last restore.
 ///
 /// # SAFETY
-/// Mêmes garanties que `xsave()`. De plus, le CPU doit supporter XSAVEOPT
+/// Same requirements as `xsave()`. Additionally, CPU must support XSAVEOPT
 /// (CPUID leaf 0xD subleaf 1, EAX[0]).
 #[inline(always)]
 pub unsafe fn xsaveopt(dst: *mut u8, rfbm: u64) {
     let rfbm_lo = rfbm as u32;
     let rfbm_hi = (rfbm >> 32) as u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xsaveopt64 [{dst}]",
@@ -190,15 +190,15 @@ pub unsafe fn xsaveopt(dst: *mut u8, rfbm: u64) {
     }
 }
 
-/// Sauvegarde via XSAVEC (format compact — ne sauvegarde que les composants actifs)
+/// Saves via XSAVEC (compact format — saves only active components)
 ///
 /// # SAFETY
-/// Idem `xsaveopt`. CPU doit supporter XSAVEC (CPUID leaf 0xD subleaf 1, EAX[1]).
+/// Same as `xsaveopt`. CPU must support XSAVEC (CPUID leaf 0xD subleaf 1, EAX[1]).
 #[inline(always)]
 pub unsafe fn xsavec(dst: *mut u8, rfbm: u64) {
     let rfbm_lo = rfbm as u32;
     let rfbm_hi = (rfbm >> 32) as u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xsavec64 [{dst}]",
@@ -210,17 +210,17 @@ pub unsafe fn xsavec(dst: *mut u8, rfbm: u64) {
     }
 }
 
-// ── XCR0 lecture/écriture ─────────────────────────────────────────────────────
+// ── XCR0 Read/Write ─────────────────────────────────────────────────────
 
-/// Lit XCR0 (XSAVE Extended Control Register 0)
+/// Reads XCR0 (XSAVE Extended Control Register 0)
 ///
 /// # SAFETY
-/// Nécessite OSXSAVE actif dans CR4. Exécutable uniquement depuis Ring 0.
+/// Requires active OSXSAVE in CR4. Executable only from Ring 0.
 #[inline(always)]
 pub unsafe fn read_xcr0() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xgetbv",
@@ -233,17 +233,17 @@ pub unsafe fn read_xcr0() -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
 
-/// Écrit XCR0 (active les composants XSAVE à sauvegarder)
+/// Writes XCR0 (enables XSAVE components to be saved)
 ///
 /// # SAFETY
-/// - Nécessite OSXSAVE dans CR4
-/// - Bits non supportés dans xcr0 provoqueront #GP
-/// - Ne pas désactiver X87 (bit 0) ni SSE (bit 1) une fois activés
+/// - Requires OSXSAVE in CR4
+/// - Unsupported bits in xcr0 will cause a #GP
+/// - Do not disable X87 (bit 0) or SSE (bit 1) once enabled
 #[inline(always)]
 pub unsafe fn write_xcr0(val: u64) {
     let lo = val as u32;
     let hi = (val >> 32) as u32;
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "xsetbv",
@@ -255,34 +255,34 @@ pub unsafe fn write_xcr0(val: u64) {
     }
 }
 
-// ── Initialisation FPU au boot ────────────────────────────────────────────────
+// ── FPU Initialization at Boot ────────────────────────────────────────────────
 
-/// Initialise la FPU sur le CPU courant
+/// Initializes the FPU on the current CPU
 ///
-/// - Active CR0.MP, efface CR0.EM
-/// - Active CR4.OSFXSR + CR4.OSXMMEXCPT
-/// - Active CR4.OSXSAVE si XSAVE disponible
-/// - Configure XCR0 avec x87 + SSE (+ AVX si disponible)
-/// - Exécute FINIT pour nettoyer l'état x87
+/// - Enables CR0.MP, clears CR0.EM
+/// - Enables CR4.OSFXSR + CR4.OSXMMEXCPT
+/// - Enables CR4.OSXSAVE if XSAVE is available
+/// - Configures XCR0 with x87 + SSE (+ AVX if available)
+/// - Executes FINIT to clean up x87 state
 pub fn init_fpu_for_cpu() {
     let mut cr0_raw: u64;
-    // SAFETY: lecture CR0 — aucun effet de bord
+    // SAFETY: CR0 read — no side effects
     unsafe {
         core::arch::asm!("mov {}, cr0", out(reg) cr0_raw, options(nostack, nomem));
     }
 
     // CR0.MP = 1 (Monitor co-processor)
-    // CR0.EM = 0 (pas d'émulation FPU)
+    // CR0.EM = 0 (no FPU emulation)
     // CR0.NE = 1 (native FP exceptions)
-    // CR0.TS = 0 (Task Switched — lazy FPU le mettra à 1 après switch)
+    // CR0.TS = 0 (Task Switched — lazy FPU will set it to 1 after switch)
     cr0_raw |= (1 << 1) | (1 << 5); // MP, NE
     cr0_raw &= !((1 << 2) | (1 << 3)); // clear EM, TS
-                                       // SAFETY: modification cohérente de CR0 avec état FPU valide
+                                       // SAFETY: consistent CR0 modification with valid FPU state
     unsafe {
         core::arch::asm!("mov cr0, {}", in(reg) cr0_raw, options(nostack, nomem));
     }
 
-    // CR4 : activer OSFXSR et OSXMMEXCPT
+    // CR4: enable OSFXSR and OSXMMEXCPT
     let mut cr4 = super::super::read_cr4();
     cr4 |= (1 << 9)  // OSFXSR
          | (1 << 10); // OSXMMEXCPT
@@ -293,12 +293,12 @@ pub fn init_fpu_for_cpu() {
         cr4 |= 1 << 18; // OSXSAVE
     }
 
-    // SAFETY: activation de OSFXSR/OSXMMEXCPT/OSXSAVE — requis pour SSE/XSAVE
+    // SAFETY: enabling OSFXSR/OSXMMEXCPT/OSXSAVE — required for SSE/XSAVE
     unsafe {
         super::super::write_cr4(cr4);
     }
 
-    // Configurer XCR0 si XSAVE disponible
+    // Configure XCR0 if XSAVE is available
     if features.has_xsave() {
         let mut xcr0 = XSAVE_X87 | XSAVE_SSE;
 
@@ -312,26 +312,26 @@ pub fn init_fpu_for_cpu() {
             xcr0 |= XSAVE_PKRU;
         }
 
-        // SAFETY: xcr0 ne contient que des bits supportés par ce CPU
+        // SAFETY: xcr0 contains only bits supported by this CPU
         unsafe {
             write_xcr0(xcr0);
         }
 
-        // Mettre à jour la taille XSAVE détectée
+        // Update detected XSAVE size
         let size = features.xsave_size();
         set_xsave_area_size(size);
     }
 
-    // FINIT : nettoie l'état x87 (tag=empty, PC=80bit, RC=round-nearest)
-    // SAFETY: FINIT est toujours valide en Ring 0 avec FPU activée
+    // FINIT: cleans up x87 state (tag=empty, PC=80bit, RC=round-nearest)
+    // SAFETY: FINIT is always valid in Ring 0 with FPU enabled
     unsafe {
         core::arch::asm!("finit", options(nostack));
     }
 
-    // MXCSR par défaut : masquer toutes les exceptions SSE non-critiques
-    // Bit 7–12 = exception masks ON, bits 13–14 = RC=round-to-nearest
+    // Default MXCSR: mask all non-critical SSE exceptions
+    // Bits 7–12 = exception masks ON, bits 13–14 = RC=round-to-nearest
     const MXCSR_DEFAULT: u32 = 0x1F80;
-    // SAFETY: ldmxcsr charge un MXCSR valide
+    // SAFETY: ldmxcsr loads a valid MXCSR
     unsafe {
         core::arch::asm!(
             "ldmxcsr [{mxcsr}]",
@@ -343,13 +343,13 @@ pub fn init_fpu_for_cpu() {
 
 // ── CLFLUSH / CLFLUSHOPT / CLWB ──────────────────────────────────────────────
 
-/// Flush une cache line (CLFLUSH — invalide dans tous les niveaux cache)
+/// Flushes a cache line (CLFLUSH — invalidates across all cache levels)
 ///
 /// # SAFETY
-/// `addr` doit être mappé et accessible.
+/// `addr` must be mapped and accessible.
 #[inline(always)]
 pub unsafe fn clflush(addr: *const u8) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "clflush [{addr}]",
@@ -359,13 +359,13 @@ pub unsafe fn clflush(addr: *const u8) {
     }
 }
 
-/// Flush optimisé (CLFLUSHOPT — non-sérialisante, plus rapide que CLFLUSH)
+/// Optimized flush (CLFLUSHOPT — non-serializing, faster than CLFLUSH)
 ///
 /// # SAFETY
-/// Idem `clflush`. Nécessite CLFLUSHOPT (CPUID leaf 7, EBX[23]).
+/// Same as `clflush`. Requires CLFLUSHOPT (CPUID leaf 7, EBX[23]).
 #[inline(always)]
 pub unsafe fn clflushopt(addr: *const u8) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "clflushopt [{addr}]",
@@ -375,13 +375,13 @@ pub unsafe fn clflushopt(addr: *const u8) {
     }
 }
 
-/// Cache line write-back (CLWB — writeback sans invalider)
+/// Cache line write-back (CLWB — writeback without invalidating)
 ///
 /// # SAFETY
-/// Idem `clflush`. Nécessite CLWB (CPUID leaf 7, EBX[24]).
+/// Same as `clflush`. Requires CLWB (CPUID leaf 7, EBX[24]).
 #[inline(always)]
 pub unsafe fn clwb(addr: *const u8) {
-    // SAFETY: délégué à l'appelant
+    // SAFETY: delegated to caller
     unsafe {
         core::arch::asm!(
             "clwb [{addr}]",
@@ -395,82 +395,82 @@ pub unsafe fn clwb(addr: *const u8) {
 // C ABI EXPORTS — scheduler/fpu/save_restore.rs interface
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// Ces fonctions #[no_mangle] extern "C" sont le pont FFI entre
-// scheduler/fpu/save_restore.rs (RÈGLE FPU-01 DOC3) et ce module.
+// These #[no_mangle] extern "C" functions are the FFI bridge between
+// scheduler/fpu/save_restore.rs (RULE FPU-01 DOC3) and this module.
 //
-// scheduler/ est Couche 1 et ne peut pas importer directement arch/.
-// La séparation logique/instructions est respectée :
-//   • scheduler/fpu/save_restore.rs = LOGIQUE (quand sauvegarder, pour qui)
-//   • arch/x86_64/cpu/fpu.rs        = INSTRUCTIONS ASM brutes (xsave/xrstor)
+// scheduler/ is Layer 1 and cannot directly import arch/.
+// The logic / instructions separation is respected:
+//   • scheduler/fpu/save_restore.rs = LOGIC (when to save, for whom)
+//   • arch/x86_64/cpu/fpu.rs        = Raw ASM INSTRUCTIONS (xsave/xrstor)
 //
-// SYNCHRONISATION : toute modification de signature ici DOIT être mise à jour
-// dans scheduler/fpu/save_restore.rs extern "C" block simultanément.
+// SYNCHRONIZATION: any signature modification here MUST be updated
+// in scheduler/fpu/save_restore.rs extern "C" block simultaneously.
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Sauvegarde l'état FPU étendu via XSAVE (C ABI export).
+/// Saves extended FPU state via XSAVE (C ABI export).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore::xsave_current()`.
+/// Called from `scheduler::fpu::save_restore::xsave_current()`.
 ///
 /// # Safety
-/// - `area` doit être aligné 64 bytes, taille ≥ `xsave_area_size()`.
-/// - OSXSAVE doit être activé dans CR4.
-/// - XSAVE doit être supporté (vérifier `arch_has_xsave()` avant).
+/// - `area` must be 64-byte aligned, size ≥ `xsave_area_size()`.
+/// - OSXSAVE must be enabled in CR4.
+/// - XSAVE must be supported (check `arch_has_xsave()` beforehand).
 #[no_mangle]
 pub unsafe extern "C" fn arch_xsave64(area: *mut u8, rfbm: u64) {
-    // SAFETY: délégué à l'appelant (scheduler vérifie arch_has_xsave et l'alignement).
+    // SAFETY: delegated to caller (scheduler checks arch_has_xsave and alignment).
     xsave(area, rfbm);
 }
 
-/// Restaure l'état FPU étendu via XRSTOR (C ABI export).
+/// Restores extended FPU state via XRSTOR (C ABI export).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore::xrstor_for()`.
+/// Called from `scheduler::fpu::save_restore::xrstor_for()`.
 ///
 /// # Safety
-/// - `area` doit être une XSAVE area valide, alignée 64 bytes.
-/// - Le composant header (offset 512) doit être cohérent avec XCR0.
+/// - `area` must be a valid XSAVE area, 64-byte aligned.
+/// - The header component (offset 512) must be consistent with XCR0.
 #[no_mangle]
 pub unsafe extern "C" fn arch_xrstor64(area: *const u8, rfbm: u64) {
-    // SAFETY: délégué à l'appelant.
+    // SAFETY: delegated to caller.
     xrstor(area, rfbm);
 }
 
-/// Sauvegarde l'état FPU/SSE via FXSAVE (C ABI export, fallback sans XSAVE).
+/// Saves FPU/SSE state via FXSAVE (C ABI export, fallback without XSAVE).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore::xsave_current()` si !arch_has_xsave().
+/// Called from `scheduler::fpu::save_restore::xsave_current()` if !arch_has_xsave().
 ///
 /// # Safety
-/// - `area` doit être aligné 16 bytes minimum (64 recommandé), taille ≥ 512.
+/// - `area` must be at least 16-byte aligned (64 recommended), size ≥ 512.
 #[no_mangle]
 pub unsafe extern "C" fn arch_fxsave64(area: *mut u8) {
-    // SAFETY: délégué à l'appelant.
+    // SAFETY: delegated to caller.
     fxsave(area);
 }
 
-/// Restaure l'état FPU/SSE via FXRSTOR (C ABI export, fallback sans XSAVE).
+/// Restores FPU/SSE state via FXRSTOR (C ABI export, fallback without XSAVE).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore::xrstor_for()` si !arch_has_xsave().
+/// Called from `scheduler::fpu::save_restore::xrstor_for()` if !arch_has_xsave().
 ///
 /// # Safety
-/// - `area` doit être une FXSAVE area valide, alignée 16 bytes.
+/// - `area` must be a valid FXSAVE area, 16-byte aligned.
 #[no_mangle]
 pub unsafe extern "C" fn arch_fxrstor64(area: *const u8) {
-    // SAFETY: délégué à l'appelant.
+    // SAFETY: delegated to caller.
     fxrstor(area);
 }
 
-/// Retourne 1 si le CPU supporte XSAVE, 0 sinon (C ABI export).
+/// Returns 1 if the CPU supports XSAVE, 0 otherwise (C ABI export).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore::init()` au boot.
-/// Lit uniquement les feature flags, aucun effet de bord.
+/// Called from `scheduler::fpu::save_restore::init()` at boot.
+/// Reads only feature flags, no side effects.
 #[no_mangle]
 pub extern "C" fn arch_has_xsave() -> u8 {
     super::features::cpu_features_or_none().is_some_and(|features| features.has_xsave()) as u8
 }
 
-/// Retourne 1 si le CPU supporte AVX (YMM registers), 0 sinon (C ABI export).
+/// Returns 1 if the CPU supports AVX (YMM registers), 0 otherwise (C ABI export).
 ///
-/// Appelé depuis `scheduler::fpu::save_restore` pour dimensionner le buffer.
-/// Lit uniquement les feature flags, aucun effet de bord.
+/// Called from `scheduler::fpu::save_restore` to dimension the buffer.
+/// Reads only feature flags, no side effects.
 #[no_mangle]
 pub extern "C" fn arch_has_avx() -> u8 {
     super::features::cpu_features_or_none().is_some_and(|features| features.has_avx()) as u8

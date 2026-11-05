@@ -1,14 +1,14 @@
 //! # arch/x86_64/smp — Symmetric Multi-Processing
 //!
-//! Démarrage des Application Processors (APs) et données per-CPU.
+//! Application Processor (AP) startup and per-CPU data.
 //!
-//! ## Séquence SMP boot
-//! 1. BSP parse MADT → liste des APIC IDs
-//! 2. BSP écrit le trampoline en mémoire basse (< 1 MB)
-//! 3. BSP envoie INIT + SIPI × 2 à chaque AP
-//! 4. AP exécute le trampoline (real mode → protected → 64 bits)
-//! 5. AP appelle `ap_entry()` — initialise GDT, IDT, TSS, LAPIC, FPU
-//! 6. AP se signale "online" et entre dans la boucle scheduler idle
+//! ## SMP Boot Sequence
+//! 1. BSP parses MADT → list of APIC IDs
+//! 2. BSP writes the trampoline into low memory (< 1 MB)
+//! 3. BSP sends INIT + SIPI × 2 to each AP
+//! 4. AP executes the trampoline (real mode → protected → 64-bit)
+//! 5. AP calls `ap_entry()` — initializes GDT, IDT, TSS, LAPIC, FPU
+//! 6. AP marks itself "online" and enters the scheduler idle loop
 
 pub mod hotplug;
 pub mod init;
