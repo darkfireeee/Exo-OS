@@ -1,32 +1,32 @@
 // kernel/src/security/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Module security — Racine du sous-système de sécurité Exo-OS (v6)
+// Security module — Exo-OS security subsystem root (v6)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Structure :
+// Structure:
 //   security/
-//   ├── capability/      Tokens de capabilities, droits, révocation, délégation
-//   ├── access_control/  Point d'entrée unifié — check_access() (v6, remplace ipc/capability_bridge)
-//   ├── zero_trust/      Étiquettes MLS, Bell-LaPadula + Biba, contexte de confiance
+//   ├── capability/      Capability tokens, rights, revocation, delegation
+//   ├── access_control/  Unified entry point — check_access() (v6, replaces ipc/capability_bridge)
+//   ├── zero_trust/      MLS labels, Bell-LaPadula + Biba, trust context
 //   ├── crypto/          BLAKE3, XChaCha20-Poly1305, X25519, Ed25519, AES-256-GCM, RNG, KDF
-//   ├── isolation/       Domaines de sécurité, sandbox, namespaces, pledge
-//   ├── integrity_check/ Signature de modules, hash runtime .text/.rodata, Secure Boot
+//   ├── isolation/       Security domains, sandbox, namespaces, pledge
+//   ├── integrity_check/ Module signing, runtime .text/.rodata hash, Secure Boot
 //   ├── exploit_mitigations/ KASLR, stack canaries, CFG, CET, SafeStack
-//   ├── audit/           Logger ring-buffer, règles d'audit, intégration syscall
-//   ├── exocage/         CET Shadow Stack + IBT — handler #CP, intégration TCB (ExoShield v1.0)
-//   ├── exoveil/         PKS domains — révocation O(1), isolation mémoire (ExoShield v1.0)
-//   ├── exoledger/       Audit chaîné Blake3, zone P0 immuable (ExoShield v1.0)
-//   └── exokairos/       Capabilities temporelles, deadline cachée, budgets (ExoShield v1.0)
+//   ├── audit/           Ring-buffer logger, audit rules, syscall integration
+//   ├── exocage/         CET Shadow Stack + IBT — #CP handler, TCB integration (ExoShield v1.0)
+//   ├── exoveil/         PKS domains — O(1) revocation, memory isolation (ExoShield v1.0)
+//   ├── exoledger/       Blake3 chained audit, immutable P0 zone (ExoShield v1.0)
+//   └── exokairos/       Temporal capabilities, hidden deadline, budgets (ExoShield v1.0)
 //
-// Ordre d'initialisation v7 (security_init) — ExoShield v1.0 :
+// Initialization order v7 (security_init) — ExoShield v1.0:
 //   integrity_check → capability → access_control → zero_trust → crypto
 //   → isolation → exploit_mitigations → audit → exoledger → exokairos_init
 //   → exoveil_restore → SECURITY_READY
 //
-// RÈGLE SEC-INIT-01 : Aucun sous-système ne doit être utilisé avant security_init().
-// RÈGLE SEC-INIT-02 : integrity_check::integrity_init() doit être le premier
-//                     sous-système à s'exécuter après le boot (avant IRQs).
+// RULE SEC-INIT-01: No subsystem must be used prior to security_init().
+// RULE SEC-INIT-02: integrity_check::integrity_init() must be the first
+//                   subsystem to execute after boot (before IRQs).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod access_control;
@@ -50,16 +50,16 @@ pub mod zero_trust;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECURITY_READY — flag BOOT-SEC (Z-AI CVE-EXO-001)
+// SECURITY_READY — BOOT-SEC flag (Z-AI CVE-EXO-001)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flag atomique positionné à `true` à la fin de `security_init()`.
+/// Atomic flag set to `true` at the end of `security_init()`.
 ///
-/// Les APs SMP DOIVENT spin-wait sur ce flag avant toute IPC ou accès ExoFS.
-/// Sans ce flag, entre l'init des capabilities et celle du checker d'accès,
-/// un AP peut effectuer des IPC non vérifiées (CVE-EXO-001 / BOOT-SEC).
+/// SMP APs MUST spin-wait on this flag before any IPC or ExoFS access.
+/// Without this flag, between capability init and access checker init,
+/// an AP can perform unverified IPCs (CVE-EXO-001 / BOOT-SEC).
 ///
-/// # Utilisation dans arch/x86_64/smp/init.rs
+/// # Usage in arch/x86_64/smp/init.rs
 /// ```rust,ignore
 /// while !security::SECURITY_READY.load(Ordering::Acquire) {
 ///     core::hint::spin_loop();
@@ -67,7 +67,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// ```
 pub static SECURITY_READY: AtomicBool = AtomicBool::new(false);
 
-/// Retourne `true` si security_init() est terminé.
+/// Returns `true` if security_init() has completed.
 #[inline]
 pub fn is_security_ready() -> bool {
     SECURITY_READY.load(Ordering::Acquire)
@@ -122,30 +122,30 @@ pub use integrity_check::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-F6 — Rapport de durcissement production
+// FIX-F6 — Production hardening report
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État des protections critiques attendues en **production**. Distingue ce qui
-/// est *réellement actif* de ce qui est désactivé en dev, pour éviter qu'un build
-/// de production parte sans durcissement (cf. AUDIT-100-PERCENT.md F6).
+/// State of critical protections expected in **production**. Distinguishes what
+/// is *actually active* from what is disabled in dev, to prevent a production
+/// build from being deployed without hardening (cf. AUDIT-100-PERCENT.md F6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProductionSecurityStatus {
-    /// Feature `strict_exec_signatures` → exec refuse les binaires non signés.
+    /// Feature `strict_exec_signatures` → exec rejects unsigned binaries.
     pub strict_exec_signatures: bool,
-    /// Enforcement Secure Boot actif → chaîne de confiance obligatoire.
+    /// Secure Boot enforcement active → mandatory chain of trust.
     pub secure_boot_enforced: bool,
-    /// Hashes de référence Kernel-A embarqués (≠ ZERO_HASH de dev).
+    /// Embedded Kernel-A reference hashes (≠ dev ZERO_HASH).
     pub reference_hashes_embedded: bool,
 }
 
 impl ProductionSecurityStatus {
-    /// Vrai si TOUTES les protections de production sont actives.
+    /// True if ALL production protections are active.
     pub fn is_hardened(&self) -> bool {
         self.strict_exec_signatures && self.secure_boot_enforced && self.reference_hashes_embedded
     }
 }
 
-/// Calcule l'état de durcissement production (fonction pure, testable).
+/// Computes production hardening status (pure function, testable).
 pub fn production_security_status() -> ProductionSecurityStatus {
     ProductionSecurityStatus {
         strict_exec_signatures: cfg!(feature = "strict_exec_signatures"),
@@ -154,8 +154,8 @@ pub fn production_security_status() -> ProductionSecurityStatus {
     }
 }
 
-/// Émet un avertissement bruyant si la configuration n'est PAS durcie pour la
-/// production. À appeler une fois en fin d'init sécurité.
+/// Emits a loud warning if the configuration is NOT hardened for
+/// production. To be called once at the end of security init.
 pub fn warn_if_not_production_hardened() {
     let st = production_security_status();
     if st.is_hardened() {
@@ -206,7 +206,7 @@ mod production_status_tests {
         };
         assert!(!none_on.is_hardened());
 
-        // Une seule protection manquante suffit à invalider le durcissement.
+        // A single missing protection is enough to invalidate hardening.
         let mut one_missing = all_on;
         one_missing.secure_boot_enforced = false;
         assert!(!one_missing.is_hardened());
@@ -299,46 +299,46 @@ pub use exoargos::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation orchestrée
+// Orchestrated initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise l'intégralité du sous-système de sécurité d'Exo-OS.
+/// Initializes the entirety of the Exo-OS security subsystem.
 ///
-/// # Ordre strict (RÈGLE SEC-INIT-01 et SEC-INIT-02) — v6
+/// # Strict order (RULE SEC-INIT-01 and SEC-INIT-02) — v6
 ///
-/// 1. **integrity_check** — Doit être en tête : calcule les hashes de référence
-///    de `.text/.rodata` pendant que les sections sont intactes (avant tout IRQ).
-/// 2. **capability** — Tables de capabilities, init du mécanisme de révocation.
-/// 3. **zero_trust** — Tables de politiques MLS, contexte de confiance initial.
-/// 4. **crypto** — CSPRNG via RDRAND + ChaCha20 (requis par stack_protector).
-/// 5. **isolation** — Domaines, sandbox, namespaces, pledge.
-/// 6. **exploit_mitigations** — KASLR figé (entropy du bootloader), canary global.
-/// 7. **audit** — Logger ring-buffer, installe les règles par défaut.
-/// 8. **access_control** — Enregistrement des mappings ObjectKind (v6, step 18).
+/// 1. **integrity_check** — Must lead: calculates reference hashes of
+///    `.text/.rodata` while sections are intact (prior to any IRQ).
+/// 2. **capability** — Capability tables, init of revocation mechanism.
+/// 3. **zero_trust** — MLS policy tables, initial trust context.
+/// 4. **crypto** — CSPRNG via RDRAND + ChaCha20 (required by stack_protector).
+/// 5. **isolation** — Domains, sandbox, namespaces, pledge.
+/// 6. **exploit_mitigations** — Frozen KASLR (bootloader entropy), global canary.
+/// 7. **audit** — Ring-buffer logger, installs default rules.
+/// 8. **access_control** — ObjectKind mapping registration (v6, step 18).
 ///
 /// # Arguments
-/// - `kaslr_entropy` : entropie fournie par le bootloader (RDRAND + TSC)
-/// - `phys_base`     : adresse physique réelle de chargement du kernel
+/// - `kaslr_entropy`: entropy provided by bootloader (RDRAND + TSC)
+/// - `phys_base`: actual physical load base address of kernel
 pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     #[inline(always)]
     fn probe(byte: u8) {
-        // SAFETY: port debug QEMU 0xE9, écriture bornée d'un octet pour tracer
-        // le progrès du boot sécurité sans dépendre d'un driver déjà initialisé.
+        // SAFETY: QEMU debug port 0xE9, bounded single-byte write to trace
+        // security boot progress without depending on an initialized driver.
         unsafe {
             core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
         }
     }
 
-    // ── 0. ExoSeal phase 0 — CET + PKS default-deny + watchdog boot ─────────
-    // SAFETY: security_init() est appelé au boot, avant toute concurrence
-    // significative des sous-systèmes de sécurité.
+    // ── 0. ExoSeal phase 0 — CET + PKS default-deny + boot watchdog ─────────
+    // SAFETY: security_init() is called at boot, prior to any significant
+    // concurrency across security subsystems.
     probe(b'j');
     unsafe {
         exoseal::exoseal_boot_phase0();
     }
     probe(b'k');
 
-    // ── 1. Intégrité ──────────────────────────────────────────────────────────
+    // ── 1. Integrity ──────────────────────────────────────────────────────────
     integrity_init();
     probe(b'l');
 
@@ -347,7 +347,7 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     probe(b'm');
 
     // ── 3. Zero Trust ─────────────────────────────────────────────────────────
-    // (pas de fonction d'init dédiée — la politique est lazy-initialized)
+    // (no dedicated init function — policy is lazy-initialized)
     probe(b'n');
 
     // ── 4. Crypto ─────────────────────────────────────────────────────────────
@@ -355,10 +355,10 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     probe(b'o');
 
     // ── 5. Isolation ──────────────────────────────────────────────────────────
-    // (domaines/namespaces/sandbox/pledge s'initialisent via leurs statics)
+    // (domains/namespaces/sandbox/pledge initialize via their statics)
     probe(b'p');
 
-    // ── 6. Atténuations d'exploitation ────────────────────────────────────────
+    // ── 6. Exploit mitigations ────────────────────────────────────────
     mitigations_init(kaslr_entropy, phys_base);
     probe(b'q');
 
@@ -370,15 +370,15 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     access_control::init();
     probe(b's');
 
-    // ── 9. ExoLedger — Audit chaîné Blake3 + zone P0 (ExoShield v1.0) ────────
-    //    Initialise le journal d'audit chaîné avec la zone P0 immuable.
-    //    Doit être avant SECURITY_READY pour capturer les événements de boot.
+    // ── 9. ExoLedger — Blake3 chained audit + P0 zone (ExoShield v1.0) ────────
+    //    Initializes chained audit log with immutable P0 zone.
+    //    Must precede SECURITY_READY to capture boot events.
     exoledger::exo_ledger_init();
     probe(b't');
 
     // ── 10. ExoKairos — Kernel secret (ExoShield v1.0) ──────────────────────
-    //    Initialise le KERNEL_SECRET pour les capabilities temporelles.
-    //    Le secret est dérivé du CSPRNG (déjà initialisé à l'étape 4).
+    //    Initializes KERNEL_SECRET for temporal capabilities.
+    //    Secret is derived from CSPRNG (already initialized in step 4).
     {
         let mut secret = [0u8; 32];
         if rng_fill(&mut secret).is_err() {
@@ -397,8 +397,8 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     probe(b'u');
 
     // ── 11. ExoArgos — PMC Monitoring (ExoShield v1.0 Module 8) ──────────────
-    //    Initialise les compteurs PMU pour le monitoring de comportement.
-    //    SAFETY: Ring 0, MSR write — appelé une seule fois au boot.
+    //    Initializes PMU counters for behavioral monitoring.
+    //    SAFETY: Ring 0, MSR write — called only once at boot.
     unsafe {
         exoargos::exoargos_init();
     }
@@ -408,21 +408,21 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     probe(b'v');
 
     // ── 12. ExoNmi — Progressive NMI Watchdog (ExoShield v1.0 Module 9) ───────
-    //    Initialise le watchdog (LAPIC virt base, timer masqué).
+    //    Initializes watchdog (LAPIC virt base, masked timer).
     exonmi::exonmi_init();
     probe(b'w');
 
-    // ── 12b. ExoCage per-thread — thread bootstrap courant ──────────────────
+    // ── 12b. ExoCage per-thread — current bootstrap thread ──────────────────
     let current_tcb = crate::scheduler::core::switch::current_thread_raw();
     if !current_tcb.is_null() && exocage::is_cet_global_enabled() {
-        // SAFETY: on agit sur le TCB courant du BSP pendant l'init sécurité,
-        // avant l'ouverture normale du système.
+        // SAFETY: operating on current BSP TCB during security init,
+        // prior to normal system operation.
         let _ = unsafe { exocage::enable_cet_for_thread(&mut *current_tcb) };
     }
     probe(b'x');
 
-    // ── 13. ExoSeal complete — PKS ops normales + SECURITY_READY + watchdog ──
-    // SAFETY: Ring 0, séquence finale de boot des modules de sécurité.
+    // ── 13. ExoSeal complete — PKS normal ops + SECURITY_READY + watchdog ──
+    // SAFETY: Ring 0, final boot sequence of security modules.
     unsafe {
         exoseal::exoseal_boot_complete();
     }
@@ -430,14 +430,14 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification périodique d'intégrité (appelée par le scheduler)
+// Periodic integrity check (called by scheduler)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Effectue la vérification périodique d'intégrité du kernel.
+/// Performs periodic kernel integrity check.
 ///
-/// Doit être appelée par le scheduler toutes les N ticks.
+/// Must be called by the scheduler every N ticks.
 ///
-/// Panique si une corruption est détectée (RÈGLE SECBOOT-01 niveau kernel).
+/// Panics if corruption is detected (RULE SECBOOT-01 kernel level).
 #[inline]
 pub fn security_periodic_check() {
     assert_kernel_integrity();
@@ -448,18 +448,18 @@ mod p2_7_security_tests {
     use super::*;
     use core::sync::atomic::{AtomicBool, Ordering};
 
-    /// P2-7 / Test 3 — Handshake SECURITY_READY : store Release → load Acquire.
+    /// P2-7 / Test 3 — SECURITY_READY handshake: store Release → load Acquire.
     ///
-    /// Vérifie le contrat BOOT-SEC / CVE-EXO-001 :
-    /// - avant security_init() : flag à false
-    /// - après store(true, Release) : load(Acquire) retourne true
+    /// Verifies BOOT-SEC / CVE-EXO-001 contract:
+    /// - prior to security_init(): flag is false
+    /// - after store(true, Release): load(Acquire) returns true
     ///
-    /// Ce test NE reproduit PAS les effets de bord de security_init()
-    /// (integrity_check, crypto, etc.) — il valide uniquement l'atomique.
-    /// Runnable sur host (pas de dépendance Ring 0).
+    /// This test DOES NOT reproduce side effects of security_init()
+    /// (integrity_check, crypto, etc.) — it validates solely the atomic.
+    /// Runnable on host (no Ring 0 dependency).
     #[test]
     fn security_ready_store_load_contract() {
-        // Réinitialisation locale pour isoler le test.
+        // Local reinitialization to isolate test.
         let local_flag = AtomicBool::new(false);
 
         assert!(
@@ -467,7 +467,7 @@ mod p2_7_security_tests {
             "SECURITY_READY doit être false avant l'init"
         );
 
-        // Simule le store final de security_init().
+        // Simulates final store of security_init().
         local_flag.store(true, Ordering::Release);
 
         assert!(
@@ -475,16 +475,16 @@ mod p2_7_security_tests {
             "SECURITY_READY doit être true après store(Release)"
         );
 
-        // Vérifie la sémantique Acquire sur relecture.
+        // Verifies Acquire semantics on reload.
         assert!(
             local_flag.load(Ordering::Acquire),
             "SECURITY_READY doit rester true (pas de reset implicite)"
         );
     }
 
-    /// P2-7 / Test 3b — is_security_ready() est cohérent avec le flag global.
+    /// P2-7 / Test 3b — is_security_ready() is consistent with global flag.
     ///
-    /// Vérifie que le wrapper public lit bien avec Acquire.
+    /// Verifies that public wrapper reads with Acquire.
     #[test]
     fn is_security_ready_matches_atomic() {
         let raw = SECURITY_READY.load(Ordering::Acquire);

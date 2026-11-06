@@ -1,33 +1,33 @@
 // kernel/src/security/access_control/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACCESS CONTROL — Module racine (v6)
+// ACCESS CONTROL — Root module (v6)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// v6 : remplace ipc/capability_bridge/ (supprimé).
-//      Point d'entrée unifié pour TOUS les modules (ipc/, fs/, process/).
+// v6: replaces ipc/capability_bridge/ (removed).
+//     Unified entry point for ALL modules (ipc/, fs/, process/).
 //
-// Structure :
+// Structure:
 //   access_control/
-//   ├── checker.rs      — check_access() point d'entrée unique + init()
-//   └── object_types.rs — ObjectKind enum + droits associés
+//   ├── checker.rs      — check_access() single entry point + init()
+//   └── object_types.rs — ObjectKind enum + associated rights
 //
-// RÈGLE SEC-AC-01 (v6) :
-//   Tout accès à un objet protégé DOIT passer par checker::check_access().
-//   Direct calls à security::capability::verify() depuis ipc/fs/process = INTERDIT.
+// RULE SEC-AC-01 (v6):
+//   Any access to a protected object MUST go through checker::check_access().
+//   Direct calls to security::capability::verify() from ipc/fs/process = FORBIDDEN.
 //
-// FLUX (v6) :
+// FLOW (v6):
 //   ipc/ | fs/ | process/
-//     → access_control::check_access(table, token, ObjectKind::X, rights, "module")
-//       → capability::verify::verify(table, token, rights)   [O(1), INV-1]
-//       → audit::log_event / audit_capability_deny
+//     -> access_control::check_access(table, token, ObjectKind::X, rights, "module")
+//       -> capability::verify::verify(table, token, rights)   [O(1), INV-1]
+//       -> audit::log_event / audit_capability_deny
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod checker;
 pub mod object_types;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports publics
+// Public re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use checker::{check_access, init, AccessError};

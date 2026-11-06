@@ -1,44 +1,44 @@
 // kernel/src/security/isolation/domains.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Domaines de sécurité — Isolation par domaine d'exécution
+// Security Domains — Execution domain isolation
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Chaque thread/processus appartient à UN domaine de sécurité unique
-//   • Les transitions sont strictement unidirectionnelles (Kernel→Driver→User→Sandbox)
-//   • Les accès cross-domain sont filtrés par la zero_trust policy
-//   • Instrumentation : compteurs atomiques par transition
+// Architecture:
+//   • Each thread/process belongs to ONE single security domain
+//   • Transitions are strictly unidirectional (Kernel→Driver→User→Sandbox)
+//   • Cross-domain accesses are filtered by the zero_trust policy
+//   • Instrumentation: atomic counters per transition
 //
-// Domaines :
-//   Kernel(0)  : code kernel — anneau 0, accès total
-//   Driver(1)  : pilotes certifiés — anneau 0 isolé, accès MMIO/DMA limité
-//   User(2)    : processus utilisateur normaux — anneau 3
-//   Sandbox(3) : processus sandboxés — anneau 3, syscalls filtrés
+// Domains:
+//   Kernel(0)  : kernel code — ring 0, full access
+//   Driver(1)  : certified drivers — isolated ring 0, limited MMIO/DMA access
+//   User(2)    : standard user processes — ring 3
+//   Sandbox(3) : sandboxed processes — ring 3, filtered syscalls
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SecurityDomain — identifiant de domaine
+// SecurityDomain — domain identifier
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Domaine de sécurité d'un thread ou processus.
+/// Security domain of a thread or process.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SecurityDomain {
-    /// Kernel pur — anneau 0, aucune restriction.
+    /// Pure kernel — ring 0, no restrictions.
     Kernel = 0,
-    /// Pilote certifié — anneau 0 avec politique IOMMU/MMIO.
+    /// Certified driver — ring 0 with IOMMU/MMIO policy.
     Driver = 1,
-    /// Processus utilisateur standard — anneau 3.
+    /// Standard user process — ring 3.
     User = 2,
-    /// Processus sandboxé — anneau 3, pledge() + syscall filter.
+    /// Sandboxed process — ring 3, pledge() + syscall filter.
     Sandbox = 3,
 }
 
 impl SecurityDomain {
-    /// Retourne le niveau de confiance numérique du domaine.
+    /// Returns the numerical trust level of the domain.
     pub fn trust_level(&self) -> u32 {
         match self {
             SecurityDomain::Kernel => 100,
@@ -48,41 +48,41 @@ impl SecurityDomain {
         }
     }
 
-    /// Vérifie si ce domaine peut accéder au domaine `target`.
+    /// Checks if this domain can access the `target` domain.
     ///
-    /// Règle : un domaine de confiance inférieure ne peut PAS accéder
-    /// à un domaine de confiance supérieure sans gate explicite.
+    /// Rule: a domain with lower trust CANNOT access
+    /// a domain with higher trust without an explicit gate.
     pub fn can_access(&self, target: SecurityDomain) -> bool {
         self.trust_level() >= target.trust_level()
     }
 
-    /// Vérifie si une transition de `self` → `next` est autorisée.
+    /// Checks if a transition from `self` → `next` is allowed.
     ///
-    /// Les transitions autorisées via gate :
+    /// Transitions allowed via gate:
     ///   User → Kernel (syscall), User → Driver (ioctl via /dev)
     ///   Driver → Kernel (driver_call)
-    ///   Sandbox → User est INTERDIT (isolation stricte)
+    ///   Sandbox → User is FORBIDDEN (strict isolation)
     pub fn is_transition_allowed(&self, next: SecurityDomain) -> bool {
         match (self, next) {
-            // Kernel peut aller partout
+            // Kernel can go anywhere
             (SecurityDomain::Kernel, _) => true,
-            // Driver → Kernel via gate driver_call
+            // Driver → Kernel via driver_call gate
             (SecurityDomain::Driver, SecurityDomain::Kernel) => true,
             // User → Kernel via syscall (normal)
             (SecurityDomain::User, SecurityDomain::Kernel) => true,
-            // Sandbox → Kernel via syscall (filtré par sandbox policy)
+            // Sandbox → Kernel via syscall (filtered by sandbox policy)
             (SecurityDomain::Sandbox, SecurityDomain::Kernel) => true,
-            // Toute autre transition est refusée
+            // Any other transition is rejected
             _ => false,
         }
     }
 
-    /// Encode le domaine sur un u8.
+    /// Encodes the domain into a u8.
     pub fn as_u8(&self) -> u8 {
         *self as u8
     }
 
-    /// Décode depuis un u8.
+    /// Decodes from a u8.
     pub fn from_u8(v: u8) -> Option<SecurityDomain> {
         match v {
             0 => Some(SecurityDomain::Kernel),
@@ -95,42 +95,42 @@ impl SecurityDomain {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DomainContext — contexte d'exécution d'un thread dans un domaine
+// DomainContext — execution context of a thread within a domain
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte de domaine par thread — stocké dans le TCB du thread.
+/// Domain context per thread — stored in the thread's TCB.
 #[repr(C)]
 pub struct DomainContext {
-    /// Domaine actuel.
+    /// Current domain.
     pub domain: SecurityDomain,
-    /// Domaine d'origine (avant la dernière transition).
+    /// Origin domain (before the last transition).
     pub previous_domain: SecurityDomain,
-    /// PID du thread propriétaire.
+    /// Owner thread PID.
     pub owner_pid: u32,
-    /// TID du thread propriétaire.
+    /// Owner thread TID.
     pub owner_tid: u32,
-    /// Nombre de transitions de domaine effectuées.
+    /// Number of domain transitions performed.
     pub transition_count: AtomicU32,
-    /// Flags additionnels (bitmask).
+    /// Additional flags (bitmask).
     pub flags: AtomicU64,
 }
 
-/// Flags de domaine context.
+/// Domain context flags.
 pub mod domain_flags {
-    /// Thread en cours de transition de domaine.
+    /// Thread undergoing domain transition.
     pub const TRANSITIONING: u64 = 1 << 0;
-    /// Thread est un thread kernel interne.
+    /// Thread is an internal kernel thread.
     pub const KERNEL_THREAD: u64 = 1 << 1;
-    /// Thread a été créé via fork() depuis un Sandbox.
+    /// Thread was created via fork() from a Sandbox.
     pub const SANDBOX_ORIGIN: u64 = 1 << 2;
-    /// Thread est en état de débogage.
+    /// Thread is in debug state.
     pub const UNDER_PTRACE: u64 = 1 << 3;
-    /// Isolation mémoire renforcée (PKRU activé).
+    /// Hardened memory isolation (PKRU enabled).
     pub const PKRU_ISOLATED: u64 = 1 << 4;
 }
 
 impl DomainContext {
-    /// Crée un contexte de domaine pour un thread kernel.
+    /// Creates a domain context for a kernel thread.
     pub fn new_kernel(pid: u32, tid: u32) -> Self {
         Self {
             domain: SecurityDomain::Kernel,
@@ -142,7 +142,7 @@ impl DomainContext {
         }
     }
 
-    /// Crée un contexte de domaine pour un processus utilisateur.
+    /// Creates a domain context for a user process.
     pub fn new_user(pid: u32, tid: u32) -> Self {
         Self {
             domain: SecurityDomain::User,
@@ -154,7 +154,7 @@ impl DomainContext {
         }
     }
 
-    /// Crée un contexte de domaine pour un processus sandboxé.
+    /// Creates a domain context for a sandboxed process.
     pub fn new_sandbox(pid: u32, tid: u32) -> Self {
         Self {
             domain: SecurityDomain::Sandbox,
@@ -166,8 +166,8 @@ impl DomainContext {
         }
     }
 
-    /// Effectue une transition vers `new_domain`.
-    /// Retourne Err si la transition n'est pas autorisée.
+    /// Performs a transition to `new_domain`.
+    /// Returns Err if the transition is not allowed.
     pub fn transition_to(&mut self, new_domain: SecurityDomain) -> Result<(), DomainError> {
         if !self.domain.is_transition_allowed(new_domain) {
             DOMAIN_STATS
@@ -191,60 +191,60 @@ impl DomainContext {
         Ok(())
     }
 
-    /// Retourne au domaine précédent (return from syscall).
+    /// Returns to previous domain (return from syscall).
     pub fn return_to_previous(&mut self) {
         let prev = self.previous_domain;
         self.domain = prev;
         self.transition_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Vérifie si le contexte est dans le domaine Kernel.
+    /// Checks if context is in Kernel domain.
     #[inline(always)]
     pub fn is_kernel(&self) -> bool {
         self.domain == SecurityDomain::Kernel
     }
 
-    /// Vérifie si le contexte est sandboxé.
+    /// Checks if context is sandboxed.
     #[inline(always)]
     pub fn is_sandboxed(&self) -> bool {
         self.domain == SecurityDomain::Sandbox
     }
 
-    /// Ajoute un flag.
+    /// Adds a flag.
     pub fn set_flag(&self, flag: u64) {
         self.flags.fetch_or(flag, Ordering::Relaxed);
     }
 
-    /// Retire un flag.
+    /// Clears a flag.
     pub fn clear_flag(&self, flag: u64) {
         self.flags.fetch_and(!flag, Ordering::Relaxed);
     }
 
-    /// Vérifie un flag.
+    /// Checks a flag.
     pub fn has_flag(&self, flag: u64) -> bool {
         self.flags.load(Ordering::Relaxed) & flag != 0
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs de domaine
+// Domain errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub enum DomainError {
-    /// Transition de domaine non autorisée.
+    /// Unauthorized domain transition.
     TransitionNotAllowed {
         from: SecurityDomain,
         to: SecurityDomain,
     },
-    /// Accès cross-domain refusé.
+    /// Cross-domain access denied.
     CrossDomainAccessDenied,
-    /// Domaine inconnu.
+    /// Unknown domain.
     UnknownDomain,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales des domaines
+// Global domain statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct DomainStats {
@@ -259,7 +259,7 @@ static DOMAIN_STATS: DomainStats = DomainStats {
     cross_domain_denials: AtomicU64::new(0),
 };
 
-/// Retourne les statistiques de domaine sous forme de snapshot.
+/// Returns domain statistics as a snapshot.
 #[derive(Debug, Clone, Copy)]
 pub struct DomainStatsSnapshot {
     pub successful_transitions: u64,

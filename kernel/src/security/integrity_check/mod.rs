@@ -1,11 +1,11 @@
 // kernel/src/security/integrity_check/mod.rs
 //
-// Module integrity_check — Vérification d'intégrité à plusieurs niveaux
+// Module integrity_check — Multi-level integrity verification
 //
-// Sous-modules :
-//   • code_signing   — Signature Ed25519 des modules kernel
-//   • runtime_check  — Hash BLAKE3 périodique de .text/.rodata
-//   • secure_boot    — Chaîne de confiance exo-boot → kernel
+// Submodules:
+//   • code_signing   — Ed25519 signature of kernel modules
+//   • runtime_check  — Periodic BLAKE3 hashing of .text/.rodata
+//   • secure_boot    — Chain of trust exo-boot → kernel
 
 pub mod code_signing;
 pub mod runtime_check;
@@ -25,27 +25,27 @@ pub use secure_boot::{
     verify_boot_attestation, BootAttestation, SecureBootError,
 };
 
-/// Initialise le sous-système d'intégrité.
+/// Initializes the integrity subsystem.
 ///
-/// Ordre : runtime_check doit s'exécuter AVANT tout autre init
-/// (les sections .text/.rodata doivent être intactes).
+/// Order: runtime_check must run BEFORE any other init
+/// (the .text/.rodata sections must be intact).
 pub fn integrity_init() {
     init_runtime_integrity();
 }
 
-/// Intervalle entre deux vérifications d'intégrité runtime (60 s). Le hash
-/// Blake3 de `.text/.rodata` est une opération lourde → basse fréquence
-/// suffisante pour détecter une altération persistante sans charge inutile.
+/// Interval between two runtime integrity checks (60 s). The Blake3
+/// hash of `.text/.rodata` is a heavy operation → low frequency
+/// sufficient to detect persistent alteration without unnecessary load.
 const INTEGRITY_CHECK_INTERVAL_NS: u64 = 60_000_000_000;
 
-/// Boucle du kthread moniteur d'intégrité (TIER 2.1-a). Dort, puis — une fois le
-/// boot sécurité terminé (`is_security_ready`, donc `.text/.rodata` stables) —
-/// lance une vérification en **mode observe** (log/ledger, jamais de panic).
+/// Loop of the integrity monitor kthread (TIER 2.1-a). Sleeps, then — once the
+/// security boot is finished (`is_security_ready`, thus `.text/.rodata` stable) —
+/// triggers a check in **observe mode** (log/ledger, never panics).
 fn integrity_monitor_loop(_arg: usize) -> ! {
     loop {
         if !crate::scheduler::timer::sleep_ns(INTEGRITY_CHECK_INTERVAL_NS) {
-            // Sommeil indisponible (très tôt) → céder le CPU et réessayer.
-            // SAFETY: cooperative_reschedule cède proprement depuis un kthread.
+            // Sleep unavailable (very early) → yield the CPU and retry.
+            // SAFETY: cooperative_reschedule yields cleanly from a kthread.
             unsafe {
                 let _ = crate::scheduler::core::switch::cooperative_reschedule();
             }
@@ -57,9 +57,9 @@ fn integrity_monitor_loop(_arg: usize) -> ! {
     }
 }
 
-/// Démarre le kthread moniteur d'intégrité runtime. Best-effort : si la création
-/// du kthread échoue, le boot continue (l'intégrité reste vérifiable à la demande
-/// via `check_kernel_integrity`). À appeler une fois après `security_init`.
+/// Starts the runtime integrity monitor kthread. Best-effort: if kthread creation
+/// fails, boot continues (integrity remains checkable on-demand
+/// via `check_kernel_integrity`). To be called once after `security_init`.
 pub fn start_integrity_monitor() {
     use crate::process::lifecycle::create::{create_kthread, KthreadParams};
     use crate::scheduler::core::task::Priority;

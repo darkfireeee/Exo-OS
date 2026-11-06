@@ -1,23 +1,23 @@
 // kernel/src/security/crypto/rng.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CSPRNG — Générateur de nombres pseudo-aléatoires cryptographiquement sûr
+// CSPRNG — Cryptographically secure pseudo-random number generator
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Source primaire : RDRAND (Intel) — instruction CPU matérielle
-//   • Générateur : ChaCha20 block function (RFC 8439) importée de
-//     xchacha20_poly1305.rs — arithmétique u32 pure, zéro SIMD/SSE2.
-//   • Reseed : toutes les 4096 blocs ChaCha20 générés, mixage RDRAND.
-//   • Fallback : TSC + adresse de pile quand RDRAND échoue.
+// Architecture:
+//   • Primary source: RDRAND (Intel) — hardware CPU instruction
+//   • Generator: ChaCha20 block function (RFC 8439) imported from
+//     xchacha20_poly1305.rs — pure u32 arithmetic, zero SIMD/SSE2.
+//   • Reseed: every 4096 ChaCha20 blocks generated, RDRAND mixing.
+//   • Fallback: TSC + stack address when RDRAND fails.
 //
-// RÈGLE CRYPTO-CRATES : ChaCha20 est la SEULE primitive crypto maison
-// autorisée (la crate chacha20 déclenche LLVM ERROR: split 128-bit sur
-// x86_64-unknown-none sans SSE2). L'implémentation est conforme RFC 8439.
+// RULE CRYPTO-CRATES: ChaCha20 is the ONLY allowed in-house crypto primitive
+// (the chacha20 crate triggers LLVM ERROR: split 128-bit on
+// x86_64-unknown-none without SSE2). The implementation conforms to RFC 8439.
 //
-// RÈGLE RNG-01 : JAMAIS appeler rng_fill() depuis un contexte NMI (pas de lock).
-// RÈGLE RNG-02 : Toujours vérifier le retour de RDRAND (CF flag).
-// RÈGLE RNG-03 : En cas d'échec RDRAND après 10 tentatives → fallback TSC+stack.
+// RULE RNG-01: NEVER call rng_fill() from an NMI context (no lock).
+// RULE RNG-02: Always check RDRAND return (CF flag).
+// RULE RNG-03: In case of RDRAND failure after 10 attempts → fallback to TSC+stack.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::xchacha20_poly1305::chacha20_block;
@@ -25,10 +25,10 @@ use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-/// Nombre de blocs ChaCha20 avant un reseed obligatoire.
+/// Number of ChaCha20 blocks before mandatory reseed.
 const RESEED_INTERVAL_BLOCKS: u64 = 4096;
 
-/// Taille d'un bloc ChaCha20 en octets.
+/// ChaCha20 block size in bytes.
 const CHACHA20_BLOCK_SIZE: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,25 +37,25 @@ const CHACHA20_BLOCK_SIZE: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
 pub enum RngError {
-    /// RDRAND a échoué après le nombre maximum de tentatives.
+    /// RDRAND failed after the maximum number of attempts.
     RdrandExhausted,
-    /// RNG non initialisé.
+    /// RNG not initialized.
     NotInitialized,
-    /// Entropie insuffisante au démarrage.
+    /// Insufficient entropy at startup.
     InsufficientEntropy,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RDRAND — lecture matérielle
+// RDRAND — hardware read
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tente de lire une valeur 64 bits depuis RDRAND.
-/// Retourne Ok(value) ou Err si CF=0 (retentatives épuisées).
+/// Attempts to read a 64-bit value from RDRAND.
+/// Returns Ok(value) or Err if CF=0 (retries exhausted).
 #[inline]
 fn rdrand64() -> Result<u64, RngError> {
     #[cfg(target_arch = "x86_64")]
     {
-        // Évite #UD si l'instruction RDRAND n'est pas supportée par le CPU/VM.
+        // Avoids #UD if the RDRAND instruction is not supported by CPU/VM.
         if !cpu_features_or_none().map_or(false, |features| features.has_rdrand()) {
             return Err(RngError::RdrandExhausted);
         }
@@ -63,7 +63,7 @@ fn rdrand64() -> Result<u64, RngError> {
         let mut val: u64 = 0;
         let mut success: u8;
         for _ in 0..10 {
-            // SAFETY: rdrand peut échouer légitimement (CF=0); val = 0 si échec, retry jusqu'à 10.
+            // SAFETY: rdrand can legitimately fail (CF=0); val = 0 on failure, retry up to 10.
             unsafe {
                 core::arch::asm!(
                     "rdrand {val}",
@@ -76,8 +76,8 @@ fn rdrand64() -> Result<u64, RngError> {
             if success != 0 {
                 return Ok(val);
             }
-            // Pause entre les tentatives (x86 hint)
-            // SAFETY: PAUSE est une hint d'attente pour le CPU — aucun effet de bord.
+            // Pause between attempts (x86 hint)
+            // SAFETY: PAUSE is a wait hint for the CPU — no side effects.
             unsafe {
                 core::arch::asm!("pause", options(nostack, nomem));
             }
@@ -88,11 +88,11 @@ fn rdrand64() -> Result<u64, RngError> {
     Err(RngError::RdrandExhausted)
 }
 
-/// Tente de lire une valeur 64 bits depuis RDSEED.
+/// Attempts to read a 64-bit value from RDSEED.
 ///
-/// RDSEED expose la source d'entropie MATÉRIELLE brute (vs RDRAND = CSPRNG
-/// matériel reseedé), donc une qualité d'entropie supérieure pour le seeding.
-/// Retourne `Err` si non supporté ou CF=0 après 10 tentatives.
+/// RDSEED exposes the raw HARDWARE entropy source (vs RDRAND = reseeded
+/// hardware CSPRNG), hence superior entropy quality for seeding.
+/// Returns `Err` if unsupported or CF=0 after 10 attempts.
 #[inline]
 fn rdseed64() -> Result<u64, RngError> {
     #[cfg(target_arch = "x86_64")]
@@ -103,7 +103,7 @@ fn rdseed64() -> Result<u64, RngError> {
         let mut val: u64 = 0;
         let mut success: u8;
         for _ in 0..10 {
-            // SAFETY: rdseed peut échouer légitimement (CF=0) ; val=0 si échec, retry.
+            // SAFETY: rdseed can legitimately fail (CF=0); val=0 on failure, retry.
             unsafe {
                 core::arch::asm!(
                     "rdseed {val}",
@@ -116,7 +116,7 @@ fn rdseed64() -> Result<u64, RngError> {
             if success != 0 {
                 return Ok(val);
             }
-            // SAFETY: PAUSE = hint CPU, aucun effet de bord.
+            // SAFETY: PAUSE = CPU hint, no side effects.
             unsafe {
                 core::arch::asm!("pause", options(nostack, nomem));
             }
@@ -127,7 +127,7 @@ fn rdseed64() -> Result<u64, RngError> {
     Err(RngError::RdrandExhausted)
 }
 
-/// Lit n bytes depuis RDRAND dans un buffer.
+/// Reads n bytes from RDRAND into a buffer.
 pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
     let mut pos = 0;
     while pos + 8 <= buf.len() {
@@ -145,16 +145,16 @@ pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers — TSC et stack pointer (fallback entropie)
+// Helpers — TSC and stack pointer (entropy fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le TSC (Time Stamp Counter).
+/// Reads the TSC (Time Stamp Counter).
 #[inline]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
         let tsc: u64;
-        // SAFETY: RDTSC est non-privilégiée — aucun effet de bord.
+        // SAFETY: RDTSC is non-privileged — no side effects.
         unsafe {
             core::arch::asm!("rdtsc; shl rdx, 32; or rax, rdx",
                 out("rax") tsc, out("rdx") _,
@@ -166,13 +166,13 @@ fn read_tsc() -> u64 {
     0
 }
 
-/// Lit le pointeur de pile courant (source d'entropie supplémentaire).
+/// Reads current stack pointer (additional entropy source).
 #[inline]
 fn read_sp() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
         let sp: u64;
-        // SAFETY: lecture seule de RSP — aucun effet de bord.
+        // SAFETY: read-only access to RSP — no side effects.
         unsafe {
             core::arch::asm!("mov {}, rsp", out(reg) sp, options(nostack, nomem));
         }
@@ -182,19 +182,19 @@ fn read_sp() -> u64 {
     0
 }
 
-/// Rassemble de l'entropie de **toutes** les sources disponibles dans un pool,
-/// puis la **conditionne par Blake3** → seed 32 octets. Retourne `true` si au
-/// moins une source MATÉRIELLE (RDSEED/RDRAND) a contribué.
+/// Gathers entropy from **all** available sources into a pool,
+/// then **conditions it via Blake3** → 32-byte seed. Returns `true` if at
+/// least one HARDWARE source (RDSEED/RDRAND) contributed.
 ///
-/// Robustesse (RÈGLE RNG-03 durcie) : l'ancien seed fallback dérivait UNIQUEMENT
-/// de TSC+SP par un mélange ad-hoc (prédictible, non-whitené). Ici :
-///   1. RDSEED (entropie matérielle vraie) ×4, puis RDRAND ×6 ;
-///   2. **jitter TSC** — lectures répétées entrecoupées de PAUSE ; les bits de
-///      poids faible varient (jitter d'horloge) = vraie source d'aléa temporel ;
-///   3. pointeur de pile (entropie d'adressage / KASLR) ;
-///   4. **conditionnement Blake3** du pool entier → 32 octets whitened.
-/// Même sans RDRAND, le seed est conditionné cryptographiquement et agrège
-/// plusieurs sources (plancher d'entropie relevé vs TSC brut).
+/// Robustness (hardened RULE RNG-03): the previous seed fallback derived ONLY
+/// from TSC+SP via ad-hoc mixing (predictable, unwhitened). Here:
+///   1. RDSEED (true hardware entropy) ×4, then RDRAND ×6;
+///   2. **TSC jitter** — repeated reads interleaved with PAUSE; lower
+///      bits vary (clock jitter) = real source of temporal randomness;
+///   3. stack pointer (addressing entropy / KASLR);
+///   4. **Blake3 conditioning** of the entire pool → 32 bytes whitened.
+/// Even without RDRAND, the seed is cryptographically conditioned and aggregates
+/// multiple sources (raised entropy floor vs raw TSC).
 fn gather_seed(out: &mut [u8; 32]) -> bool {
     fn push(pool: &mut [u8; 160], off: &mut usize, v: u64) {
         if *off + 8 <= pool.len() {
@@ -207,24 +207,24 @@ fn gather_seed(out: &mut [u8; 32]) -> bool {
     let mut off = 0usize;
     let mut hw = false;
 
-    // 1. RDSEED — entropie matérielle « vraie ».
+    // 1. RDSEED — "true" hardware entropy.
     for _ in 0..4 {
         if let Ok(v) = rdseed64() {
             push(&mut pool, &mut off, v);
             hw = true;
         }
     }
-    // 2. RDRAND — CSPRNG matériel.
+    // 2. RDRAND — hardware CSPRNG.
     for _ in 0..6 {
         if let Ok(v) = rdrand64() {
             push(&mut pool, &mut off, v);
             hw = true;
         }
     }
-    // 3. Jitter TSC (aléa temporel) + 4. pointeur de pile.
+    // 3. TSC Jitter (temporal randomness) + 4. stack pointer.
     for _ in 0..8 {
         push(&mut pool, &mut off, read_tsc());
-        // SAFETY: PAUSE = hint CPU, aucun effet de bord ; espace les lectures TSC.
+        // SAFETY: PAUSE = CPU hint, no side effects; spaces TSC reads.
         #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("pause", options(nostack, nomem));
@@ -232,13 +232,13 @@ fn gather_seed(out: &mut [u8; 32]) -> bool {
     }
     push(&mut pool, &mut off, read_sp());
 
-    // 5. Conditionnement Blake3 → 32 octets whitened.
+    // 5. Blake3 conditioning → 32 whitened bytes.
     let conditioned = super::blake3::blake3_hash(&pool[..off]);
     out.copy_from_slice(&conditioned);
 
-    // Effacer le pool (peut contenir de l'entropie résiduelle sensible).
+    // Clear pool (may contain sensitive residual entropy).
     for b in pool.iter_mut() {
-        // SAFETY: write_volatile empêche l'élision de l'effacement.
+        // SAFETY: write_volatile prevents erasure elision.
         unsafe {
             core::ptr::write_volatile(b, 0);
         }
@@ -249,26 +249,26 @@ fn gather_seed(out: &mut [u8; 32]) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChaCha20 CSPRNG — Générateur basé sur ChaCha20 block function
+// ChaCha20 CSPRNG — Generator based on ChaCha20 block function
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// CSPRNG basé sur la ChaCha20 block function (RFC 8439).
+/// CSPRNG based on ChaCha20 block function (RFC 8439).
 ///
-/// Génère un keystream ChaCha20 à partir d'une clé 256-bit et d'un nonce
-/// 96-bit + compteur. Chaque appel à `chacha20_block` produit 64 octets
-/// de données aléatoire cryptographiquement sûre.
+/// Generates a ChaCha20 keystream from a 256-bit key and a 96-bit nonce
+/// + counter. Each call to `chacha20_block` produces 64 bytes
+/// of cryptographically secure random data.
 struct ChaCha20Csprng {
-    /// Clé ChaCha20 (256 bits).
+    /// ChaCha20 key (256 bits).
     key: [u8; 32],
-    /// Nonce ChaCha20 (96 bits).
+    /// ChaCha20 nonce (96 bits).
     nonce: [u8; 12],
-    /// Compteur de bloc ChaCha20 courant.
+    /// Current ChaCha20 block counter.
     counter: u32,
-    /// Tampon du dernier bloc ChaCha20 généré (64 octets).
+    /// Buffer of last generated ChaCha20 block (64 bytes).
     buffer: [u8; CHACHA20_BLOCK_SIZE],
-    /// Position de consommation dans le tampon.
+    /// Consumption position in buffer.
     buffer_pos: usize,
-    /// Nombre total de blocs générés depuis le dernier reseed.
+    /// Total number of blocks generated since last reseed.
     blocks_since_reseed: u64,
 }
 
@@ -279,44 +279,44 @@ impl ChaCha20Csprng {
             nonce: [0u8; 12],
             counter: 0,
             buffer: [0u8; CHACHA20_BLOCK_SIZE],
-            buffer_pos: CHACHA20_BLOCK_SIZE, // Force la génération au premier appel
+            buffer_pos: CHACHA20_BLOCK_SIZE, // Forces generation on first call
             blocks_since_reseed: 0,
         }
     }
 
-    /// Initialise le CSPRNG avec un seed de 32 octets.
+    /// Initializes CSPRNG with a 32-byte seed.
     fn seed(&mut self, entropy: &[u8; 32]) {
         self.key.copy_from_slice(entropy);
-        // Dérive un nonce à partir du seed en utilisant les 12 derniers octets XOR
+        // Derives a nonce from the seed using last 12 bytes XOR
         for i in 0..12 {
             self.nonce[i] = entropy[i]
                 .wrapping_add(entropy[i + 20])
                 .wrapping_add(entropy[(i + 7) % 32]);
         }
         self.counter = 0;
-        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Force la régénération
+        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Forces regeneration
         self.blocks_since_reseed = 0;
     }
 
-    /// Reseed le CSPRNG avec de nouvelles données d'entropie.
+    /// Reseeds the CSPRNG with new entropy data.
     ///
-    /// XOR la nouvelle entropie dans la clé et avance le nonce pour
-    /// garantir un keystream différent après le reseed.
+    /// XORs new entropy into key and advances nonce to
+    /// guarantee a different keystream after reseed.
     fn reseed(&mut self, extra: &[u8; 32]) {
         for i in 0..32 {
             self.key[i] ^= extra[i];
         }
-        // Avance le nonce pour garantir un keystream nouveau
+        // Advances nonce to guarantee a new keystream
         self.nonce[11] = self.nonce[11].wrapping_add(1);
         if self.nonce[11] == 0 {
             self.nonce[10] = self.nonce[10].wrapping_add(1);
         }
         self.counter = 0;
-        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Force la régénération
+        self.buffer_pos = CHACHA20_BLOCK_SIZE; // Forces regeneration
         self.blocks_since_reseed = 0;
     }
 
-    /// Génère un nouveau bloc ChaCha20 et remplit le tampon.
+    /// Generates a new ChaCha20 block and refills buffer.
     #[inline]
     fn refill_buffer(&mut self) {
         self.buffer = chacha20_block(&self.key, &self.nonce, self.counter);
@@ -325,7 +325,7 @@ impl ChaCha20Csprng {
         self.blocks_since_reseed += 1;
     }
 
-    /// Remplit un buffer avec des octets aléatoires depuis le keystream ChaCha20.
+    /// Fills a buffer with random bytes from the ChaCha20 keystream.
     fn fill(&mut self, buf: &mut [u8]) {
         let mut pos = 0;
         while pos < buf.len() {
@@ -342,7 +342,7 @@ impl ChaCha20Csprng {
         }
     }
 
-    /// Retourne le nombre de blocs générés depuis le dernier reseed.
+    /// Returns the number of blocks generated since last reseed.
     #[inline]
     fn blocks_since_reseed(&self) -> u64 {
         self.blocks_since_reseed
@@ -350,14 +350,14 @@ impl ChaCha20Csprng {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KernelRng — singleton global
+// KernelRng — global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct KernelRng {
     prng: ChaCha20Csprng,
     initialized: bool,
-    /// Vrai si le seed (initial ou reseed) a reçu de l'entropie MATÉRIELLE
-    /// (RDSEED/RDRAND). Faux = seed conditionné mais d'entropie dégradée.
+    /// True if seed (initial or reseed) received HARDWARE entropy
+    /// (RDSEED/RDRAND). False = conditioned seed but degraded entropy.
     hw_seeded: bool,
     bytes_generated: u64,
     reseed_count: u64,
@@ -376,12 +376,12 @@ impl KernelRng {
 
     fn init(&mut self) {
         let mut seed = [0u8; 32];
-        // Seed = pool multi-sources (RDSEED+RDRAND+jitter TSC+SP) conditionné Blake3.
+        // Seed = multi-source pool (RDSEED+RDRAND+TSC jitter+SP) Blake3 conditioned.
         self.hw_seeded = gather_seed(&mut seed);
         self.prng.seed(&seed);
-        // Zéroïser le seed sur la pile (write_volatile pour empêcher l'élision).
+        // Zeroize seed on stack (write_volatile to prevent elision).
         for b in seed.iter_mut() {
-            // SAFETY: effacement borné d'un buffer local.
+            // SAFETY: bounded erasure of local buffer.
             unsafe {
                 core::ptr::write_volatile(b, 0);
             }
@@ -395,15 +395,15 @@ impl KernelRng {
             return Err(RngError::NotInitialized);
         }
 
-        // Reseed toutes les RESEED_INTERVAL_BLOCKS blocs — même pool multi-sources
-        // conditionné Blake3 (jamais de fallback faible non-whitené).
+        // Reseed every RESEED_INTERVAL_BLOCKS blocks — same multi-source pool
+        // Blake3 conditioned (never weak unwhitened fallback).
         if self.prng.blocks_since_reseed() >= RESEED_INTERVAL_BLOCKS {
             let mut extra = [0u8; 32];
             let hw = gather_seed(&mut extra);
             self.prng.reseed(&extra);
             self.hw_seeded = self.hw_seeded || hw;
             for b in extra.iter_mut() {
-                // SAFETY: effacement borné d'un buffer local.
+                // SAFETY: bounded erasure of local buffer.
                 unsafe {
                     core::ptr::write_volatile(b, 0);
                 }
@@ -422,72 +422,72 @@ static KERNEL_RNG: Mutex<KernelRng> = Mutex::new(KernelRng::new());
 static RNG_INIT: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le générateur de nombres aléatoires kernel.
-/// Doit être appelé après l'initialisation CPU (RDRAND disponible).
+/// Initializes the kernel random number generator.
+/// Must be called after CPU initialization (RDRAND available).
 pub fn rng_init() {
     if RNG_INIT.swap(true, Ordering::SeqCst) {
-        return; // Déjà initialisé
+        return; // Already initialized
     }
     KERNEL_RNG.lock().init();
 }
 
-/// Remplit un buffer avec des bytes cryptographiquement aléatoires.
+/// Fills a buffer with cryptographically random bytes.
 pub fn rng_fill(buf: &mut [u8]) -> Result<(), RngError> {
     KERNEL_RNG.lock().fill(buf)
 }
 
-/// Génère un u64 aléatoire.
+/// Generates a random u64.
 pub fn rng_u64() -> Result<u64, RngError> {
     let mut buf = [0u8; 8];
     rng_fill(&mut buf)?;
     Ok(u64::from_le_bytes(buf))
 }
 
-/// Génère un u32 aléatoire.
+/// Generates a random u32.
 pub fn rng_u32() -> Result<u32, RngError> {
     let mut buf = [0u8; 4];
     rng_fill(&mut buf)?;
     Ok(u32::from_le_bytes(buf))
 }
 
-/// Génère un tableau de 32 bytes aléatoires (clé cryptographique).
+/// Generates an array of 32 random bytes (cryptographic key).
 pub fn rng_key32() -> Result<[u8; 32], RngError> {
     let mut key = [0u8; 32];
     rng_fill(&mut key)?;
     Ok(key)
 }
 
-/// Génère un nonce de 24 bytes (XChaCha20).
+/// Generates a 24-byte nonce (XChaCha20).
 pub fn rng_nonce24() -> Result<[u8; 24], RngError> {
     let mut nonce = [0u8; 24];
     rng_fill(&mut nonce)?;
     Ok(nonce)
 }
 
-/// Retourne vrai si le RNG est initialisé et opérationnel.
+/// Returns true if RNG is initialized and operational.
 #[inline(always)]
 pub fn rng_is_ready() -> bool {
     RNG_INIT.load(Ordering::Acquire) && KERNEL_RNG.lock().initialized
 }
 
-/// Retourne vrai si le RNG a été seedé avec de l'entropie MATÉRIELLE
-/// (RDSEED/RDRAND). Faux = seed conditionné Blake3 mais sans source matérielle
-/// (entropie dégradée — un appelant générant une clé long-terme critique peut
-/// choisir de différer/alerter sur cette base).
+/// Returns true if RNG was seeded with HARDWARE entropy
+/// (RDSEED/RDRAND). False = Blake3 conditioned seed but without hardware source
+/// (degraded entropy — a caller generating a critical long-term key may
+/// choose to defer/alert on this basis).
 #[inline(always)]
 pub fn rng_hw_seeded() -> bool {
     KERNEL_RNG.lock().hw_seeded
 }
 
-/// Statistiques RNG.
+/// RNG statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct RngStats {
     pub bytes_generated: u64,
     pub reseed_count: u64,
-    /// Entropie matérielle obtenue au seeding (RDSEED/RDRAND).
+    /// Hardware entropy obtained at seeding (RDSEED/RDRAND).
     pub hw_seeded: bool,
 }
 
@@ -504,8 +504,8 @@ pub fn rng_stats() -> RngStats {
 mod tests {
     use super::*;
 
-    /// Le seed est conditionné Blake3 (jamais tout-zéro) et varie entre deux
-    /// appels (jitter TSC + sources matérielles) — pas de seed faible constant.
+    /// Seed is Blake3 conditioned (never all-zero) and varies between two
+    /// calls (TSC jitter + hardware sources) — no constant weak seed.
     #[test]
     fn gather_seed_is_conditioned_and_varies() {
         let mut a = [0u8; 32];
@@ -516,7 +516,7 @@ mod tests {
         assert_ne!(a, b, "deux seeds successifs doivent différer (TSC/HW)");
     }
 
-    /// Après init, le CSPRNG produit un flux non-nul qui varie d'un tirage à l'autre.
+    /// After init, CSPRNG produces a non-zero stream that varies from one draw to another.
     #[test]
     fn rng_fill_is_nonzero_and_varies() {
         rng_init();

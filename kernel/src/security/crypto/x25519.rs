@@ -1,26 +1,26 @@
 // kernel/src/security/crypto/x25519.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// X25519 Diffie-Hellman — Wrapper via crate x25519-dalek v2
+// X25519 Diffie-Hellman — Wrapper via x25519-dalek crate v2
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE CRYPTO-CRATES : implémentation via crate RustCrypto validée IETF.
-// Crate : x25519-dalek v2.x, features = ["static_secrets"]
-//   - Conforme RFC 7748 (X25519 Elliptic Curve Diffie-Hellman)
+// RULE CRYPTO-CRATES: implementation via IETF-validated RustCrypto crate.
+// Crate: x25519-dalek v2.x, features = ["static_secrets"]
+//   - Conforms to RFC 7748 (X25519 Elliptic Curve Diffie-Hellman)
 //   - no_std compatible
-//   - Implémentation curve25519 pure Rust, pas d'opérations en virgule flottante
+//   - Pure Rust curve25519 implementation, no floating point operations
 //
-// Usages dans Exo-OS :
-//   • Échange de clés de session kernel ↔ userspace (canaux IPC sécurisés)
-//   • Bootstrap des clés de chiffrement de volume (combiné avec HKDF)
+// Usages in Exo-OS:
+//   • Session key exchange kernel ↔ userspace (secure IPC channels)
+//   • Volume encryption key bootstrap (combined with HKDF)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use x25519_dalek::{PublicKey, StaticSecret};
 
-/// Paire de clés X25519.
+/// X25519 key pair.
 ///
-/// `private_key` est stockée comme tableau de bytes bruts (clé scalaire 32B).
-/// `public_key`  est le point Curve25519 correspondant (32B).
+/// `private_key` is stored as a raw byte array (32B scalar key).
+/// `public_key`  is the corresponding Curve25519 point (32B).
 #[derive(Clone)]
 pub struct X25519KeyPair {
     pub public_key: [u8; 32],
@@ -28,19 +28,19 @@ pub struct X25519KeyPair {
 }
 
 impl X25519KeyPair {
-    /// Efface les clés de la mémoire.
+    /// Clears keys from memory.
     pub fn zeroize(&mut self) {
         self.private_key.iter_mut().for_each(|b| *b = 0);
         self.public_key.iter_mut().for_each(|b| *b = 0);
     }
 }
 
-/// Erreur X25519.
+/// X25519 error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum X25519Error {
-    /// Clé privée invalide.
+    /// Invalid private key.
     InvalidPrivateKey,
-    /// Résultat DH invalide (point à l'infini — clé publique invalide).
+    /// Invalid DH result (point at infinity — invalid public key).
     InvalidDhResult,
 }
 
@@ -56,13 +56,13 @@ impl core::fmt::Display for X25519Error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Génère une paire de clés X25519 à partir d'un secret statique 32B.
+/// Generates an X25519 key pair from a 32B static secret.
 ///
-/// `secret_bytes` doit être de l'entropie cryptographique (CSPRNG kernel).
-/// x25519-dalek effectue le clamping bits automatiquement (RFC 7748 §5).
+/// `secret_bytes` must be cryptographic entropy (kernel CSPRNG).
+/// x25519-dalek performs bit clamping automatically (RFC 7748 §5).
 pub fn x25519_keypair_from_secret(secret_bytes: &[u8; 32]) -> Result<X25519KeyPair, X25519Error> {
     let secret = StaticSecret::from(*secret_bytes);
     let public = PublicKey::from(&secret);
@@ -73,14 +73,14 @@ pub fn x25519_keypair_from_secret(secret_bytes: &[u8; 32]) -> Result<X25519KeyPa
     })
 }
 
-/// Calcule un secret partagé Diffie-Hellman X25519.
+/// Computes an X25519 Diffie-Hellman shared secret.
 ///
-/// Retourne 32 bytes de secret partagé.
-/// Le secret DOIT être passé dans HKDF avant utilisation directe comme clé.
+/// Returns 32 bytes of shared secret.
+/// The secret MUST be passed through HKDF before direct use as a key.
 ///
-/// # Erreurs
-/// `X25519Error::InvalidDhResult` si le résultat est le point neutre (all-zeros),
-/// ce qui indique une clé publique invalide ou un twist attack.
+/// # Errors
+/// `X25519Error::InvalidDhResult` if the result is the neutral point (all-zeros),
+/// which indicates an invalid public key or a twist attack.
 pub fn x25519_diffie_hellman(
     our_private: &[u8; 32],
     their_public: &[u8; 32],
@@ -91,7 +91,7 @@ pub fn x25519_diffie_hellman(
     let dh_result = secret.diffie_hellman(&their_pk);
     let shared = dh_result.to_bytes();
 
-    // Vérification contre low-order points (all-zeros = point neutre)
+    // Check against low-order points (all-zeros = neutral point)
     let is_zero = shared.iter().fold(0u8, |acc, &b| acc | b);
     if is_zero == 0 {
         return Err(X25519Error::InvalidDhResult);
@@ -131,8 +131,8 @@ mod tests {
 
     #[test]
     fn test_low_order_point_rejected() {
-        // Point d'ordre faible (low-order) connu pour X25519
-        // (identité sur le sous-groupe d'ordre 8)
+        // Known low-order point for X25519
+        // (identity on subgroup of order 8)
         let low_order_point = [0u8; 32];
         let our_secret = [0x42u8; 32];
         let result = x25519_diffie_hellman(&our_secret, &low_order_point);

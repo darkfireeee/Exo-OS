@@ -1,110 +1,110 @@
 // kernel/src/security/exoledger.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ExoLedger — Audit Chaîné avec zone P0 immuable (ExoShield v1.0)
+// ExoLedger — Chained Audit with immutable P0 zone (ExoShield v1.0)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ExoLedger est le module d'audit chaîné d'ExoShield. Il fournit un journal
-// d'événements de sécurité avec deux zones distinctes :
+// ExoLedger is the chained audit module of ExoShield. It provides a security
+// event log with two distinct zones:
 //
-//   ZONE P0 (immuable) : 16 entrées JAMAIS écrasées — événements critiques :
+//   P0 ZONE (immutable): 16 entries NEVER overwritten — critical events:
 //     CpViolation, IommuFault, HandoffTriggered, BootSealViolation
 //
-//   ZONE RING BUFFER (circulaire) : ~90 entrées — événements de sécurité
-//     opérationnels. Overflow autorisé : les entrées les plus anciennes
-//     sont écrasées (mais JAMAIS les entrées P0).
+//   RING BUFFER ZONE (circular): ~90 entries — operational security
+//     events. Overflow allowed: the oldest entries
+//     are overwritten (but NEVER P0 entries).
 //
-// CHAÎNAGE CRYPTOGRAPHIQUE :
-//   Chaque entrée contient hash = Blake3(this_entry || prev_hash).
-//   Toute modification d'une entrée invalide la chaîne complète.
-//   Kernel B (Core 0) peut vérifier l'intégrité en relisant la chaîne.
+// CRYPTOGRAPHIC CHAINING:
+//   Each entry contains hash = Blake3(this_entry || prev_hash).
+//   Any modification of an entry invalidates the entire chain.
+//   Kernel B (Core 0) can verify integrity by reading back the chain.
 //
-// EMPLACEMENT MÉMOIRE :
-//   SSR.LOG_AUDIT (+0x8000, 16 KiB, append-only, RO pour Kernel A)
-//   +0x0000 : AuditHeader { version, total_count, last_merkle_root }
-//   +0x0030 : P0_Zone [LedgerEntry; 16]
-//   +0x08B0 : RingBuffer [LedgerEntry; ~90]
+// MEMORY LAYOUT:
+//   SSR.LOG_AUDIT (+0x8000, 16 KiB, append-only, RO for Kernel A)
+//   +0x0000: AuditHeader { version, total_count, last_merkle_root }
+//   +0x0030: P0_Zone [LedgerEntry; 16]
+//   +0x08B0: RingBuffer [LedgerEntry; ~90]
 //
-// RÈGLE EXOLEDGER-01 : exo_ledger_append_p0() = append-only, JAMAIS écrasée.
-// RÈGLE EXOLEDGER-02 : Toute tentative d'écrasement P0 = panique kernel.
-// RÈGLE EXOLEDGER-03 : ISR-safe — pas d'allocation, pas de lock bloquant.
-// RÈGLE EXOLEDGER-04 : Hash = Blake3(this || prev_hash) — chaîne immuable.
+// RULE EXOLEDGER-01: exo_ledger_append_p0() = append-only, NEVER overwritten.
+// RULE EXOLEDGER-02: Any attempt to overwrite P0 = kernel panic.
+// RULE EXOLEDGER-03: ISR-safe — no allocation, no blocking lock.
+// RULE EXOLEDGER-04: Hash = Blake3(this || prev_hash) — immutable chain.
 //
-// RÉFÉRENCES :
-//   ExoShield_v1_Production.md — MODULE 7 : ExoLedger
-//   SSR layout : ExoOS_Architecture_v7.md §3.4
+// REFERENCES:
+//   ExoShield_v1_Production.md — MODULE 7: ExoLedger
+//   SSR layout: ExoOS_Architecture_v7.md §3.4
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes ExoLedger
+// ExoLedger constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre d'entrées dans la zone P0 (immuable, jamais écrasée).
+/// Number of entries in P0 zone (immutable, never overwritten).
 pub const P0_ZONE_ENTRIES: usize = 16;
 
-/// Nombre d'entrées dans le ring buffer (circulaire).
-/// 16 KiB total / sizeof(LedgerEntry) = ~122 entrées. P0 prend 16 = 106 restantes.
-/// On arrondit à 96 pour un alignement propre.
+/// Number of entries in ring buffer (circular).
+/// 16 KiB total / sizeof(LedgerEntry) = ~122 entries. P0 takes 16 = 106 remaining.
+/// Rounded down to 96 for clean alignment.
 const RING_BUFFER_ENTRIES: usize = 96;
 
-/// Taille d'une entrée LedgerEntry = 136 bytes.
+/// Size of a LedgerEntry = 136 bytes.
 ///   seq: u64 (8) + tsc: u64 (8) + actor_oid: [u8;32] (32) + action: ActionTag (24)
 ///   + prev_hash: [u8;32] (32) + hash: [u8;32] (32) = 136 bytes
 const LEDGER_ENTRY_SIZE: usize = 136;
 
-/// Offset de la zone d'audit dans SSR (+0x8000).
+/// Offset of audit zone in SSR (+0x8000).
 pub const SSR_LOG_AUDIT_OFFSET: u64 = 0x8000;
 
-/// Taille totale de la zone d'audit (16 KiB).
+/// Total size of audit zone (16 KiB).
 pub const SSR_LOG_AUDIT_SIZE: usize = 16 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ActionTag — Types d'événements audités
+// ActionTag — Audited event types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tag d'action pour les entrées du ledger.
+/// Action tag for ledger entries.
 ///
-/// Les actions P0 (critiques, immuables) et les actions normales (ring buffer)
-/// sont distinguées au niveau du type.
+/// P0 actions (critical, immutable) and normal actions (ring buffer)
+/// are distinguished at the type level.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub enum ActionTag {
-    // ── Actions P0 (zone immuable) ──────────────────────────────────────────
-    /// Violation #CP (CET Shadow Stack / IBT). error_code du handler #CP.
+    // ── P0 Actions (immutable zone) ─────────────────────────────────────────
+    /// #CP violation (CET Shadow Stack / IBT). error_code from #CP handler.
     CpViolation { error_code: u64 },
-    /// Défaut IOMMU (DMA hors whitelist).
+    /// IOMMU fault (DMA outside whitelist).
     IommuFault { domain_id: u32, fault_addr: u64 },
-    /// HANDOFF déclenché (Kernel B a pris le contrôle).
+    /// HANDOFF triggered (Kernel B took control).
     HandoffTriggered { reason: u32 },
-    /// Violation du boot seal (réseau/FS actifs avant SECURITY_READY).
+    /// Boot seal violation (network/FS active before SECURITY_READY).
     BootSealViolation { step: u8 },
-    /// Watchdog expiré (ExoNmi — strikes dépassés).
+    /// Watchdog expired (ExoNmi — strikes exceeded).
     WatchdogExpired { strikes: u32 },
 
-    // ── Actions normales (ring buffer) ──────────────────────────────────────
-    /// Capability révoquée.
+    // ── Normal actions (ring buffer) ────────────────────────────────────────
+    /// Capability revoked.
     CapabilityRevoked { oid: u64 },
-    /// Domaine PKS révoqué.
+    /// PKS domain revoked.
     PksDomainRevoked { domain: u8 },
-    /// Tentative d'accès IPC non autorisé (ExoCordon).
+    /// Unauthorized IPC access attempt (ExoCordon).
     IpcUnauthorized { src_pid: u32, dst_pid: u32 },
-    /// Budget de capability épuisé (ExoKairos).
+    /// Capability budget exhausted (ExoKairos).
     BudgetExhausted { oid: u64 },
-    /// Violation de politique d'accès.
+    /// Access policy violation.
     AccessDenied { oid: u64, rights: u32 },
-    /// Événement de boot (ExoSeal).
+    /// Boot event (ExoSeal).
     BootEvent { step: u8 },
-    /// NIC IOMMU verrouillé (ExoSeal step 0).
+    /// NIC IOMMU locked (ExoSeal step 0).
     NicIommuLocked,
-    /// Audit général (custom data).
+    /// General audit (custom data).
     Custom { tag: u64, data: u64 },
 }
 
 impl ActionTag {
-    /// Retourne true si cette action est un événement P0 (critique).
+    /// Returns true if this action is a P0 event (critical).
     pub fn is_p0(&self) -> bool {
         matches!(
             self,
@@ -116,8 +116,8 @@ impl ActionTag {
         )
     }
 
-    /// Sérialise l'ActionTag en 24 bytes pour le hash Blake3.
-    /// Format : [type_tag: u64 | field1: u64 | field2: u64]
+    /// Serializes ActionTag into 24 bytes for Blake3 hash.
+    /// Format: [type_tag: u64 | field1: u64 | field2: u64]
     pub fn to_bytes(&self) -> [u8; 24] {
         let mut buf = [0u8; 24];
         match self {
@@ -185,47 +185,47 @@ impl ActionTag {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LedgerEntry — Structure 136 bytes
+// LedgerEntry — 136-byte structure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée du journal d'audit chaîné.
+/// Chained audit log entry.
 ///
-/// # Layout mémoire (136 bytes, #[repr(C)])
+/// # Memory layout (136 bytes, #[repr(C)])
 ///
-/// | Offset | Champ      | Taille | Description                              |
+/// | Offset | Field      | Size   | Description                              |
 /// |--------|------------|--------|------------------------------------------|
-/// | 0      | seq        | 8      | Numéro de séquence monotone global       |
-/// | 8      | tsc        | 8      | Timestamp TSC (cycles CPU)               |
-/// | 16     | actor_oid  | 32     | ObjectId de l'acteur (jamais PID)        |
-/// | 48     | action     | 24     | ActionTag sérialisé                      |
-/// | 72     | prev_hash  | 32     | Hash de l'entrée précédente              |
+/// | 0      | seq        | 8      | Global monotonic sequence number         |
+/// | 8      | tsc        | 8      | TSC timestamp (CPU cycles)               |
+/// | 16     | actor_oid  | 32     | Actor ObjectId (never PID)               |
+/// | 48     | action     | 24     | Serialized ActionTag                     |
+/// | 72     | prev_hash  | 32     | Previous entry hash                      |
 /// | 104    | hash       | 32     | Blake3(this_entry_bytes || prev_hash)     |
 ///
-/// # Intégrité
-/// Le hash est calculé comme : Blake3(seq || tsc || actor_oid || action || prev_hash)
-/// Cela rend chaque entrée dépendante de toutes les entrées précédentes.
+/// # Integrity
+/// The hash is computed as: Blake3(seq || tsc || actor_oid || action || prev_hash)
+/// This makes each entry dependent on all preceding entries.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LedgerEntry {
-    /// Numéro de séquence monotone (global, jamais remis à zéro).
+    /// Monotonic sequence number (global, never reset to zero).
     pub seq: u64,
-    /// Timestamp TSC au moment de l'événement.
+    /// TSC timestamp at time of event.
     pub tsc: u64,
-    /// ObjectId de l'acteur (jamais PID — ExoShield utilise OID pour l'audit).
+    /// Actor ObjectId (never PID — ExoShield uses OID for audit).
     pub actor_oid: [u8; 32],
-    /// Action tag sérialisé (24 bytes).
+    /// Serialized action tag (24 bytes).
     pub action: [u8; 24],
-    /// Hash de l'entrée précédente dans la chaîne.
+    /// Previous entry hash in chain.
     pub prev_hash: [u8; 32],
-    /// Hash Blake3 de cette entrée (calculé après écriture).
+    /// Blake3 hash of this entry (computed after write).
     pub hash: [u8; 32],
 }
 
 impl LedgerEntry {
-    /// Taille totale de l'entrée (136 bytes).
+    /// Total entry size (136 bytes).
     pub const SIZE: usize = LEDGER_ENTRY_SIZE;
 
-    /// Crée une entrée vide/zéro.
+    /// Creates an empty/zero entry.
     pub const fn zeroed() -> Self {
         Self {
             seq: 0,
@@ -237,12 +237,12 @@ impl LedgerEntry {
         }
     }
 
-    /// Calcule le hash Blake3 de cette entrée (sans le champ hash lui-même).
+    /// Computes Blake3 hash of this entry (excluding hash field itself).
     ///
-    /// Input : seq || tsc || actor_oid || action || prev_hash
-    /// Output : Blake3(input)
+    /// Input: seq || tsc || actor_oid || action || prev_hash
+    /// Output: Blake3(input)
     fn compute_hash(&self) -> [u8; 32] {
-        // Construire le buffer de hachage : tout sauf le champ hash
+        // Build hash buffer: everything except hash field
         // 8 + 8 + 32 + 24 + 32 = 104 bytes
         let mut buf = [0u8; 104];
         buf[0..8].copy_from_slice(&self.seq.to_le_bytes());
@@ -253,48 +253,48 @@ impl LedgerEntry {
         crate::security::crypto::blake3::blake3_hash(&buf)
     }
 
-    /// Calcule et stocke le hash de cette entrée.
+    /// Computes and stores hash of this entry.
     fn finalize_hash(&mut self) {
         self.hash = self.compute_hash();
     }
 }
 
-// Vérification statique de la taille de LedgerEntry
+// Static verification of LedgerEntry size
 const _: () = assert!(
     core::mem::size_of::<LedgerEntry>() == LEDGER_ENTRY_SIZE,
     "LedgerEntry: taille inattendue — doit être 136 bytes"
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditHeader — En-tête de la zone d'audit
+// AuditHeader — Audit zone header
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// En-tête de la zone d'audit SSR.LOG_AUDIT.
+/// SSR.LOG_AUDIT audit zone header.
 ///
-/// Placé au début de la zone (+0x0000), avant les entrées P0.
+/// Placed at start of zone (+0x0000), before P0 entries.
 #[repr(C)]
 pub struct AuditHeader {
-    /// Version du format (1 = v1.0).
+    /// Format version (1 = v1.0).
     pub version: u64,
-    /// Nombre total d'entrées écrites (P0 + ring buffer).
+    /// Total entries written (P0 + ring buffer).
     pub total_count: u64,
-    /// Dernier Merkle root calculé (pour vérification Kernel B).
+    /// Last computed Merkle root (for Kernel B verification).
     pub last_merkle_root: [u8; 32],
-    /// Padding pour alignement (total header ≈ 48 bytes).
+    /// Alignment padding (total header ≈ 48 bytes).
     pub _reserved: [u8; 16],
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stockage en mémoire — Zone P0 + Ring Buffer
+// Memory storage — P0 Zone + Ring Buffer
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Zone P0 (immuable) — 16 entrées jamais écrasées.
+/// P0 zone (immutable) — 16 entries never overwritten.
 static mut P0_ZONE: [LedgerEntry; P0_ZONE_ENTRIES] = {
     const INIT: LedgerEntry = LedgerEntry::zeroed();
     [INIT; P0_ZONE_ENTRIES]
 };
 
-/// Ring buffer (circulaire) — ~96 entrées avec overflow.
+/// Ring buffer (circular) — ~96 entries with overflow.
 static mut RING_BUFFER: [LedgerEntry; RING_BUFFER_ENTRIES] = {
     const INIT: LedgerEntry = LedgerEntry::zeroed();
     [INIT; RING_BUFFER_ENTRIES]
@@ -323,40 +323,40 @@ fn clear_ledger_storage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteurs globaux
+// Global counters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numéro de séquence monotone global.
+/// Global monotonic sequence number.
 static GLOBAL_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Nombre d'entrées P0 utilisées.
+/// Number of used P0 entries.
 static P0_USED: AtomicUsize = AtomicUsize::new(0);
 
-/// Head du ring buffer (position d'écriture).
+/// Ring buffer head (write position).
 static RING_HEAD: AtomicUsize = AtomicUsize::new(0);
 
-/// Nombre total d'entrées écrites (P0 + ring).
+/// Total entries written (P0 + ring).
 static TOTAL_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
-/// Une seule alerte d'overflow P0 est suffisante : au-delà on sature silencieusement.
+/// Single P0 overflow alert is sufficient: beyond that we saturate silently.
 static P0_OVERFLOW_REPORTED: AtomicBool = AtomicBool::new(false);
 
-/// Dernier hash calculé (pour chaînage).
+/// Last computed hash (for chaining).
 static LAST_HASH: [core::sync::atomic::AtomicU8; 32] = {
     const INIT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
     [INIT; 32]
 };
 static P0_CHAIN_LOCK: Mutex<()> = Mutex::new(());
 
-/// ExoLedger initialisé.
+/// ExoLedger initialized.
 static EXOLEDGER_INITIALIZED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers internes
+// Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le dernier hash stocké.
+/// Reads last stored hash.
 fn load_last_hash() -> [u8; 32] {
     let mut out = [0u8; 32];
     for (i, byte) in LAST_HASH.iter().enumerate() {
@@ -365,19 +365,19 @@ fn load_last_hash() -> [u8; 32] {
     out
 }
 
-/// Stocke un hash comme dernier hash.
+/// Stores a hash as last hash.
 fn store_last_hash(hash: &[u8; 32]) {
     for (i, byte) in LAST_HASH.iter().enumerate() {
         byte.store(hash[i], Ordering::Release);
     }
 }
 
-/// Lit le TSC courant (ISR-safe).
+/// Reads current TSC (ISR-safe).
 #[inline]
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         core::arch::asm!(
             "rdtsc",
@@ -389,9 +389,9 @@ fn rdtsc() -> u64 {
     (hi as u64) << 32 | lo as u64
 }
 
-/// Retourne l'ObjectId de l'acteur courant (thread actif).
-/// En l'absence d'un OID canonique câblé partout, on encode `(pid, tid)` dans
-/// les 16 premiers octets pour conserver un acteur stable dans l'audit.
+/// Returns ObjectId of current actor (active thread).
+/// In absence of a canonical OID wired everywhere, encode `(pid, tid)` into
+/// first 16 bytes to maintain a stable actor in audit log.
 fn current_actor_oid() -> [u8; 32] {
     let mut oid = [0u8; 32];
     #[cfg(test)]
@@ -399,15 +399,15 @@ fn current_actor_oid() -> [u8; 32] {
     #[cfg(not(test))]
     let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();
     if tcb_ptr.is_null() || !is_published_tcb(tcb_ptr as usize) {
-        // Fallback early-boot: éviter un OID tout-zéro pour garder l'audit exploitable.
+        // Fallback early-boot: avoid an all-zero OID to keep audit exploitable.
         let tsc = rdtsc();
         let cpu = 0u32;
         oid[0..8].copy_from_slice(&tsc.to_le_bytes());
         oid[8..12].copy_from_slice(&cpu.to_le_bytes());
         return oid;
     }
-    // SAFETY: current_thread_raw() retourne le TCB actif du CPU courant tant que
-    // l'appelant reste dans ce contexte d'exécution.
+    // SAFETY: current_thread_raw() returns the active TCB of the current CPU as long as
+    // caller remains in this execution context.
     let tcb = unsafe { &*tcb_ptr };
     oid[0..8].copy_from_slice(&(tcb.pid.0 as u64).to_le_bytes());
     oid[8..16].copy_from_slice(&tcb.tid.to_le_bytes());
@@ -426,25 +426,25 @@ fn is_published_tcb(tcb_ptr: usize) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// exo_ledger_append_p0 — Ajout dans la zone P0 (IMMUABLE)
+// exo_ledger_append_p0 — Append into P0 zone (IMMUTABLE)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ajoute une entrée dans la zone P0 immuable du ledger.
+/// Appends an entry into immutable P0 zone of ledger.
 ///
-/// # RÈGLE EXOLEDGER-01
-/// La zone P0 est append-only : les entrées ne sont JAMAIS écrasées.
-/// Si les 16 slots P0 sont pleins, la fonction panique (RÈGLE EXOLEDGER-02).
+/// # RULE EXOLEDGER-01
+/// P0 zone is append-only: entries are NEVER overwritten.
+/// If all 16 P0 slots are full, function panics (RULE EXOLEDGER-02).
 ///
 /// # ISR-safe
-/// Pas d'allocation, pas de lock bloquant. Utilise des atomiques pour
-/// la synchronisation.
+/// No allocation, no blocking lock. Uses atomics for
+/// synchronization.
 ///
 /// # Usage
-/// Appelé par :
-/// - `exocage::cp_handler()` pour les violations #CP
-/// - Le handler IOMMU fault pour les défauts DMA
-/// - ExoPhoenix HANDOFF pour les déclenchements de handoff
-/// - ExoSeal pour les violations de boot seal
+/// Called by:
+/// - `exocage::cp_handler()` for #CP violations
+/// - IOMMU fault handler for DMA faults
+/// - ExoPhoenix HANDOFF for handoff triggers
+/// - ExoSeal for boot seal violations
 pub fn exo_ledger_append_p0(action: ActionTag) {
     let _guard = P0_CHAIN_LOCK.lock();
     let idx = P0_USED.load(Ordering::Acquire);
@@ -473,32 +473,32 @@ pub fn exo_ledger_append_p0(action: ActionTag) {
         hash: [0u8; 32],
     };
 
-    // Calculer le hash chaîné : Blake3(this_entry || prev_hash)
+    // Compute chained hash: Blake3(this_entry || prev_hash)
     entry.finalize_hash();
 
-    // Écriture dans la zone P0
-    // SAFETY: idx < P0_ZONE_ENTRIES garanti par le check ci-dessus.
-    //         L'écriture est unique par slot (append-only).
+    // Write into P0 zone
+    // SAFETY: idx < P0_ZONE_ENTRIES guaranteed by above check.
+    //         Write is unique per slot (append-only).
     unsafe {
         core::ptr::write_volatile(p0_zone_ptr().add(idx), entry);
     }
 
-    // Mettre à jour le dernier hash et les compteurs
+    // Update last hash and counters
     store_last_hash(&entry.hash);
     TOTAL_WRITTEN.fetch_add(1, Ordering::Relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// exo_ledger_append — Ajout dans le ring buffer (circulaire)
+// exo_ledger_append — Append into ring buffer (circular)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ajoute une entrée dans le ring buffer du ledger.
+/// Appends an entry into ledger ring buffer.
 ///
-/// Si le ring buffer est plein, l'entrée la plus ancienne est écrasée
-/// (overflow circulaire autorisé — mais JAMAIS les entrées P0).
+/// If ring buffer is full, the oldest entry is overwritten
+/// (circular overflow permitted — but NEVER P0 entries).
 ///
 /// # ISR-safe
-/// Pas d'allocation, pas de lock. Utilise des atomiques pour le head.
+/// No allocation, no lock. Uses atomics for head.
 pub fn exo_ledger_append(action: ActionTag) {
     let _guard = P0_CHAIN_LOCK.lock();
     let seq = GLOBAL_SEQ.fetch_add(1, Ordering::AcqRel);
@@ -514,31 +514,31 @@ pub fn exo_ledger_append(action: ActionTag) {
         hash: [0u8; 32],
     };
 
-    // Calculer le hash chaîné
+    // Compute chained hash
     entry.finalize_hash();
 
-    // Écriture dans le ring buffer
-    // SAFETY: head < RING_BUFFER_ENTRIES par construction du modulo.
+    // Write into ring buffer
+    // SAFETY: head < RING_BUFFER_ENTRIES by modulo construction.
     unsafe {
         core::ptr::write_volatile(ring_buffer_ptr().add(head), entry);
     }
 
-    // Mettre à jour le dernier hash et les compteurs
+    // Update last hash and counters
     store_last_hash(&entry.hash);
     TOTAL_WRITTEN.fetch_add(1, Ordering::Relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation ExoLedger
+// ExoLedger initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système ExoLedger.
+/// Initializes the ExoLedger subsystem.
 ///
-/// Appelé par `security_init()` à l'étape 7 du boot.
+/// Called by `security_init()` at boot step 7.
 ///
-/// En Phase 3.1, les zones P0 et ring buffer sont en mémoire statique BSS.
-/// En Phase 3.2+, elles seront mappées dans SSR.LOG_AUDIT (+0x8000) en
-/// collaboration avec l'infrastructure ExoPhoenix SSR.
+/// In Phase 3.1, P0 and ring buffer zones reside in BSS static memory.
+/// In Phase 3.2+, they will be mapped into SSR.LOG_AUDIT (+0x8000) in
+/// collaboration with ExoPhoenix SSR infrastructure.
 pub fn exo_ledger_init() {
     if P0_USED.load(Ordering::Acquire) != 0
         || TOTAL_WRITTEN.load(Ordering::Acquire) != 0
@@ -548,17 +548,17 @@ pub fn exo_ledger_init() {
         return;
     }
 
-    // Réinitialiser les compteurs (en cas de ré-init)
+    // Reset counters (in case of re-init)
     GLOBAL_SEQ.store(0, Ordering::Release);
     P0_USED.store(0, Ordering::Release);
     RING_HEAD.store(0, Ordering::Release);
     TOTAL_WRITTEN.store(0, Ordering::Release);
     P0_OVERFLOW_REPORTED.store(false, Ordering::Release);
 
-    // Zéro-initialiser les zones (déjà BSS = zéro, mais explicite).
+    // Zero-initialize storage zones (already BSS = zero, but explicit).
     clear_ledger_storage();
 
-    // Initialiser le dernier hash à zéro (genesis entry)
+    // Initialize last hash to zero (genesis entry)
     for byte in LAST_HASH.iter() {
         byte.store(0, Ordering::Release);
     }
@@ -567,30 +567,30 @@ pub fn exo_ledger_init() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification d'intégrité (Kernel B)
+// Integrity verification (Kernel B)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie l'intégrité de la chaîne P0.
+/// Verifies integrity of P0 chain.
 ///
-/// Parcourt les entrées P0 et vérifie que chaque hash correspond à
-/// Blake3(entry || prev_hash). Retourne le nombre d'entrées P0 valides.
+/// Traverses P0 entries and checks that each hash matches
+/// Blake3(entry || prev_hash). Returns the number of valid P0 entries.
 ///
-/// Appelé par Kernel B pour vérifier l'intégrité de la zone P0.
+/// Called by Kernel B to verify integrity of P0 zone.
 pub fn verify_p0_integrity() -> Result<usize, LedgerIntegrityError> {
     let p0_used = P0_USED.load(Ordering::Acquire);
 
-    let mut prev_hash = [0u8; 32]; // genesis hash = zéro
+    let mut prev_hash = [0u8; 32]; // genesis hash = zero
 
     for i in 0..p0_used.min(P0_ZONE_ENTRIES) {
-        // SAFETY: i < p0_used <= P0_ZONE_ENTRIES, lecture seule.
+        // SAFETY: i < p0_used <= P0_ZONE_ENTRIES, read-only.
         let entry = unsafe { core::ptr::read_volatile(p0_zone_ptr().add(i) as *const LedgerEntry) };
 
-        // Vérifier le chaînage : prev_hash de l'entrée doit correspondre
+        // Verify chaining: entry prev_hash must match
         if entry.prev_hash != prev_hash {
             return Err(LedgerIntegrityError::ChainBroken { entry_idx: i });
         }
 
-        // Vérifier le hash de l'entrée
+        // Verify entry hash
         let computed_hash = entry.compute_hash();
         if entry.hash != computed_hash {
             return Err(LedgerIntegrityError::HashMismatch { entry_idx: i });
@@ -602,30 +602,30 @@ pub fn verify_p0_integrity() -> Result<usize, LedgerIntegrityError> {
     Ok(p0_used.min(P0_ZONE_ENTRIES))
 }
 
-/// Vérifie l'intégrité de la chaîne du ring buffer.
+/// Verifies integrity of ring buffer chain.
 ///
-/// Retourne le nombre d'entrées valides dans le ring buffer.
+/// Returns number of valid entries in ring buffer.
 pub fn verify_ring_integrity() -> Result<usize, LedgerIntegrityError> {
     let head = RING_HEAD.load(Ordering::Acquire);
     let count = head.min(RING_BUFFER_ENTRIES);
 
-    // Le ring buffer est circulaire — on vérifie depuis le début
+    // Ring buffer is circular — verify from start
     let mut prev_hash = [0u8; 32];
     let mut valid = 0;
 
     for i in 0..count {
-        // SAFETY: i < count <= RING_BUFFER_ENTRIES, lecture seule.
+        // SAFETY: i < count <= RING_BUFFER_ENTRIES, read-only.
         let entry =
             unsafe { core::ptr::read_volatile(ring_buffer_ptr().add(i) as *const LedgerEntry) };
 
-        // Les entrées non-écrites ont seq=0, on les ignore
+        // Unwritten entries have seq=0, ignore them
         if entry.seq == 0 && valid == 0 {
             continue;
         }
 
         if entry.prev_hash != prev_hash && valid > 0 {
-            // La chaîne peut être rompue par l'overflow circulaire
-            // Ce n'est pas une erreur — c'est attendu avec le ring buffer
+            // Chain may be broken by circular overflow
+            // This is not an error — expected with ring buffer
             break;
         }
 
@@ -642,89 +642,89 @@ pub fn verify_ring_integrity() -> Result<usize, LedgerIntegrityError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs d'intégrité
+// Integrity errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur de vérification d'intégrité du ledger.
+/// Ledger integrity verification error.
 #[derive(Debug, Clone, Copy)]
 pub enum LedgerIntegrityError {
-    /// La chaîne de hash est rompue à l'entrée spécifiée.
+    /// Hash chain broken at specified entry.
     ChainBroken { entry_idx: usize },
-    /// Le hash d'une entrée ne correspond pas au hash recalculé.
+    /// Entry hash does not match recomputed hash.
     HashMismatch { entry_idx: usize },
-    /// Zone P0 pleine (impossible d'ajouter).
+    /// P0 zone full (cannot append).
     P0ZoneFull,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Accesseurs publics
+// Public accessors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre d'entrées P0 utilisées.
+/// Number of used P0 entries.
 #[inline(always)]
 pub fn p0_used() -> usize {
     P0_USED.load(Ordering::Acquire)
 }
 
-/// Nombre total d'entrées écrites (P0 + ring buffer).
+/// Total entries written (P0 + ring buffer).
 #[inline(always)]
 pub fn total_written() -> u64 {
     TOTAL_WRITTEN.load(Ordering::Acquire)
 }
 
-/// Numéro de séquence global courant.
+/// Current global sequence number.
 #[inline(always)]
 pub fn current_seq() -> u64 {
     GLOBAL_SEQ.load(Ordering::Acquire)
 }
 
-/// Lit une entrée P0 par index.
+/// Reads a P0 entry by index.
 ///
-/// Retourne None si l'index est hors limites ou si l'entrée n'est pas écrite.
+/// Returns None if index is out of bounds or if entry was not written.
 pub fn read_p0_entry(idx: usize) -> Option<LedgerEntry> {
     if idx >= P0_USED.load(Ordering::Acquire).min(P0_ZONE_ENTRIES) {
         return None;
     }
-    // SAFETY: idx < P0_ZONE_ENTRIES, lecture seule.
+    // SAFETY: idx < P0_ZONE_ENTRIES, read-only.
     Some(unsafe { core::ptr::read_volatile(p0_zone_ptr().add(idx) as *const LedgerEntry) })
 }
 
-/// Lit une entrée du ring buffer par index.
+/// Reads a ring buffer entry by index.
 pub fn read_ring_entry(idx: usize) -> Option<LedgerEntry> {
     if idx >= RING_BUFFER_ENTRIES {
         return None;
     }
-    // SAFETY: idx < RING_BUFFER_ENTRIES, lecture seule.
+    // SAFETY: idx < RING_BUFFER_ENTRIES, read-only.
     let entry =
         unsafe { core::ptr::read_volatile(ring_buffer_ptr().add(idx) as *const LedgerEntry) };
     if entry.seq == 0 {
-        return None; // entrée non écrite
+        return None; // unwritten entry
     }
     Some(entry)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques ExoLedger
+// ExoLedger statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Snapshot des statistiques ExoLedger.
+/// Snapshot of ExoLedger statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct ExoLedgerStats {
-    /// Nombre d'entrées P0 utilisées.
+    /// Number of used P0 entries.
     pub p0_used: usize,
-    /// Capacité maximale P0.
+    /// Maximum P0 capacity.
     pub p0_capacity: usize,
-    /// Nombre total d'entrées écrites.
+    /// Total entries written.
     pub total_written: u64,
-    /// Séquence globale courante.
+    /// Current global sequence.
     pub current_seq: u64,
-    /// Head du ring buffer.
+    /// Ring buffer head.
     pub ring_head: usize,
-    /// Capacité du ring buffer.
+    /// Ring buffer capacity.
     pub ring_capacity: usize,
 }
 
-/// Retourne un snapshot des statistiques ExoLedger.
+/// Returns a snapshot of ExoLedger statistics.
 pub fn exoledger_stats() -> ExoLedgerStats {
     ExoLedgerStats {
         p0_used: P0_USED.load(Ordering::Relaxed),

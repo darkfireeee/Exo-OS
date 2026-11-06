@@ -1,6 +1,6 @@
 // kernel/src/security/isolation/mod.rs
 //
-// Module isolation — Isolation de processus et domaines de sécurité
+// Module isolation — Process isolation and security domains
 
 pub mod domains;
 pub mod namespaces;

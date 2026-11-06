@@ -1,21 +1,21 @@
 // kernel/src/security/capability/rights.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// RIGHTS — Bitmask des droits d'accès (Exo-OS Security · Couche 2b)
+// RIGHTS — Access rights bitmask (Exo-OS Security · Layer 2b)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ⚠️  PÉRIMÈTRE DE PREUVE FORMELLE — Toute modification ici IMPOSE une mise à
-//     jour des preuves Coq/TLA+ dans /proofs/kernel_security/.
+// ⚠️  FORMAL PROOF SCOPE — Any modification here REQUIRES updating
+//     Coq/TLA+ proofs in /proofs/kernel_security/.
 //
-// PROPRIÉTÉS :
-//   Rights est un bitmask u32 — opérations bitwise sûres.
-//   RÈGLE CAP-03 : Les droits d'un token DÉLÉGUÉ ne peuvent jamais dépasser
-//                  les droits de la source → vérification via `is_subset_of()`.
+// PROPERTIES:
+//   Rights is a u32 bitmask — safe bitwise operations.
+//   RULE CAP-03: Rights of a DELEGATED token can never exceed
+//                source rights -> verification via `is_subset_of()`.
 //
-// CONVENTION :
-//   Les bits 0..=5 sont les droits standards (READ, WRITE, EXEC, GRANT, REVOKE, DELEGATE).
-//   Les bits 6..=15 sont des droits domaine-spécifiques (IPC, memoria, DMA…).
-//   Les bits 16..=31 sont réservés aux extensions futures.
+// CONVENTION:
+//   Bits 0..=5 are standard rights (READ, WRITE, EXEC, GRANT, REVOKE, DELEGATE).
+//   Bits 6..=15 are domain-specific rights (IPC, memory, DMA…).
+//   Bits 16..=31 are reserved for future extensions.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
@@ -23,117 +23,117 @@ use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not, Sub};
 use subtle::{Choice, ConstantTimeEq};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rights — type principal
+// Rights — Main type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bitmask des droits accordés par un CapToken.
+/// Bitmask of rights granted by a CapToken.
 ///
-/// # Invariant (prouvé Coq)
-/// Tout `Rights` résultant d'une délégation est un sous-ensemble des droits
-/// du délégant : `delegated.is_subset_of(source)` == true, toujours.
+/// # Invariant (Coq proved)
+/// Any `Rights` resulting from a delegation is a subset of the delegator's
+/// rights: `delegated.is_subset_of(source)` == true, always.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Rights(u32);
 
 impl Rights {
-    // ── Droits standards (bits 0..5) ─────────────────────────────────────────
+    // ── Standard rights (bits 0..5) ──────────────────────────────────────────
 
-    /// Aucun droit.
+    /// No rights.
     pub const NONE: Self = Self(0);
 
-    /// Lecture de l'objet référencé.
+    /// Read of referenced object.
     pub const READ: Self = Self(1 << 0);
 
-    /// Écriture dans l'objet référencé.
+    /// Write to referenced object.
     pub const WRITE: Self = Self(1 << 1);
 
-    /// Exécution (mémoire exécutable, lancement d'ELF, invocation IPC).
+    /// Execution (executable memory, ELF launch, IPC invocation).
     pub const EXEC: Self = Self(1 << 2);
 
-    /// Permission d'accorder ce droit à un tiers (subdélégation de GRANT).
+    /// Permission to grant this right to a third party (sub-delegation of GRANT).
     pub const GRANT: Self = Self(1 << 3);
 
-    /// Permission de révoquer des tokens émis sur cet objet.
+    /// Permission to revoke tokens issued on this object.
     pub const REVOKE: Self = Self(1 << 4);
 
-    /// Permission de déléguer un sous-ensemble des droits possédés.
+    /// Permission to delegate a subset of held rights.
     pub const DELEGATE: Self = Self(1 << 5);
 
-    // ── Droits domaines IPC (bits 6..9) ──────────────────────────────────────
+    // ── IPC domain rights (bits 6..9) ────────────────────────────────────────
 
-    /// Connexion à un endpoint IPC.
+    /// Connection to an IPC endpoint.
     pub const IPC_CONNECT: Self = Self(1 << 6);
 
-    /// Envoi de messages sur un endpoint.
+    /// Sending messages on an endpoint.
     pub const IPC_SEND: Self = Self(1 << 7);
 
-    /// Réception de messages sur un endpoint.
+    /// Receiving messages on an endpoint.
     pub const IPC_RECV: Self = Self(1 << 8);
 
-    /// Contrôle du cycle de vie d'un endpoint (close, shutdown).
+    /// Lifecycle control of an endpoint (close, shutdown).
     pub const IPC_MANAGE: Self = Self(1 << 9);
 
-    // ── Droits domaine Mémoire (bits 10..12) ─────────────────────────────────
+    // ── Memory domain rights (bits 10..12) ────────────────────────────────────
 
-    /// Mapper une VMA dans un espace d'adressage.
+    /// Map a VMA into an address space.
     pub const MEM_MAP: Self = Self(1 << 10);
 
-    /// Modifier les permissions d'une VMA existante.
+    /// Modify permissions of an existing VMA.
     pub const MEM_PROTECT: Self = Self(1 << 11);
 
-    /// Libérer une VMA.
+    /// Free a VMA.
     pub const MEM_UNMAP: Self = Self(1 << 12);
 
-    // ── Droits domaine Device/DMA (bits 13..15) ───────────────────────────────
+    // ── Device/DMA domain rights (bits 13..15) ────────────────────────────────
 
-    /// Accès MMIO à un périphérique.
+    /// MMIO access to a device.
     pub const DEV_MMIO: Self = Self(1 << 13);
 
-    /// Allocation d'opérations DMA.
+    /// Allocation of DMA operations.
     pub const DEV_DMA: Self = Self(1 << 14);
 
-    /// Contrôle IRQ (enable/disable sur ce device).
+    /// IRQ control (enable/disable on this device).
     pub const DEV_IRQ: Self = Self(1 << 15);
 
-    // ── Droits domaine Réseau (bits 16..19) ───────────────────────────────────
+    // ── Network domain rights (bits 16..19) ──────────────────────────────────
 
-    /// Autorisation d'émission de lease réseau (Arbiter).
+    /// Network lease issuance authorization (Arbiter).
     pub const NET_ISSUE: Self = Self(1 << 16);
 
-    /// Matérialisation de brin / socket réseau (Engine).
+    /// Network socket / strand materialization (Engine).
     pub const NET_MATERIALIZE: Self = Self(1 << 17);
 
-    /// Révocation d'un pacte / lease réseau.
+    /// Revocation of a network lease / pact.
     pub const NET_REVOKE: Self = Self(1 << 18);
 
-    /// Administration / observation réseau (Lens / Console).
+    /// Network administration / observation (Lens / Console).
     pub const NET_OBSERVE: Self = Self(1 << 19);
 
-    // ── Champs composites utiles ─────────────────────────────────────────────
+    // ── Useful composite fields ──────────────────────────────────────────────
 
-    /// Droits complets en lecture/écriture sans délégation.
+    /// Full read/write rights without delegation.
     pub const READ_WRITE: Self = Self(Self::READ.0 | Self::WRITE.0);
 
-    /// Droits de base IPC (connexion + envoi + réception).
+    /// Basic IPC rights (connect + send + receive).
     pub const IPC_BASIC: Self = Self(Self::IPC_CONNECT.0 | Self::IPC_SEND.0 | Self::IPC_RECV.0);
 
-    /// Tous les droits sur un objet (ownership complet).
+    /// All rights on an object (full ownership).
     pub const ALL: Self = Self(u32::MAX);
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Constructeurs
+    // Constructors
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Crée depuis bits bruts — bits inconnus tronqués.
+    /// Creates from raw bits — unknown bits truncated.
     #[inline(always)]
     pub const fn from_bits_truncate(bits: u32) -> Self {
         Self(bits)
     }
 
-    /// Crée depuis bits bruts — retourne None si bits non reconnus.
+    /// Creates from raw bits — returns None if unrecognized bits present.
     #[inline(always)]
     pub const fn from_bits(bits: u32) -> Option<Self> {
-        // On accepte uniquement les bits 0..15
+        // Accept only bits 0..15
         if bits & !0x_0000_FFFF == 0 {
             Some(Self(bits))
         } else {
@@ -142,82 +142,82 @@ impl Rights {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Requêtes
+    // Queries
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Lit la valeur binaire sous-jacente.
+    /// Reads underlying binary value.
     #[inline(always)]
     pub const fn bits(self) -> u32 {
         self.0
     }
 
-    /// Vérifie qu'au MOINS les bits `required` sont présents.
+    /// Verifies that at LEAST `required` bits are present.
     #[inline(always)]
     pub const fn contains(self, required: Rights) -> bool {
         (self.0 & required.0) == required.0
     }
 
-    /// Variante constant-time de `contains()` pour les hot paths sensibles.
+    /// Constant-time variant of `contains()` for sensitive hot paths.
     #[inline(always)]
     pub fn contains_ct(self, required: Rights) -> Choice {
         (self.0 & required.0).ct_eq(&required.0)
     }
 
-    /// Vérifie que `self` est un sous-ensemble strict ou égal de `parent`.
-    /// Utilisé pour valider la délégation — PROPRIÉTÉ PROUVÉE Coq.
+    /// Checks that `self` is a strict or equal subset of `parent`.
+    /// Used to validate delegation — Coq PROVED PROPERTY.
     #[inline(always)]
     pub const fn is_subset_of(self, parent: Rights) -> bool {
         (self.0 & !parent.0) == 0
     }
 
-    /// Retourne l'intersection des droits.
+    /// Returns intersection of rights.
     #[inline(always)]
     pub const fn intersect(self, other: Rights) -> Rights {
         Self(self.0 & other.0)
     }
 
-    /// Retourne l'union des droits.
+    /// Returns union of rights.
     #[inline(always)]
     pub const fn union(self, other: Rights) -> Rights {
         Self(self.0 | other.0)
     }
 
-    /// Retire les droits `remove` de `self`.
+    /// Strips `remove` rights from `self`.
     #[inline(always)]
     pub const fn without(self, remove: Rights) -> Rights {
         Self(self.0 & !remove.0)
     }
 
-    /// Vrai si aucun droit n'est présent.
+    /// True if no rights are present.
     #[inline(always)]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// Comparaison constant-time de deux jeux de droits.
+    /// Constant-time comparison of two right sets.
     #[inline(always)]
     pub fn ct_eq(self, other: Rights) -> Choice {
         self.0.ct_eq(&other.0)
     }
 
-    /// Retourne un Rights sans aucun droit (sentinel pour « entrée absente »).
+    /// Returns a Rights with no rights (sentinel for "absent entry").
     pub const fn empty() -> Self {
         Self(0)
     }
 
-    /// Nombre de droits individuels activés (popcount).
+    /// Number of individual active rights (popcount).
     #[inline(always)]
     pub fn count(self) -> u32 {
         self.0.count_ones()
     }
 
-    /// Retourne vrai si le droit DELEGATE est présent (nécessaire pour sous-déléguer).
+    /// Returns true if DELEGATE right is present (necessary to sub-delegate).
     #[inline(always)]
     pub const fn can_delegate(self) -> bool {
         (self.0 & Self::DELEGATE.0) != 0
     }
 
-    /// Retourne vrai si le droit REVOKE est présent.
+    /// Returns true if REVOKE right is present.
     #[inline(always)]
     pub const fn can_revoke(self) -> bool {
         (self.0 & Self::REVOKE.0) != 0
@@ -225,7 +225,7 @@ impl Rights {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Opérateurs bitwise
+// Bitwise operators
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl BitOr for Rights {

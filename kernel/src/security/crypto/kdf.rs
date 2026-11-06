@@ -4,16 +4,16 @@
 // KDF (Key Derivation Functions) — hkdf + sha2 + blake3
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE CRYPTO-CRATES : implémentation via crates RustCrypto validées IETF.
-// Crates utilisées :
+// RULE CRYPTO-CRATES: implementation via IETF-validated RustCrypto crates.
+// Crates used:
 //   • hkdf  v0.12.x + sha2  v0.10.x  → HKDF-SHA256/HKDF-SHA512 (RFC 5869)
-//   • blake3 v1.x (features=["pure"]) → blake3_kdf (mode derive_key BLAKE3)
+//   • blake3 v1.x (features=["pure"]) → blake3_kdf (BLAKE3 derive_key mode)
 //
-// Deux familles de KDF exportées :
-//   1. HKDF-SHA256/HKDF-SHA512   → standard IETF, utilisé pour les clés IPC/FS
-//   2. BLAKE3 KDF (derive_key)    → pour les usages haute performance kernel
+// Two exported KDF families:
+//   1. HKDF-SHA256/HKDF-SHA512   → IETF standard, used for IPC/FS keys
+//   2. BLAKE3 KDF (derive_key)    → for high performance kernel usages
 //
-// Tous les contextes de domaine DOIVENT être uniques et statiques.
+// All domain contexts MUST be unique and static.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 extern crate alloc;
@@ -25,7 +25,7 @@ use sha2::{Sha256, Sha512};
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Clé dérivée 32 octets.
+/// 32-byte derived key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedKey32(pub [u8; 32]);
 
@@ -38,7 +38,7 @@ impl DerivedKey32 {
     }
 }
 
-/// Clé dérivée 64 octets.
+/// 64-byte derived key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DerivedKey64(pub [u8; 64]);
 
@@ -51,14 +51,14 @@ impl DerivedKey64 {
     }
 }
 
-/// Erreur KDF.
+/// KDF error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KdfError {
-    /// Longueur de sortie non supportée.
+    /// Unsupported output length.
     InvalidOutputLength,
-    /// Paramètre d'entrée invalide.
+    /// Invalid input parameter.
     InvalidInput,
-    /// Erreur interne HKDF expand.
+    /// HKDF expand internal error.
     ExpandError,
 }
 
@@ -76,9 +76,9 @@ impl core::fmt::Display for KdfError {
 // HKDF-SHA256
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// HKDF-SHA256 — Phase d'extraction.
-/// Retourne `(PRK 32 octets, Hkdf struct)`.
-/// `salt` peut être `None` (HKDF utilise alors un sel de zéros).
+/// HKDF-SHA256 — Extraction phase.
+/// Returns `(32-byte PRK, Hkdf struct)`.
+/// `salt` can be `None` (HKDF then uses a zero salt).
 pub fn hkdf_extract(salt: Option<&[u8]>, ikm: &[u8]) -> (DerivedKey32, Hkdf<Sha256>) {
     let (prk, hkdf) = Hkdf::<Sha256>::extract(salt, ikm);
     let mut out = [0u8; 32];
@@ -86,7 +86,7 @@ pub fn hkdf_extract(salt: Option<&[u8]>, ikm: &[u8]) -> (DerivedKey32, Hkdf<Sha2
     (DerivedKey32(out), hkdf)
 }
 
-/// HKDF-SHA256 — Phase d'expansion vers 32 octets.
+/// HKDF-SHA256 — Expansion phase to 32 bytes.
 pub fn hkdf_expand_32(prk: &Hkdf<Sha256>, info: &[u8]) -> Result<DerivedKey32, KdfError> {
     let mut okm = [0u8; 32];
     prk.expand(info, &mut okm)
@@ -94,7 +94,7 @@ pub fn hkdf_expand_32(prk: &Hkdf<Sha256>, info: &[u8]) -> Result<DerivedKey32, K
     Ok(DerivedKey32(okm))
 }
 
-/// HKDF-SHA512 — Phase d'expansion vers 64 octets.
+/// HKDF-SHA512 — Expansion phase to 64 bytes.
 pub fn hkdf_expand_64(
     ikm: &[u8],
     salt: Option<&[u8]>,
@@ -108,10 +108,10 @@ pub fn hkdf_expand_64(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de dérivation spécialisées (HKDF-SHA256)
+// Specialized derivation functions (HKDF-SHA256)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dérive une sous-clé 32B depuis un IKM avec sel + contexte.
+/// Derives a 32B subkey from an IKM with salt + context.
 pub fn derive_subkey(
     ikm: &[u8],
     salt: Option<&[u8]>,
@@ -121,9 +121,9 @@ pub fn derive_subkey(
     hkdf_expand_32(&hkdf, context)
 }
 
-/// Dérive les clés de chiffrement (enc) et d'authentification (mac) depuis un IKM.
+/// Derives encryption (enc) and authentication (mac) keys from an IKM.
 ///
-/// Retourne `(enc_key 32B, mac_key 32B)`.
+/// Returns `(enc_key 32B, mac_key 32B)`.
 pub fn derive_enc_mac_keys(
     ikm: &[u8],
     salt: Option<&[u8]>,
@@ -134,7 +134,7 @@ pub fn derive_enc_mac_keys(
     Ok((enc, mac))
 }
 
-/// Dérive la clé d'un canal IPC depuis un secret partagé DH.
+/// Derives an IPC channel key from a DH shared secret.
 pub fn derive_ipc_channel_key(
     dh_shared: &[u8; 32],
     channel_id: u64,
@@ -145,7 +145,7 @@ pub fn derive_ipc_channel_key(
     derive_subkey(dh_shared, Some(b"ExoOS-IPC-2025"), &info)
 }
 
-/// Dérive la clé d'attestation TCB.
+/// Derives the TCB attestation key.
 pub fn derive_tcb_attestation_key(
     root_secret: &[u8],
     tcb_hash: &[u8; 32],
@@ -153,7 +153,7 @@ pub fn derive_tcb_attestation_key(
     derive_subkey(root_secret, Some(tcb_hash), b"ExoOS 2025 tcb-attest")
 }
 
-/// Dérive une clé de chiffrement de clé (KEK).
+/// Derives a key encryption key (KEK).
 pub fn derive_key_encryption_key(
     master_key: &[u8; 32],
     key_id: u32,
@@ -164,7 +164,7 @@ pub fn derive_key_encryption_key(
     derive_subkey(master_key, Some(b"ExoOS-KEK-2025"), &info)
 }
 
-/// Dérive une clé de chiffrement de bloc filesystem.
+/// Derives a filesystem block encryption key.
 pub fn derive_fs_block_key(
     volume_key: &[u8; 32],
     block_index: u64,
@@ -176,21 +176,21 @@ pub fn derive_fs_block_key(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLAKE3 KDF (haute performance)
+// BLAKE3 KDF (high performance)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Dérivation de clé BLAKE3 native.
+/// Native BLAKE3 key derivation.
 ///
-/// Utilise le mode `derive_key` de BLAKE3 (plus rapide que HKDF pour usage
-/// interne kernel sans besoin d'interopérabilité RFC).
-/// `context` doit être unique et statique (ASCII).
+/// Uses BLAKE3 `derive_key` mode (faster than HKDF for kernel
+/// internal usage without RFC interoperability requirement).
+/// `context` must be unique and static (ASCII).
 pub fn blake3_kdf(context: &[u8], material: &[u8]) -> DerivedKey32 {
     let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
     let derived = blake3::derive_key(ctx, material);
     DerivedKey32(derived)
 }
 
-/// BLAKE3 KDF avec sortie XOF (longueur arbitraire, max 64B via ce wrapper).
+/// BLAKE3 KDF with XOF output (arbitrary length, max 64B via this wrapper).
 pub fn blake3_kdf_xof(context: &[u8], material: &[u8], out: &mut [u8]) {
     let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
     if out.len() <= 32 {

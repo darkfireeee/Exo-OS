@@ -1,24 +1,24 @@
 // kernel/src/security/crypto/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Module crypto — Primitives cryptographiques kernel pour Exo-OS
+// Crypto module — Kernel cryptographic primitives for Exo-OS
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Sous-modules :
-//   • blake3             : Hash BLAKE3 — 256 bits, mode keyed + derive_key
+// Submodules:
+//   • blake3             : BLAKE3 hash — 256-bit, keyed + derive_key mode
 //   • xchacha20_poly1305 : AEAD XChaCha20-Poly1305
 //   • rng                : CSPRNG (RDRAND + ChaCha20 block function)
-//   • kdf                : HKDF-BLAKE3 — dérivation de clés
+//   • kdf                : HKDF-BLAKE3 — key derivation
 //   • x25519             : ECDH X25519
-//   • ed25519            : Signatures Ed25519
+//   • ed25519            : Ed25519 signatures
 //   • aes_gcm            : AES-256-GCM (software T-tables + AES-NI runtime detection)
 //
-// Règles de sécurité (RÈGLE CRYPTO-*) :
-//   • CRYPTO-01 : Toutes les primitives sont pure-Rust no_std.
-//   • CRYPTO-02 : Crates RustCrypto validées IETF uniquement (sauf ChaCha20 custom).
-//   • CRYPTO-03 : Les clés sont zéroïsées en Drop quand elles sont wrappées.
-//   • CRYPTO-04 : Jamais de réutilisation de nonce/IV.
-//   • CRYPTO-05 : constant-time pour toutes les comparaisons de tags/clés.
+// Security rules (RULE CRYPTO-*):
+//   • CRYPTO-01: All primitives are pure-Rust no_std.
+//   • CRYPTO-02: IETF validated RustCrypto crates only (except custom ChaCha20).
+//   • CRYPTO-03: Keys are zeroized on Drop when wrapped.
+//   • CRYPTO-04: Never reuse nonce/IV.
+//   • CRYPTO-05: Constant-time for all tag/key comparisons.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod aes_gcm;
@@ -30,7 +30,7 @@ pub mod x25519;
 pub mod xchacha20_poly1305;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports principaux
+// Main re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// BLAKE3
@@ -63,7 +63,7 @@ pub use kdf::{
     DerivedKey32,
     DerivedKey64,
     KdfError,
-    // labels: supprimé (module absent du nouveau kdf.rs basé sur crates)
+    // labels: removed (module absent from new crates-based kdf.rs)
 };
 
 /// X25519
@@ -80,11 +80,11 @@ pub use aes_gcm::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation du sous-système crypto
+// Cryptographic subsystem initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système cryptographique.
-/// Doit être appelé après l'init CPU (RDRAND disponible).
+/// Initializes the cryptographic subsystem.
+/// Must be called after CPU init (RDRAND available).
 pub fn crypto_init() {
     rng::rng_init();
 }

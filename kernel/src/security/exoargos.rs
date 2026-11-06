@@ -259,7 +259,7 @@ impl PmcSnapshotInner {
 ///
 /// # Safety
 /// Must be called from Ring 0, exactly once at boot.
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoargos_init() {
     // 1. Check PMU support via CPUID leaf 0xA
     let eax_a = core::arch::x86_64::__cpuid(0x0A).eax;
@@ -272,7 +272,7 @@ pub unsafe fn exoargos_init() {
 
     // 2. Program the event selectors
     // PERFEVTSEL0 = MEM_LOAD_RETIRED.L3_MISS | EN | OS | USR
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         msr::write_msr(
             MSR_IA32_PERFEVTSEL0,
@@ -311,7 +311,7 @@ pub unsafe fn exoargos_init() {
 /// # Safety
 /// Same requirements as `exoargos_init()`: Ring 0, called once.
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn init_pmu() {
     exoargos_init()
 }
@@ -346,11 +346,11 @@ pub fn pmc_snapshot(tcb: &ThreadControlBlock) -> PmcSnapshot {
         return PmcSnapshot::default();
     }
 
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let inst_retired = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
     let clk_unhalted = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
     let l3_miss = unsafe { msr::read_msr(MSR_IA32_PMC0) };
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let br_mispredict = unsafe { msr::read_msr(MSR_IA32_PMC1) };
     let tsc_val = tsc::read_tsc();
 
@@ -379,7 +379,7 @@ fn write_snapshot_to_ssr(snap: &PmcSnapshot) {
     let cpu_id = if crate::arch::x86_64::cpu::features::cpu_features_or_none()
         .map_or(false, |features| features.has_rdtscp())
     {
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         let (_, aux) = unsafe { msr::rdtscp() };
         aux
     } else {
@@ -479,11 +479,11 @@ pub fn check_anomaly() -> bool {
         return false;
     }
 
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let inst_retired = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR0) };
     let clk_unhalted = unsafe { msr::read_msr(MSR_IA32_FIXED_CTR1) };
     let l3_miss = unsafe { msr::read_msr(MSR_IA32_PMC0) };
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let br_mispredict = unsafe { msr::read_msr(MSR_IA32_PMC1) };
     let tsc_val = tsc::read_tsc();
 

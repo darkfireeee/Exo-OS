@@ -1,69 +1,69 @@
 // kernel/src/security/audit/rules.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Audit Rules — Règles de filtrage et de déclenchement d'audit
+// Audit Rules — Audit filtering and triggering rules
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Set de 64 règles maximum (taille fixe, pas d'allocation)
-//   • Chaque règle filtre par : pid, uid, syscall_nr, catégorie, outcome
-//   • Les règles sont évaluées en ordre de priorité (0 = plus haute priorité)
-//   • Une règle peut déclencher : LOG, ALERT, KILL, DENY
+// Architecture:
+//   • Set of 64 rules maximum (fixed size, no allocation)
+//   • Each rule filters by: pid, uid, syscall_nr, category, outcome
+//   • Rules are evaluated in priority order (0 = highest priority)
+//   • A rule can trigger: LOG, ALERT, KILL, DENY
 //
-// RÈGLE ARULE-01 : L'ordre d'évaluation est déterministe (index croissant).
-// RÈGLE ARULE-02 : Pas de règle ne peut désactiver SecurityViolation.
+// RULE ARULE-01: Evaluation order is deterministic (increasing index).
+// RULE ARULE-02: No rule can disable SecurityViolation.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::logger::AuditCategory;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Action d'une règle
+// Rule action
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Action déclenchée par une règle d'audit.
+/// Action triggered by an audit rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RuleAction {
-    /// Ne rien faire (règle de suppression).
+    /// Do nothing (suppression rule).
     Skip = 0,
-    /// Enregistrer l'événement.
+    /// Record the event.
     Log = 1,
-    /// Enregistrer et générer une alerte.
+    /// Record and generate an alert.
     Alert = 2,
-    /// Refuser l'opération.
+    /// Deny operation.
     Deny = 3,
-    /// Tuer le processus.
+    /// Kill process.
     Kill = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditRule — règle individuelle
+// AuditRule — Individual rule
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Règle d'audit individuelle.
+/// Individual audit rule.
 ///
-/// Tous les champs `Option::None` signifient "match all" pour ce critère.
+/// All `Option::None` fields mean "match all" for that criterion.
 #[derive(Clone, Copy)]
 pub struct AuditRule {
-    /// PID à surveiller (None = tous les PID).
+    /// PID to monitor (None = all PIDs).
     pub pid: Option<u32>,
-    /// UID à surveiller (None = tous les UID).
+    /// UID to monitor (None = all UIDs).
     pub uid: Option<u32>,
-    /// Numéro de syscall (None = tous les syscalls).
+    /// Syscall number (None = all syscalls).
     pub syscall_nr: Option<u32>,
-    /// Catégorie (None = toutes).
+    /// Category (None = all).
     pub category: Option<AuditCategory>,
-    /// Ne s'applique qu'aux outcomes donnés (bitmask sur AuditOutcome u8).
-    /// 0xFF = tous.
+    /// Applies only to given outcomes (bitmask over AuditOutcome u8).
+    /// 0xFF = all.
     pub outcome_mask: u8,
-    /// Action à déclencher si la règle matche.
+    /// Action to trigger if rule matches.
     pub action: RuleAction,
-    /// La règle est-elle active ?
+    /// Is the rule active?
     pub enabled: bool,
-    /// Priorité (0 = plus haute).
+    /// Priority (0 = highest).
     pub priority: u8,
-    /// Compteur de matches.
+    /// Match counter.
     pub match_count: u64,
 }
 
@@ -124,7 +124,7 @@ impl AuditRule {
         }
     }
 
-    /// Teste si cette règle s'applique à l'événement décrit.
+    /// Tests if this rule applies to described event.
     pub fn matches(
         &self,
         pid: u32,
@@ -136,7 +136,7 @@ impl AuditRule {
         if !self.enabled {
             return false;
         }
-        // RÈGLE ARULE-02 : SecurityViolation ne peut pas être supprimée
+        // RULE ARULE-02: SecurityViolation cannot be suppressed
         if category == AuditCategory::SecurityViolation && self.action == RuleAction::Skip {
             return false;
         }
@@ -168,7 +168,7 @@ impl AuditRule {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuleSet — ensemble de règles
+// RuleSet — Rule collection
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_RULES: usize = 64;
@@ -187,14 +187,14 @@ impl RuleSet {
         }
     }
 
-    /// Ajoute une règle au RuleSet.
+    /// Adds a rule to RuleSet.
     ///
-    /// Retourne l'index de la règle ou `Err` si le set est plein.
+    /// Returns rule index or `Err` if set is full.
     pub fn add_rule(&mut self, rule: AuditRule) -> Result<usize, ()> {
         if self.count >= MAX_RULES {
             return Err(());
         }
-        // Trouver le premier slot libre
+        // Find first free slot
         for i in 0..MAX_RULES {
             if self.rules[i].is_none() {
                 self.rules[i] = Some(rule);
@@ -205,7 +205,7 @@ impl RuleSet {
         Err(())
     }
 
-    /// Supprime la règle à l'index `idx`.
+    /// Removes rule at index `idx`.
     pub fn remove_rule(&mut self, idx: usize) -> bool {
         if idx >= MAX_RULES || self.rules[idx].is_none() {
             return false;
@@ -217,7 +217,7 @@ impl RuleSet {
         true
     }
 
-    /// Active ou désactive la règle à `idx`.
+    /// Enables or disables rule at `idx`.
     pub fn set_enabled(&mut self, idx: usize, enabled: bool) -> bool {
         if let Some(r) = &mut self.rules[idx] {
             r.enabled = enabled;
@@ -227,11 +227,11 @@ impl RuleSet {
         }
     }
 
-    /// Évalue toutes les règles contre un événement.
+    /// Evaluates all rules against an event.
     ///
-    /// RÈGLE ARULE-01 : Évaluation par index croissant, première règle matchante prime.
+    /// RULE ARULE-01: Evaluation in ascending index order, first matching rule takes precedence.
     ///
-    /// Retourne `(action, rule_index)` ou `(Log, usize::MAX)` si aucune règle.
+    /// Returns `(action, rule_index)` or `(Log, usize::MAX)` if no rule matches.
     pub fn evaluate(
         &mut self,
         pid: u32,
@@ -240,7 +240,7 @@ impl RuleSet {
         category: AuditCategory,
         outcome: u8,
     ) -> (RuleAction, usize) {
-        // Trier par priorité (chercher la règle de plus haute priorité qui matche)
+        // Sort by priority (find matching rule with highest priority)
         let mut best_priority = u8::MAX;
         let mut best_action = RuleAction::Log;
         let mut best_idx = usize::MAX;
@@ -257,7 +257,7 @@ impl RuleSet {
             }
         }
 
-        // Incrémenter le compteur de la règle gagnante
+        // Increment match counter of winning rule
         if best_idx < MAX_RULES {
             if let Some(r) = &mut self.rules[best_idx] {
                 r.match_count = r.match_count.wrapping_add(1);
@@ -273,7 +273,7 @@ impl RuleSet {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Jeu de règles global
+// Global rule set
 // ─────────────────────────────────────────────────────────────────────────────
 
 static GLOBAL_RULES: spin::Mutex<RuleSet> = spin::Mutex::new(RuleSet::new());
@@ -281,20 +281,20 @@ static RULE_EVALS: AtomicU64 = AtomicU64::new(0);
 static RULE_MATCHES: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ajoute une règle globale.
+/// Adds a global rule.
 pub fn add_global_rule(rule: AuditRule) -> Result<usize, ()> {
     GLOBAL_RULES.lock().add_rule(rule)
 }
 
-/// Supprime une règle globale.
+/// Removes a global rule.
 pub fn remove_global_rule(idx: usize) -> bool {
     GLOBAL_RULES.lock().remove_rule(idx)
 }
 
-/// Évalue les règles globales contre un événement.
+/// Evaluates global rules against an event.
 pub fn evaluate_global(
     pid: u32,
     uid: u32,

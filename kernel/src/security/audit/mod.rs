@@ -1,11 +1,11 @@
 // kernel/src/security/audit/mod.rs
 //
-// Module audit — Journal d'audit de politique de sécurité
+// Audit module — Security policy audit log
 //
-// Sous-modules :
-//   • logger        — Ring buffer d'événements, filtres, flush vers userspace
-//   • rules         — RuleSet 64 entrées, évaluation par priorité
-//   • syscall_audit — Intégration SYSCALL entry/exit, verdict par thread
+// Submodules:
+//   • logger        — Event ring buffer, filters, flush to userspace
+//   • rules         — 64-entry RuleSet, evaluation by priority
+//   • syscall_audit — SYSCALL entry/exit integration, per-thread verdict
 
 pub mod logger;
 pub mod rules;
@@ -25,11 +25,11 @@ pub use syscall_audit::{
     syscall_audit_stats, AuditVerdict,
 };
 
-/// Initialise le sous-système d'audit.
+/// Initializes the audit subsystem.
 ///
-/// Installe les règles par défaut :
-///   - Log tous les syscalls (priorité 128)
-///   - Alert sur SecurityViolation (couverte par RÈGLE AUDIT-02 — toujours active)
+/// Installs default rules:
+///   - Log all syscalls (priority 128)
+///   - Alert on SecurityViolation (covered by RULE AUDIT-02 — always active)
 pub fn audit_init() {
     let _ = add_global_rule(AuditRule::new_log_all());
 }

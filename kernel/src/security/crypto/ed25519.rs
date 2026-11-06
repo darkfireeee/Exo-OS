@@ -1,57 +1,57 @@
 // kernel/src/security/crypto/ed25519.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Ed25519 — Wrapper via crate ed25519-dalek v2
+// Ed25519 — Wrapper via ed25519-dalek crate v2
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE CRYPTO-CRATES : implémentation via crate RustCrypto validée IETF.
-// Crate : ed25519-dalek v2.x, features = [] (default-features = false)
-//   - Conforme RFC 8032 (Edwards-Curve Digital Signature Algorithm)
-//   - SHA-512 comme fonction de hachage interne (standard IETF)
-//   - no_std compatible; pas d'opération en virgule flottante
+// RULE CRYPTO-CRATES: implementation via IETF-validated RustCrypto crate.
+// Crate: ed25519-dalek v2.x, features = [] (default-features = false)
+//   - Conforms to RFC 8032 (Edwards-Curve Digital Signature Algorithm)
+//   - SHA-512 as internal hash function (IETF standard)
+//   - no_std compatible; no floating point operations
 //
-// NOTE : L'ancienne implémentation utilisait BLAKE3 comme fonction de hachage
-// interne (non-standard). Les paires de clés sont INCOMPATIBLES avec l'ancien
-// code. Ceci est acceptable car aucune clé n'est déployée en production.
+// NOTE: The previous implementation used BLAKE3 as internal hash
+// function (non-standard). Key pairs are INCOMPATIBLE with legacy
+// code. This is acceptable as no keys are deployed in production.
 //
-// Usages dans Exo-OS :
-//   • Vérification de la signature du bootloader (secure_boot.rs)
-//   • Signature des modules noyau (code_signing.rs)
-//   • Attestation TCB (Trusted Computing Base)
+// Usages in Exo-OS:
+//   • Bootloader signature verification (secure_boot.rs)
+//   • Kernel module signing (code_signing.rs)
+//   • TCB (Trusted Computing Base) attestation
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
-/// Paire de clés Ed25519.
+/// Ed25519 key pair.
 ///
-/// `seed`       : entropie de 32B (clé secrète scalaire avant expansion)
-/// `public_key` : clé publique 32B (point sur Ed25519)
+/// `seed`: 32B entropy (scalar secret key before expansion)
+/// `public_key`: 32B public key (point on Ed25519)
 pub struct Ed25519KeyPair {
-    /// Graine 32 octets (RFC 8032 §5.1.5)
+    /// 32-byte seed (RFC 8032 §5.1.5)
     pub seed: [u8; 32],
-    /// Clé publique 32 octets
+    /// 32-byte public key
     pub public_key: [u8; 32],
-    // La clé étendue (expanded) est recalculée à la demande dans ed25519-dalek.
-    // Nous gardons le champ pour compatibilité API avec l'ancienne interface.
+    // The expanded key is recomputed on demand in ed25519-dalek.
+    // We keep the field for API compatibility with the old interface.
     pub expanded: [u8; 64],
 }
 
 impl Ed25519KeyPair {
-    /// Efface les clés sensibles de la mémoire.
+    /// Clears sensitive keys from memory.
     pub fn zeroize(&mut self) {
         self.seed.iter_mut().for_each(|b| *b = 0);
         self.expanded.iter_mut().for_each(|b| *b = 0);
     }
 }
 
-/// Erreur Ed25519.
+/// Ed25519 error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ed25519Error {
-    /// Clé invalide (format incorrect).
+    /// Invalid key (incorrect format).
     InvalidKey,
-    /// Signature invalide (vérification échouée).
+    /// Invalid signature (verification failed).
     InvalidSignature,
-    /// Message trop long ou paramètre incorrect.
+    /// Message too long or incorrect parameter.
     InvalidParameter,
 }
 
@@ -66,21 +66,21 @@ impl core::fmt::Display for Ed25519Error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Génère une paire de clés Ed25519 à partir d'une graine 32B.
+/// Generates an Ed25519 key pair from a 32B seed.
 ///
-/// `seed` doit être de l'entropie cryptographique (CSPRNG kernel).
-/// La clé étendue (champ `expanded`) est calculée depuis la graine via SHA-512
-/// conformément au RFC 8032 §5.1.5.
+/// `seed` must be cryptographic entropy (kernel CSPRNG).
+/// The expanded key (`expanded` field) is computed from the seed via SHA-512
+/// in accordance with RFC 8032 §5.1.5.
 pub fn ed25519_keypair_from_seed(seed: &[u8; 32]) -> Result<Ed25519KeyPair, Ed25519Error> {
     let signing_key = SigningKey::from_bytes(seed);
     let public_key = signing_key.verifying_key().to_bytes();
 
-    // Calcul de l'expanded key pour compatibilité API
-    // La clé étendue = SHA-512(seed) avec modification des bits (clamping)
-    // Stockée ici pour répondre à l'interface mais non utilisée directement.
+    // Expanded key computation for API compatibility
+    // Expanded key = SHA-512(seed) with bit modifications (clamping)
+    // Stored here to satisfy interface but not directly used.
     let mut expanded = [0u8; 64];
     {
         use sha2::{Digest, Sha512};
@@ -99,29 +99,29 @@ pub fn ed25519_keypair_from_seed(seed: &[u8; 32]) -> Result<Ed25519KeyPair, Ed25
     })
 }
 
-/// Signe un message avec la clé privée Ed25519.
+/// Signs a message with the Ed25519 private key.
 ///
-/// Retourne la signature 64 octets (format RFC 8032).
+/// Returns 64-byte signature (RFC 8032 format).
 pub fn ed25519_sign(keypair: &Ed25519KeyPair, message: &[u8]) -> Result<[u8; 64], Ed25519Error> {
     let signing_key = SigningKey::from_bytes(&keypair.seed);
     let sig: Signature = signing_key.sign(message);
     Ok(sig.to_bytes())
 }
 
-/// Vérifie une signature Ed25519 en mode **strict** (RFC 8032 + durcissements).
+/// Verifies an Ed25519 signature in **strict** mode (RFC 8032 + hardenings).
 ///
-/// Retourne `Ok(())` si la signature est valide, `Err(Ed25519Error::InvalidSignature)` sinon.
+/// Returns `Ok(())` if the signature is valid, `Err(Ed25519Error::InvalidSignature)` otherwise.
 ///
-/// # SÉCURITÉ — `verify_strict`, pas `verify`
-/// On utilise **délibérément** `VerifyingKey::verify_strict` et non `verify` :
-/// - **Rejet des clés publiques faibles** (low-order / torsion) : avec une clé
-///   faible, un attaquant peut forger une signature valide pour *n'importe quel*
-///   message. `verify` les accepte ; `verify_strict` les refuse.
-/// - **Anti-malléabilité** : `verify_strict` impose l'encodage canonique de R et
-///   rejette les composantes de torsion (cofacteur 8 de Curve25519). Deux
-///   signatures distinctes ne peuvent donc pas valider le même message.
-/// Pour de la vérification de code/secure-boot (forge = exécution de code non
-/// autorisé), c'est le seul choix correct. Cf. doc ed25519-dalek `verify_strict`.
+/// # SECURITY — `verify_strict`, not `verify`
+/// We **deliberately** use `VerifyingKey::verify_strict` and not `verify`:
+/// - **Rejection of weak public keys** (low-order / torsion): with a weak
+///   key, an attacker can forge a valid signature for *any*
+///   message. `verify` accepts them; `verify_strict` rejects them.
+/// - **Anti-malleability**: `verify_strict` enforces canonical encoding of R and
+///   rejects torsion components (cofactor 8 of Curve25519). Two
+///   distinct signatures therefore cannot validate the same message.
+/// For code/secure-boot verification (forgery = unauthorized code
+/// execution), this is the only correct choice. See ed25519-dalek `verify_strict` doc.
 pub fn ed25519_verify(
     public_key: &[u8; 32],
     message: &[u8],
@@ -149,7 +149,7 @@ mod tests {
         let msg = b"ExoOS kernel module signature test";
 
         let sig = ed25519_sign(&kp, msg).unwrap();
-        ed25519_verify(&kp.public_key, msg, &sig).unwrap(); // doit réussir
+        ed25519_verify(&kp.public_key, msg, &sig).unwrap(); // must succeed
     }
 
     #[test]

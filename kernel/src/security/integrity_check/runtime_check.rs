@@ -1,31 +1,31 @@
 // kernel/src/security/integrity_check/runtime_check.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Runtime Integrity Check — Vérification périodique des sections kernel
+// Runtime Integrity Check — Periodic verification of kernel sections
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Hash BLAKE3 des sections .text et .rodata calculé au boot
-//   • Vérification périodique depuis un timer kernel (ou à la demande)
-//   • En cas d'altération détectée → kernel panic immédiat
-//   • Instrumentation : nombre de vérifications, timestamp dernière vérification
+// Architecture:
+//   • BLAKE3 hash of .text and .rodata sections calculated at boot
+//   • Periodic verification from a kernel timer (or on-demand)
+//   • In case of detected alteration → immediate kernel panic
+//   • Instrumentation: check count, timestamp of last successful check
 //
-// RÈGLE RUNTIME-01 : Les hashes initiaux sont calculés AVANT d'activer les IRQ.
-// RÈGLE RUNTIME-02 : Une altération détectée → kernel_panic() IMMÉDIAT, pas de retry.
-// RÈGLE RUNTIME-03 : Les adresses .text/.rodata viennent du linker script (externs).
+// RULE RUNTIME-01: Initial hashes are calculated BEFORE enabling IRQs.
+// RULE RUNTIME-02: Detected alteration → IMMEDIATE kernel_panic(), no retry.
+// RULE RUNTIME-03: .text/.rodata addresses originate from the linker script (externs).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::super::crypto::blake3::blake3_hash;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Symboles du linker script (kernel/linker.ld)
+// Linker script symbols (kernel/linker.ld)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// SAFETY: Ces symboles sont définis dans kernel/linker.ld et sont toujours
-// présents dans un kernel correctement compilé. Les adresses sont dans la
-// section de code en lecture seule — aucun accès concurrent n'est possible
-// puisque .text/.rodata ne sont jamais écrits après le chargement.
+// SAFETY: These symbols are defined in kernel/linker.ld and are always
+// present in a properly compiled kernel. Addresses are in the
+// read-only code section — no concurrent access is possible
+// since .text/.rodata are never written after loading.
 extern "C" {
     static _text_start: u8;
     static _text_end: u8;
@@ -34,35 +34,35 @@ extern "C" {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs
+// Errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub enum IntegrityError {
-    /// Section .text altérée.
+    /// .text section altered.
     TextSectionCorrupted,
-    /// Section .rodata altérée.
+    /// .rodata section altered.
     RodataSectionCorrupted,
-    /// Section stack guard altérée.
+    /// Stack guard section altered.
     StackGuardCorrupted,
-    /// Non initialisé.
+    /// Not initialized.
     NotInitialized,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuntimeIntegrityChecker — état des vérifications
+// RuntimeIntegrityChecker — check state
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct RuntimeIntegrityState {
-    /// Hash de référence de la section .text.
+    /// Reference hash of the .text section.
     text_hash: [u8; 32],
-    /// Hash de référence de la section .rodata.
+    /// Reference hash of the .rodata section.
     rodata_hash: [u8; 32],
-    /// Initialisé ?
+    /// Initialized?
     initialized: bool,
-    /// Nombre de vérifications réussies.
+    /// Number of successful checks.
     checks_ok: u64,
-    /// Dernier timestamp TSC de vérification réussie.
+    /// Last TSC timestamp of successful check.
     last_ok_tsc: u64,
 }
 
@@ -85,34 +85,34 @@ static CHECKS_PERFORMED: AtomicU64 = AtomicU64::new(0);
 static VIOLATIONS_DETECTED: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions utilitaires pour les sections kernel
+// Utility functions for kernel sections
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le slice de la section .text.
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// Returns slice of the .text section.
+// SAFETY: Low-level operation validated — see block documentation.
 unsafe fn text_section() -> &'static [u8] {
-    // SAFETY: Les symboles _text_start/_text_end sont définis par le linker script.
-    // La section .text est valide et de taille correcte. On lit en lecture seule.
+    // SAFETY: Symbols _text_start/_text_end are defined by the linker script.
+    // The .text section is valid and correctly sized. Read in read-only mode.
     let start = &_text_start as *const u8;
     let end = &_text_end as *const u8;
     let len = end as usize - start as usize;
     core::slice::from_raw_parts(start, len)
 }
 
-/// Retourne le slice de la section .rodata.
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// Returns slice of the .rodata section.
+// SAFETY: Low-level operation validated — see block documentation.
 unsafe fn rodata_section() -> &'static [u8] {
-    // SAFETY: Identique à text_section() — symboles linker, lecture seule.
+    // SAFETY: Identical to text_section() — linker symbols, read-only.
     let start = &_rodata_start as *const u8;
     let end = &_rodata_end as *const u8;
     let len = end as usize - start as usize;
     core::slice::from_raw_parts(start, len)
 }
 
-/// Lit le TSC courant.
+/// Reads the current TSC.
 #[cfg(target_arch = "x86_64")]
 fn read_tsc() -> u64 {
-    // SAFETY: RDTSC est une instruction de lecture (aucun effet de bord sur la mémoire).
+    // SAFETY: RDTSC is a read-only instruction (no side effects on memory).
     unsafe {
         let lo: u32;
         let hi: u32;
@@ -127,20 +127,20 @@ fn read_tsc() -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise les hashes de référence du kernel.
+/// Initializes the kernel reference hashes.
 ///
-/// **DOIT être appelé avant d'activer les IRQ** (RÈGLE RUNTIME-01).
-/// Doit être appelé une seule fois.
+/// **MUST be called before enabling IRQs** (RULE RUNTIME-01).
+/// Must be called only once.
 pub fn init_runtime_integrity() {
     if INITIALIZED.swap(true, Ordering::SeqCst) {
-        return; // Double-init protégée
+        return; // Protected double-init
     }
     let mut state = INTEGRITY_STATE.lock();
 
-    // SAFETY: Voir text_section() / rodata_section() — symboles linker valides.
+    // SAFETY: See text_section() / rodata_section() — valid linker symbols.
     let text_hash = unsafe { blake3_hash(text_section()) };
     let rodata_hash = unsafe { blake3_hash(rodata_section()) };
 
@@ -150,15 +150,15 @@ pub fn init_runtime_integrity() {
     state.last_ok_tsc = read_tsc();
 }
 
-/// Hash une section en tranches de 256 Kio en cédant coopérativement le CPU
-/// entre les tranches si l'ordonnanceur est actif, afin de ne jamais bloquer
-/// les threads interactifs pendant le hash des 15 Mio de `.text`/`.rodata`.
+/// Hashes a section in 256 KiB chunks by cooperatively yielding the CPU
+/// between chunks if the scheduler is active, in order to never block
+/// interactive threads during the hashing of the ~15 MiB `.text`/`.rodata`.
 fn hash_section_cooperative(section: &[u8]) -> [u8; 32] {
     const CHUNK_SIZE: usize = 256 * 1024;
     let mut hasher = super::super::crypto::blake3::Blake3Hasher::new();
     for chunk in section.chunks(CHUNK_SIZE) {
         hasher.update(chunk);
-        // SAFETY: cooperative_reschedule vérifie en interne TCB, IRQ et preempt_count.
+        // SAFETY: cooperative_reschedule internally verifies TCB, IRQ, and preempt_count.
         unsafe {
             let _ = crate::scheduler::core::switch::cooperative_reschedule();
         }
@@ -168,10 +168,10 @@ fn hash_section_cooperative(section: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Effectue une vérification d'intégrité des sections kernel.
+/// Performs an integrity check of the kernel sections.
 ///
-/// Retourne Err si une altération est détectée.
-/// **En production : appeler kernel_panic() en cas d'Err.**
+/// Returns Err if alteration is detected.
+/// **In production: call kernel_panic() on Err.**
 pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
     let (expected_text, expected_rodata) = {
         let state = INTEGRITY_STATE.lock();
@@ -181,12 +181,12 @@ pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
         (state.text_hash, state.rodata_hash)
     };
 
-    // Calculer les hashes actuels hors du spinlock, par tranches coopératives
-    // SAFETY: Voir text_section() / rodata_section().
+    // Calculate current hashes outside spinlock, in cooperative chunks
+    // SAFETY: See text_section() / rodata_section().
     let current_text = unsafe { hash_section_cooperative(text_section()) };
     let current_rodata = unsafe { hash_section_cooperative(rodata_section()) };
 
-    // Comparer en temps constant
+    // Compare in constant time
     let mut text_diff = 0u8;
     let mut rodata_diff = 0u8;
     for i in 0..32 {
@@ -205,30 +205,30 @@ pub fn check_kernel_integrity() -> Result<(), IntegrityError> {
         return Err(IntegrityError::RodataSectionCorrupted);
     }
 
-    // Mise à jour du timestamp de succès
+    // Update success timestamp
     let mut state = INTEGRITY_STATE.lock();
     state.checks_ok += 1;
     state.last_ok_tsc = read_tsc();
     Ok(())
 }
 
-/// Vérifie l'intégrité et panics si compromise.
+/// Verifies integrity and panics if compromised.
 pub fn assert_kernel_integrity() {
     if let Err(e) = check_kernel_integrity() {
-        // En no_std kernel : panic avec message d'erreur
+        // In no_std kernel: panic with error message
         panic!("KERNEL INTEGRITY VIOLATION: {:?}", e);
     }
 }
 
-/// Vérification périodique en **MODE OBSERVE** (TIER 2.1-a) : recalcule les hashes
-/// `.text/.rodata` et, en cas de divergence, **journalise dans ExoLedger** (zone P0
-/// tamper-evident) + incrémente le compteur `VIOLATIONS_DETECTED` — **SANS panic**.
+/// Periodic check in **OBSERVE MODE** (TIER 2.1-a): recalculates `.text/.rodata`
+/// hashes and, in case of divergence, **logs into ExoLedger** (P0 tamper-evident
+/// zone) + increments the `VIOLATIONS_DETECTED` counter — **WITHOUT panicking**.
 ///
-/// Boot-safe : un faux-positif (p. ex. patch `.text` tardif) ne fait que produire
-/// une entrée d'audit, jamais un halt sur un boot fragile. Le mode FATAL
-/// (`assert_kernel_integrity` → panic + handoff ExoPhoenix) reste réservé à la
-/// production, derrière flag. No-op tant que les hashes de référence ne sont pas
-/// posés (`init_runtime_integrity`).
+/// Boot-safe: a false positive (e.g. late `.text` patch) only produces
+/// an audit entry, never a halt on a fragile boot. FATAL mode
+/// (`assert_kernel_integrity` → panic + handoff ExoPhoenix) remains reserved for
+/// production, behind a flag. No-op until reference hashes
+/// are established (`init_runtime_integrity`).
 pub fn security_periodic_check_observe() {
     if !INITIALIZED.load(Ordering::Acquire) {
         return;
@@ -240,7 +240,7 @@ pub fn security_periodic_check_observe() {
             IntegrityError::StackGuardCorrupted => 3,
             IntegrityError::NotInitialized => 0,
         };
-        // 0x494E_5445_4752_5459 = b"INTEGRTY" — tag custom d'audit intégrité.
+        // 0x494E_5445_4752_5459 = b"INTEGRTY" — custom integrity audit tag.
         crate::security::exoledger::exo_ledger_append_p0(
             crate::security::exoledger::ActionTag::Custom {
                 tag: 0x494E_5445_4752_5459,
@@ -250,7 +250,7 @@ pub fn security_periodic_check_observe() {
     }
 }
 
-/// Retourne vrai si le système d'intégrité est initialisé.
+/// Returns true if the integrity system is initialized.
 pub fn is_initialized() -> bool {
     INITIALIZED.load(Ordering::Acquire)
 }

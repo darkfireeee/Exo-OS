@@ -1,25 +1,25 @@
 // kernel/src/security/isolation/sandbox.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Sandbox — Politique de filtrage syscall par processus (style Seccomp)
+// Sandbox — Per-process syscall filtering policy (Seccomp style)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • SandboxPolicy : bitmap de syscalls autorisés (256 syscalls, 4 × u64)
-//   • DEFAULT_DENY : toute politique commence en deny-all
-//   • Actions par syscall : Allow, Deny, Errno(n), Kill
-//   • Intégration : le handler syscall vérifie la politique avant dispatch
-//   • Instrumentation : compteurs refus/autorisations par processus
+// Architecture:
+//   • SandboxPolicy: allowed syscalls bitmap (256 syscalls, 4 × u64)
+//   • DEFAULT_DENY: every policy starts in deny-all
+//   • Actions per syscall: Allow, Deny, Errno(n), Kill
+//   • Integration: the syscall handler checks policy prior to dispatch
+//   • Instrumentation: denial/allow counters per process
 //
-// RÈGLE SAND-01 : SandboxPolicy ne peut QUE réduire les droits (jamais augmenter).
-// RÈGLE SAND-02 : Un processus Sandbox ne peut pas modifier sa propre policy.
-// RÈGLE SAND-03 : Héritage : le fils reçoit une policy ⊆ père.
+// RULE SAND-01: SandboxPolicy can ONLY reduce rights (never increase).
+// RULE SAND-02: A Sandboxed process cannot modify its own policy.
+// RULE SAND-03: Inheritance: child receives a policy ⊆ parent.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Numéros de syscalls Exo-OS (sous-ensemble représentatif)
+// Exo-OS syscall numbers (representative subset)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod syscall_nr {
@@ -69,47 +69,47 @@ pub mod syscall_nr {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SandboxAction — action prise pour un syscall filtré
+// SandboxAction — action taken for a filtered syscall
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxAction {
-    /// Laisser passer le syscall.
+    /// Allow the syscall through.
     Allow = 0,
-    /// Retourner EPERM (1).
+    /// Return EPERM (1).
     DenyEperm = 1,
-    /// Retourner ENOSYS (2).
+    /// Return ENOSYS (2).
     DenyEnosys = 2,
-    /// Tuer le processus (SIGKILL).
+    /// Kill the process (SIGKILL).
     Kill = 3,
-    /// Logger et retourner EPERM.
+    /// Log and return EPERM.
     LogAndDeny = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SandboxPolicy — bitmap + actions pour 256 syscalls
+// SandboxPolicy — bitmap + actions for 256 syscalls
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique de sandbox pour un processus.
+/// Sandbox policy for a process.
 ///
-/// Représentation compacte :
-///   - `allowed_bitmap` : 4 × u64 = 256 bits — 1 si syscall autorisé
-///   - `kill_bitmap`    : 4 × u64 — 1 si syscall → SIGKILL (priorité sur allowed)
-///   - `log_bitmap`     : 4 × u64 — 1 si syscall → log + deny
+/// Compact representation:
+///   - `allowed_bitmap`: 4 × u64 = 256 bits — 1 if syscall is allowed
+///   - `kill_bitmap`   : 4 × u64 — 1 if syscall → SIGKILL (priority over allowed)
+///   - `log_bitmap`    : 4 × u64 — 1 if syscall → log + deny
 #[derive(Clone)]
 pub struct SandboxPolicy {
     allowed_bitmap: [u64; 4],
     kill_bitmap: [u64; 4],
     log_bitmap: [u64; 4],
-    /// Nombre de refus enregistrés (instrumentation).
+    /// Number of recorded denials (instrumentation).
     denials: u64,
-    /// Nombre d'autorisations enregistrées.
+    /// Number of recorded allowances.
     allows: u64,
 }
 
 impl SandboxPolicy {
-    /// Crée une politique deny-all (aucun syscall autorisé).
+    /// Creates a deny-all policy (no syscall allowed).
     pub const fn deny_all() -> Self {
         Self {
             allowed_bitmap: [0u64; 4],
@@ -120,7 +120,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Crée une politique allow-all (tous les syscalls autorisés).
+    /// Creates an allow-all policy (all syscalls allowed).
     pub const fn allow_all() -> Self {
         Self {
             allowed_bitmap: [!0u64; 4],
@@ -131,7 +131,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Crée une politique minimale pour un processus lecture-seule.
+    /// Creates a minimal policy for a read-only process.
     pub fn read_only_minimal() -> Self {
         let mut p = Self::deny_all();
         for nr in [
@@ -155,7 +155,7 @@ impl SandboxPolicy {
         p
     }
 
-    /// Crée une politique pour les processus réseau (allow I/O + socket).
+    /// Creates a policy for network processes (allow I/O + socket).
     pub fn network_io() -> Self {
         let mut p = Self::read_only_minimal();
         for nr in [
@@ -174,21 +174,21 @@ impl SandboxPolicy {
         p
     }
 
-    /// Autorise un syscall.
+    /// Allows a syscall.
     pub fn allow_syscall(&mut self, nr: usize) {
         if nr < syscall_nr::MAX_SYSCALL {
             self.allowed_bitmap[nr / 64] |= 1u64 << (nr % 64);
         }
     }
 
-    /// Interdit un syscall (retire de la liste allowed).
+    /// Denies a syscall (removes from allowed list).
     pub fn deny_syscall(&mut self, nr: usize) {
         if nr < syscall_nr::MAX_SYSCALL {
             self.allowed_bitmap[nr / 64] &= !(1u64 << (nr % 64));
         }
     }
 
-    /// Configure un syscall pour tuer le processus s'il est appelé.
+    /// Configures a syscall to kill the process if called.
     pub fn kill_on_syscall(&mut self, nr: usize) {
         if nr < syscall_nr::MAX_SYSCALL {
             self.deny_syscall(nr);
@@ -196,7 +196,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Configure un syscall pour logger + deny.
+    /// Configures a syscall to log + deny.
     pub fn log_and_deny_syscall(&mut self, nr: usize) {
         if nr < syscall_nr::MAX_SYSCALL {
             self.deny_syscall(nr);
@@ -204,7 +204,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Évalue l'action pour un numéro de syscall.
+    /// Evaluates the action for a syscall number.
     pub fn evaluate(&mut self, nr: usize) -> SandboxAction {
         if nr >= syscall_nr::MAX_SYSCALL {
             self.denials += 1;
@@ -229,7 +229,7 @@ impl SandboxPolicy {
         SandboxAction::DenyEperm
     }
 
-    /// Évalue sans modifier les compteurs (utile pour les checks préalables).
+    /// Evaluates without modifying counters (useful for preliminary checks).
     pub fn check(&self, nr: usize) -> SandboxAction {
         if nr >= syscall_nr::MAX_SYSCALL {
             return SandboxAction::DenyEnosys;
@@ -248,9 +248,9 @@ impl SandboxPolicy {
         SandboxAction::DenyEperm
     }
 
-    /// RÈGLE SAND-03 : Retourne une politique enfant ⊆ self (AND des bitmaps).
+    /// RULE SAND-03: Returns a child policy ⊆ self (bitmap AND).
     pub fn derive_child(&self) -> SandboxPolicy {
-        // L'enfant hérite exactement les mêmes droits (sous-ensemble garanti par AND)
+        // The child inherits exactly the same rights (subset guaranteed by AND)
         Self {
             allowed_bitmap: self.allowed_bitmap,
             kill_bitmap: self.kill_bitmap,
@@ -260,7 +260,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Restreint la politique actuelle avec `other` (intersection des allowed).
+    /// Restricts current policy with `other` (intersection of allowed).
     pub fn intersect_with(&mut self, other: &SandboxPolicy) {
         for i in 0..4 {
             self.allowed_bitmap[i] &= other.allowed_bitmap[i];
@@ -269,21 +269,21 @@ impl SandboxPolicy {
         }
     }
 
-    /// Statistiques de la politique.
+    /// Policy statistics.
     pub fn stats(&self) -> (u64, u64) {
         (self.allows, self.denials)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales sandbox
+// Global sandbox statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 static GLOBAL_SANDBOX_DENIALS: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_SANDBOX_ALLOWS: AtomicU64 = AtomicU64::new(0);
 static GLOBAL_SANDBOX_KILLS: AtomicU64 = AtomicU64::new(0);
 
-/// Enregistre une décision sandbox dans les compteurs globaux.
+/// Records a sandbox decision in global counters.
 pub fn record_sandbox_decision(action: SandboxAction) {
     match action {
         SandboxAction::Allow => {

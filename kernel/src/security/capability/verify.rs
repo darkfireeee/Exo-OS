@@ -1,24 +1,24 @@
 // kernel/src/security/capability/verify.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// VERIFY — Point d'entrée UNIQUE de vérification de capabilities (v6)
+// VERIFY — SINGLE entry point for capability verification (v6)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// v6 : extrait de revocation.rs pour clarté architecturale.
-//      ipc/, fs/, process/ appellent TOUS cette fonction
-//      via security::access_control::checker::check_access()
+// v6: extracted from revocation.rs for architectural clarity.
+//     ipc/, fs/, process/ ALL call this function
+//     via security::access_control::checker::check_access()
 //
-// RÈGLE SEC-01 (v6) :
-//   security::capability::verify() est L'UNIQUE point de vérification dans tout l'OS.
-//   Tout accès à un objet protégé DOIT passer par verify().
-//   Appel direct hors de security/ = INTERDIT (passer par access_control/).
+// RULE SEC-01 (v6):
+//   security::capability::verify() is the SINGLE verification point across entire OS.
+//   Any access to a protected object MUST go through verify().
+//   Direct call outside security/ = FORBIDDEN (go through access_control/).
 //
-// INVARIANTS (INVARIANTS.md) :
-//   INV-1 : verify(token, required) = Ok ⟹
-//     token.object_id existe ∧ token.generation == table.generation ∧ rights.contains(required)
-//   Couverture : proptest 1000+ cas (tests/invariants/capability_proptest.rs)
+// INVARIANTS (INVARIANTS.md):
+//   INV-1: verify(token, required) = Ok ⟹
+//     token.object_id exists ∧ token.generation == table.generation ∧ rights.contains(required)
+//   Coverage: proptest 1000+ cases (tests/invariants/capability_proptest.rs)
 //
-// COMPLEXITÉ : O(1) — lookup haché + 3 lectures atomiques
+// COMPLEXITY: O(1) — hashed lookup + 3 atomic reads
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::rights::Rights;
@@ -27,29 +27,29 @@ use super::token::{stat_denied, stat_verified, CapObjectType, CapToken};
 use subtle::{Choice, ConstantTimeEq};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CapError — erreurs de vérification et de révocation
+// CapError — Verification and revocation errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur retournée par `verify()` et `revoke()`.
+/// Error returned by `verify()` and `revoke()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapError {
-    /// L'objet référencé par le token n'existe pas dans la table.
+    /// Object referenced by token does not exist in table.
     ObjectNotFound,
-    /// Le token a été révoqué (génération incorrecte).
+    /// Token has been revoked (incorrect generation).
     Revoked,
-    /// Les droits du token ne couvrent pas les droits requis.
+    /// Token rights do not cover required rights.
     InsufficientRights,
-    /// Le token est manifestement invalide (ObjectId::INVALID).
+    /// Token is manifestly invalid (ObjectId::INVALID).
     InvalidToken,
-    /// La table de capacités est pleine.
+    /// Capability table is full.
     TableFull,
-    /// Tentative de délégation sans le droit DELEGATE.
+    /// Attempted delegation without DELEGATE right.
     DelegationDenied,
-    /// Violation d'invariant interne (ne devrait jamais se produire).
+    /// Internal invariant violation (should never happen).
     InternalError,
-    /// Refus générique constant-time (CAP-05) : verify() retourne TOUJOURS
-    /// cette variante en cas d'échec — jamais ObjectNotFound ni Revoked.
-    /// Empêche l'énumération des ObjectIds valides par timing side-channel.
+    /// Generic constant-time denial (CAP-05): verify() ALWAYS returns
+    /// this variant upon failure — never ObjectNotFound nor Revoked.
+    /// Prevents enumeration of valid ObjectIds via timing side-channel.
     Denied,
 }
 
@@ -69,58 +69,58 @@ impl core::fmt::Display for CapError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// verify — POINT D'ENTRÉE UNIQUE de vérification (v6)
+// verify — SINGLE verification entry point (v6)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérification d'un CapToken — **UNIQUE point de vérification dans tout l'OS**.
+/// Verification of a CapToken — **SINGLE verification point across entire OS**.
 ///
-/// # Algorithme (INV-1 — voir INVARIANTS.md)
-/// 1. Rejet rapide : token invalide → Err(InvalidToken)
-/// 2. Lookup O(1) dans la table par ObjectId haché
-/// 3. Comparaison de génération → Err(Revoked) si différente (INV-2)
-/// 4. Vérification des droits → Err(InsufficientRights) si insuffisants
-/// 5. Ok(()) — accès autorisé
+/// # Algorithm (INV-1 — see INVARIANTS.md)
+/// 1. Fast reject: invalid token -> Err(InvalidToken)
+/// 2. Hashed lookup O(1) in table by ObjectId
+/// 3. Generation comparison -> Err(Revoked) if different (INV-2)
+/// 4. Rights verification -> Err(InsufficientRights) if insufficient
+/// 5. Ok(()) — access authorized
 ///
 /// # Performance
-/// Hot path typique : ~3 lectures atomiques + 2 comparaisons = ~10–15 cycles.
+/// Typical hot path: ~3 atomic reads + 2 comparisons = ~10–15 cycles.
 ///
-/// # Règle d'utilisation (v6)
-/// Les modules ipc/, fs/, process/ ne doivent PAS appeler cette fonction
-/// directement — passer par `security::access_control::checker::check_access()`
-/// qui y ajoute le logging audit et un contexte d'erreur riche.
-/// Seul `access_control/` appelle cette fonction.
-/// Vérification d'un CapToken — **UNIQUE point de vérification dans tout l'OS**.
+/// # Usage rule (v6)
+/// Modules ipc/, fs/, process/ must NOT call this function
+/// directly — go through `security::access_control::checker::check_access()`
+/// which adds audit logging and rich error context.
+/// Only `access_control/` calls this function.
+/// CapToken verification — **SINGLE verification point across entire OS**.
 ///
-/// # Propriété CAP-05 — Constant-time (voir INVARIANTS.md)
-/// verify() effectue TOUJOURS la même séquence d'opérations quel que soit le
-/// résultat. Pas d'early return différentiel entre « objet absent » et « révoqué ».
-/// Retourne TOUJOURS `Err(Denied)` si quelque chose ne va pas — jamais
-/// `ObjectNotFound` ni `Revoked` — pour empêcher l'énumération des ObjectIds
-/// valides par mesure de temps côté attaquant.
+/// # Property CAP-05 — Constant-time (see INVARIANTS.md)
+/// verify() ALWAYS executes the same sequence of operations regardless of
+/// outcome. No differential early return between "missing object" and "revoked".
+/// ALWAYS returns `Err(Denied)` if anything fails — never
+/// `ObjectNotFound` nor `Revoked` — to prevent enumeration of valid ObjectIds
+/// via timing measurements by an attacker.
 ///
-/// # Algorithme (INV-1 — voir INVARIANTS.md)
-/// 1. Rejet immédiat du token INVALID (ne révèle rien sur la table).
-/// 2. Lookup O(1) dans la table par ObjectId haché — chemin identique si absent.
-/// 3. Comparaisons génération + droits effectuées MÊME si entrée absente
+/// # Algorithm (INV-1 — see INVARIANTS.md)
+/// 1. Immediate rejection of INVALID token (reveals nothing about table).
+/// 2. Hashed lookup O(1) in table by ObjectId — identical path if absent.
+/// 3. Generation + rights comparisons performed EVEN IF entry absent
 ///    (sentinel values u32::MAX / Rights::empty()).
-/// 4. Résultat combiné — un seul code d'erreur Denied.
+/// 4. Combined outcome — single error code Denied.
 ///
-/// # Règle d'utilisation (v6)
-/// Les modules ipc/, fs/, process/ ne doivent PAS appeler cette fonction
-/// directement — passer par `security::access_control::checker::check_access()`
-/// qui y ajoute le logging audit et un contexte d'erreur riche.
+/// # Usage rule (v6)
+/// Modules ipc/, fs/, process/ must NOT call this function
+/// directly — go through `security::access_control::checker::check_access()`
+/// which adds audit logging and rich error context.
 #[inline]
 pub fn verify(table: &CapTable, token: CapToken, required_rights: Rights) -> Result<(), CapError> {
-    // 1. Le cas "token invalide" suit désormais le même chemin que les autres
-    //    refus pour uniformiser le timing (CAP-05).
+    // 1. "invalid token" case follows same path as other
+    //    denials to equalize timing (CAP-05).
     let token_invalid = token.is_invalid();
 
-    // 2. Lookup — chemin identique qu'on trouve ou non l'entrée.
+    // 2. Lookup — identical path whether entry found or not.
     let entry_opt = table.get(token.object_id());
 
-    // 3. Valeurs sentinelles : mêmes comparaisons si l'entrée est absente.
-    //    u32::MAX ne peut jamais être une génération valide (counter monotone).
-    //    Rights::empty() ne satisfera jamais contains(required) si required != 0.
+    // 3. Sentinel values: same comparisons if entry is absent.
+    //    u32::MAX can never be a valid generation (monotonic counter).
+    //    Rights::empty() will never satisfy contains(required) if required != 0.
     let stored_gen = entry_opt.as_ref().map(|e| e.generation).unwrap_or(u32::MAX);
     let stored_rights = entry_opt
         .as_ref()
@@ -128,12 +128,12 @@ pub fn verify(table: &CapTable, token: CapToken, required_rights: Rights) -> Res
         .unwrap_or(Rights::empty());
     let entry_found = Choice::from(entry_opt.is_some() as u8);
 
-    // 4. Les deux comparaisons sont TOUJOURS effectuées — pas d'évaluation courte.
+    // 4. Both comparisons are ALWAYS performed — no short-circuit evaluation.
     let gen_ok = stored_gen.ct_eq(&token.generation());
     let rights_ok = stored_rights.contains_ct(required_rights);
     let access_ok = entry_found & gen_ok & rights_ok;
 
-    // 5. Résultat unifié — Denied dans TOUS les cas d'échec (CAP-05).
+    // 5. Unified result — Denied in ALL failure cases (CAP-05).
     if token_invalid | !bool::from(access_ok) {
         stat_denied();
         return Err(CapError::Denied);
@@ -143,8 +143,8 @@ pub fn verify(table: &CapTable, token: CapToken, required_rights: Rights) -> Res
     Ok(())
 }
 
-/// Variante retournant les droits effectifs si succès.
-/// Utilisée quand l'appelant a besoin de connaître les droits exacts.
+/// Variant returning effective rights on success.
+/// Used when caller needs to know exact rights.
 #[inline]
 pub fn verify_and_get_rights(
     table: &CapTable,
@@ -158,7 +158,7 @@ pub fn verify_and_get_rights(
     Ok(entry.rights)
 }
 
-/// Vérifie token ET type d'objet attendu en un seul appel.
+/// Verifies token AND expected object type in a single call.
 #[inline]
 pub fn verify_typed(
     table: &CapTable,
@@ -178,28 +178,28 @@ pub fn verify_typed(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Raccourcis — hot paths fréquents
+// Shortcuts — Frequent hot paths
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Accès en lecture (hot path commun).
+/// Read access (common hot path).
 #[inline(always)]
 pub fn verify_read(table: &CapTable, token: CapToken) -> Result<(), CapError> {
     verify(table, token, Rights::READ)
 }
 
-/// Accès en lecture + écriture.
+/// Read + write access.
 #[inline(always)]
 pub fn verify_read_write(table: &CapTable, token: CapToken) -> Result<(), CapError> {
     verify(table, token, Rights::READ_WRITE)
 }
 
-/// Envoi IPC.
+/// IPC send.
 #[inline(always)]
 pub fn verify_ipc_send(table: &CapTable, token: CapToken) -> Result<(), CapError> {
     verify(table, token, Rights::IPC_SEND)
 }
 
-/// Réception IPC.
+/// IPC receive.
 #[inline(always)]
 pub fn verify_ipc_recv(table: &CapTable, token: CapToken) -> Result<(), CapError> {
     verify(table, token, Rights::IPC_RECV)

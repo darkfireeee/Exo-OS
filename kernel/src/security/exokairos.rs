@@ -1,45 +1,45 @@
 // kernel/src/security/exokairos.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ExoKairos — Capabilities Temporelles à Budget (ExoShield v1.0)
+// ExoKairos — Budgeted Temporal Capabilities (ExoShield v1.0)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ExoKairos implémente le système de capabilities temporelles d'ExoShield.
-// Chaque capability a un budget (appels et volume) qui décroît monotiquement,
-// et une deadline cachée — l'expiration temporelle est stockée hors TCB dans
-// une table kernel-only (PKS domain Credentials), et vérifiée en temps constant.
+// ExoKairos implements the ExoShield temporal capabilities system.
+// Each capability has a budget (calls and volume) that decreases monotonically,
+// and a hidden deadline — temporal expiration is stored outside the TCB in
+// a kernel-only table (PKS domain Credentials), and verified in constant time.
 //
-// ARCHITECTURE :
-//   • TemporalCap : structure capability avec budget atomique + deadline MAC
-//   • cap_deadline_table : stockage deadline TSC hors TCB (Ring 0 only, PKS Credentials)
-//   • Vérification inline : zéro IPC, constant-time, ~30 cycles
+// ARCHITECTURE:
+//   • TemporalCap: capability structure with atomic budget + deadline MAC
+//   • cap_deadline_table: TSC deadline storage outside TCB (Ring 0 only, PKS Credentials)
+//   • Inline verification: zero IPC, constant-time, ~30 cycles
 //
-// PROPRIÉTÉS DE SÉCURITÉ :
-//   S4 (Budget Monotonicity) : □(use_cap ⟹ budget' < budget)
-//     → calls_left est AtomicU32 décrémenté via fetch_sub — toujours décroissant
-//   Deadline cachée : le TSC de deadline n'est JAMAIS exposé à Ring 1
-//     → Seul deadline_mac (HMAC-Blake3) est visible dans TemporalCap
-//     → Mythos ne peut pas inverser le deadline depuis le MAC
+// SECURITY PROPERTIES:
+//   S4 (Budget Monotonicity): □(use_cap ⟹ budget' < budget)
+//     -> calls_left is AtomicU32 decremented via fetch_sub — always decreasing
+//   Hidden deadline: deadline TSC is NEVER exposed to Ring 1
+//     -> Only deadline_mac (HMAC-Blake3) is visible in TemporalCap
+//     -> Mythos cannot invert the deadline from the MAC
 //
-// TTL PAR DROIT (ExoShield Spec MODULE 5) :
-//   NETWORK_SEND : 5 secondes
-//   FILE_WRITE   : 30 secondes
-//   EXEC         : 1 seconde
-//   IPC_CALL     : 60 secondes
-//   Défaut       : 5 minutes (300 secondes)
+// TTL PER RIGHT (ExoShield Spec MODULE 5):
+//   NETWORK_SEND: 5 seconds
+//   FILE_WRITE  : 30 seconds
+//   EXEC        : 1 second
+//   IPC_CALL    : 60 seconds
+//   Default     : 5 minutes (300 seconds)
 //
-// CORRECTION CORR-v3.1-02 :
-//   `deadline_tsc` n'est plus exposé dans la structure TemporalCap.
-//   Seul `deadline_mac: [u8; 16]` est stocké — la deadline réelle est dans
-//   cap_deadline_table (domaine PKS Credentials, inaccessible depuis Ring 1).
+// CORRECTION CORR-v3.1-02:
+//   `deadline_tsc` is no longer exposed in the TemporalCap structure.
+//   Only `deadline_mac: [u8; 16]` is stored — the actual deadline is in
+//   cap_deadline_table (PKS Credentials domain, inaccessible from Ring 1).
 //
-// RÈGLE EXOKAIROS-01 : la vérification MAC/deadline reste constant-time.
-//   Les décisions throttle/kill branchent uniquement sur des compteurs publics.
-// RÈGLE EXOKAIROS-02 : verify() ne fait AUCUN IPC — toute la logique est inline.
-// RÈGLE EXOKAIROS-03 : depth_max = 4 — pas de délégation au-delà de 4 niveaux.
+// RULE EXOKAIROS-01: MAC/deadline verification remains constant-time.
+//   throttle/kill decisions branch only on public counters.
+// RULE EXOKAIROS-02: verify() performs NO IPC — all logic is inline.
+// RULE EXOKAIROS-03: depth_max = 4 — no delegation beyond 4 levels.
 //
-// RÉFÉRENCES :
-//   ExoShield_v1_Production.md — MODULE 5 : ExoKairos
+// REFERENCES:
+//   ExoShield_v1_Production.md — MODULE 5: ExoKairos
 //   kernel/src/security/capability/ — CapToken, Rights, verify, revoke
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -55,22 +55,22 @@ use crate::security::exoveil::{self, PksDomain, PksPermission};
 // Constantes ExoKairos
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// TTL (Time-To-Live) par droit en secondes.
+/// TTL (Time-To-Live) per right in seconds.
 /// ExoShield Spec MODULE 5 — TTL defaults.
 pub mod ttl {
-    /// NETWORK_SEND : 5 secondes.
+    /// NETWORK_SEND: 5 seconds.
     pub const NETWORK_SEND_S: u64 = 5;
-    /// FILE_WRITE : 30 secondes.
+    /// FILE_WRITE: 30 seconds.
     pub const FILE_WRITE_S: u64 = 30;
-    /// EXEC : 1 seconde.
+    /// EXEC: 1 second.
     pub const EXEC_S: u64 = 1;
-    /// IPC_CALL : 60 secondes.
+    /// IPC_CALL: 60 seconds.
     pub const IPC_CALL_S: u64 = 60;
-    /// Défaut : 5 minutes (300 secondes).
+    /// Default: 5 minutes (300 seconds).
     pub const DEFAULT_S: u64 = 300;
 }
 
-/// Profondeur maximale de délégation (4 niveaux).
+/// Maximum delegation depth (4 levels).
 pub const MAX_DELEGATION_DEPTH: u8 = 4;
 
 const KAIROS_THROTTLE_SPINS: usize = 64;
@@ -80,35 +80,35 @@ const _: () = assert!(
     "KAIROS_WINDOW_NS must remain a 1s audit window"
 );
 
-/// Taille maximale de la deadline table (nombre d'entrées).
-/// En Phase 3.1, on utilise une table statique. En Phase 3.2+,
-/// la table sera dynamique (hash map protégée par PKS Credentials).
+/// Maximum deadline table size (number of entries).
+/// In Phase 3.1, a static table is used. In Phase 3.2+,
+/// the table will be dynamic (hash map protected by PKS Credentials).
 const DEADLINE_TABLE_SIZE: usize = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CapError — Erreurs de capability temporelle
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs possibles lors de la vérification d'une capability temporelle.
+/// Possible errors during temporal capability verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapError {
-    /// La capability a expiré (deadline TSC dépassée).
+    /// The capability has expired (deadline TSC exceeded).
     Expired,
-    /// Le budget d'appels est épuisé (calls_left == 0).
+    /// Call budget is exhausted (calls_left == 0).
     BudgetExhausted,
-    /// Le budget de volume est épuisé (bytes_left == 0).
+    /// Volume budget is exhausted (bytes_left == 0).
     VolumeExhausted,
-    /// La profondeur de délégation est dépassée.
+    /// Delegation depth exceeded.
     DepthExceeded,
-    /// Le token de base est invalide (révoqué, mauvaise génération, etc.).
+    /// Base token is invalid (revoked, wrong generation, etc.).
     InvalidToken,
-    /// Le deadline MAC ne correspond pas — potentiellement forgé.
+    /// Deadline MAC does not match — potentially forged.
     MacMismatch,
-    /// La capability n'existe pas dans la deadline table.
+    /// Capability does not exist in deadline table.
     NotFound,
-    /// Le budget fenêtre a atteint le seuil de ralentissement (100%).
+    /// Window budget reached throttle threshold (100%).
     ThrottleRequired,
-    /// Le budget fenêtre a atteint le seuil de terminaison (200%).
+    /// Window budget reached kill threshold (200%).
     KillThresholdExceeded,
 }
 
@@ -116,7 +116,7 @@ pub enum CapError {
 // TemporalCap — Capability temporelle
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capability temporelle avec budget atomique et deadline cachée.
+/// Temporal capability with atomic budget and hidden deadline.
 ///
 /// # Layout (repr(C))
 ///
@@ -126,57 +126,57 @@ pub enum CapError {
 /// | deadline_mac   | [u8; 16]  | 16     | HMAC-Blake3(oid\|\|deadline\|\|SECRET)|
 /// | calls_left     | AtomicU32 | 4      | Budget d'appels restant              |
 /// | bytes_left     | AtomicU64 | 8      | Volume restant (octets)              |
-/// | window_start_ns| AtomicU64 | 8      | Début fenêtre courante               |
-/// | window budgets | u32/u64   | 12     | Budget par fenêtre                   |
-/// | window used    | Atomic*   | 16     | Consommation fenêtre                 |
-/// | depth          | u8        | 1      | Profondeur de délégation (0..4)      |
+/// | window_start_ns| AtomicU64 | 8      | Current window start                  |
+/// | window budgets | u32/u64   | 12     | Budget per window                     |
+/// | window used    | Atomic*   | 16     | Window consumption                    |
+/// | depth          | u8        | 1      | Delegation depth (0..4)               |
 ///
-/// # Sécurité
-/// - `deadline_mac` : HMAC-Blake3 de (oid || deadline_tsc || KERNEL_SECRET).
-///   L'attaquant ne peut PAS déduire le TSC de deadline depuis le MAC.
-/// - `calls_left` / `bytes_left` : atomiques, rechargés uniquement au changement
-///   de fenêtre `KAIROS_WINDOW_NS`.
-/// - `window_used_*` : déclenchent throttle à 100% et kill à 200%.
-/// - `depth` : ne peut jamais dépasser MAX_DELEGATION_DEPTH (4).
+/// # Security
+/// - `deadline_mac`: HMAC-Blake3 of (oid || deadline_tsc || KERNEL_SECRET).
+///   The attacker CANNOT deduce the deadline TSC from the MAC.
+/// - `calls_left` / `bytes_left`: atomic, reloaded only on change
+///   of `KAIROS_WINDOW_NS` window.
+/// - `window_used_*`: trigger throttle at 100% and kill at 200%.
+/// - `depth`: can never exceed MAX_DELEGATION_DEPTH (4).
 #[repr(C)]
 pub struct TemporalCap {
-    /// Token de capability standard (object_id, rights, generation, type_tag).
+    /// Standard capability token (object_id, rights, generation, type_tag).
     pub base: CapToken,
     /// HMAC-Blake3(oid || deadline_tsc || KERNEL_SECRET).
-    /// Le deadline TSC réel est stocké dans cap_deadline_table (Ring 0 only).
+    /// Actual deadline TSC is stored in cap_deadline_table (Ring 0 only).
     pub deadline_mac: [u8; 16],
-    /// Budget d'appels restant (décrémenté atomiquement).
+    /// Remaining call budget (atomically decremented).
     pub calls_left: AtomicU32,
-    /// Volume restant en octets (décrémenté atomiquement).
+    /// Remaining volume in bytes (atomically decremented).
     pub bytes_left: AtomicU64,
-    /// Début de la fenêtre courante en temps monotone.
+    /// Start of current window in monotonic time.
     pub window_start_ns: AtomicU64,
-    /// Budget d'appels rechargé à chaque fenêtre.
+    /// Call budget reloaded at each window.
     window_budget_calls: u32,
-    /// Budget de volume rechargé à chaque fenêtre.
+    /// Volume budget reloaded at each window.
     window_budget_bytes: u64,
-    /// Appels consommés dans la fenêtre courante.
+    /// Calls consumed in current window.
     window_used_calls: AtomicU64,
-    /// Octets consommés dans la fenêtre courante.
+    /// Bytes consumed in current window.
     window_used_bytes: AtomicU64,
-    /// Profondeur de délégation (0 = original, 1..4 = délégué).
+    /// Delegation depth (0 = original, 1..4 = delegated).
     pub depth: u8,
 }
 
 impl TemporalCap {
-    /// Crée une nouvelle capability temporelle.
+    /// Creates a new temporal capability.
     ///
     /// # Arguments
-    /// - `base` : Token de capability standard
-    /// - `deadline_tsc` : TSC absolu de la deadline (stocké dans deadline table)
-    /// - `initial_calls` : Budget initial d'appels
-    /// - `initial_bytes` : Budget initial de volume (octets)
-    /// - `depth` : Profondeur de délégation (0 pour une nouvelle cap)
+    /// - `base`: Standard capability token
+    /// - `deadline_tsc`: Absolute deadline TSC (stored in deadline table)
+    /// - `initial_calls`: Initial call budget
+    /// - `initial_bytes`: Initial volume budget (bytes)
+    /// - `depth`: Delegation depth (0 for a new cap)
     ///
     /// # Safety
-    /// - `deadline_tsc` est stocké dans cap_deadline_table (PKS Credentials)
-    /// - Le MAC est calculé avec KERNEL_SECRET (immuable après boot)
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    /// - `deadline_tsc` is stored in cap_deadline_table (PKS Credentials)
+    /// - MAC is computed with KERNEL_SECRET (immutable after boot)
+    // SAFETY: validated low-level operation — see block documentation.
     pub unsafe fn new(
         base: CapToken,
         deadline_tsc: u64,
@@ -186,10 +186,10 @@ impl TemporalCap {
     ) -> Self {
         debug_assert!(depth <= MAX_DELEGATION_DEPTH, "delegation depth exceeded");
 
-        // Calculer le deadline MAC : HMAC-Blake3(oid || deadline_tsc || KERNEL_SECRET)
+        // Compute deadline MAC: HMAC-Blake3(oid || deadline_tsc || KERNEL_SECRET)
         let deadline_mac = compute_deadline_mac(base.object_id(), deadline_tsc);
 
-        // Stocker la deadline dans la table kernel-only
+        // Store deadline in kernel-only table
         let _ = cap_deadline_table::insert(base.object_id(), deadline_tsc);
 
         Self {
@@ -269,16 +269,16 @@ impl TemporalCap {
         if budget == 0 {
             return Err(CapError::BudgetExhausted);
         }
-        // FIX-KAIROS-01 (rapport_analyse §5.4) : `used.saturating_mul(100)` saturait
-        // à u64::MAX si used > u64::MAX/100 (~1.84×10¹⁷, soit ~5840 ans en nanosecondes),
-        // déclenchant un faux KillThresholdExceeded quel que soit le budget réel.
+        // FIX-KAIROS-01 (analysis report §5.4): `used.saturating_mul(100)` saturated
+        // at u64::MAX if used > u64::MAX/100 (~1.84×10¹⁷, or ~5840 years in nanoseconds),
+        // triggering a false KillThresholdExceeded regardless of actual budget.
         //
-        // Correction : checked_mul(100). Si l'overflow se produit, le budget est
-        // définitivement dépassé — le kill est alors légitime (valeur astronomique).
+        // Fix: checked_mul(100). If overflow occurs, budget is
+        // definitively exceeded — kill is therefore legitimate (astronomical value).
         let used_pct = match used.checked_mul(100) {
             Some(v) => v,
             None => {
-                // used > u64::MAX / 100 → dépasse forcément tout budget × KAIROS_KILL_PCT.
+                // used > u64::MAX / 100 -> inevitably exceeds any budget × KAIROS_KILL_PCT.
                 return Err(CapError::KillThresholdExceeded);
             }
         };
@@ -307,43 +307,43 @@ impl TemporalCap {
         }
     }
 
-    /// Vérifie la validité de cette capability — MAC/deadline constant-time, ZÉRO IPC.
+    /// Checks validity of this capability — constant-time MAC/deadline, ZERO IPC.
     ///
-    /// # Propriétés
-    /// - Constant-time pour la deadline et le MAC cachés
-    /// - Zéro IPC : toute la logique est inline dans Ring 0
-    /// - Monotone : calls_left et bytes_left décroissent toujours
+    /// # Properties
+    /// - Constant-time for hidden deadline and MAC
+    /// - Zero IPC: all logic is inline in Ring 0
+    /// - Monotonic: calls_left and bytes_left always decrease
     ///
-    /// # Séquence
-    /// 1. Récupérer la deadline depuis cap_deadline_table (inaccessible Ring 1)
-    /// 2. Vérifier expiration (constant-time comparison)
-    /// 3. Vérifier le MAC (protection contre la falsification)
-    /// 4. Décrémenter calls_left atomiquement
-    /// 5. Vérifier le budget restant
+    /// # Sequence
+    /// 1. Retrieve deadline from cap_deadline_table (inaccessible from Ring 1)
+    /// 2. Verify expiration (constant-time comparison)
+    /// 3. Verify MAC (tamper protection)
+    /// 4. Atomically decrement calls_left
+    /// 5. Verify remaining budget
     ///
-    /// # RÈGLE EXOKAIROS-01
-    /// La partie secrète (deadline table + MAC) reste constant-time. La fenêtre
-    /// de budget peut déclencher throttle/kill sur compteurs publics.
+    /// # RULE EXOKAIROS-01
+    /// The secret part (deadline table + MAC) remains constant-time. Budget window
+    /// may trigger throttle/kill on public counters.
     pub fn verify(&self, current_tsc: u64) -> Result<(), CapError> {
-        // 1. Récupérer la deadline depuis la table kernel (inaccessible Ring 1)
+        // 1. Retrieve deadline from kernel table (inaccessible from Ring 1)
         let deadline = cap_deadline_table::get_const_time(self.base.object_id());
         if deadline == u64::MAX {
             return Err(CapError::NotFound);
         }
 
-        // 2. Vérifier le MAC (protection contre falsification du deadline_mac)
+        // 2. Verify MAC (protection against deadline_mac forgery)
         let expected_mac = compute_deadline_mac(self.base.object_id(), deadline);
         if !ct_u8_array_eq(&self.deadline_mac, &expected_mac) {
             return Err(CapError::MacMismatch);
         }
 
-        // 3. Vérifier expiration (comparaison sans branche sur les bits secrets).
+        // 3. Verify expiration (branchless comparison on secret bits).
         if ct_u64_gte_mask(current_tsc, deadline) != 0 {
             return Err(CapError::Expired);
         }
 
-        // 4. Fenêtre glissante : reset toutes les `KAIROS_WINDOW_NS`, throttle
-        //    à 100% du budget et kill à 200%.
+        // 4. Sliding window: reset every `KAIROS_WINDOW_NS`, throttle
+        //    at 100% of budget and kill at 200%.
         let now_ns = Self::current_window_ns(current_tsc);
         self.check_and_advance_window(now_ns);
         let used_calls = self
@@ -352,7 +352,7 @@ impl TemporalCap {
             .saturating_add(1);
         Self::throttle_or_kill(used_calls, self.window_budget_calls as u64)?;
 
-        // 5. Décompte atomique saturant du budget visible dans la fenêtre.
+        // 5. Saturating atomic deduction of visible budget in window.
         self.debit_call_budget();
 
         if self.window_budget_bytes == 0 {
@@ -362,10 +362,10 @@ impl TemporalCap {
         Ok(())
     }
 
-    /// Décrémente le volume restant de `n` octets.
+    /// Decrements remaining volume by `n` bytes.
     ///
-    /// Retourne le volume restant après décrémentation, ou 0 si le budget
-    /// est épuisé (saturating_sub).
+    /// Returns remaining volume after decrement, or 0 if budget
+    /// is exhausted (saturating_sub).
     #[inline(always)]
     pub fn consume_bytes(&self, n: u64) -> u64 {
         let now_ns = Self::current_window_ns(0);
@@ -386,37 +386,37 @@ impl TemporalCap {
                 Ordering::Acquire,
             ) {
                 Ok(_) => return new_val,
-                Err(_) => continue, // réessayer (CAS contention)
+                Err(_) => continue, // retry (CAS contention)
             }
         }
     }
 
-    /// Crée une capability déléguée (sous-ensemble des droits).
+    /// Creates a delegated capability (subset of rights).
     ///
-    /// # RÈGLE CAP-03 (héritée)
-    /// Les droits délégués ne peuvent JAMAIS excéder les droits de la source.
+    /// # RULE CAP-03 (inherited)
+    /// Delegated rights can NEVER exceed the rights of the source.
     ///
-    /// # RÈGLE EXOKAIROS-03
-    /// La profondeur de délégation ne peut pas dépasser MAX_DELEGATION_DEPTH (4).
+    /// # RULE EXOKAIROS-03
+    /// Delegation depth cannot exceed MAX_DELEGATION_DEPTH (4).
     ///
-    /// Le budget et la deadline sont hérités (sous-ensemble du parent).
+    /// Budget and deadline are inherited (subset of parent).
     pub fn delegate(
         &self,
         restricted_rights: Rights,
         new_calls: u32,
         new_bytes: u64,
     ) -> Result<TemporalCap, CapError> {
-        // Vérifier la profondeur de délégation
+        // Check delegation depth
         if self.depth >= MAX_DELEGATION_DEPTH {
             return Err(CapError::DepthExceeded);
         }
 
-        // Vérifier que les droits demandés sont un sous-ensemble
+        // Verify that requested rights are a subset
         if !restricted_rights.is_subset_of(self.base.rights()) {
             return Err(CapError::InvalidToken);
         }
 
-        // Le budget délégué ne peut pas excéder le budget restant du parent
+        // Delegated budget cannot exceed parent remaining budget
         let parent_calls = self.calls_left.load(Ordering::Acquire);
         let parent_bytes = self.bytes_left.load(Ordering::Acquire);
 
@@ -424,9 +424,9 @@ impl TemporalCap {
             return Err(CapError::BudgetExhausted);
         }
 
-        // Créer le token délégué (même object_id, droits restreints)
-        // Note: CapToken::new est pub(super) — en Phase 3.1 on construit manuellement
-        // pour les tests. En production, delegate() passe par CapTable::grant().
+        // Create delegated token (same object_id, restricted rights)
+        // Note: CapToken::new is pub(super) — in Phase 3.1 constructed manually
+        // for tests. In production, delegate() goes through CapTable::grant().
         let delegated_base = CapToken::new(
             self.base.object_id(),
             restricted_rights,
@@ -434,10 +434,10 @@ impl TemporalCap {
             self.base.object_type(),
         );
 
-        // Récupérer la deadline depuis la table
+        // Retrieve deadline from table
         let deadline = cap_deadline_table::get_const_time(self.base.object_id());
 
-        // SAFETY: deadline est valide, depth est vérifié
+        // SAFETY: deadline is valid, depth is verified
         Ok(unsafe {
             TemporalCap::new(
                 delegated_base,
@@ -449,19 +449,19 @@ impl TemporalCap {
         })
     }
 
-    /// Retourne la profondeur de délégation.
+    /// Returns delegation depth.
     #[inline(always)]
     pub fn depth(&self) -> u8 {
         self.depth
     }
 
-    /// Retourne le budget d'appels restant.
+    /// Returns remaining call budget.
     #[inline(always)]
     pub fn calls_remaining(&self) -> u32 {
         self.calls_left.load(Ordering::Acquire)
     }
 
-    /// Retourne le volume restant.
+    /// Returns remaining volume.
     #[inline(always)]
     pub fn bytes_remaining(&self) -> u64 {
         self.bytes_left.load(Ordering::Acquire)
@@ -472,28 +472,28 @@ impl TemporalCap {
 // cap_deadline_table — Stockage deadline TSC (Ring 0 only, PKS Credentials)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Module de stockage des deadlines TSC.
+/// Module storing TSC deadlines.
 ///
-/// Les deadlines sont stockées dans une table séparée du TCB et des TemporalCap.
-/// Cette table est dans le domaine PKS Credentials (pkey=2) — inaccessible
-/// depuis Ring 1 et Ring 3.
+/// Deadlines are stored in a table separate from TCB and TemporalCap.
+/// This table resides in PKS Credentials domain (pkey=2) — inaccessible
+/// from Ring 1 and Ring 3.
 ///
-/// En Phase 3.1, la table est un tableau statique. En Phase 3.2+,
-/// elle sera une hash table dynamique protégée par PKS.
+/// In Phase 3.1, the table is a static array. In Phase 3.2+,
+/// it will be a dynamic hash table protected by PKS.
 pub mod cap_deadline_table {
     use super::*;
     use crate::security::capability::token::ObjectId;
 
-    /// Entrée de la deadline table : (ObjectId, deadline_tsc).
+    /// Deadline table entry: (ObjectId, deadline_tsc).
     #[repr(C)]
     struct DeadlineEntry {
         oid: u64,
         deadline_tsc: u64,
-        occupied: AtomicU32, // 0 = libre, 1 = occupé
+        occupied: AtomicU32, // 0 = free, 1 = occupied
     }
 
-    /// Table statique de deadlines (Phase 3.1).
-    /// Taille : 256 entrées × 20 bytes = 5 KiB.
+    /// Static table of deadlines (Phase 3.1).
+    /// Size: 256 entries × 20 bytes = 5 KiB.
     static mut TABLE: [DeadlineEntry; DEADLINE_TABLE_SIZE] = {
         const INIT: DeadlineEntry = DeadlineEntry {
             oid: 0,
@@ -503,35 +503,35 @@ pub mod cap_deadline_table {
         [INIT; DEADLINE_TABLE_SIZE]
     };
 
-    /// Compteur d'entrées utilisées.
+    /// Counter of used entries.
     static USED: AtomicUsize = AtomicUsize::new(0);
 
-    /// Insère une deadline dans la table.
+    /// Inserts a deadline into table.
     ///
     /// # Safety
-    /// Ring 0 uniquement. La table est protégée par PKS Credentials.
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    /// Ring 0 only. Table is protected by PKS Credentials.
+    // SAFETY: validated low-level operation — see block documentation.
     pub unsafe fn insert(oid: ObjectId, deadline_tsc: u64) -> bool {
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
         };
         let oid_val = oid.as_u64();
 
-        // Recherche séquentielle (Phase 3.1 — sera hash table en Phase 3.2)
+        // Sequential search (Phase 3.1 — will be hash table in Phase 3.2)
         for i in 0..DEADLINE_TABLE_SIZE {
-            // SAFETY: i < DEADLINE_TABLE_SIZE ; pointeur brut mutable réservé
-            // à cette routine Ring 0 pour la mise à jour atomique des entrées.
+            // SAFETY: i < DEADLINE_TABLE_SIZE; mutable raw pointer reserved
+            // to this Ring 0 routine for atomic update of entries.
             let entry = &raw mut TABLE[i];
             let occupied = (*entry).occupied.load(Ordering::Acquire);
 
             if occupied == 1 && (*entry).oid == oid_val {
-                // Mise à jour d'une entrée existante
+                // Update existing entry
                 (*entry).deadline_tsc = deadline_tsc;
                 return true;
             }
 
             if occupied == 0 {
-                // Slot libre — insertion CAS
+                // Free slot — CAS insertion
                 match (*entry)
                     .occupied
                     .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
@@ -542,7 +542,7 @@ pub mod cap_deadline_table {
                         USED.fetch_add(1, Ordering::Relaxed);
                         return true;
                     }
-                    Err(_) => continue, // CAS raté — un autre thread a pris le slot
+                    Err(_) => continue, // Failed CAS — another thread took the slot
                 }
             }
         }
@@ -550,38 +550,38 @@ pub mod cap_deadline_table {
         false
     }
 
-    /// Récupère la deadline TSC pour un ObjectId — temps constant.
+    /// Retrieves TSC deadline for an ObjectId — constant time.
     ///
     /// # Constant-time
-    /// Cette fonction parcourt TOUJOURS toute la table, même si la deadline
-    /// est trouvée en début. Cela garantit que le temps d'exécution ne dépend
-    /// pas de la position de l'entrée.
+    /// This function ALWAYS traverses the entire table, even if deadline
+    /// is found at the beginning. This guarantees execution time does not depend
+    /// on entry position.
     ///
-    /// # RÈGLE EXOKAIROS-01
-    /// Accès constant-time pour empêcher l'attaque par timing.
+    /// # RULE EXOKAIROS-01
+    /// Constant-time access to prevent timing attacks.
     pub fn get_const_time(oid: ObjectId) -> u64 {
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly)
         };
         let oid_val = oid.as_u64();
-        let mut result = u64::MAX; // deadline = MAX signifie "pas trouvé" → Expiré
+        let mut result = u64::MAX; // deadline = MAX means "not found" -> Expired
 
-        // SAFETY: lecture seule de la table statique, pas de concurrent write
-        // pendant get_const_time (PKS Credentials protège en Phase 3.2).
+        // SAFETY: read-only access to static table, no concurrent write
+        // during get_const_time (PKS Credentials protects in Phase 3.2).
         unsafe {
             for i in 0..DEADLINE_TABLE_SIZE {
                 let entry = &raw const TABLE[i];
                 let occupied = (*entry).occupied.load(Ordering::Acquire);
 
-                // Comparaison constant-time : on utilise ct_eq
+                // Constant-time comparison: using ct_eq
                 let oid_match = ct_u64_eq((*entry).oid, oid_val);
                 let is_valid = (occupied == 1) as u64 & oid_match;
 
-                // Sélection conditionnelle sans branchement :
-                // Si is_valid != 0, result = entry.deadline_tsc
-                // Sinon, result = result (inchangé)
-                let mask = is_valid.wrapping_sub(1); // 0x0000... si match, 0xFFFF... sinon
+                // Branchless conditional selection:
+                // If is_valid != 0, result = entry.deadline_tsc
+                // Otherwise, result = result (unchanged)
+                let mask = is_valid.wrapping_sub(1); // 0x0000... if match, 0xFFFF... otherwise
                 result = (result & mask) | ((*entry).deadline_tsc & !mask);
             }
         }
@@ -589,20 +589,20 @@ pub mod cap_deadline_table {
         result
     }
 
-    /// Supprime une entrée de la deadline table.
+    /// Removes an entry from deadline table.
     ///
-    /// Appelé lors de la révocation d'une capability temporelle.
+    /// Called upon revocation of a temporal capability.
     pub fn remove(oid: ObjectId) {
-        // SAFETY: PKS Credentials write-access requis pour modifier la deadline table.
-        // scoped_domain_access() utilise WRPKRU pour ouvrir temporairement le domaine.
+        // SAFETY: PKS Credentials write-access required to modify deadline table.
+        // scoped_domain_access() uses WRPKRU to temporarily open domain.
         let _guard = unsafe {
             exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite)
         };
         let oid_val = oid.as_u64();
 
-        // SAFETY: TABLE est un tableau statique de DEADLINE_TABLE_SIZE entrées.
-        // Accès exclusif garanti par le verrou PKS Credentials (_guard ci-dessus).
-        // i < DEADLINE_TABLE_SIZE est maintenu par la boucle.
+        // SAFETY: TABLE is a static array of DEADLINE_TABLE_SIZE entries.
+        // Exclusive access guaranteed by PKS Credentials lock (_guard above).
+        // i < DEADLINE_TABLE_SIZE is maintained by the loop.
         unsafe {
             for i in 0..DEADLINE_TABLE_SIZE {
                 let entry = &raw mut TABLE[i];
@@ -617,7 +617,7 @@ pub mod cap_deadline_table {
         }
     }
 
-    /// Nombre d'entrées utilisées dans la table.
+    /// Number of used entries in table.
     pub fn used_count() -> usize {
         USED.load(Ordering::Relaxed)
     }
@@ -627,23 +627,23 @@ pub mod cap_deadline_table {
 // Fonctions constant-time
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Comparaison constant-time de deux u64.
+/// Constant-time comparison of two u64.
 ///
-/// Retourne 1 si a == b, 0 sinon. Le temps d'exécution est indépendant
-/// des valeurs comparées.
+/// Returns 1 if a == b, 0 otherwise. Execution time is independent
+/// of compared values.
 #[inline(always)]
 fn ct_u64_eq(a: u64, b: u64) -> u64 {
     let xor = a ^ b;
-    // Si xor == 0, les valeurs sont égales.
-    // On utilise le fait que (xor | -xor) >> 63 == 0 uniquement si xor == 0.
+    // If xor == 0, values are equal.
+    // We use the fact that (xor | -xor) >> 63 == 0 only if xor == 0.
     let v = xor | xor.wrapping_neg();
-    (v >> 63).wrapping_sub(1) & 1 // 1 si égal, 0 sinon
+    (v >> 63).wrapping_sub(1) & 1 // 1 if equal, 0 otherwise
 }
 
-/// Comparaison sans branche : a >= b.
+/// Branchless comparison: a >= b.
 ///
-/// Retourne 1 si a >= b, 0 sinon. La formule calcule le bit d'emprunt de
-/// `a - b` en arithmétique non signée, sans dépendre du bit de signe seul.
+/// Returns 1 if a >= b, 0 otherwise. The formula computes borrow bit of
+/// `a - b` in unsigned arithmetic, without relying on sign bit alone.
 #[inline(always)]
 fn ct_u64_gte_mask(a: u64, b: u64) -> u64 {
     let diff = a.wrapping_sub(b);
@@ -651,9 +651,9 @@ fn ct_u64_gte_mask(a: u64, b: u64) -> u64 {
     borrow ^ 1
 }
 
-/// Comparaison constant-time de deux tableaux de 16 bytes.
+/// Constant-time comparison of two 16-byte arrays.
 ///
-/// Retourne true si les tableaux sont identiques.
+/// Returns true if arrays are identical.
 #[inline(always)]
 fn ct_u8_array_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
     let mut acc: u8 = 0;
@@ -667,16 +667,16 @@ fn ct_u8_array_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
 // Deadline MAC — HMAC-Blake3
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule le MAC de deadline : HMAC-Blake3(oid || deadline_tsc || KERNEL_SECRET).
+/// Computes deadline MAC: HMAC-Blake3(oid || deadline_tsc || KERNEL_SECRET).
 ///
-/// Le MAC tronqué à 16 bytes est stocké dans TemporalCap.deadline_mac.
-/// La deadline TSC réelle n'est PAS déductible depuis ce MAC.
+/// The MAC truncated to 16 bytes is stored in TemporalCap.deadline_mac.
+/// Actual deadline TSC is NOT deducible from this MAC.
 ///
 fn compute_deadline_mac(
     oid: crate::security::capability::token::ObjectId,
     deadline_tsc: u64,
 ) -> [u8; 16] {
-    // Construire le message : oid (8 bytes) || deadline_tsc (8 bytes)
+    // Build message: oid (8 bytes) || deadline_tsc (8 bytes)
     let mut msg = [0u8; 16];
     msg[0..8].copy_from_slice(&oid.as_u64().to_le_bytes());
     msg[8..16].copy_from_slice(&deadline_tsc.to_le_bytes());
@@ -684,59 +684,59 @@ fn compute_deadline_mac(
     let key = get_kernel_secret();
     let full_hash = crate::security::crypto::blake3::blake3_mac(&key, &msg);
 
-    // Tronquer à 16 bytes (128 bits de sécurité)
+    // Truncate to 16 bytes (128 bits of security)
     let mut mac = [0u8; 16];
     mac.copy_from_slice(&full_hash[0..16]);
     mac
 }
 
-/// KERNEL_SECRET — clé secrète initialisée par ExoSeal au boot.
-/// 32 bytes, stocké en mémoire statique (sera en PKS Credentials en Phase 3.2).
+/// KERNEL_SECRET — secret key initialized by ExoSeal at boot.
+/// 32 bytes, stored in static memory (will be in PKS Credentials in Phase 3.2).
 static KERNEL_SECRET: Once<[u8; 32]> = Once::new();
 
-/// Initialise le KERNEL_SECRET (appelé par ExoSeal au boot).
+/// Initializes KERNEL_SECRET (called by ExoSeal at boot).
 ///
 /// # Safety
-/// Doit être appelé UNE SEULE FOIS au boot, avant que Kernel A ne démarre.
-/// Le secret doit provenir d'une source CSPRNG (RDRAND + ChaCha20).
+/// Must be called ONCE at boot, before Kernel A starts.
+/// Secret must originate from a CSPRNG source (RDRAND + ChaCha20).
 pub fn init_kernel_secret(secret: &[u8; 32]) {
     let _guard =
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadWrite) };
     KERNEL_SECRET.call_once(|| *secret);
 }
 
-/// Lit le KERNEL_SECRET (Ring 0 uniquement).
+/// Reads KERNEL_SECRET (Ring 0 only).
 ///
 /// # Safety
-/// Ne doit jamais être appelé depuis Ring 1 ou Ring 3.
-/// En Phase 3.2, cette lecture sera protégée par PKS Credentials.
+/// Must never be called from Ring 1 or Ring 3.
+/// In Phase 3.2, this read will be protected by PKS Credentials.
 fn get_kernel_secret() -> [u8; 32] {
     let _guard =
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe { exoveil::scoped_domain_access(PksDomain::Credentials, PksPermission::ReadOnly) };
     KERNEL_SECRET.get().copied().unwrap_or([0u8; 32])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TTL Lookup — Détermine le TTL pour un droit donné
+// TTL Lookup — Determines TTL for a given right
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre une deadline temporelle pour une capability fraîchement créée.
+/// Registers a temporal deadline for a newly created capability.
 ///
-/// FIX-P1-KAIROS (Security_Application_Audit §GAP-07) : `ttl_for_right()` n'avait
-/// aucun appelant externe — les tokens IPC n'expiraient jamais. Cette fonction
-/// est appelée depuis `capability::create()` pour associer chaque token émis à
-/// une deadline = maintenant + TTL(droits). La base de temps est `monotonic_ns()`
-/// (la même que `verify()` via `current_window_ns`), de sorte que `TemporalCap::
-/// verify(monotonic_ns())` détectera l'expiration.
+/// FIX-P1-KAIROS (Security_Application_Audit §GAP-07): `ttl_for_right()` had
+/// no external caller — IPC tokens never expired. This function
+/// is called from `capability::create()` to associate each issued token with
+/// a deadline = now + TTL(rights). Time base is `monotonic_ns()`
+/// (the same as `verify()` via `current_window_ns`), so that `TemporalCap::
+/// verify(monotonic_ns())` will detect expiration.
 ///
-/// Best-effort : si l'horloge n'est pas encore calibrée (monotonic_ns == 0) ou si
-/// la table est pleine, l'enregistrement est ignoré (le token reste non-temporel,
-/// comportement identique à l'existant — aucune régression).
+/// Best-effort: if clock is not yet calibrated (monotonic_ns == 0) or if
+/// table is full, registration is ignored (token remains non-temporal,
+/// identical behavior to existing — no regression).
 pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, rights: Rights) {
-    // En test hôte, l'horloge kernel n'existe pas — même convention que
-    // TemporalCap::current_window_ns (variante #[cfg(test)]) : no-op déterministe.
+    // In host test, kernel clock does not exist — same convention as
+    // TemporalCap::current_window_ns (variant #[cfg(test)]): deterministic no-op.
     #[cfg(test)]
     {
         let _ = (oid, rights);
@@ -749,24 +749,24 @@ pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, r
         }
         let ttl_s = ttl_for_right(rights);
         let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
-        // SAFETY: Ring 0, table protégée par PKS Credentials via scoped_domain_access
-        // interne à insert(). L'ObjectId provient de la table kernel (create()).
+        // SAFETY: Ring 0, table protected by PKS Credentials via scoped_domain_access
+        // internal to insert(). ObjectId comes from kernel table (create()).
         unsafe {
             let _ = cap_deadline_table::insert(oid, deadline_ns);
         }
     }
 }
 
-/// Retourne le TTL en secondes pour un droit spécifique.
+/// Returns TTL in seconds for a specific right.
 ///
-/// Utilisé lors de la création d'une TemporalCap pour calculer la deadline.
+/// Used when creating a TemporalCap to calculate deadline.
 pub fn ttl_for_right(rights: Rights) -> u64 {
-    // Le TTL est celui du droit le plus restrictif (le plus court)
+    // TTL is that of the most restrictive right (shortest)
     if rights.contains(Rights::EXEC) {
         return ttl::EXEC_S;
     }
     if rights.contains(Rights::IPC_SEND) {
-        return ttl::NETWORK_SEND_S; // IPC_SEND ≈ NETWORK_SEND pour le TTL
+        return ttl::NETWORK_SEND_S; // IPC_SEND ≈ NETWORK_SEND for TTL
     }
     if rights.contains(Rights::WRITE) {
         return ttl::FILE_WRITE_S;
@@ -778,19 +778,19 @@ pub fn ttl_for_right(rights: Rights) -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques ExoKairos
+// ExoKairos statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Snapshot des statistiques ExoKairos.
+/// Snapshot of ExoKairos statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct ExoKairosStats {
-    /// Nombre d'entrées dans la deadline table.
+    /// Number of entries in deadline table.
     pub deadline_table_used: usize,
-    /// KERNEL_SECRET initialisé.
+    /// KERNEL_SECRET initialized.
     pub secret_initialized: bool,
 }
 
-/// Retourne un snapshot des statistiques ExoKairos.
+/// Returns a snapshot of ExoKairos statistics.
 pub fn exokairos_stats() -> ExoKairosStats {
     ExoKairosStats {
         deadline_table_used: cap_deadline_table::used_count(),
@@ -823,7 +823,7 @@ mod tests {
         cap_deadline_table::remove(oid);
         let before = cap_deadline_table::used_count();
 
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             cap_deadline_table::insert(oid, 0x1234_5678_9abc_def0);
         }
@@ -833,7 +833,7 @@ mod tests {
         );
         assert_eq!(cap_deadline_table::used_count(), before + 1);
 
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             cap_deadline_table::insert(oid, 0x0fed_cba9_8765_4321);
         }
@@ -861,7 +861,7 @@ mod tests {
         for idx in 0..DEADLINE_TABLE_SIZE {
             let oid = test_oid(0x1000 + idx as u64);
             cap_deadline_table::remove(oid);
-            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+            // SAFETY: validated low-level operation — see block documentation.
             unsafe {
                 cap_deadline_table::insert(oid, 0x1000_0000 + idx as u64);
             }
@@ -888,7 +888,7 @@ mod tests {
         let _guard = TEST_LOCK.lock();
         let oid = test_oid(0x3000);
         cap_deadline_table::remove(oid);
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         let cap = unsafe { TemporalCap::new(test_token(0x3000), u64::MAX - 1, 2, 64, 0) };
 
         assert_eq!(cap.verify(1), Ok(()));
@@ -904,7 +904,7 @@ mod tests {
         let _guard = TEST_LOCK.lock();
         let oid = test_oid(0x3001);
         cap_deadline_table::remove(oid);
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         let cap = unsafe { TemporalCap::new(test_token(0x3001), u64::MAX - 1, 2, 64, 0) };
 
         assert_eq!(cap.verify(1), Ok(()));

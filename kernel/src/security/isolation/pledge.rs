@@ -1,87 +1,87 @@
 // kernel/src/security/isolation/pledge.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Pledge — Restrictions de capacités style OpenBSD
+// Pledge — OpenBSD-style capability restrictions
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • PledgeSet : bitmask de "promesses" (pledges) que le processus s'engage à respecter
-//   • Une fois activé, les pledges ne peuvent QUE se réduire
-//   • Intégration avec SandboxPolicy : les pledges génèrent une SandboxPolicy
-//   • Pledges disponibles : stdio, rpath, wpath, cpath, tmppath,
+// Architecture:
+//   • PledgeSet: bitmask of "promises" (pledges) that the process commits to respect
+//   • Once enabled, pledges can ONLY be reduced
+//   • Integration with SandboxPolicy: pledges generate a SandboxPolicy
+//   • Available pledges: stdio, rpath, wpath, cpath, tmppath,
 //     inet, unix, dns, getpw, proc, exec, id, route, etc.
 //
-// RÈGLE PLEDGE-01 : Un processus ne peut QUE retirer des pledges, jamais en ajouter.
-// RÈGLE PLEDGE-02 : La violation d'un pledge → SIGKILL immédiat.
-// RÈGLE PLEDGE-03 : Le processus init ne peut pas appeler pledge().
+// RULE PLEDGE-01: A process can ONLY drop pledges, never add them.
+// RULE PLEDGE-02: Violation of a pledge → immediate SIGKILL.
+// RULE PLEDGE-03: The init process cannot call pledge().
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::sandbox::{syscall_nr, SandboxPolicy};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pledges disponibles
+// Available pledges
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags de pledge (bitmask u64).
+/// Pledge flags (u64 bitmask).
 pub mod pledge_flags {
-    /// Opérations I/O de base : read, write, recvfrom, sendto, etc.
+    /// Basic I/O operations: read, write, recvfrom, sendto, etc.
     pub const STDIO: u64 = 1 << 0;
-    /// Lecture de fichiers (open en mode lecture, stat, etc.).
+    /// File read (open in read mode, stat, etc.).
     pub const RPATH: u64 = 1 << 1;
-    /// Écriture de fichiers (open en écriture).
+    /// File write (open in write mode).
     pub const WPATH: u64 = 1 << 2;
-    /// Création de fichiers (creat, unlink, rename, etc.).
+    /// File creation (creat, unlink, rename, etc.).
     pub const CPATH: u64 = 1 << 3;
-    /// Accès /tmp.
+    /// Access to /tmp.
     pub const TMPPATH: u64 = 1 << 4;
-    /// Sockets TCP/UDP.
+    /// TCP/UDP sockets.
     pub const INET: u64 = 1 << 5;
-    /// Sockets Unix Domain.
+    /// Unix Domain sockets.
     pub const UNIX: u64 = 1 << 6;
-    /// Résolution DNS.
+    /// DNS resolution.
     pub const DNS: u64 = 1 << 7;
-    /// Lecture /etc/passwd et /etc/group.
+    /// Read /etc/passwd and /etc/group.
     pub const GETPW: u64 = 1 << 8;
-    /// Création de processus enfants.
+    /// Child process creation.
     pub const PROC: u64 = 1 << 9;
     /// execve().
     pub const EXEC: u64 = 1 << 10;
     /// setuid/setgid/getuid/getgid/etc.
     pub const ID: u64 = 1 << 11;
-    /// Gestion des tables de routage.
+    /// Routing table management.
     pub const ROUTE: u64 = 1 << 12;
-    /// Mémoire partagée.
+    /// Shared memory.
     pub const SHM: u64 = 1 << 13;
-    /// Gestion des signaux (sigaction, sigprocmask, etc.).
+    /// Signal management (sigaction, sigprocmask, etc.).
     pub const SIGNAL: u64 = 1 << 14;
-    /// Appels ioctl limités aux terminaux.
+    /// ioctl calls limited to terminals.
     pub const TTY: u64 = 1 << 15;
-    /// Opérations sur les futex (mutex userspace).
+    /// Futex operations (userspace mutexes).
     pub const FUTEX: u64 = 1 << 16;
-    /// Toutes les privilèges (aucune restriction).
+    /// All privileges (no restrictions).
     pub const UNRESTRICTED: u64 = !0u64;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PledgeSet — état des pledges d'un processus
+// PledgeSet — process pledge state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État des pledges d'un processus.
+/// Pledge state of a process.
 #[derive(Clone, Copy)]
 pub struct PledgeSet {
-    /// Pledges actifs (bitmask).
+    /// Active pledges (bitmask).
     active: u64,
-    /// Pledges actifs lors de l'activation initiale (non modifiable).
+    /// Active pledges at initial activation (non-modifiable).
     initial: u64,
-    /// Pledge aktivé (true = pledge() a été appelé).
+    /// Pledge enabled (true = pledge() was called).
     enabled: bool,
-    /// Compteur de violations.
+    /// Violations counter.
     violations: u64,
 }
 
 impl PledgeSet {
-    /// État initial : aucun pledge (non activé = UNRESTRICTED).
+    /// Initial state: no pledge (not enabled = UNRESTRICTED).
     pub const fn new() -> Self {
         Self {
             active: pledge_flags::UNRESTRICTED,
@@ -91,7 +91,7 @@ impl PledgeSet {
         }
     }
 
-    /// État initial avec pledges restreints.
+    /// Initial state with restricted pledges.
     pub const fn restricted(flags: u64) -> Self {
         Self {
             active: flags,
@@ -101,12 +101,12 @@ impl PledgeSet {
         }
     }
 
-    /// Active les pledges. Une fois activé, ne peut que se restreindre.
+    /// Enables pledges. Once enabled, can only be restricted.
     ///
-    /// RÈGLE PLEDGE-01 : `flags` doit être ⊆ `self.active`.
+    /// RULE PLEDGE-01: `flags` must be ⊆ `self.active`.
     pub fn pledge(&mut self, flags: u64) -> Result<(), PledgeError> {
         if self.enabled {
-            // Vérifier que les nouveaux flags sont un sous-ensemble des actifs
+            // Verify that new flags are a subset of active ones
             if flags & !self.active != 0 {
                 return Err(PledgeError::CannotExpand);
             }
@@ -116,22 +116,22 @@ impl PledgeSet {
         Ok(())
     }
 
-    /// Vérifie si un pledge flag est actif.
+    /// Checks if a pledge flag is active.
     pub fn has(&self, flag: u64) -> bool {
         if !self.enabled {
             return true;
-        } // Non activé = tout autorisé
+        } // Not enabled = all permitted
         self.active & flag != 0
     }
 
-    /// Génère la SandboxPolicy correspondant aux pledges actifs.
+    /// Generates the SandboxPolicy corresponding to active pledges.
     pub fn to_sandbox_policy(&self) -> SandboxPolicy {
         if !self.enabled {
             return SandboxPolicy::allow_all();
         }
         let mut policy = SandboxPolicy::deny_all();
 
-        // STDIO : opérations I/O de base
+        // STDIO: basic I/O operations
         if self.has(pledge_flags::STDIO) {
             for nr in [
                 syscall_nr::READ,
@@ -156,31 +156,31 @@ impl PledgeSet {
             }
         }
 
-        // RPATH : lecture fichiers
+        // RPATH: file read
         if self.has(pledge_flags::RPATH) {
             for nr in [syscall_nr::OPEN, syscall_nr::STAT, syscall_nr::LSTAT] {
                 policy.allow_syscall(nr);
             }
         }
 
-        // WPATH : écriture fichiers
+        // WPATH: file write
         if self.has(pledge_flags::WPATH) {
             policy.allow_syscall(syscall_nr::OPEN);
         }
 
-        // PROC : création processus
+        // PROC: process creation
         if self.has(pledge_flags::PROC) {
             for nr in [syscall_nr::FORK, syscall_nr::CLONE, syscall_nr::WAIT4] {
                 policy.allow_syscall(nr);
             }
         }
 
-        // EXEC : execve
+        // EXEC: execve
         if self.has(pledge_flags::EXEC) {
             policy.allow_syscall(syscall_nr::EXECVE);
         }
 
-        // INET : sockets réseau
+        // INET: network sockets
         if self.has(pledge_flags::INET) {
             for nr in [
                 syscall_nr::SOCKET,
@@ -195,14 +195,14 @@ impl PledgeSet {
             }
         }
 
-        // ID : uid/gid
+        // ID: uid/gid
         if self.has(pledge_flags::ID) {
             for nr in [syscall_nr::GETUID, syscall_nr::GETGID] {
                 policy.allow_syscall(nr);
             }
         }
 
-        // EXIT est toujours autorisé
+        // EXIT is always permitted
         policy.allow_syscall(syscall_nr::EXIT);
 
         // SIGNAL
@@ -210,44 +210,44 @@ impl PledgeSet {
             policy.allow_syscall(syscall_nr::RT_SIGACTION);
         }
 
-        // TTY : ioctl terminal limité
+        // TTY: limited terminal ioctl
         if self.has(pledge_flags::TTY) {
             policy.allow_syscall(syscall_nr::IOCTL);
         }
 
-        // FUTEX : mutex userspace
+        // FUTEX: userspace mutex
         if self.has(pledge_flags::FUTEX) {
             policy.allow_syscall(syscall_nr::FUTEX);
         }
 
-        // PTRACE est toujours interdit en mode pledge (RÈGLE PLEDGE-02)
+        // PTRACE is always forbidden in pledge mode (RULE PLEDGE-02)
         policy.kill_on_syscall(syscall_nr::PTRACE);
 
         policy
     }
 
-    /// Vérifie si le pledge est activé.
+    /// Checks if pledge is enabled.
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
 
-    /// Retourne les flags actifs.
+    /// Returns active flags.
     pub fn active_flags(&self) -> u64 {
         self.active
     }
 
-    /// Enregistre une violation de pledge.
+    /// Records a pledge violation.
     pub fn record_violation(&mut self) {
         self.violations += 1;
         GLOBAL_PLEDGE_VIOLATIONS.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Retourne le nombre de violations.
+    /// Returns the number of violations.
     pub fn violations(&self) -> u64 {
         self.violations
     }
 
-    /// Dérive un PledgeSet enfant ⊆ self.
+    /// Derives a child PledgeSet ⊆ self.
     pub fn derive_child(&self) -> PledgeSet {
         PledgeSet {
             active: self.active,
@@ -259,21 +259,21 @@ impl PledgeSet {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs pledge
+// Pledge errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub enum PledgeError {
-    /// Tentative d'élargir les pledges (RÈGLE PLEDGE-01).
+    /// Attempt to expand pledges (RULE PLEDGE-01).
     CannotExpand,
-    /// Pledge appelé par le processus init (RÈGLE PLEDGE-03).
+    /// Pledge called by init process (RULE PLEDGE-03).
     InitProcessCannotPledge,
-    /// Flags de pledge invalides.
+    /// Invalid pledge flags.
     InvalidFlags,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques globales
+// Global statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 static GLOBAL_PLEDGE_VIOLATIONS: AtomicU64 = AtomicU64::new(0);

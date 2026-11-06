@@ -4,24 +4,24 @@
 // AES-256-GCM — Software Implementation + AES-NI Runtime Detection
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémentation complète AES-256-GCM conforme NIST SP 800-38D :
-//   • Software AES-256 via rounds software internes (pas de SIMD/SSE2)
-//   • GCM mode avec GHASH multiplication (arithmétique u64 pure, pas de SIMD)
-//   • Détection AES-NI à l'exécution (CPUID via CPU_FEATURES)
-//   • Si AES-NI disponible → accélération matérielle (inline asm .byte)
-//   • Si AES-NI absent → chemin software (T-tables)
-//   • JAMAIS NotAvailableOnThisTarget
+// Full AES-256-GCM implementation conforming to NIST SP 800-38D:
+//   • Software AES-256 via internal software rounds (no SIMD/SSE2)
+//   • GCM mode with GHASH multiplication (pure u64 arithmetic, no SIMD)
+//   • AES-NI runtime detection (CPUID via CPU_FEATURES)
+//   • If AES-NI available → hardware acceleration (inline asm .byte)
+//   • If AES-NI absent → software path (T-tables)
+//   • NEVER NotAvailableOnThisTarget
 //
-// CONTRAINTE TARGET : la crate aes-gcm NE COMPILE PAS sur x86_64-unknown-none
-// (polyval/ghash génère des opérations 128-bit → LLVM ERROR: split 128-bit).
-// Solution : utiliser un AES-256 software interne (SubBytes/ShiftRows/MixColumns)
-// + GCM implémenté manuellement avec GHASH en arithmétique u64 pure.
+// TARGET CONSTRAINT: aes-gcm crate DOES NOT COMPILE on x86_64-unknown-none
+// (polyval/ghash generates 128-bit operations → LLVM ERROR: split 128-bit).
+// Solution: use internal software AES-256 (SubBytes/ShiftRows/MixColumns)
+// + manually implemented GCM with GHASH in pure u64 arithmetic.
 //
-// RÈGLE CRYPTO-CRATES : le chemin kernel bare-metal doit rester pure-Rust soft.
-// Le GCM/GHASH est implémenté manuellement car la crate aes-gcm est incompatible
-// avec le target. Le GHASH utilise uniquement des opérations u64 (pas de SIMD).
+// RULE CRYPTO-CRATES: bare-metal kernel path must remain soft pure-Rust.
+// GCM/GHASH is manually implemented because aes-gcm crate is incompatible
+// with target. GHASH only uses u64 operations (no SIMD).
 //
-// RÉFÉRENCES :
+// REFERENCES:
 //   NIST SP 800-38D (GCM Specification)
 //   NIST SP 800-38A (AES Specification)
 //   Intel Carry-Less Multiplication Instruction (White Paper)
@@ -32,29 +32,29 @@ use subtle::ConstantTimeEq;
 use crate::arch::x86_64::cpu::features::cpu_features_or_none;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes publiques
+// Public constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Longueur de la clé AES-256 (32 octets).
+/// AES-256 key length (32 bytes).
 pub const AES_KEY_LEN: usize = 32;
-/// Longueur du nonce AES-GCM (12 octets = 96 bits, recommandé NIST).
+/// AES-GCM nonce length (12 bytes = 96 bits, NIST recommended).
 pub const AES_GCM_NONCE_LEN: usize = 12;
-/// Longueur du tag GCM (16 octets = 128 bits).
+/// GCM tag length (16 bytes = 128 bits).
 pub const AES_GCM_TAG_LEN: usize = 16;
 
-/// Taille de bloc AES (16 octets = 128 bits).
+/// AES block size (16 bytes = 128 bits).
 const BLOCK_SIZE: usize = 16;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreur AES-GCM
+// AES-GCM Error
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur AES-GCM.
+/// AES-GCM error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AesGcmError {
-    /// Authentification échouée (tag invalide ou données corrompues).
+    /// Authentication failed (invalid tag or corrupted data).
     AuthenticationFailed,
-    /// Paramètre invalide (longueur incorrecte).
+    /// Invalid parameter (incorrect length).
     InvalidParameter,
 }
 
@@ -68,7 +68,7 @@ impl core::fmt::Display for AesGcmError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AES S-Box (pour le key expansion du chemin AES-NI)
+// AES S-Box (for AES-NI path key expansion)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// S-Box AES standard (FIPS 197).
@@ -91,7 +91,7 @@ const AES_SBOX: [u8; 256] = [
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
 
-/// Round constants pour AES-256 key expansion.
+/// Round constants for AES-256 key expansion.
 const AES_RCON: [u32; 7] = [
     0x0100_0000,
     0x0200_0000,
@@ -103,15 +103,15 @@ const AES_RCON: [u32; 7] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AES-256 Key Expansion (pour le chemin AES-NI)
+// AES-256 Key Expansion (for AES-NI path)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Round keys pour AES-256 (15 × 16 octets = 240 octets).
+/// Round keys for AES-256 (15 × 16 bytes = 240 bytes).
 struct Aes256RoundKeys {
     keys: [[u8; 16]; 15],
 }
 
-/// SubWord : applique la S-Box à chaque octet d'un mot 32 bits.
+/// SubWord: applies S-Box to each byte of a 32-bit word.
 fn sub_word(w: u32) -> u32 {
     let b0 = AES_SBOX[((w >> 24) & 0xFF) as usize] as u32;
     let b1 = AES_SBOX[((w >> 16) & 0xFF) as usize] as u32;
@@ -120,19 +120,19 @@ fn sub_word(w: u32) -> u32 {
     (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
 }
 
-/// RotWord : rotation d'un mot 32 bits vers la gauche de 8 bits.
+/// RotWord: 8-bit left rotation of a 32-bit word.
 #[inline]
 fn rot_word(w: u32) -> u32 {
     w.rotate_left(8)
 }
 
-/// Expansion de clé AES-256 standard (FIPS 197 §5.2).
+/// Standard AES-256 key expansion (FIPS 197 §5.2).
 ///
-/// Produit 15 round keys (60 mots) à partir de la clé 256-bit.
+/// Produces 15 round keys (60 words) from 256-bit key.
 fn aes256_expand_key(key: &[u8; 32]) -> Aes256RoundKeys {
     let mut w = [0u32; 60];
 
-    // Initialiser les 8 premiers mots depuis la clé
+    // Initialize first 8 words from key
     for i in 0..8 {
         w[i] = u32::from_be_bytes(key[i * 4..i * 4 + 4].try_into().unwrap());
     }
@@ -263,32 +263,32 @@ fn aes256_encrypt_block_sw(round_keys: &Aes256RoundKeys, block: &mut [u8; 16]) {
 // AES-256 Encryption — AES-NI hardware path (inline assembly)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Chiffre un bloc 16 octets via AES-NI (accélération matérielle).
+/// Encrypts a 16-byte block via AES-NI (hardware acceleration).
 ///
-/// Utilise l'inline assembly avec encodage .byte pour les instructions
-/// SSE/AES-NI, afin de contourner la restriction LLVM sur le target
-/// x86_64-unknown-none (pas de SSE2 dans les target features).
+/// Uses inline assembly with .byte encoding for SSE/AES-NI instructions,
+/// in order to bypass the LLVM restriction on x86_64-unknown-none target
+/// (no SSE2 in target features).
 ///
-/// Les registres XMM sont sauvegardés et restaurés manuellement pour
-/// éviter la corruption de l'état FPU du thread courant.
+/// XMM registers are manually saved and restored to
+/// avoid corruption of current thread FPU state.
 ///
 /// # Safety
-/// - Doit être appelé uniquement quand AES-NI est disponible
-/// - `block` doit pointer vers 16 octets accessibles en lecture/écriture
-/// - `round_keys` doit pointer vers 240 octets (15 × 16) lisibles
+/// - Must be called only when AES-NI is available
+/// - `block` must point to 16 readable/writable bytes
+/// - `round_keys` must point to 240 readable bytes (15 × 16)
 #[cfg(target_arch = "x86_64")]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
-    // Encode les instructions AES-NI en .byte pour éviter LLVM.
+    // Encodes AES-NI instructions as .byte to avoid LLVM.
     //
-    // Registres utilisés :
-    //   rdi = pointeur vers le bloc (in/out)
-    //   rsi = pointeur vers les round keys
-    //   rax = pointeur courant vers les round keys
-    //   xmm0 = état AES
-    //   xmm1 = round key temporaire
+    // Registers used:
+    //   rdi = pointer to block (in/out)
+    //   rsi = pointer to round keys
+    //   rax = current pointer to round keys
+    //   xmm0 = AES state
+    //   xmm1 = temporary round key
     //
-    // Instructions encodées :
+    // Encoded instructions:
     //   movdqu xmm0, [rdi]       = F3 0F 6F 07
     //   movdqu xmm1, [rax]       = F3 0F 6F 08
     //   pxor   xmm0, xmm1       = 66 0F EF C1
@@ -301,27 +301,27 @@ unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
     //   movdqu xmm1, [rsp+16]   = F3 0F 6F 4C 24 10
 
     core::arch::asm!(
-        // ── Sauvegarder XMM0 et XMM1 sur la pile ──────────────────────
+        // ── Save XMM0 and XMM1 on stack ──────────────────────────────
         "sub rsp, 32",
         // movdqu [rsp], xmm0
         ".byte 0xF3, 0x0F, 0x7F, 0x04, 0x24",
         // movdqu [rsp+16], xmm1
         ".byte 0xF3, 0x0F, 0x7F, 0x4C, 0x24, 0x10",
 
-        // ── Charger le plaintext dans xmm0 ────────────────────────────
+        // ── Load plaintext into xmm0 ─────────────────────────────────
         // movdqu xmm0, [rdi]
         ".byte 0xF3, 0x0F, 0x6F, 0x07",
 
-        // ── XOR avec la round key 0 ───────────────────────────────────
+        // ── XOR with round key 0 ─────────────────────────────────────
         // movdqu xmm1, [rsi]
         ".byte 0xF3, 0x0F, 0x6F, 0x0E",
         // pxor xmm0, xmm1
         ".byte 0x66, 0x0F, 0xEF, 0xC1",
 
-        // ── Setup : rax pointe vers la round key 1 ────────────────────
+        // ── Setup: rax points to round key 1 ─────────────────────────
         "lea rax, [rsi + 16]",
 
-        // ── 13 AESENC rounds (rounds 1 à 13) ─────────────────────────
+        // ── 13 AESENC rounds (rounds 1 to 13) ────────────────────────
         // Round 1
         ".byte 0xF3, 0x0F, 0x6F, 0x08",        // movdqu xmm1, [rax]
         ".byte 0x66, 0x0F, 0x38, 0xDC, 0xC1",  // aesenc xmm0, xmm1
@@ -379,17 +379,17 @@ unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
         ".byte 0xF3, 0x0F, 0x6F, 0x08",        // movdqu xmm1, [rax]
         ".byte 0x66, 0x0F, 0x38, 0xDD, 0xC1",  // aesenclast xmm0, xmm1
 
-        // ── Stocker le résultat ────────────────────────────────────────
+        // ── Store result ─────────────────────────────────────────────
         // movdqu [rdi], xmm0
         ".byte 0xF3, 0x0F, 0x7F, 0x07",
 
-        // ── Restaurer XMM0 et XMM1 ────────────────────────────────────
+        // ── Restore XMM0 and XMM1 ────────────────────────────────────
         // movdqu xmm0, [rsp]
         ".byte 0xF3, 0x0F, 0x6F, 0x04, 0x24",
         // movdqu xmm1, [rsp+16]
         ".byte 0xF3, 0x0F, 0x6F, 0x4C, 0x24, 0x10",
 
-        // ── Restaurer la pile ──────────────────────────────────────────
+        // ── Restore stack ────────────────────────────────────────────
         "add rsp, 32",
 
         in("rdi") block,
@@ -400,24 +400,24 @@ unsafe fn aes256_encrypt_block_ni(block: *mut u8, round_keys: *const u8) {
 }
 
 #[cfg(not(target_arch = "x86_64"))]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn aes256_encrypt_block_ni(_block: *mut u8, _round_keys: *const u8) {
-    // Pas d'AES-NI sur une architecture non-x86_64
+    // No AES-NI on non-x86_64 architecture
     unreachable!()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AES-256 Encryption — Dispatch software / AES-NI
+// AES-256 Encryption — Software / AES-NI dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte AES-256 pour le chiffrement GCM.
+/// AES-256 context for GCM encryption.
 ///
-/// Encapsule à la fois le chemin software pure-Rust et le chemin
-/// AES-NI (round keys pré-calculées + inline assembly).
+/// Encapsulates both pure-Rust software path and AES-NI
+/// path (precomputed round keys + inline assembly).
 struct Aes256GcmCipher {
-    /// Round keys utilisées par le chemin software et le chemin AES-NI.
+    /// Round keys used by software path and AES-NI path.
     round_keys: Aes256RoundKeys,
-    /// AES-NI disponible sur ce CPU.
+    /// AES-NI available on this CPU.
     has_aesni: bool,
 }
 
@@ -431,10 +431,10 @@ impl Aes256GcmCipher {
         }
     }
 
-    /// Chiffre un bloc 16 octets (dispatch software / AES-NI).
+    /// Encrypts a 16-byte block (software / AES-NI dispatch).
     fn encrypt_block(&self, block: &mut [u8; 16]) {
         if self.has_aesni {
-            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+            // SAFETY: validated low-level operation — see block documentation.
             unsafe {
                 aes256_encrypt_block_ni(block.as_mut_ptr(), self.round_keys.keys[0].as_ptr());
             }
@@ -448,45 +448,45 @@ impl Aes256GcmCipher {
 // GF(2^128) Multiplication — GHASH core
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Multiplication dans GF(2^128) selon la convention GCM.
+/// Multiplication in GF(2^128) according to GCM convention.
 ///
-/// Représentation : élément = [u64; 2] où [0] = 8 octets de poids fort
-/// (MSB = x^0 dans la convention GCM) et [1] = 8 octets de poids faible.
+/// Representation: element = [u64; 2] where [0] = 8 most significant bytes
+/// (MSB = x^0 in GCM convention) and [1] = 8 least significant bytes.
 ///
-/// Polynôme de réduction : x^128 + x^7 + x^2 + x + 1
-/// Constante de réduction : 0xE100_0000_0000_0000 (dans le mot [0]).
+/// Reduction polynomial: x^128 + x^7 + x^2 + x + 1
+/// Reduction constant: 0xE100_0000_0000_0000 (in word [0]).
 ///
-/// Algorithme : shift-and-XOR (schoolbook), 128 itérations.
+/// Algorithm: shift-and-XOR (schoolbook), 128 iterations.
 ///
-/// SÉCURITÉ — **temps constant** : aucune branche ne dépend des données. Pendant
-/// le calcul du tag, `b` contient la sous-clé de hachage `H = AES_K(0)` ; un
-/// branchement sur ses bits (`if bit_set`) fuiterait `H` par canal temporel, ce
-/// qui permet la forge de tags GCM. On remplace donc les branches data-dépendantes
-/// par des **masques** (`0 - bit` = tout-à-un si bit=1, tout-à-zéro sinon). Le seul
-/// `if i < 64` porte sur l'indice de boucle (public) → identique à chaque appel.
+/// SECURITY — **constant-time**: no branch depends on data. During
+/// tag computation, `b` contains the hash subkey `H = AES_K(0)`; branching
+/// on its bits (`if bit_set`) would leak `H` via timing channel, allowing
+/// GCM tag forgery. We therefore replace data-dependent branches
+/// with **masks** (`0 - bit` = all-ones if bit=1, all-zeros otherwise). The only
+/// `if i < 64` depends on loop index (public) → identical on every call.
 fn gf128_mul(a: [u64; 2], b: [u64; 2]) -> [u64; 2] {
     let mut z = [0u64, 0u64];
     let mut v = [a[0], a[1]];
 
     for i in 0..128 {
-        // Bit i de b (MSB en premier, convention GCM). Décalage par `i` (public).
+        // Bit i of b (MSB first, GCM convention). Shift by `i` (public).
         let bit = if i < 64 {
             (b[0] >> (63 - i)) & 1
         } else {
             (b[1] >> (127 - i)) & 1
         };
-        // Masque temps-constant : 0xFFFF…FFFF si bit==1, 0 sinon (pas de branche).
+        // Constant-time mask: 0xFFFF…FFFF if bit==1, 0 otherwise (no branch).
         let bit_mask = 0u64.wrapping_sub(bit);
         z[0] ^= v[0] & bit_mask;
         z[1] ^= v[1] & bit_mask;
 
-        // Multiplier v par x : décaler à droite de 1 bit.
+        // Multiply v by x: shift right by 1 bit.
         let lsb = v[1] & 1;
         let carry = v[0] & 1;
         v[0] >>= 1;
         v[1] = (v[1] >> 1) | (carry << 63);
 
-        // Réduction conditionnelle (temps constant) si le bit x^127 était positionné.
+        // Conditional reduction (constant-time) if bit x^127 was set.
         let lsb_mask = 0u64.wrapping_sub(lsb);
         v[0] ^= 0xE100_0000_0000_0000 & lsb_mask;
     }
@@ -498,7 +498,7 @@ fn gf128_mul(a: [u64; 2], b: [u64; 2]) -> [u64; 2] {
 // Conversion bytes ↔ GF(2^128) block
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit 16 octets (big-endian) en élément GF(2^128).
+/// Converts 16 bytes (big-endian) into GF(2^128) element.
 #[inline]
 fn bytes_to_gf(b: &[u8; 16]) -> [u64; 2] {
     [
@@ -507,7 +507,7 @@ fn bytes_to_gf(b: &[u8; 16]) -> [u64; 2] {
     ]
 }
 
-/// Convertit un élément GF(2^128) en 16 octets (big-endian).
+/// Converts a GF(2^128) element into 16 bytes (big-endian).
 #[inline]
 fn gf_to_bytes(gf: [u64; 2]) -> [u8; 16] {
     let mut out = [0u8; 16];
@@ -541,10 +541,10 @@ fn ghash_update(y: &mut [u64; 2], h: [u64; 2], data: &[u8]) {
 // GCM Counter Increment
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Incrémente le compteur GCM (32 bits de poids faible en big-endian).
+/// Increments GCM counter (32 least significant bits in big-endian).
 ///
-/// Le compteur est un bloc de 16 octets où les 4 derniers octets forment
-/// un compteur 32 bits en big-endian (NIST SP 800-38D §5.2.1.1).
+/// Counter is a 16-byte block where the last 4 bytes form
+/// a 32-bit big-endian counter (NIST SP 800-38D §5.2.1.1).
 fn gcm_inc32(counter: &mut [u8; 16]) {
     let c = u32::from_be_bytes(counter[12..16].try_into().unwrap());
     let c = c.wrapping_add(1);
@@ -555,25 +555,25 @@ fn gcm_inc32(counter: &mut [u8; 16]) {
 // GCM CTR Encryption
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Chiffrement CTR (Counter mode) pour GCM.
+/// CTR (Counter mode) encryption for GCM.
 ///
-/// Génère un keystream à partir du compteur initial `icb` et le XOR
-/// avec `data`. Le compteur est incrémenté après chaque bloc.
+/// Generates a keystream from initial counter `icb` and XORs it
+/// with `data`. The counter is incremented after each block.
 fn gcm_ctr_encrypt(cipher: &Aes256GcmCipher, mut icb: [u8; 16], data: &mut [u8]) {
     let mut offset = 0;
     while offset < data.len() {
-        // Chiffrer le compteur pour obtenir le keystream
+        // Encrypt counter to obtain keystream
         let mut keystream = icb;
         cipher.encrypt_block(&mut keystream);
 
-        // XOR le keystream avec les données
+        // XOR keystream with data
         let remaining = data.len() - offset;
         let chunk_len = remaining.min(BLOCK_SIZE);
         for i in 0..chunk_len {
             data[offset + i] ^= keystream[i];
         }
 
-        // Incrémenter le compteur
+        // Increment counter
         gcm_inc32(&mut icb);
         offset += chunk_len;
     }
@@ -585,15 +585,15 @@ fn gcm_ctr_encrypt(cipher: &Aes256GcmCipher, mut icb: [u8; 16], data: &mut [u8])
 
 /// AES-256-GCM seal (encrypt + authenticate).
 ///
-/// Chiffre `plaintext` en place, calcule le tag GCM sur (aad, ciphertext)
-/// et écrit le tag dans `tag_out`.
+/// Encrypts `plaintext` in place, computes GCM tag over (aad, ciphertext)
+/// and writes tag into `tag_out`.
 ///
 /// # Arguments
-/// * `key`       — Clé AES-256 (32 octets)
-/// * `iv`        — Vecteur d'initialisation (12 octets, 96 bits)
-/// * `aad`       — Données additionnelles authentifiées (non chiffrées)
-/// * `plaintext` — Données à chiffrer (chiffrées en place)
-/// * `tag_out`   — Tag d'authentification en sortie (16 octets)
+/// * `key`       — AES-256 key (32 bytes)
+/// * `iv`        — Initialization vector (12 bytes, 96 bits)
+/// * `aad`       — Additional authenticated data (unencrypted)
+/// * `plaintext` — Data to encrypt (encrypted in place)
+/// * `tag_out`   — Output authentication tag (16 bytes)
 pub fn aes_gcm_seal(
     key: &[u8; AES_KEY_LEN],
     iv: &[u8; AES_GCM_NONCE_LEN],
@@ -603,22 +603,22 @@ pub fn aes_gcm_seal(
 ) -> Result<(), AesGcmError> {
     let cipher = Aes256GcmCipher::new(key);
 
-    // 1. Calculer H = AES_K(0^128) — hash subkey
+    // 1. Compute H = AES_K(0^128) — hash subkey
     let mut h_block = [0u8; 16];
     cipher.encrypt_block(&mut h_block);
     let h = bytes_to_gf(&h_block);
 
-    // 2. Construire J0 = IV || 0^31 || 1
+    // 2. Build J0 = IV || 0^31 || 1
     let mut j0 = [0u8; 16];
     j0[0..12].copy_from_slice(iv);
     j0[15] = 1;
 
-    // 3. Chiffrer en mode CTR à partir de inc32(J0)
+    // 3. Encrypt in CTR mode starting from inc32(J0)
     let mut counter = j0;
     gcm_inc32(&mut counter);
     gcm_ctr_encrypt(&cipher, counter, plaintext);
 
-    // 4. Calculer le tag GHASH
+    // 4. Compute GHASH tag
     let tag = compute_gcm_tag(&cipher, h, j0, aad, plaintext);
     tag_out.copy_from_slice(&tag);
 
@@ -627,16 +627,16 @@ pub fn aes_gcm_seal(
 
 /// AES-256-GCM open (verify + decrypt).
 ///
-/// Vérifie le tag GCM, et s'il est valide, déchiffre `ciphertext` en place.
-/// Si le tag est invalide, les données ne sont PAS déchiffrées et
-/// `Err(AesGcmError::AuthenticationFailed)` est retourné.
+/// Verifies GCM tag, and if valid, decrypts `ciphertext` in place.
+/// If tag is invalid, data is NOT decrypted and
+/// `Err(AesGcmError::AuthenticationFailed)` is returned.
 ///
 /// # Arguments
-/// * `key`        — Clé AES-256 (32 octets)
-/// * `iv`         — Vecteur d'initialisation (12 octets)
-/// * `aad`        — Données additionnelles authentifiées
-/// * `ciphertext` — Données chiffrées (déchiffrées en place si tag OK)
-/// * `tag`        — Tag d'authentification (16 octets)
+/// * `key`        — AES-256 key (32 bytes)
+/// * `iv`         — Initialization vector (12 bytes)
+/// * `aad`        — Additional authenticated data
+/// * `ciphertext` — Encrypted data (decrypted in place if tag OK)
+/// * `tag`        — Authentication tag (16 bytes)
 pub fn aes_gcm_open(
     key: &[u8; AES_KEY_LEN],
     iv: &[u8; AES_GCM_NONCE_LEN],
@@ -646,21 +646,21 @@ pub fn aes_gcm_open(
 ) -> Result<(), AesGcmError> {
     let cipher = Aes256GcmCipher::new(key);
 
-    // 1. Calculer H = AES_K(0^128)
+    // 1. Compute H = AES_K(0^128)
     let mut h_block = [0u8; 16];
     cipher.encrypt_block(&mut h_block);
     let h = bytes_to_gf(&h_block);
 
-    // 2. Construire J0 = IV || 0^31 || 1
+    // 2. Build J0 = IV || 0^31 || 1
     let mut j0 = [0u8; 16];
     j0[0..12].copy_from_slice(iv);
     j0[15] = 1;
 
-    // 3. Vérifier le tag AVANT de déchiffrer
+    // 3. Verify tag BEFORE decrypting
     let expected_tag = compute_gcm_tag(&cipher, h, j0, aad, ciphertext);
     if !bool::from(expected_tag.ct_eq(tag)) {
         for byte in &mut h_block {
-            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+            // SAFETY: validated low-level operation — see block documentation.
             unsafe {
                 core::ptr::write_volatile(byte, 0);
             }
@@ -668,7 +668,7 @@ pub fn aes_gcm_open(
         return Err(AesGcmError::AuthenticationFailed);
     }
 
-    // 4. Déchiffrer en mode CTR à partir de inc32(J0)
+    // 4. Decrypt in CTR mode starting from inc32(J0)
     let mut counter = j0;
     gcm_inc32(&mut counter);
     gcm_ctr_encrypt(&cipher, counter, ciphertext);
@@ -731,17 +731,17 @@ mod tests {
         crate::arch::x86_64::cpu::features::init_cpu_features();
     }
 
-    /// Test : GF(2^128) multiplication par 1 est identité.
+    /// Test: GF(2^128) multiplication by 1 is identity.
     #[test]
     fn gf128_mul_identity() {
         init_crypto_test_env();
-        let one: [u64; 2] = [0x8000_0000_0000_0000, 0]; // x^0 = 1 dans la convention GCM
+        let one: [u64; 2] = [0x8000_0000_0000_0000, 0]; // x^0 = 1 in GCM convention
         let a: [u64; 2] = [0x1234_5678_9ABC_DEF0, 0xFEDC_BA98_7654_3210];
         let result = gf128_mul(a, one);
         assert_eq!(result, a, "a * 1 should equal a");
     }
 
-    /// Test : GF(2^128) multiplication par 0 est 0.
+    /// Test: GF(2^128) multiplication by 0 is 0.
     #[test]
     fn gf128_mul_zero() {
         init_crypto_test_env();
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(result, zero, "a * 0 should be 0");
     }
 
-    /// Test : roundtrip seal/open avec AAD vide.
+    /// Test: roundtrip seal/open with empty AAD.
     #[test]
     fn roundtrip_empty_aad() {
         init_crypto_test_env();
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(data, original, "Decrypted data must match original");
     }
 
-    /// Test : tag corrompu est rejeté.
+    /// Test: corrupted tag is rejected.
     #[test]
     fn tampered_tag_rejected() {
         init_crypto_test_env();
@@ -786,7 +786,7 @@ mod tests {
         );
     }
 
-    /// Test : ciphertext corrompu est rejeté.
+    /// Test: corrupted ciphertext is rejected.
     #[test]
     fn tampered_ciphertext_rejected() {
         init_crypto_test_env();
@@ -804,7 +804,7 @@ mod tests {
         );
     }
 
-    /// Test : AAD différent est rejeté.
+    /// Test: different AAD is rejected.
     #[test]
     fn wrong_aad_rejected() {
         init_crypto_test_env();
@@ -821,7 +821,7 @@ mod tests {
         );
     }
 
-    /// Test : roundtrip avec AAD non vide.
+    /// Test: roundtrip with non-empty AAD.
     #[test]
     fn roundtrip_with_aad() {
         init_crypto_test_env();
@@ -836,13 +836,13 @@ mod tests {
         assert_eq!(data, original);
     }
 
-    /// Test : données non alignées sur 16 octets.
+    /// Test: data not aligned to 16 bytes.
     #[test]
     fn roundtrip_unaligned() {
         init_crypto_test_env();
         let key = [0x99u8; AES_KEY_LEN];
         let iv = [0xAAu8; AES_GCM_NONCE_LEN];
-        let mut data = *b"short"; // 5 octets
+        let mut data = *b"short"; // 5 bytes
         let original = data;
         let mut tag = [0u8; AES_GCM_TAG_LEN];
 
@@ -851,7 +851,7 @@ mod tests {
         assert_eq!(data, original);
     }
 
-    /// Test : données vides.
+    /// Test: empty data.
     #[test]
     fn roundtrip_empty_plaintext() {
         init_crypto_test_env();
@@ -862,6 +862,6 @@ mod tests {
 
         aes_gcm_seal(&key, &iv, b"some-aad", &mut data, &mut tag).unwrap();
         aes_gcm_open(&key, &iv, b"some-aad", &mut data, &tag).unwrap();
-        // Pas de données à vérifier, mais le tag doit être valide
+        // No data to verify, but tag must be valid
     }
 }

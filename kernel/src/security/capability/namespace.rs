@@ -1,20 +1,20 @@
 // kernel/src/security/capability/namespace.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CAPABILITY NAMESPACE — Espace de nommage des capacités
+// CAPABILITY NAMESPACE — Capability naming space
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Chaque CapNamespace constitue un domaine d'ObjectId indépendant.
-// Un ObjectId valide dans un namespace A n'est pas valide dans B.
+// Each CapNamespace constitutes an independent ObjectId domain.
+// An ObjectId valid in namespace A is not valid in B.
 //
-// UTILISATION :
-//   • kernel namespace : PID 0 (init) — capacités sur tous les objets noyau
-//   • user namespace   : chaque conteneur/processus — vue restreinte
-//   • driver namespace : Ring 1 — capabilities sur MMIO/IRQ/DMA uniquement
+// USAGE:
+//   • kernel namespace: PID 0 (init) — capabilities on all kernel objects
+//   • user namespace  : each container/process — restricted view
+//   • driver namespace: Ring 1 — capabilities on MMIO/IRQ/DMA only
 //
-// PROPRIÉTÉ :
-//   cross_namespace_verify() retourne TOUJOURS Err(ObjectNotFound) si les
-//   namespaces source et cible diffèrent → isolation garantie.
+// PROPERTY:
+//   cross_namespace_verify() ALWAYS returns Err(ObjectNotFound) if
+//   source and target namespaces differ -> guaranteed isolation.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -28,19 +28,19 @@ use super::verify::CapError;
 // NamespaceId
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant unique d'un namespace de capacités.
+/// Unique identifier of a capability namespace.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct NamespaceId(pub u32);
 
 impl NamespaceId {
-    /// Namespace noyau — capabilities sur tous les objets système.
+    /// Kernel namespace — capabilities on all system objects.
     pub const KERNEL: Self = Self(0);
 
-    /// Namespace utilisateur par défaut.
+    /// Default user namespace.
     pub const USER_DEFAULT: Self = Self(1);
 
-    /// Namespace pour les drivers Ring 1.
+    /// Namespace for Ring 1 drivers.
     pub const DRIVER: Self = Self(2);
 
     pub fn is_kernel(self) -> bool {
@@ -49,12 +49,12 @@ impl NamespaceId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteur global de namespaces
+// Global namespace counter
 // ─────────────────────────────────────────────────────────────────────────────
 
-static NS_COUNTER: AtomicU32 = AtomicU32::new(3); // 0=KERNEL, 1=USER_DEFAULT, 2=DRIVER réservés
+static NS_COUNTER: AtomicU32 = AtomicU32::new(3); // 0=KERNEL, 1=USER_DEFAULT, 2=DRIVER reserved
 
-/// Alloue un nouveau NamespaceId unique.
+/// Allocates a new unique NamespaceId.
 pub fn alloc_namespace_id() -> NamespaceId {
     let id = NS_COUNTER.fetch_add(1, Ordering::Relaxed);
     NamespaceId(id)
@@ -64,70 +64,70 @@ pub fn alloc_namespace_id() -> NamespaceId {
 // CapNamespace — domaine d'ObjectId
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Namespace de capacités — domain d'ObjectId indépendant.
+/// Capability namespace — independent ObjectId domain.
 ///
-/// Chaque namespace dispose de son propre compteur d'ObjectId et de sa propre CapTable.
-/// Un ObjectId issu d'un namespace A ne peut jamais être vérifié dans un namespace B.
+/// Each namespace has its own ObjectId counter and CapTable.
+/// An ObjectId from namespace A can never be verified in namespace B.
 pub struct CapNamespace {
-    /// Identifiant de ce namespace.
+    /// Identifier of this namespace.
     id: NamespaceId,
-    /// Table des capacités appartenant à ce namespace.
+    /// Capability table belonging to this namespace.
     table: CapTable,
-    /// Compteur d'ObjectId local — incrémenté à chaque `alloc_object_id()`.
+    /// Local ObjectId counter — incremented on each `alloc_object_id()`.
     id_counter: AtomicU64,
-    /// Nombre d'utilisateurs de ce namespace (reference counting).
+    /// Number of users of this namespace (reference counting).
     refcount: AtomicU32,
 }
 
-// SAFETY: CapNamespace utilise uniquement des primitives atomiques + CapTable (Sync).
+// SAFETY: CapNamespace uses only atomic primitives + CapTable (Sync).
 unsafe impl Send for CapNamespace {}
 unsafe impl Sync for CapNamespace {}
 
 impl CapNamespace {
-    /// Crée un nouveau namespace vide.
+    /// Creates a new empty namespace.
     pub fn new(id: NamespaceId) -> Self {
         Self {
             id,
             table: CapTable::new(),
-            id_counter: AtomicU64::new(1), // 0 réservé = INVALID
+            id_counter: AtomicU64::new(1), // 0 reserved = INVALID
             refcount: AtomicU32::new(1),
         }
     }
 
-    /// Retourne l'identifiant du namespace.
+    /// Returns the namespace identifier.
     #[inline(always)]
     pub fn id(&self) -> NamespaceId {
         self.id
     }
 
-    /// Alloue un nouvel ObjectId unique dans ce namespace.
+    /// Allocates a new unique ObjectId in this namespace.
     ///
-    /// Les ObjectId sont garantis uniques dans le namespace + encodent le NamespaceId
-    /// dans les bits supérieurs.
+    /// ObjectIds are guaranteed unique in the namespace + encode NamespaceId
+    /// in the upper bits.
     pub fn alloc_object_id(&self) -> ObjectId {
         let local = self.id_counter.fetch_add(1, Ordering::Relaxed);
-        // Encode NamespaceId dans les 16 bits supérieurs de l'ObjectId
+        // Encode NamespaceId in upper 16 bits of ObjectId
         let oid = ((self.id.0 as u64) << 48) | (local & 0x0000_FFFF_FFFF_FFFF);
         ObjectId::from_raw(oid)
     }
 
-    /// Extrait le NamespaceId encodé dans un ObjectId.
+    /// Extracts NamespaceId encoded in an ObjectId.
     pub fn namespace_of(oid: ObjectId) -> NamespaceId {
         NamespaceId((oid.as_u64() >> 48) as u32)
     }
 
-    /// Vérifie qu'un ObjectId appartient à ce namespace.
+    /// Verifies that an ObjectId belongs to this namespace.
     pub fn owns(&self, oid: ObjectId) -> bool {
         Self::namespace_of(oid) == self.id
     }
 
-    /// Accès à la CapTable interne.
+    /// Access to internal CapTable.
     #[inline(always)]
     pub fn table(&self) -> &CapTable {
         &self.table
     }
 
-    /// Accorde une capability dans ce namespace.
+    /// Grants a capability in this namespace.
     pub fn grant(
         &self,
         rights: Rights,
@@ -138,7 +138,7 @@ impl CapNamespace {
         Ok((oid, token))
     }
 
-    /// Révoque toutes les capabilities sur un ObjectId.
+    /// Revokes all capabilities on an ObjectId.
     pub fn revoke(&self, oid: ObjectId) -> Result<(), CapError> {
         if !self.owns(oid) {
             return Err(CapError::ObjectNotFound);
@@ -147,38 +147,38 @@ impl CapNamespace {
         Ok(())
     }
 
-    /// Vérifie un token dans ce namespace.
+    /// Verifies a token in this namespace.
     pub fn verify(&self, token: super::token::CapToken, required: Rights) -> Result<(), CapError> {
-        // Rejet rapide si l'ObjectId n'appartient pas à ce namespace
+        // Fast reject if ObjectId does not belong to this namespace
         if !self.owns(token.object_id()) {
             return Err(CapError::ObjectNotFound);
         }
         super::verify::verify(&self.table, token, required)
     }
 
-    /// Incrémente le refcount.
+    /// Increments refcount.
     pub fn acquire(&self) {
         self.refcount.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Décrémente le refcount — retourne vrai si le namespace peut être détruit.
+    /// Decrements refcount — returns true if namespace can be destroyed.
     pub fn release(&self) -> bool {
         self.refcount.fetch_sub(1, Ordering::Release) == 1
     }
 
-    /// Retourne le refcount courant.
+    /// Returns current refcount.
     pub fn refcount(&self) -> u32 {
         self.refcount.load(Ordering::Relaxed)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification cross-namespace — TOUJOURS Err
+// Cross-namespace verification — ALWAYS Err
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tente une vérification cross-namespace.
-/// Retourne TOUJOURS Err(ObjectNotFound) si les namespaces diffèrent.
-/// Propriété d'isolation garantie.
+/// Attempts a cross-namespace verification.
+/// ALWAYS returns Err(ObjectNotFound) if namespaces differ.
+/// Guaranteed isolation property.
 pub fn cross_namespace_verify(
     ns_a: &CapNamespace,
     ns_b: &CapNamespace,
@@ -186,9 +186,9 @@ pub fn cross_namespace_verify(
     required: Rights,
 ) -> Result<(), CapError> {
     if ns_a.id() != ns_b.id() {
-        // Isolation : pas de vérification cross-namespace
+        // Isolation: no cross-namespace verification
         return Err(CapError::ObjectNotFound);
     }
-    // Même namespace — délégation à verify standard
+    // Same namespace — delegate to standard verify
     ns_a.verify(token, required)
 }

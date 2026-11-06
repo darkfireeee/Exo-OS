@@ -1,56 +1,56 @@
 // kernel/src/security/audit/logger.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Audit Logger — Journal d'audit du kernel (syscalls, violations, events)
+// Audit Logger — Kernel audit log (syscalls, violations, events)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Ring buffer lock-free de 65536 entrées (1M de mémoire)
-//   • Chaque entrée : 16 bytes minimum (catégorie, tid, timestamp, data)
-//   • Flush vers userspace via interface mémoire partagée (zero-copy)
-//   • Distinct du tcb/audit.rs (TCB ring buffer = sécurité bas niveau)
-//     Ici : audit de politique de haut niveau (LSM-like)
+// Architecture:
+//   • Lock-free ring buffer of 65536 entries (1M memory)
+//   • Each entry: 16 bytes minimum (category, tid, timestamp, data)
+//   • Flush to userspace via shared memory interface (zero-copy)
+//   • Distinct from tcb/audit.rs (TCB ring buffer = low-level security)
+//     Here: high-level policy audit (LSM-like)
 //
-// RÈGLE AUDIT-01 : log_event() doit être non-bloquant (ISR-safe) — spin uniquement.
-// RÈGLE AUDIT-02 : Les événements critiques (SECVIOL) ne peuvent pas être filtrés.
-// RÈGLE AUDIT-03 : Le buffer plein → événements les plus anciens écrasés (ring).
+// RULE AUDIT-01: log_event() must be non-blocking (ISR-safe) — spin only.
+// RULE AUDIT-02: Critical events (SECVIOL) cannot be filtered.
+// RULE AUDIT-03: Buffer full -> oldest events overwritten (ring).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Types d'événements
+// Event types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Catégorie d'événement d'audit.
+/// Audit event category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AuditCategory {
-    /// Appel système.
+    /// System call.
     Syscall = 0x01,
-    /// Violation de politique de sécurité.
+    /// Security policy violation.
     SecurityViolation = 0x02,
-    /// Opération sur les capabilities.
+    /// Capability operation.
     Capability = 0x03,
-    /// Accès au système de fichiers.
+    /// File system access.
     FileAccess = 0x04,
-    /// Opération réseau.
+    /// Network operation.
     Network = 0x05,
-    /// Création/terminaison de processus.
+    /// Process creation/termination.
     Process = 0x06,
-    /// Opération IPC.
+    /// IPC operation.
     Ipc = 0x07,
-    /// Événement d'authentification.
+    /// Authentication event.
     Auth = 0x08,
-    /// Violation crypto (signature invalide, etc.).
+    /// Crypto violation (invalid signature, etc.).
     Crypto = 0x09,
-    /// Événement de boot.
+    /// Boot event.
     Boot = 0x0A,
-    /// Événement divers.
+    /// Miscellaneous event.
     Other = 0xFF,
 }
 
-/// Résultat d'une opération (pour les événements de type Syscall).
+/// Operation outcome (for Syscall type events).
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum AuditOutcome {
@@ -61,32 +61,32 @@ pub enum AuditOutcome {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrée du ring buffer d'audit
+// Audit ring buffer entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée d'audit (16 bytes, cache-line friendly × 4 par cache line).
+/// Audit entry (16 bytes, cache-line friendly × 4 per cache line).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct AuditRecord {
-    /// Timestamp TSC (cycles CPU).
+    /// TSC timestamp (CPU cycles).
     pub timestamp: u64,
-    /// Thread ID émetteur.
+    /// Sender thread ID.
     pub thread_id: u32,
-    /// Process ID émetteur.
+    /// Sender process ID.
     pub pid: u32,
-    /// Numéro de syscall (ou 0).
+    /// Syscall number (or 0).
     pub syscall_nr: u32,
-    /// Code d'erreur / résultat.
+    /// Error code / result.
     pub result: i32,
-    /// Catégorie d'événement.
+    /// Event category.
     pub category: AuditCategory,
-    /// Résultat de l'opération.
+    /// Operation outcome.
     pub outcome: AuditOutcome,
-    /// UID de l'appelant.
+    /// Caller UID.
     pub uid: u16,
-    /// Padding pour 24 bytes totaux.
+    /// Padding for 24 bytes total.
     pub _pad: [u8; 2],
-    /// Données supplémentaires (hash de path, addr, etc.).
+    /// Additional data (path hash, addr, etc.).
     pub data: [u8; 8],
 }
 
@@ -111,13 +111,13 @@ impl AuditRecord {
 // Ring buffer
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille du ring buffer : 65536 entrées.
+/// Ring buffer size: 65536 entries.
 const RING_SIZE: usize = 65536;
 
 struct AuditRing {
     buffer: [AuditRecord; RING_SIZE],
-    head: AtomicUsize, // Position d'écriture (produit)
-    tail: AtomicUsize, // Position de lecture (consommateur)
+    head: AtomicUsize, // Write position (producer)
+    tail: AtomicUsize, // Read position (consumer)
     overflow: AtomicU64,
 }
 
@@ -131,29 +131,29 @@ impl AuditRing {
         }
     }
 
-    /// Écrit un événement dans le ring buffer (RÈGLE AUDIT-01 : lock-free).
+    /// Writes an event into the ring buffer (RULE AUDIT-01: lock-free).
     ///
-    /// Implémente une politique OVERWRITE si le buffer est plein (RÈGLE AUDIT-03).
+    /// Implements an OVERWRITE policy if buffer is full (RULE AUDIT-03).
     fn push(&mut self, record: AuditRecord) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) % RING_SIZE;
-        // Vérifier si on va écraser un élément non consommé
+        // Check if unconsumed element will be overwritten
         let tail = self.tail.load(Ordering::Relaxed);
         let head = idx;
-        // Distance circulaire
+        // Circular distance
         let used = head.wrapping_sub(tail) % RING_SIZE;
         if used >= RING_SIZE - 1 {
-            // Buffer plein : avancer le tail (écrase le plus ancien)
+            // Buffer full: advance tail (overwrites oldest)
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.overflow.fetch_add(1, Ordering::Relaxed);
         }
-        // SAFETY: idx < RING_SIZE par construction du modulo
+        // SAFETY: idx < RING_SIZE by modulo construction
         unsafe {
             let ptr = self.buffer.as_mut_ptr().add(idx);
             core::ptr::write_volatile(ptr, record);
         }
     }
 
-    /// Lit jusqu'à `max` entrées depuis le tail, retourne le nombre lu.
+    /// Reads up to `max` entries from tail, returns number read.
     fn drain(&mut self, out: &mut [AuditRecord]) -> usize {
         let mut count = 0usize;
         while count < out.len() {
@@ -181,26 +181,26 @@ impl AuditRing {
 static AUDIT_RING: spin::Mutex<AuditRing> = spin::Mutex::new(AuditRing::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Filtres
+// Filters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bitmask des catégories activées (1 bit par AuditCategory u8).
+/// Bitmask of active categories (1 bit per AuditCategory u8).
 /// Bit 1 = Syscall, bit 2 = SecurityViolation, etc.
-static FILTER_MASK: AtomicU64 = AtomicU64::new(!0u64); // Tout activé par défaut
+static FILTER_MASK: AtomicU64 = AtomicU64::new(!0u64); // All enabled by default
 
 static EVENTS_LOGGED: AtomicU64 = AtomicU64::new(0);
 static EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
 static EVENTS_CRITICAL: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitaire TSC
+// TSC utility
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline]
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp de log.
+    // SAFETY: rdtsc available on x86_64; non-serialized sufficient for log timestamp.
     unsafe {
         core::arch::asm!(
             "rdtsc",
@@ -212,13 +212,13 @@ fn rdtsc() -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre un événement d'audit.
+/// Records an audit event.
 ///
-/// RÈGLE AUDIT-01 : Non-bloquant (spin lock court, pas d'allocation).
-/// RÈGLE AUDIT-02 : SecurityViolation ne peut pas être filtrée.
+/// RULE AUDIT-01: Non-blocking (short spin lock, no allocation).
+/// RULE AUDIT-02: SecurityViolation cannot be filtered.
 pub fn log_event(
     category: AuditCategory,
     pid: u32,
@@ -231,7 +231,7 @@ pub fn log_event(
 ) {
     let critical = category == AuditCategory::SecurityViolation;
 
-    // Vérifier le filtre (RÈGLE AUDIT-02 : SecurityViolation toujours loguée)
+    // Check filter (RULE AUDIT-02: SecurityViolation always logged)
     let mask = FILTER_MASK.load(Ordering::Relaxed);
     let cat_bit = 1u64 << (category as u8);
     if !critical && (mask & cat_bit == 0) {
@@ -259,7 +259,7 @@ pub fn log_event(
     }
 }
 
-/// Enregistre une violation de sécurité (raccourci pour RÈGLE AUDIT-02).
+/// Records a security violation (shortcut for RULE AUDIT-02).
 pub fn log_security_violation(pid: u32, tid: u32, uid: u16, syscall_nr: u32, data: [u8; 8]) {
     log_event(
         AuditCategory::SecurityViolation,
@@ -273,23 +273,23 @@ pub fn log_security_violation(pid: u32, tid: u32, uid: u16, syscall_nr: u32, dat
     );
 }
 
-/// Flush les événements en attente dans `out`.
+/// Flushes pending events into `out`.
 ///
-/// Retourne le nombre d'événements copiés.
+/// Returns number of copied events.
 pub fn flush_to_userspace(out: &mut [AuditRecord]) -> usize {
     AUDIT_RING.lock().drain(out)
 }
 
-/// Nombre d'événements en attente de lecture.
+/// Number of events pending read.
 pub fn pending_events() -> usize {
     AUDIT_RING.lock().pending()
 }
 
-/// Active/désactive une catégorie d'audit (sauf SecurityViolation, toujours actée).
+/// Enables/disables an audit category (except SecurityViolation, always enabled).
 pub fn set_filter(category: AuditCategory, enabled: bool) {
     if category == AuditCategory::SecurityViolation {
         return;
-    } // RÈGLE AUDIT-02
+    } // RULE AUDIT-02
     let bit = 1u64 << (category as u8);
     if enabled {
         FILTER_MASK.fetch_or(bit, Ordering::Relaxed);

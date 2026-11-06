@@ -1,75 +1,75 @@
 // kernel/src/security/crypto/blake3.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// BLAKE3 — Wrapper kernel autour de la crate blake3 (features = ["pure"])
+// BLAKE3 — Kernel wrapper around blake3 crate (features = ["pure"])
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE CRYPTO-CRATES : implémentation via crate RustCrypto validée IETF.
-// JAMAIS d'implémentation from scratch (ExoOS_Dependencies_Complete.md).
+// RULE CRYPTO-CRATES: implementation via IETF-validated RustCrypto crate.
+// NEVER an implementation from scratch (ExoOS_Dependencies_Complete.md).
 //
-// Crate : blake3 v1.x, features = ["pure"]
-//   - "pure" : implémentation 100% Rust, aucun code assembleur natif,
-//              aucune dépendance AES-NI / SIMD → compatible x86_64-unknown-none.
-//   - Conforme BLAKE3 v1.3.1 (https://github.com/BLAKE3-team/BLAKE3-specs)
+// Crate: blake3 v1.x, features = ["pure"]
+//   - "pure": 100% Rust implementation, no native assembly code,
+//             no AES-NI / SIMD dependency → compatible with x86_64-unknown-none.
+//   - Conforms to BLAKE3 v1.3.1 (https://github.com/BLAKE3-team/BLAKE3-specs)
 //
-// Crate : subtle v2.x (RustCrypto) — constant-time comparisons
-//   - Remplace l'implémentation maison de constant_time_eq()
-//   - Conforme aux meilleures pratiques crypto (résistance timing attacks)
+// Crate: subtle v2.x (RustCrypto) — constant-time comparisons
+//   - Replaces in-house constant_time_eq() implementation
+//   - Conforms to crypto best practices (timing attacks resistance)
 //
-// Usages dans Exo-OS :
-//   • Checksums d'intégrité kernel (superblock, blob headers)
-//   • PRF dans le KDF (blake3_kdf / HKDF-BLAKE3)
-//   • Vérification de signature de modules (code_signing.rs)
-//   • MAC des canaux kernel (combiné avec XChaCha20)
-//   • BlobId filesystem (exofs/core/blob_id.rs)
+// Usages in Exo-OS:
+//   • Kernel integrity checksums (superblock, blob headers)
+//   • PRF in KDF (blake3_kdf / HKDF-BLAKE3)
+//   • Module signature verification (code_signing.rs)
+//   • Kernel channel MAC (combined with XChaCha20)
+//   • Filesystem BlobId (exofs/core/blob_id.rs)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 extern crate alloc;
 
 use subtle::ConstantTimeEq;
 
-/// Wrapper autour de `blake3::Hasher`.
+/// Wrapper around `blake3::Hasher`.
 ///
-/// L'API est volontairement conservée identique à l'ancienne interface
-/// afin de ne pas casser les appelants existants.
+/// The API is intentionally kept identical to the old interface
+/// in order not to break existing callers.
 pub struct Blake3Hasher(blake3::Hasher);
 
 impl Blake3Hasher {
-    /// Nouveau hasher standard (mode hash).
+    /// New standard hasher (hash mode).
     #[inline]
     pub fn new() -> Self {
         Self(blake3::Hasher::new())
     }
 
-    /// Nouveau hasher avec clé 32B (mode MAC / keyed hash).
+    /// New hasher with 32B key (MAC mode / keyed hash).
     #[inline]
     pub fn new_keyed(key: &[u8; 32]) -> Self {
         Self(blake3::Hasher::new_keyed(key))
     }
 
-    /// Nouveau hasher en mode dérivation de clé.
+    /// New hasher in key derivation mode.
     ///
-    /// `context` doit être une chaîne ASCII unique et statique décrivant le
-    /// contexte de domaine (ex : `b"Exo-OS 2025 Volume Encryption"`).
-    /// Si `context` n'est pas de l'UTF-8 valide, le contexte est remplacé
-    /// par `"ExoOS-KDF-Blake3"` (cas dégradé sécurisé).
+    /// `context` must be a unique, static ASCII string describing the
+    /// domain context (e.g.: `b"Exo-OS 2025 Volume Encryption"`).
+    /// If `context` is not valid UTF-8, the context is replaced
+    /// with `"ExoOS-KDF-Blake3"` (safe fallback).
     #[inline]
     pub fn new_derive_key(context: &[u8]) -> Self {
         let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
         Self(blake3::Hasher::new_derive_key(ctx))
     }
 
-    /// Ajoute des données au hasher. Retourne `&mut Self` pour le chaînage.
+    /// Adds data to the hasher. Returns `&mut Self` for chaining.
     #[inline]
     pub fn update(&mut self, input: &[u8]) -> &mut Self {
         self.0.update(input);
         self
     }
 
-    /// Finalise et écrit les octets de sortie dans `out`.
+    /// Finalizes and writes output bytes into `out`.
     ///
-    /// Si `out.len() <= 32`, sortie standard 32B.
-    /// Si `out.len() > 32`, mode XOF (eXtendable Output Function).
+    /// If `out.len() <= 32`, standard 32B output.
+    /// If `out.len() > 32`, XOF (eXtendable Output Function) mode.
     pub fn finalize(&self, out: &mut [u8]) {
         let n = out.len();
         if n <= 32 {
@@ -80,13 +80,13 @@ impl Blake3Hasher {
         }
     }
 
-    /// Hash complet d'une slice — retourne 32 bytes.
+    /// Full slice hash — returns 32 bytes.
     #[inline]
     pub fn hash(input: &[u8]) -> [u8; 32] {
         blake3_hash(input)
     }
 
-    /// MAC BLAKE3 (keyed hash) — retourne 32 bytes.
+    /// BLAKE3 MAC (keyed hash) — returns 32 bytes.
     #[inline]
     pub fn mac(key: &[u8; 32], input: &[u8]) -> [u8; 32] {
         blake3_mac(key, input)
@@ -100,30 +100,30 @@ impl Default for Blake3Hasher {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions utilitaires publiques
+// Public utility functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// DIAG: signale un input blake3 anormalement grand (longueur corrompue probable)
-/// avant la récursion de compress_subtree_wide qui déborderait la pile noyau.
-/// Hash BLAKE3 d'un message — retourne 32 bytes.
-/// Utilise `blake3::hash` (implémentation pure Rust validée IETF).
+/// DIAG: signals an abnormally large blake3 input (likely corrupted length)
+/// before compress_subtree_wide recursion that would overflow the kernel stack.
+/// BLAKE3 hash of a message — returns 32 bytes.
+/// Uses `blake3::hash` (IETF validated pure Rust implementation).
 #[inline]
 pub fn blake3_hash(input: &[u8]) -> [u8; 32] {
     *blake3::hash(input).as_bytes()
 }
 
-/// MAC BLAKE3 (keyed hash) d'un message avec une clé de 32 bytes.
-/// Utilise `blake3::keyed_hash`.
+/// BLAKE3 MAC (keyed hash) of a message with a 32-byte key.
+/// Uses `blake3::keyed_hash`.
 #[inline]
 pub fn blake3_mac(key: &[u8; 32], input: &[u8]) -> [u8; 32] {
     *blake3::keyed_hash(key, input).as_bytes()
 }
 
-/// Dérivation de clé BLAKE3 — contexte de domaine + matériel → clé dérivée.
+/// BLAKE3 key derivation — domain context + material → derived key.
 ///
-/// `context` doit être une chaîne ASCII unique et statique.
-/// `out` peut recevoir jusqu'à N octets via le mode XOF si len > 32.
-/// Utilise `blake3::derive_key` (mode natif BLAKE3, plus rapide que HKDF).
+/// `context` must be a unique, static ASCII string.
+/// `out` can receive up to N bytes via XOF mode if len > 32.
+/// Uses `blake3::derive_key` (native BLAKE3 mode, faster than HKDF).
 pub fn blake3_derive_key(context: &[u8], material: &[u8], out: &mut [u8]) {
     let ctx = core::str::from_utf8(context).unwrap_or("ExoOS-KDF-Blake3");
     if out.len() <= 32 {
@@ -138,11 +138,11 @@ pub fn blake3_derive_key(context: &[u8], material: &[u8], out: &mut [u8]) {
     }
 }
 
-/// Comparaison de deux digests en temps constant (résistance aux timing attacks).
-/// Retourne `true` ssi `a == b` octet par octet.
+/// Constant-time comparison of two digests (timing attack resistance).
+/// Returns `true` iff `a == b` byte for byte.
 ///
-/// Utilise la crate `subtle` (RustCrypto) pour garantir un temps d'exécution
-/// indépendant des données comparées — remplace l'implémentation maison précédente.
+/// Uses `subtle` crate (RustCrypto) to guarantee execution time
+/// independent of compared data — replaces previous in-house implementation.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_hash_known_vector() {
-        // Vecteur de test BLAKE3 (entrée vide)
+        // BLAKE3 test vector (empty input)
         let h = blake3_hash(b"");
         assert_eq!(h.len(), 32);
         // BLAKE3("") = af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9...

@@ -1,19 +1,19 @@
 // kernel/src/security/audit/syscall_audit.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Syscall Audit — Intégration du journal d'audit dans le dispatch des syscalls
+// Syscall Audit — Integration of audit log into syscall dispatch
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Appelé par le handler SYSCALL/SYSENTER, avant et après l'exécution
-//   • `audit_syscall_entry` : décide si l'appel doit être loggué/bloqué
-//   • `audit_syscall_exit`  : complète l'enregistrement avec le résultat
-//   • Corrèle entry+exit via un contexte par thread (SyscallContext)
+// Architecture:
+//   • Called by SYSCALL/SYSENTER handler, before and after execution
+//   • `audit_syscall_entry`: decides if call must be logged/blocked
+//   • `audit_syscall_exit`: completes record with result
+//   • Correlates entry+exit via per-thread context (SyscallContext)
 //
-// RÈGLE SAU-01 : audit_syscall_entry/exit ne doit pas déclencher de syscall
-//               récursif (pas d'accès FS, pas de réseau).
-// RÈGLE SAU-02 : Si l'audit retourne AuditVerdict::Kill, le thread est tué IMMÉDIATEMENT.
-// RÈGLE SAU-03 : Syscalls privés du kernel (nr > MAX_USER_SYSCALL) non audités ici.
+// RULE SAU-01: audit_syscall_entry/exit must not trigger recursive syscall
+//              (no FS access, no network).
+// RULE SAU-02: If audit returns AuditVerdict::Kill, thread is killed IMMEDIATELY.
+// RULE SAU-03: Kernel private syscalls (nr > MAX_USER_SYSCALL) not audited here.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::logger::{log_event, log_security_violation, AuditCategory, AuditOutcome};
@@ -21,27 +21,27 @@ use super::rules::{evaluate_global, RuleAction};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Verdict d'audit
+// Audit verdict
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Verdict retourné par `audit_syscall_entry` au dispatcher de syscalls.
+/// Verdict returned by `audit_syscall_entry` to syscall dispatcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditVerdict {
-    /// Permettre l'exécution du syscall.
+    /// Allow execution of syscall.
     Allow,
-    /// Bloquer le syscall avec EPERM.
+    /// Block syscall with EPERM.
     DenyEperm,
-    /// Bloquer le syscall avec ENOSYS.
+    /// Block syscall with ENOSYS.
     DenyEnosys,
-    /// Tuer le thread appelant.
+    /// Kill calling thread.
     Kill,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Contexte de syscall par thread (pour corréler entry/exit)
+// Per-thread syscall context (to correlate entry/exit)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte d'un syscall en cours.
+/// Context of an in-flight syscall.
 #[derive(Clone, Copy)]
 struct SyscallContext {
     thread_id: u32,
@@ -70,7 +70,7 @@ impl SyscallContext {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table de contextes par thread
+// Per-thread context table
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_CONCURRENT_SYSCALLS: usize = 1024;
@@ -114,14 +114,14 @@ impl ContextTable {
 static CTX_TABLE: spin::Mutex<ContextTable> = spin::Mutex::new(ContextTable::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Borne de syscalls utilisateur
+// User syscall bound
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numéro de syscall maximum accessible à l'espace utilisateur.
+/// Maximum syscall number accessible to userspace.
 const MAX_USER_SYSCALL: u32 = 511;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 static ENTRIES_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -138,7 +138,7 @@ static ORPHAN_EXITS: AtomicU64 = AtomicU64::new(0);
 fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: rdtsc disponible sur x86_64; non-sérialisé suffisant pour timestamp d'audit.
+    // SAFETY: rdtsc available on x86_64; non-serialized sufficient for audit timestamp.
     unsafe {
         core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi);
     }
@@ -146,36 +146,36 @@ fn rdtsc() -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appelé AVANT l'exécution du syscall.
+/// Called BEFORE syscall execution.
 ///
-/// Retourne le verdict qui doit être utilisé par le dispatcher.
+/// Returns verdict that must be used by the dispatcher.
 ///
 /// # Arguments
-/// - `syscall_nr` : numéro du syscall
-/// - `pid`        : PID de l'appelant
-/// - `tid`        : Thread ID de l'appelant
-/// - `uid`        : UID effectif de l'appelant
+/// - `syscall_nr`: syscall number
+/// - `pid`: caller PID
+/// - `tid`: caller Thread ID
+/// - `uid`: caller effective UID
 ///
-/// RÈGLE SAU-03 : syscalls kernel internes non audités.
+/// RULE SAU-03: internal kernel syscalls not audited.
 pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> AuditVerdict {
-    // RÈGLE SAU-03
+    // RULE SAU-03
     if syscall_nr > MAX_USER_SYSCALL {
         return AuditVerdict::Allow;
     }
 
     ENTRIES_TOTAL.fetch_add(1, Ordering::Relaxed);
 
-    // Évaluer les règles globales
+    // Evaluate global rules
     let action = evaluate_global(pid, uid as u32, syscall_nr, AuditCategory::Syscall, 0);
 
     let verdict = match action {
         RuleAction::Skip => AuditVerdict::Allow,
         RuleAction::Log => AuditVerdict::Allow,
         RuleAction::Alert => {
-            // Alerter et permettre
+            // Alert and allow
             log_security_violation(
                 pid,
                 tid,
@@ -215,7 +215,7 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
         }
     };
 
-    // Enregistrer le contexte pour l'exit
+    // Save context for exit
     CTX_TABLE.lock().set(SyscallContext {
         thread_id: tid,
         pid,
@@ -226,7 +226,7 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
         active: true,
     });
 
-    // Log entry si Log ou Alert
+    // Log entry if Log or Alert
     if matches!(action, RuleAction::Log | RuleAction::Alert) {
         log_event(
             AuditCategory::Syscall,
@@ -243,9 +243,9 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
     verdict
 }
 
-/// Appelé APRÈS l'exécution du syscall, avec son résultat.
+/// Called AFTER syscall execution, with its result.
 ///
-/// RÈGLE SAU-01 : Pas de syscall récursif dans cette fonction.
+/// RULE SAU-01: No recursive syscall in this function.
 pub fn audit_syscall_exit(tid: u32, result: i64) {
     EXITS_TOTAL.fetch_add(1, Ordering::Relaxed);
 
@@ -270,7 +270,7 @@ pub fn audit_syscall_exit(tid: u32, result: i64) {
         AuditOutcome::Allow
     };
 
-    // Enregistrer l'exit avec le résultat
+    // Record exit with result
     log_event(
         AuditCategory::Syscall,
         ctx.pid,
@@ -283,7 +283,7 @@ pub fn audit_syscall_exit(tid: u32, result: i64) {
     );
 }
 
-/// Journalise un refus de capability (appelé par capability::verify).
+/// Logs a capability denial (called by capability::verify).
 pub fn audit_capability_deny(pid: u32, tid: u32, uid: u16, cap_right: u32) {
     let mut data = [0u8; 8];
     data[..4].copy_from_slice(&cap_right.to_le_bytes());
@@ -299,7 +299,7 @@ pub fn audit_capability_deny(pid: u32, tid: u32, uid: u16, cap_right: u32) {
     );
 }
 
-/// Journalise un accès fichier refusé.
+/// Logs a denied file access.
 pub fn audit_file_deny(pid: u32, tid: u32, uid: u16, path_hash: u32) {
     let mut data = [0u8; 8];
     data[..4].copy_from_slice(&path_hash.to_le_bytes());
@@ -315,7 +315,7 @@ pub fn audit_file_deny(pid: u32, tid: u32, uid: u16, path_hash: u32) {
     );
 }
 
-/// Encode des données de contexte dans 8 bytes.
+/// Encodes context data into 8 bytes.
 fn encode_syscall_data(syscall_nr: u32, _tag: &str) -> [u8; 8] {
     let mut d = [0u8; 8];
     d[..4].copy_from_slice(&syscall_nr.to_le_bytes());

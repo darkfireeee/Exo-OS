@@ -4,34 +4,34 @@
 // ExoVeil — PKS (Protection Keys for Supervisor) Domains (ExoShield v1.0)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ExoVeil implémente l'isolation mémoire par domaines PKS (Intel PKS, SDM Vol.3 §5.5.2).
-// Chaque domaine PKS contrôle l'accès à des pages marquées avec une clé de protection
-// (pkey) dans leurs PTE. La révocation d'un domaine est O(1), ~20 cycles, sans TLB
-// shootdown — le CPU vérifie la permission dans le MSR IA32_PKRS à chaque accès.
+// ExoVeil implements memory isolation via PKS domains (Intel PKS, SDM Vol.3 §5.5.2).
+// Each PKS domain controls access to pages marked with a protection key
+// (pkey) in their PTEs. Revoking a domain is O(1), ~20 cycles, without TLB
+// shootdown — the CPU checks permissions in MSR IA32_PKRS on every access.
 //
-// DOMAINES PKS v1.0 :
-//   Domain 0 (Default)    : Code kernel standard — toujours accessible
-//   Domain 1 (Caps)       : Tables CapToken — révoqué si compromission détectée
-//   Domain 2 (Credentials): Clés crypto — révoqué au boot, restauré selon besoin
-//   Domain 4 (TcbHot)     : TCB cache lines CL3-CL4 — révoqué si compromission critique
+// PKS DOMAINS v1.0:
+//   Domain 0 (Default)    : Standard kernel code — always accessible
+//   Domain 1 (Caps)       : CapToken tables — revoked if compromise detected
+//   Domain 2 (Credentials): Crypto keys — revoked at boot, restored as needed
+//   Domain 4 (TcbHot)     : TCB cache lines CL3-CL4 — revoked upon critical compromise
 //
-// RÈGLE EXOVEIL-01 : Révocation dynamique réactive DÉSACTIVÉE en v1.0.
-//   La révocation PKS est utilisée uniquement :
-//   a) Au boot (Credentials par défaut révoqué — ExoSeal step 0)
-//   b) Lors du HANDOFF (tous les domaines révoqués sauf Default)
-//   c) Sur décision explicite de Kernel B (pas de scoring automatique)
+// RULE EXOVEIL-01: Reactive dynamic revocation DISABLED in v1.0.
+//   PKS revocation is used solely:
+//   a) At boot (Credentials revoked by default — ExoSeal step 0)
+//   b) During HANDOFF (all domains revoked except Default)
+//   c) Upon explicit decision from Kernel B (no automatic scoring)
 //
-// RÈGLE EXOVEIL-02 : `revoke_domain()` = O(1), ~20 cycles, ZÉRO TLB shootdown.
-//   PKS modifie uniquement le MSR IA32_PKRS — pas de modification de PTE.
+// RULE EXOVEIL-02: `revoke_domain()` = O(1), ~20 cycles, ZERO TLB shootdown.
+//   PKS modifies solely the MSR IA32_PKRS — zero modification of PTEs.
 //
-// RÈGLE EXOVEIL-03 : TCB CL3-CL4 (domain TcbHot, pkey=4) sont allouées avec
-//   `pte |= (4u64 << 59)` pour garantir que les champs ExoShield du TCB sont
-//   dans le domaine TcbHot.
+// RULE EXOVEIL-03: TCB CL3-CL4 (domain TcbHot, pkey=4) are allocated with
+//   `pte |= (4u64 << 59)` to guarantee that TCB ExoShield fields are
+//   in the TcbHot domain.
 //
-// RÉFÉRENCES :
+// REFERENCES:
 //   Intel SDM Vol.3 §5.5.2 (PKS — Protection Keys for Supervisor Pages)
 //   Intel SDM Vol.4 §2 (MSR IA32_PKRS = 0x6E1)
-//   ExoShield_v1_Production.md — MODULE 4 : ExoVeil
+//   ExoShield_v1_Production.md — MODULE 4: ExoVeil
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -39,73 +39,73 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::arch::x86_64::cpu::msr;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes MSR
+// MSR constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// MSR IA32_PKRS — Supervisor Protection Keys Rights Register.
-/// Chaque paire de 2 bits (pour 16 pkeys) encode : 00=RWX, 01=none, 10=RO, 11=none.
+/// Each 2-bit pair (for 16 pkeys) encodes: 00=RWX, 01=none, 10=RO, 11=none.
 const MSR_IA32_PKRS: u32 = 0x6E1;
 
-/// Nombre maximum de pkeys PKS (pkey 0..15). Intel SDM : 4 bits dans PTE bits [62:59].
+/// Maximum number of PKS pkeys (pkey 0..15). Intel SDM: 4 bits in PTE bits [62:59].
 const MAX_PKS_KEYS: usize = 16;
 
-/// Valeur PKRS par défaut : tout accessible (tous les domaines = RWX = 0b00).
+/// Default PKRS value: all accessible (all domains = RWX = 0b00).
 #[allow(dead_code)]
 const PKRS_DEFAULT_ALL_ACCESS: u64 = 0x0000_0000_0000_0000;
 
-/// Valeur PKRS tous révoqués : tous les domaines = 0b11 (Access Disabled + Write Disabled).
-/// En PKS, chaque domaine pkey a 2 bits (AD=bit0, WD=bit1) : 0b11 = 0xF par quartet.
-const PKRS_ALL_REVOKED: u64 = 0xFFFF_FFFF_FFFF_FFFF; // chaque paire = 0b11 (AUDIT-SEC1)
+/// PKRS value with all revoked: all domains = 0b11 (Access Disabled + Write Disabled).
+/// In PKS, each pkey domain has 2 bits (AD=bit0, WD=bit1): 0b11 = 0xF per nibble.
+const PKRS_ALL_REVOKED: u64 = 0xFFFF_FFFF_FFFF_FFFF; // each pair = 0b11 (AUDIT-SEC1)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PksDomain — Domaines de protection
+// PksDomain — Protection domains
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Domaines PKS d'ExoOS.
+/// ExoOS PKS domains.
 ///
-/// Chaque domaine correspond à une clé de protection (pkey) dans les PTE.
-/// La valeur du domaine est le numéro de pkey (0..15).
+/// Each domain corresponds to a protection key (pkey) in PTEs.
+/// The domain value is the pkey number (0..15).
 ///
-/// # Layout PKR dans IA32_PKRS (Intel SDM Vol 3A §4.6.2.2)
+/// # PKR Layout in IA32_PKRS (Intel SDM Vol 3A §4.6.2.2)
 ///
-/// Pour le domaine `d`, les bits `PKRS[2*d+1 : 2*d]` contrôlent l'accès :
-/// - Bit `2*d` : AD (Access-Disable, 1 = tout accès données interdit)
-/// - Bit `2*d+1` : WD (Write-Disable, 1 = écriture interdite)
+/// For domain `d`, bits `PKRS[2*d+1 : 2*d]` control access:
+/// - Bit `2*d` : AD (Access-Disable, 1 = all data access forbidden)
+/// - Bit `2*d+1` : WD (Write-Disable, 1 = write forbidden)
 /// - `0b00` : Read/Write (AD=0, WD=0)
 /// - `0b10` : Read-only (AD=0, WD=1)
-/// - `0b11` : Access Disabled / Révoqué (AD=1, WD=1)
+/// - `0b11` : Access Disabled / Revoked (AD=1, WD=1)
 ///
-/// # Correspondance PTE
+/// # PTE Correspondence
 ///
-/// Les pages associées au domaine `d` ont leur PTE bits[62:59] = `d` (4 bits).
+/// Pages associated with domain `d` have PTE bits[62:59] = `d` (4 bits).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum PksDomain {
-    /// Domaine 0 : Code kernel standard — TOUJOURS accessible.
+    /// Domain 0: Standard kernel code — ALWAYS accessible.
     Default = 0,
-    /// Domaine 1 : Tables CapToken — révoqué si compromission capabilities.
+    /// Domain 1: CapToken tables — revoked if capabilities compromised.
     Caps = 1,
-    /// Domaine 2 : Clés crypto, credentials — révoqué au boot par défaut.
+    /// Domain 2: Crypto keys, credentials — revoked at boot by default.
     Credentials = 2,
-    /// Domaine 4 : TCB cache lines CL3-CL4 — révoqué si compromission critique.
+    /// Domain 4: TCB cache lines CL3-CL4 — revoked upon critical compromise.
     TcbHot = 4,
 }
 
 impl PksDomain {
-    /// Retourne le pkey (numéro de domaine) en tant que u32.
+    /// Returns pkey (domain number) as u32.
     #[inline(always)]
     pub fn pkey(self) -> u32 {
         self as u32
     }
 
-    /// Retourne le décalage en bits dans IA32_PKRS pour ce domaine.
-    /// Chaque domaine occupe 2 bits : shift = domain * 2.
+    /// Returns bit shift in IA32_PKRS for this domain.
+    /// Each domain occupies 2 bits: shift = domain * 2.
     #[inline(always)]
     pub fn shift(self) -> u32 {
         (self as u32) * 2
     }
 
-    /// Masque PKRS pour ce domaine (2 bits).
+    /// PKRS mask for this domain (2 bits).
     #[inline(always)]
     pub fn mask(self) -> u64 {
         0b11u64 << self.shift()
@@ -113,23 +113,23 @@ impl PksDomain {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Permissions PKS
+// PKS permissions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Permission d'accès pour un domaine PKS.
+/// Access permission for a PKS domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PksPermission {
-    /// Lecture et écriture autorisées (valeur PKRS = 0b00 : AD=0, WD=0).
+    /// Read and write authorized (PKRS value = 0b00: AD=0, WD=0).
     ReadWrite = 0b00,
-    /// Lecture seule (valeur PKRS = 0b10 : AD=0, WD=1, conforme Intel SDM).
+    /// Read-only (PKRS value = 0b10: AD=0, WD=1, compliant with Intel SDM).
     ReadOnly = 0b10,
-    /// Accès totalement interdit / révoqué (valeur PKRS = 0b11 : AD=1, WD=1).
+    /// Access fully forbidden / revoked (PKRS value = 0b11: AD=1, WD=1).
     Disabled = 0b11,
 }
 
 impl PksPermission {
-    /// Valeur 2 bits à écrire dans PKRS.
+    /// 2-bit value to write to PKRS.
     #[inline(always)]
     pub fn bits(self) -> u64 {
         (self as u8 as u64) & 0b11
@@ -137,46 +137,46 @@ impl PksPermission {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// État global ExoVeil
+// Global ExoVeil state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valeur PKRS courante (shadow software du MSR matériel).
-/// Permet des lectures rapides sans RDMSR (~1 cycle vs ~20 cycles pour RDMSR).
+/// Current PKRS value (software shadow of hardware MSR).
+/// Enables fast reads without RDMSR (~1 cycle vs ~20 cycles for RDMSR).
 static CURRENT_PKRS: AtomicU64 = AtomicU64::new(PKRS_ALL_REVOKED);
 
-/// PKS supporté par le CPU (détecté au boot par ExoSeal).
+/// PKS supported by CPU (detected at boot by ExoSeal).
 static PKS_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
-/// ExoVeil initialisé (ExoSeal step 0 complété).
+/// ExoVeil initialized (ExoSeal step 0 completed).
 static EXOVEIL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Compteur de révocations par domaine (instrumentation).
+/// Revocation counter per domain (instrumentation).
 static REVOKE_COUNT: [AtomicU64; MAX_PKS_KEYS] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
     [INIT; 16]
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions bas niveau MSR
+// Low-level MSR functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lit le MSR IA32_PKRS courant.
+/// Reads current MSR IA32_PKRS.
 ///
 /// # Safety
-/// Doit être appelé depuis Ring 0. Le CPU doit supporter PKS.
+/// Must be called from Ring 0. CPU must support PKS.
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn rdpkrs() -> u64 {
     msr::read_msr(MSR_IA32_PKRS)
 }
 
-/// Écrit le MSR IA32_PKRS.
+/// Writes MSR IA32_PKRS.
 ///
 /// # Safety
-/// Doit être appelé depuis Ring 0. La valeur doit respecter le layout PKRS
-/// (2 bits par domaine, max 16 domaines).
+/// Must be called from Ring 0. Value must follow PKRS layout
+/// (2 bits per domain, max 16 domains).
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn wrpkrs(val: u64) {
     msr::write_msr(MSR_IA32_PKRS, val);
 }
@@ -189,21 +189,21 @@ fn apply_domain_permission(pkrs: u64, domain: PksDomain, perm: PksPermission) ->
 }
 
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn write_pkrs_shadowed(new_val: u64) {
     let _irq = crate::scheduler::core::preempt::IrqGuard::new();
-    // SAFETY: l'appelant garantit Ring 0 et une valeur PKRS valide.
+    // SAFETY: caller guarantees Ring 0 and a valid PKRS value.
     unsafe {
         wrpkrs(new_val);
     }
     CURRENT_PKRS.store(new_val, Ordering::Release);
 }
 
-/// Garde RAII restaurant la valeur PKRS précédente à la sortie du scope.
+/// RAII guard restoring previous PKRS value on scope exit.
 ///
-/// Cette garde est pensée pour des sections critiques très courtes :
-/// accès ponctuel à des données protégées par PKS sans laisser un domaine
-/// restauré plus longtemps que nécessaire.
+/// This guard is designed for very short critical sections:
+/// momentary access to PKS-protected data without leaving a domain
+/// restored longer than necessary.
 #[must_use = "conserver la garde pendant toute la durée de l'accès PKS"]
 pub(crate) struct ScopedPkrsAccess {
     previous_pkrs: u64,
@@ -227,8 +227,8 @@ impl Drop for ScopedPkrsAccess {
         }
 
         let _irq = crate::scheduler::core::preempt::IrqGuard::new();
-        // SAFETY: la garde ne peut être active que si PKS est disponible et
-        // qu'une valeur PKRS précédente valide a été sauvegardée.
+        // SAFETY: guard can only be active if PKS is available and
+        // a valid previous PKRS value was saved.
         unsafe {
             wrpkrs(self.previous_pkrs);
         }
@@ -237,39 +237,39 @@ impl Drop for ScopedPkrsAccess {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// revoke_domain — Révocation O(1) d'un domaine PKS
+// revoke_domain — O(1) revocation of a PKS domain
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Révoque l'accès à un domaine PKS — O(1), ~20 cycles, ZÉRO TLB shootdown.
+/// Revokes access to a PKS domain — O(1), ~20 cycles, ZERO TLB shootdown.
 ///
-/// Positionne les 2 bits du domaine dans IA32_PKRS à `0b11` (Access Disabled).
-/// Le CPU refusera tout accès aux pages marquées avec ce pkey.
+/// Sets domain 2-bit field in IA32_PKRS to `0b11` (Access Disabled).
+/// The CPU will reject all accesses to pages marked with this pkey.
 ///
 /// # ExoShield Spec
-/// "Révocation au boot uniquement (Credentials) — PAS de révocation dynamique
-///  réactive en v1.0."
+/// "Boot revocation only (Credentials) — NO reactive dynamic revocation
+///  in v1.0."
 ///
-/// Les appels autorisés en v1.0 sont :
-/// - `exoveil_init()` au boot (Credentials révoqué par défaut)
-/// - `exoveil_revoke_all_on_handoff()` lors du HANDOFF ExoPhoenix
-/// - `revoke_domain()` explicite par Kernel B (décision externe)
+/// Permitted calls in v1.0 are:
+/// - `exoveil_init()` at boot (Credentials revoked by default)
+/// - `exoveil_revoke_all_on_handoff()` during ExoPhoenix HANDOFF
+/// - Explicit `revoke_domain()` by Kernel B (external decision)
 ///
 /// # Safety
-/// - Ring 0 uniquement
-/// - PKS doit être supporté et initialisé
-/// - NE PAS appeler depuis un contexte ISR (le WRMSR n'est pas ISR-safe
-///   sur toutes les implémentations — vérifier SDM §5.5.2 pour votre CPU)
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// - Ring 0 only
+/// - PKS must be supported and initialized
+/// - DO NOT call from an ISR context (WRMSR is not ISR-safe
+///   on all implementations — check SDM §5.5.2 for your CPU)
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn revoke_domain(domain: PksDomain) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
-        return; // PKS non disponible — noop silencieux
+        return; // PKS not available — silent noop
     }
 
-    // Read-Modify-Write du MSR PKRS
+    // Read-Modify-Write of MSR PKRS
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
     let new_val = apply_domain_permission(cur, domain, PksPermission::Disabled);
 
-    // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
+    // SAFETY: Ring 0, PKS supported, valid PKRS value.
     unsafe {
         write_pkrs_shadowed(new_val);
     }
@@ -279,18 +279,18 @@ pub unsafe fn revoke_domain(domain: PksDomain) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// restore_domain — Restauration d'un domaine PKS
+// restore_domain — Restoration of a PKS domain
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Restaure l'accès en lecture/écriture à un domaine PKS.
+/// Restores read/write access to a PKS domain.
 ///
-/// Positionne les 2 bits du domaine dans IA32_PKRS à `0b00` (ReadWrite).
+/// Sets domain 2-bit field in IA32_PKRS to `0b00` (ReadWrite).
 ///
 /// # Safety
-/// - Ring 0 uniquement
-/// - Ne restaurer que les domaines explicitement autorisés par la politique
-///   de sécurité (ExoSeal + Kernel B)
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// - Ring 0 only
+/// - Only restore domains explicitly authorized by security policy
+///   (ExoSeal + Kernel B)
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn restore_domain(domain: PksDomain) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -299,17 +299,17 @@ pub unsafe fn restore_domain(domain: PksDomain) {
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
     let new_val = apply_domain_permission(cur, domain, PksPermission::ReadWrite);
 
-    // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
+    // SAFETY: Ring 0, PKS supported, valid PKRS value.
     unsafe {
         write_pkrs_shadowed(new_val);
     }
 }
 
-/// Restaure un domaine PKS avec une permission spécifique.
+/// Restores a PKS domain with a specific permission.
 ///
 /// # Safety
-/// Mêmes conditions que `restore_domain()`.
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// Same requirements as `restore_domain()`.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermission) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
@@ -318,20 +318,20 @@ pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermiss
     let cur = CURRENT_PKRS.load(Ordering::Relaxed);
     let new_val = apply_domain_permission(cur, domain, perm);
 
-    // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
+    // SAFETY: Ring 0, PKS supported, valid PKRS value.
     unsafe {
         write_pkrs_shadowed(new_val);
     }
 }
 
-/// Restaure temporairement un domaine PKS et restaure automatiquement PKRS
-/// à la sortie du scope.
+/// Momentarily restores a PKS domain and automatically restores PKRS
+/// on scope exit.
 ///
 /// # Safety
-/// - Ring 0 uniquement
-/// - Le scope protégé ne doit pas modifier lui-même IA32_PKRS
-/// - À réserver à de très courtes sections critiques sans allocation
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// - Ring 0 only
+/// - Protected scope must not modify IA32_PKRS itself
+/// - Reserve for very short critical sections without allocation
+// SAFETY: validated low-level operation — see block documentation.
 pub(crate) unsafe fn scoped_domain_access(
     domain: PksDomain,
     perm: PksPermission,
@@ -343,7 +343,7 @@ pub(crate) unsafe fn scoped_domain_access(
     let previous_pkrs = CURRENT_PKRS.load(Ordering::Acquire);
     let new_val = apply_domain_permission(previous_pkrs, domain, perm);
 
-    // SAFETY: Ring 0, PKS supporté, valeur PKRS valide.
+    // SAFETY: Ring 0, PKS supported, valid PKRS value.
     unsafe {
         write_pkrs_shadowed(new_val);
     }
@@ -355,25 +355,25 @@ pub(crate) unsafe fn scoped_domain_access(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation ExoVeil (ExoSeal step 0)
+// ExoVeil initialization (ExoSeal step 0)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système ExoVeil PKS.
+/// Initializes the ExoVeil PKS subsystem.
 ///
-/// Appelé par ExoSeal à l'étape 0 du boot (Kernel B, Core 0).
+/// Called by ExoSeal in step 0 of boot (Kernel B, Core 0).
 ///
-/// # Séquence
-/// 1. Détecter le support PKS via CPUID.7.0:ECX bit 6
-/// 2. Révoquer TOUS les domaines (IA32_PKRS = 0xFFFFFFFF)
-/// 3. Restaurer Default (pkey=0) en ReadWrite
-/// 4. Conserver Credentials (pkey=2) en Disabled (révoqué au boot)
+/// # Sequence
+/// 1. Detect PKS support via CPUID.7.0:ECX bit 6
+/// 2. Revoke ALL domains (IA32_PKRS = 0xFFFFFFFF)
+/// 3. Restore Default (pkey=0) to ReadWrite
+/// 4. Keep Credentials (pkey=2) as Disabled (revoked at boot)
 ///
 /// # Safety
-/// - Doit être appelé depuis Ring 0, Core 0, avant que Kernel A ne démarre
-/// - Aucun autre CPU ne doit être actif
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// - Must be called from Ring 0, Core 0, before Kernel A starts
+/// - No other CPU must be active
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoveil_init() {
-    // Détecter PKS : CPUID.07H.0H:ECX bit 6
+    // Detect PKS: CPUID.07H.0H:ECX bit 6
     let ecx: u32;
     core::arch::asm!(
         "push rbx",
@@ -390,74 +390,74 @@ pub unsafe fn exoveil_init() {
     PKS_AVAILABLE.store(pks_supported, Ordering::Release);
 
     if !pks_supported {
-        // PKS non disponible — ExoVeil en mode noop
-        // Les pages TcbHot ne seront PAS protégées par PKS
+        // PKS unavailable — ExoVeil in noop mode
+        // TcbHot pages will NOT be protected by PKS
         // (compensation via KASLR + IOMMU + CET)
         return;
     }
 
-    // 1. Révoquer tous les domaines au boot (default-deny)
-    //    IA32_PKRS = 0xFFFFFFFF : chaque paire de bits = 0b11 = Disabled
+    // 1. Revoke all domains at boot (default-deny)
+    //    IA32_PKRS = 0xFFFFFFFF: each bit pair = 0b11 = Disabled
     wrpkrs(PKRS_ALL_REVOKED);
     CURRENT_PKRS.store(PKRS_ALL_REVOKED, Ordering::Release);
 
-    // 2. Restaurer Default (pkey=0) en ReadWrite — code kernel standard
+    // 2. Restore Default (pkey=0) to ReadWrite — standard kernel code
     restore_domain(PksDomain::Default);
 
-    // 3. Caps (pkey=1) reste en Disabled jusqu'à security_init()
-    // 4. Credentials (pkey=2) reste en Disabled — révoqué au boot par défaut
-    // 5. TcbHot (pkey=4) reste en Disabled jusqu'à l'allocation TCB
+    // 3. Caps (pkey=1) remains Disabled until security_init()
+    // 4. Credentials (pkey=2) remains Disabled — revoked at boot by default
+    // 5. TcbHot (pkey=4) remains Disabled until TCB allocation
 
     EXOVEIL_INITIALIZED.store(true, Ordering::Release);
 }
 
-/// Restaure les domaines PKS pour les opérations normales (step 18 SECURITY_READY).
+/// Restores PKS domains for normal operations (step 18 SECURITY_READY).
 ///
-/// Appelé à l'étape 18 du boot, après security_init(), quand le système
-/// passe en mode opérationnel.
+/// Called in step 18 of boot, after security_init(), when system
+/// transitions to operational mode.
 ///
 /// # Safety
-/// Ring 0 uniquement. Doit être appelé APRÈS exoveil_init().
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// Ring 0 only. Must be called AFTER exoveil_init().
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn pks_restore_for_normal_ops() {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
     }
 
-    // Restaurer les domaines opérationnels :
-    // - Caps : ReadWrite (tables de capabilities doivent être accessibles)
-    // - TcbHot : ReadWrite (TCB _cold_reserve accessible par le scheduler)
-    // - Credentials : RESTE en Disabled (accès uniquement via crypto_server)
-    //   (sera restauré temporairement par les opérations crypto)
+    // Restore operational domains:
+    // - Caps: ReadWrite (capability tables must be accessible)
+    // - TcbHot: ReadWrite (TCB _cold_reserve accessible by scheduler)
+    // - Credentials: REMAINS Disabled (access solely via crypto_server)
+    //   (will be temporarily restored by crypto operations)
     restore_domain(PksDomain::Caps);
     restore_domain(PksDomain::TcbHot);
-    // Credentials reste révoqué — doit être explicitement restauré par
+    // Credentials remains revoked — must be explicitly restored by
     // crypto_server via restore_domain(PksDomain::Credentials)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HANDOFF — Révocation de tous les domaines
+// HANDOFF — Revocation of all domains
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Révoque TOUS les domaines PKS lors d'un HANDOFF ExoPhoenix.
+/// Revokes ALL PKS domains during an ExoPhoenix HANDOFF.
 ///
-/// Appelé par le handler HANDOFF pour isoler immédiatement toutes les données
-//  protégées par PKS. Seul le domaine Default reste accessible.
+/// Called by HANDOFF handler to immediately isolate all data
+//  protected by PKS. Only Default domain remains accessible.
 ///
 /// # Safety
-/// Ring 0 uniquement. Appelé depuis un contexte HANDOFF (pas de scheduler actif).
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+/// Ring 0 only. Called from a HANDOFF context (no active scheduler).
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoveil_revoke_all_on_handoff() {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
     }
 
-    // Révoquer tous les domaines sauf Default
+    // Revoke all domains except Default
     revoke_domain(PksDomain::Caps);
     revoke_domain(PksDomain::Credentials);
     revoke_domain(PksDomain::TcbHot);
 
-    // Vérifier que seul Default est accessible
+    // Verify that only Default is accessible
     let pkrs = rdpkrs();
     debug_assert!(
         (pkrs & PksDomain::Default.mask()) == 0, // Default = RW
@@ -469,25 +469,25 @@ pub unsafe fn exoveil_revoke_all_on_handoff() {
 // Accesseurs publics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne true si PKS est supporté par le CPU.
+/// Returns true if PKS is supported by CPU.
 #[inline(always)]
 pub fn pks_available() -> bool {
     PKS_AVAILABLE.load(Ordering::Acquire)
 }
 
-/// Retourne true si ExoVeil a été initialisé.
+/// Returns true if ExoVeil has been initialized.
 #[inline(always)]
 pub fn exoveil_initialized() -> bool {
     EXOVEIL_INITIALIZED.load(Ordering::Acquire)
 }
 
-/// Lit la valeur PKRS courante (shadow software, pas RDMSR).
+/// Reads current PKRS value (software shadow, not RDMSR).
 #[inline(always)]
 pub fn current_pkrs() -> u64 {
     CURRENT_PKRS.load(Ordering::Acquire)
 }
 
-/// Vérifie si un domaine spécifique est révoqué.
+/// Checks if a specific domain is revoked.
 #[inline(always)]
 pub fn is_domain_revoked(domain: PksDomain) -> bool {
     let pkrs = CURRENT_PKRS.load(Ordering::Acquire);
@@ -495,69 +495,69 @@ pub fn is_domain_revoked(domain: PksDomain) -> bool {
     perm_bits == PksPermission::Disabled as u64
 }
 
-/// Retourne le nombre de révocations pour un domaine (instrumentation).
+/// Returns revocation count for a domain (instrumentation).
 #[inline(always)]
 pub fn revoke_count(domain: PksDomain) -> u64 {
     REVOKE_COUNT[domain.pkey() as usize].load(Ordering::Relaxed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Intégration TCB — Écriture PKRS dans le TCB
+// TCB Integration — PKRS write into TCB
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sauvegarde la valeur PKRS courante dans le TCB d'un thread.
+/// Saves current PKRS value in thread TCB.
 ///
-/// Appelé lors du context switch OUT (préemption du thread).
+/// Called on context switch OUT (thread preemption).
 ///
 /// # Safety
-/// Le TCB doit être valide. Le thread est en cours de descheduling.
+/// TCB must be valid. Thread is being descheduled.
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn save_pkrs_to_tcb(tcb: &mut crate::scheduler::core::task::ThreadControlBlock) {
     tcb.pkrs = CURRENT_PKRS.load(Ordering::Relaxed) as u32;
 }
 
-/// Restaure la valeur PKRS depuis le TCB d'un thread.
+/// Restores PKRS value from thread TCB.
 ///
-/// Appelé lors du context switch IN (reprise du thread).
+/// Called on context switch IN (thread resumption).
 ///
 /// # Safety
-/// Le TCB doit être valide. Le thread est sur le point d'être schedulé.
+/// TCB must be valid. Thread is about to be scheduled.
 #[inline(always)]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn restore_pkrs_from_tcb(tcb: &crate::scheduler::core::task::ThreadControlBlock) {
     if !PKS_AVAILABLE.load(Ordering::Acquire) {
         return;
     }
     let pkrs_val = tcb.pkrs as u64;
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         write_pkrs_shadowed(pkrs_val);
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques ExoVeil
+// ExoVeil statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Snapshot des statistiques ExoVeil.
+/// Snapshot of ExoVeil statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct ExoVeilStats {
-    /// PKS supporté par le CPU.
+    /// PKS supported by CPU.
     pub pks_available: bool,
-    /// ExoVeil initialisé.
+    /// ExoVeil initialized.
     pub initialized: bool,
-    /// Valeur PKRS courante.
+    /// Current PKRS value.
     pub current_pkrs: u64,
-    /// Révocations du domaine Caps.
+    /// Revocations of Caps domain.
     pub caps_revokes: u64,
-    /// Révocations du domaine Credentials.
+    /// Revocations of Credentials domain.
     pub creds_revokes: u64,
-    /// Révocations du domaine TcbHot.
+    /// Revocations of TcbHot domain.
     pub tcbhot_revokes: u64,
 }
 
-/// Retourne un snapshot des statistiques ExoVeil.
+/// Returns a snapshot of ExoVeil statistics.
 pub fn exoveil_stats() -> ExoVeilStats {
     ExoVeilStats {
         pks_available: PKS_AVAILABLE.load(Ordering::Relaxed),

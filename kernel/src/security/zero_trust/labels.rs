@@ -1,30 +1,30 @@
 // kernel/src/security/zero_trust/labels.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECURITY LABELS — Labels de sécurité MLS-like (Zero-Trust)
+// SECURITY LABELS — MLS-like security labels (Zero-Trust)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Système de labels de sécurité inspiré de Bell-LaPadula (confidentialité)
-// et Biba (intégrité). Simplifié pour un OS embarqué sans base de données MLS.
+// Security label system inspired by Bell-LaPadula (confidentiality)
+// and Biba (integrity). Simplified for an embedded OS without MLS database.
 //
-// MODÈLE :
-//   Confidentialité : [0=Public, 1=Internal, 2=Confidential, 3=Secret, 4=TopSecret]
-//   Intégrité       : [0=Untrusted, 1=Low, 2=Medium, 3=High, 4=Critical]
+// MODEL:
+//   Confidentiality: [0=Public, 1=Internal, 2=Confidential, 3=Secret, 4=TopSecret]
+//   Integrity      : [0=Untrusted, 1=Low, 2=Medium, 3=High, 4=Critical]
 //
-// REGLES Bell-LaPadula (confidentialité) :
-//   No-read-up   : sujet ne peut lire un objet de niveau supérieur
-//   No-write-down: sujet ne peut écrire dans un objet de niveau inférieur
+// Bell-LaPadula RULES (confidentiality):
+//   No-read-up   : subject cannot read an object of higher level
+//   No-write-down: subject cannot write to an object of lower level
 //
-// REGLES Biba (intégrité) :
-//   No-read-down : sujet ne peut lire un objet d'intégrité inférieure
-//   No-write-up  : sujet ne peut écrire dans un objet d'intégrité supérieure
+// Biba RULES (integrity):
+//   No-read-down : subject cannot read an object of lower integrity
+//   No-write-up  : subject cannot write to an object of higher integrity
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ConfidentialityLevel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau de confidentialité — classification des données.
+/// Confidentiality level — data classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ConfidentialityLevel {
@@ -47,7 +47,7 @@ impl ConfidentialityLevel {
         }
     }
 
-    /// Bell-LaPadula no-read-up : sujet ne peut lire un objet de niveau supérieur.
+    /// Bell-LaPadula no-read-up: subject cannot read an object of higher level.
     #[inline(always)]
     pub fn can_read(subject: Self, object: Self) -> bool {
         subject >= object
@@ -64,7 +64,7 @@ impl ConfidentialityLevel {
 // IntegrityLevel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau d'intégrité — fiabilité de la source de données.
+/// Integrity level — data source trustworthiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum IntegrityLevel {
@@ -87,13 +87,13 @@ impl IntegrityLevel {
         }
     }
 
-    /// Biba no-read-down : ne pas lire des données de moins bonne intégrité.
+    /// Biba no-read-down: do not read data of lower integrity.
     #[inline(always)]
     pub fn can_read(subject: Self, object: Self) -> bool {
         subject <= object
     }
 
-    /// Biba no-write-up : ne pas écrire dans un objet d'intégrité supérieure.
+    /// Biba no-write-up: do not write to an object of higher integrity.
     #[inline(always)]
     pub fn can_write(subject: Self, object: Self) -> bool {
         subject >= object
@@ -101,11 +101,11 @@ impl IntegrityLevel {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SecurityLabel — combinaison confidentialité + intégrité
+// SecurityLabel — combined confidentiality + integrity
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Label de sécurité composite : confidentialité × intégrité.
-/// Taille : 2 bytes — peut être stocké dans le TCB sans impact.
+/// Composite security label: confidentiality × integrity.
+/// Size: 2 bytes — can be stored in the TCB without overhead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct SecurityLabel {
@@ -114,7 +114,7 @@ pub struct SecurityLabel {
 }
 
 impl SecurityLabel {
-    /// Label noyau : TopSecret + Critical intégrité.
+    /// Kernel label: TopSecret + Critical integrity.
     pub const fn kernel() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::TopSecret,
@@ -122,7 +122,7 @@ impl SecurityLabel {
         }
     }
 
-    /// Label utilisateur par défaut : Internal + Medium.
+    /// Default user label: Internal + Medium.
     pub const fn user_default() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Internal,
@@ -130,7 +130,7 @@ impl SecurityLabel {
         }
     }
 
-    /// Label public : Public + Low intégrité.
+    /// Public label: Public + Low integrity.
     pub const fn public() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Public,
@@ -138,7 +138,7 @@ impl SecurityLabel {
         }
     }
 
-    /// Label pour un driver système : Confidential + High.
+    /// Label for a system driver: Confidential + High.
     pub const fn driver() -> Self {
         Self {
             confidentiality: ConfidentialityLevel::Confidential,
@@ -146,7 +146,7 @@ impl SecurityLabel {
         }
     }
 
-    /// Crée un label avec des niveaux spécifiés.
+    /// Creates a label with specified levels.
     pub const fn new(c: ConfidentialityLevel, i: IntegrityLevel) -> Self {
         Self {
             confidentiality: c,
@@ -154,30 +154,30 @@ impl SecurityLabel {
         }
     }
 
-    /// Vérifie si ce sujet (self) peut LIRE un objet avec le label `object`.
-    /// Combine Bell-LaPadula + Biba.
+    /// Checks if this subject (self) can READ an object with label `object`.
+    /// Combines Bell-LaPadula + Biba.
     #[inline(always)]
     pub fn can_read(self, object: SecurityLabel) -> bool {
         ConfidentialityLevel::can_read(self.confidentiality, object.confidentiality)
             && IntegrityLevel::can_read(self.integrity, object.integrity)
     }
 
-    /// Vérifie si ce sujet peut ÉCRIRE dans un objet avec le label `object`.
+    /// Checks if this subject can WRITE to an object with label `object`.
     #[inline(always)]
     pub fn can_write(self, object: SecurityLabel) -> bool {
         ConfidentialityLevel::can_write(self.confidentiality, object.confidentiality)
             && IntegrityLevel::can_write(self.integrity, object.integrity)
     }
 
-    /// Domination : self domine object (≥ sur les deux axes).
+    /// Domination: self dominates object (≥ on both axes).
     #[inline(always)]
     pub fn dominates(self, other: SecurityLabel) -> bool {
         self.confidentiality >= other.confidentiality && self.integrity >= other.integrity
     }
 
-    /// Label hérité pour un fils — conservateur (prend le minimum).
+    /// Inherited label for a child — conservative (takes the minimum).
     pub fn inherit(self) -> Self {
-        // L'enfant prend le minimum sur les deux axes (principe du moindre privilège)
+        // Child takes the minimum on both axes (principle of least privilege)
         Self {
             confidentiality: match self.confidentiality {
                 ConfidentialityLevel::TopSecret => ConfidentialityLevel::Secret,
@@ -190,12 +190,12 @@ impl SecurityLabel {
         }
     }
 
-    /// Encodage compact en u16 pour stockage.
+    /// Compact encoding into u16 for storage.
     pub fn encode(self) -> u16 {
         ((self.confidentiality as u16) << 8) | (self.integrity as u16)
     }
 
-    /// Décode depuis u16.
+    /// Decodes from u16.
     pub fn decode(v: u16) -> Self {
         Self {
             confidentiality: ConfidentialityLevel::from_u8((v >> 8) as u8),

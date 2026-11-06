@@ -1,42 +1,42 @@
 // kernel/src/security/capability/access_control/object_types.rs
 //
-// ObjectKind — catalogue des types d'objets protégés (v6)
+// ObjectKind — catalog of protected object types (v6)
 //
-// Chaque variante documente les droits attendus pour les opérations typiques.
-// Utilisé par checker::check_access() pour l'audit et les messages d'erreur.
+// Each variant documents expected rights for typical operations.
+// Used by checker::check_access() for auditing and error messages.
 
 use crate::security::capability::Rights;
 
-/// Type d'objet protégé par le système de capabilities.
+/// Type of object protected by the capability system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ObjectKind {
-    /// Canal IPC (nommé ou anonyme).
-    /// Droits : `READ` (recv) | `WRITE` (send)
+    /// IPC channel (named or anonymous).
+    /// Rights: `READ` (recv) | `WRITE` (send)
     IpcChannel = 0,
-    /// Endpoint IPC (point de connexion de service).
-    /// Droits : `EXEC` (connect) | `WRITE` (publish)
+    /// IPC endpoint (service connection point).
+    /// Rights: `EXEC` (connect) | `WRITE` (publish)
     IpcEndpoint = 1,
-    /// Région de mémoire partagée.
-    /// Droits : `READ` | `WRITE`
+    /// Shared memory region.
+    /// Rights: `READ` | `WRITE`
     ShmRegion = 2,
-    /// Fichier régulier.
-    /// Droits : `READ` | `WRITE` | `EXEC`
+    /// Regular file.
+    /// Rights: `READ` | `WRITE` | `EXEC`
     File = 3,
-    /// Répertoire.
-    /// Droits : `READ` (list) | `WRITE` (create/delete)
+    /// Directory.
+    /// Rights: `READ` (list) | `WRITE` (create/delete)
     Directory = 4,
-    /// Processus ou thread.
-    /// Droits : `WRITE` (signal) | `EXEC` (ptrace/debug)
+    /// Process or thread.
+    /// Rights: `WRITE` (signal) | `EXEC` (ptrace/debug)
     Process = 5,
-    /// Clé cryptographique.
-    /// Droits : `EXEC` (utilisation de la clé)
+    /// Cryptographic key.
+    /// Rights: `EXEC` (key usage)
     CryptoKey = 6,
 }
 
 impl ObjectKind {
-    /// Droits minimaux suggérés pour les opérations typiques sur ce type.
-    /// Utilisé dans les messages d'erreur audit ; n'est PAS un whitelist.
+    /// Suggested minimal rights for typical operations on this type.
+    /// Used in audit error messages; is NOT a whitelist.
     pub const fn typical_rights(self) -> Rights {
         match self {
             Self::IpcChannel => Rights::IPC_BASIC,
@@ -49,7 +49,7 @@ impl ObjectKind {
         }
     }
 
-    /// Nom lisible pour les logs d'audit.
+    /// Human-readable name for audit logs.
     pub const fn name(self) -> &'static str {
         match self {
             Self::IpcChannel => "IpcChannel",

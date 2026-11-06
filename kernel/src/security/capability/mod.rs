@@ -1,22 +1,22 @@
 // kernel/src/security/capability/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CAPABILITY — Module racine (Exo-OS Security · Couche 2b) — v6
+// CAPABILITY — Root module (Exo-OS Security · Layer 2b) — v6
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE CAP-01 : security/capability/ est l'UNIQUE source de vérité pour les capabilities.
-// RÈGLE CAP-02 (v6) : ipc/, fs/, process/ accèdent via security::access_control::check_access()
-//                     — appel direct à verify() hors de security/ est INTERDIT.
-// RÈGLE CAP-03 : Délégation = toujours avec sous-ensemble de droits (invariant CAP-03).
+// RULE CAP-01: security/capability/ is the UNIQUE source of truth for capabilities.
+// RULE CAP-02 (v6): ipc/, fs/, process/ access via security::access_control::check_access()
+//                   — direct call to verify() outside of security/ is FORBIDDEN.
+// RULE CAP-03: Delegation = always with a subset of rights (invariant CAP-03).
 //
-// Sous-modules :
-//   token      — CapToken (24 bytes, inforgeable, Copy)
+// Submodules:
+//   token      — CapToken (24 bytes, unforgeable, Copy)
 //   rights     — Rights bitmask (u32)
-//   table      — CapTable par processus (512 slots, lock-free lectures)
-//   verify     — verify() UNIQUE point d'entrée + CapError (v6)
-//   revocation — revoke() O(1) uniquement (v6)
-//   delegation — subdélégation (invariant CAP-03)
-//   namespace  — domaines d'ObjectId indépendants
+//   table      — CapTable per process (512 slots, lock-free reads)
+//   verify     — verify() UNIQUE entry point + CapError (v6)
+//   revocation — revoke() O(1) only (v6)
+//   delegation — subdelegation (invariant CAP-03)
+//   namespace  — independent ObjectId domains
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod delegation;
@@ -27,22 +27,22 @@ pub mod table;
 pub mod token;
 pub mod verify;
 
-// ── Re-exports publics ────────────────────────────────────────────────────────
+// ── Public re-exports ────────────────────────────────────────────────────────
 
-// Types fondamentaux
+// Fundamental types
 pub use rights::Rights;
 pub use table::{CapTable, CapTableSnapshot, CAP_TABLE_CAPACITY};
 pub use token::{
     read_stats as token_stats, CapObjectType, CapToken, ObjectId, TokenStats, CAP_TOKEN_WIRE_SIZE,
 };
 
-// verify — v6 : extraits de revocation.rs
+// verify — v6: extracted from revocation.rs
 pub use verify::{
     verify, verify_and_get_rights, verify_ipc_recv, verify_ipc_send, verify_read,
     verify_read_write, verify_typed, CapError,
 };
 
-// revocation — v6 : uniquement révocation
+// revocation — v6: revocation only
 pub use revocation::{revoke, revoke_token};
 
 pub use delegation::{
@@ -51,7 +51,7 @@ pub use delegation::{
 pub use namespace::{alloc_namespace_id, cross_namespace_verify, CapNamespace, NamespaceId};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// init_capability_subsystem — appelé au boot (étape séquencée)
+// init_capability_subsystem — called at boot (sequenced step)
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -59,22 +59,22 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static CAP_INIT_DONE: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table de capabilities globale (kernel-context)
+// Global capability table (kernel-context)
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::scheduler::sync::spinlock::SpinLock;
 
-/// Table de capabilities du noyau — utilisée pour les allocations syscall
-/// avant que le registre de processus soit disponible.
-/// Initialisée par `init_capability_subsystem()`.
+/// Kernel capability table — used for syscall allocations
+/// before the process registry is available.
+/// Initialized by `init_capability_subsystem()`.
 static KERNEL_CAP_TABLE: SpinLock<Option<table::CapTable>> = SpinLock::new(None);
 
-/// Métadonnées de capabilities de service Ring 1.
+/// Ring 1 service capability metadata.
 ///
-/// Les tokens créés via `exo_cap_create()` pour les endpoints IPC sont
-/// enregistrés ici pour permettre au noyau de vérifier le couple
-/// `{service appelant -> service cible}` lorsqu'un serveur valide un token
-/// reçu sur le fil.
+/// Tokens created via `exo_cap_create()` for IPC endpoints are
+/// registered here to allow the kernel to verify the pair
+/// `{calling service -> target service}` when a server validates a token
+/// received on the wire.
 const SERVICE_CAP_META_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,10 +104,10 @@ impl ServiceCapMeta {
 static SERVICE_CAP_META: SpinLock<[ServiceCapMeta; SERVICE_CAP_META_CAPACITY]> =
     SpinLock::new([ServiceCapMeta::empty(); SERVICE_CAP_META_CAPACITY]);
 
-/// Générateur d'ObjectId unique, monotoniquement croissant.
+/// Unique, monotonically increasing ObjectId generator.
 static OBJ_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Alloue un ObjectId frais, garanti unique pour la durée de vie du noyau.
+/// Allocates a fresh ObjectId, guaranteed unique for the kernel lifetime.
 #[inline]
 fn alloc_object_id() -> token::ObjectId {
     token::ObjectId::from_raw(OBJ_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -154,30 +154,30 @@ fn remove_service_cap_meta(object_id: token::ObjectId) {
     }
 }
 
-/// Initialise le sous-système de capabilities.
+/// Initializes the capability subsystem.
 ///
 /// # Boot sequence
-/// Appelé par `security::init()` avant toute autre initialisation de couche 2b+.
-/// Doit être appelé UNE SEULE fois ; les appels suivants sont idempotents.
+/// Called by `security::init()` before any other layer 2b+ initialization.
+/// Must be called ONCE; subsequent calls are idempotent.
 pub fn init_capability_subsystem() {
     if CAP_INIT_DONE.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Initialiser la table kernel globale
+    // Initialize global kernel table
     *KERNEL_CAP_TABLE.lock() = Some(table::CapTable::new());
 }
 
-/// Retourne vrai si le sous-système est initialisé.
+/// Returns true if the subsystem is initialized.
 #[inline(always)]
 pub fn is_initialized() -> bool {
     CAP_INIT_DONE.load(Ordering::Acquire)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KernelCapError — erreur syscall (to_kernel_errno compatible)
+// KernelCapError — syscall error (to_kernel_errno compatible)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur retournée par les wrappers syscall de capability.
+/// Error returned by capability syscall wrappers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelCapError {
     NotFound,
@@ -187,7 +187,7 @@ pub enum KernelCapError {
 }
 
 impl KernelCapError {
-    /// Convertit en code errno négatif (compatible Linux ABI).
+    /// Converts to negative errno code (Linux ABI compatible).
     #[inline]
     pub const fn to_kernel_errno(self) -> i32 {
         match self {
@@ -200,16 +200,16 @@ impl KernelCapError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wrappers syscall — appelés depuis syscall/table.rs
+// Syscall wrappers — called from syscall/table.rs
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Crée une capability de service IPC pour un endpoint cible.
+/// Creates an IPC service capability for a target endpoint.
 ///
-/// `cap_type` : type d'objet (seul `IpcEndpoint` est accepté sur ce chemin),
-/// `rights` : bitmask Rights, `target_pid` : PID du service cible,
-/// `owner_pid` : PID du service qui recevra le token.
+/// `cap_type`: object type (only `IpcEndpoint` is accepted on this path),
+/// `rights`: Rights bitmask, `target_pid`: target service PID,
+/// `owner_pid`: PID of the service that will receive the token.
 ///
-/// Retourne le `CapToken` émis par le noyau ou une erreur.
+/// Returns the `CapToken` issued by the kernel or an error.
 pub fn create(
     cap_type: u32,
     rights: u32,
@@ -222,9 +222,9 @@ pub fn create(
     if owner_pid == 0 || target_pid == 0 {
         return Err(KernelCapError::InvalidArg);
     }
-    // Validation du bitmask de droits
+    // Rights bitmask validation
     let rights_val = Rights::from_bits(rights).ok_or(KernelCapError::InvalidArg)?;
-    // Validation et conversion du type d'objet
+    // Object type validation and conversion
     if cap_type > u16::MAX as u32 {
         return Err(KernelCapError::InvalidArg);
     }
@@ -251,7 +251,7 @@ pub fn create(
         }
     }
 
-    // Allouer un ObjectId frais et insérer dans la table kernel
+    // Allocate a fresh ObjectId and insert into kernel table
     let oid = alloc_object_id();
     let mut guard = KERNEL_CAP_TABLE.lock();
     let table = guard.as_mut().ok_or(KernelCapError::NotSupported)?;
@@ -268,18 +268,18 @@ pub fn create(
         return Err(err);
     }
 
-    // FIX-P1-KAIROS (Security_Application_Audit §GAP-07) : associer une deadline
-    // temporelle au token via ExoKairos (TTL fonction des droits). Best-effort —
-    // sans régression si l'horloge n'est pas calibrée ou la table pleine.
+    // FIX-P1-KAIROS (Security_Application_Audit §GAP-07): associate a temporal
+    // deadline with the token via ExoKairos (TTL function of rights). Best-effort —
+    // without regression if clock is uncalibrated or table is full.
     crate::security::exokairos::register_ttl_for_cap(oid, rights_val);
 
     Ok(token)
 }
 
-/// Vérifie un token de service IPC sérialisé émis via `create()`.
+/// Verifies a serialized IPC service token issued via `create()`.
 ///
-/// Utilisé par les serveurs Ring 1 qui souhaitent valider qu'une requête IPC
-/// porte bien une capability noyau correspondant au service attendu.
+/// Used by Ring 1 servers that wish to validate that an IPC request
+/// carries a kernel capability corresponding to the expected service.
 pub fn check_token(
     token: token::CapToken,
     required_rights: u32,
@@ -313,7 +313,7 @@ pub fn check_token(
     Ok(meta.object_id)
 }
 
-/// Vérifie un token de service IPC et son propriétaire attendu.
+/// Verifies an IPC service token and its expected owner.
 pub fn check_token_owner(
     token: token::CapToken,
     required_rights: u32,
@@ -332,15 +332,15 @@ pub fn check_token_owner(
     Ok(object_id)
 }
 
-/// Révoque une capability par handle opaque (syscall exo_cap_revoke).
+/// Revokes a capability by opaque handle (syscall exo_cap_revoke).
 ///
-/// T11-001 FIX : Vérifie que le processus appelant est bien le propriétaire
-/// ou le destinataire enregistré de la capability.
+/// T11-001 FIX: Verifies that the calling process is indeed the owner
+/// or registered recipient of the capability.
 pub fn revoke_handle(handle: u32) -> Result<(), KernelCapError> {
     revoke_handle_by_caller(0, handle)
 }
 
-/// Révoque une capability avec vérification de l'identité de l'appelant.
+/// Revokes a capability with verification of caller identity.
 pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), KernelCapError> {
     if !is_initialized() {
         return Err(KernelCapError::NotSupported);
@@ -355,7 +355,7 @@ pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), Kerne
                 }
             }
             None => {
-                // Sans métadonnées prouvant la propriété, un appelant non-root ne peut pas révoquer.
+                // Without metadata proving ownership, a non-root caller cannot revoke.
                 return Err(KernelCapError::PermissionDenied);
             }
         }
@@ -369,18 +369,18 @@ pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), Kerne
     Ok(())
 }
 
-/// Lecture des capabilities POSIX.1e (syscall capget — compat Linux).
+/// Reading POSIX.1e capabilities (syscall capget — Linux compat).
 ///
-/// ExoOS utilise son propre modèle de capabilities (CapToken/Rights/CapTable),
-/// incompatible avec POSIX.1e capget/capset. Le retour ENOSYS est
-/// le comportement correct et documenté — les applications ExoOS
-/// doivent utiliser les syscalls exo_cap_create/exo_cap_revoke à la place.
+/// ExoOS uses its own capability model (CapToken/Rights/CapTable),
+/// incompatible with POSIX.1e capget/capset. Returning ENOSYS is
+/// the correct and documented behavior — ExoOS applications
+/// must use exo_cap_create/exo_cap_revoke syscalls instead.
 #[inline]
 pub fn capget(_hdrp: u64, _datap: u64) -> Result<(), KernelCapError> {
     Err(KernelCapError::NotSupported)
 }
 
-/// Écriture des capabilities POSIX.1e (syscall capset — compat Linux).
+/// Writing POSIX.1e capabilities (syscall capset — Linux compat).
 #[inline]
 pub fn capset(_hdrp: u64, _datap: u64) -> Result<(), KernelCapError> {
     Err(KernelCapError::NotSupported)
@@ -479,14 +479,14 @@ mod tests {
         unregister_test_service(NETWORK_PID);
     }
 
-    /// TIER 0.6 — la **révocation** d'un token de service IPC est effective : après
-    /// `revoke_handle`, le même token est rejeté par `check_token` (génération bumpée
-    /// dans KERNEL_CAP_TABLE + meta retirée). Complète le scénario e2e capability côté
-    /// IPC (refusé avant émission → autorisé avec token → refusé après révocation).
+    /// TIER 0.6 — the **revocation** of an IPC service token is effective: after
+    /// `revoke_handle`, the same token is rejected by `check_token` (generation bumped
+    /// in KERNEL_CAP_TABLE + meta removed). Completes the e2e capability scenario on
+    /// IPC side (denied before issuance → allowed with token → denied after revocation).
     #[test]
     fn service_token_revocation_is_effective() {
         ensure_capability_init();
-        const OWNER_PID: u32 = 1131; // ExoShield (route autorisée vers CryptoServer)
+        const OWNER_PID: u32 = 1131; // ExoShield (authorized route to CryptoServer)
         const TARGET_PID: u32 = 1132; // CryptoServer
 
         register_test_service(OWNER_PID, ServiceClass::ExoShield);
@@ -500,7 +500,7 @@ mod tests {
         )
         .expect("mint service token");
 
-        // Avant révocation : le token est accepté.
+        // Before revocation: token is accepted.
         assert!(
             check_token(
                 token,
@@ -512,10 +512,10 @@ mod tests {
             "un token fraîchement émis doit être accepté"
         );
 
-        // Révocation par handle (32 bits bas de l'ObjectId).
+        // Revocation by handle (lower 32 bits of ObjectId).
         revoke_handle(token.object_id().as_u64() as u32).expect("revoke");
 
-        // Après révocation : le MÊME token est rejeté (pas de bypass).
+        // After revocation: the SAME token is rejected (no bypass).
         assert!(
             check_token(
                 token,

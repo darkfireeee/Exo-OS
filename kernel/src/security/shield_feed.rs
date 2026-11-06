@@ -1,36 +1,36 @@
 // kernel/src/security/shield_feed.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ShieldFeed — anneau d'événements de sécurité kernel → exo_shield (TIER 3.1)
+// ShieldFeed — security event ring kernel → exo_shield (TIER 3.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le serveur NGAV `exo_shield` (Ring 1) est réactif : il traite les événements
-// EVENT_REPORT/PMC_ANOMALY qu'on lui envoie. Sans alimentation, il est AVEUGLE.
+// The NGAV server `exo_shield` (Ring 1) is reactive: it processes EVENT_REPORT
+// and PMC_ANOMALY events sent to it. Without a feed, it is BLIND.
 //
-// Ce module fournit le FEED : le kernel POUSSE (non-bloquant, best-effort) les
-// événements de sécurité dans un ring borné ; le serveur les DRAINE via le
-// syscall `SYS_EXO_SHIELD_DRAIN` et les injecte dans son moteur.
+// This module provides the FEED: the kernel PUSHES (non-blocking, best-effort)
+// security events into a bounded ring; the server DRAINS them via the
+// `SYS_EXO_SHIELD_DRAIN` syscall and feeds them into its engine.
 //
-// CHOIX : feed ASYNCHRONE (ring + drain) plutôt qu'IPC synchrone par événement —
-//   • coût push ≈ un lock court + copie 40 o (jamais d'IPC dans le hot-path) ;
-//   • aucun deadlock kernel→userspace (le kernel n'attend jamais le serveur) ;
-//   • best-effort : si le ring est plein (serveur en retard), on DROP et on
-//     compte (`DROPPED`) — la sécurité kernel (capability/zero_trust/exoledger)
-//     reste l'autorité ; le shield est une couche de détection complémentaire.
+// DESIGN: ASYNCHRONOUS feed (ring + drain) rather than synchronous IPC per event —
+//   • push cost ≈ short lock + 40-byte copy (never IPC in hot-path);
+//   • no kernel→userspace deadlock (kernel never waits for the server);
+//   • best-effort: if ring is full (server lagging), we DROP and count
+//     (`DROPPED`) — kernel security (capability/zero_trust/exoledger) remains
+//     the authority; the shield is a complementary detection layer.
 //
-// RÈGLE SHIELDFEED-01 : `push` ne bloque JAMAIS et ne panique JAMAIS.
-// RÈGLE SHIELDFEED-02 : les sites de push sont des événements de sécurité RÉELS
-//   (refus capability/IPC/syscall, exec) — déjà journalisés ailleurs (exoledger).
+// RULE SHIELDFEED-01: `push` NEVER blocks and NEVER panics.
+// RULE SHIELDFEED-02: push sites are REAL security events (capability/IPC/syscall
+//   denials, exec) — already logged elsewhere (exoledger).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
-/// Capacité du ring (puissance de 2). 256 événements en attente de drain.
+/// Ring capacity (power of 2). 256 events awaiting drain.
 const RING_SIZE: usize = 256;
 
-/// Catégorie d'événement — miroir de `engine::EventType` côté exo_shield.
-/// Valeurs stables (ABI du feed).
+/// Event category — mirrors `engine::EventType` on exo_shield side.
+/// Stable values (feed ABI).
 pub mod event_type {
     pub const PROCESS: u8 = 0;
     pub const SYSCALL: u8 = 1;
@@ -40,7 +40,7 @@ pub mod event_type {
     pub const CAPABILITY: u8 = 5;
 }
 
-/// Niveau de menace — miroir de `engine::ThreatLevel` côté exo_shield.
+/// Threat level — mirrors `engine::ThreatLevel` on exo_shield side.
 pub mod severity {
     pub const LOW: u8 = 0;
     pub const MEDIUM: u8 = 1;
@@ -48,26 +48,26 @@ pub mod severity {
     pub const CRITICAL: u8 = 3;
 }
 
-/// Événement de sécurité forwardé au shield. Layout `#[repr(C)]` stable = ABI du
-/// syscall de drain (le serveur lit exactement cette structure).
+/// Security event forwarded to shield. Stable `#[repr(C)]` layout = drain
+/// syscall ABI (the server reads exactly this structure).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShieldEvent {
-    /// PID concerné par l'événement.
+    /// Target PID of the event.
     pub pid: u32,
-    /// Catégorie (`event_type::*`).
+    /// Category (`event_type::*`).
     pub event_type: u8,
-    /// Sévérité (`severity::*`).
+    /// Severity (`severity::*`).
     pub severity: u8,
     pub _pad: [u8; 2],
-    /// Code d'opération (n° de syscall, opcode réseau, action exec…).
+    /// Operation code (syscall number, network opcode, exec action...).
     pub opcode: u32,
     pub _pad2: u32,
-    /// Argument générique 0 (adresse, ppid, taille…).
+    /// Generic argument 0 (address, ppid, size...).
     pub arg0: u64,
-    /// Argument générique 1.
+    /// Generic argument 1.
     pub arg1: u64,
-    /// Numéro de séquence monotone (ordre + détection de perte côté serveur).
+    /// Monotonic sequence number (order + loss detection on server side).
     pub seq: u64,
 }
 
@@ -86,7 +86,7 @@ impl ShieldEvent {
         }
     }
 
-    /// Constructeur ergonomique pour les sites de push.
+    /// Ergonomic constructor for push call sites.
     #[inline]
     pub fn new(pid: u32, event_type: u8, severity: u8, opcode: u32, arg0: u64, arg1: u64) -> Self {
         Self {
@@ -103,24 +103,24 @@ impl ShieldEvent {
     }
 }
 
-/// Taille en octets d'un `ShieldEvent` — exposée pour l'ABI du syscall.
+/// Byte size of a `ShieldEvent` — exposed for syscall ABI.
 pub const SHIELD_EVENT_SIZE: usize = core::mem::size_of::<ShieldEvent>();
 
 static RING: Mutex<[ShieldEvent; RING_SIZE]> = Mutex::new([ShieldEvent::zero(); RING_SIZE]);
-/// Position d'écriture (monotone, modulo RING_SIZE à l'indexation).
+/// Write position (monotonic, modulo RING_SIZE on indexing).
 static HEAD: AtomicUsize = AtomicUsize::new(0);
-/// Position de lecture/drain (monotone).
+/// Read/drain position (monotonic).
 static TAIL: AtomicUsize = AtomicUsize::new(0);
-/// Compteur de séquence global.
+/// Global sequence counter.
 static SEQ: AtomicU64 = AtomicU64::new(0);
-/// Événements perdus (ring plein — serveur en retard ou absent).
+/// Dropped events (ring full — server lagging or absent).
 static DROPPED: AtomicU64 = AtomicU64::new(0);
-/// Événements poussés au total.
+/// Total pushed events.
 static PUSHED: AtomicU64 = AtomicU64::new(0);
 
-/// Pousse un événement de sécurité vers le shield. **Non-bloquant, best-effort** :
-/// si le ring est plein, l'événement le plus récent est DROP (compté). Ne panique
-/// jamais (RÈGLE SHIELDFEED-01). Sûr depuis n'importe quel contexte non-NMI.
+/// Pushes a security event to the shield. **Non-blocking, best-effort**:
+/// if ring is full, the newest event is DROPPED (counted). Never panics
+/// (RULE SHIELDFEED-01). Safe from any non-NMI context.
 pub fn push(mut ev: ShieldEvent) {
     let mut ring = RING.lock();
     let head = HEAD.load(Ordering::Relaxed);
@@ -135,7 +135,7 @@ pub fn push(mut ev: ShieldEvent) {
     PUSHED.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Raccourci de push (évite de construire un `ShieldEvent` au site d'appel).
+/// Push shortcut (avoids constructing a `ShieldEvent` at call site).
 #[inline]
 pub fn push_event(pid: u32, event_type: u8, severity: u8, opcode: u32, arg0: u64, arg1: u64) {
     push(ShieldEvent::new(
@@ -143,8 +143,8 @@ pub fn push_event(pid: u32, event_type: u8, severity: u8, opcode: u32, arg0: u64
     ));
 }
 
-/// Draine jusqu'à `out.len()` événements dans `out`. Retourne le nombre copié.
-/// Appelé par le syscall de drain (serveur exo_shield).
+/// Drains up to `out.len()` events into `out`. Returns the number of copied items.
+/// Called by drain syscall (exo_shield server).
 pub fn drain(out: &mut [ShieldEvent]) -> usize {
     if out.is_empty() {
         return 0;
@@ -162,7 +162,7 @@ pub fn drain(out: &mut [ShieldEvent]) -> usize {
     n
 }
 
-/// Snapshot de statistiques du feed.
+/// Feed statistics snapshot.
 #[derive(Debug, Clone, Copy)]
 pub struct ShieldFeedStats {
     pub pushed: u64,
@@ -185,7 +185,7 @@ mod tests {
     use super::*;
 
     fn reset() {
-        // Drain tout pour repartir propre (les tests partagent le ring statique).
+        // Drain everything to start clean (tests share static ring).
         let mut sink = [ShieldEvent::zero(); RING_SIZE];
         while drain(&mut sink) == RING_SIZE {}
     }
@@ -199,7 +199,7 @@ mod tests {
         let mut out = [ShieldEvent::zero(); 8];
         let n = drain(&mut out);
         assert!(n >= 2);
-        // Les deux derniers de notre paire doivent apparaître dans l'ordre.
+        // The last two of our pair must appear in order.
         let a = out[n - 2];
         let b = out[n - 1];
         assert_eq!(a.pid, 42);
@@ -220,12 +220,12 @@ mod tests {
     #[test]
     fn overflow_drops_without_panic() {
         reset();
-        // Remplir au-delà de la capacité → les surplus sont DROP, pas de panic.
+        // Fill beyond capacity -> surpluses are DROPPED, no panic.
         for i in 0..(RING_SIZE + 32) {
             push_event(i as u32, event_type::MEMORY, severity::LOW, 0, 0, 0);
         }
         assert!(stats().dropped >= 32, "les surplus doivent être comptés");
-        // Le ring contient au plus RING_SIZE événements.
+        // Ring contains at most RING_SIZE events.
         let mut out = [ShieldEvent::zero(); RING_SIZE];
         let n = drain(&mut out);
         assert!(n <= RING_SIZE);

@@ -1,29 +1,29 @@
 // kernel/src/security/zero_trust/process_state.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ZERO-TRUST PROCESS STATE — état de sécurité persistant par-process (TIER 1.1)
+// ZERO-TRUST PROCESS STATE — Persistent per-process security state (TIER 1.1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le moteur `policy.rs` est RÉEL (MLS Bell-LaPadula/Biba, restrictions, règles par
-// ressource) mais restait INERTE pour les syscalls : le dispatch reconstruisait un
-// `SecurityContext::new_normal` neuf (restrictions=0, trust figé) à chaque appel,
-// ignorant l'état réel du process → comportement « TRUST_ALL » de fait.
+// The `policy.rs` engine is REAL (Bell-LaPadula/Biba MLS, restrictions, per-
+// resource rules) but remained INERT for syscalls: dispatch reconstructed a
+// fresh `SecurityContext::new_normal` (restrictions=0, fixed trust) on each call,
+// ignoring the actual state of the process → de facto "TRUST_ALL" behavior.
 //
-// Ce module détient cet état réel et construit le contexte consulté à chaque
-// syscall (`dispatch.rs`) :
-//   • restrictions sandbox/pledge persistées par PID (durcissables uniquement) ;
-//   • niveau de confiance dérivé de l'état système (init/Ring 1/normal).
+// This module holds this actual state and constructs the context consulted at each
+// syscall (`dispatch.rs`):
+//   • sandbox/pledge restrictions persisted per PID (harden-only);
+//   • trust level derived from system state (init/Ring 1/normal).
 //
-// STOCKAGE : tableau lock-free indexé par PID (`[AtomicU64; MAX_TRACKED_PIDS]`).
-//   - Défaut (slot=0) = AUCUNE restriction → identique au comportement antérieur
-//     (BOOT-SAFE : rien n'est restreint tant qu'un process n'a pas explicitement
-//     opt-in via `restrict_process`).
-//   - Monotone : `restrict_process` ne fait qu'AJOUTER des bits de restriction
-//     (RÈGLE ZT-02 / PLEDGE-01 : les droits ne peuvent que diminuer).
-//   - PID hors plage (>= MAX) : non traçable → `restrict_process` échoue
-//     (fail-closed au site d'opt-in) ; la lecture renvoie 0 (cohérent — un tel PID
-//     n'a jamais pu être restreint).
-//   - Recyclage : le slot est remis à 0 à la libération du PID (cf. lifecycle/wait).
+// STORAGE: lock-free array indexed by PID (`[AtomicU64; MAX_TRACKED_PIDS]`).
+//   - Default (slot=0) = NO restriction → identical to previous behavior
+//     (BOOT-SAFE: nothing is restricted until a process explicitly opts in
+//     via `restrict_process`).
+//   - Monotonic: `restrict_process` only ADDS restriction bits
+//     (RULE ZT-02 / PLEDGE-01: rights can only decrease).
+//   - Out-of-bounds PID (>= MAX): untrackable → `restrict_process` fails
+//     (fail-closed at opt-in site); reading returns 0 (consistent — such PID
+//     could never have been restricted).
+//   - Recycling: the slot is reset to 0 upon PID release (cf. lifecycle/wait).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -32,21 +32,21 @@ use super::context::{restriction_flags, PrincipalId, SecurityContext, TrustLevel
 use super::verify::ring1_trusted_mask;
 use crate::syscall::numbers;
 
-/// Nombre de PID traçables sans verrou. Couvre l'intégralité de l'espace PID d'Exo-OS
-/// (PID_MAX = 32 767, donc 32 768 slots pour couvrir PIDs 0..=32767 sans fail-open).
+/// Number of trackable PIDs without lock. Covers the entirety of Exo-OS PID space
+/// (PID_MAX = 32,767, thus 32,768 slots to cover PIDs 0..=32767 without fail-open).
 pub const MAX_TRACKED_PIDS: usize = 32768;
 
-/// PID du process init — ne peut pas être restreint (RÈGLE PLEDGE-03).
+/// PID of the init process — cannot be restricted (RULE PLEDGE-03).
 const INIT_PID: u32 = 1;
 
-/// État de restriction par PID. `0` = aucune restriction.
+/// Restriction state per PID. `0` = no restriction.
 static PROCESS_RESTRICTIONS: [AtomicU64; MAX_TRACKED_PIDS] =
     [const { AtomicU64::new(0) }; MAX_TRACKED_PIDS];
 
-/// Ajoute des restrictions au process `pid` (monotone — ne peut que DURCIR).
+/// Adds restrictions to process `pid` (monotonic — can only HARDEN).
 ///
-/// Refuse init (PID 1, RÈGLE PLEDGE-03), le PID 0 et les PID hors plage.
-/// Retourne `true` si la restriction a été appliquée.
+/// Rejects init (PID 1, RULE PLEDGE-03), PID 0, and out-of-range PIDs.
+/// Returns `true` if the restriction was applied.
 pub fn restrict_process(pid: u32, flags: u64) -> bool {
     if pid == 0 || pid == INIT_PID {
         return false;
@@ -59,7 +59,7 @@ pub fn restrict_process(pid: u32, flags: u64) -> bool {
     true
 }
 
-/// Restrictions actives du process `pid` (0 = aucune).
+/// Active restrictions of process `pid` (0 = none).
 #[inline]
 pub fn process_restrictions(pid: u32) -> u64 {
     let idx = pid as usize;
@@ -69,8 +69,8 @@ pub fn process_restrictions(pid: u32) -> u64 {
     PROCESS_RESTRICTIONS[idx].load(Ordering::Acquire)
 }
 
-/// Réinitialise l'état d'un PID. Appelé à la libération du PID (recyclage) pour
-/// qu'un futur process réutilisant ce numéro reparte SANS restriction héritée.
+/// Resets a PID's state. Called upon PID release (recycling) so
+/// a future process reusing this number starts WITHOUT inherited restrictions.
 pub fn clear_process_restrictions(pid: u32) {
     let idx = pid as usize;
     if idx < MAX_TRACKED_PIDS {
@@ -78,8 +78,8 @@ pub fn clear_process_restrictions(pid: u32) {
     }
 }
 
-/// Héritage fork : l'enfant reçoit AU MOINS les restrictions du parent
-/// (RÈGLE ZT-03 / SAND-03 : un fils ne peut pas être moins restreint que son père).
+/// Fork inheritance: child receives AT LEAST the parent's restrictions
+/// (RULE ZT-03 / SAND-03: a child cannot be less restricted than its parent).
 pub fn inherit_restrictions(parent_pid: u32, child_pid: u32) {
     let parent = process_restrictions(parent_pid);
     if parent != 0 {
@@ -87,11 +87,11 @@ pub fn inherit_restrictions(parent_pid: u32, child_pid: u32) {
     }
 }
 
-/// Niveau de confiance **authentifié** d'un PID, dérivé de l'état réel du système.
+/// **Authenticated** trust level of a PID, derived from actual system state.
 ///
-/// - init (PID 1) → System (process le plus privilégié) ;
-/// - service Ring 1 de confiance (mask maintenu par `ipc_policy`) → Trusted ;
-/// - tout le reste (apps, shell) → Normal.
+/// - init (PID 1) → System (most privileged process);
+/// - trusted Ring 1 service (mask maintained by `ipc_policy`) → Trusted;
+/// - everything else (apps, shell) → Normal.
 pub fn trust_for_pid(pid: u32) -> TrustLevel {
     if pid == INIT_PID {
         return TrustLevel::System;
@@ -102,9 +102,9 @@ pub fn trust_for_pid(pid: u32) -> TrustLevel {
     TrustLevel::Normal
 }
 
-/// Construit le `SecurityContext` RÉEL du process appelant : niveau de confiance
-/// dérivé de l'état système + restrictions persistées. Remplace le `new_normal`
-/// inerte précédemment câblé dans le dispatch (TIER 1.1).
+/// Constructs the ACTUAL `SecurityContext` of the calling process: trust level
+/// derived from system state + persisted restrictions. Replaces the inert
+/// `new_normal` previously hardcoded in dispatch (TIER 1.1).
 pub fn context_for_caller(pid: u32, tid: u32) -> SecurityContext {
     let principal = PrincipalId {
         uid: 0,
@@ -116,13 +116,13 @@ pub fn context_for_caller(pid: u32, tid: u32) -> SecurityContext {
     SecurityContext::for_process(principal, trust_for_pid(pid), process_restrictions(pid))
 }
 
-/// Masque des restrictions qui INTERDISENT le syscall `nr`. Si l'appelant porte
-/// une de ces restrictions, le syscall est refusé par `policy::check_restrictions`.
+/// Mask of restrictions that FORBID syscall `nr`. If caller holds
+/// one of these restrictions, the syscall is rejected by `policy::check_restrictions`.
 ///
-/// Mapping (numéros Linux-compat, cf. [`crate::syscall::numbers`]) :
-///   - création de process (fork/clone/vfork) → `NO_FORK | NO_PROCESS_CREATE`
-///   - exec (execve)                          → `NO_EXEC | NO_PROCESS_CREATE`
-///   - réseau (socket/connect/bind/listen/    → `NO_NETWORK`
+/// Mapping (Linux-compat numbers, cf. [`crate::syscall::numbers`]):
+///   - process creation (fork/clone/vfork) → `NO_FORK | NO_PROCESS_CREATE`
+///   - exec (execve)                       → `NO_EXEC | NO_PROCESS_CREATE`
+///   - network (socket/connect/bind/listen/ → `NO_NETWORK`
 ///     accept/sendto/recvfrom/…)
 #[inline]
 pub fn syscall_restriction_mask(nr: u64) -> u64 {
@@ -144,19 +144,19 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
     }
 }
 
-/// Traduit un bitmask de **promesses pledge** (OpenBSD-like, `pledge_flags`) en
-/// **restrictions zero-trust** : toute capacité NON promise devient une restriction
-/// enforced au bord syscall (cf. `syscall_restriction_mask`). TIER 2.10 — pont
-/// entre l'API `pledge()` userspace et l'enforcement TIER 1.1.
+/// Translates a bitmask of **pledge promises** (OpenBSD-like, `pledge_flags`) into
+/// **zero-trust restrictions**: any capacity NOT promised becomes an enforced
+/// restriction at the syscall boundary (cf. `syscall_restriction_mask`). TIER 2.10 —
+/// bridge between userspace `pledge()` API and TIER 1.1 enforcement.
 ///
-/// Mapping (promesse absente → restriction) :
-///   - `PROC` (création de process) absent → `NO_FORK | NO_PROCESS_CREATE`
-///   - `EXEC` absent                       → `NO_EXEC`
-///   - `INET` (réseau) absent              → `NO_NETWORK`
+/// Mapping (missing promise → restriction):
+///   - `PROC` (process creation) absent → `NO_FORK | NO_PROCESS_CREATE`
+///   - `EXEC` absent                    → `NO_EXEC`
+///   - `INET` (network) absent           → `NO_NETWORK`
 ///
-/// Seules les capacités réellement enforced sont mappées (fork/exec/réseau) ;
-/// les autres pledges (rpath/wpath/…) seront ajoutées quand l'enforcement FS/IO
-/// par-syscall existera. Conservatif : ne restreint jamais plus que les flags connus.
+/// Only actually enforced capabilities are mapped (fork/exec/network);
+/// other pledges (rpath/wpath/…) will be added when per-syscall FS/IO
+/// enforcement exists. Conservative: never restricts more than known flags.
 pub fn pledge_promises_to_restrictions(promises: u64) -> u64 {
     use crate::security::isolation::pledge::pledge_flags;
     use restriction_flags::*;
@@ -177,8 +177,8 @@ pub fn pledge_promises_to_restrictions(promises: u64) -> u64 {
 mod tests {
     use super::*;
 
-    // PID de test choisis hauts pour éviter toute collision avec d'éventuels PID
-    // système (et restant < MAX_TRACKED_PIDS).
+    // Test PIDs chosen high to avoid collisions with any potential
+    // system PIDs (and remaining < MAX_TRACKED_PIDS).
     const P_A: u32 = 700;
     const P_B: u32 = 701;
     const P_CHILD: u32 = 702;
@@ -189,8 +189,8 @@ mod tests {
         }
     }
 
-    /// Défaut = aucune restriction (boot-safe). `restrict_process` durcit ; init
-    /// et les PID hors plage sont refusés.
+    /// Default = no restriction (boot-safe). `restrict_process` hardens; init
+    /// and out-of-range PIDs are rejected.
     #[test]
     fn restrict_is_monotonic_and_guarded() {
         reset(&[P_A]);
@@ -199,16 +199,16 @@ mod tests {
         assert!(restrict_process(P_A, restriction_flags::NO_FORK));
         assert!(process_restrictions(P_A) & restriction_flags::NO_FORK != 0);
 
-        // Ajout monotone : la première restriction reste présente.
+        // Monotonic addition: the first restriction remains present.
         assert!(restrict_process(P_A, restriction_flags::NO_NETWORK));
         let r = process_restrictions(P_A);
         assert!(r & restriction_flags::NO_FORK != 0 && r & restriction_flags::NO_NETWORK != 0);
 
-        // init ne peut pas être restreint (RÈGLE PLEDGE-03).
+        // init cannot be restricted (RULE PLEDGE-03).
         assert!(!restrict_process(INIT_PID, restriction_flags::NO_FORK));
         assert_eq!(process_restrictions(INIT_PID), 0);
 
-        // PID hors plage → non traçable.
+        // Out-of-range PID → untrackable.
         assert!(!restrict_process(
             MAX_TRACKED_PIDS as u32,
             restriction_flags::NO_FORK
@@ -218,7 +218,7 @@ mod tests {
         reset(&[P_A]);
     }
 
-    /// Le recyclage (clear) repart d'un état vierge.
+    /// Recycling (clear) starts from a blank slate.
     #[test]
     fn clear_resets_slot() {
         reset(&[P_B]);
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(process_restrictions(P_B), 0);
     }
 
-    /// L'enfant fork hérite (au moins) des restrictions du parent.
+    /// Fork child inherits (at least) parent restrictions.
     #[test]
     fn child_inherits_parent_restrictions() {
         reset(&[P_A, P_CHILD]);
@@ -241,7 +241,7 @@ mod tests {
         reset(&[P_A, P_CHILD]);
     }
 
-    /// Le mapping syscall→restriction couvre create-process / exec / réseau.
+    /// Syscall->restriction mapping covers create-process / exec / network.
     #[test]
     fn syscall_mask_maps_dangerous_syscalls() {
         use restriction_flags::*;
@@ -249,37 +249,37 @@ mod tests {
         assert!(syscall_restriction_mask(numbers::SYS_CLONE) & NO_PROCESS_CREATE != 0);
         assert!(syscall_restriction_mask(numbers::SYS_EXECVE) & NO_EXEC != 0);
         assert!(syscall_restriction_mask(numbers::SYS_SOCKET) & NO_NETWORK != 0);
-        // Un syscall bénin (read=0) n'est jamais filtré par ce mécanisme.
+        // Benign syscall (read=0) is never filtered by this mechanism.
         assert_eq!(syscall_restriction_mask(numbers::SYS_READ), 0);
     }
 
-    /// `trust_for_pid` : init = System, inconnu = Normal.
+    /// `trust_for_pid`: init = System, unknown = Normal.
     #[test]
     fn trust_derivation_init_and_default() {
         assert_eq!(trust_for_pid(INIT_PID), TrustLevel::System);
         assert_eq!(trust_for_pid(P_A), TrustLevel::Normal);
     }
 
-    /// TIER 2.10 — `pledge()` : une promesse absente devient une restriction
-    /// enforced ; toutes les promesses → rien à restreindre.
+    /// TIER 2.10 — `pledge()`: missing promise becomes an enforced restriction;
+    /// all promises → nothing to restrict.
     #[test]
     fn pledge_maps_absent_promises_to_restrictions() {
         use crate::security::isolation::pledge::pledge_flags;
         use restriction_flags::*;
 
-        // STDIO seul (pas PROC/EXEC/INET) → fork+exec+réseau restreints.
+        // STDIO alone (not PROC/EXEC/INET) → fork+exec+network restricted.
         let r = pledge_promises_to_restrictions(pledge_flags::STDIO);
         assert!(r & NO_FORK != 0 && r & NO_PROCESS_CREATE != 0);
         assert!(r & NO_EXEC != 0);
         assert!(r & NO_NETWORK != 0);
 
-        // PROC|EXEC|INET promis → aucune restriction (sur les flags enforced).
+        // PROC|EXEC|INET promised → no restriction (on enforced flags).
         let none = pledge_promises_to_restrictions(
             pledge_flags::PROC | pledge_flags::EXEC | pledge_flags::INET,
         );
         assert_eq!(none, 0);
 
-        // INET seul → réseau autorisé, fork/exec restreints.
+        // INET alone → network allowed, fork/exec restricted.
         let net_only = pledge_promises_to_restrictions(pledge_flags::INET);
         assert_eq!(net_only & NO_NETWORK, 0);
         assert!(net_only & NO_FORK != 0 && net_only & NO_EXEC != 0);

@@ -1,26 +1,26 @@
 // kernel/src/security/capability/table.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CAP TABLE — Table de capacités par processus (Exo-OS Security · Couche 2b)
+// CAP TABLE — Per-process capability table (Exo-OS Security · Layer 2b)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// ⚠️  HORS périmètre de vérification formelle (proptest + INVARIANTS.md uniquement).
-//     table.rs est l'implémentation concrète — non incluse dans la preuve.
-//     Le périmètre formel couvre : model.rs, token.rs, rights.rs,
-//     revocation.rs, delegation.rs (voir DOC7, RÈGLE CAP-02).
+// ⚠️  OUT of formal verification scope (proptest + INVARIANTS.md only).
+//     table.rs is the concrete implementation — not included in the proof.
+//     The formal scope covers: model.rs, token.rs, rights.rs,
+//     revocation.rs, delegation.rs (see DOC7, RULE CAP-02).
 //
-// STRUCTURE :
-//   Chaque processus possède une CapTable correspondant à une map ObjectId→Entry.
-//   L'implémentation utilise un tableau statique de CAP_TABLE_CAPACITY entrées
-//   avec un spinlock global — pas d'allocation heap dans le hot path de vérification.
+// STRUCTURE:
+//   Each process owns a CapTable corresponding to an ObjectId→Entry map.
+//   The implementation uses a static array of CAP_TABLE_CAPACITY entries
+//   with a global spinlock — no heap allocation in the verification hot path.
 //
-// PROPRIÉTÉS :
-//   • Insertion : O(1) amortie (scan linéaire des slots libres)
-//   • Vérification : O(1) — accès direct par index haché
-//   • Révocation : O(1) — incrément atomique de génération
-//   • Thread-safety : Spinlock sur mutations, lecture atomique de génération
+// PROPERTIES:
+//   • Insertion: amortized O(1) (linear scan of free slots)
+//   • Verification: O(1) — direct access by hashed index
+//   • Revocation: O(1) — atomic increment of generation
+//   • Thread-safety: Spinlock on mutations, atomic read of generation
 //
-// ESPACE MÉMOIRE RÉSERVÉ :
+// RESERVED MEMORY SPACE:
 //   CAP_TABLE_CAPACITY × size_of::<CapEntry>() = 512 × 24 = 12 288 bytes ≈ 12 KiB
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -32,33 +32,33 @@ use super::token::{CapObjectType, CapToken, ObjectId};
 use super::verify::CapError;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacité maximale d'entrées par CapTable (par processus).
-/// 512 capacités simultanées — suffisant pour un processus complexe.
+/// Maximum entry capacity per CapTable (per process).
+/// 512 concurrent capabilities — sufficient for a complex process.
 pub const CAP_TABLE_CAPACITY: usize = 512;
 
-/// Marqueur de slot vide.
+/// Empty slot marker.
 const SLOT_FREE: u64 = u64::MAX;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CapEntry — entrée interne de la table
+// CapEntry — internal table entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée interne dans la CapTable.
-/// Taille : 8+4+4+4+4 = 24 bytes, alignée sur 8.
+/// Internal entry in CapTable.
+/// Size: 8+4+4+4+4 = 24 bytes, aligned to 8.
 #[repr(C)]
 struct CapEntry {
-    /// Identifiant de l'objet — SLOT_FREE si libre.
+    /// Object identifier — SLOT_FREE if free.
     object_id: AtomicU64,
-    /// Droits accordés pour cet objet.
+    /// Rights granted for this object.
     rights: AtomicU32,
-    /// Génération courante — incrémentée lors d'une révocation.
+    /// Current generation — incremented upon revocation.
     generation: AtomicU32,
-    /// Type de l'objet — stocké pour validation rapide.
+    /// Object type — stored for fast validation.
     type_tag: AtomicU32,
-    /// Padding pour alignement cache-line-friendly.
+    /// Padding for cache-line-friendly alignment.
     _pad: AtomicU32,
 }
 
@@ -78,7 +78,7 @@ impl CapEntry {
         self.object_id.load(Ordering::Acquire) == SLOT_FREE
     }
 
-    /// Retourne (rights, generation, type_tag) si l'ObjectId correspond.
+    /// Returns (rights, generation, type_tag) if the ObjectId matches.
     #[inline(always)]
     #[allow(dead_code)]
     fn load_for_verify(&self, expected_oid: ObjectId) -> Option<(Rights, u32, CapObjectType)> {
@@ -94,28 +94,28 @@ impl CapEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CapTable — structure principale
+// CapTable — main structure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table de capacités d'un processus.
+/// Capability table of a process.
 ///
-/// # Sécurité processus
-/// Chaque processus possède sa propre CapTable — pas de partage direct.
-/// L'accès en écriture est protégé par un Mutex; la vérification (lecture atomique)
-/// ne prend pas le lock en condition normale.
+/// # Process security
+/// Each process owns its own CapTable — no direct sharing.
+/// Write access is protected by a Mutex; verification (atomic read)
+/// does not take the lock under normal conditions.
 pub struct CapTable {
-    /// Tableau fixe d'entrées — pas d'allocation heap.
+    /// Fixed array of entries — no heap allocation.
     entries: [CapEntry; CAP_TABLE_CAPACITY],
-    /// Mutex pour les mutations (grant, revoke, inherit).
-    /// Pas pris sur le chemin verify() sauf fallback.
+    /// Mutex for mutations (grant, revoke, inherit).
+    /// Not taken on verify() path except fallback.
     write_lock: Mutex<()>,
-    /// Nombre d'entrées actuellement occupées.
+    /// Number of currently occupied entries.
     count: AtomicU32,
-    /// Statistiques.
+    /// Statistics.
     stats: CapTableStats,
 }
 
-/// Statistiques par table.
+/// Statistics per table.
 struct CapTableStats {
     grants: AtomicU64,
     revocations: AtomicU64,
@@ -134,7 +134,7 @@ impl CapTableStats {
     }
 }
 
-/// Snapshot de statistiques CapTable.
+/// CapTable statistics snapshot.
 #[derive(Debug, Clone, Copy)]
 pub struct CapTableSnapshot {
     pub grants: u64,
@@ -145,33 +145,33 @@ pub struct CapTableSnapshot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Implémentation CapTable
+// CapTable implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-// SAFETY: CapTable contient uniquement des types atomiques + Mutex.
-// Les accès concurrents sont correctement synchronisés.
+// SAFETY: CapTable contains only atomic types + Mutex.
+// Concurrent accesses are properly synchronized.
 unsafe impl Send for CapTable {}
 unsafe impl Sync for CapTable {}
 
-// Macro pour créer un tableau [CapEntry; N] avec des entrées libres.
-// Nécessaire car CapEntry n'est pas Copy.
+// Macro to create a [CapEntry; N] array with free entries.
+// Necessary because CapEntry is not Copy.
 macro_rules! init_cap_entries {
     () => {{
         let mut arr: [core::mem::MaybeUninit<CapEntry>; CAP_TABLE_CAPACITY] =
-            // SAFETY: MaybeUninit array uninit valide; chaque slot est écrasé par new_free() ensuite.
+            // SAFETY: MaybeUninit uninit array is valid; each slot is overwritten by new_free() afterwards.
             unsafe { core::mem::MaybeUninit::uninit().assume_init() };
         let mut i = 0usize;
         while i < CAP_TABLE_CAPACITY {
             arr[i] = core::mem::MaybeUninit::new(CapEntry::new_free());
             i += 1;
         }
-        // SAFETY: Tous les éléments initialisés.
+        // SAFETY: All elements initialized.
         unsafe { core::mem::transmute::<_, [CapEntry; CAP_TABLE_CAPACITY]>(arr) }
     }};
 }
 
 impl CapTable {
-    /// Crée une nouvelle CapTable vide.
+    /// Creates a new empty CapTable.
     pub fn new() -> Self {
         Self {
             entries: init_cap_entries!(),
@@ -181,21 +181,21 @@ impl CapTable {
         }
     }
 
-    /// FIX-P2-A03 (Security_Audit_Passe2 §A-03): crée une CapTable héritée
-    /// du parent pour fork(). Copie toutes les entrées non-libres.
+    /// FIX-P2-A03 (Security_Audit_Passe2 §A-03): creates a CapTable inherited
+    /// from the parent for fork(). Copies all non-free entries.
     ///
-    /// Utilise les champs réels de CapEntry: object_id, rights, generation, type_tag.
-    /// Un slot est libre si object_id == SLOT_FREE (u64::MAX).
+    /// Uses real fields of CapEntry: object_id, rights, generation, type_tag.
+    /// A slot is free if object_id == SLOT_FREE (u64::MAX).
     pub fn inherit_from(parent: &CapTable) -> Self {
         let child = Self::new();
         let _guard = parent.write_lock.lock();
         let mut inherited = 0u32;
         for i in 0..CAP_TABLE_CAPACITY {
             let oid = parent.entries[i].object_id.load(Ordering::Acquire);
-            // SLOT_FREE = u64::MAX signifie slot vide — ne pas copier.
+            // SLOT_FREE = u64::MAX means empty slot — do not copy.
             if oid != u64::MAX {
-                // Copier tous les champs atomiquement (sous write_lock du parent).
-                // SAFETY: write_lock est tenu, pas de concurrent writer sur parent.
+                // Copy all fields atomically (under parent's write_lock).
+                // SAFETY: write_lock is held, no concurrent writer on parent.
                 child.entries[i].object_id.store(oid, Ordering::Relaxed);
                 child.entries[i].rights.store(
                     parent.entries[i].rights.load(Ordering::Relaxed),
@@ -216,12 +216,12 @@ impl CapTable {
         child
     }
 
-    /// FIX-SEC-T1.0 : héritage fork avec **moindre privilège**. Comme `inherit_from`,
-    /// mais retire les bits `strip_rights` des droits de toute cap dont
-    /// `type_tag == strip_type`. Empêche la propagation automatique des droits FS
-    /// privilégiés (gc/import/snapshot/admin) aux enfants : seuls un `grant` ou une
-    /// délégation explicites les rétablissent. Les droits opérationnels (read/write/…)
-    /// sont conservés. Les autres types de caps sont copiés tels quels.
+    /// FIX-SEC-T1.0: fork inheritance with **least privilege**. Like `inherit_from`,
+    /// but strips `strip_rights` bits from rights of any cap where
+    /// `type_tag == strip_type`. Prevents automatic propagation of privileged FS
+    /// rights (gc/import/snapshot/admin) to children: only an explicit `grant` or
+    /// delegation re-establishes them. Operational rights (read/write/…)
+    /// are preserved. Other types of caps are copied as is.
     pub fn inherit_from_masked(
         parent: &CapTable,
         strip_rights: Rights,
@@ -254,10 +254,10 @@ impl CapTable {
         child
     }
 
-    // ── Hachage ObjectId → index ─────────────────────────────────────────────
+    // ── Hashing ObjectId → index ─────────────────────────────────────────────
 
-    /// Hache un ObjectId en index de départ dans le tableau.
-    /// Utilise FNV-1a 64-bit condensé sur 9 bits.
+    /// Hashes an ObjectId into a starting index in the array.
+    /// Uses 64-bit FNV-1a condensed to 9 bits.
     #[inline(always)]
     fn hash_index(oid: ObjectId) -> usize {
         let h = oid.0.wrapping_mul(0x9e37_79b9_7f4a_7c15);
@@ -265,10 +265,10 @@ impl CapTable {
         (h as usize) & (CAP_TABLE_CAPACITY - 1)
     }
 
-    // ── Recherche d'un slot ──────────────────────────────────────────────────
+    // ── Slot lookup ──────────────────────────────────────────────────────────
 
-    /// Trouve l'index de l'entrée pour un ObjectId donné (probe linéaire).
-    /// Retourne None si non trouvé.
+    /// Finds the entry index for a given ObjectId (linear probe).
+    /// Returns None if not found.
     #[inline]
     fn find_slot(&self, oid: ObjectId) -> Option<usize> {
         let start = Self::hash_index(oid);
@@ -280,14 +280,14 @@ impl CapTable {
                 return Some(idx);
             }
             if stored == SLOT_FREE {
-                // Pas de wrapped-around possible sans plus de remplissage
+                // No wrapped-around possible without more filling
                 return None;
             }
         }
         None
     }
 
-    /// Trouve un slot libre — utilisé lors d'un grant().
+    /// Finds a free slot — used during grant().
     #[inline]
     fn find_free_slot(&self, oid: ObjectId) -> Option<usize> {
         let start = Self::hash_index(oid);
@@ -296,7 +296,7 @@ impl CapTable {
             if self.entries[idx].is_free() {
                 return Some(idx);
             }
-            // Si même ObjectId déjà présent, retourner cet index (mise à jour)
+            // If same ObjectId already present, return this index (update)
             if self.entries[idx].object_id.load(Ordering::Acquire) == oid.0 {
                 return Some(idx);
             }
@@ -304,15 +304,15 @@ impl CapTable {
         None
     }
 
-    // ── API publique ─────────────────────────────────────────────────────────
+    // ── Public API ───────────────────────────────────────────────────────────
 
-    /// Ajoute une entrée dans la table et retourne le CapToken correspondant.
+    /// Adds an entry to the table and returns the corresponding CapToken.
     ///
-    /// # Erreurs
-    /// - `CapError::TableFull` si la table est saturée.
+    /// # Errors
+    /// - `CapError::TableFull` if the table is full.
     ///
     /// # Thread-safety
-    /// Acquiert le mutex d'écriture.
+    /// Acquires the write mutex.
     pub fn grant(
         &self,
         object_id: ObjectId,
@@ -325,16 +325,16 @@ impl CapTable {
         let entry = &self.entries[idx];
 
         let gen = if entry.is_free() {
-            // Nouveau slot — génération 0
+            // New slot — generation 0
             entry.rights.store(rights.bits(), Ordering::Release);
             entry.type_tag.store(type_tag as u32, Ordering::Release);
             entry.generation.store(0, Ordering::Release);
-            // Publication atomique de l'ObjectId — doit être LAST
+            // Atomic publication of ObjectId — must be LAST
             entry.object_id.store(object_id.0, Ordering::Release);
             self.count.fetch_add(1, Ordering::Relaxed);
             0
         } else {
-            // Mise à jour d'un slot existant (re-grant après révocation)
+            // Update of existing slot (re-grant after revocation)
             let current_gen = entry.generation.load(Ordering::Acquire);
             entry.rights.store(rights.bits(), Ordering::Release);
             entry.type_tag.store(type_tag as u32, Ordering::Release);
@@ -345,18 +345,18 @@ impl CapTable {
         Ok(CapToken::new(object_id, rights, gen, type_tag))
     }
 
-    /// Révoque tous les tokens pour un ObjectId donné.
+    /// Revokes all tokens for a given ObjectId.
     ///
-    /// La révocation est O(1) : on incrémente uniquement le compteur de génération.
-    /// Les tokens existants avec l'ancienne génération retourneront Err(Revoked).
+    /// Revocation is O(1): only the generation counter is incremented.
+    /// Existing tokens with the old generation will return Err(Revoked).
     ///
-    /// # PROPRIÉTÉ VÉRIFIÉE (proptest + INVARIANTS.md — LAC-02)
+    /// # VERIFIED PROPERTY (proptest + INVARIANTS.md — LAC-02)
     /// ∀ token t, revoke(obj) → verify(t) = Err(Denied)
     pub fn revoke(&self, object_id: ObjectId) -> Result<(), CapError> {
         if let Some(idx) = self.find_slot(object_id) {
-            // Incrément atomique de génération — invalide TOUS les tokens existants
+            // Atomic increment of generation — invalidates ALL existing tokens
             self.entries[idx].generation.fetch_add(1, Ordering::Release);
-            // Remise à zéro des droits — invalide immédiatement check_object et check_right_any_type
+            // Reset rights to zero — immediately invalidates check_object and check_right_any_type
             self.entries[idx].rights.store(0, Ordering::Release);
             self.stats.revocations.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -365,14 +365,14 @@ impl CapTable {
         }
     }
 
-    /// Supprime complètement une entrée (libère le slot).
-    /// Utilisé lors de la destruction d'un objet.
+    /// Completely removes an entry (frees the slot).
+    /// Used during object destruction.
     pub fn remove(&self, object_id: ObjectId) -> Result<(), CapError> {
         let _guard = self.write_lock.lock();
         if let Some(idx) = self.find_slot(object_id) {
-            // On révoque d'abord (incrément génération)
+            // First revoke (increment generation)
             self.entries[idx].generation.fetch_add(1, Ordering::Release);
-            // Puis on libère le slot en marquant comme libre
+            // Then free the slot by marking it free
             self.entries[idx]
                 .object_id
                 .store(SLOT_FREE, Ordering::Release);
@@ -384,8 +384,8 @@ impl CapTable {
         }
     }
 
-    /// Incrémente directement le compteur de génération d'un objet.
-    /// Utilisé par `revocation::revoke()` interne.
+    /// Directly increments the generation counter of an object.
+    /// Used by internal `revocation::revoke()`.
     #[inline]
     pub(super) fn increment_generation(&self, object_id: ObjectId, ord: Ordering) {
         if let Some(idx) = self.find_slot(object_id) {
@@ -393,7 +393,7 @@ impl CapTable {
         }
     }
 
-    /// Charge l'entrée pour un ObjectId donné — utilisée par `revocation::verify()`.
+    /// Loads the entry for a given ObjectId — used by `revocation::verify()`.
     #[inline]
     pub(super) fn get(&self, object_id: ObjectId) -> Option<CapEntryView> {
         self.stats.lookups.fetch_add(1, Ordering::Relaxed);
@@ -413,16 +413,16 @@ impl CapTable {
         }
     }
 
-    /// Vérifie si l'objet existe dans la table.
+    /// Checks whether the object exists in the table.
     #[inline]
     pub fn contains(&self, object_id: ObjectId) -> bool {
         self.find_slot(object_id).is_some()
     }
 
-    /// FIX-SEC-T0 : point d'entrée PUBLIC d'enforcement — vérifie (lecture atomique)
-    /// qu'une capability existe pour `object_id`, du type `ty`, couvrant **au moins**
-    /// les droits `required`. Évite d'exposer `get()` (réservé au module). Utilisé par
-    /// l'enforcement ExoFS ([fs/exofs/syscall/captable.rs]).
+    /// FIX-SEC-T0: PUBLIC enforcement entry point — verifies (atomic read)
+    /// that a capability exists for `object_id`, of type `ty`, covering **at least**
+    /// the `required` rights. Avoids exposing `get()` (reserved for the module). Used by
+    /// ExoFS enforcement ([fs/exofs/syscall/captable.rs]).
     #[inline]
     pub fn check_object(&self, object_id: ObjectId, required: Rights, ty: CapObjectType) -> bool {
         match self.get(object_id) {
@@ -431,8 +431,8 @@ impl CapTable {
         }
     }
 
-    /// Vérifie qu'une capability existe pour `object_id` couvrant au moins les droits `required`,
-    /// quel que soit le type de l'objet (utilisé pour les droits universels comme REVOKE).
+    /// Checks that a capability exists for `object_id` covering at least the `required` rights,
+    /// regardless of the object type (used for universal rights such as REVOKE).
     #[inline]
     pub fn check_right_any_type(&self, object_id: ObjectId, required: Rights) -> bool {
         match self.get(object_id) {
@@ -441,7 +441,7 @@ impl CapTable {
         }
     }
 
-    /// Retourne un snapshot de stats.
+    /// Returns a stats snapshot.
     pub fn stats(&self) -> CapTableSnapshot {
         CapTableSnapshot {
             grants: self.stats.grants.load(Ordering::Relaxed),
@@ -452,13 +452,13 @@ impl CapTable {
         }
     }
 
-    /// Nombre d'entrées actives.
+    /// Number of active entries.
     #[inline]
     pub fn len(&self) -> usize {
         self.count.load(Ordering::Relaxed) as usize
     }
 
-    /// Vrai si la table est vide.
+    /// True if the table is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -472,10 +472,10 @@ impl Default for CapTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CapEntryView — vue lecture
+// CapEntryView — read view
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vue en lecture d'une entrée — retournée par `get()`.
+/// Read view of an entry — returned by `get()`.
 #[derive(Debug, Clone, Copy)]
 pub struct CapEntryView {
     pub rights: Rights,
@@ -487,11 +487,11 @@ pub struct CapEntryView {
 mod tier_sec_tests {
     use super::*;
 
-    // Bits ExoFS locaux (évite la dépendance au crate fs/exofs dans le test).
+    // Local ExoFS bits (avoids dependency on fs/exofs crate in test).
     const R_READ: u32 = 1 << 0;
     const R_WRITE: u32 = 1 << 1;
-    const R_GC: u32 = 1 << 13; // RIGHT_GC_TRIGGER (privilégié)
-    const R_ADMIN: u32 = 1 << 16; // RIGHT_ADMIN (privilégié)
+    const R_GC: u32 = 1 << 13; // RIGHT_GC_TRIGGER (privileged)
+    const R_ADMIN: u32 = 1 << 16; // RIGHT_ADMIN (privileged)
     const PRIV: u32 = R_GC | R_ADMIN;
 
     fn oid(v: u64) -> ObjectId {
@@ -501,20 +501,20 @@ mod tier_sec_tests {
         Rights::from_bits_truncate(bits)
     }
 
-    /// FIX-SEC-T0 : `check_object` enforce réellement droits + type (pas un bitmask
-    /// auto-déclaré). C'est la preuve que l'enforcement ExoFS n'est plus du théâtre.
+    /// FIX-SEC-T0: `check_object` really enforces rights + type (not a self-declared
+    /// bitmask). This proves that ExoFS enforcement is not theater.
     #[test]
     fn check_object_enforces_rights_and_type() {
         let t = CapTable::new();
         t.grant(oid(42), r(R_READ), CapObjectType::FileInode)
             .unwrap();
         assert!(t.check_object(oid(42), r(R_READ), CapObjectType::FileInode));
-        assert!(!t.check_object(oid(42), r(R_WRITE), CapObjectType::FileInode)); // pas de WRITE
-        assert!(!t.check_object(oid(42), r(R_READ), CapObjectType::IpcEndpoint)); // mauvais type
-        assert!(!t.check_object(oid(99), r(R_READ), CapObjectType::FileInode)); // objet inconnu
+        assert!(!t.check_object(oid(42), r(R_WRITE), CapObjectType::FileInode)); // no WRITE
+        assert!(!t.check_object(oid(42), r(R_READ), CapObjectType::IpcEndpoint)); // wrong type
+        assert!(!t.check_object(oid(99), r(R_READ), CapObjectType::FileInode)); // unknown object
     }
 
-    /// La révocation (remove) invalide la cap → check refuse.
+    /// Revocation (remove) invalidates cap → check denies.
     #[test]
     fn revoke_then_check_denies() {
         let t = CapTable::new();
@@ -525,9 +525,9 @@ mod tier_sec_tests {
         assert!(!t.check_object(oid(7), r(R_READ), CapObjectType::FileInode));
     }
 
-    /// FIX-SEC-T1.0 : l'héritage fork à moindre privilège retire les droits FS
-    /// privilégiés (gc/admin) à l'enfant mais conserve read/write ; le parent (init)
-    /// garde tout.
+    /// FIX-SEC-T1.0: least-privilege fork inheritance strips privileged FS rights
+    /// (gc/admin) from child but preserves read/write; parent (init)
+    /// keeps everything.
     #[test]
     fn fork_inherit_masked_strips_privileged_fs_rights() {
         let parent = CapTable::new();
@@ -542,7 +542,7 @@ mod tier_sec_tests {
         assert!(child.check_object(oid(0), r(R_READ | R_WRITE), CapObjectType::FileInode));
         assert!(!child.check_object(oid(0), r(R_GC), CapObjectType::FileInode));
         assert!(!child.check_object(oid(0), r(R_ADMIN), CapObjectType::FileInode));
-        // init conserve l'intégralité de ses droits.
+        // init keeps all its rights.
         assert!(parent.check_object(oid(0), r(R_ADMIN), CapObjectType::FileInode));
     }
 }

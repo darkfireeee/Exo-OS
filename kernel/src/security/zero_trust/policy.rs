@@ -1,20 +1,20 @@
 // kernel/src/security/zero_trust/policy.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ZERO-TRUST POLICY — Moteur de politique de sécurité
+// ZERO-TRUST POLICY — Security policy engine
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module implémente le moteur de politique Zero-Trust d'Exo-OS.
-// CHAQUE accès à une ressource doit être évalué par ce moteur.
+// This module implements the Exo-OS Zero-Trust policy engine.
+// EVERY access to a resource must be evaluated by this engine.
 //
-// PRINCIPE Zero-Trust : "Never trust, always verify"
-//   • Aucune confiance implicite basée sur la localisation (réseau interne, Ring 1…)
-//   • Authentification + autorisation pour CHAQUE accès
-//   • Accès accordé sur le minimum nécessaire (least privilege)
-//   • Monitoring continu des accès (journalisation)
+// Zero-Trust PRINCIPLE: "Never trust, always verify"
+//   • No implicit trust based on location (internal network, Ring 1…)
+//   • Authentication + authorization for EVERY access
+//   • Access granted on the minimum necessary (least privilege)
+//   • Continuous access monitoring (logging)
 //
-// RÈGLE ZT-POLICY-01 : deny_by_default() est l'action par défaut.
-//   Si aucune règle ne matche → accès refusé.
+// RULE ZT-POLICY-01: deny_by_default() is the default action.
+//   If no rule matches → access denied.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -23,19 +23,19 @@ use super::context::{SecurityContext, TrustLevel};
 use super::labels::SecurityLabel;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PolicyAction — décision de politique
+// PolicyAction — policy decision
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Décision prise par le moteur de politique.
+/// Decision made by the policy engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyAction {
-    /// Accès autorisé.
+    /// Access granted.
     Allow,
-    /// Accès refusé.
+    /// Access denied.
     Deny,
-    /// Accès refusé + audit obligatoire.
+    /// Access denied + mandatory audit.
     DenyAndAudit,
-    /// Accès refusé + alerte de sécurité.
+    /// Access denied + security alert.
     DenyAndAlert,
 }
 
@@ -52,63 +52,63 @@ impl PolicyAction {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ResourceKind — type de ressource accédée
+// ResourceKind — type of accessed resource
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type de ressource faisant l'objet d'une vérification de politique.
+/// Type of resource subject to policy verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ResourceKind {
-    /// Endpoint IPC.
+    /// IPC endpoint.
     IpcEndpoint = 0,
-    /// Région mémoire.
+    /// Memory region.
     MemoryRegion = 1,
-    /// Inode de fichier.
+    /// File inode.
     FileInode = 2,
-    /// Périphérique physique.
+    /// Physical device.
     Device = 3,
-    /// Thread d'un autre processus.
+    /// Thread belonging to another process.
     Thread = 4,
     /// Namespace.
     Namespace = 5,
-    /// Clé cryptographique.
+    /// Cryptographic key.
     CryptoKey = 6,
-    /// Canal DMA.
+    /// DMA channel.
     DmaChannel = 7,
-    /// Syscall système (pour le sandbox).
+    /// System syscall (for sandboxing).
     Syscall = 8,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AccessRequest — requête d'accès à évaluer
+// AccessRequest — access request to evaluate
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Requête d'accès transmise au moteur de politique.
+/// Access request passed to the policy engine.
 pub struct AccessRequest<'a> {
-    /// Contexte du demandeur.
+    /// Requestor context.
     pub subject: &'a SecurityContext,
-    /// Type de ressource accédée.
+    /// Type of resource accessed.
     pub resource_kind: ResourceKind,
-    /// Label de sécurité de la ressource.
+    /// Security label of the resource.
     pub object_label: SecurityLabel,
-    /// Opération demandée : vrai = écriture, faux = lecture.
+    /// Requested operation: true = write, false = read.
     pub is_write: bool,
-    /// Données supplémentaires (syscall no, adresse, etc.).
+    /// Supplementary data (syscall no, address, etc.).
     pub context_data: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZeroTrustPolicy — moteur principal
+// ZeroTrustPolicy — main engine
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Moteur de politique Zero-Trust.
+/// Zero-Trust policy engine.
 ///
-/// # Algorithme d'évaluation
-/// 1. Niveau de confiance insuffisant → DenyAndAudit
-/// 2. Restriction active pour ce type de ressource → DenyAndAudit
-/// 3. Vérification MLS (Bell-LaPadula + Biba) → Deny si violation
-/// 4. Règle spécifique au type de ressource
-/// 5. Allow (default allow pour Kernel/System, Deny pour le reste si non matché)
+/// # Evaluation algorithm
+/// 1. Insufficient trust level → DenyAndAudit
+/// 2. Active restriction for this resource kind → DenyAndAudit
+/// 3. MLS verification (Bell-LaPadula + Biba) → Deny on violation
+/// 4. Resource kind-specific rule
+/// 5. Allow (default allow for Kernel/System, Deny for remainder if unmatched)
 pub struct ZeroTrustPolicy {
     evaluations: AtomicU64,
     denials: AtomicU64,
@@ -124,15 +124,15 @@ impl ZeroTrustPolicy {
         }
     }
 
-    /// Évalue une requête d'accès — cœur du moteur Zero-Trust.
+    /// Evaluates an access request — core of the Zero-Trust engine.
     pub fn evaluate(&self, req: &AccessRequest<'_>) -> PolicyAction {
         self.evaluations.fetch_add(1, Ordering::Relaxed);
 
         let trust = req.subject.trust_level();
 
-        // ── 1. Threads non fiables : deny tout sauf lecture Public ───────────
+        // ── 1. Untrusted threads: deny all except Public read ────────────────
         if trust == TrustLevel::Untrusted {
-            // Untrusted peut uniquement lire des ressources Public
+            // Untrusted can only read Public resources
             if req.is_write
                 || req.object_label.confidentiality != super::labels::ConfidentialityLevel::Public
             {
@@ -142,7 +142,7 @@ impl ZeroTrustPolicy {
             }
         }
 
-        // ── 2. Restrictions actives ───────────────────────────────────────────
+        // ── 2. Active restrictions ───────────────────────────────────────────
         let action = self.check_restrictions(req, trust);
         if action.is_deny() {
             self.denials.fetch_add(1, Ordering::Relaxed);
@@ -150,17 +150,17 @@ impl ZeroTrustPolicy {
             return action;
         }
 
-        // ── 3. Vérification MLS ───────────────────────────────────────────────
-        // FIX-ZT-SYSCALL : l'INVOCATION d'un syscall n'est PAS un flux de données
-        // Bell-LaPadula. L'autorisation d'un syscall est déléguée à
-        // `check_restrictions` / sandbox (capabilities, seccomp) — cf. la branche
-        // `ResourceKind::Syscall` de `check_restrictions` qui renvoie Allow.
-        // Appliquer le no-read-up contre le label `kernel()` (TopSecret/Critical)
-        // ici refuserait *tous* les syscalls d'un thread `user_default()`
-        // (Internal ne domine pas TopSecret), rendant l'espace utilisateur
-        // entièrement inopérant (PID 1 ne peut ni write, ni fork, ni faire d'IPC).
-        // Le MLS ne s'applique donc qu'aux accès aux ressources de DONNÉES
-        // (fichiers, IPC, mémoire, devices), pas à l'acte d'appeler un syscall.
+        // ── 3. MLS verification ───────────────────────────────────────────────
+        // FIX-ZT-SYSCALL: INVOCATION of a syscall is NOT a Bell-LaPadula data
+        // flow. Syscall authorization is delegated to `check_restrictions` /
+        // sandbox (capabilities, seccomp) — cf. `ResourceKind::Syscall` branch
+        // of `check_restrictions` which returns Allow.
+        // Applying no-read-up against `kernel()` label (TopSecret/Critical)
+        // here would deny *all* syscalls from a `user_default()` thread
+        // (Internal does not dominate TopSecret), rendering userspace
+        // completely inoperable (PID 1 can neither write, fork, nor do IPC).
+        // MLS thus applies only to DATA resource accesses (files, IPC,
+        // memory, devices), not to the act of calling a syscall.
         let mls_applies = !matches!(req.resource_kind, ResourceKind::Syscall);
         if mls_applies {
             let subject_label = req.subject.label();
@@ -173,7 +173,7 @@ impl ZeroTrustPolicy {
             if !mls_ok {
                 self.denials.fetch_add(1, Ordering::Relaxed);
                 req.subject.record_deny();
-                // Violation MLS : potentiellement un exploit → alerte
+                // MLS violation: potentially an exploit → alert
                 if req.object_label.confidentiality >= super::labels::ConfidentialityLevel::Secret {
                     self.alerts.fetch_add(1, Ordering::Relaxed);
                     return PolicyAction::DenyAndAlert;
@@ -182,7 +182,7 @@ impl ZeroTrustPolicy {
             }
         }
 
-        // ── 4. Règles spécifiques aux ressources ──────────────────────────────
+        // ── 4. Resource-specific rules ────────────────────────────────────────
         let resource_action = self.check_resource_rules(req, trust);
         if resource_action.is_deny() {
             self.denials.fetch_add(1, Ordering::Relaxed);
@@ -200,7 +200,7 @@ impl ZeroTrustPolicy {
 
         match req.resource_kind {
             ResourceKind::IpcEndpoint => {
-                // Pas de restriction active interdisant l'IPC
+                // No active restriction forbidding IPC
                 PolicyAction::Allow
             }
             ResourceKind::FileInode => {
@@ -213,11 +213,11 @@ impl ZeroTrustPolicy {
                 PolicyAction::Allow
             }
             ResourceKind::Syscall => {
-                // TIER 1.1 : enforce les restrictions sandbox/pledge RÉELLES du
-                // process appelant. `context_data` porte le numéro de syscall ;
-                // si l'appelant détient une restriction qui interdit ce syscall
-                // (NO_FORK/NO_EXEC/NO_NETWORK/NO_PROCESS_CREATE), on refuse + audit.
-                // Défaut (process non restreint) → masque 0 → Allow (boot-safe).
+                // TIER 1.1: enforce ACTUAL sandbox/pledge restrictions of the
+                // calling process. `context_data` carries the syscall number;
+                // if caller holds a restriction forbidding this syscall
+                // (NO_FORK/NO_EXEC/NO_NETWORK/NO_PROCESS_CREATE), deny + audit.
+                // Default (unrestricted process) → mask 0 → Allow (boot-safe).
                 let forbidding = super::process_state::syscall_restriction_mask(req.context_data);
                 if forbidding != 0 && req.subject.has_restriction(forbidding) {
                     return PolicyAction::DenyAndAudit;
@@ -225,7 +225,7 @@ impl ZeroTrustPolicy {
                 PolicyAction::Allow
             }
             ResourceKind::Device => {
-                // Devices : restreint aux threads Trusted+
+                // Devices: restricted to Trusted+ threads
                 PolicyAction::Allow
             }
             _ => PolicyAction::Allow,
@@ -235,14 +235,14 @@ impl ZeroTrustPolicy {
     fn check_resource_rules(&self, req: &AccessRequest<'_>, trust: TrustLevel) -> PolicyAction {
         match req.resource_kind {
             ResourceKind::CryptoKey => {
-                // Clés crypto : minimum Trusted
+                // Crypto keys: minimum Trusted
                 if trust < TrustLevel::Trusted {
                     return PolicyAction::DenyAndAudit;
                 }
                 PolicyAction::Allow
             }
             ResourceKind::DmaChannel => {
-                // DMA : réservé aux drivers (Trusted+)
+                // DMA: reserved for drivers (Trusted+)
                 if trust < TrustLevel::Trusted {
                     return PolicyAction::DenyAndAlert;
                 }
@@ -258,7 +258,7 @@ impl ZeroTrustPolicy {
         }
     }
 
-    /// Statistiques du moteur.
+    /// Engine statistics.
     pub fn stats(&self) -> PolicyStats {
         PolicyStats {
             evaluations: self.evaluations.load(Ordering::Relaxed),
@@ -274,7 +274,7 @@ impl Default for ZeroTrustPolicy {
     }
 }
 
-/// Snapshot de statistiques du moteur de politique.
+/// Policy engine statistics snapshot.
 #[derive(Debug, Clone, Copy)]
 pub struct PolicyStats {
     pub evaluations: u64,
@@ -282,7 +282,7 @@ pub struct PolicyStats {
     pub alerts: u64,
 }
 
-// Singleton global
+// Global singleton
 static GLOBAL_POLICY: ZeroTrustPolicy = ZeroTrustPolicy::new();
 
 pub fn global_policy() -> &'static ZeroTrustPolicy {

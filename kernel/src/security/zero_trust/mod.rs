@@ -1,9 +1,9 @@
 // kernel/src/security/zero_trust/mod.rs
 
-//! Zero-Trust Security — Politique de sécurité avec vérification de chaque accès.
+//! Zero-Trust Security — Security policy with verification of every access.
 //!
-//! PRINCIPE : "Never trust, always verify"
-//! Tout accès à une ressource passe par `verify::verify_access()`.
+//! PRINCIPLE: "Never trust, always verify"
+//! Every resource access goes through `verify::verify_access()`.
 
 pub mod context;
 pub mod labels;

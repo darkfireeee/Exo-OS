@@ -1,19 +1,19 @@
 // kernel/src/security/crypto/xchacha20_poly1305.rs
 //
-// XChaCha20-BLAKE3 AEAD pour le kernel.
+// XChaCha20-BLAKE3 AEAD for the kernel.
 //
-// Le nom de module historique est conservé pour compatibilité API, mais
-// l'authentification côté noyau est réalisée avec BLAKE3 keyed-hash plutôt que
-// Poly1305 afin d'éviter les dépendances SIMD/SSE2 indisponibles sur
+// The historical module name is preserved for API compatibility, but
+// kernel-side authentication is performed with BLAKE3 keyed-hash rather than
+// Poly1305 in order to avoid SIMD/SSE2 dependencies unavailable on
 // `x86_64-unknown-none`.
 
 use super::blake3::{blake3_derive_key, constant_time_eq, Blake3Hasher};
 
-/// Longueur du tag d'authentification (16 octets tronqués).
+/// Authentication tag length (16 truncated bytes).
 pub const TAG_LEN: usize = 16;
-/// Longueur du nonce XChaCha20 (24 octets).
+/// XChaCha20 nonce length (24 bytes).
 pub const XCHACHA20_NONCE_LEN: usize = 24;
-/// Longueur de la clé ChaCha20 (32 octets).
+/// ChaCha20 key length (32 bytes).
 pub const KEY_LEN: usize = 32;
 
 const CHACHA20_BLOCK_SIZE: usize = 64;
@@ -71,16 +71,16 @@ pub fn xchacha20_poly1305_open(
     Ok(())
 }
 
-/// FIX-F1 : chiffrement de flux XChaCha20 **longueur-préservante** (XOR keystream).
+/// FIX-F1: **length-preserving** XChaCha20 stream cipher (XOR keystream).
 ///
-/// `encrypt == decrypt` (involution XOR). Destiné au chiffrement-at-rest ExoFS au
-/// niveau bloc, où une expansion de longueur (tag AEAD) casserait le layout disque.
+/// `encrypt == decrypt` (XOR involution). Intended for ExoFS block-level
+/// at-rest encryption, where a length expansion (AEAD tag) would break disk layout.
 ///
-/// SÉCURITÉ : sûr UNIQUEMENT si la paire `(key, nonce)` ne chiffre qu'un seul
-/// plaintext (sinon fuite du XOR des clairs). C'est garanti dans ExoFS car les
-/// blobs sont **immuables et adressés par contenu** (BlobId = hash) : un BlobId
-/// donné ne change jamais. L'intégrité est fournie par le checksum BLAKE3 de blob
-/// existant (le chiffrement de flux seul n'authentifie pas).
+/// SECURITY: safe ONLY if the `(key, nonce)` pair encrypts a single
+/// plaintext (otherwise leakage of XOR of plaintexts). This is guaranteed in ExoFS because
+/// blobs are **immutable and content-addressed** (BlobId = hash): a given
+/// BlobId never changes. Integrity is provided by the existing BLAKE3 blob
+/// checksum (stream cipher alone does not authenticate).
 #[inline]
 pub fn xchacha20_xor(key: &[u8; KEY_LEN], nonce: &[u8; XCHACHA20_NONCE_LEN], data: &mut [u8]) {
     xchacha20_apply(key, nonce, data);
@@ -265,22 +265,22 @@ mod tests {
         );
     }
 
-    /// Vecteur de test connu **RFC 8439 §2.3.2** — valide que la ChaCha20
-    /// implémentée à la main est CONFORME au standard (interop + correction),
-    /// pas seulement auto-cohérente. Test d'or pour une primitive maison.
+    /// Known test vector **RFC 8439 §2.3.2** — validates that hand-implemented
+    /// ChaCha20 is CONFORMANT to the standard (interop + correctness),
+    /// not only self-consistent. Golden test for an in-house primitive.
     #[test]
     fn chacha20_block_matches_rfc8439_2_3_2() {
-        // Clé = 00 01 02 … 1f
+        // Key = 00 01 02 … 1f
         let mut key = [0u8; KEY_LEN];
         for (i, b) in key.iter_mut().enumerate() {
             *b = i as u8;
         }
-        // Nonce (12 o) tel que state[13..16] = 0x09000000, 0x4a000000, 0x00000000.
+        // Nonce (12 B) such that state[13..16] = 0x09000000, 0x4a000000, 0x00000000.
         let nonce: [u8; 12] = [
             0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00,
         ];
         let counter = 1u32;
-        // Keystream attendu (RFC 8439 §2.3.2).
+        // Expected keystream (RFC 8439 §2.3.2).
         let expected: [u8; 64] = [
             0x10, 0xf1, 0xe7, 0xe4, 0xd1, 0x3b, 0x59, 0x15, 0x50, 0x0f, 0xdd, 0x1f, 0xa3, 0x20,
             0x71, 0xc4, 0xc7, 0xd1, 0xf4, 0xc7, 0x33, 0xc0, 0x68, 0x03, 0x04, 0x22, 0xaa, 0x9a,

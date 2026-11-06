@@ -1,34 +1,34 @@
 // kernel/src/security/isolation/namespaces.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Namespaces d'isolation — Isolation PID/Mount/Network/IPC par namespace
+// Isolation Namespaces — PID/Mount/Network/IPC isolation per namespace
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • NamespaceSet : ensemble de namespaces pour un processus
-//   • Types : PID, Mount, Network, IPC, User, UTS
-//   • Chaque namespace a un identifiant unique croissant
-//   • Les namespaces s'intègrent avec capability/namespace.rs (NamespaceId)
-//   • Un processus ne peut voir que les ressources dans son namespace
+// Architecture:
+//   • NamespaceSet: set of namespaces for a process
+//   • Kinds: PID, Mount, Network, IPC, User, UTS
+//   • Each namespace has a monotonically increasing unique ID
+//   • Namespaces integrate with capability/namespace.rs (NamespaceId)
+//   • A process can only see resources within its namespace
 //
-// RÈGLE NS-01 : Un processus ne peut PAS accéder à un namespace parent sans CAP_NS_ADMIN.
-// RÈGLE NS-02 : La création d'un namespace requiert CAP_SYS_ADMIN.
-// RÈGLE NS-03 : Un namespace est détruit quand son refcount atteint 0.
+// RULE NS-01: A process CANNOT access a parent namespace without CAP_NS_ADMIN.
+// RULE NS-02: Namespace creation requires CAP_SYS_ADMIN.
+// RULE NS-03: A namespace is destroyed when its refcount reaches 0.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Identifiants de namespace
+// Namespace identifiers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant unique d'un namespace (global, croissant).
+/// Unique namespace identifier (global, increasing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NsId(pub u32);
 
 impl NsId {
-    /// Namespace init (PID 1) — id 0.
+    /// Init namespace (PID 1) — id 0.
     pub const INIT: NsId = NsId(0);
 
     pub fn is_init(&self) -> bool {
@@ -36,7 +36,7 @@ impl NsId {
     }
 }
 
-// Compteur global pour l'allocation de NsId
+// Global counter for NsId allocation
 static NS_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 fn alloc_ns_id() -> NsId {
@@ -44,10 +44,10 @@ fn alloc_ns_id() -> NsId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Type de namespace
+// Namespace type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Types de namespaces supportés par Exo-OS.
+/// Namespace types supported by Exo-OS.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NsKind {
@@ -64,31 +64,31 @@ impl NsKind {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Namespace — descripteur d'un namespace unique
+// Namespace — descriptor of a single namespace
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur d'un namespace.
+/// Namespace descriptor.
 pub struct Namespace {
     pub id: NsId,
     pub kind: NsKind,
-    /// Parent namespace (None pour init).
+    /// Parent namespace (None for init).
     pub parent_id: Option<NsId>,
-    /// Compteur de références — détruit quand 0.
+    /// Reference counter — destroyed when 0.
     ref_count: AtomicU32,
-    /// Nombre de processus dans ce namespace.
+    /// Number of processes in this namespace.
     process_count: AtomicU32,
     /// Flags (bitmask).
     flags: AtomicU64,
 }
 
 pub mod ns_flags {
-    /// Namespace est en cours de destruction.
+    /// Namespace is undergoing destruction.
     pub const DYING: u64 = 1 << 0;
-    /// Namespace est un clone d'un parent.
+    /// Namespace is a clone of a parent.
     pub const CLONED: u64 = 1 << 1;
-    /// Namespace réseau est isolé (no external access).
+    /// Network namespace is isolated (no external access).
     pub const NET_ISOLATED: u64 = 1 << 2;
-    /// Namespace PID commence à 1 (contenant).
+    /// PID namespace starts at 1 (container).
     pub const PID_CONTAINER: u64 = 1 << 3;
 }
 
@@ -115,12 +115,12 @@ impl Namespace {
         }
     }
 
-    /// Acquiert une référence (incrémente ref_count).
+    /// Acquires a reference (increments ref_count).
     pub fn acquire(&self) {
         self.ref_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Libère une référence. Retourne true si le namespace doit être détruit.
+    /// Releases a reference. Returns true if the namespace must be destroyed.
     pub fn release(&self) -> bool {
         let prev = self.ref_count.fetch_sub(1, Ordering::Release);
         if prev == 1 {
@@ -130,12 +130,12 @@ impl Namespace {
         false
     }
 
-    /// Enregistre un processus dans ce namespace.
+    /// Enrolls a process in this namespace.
     pub fn enter(&self) {
         self.process_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Désinscrit un processus de ce namespace.
+    /// Unenrolls a process from this namespace.
     pub fn leave(&self) {
         self.process_count.fetch_sub(1, Ordering::Relaxed);
     }
@@ -152,18 +152,18 @@ impl Namespace {
         self.flags.load(Ordering::Relaxed) & ns_flags::DYING != 0
     }
 
-    /// Vérifie si un namespace `other` est visible depuis `self`.
-    /// Un ns est visible depuis soi-même ou depuis un namespace parent.
+    /// Checks if a namespace `other` is visible from `self`.
+    /// A ns is visible from itself or from a parent namespace.
     pub fn can_see(&self, other: &Namespace) -> bool {
-        // Même namespace = toujours visible
+        // Same namespace = always visible
         if self.id == other.id {
             return true;
         }
-        // Le namespace init est visible par tous
+        // The init namespace is visible by all
         if other.id.is_init() {
             return true;
         }
-        // Vérifier la relation parent
+        // Check parent relationship
         if let Some(parent) = self.parent_id {
             if parent == other.id {
                 return true;
@@ -174,10 +174,10 @@ impl Namespace {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NamespaceSet — ensemble de namespaces d'un processus
+// NamespaceSet — set of namespaces of a process
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensemble de namespaces d'un processus (un namespace par type).
+/// Set of namespaces of a process (one namespace per type).
 pub struct NamespaceSet {
     pub pid_ns: NsId,
     pub mnt_ns: NsId,
@@ -188,7 +188,7 @@ pub struct NamespaceSet {
 }
 
 impl NamespaceSet {
-    /// Crée le namespace set du processus init.
+    /// Creates the namespace set for the init process.
     pub const fn init() -> Self {
         Self {
             pid_ns: NsId::INIT,
@@ -200,7 +200,7 @@ impl NamespaceSet {
         }
     }
 
-    /// Retourne le NsId pour un kind donné.
+    /// Returns the NsId for a given kind.
     pub fn get(&self, kind: NsKind) -> NsId {
         match kind {
             NsKind::Pid => self.pid_ns,
@@ -212,7 +212,7 @@ impl NamespaceSet {
         }
     }
 
-    /// Crée un clone du namespace set avec un nouveau namespace pour `kind`.
+    /// Creates a clone of the namespace set with a new namespace for `kind`.
     pub fn clone_with_new(&self, kind: NsKind, new_id: NsId) -> Self {
         let mut ns = *self;
         match kind {
@@ -226,7 +226,7 @@ impl NamespaceSet {
         ns
     }
 
-    /// Vérifie si le namespace de type `kind` est le namespace init.
+    /// Checks if the namespace of type `kind` is the init namespace.
     pub fn is_init_ns(&self, kind: NsKind) -> bool {
         self.get(kind) == NsId::INIT
     }
@@ -240,7 +240,7 @@ impl Clone for NamespaceSet {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NsManager — registre global des namespaces actifs
+// NsManager — global registry of active namespaces
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_NAMESPACES: usize = 256;
@@ -252,7 +252,7 @@ struct NsRegistry {
 
 impl NsRegistry {
     const fn new() -> Self {
-        // SAFETY: Option<Namespace> est valide à zéro pour None (initialisé via MaybeUninit implicite)
+        // SAFETY: Option<Namespace> is valid all-zero for None (initialized via implicit MaybeUninit)
         const NONE_NS: Option<Namespace> = None;
         Self {
             entries: [NONE_NS; MAX_NAMESPACES],
@@ -293,7 +293,7 @@ impl NsRegistry {
 
 static NS_REGISTRY: Mutex<NsRegistry> = Mutex::new(NsRegistry::new());
 
-/// Crée un nouveau namespace du type donné.
+/// Creates a new namespace of the given type.
 pub fn create_namespace(kind: NsKind, parent: Option<NsId>) -> Result<NsId, NsError> {
     let ns = Namespace::new(kind, parent);
     let id = ns.id;
@@ -301,7 +301,7 @@ pub fn create_namespace(kind: NsKind, parent: Option<NsId>) -> Result<NsId, NsEr
     Ok(id)
 }
 
-/// Détruit un namespace s'il n'est plus référencé.
+/// Destroys a namespace if it is no longer referenced.
 pub fn destroy_namespace(id: NsId) {
     let mut reg = NS_REGISTRY.lock();
     if let Some(ns) = reg.find(id) {

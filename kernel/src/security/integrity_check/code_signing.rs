@@ -1,18 +1,18 @@
 // kernel/src/security/integrity/code_signing.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Code Signing — Vérification de signature Ed25519 pour modules kernel
+// Code Signing — Ed25519 signature verification for kernel modules
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   • Chaque module kernel doit être signé par une clé Ed25519 Exo-OS
-//   • La clé publique de vérification est embeddée dans le kernel (ROM)
-//   • Vérification : Ed25519.verify(module_hash || metadata, signature, pub_key)
-//   • La liste des modules chargés est auditée
+// Architecture:
+//   • Each kernel module must be signed by an Exo-OS Ed25519 key
+//   • The verification public key is embedded in the kernel (ROM)
+//   • Verification: Ed25519.verify(module_hash || metadata, signature, pub_key)
+//   • The list of loaded modules is audited
 //
-// RÈGLE CSIGN-01 : Un module non signé ne peut JAMAIS être chargé en kernel-space.
-// RÈGLE CSIGN-02 : La clé publique maître est en ROM (non modifiable au runtime).
-// RÈGLE CSIGN-03 : Chaque module a ses propres métadonnées vérifiées (name, version).
+// RULE CSIGN-01: An unsigned module can NEVER be loaded in kernel-space.
+// RULE CSIGN-02: The master public key is in ROM (not modifiable at runtime).
+// RULE CSIGN-03: Each module has its own verified metadata (name, version).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::super::crypto::blake3::blake3_hash;
@@ -20,16 +20,16 @@ use super::super::crypto::ed25519::{ed25519_verify, Ed25519Error};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Clé publique maître (embeddée en ROM)
+// Master public key (embedded in ROM)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Clé publique Ed25519 maître pour la vérification des modules Exo-OS.
+/// Master Ed25519 public key for Exo-OS module verification.
 ///
-/// SECURITE (FIX-F5) : remplace les anciens Test Vectors RFC 8032 (dont la clé
-/// privée était PUBLIQUE → forge triviale). Paire de **développement** réelle
-/// générée hors-RFC ; la privée correspondante est dans
-/// `.secrets/exoseal_master.pem` (gitignored, JAMAIS committée). Production :
-/// régénérer hors-ligne, stocker la privée en HSM, embarquer ici la publique prod.
+/// SECURITY (FIX-F5): replaces the old RFC 8032 Test Vectors (whose private key
+/// was PUBLIC → trivial forgery). Real **development** pair
+/// generated outside RFC; corresponding private key is in
+/// `.secrets/exoseal_master.pem` (gitignored, NEVER committed). Production:
+/// regenerate offline, store private key in HSM, embed prod public key here.
 ///   openssl genpkey -algorithm ed25519 -out master.pem
 ///   openssl pkey -in master.pem -pubout -outform DER | tail -c 32 | xxd -i
 static MASTER_PUBLIC_KEY: [u8; 32] = [
@@ -37,24 +37,24 @@ static MASTER_PUBLIC_KEY: [u8; 32] = [
     0x97, 0xaf, 0x31, 0x8f, 0x15, 0xb0, 0x54, 0x49, 0xf3, 0xbb, 0x6b, 0xb8, 0x6d, 0x5d, 0xd6, 0x6e,
 ];
 
-/// Clé publique secondaire pour mise à jour en vol (firmware updates).
-/// FIX-F5 : paire de dev réelle ; privée dans `.secrets/exoseal_update.pem` (gitignored).
+/// Secondary public key for in-flight updates (firmware updates).
+/// FIX-F5: real dev pair; private key in `.secrets/exoseal_update.pem` (gitignored).
 static UPDATE_PUBLIC_KEY: [u8; 32] = [
     0x15, 0x90, 0x98, 0x7c, 0xc2, 0x16, 0xc2, 0x4f, 0x6f, 0xa7, 0xbb, 0xa4, 0x9b, 0x4a, 0xd1, 0x99,
     0x6c, 0x29, 0x47, 0xf3, 0x89, 0x1a, 0xd4, 0x72, 0x5d, 0xf2, 0x05, 0x92, 0x03, 0xf7, 0xfa, 0xd8,
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-DEEP-CRYPTO : garde structurelle anti-« fausse sécurité »
+// FIX-DEEP-CRYPTO: structural guard against "false security"
 //
-// Une clé de vérification NULLE ou égale à un vecteur de test public connu rend
-// la signature forgeable trivialement (la privée correspondante est publique).
-// C'est exactement le bug corrigé par F5. On l'empêche désormais de RÉ-APPARAÎTRE
-// au niveau du compilateur : si une de ces clés redevient un vecteur de test, le
-// kernel **ne compile plus**. La sécurité ne peut plus régresser silencieusement.
+// A NULL verification key or one equal to a known public test vector makes
+// the signature trivially forgeable (the corresponding private key is public).
+// This is exactly the bug fixed by F5. We now prevent it from RE-APPEARING
+// at the compiler level: if one of these keys becomes a test vector again, the
+// kernel **no longer compiles**. Security can no longer regress silently.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vrai si `k` est nulle ou un vecteur de test Ed25519 connu (INTERDIT en ROM).
+/// True if `k` is all-zero or a known Ed25519 test vector (FORBIDDEN in ROM).
 const fn key_is_forbidden(k: &[u8; 32]) -> bool {
     let mut all_zero = true;
     let mut i = 0;
@@ -67,8 +67,8 @@ const fn key_is_forbidden(k: &[u8; 32]) -> bool {
     if all_zero {
         return true;
     }
-    // RFC 8032 Test 1 : clé publique, ET la graine (mal) utilisée comme clé
-    // publique (le bug historique du bootloader).
+    // RFC 8032 Test 1: public key, AND seed (incorrectly) used as public
+    // key (the historic bootloader bug).
     const RFC8032_PUB: [u8; 32] = [
         0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07,
         0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07,
@@ -105,49 +105,49 @@ const _: () = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs de code signing
+// Code signing errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeSignError {
-    /// Signature invalide.
+    /// Invalid signature.
     InvalidSignature,
-    /// Hash de module invalide.
+    /// Invalid module hash.
     InvalidModuleHash,
-    /// Métadonnées corrompues.
+    /// Corrupted metadata.
     CorruptedMetadata,
-    /// Module trop grand (> MAX_MODULE_SIZE).
+    /// Module too large (> MAX_MODULE_SIZE).
     ModuleTooLarge,
-    /// Clé de vérification inconnue.
+    /// Unknown public key.
     UnknownPublicKey,
-    /// Module déjà chargé (anti-replay).
+    /// Module already loaded (anti-replay).
     AlreadyLoaded,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ModuleHeader — en-tête de module signé
+// ModuleHeader — signed module header
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// En-tête d'un module kernel signé (présent au début du binaire).
+/// Header of a signed kernel module (located at the beginning of the binary).
 #[repr(C)]
 pub struct ModuleHeader {
-    /// Magic number : b"EXOMOD\xFE\xFF"
+    /// Magic number: b"EXOMOD\xFE\xFF"
     pub magic: [u8; 8],
-    /// Version du format d'en-tête.
+    /// Header format version.
     pub version: u32,
-    /// Taille du module (bytes).
+    /// Module size (bytes).
     pub module_size: u32,
-    /// Nom du module (UTF-8, 64 bytes max).
+    /// Module name (UTF-8, 64 bytes max).
     pub name: [u8; 64],
-    /// Version sémantique (major.minor.patch)
+    /// Semantic version (major.minor.patch)
     pub semver: [u32; 3],
-    /// Hash BLAKE3 du code du module (excluant cet en-tête).
+    /// BLAKE3 hash of the module code (excluding this header).
     pub code_hash: [u8; 32],
-    /// Signature Ed25519 de (magic || version || name || semver || code_hash).
+    /// Ed25519 signature of (magic || version || name || semver || code_hash).
     pub signature: [u8; 64],
-    /// Index de clé publique utilisée (0=master, 1=update).
+    /// Public key index used (0=master, 1=update).
     pub key_index: u8,
-    /// Padding pour alignment 512 bytes.
+    /// Padding for 512-byte alignment.
     pub _pad: [u8; 3],
 }
 
@@ -155,18 +155,18 @@ impl ModuleHeader {
     pub const MAGIC: [u8; 8] = *b"EXOMOD\xFE\xFF";
     pub const SIZE: usize = core::mem::size_of::<ModuleHeader>();
 
-    /// Vérifie le magic number.
+    /// Checks the magic number.
     pub fn check_magic(&self) -> bool {
         self.magic == Self::MAGIC
     }
 
-    /// Retourne le nom du module comme slice UTF-8.
+    /// Returns the module name as a UTF-8 slice.
     pub fn name_str(&self) -> &[u8] {
         let len = self.name.iter().position(|&b| b == 0).unwrap_or(64);
         &self.name[..len]
     }
 
-    /// Construit les données signées (ce qui est hashé avant la signature).
+    /// Builds the signed data (what is hashed before signing).
     fn signed_data(&self) -> [u8; 8 + 4 + 64 + 12 + 32] {
         let mut data = [0u8; 8 + 4 + 64 + 12 + 32];
         data[..8].copy_from_slice(&self.magic);
@@ -180,31 +180,31 @@ impl ModuleHeader {
     }
 }
 
-/// Limite de taille de module kernel (64 MiB).
+/// Kernel module size limit (64 MiB).
 const MAX_MODULE_SIZE: u32 = 64 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification de module
+// Module verification
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie la signature et l'intégrité d'un module kernel.
+/// Verifies the signature and integrity of a kernel module.
 ///
-/// - `header` : en-tête du module (pointeur vers le début du binaire)
-/// - `code`   : code du module (excluant l'en-tête)
+/// - `header`: module header (pointer to the start of the binary)
+/// - `code`: module code (excluding the header)
 pub fn verify_module_signature(header: &ModuleHeader, code: &[u8]) -> Result<(), CodeSignError> {
-    // Vérifier le magic
+    // Check magic
     if !header.check_magic() {
         SIGN_STATS.failures.fetch_add(1, Ordering::Relaxed);
         return Err(CodeSignError::CorruptedMetadata);
     }
 
-    // Vérifier la taille
+    // Check size
     if header.module_size > MAX_MODULE_SIZE {
         SIGN_STATS.failures.fetch_add(1, Ordering::Relaxed);
         return Err(CodeSignError::ModuleTooLarge);
     }
 
-    // Sélectionner la clé publique
+    // Select public key
     let pub_key = match header.key_index {
         0 => &MASTER_PUBLIC_KEY,
         1 => &UPDATE_PUBLIC_KEY,
@@ -214,7 +214,7 @@ pub fn verify_module_signature(header: &ModuleHeader, code: &[u8]) -> Result<(),
         }
     };
 
-    // Vérifier le hash du code
+    // Verify code hash
     let computed_hash = blake3_hash(code);
     let mut hash_diff = 0u8;
     for i in 0..32 {
@@ -225,7 +225,7 @@ pub fn verify_module_signature(header: &ModuleHeader, code: &[u8]) -> Result<(),
         return Err(CodeSignError::InvalidModuleHash);
     }
 
-    // Vérifier la signature Ed25519
+    // Verify Ed25519 signature
     let signed_data = header.signed_data();
     ed25519_verify(pub_key, &signed_data, &header.signature).map_err(|e| match e {
         Ed25519Error::InvalidSignature => CodeSignError::InvalidSignature,
@@ -238,7 +238,7 @@ pub fn verify_module_signature(header: &ModuleHeader, code: &[u8]) -> Result<(),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registre des modules chargés (anti-replay)
+// Loaded modules registry (anti-replay)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_LOADED_MODULES: usize = 64;
@@ -296,7 +296,7 @@ impl ModuleRegistry {
 
 static MODULE_REG: spin::Mutex<ModuleRegistry> = spin::Mutex::new(ModuleRegistry::new());
 
-/// Enregistre un module comme chargé (après vérification réussie).
+/// Registers a module as loaded (after successful verification).
 pub fn register_loaded_module(header: &ModuleHeader) -> Result<(), CodeSignError> {
     let name_hash = blake3_hash(header.name_str());
     let mut reg = MODULE_REG.lock();
@@ -309,7 +309,7 @@ pub fn register_loaded_module(header: &ModuleHeader) -> Result<(), CodeSignError
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct SignStats {

@@ -147,7 +147,7 @@ pub fn exonmi_stats() -> ExoNmiStats {
 /// # Safety
 /// The LAPIC must be mapped in virtual memory and the offset must be valid.
 #[inline]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn lapic_write32(offset: u32, val: u32) {
     let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed) as usize;
     let ptr = (base + offset as usize) as *mut u32;
@@ -159,7 +159,7 @@ unsafe fn lapic_write32(offset: u32, val: u32) {
 /// # Safety
 /// The LAPIC must be mapped in virtual memory and the offset must be valid.
 #[inline]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn lapic_read32(offset: u32) -> u32 {
     let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed) as usize;
     let ptr = (base + offset as usize) as *const u32;
@@ -179,7 +179,7 @@ unsafe fn lapic_read32(offset: u32) -> u32 {
 /// # Safety
 /// The LAPIC must be initialized and mapped.
 #[inline]
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 unsafe fn reload_timer() {
     let count = CACHED_INITIAL_COUNT.load(Ordering::Relaxed);
     if count > 0 {
@@ -212,7 +212,7 @@ fn get_apic_timer_frequency() -> u64 {
     // Core crystal clock ratio = EBX/EAX
     // APIC timer frequency ≈ crystal_clock * EBX / EAX
     let (eax, ebx, ecx): (u32, u32, u32);
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         let ebx_r: u64;
         core::arch::asm!(
@@ -249,12 +249,12 @@ fn get_apic_timer_frequency() -> u64 {
     }
 
     // Save current timer configuration
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let saved_lvt = unsafe { lapic_read32(LAPIC_LVT_TIMER) };
     let saved_dcr = unsafe { lapic_read32(LAPIC_TIMER_DCR) };
 
     // Configure timer: one-shot, divisor 16, masked (no IRQ)
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         lapic_write32(LAPIC_TIMER_DCR, 0x03); // div/16
         lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
@@ -262,7 +262,7 @@ fn get_apic_timer_frequency() -> u64 {
 
     let test_count: u32 = 10_000_000;
     let tsc_start = tsc::read_tsc_begin();
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         lapic_write32(LAPIC_TIMER_ICR, test_count);
     }
@@ -271,7 +271,7 @@ fn get_apic_timer_frequency() -> u64 {
     let mut current = test_count;
     let mut iterations = 0u32;
     while current > 0 && iterations < 10_000_000 {
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         current = unsafe { lapic_read32(LAPIC_TIMER_CCR) };
         iterations += 1;
         core::hint::spin_loop();
@@ -281,7 +281,7 @@ fn get_apic_timer_frequency() -> u64 {
     let tsc_delta = tsc_end.wrapping_sub(tsc_start);
 
     // Restore previous timer configuration
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         lapic_write32(LAPIC_LVT_TIMER, saved_lvt);
         lapic_write32(LAPIC_TIMER_DCR, saved_dcr);
@@ -343,7 +343,7 @@ fn compute_initial_count(timeout_ms: u64) -> u32 {
 /// separately).
 pub fn exonmi_init() {
     // Read the LAPIC physical base address from MSR
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     let apic_base_phys = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & 0xFFFF_F000;
     // Convert to virtual address
     let apic_base_virt =
@@ -352,7 +352,7 @@ pub fn exonmi_init() {
 
     if local_apic::claim_lapic_timer(LapicTimerOwner::ExoNmiWatchdog) {
         // Ensure the timer is masked while ExoNmi owns it.
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
         }
@@ -380,7 +380,7 @@ pub fn arm_watchdog(timeout_ms: u64) {
         CONFIGURED_TIMEOUT_MS.store(0, Ordering::Release);
         CACHED_INITIAL_COUNT.store(0, Ordering::Release);
         if local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog {
-            // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+            // SAFETY: validated low-level operation — see block documentation.
             unsafe {
                 lapic_write32(LAPIC_LVT_TIMER, LVT_TIMER_MASKED | LVT_TIMER_ONESHOT);
             }
@@ -414,7 +414,7 @@ pub fn arm_watchdog(timeout_ms: u64) {
 
     if owns_lapic_timer {
         // Configure the APIC timer only while ExoNmi owns it.
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             // Set divisor to 1
             lapic_write32(LAPIC_TIMER_DCR, APIC_TIMER_DIV_1);
@@ -446,7 +446,7 @@ pub fn ping() {
         && local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog
     {
         // Reload the one-shot timer (writing ICR restarts it)
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             reload_timer();
         }
@@ -471,7 +471,7 @@ pub fn tick() {
         );
 
         // Write HANDOFF_FLAG into the SSR — triggers Kernel A freeze
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
                 .store(HANDOFF_FREEZE_REQ, Ordering::Release);
@@ -487,7 +487,7 @@ pub fn tick() {
     if WATCHDOG_ARMED.load(Ordering::Acquire)
         && local_apic::lapic_timer_owner() == LapicTimerOwner::ExoNmiWatchdog
     {
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             reload_timer();
         }
@@ -503,7 +503,7 @@ pub fn exonmi_check_idt_integrity() {
         return;
     }
 
-    // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+    // SAFETY: validated low-level operation — see block documentation.
     unsafe {
         crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
             .store(HANDOFF_FREEZE_REQ, Ordering::Release);

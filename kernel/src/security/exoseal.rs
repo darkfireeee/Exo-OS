@@ -1,7 +1,7 @@
-//! ExoSeal — boot inversé ExoShield v1.0.
+//! ExoSeal — inverted boot ExoShield v1.0.
 //!
-//! Ce module rassemble le minimum opérationnel demandé par la spec :
-//! PKS default-deny, CET global, watchdog durci et verrouillage IOMMU du NIC.
+//! This module aggregates the operational minimum required by the spec:
+//! PKS default-deny, global CET, hardened watchdog and NIC IOMMU locking.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -91,7 +91,7 @@ pub fn verify_p0_fixes() -> Result<(), P0VerifyError> {
             P0VerifyError::TcbHotDomainExposed => 5,
         };
         exoledger::exo_ledger_append_p0(exoledger::ActionTag::BootSealViolation { step });
-        // SAFETY: opération bas-niveau validée — voir documentation du bloc.
+        // SAFETY: validated low-level operation — see block documentation.
         unsafe {
             ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).store(1, Ordering::Release);
         }
@@ -151,19 +151,19 @@ pub fn configure_nic_iommu_policy() {
     exoledger::exo_ledger_append_p0(exoledger::ActionTag::NicIommuLocked);
 }
 
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoseal_boot_phase0() {
     if EXOSEAL_PHASE0_DONE.swap(true, Ordering::AcqRel) {
         return;
     }
 
     configure_nic_iommu_policy();
-    // SAFETY: ExoSeal phase 0 s'exécute au boot en ring 0, avant usage normal
-    // des domaines PKS.
+    // SAFETY: ExoSeal phase 0 runs at boot in Ring 0, prior to normal use
+    // of PKS domains.
     unsafe {
         exoveil::exoveil_init();
     }
-    // SAFETY: l'activation CET globale est un prérequis ring 0 du boot ExoShield.
+    // SAFETY: global CET enablement is a Ring 0 prerequisite for ExoShield boot.
     let _ = unsafe { exocage::exocage_global_enable() };
     let _ = stage0::arm_apic_watchdog(BOOT_PHASE0_WATCHDOG_MS);
     if verify_p0_fixes().is_err() {
@@ -172,7 +172,7 @@ pub unsafe fn exoseal_boot_phase0() {
     exoledger::exo_ledger_append(exoledger::ActionTag::BootEvent { step: 0 });
 }
 
-// SAFETY: opération bas-niveau validée — voir documentation du bloc.
+// SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoseal_boot_complete() {
     if EXOSEAL_COMPLETE_DONE.swap(true, Ordering::AcqRel) {
         return;
@@ -182,13 +182,13 @@ pub unsafe fn exoseal_boot_complete() {
         return;
     }
 
-    // SAFETY: la restauration PKS intervient à la fin du boot sécurité, en ring 0.
+    // SAFETY: PKS restoration occurs at the end of security boot, in Ring 0.
     unsafe {
         exoveil::pks_restore_for_normal_ops();
     }
 
-    // SAFETY: `SSR_HANDOFF_FLAG` pointe une case SSR partagée 64-bit, mappée en
-    // ring 0 pour ExoPhoenix et utilisée ici uniquement pour revenir en mode normal.
+    // SAFETY: `SSR_HANDOFF_FLAG` points to a shared 64-bit SSR cell, mapped in
+    // Ring 0 for ExoPhoenix and used here solely to return to normal mode.
     unsafe {
         ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).store(NORMAL_HANDOFF_FLAG, Ordering::Release);
     }

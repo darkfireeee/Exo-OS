@@ -1,16 +1,16 @@
 // kernel/src/security/zero_trust/verify.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ZERO-TRUST VERIFY — Vérification de chaque accès (Zero-Trust)
+// ZERO-TRUST VERIFY — Verification of every access (Zero-Trust)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE ZT-VERIFY-01 : verify_access() est appelé pour CHAQUE accès à une
-//   ressource sensible — syscall, IPC, device, clé crypto.
+// RULE ZT-VERIFY-01: verify_access() is called for EVERY access to a
+//   sensitive resource — syscall, IPC, device, crypto key.
 //
-// RÈGLE ZT-VERIFY-02 : Un refus est TOUJOURS journalisé dans l'audit log TCB.
+// RULE ZT-VERIFY-02: A denial is ALWAYS logged into the TCB audit log.
 //
-// RÈGLE ZT-VERIFY-03 : En mode strict (SECURITY_STRICT), un DenyAndAlert
-//   déclenche une alerte immédiate vers le security monitor (Ring 1).
+// RULE ZT-VERIFY-03: In strict mode (SECURITY_STRICT), a DenyAndAlert
+//   triggers an immediate alert to the security monitor (Ring 1).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -20,8 +20,8 @@ use super::labels::SecurityLabel;
 use super::policy::{global_policy, AccessRequest, PolicyAction, ResourceKind};
 use crate::security::{audit, shield_feed};
 
-/// Bitmask des PIDs Ring1 de confiance. La forme compacte couvre les PIDs
-/// précoces des serveurs canoniques; les PIDs >= 64 prennent le slow path.
+/// Bitmask of trusted Ring1 PIDs. The compact form covers early PIDs
+/// of canonical servers; PIDs >= 64 take the slow path.
 static RING1_TRUSTED_MASK: AtomicU64 = AtomicU64::new((1u64 << 1) | (1u64 << 2));
 
 #[inline(always)]
@@ -62,17 +62,17 @@ pub fn ring1_pair_trusted(sender_pid: u32, receiver_pid: u32) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AccessError — erreur de vérification d'accès
+// AccessError — access verification error
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur retournée par `verify_access()`.
+/// Error returned by `verify_access()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessError {
-    /// Accès refusé (politique).
+    /// Access denied (policy).
     Denied,
-    /// Accès refusé avec alerte de sécurité levée.
+    /// Access denied with security alert raised.
     DeniedAlert,
-    /// Contexte de sécurité invalide.
+    /// Invalid security context.
     InvalidContext,
 }
 
@@ -87,7 +87,7 @@ impl core::fmt::Display for AccessError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// verify_access — point d'entrée principal
+// verify_access — main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
@@ -100,19 +100,19 @@ fn kind_to_feed_type(kind: ResourceKind) -> u8 {
     }
 }
 
-/// Vérifie un accès à une ressource selon la politique Zero-Trust.
+/// Verifies an access to a resource according to the Zero-Trust policy.
 ///
-/// # Paramètres
-/// * `subject` — contexte de sécurité du thread demandeur
-/// * `resource_kind` — type de la ressource accédée
-/// * `object_label` — label de sécurité de la ressource (confidentialité + intégrité)
-/// * `is_write` — vrai si écriture, faux si lecture
-/// * `context_data` — données supplémentaires pour l'audit (ObjectId, syscall no…)
+/// # Parameters
+/// * `subject` — security context of the requesting thread
+/// * `resource_kind` — type of accessed resource
+/// * `object_label` — security label of the resource (confidentiality + integrity)
+/// * `is_write` — true if write, false if read
+/// * `context_data` — additional data for audit (ObjectId, syscall no…)
 ///
-/// # Retourne
-/// * `Ok(())` si l'accès est autorisé
-/// * `Err(AccessError::Denied)` si refusé
-/// * `Err(AccessError::DeniedAlert)` si refusé avec alerte
+/// # Returns
+/// * `Ok(())` if access is granted
+/// * `Err(AccessError::Denied)` if denied
+/// * `Err(AccessError::DeniedAlert)` if denied with alert
 #[inline]
 pub fn verify_access(
     subject: &SecurityContext,
@@ -190,7 +190,7 @@ pub fn verify_access(
     }
 }
 
-/// Raccourci : vérifie un accès en lecture à un fichier.
+/// Shortcut: verifies a file read access.
 #[inline(always)]
 pub fn verify_file_read(
     subject: &SecurityContext,
@@ -206,7 +206,7 @@ pub fn verify_file_read(
     )
 }
 
-/// Raccourci : vérifie un accès en écriture à un fichier.
+/// Shortcut: verifies a file write access.
 #[inline(always)]
 pub fn verify_file_write(
     subject: &SecurityContext,
@@ -222,7 +222,7 @@ pub fn verify_file_write(
     )
 }
 
-/// Raccourci : vérifie un accès IPC.
+/// Shortcut: verifies an IPC access.
 #[inline(always)]
 pub fn verify_ipc_access(
     subject: &SecurityContext,
@@ -237,7 +237,7 @@ pub fn verify_ipc_access(
     verify_ipc_peer_access(subject, None, ep_label, endpoint_id, is_send)
 }
 
-/// Vérifie un accès IPC quand le PID destinataire est connu par l'appelant.
+/// Verifies an IPC access when receiver PID is known to the caller.
 #[inline(always)]
 pub fn verify_ipc_access_between(
     subject: &SecurityContext,
@@ -273,7 +273,7 @@ fn verify_ipc_peer_access(
     )
 }
 
-/// Raccourci : vérifie un accès à une clé cryptographique.
+/// Shortcut: verifies a cryptographic key access.
 #[inline(always)]
 pub fn verify_crypto_key_access(
     subject: &SecurityContext,
@@ -283,7 +283,7 @@ pub fn verify_crypto_key_access(
     verify_access(subject, ResourceKind::CryptoKey, key_label, false, key_id)
 }
 
-/// Raccourci : vérifie un accès DMA.
+/// Shortcut: verifies a DMA access.
 #[inline(always)]
 pub fn verify_dma_access(
     subject: &SecurityContext,
@@ -299,10 +299,10 @@ pub fn verify_dma_access(
     )
 }
 
-/// Vérifie un appel syscall dans un contexte sandboxé.
+/// Verifies a syscall invocation in a sandboxed context.
 #[inline]
 pub fn verify_syscall(subject: &SecurityContext, syscall_no: u64) -> Result<(), AccessError> {
-    // Syscalls ont le label kernel — vérification de la restriction sandbox
+    // Syscalls have the kernel label — sandbox restriction verification
     let kernel_label = SecurityLabel::kernel();
     verify_access(
         subject,
@@ -355,15 +355,15 @@ mod tests {
         unregister_ring1_pid(43);
     }
 
-    /// TIER 1.1 — `verify_syscall` enforce RÉELLEMENT les restrictions du contexte :
-    /// un process portant `NO_FORK` se voit refuser `fork`, mais garde les syscalls
-    /// bénins ; un process non restreint passe (boot-safe).
+    /// TIER 1.1 — `verify_syscall` TRULY enforces context restrictions:
+    /// a process holding `NO_FORK` has `fork` denied, but retains benign
+    /// syscalls; an unrestricted process succeeds (boot-safe).
     #[test]
     fn syscall_restriction_is_enforced() {
         use super::super::context::{restriction_flags, TrustLevel};
         use crate::syscall::numbers::{SYS_FORK, SYS_READ};
 
-        // Process restreint NO_FORK.
+        // Process restricted NO_FORK.
         let restricted = SecurityContext::for_process(
             principal(60),
             TrustLevel::Normal,
@@ -379,7 +379,7 @@ mod tests {
             "un syscall bénin reste autorisé"
         );
 
-        // Process non restreint : fork autorisé.
+        // Unrestricted process: fork authorized.
         let free = SecurityContext::for_process(principal(61), TrustLevel::Normal, 0);
         assert!(
             verify_syscall(&free, SYS_FORK).is_ok(),

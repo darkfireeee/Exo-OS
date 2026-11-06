@@ -1,25 +1,25 @@
 // kernel/src/security/access_control/checker.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACCESS CONTROL CHECKER — Point d'entrée unifié (v6)
+// ACCESS CONTROL CHECKER — Unified entry point (v6)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// v6 : remplace ipc/capability_bridge/ qui est supprimé.
-//      Tous les modules (ipc/, fs/, process/, ...) appellent check_access()
-//      au lieu d'accéder directement à capability::verify().
+// v6: replaces ipc/capability_bridge/ which is removed.
+//     All modules (ipc/, fs/, process/, ...) call check_access()
+//     instead of directly accessing capability::verify().
 //
-// RÈGLE SEC-AC-01 (v6) :
-//   Tout accès à un objet protégé DOIT passer par check_access().
-//   capability::verify() ne doit être appelé que depuis ce fichier.
+// RULE SEC-AC-01 (v6):
+//   Any access to a protected object MUST go through check_access().
+//   capability::verify() must only be called from this file.
 //
-// RÈGLE SEC-AC-02 :
-//   check_access() logue TOUJOURS — succès et refus — via le module audit.
+// RULE SEC-AC-02:
+//   check_access() ALWAYS logs — success and denial — via the audit module.
 //
-// FLUX DE VÉRIFICATION (v6) :
+// VERIFICATION FLOW (v6):
 //   any_module
-//     → security::access_control::check_access(table, token, kind, rights, caller)
-//       → security::capability::verify::verify(table, token, rights)  [INV-1]
-//       → security::audit  [log_event ou log_security_violation]
+//     -> security::access_control::check_access(table, token, kind, rights, caller)
+//       -> security::capability::verify::verify(table, token, rights)  [INV-1]
+//       -> security::audit  [log_event or log_security_violation]
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::object_types::ObjectKind;
@@ -29,22 +29,22 @@ use crate::security::capability::verify::{verify as cap_verify, CapError};
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AccessError — erreur riche retournée à l'appelant
+// AccessError — Rich error returned to caller
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur d'accès retournée par `check_access()`.
-/// Encapsule CapError avec contexte métier.
+/// Access error returned by `check_access()`.
+/// Encapsulates CapError with domain context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessError {
-    /// La vérification de capability a échoué.
+    /// Capability verification failed.
     CapabilityDenied {
         reason: CapError,
         object: ObjectKind,
         module: &'static str,
     },
-    /// L'objet demandé n'existe pas dans la table.
+    /// Requested object does not exist in the table.
     ObjectNotFound { object: ObjectKind },
-    /// Les droits effectifs sont insuffisants.
+    /// Effective rights are insufficient.
     InsufficientRights { had: Rights, needed: Rights },
 }
 
@@ -70,26 +70,26 @@ impl core::fmt::Display for AccessError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// check_access — POINT D'ENTRÉE UNIQUE (v6)
+// check_access — SINGLE ENTRY POINT (v6)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie l'accès à un objet protégé.
+/// Verifies access to a protected object.
 ///
 /// # Arguments
-/// - `table`    : table de capabilities du processus appelant
-/// - `token`    : capability token présentée
-/// - `object`   : type d'objet demandé (pour audit et messages d'erreur)
-/// - `required` : droits requis pour cette opération
-/// - `caller`   : nom du module appelant ("ipc", "fs", "process", …)
+/// - `table`: capability table of calling process
+/// - `token`: presented capability token
+/// - `object`: requested object kind (for audit and error messages)
+/// - `required`: required rights for this operation
+/// - `caller`: calling module name ("ipc", "fs", "process", …)
 ///
-/// # Comportement
-/// - Appelle `capability::verify::verify()` (INV-1)
-/// - Logue le résultat via `security::audit` (RÈGLE SEC-AC-02)
-/// - Retourne `Ok(())` ou `Err(AccessError)`
+/// # Behavior
+/// - Calls `capability::verify::verify()` (INV-1)
+/// - Logs result via `security::audit` (RULE SEC-AC-02)
+/// - Returns `Ok(())` or `Err(AccessError)`
 ///
 /// # Performance
-/// Même complexité que `verify()` : O(1).
-/// Surcoût d'audit ≈ 1 écriture atomique dans le ring buffer.
+/// Same complexity as `verify()`: O(1).
+/// Audit overhead ≈ 1 atomic write into ring buffer.
 #[inline]
 pub fn check_access(
     table: &CapTable,
@@ -100,7 +100,7 @@ pub fn check_access(
 ) -> Result<(), AccessError> {
     match cap_verify(table, token, required) {
         Ok(()) => {
-            // ── Succès — log audit filtrable (catégorie Capability)
+            // ── Success — filterable audit log (Capability category)
             audit::log_event(
                 AuditCategory::Capability,
                 0,
@@ -114,7 +114,7 @@ pub fn check_access(
             Ok(())
         }
         Err(CapError::ObjectNotFound) => {
-            // Violation de sécurité — toujours loguée (RÈGLE AUDIT-02)
+            // Security violation — always logged (RULE AUDIT-02)
             audit::log_security_violation(0, 0, 0, 0, [0u8; 8]);
             Err(AccessError::ObjectNotFound { object })
         }
@@ -140,15 +140,15 @@ pub fn check_access(
 // init
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le checker access_control.
+/// Initializes the access_control checker.
 ///
-/// Appelé par `security::security_init()` à l'étape 18 (v6 boot sequence).
-/// Enregistre les mappings ObjectKind → droits attendus dans les règles d'audit.
+/// Called by `security::security_init()` at step 18 (v6 boot sequence).
+/// Registers ObjectKind -> expected rights mappings in audit rules.
 pub fn init() {
-    // Enregistrement des règles d'audit par type d'objet
-    // (extensible : ajouter un add_global_rule() par ObjectKind si besoin)
+    // Register audit rules per object kind
+    // (extensible: add an add_global_rule() per ObjectKind if needed)
     //
-    // v6 : pas de table de dispatch runtime — les droits sont vérifiés
-    // directement par cap_verify(). Cette fonction existe pour le hook
-    // d'initialisation du boot (step 18) et pour la testabilité.
+    // v6: no runtime dispatch table — rights are verified
+    // directly by cap_verify(). This function exists for the boot
+    // initialization hook (step 18) and for testability.
 }
