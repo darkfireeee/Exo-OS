@@ -1,9 +1,9 @@
-//! # main.rs  Point d'entree kernel Exo-OS
+//! # main.rs — Exo-OS Kernel Entry Point
 //!
-//! Flux de boot (GRUB Multiboot2 BIOS) :
+//! Boot flow (GRUB Multiboot2 BIOS):
 //! ```
 //!   GRUB  _start  (32-bit protected mode, EAX=magic, EBX=info)
-//!      trampoline 3264 bits (page tables + EFER.LME + CR0.PG + retf)
+//!      trampoline 32→64 bits (page tables + EFER.LME + CR0.PG + retf)
 //!      _start64  (64-bit long mode)
 //!        call kernel_main(mb2_magic, mb2_info, 0)
 //!          arch_boot_init()  (CPU, GDT, IDT, TSS, APIC, SMP)
@@ -11,10 +11,10 @@
 //!          halt_cpu()
 //! ```
 //!
-//! Flux de boot (exo-boot UEFI) :
+//! Boot flow (exo-boot UEFI):
 //! ```
-//!   exo-boot  handoff_to_kernel()  met EAX=EXOBOOT_MAGIC_U32, RBX=BootInfo
-//!      jump vers _start_uefi (entry 64-bit, long mode deja actif)
+//!   exo-boot  handoff_to_kernel()  sets EAX=EXOBOOT_MAGIC_U32, RBX=BootInfo
+//!      jump to _start_uefi (64-bit entry, long mode already active)
 //!      _start64  kernel_main(EXOBOOT_MAGIC_U32, boot_info_phys, 0)
 //! ```
 
@@ -40,23 +40,23 @@
 
 use exo_os_kernel as kernel;
 
-//  Header Multiboot2 
-// PATCH-P2-BOOT: Header Multiboot2 gate derriere --features multiboot2_compat.
-// DEPRECIE (vision Strata: UEFI-only via exo-boot SPEC-BOOTLOADER-GPT-STRATA.md).
-// Par defaut ACTIF (default feature) pour preserver le workflow QEMU/GRUB actuel.
-// Phase 8 non encore complete -- retrait prevu apres migration UEFI GPT.
-// Dev QEMU/GRUB (defaut) : cargo build
-// Production UEFI-only   : cargo build --release --no-default-features
+// ── Multiboot2 Header ─────────────────────────────────────────────────────────
+// PATCH-P2-BOOT: Multiboot2 Header gated behind --features multiboot2_compat.
+// DEPRECATED (Strata vision: UEFI-only via exo-boot SPEC-BOOTLOADER-GPT-STRATA.md).
+// ACTIVE by default (default feature) to preserve current QEMU/GRUB workflow.
+// Phase 8 not yet complete -- removal planned after UEFI GPT migration.
+// Dev QEMU/GRUB (default) : cargo build
+// Production UEFI-only    : cargo build --release --no-default-features
 //
-// GRUB cherche le magic 0xE85250D6 dans les 32 premiers KiB de l'image.
-// Doit etre dans la section `.multiboot2`, qui est la PREMIERE dans linker.ld.
+// GRUB searches for magic 0xE85250D6 within the first 32 KiB of the image.
+// Must be in the `.multiboot2` section, which is FIRST in linker.ld.
 #[cfg(feature = "multiboot2_compat")]
 core::arch::global_asm!(
     ".section .multiboot2, \"a\"",
     ".align 8",
     ".long 0xE85250D6", // Magic Multiboot2
-    ".long 0",          // Architecture i386 (GRUB entre en 32-bit prot. mode)
-    ".long 48",         // Header length : 16 + fb tag(20) + pad(4) + end tag(8)
+    ".long 0",          // Architecture i386 (GRUB enters in 32-bit prot. mode)
+    ".long 48",         // Header length: 16 + fb tag(20) + pad(4) + end tag(8)
     ".long 0x17ADAEFA", // Checksum : -(0xE85250D6 + 0 + 48) mod 2^32
     ".short 5",
     ".short 0",
@@ -64,26 +64,26 @@ core::arch::global_asm!(
     ".long 1024",
     ".long 768",
     ".long 32",
-    ".long 0", // padding 8-byte alignment avant end tag
+    ".long 0", // padding 8-byte alignment before end tag
     ".short 0",
     ".short 0",
     ".long 8", // End tag
 );
 
-//  Tables de pages de boot (BSS  zero-initialisees, alignees 4 KiB) 
-// Utilisees par le trampoline 3264 bits pour mettre en place le mapping
-// identite 0..1 GiB avant d'activer la pagination (long mode exige des PTEs).
+// ── Boot Page Tables (BSS, zero-initialized, 4 KiB-aligned) ───────────────────
+// Used by the 32→64 bits trampoline to establish the identity mapping
+// 0..1 GiB before enabling paging (long mode requires PTEs).
 //
-// Layout :
+// Layout:
 //   PML4[0]     _boot_pdpt (identity: virtual 0..512 GiB)
 //   PDPT[0]     _boot_pd   (identity: virtual 0..1 GiB)
-//   PDPT[3]     _boot_pd_high (MMIO APIC: virtual 3..4 GiB, pour LAPIC/IOAPIC)
-//   PD[0..512] = huge pages 2 MiB (identity: virtual 0..1 GiB  phys 0..1 GiB)
+//   PDPT[3]     _boot_pd_high (MMIO APIC: virtual 3..4 GiB, for LAPIC/IOAPIC)
+//   PD[0..512] = huge pages 2 MiB (identity: virtual 0..1 GiB -> phys 0..1 GiB)
 //   _boot_pd_high[502] = 0xFEC00000 (IOAPIC MMIO)
 //   _boot_pd_high[503] = 0xFEE00000 (LAPIC MMIO)
 //
-// NOTE : 1 GiB couvre largement le kernel (~10 MiB) + stack (~46 MiB).
-//        Le mapping APIC (0xFEE00000) est necessaire pour init_apic_system.
+// NOTE: 1 GiB amply covers kernel (~10 MiB) + stack (~46 MiB).
+//       APIC mapping (0xFEE00000) is required for init_apic_system.
 core::arch::global_asm!(
     ".section .bss",
     ".balign 4096",
@@ -99,7 +99,7 @@ core::arch::global_asm!(
     ".global _boot_pd_high",
     "_boot_pd_high:",
     ".space 4096",
-    // Sauvegarde des args Multiboot2 (EAX/EBX) pendant la transition 3264
+    // Save Multiboot2 args (EAX/EBX) during 32→64 transition
     ".global _mb2_saved_magic",
     "_mb2_saved_magic:",
     ".long 0",
@@ -108,12 +108,12 @@ core::arch::global_asm!(
     ".quad 0",
 );
 
-//  GDT 64-bit minimale pour le trampoline de boot 
-// Chargee en 32-bit par lgdt, puis utilisee en 64-bit apres le retf.
-// Format : null (8B) + code64 (8B) + data64 (8B) = 24 bytes.
+// ── Minimal 64-bit GDT for boot trampoline ───────────────────────────────────
+// Loaded in 32-bit by lgdt, then used in 64-bit after retf.
+// Format: null (8B) + code64 (8B) + data64 (8B) = 24 bytes.
 //
-//   CS = 0x08 : L=1 (64-bit code), DPL=0, P=1, Type=0xA (code exec/read)
-//   DS = 0x10 : L=0, D=1 (32/64-bit data), DPL=0, P=1, Type=0x2 (data r/w)
+//   CS = 0x08: L=1 (64-bit code), DPL=0, P=1, Type=0xA (code exec/read)
+//   DS = 0x10: L=0, D=1 (32/64-bit data), DPL=0, P=1, Type=0x2 (data r/w)
 core::arch::global_asm!(
     ".section .rodata",
     ".balign 16",
@@ -126,21 +126,21 @@ core::arch::global_asm!(
     ".global _boot_gdtr",
     "_boot_gdtr:",
     ".short 23",        // limit = 3*8 - 1 = 23
-    ".long  _boot_gdt", // base  (32-bit physique — kernel < 4 GiB)
+    ".long  _boot_gdt", // base (32-bit physical — kernel < 4 GiB)
 );
 
-//  Trampoline de boot : 32-bit  64-bit (long mode) 
+// ── Boot trampoline: 32-bit → 64-bit (long mode) ──────────────────────────────
 //
-// GRUB entre ici en mode protege 32-bit :
+// GRUB enters here in 32-bit protected mode:
 //   EAX = 0x36d76289 (Multiboot2 magic)
-//   EBX = adresse physique de la structure Multiboot2 Info (<4 GiB)
-//   CS  = descripteur flat 32-bit (base=0, limit=4GiB)
+//   EBX = physical address of Multiboot2 Info structure (<4 GiB)
+//   CS  = flat 32-bit descriptor (base=0, limit=4GiB)
 //   PE=1, IF=0, paging=0
 //
-// Objectif : avant d'appeler kernel_main (64-bit Rust), activer le long mode.
+// Goal: enable long mode before calling kernel_main (64-bit Rust).
 //
-// SAFETY : toutes les adresses de symboles sont < 1 GiB (kernel a 1 MiB).
-//          L'identite-mapping couvre 0..1 GiB en huge pages 2 MiB.
+// SAFETY: all symbol addresses are < 1 GiB (kernel at 1 MiB).
+//         Identity-mapping covers 0..1 GiB with 2 MiB huge pages.
 core::arch::global_asm!(
     ".section .text.boot",
     ".global _start",
@@ -150,120 +150,120 @@ core::arch::global_asm!(
     "_start:",
     "cli",
     "cld",
-    //  Sauvegarder args Multiboot2 avant de clobber EBX 
+    // Save Multiboot2 args before clobbering EBX
     "mov dword ptr [_mb2_saved_magic], eax",
     "mov dword ptr [_mb2_saved_info],  ebx",
-    "mov dword ptr [_mb2_saved_info + 4], 0", // zero-extend à 64 bits
-    //  Stack 32-bit provisoire (adresse physique = virtuelle avant paging) 
-    // _exo_boot_stack_top est defini plus bas (section .boot_stack).
-    // lea donne l'ADRESSE effective du label (et non son contenu).
+    "mov dword ptr [_mb2_saved_info + 4], 0", // zero-extend to 64 bits
+    // Provisional 32-bit stack (physical address = virtual before paging)
+    // _exo_boot_stack_top is defined below (.boot_stack section).
+    // lea yields the effective ADDRESS of the label (not its content).
     "lea esp, [_exo_boot_stack_top]",
     "and esp, -16",
-    //  Construire le PD : 512 huge pages 2 MiB (identity 0..1 GiB) 
-    // Flags : P=1 (present), R/W=1 (writable), PS=1 (2 MiB page) = 0x83
-    // Chaque entree : (index << 21) | 0x83
+    // Build PD: 512 huge pages 2 MiB (identity 0..1 GiB)
+    // Flags: P=1 (present), R/W=1 (writable), PS=1 (2 MiB page) = 0x83
+    // Each entry: (index << 21) | 0x83
     "xor ecx, ecx",
     "_pd_loop:",
     "  cmp ecx, 512",
     "  jge _pd_done",
     "  mov eax, ecx",
-    "  shl eax, 21",         // adresse physique = index × 2 MiB
+    "  shl eax, 21",         // physical address = index × 2 MiB
     "  or  eax, 0x83",       // flags R/W + Present + PageSize
-    "  lea edi, [_boot_pd]", // base du PD
+    "  lea edi, [_boot_pd]", // base of PD
     "  mov ebx, ecx",
-    "  shl ebx, 3", // offset = index × 8 octets
+    "  shl ebx, 3", // offset = index × 8 bytes
     "  add edi, ebx",
     "  mov dword ptr [edi],     eax",
     "  mov dword ptr [edi + 4], 0", // upper 32 bits = 0
     "  inc ecx",
     "  jmp _pd_loop",
     "_pd_done:",
-    //  PDPT[0]  PD (identity 0..1 GiB) 
+    // PDPT[0] -> PD (identity 0..1 GiB)
     "lea eax, [_boot_pd]",
     "or  eax, 0x03", // P + R/W
     "mov dword ptr [_boot_pdpt],     eax",
     "mov dword ptr [_boot_pdpt + 4], 0",
-    //  _boot_pd_high : mapping MMIO APIC (LAPIC + IOAPIC) dans 3..4 GiB 
-    // LAPIC MMIO : 0xFEE00000  PD_high[503] (PDPT[3], PD entry 503)
-    // IOAPIC MMIO: 0xFEC00000  PD_high[501] (PD entry 501... wait: compute below)
-    // Calcul : PD_high entry index = (phys - 0xC0000000) >> 21
-    //  - IOAPIC 0xFEC00000 : (0xFEC00000 - 0xC0000000) >> 21 = 0x3EC00000 >> 21 = 502
-    //  - LAPIC  0xFEE00000 : (0xFEE00000 - 0xC0000000) >> 21 = 0x3EE00000 >> 21 = 503
-    // Entry format (2 MiB huge page) : phys_base | 0x83 (P + R/W + PS)
+    // _boot_pd_high: MMIO APIC mapping (LAPIC + IOAPIC) in 3..4 GiB
+    // LAPIC MMIO: 0xFEE00000 -> PD_high[503] (PDPT[3], PD entry 503)
+    // IOAPIC MMIO: 0xFEC00000 -> PD_high[502] (PD entry 502)
+    // Calculation: PD_high entry index = (phys - 0xC0000000) >> 21
+    //  - IOAPIC 0xFEC00000: (0xFEC00000 - 0xC0000000) >> 21 = 0x3EC00000 >> 21 = 502
+    //  - LAPIC  0xFEE00000: (0xFEE00000 - 0xC0000000) >> 21 = 0x3EE00000 >> 21 = 503
+    // Entry format (2 MiB huge page): phys_base | 0x83 (P + R/W + PS)
     //   IOAPIC page base: 503 - 1 = 502  phys = 0xC0000000 + 502*0x200000 = 0xFEC00000
     //   LAPIC  page base: 503         phys = 0xC0000000 + 503*0x200000 = 0xFEE00000
-    //   Note : 0xFEC00000 | 0x83 = 0xFEC00083 (lower 32 bits; upper = 0)
-    //          0xFEE00000 | 0x83 = 0xFEE00083
+    //   Note: 0xFEC00000 | 0x83 = 0xFEC00083 (lower 32 bits; upper = 0)
+    //         0xFEE00000 | 0x83 = 0xFEE00083
 
-    // Ecrire PD_high[502] = 0xFEC0009B (IOAPIC 2 MiB page, P+R/W+PS+PWT+PCD  UC)
-    // 0x9B = 0x83 | 0x08 (PWT) | 0x10 (PCD) : selectionne PAT[3]=UC (defaut Intel)
+    // Write PD_high[502] = 0xFEC0009B (IOAPIC 2 MiB page, P+R/W+PS+PWT+PCD UC)
+    // 0x9B = 0x83 | 0x08 (PWT) | 0x10 (PCD): selects PAT[3]=UC (Intel default)
     "lea edi, [_boot_pd_high]",
     "add edi, 4016",
     "mov dword ptr [edi],     0xFEC0009B",
     "mov dword ptr [edi + 4], 0",
-    // Ecrire PD_high[503] = 0xFEE0009B (LAPIC 2 MiB page, P+R/W+PS+PWT+PCD  UC)
+    // Write PD_high[503] = 0xFEE0009B (LAPIC 2 MiB page, P+R/W+PS+PWT+PCD UC)
     "lea edi, [_boot_pd_high]",
     "add edi, 4024",
     "mov dword ptr [edi],     0xFEE0009B",
     "mov dword ptr [edi + 4], 0",
-    //  PDPT[3]  _boot_pd_high (MMIO APIC region) ; offset = 38 = 24 
+    // PDPT[3] -> _boot_pd_high (MMIO APIC region); offset = 3*8 = 24
     "lea eax, [_boot_pd_high]",
     "or  eax, 0x03", // P + R/W
     "mov dword ptr [_boot_pdpt + 24],     eax",
     "mov dword ptr [_boot_pdpt + 28], 0",
-    //  PML4[256]  _boot_pdpt (physmap 0xFFFF_8000_0000_0000) 
-    // Reutilise _boot_pdpt existant (2 MiB pages via _boot_pd).
-    // CPUID.PDPE1GB non requis  pages 1 GiB non supportees universellement.
-    // Couvre 0..1 GiB physique via PDPT[0]_boot_pd  suffisant pour -m 256M.
-    // PML4 index 256 = bits[47:39] de 0xFFFF_8000_0000_0000 ; offset = 2048.
+    // PML4[256] -> _boot_pdpt (physmap 0xFFFF_8000_0000_0000)
+    // Reuses existing _boot_pdpt (2 MiB pages via _boot_pd).
+    // CPUID.PDPE1GB not required (1 GiB pages not universally supported).
+    // Covers 0..1 GiB physical via PDPT[0]->_boot_pd (sufficient for -m 256M).
+    // PML4 index 256 = bits[47:39] of 0xFFFF_8000_0000_0000; offset = 2048.
     "lea eax, [_boot_pdpt]",
     "or  eax, 0x03", // P + R/W
     "mov dword ptr [_boot_pml4 + 2048],     eax",
     "mov dword ptr [_boot_pml4 + 2052], 0",
-    //  PML4[0]  PDPT 
+    // PML4[0] -> PDPT
     "lea eax, [_boot_pdpt]",
     "or  eax, 0x03", // P + R/W
     "mov dword ptr [_boot_pml4],     eax",
     "mov dword ptr [_boot_pml4 + 4], 0",
-    //  Charger notre GDT 64-bit 
+    // Load our 64-bit GDT
     "lgdt [_boot_gdtr]",
-    //  CR3 = PML4 
+    // CR3 = PML4
     "lea eax, [_boot_pml4]",
     "mov cr3, eax",
-    //  CR4.PAE = 1 (Physical Address Extension, requis pour long mode) 
+    // CR4.PAE = 1 (Physical Address Extension, required for long mode)
     "mov eax, cr4",
     "or  eax, 0x00000020", // bit 5 = PAE
     "mov cr4, eax",
-    //  EFER.LME = 1 (Long Mode Enable, MSR 0xC0000080) 
+    // EFER.LME = 1 (Long Mode Enable, MSR 0xC0000080)
     "mov ecx, 0xC0000080",
     "rdmsr",
     "or  eax, 0x00000100", // bit 8 = LME
     "wrmsr",
-    //  CR0.PG = 1 : active la pagination  active le long mode 
-    // Le CPU passe immediatement en mode compatibilite (32-bit submode de LM).
-    // Le far jump ci-dessous passe en mode 64-bit pur (CS avec L=1).
+    // CR0.PG = 1: enables paging -> activates long mode
+    // CPU immediately enters compatibility mode (32-bit submode of LM).
+    // Far jump below switches to pure 64-bit mode (CS with L=1).
     "mov eax, cr0",
     "or  eax, 0x80000000", // bit 31 = PG
     "mov cr0, eax",
-    //  Saut lointain vers CS=0x08 (64-bit) : entre en mode 64-bit 
-    // Technique RETF : empile (CS, EIP) en ordre inverse puis `retf`.
-    // `retf` depile EIP puis CS  charge CS=0x08 (64-bit code descriptor).
-    // Apres : CPU en mode 64-bit, CS=0x08.
-    "lea eax, [_start64]", // EAX = adresse physique de _start64
-    "push dword ptr 0x08", // empile CS = 0x08 (64-bit code)
-    "push eax",            // empile EIP = adresse de _start64
-    "retf",                // far return → CS:EIP chargés → mode 64-bit
-    //  Halt (ne devrait jamais etre atteint) 
+    // Far jump to CS=0x08 (64-bit): enters 64-bit mode
+    // RETF technique: pushes (CS, EIP) in reverse order then `retf`.
+    // `retf` pops EIP then CS -> loads CS=0x08 (64-bit code descriptor).
+    // After: CPU in 64-bit mode, CS=0x08.
+    "lea eax, [_start64]", // EAX = physical address of _start64
+    "push dword ptr 0x08", // push CS = 0x08 (64-bit code)
+    "push eax",            // push EIP = address of _start64
+    "retf",                // far return → CS:EIP loaded → 64-bit mode
+    // Halt (should never be reached)
     "_boot_halt32:",
     "cli",
     "hlt",
     "jmp _boot_halt32",
     // 
-    // _start_uefi : entree 64-bit pour exo-boot.
+    // _start_uefi: 64-bit entry for exo-boot.
     //
-    // exo-boot arrive deja en long mode avec CR3 final charge. Sauter sur
-    // _start (code32) depuis ce contexte est invalide ; cette entree sauvegarde
-    // la meme convention EAX/RBX puis rejoint le chemin commun _start64.
+    // exo-boot already arrives in long mode with final CR3 loaded. Jumping to
+    // _start (code32) from this context is invalid; this entry preserves
+    // the same EAX/RBX convention then joins the common _start64 path.
     // 
     ".code64",
     ".global _start_uefi",
@@ -275,15 +275,15 @@ core::arch::global_asm!(
     "mov qword ptr [rip + _mb2_saved_info], rbx",
     "jmp _start64",
     // 
-    // _start64 : premier code 64-bit apres transition long mode
+    // _start64: first 64-bit code after long mode transition
     // 
     ".global _start64",
     ".type _start64, @function",
     "_start64:",
-    // Marqueur debug port 0xE9 : 'X' = 0x58  confirme que _start64 est atteint
+    // Debug marker port 0xE9: 'X' = 0x58 confirms that _start64 is reached
     "mov al, 0x58", // 'X'
     "out 0xe9, al",
-    // Recharger les selecteurs de donnees avec DS=0x10 (data 64-bit)
+    // Reload data selectors with DS=0x10 (64-bit data)
     "mov ax, 0x10",
     "mov ds, ax",
     "mov es, ax",
@@ -291,19 +291,19 @@ core::arch::global_asm!(
     "xor ax, ax",
     "mov fs, ax",
     "mov gs, ax",
-    // Stack 64-bit propre (symbole resolu par le linker)
+    // Clean 64-bit stack (symbol resolved by linker)
     "lea rsp, [rip + _exo_boot_stack_top]",
     "and rsp, -16",
-    // Restaurer les arguments Multiboot2 sauvegardes dans .bss
+    // Restore Multiboot2 arguments saved in .bss
     //   RDI = mb2_magic (u32)
     //   RSI = mb2_info  (u64)
-    //   RDX = rsdp_phys (u64, 0  arch_boot_init scannera ACPI)
+    //   RDX = rsdp_phys (u64, 0 -> arch_boot_init will scan ACPI)
     "mov edi, dword ptr [rip + _mb2_saved_magic]",
     "mov rsi, qword ptr [rip + _mb2_saved_info]",
     "xor edx, edx",
-    // Appeler kernel_main (Rust, 64-bit SysV ABI)
+    // Call kernel_main (Rust, 64-bit SysV ABI)
     "call kernel_main",
-    // Idle definitif si kernel_main retourne (ne devrait pas)
+    // Final idle if kernel_main returns (should not)
     "cli",
     "_start64_halt:",
     "hlt",
@@ -311,53 +311,53 @@ core::arch::global_asm!(
     ".size _start, . - _start",
 );
 
-//  Pile de boot BSP 
-// Section .boot_stack : NOBITS (comme .bss, absent de l'image ELF).
-// `_exo_boot_stack_top` = RSP initial du BSP (pile croit vers le bas).
+// ── BSP Boot Stack ──────────────────────────────────────────────────────────
+// Section .boot_stack: NOBITS (like .bss, absent from ELF image).
+// `_exo_boot_stack_top` = initial RSP of BSP (stack grows downwards).
 core::arch::global_asm!(
     ".section .boot_stack, \"aw\", @nobits",
     ".balign 4096",
     ".global _exo_boot_stack_bottom",
     "_exo_boot_stack_bottom:",
-    // 512 KiB (était 64 KiB — trop petit : overflow sur le chemin
-    // profond exofs_init/virtio/recovery corrompait l'IDT/TSS/IST adjacents →
-    // triple fault bypassant les handlers. 4 MiB collisionnait la SSR à 16 MiB ;
-    // 512 KiB = marge confortable sans collision. FIX-BOOT-STACK.)
+    // 512 KiB (was 64 KiB — too small: overflow on the deep
+    // exofs_init/virtio/recovery path corrupted adjacent IDT/TSS/IST →
+    // triple fault bypassing handlers. 4 MiB collided with SSR at 16 MiB;
+    // 512 KiB = comfortable margin without collision. FIX-BOOT-STACK.)
     ".space 524288",
     ".global _exo_boot_stack_top",
     "_exo_boot_stack_top:",
     ".section .text",
 );
 
-//  Point d'entree Rust principal 
+// ── Main Rust Entry Point ───────────────────────────────────────────
 
-/// `kernel_main`  premiere fonction Rust executee sur le BSP.
+/// `kernel_main` — first Rust function executed on the BSP.
 ///
 /// # Safety
-/// - Appele depuis `_start` (ASM) une unique fois sur le BSP
-/// - Interruptions desactivees (EFLAGS.IF = 0)
-/// - Pile BSP valide (`BOOT_STACK` dans `early_init.rs`)
-/// - Mode long 64 bits actif, GDT minimale bootloader chargee
+/// - Called from `_start` (ASM) exactly once on the BSP
+/// - Interrupts disabled (EFLAGS.IF = 0)
+/// - Valid BSP stack (`BOOT_STACK` in `early_init.rs`)
+/// - 64-bit long mode active, minimal bootloader GDT loaded
 #[no_mangle]
 pub unsafe extern "C" fn kernel_main(
-    mb2_magic: u32, // 0x36d76289 si boot Multiboot2 valide, sinon 0
-    mb2_info: u64,  // Adresse physique de la structure Multiboot2 Info (ou 0)
-    rsdp_phys: u64, // Adresse physique RSDP passée par le bootloader (ou 0)
+    mb2_magic: u32, // 0x36d76289 if valid Multiboot2 boot, else 0
+    mb2_info: u64,  // Physical address of Multiboot2 Info structure (or 0)
+    rsdp_phys: u64, // Physical RSDP address passed by bootloader (or 0)
 ) -> ! {
-    // Debug : marqueur de debut kernel_main sur port 0xE9 ('K' = 0x4B)
+    // Debug: kernel_main start marker on port 0xE9 ('K' = 0x4B)
     core::arch::asm!("mov al, 0x4B", "out 0xe9, al", options(nostack, nomem));
 
-    // Console de boot de secours. En mode graphique GRUB, ce fallback peut ne pas
-    // etre visible ; le framebuffer prendra le relais des le retour d'arch_boot_init().
+    // Fallback boot console. In graphical GRUB mode, this fallback might not
+    // be visible; the framebuffer will take over upon return from arch_boot_init().
     kernel::arch::x86_64::boot_display::boot_screen();
 
-    //  Phase 1 : Architecture (GDT, IDT, TSS, per-CPU, TSC, FPU, ACPI, APIC,
-    //              SYSCALL, Spectre, SMP boot des APs)
-    // SAFETY: arch_boot_init doit etre le PREMIER code Rust execute en Ring 0.
-    // Preconditions satisfaites : mode long, interruptions off, pile valide.
+    // ── Phase 1: Architecture (GDT, IDT, TSS, per-CPU, TSC, FPU, ACPI, APIC,
+    //             SYSCALL, Spectre, SMP boot of APs)
+    // SAFETY: arch_boot_init must be the FIRST Rust code executed in Ring 0.
+    // Satisfied preconditions: long mode, interrupts off, valid stack.
     let boot_info = kernel::arch_boot_init(mb2_magic, mb2_info, rsdp_phys);
 
-    // Debug : arch_boot_init termine ('A' = 0x41)
+    // Debug: arch_boot_init complete ('A' = 0x41)
     core::arch::asm!("mov al, 0x41", "out 0xe9, al", options(nostack, nomem));
 
     if boot_info.framebuffer_phys_addr != 0 && boot_info.framebuffer_size_bytes != 0 {
@@ -385,17 +385,17 @@ pub unsafe extern "C" fn kernel_main(
         // 'w'
     }
 
-    //  Phases 27 : Init des couches (memory  scheduler  process  ipc  fs)
-    // SAFETY: kernel_init suit l'ordre strict des couches defini en docs/refonte.
-    // Doit etre appele apres arch_boot_init (necessite GDT + interruptions pretes).
+    // ── Phases 2–7: Layer initialization (memory, scheduler, process, ipc, fs)
+    // SAFETY: kernel_init follows the strict layer ordering defined in docs/refonte.
+    // Must be called after arch_boot_init (requires GDT + interrupts ready).
     kernel::kernel_init(boot_info.cpu_count as usize);
 
-    // Debug : kernel_init termine ('I' = 0x49)
+    // Debug: kernel_init complete ('I' = 0x49)
     core::arch::asm!("mov al, 0x49", "out 0xe9, al", options(nostack, nomem));
 
     let userspace_status = kernel::userspace_boot::boot_userspace();
 
-    // Mise a jour ecran VGA/framebuffer : noyau initialise, scheduler vivant.
+    // VGA/framebuffer screen update: kernel initialized, scheduler alive.
     kernel::arch::x86_64::boot_display::boot_complete();
     match userspace_status {
         kernel::userspace_boot::BootUserspaceStatus::Started { .. } => {
@@ -429,7 +429,7 @@ pub unsafe extern "C" fn kernel_main(
         }
     }
 
-    // Debug : boot complet  '\n', 'O', 'K', '\n'
+    // Debug: boot complete — '\n', 'O', 'K', '\n'
     core::arch::asm!(
         "mov al, 0x0a",
         "out 0xe9, al",
@@ -445,15 +445,15 @@ pub unsafe extern "C" fn kernel_main(
     #[cfg(exophoenix_resurrection_test)]
     kernel::exophoenix::resurrection::trigger_self_destruct();
 
-    //  Idle scheduler 
-    // Fin de boot: ne pas utiliser halt_cpu() ici. `halt_cpu()` coupe IF avec
-    // `cli; hlt` et empeche tout kthread/PID1 enfile de prendre le CPU. La boucle
-    // idle scheduler ci-dessous garde les IRQ actives et tente un switch avant
-    // chaque HLT.
+    // ── Scheduler idle ──────────────────────────────────────────────────
+    // End of boot: do not use halt_cpu() here. `halt_cpu()` disables IF with
+    // `cli; hlt` and prevents any enqueued kthread/PID 1 from taking the CPU. The
+    // idle scheduler loop below keeps IRQs active and attempts a switch before
+    // each HLT.
     #[cfg(not(exophoenix_resurrection_test))]
     kernel::arch::x86_64::run_scheduler_idle()
 }
 
-//  Gestionnaires panic / OOM 
-// Definis dans lib.rs  le binaire herite de l'implementation via le rlib.
-// Ne pas redefinir ici pour eviter les conflits de lang_item.
+// ── Panic / OOM Handlers ─────────────────────────────────────────────
+// Defined in lib.rs — binary inherits implementation via rlib.
+// Do not redefine here to avoid lang_item conflicts.

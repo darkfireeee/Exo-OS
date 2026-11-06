@@ -1,7 +1,7 @@
 //! # drivers/mod.rs
 //!
-//! Driver Framework GI-03 - Point d'entrée principal
-//! Agrège: IOMMU, DMA, PCI, MSI, MMIO, device claims
+//! Driver Framework GI-03 — Main entry point
+//! Aggregates: IOMMU, DMA, PCI, MSI, MMIO, device claims
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};

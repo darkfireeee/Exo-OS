@@ -1,9 +1,9 @@
-//! Test de résurrection contrôlé ExoPhoenix.
+//! ExoPhoenix controlled resurrection test.
 //!
-//! Ce module fournit le chemin de preuve QEMU demandé: Kernel A provoque une
-//! faute Ring 0 volontaire, Kernel B/ExoPhoenix capture l'effondrement, verrouille
-//! la fenêtre IOMMU, vérifie l'image propre de A depuis ExoFS, puis reprend sur un
-//! point de relance sain au lieu de nécessiter un reset physique.
+//! This module provides the requested QEMU proof path: Kernel A triggers an
+//! intentional Ring 0 fault, Kernel B/ExoPhoenix captures the collapse, locks
+//! the IOMMU window, verifies the clean image of A from ExoFS, then resumes at a
+//! healthy restart point instead of requiring a physical reset.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -90,11 +90,11 @@ pub fn try_recover_exception(reason: &str, frame: &mut ExceptionFrame) -> bool {
     if !frame.from_kernel() {
         return false;
     }
-    // PATCH-P0-PHOENIX: en production, déclencher la récupération dès que
-    // ExoPhoenix est en état Normal (complètement opérationnel).
-    // En mode test (cfg exophoenix_resurrection_test), TEST_ARMED suffit aussi.
-    // Avant ce patch, la garde TEST_ARMED était toujours false en production,
-    // rendant la récupération d'exception impossible hors tests contrôlés.
+    // PATCH-P0-PHOENIX: in production, trigger recovery as soon as
+    // ExoPhoenix is in Normal state (fully operational).
+    // In test mode (cfg exophoenix_resurrection_test), TEST_ARMED is also sufficient.
+    // Prior to this patch, the TEST_ARMED guard was always false in production,
+    // making exception recovery impossible outside controlled tests.
     let phoenix_ready = PHOENIX_STATE.load(Ordering::Acquire) == PhoenixState::Normal as u8;
     let test_triggered = TEST_ARMED.swap(false, Ordering::AcqRel);
 

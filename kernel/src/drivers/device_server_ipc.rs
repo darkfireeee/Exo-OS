@@ -1,7 +1,7 @@
 //! # drivers/device_server_ipc.rs
 //!
-//! Notifications kernel -> device_server.
-//! File bornée, sans allocation, utilisable depuis ISR ou worker.
+//! Kernel -> device_server notifications.
+//! Bounded queue, allocation-free, usable from ISR or worker.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -208,7 +208,7 @@ fn notify(event: DeviceServerEvent) {
     let _ = DEVICE_SERVER_EVENTS.push(event);
 }
 
-/// Driver non réactif : IRQ non acquittée dans la fenêtre watchdog.
+/// Unresponsive driver: IRQ unacknowledged within the watchdog window.
 pub fn notify_driver_stall(irq: u8) {
     notify(DeviceServerEvent::at(
         DeviceServerEventKind::DriverStall,
@@ -219,7 +219,7 @@ pub fn notify_driver_stall(irq: u8) {
     ));
 }
 
-/// IRQ ghost : aucun handler n'a revendiqué l'IRQ level.
+/// Ghost IRQ: no handler claimed the level IRQ.
 pub fn notify_unhandled_irq(irq: u8) {
     notify(DeviceServerEvent::at(
         DeviceServerEventKind::UnhandledIrq,
@@ -230,7 +230,7 @@ pub fn notify_unhandled_irq(irq: u8) {
     ));
 }
 
-/// IRQ blacklistée après storms répétés.
+/// Blacklisted IRQ after repeated storms.
 pub fn notify_irq_blacklisted(irq: u8) {
     notify(DeviceServerEvent::at(
         DeviceServerEventKind::IrqBlacklisted,
@@ -241,7 +241,7 @@ pub fn notify_irq_blacklisted(irq: u8) {
     ));
 }
 
-/// Faute IOMMU détectée pour un PID et une IOVA données.
+/// IOMMU fault detected for a given PID and IOVA.
 pub fn notify_iommu_fault_kill(pid: u32, iova: u64, reason: u8) {
     notify(DeviceServerEvent::at(
         DeviceServerEventKind::IommuFaultKill,
@@ -252,7 +252,7 @@ pub fn notify_iommu_fault_kill(pid: u32, iova: u64, reason: u8) {
     ));
 }
 
-/// Fuite de domaine/mapping IOMMU détectée par le noyau.
+/// IOMMU domain/mapping leak detected by the kernel.
 pub fn notify_iommu_leak(domain_id: u32) {
     notify(DeviceServerEvent::at(
         DeviceServerEventKind::IommuLeak,

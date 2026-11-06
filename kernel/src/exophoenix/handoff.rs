@@ -1,12 +1,12 @@
-//! Handoff ExoPhoenix (Phase 3.6).
+//! ExoPhoenix handoff (Phase 3.6).
 //!
-//! Contraintes appliquées:
-//! - G4: IPI 0xF1 + soft revoke IOMMU lancés dans la même fenêtre.
+//! Applied constraints:
+//! - G4: IPI 0xF1 + soft revoke IOMMU launched within the same window.
 //! - S-N1: hard revoke + IOTLB flush.
-//! - S9: `SSR_HANDOFF_FLAG` en Release/Acquire.
-//! - S10: adressage SSR via `apic_to_slot` (jamais `apic_id*64`).
-//! - S1: aucun spinlock explicite dans ce module.
-//! - G8: aucun renvoi SIPI (géré uniquement en stage0).
+//! - S9: `SSR_HANDOFF_FLAG` in Release/Acquire.
+//! - S10: SSR addressing via `apic_to_slot` (never `apic_id*64`).
+//! - S1: no explicit spinlock in this module.
+//! - G8: no SIPI re-issuance (handled solely in stage0).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -109,7 +109,7 @@ fn wait_crypto_phoenix_ack(
 
 #[inline(always)]
 fn xapic_mmio_base() -> usize {
-    // SAFETY: lecture d'un MSR architectural en Ring 0.
+    // SAFETY: reading an architectural MSR in Ring 0.
     let apic_base = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & APICBASE_ADDR_MASK;
     apic_base as usize
 }
@@ -118,12 +118,12 @@ fn xapic_mmio_base() -> usize {
 fn current_apic_id() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
-            // SAFETY: x2APIC actif et MSR X2APIC_ID lisible.
+            // SAFETY: x2APIC active and MSR X2APIC_ID readable.
             unsafe { msr::read_msr(x2apic::X2APIC_ID) as u32 }
         }
         stage0::BootApicMode::XApic => {
             let lapic_id_ptr = (xapic_mmio_base() + LAPIC_ID_REG_OFFSET) as *const u32;
-            // SAFETY: LAPIC MMIO actif en mode xAPIC.
+            // SAFETY: LAPIC MMIO active in xAPIC mode.
             unsafe { core::ptr::read_volatile(lapic_id_ptr) >> 24 }
         }
     }
@@ -138,7 +138,7 @@ fn current_slot() -> Option<usize> {
 fn read_apic_timestamp_ticks() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
-            // SAFETY: lecture MSR x2APIC du compteur courant.
+            // SAFETY: x2APIC MSR read of current counter.
             unsafe { msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32 }
         }
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
@@ -155,7 +155,7 @@ fn apic_elapsed_us(start_ticks: u32, end_ticks: u32, ticks_per_us: u64) -> u64 {
 
 #[inline(always)]
 fn set_handoff_flag_release(v: u64) {
-    // SAFETY: offset SSR valide ; Ordering Release imposé (S9).
+    // SAFETY: valid SSR offset; Release ordering enforced (S9).
     unsafe {
         ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).store(v, Ordering::Release);
     }
@@ -163,7 +163,7 @@ fn set_handoff_flag_release(v: u64) {
 
 #[inline(always)]
 fn handoff_flag_acquire() -> u64 {
-    // SAFETY: offset SSR valide ; lecture Acquire imposée (S9).
+    // SAFETY: valid SSR offset; Acquire read enforced (S9).
     unsafe { ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).load(Ordering::Acquire) }
 }
 
@@ -239,7 +239,7 @@ fn reset_freeze_acks_for_targets(self_slot: Option<usize>) {
         if !super::take_slot_once(&mut seen_slots, slot) {
             return;
         }
-        // SAFETY: offset borné par slot map stage0.
+        // SAFETY: offset bounded by stage0 slot map.
         unsafe {
             ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).store(0, Ordering::Release);
         }
@@ -260,7 +260,7 @@ fn all_freeze_acks_observed(self_slot: Option<usize>) -> bool {
         if !super::take_slot_once(&mut seen_slots, slot) {
             return;
         }
-        // SAFETY: offset borné par slot map stage0.
+        // SAFETY: offset bounded by stage0 slot map.
         let ack =
             unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
@@ -280,12 +280,12 @@ fn send_freeze_ipi_broadcast_except_self() {
 }
 
 fn stage_soft_revoke_iommu() {
-    // Soft revoke: marquer l'intention et invalider les traductions DMA existantes.
+    // Soft revoke: mark intention and invalidate existing DMA translations.
     IOMMU_DRAIN_CONFIRMED.store(false, Ordering::Release);
     let blocked_domain = stage0::blocked_domain_id();
 
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
-        // SAFETY: CPL0, VT-d initialisé.
+        // SAFETY: CPL0, VT-d initialized.
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
         }
@@ -304,12 +304,12 @@ fn stage_hard_revoke_iommu(with_drain: bool) {
     let blocked_domain = stage0::blocked_domain_id();
 
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
-        // SAFETY: CPL0, flush IOTLB domaine bloqué (QI-like sync).
+        // SAFETY: CPL0, flush blocked domain IOTLB (QI-like sync).
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
         }
     } else if AMD_IOMMU.is_initialized() && AMD_IOMMU.unit_count() > 0 {
-        // AMD completion wait fallback (barrière stricte).
+        // AMD completion wait fallback (strict barrier).
         core::sync::atomic::fence(Ordering::SeqCst);
     }
 }
@@ -398,9 +398,9 @@ fn mask_all_msi_msix() {
             continue;
         };
 
-        // SAFETY: accès PCI config space en ring0 pour les devices Stage0.
+        // SAFETY: PCI config space access in ring0 for Stage0 devices.
         unsafe {
-            // MSI : bit0 du MSI Control
+            // MSI: bit0 of MSI Control
             if let Some(msi_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSI) {
                 let ctrl_offset = msi_cap + 2;
                 let raw = pci_read_dword_handoff(dev.bus, dev.device, dev.function, msi_cap);
@@ -414,7 +414,7 @@ fn mask_all_msi_msix() {
                 );
             }
 
-            // MSI-X : bit14 Function Mask du MSI-X Control
+            // MSI-X: bit14 Function Mask of MSI-X Control
             if let Some(msix_cap) = find_pci_cap(dev.bus, dev.device, dev.function, PCI_CAP_ID_MSIX)
             {
                 let ctrl_offset = msix_cap + 2;
@@ -449,7 +449,7 @@ fn send_init_ipi_to_resistant_cores(self_slot: Option<usize>) {
         if Some(slot) == self_slot {
             return;
         }
-        // SAFETY: offset borné par slot map stage0.
+        // SAFETY: offset bounded by stage0 slot map.
         let ack =
             unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
         if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
@@ -459,8 +459,8 @@ fn send_init_ipi_to_resistant_cores(self_slot: Option<usize>) {
 }
 
 fn scan_and_release_spinlocks() {
-    // Placeholder phase 3.6: aucune table globale lock-owner exportée ici.
-    // Maintenu lock-free pour le chemin critique.
+    // Placeholder phase 3.6: no global lock-owner table exported here.
+    // Kept lock-free for the critical path.
     core::sync::atomic::fence(Ordering::SeqCst);
 }
 
@@ -507,15 +507,15 @@ fn try_forge_reconstruct_with_policy() -> Result<(), &'static str> {
     Err("forge_reconstruct_failed")
 }
 
-/// Démarrage isolation coopérative (Phase 1).
+/// Cooperative isolation start (Phase 1).
 pub fn begin_isolation_soft() -> Result<(), &'static str> {
-    // FIX-AUDIT-V020-P1-2 : précondition fail-safe — ne JAMAIS diffuser un IPI
-    // freeze (qui gèle tous les autres cœurs) si les vecteurs de récupération
-    // ExoPhoenix ne sont pas armés. stage0_init_all_steps() (lib.rs, chemin BSP
-    // commun) arme les vecteurs en fin de stage0, donc le sentinel — qui appelle
-    // cette fonction bien plus tard — les voit toujours actifs en exploitation
-    // normale. Si le flag est faux, c'est une mauvaise configuration du boot :
-    // geler les cœurs sans pouvoir les relancer serait pire que de refuser.
+    // FIX-AUDIT-V020-P1-2: fail-safe precondition — NEVER broadcast a freeze
+    // IPI (which freezes all other cores) if the ExoPhoenix recovery vectors
+    // are not armed. stage0_init_all_steps() (lib.rs, common BSP path)
+    // arms the vectors at the end of stage0, so the sentinel — which calls
+    // this function much later — always sees them active in normal operation.
+    // If the flag is false, this is a boot misconfiguration: freezing cores
+    // without being able to restart them would be worse than refusing.
     if !crate::exophoenix::stage0::exophoenix_vectors_active() {
         return Err("exophoenix_vectors_not_armed");
     }
@@ -525,7 +525,7 @@ pub fn begin_isolation_soft() -> Result<(), &'static str> {
     set_handoff_flag_release(HANDOFF_FREEZE_REQ);
     reset_freeze_acks_for_targets(self_slot);
 
-    // G4: IPI freeze + soft revoke dans la même fenêtre critique.
+    // G4: freeze IPI + soft revoke in the same critical window.
     send_freeze_ipi_broadcast_except_self();
     stage_soft_revoke_iommu();
 
@@ -533,7 +533,7 @@ pub fn begin_isolation_soft() -> Result<(), &'static str> {
         return begin_isolation_hard();
     }
 
-    // S-N1: hard revoke + IOTLB flush après confirmation des ACK/drain.
+    // S-N1: hard revoke + IOTLB flush after ACK/drain confirmation.
     stage_hard_revoke_iommu(true);
 
     PHOENIX_STATE.store(PhoenixState::IsolationHard as u8, Ordering::Release);
@@ -541,15 +541,15 @@ pub fn begin_isolation_soft() -> Result<(), &'static str> {
     try_forge_reconstruct_with_policy()
 }
 
-/// Démarrage isolation forcée (Phase 2).
+/// Forced isolation start (Phase 2).
 pub fn begin_isolation_hard() -> Result<(), &'static str> {
     let self_slot = current_slot();
 
-    // G2: masquer MSI/MSI-X avant INIT IPI.
+    // G2: mask MSI/MSI-X before INIT IPI.
     mask_all_msi_msix();
     send_init_ipi_to_resistant_cores(self_slot);
 
-    // Hard revoke sans drain.
+    // Hard revoke without drain.
     stage_hard_revoke_iommu(false);
     scan_and_release_spinlocks();
 

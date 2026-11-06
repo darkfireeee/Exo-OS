@@ -1,9 +1,9 @@
 //! # drivers/pci_topology.rs
 //!
-//! Graphe de topologie PCI.
+//! PCI topology graph.
 //! Source: GI-03_Drivers_IRQ_DMA.md §8
 //!
-//! DRV-45 : Lock d'écriture avec garantie IRQ_SAVE.
+//! DRV-45: Write lock with IRQ_SAVE guarantee.
 //! 0 STUB, 0 TODO.
 
 use spin::RwLock;
@@ -53,9 +53,9 @@ impl PciTopology {
         }
     }
 
-    /// Enregistre un lien dans la topologie.
-    /// DRV-45 : irq_save est OBLIGATOIRE avant toute prise de lock WRITE
-    /// pour éviter un deadlock avec d'éventuelles interruptions.
+    /// Registers a link in the topology.
+    /// DRV-45: irq_save is MANDATORY before acquiring a WRITE lock
+    /// to avoid a deadlock with potential interrupts.
     pub fn register(&self, child: PciBdf, parent: PciBdf) -> Result<(), PciError> {
         let _irq_guard = irq_save();
         let mut table = self.entries.write();
@@ -77,7 +77,7 @@ impl PciTopology {
         Ok(())
     }
 
-    /// Retourne le parent d'un device PCI avec un lock READ thread-safe.
+    /// Returns the parent of a PCI device with a thread-safe READ lock.
     pub fn parent_bridge(&self, child: PciBdf) -> Option<PciBdf> {
         let table = self.entries.read();
         table

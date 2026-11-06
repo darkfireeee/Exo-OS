@@ -1,10 +1,10 @@
-//! Boucle sentinelle ExoPhoenix (Phase 3.5).
+//! ExoPhoenix sentinel loop (Phase 3.5).
 //!
-//! Contraintes clés:
-//! - Détection SMI (S-N2): cycle trop long => compteur SMI++, skip, pas d'escalade.
-//! - PT walker itératif strict (S4): aucune récursion.
-//! - Liveness nonce Release/Acquire sur SSR (S9).
-//! - PMC: contribution positive uniquement (S5), jamais de score négatif.
+//! Key constraints:
+//! - SMI detection (S-N2): overly long cycle => SMI counter++, skip, no escalation.
+//! - Strict iterative PT walker (S4): zero recursion.
+//! - Liveness nonce Release/Acquire on SSR (S9).
+//! - PMC: positive contribution only (S5), never a negative score.
 
 use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,22 +29,22 @@ const SCORE_PMC_ANOMALY: u32 = 10;
 const THREAT_THRESHOLD: u32 = 100;
 
 const B_REGION_PHYS_BASE: u64 = KERNEL_LOAD_PHYS_ADDR;
-// FIX #25 (Audit 6.2) — `KERNEL_IMAGE_MAX_SIZE` (2 GiB) est une borne haute de
-// budget de lien, PAS la taille réelle de l'image chargée. L'ancien code
-// retournait `true` pour toute adresse physique entre 1 Mio et ~2049 Mio, soit
-// la quasi-totalité de la RAM allouée par le buddy. Maintenant on calcule la
-// taille réelle via le symbole linker `__kernel_end` (lazy-init dans
-// `b_region_phys_end()`). On garde un plafond prudent sur
-// `KERNEL_IMAGE_MAX_SIZE` uniquement si `__kernel_end` est absent ou invalide
-// (fallback défensif).
+// FIX #25 (Audit 6.2) — `KERNEL_IMAGE_MAX_SIZE` (2 GiB) is an upper bound of
+// link budget, NOT the actual loaded image size. The legacy code
+// returned `true` for any physical address between 1 MiB and ~2049 MiB, meaning
+// almost the entire RAM allocated by buddy allocator. We now compute the
+// actual size via the linker symbol `__kernel_end` (lazy-init in
+// `b_region_phys_end()`). We maintain a conservative ceiling on
+// `KERNEL_IMAGE_MAX_SIZE` only if `__kernel_end` is missing or invalid
+// (defensive fallback).
 static B_REGION_PHYS_END: AtomicU64 = AtomicU64::new(0);
 
 const SSR_CMD_PHYS_START: u64 = ssr::SSR_BASE + ssr::SSR_CMD_B2A as u64;
 const SSR_CMD_PHYS_END: u64 = SSR_CMD_PHYS_START + 64;
 
-/// Zone connue côté mémoire A (PULL) pour miroir du nonce SSR.
+/// Known zone on Kernel A memory side (PULL) for mirroring SSR nonce.
 ///
-/// Prototype actuel: offset fixe dans l'image kernel A chargée en physique.
+/// Current prototype: fixed offset in Kernel A image loaded in physical memory.
 const A_LIVENESS_MIRROR_PHYS: u64 =
     KERNEL_LOAD_PHYS_ADDR + exo_phoenix_ssr::A_LIVENESS_MIRROR_OFFSET;
 
@@ -59,35 +59,35 @@ static PMC_BASELINE: [AtomicU64; 4] = [
 ];
 static PMC_BASELINE_SET: AtomicBool = AtomicBool::new(false);
 
-/// FIX #25 (Audit 6.2) — Calcule la taille RÉELLE de l'image kernel chargée
-/// via le symbole linker `__kernel_end`. Retourne la taille en octets, bornée
-/// par `KERNEL_IMAGE_MAX_SIZE` par sécurité (fallback défensif si le symbole
-/// est absent ou incohérent).
+/// FIX #25 (Audit 6.2) — Computes ACTUAL size of loaded kernel image
+/// via linker symbol `__kernel_end`. Returns size in bytes, bounded
+/// by `KERNEL_IMAGE_MAX_SIZE` for safety (defensive fallback if the symbol
+/// is missing or inconsistent).
 fn real_kernel_image_size() -> usize {
-    // Symbole linker fourni par le linker script kernel.
+    // Linker symbol provided by kernel linker script.
     extern "C" {
         static __kernel_end: u8;
     }
-    // Lecture purement adresse — pas de déréférencement.
+    // Purely address reading — no dereferencing.
     let end_addr = (&raw const __kernel_end) as usize as u64;
     let start_addr = KERNEL_LOAD_PHYS_ADDR;
     if end_addr > start_addr {
         let size = (end_addr - start_addr) as usize;
-        // Plafond défensif pour éviter toute régression si le symbole linker
-        // venait à mal se résoudre (borne haute de budget de lien).
+        // Defensive ceiling to prevent regression if linker symbol
+        // resolves improperly (upper bound of link budget).
         if size < KERNEL_IMAGE_MAX_SIZE {
             size
         } else {
             KERNEL_IMAGE_MAX_SIZE
         }
     } else {
-        // Fallback : borne haute conservatrice.
+        // Fallback: conservative upper bound.
         KERNEL_IMAGE_MAX_SIZE
     }
 }
 
-/// Retourne `B_REGION_PHYS_END`, en l'initialisant paresseusement à la première
-/// invocation via `real_kernel_image_size()`. Once-init simple via CAS.
+/// Returns `B_REGION_PHYS_END`, lazily initializing it on the first
+/// invocation via `real_kernel_image_size()`. Simple once-init via CAS.
 #[inline(always)]
 fn b_region_phys_end() -> u64 {
     let cached = B_REGION_PHYS_END.load(Ordering::Acquire);
@@ -103,7 +103,7 @@ fn b_region_phys_end() -> u64 {
 fn read_apic_timestamp_ticks() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
-            // SAFETY: lecture MSR x2APIC du compteur courant.
+            // SAFETY: reading x2APIC MSR of current counter.
             unsafe { msr::read_msr(x2apic::X2APIC_TIMER_CCR) as u32 }
         }
         stage0::BootApicMode::XApic => local_apic::timer_current_count(),
@@ -141,7 +141,7 @@ fn walk_a_page_tables_iterative() -> u32 {
         .max(4096);
 
     let pml4_phys = read_cr3();
-    // SAFETY: CR3 courant doit pointer sur une PML4 valide en contexte noyau.
+    // SAFETY: current CR3 must point to a valid PML4 in kernel context.
     let pml4 = unsafe { phys_to_table_ref(pml4_phys) };
 
     'walk: for p4i in 0..512 {
@@ -168,7 +168,7 @@ fn walk_a_page_tables_iterative() -> u32 {
             score = score.saturating_add(SCORE_PA_REMAP);
         }
 
-        // SAFETY: entrée présente => table niveau 3 attendue.
+        // SAFETY: present entry => level 3 table expected.
         let pdpt = unsafe { phys_to_table_ref(l4e.phys_addr()) };
         for p3i in 0..512 {
             steps = steps.saturating_add(1);
@@ -197,7 +197,7 @@ fn walk_a_page_tables_iterative() -> u32 {
                 continue;
             }
 
-            // SAFETY: entrée présente non huge => table niveau 2 attendue.
+            // SAFETY: present non-huge entry => level 2 table expected.
             let pd = unsafe { phys_to_table_ref(l3e.phys_addr()) };
             for p2i in 0..512 {
                 steps = steps.saturating_add(1);
@@ -230,7 +230,7 @@ fn walk_a_page_tables_iterative() -> u32 {
                     continue;
                 }
 
-                // SAFETY: entrée présente non huge => table niveau 1 attendue.
+                // SAFETY: present non-huge entry => level 1 table expected.
                 let pt = unsafe { phys_to_table_ref(l2e.phys_addr()) };
                 for p1i in 0..512 {
                     steps = steps.saturating_add(1);
@@ -263,7 +263,7 @@ fn generate_liveness_nonce() -> u64 {
         for _ in 0..10 {
             let value: u64;
             let ok: u8;
-            // SAFETY: RDRAND en ring0, avec vérification explicite du CF via setc.
+            // SAFETY: RDRAND in ring0, with explicit CF verification via setc.
             unsafe {
                 core::arch::asm!(
                     "rdrand {val}",
@@ -288,14 +288,14 @@ fn read_a_liveness_mirror_pull() -> u64 {
     let mirror_virt = PHYS_MAP_BASE
         .as_u64()
         .saturating_add(A_LIVENESS_MIRROR_PHYS);
-    // SAFETY: lecture volatile d'une zone physique connue via physmap (PULL explicite).
+    // SAFETY: volatile read of known physical zone via physmap (explicit PULL).
     unsafe { read_volatile(mirror_virt as *const u64) }
 }
 
 fn check_liveness_nonce() -> u32 {
     let nonce = generate_liveness_nonce();
 
-    // SAFETY: offset SSR valide et mappé ; Release obligatoire sur champ critique.
+    // SAFETY: valid and mapped SSR offset; mandatory Release on critical field.
     unsafe {
         ssr::ssr_atomic(ssr::SSR_LIVENESS_NONCE).store(nonce, Ordering::Release);
     }
@@ -323,11 +323,11 @@ fn pmc_anomaly_score() -> u32 {
     let base = ssr::SSR_BASE as usize + ssr::pmc_snapshot_offset(0);
     let mut ctrs = [0u64; 4];
 
-    // Layout snapshot PMC: [evtsel0, ctr0, evtsel1, ctr1, ...]
-    // On ne score que les compteurs CTR (offset +8 dans chaque paire de 16 bytes).
+    // PMC snapshot layout: [evtsel0, ctr0, evtsel1, ctr1, ...]
+    // Only CTR counters are scored (+8 offset in each 16-byte pair).
     for i in 0..4usize {
         let ptr = (base + i * 16 + 8) as *const u64;
-        // SAFETY: lecture volatile dans SSR slot 0.
+        // SAFETY: volatile read in SSR slot 0.
         ctrs[i] = unsafe { read_volatile(ptr) };
     }
 
@@ -373,7 +373,7 @@ fn wait_until_next_detection_window() {
     }
 }
 
-/// Exécute la boucle sentinelle infinie (Phase 3.5).
+/// Executes the infinite sentinel loop (Phase 3.5).
 pub fn run_forever() -> ! {
     loop {
         let cycle_start_ns = ktime_get_ns();
@@ -384,12 +384,12 @@ pub fn run_forever() -> ! {
         let apic_t1 = read_apic_timestamp_ticks();
         let mut elapsed_us = apic_elapsed_us(apic_t0, apic_t1);
 
-        // Fallback si APIC ticks indisponibles (ex: tpu=0): conserver la détection SMI.
+        // Fallback if APIC ticks unavailable (e.g. tpu=0): preserve SMI detection.
         if elapsed_us == 0 {
             elapsed_us = ktime_get_ns().wrapping_sub(cycle_start_ns) / 1000;
         }
 
-        // S-N2 : un cycle anormalement long est traité comme SMI firmware probable.
+        // S-N2: abnormally long cycle treated as probable firmware SMI.
         if elapsed_us > T_DETECTION_US.saturating_mul(SMI_MULTIPLIER) {
             SMI_COUNTER.fetch_add(1, Ordering::Relaxed);
             continue;

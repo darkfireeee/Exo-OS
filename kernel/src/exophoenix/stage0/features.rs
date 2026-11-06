@@ -1,6 +1,6 @@
-//! # exophoenix/stage0/features.rs — Détection et sondage des capacités matérielles CPU/APIC
+//! # exophoenix/stage0/features.rs — CPU/APIC hardware capability detection and probing
 //!
-//! Gère la détection CPUID (x2APIC, PKS, INVPCID, PCID, SMEP, SMAP, invariant TSC, PMC, VMX).
+//! Handles CPUID detection (x2APIC, PKS, INVPCID, PCID, SMEP, SMAP, invariant TSC, PMC, VMX).
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use crate::arch::x86_64;
@@ -76,7 +76,7 @@ pub static B_FEATURES: BootFeatures = BootFeatures::new();
 pub fn cpuid_ex(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
     let (eax, ecx, edx): (u32, u32, u32);
     let ebx_result: u64;
-    // SAFETY: CPUID est non-privilégié ; pattern xchg pour préserver rbx.
+    // SAFETY: CPUID is non-privileged; xchg pattern to preserve rbx.
     unsafe {
         core::arch::asm!(
             "xchg {tmp:r}, rbx",
@@ -97,11 +97,11 @@ pub fn cpuid(leaf: u32) -> (u32, u32, u32, u32) {
     cpuid_ex(leaf, 0)
 }
 
-/// Détecte le mode APIC actif conformément au plan v4.
-/// x2APIC seulement si support CPUID *et* APIC_BASE.bit10 activé.
+/// Detects active APIC mode in accordance with plan v4.
+/// x2APIC only if CPUID support *and* APIC_BASE.bit10 enabled.
 pub fn detect_apic_mode() -> BootApicMode {
     let (_, _, ecx1, _) = cpuid(1);
-    // SAFETY: ring0, MSR standard IA32_APIC_BASE.
+    // SAFETY: ring0, standard MSR IA32_APIC_BASE.
     let apic_base = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) };
 
     let cpuid_x2apic = (ecx1 & (1 << 21)) != 0;
@@ -134,7 +134,7 @@ fn detect_invariant_tsc() -> bool {
     (edx & (1 << 8)) != 0
 }
 
-/// Étape 1b : probe global des features B.
+/// Step 1b: global feature probe for B.
 pub fn init_feature_probe(hpet_available: bool) {
     let features = crate::arch::x86_64::cpu::features::cpu_features_or_none();
 
@@ -178,7 +178,7 @@ pub fn init_feature_probe(hpet_available: bool) {
     B_FEATURES.vmx_active.store(vmx_active, Ordering::Release);
 }
 
-/// Étape 8 : VMXOFF défensif si VT-x actif.
+/// Step 8: defensive VMXOFF if VT-x active.
 pub fn vmxoff_if_active() {
     if !B_FEATURES.vmx_active.load(Ordering::Acquire) {
         return;
@@ -190,7 +190,7 @@ pub fn vmxoff_if_active() {
         return;
     }
 
-    // SAFETY: instruction privilégiée ring0. On ne panique pas en cas d'échec VMXOFF.
+    // SAFETY: ring0 privileged instruction. We do not panic on VMXOFF failure.
     unsafe {
         core::arch::asm!("vmxoff", options(nostack));
         x86_64::write_cr4(cr4 & !CR4_VMXE);

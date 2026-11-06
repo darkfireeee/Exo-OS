@@ -1,9 +1,9 @@
 //! # drivers/dma.rs
 //!
 //! DMA Manager GI-03
-//! Responsable : allocation DMA, mappings, cleanup
+//! Responsible: DMA allocation, mappings, cleanup
 //!
-//! Spécification GI-03 §5 - sys_dma_map. ORDRE IMPÉRATIF : COW AVANT query_perms (FIX-68)
+//! Specification GI-03 §5 — sys_dma_map. MANDATORY ORDER: COW BEFORE query_perms (FIX-68)
 //! 0 TODO, 0 STUB.
 
 use alloc::boxed::Box;
@@ -47,7 +47,7 @@ pub fn boot_tsc_khz() -> u64 {
     BOOT_TSC_KHZ.load(Ordering::Acquire)
 }
 
-/// Page physique verrouillée en mémoire (empêche le swap).
+/// Physical page pinned in memory (prevents swapping).
 pub struct PinnedPage {
     pub phys: PhysAddr,
     frame: Frame,
@@ -136,9 +136,9 @@ fn user_as_for_pid(pid: u32) -> Option<&'static UserAddressSpace> {
         return None;
     }
 
-    // SAFETY: ptr non-null (vérifié), publié par lifecycle/create comme
-    // UserAddressSpace 'static lié au PCB ; le PCB reste vivant dans
-    // PROCESS_REGISTRY pour la durée du syscall appelant.
+    // SAFETY: non-null ptr (verified), published by lifecycle/create as
+    // a 'static UserAddressSpace tied to the PCB; the PCB remains alive in
+    // PROCESS_REGISTRY for the duration of the calling syscall.
     Some(unsafe { &*ptr })
 }
 
@@ -201,9 +201,9 @@ impl FaultAllocator for UserFaultAllocator<'_> {
         frame: Frame,
         flags: PageFlags,
     ) -> Result<(), crate::memory::AllocError> {
-        // SAFETY: self.user_as est un UserAddressSpace valide (emprunté pour la
-        // durée de l'allocateur) ; map_page insère une PTE 4 KiB pour `frame`
-        // dans ses tables, en utilisant `self` comme allocateur de tables.
+        // SAFETY: self.user_as is a valid UserAddressSpace (borrowed for the
+        // lifetime of the allocator); map_page inserts a 4 KiB PTE for `frame`
+        // into its tables, using `self` as the page table allocator.
         unsafe { self.user_as.map_page(virt, frame, flags, self) }
     }
 
@@ -227,7 +227,7 @@ impl FaultAllocator for UserFaultAllocator<'_> {
 
     fn compare_exchange_pte_raw(&self, virt: VirtAddr, current: u64, new: u64) -> Result<(), u64> {
         let walker = PageTableWalker::new(self.user_as.pml4_phys());
-        // SAFETY: `virt` désigne une PTE 4 KiB appartenant à cet espace user.
+        // SAFETY: `virt` designates a 4 KiB PTE belonging to this user address space.
         unsafe { walker.compare_exchange_leaf_raw(virt, current, new) }
     }
 }
@@ -245,9 +245,9 @@ mod page_tables {
         let vma_ptr = user_as
             .find_vma(page_addr)
             .ok_or(CowError::InvalidAddress)?;
-        // SAFETY: vma_ptr provient de find_vma() de cet espace d'adressage ;
-        // il pointe vers un VmaDescriptor vivant tant que l'AS n'est pas détruit
-        // (l'AS reste emprunté ici via user_as).
+        // SAFETY: vma_ptr comes from find_vma() of this address space;
+        // it points to a VmaDescriptor alive as long as the AS is not destroyed
+        // (the AS remains borrowed here via user_as).
         let vma = unsafe { &*vma_ptr };
 
         let cause = if prot.requires_write() {
@@ -287,8 +287,8 @@ mod page_tables {
             }
             WalkResult::NotMapped => {
                 let vma_ptr = user_as.find_vma(page_addr)?;
-                // SAFETY: vma_ptr provient de find_vma() de `user_as` ; VMA vivant
-                // tant que l'AS emprunté ici existe.
+                // SAFETY: vma_ptr comes from find_vma() of `user_as`; VMA alive
+                // as long as the AS borrowed here exists.
                 let vma = unsafe { &*vma_ptr };
                 Some(PageProtection {
                     writable: vma.flags.contains(VmaFlags::WRITE)
@@ -428,8 +428,8 @@ fn mmio_page_flags_for(phys: PhysAddr, size: usize) -> PageFlags {
         | PageFlags::WRITABLE
         | PageFlags::USER
         | PageFlags::NO_EXECUTE;
-    // Pour le framebuffer d'affichage, activer Write-Combining (PAT index 7)
-    // afin de démultiplier le débit d'affichage sans saturer le bus MMIO QEMU.
+    // For the display framebuffer, enable Write-Combining (PAT index 7)
+    // to dramatically increase display throughput without saturating the QEMU MMIO bus.
     if crate::arch::x86_64::framebuffer_early::user_framebuffer_contains(phys.as_u64(), size as u64) {
         flags |= PageFlags::WRITE_COMBINING;
     } else {
@@ -453,8 +453,8 @@ fn dma_alloc_vma_flags() -> VmaFlags {
 fn rollback_mmio_pages(user_as: &UserAddressSpace, map_base: VirtAddr, mapped_pages: usize) {
     for page_idx in 0..mapped_pages {
         let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
-        // SAFETY: rollback — `virt` est une page précédemment mappée par cette
-        // routine dans `user_as` ; unmap_page retire la PTE correspondante.
+        // SAFETY: rollback — `virt` is a page previously mapped by this
+        // routine in `user_as`; unmap_page removes the corresponding PTE.
         let _ = unsafe { user_as.unmap_page(virt) };
     }
 }
@@ -473,8 +473,8 @@ fn map_dma_alloc_into_user(pid: u32, frame: Frame, size: usize) -> Result<(u64, 
     for page_idx in 0..mapped_pages {
         let virt = VirtAddr::new(map_base.as_u64() + (page_idx * PAGE_SIZE) as u64);
         let phys = PhysAddr::new(frame.start_address().as_u64() + (page_idx * PAGE_SIZE) as u64);
-        // SAFETY: `virt` est dans un gap VMA libre réservé (find_free_gap) ; `phys`
-        // appartient au frame DMA alloué. map_page insère la PTE via `alloc`.
+        // SAFETY: `virt` is in a reserved free VMA gap (find_free_gap); `phys`
+        // belongs to the allocated DMA frame. map_page inserts the PTE via `alloc`.
         if unsafe { user_as.map_page(virt, Frame::containing(phys), page_flags, &alloc) }.is_err() {
             rollback_mmio_pages(user_as, map_base, page_idx);
             return Err(DmaError::OutOfMemory);
@@ -489,12 +489,12 @@ fn map_dma_alloc_into_user(pid: u32, frame: Frame, size: usize) -> Result<(u64, 
         VmaBacking::Direct,
     ));
     let vma_ptr = Box::into_raw(vma);
-    // SAFETY: vma_ptr est une Box::into_raw fraîche (unique, valide). insert_vma
-    // prend possession du pointeur en cas de succès.
+    // SAFETY: vma_ptr is a fresh Box::into_raw (unique, valid). insert_vma
+    // takes ownership of the pointer on success.
     if !unsafe { user_as.insert_vma(vma_ptr) } {
         rollback_mmio_pages(user_as, map_base, mapped_pages);
-        // SAFETY: insert_vma a échoué et n'a pas pris possession de vma_ptr ;
-        // on reprend l'ownership pour le libérer (pas de double-free).
+        // SAFETY: insert_vma failed and did not take ownership of vma_ptr;
+        // we reclaim ownership to free it (no double-free).
         let _ = unsafe { Box::from_raw(vma_ptr) };
         return Err(DmaError::OutOfMemory);
     }
@@ -509,15 +509,15 @@ fn unmap_dma_alloc_record(record: &DmaAllocRecord) {
     let map_base = VirtAddr::new(record.virt);
     let map_size = align_up(record.size);
     if let Some(vma_ptr) = user_as.remove_vma(map_base) {
-        // SAFETY: remove_vma a retiré ce vma_ptr de l'AS et nous en transfère la
-        // possession ; il provenait de Box::into_raw — on le libère une seule fois.
+        // SAFETY: remove_vma removed this vma_ptr from the AS and transfers ownership
+        // to us; it originated from Box::into_raw — we free it exactly once.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
     rollback_mmio_pages(user_as, map_base, map_size / PAGE_SIZE);
 
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
-    // SAFETY: shootdown_sync émet un TLB shootdown IPI sur les cœurs actifs
-    // pour invalider les entrées TLB des pages DMA libérées.
+    // SAFETY: shootdown_sync issues a TLB shootdown IPI to active cores
+    // to invalidate TLB entries of the freed DMA pages.
     unsafe {
         shootdown_sync(
             TlbFlushType::Range {
@@ -535,21 +535,21 @@ fn unmap_mmio_record(record: MmioRecord) {
     };
 
     if let Some(vma_ptr) = user_as.remove_vma(VirtAddr::new(record.map_base)) {
-        // SAFETY: remove_vma nous transfère la possession du vma_ptr (issu de
-        // Box::into_raw) ; libération unique.
+        // SAFETY: remove_vma transfers ownership of vma_ptr (from Box::into_raw)
+        // to us; single free.
         let _ = unsafe { Box::from_raw(vma_ptr) };
     }
 
     for page_idx in 0..(record.map_size / PAGE_SIZE) {
         let virt = VirtAddr::new(record.map_base + (page_idx * PAGE_SIZE) as u64);
-        // SAFETY: `virt` est une page MMIO précédemment mappée par ce record ;
-        // unmap_page retire la PTE de l'AS du processus.
+        // SAFETY: `virt` is an MMIO page previously mapped by this record;
+        // unmap_page removes the PTE from the process address space.
         let _ = unsafe { user_as.unmap_page(virt) };
     }
 
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
-    // SAFETY: shootdown_sync émet un TLB shootdown IPI sur les `cpu_count` cœurs
-    // actifs pour la plage MMIO démappée ; Ring 0, plage virtuelle valide.
+    // SAFETY: shootdown_sync issues a TLB shootdown IPI to `cpu_count` active
+    // cores for the unmapped MMIO range; Ring 0, valid virtual range.
     unsafe {
         shootdown_sync(
             TlbFlushType::Range {
@@ -561,8 +561,8 @@ fn unmap_mmio_record(record: MmioRecord) {
     }
 }
 
-/// Mappe une plage virtuelle utilisateur en espace DMA/IOMMU.
-/// FIX-68 Obligatoire : Résolution du Copy-On-Write (COW) avant l'interrogation des permissions.
+/// Maps a user virtual range into DMA/IOMMU space.
+/// Mandatory FIX-68: Copy-On-Write (COW) resolution before permissions check.
 pub fn sys_dma_map(
     pid: u32,
     vaddr: usize,
@@ -580,7 +580,7 @@ pub fn sys_dma_map(
     for i in 0..page_count {
         let vpage = vaddr + i * PAGE_SIZE;
 
-        // Étape 1 : COW AVANT query_perms (FIX-68 obligatoire)
+        // Step 1: COW BEFORE query_perms (mandatory FIX-68)
         if matches!(dir, DmaDirection::FromDevice | DmaDirection::Bidirection) {
             page_tables::resolve_cow_or_fault(pid, vpage, PageProtection::WRITE).map_err(|e| {
                 rollback_pinned_pages(&pinned);
@@ -591,7 +591,7 @@ pub fn sys_dma_map(
             })?;
         }
 
-        // Étape 2 : Vérifier les permissions APRÈS COW
+        // Step 2: Check permissions AFTER COW
         let perms = page_tables::query_perms_single(pid, vpage).ok_or_else(|| {
             rollback_pinned_pages(&pinned);
             DmaError::InvalidParams
@@ -604,7 +604,7 @@ pub fn sys_dma_map(
             return Err(DmaError::IommuFault);
         }
 
-        // Étape 3 : Épingler la page (empêche swap pendant DMA)
+        // Step 3: Pin page (prevents swapping during DMA)
         let p = page_tables::pin_user_page(pid, vpage).ok_or_else(|| {
             rollback_pinned_pages(&pinned);
             DmaError::InvalidParams
@@ -612,7 +612,7 @@ pub fn sys_dma_map(
         pinned.push(p);
     }
 
-    // Étape 4-5 : Allouer des IOVAs contiguës et enregistrer chaque page épinglée.
+    // Steps 4-5: Allocate contiguous IOVAs and register each pinned page.
     let _iova_guard = DMA_IOVA_SERIALIZER.lock();
     let mut mapped_count = 0usize;
     let mut iova_base = IovaAddr::zero();
@@ -744,7 +744,7 @@ pub fn revoke_all_for_pid(pid: u32) -> usize {
 }
 
 // -----------------------------------------------------------------------------------------
-// FONCTIONS DE COMPATIBILITÉ (POUR 0 ERROR COMPILE)
+// COMPATIBILITY FUNCTIONS (FOR 0 COMPILE ERRORS)
 // -----------------------------------------------------------------------------------------
 
 pub fn sys_dma_alloc_for_pid(
@@ -897,22 +897,22 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
             map_phys_base.as_u64() + (page_idx * PAGE_SIZE) as u64,
         ));
 
-        // `map_base` vient d'un gap VMA libre; aucune traduction utilisateur
-        // valide ne peut encore exister pour cette plage. Eviter un INVLPG par
-        // page rend le mapping du framebuffer de boot (plusieurs MiB) praticable.
-        // SAFETY: `virt` est dans un gap VMA libre fraîchement réservé (aucune
-        // traduction user existante), `phys_page` est la page MMIO device cible.
-        // map_page_unflushed insère la PTE sans INVLPG (flush groupé après boucle).
+        // `map_base` comes from a free VMA gap; no valid user translation
+        // can yet exist for this range. Avoiding an INVLPG per
+        // page makes mapping the boot framebuffer (several MiB) feasible.
+        // SAFETY: `virt` is in a freshly reserved free VMA gap (no existing
+        // user translation), `phys_page` is the target MMIO device page.
+        // map_page_unflushed inserts the PTE without INVLPG (batch flush after loop).
         if unsafe { user_as.map_page_unflushed(virt, phys_page, page_flags, &alloc) }.is_err() {
             rollback_mmio_pages(user_as, map_base, page_idx);
             return Err(MmioError::OutOfMemory);
         }
     }
-    // Les PTE viennent d'etre creees en masse dans l'espace courant. Un flush
-    // local unique evite les entrees TLB negatives stale sans retomber sur un
-    // INVLPG par page.
-    // SAFETY: flush_all() recharge CR3 pour purger le TLB local après le mapping
-    // de masse des PTE MMIO. Ring 0, aucune invariant mémoire violée.
+    // PTEs were just created in bulk in the current space. A single local
+    // flush avoids stale negative TLB entries without falling back to an
+    // INVLPG per page.
+    // SAFETY: flush_all() reloads CR3 to purge the local TLB after the bulk
+    // mapping of MMIO PTEs. Ring 0, no memory invariant violated.
     unsafe {
         crate::memory::virt::flush_all();
     }
@@ -925,12 +925,12 @@ pub fn sys_mmio_map_for_pid(_pid: u32, _phys: PhysAddr, _size: usize) -> Result<
         VmaBacking::Device,
     ));
     let vma_ptr = Box::into_raw(vma);
-    // SAFETY: vma_ptr est une Box::into_raw fraîche, unique ; insert_vma en prend
-    // possession en cas de succès.
+    // SAFETY: vma_ptr is a fresh, unique Box::into_raw; insert_vma takes
+    // ownership on success.
     if !unsafe { user_as.insert_vma(vma_ptr) } {
         rollback_mmio_pages(user_as, map_base, mapped_pages);
-        // SAFETY: insert_vma a échoué sans prendre possession ; on reprend
-        // l'ownership pour libérer (pas de double-free).
+        // SAFETY: insert_vma failed without taking ownership; we reclaim
+        // ownership to free it (no double-free).
         let _ = unsafe { Box::from_raw(vma_ptr) };
         return Err(MmioError::AlreadyMapped);
     }

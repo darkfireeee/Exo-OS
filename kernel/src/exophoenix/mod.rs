@@ -1,8 +1,8 @@
-//! # ExoPhoenix — noyau sentinelle (Kernel B)
+//! # ExoPhoenix — sentinel kernel (Kernel B)
 //!
-//! Ce module centralise l'état partagé et les primitives communes entre
-//! les composants ExoPhoenix. Les implémentations détaillées Stage 0 / sentinel
-//! seront branchées incrémentalement.
+//! This module centralizes shared state and common primitives between
+//! ExoPhoenix components. Detailed Stage 0 / sentinel implementations
+//! will be connected incrementally.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 

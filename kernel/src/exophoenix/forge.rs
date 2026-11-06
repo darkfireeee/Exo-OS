@@ -1,12 +1,12 @@
-//! ExoForge — reconstruction de Kernel A (Phase 3.7)
+//! ExoForge — Kernel A reconstruction (Phase 3.7)
 //!
-//! Checklist post-reconstruction obligatoire (G9) :
-//! 1. FACS RO re-marqué dans PTEs de A
-//! 2. Hash MADT vérifié inchangé
+//! Mandatory post-reconstruction checklist (G9):
+//! 1. FACS RO re-marked in PTEs of A
+//! 2. MADT hash verified unchanged
 //! 3. TLB shootdown IPI 0xF3 broadcast
-//! 4. IDT de A contient 0xF1/0xF2/0xF3
+//! 4. IDT of A contains 0xF1/0xF2/0xF3
 //!
-//! Erreurs couvertes : G3, G9, S-N1
+//! Covered errors: G3, G9, S-N1
 
 use core::sync::atomic::Ordering;
 
@@ -23,9 +23,9 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use spin::Once;
 
-// ── MARQUEURS POUR GPT-5.3-CODEX ─────────────────────────────────────────
-// Les lignes marquées [ADAPT] nécessitent la substitution des noms d'API
-// réels du codebase. Tout le reste est figé et ne doit pas être modifié.
+// ── MARKERS FOR GPT-5.3-CODEX ─────────────────────────────────────────
+// Lines marked with [ADAPT] require substitution of actual codebase API
+// names. Everything else is frozen and must not be modified.
 // ─────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,18 +46,18 @@ pub fn register_ring1_driver_reload_hook(hook: Ring1DriverReloadHook) {
     let _ = RING1_DRIVER_RELOAD_HOOK.call_once(|| hook);
 }
 
-// Hash Blake3 connu de l'image propre de A — établi au Stage 0
-// Injecté par build.rs dans OUT_DIR (fichier binaire de 32 bytes).
+// Known Blake3 hash of clean Kernel A image — established in Stage 0
+// Injected by build.rs into OUT_DIR (32-byte binary file).
 static A_IMAGE_HASH: [u8; 32] =
     *include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_image_hash.bin"));
 
-// Racine Merkle connue de .text + .rodata de A
-// Injecté par build.rs dans OUT_DIR (fichier binaire de 32 bytes).
+// Known Merkle root of .text + .rodata of A
+// Injected by build.rs into OUT_DIR (32-byte binary file).
 static A_MERKLE_ROOT: [u8; 32] =
     *include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_merkle_root.bin"));
 
-// ELF propre de Kernel A, copié par build.rs depuis KERNEL_A_IMAGE_PATH lors
-// de la seconde passe Kernel B.
+// Clean ELF of Kernel A, copied by build.rs from KERNEL_A_IMAGE_PATH during
+// the second Kernel B pass.
 static A_CLEAN_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_image.bin"));
 
 const MAX_EAGER_KERNEL_A_BLOB_BYTES: usize = (1usize << BUDDY_MAX_ORDER) * PAGE_SIZE - PAGE_SIZE;
@@ -107,19 +107,19 @@ pub fn kernel_a_merkle_root() -> [u8; 32] {
     A_MERKLE_ROOT
 }
 
-/// Provisionne dans le cache ExoFS l'image propre embarquée de Kernel A.
+/// Provisions the embedded clean Kernel A image into the ExoFS cache.
 ///
-/// Le forge charge ensuite exclusivement par BlobId(A_IMAGE_HASH), ce qui garde
-/// le même contrat que la reconstruction depuis ExoFS tout en supprimant le
-/// mode dégradé "hash nul".
+/// The forge then loads exclusively by BlobId(A_IMAGE_HASH), which maintains
+/// the same contract as reconstruction from ExoFS while eliminating
+/// the degraded "zero hash" mode.
 pub fn seed_kernel_a_image_blob() -> Result<(), ForgeError> {
     if !kernel_a_image_provisioned() {
         return Err(ForgeError::ExoFsLoadFailed);
     }
 
-    // L'image de Kernel A est déjà embarquée statiquement en mémoire (RODATA propre).
-    // load_a_image_from_exofs() retombe directement dessus en zero-copy.
-    // Éviter 3000 allocations de pages et une saturation inutile du heap au boot.
+    // Kernel A's image is already embedded statically in memory (clean RODATA).
+    // load_a_image_from_exofs() directly falls back to it in zero-copy.
+    // Avoids 3000 page allocations and unnecessary heap saturation at boot.
     if kernel_a_image_provisioned() {
         return Ok(());
     }
@@ -142,7 +142,7 @@ pub fn seed_kernel_a_image_blob() -> Result<(), ForgeError> {
         .map_err(|_| ForgeError::ExoFsLoadFailed)
 }
 
-// ── Étape 1 : charger l'image de A depuis ExoFS ───────────────────────────
+// ── Step 1: Load image of A from ExoFS ───────────────────────────
 
 static A_IMAGE_BUF: Mutex<Option<Arc<[u8]>>> = Mutex::new(None);
 
@@ -163,12 +163,12 @@ fn load_a_image_from_exofs() -> Result<&'static [u8], ForgeError> {
         .map(|buf| buf.as_ref())
         .ok_or(ForgeError::ExoFsLoadFailed)?;
     let ptr = slice as *const [u8];
-    // SAFETY: A_IMAGE_BUF garde l'image jusqu'à la fin du kernel et ce code ne
-    // remplace pas le buffer après initialisation.
+    // SAFETY: A_IMAGE_BUF retains the image until kernel termination and this code
+    // does not replace the buffer after initialization.
     Ok(unsafe { &*ptr })
 }
 
-// ── Étape 2 : parser ELF — safe Rust uniquement ───────────────────────────
+// ── Step 2: Parse ELF — safe Rust only ───────────────────────────
 
 struct ElfImage<'a> {
     text: &'a [u8],
@@ -291,7 +291,7 @@ fn parse_elf_safe(image: &[u8]) -> Result<ElfImage<'_>, ForgeError> {
     })
 }
 
-// ── Étape 3 : vérification Merkle ─────────────────────────────────────────
+// ── Step 3: Merkle verification ─────────────────────────────────────────
 
 #[cfg(exophoenix_resurrection_test)]
 fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
@@ -303,21 +303,21 @@ fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
 
 #[cfg(not(exophoenix_resurrection_test))]
 fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
-    // FIX-MERKLE-DEGRADE (Security_Audit_Passe2 §C-02) :
-    // Si A_MERKLE_ROOT est tout-zéros (build non configuré),
-    // retourner Err explicitement au lieu de laisser la vérification
-    // silencieusement réussir — bypass Merkle total sinon.
+    // FIX-MERKLE-DEGRADE (Security_Audit_Passe2 §C-02):
+    // If A_MERKLE_ROOT is all-zeros (unconfigured build),
+    // return Err explicitly instead of allowing verification
+    // to silently succeed — total Merkle bypass otherwise.
     if kernel_a_hash_is_zero() {
-        // SAFETY: port 0xE9 debug QEMU, ignoré sur bare metal sans QEMU.
+        // SAFETY: QEMU debug port 0xE9, ignored on bare metal without QEMU.
         #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("out 0xe9, al", in("al") b'M', options(nomem, nostack));
         }
         return Err(ForgeError::MerkleVerifyFailed);
     }
-    // Hash Blake3 de .text ++ .rodata comparé à A_MERKLE_ROOT
-    // [ADAPT] : utiliser le blake3 existant du codebase
-    // Pattern attendu :
+    // Blake3 hash of .text ++ .rodata compared to A_MERKLE_ROOT
+    // [ADAPT]: use existing blake3 from codebase
+    // Expected pattern:
     //   let mut hasher = blake3::Hasher::new();
     //   hasher.update(elf.text);
     //   hasher.update(elf.rodata);
@@ -350,7 +350,7 @@ fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
 }
 
 fn validate_elf_layout(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
-    // Validation structurelle minimale du parser ELF avant reconstruction.
+    // Minimal structural validation of ELF parser before reconstruction.
     if elf.text.is_empty() || elf.rodata.is_empty() {
         return Err(ForgeError::ElfParseFailed);
     }
@@ -358,7 +358,7 @@ fn validate_elf_layout(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
         return Err(ForgeError::ElfParseFailed);
     }
 
-    // Bornes défensives sur .bss (anti-overflow / anti-objet malformé).
+    // Defensive bounds on .bss (anti-overflow / anti-malformed object).
     let _bss_end = elf
         .bss_start
         .checked_add(elf.bss_size as u64)
@@ -367,13 +367,13 @@ fn validate_elf_layout(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
         return Err(ForgeError::ElfParseFailed);
     }
 
-    // Touch explicite de .data: section valide mais possiblement vide.
+    // Explicit touch of .data: valid section but possibly empty.
     let _data_len = elf.data.len();
     Ok(())
 }
 
-/// Vérification légère utilisée par le test de résurrection: image présente
-/// dans ExoFS, ELF parsable, layout minimal sain, Merkle conforme.
+/// Lightweight verification used by resurrection test: image present
+/// in ExoFS, ELF parseable, minimal healthy layout, compliant Merkle.
 pub fn verify_seeded_kernel_a_image() -> Result<(), ForgeError> {
     phoenix_test_log("[ExoPhoenix] Forge: image contract present\n");
     let image = if kernel_a_image_provisioned() {
@@ -392,7 +392,7 @@ pub fn verify_seeded_kernel_a_image() -> Result<(), ForgeError> {
     Ok(())
 }
 
-// ── Étape 4 : reset drivers Ring 1 (G3) ──────────────────────────────────
+// ── Step 4: Reset Ring 1 drivers (G3) ──────────────────────────────────
 
 const PCI_CAP_ID_EXP: u8 = 0x10;
 const PCI_CFG_ADDR: u16 = 0xCF8;
@@ -454,28 +454,28 @@ unsafe fn find_pcie_cap_in_forge(bus: u8, dev: u8, func: u8, cap_id: u8) -> Opti
 fn pci_function_level_reset(bus: u8, device: u8, func: u8) -> Result<(), ForgeError> {
     const DEVCTL_BCR_FLR: u16 = 1 << 15;
 
-    // SAFETY: accès CF8/CFC en ring0 dans le chemin ExoPhoenix.
+    // SAFETY: CF8/CFC access in Ring 0 within ExoPhoenix path.
     let pcie_cap = unsafe { find_pcie_cap_in_forge(bus, device, func, PCI_CAP_ID_EXP) }
         .ok_or(ForgeError::DriverResetFailed)?;
 
     let devctl_offset = pcie_cap + 8;
 
-    // SAFETY: lecture/écriture PCI config 16-bit sur fonction valide.
+    // SAFETY: 16-bit PCI config read/write on valid function.
     unsafe {
         let raw = pci_cfg_read_dword_forge(bus, device, func, pcie_cap);
         let current = ((raw >> 16) & 0xFFFF) as u16;
         pci_cfg_write_word_forge(bus, device, func, devctl_offset, current | DEVCTL_BCR_FLR);
     }
 
-    // Spéc PCIe: délai max de complétion FLR = 100ms.
+    // PCIe spec: max FLR completion delay = 100ms.
     let _ = wait_apic_timeout_us(100_000);
     Ok(())
 }
 
 fn drain_dma_queues(bus: u8, device: u8, func: u8) {
-    // Attendre que les DMA en vol se terminent
-    // [ADAPT] : utiliser l'API DMA existante du codebase si disponible
-    // Fallback : busy-wait 200µs (timeout drain par device class)
+    // Wait for in-flight DMAs to finish
+    // [ADAPT]: use existing DMA API from codebase if available
+    // Fallback: busy-wait 200µs (drain timeout per device class)
     let _ = wait_apic_timeout_us(200);
     let _ = (bus, device, func);
 }
@@ -608,13 +608,13 @@ fn reload_driver_binary_from_exofs(bus: u8, device: u8, func: u8) -> Result<(), 
 }
 
 fn reset_all_ring1_drivers() -> Result<(), ForgeError> {
-    // Itérer sur les devices connus de B_DEVICE_TABLE (construite au Stage 0)
+    // Iterate over known devices from B_DEVICE_TABLE (built during Stage 0)
     let device_count = stage0::b_device_count();
     for i in 0..device_count {
         let Some(dev) = stage0::b_device(i) else {
             continue;
         };
-        // G3 : séquence obligatoire — FLR → drain → IOTLB → reload
+        // G3: mandatory sequence — FLR → drain → IOTLB → reload
         pci_function_level_reset(dev.bus, dev.device, dev.function)?;
         drain_dma_queues(dev.bus, dev.device, dev.function);
         iotlb_flush_after_flr();
@@ -623,12 +623,12 @@ fn reset_all_ring1_drivers() -> Result<(), ForgeError> {
     Ok(())
 }
 
-// ── Étape 5 : checklist post-reconstruction (G9) ─────────────────────────
+// ── Step 5: Post-reconstruction checklist (G9) ─────────────────────────
 
 fn checklist_facs_ro() -> Result<(), ForgeError> {
-    // Re-marquer FACS read-only dans les PTEs de A
-    // [ADAPT] : appeler la fonction déjà implémentée dans stage0.rs
-    // Pattern attendu :
+    // Re-mark FACS read-only in PTEs of A
+    // [ADAPT]: call function already implemented in stage0.rs
+    // Expected pattern:
     //   stage0::mark_facs_ro_in_a_pts(&stage0::ACPI_FACS_PHYS);
     let acpi = stage0::parse_stage0_acpi();
     if acpi.facs_phys == 0 {
@@ -641,9 +641,9 @@ fn checklist_facs_ro() -> Result<(), ForgeError> {
 }
 
 fn checklist_madt_hash() -> Result<(), ForgeError> {
-    // Vérifier que le hash MADT stocké au Stage 0 n'a pas changé
-    // [ADAPT] : comparer stage0::MADT_HASH avec le hash recalculé
-    // Pattern attendu :
+    // Verify that MADT hash stored at Stage 0 has not changed
+    // [ADAPT]: compare stage0::MADT_HASH with recalculated hash
+    // Expected pattern:
     //   let current = stage0::hash_madt_current();
     //   if current != stage0::MADT_HASH.load(Ordering::Acquire) {
     //       return Err(ForgeError::ChecklistFailed("madt_hash_mismatch"));
@@ -653,7 +653,7 @@ fn checklist_madt_hash() -> Result<(), ForgeError> {
         return Err(ForgeError::ChecklistFailed("madt_missing"));
     }
 
-    // MADT SDT length à +4.
+    // MADT SDT length at +4.
     let madt_len =
         unsafe { core::ptr::read_unaligned((acpi.madt_phys as usize + 4) as *const u32) } as usize;
     if !(36..=256 * 1024).contains(&madt_len) {
@@ -670,7 +670,7 @@ fn checklist_madt_hash() -> Result<(), ForgeError> {
 }
 
 fn checklist_tlb_shootdown() {
-    // IPI 0xF3 broadcast — invalider TLB de tous les cores de A
+    // IPI 0xF3 broadcast — invalidate TLB across all cores of A
     let self_slot = current_slot();
     reset_tlb_acks(self_slot);
     if apic::is_x2apic() {
@@ -678,14 +678,14 @@ fn checklist_tlb_shootdown() {
     } else {
         local_apic::broadcast_ipi_except_self(idt::VEC_EXOPHOENIX_TLB);
     }
-    // Attendre les ACK TLB dans la SSR
+    // Wait for TLB ACKs in SSR
     let _ = wait_for_tlb_acks(self_slot, 100);
 }
 
 fn checklist_idt_has_exophoenix_vectors() -> Result<(), ForgeError> {
-    // Vérifier que l'IDT de A contient les vecteurs 0xF1/0xF2/0xF3
-    // [ADAPT] : lire les entrées IDT de A via accès physique direct
-    // Pattern attendu :
+    // Verify that IDT of A contains vectors 0xF1/0xF2/0xF3
+    // [ADAPT]: read IDT entries of A via direct physical access
+    // Expected pattern:
     //   let idt_phys = read_a_idtr();
     //   verify_idt_entry(idt_phys, 0xF1)?;
     //   verify_idt_entry(idt_phys, 0xF2)?;
@@ -697,7 +697,7 @@ fn checklist_idt_has_exophoenix_vectors() -> Result<(), ForgeError> {
     }
 
     let mut idtr = Idtr { limit: 0, base: 0 };
-    // SAFETY: lecture de l'IDTR courant en ring0.
+    // SAFETY: reading current IDTR in Ring 0.
     unsafe {
         core::arch::asm!(
             "sidt [{ptr}]",
@@ -733,37 +733,37 @@ fn checklist_idt_has_exophoenix_vectors() -> Result<(), ForgeError> {
 }
 
 fn run_postconstruction_checklist() -> Result<(), ForgeError> {
-    // Ordre obligatoire — ne pas modifier
+    // Mandatory order — do not modify
     checklist_facs_ro()?;
     checklist_madt_hash()?;
-    checklist_tlb_shootdown(); // pas de ? — toujours exécuté
+    checklist_tlb_shootdown(); // no ? — always executed
     checklist_idt_has_exophoenix_vectors()?;
     Ok(())
 }
 
-// ── Point d'entrée principal ──────────────────────────────────────────────
+// ── Main Entry Point ──────────────────────────────────────────────
 
-/// Reconstruction de Kernel A depuis image propre ExoFS.
-/// Appelé par handoff.rs après isolation confirmée.
-/// Si Ok(()) → handoff.rs passe PHOENIX_STATE = Restore.
-/// Si Err    → handoff.rs compte l'échec vers Degraded.
+/// Kernel A reconstruction from clean ExoFS image.
+/// Called by handoff.rs after confirmed isolation.
+/// If Ok(()) → handoff.rs sets PHOENIX_STATE = Restore.
+/// If Err    → handoff.rs counts failure towards Degraded.
 pub fn reconstruct_kernel_a() -> Result<(), ForgeError> {
-    // 1. Charger depuis ExoFS
+    // 1. Load from ExoFS
     let image = load_a_image_from_exofs()?;
 
-    // 2. Parser ELF (safe Rust)
+    // 2. Parse ELF (safe Rust)
     let elf = parse_elf_safe(image)?;
 
-    // Validation complémentaire des sections/entry extraites.
+    // Complementary validation of extracted sections/entry.
     validate_elf_layout(&elf)?;
 
-    // 3. Vérifier Merkle
+    // 3. Verify Merkle
     verify_merkle(&elf)?;
 
-    // 4. Reset drivers Ring 1 (G3)
+    // 4. Reset Ring 1 drivers (G3)
     reset_all_ring1_drivers()?;
 
-    // 5. Checklist post-reconstruction (G9)
+    // 5. Post-reconstruction checklist (G9)
     run_postconstruction_checklist()?;
 
     Ok(())

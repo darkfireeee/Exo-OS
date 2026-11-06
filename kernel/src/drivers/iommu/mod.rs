@@ -1,9 +1,9 @@
 //! # drivers/iommu/mod.rs
 //!
-//! Driver Framework GI-03 - Isolation Mémoire (IOMMU)
+//! Driver Framework GI-03 — Memory Isolation (IOMMU)
 //!
-//! Responsabilités :
-//! 1. `fault_queue.rs` : Remontée robuste (lock-free) des accès IOMMU illégaux.
+//! Responsibilities:
+//! 1. `fault_queue.rs`: Robust (lock-free) reporting of illegal IOMMU accesses.
 
 pub mod domain_registry;
 pub mod fault_handler;

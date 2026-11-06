@@ -97,20 +97,20 @@ pub fn pmc_snapshot_offset(slot_index: usize) -> usize {
     exo_phoenix_ssr::pmc_snapshot_offset(slot_index as u32)
 }
 
-/// Accès atomique 64-bit à une case SSR (flags/nonce/compteurs 64-bit).
+/// 64-bit atomic access to an SSR slot (64-bit flags/nonce/counters).
 ///
 /// # Safety
-/// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
+/// Caller must provide a valid offset and ensure the SSR is mapped.
 pub unsafe fn ssr_atomic(offset: usize) -> &'static AtomicU64 {
     debug_assert!(offset + core::mem::size_of::<AtomicU64>() <= SSR_SIZE);
     let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
     &*((base + offset) as *const AtomicU64)
 }
 
-/// Accès atomique 32-bit à une case SSR (freeze ACK layout partagé: u32 × N).
+/// 32-bit atomic access to an SSR slot (shared freeze ACK layout: u32 × N).
 ///
 /// # Safety
-/// L'appelant doit fournir un offset valide et s'assurer que la SSR est mappée.
+/// Caller must provide a valid offset and ensure the SSR is mapped.
 pub unsafe fn ssr_atomic_u32(offset: usize) -> &'static AtomicU32 {
     debug_assert!(offset + core::mem::size_of::<AtomicU32>() <= SSR_SIZE);
     let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
@@ -119,13 +119,13 @@ pub unsafe fn ssr_atomic_u32(offset: usize) -> &'static AtomicU32 {
 
 #[inline(always)]
 pub fn read_magic_version() -> u64 {
-    // SAFETY: SSR_MAGIC est un offset u64 valide dans la SSR v7.
+    // SAFETY: SSR_MAGIC is a valid u64 offset in SSR v7.
     unsafe { ssr_atomic(SSR_MAGIC).load(core::sync::atomic::Ordering::Acquire) }
 }
 
 #[inline(always)]
 pub fn write_magic_version() {
-    // SAFETY: SSR_MAGIC est un offset u64 valide dans la SSR v7.
+    // SAFETY: SSR_MAGIC is a valid u64 offset in SSR v7.
     unsafe {
         ssr_atomic(SSR_MAGIC).store(
             exo_phoenix_ssr::SSR_MAGIC_VERSION,
@@ -143,10 +143,10 @@ pub fn validate_layout_v7() -> Result<(), SsrVersionError> {
     }
 }
 
-/// Initialise la SSR détenue par Kernel B, puis valide le contrat v7 compilé.
+/// Initializes the SSR owned by Kernel B, then validates the compiled v7 contract.
 ///
-/// Cette fonction ne touche pas aux zones audit/métriques: elle initialise le
-/// header et les atomics de synchronisation nécessaires au handoff.
+/// This function does not touch audit/metrics zones: it initializes the
+/// header and the synchronization atomics required for handoff.
 pub fn initialize_layout_v7() -> Result<(), SsrVersionError> {
     let observed = read_magic_version();
     if exo_phoenix_ssr::magic_from_magic_version(observed) == exo_phoenix_ssr::SSR_MAGIC
@@ -157,7 +157,7 @@ pub fn initialize_layout_v7() -> Result<(), SsrVersionError> {
 
     write_magic_version();
 
-    // SAFETY: offsets v7 bornés par les assertions de `exo-phoenix-ssr`.
+    // SAFETY: v7 offsets bounded by `exo-phoenix-ssr` assertions.
     unsafe {
         ssr_atomic(SSR_HANDOFF_FLAG).store(HANDOFF_NORMAL, core::sync::atomic::Ordering::Release);
         ssr_atomic(SSR_LIVENESS_NONCE).store(0, core::sync::atomic::Ordering::Release);

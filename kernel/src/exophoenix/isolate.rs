@@ -1,7 +1,7 @@
-//! ExoIsolate — cage mémoire de Kernel A pendant l'isolation.
+//! ExoIsolate — Kernel A memory cage during isolation.
 //!
-//! Erreurs couvertes : S8 (TLB shootdown via 0xF3), S-N1 (IOTLB flush)
-//! Activé par handoff.rs après confirmation des ACK freeze.
+//! Covered errors: S8 (TLB shootdown via 0xF3), S-N1 (IOTLB flush)
+//! Activated by handoff.rs after confirmation of freeze ACKs.
 
 use core::sync::atomic::Ordering;
 
@@ -14,9 +14,9 @@ use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 use crate::memory::virt::address_space::kernel::KERNEL_AS;
 use crate::memory::virt::page_table::{PageTableWalker, WalkResult};
 
-// ── MARQUEURS POUR GPT-5.3-CODEX ─────────────────────────────────────────
-// Les lignes [ADAPT] nécessitent la substitution des noms d'API réels.
-// Tout le reste est figé.
+// ── MARKERS FOR GPT-5.3-CODEX ─────────────────────────────────────────
+// Lines marked with [ADAPT] require substitution of actual API names.
+// Everything else is frozen.
 // ─────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
@@ -82,7 +82,7 @@ fn all_tlb_acks_observed(self_slot: Option<usize>) -> bool {
     all_ok
 }
 
-// ── 1. Marquer les pages de A comme !PRESENT ─────────────────────────────
+// ── 1. Mark pages of A as !PRESENT ─────────────────────────────
 
 fn mark_a_pages_not_present() {
     let kernel_start = crate::memory::core::layout::KERNEL_START;
@@ -110,11 +110,11 @@ fn mark_a_pages_not_present() {
     }
 }
 
-// ── 2. TLB shootdown (S8 — IPI 0xF3 obligatoire) ─────────────────────────
+// ── 2. TLB shootdown (S8 — mandatory IPI 0xF3) ─────────────────────────
 
 fn tlb_shootdown_all_a_cores() {
-    // S8 : INVPCID invalide seulement le core local.
-    // Seul un IPI 0xF3 broadcast invalide les TLBs des cores de A.
+    // S8: INVPCID invalidates only the local core.
+    // Only a broadcast IPI 0xF3 invalidates the TLBs of Kernel A's cores.
     let self_slot = current_slot();
     reset_tlb_acks(self_slot);
     if apic::is_x2apic() {
@@ -122,7 +122,7 @@ fn tlb_shootdown_all_a_cores() {
     } else {
         local_apic::broadcast_ipi_except_self(idt::VEC_EXOPHOENIX_TLB);
     }
-    // Attendre les ACK TLB dans la SSR (timeout 100µs)
+    // Wait for TLB ACKs in SSR (timeout 100µs)
     let ticks_per_us = stage0::ticks_per_us();
     if ticks_per_us == 0 {
         return;
@@ -146,8 +146,8 @@ fn tlb_shootdown_all_a_cores() {
 fn iommu_hard_revoke_and_flush() {
     let blocked = stage0::blocked_domain_id();
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
-        // QI Intel VT-d : tables + flush IOTLB
-        // S-N1 : ne pas se contenter de modifier les tables sans flush
+        // QI Intel VT-d: tables + IOTLB flush
+        // S-N1: do not merely modify tables without flushing
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked as u16, 0);
         }
@@ -157,7 +157,7 @@ fn iommu_hard_revoke_and_flush() {
     }
 }
 
-// ── 4. Override IDT de A ──────────────────────────────────────────────────
+// ── 4. Override IDT of A ──────────────────────────────────────────────────
 
 #[inline(always)]
 fn read_current_idtr() -> (u64, u16) {
@@ -189,7 +189,7 @@ unsafe fn write_idt_entry(idt_base: u64, vector: u8, handler: u64) {
     entry[0..2].copy_from_slice(&lo16.to_le_bytes());
     entry[2..4].copy_from_slice(&(0x0008u16).to_le_bytes()); // GDT_KERNEL_CS
     entry[4] = 0x00; // IST=0
-    entry[5] = 0x8E; // Interrupt gate présent DPL0
+    entry[5] = 0x8E; // Interrupt gate present DPL0
     entry[6..8].copy_from_slice(&mid16.to_le_bytes());
     entry[8..12].copy_from_slice(&hi32.to_le_bytes());
     entry[12..16].fill(0);
@@ -223,21 +223,21 @@ fn override_a_idt_with_b_handlers() {
     }
 }
 
-// ── Point d'entrée principal ──────────────────────────────────────────────
+// ── Main Entry Point ──────────────────────────────────────────────
 
-/// Applique la cage mémoire complète sur Kernel A.
-/// Appelé par handoff.rs après confirmation des ACK freeze et drain IOMMU.
-/// Ordre strict — ne pas modifier.
+/// Applies the full memory cage to Kernel A.
+/// Called by handoff.rs after confirmation of freeze ACKs and IOMMU drain.
+/// Strict order — do not modify.
 pub fn isolate_kernel_a_memory() {
-    // 1. Marquer pages de A !PRESENT
+    // 1. Mark pages of A !PRESENT
     mark_a_pages_not_present();
 
-    // 2. TLB shootdown sur tous les cores de A (S8)
+    // 2. TLB shootdown across all cores of A (S8)
     tlb_shootdown_all_a_cores();
 
     // 3. Hard revoke IOMMU + IOTLB flush (S-N1)
     iommu_hard_revoke_and_flush();
 
-    // 4. Override IDT de A
+    // 4. Override IDT of A
     override_a_idt_with_b_handlers();
 }

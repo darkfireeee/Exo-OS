@@ -1,18 +1,18 @@
 //! # drivers/iommu/fault_handler.rs
 //!
-//! Traitement des erreurs remontées par la `IommuFaultQueue`.
-//! Source : GI-03_Drivers_IRQ_DMA.md §4
+//! Processing of faults reported by `IommuFaultQueue`.
+//! Source: GI-03_Drivers_IRQ_DMA.md §4
 //!
-//! La logique est exécutée dans le contexte du worker/softirq, JAMAIS en ISR dur,
-//! car elle implique des actions lourdes comme la notification IPC aux drivers
-//! ou la terminaison de PIDs corrompus.
+//! Logic is executed within worker/softirq context, NEVER in hard ISR,
+//! as it involves heavyweight actions like IPC notification to drivers
+//! or terminating corrupted PIDs.
 
 use super::fault_queue::IOMMU_FAULT_QUEUE;
 use super::pid_of_domain;
 use crate::drivers::device_server_ipc;
 
-/// Scanne la file d'erreurs IOMMU collectées en ISR et applique les politiques.
-/// Doit être appelé régulièrement (ex: via le timer tick).
+/// Scans the IOMMU fault queue collected in ISR and applies policies.
+/// Must be called regularly (e.g. via the timer tick).
 pub fn process_iommu_faults() {
     let dropped = IOMMU_FAULT_QUEUE.drain_dropped();
     if dropped > 0 {
@@ -36,9 +36,9 @@ pub fn process_iommu_faults() {
             fa
         );
 
-        // Implémentation GI-03 §4: Lier domain_id au PID propriétaire
-        // et envoyer un SIGKILL (corruption DMA).
-        // On effectue ici un mapping 1:1 entre le domaine IOMMU et le PID du processus.
+        // GI-03 §4 implementation: Bind domain_id to owner PID
+        // and send SIGKILL (DMA corruption).
+        // Here we perform a 1:1 mapping between the IOMMU domain and process PID.
         if let Some(pid) = pid_of_domain(crate::memory::dma::core::types::IommuDomainId(dom)) {
             device_server_ipc::notify_iommu_fault_kill(pid, fa, ftype);
             let malicious_pid = crate::process::core::pid::Pid(pid);

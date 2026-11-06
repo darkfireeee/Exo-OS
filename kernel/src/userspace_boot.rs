@@ -1,8 +1,8 @@
-//! Bootstrap userspace depuis le disque ExoFS racine.
+//! Userspace bootstrap from the root ExoFS disk.
 //!
-//! Les binaires Ring1 ne sont pas embarques dans le noyau. Le chargeur ELF
-//! resout `/sbin/...` via ExoFS, lit les blobs depuis le block device global,
-//! puis transfere l'execution a `/lib/ld-exo.so` pour le handoff dynamique.
+//! Ring 1 binaries are not embedded into the kernel. The ELF loader
+//! resolves `/sbin/...` via ExoFS, reads blobs from the global block device,
+//! then transfers execution to `/lib/ld-exo.so` for the dynamic handoff.
 
 use crate::process::core::pid::Pid;
 use crate::process::lifecycle::{

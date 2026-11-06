@@ -1,8 +1,8 @@
-//! # exophoenix/stage0/isolation.rs — Isolation mémoire, politique IOMMU et stack B
+//! # exophoenix/stage0/isolation.rs — Memory isolation, IOMMU policy and stack B
 //!
-//! Gère l'installation des tables de pages de Kernel B, la pile B avec guard page !PRESENT,
-//! le marquage de la table FACS en lecture seule, l'allocation et la protection du pool R3,
-//! et la configuration IOMMU deny-by-default avec isolation des root-ports ACS.
+//! Handles Kernel B page table installation, stack B with !PRESENT guard page,
+//! marking FACS table read-only, allocating and protecting pool R3,
+//! and deny-by-default IOMMU setup with ACS root-port isolation.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use crate::arch::x86_64;
@@ -22,10 +22,10 @@ pub const STAGE0_B_REGION_PHYS_SIZE: u64 = crate::memory::core::layout::KERNEL_I
 pub const B_STACK_GUARD_SIZE: usize = 4096;
 pub const B_STACK_SIZE: usize = 64 * 1024;
 
-/// Les vecteurs 0xF1/0xF2/0xF3 ne sont activés qu'une fois Stage 0 prêt.
+/// Vectors 0xF1/0xF2/0xF3 are activated only once Stage 0 is ready.
 pub static EXOPHOENIX_VECTORS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Résultats stage0 (1..7)
+/// Stage0 results (1..7)
 pub static B_STAGE0_CR3: AtomicU64 = AtomicU64::new(0);
 pub static B_STACK_TOP: AtomicU64 = AtomicU64::new(0);
 pub static B_STACK_GUARD_VA: AtomicU64 = AtomicU64::new(0);
@@ -34,7 +34,7 @@ pub static POOL_R3_BASE_PHYS: AtomicU64 = AtomicU64::new(0);
 pub static POOL_R3_ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
 pub static POOL_R3_ALLOC_ORDER: AtomicU8 = AtomicU8::new(0);
 
-/// Étape 9 : policy IOMMU Stage0 (deny-by-default + zones protégées).
+/// Step 9: Stage0 IOMMU policy (deny-by-default + protected regions).
 pub static IOMMU_POLICY_READY: AtomicBool = AtomicBool::new(false);
 pub static IOMMU_BLOCKED_DOMAIN_ID: AtomicU32 = AtomicU32::new(0);
 pub static IOMMU_ACS_ROOT_PORTS: AtomicU32 = AtomicU32::new(0);
@@ -45,7 +45,7 @@ pub static IOMMU_PROTECT_SSR_SIZE: AtomicU64 = AtomicU64::new(0);
 pub static IOMMU_PROTECT_POOL_R3_BASE: AtomicU64 = AtomicU64::new(0);
 pub static IOMMU_PROTECT_POOL_R3_SIZE: AtomicU64 = AtomicU64::new(0);
 
-/// Étape 10 : FACS RO.
+/// Step 10: FACS RO.
 pub static FACS_RO_MARKED: AtomicBool = AtomicBool::new(false);
 
 #[repr(align(4096))]
@@ -54,7 +54,7 @@ struct Stage0BStack([u8; B_STACK_GUARD_SIZE + B_STACK_SIZE]);
 
 static mut B_STAGE0_STACK: Stage0BStack = Stage0BStack([0; B_STACK_GUARD_SIZE + B_STACK_SIZE]);
 
-/// Étape 1 : installer les page tables de B.
+/// Step 1: install page tables of B.
 pub fn install_b_page_tables() -> u64 {
     let current_cr3 = x86_64::read_cr3();
     let current_flags = current_cr3 & 0xFFF;
@@ -67,7 +67,7 @@ pub fn install_b_page_tables() -> u64 {
     let new_cr3 = target_phys | current_flags;
 
     if (current_cr3 & !0xFFF) != target_phys {
-        // SAFETY: target_phys est la PML4 noyau active, bootstrap ring0.
+        // SAFETY: target_phys is the active kernel PML4, ring0 bootstrap.
         unsafe {
             x86_64::write_cr3(new_cr3);
         }
@@ -77,7 +77,7 @@ pub fn install_b_page_tables() -> u64 {
     new_cr3
 }
 
-/// Étape 2 : stack B + guard page !PRESENT sous la pile.
+/// Step 2: stack B + guard page !PRESENT below stack.
 pub fn setup_b_stack_with_guard_page() -> u64 {
     let base = core::ptr::addr_of_mut!(B_STAGE0_STACK) as *mut Stage0BStack as u64;
     let guard_page = base;
@@ -86,7 +86,7 @@ pub fn setup_b_stack_with_guard_page() -> u64 {
 
     let guard_va = VirtAddr::new(guard_page).page_align_down();
     if guard_va.is_kernel() {
-        // SAFETY: demande explicite étape 2 : guard page non présente sous la stack B.
+        // SAFETY: explicit step 2 requirement: guard page not present under stack B.
         unsafe {
             let _ = KERNEL_AS.unmap(guard_va);
         }
@@ -103,16 +103,16 @@ pub fn setup_b_stack_with_guard_page() -> u64 {
     stack_top
 }
 
-/// Étape 3 : init B-TSS (Phase 3.1) et rechargement TR.
+/// Step 3: init B-TSS (Phase 3.1) and reload TR.
 pub fn init_b_tss(stack_top: u64) {
     crate::arch::x86_64::tss::init_tss_for_cpu(0, stack_top);
-    // SAFETY: descripteur TSS kernel valide dans la GDT BSP.
+    // SAFETY: valid kernel TSS descriptor in BSP GDT.
     unsafe {
         crate::arch::x86_64::tss::load_tss(crate::arch::x86_64::gdt::GDT_TSS_SEL);
     }
 }
 
-/// Étape 4 : IDT stubs (F1/F2/F3/#PF/NMI) — on garde les vecteurs ExoPhoenix inactifs.
+/// Step 4: IDT stubs (F1/F2/F3/#PF/NMI) — keep ExoPhoenix vectors inactive.
 pub fn setup_b_idt_with_stubs() {
     crate::arch::x86_64::idt::init_idt();
     crate::arch::x86_64::idt::load_idt();
@@ -167,7 +167,7 @@ impl IommuDriver for IntelIommuDriver {
     }
 
     fn flush_iotlb(&self, blocked_domain_id: u32) {
-        // SAFETY: Stage0 kernel ring0 ; la flush est idempotente et bornée au domaine bloqué.
+        // SAFETY: Stage0 kernel ring0; flush is idempotent and bounded to blocked domain.
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked_domain_id as u16, 0);
         }
@@ -208,7 +208,7 @@ pub fn update_iommu_protected_regions(pool_r3_base: u64, pool_r3_size: u64) {
     IOMMU_PROTECT_POOL_R3_SIZE.store(pool_r3_size, Ordering::Release);
 }
 
-/// Étape 9 : config IOMMU deny-by-default + politique régions + ACS root-ports.
+/// Step 9: deny-by-default IOMMU config + region policy + ACS root-ports.
 pub fn setup_iommu_stage0(pool_r3_size_bytes: u64) {
     if IOMMU_DOMAINS.domain_count() == 0 {
         IOMMU_DOMAINS.init();
@@ -238,7 +238,7 @@ pub fn setup_iommu_stage0(pool_r3_size_bytes: u64) {
     IOMMU_POLICY_READY.store(true, Ordering::Release);
 }
 
-/// Étape 10 : marquer FACS en lecture seule dans les PTE A/B partagées.
+/// Step 10: mark FACS as read-only in shared A/B PTEs.
 pub fn mark_facs_ro_in_a_pts(facs_phys: u64) -> bool {
     if facs_phys == 0 {
         FACS_RO_MARKED.store(false, Ordering::Release);
@@ -259,7 +259,7 @@ pub fn mark_facs_ro_in_a_pts(facs_phys: u64) -> bool {
     };
 
     if updated {
-        // SAFETY: invalidation locale d'une seule page après remap flags.
+        // SAFETY: local invalidation of a single page after remap flags.
         unsafe {
             tlb::flush_single(facs_virt);
         }
@@ -283,7 +283,7 @@ fn order_for_pages(mut pages: u64) -> usize {
     pages.trailing_zeros() as usize
 }
 
-/// Étape 11 : initialise/protège pool R3 selon POOL_R3_SIZE_BYTES.
+/// Step 11: initialize/protect pool R3 according to POOL_R3_SIZE_BYTES.
 pub fn init_pool_r3_from_stage0_size(pool_r3_size_bytes: u64) -> bool {
     if pool_r3_size_bytes == 0 {
         return false;
@@ -307,7 +307,7 @@ pub fn init_pool_r3_from_stage0_size(pool_r3_size_bytes: u64) -> bool {
     update_iommu_protected_regions(base, alloc_bytes);
     let blocked_domain = IOMMU_BLOCKED_DOMAIN_ID.load(Ordering::Acquire);
     if INTEL_VTD.is_initialized() {
-        // SAFETY: flush ciblée domaine Stage0 après update policy.
+        // SAFETY: targeted flush of Stage0 domain after policy update.
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
         }

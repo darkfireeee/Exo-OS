@@ -1,7 +1,7 @@
 //! # drivers/iommu/domain_registry.rs
 //!
-//! Registre bidirectionnel PID <-> domaine IOMMU.
-//! Implémentation fixe, sans allocation côté registre, conforme à CORR-16/CORR-23.
+//! Bidirectional PID <-> IOMMU domain registry.
+//! Fixed implementation, allocation-free registry side, compliant with CORR-16/CORR-23.
 
 use spin::Mutex;
 

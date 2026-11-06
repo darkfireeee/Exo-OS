@@ -1,6 +1,6 @@
 //! # drivers/pci_cfg.rs
 //!
-//! Accès PCI configuration space + helpers de cleanup GI-03.
+//! PCI configuration space access + GI-03 cleanup helpers.
 
 use core::hint::spin_loop;
 

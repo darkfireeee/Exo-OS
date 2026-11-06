@@ -1,7 +1,7 @@
-//! # exophoenix/stage0/apic_routing.rs — Routage APIC, calibration timer et watchdog
+//! # exophoenix/stage0/apic_routing.rs — APIC routing, timer calibration and watchdog
 //!
-//! Gère la correspondance APIC ID -> slots de cœurs logiques, la calibration
-//! du timer APIC via le canal 2 du PIT, l'armement du watchdog matériel, et l'envoi SIPI.
+//! Manages APIC ID -> logical core slots correspondence, APIC timer
+//! calibration via PIT channel 2, hardware watchdog arming, and SIPI transmission.
 
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use crate::arch::x86_64;
@@ -19,18 +19,18 @@ pub const CORE_A_SLOT: u8 = 0;
 pub const A_ENTRY_VECTOR: u8 = TRAMPOLINE_PAGE;
 pub const SIPI_SENT_BIT: u64 = 1;
 
-/// Table APIC ID (0..255) -> slot SSR (0..255), 0xFF = non assigné.
+/// APIC ID (0..255) -> SSR slot (0..255) table, 0xFF = unassigned.
 pub static APIC_TO_SLOT: [AtomicU8; 256] = [const { AtomicU8::new(0xFF) }; 256];
 
-/// Étape 7 : ticks APIC par microseconde (calibré via PIT ch2).
+/// Step 7: APIC ticks per microsecond (calibrated via PIT ch2).
 pub static TICKS_PER_US: AtomicU64 = AtomicU64::new(0);
 pub static WATCHDOG_ARMED_MS: AtomicU64 = AtomicU64::new(0);
 pub static WATCHDOG_ARMED_TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// Étape 13 : garde-fou anti double SIPI (G8).
+/// Step 13: anti double SIPI guardrail (G8).
 pub static SIPI_SENT: AtomicU64 = AtomicU64::new(0);
 
-/// Étape 6 : construction apic_to_slot[256] depuis la MADT réelle.
+/// Step 6: build apic_to_slot[256] from real MADT.
 pub fn build_apic_to_slot_from_real_madt(madt_phys: u64) -> usize {
     for slot in &APIC_TO_SLOT {
         slot.store(0xFF, Ordering::Relaxed);
@@ -51,7 +51,7 @@ pub fn build_apic_to_slot_from_real_madt(madt_phys: u64) -> usize {
     }
 
     if mapped == 0 {
-        // Fallback BSP minimal si MADT inutilisable.
+        // Minimal BSP fallback if MADT is unusable.
         let bsp_apic = match B_FEATURES.apic_mode() {
             BootApicMode::X2Apic => crate::arch::x86_64::apic::x2apic::x2apic_id(),
             BootApicMode::XApic => local_apic::lapic_id(),
@@ -74,7 +74,7 @@ pub fn apic_timer_write(reg: u32, val: u32) {
         BootApicMode::XApic => local_apic::lapic_write(reg, val),
         BootApicMode::X2Apic => {
             let msr_reg = apic_reg_to_x2apic_msr(reg);
-            // SAFETY: registre x2APIC standard, ring0 bootstrap.
+            // SAFETY: standard x2APIC register, ring0 bootstrap.
             unsafe {
                 msr::write_msr(msr_reg, val as u64);
             }
@@ -88,24 +88,24 @@ pub fn apic_timer_read(reg: u32) -> u32 {
         BootApicMode::XApic => local_apic::lapic_read(reg),
         BootApicMode::X2Apic => {
             let msr_reg = apic_reg_to_x2apic_msr(reg);
-            // SAFETY: registre x2APIC standard, ring0 bootstrap.
+            // SAFETY: standard x2APIC register, ring0 bootstrap.
             unsafe { msr::read_msr(msr_reg) as u32 }
         }
     }
 }
 
-/// Étape 7 : calibration APIC timer via PIT channel 2.
+/// Step 7: APIC timer calibration via PIT channel 2.
 pub fn calibrate_apic_timer_via_pit_ch2() -> Option<u64> {
     let irq_flags = x86_64::irq_save();
     let pit_count: u16 = 11_931; // ~10ms @ 1.193182MHz
 
     pit::setup_ch2_oneshot(pit_count);
-    // Timer APIC one-shot masqué, compteur au maximum.
+    // Masked one-shot APIC timer, maximum count.
     apic_timer_write(
         local_apic::LAPIC_LVT_TIMER,
         local_apic::TIMER_MODE_ONESHOT | 0x0001_0000 | 0xFF,
     );
-    apic_timer_write(local_apic::LAPIC_TIMER_DCR, 0x3); // diviseur /16
+    apic_timer_write(local_apic::LAPIC_TIMER_DCR, 0x3); // divider /16
     apic_timer_write(local_apic::LAPIC_TIMER_ICR, u32::MAX);
 
     let done = pit::wait_ch2_done();
@@ -142,7 +142,7 @@ pub fn calibrate_and_store_ticks_per_us() -> u64 {
     ticks
 }
 
-/// Étape 8 : init APIC local avec dispatch explicite xAPIC/x2APIC via B_FEATURES.
+/// Step 8: local APIC init with explicit xAPIC/x2APIC dispatch via B_FEATURES.
 pub fn init_local_apic_dispatch() {
     match B_FEATURES.apic_mode() {
         BootApicMode::X2Apic => {
@@ -170,7 +170,7 @@ pub fn init_local_apic_dispatch() {
     }
 }
 
-/// Étape 12 : arme watchdog APIC (par défaut 5000ms), basé sur TICKS_PER_US.
+/// Step 12: arms APIC watchdog (default 5000ms), based on TICKS_PER_US.
 pub fn arm_apic_watchdog(ms: u64) -> u64 {
     let ms = if ms == 0 { WATCHDOG_DEFAULT_MS } else { ms };
     let ticks_per_us = TICKS_PER_US.load(Ordering::Acquire);
@@ -253,7 +253,7 @@ pub fn resolve_apic_id_for_slot(slot_index: u8) -> Option<u8> {
     fallback
 }
 
-/// Étape 13 : envoi SIPI one-shot (G8) vers le slot cible.
+/// Step 13: one-shot SIPI dispatch (G8) to target slot.
 pub fn send_sipi_once(core_slot: u8, entry_vector: u8) -> Result<(), SendSipiError> {
     let prior = SIPI_SENT.fetch_or(SIPI_SENT_BIT, Ordering::AcqRel);
     if (prior & SIPI_SENT_BIT) != 0 {

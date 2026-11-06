@@ -1,9 +1,9 @@
 //! # drivers/iommu/fault_queue.rs
 //!
-//! Queue IOMMU fault basée sur CAS strong (FIX-104)
-//! Source : ExoOS_Driver_Framework_v10.md §3.4 + GI-03_Drivers_IRQ_DMA.md
+//! IOMMU fault queue based on strong CAS (FIX-104)
+//! Source: ExoOS_Driver_Framework_v10.md §3.4 + GI-03_Drivers_IRQ_DMA.md
 //!
-//! Logique lock-free complète pour autoriser l'appel `push()` depuis ISR sans aucun Mutex.
+//! Full lock-free logic allowing `push()` from ISR without any Mutex.
 //! 0 STUB, 0 TODO
 
 use core::cell::UnsafeCell;
@@ -21,7 +21,7 @@ pub struct IommuFaultEvent {
     pub faulted_addr: u64,
 }
 
-// ALIGNEMENT CACHE L1 (64 octets) pour éviter le faux partage (False Sharing) en SMP.
+// L1 CACHE ALIGNMENT (64 bytes) to avoid False Sharing in SMP.
 #[repr(C, align(64))]
 pub struct FaultQueueSlot {
     pub seq: AtomicU32,
@@ -30,11 +30,11 @@ pub struct FaultQueueSlot {
 
 unsafe impl Sync for FaultQueueSlot {}
 
-// Padding ajouté pour aligner la tête et la queue sur des lignes de cache distinctes.
+// Padding added to align head and tail on distinct cache lines.
 #[repr(C, align(64))]
 pub struct IommuFaultQueue {
     pub head: AtomicU32,
-    _pad_head: [u8; 60], // Assure que head et tail sont séparés
+    _pad_head: [u8; 60], // Ensures head and tail are separated
     pub tail: AtomicU32,
     _pad_tail: [u8; 60],
     pub dropped: AtomicU32,
@@ -79,8 +79,8 @@ impl IommuFaultQueue {
     }
 
     pub fn push(&self, event: IommuFaultEvent) -> bool {
-        // Mode release: on évite le panic si appelé avant init,
-        // on se fie au drop silencieux spécifié.
+        // Release mode: avoids panic if called before init,
+        // relies on specified silent drop.
         if !self.initialized.load(Ordering::Acquire) {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return false;

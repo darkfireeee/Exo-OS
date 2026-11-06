@@ -1,9 +1,9 @@
 //! # drivers/device_claims.rs
 //!
-//! Enregistrement et gestion des revendications de périphériques PCI et MMIO.
+//! Registration and management of PCI and MMIO device claims.
 //! Source: GI-03_Drivers_IRQ_DMA.md §6
 //!
-//! TOCTOU Protection (CORR-32) : Le lock d'écriture est pris *avant* toute vérification.
+//! TOCTOU Protection (CORR-32): The write lock is acquired *before* any check.
 //! 0 STUBS, 0 TODO.
 
 use alloc::vec::Vec;
@@ -15,7 +15,7 @@ use crate::memory::core::types::PhysAddr;
 use crate::process::core::pid::Pid;
 use crate::process::PROCESS_REGISTRY;
 
-/// Erreur de revendication de périphérique
+/// Device claim error
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimError {
     NotInHardwareRegion,
@@ -130,16 +130,16 @@ pub fn sys_pci_claim(
     let d_pid = Pid(driver_pid);
     let c_pid = Pid(calling_pid);
 
-    // Vérification capability AVANT lock (lecture seule, pas de TOCTOU ici)
+    // Capability check BEFORE lock (read-only, no TOCTOU here)
     if !check_sys_admin_capability(c_pid) {
         return Err(ClaimError::PermissionDenied);
     }
 
-    // CORR-32 : Lock AVANT toute vérification de région
-    let _irq = irq_save(); // Éviter deadlock si appelé en interruption/softirq
+    // CORR-32: Lock BEFORE any region checks
+    let _irq = irq_save(); // Avoid deadlock if called in interrupt/softirq context
     let mut claims = DEVICE_CLAIMS.write();
 
-    // Toutes les vérifications SOUS le lock
+    // All checks UNDER the lock
     if !md_mmio_whitelist_contains(phys_base, size) && !pci_bar_claim_contains(bdf, phys_base, size)
     {
         return Err(ClaimError::NotInHardwareRegion);

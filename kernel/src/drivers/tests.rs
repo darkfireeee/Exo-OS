@@ -28,7 +28,7 @@ pub mod smp_tests {
 
         let start = Instant::now();
 
-        // 16 consumers acharnés
+        // 16 relentless consumers
         for _ in 0..consumers {
             let q = queue.clone();
             let cp = total_popped.clone();
@@ -46,7 +46,7 @@ pub mod smp_tests {
             }));
         }
 
-        // 16 producteurs acharnés
+        // 16 relentless producers
         for p in 0..producers {
             let q = queue.clone();
             handles.push(thread::spawn(move || {
@@ -105,7 +105,7 @@ pub mod smp_tests {
     #[test]
     fn test_02_toctou_pci_claim() {
         println!("\n[TEST 2] TOCTOU System PCI Claim Stress Test");
-        // Simulation d'une attaque TOCTOU : 50 threads tentent d'enregistrer le BDF 0x01.00.0 simultanement
+        // TOCTOU attack simulation: 50 threads attempt to register BDF 0x01.00.0 simultaneously
         let phys_base = PhysAddr::new(0xA000_0000);
         let size = 4096;
         let bdf = Some(PciBdf {
@@ -132,7 +132,7 @@ pub mod smp_tests {
 
         for i in 0..50 {
             handles.push(thread::spawn(move || {
-                // Seulement un thread passera le check initial TOCTOU. Le reste aura AlreadyClaimed.
+                // Only one thread will pass the initial TOCTOU check. The rest will get AlreadyClaimed.
                 sys_pci_claim(phys_base, size, i, bdf, 0)
             }));
         }

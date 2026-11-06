@@ -1,21 +1,21 @@
 //! # exophoenix/stage0/mod.rs — ExoPhoenix Stage 0 (Bootstrap Kernel-B)
 //!
-//! Orchestrateur central du bootstrap de Kernel B (étapes 1a→13) :
+//! Central bootstrap orchestrator for Kernel B (steps 1a→13):
 //! - 1a) install page tables B
 //! - 1b) probe CPUID global
 //! - 2) stack B + guard page !PRESENT
 //! - 3) init TSS (init_b_tss)
-//! - 4) IDT stubs (vecteurs ExoPhoenix inactifs)
+//! - 4) IDT stubs (inactive ExoPhoenix vectors)
 //! - 5) parse ACPI (MADT/FADT/FACS)
-//! - 5b) enum PCI + calcul taille pool R3
-//! - 6) build apic_to_slot[256] depuis MADT réel
-//! - 7) calibration APIC timer via PIT ch2 -> TICKS_PER_US
+//! - 5b) enum PCI + calculate pool R3 size
+//! - 6) build apic_to_slot[256] from real MADT
+//! - 7) APIC timer calibration via PIT ch2 -> TICKS_PER_US
 //! - 8) init APIC local dispatch
 //! - 9) setup IOMMU deny-by-default + ACS root ports
 //! - 10) FACS RO + hash MADT
 //! - 11) init pool R3
-//! - 12) armer watchdog APIC
-//! - 13) armer vecteurs de récupération et SIPI
+//! - 12) arm APIC watchdog
+//! - 13) arm recovery vectors and SIPI
 
 pub mod apic_routing;
 pub mod features;
@@ -59,22 +59,22 @@ pub struct Stage0Summary {
     pub ticks_per_us: u64,
 }
 
-/// Orchestrateur strict des étapes 1a→12.
-/// Exécute les étapes stage0 ExoPhoenix.
+/// Strict orchestrator for steps 1a→12.
+/// Executes ExoPhoenix stage0 steps.
 ///
-/// FIX-BOOT-STAGE0-HANG : `kernel_a_boot = true` quand la fonction est appelée
-/// INLINE sur le boot du noyau principal (Kernel A, lib.rs Phase 5b). Dans ce
-/// cas, on SAUTE les étapes qui reconfigurent l'état CPU live du BSP de Kernel A
-/// (pile/TSS/IDT/timer APIC/watchdog), car elles appartiennent à Kernel B et
-/// clobbent l'état de Kernel A.
+/// FIX-BOOT-STAGE0-HANG: `kernel_a_boot = true` when the function is called
+/// INLINE during main kernel boot (Kernel A, lib.rs Phase 5b). In this
+/// case, we SKIP the steps that reconfigure the live CPU state of Kernel A's BSP
+/// (stack/TSS/IDT/APIC timer/watchdog), because they belong to Kernel B and
+/// clobber Kernel A's state.
 pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
-    // SAFETY: Stage0 s'exécute sur Kernel B avant la prise de contrôle normale
-    // de Kernel A ; ExoSeal phase 0 est idempotent.
+    // SAFETY: Stage0 runs on Kernel B prior to normal control handover to
+    // Kernel A; ExoSeal phase 0 is idempotent.
     unsafe {
         crate::security::exoseal::exoseal_boot_phase0();
     }
 
-    // 1a) Page tables de B
+    // 1a) Page tables of B
     let b_cr3 = install_b_page_tables();
 
     if let Err(err) = super::ssr::initialize_layout_v7() {
@@ -90,19 +90,19 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
 
     #[inline(always)]
     fn s0dbg(tag: u8) {
-        // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire, dispo dès le reset.
+        // SAFETY: port 0xE9 = QEMU ISA debug device, no memory effect, available right from reset.
         unsafe {
             core::arch::asm!("out 0xE9, al", in("al") b'@', options(nomem, nostack));
             core::arch::asm!("out 0xE9, al", in("al") tag, options(nomem, nostack));
         }
     }
-    s0dbg(b'1'); // SSR ok/dégradé
+    s0dbg(b'1'); // SSR ok/degraded
 
-    // 1b) Probe CPUID global (HPET faux jusqu'au parse ACPI)
+    // 1b) Probe CPUID global (HPET false until ACPI parse)
     init_feature_probe(false);
     s0dbg(b'2');
 
-    // ── Étapes 2/3/4 : état CPU de Kernel B (pile + TSS + IDT) ────────────────
+    // ── Steps 2/3/4: CPU state of Kernel B (stack + TSS + IDT) ────────────────
     let b_stack_top = if kernel_a_boot {
         isolation::B_STACK_TOP.load(Ordering::Acquire)
     } else {
@@ -118,11 +118,11 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
     };
     s0dbg(b'5');
 
-    // 5) ACPI (MADT/FADT/FACS) — lecture seule
+    // 5) ACPI (MADT/FADT/FACS) — read-only
     let acpi = parse_stage0_acpi();
     s0dbg(b'6');
 
-    // 5b) PCI + taille pool R3 — lecture seule (config space)
+    // 5b) PCI + pool R3 size — read-only (config space)
     let pci_device_count = enumerate_pci_devices();
     s0dbg(b'7');
     const POOL_R3_MIN_SIZE: u64 = 8 * 1024 * 1024;
@@ -131,30 +131,30 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
         .max(POOL_R3_MIN_SIZE);
     isolation::set_pool_r3_size_bytes(pool_r3_size);
 
-    // 6) APIC->slot depuis MADT réel — lecture seule
+    // 6) APIC->slot from real MADT — read-only
     let apic_slots_mapped = build_apic_to_slot_from_real_madt(acpi.madt_phys);
     s0dbg(b'8');
 
-    // ── Étapes 7/8 : timer APIC de Kernel B ───────────────────────────────────
+    // ── Steps 7/8: APIC timer of Kernel B ───────────────────────────────────
     let ticks_per_us = if kernel_a_boot {
         ticks_per_us()
     } else {
         // 7) APIC timer via PIT ch2
         let t = calibrate_and_store_ticks_per_us();
         s0dbg(b'9');
-        // 8) APIC local dispatch + VMXOFF défensif
+        // 8) APIC local dispatch + defensive VMXOFF
         init_local_apic_dispatch();
         vmxoff_if_active();
         t
     };
     s0dbg(b'a');
 
-    // 9) IOMMU + ACS root-ports + IOTLB flush (no-op sans VT-d / domain_count==0)
+    // 9) IOMMU + ACS root-ports + IOTLB flush (no-op without VT-d / domain_count==0)
     setup_iommu_stage0(pool_r3_size);
     crate::security::exoseal::configure_nic_iommu_policy();
     s0dbg(b'b');
 
-    // 10) FACS en RO + hash MADT
+    // 10) FACS in RO + MADT hash
     let _ = mark_facs_ro_in_a_pts(acpi.facs_phys);
     let _ = hash_and_store_madt(acpi.madt_phys);
     s0dbg(b'c');
@@ -169,7 +169,7 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
     }
     s0dbg(b'e');
 
-    // 13) Armer les vecteurs de récupération ExoPhoenix (0xF1/0xF2/0xF3).
+    // 13) Arm ExoPhoenix recovery vectors (0xF1/0xF2/0xF3).
     if PHOENIX_STATE.load(Ordering::Acquire) != PhoenixState::Degraded as u8 {
         activate_exophoenix_vectors();
     }
@@ -185,7 +185,7 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
     }
 }
 
-/// Stage0 complet (1→13): bascule Normal, SIPI one-shot, puis boucle sentinelle.
+/// Full Stage0 (1→13): switches to Normal, one-shot SIPI, then sentinel loop.
 pub fn stage0_init() -> ! {
     let _summary = stage0_init_all_steps(false);
 

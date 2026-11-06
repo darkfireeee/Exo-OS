@@ -1,7 +1,7 @@
-//! # exophoenix/stage0/hardware_scan.rs — Énumération PCI et inspection des tables ACPI
+//! # exophoenix/stage0/hardware_scan.rs — PCI enumeration and ACPI table inspection
 //!
-//! Gère l'énumération brute du bus PCI (périphériques et BARs), le calcul de taille
-//! du pool Ring 3, et l'analyse/hachage cryptographique des tables ACPI (MADT/FADT/FACS/HPET).
+//! Handles raw PCI bus enumeration (devices and BARs), Ring 3 pool size
+//! calculation, and cryptographic parsing/hashing of ACPI tables (MADT/FADT/FACS/HPET).
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
@@ -90,7 +90,7 @@ pub fn pci_read_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
         | ((function as u32) << 8)
         | ((offset as u32) & 0xFC);
 
-    // SAFETY: accès CF8/CFC en ring0 pendant bootstrap Stage0.
+    // SAFETY: CF8/CFC access in ring0 during Stage0 bootstrap.
     unsafe {
         x86_64::outl(PCI_CFG_ADDR, addr);
         x86_64::inl(PCI_CFG_DATA)
@@ -102,8 +102,8 @@ pub fn pci_vendor_id(bus: u8, device: u8, function: u8) -> u16 {
     (pci_read_dword(bus, device, function, 0x00) & 0xFFFF) as u16
 }
 
-/// Formule V4-M2 :
-/// base fixe + contribution par device + contribution par BAR, puis alignement 2 MiB.
+/// V4-M2 formula:
+/// fixed base + contribution per device + contribution per BAR, then 2 MiB alignment.
 pub fn calc_pool_r3_size(device_count: usize, bar_count: usize) -> u64 {
     const BASE: u64 = 8 * 1024 * 1024;
     const PER_DEVICE: u64 = 64 * 1024;
@@ -118,7 +118,7 @@ pub fn calc_pool_r3_size(device_count: usize, bar_count: usize) -> u64 {
     aligned.min(MAX)
 }
 
-/// Étape 5b : enum PCI (devices + BARs) + taille pool R3.
+/// Step 5b: PCI enum (devices + BARs) + pool R3 size.
 pub fn enumerate_pci_devices() -> usize {
     B_DEVICE_COUNT.store(0, Ordering::Release);
     B_DEVICE_BAR_COUNT.store(0, Ordering::Release);
@@ -162,7 +162,7 @@ pub fn enumerate_pci_devices() -> usize {
                 }
 
                 if count < MAX_B_DEVICES {
-                    // SAFETY: bootstrap single-thread ; count borné < MAX_B_DEVICES.
+                    // SAFETY: single-thread bootstrap; count bounded < MAX_B_DEVICES.
                     unsafe {
                         (*B_DEVICE_TABLE.0.get())[count] = PciDeviceRecord {
                             bus,
@@ -203,11 +203,11 @@ pub fn b_device(index: usize) -> Option<PciDeviceRecord> {
     if index >= b_device_count() || index >= MAX_B_DEVICES {
         return None;
     }
-    // SAFETY: table statique ; écritures uniquement au boot stage0.
+    // SAFETY: static table; writes only during stage0 boot.
     Some(unsafe { (*B_DEVICE_TABLE.0.get())[index] })
 }
 
-/// Retourne le BlobId driver associé à un BDF (clé 0x00BB_DDFF), si présent.
+/// Returns driver BlobId associated with a BDF (0x00BB_DDFF key), if present.
 pub fn driver_blob_id(bdf_key: u32) -> Option<BlobId> {
     let count = b_device_count();
     let mut idx = 0usize;
@@ -215,7 +215,7 @@ pub fn driver_blob_id(bdf_key: u32) -> Option<BlobId> {
         let dev = b_device(idx)?;
         let key = ((dev.bus as u32) << 16) | ((dev.device as u32) << 8) | dev.function as u32;
         if key == bdf_key {
-            // SAFETY: écritures uniquement au boot stage0 ; lecture en RO ensuite.
+            // SAFETY: writes only during stage0 boot; read in RO afterwards.
             let blob = unsafe { (*B_DRIVER_BLOB_TABLE.0.get())[idx] };
             if blob == BlobId::ZERO {
                 return None;
@@ -232,8 +232,8 @@ pub fn parse_facs_from_fadt(fadt_phys: u64) -> u64 {
         return 0;
     }
 
-    // SdtHeader.length à offset +4.
-    // SAFETY: zone ACPI identity-mappée et validée grossièrement ci-dessus.
+    // SdtHeader.length at offset +4.
+    // SAFETY: ACPI zone identity-mapped and roughly validated above.
     let fadt_len =
         unsafe { core::ptr::read_unaligned((fadt_phys as usize + 4) as *const u32) } as usize;
 
@@ -241,14 +241,14 @@ pub fn parse_facs_from_fadt(fadt_phys: u64) -> u64 {
         return 0;
     }
 
-    // ACPI 1.0 FACS 32-bit (firmware_ctrl) à offset 36.
-    // SAFETY: fadt_len vérifié >= 40.
+    // ACPI 1.0 FACS 32-bit (firmware_ctrl) at offset 36.
+    // SAFETY: fadt_len verified >= 40.
     let facs32 =
         unsafe { core::ptr::read_unaligned((fadt_phys as usize + 36) as *const u32) } as u64;
 
-    // ACPI 2.0+ X_FIRMWARE_CTRL à offset 132 (si table assez grande).
+    // ACPI 2.0+ X_FIRMWARE_CTRL at offset 132 (if table is large enough).
     let facs64 = if fadt_len >= 140 {
-        // SAFETY: fadt_len vérifié >= 140.
+        // SAFETY: fadt_len verified >= 140.
         unsafe { core::ptr::read_unaligned((fadt_phys as usize + 132) as *const u64) }
     } else {
         0
@@ -261,7 +261,7 @@ pub fn parse_facs_from_fadt(fadt_phys: u64) -> u64 {
     }
 }
 
-/// Étape 5 : parse ACPI MADT/FADT/FACS.
+/// Step 5: parse ACPI MADT/FADT/FACS.
 pub fn parse_stage0_acpi() -> Stage0AcpiSnapshot {
     let info = if parser::acpi_available() {
         Some(*parser::acpi_info())
@@ -296,7 +296,7 @@ pub fn acpi_table_len(table_phys: u64) -> Option<usize> {
     if table_phys < 0x1000 || table_phys >= 0x4000_0000 {
         return None;
     }
-    // SAFETY: ACPI identity-map bootstrap ; lecture header SDT length @ +4.
+    // SAFETY: ACPI identity-map bootstrap; reading SDT length header @ +4.
     let len =
         unsafe { core::ptr::read_unaligned((table_phys as usize + 4) as *const u32) } as usize;
     if len < 36 || len > ACPI_MAX_TABLE_LEN {
@@ -323,10 +323,10 @@ pub fn load_madt_hash() -> [u8; 32] {
     out
 }
 
-/// Étape 10 : calcule et stocke le hash MADT (BLAKE3, 32 bytes).
+/// Step 10: calculates and stores MADT hash (BLAKE3, 32 bytes).
 pub fn hash_and_store_madt(madt_phys: u64) -> Option<[u8; 32]> {
     let len = acpi_table_len(madt_phys)?;
-    // SAFETY: table ACPI identity-mappée ; longueur bornée et validée ci-dessus.
+    // SAFETY: ACPI table identity-mapped; length bounded and validated above.
     let bytes = unsafe { core::slice::from_raw_parts(madt_phys as *const u8, len) };
     let hash = blake3_hash(bytes);
     store_madt_hash(hash);

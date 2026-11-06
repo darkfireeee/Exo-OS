@@ -1,5 +1,5 @@
-//! Handlers ExoPhoenix pour les vecteurs réservés.
-//! Règle absolue : lock-free, aucune allocation, uniquement atomics + MSR/CR3.
+//! ExoPhoenix handlers for reserved vectors.
+//! Absolute rule: lock-free, zero allocation, atomics + MSR/CR3 only.
 
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::Ordering;
@@ -17,7 +17,7 @@ const LAPIC_ACK_REG_OFFSET: usize = 0xB0;
 
 #[inline(always)]
 fn xapic_mmio_base() -> usize {
-    // SAFETY: lecture d'un MSR architectural en Ring 0.
+    // SAFETY: reading an architectural MSR in Ring 0.
     let apic_base = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & APICBASE_ADDR_MASK;
     apic_base as usize
 }
@@ -26,12 +26,12 @@ fn xapic_mmio_base() -> usize {
 fn current_apic_id() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
-            // SAFETY: x2APIC actif et MSR X2APIC_ID lisible.
+            // SAFETY: x2APIC active and MSR X2APIC_ID readable.
             unsafe { msr::read_msr(x2apic::X2APIC_ID) as u32 }
         }
         stage0::BootApicMode::XApic => {
             let lapic_id_ptr = (xapic_mmio_base() + LAPIC_ID_REG_OFFSET) as *const u32;
-            // SAFETY: LAPIC MMIO actif en mode xAPIC.
+            // SAFETY: LAPIC MMIO active in xAPIC mode.
             unsafe { read_volatile(lapic_id_ptr) >> 24 }
         }
     }
@@ -46,14 +46,14 @@ fn current_slot() -> Option<usize> {
 fn apic_ack() {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
-            // SAFETY: x2APIC actif ; EOI via MSR dédié.
+            // SAFETY: x2APIC active; EOI via dedicated MSR.
             unsafe {
                 msr::write_msr(x2apic::X2APIC_EOI, 0);
             }
         }
         stage0::BootApicMode::XApic => {
             let lapic_eoi_ptr = (xapic_mmio_base() + LAPIC_ACK_REG_OFFSET) as *mut u32;
-            // SAFETY: LAPIC MMIO actif en mode xAPIC.
+            // SAFETY: LAPIC MMIO active in xAPIC mode.
             unsafe {
                 write_volatile(lapic_eoi_ptr, 0);
             }
@@ -81,14 +81,14 @@ unsafe fn save_current_fpu_before_freeze_ack() {
     crate::scheduler::fpu::lazy::cr0_set_ts();
 }
 
-/// 0xF1 — Freeze coopératif.
+/// 0xF1 — Cooperative freeze.
 ///
-/// - CLI (IRQ maskables off ; NMI reste possible par design x86)
-/// - XSAVE éventuel avant ACK (CORR-15 / TLA S3)
-/// - ACK FREEZE en Release
-/// - spin jusqu'à reprise Kernel B
+/// - CLI (maskable IRQs off; NMI remains possible by x86 design)
+/// - Potential XSAVE before ACK (CORR-15 / TLA S3)
+/// - ACK FREEZE with Release ordering
+/// - spin until Kernel B resumption
 pub unsafe fn handle_freeze_ipi() {
-    // SAFETY: instruction privilégiée en contexte handler IRQ ring0.
+    // SAFETY: privileged instruction in ring0 IRQ handler context.
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
     }
@@ -96,7 +96,7 @@ pub unsafe fn handle_freeze_ipi() {
     save_current_fpu_before_freeze_ack();
 
     if let Some(slot) = current_slot() {
-        // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
+        // SAFETY: fixed/reserved physical SSR; offset bounded via slot map.
         unsafe {
             ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
                 .store(ssr::FREEZE_ACK_DONE, Ordering::Release);
@@ -110,7 +110,7 @@ pub unsafe fn handle_freeze_ipi() {
             break;
         }
 
-        // SAFETY: boucle de gel volontaire.
+        // SAFETY: intentional freeze loop.
         unsafe {
             core::arch::asm!("pause", options(nostack, nomem));
         }
@@ -119,7 +119,7 @@ pub unsafe fn handle_freeze_ipi() {
     apic_ack();
 }
 
-/// 0xF2 — PMC snapshot (heuristique, jamais source unique de vérité).
+/// 0xF2 — PMC snapshot (heuristic, never single source of truth).
 pub unsafe fn handle_pmc_snapshot_ipi() {
     if !stage0::B_FEATURES.pmc_available() {
         apic_ack();
@@ -134,12 +134,12 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
     let base = ssr::SSR_BASE as usize + ssr::pmc_snapshot_offset(slot);
 
     for i in 0..4u32 {
-        // SAFETY: accès MSR conditionné par pmc_available.
+        // SAFETY: MSR access conditioned by pmc_available.
         let evtsel = unsafe { msr::read_msr(msr::MSR_IA32_PERFEVTSEL0 + i) };
-        // SAFETY: idem, PMC bank séquentielle IA32_PMC0..3.
+        // SAFETY: ditto, sequential PMC bank IA32_PMC0..3.
         let ctr = unsafe { msr::read_msr(msr::MSR_IA32_PMC0 + i) };
 
-        // SAFETY: écritures volatiles dans SSR dédiée au slot courant.
+        // SAFETY: volatile writes in SSR dedicated to current slot.
         unsafe {
             core::ptr::write_volatile((base + (i as usize) * 16) as *mut u64, evtsel);
             core::ptr::write_volatile((base + (i as usize) * 16 + 8) as *mut u64, ctr);
@@ -149,14 +149,14 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
     apic_ack();
 }
 
-/// 0xF3 — TLB flush global local (reload CR3) + ACK.
+/// 0xF3 — Local global TLB flush (reload CR3) + ACK.
 pub unsafe fn handle_tlb_flush_ipi() {
-    // SAFETY: instruction privilégiée en contexte handler IRQ ring0.
+    // SAFETY: privileged instruction in ring0 IRQ handler context.
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
     }
 
-    // SAFETY: rechargement du CR3 courant pour invalider le TLB local.
+    // SAFETY: reload current CR3 to invalidate local TLB.
     unsafe {
         core::arch::asm!(
             "mov {tmp}, cr3",
@@ -167,7 +167,7 @@ pub unsafe fn handle_tlb_flush_ipi() {
     }
 
     if let Some(slot) = current_slot() {
-        // SAFETY: SSR physique fixée/réservée ; offset borné via slot map.
+        // SAFETY: fixed/reserved physical SSR; offset bounded via slot map.
         unsafe {
             ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
                 .store(ssr::TLB_ACK_DONE, Ordering::Release);
