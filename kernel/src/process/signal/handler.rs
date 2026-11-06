@@ -1,18 +1,18 @@
 // kernel/src/process/signal/handler.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Construction du frame signal utilisateur (x86_64 System V) — Exo-OS
+// Construction of user signal frame (x86_64 System V) — Exo-OS
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le frame est construit sur la pile utilisateur (ou sigaltstack si SA_ONSTACK).
-// Il contient le contexte complet (ucontext_t) permettant sigreturn(2) de restaurer
-// correctement l'état du thread après résolution du handler.
+// Frame is constructed on user stack (or sigaltstack if SA_ONSTACK).
+// It contains complete context (ucontext_t) allowing sigreturn(2) to properly
+// restore thread state after handler completion.
 //
-// Layout mémoire (croissant vers haut) :
-//   [rsp - sizeof(SignalFrame)] : SignalFrame
-//      +0   : SigInfo      (siginfo_t, 128 octets)
-//      +128 : UContext      (ucontext_t, 936 octets)
-//      +... : restorer stub (8 octets optionnel)
+// Memory layout (growing upwards):
+//   [rsp - sizeof(SignalFrame)]: SignalFrame
+//      +0   : SigInfo      (siginfo_t, 128 bytes)
+//      +128 : UContext     (ucontext_t, 936 bytes)
+//      +... : restorer stub (8 bytes optional)
 
 use super::default::SigAction;
 use super::delivery::SyscallFrame;
@@ -22,10 +22,10 @@ use crate::process::core::tcb::ProcessThread;
 use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structures ABI
+// ABI structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registres généraux x86_64 sauvegardés dans ucontext_t.uc_mcontext.
+/// x86_64 general purpose registers saved in ucontext_t.uc_mcontext.
 #[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub struct GRegs {
@@ -57,7 +57,7 @@ pub struct GRegs {
     pub cr2: u64,
 }
 
-/// Stack state pour ucontext.
+/// Stack state for ucontext.
 #[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub struct SigAltStack {
@@ -70,49 +70,49 @@ pub struct SigAltStack {
 pub const SS_ONSTACK: i32 = 1;
 pub const SS_DISABLE: i32 = 2;
 
-/// Equivalent de ucontext_t (Linux x86_64).
+/// Equivalent of ucontext_t (Linux x86_64).
 ///
-/// FIX-SIGALIGN : pas de `align(16)` sur cette structure. `_fpregs_mem` n'est
-/// pour l'instant qu'un espace réservé mis à zéro (aucun FXSAVE/XRSTOR). Un
-/// `align(16)` ici se propage à `SignalFrame` (champ imbriqué) et rendrait
-/// `ptr.write` à `sig_rsp` ≡8 mod16 un UB — exactement le placement SysV que
-/// `setup_signal_frame` doit livrer. Si un FXSAVE/XRSTOR y est branché, aligner
-/// spécifiquement ce champ, pas toute la structure.
+/// FIX-SIGALIGN: no `align(16)` on this structure. `_fpregs_mem` is
+/// currently just a zeroed reserved space (no FXSAVE/XRSTOR). An
+/// `align(16)` here propagates to `SignalFrame` (nested field) and would make
+/// `ptr.write` at `sig_rsp` ≡8 mod16 UB — exactly the SysV placement that
+/// `setup_signal_frame` must deliver. If FXSAVE/XRSTOR is hooked up, align
+/// that field specifically, not the entire structure.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct UContext {
     pub uc_flags: u64,
-    pub uc_link: u64, // pointeur vers ucontext parent (optionnel)
+    pub uc_link: u64, // Pointer to parent ucontext (optional)
     pub uc_stack: SigAltStack,
     pub uc_mcontext: GRegs,
     pub uc_sigmask: u64,
     pub uc_fs_base: u64,
     pub uc_gs_base: u64,
-    pub _fpregs_mem: [u8; 512], // espace pour FXSAVE
+    pub _fpregs_mem: [u8; 512], // Space for FXSAVE
 }
 
 impl Default for UContext {
     fn default() -> Self {
-        // SAFETY: tous les champs sont des types numériques → zéros valides.
+        // SAFETY: all fields are numeric types → valid zeroes.
         unsafe { core::mem::zeroed() }
     }
 }
 
-/// Frame complet placé sur la pile utilisateur avant appel du handler.
+/// Full frame placed on user stack before calling handler.
 ///
-/// FIX-SIGALIGN (bisect OOM/GP run 12/13, `<GP1 rip=... rsp mod16=8>`) :
-/// pas de `align(16)` ici ni sur `UContext` (où vit `_fpregs_mem`). Voir
-/// `setup_signal_frame` : RSP d'entrée du handler doit être ≡8 mod16.
+/// FIX-SIGALIGN (bisect OOM/GP run 12/13, `<GP1 rip=... rsp mod16=8>`):
+/// no `align(16)` here nor on `UContext` (where `_fpregs_mem` lives). See
+/// `setup_signal_frame`: handler entry RSP must be ≡8 mod16.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct SignalFrame {
-    /// Adresse de retour : pointe sur la routine sigreturn (restorer).
+    /// Return address: points to sigreturn routine (restorer).
     pub pretcode: u64,
-    /// Numéro du signal (rdi pour handler(int signo)).
+    /// Signal number (rdi for handler(int signo)).
     pub signo: u64,
-    /// Pointeur vers si_info (rsi pour handler(int, siginfo_t*, void*)).
+    /// Pointer to si_info (rsi for handler(int, siginfo_t*, void*)).
     pub pinfo: u64,
-    /// Pointeur vers uc (rdx pour SA_SIGINFO handler).
+    /// Pointer to uc (rdx for SA_SIGINFO handler).
     pub puc: u64,
     /// siginfo_t.
     pub info: SigInfoC,
@@ -120,7 +120,7 @@ pub struct SignalFrame {
     pub uc: UContext,
 }
 
-/// Version C-compatible de SigInfo (128 octets, compatible siginfo_t).
+/// C-compatible version of SigInfo (128 bytes, siginfo_t compatible).
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct SigInfoC {
@@ -138,7 +138,7 @@ pub struct SigInfoC {
 
 impl Default for SigInfoC {
     fn default() -> Self {
-        // SAFETY: tous les champs sont des types numériques → zéros valides.
+        // SAFETY: all fields are numeric types → valid zeroes.
         unsafe { core::mem::zeroed() }
     }
 }
@@ -157,21 +157,21 @@ impl SigInfoC {
     }
 }
 
-// Taille totale du frame signal : doit être <= 4096 pour tenir sur une page.
+// Total size of signal frame: must be <= 4096 to fit in a page.
 const _: () = assert!(
     core::mem::size_of::<SignalFrame>() <= 4096,
     "SignalFrame doit tenir dans une page utilisateur"
 );
 
-/// Offset du champ `uc` (UContext) dans `SignalFrame`, en octets.
+/// Offset of `uc` (UContext) field in `SignalFrame`, in bytes.
 ///
-/// Layout : pretcode(8) + signo(8) + pinfo(8) + puc(8) + info(SigInfoC=128) = 160.
-/// Utilisé par `dispatch.rs` pour calculer `uc_ptr` lors du sigreturn.
+/// Layout: pretcode(8) + signo(8) + pinfo(8) + puc(8) + info(SigInfoC=128) = 160.
+/// Used by `dispatch.rs` to compute `uc_ptr` during sigreturn.
 pub const SIGNAL_FRAME_UC_OFFSET: u64 = 160;
 
-/// Registres restaurés depuis le UContext au sigreturn.
+/// Registers restored from UContext on sigreturn.
 ///
-/// Retourné par `verify_and_extract_uc()` après vérification du magic SIG-13.
+/// Returned by `verify_and_extract_uc()` after verifying magic SIG-13.
 #[derive(Copy, Clone, Default)]
 pub struct UContextRegs {
     pub rip: u64,
@@ -196,25 +196,25 @@ pub struct UContextRegs {
     pub signal_mask: u64,
 }
 
-/// Vérifie le magic SIG-13 et extrait les registres du UContext userspace.
+/// Verifies magic SIG-13 and extracts registers from userspace UContext.
 ///
-/// ## Sécurité (LAC-01 / SIG-13 / SIG-14)
-/// - CONSTANT-TIME : toutes les données sont lues AVANT la vérification du magic.
-///   Aucun chemin ne permet un timing oracle sur la validité du magic.
-/// - Retourne `None` si l'adresse est invalide ou si `uc_flags != SIGNAL_FRAME_MAGIC`.
+/// ## Security (LAC-01 / SIG-13 / SIG-14)
+/// - CONSTANT-TIME: all data is read BEFORE verifying magic.
+///   No path allows a timing oracle on magic validity.
+/// - Returns `None` if address is invalid or if `uc_flags != SIGNAL_FRAME_MAGIC`.
 ///
 /// # Safety
-/// `uc_ptr` doit être une adresse userspace valide (vérifiée en interne).
+/// `uc_ptr` must be a valid userspace address (verified internally).
 pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return None;
     }
-    // SAFETY: adresse userspace validée ci-dessus.
+    // SAFETY: userspace address validated above.
     let uc = unsafe { &*(uc_ptr as *const UContext) };
     let mc = &uc.uc_mcontext;
 
-    // Extraire TOUTES les données avant de vérifier le magic (LAC-01 constant-time).
+    // Extract ALL data before checking magic (LAC-01 constant-time).
     let regs = UContextRegs {
         rip: mc.rip,
         rsp: mc.rsp,
@@ -238,8 +238,8 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
         signal_mask: uc.uc_sigmask,
     };
 
-    // Vérification magic constant-time : XOR puis test (pas de brèche prédicteur).
-    // SIG-13 / SIG-14 : si le magic est faux, le sigreturn est rejeté.
+    // Constant-time magic verification: XOR then test (no predictor leak).
+    // SIG-13 / SIG-14: if magic is wrong, sigreturn is rejected.
     let magic_diff = uc.uc_flags ^ (SIGNAL_FRAME_MAGIC as u64);
     if magic_diff != 0 {
         return None;
@@ -249,7 +249,7 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// setup_signal_frame — construit le frame sur la pile utilisateur
+// setup_signal_frame — builds frame on user stack
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C, align(16))]
@@ -260,7 +260,7 @@ struct AlignedFpRegs([u8; 512]);
 #[inline]
 fn save_fpu_regs_to_bytes() -> [u8; 512] {
     let mut fp = AlignedFpRegs([0u8; 512]);
-    // SAFETY: fp est aligné sur 16 octets (requis par fxsave64).
+    // SAFETY: fp is aligned on 16 bytes (required by fxsave64).
     unsafe {
         core::arch::asm!(
             "fxsave64 [{}]",
@@ -281,10 +281,10 @@ fn save_fpu_regs_to_bytes() -> [u8; 512] {
 #[inline]
 fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
     let mut fp = AlignedFpRegs(*src);
-    // Masquer les bits réservés de MXCSR (octets 24..28) pour interdire un #GP(0) forgé depuis Ring 3.
+    // Mask reserved bits of MXCSR (bytes 24..28) to prohibit forged #GP(0) from Ring 3.
     let mxcsr = u32::from_le_bytes([fp.0[24], fp.0[25], fp.0[26], fp.0[27]]) & 0x0000_FFBF;
     fp.0[24..28].copy_from_slice(&mxcsr.to_le_bytes());
-    // SAFETY: fp est aligné sur 16 octets et MXCSR est assaini.
+    // SAFETY: fp is aligned on 16 bytes and MXCSR is sanitized.
     unsafe {
         core::arch::asm!(
             "fxrstor64 [{}]",
@@ -298,15 +298,15 @@ fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
 #[inline]
 fn restore_fpu_regs_from_bytes(_src: &[u8; 512]) {}
 
-/// Construit un SignalFrame sur la pile utilisateur et redirige RIP vers
-/// le handler. Appelé depuis delivery::deliver_one() uniquement.
+/// Constructs a SignalFrame on user stack and redirects RIP to
+/// handler. Called from delivery::deliver_one() only.
 ///
-/// Séquence :
-/// 1. Choisir la pile (sigaltstack si SA_ONSTACK, sinon pile courante).
-/// 2. Aligner RSP à 16 oct (-sizeof(SignalFrame)) selon System V ABI.
-/// 3. Écrire SignalFrame (info + ucontext avec les registres courants).
-/// 4. Modifier frame->user_rip = handler, frame->user_rsp = &SignalFrame.
-/// 5. Configurer RDI/RSI/RDX pour la convention SA_SIGINFO.
+/// Sequence:
+/// 1. Choose stack (sigaltstack if SA_ONSTACK, otherwise current stack).
+/// 2. Align RSP to 16 bytes (-sizeof(SignalFrame)) according to System V ABI.
+/// 3. Write SignalFrame (info + ucontext with current registers).
+/// 4. Modify frame->user_rip = handler, frame->user_rsp = &SignalFrame.
+/// 5. Configure RDI/RSI/RDX for SA_SIGINFO convention.
 pub fn setup_signal_frame(
     thread: &mut ProcessThread,
     frame: &mut SyscallFrame,
@@ -326,7 +326,7 @@ pub fn setup_signal_frame(
             }
         });
 
-    // Choisir la pile cible.
+    // Choose target stack.
     let target_rsp = if action.flags & SigAction::SA_ONSTACK != 0 {
         let alt = thread.addresses.sigaltstack_top();
         if alt != 0 {
@@ -346,27 +346,27 @@ pub fn setup_signal_frame(
         frame.user_rsp
     };
 
-    // Aligner selon SysV : (rsp - frame_size) & ~0xF, puis -8 (pour la red zone).
+    // Align according to SysV: (rsp - frame_size) & ~0xF, then -8 (for red zone).
     //
-    // FIX-SIGALIGN (bisect OOM/GP run 12/13) : ce commentaire décrivait déjà le
-    // bon algorithme, mais le "-8" n'était jamais appliqué — `sig_rsp` sortait
-    // ≡0 mod16 et était utilisé tel quel comme RSP d'entrée du handler
-    // (`frame.user_rsp = sig_rsp` plus bas). Or l'ABI SysV attend RSP ≡8 mod16
-    // à l'entrée d'une fonction atteinte "comme par un call" (ce qu'un handler
-    // de signal simule) : le compilateur du binaire utilisateur émet un
-    // prologue qui suppose cet invariant (ex. `movaps [rsp+N], xmmM`, qui
-    // n'est correct que 16-aligné). Avec l'ancien calcul, ce prologue voit un
-    // RSP faux de 8 octets et `movaps` lève #GP — c'est exactement le crash
-    // observé (`<GP1 ... rsp=...b8>`, rsp mod16=8 au lieu de 0 attendu par le
-    // code compilé une fois son propre push effectué).
+    // FIX-SIGALIGN (bisect OOM/GP run 12/13): this comment already described the
+    // proper algorithm, but the "-8" was never applied — `sig_rsp` came out
+    // ≡0 mod16 and was used as is as entry RSP for handler
+    // (`frame.user_rsp = sig_rsp` below). But SysV ABI expects RSP ≡8 mod16
+    // at entry of function reached "as if by call" (what a signal handler
+    // simulates): compiler of user binary emits a
+    // prologue assuming this invariant (e.g. `movaps [rsp+N], xmmM`, which
+    // is only correct 16-aligned). With previous calculation, this prologue saw
+    // incorrect RSP by 8 bytes and `movaps` raised #GP — exactly the crash
+    // observed (`<GP1 ... rsp=...b8>`, rsp mod16=8 instead of 0 expected by
+    // compiled code once its own push was done).
     let frame_size = core::mem::size_of::<SignalFrame>() as u64;
     let sig_rsp = ((target_rsp - frame_size) & !0xFu64) - 8;
 
-    // Construire le contenu du frame dans un buffer temporaire.
-    // Assurer que sig_rsp est une adresse utilisateur valide (< USER_SPACE_TOP).
+    // Build frame contents in a temporary buffer.
+    // Ensure that sig_rsp is a valid user address (< USER_SPACE_TOP).
     if !(0x1000..USER_SPACE_TOP).contains(&sig_rsp) {
-        // Pile utilisateur corrompue : forcer SIGSEGV.
-        // En prod, mettre le thread en SIGSEGV et passer à l'action Core.
+        // Corrupted user stack: force SIGSEGV.
+        // In prod, set thread to SIGSEGV and proceed to Core action.
         return;
     }
 
@@ -376,7 +376,7 @@ pub fn setup_signal_frame(
         k_mask | u_mask
     };
 
-    // Construire le SignalFrame.
+    // Build SignalFrame.
     let sig_frame = SignalFrame {
         pretcode: action.restorer,
         signo: sig_n as u64,
@@ -384,7 +384,7 @@ pub fn setup_signal_frame(
         puc: sig_rsp + offset_of_uc(),
         info: SigInfoC::from_queue(info),
         uc: UContext {
-            // SIG-13 : stocker SIGNAL_FRAME_MAGIC dans uc_flags pour vérification au sigreturn.
+            // SIG-13: store SIGNAL_FRAME_MAGIC in uc_flags for verification on sigreturn.
             uc_flags: SIGNAL_FRAME_MAGIC as u64,
             uc_link: 0,
             uc_stack: SigAltStack {
@@ -428,17 +428,17 @@ pub fn setup_signal_frame(
         },
     };
 
-    // Écrire le frame sur la pile utilisateur.
-    // SAFETY: sig_rsp pointe vers adresse userspace validée ci-dessus; écriture = livraison signal POSIX.
+    // Write frame onto user stack.
+    // SAFETY: sig_rsp points to validated userspace address above; write = POSIX signal delivery.
     unsafe {
         let ptr = sig_rsp as *mut SignalFrame;
         ptr.write(sig_frame);
     }
 
-    // Mettre à jour le masque pendant l'exécution du handler (SA_NODEFER exclut sig_n).
+    // Update mask during handler execution (SA_NODEFER excludes sig_n).
     let mut new_mask = old_mask | action.mask;
     if action.flags & SigAction::SA_NODEFER == 0 {
-        new_mask |= 1u64 << (sig_n - 1); // bloquer le signal courant
+        new_mask |= 1u64 << (sig_n - 1); // block current signal
     }
     use super::mask::SigMask;
     let safe_new_mask = SigMask::from(new_mask).0;
@@ -451,29 +451,29 @@ pub fn setup_signal_frame(
         stcb.in_handler.store(1, Ordering::Release);
     }
 
-    // Rediriger le retour syscall vers le handler.
+    // Redirect syscall return to handler.
     frame.user_rip = action.handler;
     frame.user_rsp = sig_rsp;
-    // Convention SA_SIGINFO (rdi = signo, rsi = *siginfo, rdx = *ucontext).
+    // SA_SIGINFO convention (rdi = signo, rsi = *siginfo, rdx = *ucontext).
     frame.user_rdi = sig_n as u64;
     frame.user_rsi = sig_rsp + offset_of_info();
     frame.user_rdx = sig_rsp + offset_of_uc();
 }
 
-/// Restaure le contexte après sigreturn(2).
-/// `uc_ptr` = adresse du UContext passé par l'utilisateur dans rdi.
-/// Modifie `frame` pour restaurer les registres sauvegardés.
+/// Restores context after sigreturn(2).
+/// `uc_ptr` = address of UContext passed by user in rdi.
+/// Modifies `frame` to restore saved registers.
 pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame, uc_ptr: u64) {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return;
     }
 
-    // SAFETY : uc_ptr a été écrit par setup_signal_frame ; on le relègit.
+    // SAFETY: uc_ptr was written by setup_signal_frame; reread it.
     let uc = unsafe { &*(uc_ptr as *const UContext) };
     let mc = &uc.uc_mcontext;
 
-    // SIG-13 (constant-time) : extraire les données AVANT de vérifier le magic.
+    // SIG-13 (constant-time): extract data BEFORE checking magic.
     let rip_saved = mc.rip;
     let rsp_saved = mc.rsp;
     let rax_saved = mc.rax;
@@ -496,8 +496,8 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     let mask_saved = uc.uc_sigmask;
     let fpregs_saved = uc._fpregs_mem;
 
-    // Vérification magic constant-time (SIG-13 / SIG-14).
-    // Si le magic est invalide, on ne restaure rien (attaque de sigframe).
+    // Constant-time magic verification (SIG-13 / SIG-14).
+    // If magic is invalid, restore nothing (sigframe attack).
     let magic_diff = uc.uc_flags ^ (SIGNAL_FRAME_MAGIC as u64);
     if magic_diff != 0 {
         return;
@@ -505,7 +505,7 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
 
     restore_fpu_regs_from_bytes(&fpregs_saved);
 
-    // Restaurer les registres.
+    // Restore registers.
     frame.user_rip = rip_saved;
     frame.user_rsp = rsp_saved;
     frame.user_rax = rax_saved;
@@ -532,7 +532,7 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     thread.sched_tcb.user_gs_base = gs_base_saved;
     thread.tls_gs_base.store(fs_base_saved, Ordering::Release);
 
-    // Restaurer le masque de signal sauvegardé (sans SIGKILL/SIGSTOP).
+    // Restore saved signal mask (without SIGKILL/SIGSTOP).
     use super::mask::SigMask;
     let restored_mask = SigMask::from(mask_saved);
     thread
@@ -552,7 +552,7 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Offsets const dans SignalFrame
+// Const offsets in SignalFrame
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]

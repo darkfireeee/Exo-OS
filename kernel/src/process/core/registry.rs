@@ -1,19 +1,19 @@
 // kernel/src/process/core/registry.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ProcessRegistry — table globale PID → PCB (Exo-OS Couche 1.5)
+// ProcessRegistry — global PID → PCB table (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Structure :
-//   • Tableau plat de slots (index = PID - 1).
-//   • Chaque slot = Option<Box<ProcessControlBlock>> dans un RwLock léger.
-//   • Accès non bloquant en lecture via AtomicPtr pour les hot paths.
-//   • Écriture protégée par spinlock global de la registry.
+// Structure:
+//   • Flat array of slots (index = PID - 1).
+//   • Each slot = Option<Box<ProcessControlBlock>> in a lightweight RwLock.
+//   • Non-blocking read access via AtomicPtr for hot paths.
+//   • Writes protected by global registry spinlock.
 //
-// Concurrence :
-//   Les lecteurs (signal, syscall, IPC) utilisent `find_by_pid()` qui lit
-//   le slot via raw pointer atomique — cohérent via la garantie que le PCB
-//   ne peut pas être libéré tant qu'il y a des références (refcounting).
+// Concurrency:
+//   Readers (signal, syscall, IPC) use `find_by_pid()` which reads
+//   the slot via atomic raw pointer — consistent through the guarantee that
+//   the PCB cannot be freed while active references exist (refcounting).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::pcb::{Credentials, ProcessControlBlock};
@@ -26,12 +26,12 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 // RegistrySlot
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un slot dans la table de la registry.
-/// AtomicPtr permet les lectures lockless (non-blocking reads).
+/// A slot in the registry table.
+/// AtomicPtr allows lockless (non-blocking) reads.
 struct RegistrySlot {
-    /// Pointeur atomique vers le PCB. null = slot vide.
+    /// Atomic pointer to PCB. null = empty slot.
     pcb_ptr: AtomicPtr<ProcessControlBlock>,
-    /// Compteur de références actives sur ce PCB.
+    /// Active reference count on this PCB.
     refcount: AtomicU32,
 }
 
@@ -48,40 +48,40 @@ impl RegistrySlot {
 // ProcessRegistry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur de registry.
+/// Registry error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistryError {
-    /// Slot plein (pas de place).
+    /// Slot full (no space).
     Full,
-    /// PID non trouvé.
+    /// PID not found.
     NotFound,
-    /// PID déjà enregistré.
+    /// PID already registered.
     AlreadyExists,
 }
 
-/// Table globale PID → PCB (initialisation dynamique).
+/// Global PID → PCB table (dynamically initialized).
 pub struct ProcessRegistry {
-    /// Slots de la registry (alloués à l'init).
+    /// Registry slots (allocated at init).
     slots: *mut RegistrySlot,
-    /// Capacité de la table (nombre de PIDs supportés).
+    /// Table capacity (number of supported PIDs).
     capacity: usize,
-    /// Spinlock pour les écritures (insert/remove).
+    /// Spinlock for writes (insert/remove).
     write_lock: SpinLock<()>,
-    /// Nombre de processus enregistrés.
+    /// Number of registered processes.
     count: AtomicUsize,
-    /// Nombre total d'insertions depuis le boot.
+    /// Total number of insertions since boot.
     inserts: AtomicUsize,
-    /// Nombre total de suppressions.
+    /// Total number of removals.
     removes: AtomicUsize,
-    /// Nombre de lookups (instrumentation debugging).
+    /// Number of lookups (debugging instrumentation).
     lookups: AtomicUsize,
 }
 
-// SAFETY: slots pointés sont accédés de manière exclusive ou via atomiques.
+// SAFETY: pointed slots are accessed exclusively or via atomics.
 unsafe impl Sync for ProcessRegistry {}
 unsafe impl Send for ProcessRegistry {}
 
-// Registry globale — initialement invalide (ptr null, capacity 0).
+// Global registry — initially invalid (null ptr, capacity 0).
 pub static PROCESS_REGISTRY: ProcessRegistry = ProcessRegistry {
     slots: core::ptr::null_mut(),
     capacity: 0,
@@ -93,37 +93,37 @@ pub static PROCESS_REGISTRY: ProcessRegistry = ProcessRegistry {
 };
 
 impl ProcessRegistry {
-    /// Initialise la registry avec `capacity` slots.
+    /// Initializes the registry with `capacity` slots.
     ///
     /// # Safety
-    /// Appelé une seule fois depuis le BSP durant l'init.
+    /// Called once from the BSP during init.
     pub unsafe fn init(&self, capacity: usize) {
         use alloc::alloc::{alloc_zeroed, Layout};
-        // FIX-KRN-10: layout calculé après capacité finale déterminée ci-dessus.
-        // Sera recalculé ci-dessous avec final_capacity.
+        // FIX-KRN-10: layout computed after final capacity determined below.
+        // Will be recalculated below with final_capacity.
         let _layout_orig =
             Layout::array::<RegistrySlot>(capacity).expect("layout RegistrySlot valide");
-        // FIX-KRN-10 (rapport_analyse §6.3) : vérification de la mémoire disponible
-        // avant l'allocation statique de 512Ko (32768 × 16B).
-        // Sur QEMU -m 256M, cette allocation représente 0.2% de la RAM — acceptable.
-        // Mais sans garde, un boot sur machine avec peu de RAM panique sans message clair.
+        // FIX-KRN-10 (analysis report §6.3): check available memory
+        // before static allocation of 512 KiB (32768 × 16B).
+        // On QEMU -m 256M, this allocation represents 0.2% of RAM — acceptable.
+        // But without guard, boot on machine with little RAM panics without clear message.
         //
-        // Vérification : si le buddy allocator a moins de 2 × REGISTRY_SIZE en frames libres,
-        // log d'avertissement et réduction de la capacité au maximum disponible.
-        // FIX-KRN-10: utiliser l'API réelle de mémoire physique disponible.
+        // Check: if buddy allocator has less than 2 × REGISTRY_SIZE in free frames,
+        // log warning and reduce capacity to maximum available.
+        // FIX-KRN-10: use real physical memory available API.
         let available_bytes = crate::memory::physical::stats::free_bytes();
         let registry_bytes = capacity * core::mem::size_of::<RegistrySlot>();
-        // FIX-KRN-10b : free_bytes() == 0 signifie que l'allocateur physique
-        // n'est pas initialisé (tests hôte, init très précoce) — la garde
-        // basse-mémoire ne s'applique alors pas. L'ancien code réduisait la
-        // capacité à 64 slots dans ce cas, cassant tout PID > 64.
+        // FIX-KRN-10b: free_bytes() == 0 means physical allocator
+        // is not initialized (host tests, very early init) — low-memory
+        // guard does not apply. Old code reduced capacity to 64 slots
+        // in this case, breaking any PID > 64.
         let final_capacity = if available_bytes != 0 && available_bytes < registry_bytes * 2 {
-            // Fallback : allouer au maximum la moitié de la RAM disponible pour le registry
+            // Fallback: allocate at most half of available RAM for the registry
             let safe_cap = (available_bytes / 2) / core::mem::size_of::<RegistrySlot>();
             crate::arch::x86_64::terminal::debug_write(
                 b"process_registry: WARNING reducing capacity due to low memory\n",
             );
-            safe_cap.max(64) // minimum 64 slots pour les serveurs Ring1
+            safe_cap.max(64) // minimum 64 slots for Ring1 servers
         } else {
             capacity
         };
@@ -131,22 +131,22 @@ impl ProcessRegistry {
             .expect("ProcessRegistry: layout invalide");
         let ptr = alloc_zeroed(layout) as *mut RegistrySlot;
         assert!(!ptr.is_null(), "ProcessRegistry::init : allocation échouée");
-        // FIX-KRN-10b : l'initialisation et la capacité publiée doivent utiliser
-        // final_capacity (la taille réellement allouée). L'ancien code itérait et
-        // publiait `capacity` : si la branche de réduction mémoire s'appliquait,
-        // l'init écrivait HORS du tableau alloué (heap overflow) et la registry
-        // exposait des slots inexistants.
+        // FIX-KRN-10b: initialization and published capacity must use
+        // final_capacity (the size actually allocated). Old code iterated and
+        // published `capacity`: if memory reduction branch applied,
+        // init wrote OUTSIDE allocated array (heap overflow) and registry
+        // exposed nonexistent slots.
         for i in 0..final_capacity {
-            // SAFETY: ptr + i est dans le tableau alloué (i < final_capacity).
+            // SAFETY: ptr + i is within the allocated array (i < final_capacity).
             core::ptr::write(ptr.add(i), RegistrySlot::empty());
         }
-        // Mise à jour via raw pointer (la static mut est à adresse fixe).
+        // Update via raw pointer (static mut is at a fixed address).
         let self_mut = self as *const Self as *mut Self;
         (*self_mut).slots = ptr;
         (*self_mut).capacity = final_capacity;
     }
 
-    /// Enregistre un PCB dans la table (appelé lors de la création d'un processus).
+    /// Registers a PCB in the table (called on process creation).
     pub fn insert(&self, pcb: Box<ProcessControlBlock>) -> Result<(), RegistryError> {
         let pid = pcb.pid;
         let idx = pid.0 as usize;
@@ -154,14 +154,14 @@ impl ProcessRegistry {
             return Err(RegistryError::Full);
         }
         let slot_idx = idx - 1;
-        // SAFETY: slot_idx < capacity, slots initialisé.
+        // SAFETY: slot_idx < capacity, slots initialized.
         let slot = unsafe { &*self.slots.add(slot_idx) };
 
         let _guard = self.write_lock.lock();
         if !slot.pcb_ptr.load(Ordering::Relaxed).is_null() {
             return Err(RegistryError::AlreadyExists);
         }
-        // Convertit Box en raw pointer, stocke dans le slot.
+        // Converts Box to raw pointer, stores in slot.
         let raw = Box::into_raw(pcb);
         slot.pcb_ptr.store(raw, Ordering::Release);
         slot.refcount.store(1, Ordering::Relaxed);
@@ -170,7 +170,7 @@ impl ProcessRegistry {
         Ok(())
     }
 
-    /// Retire le PCB de la table et retourne la Box pour libération.
+    /// Removes the PCB from the table and returns the Box for deallocation.
     pub fn remove(&self, pid: Pid) -> Result<Box<ProcessControlBlock>, RegistryError> {
         let idx = pid.0 as usize;
         if idx == 0 || idx > self.capacity {
@@ -187,13 +187,13 @@ impl ProcessRegistry {
         }
         self.count.fetch_sub(1, Ordering::Relaxed);
         self.removes.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: raw a été mis dans la table via Box::into_raw dans insert().
+        // SAFETY: raw was placed in the table via Box::into_raw in insert().
         Ok(unsafe { Box::from_raw(raw) })
     }
 
-    /// Recherche lockless d'un PCB par PID.
-    /// Retourne un pointeur brut validé ou null.
-    /// Le pointeur reste valide tant que le PCB est dans la table.
+    /// Lockless lookup of a PCB by PID.
+    /// Returns a validated raw pointer or null.
+    /// The pointer remains valid as long as the PCB is in the table.
     pub fn find_by_pid(&self, pid: Pid) -> Option<&ProcessControlBlock> {
         self.lookups.fetch_add(1, Ordering::Relaxed);
         let idx = pid.0 as usize;
@@ -201,24 +201,24 @@ impl ProcessRegistry {
             return None;
         }
         let slot_idx = idx - 1;
-        // SAFETY: slot_idx < capacity, accès read-only via AtomicPtr.
+        // SAFETY: slot_idx < capacity, read-only access via AtomicPtr.
         let slot = unsafe { &*self.slots.add(slot_idx) };
         let raw = slot.pcb_ptr.load(Ordering::Acquire);
         if raw.is_null() {
             return None;
         }
-        // SAFETY: raw non null = PCB encore dans la table (non libéré).
+        // SAFETY: non-null raw = PCB still in table (not freed).
         Some(unsafe { &*raw })
     }
 
-    /// Nombre de processus courants.
+    /// Current number of processes.
     #[inline(always)]
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
     }
 
-    /// Itère sur tous les PCBs actifs (lecture seule).
-    /// Fermeture appelée pour chaque PCB non-null.
+    /// Iterates over all active PCBs (read-only).
+    /// Closure called for each non-null PCB.
     pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&ProcessControlBlock),
@@ -228,16 +228,16 @@ impl ProcessRegistry {
             let slot = unsafe { &*self.slots.add(i) };
             let raw = slot.pcb_ptr.load(Ordering::Acquire);
             if !raw.is_null() {
-                // SAFETY: raw non null = PCB valide en mémoire.
+                // SAFETY: non-null raw = valid PCB in memory.
                 f(unsafe { &*raw });
             }
         }
     }
 
-    /// Accède aux credentials d'un processus et applique une fermeture mutatrice.
+    /// Accesses a process's credentials and applies a mutating closure.
     ///
-    /// Retourne `Some(R)` si le processus existe, `None` sinon.
-    /// La fermeture reçoit `&mut Credentials` pour modification atomique.
+    /// Returns `Some(R)` if process exists, `None` otherwise.
+    /// Closure receives `&mut Credentials` for atomic modification.
     ///
     /// # Example
     /// ```rust
@@ -248,12 +248,12 @@ impl ProcessRegistry {
         F: FnOnce(&mut Credentials) -> R,
     {
         let pcb = self.find_by_pid(pid)?;
-        // SAFETY: SpinLock<Credentials> — verrouillage court (quelques instructions),
-        // pas d'allocation ni d'appel système à l'intérieur.
+        // SAFETY: SpinLock<Credentials> — short lock (few instructions),
+        // no allocation or system call inside.
         Some(f(&mut *pcb.creds.lock()))
     }
 
-    /// Statistiques de la registry pour le système de monitoring.
+    /// Registry statistics for monitoring system.
     pub fn stats(&self) -> RegistryStats {
         RegistryStats {
             current_count: self.count.load(Ordering::Relaxed),
@@ -265,7 +265,7 @@ impl ProcessRegistry {
     }
 }
 
-/// Statistiques exportées par la registry.
+/// Statistics exported by the registry.
 #[derive(Debug, Clone, Copy)]
 pub struct RegistryStats {
     pub current_count: usize,
@@ -275,10 +275,10 @@ pub struct RegistryStats {
     pub capacity: usize,
 }
 
-/// Initialise la registry globale.
+/// Initializes the global registry.
 ///
 /// # Safety
-/// Une seule fois depuis le BSP.
+/// Called once from the BSP.
 pub unsafe fn init(max_pids: usize) {
     PROCESS_REGISTRY.init(max_pids);
 }

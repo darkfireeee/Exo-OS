@@ -1,16 +1,16 @@
 // kernel/src/process/state/wakeup.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ProcessWakeupHandler impl DmaWakeupHandler — RÈGLE PROC-02 (DOC4)
+// ProcessWakeupHandler impl DmaWakeupHandler — RULE PROC-02 (DOC4)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémente le trait DmaWakeupHandler de memory/ pour que le sous-système DMA
-// puisse réveiller un thread en attente d'une transaction DMA.
+// Implements the DmaWakeupHandler trait from memory/ so that the DMA subsystem
+// can wake a thread waiting for a DMA transaction.
 //
-// Inversion de dépendance :
-//   memory/ définit DmaWakeupHandler (trait).
-//   process/ l'implémente ici (ProcessWakeupHandler).
-//   process/mod.rs::init() appelle register_with_dma() pour s'enregistrer.
+// Dependency inversion:
+//   memory/ defines DmaWakeupHandler (trait).
+//   process/ implements it here (ProcessWakeupHandler).
+//   process/mod.rs::init() calls register_with_dma() to register.
 
 use crate::memory::dma::core::types::{DmaError, DmaTransactionId};
 use crate::memory::dma::core::wakeup_iface::DmaWakeupHandler;
@@ -18,27 +18,27 @@ use crate::scheduler::sync::wait_queue::WaitQueue;
 use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// File d'attente globale pour les threads en attente de DMA
+// Global wait queue for threads waiting on DMA
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// File d'attente globale : threads en attente de complétion DMA.
+/// Global wait queue: threads waiting for DMA completion.
 static DMA_WAIT_QUEUE: WaitQueue = WaitQueue::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registre des résultats DMA par TID
+// DMA result registry by TID
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacité maximale du registre de complétions DMA en attente.
+/// Maximum capacity of pending DMA completion registry.
 const DMA_COMPLETION_SLOTS: usize = 256;
 
-/// Slot de complétion DMA.
+/// DMA completion slot.
 #[repr(C)]
 struct DmaCompletionSlot {
-    /// TID cible (0 = slot libre).
+    /// Target TID (0 = free slot).
     tid: core::sync::atomic::AtomicU64,
-    /// ID de transaction.
+    /// Transaction ID.
     txn_id: core::sync::atomic::AtomicU64,
-    /// Résultat (0 = OK, errno négatif = erreur).
+    /// Result (0 = OK, negative errno = error).
     result: core::sync::atomic::AtomicI64,
 }
 
@@ -52,13 +52,13 @@ impl DmaCompletionSlot {
     }
 }
 
-/// Tableau statique des slots de complétion.
+/// Static array of completion slots.
 static DMA_COMPLETIONS: [DmaCompletionSlot; DMA_COMPLETION_SLOTS] =
     [const { DmaCompletionSlot::empty() }; DMA_COMPLETION_SLOTS];
 
-/// Enregistre la complétion d'une transaction pour le thread `tid`.
+/// Records transaction completion for thread `tid`.
 fn store_completion(tid: u64, txn_id: u64, result: i64) {
-    // Cherche un slot libre par round-robin simple.
+    // Find a free slot via simple round-robin.
     for slot in &DMA_COMPLETIONS {
         if slot
             .tid
@@ -70,11 +70,11 @@ fn store_completion(tid: u64, txn_id: u64, result: i64) {
             return;
         }
     }
-    // Table pleine : ignorer (le thread remarquera le timeout).
+    // Table full: ignore (the thread will notice the timeout).
 }
 
-/// Récupère et efface la complétion pour le thread `tid` et la transaction `txn_id`.
-/// Retourne Some(result) ou None.
+/// Retrieves and clears the completion for thread `tid` and transaction `txn_id`.
+/// Returns Some(result) or None.
 pub fn consume_completion(tid: u64, txn_id: u64) -> Option<i64> {
     for slot in &DMA_COMPLETIONS {
         let stored_tid = slot.tid.load(Ordering::Acquire);
@@ -94,11 +94,11 @@ pub fn consume_completion(tid: u64, txn_id: u64) -> Option<i64> {
 // ProcessWakeupHandler
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Implémentation de DmaWakeupHandler pour le module process/.
-/// Instance statique unique enregistrée auprès de memory/dma/ à l'init.
+/// DmaWakeupHandler implementation for the process/ module.
+/// Single static instance registered with memory/dma/ at init.
 pub struct ProcessWakeupHandler;
 
-/// Convertit une DmaError en code errno négatif (Linux compatible).
+/// Converts a DmaError to a negative errno code (Linux-compatible).
 #[inline]
 fn dma_error_to_errno(e: DmaError) -> i64 {
     match e {
@@ -118,36 +118,36 @@ fn dma_error_to_errno(e: DmaError) -> i64 {
 }
 
 impl DmaWakeupHandler for ProcessWakeupHandler {
-    /// Appelé par le driver DMA quand une transaction se termine.
-    /// Réveille le thread `tid` en attente dans DMA_WAIT_QUEUE.
+    /// Called by the DMA driver when a transaction completes.
+    /// Wakes up thread `tid` waiting in DMA_WAIT_QUEUE.
     fn wake_on_completion(
         &self,
         tid: u64,
         txn_id: DmaTransactionId,
         result: Result<usize, DmaError>,
     ) {
-        // Convertit le résultat en i64 (bytes ou errno négatif)
+        // Convert result to i64 (bytes or negative errno)
         let result_i64 = match result {
             Ok(bytes) => bytes as i64,
             Err(e) => dma_error_to_errno(e),
         };
-        // Stocker le résultat pour que le thread puisse le lire après réveil.
+        // Store result so the thread can read it after wakeup.
         store_completion(tid, txn_id.0, result_i64);
-        // Réveiller tous les threads en attente DMA ;
-        // chacun vérifiera si c'est son TID.
+        // Wake all threads waiting for DMA;
+        // each will check if it matches its TID.
         DMA_WAIT_QUEUE.notify_all();
     }
 
-    /// Appelé par le driver DMA en cas d'erreur fatale sur un canal.
-    /// Réveille tous les threads en attente sur ce canal.
+    /// Called by the DMA driver on fatal error on a channel.
+    /// Wakes all threads waiting on this channel.
     fn wake_all_on_error(&self, channel_id: u32, error: DmaError) {
         let errno = dma_error_to_errno(error);
-        // Marquer toutes les transactions de ce canal comme échouées.
+        // Mark all transactions on this channel as failed.
         for slot in &DMA_COMPLETIONS {
             let tid_stored = slot.tid.load(Ordering::Acquire);
             if tid_stored != 0 {
                 let txn = slot.txn_id.load(Ordering::Acquire);
-                // Les TXN IDs d'un canal possèdent channel_id dans les bits hauts.
+                // Channel TXN IDs contain channel_id in the high bits.
                 if (txn >> 32) as u32 == channel_id {
                     slot.result.store(errno, Ordering::Release);
                 }
@@ -157,40 +157,40 @@ impl DmaWakeupHandler for ProcessWakeupHandler {
     }
 }
 
-/// Instance statique enregistrée auprès de memory/dma/.
+/// Static instance registered with memory/dma/.
 pub static PROCESS_WAKEUP_HANDLER: ProcessWakeupHandler = ProcessWakeupHandler;
 
-/// Enregistre PROCESS_WAKEUP_HANDLER auprès du sous-système DMA.
-/// Appelé depuis process::init() (RÈGLE PROC-02).
+/// Registers PROCESS_WAKEUP_HANDLER with the DMA subsystem.
+/// Called from process::init() (RULE PROC-02).
 pub fn register_with_dma() {
-    // SAFETY: appelé une seule fois depuis process::init() après scheduler::init().
+    // SAFETY: called once from process::init() after scheduler::init().
     unsafe {
         crate::memory::dma::register_wakeup_handler(&PROCESS_WAKEUP_HANDLER);
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Point d'entrée pour les threads en attente de DMA
+// Entry point for threads waiting on DMA
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Attend la complétion d'une transaction DMA.
-/// Le thread courant se bloque dans DMA_WAIT_QUEUE jusqu'à réveil.
-/// Retourne le résultat ou -EINTR si signal reçu.
+/// Waits for completion of a DMA transaction.
+/// The current thread blocks in DMA_WAIT_QUEUE until woken up.
+/// Returns result or -EINTR if signal received.
 pub fn wait_for_dma(
     tcb: &crate::scheduler::core::task::ThreadControlBlock,
     tid: u64,
     txn_id: u64,
 ) -> i64 {
     loop {
-        // Vérifier si la complétion est déjà arrivée (pas de spurious).
+        // Check if completion has already arrived (no spurious).
         if let Some(result) = consume_completion(tid, txn_id) {
             return result;
         }
-        // Vérifier signal avant de se bloquer.
+        // Check for signal before blocking.
         if tcb.has_signal_pending() {
             return -4; // -EINTR
         }
-        // SAFETY: tcb pointe vers le TCB courant, pas d'alias &mut actif.
+        // SAFETY: tcb points to the current TCB, no active &mut alias.
         unsafe {
             DMA_WAIT_QUEUE.wait_interruptible(tcb as *const _ as *mut _);
         }

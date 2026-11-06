@@ -1,49 +1,49 @@
 // kernel/src/process/state/transitions.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Machine à états du ProcessControlBlock — Exo-OS Couche 1.5
+// ProcessControlBlock state machine — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Transitions valides :
-//   Creating → Running
-//   Creating → Zombie  (échec/exit pendant fork/exec)
-//   Running  → Sleeping | Stopped | Zombie
-//   Running  → Running (wake idempotent)
-//   Sleeping → Running
-//   Stopped  → Running (via SIGCONT ou wake)
-//   Zombie   → Dead    (via reaper)
-//   Dead     → (terminal)
+// Valid transitions:
+//   Creating -> Running
+//   Creating -> Zombie  (failure/exit during fork/exec)
+//   Running  -> Sleeping | Stopped | Zombie
+//   Running  -> Running (idempotent wake)
+//   Sleeping -> Running
+//   Stopped  -> Running (via SIGCONT or wake)
+//   Zombie   -> Dead    (via reaper)
+//   Dead     -> (terminal)
 
 use crate::process::core::pcb::{ProcessControlBlock, ProcessState};
 
-/// Raison d'une transition.
+/// Reason for a transition.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum StateTransition {
-    /// Allocation terminée, thread prêt.
+    /// Allocation complete, thread ready.
     Spawn,
-    /// Thread mis en sommeil (attente E/S, mutex, etc.).
+    /// Thread put to sleep (waiting for I/O, mutex, etc.).
     Sleep,
-    /// Thread réveillé (E/S terminée, mutex disponible).
+    /// Thread awakened (I/O complete, mutex available).
     Wake,
-    /// SIGSTOP reçu.
+    /// SIGSTOP received.
     Stop,
-    /// SIGCONT reçu.
+    /// SIGCONT received.
     Continue,
-    /// do_exit() appelé ; en attente de récolte.
+    /// do_exit() called; awaiting reaping.
     ExitToZombie,
-    /// Récolte terminée par le reaper.
+    /// Reaping completed by the reaper.
     ZombieToDead,
 }
 
-/// Erreur de transition illégale.
+/// Illegal transition error.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TransitionError {
     pub from: ProcessState,
     pub transition: StateTransition,
 }
 
-/// Table des transitions valides.
-/// Retourne l'état suivant ou Err si la transition est illégale.
+/// Valid transition table.
+/// Returns the next state or Err if the transition is illegal.
 pub fn transition(
     pcb: &ProcessControlBlock,
     tr: StateTransition,

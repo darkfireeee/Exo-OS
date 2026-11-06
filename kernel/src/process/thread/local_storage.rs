@@ -1,18 +1,18 @@
 // kernel/src/process/thread/local_storage.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// TLS (Thread Local Storage) — gestion du segment FS pour x86_64
+// TLS (Thread Local Storage) — FS segment management for x86_64
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture x86_64 :
-//   Le segment FS est utilisé pour les données TLS utilisateur.
-//   FS.base (MSR_FS_BASE = 0xC0000100) = adresse du bloc TLS statique.
-//   SWAPGS ne touche que GS : le scheduler conserve user_gs_base séparément.
+// x86_64 Architecture:
+//   The FS segment is used for user TLS data.
+//   FS.base (MSR_FS_BASE = 0xC0000100) = static TLS block address.
+//   SWAPGS only touches GS: the scheduler preserves user_gs_base separately.
 //
-// Implémentation simplifiée :
-//   • TlsBlock : copie du .tdata/.tbss initialisé par execve() puis copié par clone().
-//   • set_fs_base() : écrit ARCH_SET_FS via wrmsrl(MSR_FS_BASE, addr).
-//   • TLS dynamique (dlopen / __tls_get_addr) : hors scope noyau.
+// Simplified implementation:
+//   • TlsBlock: copy of .tdata/.tbss initialized by execve() then copied by clone().
+//   • set_fs_base(): writes ARCH_SET_FS via wrmsrl(MSR_FS_BASE, addr).
+//   • Dynamic TLS (dlopen / __tls_get_addr): outside kernel scope.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use alloc::boxed::Box;
@@ -20,10 +20,10 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// Taille maximale d'un bloc TLS statique (64 KiB).
+/// Maximum size of a static TLS block (64 KiB).
 pub const TLS_MAX_SIZE: usize = 65536;
 
-/// Clé TLS dynamique (pthread_key_t).
+/// Dynamic TLS key (pthread_key_t).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TlsKey(pub u32);
 
@@ -34,23 +34,23 @@ impl TlsKey {
     }
 }
 
-/// Bloc TLS statique d'un thread.
+/// Static TLS block of a thread.
 ///
-/// Contient la copie du .tdata initialement chargé par execve(),
-/// suivie du .tbss (zéro-initialisé).
+/// Contains the copy of .tdata initially loaded by execve(),
+/// followed by .tbss (zero-initialized).
 pub struct TlsBlock {
-    /// Données TLS (tdata + tbss).
+    /// TLS data (tdata + tbss).
     data: Box<[u8]>,
-    /// Taille du segment tdata.
+    /// Size of the tdata segment.
     tdata_size: usize,
-    /// Taille totale (tdata + tbss).
+    /// Total size (tdata + tbss).
     total_size: usize,
-    /// Adresse userspace de base du bloc TLS.
+    /// Userspace base address of the TLS block.
     user_base: u64,
 }
 
 impl TlsBlock {
-    /// Crée un bloc TLS en copiant le modèle tdata fourni.
+    /// Creates a TLS block by copying the provided tdata template.
     pub fn new(tdata: &[u8], tbss_size: usize, user_base: u64) -> Option<Self> {
         let total = tdata.len() + tbss_size;
         if total == 0 || total > TLS_MAX_SIZE {
@@ -61,7 +61,7 @@ impl TlsBlock {
         data.resize(total, 0);
         data[..tdata.len()].copy_from_slice(tdata);
         let data = data.into_boxed_slice();
-        // tbss est déjà zéro-initialisé par resize().
+        // tbss is already zero-initialized by resize().
         Some(Self {
             data,
             tdata_size: tdata.len(),
@@ -70,7 +70,7 @@ impl TlsBlock {
         })
     }
 
-    /// Pointeur vers les données (pour écriture de FS.base).
+    /// Pointer to data (for writing FS.base).
     #[inline(always)]
     pub fn as_ptr(&self) -> *const u8 {
         self.data.as_ptr()
@@ -81,19 +81,19 @@ impl TlsBlock {
         self.data.as_mut_ptr()
     }
 
-    /// Adresse userspace de ce bloc.
+    /// Userspace address of this block.
     #[inline(always)]
     pub fn user_base(&self) -> u64 {
         self.user_base
     }
 
-    /// Taille totale en bytes.
+    /// Total size in bytes.
     #[inline(always)]
     pub fn size(&self) -> usize {
         self.total_size
     }
 
-    /// Clone le bloc TLS pour un nouveau thread (fork ou pthread_create).
+    /// Clones the TLS block for a new thread (fork or pthread_create).
     pub fn clone_for_thread(&self, new_user_base: u64) -> Option<Self> {
         let mut data = Vec::new();
         data.try_reserve_exact(self.data.len()).ok()?;
@@ -109,30 +109,30 @@ impl TlsBlock {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TlsRegistry — registre global des clés TLS dynamiques
+// TlsRegistry — global dynamic TLS key registry
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_TLS_KEYS: usize = 1024;
 
-/// Entrée de la table des clés TLS dynamiques.
+/// Dynamic TLS key table entry.
 struct TlsKeyEntry {
     used: bool,
-    destructor: Option<u64>, // pointeur userspace vers la fonction destructeur
+    destructor: Option<u64>, // userspace pointer to destructor function
 }
 
-/// Registre global des clés TLS dynamiques (pthread_key_create/destroy).
+/// Global registry of dynamic TLS keys (pthread_key_create/destroy).
 pub struct TlsRegistry {
     keys: UnsafeCell<[TlsKeyEntry; MAX_TLS_KEYS]>,
     n_used: AtomicU32,
     lock: crate::scheduler::sync::spinlock::SpinLock<()>,
 }
 
-// SAFETY: TlsRegistry est accédé via SpinLock.
+// SAFETY: TlsRegistry is accessed via SpinLock.
 unsafe impl Sync for TlsRegistry {}
 
 pub static TLS_REGISTRY: TlsRegistry = TlsRegistry {
-    // SAFETY: TlsKeyEntry n'est pas Copy, initialiser manuellement pour les 1024 entrées.
-    // Option: utiliser une construction const via const fn.
+    // SAFETY: TlsKeyEntry is not Copy, initialize manually for the 1024 entries.
+    // Option: use a const construction via const fn.
     keys: UnsafeCell::new(
         [const {
             TlsKeyEntry {
@@ -146,10 +146,10 @@ pub static TLS_REGISTRY: TlsRegistry = TlsRegistry {
 };
 
 impl TlsRegistry {
-    /// Alloue une nouvelle clé TLS dynamique (pthread_key_create).
+    /// Allocates a new dynamic TLS key (pthread_key_create).
     pub fn alloc_key(&self, destructor: Option<u64>) -> Option<TlsKey> {
         let _g = self.lock.lock();
-        // SAFETY: accès sous spinlock garantis exclusifs.
+        // SAFETY: access under spinlock is guaranteed exclusive.
         let keys = unsafe { &mut *self.keys.get() };
         for (i, entry) in keys.iter_mut().enumerate() {
             if !entry.used {
@@ -162,13 +162,13 @@ impl TlsRegistry {
         None // EAGAIN
     }
 
-    /// Libère une clé TLS (pthread_key_delete).
+    /// Frees a TLS key (pthread_key_delete).
     pub fn free_key(&self, key: TlsKey) -> bool {
         if key.0 as usize >= MAX_TLS_KEYS {
             return false;
         }
         let _g = self.lock.lock();
-        // SAFETY: accès sous spinlock.
+        // SAFETY: access under spinlock.
         let entry = unsafe { &mut (*self.keys.get())[key.0 as usize] };
         if entry.used {
             entry.used = false;
@@ -180,12 +180,12 @@ impl TlsRegistry {
         }
     }
 
-    /// Retourne le destructeur associé à une clé (None si inexistant).
+    /// Returns destructor associated with a key (None if nonexistent).
     pub fn get_destructor(&self, key: TlsKey) -> Option<u64> {
         if key.0 as usize >= MAX_TLS_KEYS {
             return None;
         }
-        // SAFETY: lecture légère sans lock (conservative).
+        // SAFETY: lightweight read without lock (conservative).
         let entry = unsafe { &(*self.keys.get())[key.0 as usize] };
         if entry.used {
             entry.destructor
@@ -199,23 +199,23 @@ impl TlsRegistry {
 // GS.base — MSR ARCH_SET_GS x86_64
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// MSR_FS_BASE (0xC0000100) = base du segment FS (libc utilise FS pour TLS).
+/// MSR_FS_BASE (0xC0000100) = FS segment base (libc uses FS for TLS).
 const MSR_FS_BASE: u32 = 0xC0000100;
-/// MSR_GS_BASE (0xC0000101) = base du segment GS.
+/// MSR_GS_BASE (0xC0000101) = GS segment base.
 #[allow(dead_code)]
 const MSR_GS_BASE: u32 = 0xC0000101;
 /// MSR_KERNEL_GS_BASE (0xC0000102) = GS backup (swapgs).
 #[allow(dead_code)]
 const MSR_KERNEL_GS_BASE: u32 = 0xC0000102;
 
-/// Écrit MSR_FS_BASE avec l'adresse de base TLS (appelé lors du context switch).
+/// Writes MSR_FS_BASE with TLS base address (called during context switch).
 ///
 /// # Safety
-/// Doit être appelé depuis un contexte kernel (Ring 0) pendant le context switch.
+/// Must be called from a kernel context (Ring 0) during context switch.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn set_fs_base(addr: u64) {
-    // SAFETY: instruction wrmsrl valide en Ring 0.
+    // SAFETY: wrmsrl instruction valid in Ring 0.
     core::arch::asm!(
         "wrmsr",
         in("ecx") MSR_FS_BASE,
@@ -225,13 +225,13 @@ pub unsafe fn set_fs_base(addr: u64) {
     );
 }
 
-/// Lit MSR_FS_BASE.
+/// Reads MSR_FS_BASE.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn get_fs_base() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: instruction rdmsr valide en Ring 0.
+    // SAFETY: rdmsr instruction valid in Ring 0.
     core::arch::asm!(
         "rdmsr",
         in("ecx") MSR_FS_BASE,

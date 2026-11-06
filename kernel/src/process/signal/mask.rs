@@ -1,27 +1,27 @@
 // kernel/src/process/signal/mask.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Masque de signaux POSIX (sigprocmask, pthread_sigmask) — Exo-OS Couche 1.5
+// POSIX signal mask (sigprocmask, pthread_sigmask) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le masque de signaux est un bitmap 64 bits par thread.
-// Bit i = signal (i+1) est bloqué.
-// SIGKILL (bit 8) et SIGSTOP (bit 18) ne peuvent être bloqués : ignorés.
+// The signal mask is a 64-bit bitmap per thread.
+// Bit i = signal (i+1) is blocked.
+// SIGKILL (bit 8) and SIGSTOP (bit 18) cannot be blocked: ignored.
 
 use super::default::Signal;
 use crate::scheduler::core::task::ThreadControlBlock;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SIG_BLOCK: i32 = 0;
 pub const SIG_UNBLOCK: i32 = 1;
 pub const SIG_SETMASK: i32 = 2;
 
-/// Signaux non-bloquables : SIGKILL (9) et SIGSTOP (19).
-/// Bit i correspond au signal (i+1).
+/// Unblockable signals: SIGKILL (9) and SIGSTOP (19).
+/// Bit i corresponds to signal (i+1).
 /// SIGKILL = bit 8, SIGSTOP = bit 18.
 const NON_BLOCKABLE: u64 =
     (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
@@ -36,10 +36,10 @@ const _: () = assert!(
 const VALID_SIGNAL_MASK: u64 = (1u64 << Signal::SIGRTMAX) - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SigMask — valeur pure (pas atomique)
+// SigMask — pure value (not atomic)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Masque de signaux non-atomique (valeur pure à usage local).
+/// Non-atomic signal mask (pure value for local use).
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct SigMask(pub u64);
@@ -96,11 +96,11 @@ impl From<u64> for SigMask {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SigSet — wrappers atomique (pour stockage dans TCB)
+// SigSet — atomic wrappers (for storage in TCB)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensemble atomique de signal pending (vu depuis le TCB scheduler).
-/// Accessible depuis plusieurs CPU simultanément : opérations atomiques.
+/// Atomic pending signal set (seen from scheduler TCB).
+/// Accessible from multiple CPUs simultaneously: atomic operations.
 #[repr(transparent)]
 pub struct SigSet(AtomicU64);
 
@@ -119,7 +119,7 @@ impl SigSet {
         self.0.store(SigMask::from(m.0).0, Ordering::Release);
     }
 
-    /// Définit le bit du signal sans lock (atomique fetch_or).
+    /// Sets signal bit lock-free (atomic fetch_or).
     #[inline(always)]
     pub fn set_signal(&self, sig: u8) {
         if sig == 0 || sig > Signal::SIGRTMAX {
@@ -128,7 +128,7 @@ impl SigSet {
         self.0.fetch_or(1u64 << (sig - 1), Ordering::AcqRel);
     }
 
-    /// Efface le bit du signal sans lock.
+    /// Clears signal bit lock-free.
     #[inline(always)]
     pub fn clear_signal(&self, sig: u8) {
         if sig == 0 || sig > Signal::SIGRTMAX {
@@ -137,13 +137,13 @@ impl SigSet {
         self.0.fetch_and(!(1u64 << (sig - 1)), Ordering::AcqRel);
     }
 
-    /// Vérifie si au moins un signal non-bloqué est en attente.
+    /// Checks if at least one unblocked signal is pending.
     #[inline(always)]
     pub fn has_unblocked(&self, mask: SigMask) -> bool {
         self.0.load(Ordering::Acquire) & !mask.0 != 0
     }
 
-    /// Premier signal non-bloqué en attente (0 = aucun).
+    /// First unblocked pending signal (0 = none).
     pub fn first_pending(&self, mask: SigMask) -> u8 {
         let pending = self.0.load(Ordering::Acquire) & !mask.0;
         if pending == 0 {
@@ -165,12 +165,12 @@ pub enum SigmaskError {
 }
 
 /// POSIX sigprocmask(2).
-/// Opère sur le masque stocké dans le TCB courant via le champ
-/// `signal_mask: AtomicU64` de `ThreadControlBlock`.
+/// Operates on the mask stored in the current TCB via the
+/// `signal_mask: AtomicU64` field of `ThreadControlBlock`.
 ///
-/// `how` : SIG_BLOCK (0), SIG_UNBLOCK (1), SIG_SETMASK (2).
-/// `set` : nouveau masque (Some) ou NULL (None).
-/// Retourne l'ancien masque.
+/// `how`: SIG_BLOCK (0), SIG_UNBLOCK (1), SIG_SETMASK (2).
+/// `set`: new mask (Some) or NULL (None).
+/// Returns the old mask.
 pub fn sigprocmask(
     tcb: &ThreadControlBlock,
     how: i32,
@@ -190,16 +190,16 @@ pub fn sigprocmask(
     Ok(old)
 }
 
-/// Réinitialise les handlers POSIX à SIG_DFL lors d'un execve.
-/// Appelé exclusivement depuis lifecycle/exec.rs.
+/// Resets POSIX handlers to SIG_DFL during execve.
+/// Called exclusively from lifecycle/exec.rs.
 ///
-/// Politique :
-/// - Tous les handlers utilisateur → SIG_DFL.
-/// - Les signaux ignorés (SIG_IGN) restent ignorés.
-/// - Le masque de signal est conservé.
+/// Policy:
+/// - All user handlers → SIG_DFL.
+/// - Ignored signals (SIG_IGN) remain ignored.
+/// - The signal mask is preserved.
 pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
-    // Acquérir le pointeur vers le PCB pour réinitialiser la table des handlers.
-    // Le PCB contient le champ `sig_handlers: SpinLock<SigHandlerTable>`.
+    // Acquire pointer to PCB to reset handler table.
+    // The PCB contains the `sig_handlers: SpinLock<SigHandlerTable>` field.
 
     use crate::process::core::pid::Pid;
     use crate::process::core::registry::PROCESS_REGISTRY;
@@ -209,21 +209,21 @@ pub fn reset_signals_on_exec(tcb: &ThreadControlBlock) {
         let mut handlers = pcb.sig_handlers.lock();
         handlers.reset_on_exec();
     }
-    // Le masque de signal est conservé par POSIX (sauf si SA_RESETHAND).
+    // The signal mask is preserved by POSIX (unless SA_RESETHAND).
 }
 
-/// Bloque tous les signaux sauf SIGKILL et SIGSTOP (LAC-08 / PROC-03).
+/// Blocks all signals except SIGKILL and SIGSTOP (LAC-08 / PROC-03).
 ///
-/// Appelé au début de do_execve() **avant** le chargement ELF pouréviter le
-/// race PROC-03 : un signal livré entre load_elf() et reset_signals_on_exec()
-/// invoquerait l'ancien handler dans un espace d'adressage partiellement
-/// remplacé → comportement indéfini / exploit potentiel.
+/// Called at the start of do_execve() **before** ELF loading to avoid
+/// the PROC-03 race: a signal delivered between load_elf() and reset_signals_on_exec()
+/// would invoke the old handler in a partially
+/// replaced address space → undefined behavior / potential exploit.
 ///
-/// Le masque appelant est restauré par do_execve() après reset des handlers et
-/// purge des files pending de l'ancienne image.
+/// The calling mask is restored by do_execve() after resetting handlers and
+/// purging pending queues from the old image.
 pub fn block_all_except_kill(tcb: &ThreadControlBlock) {
-    // SigMask::FULL = tous les signaux sauf SIGKILL (9) et SIGSTOP (19).
-    // NON_BLOCKABLE est déjà masqué dans SigMask::FULL.
+    // SigMask::FULL = all signals except SIGKILL (9) and SIGSTOP (19).
+    // NON_BLOCKABLE is already masked in SigMask::FULL.
     tcb.signal_mask.store(SigMask::FULL.0, Ordering::Release);
 }
 

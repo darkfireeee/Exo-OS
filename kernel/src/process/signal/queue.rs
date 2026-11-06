@@ -1,45 +1,45 @@
 // kernel/src/process/signal/queue.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// File d'attente de signaux POSIX.1b (RT signals 32-63) — Exo-OS Couche 1.5
+// POSIX.1b signal queue (RT signals 32-63) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// POSIX.1b garantit qu'au moins une occurrence de chaque RT signal peut être
-// mis en file. On utilise un tableau fixe par signal (max SIGQUEUE_DEPTH = 32
-// entrées) + compteur atomique, sans alloc dynamique.
+// POSIX.1b guarantees that at least one occurrence of each RT signal can be
+// queued. A fixed array per signal is used (max SIGQUEUE_DEPTH = 32
+// entries) + atomic counter, without dynamic allocation.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-/// Profondeur maximale de la file par RT signal.
+/// Maximum queue depth per RT signal.
 pub const SIGQUEUE_DEPTH: usize = 32;
-/// Nombre de signaux RT.
+/// Number of RT signals.
 const RT_NSIG: usize = 32; // 32..63
 
-/// Compteur global de dépassement de capacité (statistiques).
+/// Global overflow counter (statistics).
 pub static SIGQUEUE_OVERFLOW: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SigInfo — informations attachées à un signal (siginfo_t)
+// SigInfo — information attached to a signal (siginfo_t)
 // ──────────────────────────────────────────────────═──────────────────────────
 
-/// Informations associées à un signal (équivalent siginfo_t).
+/// Information associated with a signal (siginfo_t equivalent).
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct SigInfo {
-    /// Numéro du signal (1..63).
+    /// Signal number (1..63).
     pub signo: u32,
-    /// Code du signal (SI_USER, SI_KERNEL, SI_QUEUE...).
+    /// Signal code (SI_USER, SI_KERNEL, SI_QUEUE...).
     pub code: i32,
-    /// PID de l'expéditeur (0 si noyau).
+    /// Sender PID (0 if kernel).
     pub sender_pid: u32,
-    /// UID de l'expéditeur.
+    /// Sender UID.
     pub sender_uid: u32,
-    /// Valeur si POSIX.1b sigqueue() (entier).
+    /// Value if POSIX.1b sigqueue() (integer).
     pub value_int: i32,
-    /// Valeur si POSIX.1b sigqueue() (pointeur, représenté en u64).
+    /// Value if POSIX.1b sigqueue() (pointer, represented as u64).
     pub value_ptr: u64,
-    // si code=SIGFPE/SIGSEGV : adresse fautive
+    // If code=SIGFPE/SIGSEGV: faulting address
     pub fault_addr: u64,
 }
 
@@ -51,7 +51,7 @@ impl SigInfo {
     pub const SI_MESGQ: i32 = -3;
     pub const SI_ASYNCIO: i32 = -4;
 
-    /// Crée un SigInfo pour kill(2).
+    /// Creates a SigInfo for kill(2).
     #[inline]
     pub fn from_kill(sig: u8, sender_pid: u32, sender_uid: u32) -> Self {
         Self {
@@ -63,7 +63,7 @@ impl SigInfo {
         }
     }
 
-    /// Crée un SigInfo pour kill interne noyau.
+    /// Creates a SigInfo for internal kernel kill.
     #[inline]
     pub fn kernel(sig: u8) -> Self {
         Self {
@@ -75,14 +75,14 @@ impl SigInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SigQueue — file de signaux standard (un bit par signal)
+// SigQueue — standard signal queue (one bit per signal)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// File de signaux standard (signaux 1..31).
-/// Un bit par signal ; mutiples envois du même signal = 1 livraison.
+/// Standard signal queue (signals 1..31).
+/// One bit per signal; multiple deliveries of the same signal = 1 delivery.
 #[repr(C)]
 pub struct SigQueue {
-    /// Bitmap de signaux en attente (bit i = signal i+1 est pending).
+    /// Bitmap of pending signals (bit i = signal i+1 is pending).
     pub pending: AtomicU64,
 }
 
@@ -99,19 +99,18 @@ impl SigQueue {
         }
     }
 
-    /// Initialise une file standard directement dans son emplacement final.
+    /// Initializes a standard queue directly in its final location.
     ///
-    /// Utilise par les allocations de thread pour eviter de materialiser les
-    /// grosses structures signal sur la pile noyau.
+    /// Used by thread allocations to avoid materializing large signal
+    /// structures on the kernel stack.
     ///
     /// # Safety
-    /// `dst` doit pointer vers une memoire valide et non initialisee pour
-    /// `SigQueue`.
+    /// `dst` must point to valid, uninitialized memory for `SigQueue`.
     pub unsafe fn init_at(dst: *mut Self) {
         core::ptr::addr_of_mut!((*dst).pending).write(AtomicU64::new(0));
     }
 
-    /// Met un signal en file.
+    /// Enqueues a signal.
     #[inline(always)]
     pub fn enqueue(&self, sig: u8) {
         if sig == 0 || sig > 63 {
@@ -120,8 +119,8 @@ impl SigQueue {
         self.pending.fetch_or(1u64 << (sig - 1), Ordering::AcqRel);
     }
 
-    /// Défile le premier signal non-bloqué.
-    /// Retourne (signo, SigInfo) ou None.
+    /// Dequeues the first unblocked signal.
+    /// Returns (signo, SigInfo) or None.
     pub fn dequeue(&self, mask: u64) -> Option<(u8, SigInfo)> {
         loop {
             let pending = self.pending.load(Ordering::Acquire);
@@ -134,7 +133,7 @@ impl SigQueue {
             if old & (1u64 << bit) != 0 {
                 return Some((bit + 1, SigInfo::kernel(bit + 1)));
             }
-            // Le bit a été effacé par un autre CPU entre les deux : réessayer.
+            // The bit was cleared by another CPU in between: retry.
         }
     }
 
@@ -143,7 +142,7 @@ impl SigQueue {
         self.pending.load(Ordering::Acquire) == 0
     }
 
-    /// Signaux pendant non bloqués par `mask`.
+    /// Pending signals not blocked by `mask`.
     #[inline(always)]
     pub fn has_pending(&self, mask: u64) -> bool {
         self.pending.load(Ordering::Acquire) & !mask != 0
@@ -156,31 +155,31 @@ impl SigQueue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RTSigQueue — file de signaux temps-réel (POSIX.1b, signaux 32..63)
+// RTSigQueue — real-time signal queue (POSIX.1b, signals 32..63)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une entrée de la file RT.
+/// An entry in the RT queue.
 #[derive(Copy, Clone, Debug, Default)]
 struct RTEntry {
     info: SigInfo,
     valid: bool,
 }
 
-/// File circulaire par signal RT — SIGQUEUE_DEPTH entrées.
+/// Circular ring buffer per RT signal — SIGQUEUE_DEPTH entries.
 struct RTRing {
-    /// Données brutes.
+    /// Raw data.
     entries: UnsafeCell<[RTEntry; SIGQUEUE_DEPTH]>,
-    /// Indice de lecture.
+    /// Read index.
     head: UnsafeCell<usize>,
-    /// Indice d'écriture.
+    /// Write index.
     tail: AtomicUsize,
-    /// Nombre d'éléments en file.
+    /// Number of queued elements.
     count: AtomicU32,
 }
 
-// SAFETY : Exo-OS fonctionne en noyau mono-UCP avec un seul producteur/consommateur
-// par file RT ; l'accès exclusif est garanti par le verrou PCB ou le contexte
-// d'interruption masqué. Les champs UnsafeCell sont protégés par convention.
+// SAFETY: Exo-OS operates in a uniprocessor kernel with a single producer/consumer
+// per RT queue; exclusive access is guaranteed by the PCB lock or masked
+// interrupt context. UnsafeCell fields are protected by convention.
 unsafe impl Send for RTRing {}
 unsafe impl Sync for RTRing {}
 
@@ -227,14 +226,14 @@ impl RTRing {
         core::ptr::addr_of_mut!((*dst).count).write(AtomicU32::new(0));
     }
 
-    /// Enfile un SigInfo.
+    /// Enqueues a SigInfo.
     fn push(&self, info: SigInfo) -> bool {
         if self.count.load(Ordering::Acquire) as usize >= SIGQUEUE_DEPTH {
             SIGQUEUE_OVERFLOW.fetch_add(1, Ordering::Relaxed);
             return false;
         }
         let tail = self.tail.load(Ordering::Acquire);
-        // SAFETY: accès exclusif garanti par contexte d'appel (verrou PCB).
+        // SAFETY: exclusive access guaranteed by caller context (PCB lock).
         unsafe {
             (*self.entries.get())[tail % SIGQUEUE_DEPTH] = RTEntry { info, valid: true };
         }
@@ -243,12 +242,12 @@ impl RTRing {
         true
     }
 
-    /// Défile le prochain élément valide.
+    /// Dequeues the next valid element.
     fn pop(&self) -> Option<SigInfo> {
         if self.count.load(Ordering::Acquire) == 0 {
             return None;
         }
-        // SAFETY : accès exclusif garanti par contexte d'appel.
+        // SAFETY: exclusive access guaranteed by caller context.
         let info = unsafe {
             let head_ptr = self.head.get();
             let head = *head_ptr;
@@ -281,16 +280,16 @@ impl RTRing {
     }
 }
 
-/// File de signaux temps-réel pour les 32 signaux RT (SIGRTMIN..SIGRTMAX).
-/// Chaque signal possède sa propre file circulaire.
+/// Real-time signal queue for the 32 RT signals (SIGRTMIN..SIGRTMAX).
+/// Each signal has its own circular ring buffer.
 pub struct RTSigQueue {
-    /// Une file par signal RT (index 0 = SIGRTMIN = signal 32).
+    /// One queue per RT signal (index 0 = SIGRTMIN = signal 32).
     rings: [RTRing; RT_NSIG],
-    /// Bitmap indiquant quels slots ont des éléments en attente.
+    /// Bitmap indicating which slots have pending elements.
     pub pending_mask: AtomicU64,
 }
 
-// SAFETY : même argument que RTRing.
+// SAFETY: same rationale as RTRing.
 unsafe impl Send for RTSigQueue {}
 unsafe impl Sync for RTSigQueue {}
 
@@ -308,16 +307,15 @@ impl RTSigQueue {
         }
     }
 
-    /// Initialise la file RT directement dans son emplacement final.
+    /// Initializes the RT queue directly in its final location.
     ///
-    /// `RTSigQueue` contient `RT_NSIG * SIGQUEUE_DEPTH` entrees fixes; la
-    /// construire comme temporaire sur une kstack peut deborder la page de
-    /// garde pendant fork/exec. Cette primitive garde l'invariant sans pression
-    /// de pile.
+    /// `RTSigQueue` contains `RT_NSIG * SIGQUEUE_DEPTH` fixed entries;
+    /// constructing it as a temporary on a kstack can overflow the guard
+    /// page during fork/exec. This primitive preserves the invariant without
+    /// stack pressure.
     ///
     /// # Safety
-    /// `dst` doit pointer vers une memoire valide et non initialisee pour
-    /// `RTSigQueue`.
+    /// `dst` must point to valid, uninitialized memory for `RTSigQueue`.
     pub unsafe fn init_at(dst: *mut Self) {
         let rings = core::ptr::addr_of_mut!((*dst).rings) as *mut RTRing;
         for idx in 0..RT_NSIG {
@@ -326,8 +324,8 @@ impl RTSigQueue {
         core::ptr::addr_of_mut!((*dst).pending_mask).write(AtomicU64::new(0));
     }
 
-    /// Enfile un signal temps-réel.
-    /// `sig` doit être dans [32..63].
+    /// Enqueues a real-time signal.
+    /// `sig` must be in [32..63].
     pub fn enqueue(&self, sig: u8, info: SigInfo) -> bool {
         let idx = sig.wrapping_sub(32) as usize;
         if idx >= RT_NSIG {
@@ -340,7 +338,7 @@ impl RTSigQueue {
         ok
     }
 
-    /// Défile le premier signal RT non-bloqué (mask = signal_mask >> 31).
+    /// Dequeues the first unblocked RT signal (mask = signal_mask >> 31).
     pub fn dequeue(&self, rt_mask: u32) -> Option<(u8, SigInfo)> {
         let pending = self.pending_mask.load(Ordering::Acquire) as u32;
         let unblocked = pending & !rt_mask;

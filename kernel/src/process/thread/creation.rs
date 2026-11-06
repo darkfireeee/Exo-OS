@@ -1,18 +1,18 @@
 // kernel/src/process/thread/creation.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Création de threads POSIX <500ns (Exo-OS Couche 1.5)
+// POSIX thread creation <500ns (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Objectif performance : création <500ns mesurée depuis syscall clone().
+// Performance target: creation <500ns measured from clone() syscall.
 //
-// Séquence create_thread() :
-//   1. Allouer TID.
-//   2. Créer ProcessThread (stack kernel + TCB).
-//   3. Configurer le point d'entrée + stack utilisateur.
-//   4. Configurer la TLS.
-//   5. Enregistrer dans le PCB (inc_threads).
-//   6. Enqueuer dans la run queue.
+// create_thread() sequence:
+//   1. Allocate TID.
+//   2. Create ProcessThread (kernel stack + TCB).
+//   3. Configure entry point + user stack.
+//   4. Configure TLS.
+//   5. Register in PCB (inc_threads).
+//   6. Enqueue into run queue.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
@@ -32,7 +32,7 @@ extern "C" {
     fn user_entry_trampoline();
 }
 
-/// Erreur de création de thread.
+/// Thread creation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadCreateError {
     TidExhausted,
@@ -43,29 +43,29 @@ pub enum ThreadCreateError {
     StackSetupFailed,
 }
 
-/// Attributs d'un thread POSIX à créer.
+/// Attributes of a POSIX thread to create.
 #[derive(Clone)]
 pub struct ThreadAttr {
-    /// Taille du stack utilisateur demandée (0 = défaut).
+    /// Requested user stack size (0 = default).
     pub stack_size: u64,
-    /// Adresse de base du stack fournie par l'utilisateur (0 = allouer).
+    /// User-provided stack base address (0 = allocate).
     pub stack_addr: u64,
-    /// Politique d'ordonnancement.
+    /// Scheduling policy.
     pub policy: SchedPolicy,
-    /// Priorité.
+    /// Priority.
     pub priority: Priority,
-    /// Thread détaché par défaut.
+    /// Detached thread by default.
     pub detached: bool,
-    /// CPU d'affinité (-1 = sans préférence).
+    /// CPU affinity (-1 = no preference).
     pub cpu_affinity: i32,
-    /// Taille de la zone sigaltstack (0 = SIGSTKSZ défaut 8192).
+    /// sigaltstack area size (0 = SIGSTKSZ default 8192).
     pub sigaltstack_size: u64,
 }
 
 impl Default for ThreadAttr {
     fn default() -> Self {
         Self {
-            stack_size: 8 * 1024 * 1024, // 8 MiB par défaut
+            stack_size: 8 * 1024 * 1024, // 8 MiB default
             stack_addr: 0,
             policy: SchedPolicy::Normal,
             priority: Priority::NORMAL_DEFAULT,
@@ -76,55 +76,55 @@ impl Default for ThreadAttr {
     }
 }
 
-/// Paramètres de création d'un thread.
+/// Thread creation parameters.
 pub struct ThreadCreateParams {
-    /// PCB du processus auquel ajouter le thread.
+    /// PCB of process to which thread is added.
     pub pcb: *const ProcessControlBlock,
-    /// Attributs du thread.
+    /// Thread attributes.
     pub attr: ThreadAttr,
-    /// Point d'entrée du thread (adresse userspace).
+    /// Thread entry point (userspace address).
     pub start_func: u64,
-    /// Argument passé au thread (valeur userspace, rdi).
+    /// Argument passed to thread (userspace value, rdi).
     pub arg: u64,
-    /// RSP userspace initial explicite (0 = dériver de `attr`).
+    /// Explicit initial userspace RSP (0 = derive from `attr`).
     pub initial_rsp: u64,
-    /// Base FS/TLS userspace initiale.
+    /// Initial userspace FS/TLS base.
     pub tls_base: u64,
-    /// CPU cible pour l'enqueue.
+    /// Target CPU for enqueue.
     pub target_cpu: u32,
-    /// Adresse de la structure pthread_t à remplir.
+    /// Address of pthread_t structure to populate.
     pub pthread_out: u64,
 }
 
-/// Handle d'un thread créé.
+/// Handle to a created thread.
 pub struct ThreadHandle {
     pub tid: Tid,
     pub thread: *mut ProcessThread,
 }
 
-// SAFETY: transféré d'un seul thread producteur.
+// SAFETY: transferred from a single producer thread.
 unsafe impl Send for ThreadHandle {}
 
-/// Crée un nouveau thread POSIX dans le processus donné.
+/// Creates a new POSIX thread in the given process.
 ///
 /// # Safety
-/// `params.pcb` doit pointer vers un PCB valide et non libéré.
+/// `params.pcb` must point to a valid and non-freed PCB.
 pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, ThreadCreateError> {
-    // SAFETY: pcb est garanti valide par l'appelant.
+    // SAFETY: pcb is guaranteed valid by the caller.
     let pcb = unsafe { &*params.pcb };
 
-    // Refus si le processus est en cours de terminaison.
+    // Reject if process is exiting.
     if pcb.is_exiting() {
         return Err(ThreadCreateError::ProcessExiting);
     }
 
-    // 1. Allouer TID.
+    // 1. Allocate TID.
     let tid_raw = TID_ALLOCATOR
         .alloc()
         .map_err(|_| ThreadCreateError::TidExhausted)?;
     let tid = Tid(tid_raw);
 
-    // 2. Créer le ProcessThread.
+    // 2. Create ProcessThread.
     let cr3 = pcb.cr3.load(Ordering::Relaxed);
     let thread = ProcessThread::new(tid, pcb.pid, cr3, params.attr.policy, params.attr.priority)
         .ok_or_else(|| {
@@ -132,11 +132,11 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
             ThreadCreateError::OutOfMemory
         })?;
 
-    // 3. Configurer le point d'entrée et le stack utilisateur.
+    // 3. Configure entry point and user stack.
     let thread_ptr = Box::into_raw(thread);
-    // SAFETY: thread_ptr valide, juste créé.
+    // SAFETY: thread_ptr is valid, newly created.
     unsafe {
-        // Configurer le frame de démarrage sur le stack kernel pour le trampoline.
+        // Configure startup frame on kernel stack for the trampoline.
         let kstack_top = (*thread_ptr).kernel_stack.top_addr();
         let initial_rsp = if params.initial_rsp != 0 {
             params.initial_rsp
@@ -148,13 +148,13 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
                 .wrapping_sub(16)
         };
 
-        // Layout attendu par switch_to_new_thread puis user_entry_trampoline :
+        // Expected layout for switch_to_new_thread then user_entry_trampoline:
         // 6 callee-saved registers, a return address, then the iretq frame.
         let kernel_rsp = kstack_top - 96;
         let frame = kernel_rsp as *mut u64;
         *frame.add(0) = 0; // rbx
         *frame.add(1) = 0; // rbp
-        *frame.add(2) = params.arg; // r12 -> rdi par user_entry_trampoline
+        *frame.add(2) = params.arg; // r12 -> rdi via user_entry_trampoline
         *frame.add(3) = 0; // r13
         *frame.add(4) = 0; // r14
         *frame.add(5) = 0; // r15
@@ -166,7 +166,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         *frame.add(11) = GDT_USER_DS as u64; // SS
         (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
 
-        // Adresses userspace.
+        // Userspace addresses.
         (*thread_ptr).addresses = ThreadAddress {
             stack_base: params.attr.stack_addr,
             stack_size: params.attr.stack_size,
@@ -184,7 +184,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
             .tls_gs_base
             .store(params.tls_base, Ordering::Release);
 
-        // Afficité CPU.
+        // CPU affinity.
         if params.attr.cpu_affinity >= 0 {
             let cpu = params.attr.cpu_affinity as u32;
             if cpu < MAX_CPUS as u32 {
@@ -192,14 +192,14 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
             }
         }
 
-        // Thread détaché.
+        // Detached thread.
         if params.attr.detached {
             (*thread_ptr).detached.store(true, Ordering::Relaxed);
         }
     }
 
     if !pcb.register_thread_ptr(thread_ptr) {
-        // SAFETY: thread_ptr vient d'être alloué et n'est pas publié.
+        // SAFETY: thread_ptr was just allocated and is not published.
         unsafe {
             drop(Box::from_raw(thread_ptr));
         }
@@ -207,23 +207,23 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         return Err(ThreadCreateError::TooManyThreads);
     }
 
-    // 4. Incrémenter le compteur de threads du PCB.
+    // 4. Increment PCB thread counter.
     pcb.inc_threads();
 
-    // 5. Enqueuer dans la run queue.
+    // 5. Enqueue into run queue.
     {
         let _preempt = PreemptGuard::new();
         if params.target_cpu as usize >= MAX_CPUS {
             pcb.dec_threads();
             pcb.unregister_thread_ptr(thread_ptr);
-            // SAFETY: thread_ptr valide.
+            // SAFETY: thread_ptr is valid.
             unsafe {
                 drop(Box::from_raw(thread_ptr));
             }
             TID_ALLOCATOR.free(tid_raw);
             return Err(ThreadCreateError::InvalidCpu);
         }
-        // SAFETY: cpu vérifié, thread_ptr valide.
+        // SAFETY: cpu verified, thread_ptr is valid.
         unsafe {
             let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
             run_queue(CpuId(params.target_cpu)).enqueue(tcb_ptr);

@@ -1,24 +1,24 @@
 // kernel/src/process/namespace/net_ns.rs
 //
-// Espace de noms réseau (CLONE_NEWNET) — Exo-OS Couche 1.5
+// Network namespace (CLONE_NEWNET) — Exo-OS Layer 1.5
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// Identifiant d'un espace de noms réseau.
+/// Network namespace identifier.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct NetNsId(pub u32);
 
-/// Espace de noms réseau.
+/// Network namespace.
 #[repr(C)]
 pub struct NetNamespace {
-    /// Identifiant unique.
+    /// Unique identifier.
     pub id: u32,
-    /// Nombre de processus.
+    /// Number of processes.
     pub refcount: AtomicU32,
-    /// Loopback actif.
+    /// Loopback active.
     pub loopback: AtomicU32,
-    /// Validité.
+    /// Validity.
     pub valid: AtomicU32,
 }
 
@@ -42,5 +42,5 @@ impl NetNamespace {
 
 unsafe impl Sync for NetNamespace {}
 
-/// Namespace réseau racine.
+/// Root network namespace.
 pub static ROOT_NET_NS: NetNamespace = NetNamespace::new_root();

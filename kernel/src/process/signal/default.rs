@@ -1,16 +1,16 @@
 // kernel/src/process/signal/default.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Définitions POSIX des signaux et actions par défaut (Exo-OS Couche 1.5)
+// POSIX signal definitions and default actions (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Numéros de signal POSIX
+// POSIX signal numbers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Signal POSIX (numéros Linux x86_64).
+/// POSIX signal (Linux x86_64 numbers).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[repr(u8)]
 pub enum Signal {
@@ -57,7 +57,7 @@ impl Signal {
         if n == 0 || n > 31 {
             return None;
         }
-        // SAFETY: n est dans [1..31], un discriminant valide de Signal.
+        // SAFETY: n is in [1..31], a valid discriminant of Signal.
         Some(unsafe { core::mem::transmute::<u8, Signal>(n) })
     }
 
@@ -66,19 +66,19 @@ impl Signal {
         self as u8
     }
 
-    /// Vrai si ce signal est un signal temps-réel (SIGRT*).
+    /// True if this signal is a real-time signal (SIGRT*).
     #[inline(always)]
     pub fn is_realtime(n: u8) -> bool {
         (Self::SIGRTMIN..=Self::SIGRTMAX).contains(&n)
     }
 
-    /// Ce signal peut-il être bloqué ?
+    /// Can this signal be blocked?
     #[inline(always)]
     pub fn is_blockable(self) -> bool {
         !matches!(self, Signal::SIGKILL | Signal::SIGSTOP)
     }
 
-    /// Ce signal peut-il être ignoré ?
+    /// Can this signal be ignored?
     #[inline(always)]
     pub fn is_ignorable(self) -> bool {
         !matches!(self, Signal::SIGKILL | Signal::SIGSTOP)
@@ -117,40 +117,40 @@ impl fmt::Display for Signal {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Actions par défaut (POSIX)
+// Default actions (POSIX)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Action sur réception d'un signal.
+/// Action upon signal reception.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum SigActionKind {
-    /// Terminer le processus.
+    /// Terminate process.
     Term = 0,
-    /// Terminer + générer core dump.
+    /// Terminate + generate core dump.
     Core = 1,
-    /// Ignorer le signal.
+    /// Ignore signal.
     Ignore = 2,
-    /// Arrêter le processus (SIGSTOP).
+    /// Stop process (SIGSTOP).
     Stop = 3,
-    /// Reprendre le processus (SIGCONT).
+    /// Resume process (SIGCONT).
     Cont = 4,
-    /// Handler utilisateur installé.
+    /// User handler installed.
     User = 5,
 }
 
-/// Description complète d'une action associée à un signal.
+/// Full description of an action associated with a signal.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct SigAction {
-    /// Action courante.
+    /// Current action.
     pub kind: SigActionKind,
-    /// Adresse du handler utilisateur (0 si SIG_DFL / SIG_IGN).
+    /// Address of user handler (0 if SIG_DFL / SIG_IGN).
     pub handler: u64,
-    /// Drapeaux SA_RESTART, SA_NODEFER, SA_SIGINFO...
+    /// Flags SA_RESTART, SA_NODEFER, SA_SIGINFO...
     pub flags: u32,
-    /// Masque additionnel pendant l'exécution du handler.
+    /// Additional mask during handler execution.
     pub mask: u64,
-    /// Adresse de la fonction de nettoyage (SA_RESTORER).
+    /// Address of cleanup function (SA_RESTORER).
     pub restorer: u64,
 }
 
@@ -202,8 +202,8 @@ impl SigAction {
     }
 }
 
-/// Table des actions par défaut pour les signaux 1..31.
-/// Index i = signal numéro i (signal 0 = unused).
+/// Default actions table for signals 1..31.
+/// Index i = signal number i (signal 0 = unused).
 pub const DEFAULT_ACTIONS: [SigAction; 32] = [
     SigAction::DFL,  //  0  unused
     SigAction::DFL,  //  1  SIGHUP   → Term
@@ -214,7 +214,7 @@ pub const DEFAULT_ACTIONS: [SigAction; 32] = [
     SigAction::CORE, //  6  SIGABRT  → Core
     SigAction::CORE, //  7  SIGBUS   → Core
     SigAction::CORE, //  8  SIGFPE   → Core
-    SigAction::DFL,  //  9  SIGKILL  → Term (non-bloquable)
+    SigAction::DFL,  //  9  SIGKILL  → Term (unblockable)
     SigAction::DFL,  // 10  SIGUSR1  → Term
     SigAction::CORE, // 11  SIGSEGV  → Core
     SigAction::DFL,  // 12  SIGUSR2  → Term
@@ -229,8 +229,8 @@ pub const DEFAULT_ACTIONS: [SigAction; 32] = [
     SigAction::STOP, // 21  SIGTTIN  → Stop
     SigAction::STOP, // 22  SIGTTOU  → Stop
     SigAction::IGN,  // 23  SIGURG   → Ignore
-    SigAction::DFL,  // 24  SIGXCPU  → Term (+ core sur Linux)
-    SigAction::DFL,  // 25  SIGXFSZ  → Term (+ core sur Linux)
+    SigAction::DFL,  // 24  SIGXCPU  → Term (+ core on Linux)
+    SigAction::DFL,  // 25  SIGXFSZ  → Term (+ core on Linux)
     SigAction::DFL,  // 26  SIGVTALRM→ Term
     SigAction::DFL,  // 27  SIGPROF  → Term
     SigAction::IGN,  // 28  SIGWINCH → Ignore
@@ -239,18 +239,18 @@ pub const DEFAULT_ACTIONS: [SigAction; 32] = [
     SigAction::CORE, // 31  SIGSYS   → Core
 ];
 
-/// Retourne l'action par défaut d'un signal standard.
+/// Returns the default action of a standard signal.
 #[inline]
 pub fn default_action(sig: u8) -> SigAction {
     if sig < 32 {
         DEFAULT_ACTIONS[sig as usize]
     } else {
         SigAction::DFL
-    } // RT signals → Term par défaut
+    } // RT signals → Term by default
 }
 
-/// Table des actions installées pour un processus (SigAction par signal).
-/// Partagé entre threads (les handlers sont globaux au processus).
+/// Installed actions table for a process (SigAction per signal).
+/// Shared between threads (handlers are global to process).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SigHandlerTable {
@@ -265,10 +265,10 @@ impl Default for SigHandlerTable {
 }
 
 impl SigHandlerTable {
-    /// Crée une table avec les actions par défaut.
+    /// Creates a table with default actions.
     pub const fn new() -> Self {
         let mut actions = [SigAction::DFL; 64];
-        // Les 32 premiers = DEFAULT_ACTIONS.
+        // First 32 = DEFAULT_ACTIONS.
         let mut i = 0usize;
         while i < 32 {
             actions[i] = DEFAULT_ACTIONS[i];
@@ -277,7 +277,7 @@ impl SigHandlerTable {
         Self { actions }
     }
 
-    /// Obtient l'action courante pour un signal.
+    /// Obtains current action for a signal.
     #[inline(always)]
     pub fn get(&self, sig: u8) -> SigAction {
         if (sig as usize) < 64 {
@@ -287,8 +287,8 @@ impl SigHandlerTable {
         }
     }
 
-    /// Définit l'action (sigaction()).
-    /// Retourne l'ancienne action.
+    /// Sets action (sigaction()).
+    /// Returns old action.
     #[inline]
     pub fn set(&mut self, sig: u8, action: SigAction) -> SigAction {
         if (sig as usize) >= 64 {
@@ -299,7 +299,7 @@ impl SigHandlerTable {
         old
     }
 
-    /// Réinitialise tous les handlers non-ignorés à SIG_DFL (appelé par execve).
+    /// Resets all non-ignored handlers to SIG_DFL (called by execve).
     pub fn reset_on_exec(&mut self) {
         for i in 0..64usize {
             if self.actions[i].kind == SigActionKind::User {

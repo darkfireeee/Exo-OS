@@ -1,7 +1,7 @@
-//! # process/core/pcb/types.rs — Types et drapeaux pour ProcessControlBlock
+//! # process/core/pcb/types.rs — Types and flags for ProcessControlBlock
 //!
-//! Définit la machine d'états ProcessState, les drapeaux de processus,
-//! les identifiants POSIX (Credentials) et les constantes fondamentales.
+//! Defines the ProcessState state machine, process flags,
+//! POSIX identifiers (Credentials), and fundamental constants.
 
 use alloc::alloc::{alloc, Layout};
 use alloc::boxed::Box;
@@ -26,24 +26,24 @@ pub fn try_box_new<T>(value: T) -> Option<Box<T>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ProcessState — machine d'états du processus
+// ProcessState — process state machine
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État du processus (distinct de l'état des threads individuels).
+/// Process state (distinct from individual thread state).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ProcessState {
-    /// En cours de création (fork / execve non terminé).
+    /// Being created (fork / execve not completed).
     Creating = 0,
-    /// Au moins un thread actif.
+    /// At least one active thread.
     Running = 1,
-    /// Tous les threads bloqués.
+    /// All threads blocked.
     Sleeping = 2,
-    /// Arrêté via SIGSTOP (tous threads Stopped).
+    /// Stopped via SIGSTOP (all threads Stopped).
     Stopped = 3,
-    /// exit() appelé, en attente de waitpid() par le parent.
+    /// exit() called, waiting for waitpid() from parent.
     Zombie = 4,
-    /// Ressources libérées (après reap).
+    /// Resources freed (after reap).
     Dead = 5,
 }
 
@@ -52,29 +52,29 @@ pub enum ProcessState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod process_flags {
-    /// fork() par copy-on-write (CLONE_VM absent).
+    /// fork() via copy-on-write (CLONE_VM absent).
     pub const FORKED: u32 = 1 << 0;
-    /// execve() effectué au moins une fois.
+    /// execve() performed at least once.
     pub const EXEC_DONE: u32 = 1 << 1;
-    /// Processus leader de session.
+    /// Session leader process.
     pub const SESSION_LEADER: u32 = 1 << 2;
-    /// Processus démonisé (no ctty).
+    /// Daemonized process (no ctty).
     pub const DAEMON: u32 = 1 << 3;
-    /// Undergoing exit — ne pas envoyer de nouveaux signaux.
+    /// Undergoing exit — do not send new signals.
     pub const EXITING: u32 = 1 << 4;
-    /// Setuid actif.
+    /// Setuid active.
     pub const SETUID: u32 = 1 << 5;
-    /// Setgid actif.
+    /// Setgid active.
     pub const SETGID: u32 = 1 << 6;
-    /// Dump core interdit (prctl(PR_SET_DUMPABLE, 0)).
+    /// Core dump prohibited (prctl(PR_SET_DUMPABLE, 0)).
     pub const NO_DUMP: u32 = 1 << 7;
-    /// Processus soumis à ptrace.
+    /// Process subjected to ptrace.
     pub const TRACED: u32 = 1 << 8;
-    /// Processus dans un namespace PID (non-init).
+    /// Process in a PID namespace (non-init).
     pub const IN_PID_NS: u32 = 1 << 9;
-    /// Vfork en attente — libérer le parent bloqué.
+    /// Vfork pending — release blocked parent.
     pub const VFORK_DONE: u32 = 1 << 10;
-    /// Enfant vfork() partageant temporairement l'adresse parent jusqu'à exec/exit.
+    /// vfork() child temporarily sharing parent address space until exec/exit.
     pub const VFORK_SHARED_AS: u32 = 1 << 11;
 }
 
@@ -88,7 +88,7 @@ pub const DEFAULT_UMASK: u32 = 0o022;
 // Credentials — UID/GID
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiants d'un processus (clones entre fork, remplacés par setuid/setgid).
+/// Process credentials (cloned across fork, replaced by setuid/setgid).
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct Credentials {

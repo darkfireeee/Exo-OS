@@ -1,21 +1,21 @@
 // kernel/src/process/lifecycle/exec.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// execve() — Remplacement de l'image processus (Exo-OS Couche 1.5)
+// execve() — Replacing process image (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE PROC-01 : process/ (couche 1.5) ne peut pas importer fs/ (couche 3).
-// SOLUTION : trait ElfLoader enregistré par fs/ au boot.
+// RULE PROC-01: process/ (layer 1.5) cannot import fs/ (layer 3).
+// SOLUTION: ElfLoader trait registered by fs/ at boot.
 //
-// Séquence do_execve() :
-//   1. Vérifier les permissions (creds).
-//   2. Appeler ElfLoader::load_elf() pour charger le binaire.
-//   3. Fermer les fds O_CLOEXEC.
-//   4. Réinitialiser l'espace d'adressage virtuel.
-//   5. Mettre à jour le TCB (entry_point, initial_rsp, TLS).
-//   6. Mettre à jour le PCB (flags, compteurs).
-//   7. Réinitialiser les signaux (handlers → SIG_DFL).
-//   8. Retourner vers userspace.
+// Sequence do_execve():
+//   1. Check permissions (creds).
+//   2. Call ElfLoader::load_elf() to load binary.
+//   3. Close O_CLOEXEC fds.
+//   4. Reset virtual address space.
+//   5. Update TCB (entry_point, initial_rsp, TLS).
+//   6. Update PCB (flags, counters).
+//   7. Reset signals (handlers → SIG_DFL).
+//   8. Return to userspace.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::memory::virt::UserAddressSpace;
@@ -58,86 +58,86 @@ fn build_exec_kpti_shadow(_kstack_top: u64, _cr3: u64) -> Result<u64, ExecError>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait ElfLoader — RÈGLE PROC-01 : abstraction de la couche fs/
+// Trait ElfLoader — RULE PROC-01: fs/ layer abstraction
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres issus du chargement ELF.
+/// Parameters resulting from ELF loading.
 #[derive(Debug, Clone)]
 pub struct ElfLoadResult {
-    /// Adresse d'entrée (entry point du binaire).
+    /// Entry address (entry point of the binary).
     pub entry_point: u64,
-    /// Pointeur de pile initial (RSP au démarrage).
+    /// Initial stack pointer (RSP at startup).
     pub initial_stack_top: u64,
-    /// Premier argument userspace (RDI) injecté au point d'entrée.
+    /// First userspace argument (RDI) injected at entry point.
     pub entry_arg0: u64,
-    /// Base de la TLS statique chargée (segment .tdata/.tbss).
+    /// Base of loaded static TLS (.tdata/.tbss segment).
     pub tls_base: u64,
-    /// Taille de la TLS statique.
+    /// Size of static TLS.
     pub tls_size: usize,
-    /// Adresse de début du heap brk (juste après le segment .bss).
+    /// Start address of brk heap (just after .bss segment).
     pub brk_start: u64,
-    /// Adresse physique (CR3) du nouvel espace d'adressage créé.
+    /// Physical address (CR3) of the newly created address space.
     pub cr3: u64,
-    /// Pointeur opaque vers le UserAddressSpace créé par fs/.
+    /// Opaque pointer to UserAddressSpace created by fs/.
     pub addr_space_ptr: usize,
-    /// Adresse virtuelle du SignalTcb mappé (0 si absent) — pour PROC-VMA/V-17.
+    /// Virtual address of mapped SignalTcb (0 if absent) — for PROC-VMA/V-17.
     pub signal_tcb_vaddr: u64,
 }
 
-/// Erreurs renvoyées par ElfLoader.
+/// Errors returned by ElfLoader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElfLoadError {
-    /// Fichier non trouvé.
+    /// File not found.
     NotFound,
-    /// Format ELF invalide ou corrompu.
+    /// Invalid or corrupted ELF format.
     InvalidElf,
-    /// Permission refusée.
+    /// Permission denied.
     PermissionDenied,
-    /// Pas assez de mémoire pour charger.
+    /// Not enough memory to load.
     OutOfMemory,
-    /// Architecture non supportée.
+    /// Unsupported architecture.
     UnsupportedArch,
-    /// Interprète (PT_INTERP) non trouvé.
+    /// Interpreter (PT_INTERP) not found.
     InterpreterNotFound,
 }
 
-/// Erreurs d'execve.
+/// execve errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecError {
-    /// ELF non chargeable (wrapper).
+    /// ELF unloadable (wrapper).
     ElfLoadFailed(ElfLoadError),
-    /// SCM / capability refusée.
+    /// SCM / capability denied.
     PermissionDenied,
-    /// Signature de module invalide ou absente (FIX-EXEC-SIG).
+    /// Module signature invalid or missing (FIX-EXEC-SIG).
     SignatureVerificationFailed,
-    /// Trop d'arguments (E2BIG).
+    /// Argument list too long (E2BIG).
     ArgListTooLong,
-    /// Nom de fichier trop long.
+    /// File name too long.
     NameTooLong,
-    /// Processus déjà en train de quitter.
+    /// Process already exiting.
     ProcessExiting,
-    /// Exec multi-thread refusé tant que THREAD-06 n'a pas tué les autres threads.
+    /// Multi-threaded exec denied until THREAD-06 terminates other threads.
     ThreadGroupNotSingle,
-    /// Allocation noyau échouée après le chargement ELF.
+    /// Kernel allocation failed after ELF loading.
     OutOfMemory,
-    /// Aucun ElfLoader enregistré.
+    /// No ElfLoader registered.
     NoLoader,
 }
 
-/// Trait que `fs/` doit implémenter et enregistrer via `register_elf_loader()`.
+/// Trait that `fs/` must implement and register via `register_elf_loader()`.
 ///
-/// La couche process/ ne connaît PAS les types fs/  — uniquement ce trait.
+/// The process/ layer does NOT know fs/ types — only this trait.
 pub trait ElfLoader: Send + Sync {
-    /// Charge un ELF depuis le chemin donné dans l'espace d'adressage courant.
+    /// Loads an ELF from the given path into current address space.
     ///
     /// # Arguments
-    /// * `path`   — chemin absolu dans le VFS.
-    /// * `argv`   — vecteur d'arguments (argv[0] = binaire).
-    /// * `envp`   — variables d'environnement.
-    /// * `cr3_in` — CR3 de l'espace d'adressage existant à réinitialiser.
+    /// * `path`   — absolute path in VFS.
+    /// * `argv`   — argument vector (argv[0] = binary).
+    /// * `envp`   — environment variables.
+    /// * `cr3_in` — CR3 of existing address space to reset.
     ///
     /// # Returns
-    /// `ElfLoadResult` décrivant l'espace d'adressage peuplé.
+    /// `ElfLoadResult` describing populated address space.
     fn load_elf(
         &self,
         path: &str,
@@ -148,18 +148,18 @@ pub trait ElfLoader: Send + Sync {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registre global du chargeur ELF
+// Global ELF loader registry
 // ─────────────────────────────────────────────────────────────────────────────
 
 static ELF_LOADER: Once<&'static dyn ElfLoader> = Once::new();
 pub type CloseExecHandlesHook = fn(pid: u32, handles: &[u64]);
 static CLOSE_EXEC_HANDLES_HOOK: Once<CloseExecHandlesHook> = Once::new();
 
-/// Enregistre le chargeur ELF (appelé une seule fois depuis fs/ au boot).
+/// Registers ELF loader (called once from fs/ at boot).
 ///
 /// # Safety
-/// `loader` doit avoir une durée de vie `'static` (typiquement une référence
-/// à un objet alloué statiquement dans fs/).
+/// `loader` must have `'static` lifetime (typically a reference
+/// to a statically allocated object in fs/).
 pub fn register_elf_loader(loader: &'static dyn ElfLoader) {
     ELF_LOADER.call_once(|| loader);
 }
@@ -175,8 +175,8 @@ fn close_exec_handles(pid: u32, handles: &[u64]) {
     }
 }
 
-/// Charge un binaire ELF pour le bootstrap userspace, avant qu'un thread
-/// appelant existe. Ce chemin est utilise uniquement pour fabriquer PID 1.
+/// Loads an ELF binary for userspace bootstrap, before a calling thread
+/// exists. This path is only used to build PID 1.
 pub fn load_elf_for_boot(
     path: &str,
     argv: &[&str],
@@ -198,17 +198,17 @@ pub fn load_elf_for_boot(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// do_execve — implémentation principale
+// do_execve — main implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Execute un nouveau binaire ELF dans le contexte du thread courant.
+/// Executes a new ELF binary in the context of the current thread.
 ///
-/// Cette fonction est appelée depuis le syscall execve() après validation
-/// des paramètres utilisateur.
+/// This function is called from the execve() syscall after validation
+/// of user parameters.
 ///
 /// # Safety
-/// `thread` doit pointer vers le ProcessThread du thread appelant.
-/// L'espace d'adressage sera reconstruit — aucun accès userspace après l'appel.
+/// `thread` must point to the calling thread's ProcessThread.
+/// The address space will be rebuilt — no userspace access after the call.
 pub fn do_execve(
     thread: &mut ProcessThread,
     pcb: &ProcessControlBlock,
@@ -216,7 +216,7 @@ pub fn do_execve(
     argv: &[&str],
     envp: &[&str],
 ) -> Result<(), ExecError> {
-    // Vérifier que le processus n'est pas en train de quitter.
+    // Verify that the process is not exiting.
     if pcb.is_exiting() {
         return Err(ExecError::ProcessExiting);
     }
@@ -224,7 +224,7 @@ pub fn do_execve(
         return Err(ExecError::ThreadGroupNotSingle);
     }
 
-    // Valider la longueur du chemin et des arguments.
+    // Validate path and argument length.
     if path.len() > 4096 {
         return Err(ExecError::NameTooLong);
     }
@@ -234,21 +234,21 @@ pub fn do_execve(
         return Err(ExecError::ArgListTooLong);
     }
 
-    // Obtenir le chargeur ELF (enregistré depuis fs/ au boot).
+    // Get ELF loader (registered from fs/ at boot).
     let loader = ELF_LOADER.get().ok_or(ExecError::NoLoader)?;
     let saved_signal_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
     let old_as_ptr = pcb.address_space.load(Ordering::Acquire);
     let old_process_flags = pcb.flags.load(Ordering::Acquire);
     let old_as_is_vfork_shared = old_process_flags & process_flags::VFORK_SHARED_AS != 0;
 
-    // Étape 3 (LAC-08 / PROC-03) : bloquer TOUS les signaux sauf SIGKILL/SIGSTOP
-    // AVANT le chargement ELF. Empêche un signal livré entre load_elf() et
-    // reset_signals_on_exec() d'invoquer l'ancien handler dans un address space
-    // partiellement remplacé. Le masque appelant est restauré après la purge
-    // des signaux pending de l'ancienne image.
+    // Step 3 (LAC-08 / PROC-03): block ALL signals except SIGKILL/SIGSTOP
+    // BEFORE ELF loading. Prevents a signal delivered between load_elf() and
+    // reset_signals_on_exec() from invoking the old handler in a
+    // partially replaced address space. The calling mask is restored after purging
+    // pending signals of the old image.
     block_all_except_kill(&thread.sched_tcb);
 
-    // Charger le nouveau binaire dans l'espace d'adressage.
+    // Load new binary into address space.
     let cr3_current = thread.sched_tcb.cr3_phys;
     let elf_result = match loader.load_elf(path, argv, envp, cr3_current) {
         Ok(result) => result,
@@ -261,22 +261,22 @@ pub fn do_execve(
         }
     };
 
-    // FIX-EXEC-SIG (Security_Audit_Passe2 §C-01) : vérification de la signature
-    // du module avant remplacement de l'espace d'adressage.
-    // ElfLoadResult ne fournit pas le ModuleHeader directement — la vérification
-    // se fait via is_chain_verified() qui confirme que la chaîne de confiance
-    // ExoSeal a bien validé ce binaire lors du chargement initial depuis ExoFS.
+    // FIX-EXEC-SIG (Security_Audit_Passe2 §C-01): module signature verification
+    // before replacing address space.
+    // ElfLoadResult does not directly provide ModuleHeader — verification
+    // is done via is_chain_verified() which confirms that the ExoSeal trust chain
+    // successfully validated this binary during initial load from ExoFS.
     //
-    // En v0.2.0 dev (kernel_a_hash_is_zero()), la vérification est loguée mais
-    // non bloquante. En production (EXOPHOENIX_REQUIRE_HASHES=1), elle est stricte.
+    // In v0.2.0 dev (kernel_a_hash_is_zero()), verification is logged but
+    // non-blocking. In production (EXOPHOENIX_REQUIRE_HASHES=1), it is strict.
     if crate::security::is_chain_verified() {
-        // La chaîne de confiance est active — vérifier que le binaire est signé.
-        // check_chain_of_trust() vérifie la signature Ed25519 du binaire via ExoSeal.
+        // Trust chain is active — verify binary is signed.
+        // check_chain_of_trust() verifies Ed25519 binary signature via ExoSeal.
         if let Err(_e) = crate::security::check_chain_of_trust() {
-            // Log mais ne pas bloquer en dev
+            // Log but do not block in dev
             #[cfg(not(feature = "strict_exec_signatures"))]
             {
-                // Mode dev : avertissement seulement
+                // Dev mode: warning only
                 crate::arch::x86_64::terminal::debug_write(
                     b"exec: WARNING unsigned binary executed\n",
                 );
@@ -313,12 +313,12 @@ pub fn do_execve(
             }
         };
 
-    // PROC-VMA (V-17) : marquer la VMA SignalTcb DONTEXPAND (et non DONTCOPY pour
-    // préserver la page SignalTcb en CoW lors d'un fork() ultérieur).
-    // Empêche un attaquant d'utiliser mremap pour étendre la VMA SignalTcb.
+    // PROC-VMA (V-17): mark SignalTcb VMA as DONTEXPAND (and not DONTCOPY to
+    // preserve the SignalTcb page in CoW during a subsequent fork()).
+    // Prevents an attacker from using mremap to expand the SignalTcb VMA.
     if elf_result.signal_tcb_vaddr != 0 {
-        // SAFETY: addr_space_ptr créé par ElfLoader::load_elf() comme Box<UserAddressSpace>;
-        // on est le seul détenteur de cet AS (l'ancien AS a été remplacé).
+        // SAFETY: addr_space_ptr created by ElfLoader::load_elf() as Box<UserAddressSpace>;
+        // we are the sole holder of this AS (old AS has been replaced).
         let addr_space = unsafe { &*(elf_result.addr_space_ptr as *const UserAddressSpace) };
         addr_space.set_vma_flags(
             VirtAddr::new(elf_result.signal_tcb_vaddr),
@@ -326,7 +326,7 @@ pub fn do_execve(
         );
     }
 
-    // Fermer les fds O_CLOEXEC.
+    // Close O_CLOEXEC fds.
     let closed_handles = {
         let mut files = pcb.files.lock();
         files.close_on_exec()
@@ -347,7 +347,7 @@ pub fn do_execve(
     };
     close_exec_handles(pcb.pid.0, &closed_handles);
 
-    // Réinitialiser les signaux et purger les signaux de l'ancienne image.
+    // Reset signals and purge signals from old image.
     reset_signals_on_exec(&thread.sched_tcb);
     thread.sig_queue.clear();
     thread.rt_sig_queue.clear();
@@ -356,17 +356,17 @@ pub fn do_execve(
         .signal_mask
         .store(saved_signal_mask, Ordering::Release);
 
-    // Mettre à jour l'espace d'adressage dans le TCB scheduler.
+    // Update address space in scheduler TCB.
     thread.sched_tcb.cr3_phys = elf_result.cr3;
-    // FIX #25 (Audit 6.1) — Libérer l'ancienne shadow PML4 KPTI avant de
-    // l'écraser. Sans cette libération, chaque `fork()`+`execve()` orpheline
-    // une page physique de 4 KiB.
+    // FIX #25 (Audit 6.1) — Free old KPTI shadow PML4 before
+    // overwriting it. Without this cleanup, each `fork()`+`execve()` orphans
+    // a 4 KiB physical page.
     {
         let old_kpti_cr3 = thread.sched_tcb.kpti_user_cr3();
         if old_kpti_cr3 != 0 && old_kpti_cr3 != exec_kpti_user_cr3 {
-            // SAFETY: l'ancienne shadow PML4 a été allouée via
-            // `build_user_shadow_pml4` (lui-même `buddy::alloc_page(ZEROED)`).
-            // Elle n'est plus référencée nulle part après ce point.
+            // SAFETY: old shadow PML4 was allocated via
+            // `build_user_shadow_pml4` (itself `buddy::alloc_page(ZEROED)`).
+            // It is no longer referenced anywhere after this point.
             let _ = crate::memory::physical::allocator::buddy::free_pages(
                 crate::memory::core::Frame::containing(crate::memory::core::PhysAddr::new(
                     old_kpti_cr3,
@@ -379,8 +379,8 @@ pub fn do_execve(
     thread.sched_tcb.fs_base = elf_result.tls_base;
     thread.sched_tcb.user_gs_base = 0;
 
-    // Mettre à jour les adresses du thread.
-    // CORRECTION P2-03 : calculer et propager stack_base et stack_size au lieu de 0
+    // Update thread addresses.
+    // FIX P2-03: compute and propagate stack_base and stack_size instead of 0
     const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
     const DEFAULT_STACK_SIZE: u64 = crate::memory::core::layout::USER_STACK_BOOTSTRAP_SIZE as u64;
 
@@ -389,8 +389,8 @@ pub fn do_execve(
     let stack_size = stack_top.saturating_sub(stack_base);
 
     thread.addresses = ThreadAddress {
-        stack_base, // CORRECTION P2-03
-        stack_size, // CORRECTION P2-03
+        stack_base, // FIX P2-03
+        stack_size, // FIX P2-03
         entry_point: elf_result.entry_point,
         initial_rsp: elf_result.initial_stack_top,
         tls_base: elf_result.tls_base,
@@ -404,9 +404,9 @@ pub fn do_execve(
         .store(elf_result.tls_base, Ordering::Release);
     thread.tls_size = elf_result.tls_size;
 
-    // P1-05 / PROC-01 : execve() ne remplace pas la pile kernel du thread courant,
-    // mais on republie explicitement ce kstack dans les slots arch locaux pour
-    // garder l'invariant TSS.RSP0 / GS:[0x00] visible et auto-documenté.
+    // P1-05 / PROC-01: execve() does not replace the kernel stack of current thread,
+    // but we explicitly republish this kstack in local arch slots to keep
+    // TSS.RSP0 / GS:[0x00] invariant visible and self-documented.
     #[cfg(target_os = "none")]
     unsafe {
         let cpu_id = crate::arch::x86_64::smp::percpu::current_cpu_id() as usize;
@@ -421,28 +421,28 @@ pub fn do_execve(
         crate::arch::x86_64::write_cr3(elf_result.cr3);
     }
 
-    // BUG-04 / PROC-01 fix: écrire IA32_FS_BASE MSR immédiatement.
-    // do_execve() s'exécute en contexte kernel sur le CPU courant du thread ;
-    // le nouveau TLS base doit être actif avant la première instruction userspace.
-    // Sans cet WRMSR, %fs pointe vers l'ancienne base → crash userspace dès le
-    // premier accès TLS (thread_local!, pthread_self…).
+    // BUG-04 / PROC-01 fix: write IA32_FS_BASE MSR immediately.
+    // do_execve() executes in kernel context on current CPU of thread;
+    // new TLS base must be active before first userspace instruction.
+    // Without this WRMSR, %fs points to old base -> userspace crash upon
+    // first TLS access (thread_local!, pthread_self...).
     #[cfg(target_os = "none")]
     unsafe {
-        // SAFETY: WRMSR sur MSR_FS_BASE = 0xC000_0100 est toujours défini sur
-        // x86_64 (AMD64 v0), et le MSR est writable depuis Ring 0. Le contexte
-        // est celui du thread courant sur ce CPU — effet local, aucune contention.
+        // SAFETY: WRMSR on MSR_FS_BASE = 0xC000_0100 is always defined on
+        // x86_64 (AMD64 v0), and MSR is writable from Ring 0. Context
+        // is that of the current thread on this CPU — local effect, no contention.
         crate::arch::x86_64::cpu::msr::write_msr(
             crate::arch::x86_64::cpu::msr::MSR_FS_BASE,
             elf_result.tls_base,
         );
-        // execve() repart d'une image neuve : ne pas réinjecter l'ancien GS userspace.
+        // execve() starts fresh: do not re-inject old userspace GS.
         crate::arch::x86_64::cpu::msr::write_msr(
             crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
             0,
         );
     }
 
-    // Mettre à jour le PCB avec le nouvel espace d'adressage.
+    // Update PCB with new address space.
     pcb.cr3.store(elf_result.cr3, Ordering::Release);
     pcb.address_space
         .store(elf_result.addr_space_ptr, Ordering::Release);
@@ -453,9 +453,9 @@ pub fn do_execve(
         .store(elf_result.brk_start, Ordering::Release);
     pcb.set_name_from_path(path.as_bytes());
 
-    // Retirer FORKED/VFORK_SHARED_AS maintenant, mais ne publier EXEC_DONE/VFORK_DONE
-    // qu'après le teardown de l'ancien address space : le parent vfork ne doit pas
-    // pouvoir reprendre pendant `free_addr_space()`.
+    // Remove FORKED/VFORK_SHARED_AS now, but only publish EXEC_DONE/VFORK_DONE
+    // after teardown of old address space: vfork parent must not be able to
+    // resume during `free_addr_space()`.
     pcb.flags.fetch_and(
         !(process_flags::FORKED | process_flags::VFORK_SHARED_AS),
         Ordering::Release,
@@ -470,9 +470,9 @@ pub fn do_execve(
         Ordering::Release,
     );
 
-    // Transition vers Running.
+    // Transition to Running.
     pcb.set_state(ProcessState::Running);
-    // ExoLedger : trace immuable de chaque chargement de binaire (changement d'identité).
+    // ExoLedger: immutable trace of each binary load (identity change).
     crate::security::exoledger::exo_ledger_append(crate::security::exoledger::ActionTag::Custom {
         tag: 0x6578_6563, // b"exec"
         data: pcb.pid.0 as u64,

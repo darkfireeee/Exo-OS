@@ -1,7 +1,7 @@
 // kernel/src/process/namespace/pid_ns.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Espace de noms PID (CLONE_NEWPID) — Exo-OS Couche 1.5
+// PID namespace (CLONE_NEWPID) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::sync::spinlock::SpinLock;
@@ -9,12 +9,12 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[allow(dead_code)]
 const MAX_PID_NS: usize = 64;
-/// PIDs max par namespace : 1..32767.
+/// Max PIDs per namespace: 1..32767.
 const NS_PID_MAX: u32 = 32767;
-/// Taille du bitmap local en mots u64.
+/// Local bitmap size in u64 words.
 const NS_PID_WORDS: usize = 512; // 512 × 64 = 32768
 
-/// Bitmap PID local au namespace (mots AtomicU64, bit=1 → libre).
+/// Local PID bitmap for the namespace (AtomicU64 words, bit=1 → free).
 pub struct NsPidBitmap {
     words: [AtomicU64; NS_PID_WORDS],
 }
@@ -32,7 +32,7 @@ impl NsPidBitmap {
         }
     }
 
-    /// Alloue le premier PID libre ≥ `min`.
+    /// Allocates first free PID ≥ `min`.
     pub fn alloc(&self, min: u32) -> Option<u32> {
         let start = (min / 64) as usize;
         for w in start..NS_PID_WORDS {
@@ -56,7 +56,7 @@ impl NsPidBitmap {
         None
     }
 
-    /// Libère un PID.
+    /// Frees a PID.
     pub fn free(&self, pid: u32) {
         let w = (pid / 64) as usize;
         let bit = pid % 64;
@@ -64,25 +64,25 @@ impl NsPidBitmap {
     }
 }
 
-// SAFETY : NsPidBitmap ne contient que des AtomicU64.
+// SAFETY: NsPidBitmap contains only AtomicU64.
 unsafe impl Sync for NsPidBitmap {}
 
-/// Espace de noms PID avec son propre allocateur.
+/// PID namespace with its own allocator.
 #[repr(C)]
 pub struct PidNamespace {
-    /// Index unique du namespace.
+    /// Unique namespace index.
     pub id: u32,
-    /// Profondeur (0 = racine).
+    /// Depth (0 = root).
     pub level: u32,
-    /// PID parent du namespace (PID 1 dans ce namespace).
+    /// Parent PID of namespace (PID 1 in this namespace).
     pub init_pid: AtomicU32,
-    /// Nombre de processus vivants.
+    /// Number of living processes.
     pub pop: AtomicU32,
-    /// Compteur de références.
+    /// Reference counter.
     pub refcount: AtomicU32,
-    /// Validité.
+    /// Validity.
     pub valid: AtomicU32,
-    /// Allocateur de PIDs local.
+    /// Local PID allocator.
     pub bitmap: NsPidBitmap,
     pub alloc_lock: SpinLock<()>,
 }
@@ -101,7 +101,7 @@ impl PidNamespace {
         }
     }
 
-    /// Alloue un PID local dans ce namespace.
+    /// Allocates a local PID in this namespace.
     pub fn alloc_local_pid(&self) -> Option<u32> {
         let _guard = self.alloc_lock.lock();
         self.bitmap.alloc(2).inspect(|_| {
@@ -109,7 +109,7 @@ impl PidNamespace {
         })
     }
 
-    /// Libère un PID local.
+    /// Frees a local PID.
     pub fn free_local_pid(&self, pid: u32) {
         let _guard = self.alloc_lock.lock();
         self.bitmap.free(pid);
@@ -117,8 +117,8 @@ impl PidNamespace {
     }
 }
 
-// SAFETY : seuls des atomiques + SpinLock.
+// SAFETY: atomics + SpinLock only.
 unsafe impl Sync for PidNamespace {}
 
-/// Namespace PID racine (global).
+/// Root PID namespace (global).
 pub static ROOT_PID_NS: PidNamespace = PidNamespace::new_root();

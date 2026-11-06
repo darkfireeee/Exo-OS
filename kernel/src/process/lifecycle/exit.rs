@@ -1,8 +1,8 @@
 //! # process/lifecycle/exit.rs
 //!
-//! Nettoyage stricte de chaine d'Exit pour la terminaison de PID (GI-03 §7).
-//! Ordre imperatif : Bus Mastering Off -> Quiesce -> SysReset -> IOMMU Maps.
-//! Protege contre les attaques de Bus Mastering liees au nettoyage tardif.
+//! Strict Exit chain cleanup for PID termination (GI-03 §7).
+//! Mandatory order: Bus Mastering Off -> Quiesce -> SysReset -> IOMMU Maps.
+//! Protects against Bus Mastering attacks related to late cleanup.
 //! 100% compliant. 0 TODO, 0 STUB.
 
 use crate::drivers;
@@ -34,7 +34,7 @@ pub(crate) fn close_all_pid_vfs(pid: u32) {
 #[inline(always)]
 fn halt_forever() -> ! {
     loop {
-        // SAFETY: thread terminé, le CPU ne doit jamais revenir dans ce contexte.
+        // SAFETY: thread terminated, CPU must never return to this context.
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack));
         }
@@ -49,7 +49,7 @@ fn mark_exit(
 ) {
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
-    // FIX-PROC-JOIN-01 : réveiller les threads bloqués dans pthread_join.
+    // FIX-PROC-JOIN-01: wake up threads blocked in pthread_join.
     crate::process::thread::join::wake_joiners();
     crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&thread.sched_tcb);
     thread.set_state(TaskState::Dead);
@@ -57,8 +57,8 @@ fn mark_exit(
         crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);
     }
 
-    // T6-003 FIX : Distinguer thread-exit et process-exit.
-    // Ne détruire les ressources globales (fichiers, VFS, drivers, VFORK) que si c'était le dernier thread.
+    // T6-003 FIX: Distinguish thread-exit and process-exit.
+    // Only destroy global resources (files, VFS, drivers, VFORK) if this was the last thread.
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
         pcb.set_exiting();

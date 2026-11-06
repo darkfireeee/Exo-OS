@@ -1,6 +1,6 @@
 // kernel/src/process/namespace/mod.rs
 //
-// Espaces de noms Linux (namespaces) — Couche 1.5 Exo-OS.
+// Linux namespaces — Layer 1.5 Exo-OS.
 
 pub mod mount_ns;
 pub mod net_ns;
@@ -14,11 +14,11 @@ pub use pid_ns::{PidNamespace, ROOT_PID_NS};
 pub use user_ns::{UserNamespace, ROOT_USER_NS};
 pub use uts_ns::{UtsNamespace, ROOT_UTS_NS};
 
-/// Ensemble des namespaces actifs pour un processus.
+/// Set of active namespaces for a process.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct NsSet {
-    pub pid_ns: u32, // index dans PID_NS_TABLE
+    pub pid_ns: u32, // Index in PID_NS_TABLE
     pub mnt_ns: u32,
     pub net_ns: u32,
     pub uts_ns: u32,
@@ -26,7 +26,7 @@ pub struct NsSet {
 }
 
 impl NsSet {
-    /// NsSet pour le namespace raçine (init).
+    /// NsSet for root namespace (init).
     pub const ROOT: Self = Self {
         pid_ns: 0,
         mnt_ns: 0,

@@ -1,14 +1,14 @@
 // kernel/src/process/group/pgrp.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Groupes de processus POSIX (PGID) — Exo-OS Couche 1.5
+// POSIX process groups (PGID) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pid::Pid;
 use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// Identifiant de groupe de processus.
+/// Process group identifier.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[repr(transparent)]
 pub struct PgId(pub u32);
@@ -19,16 +19,16 @@ impl PgId {
 
 const MAX_PGROUPS: usize = 2048;
 
-/// Descripteur d'un groupe de processus.
+/// Process group descriptor.
 #[repr(C)]
 pub struct ProcessGroup {
-    /// PGID = PID du leader.
+    /// PGID = leader's PID.
     pub pgid: PgId,
-    /// SID de la session contenant ce groupe.
+    /// SID of the session containing this group.
     pub sid: AtomicU32,
-    /// Nombre de membres vivants.
+    /// Number of living members.
     pub members: AtomicU32,
-    /// slot valide.
+    /// Valid slot.
     pub valid: AtomicU32,
 }
 
@@ -43,7 +43,7 @@ impl ProcessGroup {
     }
 }
 
-/// Table globale des groupes de processus.
+/// Global process groups table.
 pub struct PGroupTable {
     slots: [ProcessGroup; MAX_PGROUPS],
     lock: SpinLock<()>,
@@ -61,20 +61,20 @@ impl PGroupTable {
         }
     }
 
-    /// Crée ou rejoint un groupe de processus.
+    /// Creates or joins a process group.
     pub fn create_or_join(&self, pgid: PgId, sid: u32) -> bool {
         let _guard = self.lock.lock();
-        // Cherche si le groupe existe déjà.
+        // Check if group already exists.
         for slot in &self.slots {
             if slot.valid.load(Ordering::Acquire) == 1 && slot.pgid == pgid {
                 slot.members.fetch_add(1, Ordering::AcqRel);
                 return true;
             }
         }
-        // Créer un nouveau groupe.
+        // Create a new group.
         for slot in &self.slots {
             if slot.valid.load(Ordering::Acquire) == 0 {
-                // SAFETY: write_lock exclusif; slot libre (valid==0), mutation unique.
+                // SAFETY: exclusive write_lock; free slot (valid==0), unique mutation.
                 unsafe {
                     (*(slot as *const ProcessGroup as *mut ProcessGroup)).pgid = pgid;
                 }
@@ -88,7 +88,7 @@ impl PGroupTable {
         false
     }
 
-    /// Quitte un groupe.
+    /// Leaves a group.
     pub fn leave(&self, pgid: PgId) {
         let _guard = self.lock.lock();
         for slot in &self.slots {
@@ -103,14 +103,14 @@ impl PGroupTable {
         }
     }
 
-    /// Cherche un groupe par PGID.
+    /// Finds a group by PGID.
     pub fn find(&self, pgid: PgId) -> Option<&ProcessGroup> {
         self.slots
             .iter()
             .find(|slot| slot.valid.load(Ordering::Acquire) == 1 && slot.pgid == pgid)
     }
 
-    /// Envoie un signal à tous les membres d'un groupe.
+    /// Sends a signal to all members of a group.
     pub fn signal_group(&self, pgid: PgId, sig: crate::process::signal::Signal) {
         use crate::process::core::registry::PROCESS_REGISTRY;
         PROCESS_REGISTRY.for_each(|pcb| {
@@ -127,16 +127,16 @@ impl PGroupTable {
     }
 }
 
-/// Table globale des groupes de processus.
+/// Global process groups table.
 pub static PGROUP_TABLE: PGroupTable = PGroupTable::new();
 
-/// setpgid(2) : place le processus `pid` dans le groupe `pgid`.
+/// setpgid(2): places process `pid` into group `pgid`.
 pub fn setpgid(pid: Pid, pgid: PgId) -> Result<(), PgidError> {
     use crate::process::core::registry::PROCESS_REGISTRY;
     let pcb = PROCESS_REGISTRY
         .find_by_pid(pid)
         .ok_or(PgidError::NoSuchProcess)?;
-    // Ne pas changer le groupe d'un leader de session.
+    // Do not change group of a session leader.
     if pcb.is_session_leader() {
         return Err(PgidError::SessionLeader);
     }

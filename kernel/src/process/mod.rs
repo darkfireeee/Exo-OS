@@ -1,26 +1,26 @@
 // kernel/src/process/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// MODULE PROCESS — Couche 1.5 : Gestion des processus et threads
+// PROCESS MODULE — Layer 1.5: Process and thread management
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// POSITION ARCHITECTURALE (docs/refonte/DOC4) :
-//   Couche 1.5 — dépend de memory/ (Couche 0) + scheduler/ (Couche 1)
-//   Est appelé par : ipc/, fs/ (via traits), arch/syscall
-//   INTERDIT : use crate::fs, use crate::ipc (sauf via trait abstrait)
-//   signal/ : ICI uniquement (RÈGLE SIGNAL-01 DOC1)
+// ARCHITECTURAL POSITION (docs/refonte/DOC4):
+//   Layer 1.5 — depends on memory/ (Layer 0) + scheduler/ (Layer 1)
+//   Called by: ipc/, fs/ (via traits), arch/syscall
+//   FORBIDDEN: use crate::fs, use crate::ipc (except via abstract traits)
+//   signal/: HERE only (RULE SIGNAL-01 DOC1)
 //
-// SOUS-MODULES :
-//   core/       — pid.rs, pcb.rs, tcb.rs (extensions process), registry.rs
+// SUBMODULES:
+//   core/       — pid.rs, pcb.rs, tcb.rs (process extensions), registry.rs
 //   lifecycle/  — create, fork, exec, exit, wait, reap
-//   thread/     — création, join, detach, TLS, pthread_compat
-//   signal/     — delivery, handler, mask, queue, default  ← déplacé de scheduler/
-//   state/      — machine d'états, wakeup (DmaWakeupHandler impl)
+//   thread/     — creation, join, detach, TLS, pthread_compat
+//   signal/     — delivery, handler, mask, queue, default  ← moved from scheduler/
+//   state/      — state machine, wakeup (DmaWakeupHandler impl)
 //   group/      — session, pgrp, job_control
 //   namespace/  — pid_ns, mount_ns, net_ns, uts_ns, user_ns
 //   resource/   — rlimit, usage, cgroup
 //
-// SÉQUENCE D'INIT (step 20 global) :
+// INIT SEQUENCE (global step 20):
 //   1. core::pid::init()
 //   2. core::registry::init()
 //   3. lifecycle::reap::init_reaper()
@@ -28,18 +28,18 @@
 //   5. state::wakeup::register_with_dma()
 //   6. resource::cgroup::init() (idempotent; root already prepared before runqueues)
 //
-// RÈGLES ABSOLUES :
-//   • PROC-01 : exec() via trait ElfLoader abstrait
-//   • PROC-02 : DmaWakeupHandler impl dans state/wakeup.rs
-//   • PROC-03 : signal/ géré ici entièrement
-//   • PROC-04 : signal_pending ÉCRIT par process/signal/, LU par scheduler
-//   • PROC-05 : TCB ProcessThread ≤ 256 bytes additionnel
-//   • PROC-06 : Livraison signal : au retour userspace UNIQUEMENT
-//   • PROC-07 : zombie reaper = kthread dédié
-//   • PROC-08 : fork() flush TLB parent AVANT retour
-//   • PROC-09 : namespace/ = isolation complète PID/net/mount
-//   • PROC-10 : dma_completion_result dans TCB scheduler (AtomicU8)
-//   • unsafe → // SAFETY: obligatoire (regle_bonus.md)
+// ABSOLUTE RULES:
+//   • PROC-01: exec() via abstract ElfLoader trait
+//   • PROC-02: DmaWakeupHandler impl in state/wakeup.rs
+//   • PROC-03: signal/ managed entirely here
+//   • PROC-04: signal_pending WRITTEN by process/signal/, READ by scheduler
+//   • PROC-05: ProcessThread TCB ≤ 256 additional bytes
+//   • PROC-06: Signal delivery: on return to userspace ONLY
+//   • PROC-07: zombie reaper = dedicated kthread
+//   • PROC-08: fork() flushes parent TLB BEFORE return
+//   • PROC-09: namespace/ = full isolation PID/net/mount
+//   • PROC-10: dma_completion_result in scheduler TCB (AtomicU8)
+//   • unsafe → // SAFETY: mandatory (regle_bonus.md)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub mod auxv;
@@ -58,7 +58,7 @@ use crate::memory::OomKillCandidate;
 use crate::rust_core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports principaux
+// Main re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use self::core::pcb::{ProcessControlBlock, ProcessFlags, ProcessState};
@@ -70,16 +70,16 @@ pub use self::signal::delivery::handle_pending_signals;
 pub use self::state::wakeup::{register_with_dma, PROCESS_WAKEUP_HANDLER};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paramètres d'initialisation
+// Initialization parameters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres pour `process::init()`.
+/// Parameters for `process::init()`.
 pub struct ProcessInitParams {
-    /// Nombre max de processus simultanés.
+    /// Maximum number of concurrent processes.
     pub max_pids: usize,
-    /// Nombre max de threads simultanés.
+    /// Maximum number of concurrent threads.
     pub max_tids: usize,
-    /// Stack kernel par thread (bytes, multiple de PAGE_SIZE).
+    /// Kernel stack per thread (bytes, multiple of PAGE_SIZE).
     pub kstack_size: usize,
 }
 
@@ -93,12 +93,12 @@ impl Default for ProcessInitParams {
     }
 }
 
-/// Initialise le sous-système process.
+/// Initializes the process subsystem.
 ///
-/// Appelé depuis `kernel_main` APRÈS `scheduler::init()`.
+/// Called from `kernel_main` AFTER `scheduler::init()`.
 ///
 /// # Safety
-/// Appelé une seule fois depuis le BSP avant activation des APs.
+/// Called once from the BSP before activating APs.
 pub unsafe fn init(params: &ProcessInitParams) {
     self::core::pid::init(params.max_pids, params.max_tids);
     self::core::registry::init(params.max_pids);
@@ -163,7 +163,7 @@ fn register_with_oom() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitaires de processus
+// Process utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Check if a process with given PID is alive (registered and not reaped).

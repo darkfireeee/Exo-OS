@@ -1,14 +1,14 @@
 // kernel/src/process/group/session.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Sessions POSIX — Exo-OS Couche 1.5
+// POSIX sessions — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pid::Pid;
 use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-/// Identifiant de session.
+/// Session identifier.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[repr(transparent)]
 pub struct SessionId(pub u32);
@@ -17,21 +17,21 @@ impl SessionId {
     pub const KERNEL: Self = Self(0);
 }
 
-/// Nombre maximum de sessions simultanées.
+/// Maximum number of simultaneous sessions.
 const MAX_SESSIONS: usize = 1024;
 
-/// Descripteur d'une session POSIX.
+/// POSIX session descriptor.
 #[repr(C)]
 pub struct Session {
-    /// SID = PID du leader de session.
+    /// SID = session leader PID.
     pub sid: SessionId,
-    /// PID du leader de session.
+    /// Session leader PID.
     pub leader_pid: AtomicU32,
-    /// Terminal de contrôle associé (0 = aucun).
+    /// Associated controlling terminal (0 = none).
     pub ctty: AtomicU64,
-    /// Numéro de références.
+    /// Reference count.
     pub refcount: AtomicU32,
-    /// Slot valid.
+    /// Valid slot.
     pub valid: AtomicU32,
 }
 
@@ -47,14 +47,14 @@ impl Session {
     }
 }
 
-/// Table globale des sessions (tableau statique).
+/// Global session table (static array).
 pub struct SessionTable {
     slots: [Session; MAX_SESSIONS],
     lock: SpinLock<()>,
     count: AtomicU32,
 }
 
-// SAFETY : Session ne contient que des atomiques + SpinLock, accès serialisé.
+// SAFETY: Session contains only atomics + SpinLock, serialized access.
 unsafe impl Sync for SessionTable {}
 
 impl Default for SessionTable {
@@ -72,12 +72,12 @@ impl SessionTable {
         }
     }
 
-    /// Crée une nouvelle session avec `leader` comme leader.
+    /// Creates a new session with `leader` as leader.
     pub fn create(&self, leader: Pid) -> Option<SessionId> {
         let _guard = self.lock.lock();
         for slot in &self.slots {
             if slot.valid.load(Ordering::Acquire) == 0 {
-                // SAFETY: write_lock exclusif; slot libre (valid==0), accès unique.
+                // SAFETY: exclusive write_lock; free slot (valid==0), unique access.
                 unsafe {
                     (*(slot as *const Session as *mut Session)).sid = SessionId(leader.0);
                 }
@@ -89,17 +89,17 @@ impl SessionTable {
                 return Some(SessionId(leader.0));
             }
         }
-        None // Max sessions atteint
+        None // Max sessions reached
     }
 
-    /// Cherche une session par SID.
+    /// Finds a session by SID.
     pub fn find(&self, sid: SessionId) -> Option<&Session> {
         self.slots
             .iter()
             .find(|slot| slot.valid.load(Ordering::Acquire) == 1 && slot.sid == sid)
     }
 
-    /// Supprime une session quand son refcount atteint 0.
+    /// Releases a session when its refcount reaches 0.
     pub fn release(&self, sid: SessionId) {
         let _guard = self.lock.lock();
         for slot in &self.slots {
@@ -119,12 +119,12 @@ impl SessionTable {
     }
 }
 
-/// Table globale des sessions.
+/// Global session table.
 pub static SESSION_TABLE: SessionTable = SessionTable::new();
 
-/// setsid(2) : crée une nouvelle session pour le processus courant.
+/// setsid(2): creates a new session for current process.
 pub fn setsid(caller_pid: Pid) -> Result<SessionId, SidError> {
-    // Vérifier que le caller n'est pas déjà leader de groupe.
+    // Verify caller is not already group leader.
     use crate::process::core::registry::PROCESS_REGISTRY;
     let pcb = PROCESS_REGISTRY
         .find_by_pid(caller_pid)

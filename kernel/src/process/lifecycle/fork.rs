@@ -1,19 +1,19 @@
 // kernel/src/process/lifecycle/fork.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// fork() — Duplication de processus Copy-on-Write (Exo-OS Couche 1.5)
+// fork() — Copy-on-Write process duplication (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// fork() sémantique POSIX :
-//   • Copie le processus courant avec CoW sur les pages utilisateur.
-//   • Hérite des fds, signaux masqués, credentials, namespaces.
-//   • Le fils reçoit PID=nouveau / retour=0 ; le parent reçoit PID fils.
+// fork() POSIX semantics:
+//   • Copies current process with CoW on user pages.
+//   • Inherits fds, masked signals, credentials, namespaces.
+//   • Child receives PID=new / return=0; parent receives child PID.
 //
-// RÈGLE PROC-08 : flush TLB parent AVANT retour de fork().
+// RULE PROC-08: flush parent TLB BEFORE return from fork().
 //
-// Couche mémoire :
-//   La duplication de l'espace d'adressage est déléguée à memory/cow/
-//   via le trait abstrait AddressSpaceCloner (injection de dépendance).
+// Memory layer:
+//   Address space duplication is delegated to memory/cow/
+//   via abstract trait AddressSpaceCloner (dependency injection).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[cfg(target_arch = "x86_64")]
@@ -39,25 +39,25 @@ pub use crate::memory::virt::address_space::fork_impl::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ForkFlags — flags CLONE_* Linux-compatibles
+// ForkFlags — Linux-compatible CLONE_* flags
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags contrôlant le comportement de fork/clone.
+/// Flags controlling fork/clone behavior.
 #[derive(Copy, Clone, Default, Debug)]
 pub struct ForkFlags(pub u32);
 
 impl ForkFlags {
-    /// Partager les fds (CLONE_FILES).
+    /// Share fds (CLONE_FILES).
     pub const CLONE_FILES: u32 = 1 << 0;
-    /// Partager l'espace d'adressage (CLONE_VM = clone thread).
+    /// Share address space (CLONE_VM = thread clone).
     pub const CLONE_VM: u32 = 1 << 1;
-    /// Partager les handlers de signaux (CLONE_SIGHAND).
+    /// Share signal handlers (CLONE_SIGHAND).
     pub const CLONE_SIGHAND: u32 = 1 << 2;
-    /// Nouveau namespace PID (CLONE_NEWPID).
+    /// New PID namespace (CLONE_NEWPID).
     pub const CLONE_NEWPID: u32 = 1 << 3;
-    /// Opération vfork (parent bloqué jusqu'au exec).
+    /// vfork operation (parent blocked until exec).
     pub const VFORK: u32 = 1 << 4;
-    /// Thread POSIX (CLONE_THREAD).
+    /// POSIX thread (CLONE_THREAD).
     pub const CLONE_THREAD: u32 = 1 << 5;
 
     pub fn set(self, flag: u32) -> Self {
@@ -69,13 +69,13 @@ impl ForkFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Injection de dépendance vers memory/cow/
+// Dependency injection towards memory/cow/
 // ─────────────────────────────────────────────────────────────────────────────
 
 static ADDR_SPACE_CLONER: Once<&'static dyn AddressSpaceCloner> = Once::new();
 static VFORK_WAIT_QUEUE: WaitQueue = WaitQueue::new();
 
-/// Enregistre l'implémentation du clonage d'espace d'adressage (memory/ au boot).
+/// Registers address space cloning implementation (memory/ at boot).
 pub fn register_addr_space_cloner(cloner: &'static dyn AddressSpaceCloner) {
     ADDR_SPACE_CLONER.call_once(|| cloner);
 }
@@ -157,17 +157,17 @@ fn rollback_child_process_resources(
 
 #[inline]
 fn vfork_shares_address_space(flags: ForkFlags) -> bool {
-    // FIX #25 : VFORK ne PARTAGE PLUS l'espace d'adressage. On le traite comme un
-    // « fork bloquant » : clone CoW séparé (comme fork) + parent suspendu jusqu'à
-    // l'execve de l'enfant (`wait_for_vfork_completion`, déclenché par le flag
-    // VFORK dans dispatch.rs, indépendant de ce choix de partage).
+    // FIX #25: VFORK NO LONGER SHARES address space. Treated as a
+    // "blocking fork": separate CoW clone (like fork) + parent suspended until
+    // child's execve (`wait_for_vfork_completion`, triggered by the VFORK
+    // flag in dispatch.rs, independent of this sharing choice).
     //
-    // Raison : le partage d'AS exposait la mémoire vivante du parent (init) à
-    // l'execve de l'enfant — la course de co-planification #25 corrompait alors
-    // directement l'AS d'init. Avec un clone CoW séparé + parent bloqué, l'AS
-    // d'init est protégée par le CoW ET init ne s'exécute pas pendant l'execve,
-    // fermant la fenêtre de course de façon fiable (couvre tout execve, contrairement
-    // à un sleep fixe). Seul CLONE_VM (threads) partage encore l'AS.
+    // Reason: sharing AS exposed live parent memory (init) to
+    // child's execve — co-scheduling race #25 then directly corrupted
+    // init's AS. With a separate CoW clone + blocked parent, init's AS
+    // is protected by CoW AND init does not execute during execve,
+    // reliably closing the race window (covers all of execve, unlike
+    // a fixed sleep). Only CLONE_VM (threads) still shares AS.
     flags.has(ForkFlags::CLONE_VM)
 }
 
@@ -284,31 +284,31 @@ fn fork_debug_cloned(label: &[u8], cloned_as: &ClonedAddressSpace) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// do_fork — implémentation principale
+// do_fork — main implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres en entrée de do_fork().
+/// Input parameters for do_fork().
 pub struct ForkContext<'a> {
-    /// ProcessThread du processus parent.
+    /// Parent process ProcessThread.
     pub parent_thread: &'a ProcessThread,
-    /// PCB du processus parent.
+    /// Parent process PCB.
     pub parent_pcb: &'a ProcessControlBlock,
-    /// Flags de fork (ForkFlags::*).
+    /// Fork flags (ForkFlags::*).
     pub flags: ForkFlags,
-    /// CPU cible pour le thread fils (typiquement CPU courant).
+    /// Target CPU for child thread (typically current CPU).
     pub target_cpu: u32,
-    /// RIP du fils au retour (après retour syscall, = point de fork).
+    /// Child RIP upon return (after syscall return, = fork point).
     pub child_rip: u64,
-    /// RSP utilisateur du fils.
+    /// Child user RSP.
     pub child_rsp: u64,
-    /// RFLAGS du parent au moment du fork (depuis frame.r11 sauvé par SYSCALL).
-    /// CORRECTION P2-02 : propagé au fils avec masquage sécurisé.
+    /// Parent RFLAGS at fork time (from frame.r11 saved by SYSCALL).
+    /// FIX P2-02: propagated to child with secure masking.
     pub parent_rflags: u64,
-    /// Registres utilisateur à restaurer dans le fils.
+    /// User registers to restore in child.
     ///
-    /// Le wrapper userspace `syscall` ne déclare que `rax`, `rcx` et `r11`
-    /// comme clobbers. Le fils doit donc reprendre avec les mêmes registres
-    /// visibles que le parent, sauf `rax=0`.
+    /// The userspace `syscall` wrapper only declares `rax`, `rcx`, and `r11`
+    /// as clobbers. Child must therefore resume with same visible registers
+    /// as parent, except `rax=0`.
     pub user_rbx: u64,
     pub user_rbp: u64,
     pub user_r12: u64,
@@ -323,22 +323,22 @@ pub struct ForkContext<'a> {
     pub user_r9: u64,
 }
 
-/// Résultat de fork() pour le parent.
+/// fork() result for the parent.
 pub struct ForkResult {
-    /// PID du fils créé.
+    /// Created child PID.
     pub child_pid: Pid,
-    /// TID du thread principal du fils.
+    /// Child main thread TID.
     pub child_tid: Tid,
 }
 
-/// Effectue un fork() POSIX : duplique le processus courant.
+/// Performs a POSIX fork(): duplicates current process.
 ///
-/// # RÈGLE PROC-08
-/// Le TLB parent est flushé AVANT le retour pour invalider les PTEs qui
-/// viennent d'être marquées read-only (CoW).
+/// # RULE PROC-08
+/// Parent TLB is flushed BEFORE return to invalidate PTEs that
+/// have just been marked read-only (CoW).
 ///
 /// # Safety
-/// `ctx.parent_thread` doit pointer vers le thread courant du processus.
+/// `ctx.parent_thread` must point to the current thread of the process.
 pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     fork_trace(b"fork: enter\n");
     let parent = ctx.parent_thread;
@@ -350,7 +350,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         return Err(ForkError::UnsupportedFlag);
     }
 
-    // 1. Allouer PID + TID fils.
+    // 1. Allocate child PID + TID.
     let child_pid_raw = PID_ALLOCATOR.alloc().map_err(|_| ForkError::PidExhausted)?;
     let child_tid_raw = TID_ALLOCATOR.alloc().map_err(|_| {
         PID_ALLOCATOR.free(child_pid_raw);
@@ -361,7 +361,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let child_tid = Tid(child_tid_raw);
     fork_trace(b"fork: pid/tid\n");
 
-    // 2. Cloner l'espace d'adressage (CoW).
+    // 2. Clone address space (CoW).
     let cloner = ADDR_SPACE_CLONER.get().ok_or_else(|| {
         PID_ALLOCATOR.free(child_pid_raw);
         TID_ALLOCATOR.free(child_tid_raw);
@@ -394,7 +394,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_as_pid", parent, parent_pcb);
 
-    // RÈGLE PROC-08 : Flush TLB parent AVANT retour (pages devenues read-only CoW).
+    // RULE PROC-08: Flush parent TLB BEFORE return (pages turned read-only CoW).
     if owns_addr_space {
         cloner.flush_tlb_after_fork(parent_cr3);
     }
@@ -402,7 +402,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_tlb", parent, parent_pcb);
 
-    // 3. Créer le ProcessThread fils.
+    // 3. Create child ProcessThread.
     fork_trace(b"fork: before policy\n");
     let policy = parent.sched_tcb.policy;
     fork_trace(b"fork: after policy\n");
@@ -420,71 +420,71 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let child_thread_ptr = Box::into_raw(child_thread);
     fork_trace(b"fork: thread\n");
 
-    // Configurer le point de retour du fils (RIP + RSP au retour de fork).
-    // SAFETY: child_thread_ptr valide.
+    // Configure child return point (RIP + RSP on fork return).
+    // SAFETY: child_thread_ptr valid.
     unsafe {
         let child_tcb = (*child_thread_ptr).tcb_mut();
         let parent_vruntime = parent.sched_tcb.vruntime.load(Ordering::Acquire);
         child_tcb
             .vruntime
             .store(parent_vruntime.saturating_add(6_000_000), Ordering::Release);
-        // Le fils retourne 0 via la convention de syscall (rax=0 dans le frame).
-        // switch_to_new_thread restaure le stack puis ret vers fork_child_trampoline.
-        // fork_child_trampoline : xor eax,eax ; swapgs ; iretq → userspace.
-        // SAFETY: fork_child_trampoline est défini dans switch_asm.s, lié statiquement.
+        // Child returns 0 via syscall convention (rax=0 in frame).
+        // switch_to_new_thread restores stack then ret to fork_child_trampoline.
+        // fork_child_trampoline: xor eax,eax ; swapgs ; iretq → userspace.
+        // SAFETY: fork_child_trampoline is defined in switch_asm.s, statically linked.
         extern "C" {
             fn fork_child_trampoline();
         }
 
         let kstack_top = (*child_thread_ptr).kernel_stack.top_addr();
-        // Frame complet : 18 × u64 = 144 bytes.
-        // Layout (indices depuis kernel_rsp = kstack_top - 144) :
-        //   [0..48)    = 6 callee-saved regs parent  ← format switch_to_new_thread
-        //   [48]       = fork_child_trampoline        ← adresse ret après 6 pops
-        //   [56..104)  = 6 caller-saved regs restaurés par le trampoline
+        // Full frame: 18 × u64 = 144 bytes.
+        // Layout (indices from kernel_rsp = kstack_top - 144):
+        //   [0..48)    = 6 parent callee-saved regs  ← switch_to_new_thread format
+        //   [48]       = fork_child_trampoline        ← ret address after 6 pops
+        //   [56..104)  = 6 caller-saved regs restored by trampoline
         //   [104..144) = iretq frame (RIP, CS, RFLAGS, RSP, SS)
         let frame_ptr = (kstack_top - 144) as *mut u64;
-        // Callee-saved registers. switch_to_new_thread les dépile avant le ret.
+        // Callee-saved registers. switch_to_new_thread pops them before ret.
         *frame_ptr.add(0) = ctx.user_rbx; // rbx
         *frame_ptr.add(1) = ctx.user_rbp; // rbp
         *frame_ptr.add(2) = ctx.user_r12; // r12
         *frame_ptr.add(3) = ctx.user_r13; // r13
         *frame_ptr.add(4) = ctx.user_r14; // r14
         *frame_ptr.add(5) = ctx.user_r15; // r15
-                                          // Adresse de retour : fork_child_trampoline (exécuté après les 6 pops).
+                                          // Return address: fork_child_trampoline (executed after the 6 pops).
         *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
-        // Registres caller-saved que le wrapper syscall userspace attend préservés.
+        // Caller-saved registers that userspace syscall wrapper expects preserved.
         *frame_ptr.add(7) = ctx.user_rdi;
         *frame_ptr.add(8) = ctx.user_rsi;
         *frame_ptr.add(9) = ctx.user_rdx;
         *frame_ptr.add(10) = ctx.user_r10;
         *frame_ptr.add(11) = ctx.user_r8;
         *frame_ptr.add(12) = ctx.user_r9;
-        // iretq frame (RSP pointe ici à l'entrée fork_child_trampoline).
-        *frame_ptr.add(13) = ctx.child_rip; // RIP  userspace
-        *frame_ptr.add(14) = GDT_USER_CS64 as u64; // CS   ring3 (code64)
+        // iretq frame (RSP points here on entry to fork_child_trampoline).
+        *frame_ptr.add(13) = ctx.child_rip; // Userspace RIP
+        *frame_ptr.add(14) = GDT_USER_CS64 as u64; // CS ring3 (code64)
 
-        // CORRECTION P2-02 : propager les RFLAGS du parent avec masquage sécurisé.
-        // Masque des flags sûrs à hériter (POSIX + sécurité kernel).
-        // - Conserver : CF(0), PF(2), AF(4), ZF(6), SF(7), OF(11), DF(10), AC(18), ID(21)
-        // - Forcer  : IF=1 (bit 9) — le fils doit accepter les interruptions
-        // - Effacer : TF=0 (bit 8) — ne pas tracer le fils si le parent était en trace
-        //             NT=0 (bit 14) — Nested Task flag — jamais hérité
-        //             IOPL=0 (bits 12-13) — jamais hérité en Ring3/capability model
-        //             RF=0 (bit 16) — Resume Flag — jamais hérité
-        //             VM=0 (bit 17) — Virtual 8086 — non supporté
+        // FIX P2-02: propagate parent RFLAGS with secure masking.
+        // Mask of safe flags to inherit (POSIX + kernel security).
+        // - Preserve: CF(0), PF(2), AF(4), ZF(6), SF(7), OF(11), DF(10), AC(18), ID(21)
+        // - Force   : IF=1 (bit 9) — child must accept interrupts
+        // - Clear   : TF=0 (bit 8) — do not trace child if parent was traced
+        //             NT=0 (bit 14) — Nested Task flag — never inherited
+        //             IOPL=0 (bits 12-13) — never inherited in Ring3/capability model
+        //             RF=0 (bit 16) — Resume Flag — never inherited
+        //             VM=0 (bit 17) — Virtual 8086 — unsupported
         const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
         const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200; // IF=1
         const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100; // TF=0, IOPL=0, NT=0, RF=0, VM=0
 
         let child_rflags =
             ((ctx.parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
-        // Garantir que le bit réservé 1 est toujours à 1.
+        // Ensure reserved bit 1 is always 1.
         let child_rflags = child_rflags | 0x0002;
 
-        *frame_ptr.add(15) = child_rflags; // RFLAGS (hérités du parent avec masquage)
-        *frame_ptr.add(16) = ctx.child_rsp; // RSP  userspace
-        *frame_ptr.add(17) = GDT_USER_DS as u64; // SS   ring3
+        *frame_ptr.add(15) = child_rflags; // RFLAGS (inherited from parent with masking)
+        *frame_ptr.add(16) = ctx.child_rsp; // Userspace RSP
+        *frame_ptr.add(17) = GDT_USER_DS as u64; // SS ring3
         child_tcb.kstack_ptr = kstack_top - 144;
         child_tcb.signal_mask.store(
             parent.sched_tcb.signal_mask.load(Ordering::Acquire),
@@ -494,8 +494,8 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_frame", parent, parent_pcb);
 
-    // Copier les adresses utilisateur.
-    // SAFETY: child_thread_ptr valide.
+    // Copy user addresses.
+    // SAFETY: child_thread_ptr valid.
     unsafe {
         (*child_thread_ptr).addresses = parent.addresses;
         let child = &mut *child_thread_ptr;
@@ -513,7 +513,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_addresses", parent, parent_pcb);
 
-    // 4. Créer le PCB fils — hérite des namespaces, credentials, etc.
+    // 4. Create child PCB — inherits namespaces, credentials, etc.
     let parent_creds = *parent_pcb.creds.lock();
     let (fd_limit, cloned_files) = {
         let f = parent_pcb.files.lock();
@@ -527,7 +527,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
                     Some(files)
                 }
                 None => {
-                    // SAFETY: child_thread_ptr provient de Box::into_raw et n'est pas publié.
+                    // SAFETY: child_thread_ptr comes from Box::into_raw and is not published.
                     unsafe {
                         drop(Box::from_raw(child_thread_ptr));
                     }
@@ -551,7 +551,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let mut child_pcb = ProcessControlBlock::try_new(
         child_pid,
         parent_pcb.pid, // ppid = parent pid
-        child_pid,      // tgid = child pid (nouveau process group leader thread)
+        child_pid,      // tgid = child pid (new process group leader thread)
         ThreadId(child_tid_raw as u64),
         parent_creds,
         fd_limit,
@@ -559,7 +559,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         cloned_as.addr_space_ptr,
     )
     .ok_or_else(|| {
-        // SAFETY: child_thread_ptr provient de Box::into_raw et n'est pas publié.
+        // SAFETY: child_thread_ptr comes from Box::into_raw and is not published.
         unsafe {
             drop(Box::from_raw(child_thread_ptr));
         }
@@ -570,14 +570,14 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_pcb", parent, parent_pcb);
 
-    // Copier les fds si !CLONE_FILES.
+    // Copy fds if !CLONE_FILES.
     if let Some(cloned_files) = cloned_files {
         *child_pcb.files.lock() = cloned_files;
     }
     child_pcb.set_name_bytes(&parent_pcb.name_snapshot());
     child_pcb.set_main_thread_ptr(child_thread_ptr);
 
-    // Copier les namespaces.
+    // Copy namespaces.
     child_pcb.pid_ns.clone_from(&parent_pcb.pid_ns);
     child_pcb.mnt_ns.clone_from(&parent_pcb.mnt_ns);
     child_pcb.net_ns.clone_from(&parent_pcb.net_ns);
@@ -586,16 +586,16 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     child_pcb.set_pgroup_id(parent_pcb.pgroup_id());
     child_pcb.set_session_id(parent_pcb.session_id());
 
-    // FIX-SEC-T0.2 : l'enfant HÉRITE la table de capabilities du parent (les caps =
-    // objets ExoFS ouverts + droits délégués). Sans ça, un fork perdrait tous les
-    // accès et `check_object_cap` refuserait toute opération post-fork. inherit_from
-    // copie tous les slots non-libres sous write_lock (révocation par génération
-    // préservée). RÈGLE SEC-CAP-02.
-    // FIX-SEC-T1.0 : héritage à MOINDRE PRIVILÈGE — l'enfant hérite les droits
-    // opérationnels (read/write/…) mais PAS les droits FS privilégiés
-    // (gc/import/snapshot/admin = PRIVILEGED_RIGHTS) : ceux-ci ne se propagent qu'au
-    // travers d'un grant/délégation explicites. Empêche que tout fork (shell, app)
-    // hérite l'admin FS d'init.
+    // FIX-SEC-T0.2: child INHERITS parent capability table (caps =
+    // open ExoFS objects + delegated rights). Without this, a fork would lose all
+    // access and `check_object_cap` would deny any post-fork operation. inherit_from
+    // copies all non-free slots under write_lock (generation-based revocation
+    // preserved). RULE SEC-CAP-02.
+    // FIX-SEC-T1.0: LEAST-PRIVILEGE inheritance — child inherits operational
+    // rights (read/write/…) but NOT privileged FS rights
+    // (gc/import/snapshot/admin = PRIVILEGED_RIGHTS): these only propagate
+    // through explicit grant/delegation. Prevents any fork (shell, app)
+    // from inheriting init's FS admin.
     child_pcb.cap_table =
         alloc::boxed::Box::new(crate::security::capability::CapTable::inherit_from_masked(
             &parent_pcb.cap_table,
@@ -605,19 +605,19 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             crate::security::capability::CapObjectType::FileInode,
         ));
 
-    // FIX-SEC-T1.1 : l'enfant hérite AU MOINS les restrictions zero-trust
-    // (sandbox/pledge) du parent — un process sandboxé ne peut pas s'en échapper
-    // par fork (RÈGLE ZT-03 / SAND-03). No-op si le parent n'est pas restreint.
+    // FIX-SEC-T1.1: child inherits AT LEAST zero-trust restrictions
+    // (sandbox/pledge) from parent — a sandboxed process cannot escape them
+    // via fork (RULE ZT-03 / SAND-03). No-op if parent is not restricted.
     crate::security::zero_trust::inherit_restrictions(parent_pcb.pid.0, child_pid.0);
 
-    // Marquer FORKED.
+    // Mark FORKED.
     child_pcb
         .flags
         .fetch_or(child_process_flags(ctx.flags), Ordering::Release);
     child_pcb.set_state(ProcessState::Running);
     fork_trace(b"fork: pcb state\n");
 
-    // Copier les valeurs brk et SignalTcb / dispositions de signaux POSIX.
+    // Copy brk and SignalTcb values / POSIX signal dispositions.
     child_pcb.brk_start.store(
         parent_pcb.brk_start.load(Ordering::Relaxed),
         Ordering::Relaxed,
@@ -634,9 +634,9 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_setup", parent, parent_pcb);
 
-    // 5. Insérer le fils dans la registry.
-    // NOTE: Si insert échoue, le drop de `child_pcb` appelle `cleanup_all_threads()`
-    // qui libère déjà `child_thread_ptr` et `child_tid_raw`.
+    // 5. Insert child into registry.
+    // NOTE: If insert fails, child_pcb drop calls `cleanup_all_threads()`
+    // which already frees `child_thread_ptr` and `child_tid_raw`.
     PROCESS_REGISTRY.insert(child_pcb).map_err(|_| {
         rollback_child_process_resources(&cloned_as, child_pid_raw, owns_addr_space);
         ForkError::RegistryError
@@ -647,34 +647,33 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_registry", parent, parent_pcb);
 
-    // 6. Enqueue le fils dans la run queue.
+    // 6. Enqueue child in run queue.
     {
         let _preempt = PreemptGuard::new();
         if ctx.target_cpu as usize >= MAX_CPUS {
-            // CPU invalide — le retrait du child_pcb et son drop libèrent thread et tid.
+            // Invalid CPU — child_pcb removal and drop frees thread and tid.
             let _ = PROCESS_REGISTRY.remove(child_pid);
             rollback_child_process_resources(&cloned_as, child_pid_raw, owns_addr_space);
             return Err(ForkError::InvalidCpu);
         }
-        // SAFETY: cpu vérifié, child_thread_ptr valide.
+        // SAFETY: cpu verified, child_thread_ptr valid.
         unsafe {
             let tcb_ptr = core::ptr::NonNull::new_unchecked((*child_thread_ptr).tcb_ptr());
             run_queue(CpuId(ctx.target_cpu)).enqueue(tcb_ptr);
         }
     }
-    // Le fils est runnable dès maintenant, mais le parent doit pouvoir finir le
-    // chemin de retour fork() et publier ses effets immédiats (init/service
-    // bookkeeping, setpgid, vfork wait explicite) avant une préemption forcée.
-    // Le tick scheduler et les points de blocage coopératifs prendront ensuite
-    // le relais sans imposer une politique child-first fragile.
-    // FIX-APP-07 (Security_Application_Audit §GAP-07) : initialiser le budget
-    // exokairos pour le processus enfant immédiatement après son enqueue.
-    // Sans câblage, un processus forké n'avait aucune limite temporelle —
-    // bypass complet de throttle/kill exokairos.
-    // FIX-APP-07: ExoKairos budgets pour le processus enfant.
-    // init_process_budget() n'existe pas en v0.2.0 — l'initialisation
-    // des budgets exokairos se fait implicitement via init_kernel_secret()
-    // au boot. Ici on logue l'événement de fork dans l'audit pour traçabilité.
+    // Child is runnable now, but parent must be able to complete fork() return
+    // path and publish immediate effects (init/service bookkeeping, setpgid,
+    // explicit vfork wait) before forced preemption. Scheduler tick and cooperative
+    // blocking points will then take over without imposing a fragile child-first policy.
+    // FIX-APP-07 (Security_Application_Audit §GAP-07): initialize exokairos budget
+    // for child process immediately after enqueue.
+    // Without wiring, a forked process had no time limit —
+    // complete bypass of exokairos throttle/kill.
+    // FIX-APP-07: ExoKairos budgets for child process.
+    // init_process_budget() does not exist in v0.2.0 — initialization
+    // of exokairos budgets happens implicitly via init_kernel_secret()
+    // at boot. Here we log the fork event in audit for traceability.
     {
         use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
         log_event(
@@ -687,7 +686,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
             AuditOutcome::Allow,
             [0u8; 8],
         );
-        // ExoLedger : trace immuable en plus du ring buffer d'audit.
+        // ExoLedger: immutable trace in addition to audit ring buffer.
         crate::security::exoledger::exo_ledger_append(
             crate::security::exoledger::ActionTag::Custom {
                 tag: 0x666F_726B, // b"fork"

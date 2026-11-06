@@ -1,20 +1,20 @@
 // kernel/src/process/lifecycle/create.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Création de processus et de threads kernel (Exo-OS Couche 1.5)
+// Process and kernel thread creation (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Entrées :
-//   create_process() — crée un processus complet (PCB + thread principal)
-//   create_kthread()  — crée un thread kernel pur (pid=1, KTHREAD flag)
+// Entry points:
+//   create_process() — creates a complete process (PCB + main thread)
+//   create_kthread() — creates a pure kernel thread (pid=1, KTHREAD flag)
 //
-// Séquence create_process() :
-//   1. Allouer un PID + TID.
-//   2. Créer le ProcessThread (stack kernel + TCB scheduler).
-//   3. Créer le ProcessControlBlock.
-//   4. Enregistrer dans PROCESS_REGISTRY.
-//   5. Enregistrer le TCB dans la run queue du scheduler.
-//   6. Retourner le PID.
+// Sequence for create_process():
+//   1. Allocate a PID + TID.
+//   2. Create ProcessThread (kernel stack + scheduler TCB).
+//   3. Create ProcessControlBlock.
+//   4. Register in PROCESS_REGISTRY.
+//   5. Enqueue TCB in the scheduler run queue.
+//   6. Return PID.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pid::{Pid, PidAllocError, Tid, PID_ALLOCATOR, TID_ALLOCATOR};
@@ -22,9 +22,9 @@ use alloc::boxed::Box;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
 
-// Trampoline de démarrage kthread — défini dans scheduler/asm/switch_asm.s.
-// Appelé lors du premier context_switch vers un nouveau kthread.
-// À l'entrée : r12 = entry_fn, r13 = arg. Place arg dans rdi puis jmp *r12.
+// kthread start trampoline — defined in scheduler/asm/switch_asm.s.
+// Called during first context_switch to a new kthread.
+// On entry: r12 = entry_fn, r13 = arg. Places arg in rdi then jmp *r12.
 extern "C" {
     fn kthread_trampoline();
     fn user_entry_trampoline();
@@ -79,20 +79,20 @@ fn sync_process_kernel_half(cr3: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreurs de création
+// Creation errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateError {
-    /// Plus de PIDs disponibles.
+    /// No more PIDs available.
     PidExhausted,
-    /// Plus de TIDs disponibles.
+    /// No more TIDs available.
     TidExhausted,
-    /// Allocation mémoire échouée (stack kernel ou PCB).
+    /// Memory allocation failed (kernel stack or PCB).
     OutOfMemory,
-    /// Erreur d'enregistrement dans la registry.
+    /// Registration error in registry.
     RegistryError,
-    /// CPU cible invalide.
+    /// Invalid target CPU.
     InvalidCpu,
 }
 
@@ -106,26 +106,26 @@ impl From<PidAllocError> for CreateError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CreateParams — paramètres de création d'un processus
+// CreateParams — process creation parameters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres de création d'un processus utilisateur.
+/// User process creation parameters.
 pub struct CreateParams {
-    /// PID du processus parent (0 = init).
+    /// Parent process PID (0 = init).
     pub ppid: Pid,
-    /// Credentials du nouveau processus.
+    /// Credentials of the new process.
     pub creds: Credentials,
-    /// CR3 initial (espace d'adressage vide — rempli par execve).
+    /// Initial CR3 (empty address space — filled by execve).
     pub cr3: u64,
-    /// Pointeur opaque vers l'espace d'adressage initial (peut être 0).
+    /// Opaque pointer to initial address space (can be 0).
     pub addr_space: usize,
-    /// Politique d'ordonnancement du thread principal.
+    /// Main thread scheduling policy.
     pub policy: SchedPolicy,
-    /// Priorité initiale.
+    /// Initial priority.
     pub priority: Priority,
-    /// CPU cible pour l'enfilement initial.
+    /// Target CPU for initial enqueue.
     pub target_cpu: u32,
-    /// Limite de FDs ouverts.
+    /// Open FDs limit.
     pub fd_limit: usize,
 }
 
@@ -162,39 +162,39 @@ fn least_loaded_cpu() -> u32 {
     best_cpu
 }
 
-/// Handle de création — regroupe les objets créés pour les passer de façon atomique.
+/// Creation handle — groups created objects to pass them atomically.
 pub struct ProcessHandle {
-    /// PID du processus créé.
+    /// Created process PID.
     pub pid: Pid,
-    /// TID du thread principal.
+    /// Main thread TID.
     pub tid: Tid,
-    /// Pointeur raw vers le ProcessThread (géré par lifecycle).
+    /// Raw pointer to ProcessThread (managed by lifecycle).
     pub thread: *mut ProcessThread,
 }
 
-// SAFETY: ProcessHandle transféré entre threads uniquement lors de la création.
+// SAFETY: ProcessHandle transferred between threads only during creation.
 unsafe impl Send for ProcessHandle {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// create_process — création complète d'un processus utilisateur
+// create_process — full creation of a user process
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Crée un nouveau processus avec un thread principal.
+/// Creates a new process with a main thread.
 ///
-/// Séquence :
-///   1. Allouer PID + TID.
-///   2. Créer ProcessThread (stack kernel + TCB scheduler).
-///   3. Créer ProcessControlBlock.
-///   4. Insérer dans PROCESS_REGISTRY.
-///   5. Pousser le TCB dans la run queue.
+/// Sequence:
+///   1. Allocate PID + TID.
+///   2. Create ProcessThread (kernel stack + scheduler TCB).
+///   3. Create ProcessControlBlock.
+///   4. Insert into PROCESS_REGISTRY.
+///   5. Push TCB into the run queue.
 ///
 /// # Safety
-/// Appelé depuis le contexte d'un thread kernel avec préemption active.
+/// Called from context of a kernel thread with active preemption.
 pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateError> {
-    // 1. Allouer PID et TID.
+    // 1. Allocate PID and TID.
     let pid_raw = PID_ALLOCATOR.alloc()?;
     let tid_raw = TID_ALLOCATOR.alloc().map_err(|_| {
-        // Libérer le PID déjà alloué avant de retourner l'erreur.
+        // Free already allocated PID before returning error.
         PID_ALLOCATOR.free(pid_raw);
         CreateError::TidExhausted
     })?;
@@ -202,7 +202,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     let pid = Pid(pid_raw);
     let tid = Tid(tid_raw);
 
-    // 2. Créer le ProcessThread (stack kernel alloué ici).
+    // 2. Create ProcessThread (kernel stack allocated here).
     let thread = ProcessThread::new(tid, pid, params.cr3, params.policy, params.priority)
         .ok_or_else(|| {
             PID_ALLOCATOR.free(pid_raw);
@@ -210,14 +210,14 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
             CreateError::OutOfMemory
         })?;
 
-    // Enregistrer le TID POSIX dans le TCB.
+    // Record POSIX TID in TCB.
     let thread_ptr = Box::into_raw(thread);
 
-    // 3. Créer le PCB.
+    // 3. Create PCB.
     let pcb = ProcessControlBlock::try_new(
         pid,
         params.ppid,
-        pid, // tgid = pid pour le thread principal
+        pid, // tgid = pid for main thread
         ThreadId(tid_raw as u64),
         params.creds,
         params.fd_limit,
@@ -225,7 +225,7 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
         params.addr_space,
     )
     .ok_or_else(|| {
-        // SAFETY: thread_ptr a été créé par Box::into_raw juste au-dessus.
+        // SAFETY: thread_ptr was created by Box::into_raw just above.
         unsafe {
             drop(Box::from_raw(thread_ptr));
         }
@@ -235,16 +235,16 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     })?;
     pcb.set_main_thread_ptr(thread_ptr);
 
-    // 4. Insérer dans la registry.
-    // NOTE: Si insert échoue, le drop de `pcb` appelle `cleanup_all_threads()` qui libère
-    // `thread_ptr` et `tid_raw`. Il ne faut donc libérer ici que le `pid_raw`.
+    // 4. Insert into registry.
+    // NOTE: If insert fails, drop of `pcb` calls `cleanup_all_threads()` which frees
+    // `thread_ptr` and `tid_raw`. Therefore, only `pid_raw` must be freed here.
     PROCESS_REGISTRY.insert(pcb).map_err(|_| {
         PID_ALLOCATOR.free(pid_raw);
         CreateError::RegistryError
     })?;
     sync_process_kernel_half(params.cr3);
 
-    // 5. Enregistrer le TCB dans la run queue du CPU cible.
+    // 5. Register TCB into target CPU run queue.
     {
         let _preempt = PreemptGuard::new();
         let cpu_id = if params.target_cpu == 0 {
@@ -253,13 +253,13 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
             params.target_cpu
         };
         if cpu_id as usize >= MAX_CPUS {
-            // CPU invalide — nettoyer et retourner erreur.
-            // Le retrait du PCB de la registry et son drop libèrent thread_ptr et tid_raw.
+            // Invalid CPU — clean up and return error.
+            // Removing PCB from registry and dropping it frees thread_ptr and tid_raw.
             let _ = PROCESS_REGISTRY.remove(pid);
             PID_ALLOCATOR.free(pid_raw);
             return Err(CreateError::InvalidCpu);
         }
-        // SAFETY: cpu_id vérifié, thread_ptr valide, durée de vie gérée par lifecycle.
+        // SAFETY: cpu_id verified, thread_ptr valid, lifetime managed by lifecycle.
         unsafe {
             let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
             run_queue(CpuId(cpu_id)).enqueue(tcb_ptr);
@@ -273,13 +273,13 @@ pub fn create_process(params: &CreateParams) -> Result<ProcessHandle, CreateErro
     })
 }
 
-/// Cree le vrai PID 1 depuis une image ELF deja chargee.
+/// Creates real PID 1 from an already loaded ELF image.
 ///
-/// `pid::init()` reserve PID 1 dans le bitmap: ce chemin n'alloue donc pas de
-/// PID, il publie explicitement le PCB `init` dans la registry puis enfile son
-/// thread principal. Le premier switch vers ce thread passe par
-/// `user_entry_trampoline`, qui prepare les registres ABI minimaux avant l'IRET
-/// ring3.
+/// `pid::init()` reserves PID 1 in bitmap: this path therefore does not allocate a
+/// PID, it explicitly publishes the `init` PCB in registry then enqueues its
+/// main thread. The first switch to this thread goes through
+/// `user_entry_trampoline`, which prepares minimal ABI registers before ring3
+/// IRET.
 pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle, CreateError> {
     if PROCESS_REGISTRY.find_by_pid(Pid::INIT).is_some() {
         return Err(CreateError::RegistryError);
@@ -339,15 +339,15 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
         let frame = kernel_rsp as *mut u64;
         *frame.add(0) = 0; // rbx
         *frame.add(1) = 0; // rbp
-        *frame.add(2) = elf.entry_arg0; // r12 -> rdi par user_entry_trampoline
+        *frame.add(2) = elf.entry_arg0; // r12 -> rdi via user_entry_trampoline
         *frame.add(3) = 0; // r13
         *frame.add(4) = 0; // r14
         *frame.add(5) = 0; // r15
         *frame.add(6) = user_entry_trampoline as *const () as u64;
-        *frame.add(7) = elf.entry_point; // RIP userspace
+        *frame.add(7) = elf.entry_point; // Userspace RIP
         *frame.add(8) = GDT_USER_CS64 as u64; // CS ring3 64-bit
         *frame.add(9) = 0x0202; // RFLAGS: reserved bit + IF
-        *frame.add(10) = elf.initial_stack_top; // RSP userspace
+        *frame.add(10) = elf.initial_stack_top; // Userspace RSP
         *frame.add(11) = GDT_USER_DS as u64; // SS ring3
         thread.sched_tcb.kstack_ptr = kernel_rsp;
     }
@@ -393,10 +393,10 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
     }
     pcb.set_state(ProcessState::Running);
 
-    // FIX-SEC-T0.2/E : init (PID1) = racine de confiance du FS. On lui accorde une
-    // capability admin sur l'objet racine ExoFS (FS_ROOT_OBJECT_ID) → autorise les
-    // opérations globales (gc/quota/snapshot/import) et l'admin. Les serveurs
-    // obtiennent leurs caps par héritage au fork (inherit_from) ou délégation.
+    // FIX-SEC-T0.2/E: init (PID 1) = FS trust root. Grant an admin
+    // capability on the root ExoFS object (FS_ROOT_OBJECT_ID) -> authorizes
+    // global operations (gc/quota/snapshot/import) and admin. Servers
+    // obtain their caps by inheritance at fork (inherit_from) or delegation.
     {
         use crate::fs::exofs::core::rights::{ALL_RIGHTS, RIGHT_ADMIN};
         use crate::security::capability::{CapObjectType, ObjectId, Rights};
@@ -432,41 +432,41 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// create_kthread — création d'un thread kernel dédié
+// create_kthread — creation of a dedicated kernel thread
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres d'un kthread.
+/// Parameters for a kthread.
 pub struct KthreadParams {
-    /// Nom du kthread (pour le debugging).
+    /// Name of the kthread (for debugging).
     pub name: &'static str,
-    /// Fonction d'entrée du kthread.
+    /// Entry function of the kthread.
     pub entry: fn(usize) -> !,
-    /// Argument passé à `entry`.
+    /// Argument passed to `entry`.
     pub arg: usize,
-    /// CPU cible (0 = BSP).
+    /// Target CPU (0 = BSP).
     pub target_cpu: u32,
-    /// Priorité (Normal par défaut).
+    /// Priority (Normal by default).
     pub priority: Priority,
 }
 
-/// Crée un thread kernel (kthread) et l'enfile dans la run queue.
+/// Creates a kernel thread (kthread) and enqueues it into the run queue.
 ///
-/// Les kthreads :
-///   - Appartiennent au domaine noyau (PID 0 côté scheduler).
-///   - N'ont jamais d'espace d'adressage utilisateur.
-///   - Ont le flag KTHREAD positionné dans le TCB.
+/// kthreads:
+///   - Belong to the kernel domain (PID 0 on scheduler side).
+///   - Never have a user address space.
+///   - Have the KTHREAD flag set in TCB.
 ///
 /// # Safety
-/// L'argument `arg` et le pointeur `entry` doivent rester valides
-/// pendant toute la durée de vie du kthread.
+/// The `arg` argument and `entry` pointer must remain valid
+/// throughout the lifetime of the kthread.
 pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
-    // Allouer un TID uniquement (kthread ne consomme pas de PID extra).
+    // Allocate a TID only (kthread does not consume an extra PID).
     let tid_raw = TID_ALLOCATOR
         .alloc()
         .map_err(|_| CreateError::TidExhausted)?;
     let tid = Tid(tid_raw);
 
-    // Créer le ProcessThread avec cr3=0 (espace kernel partagé).
+    // Create ProcessThread with cr3=0 (shared kernel space).
     let thread = ProcessThread::new_kthread(tid, 0).ok_or_else(|| {
         TID_ALLOCATOR.free(tid_raw);
         CreateError::OutOfMemory
@@ -474,13 +474,13 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
 
     let thread_ptr = Box::into_raw(thread);
 
-    // Configurer le point d'entrée dans la stack kernel.
-    // SAFETY: thread_ptr valide, kernel_stack alloué dedans.
+    // Configure entry point in kernel stack.
+    // SAFETY: thread_ptr valid, kernel_stack allocated inside.
     unsafe {
         (*thread_ptr).sched_tcb.priority = params.priority;
 
-        // Frame attendu par switch_to_new_thread lors du PREMIER switch vers ce kthread.
-        // switch_to_new_thread restaure dans cet ordre (SANS MXCSR/FCW) :
+        // Frame expected by switch_to_new_thread during FIRST switch to this kthread.
+        // switch_to_new_thread restores in this order (WITHOUT MXCSR/FCW):
         //   popq %rbx           → rbx     [rsp+ 0]
         //   popq %rbp           → rbp     [rsp+ 8]
         //   popq %r12           → r12     [rsp+16]  ← entry_fn
@@ -489,14 +489,14 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         //   popq %r15           → r15     [rsp+40]
         //   ret                 → rip     [rsp+48]  ← kthread_trampoline
         //
-        // kthread_trampoline fait : mov r13, rdi ; jmp *r12
-        // (arg → rdi, puis saute à entry_fn(arg))
+        // kthread_trampoline does: mov r13, rdi ; jmp *r12
+        // (arg → rdi, then jumps to entry_fn(arg))
         //
-        // NOTE: context_switch_asm utilise un frame de 72 octets AVEC MXCSR+FCW.
-        //       switch_to_new_thread utilise un frame de 56 octets SANS MXCSR+FCW.
-        //       create_kthread() doit utiliser le format switch_to_new_thread (première activation).
+        // NOTE: context_switch_asm uses a 72-byte frame WITH MXCSR+FCW.
+        //       switch_to_new_thread uses a 56-byte frame WITHOUT MXCSR+FCW.
+        //       create_kthread() must use the switch_to_new_thread format (first activation).
         let stack_top = (*thread_ptr).kernel_stack.top_addr();
-        const FRAME: u64 = 7 * 8; // 56 bytes — format switch_to_new_thread
+        const FRAME: u64 = 7 * 8; // 56 bytes — switch_to_new_thread format
         let kernel_rsp = stack_top - FRAME;
         let frame = kernel_rsp as *mut u64;
         *frame.add(0) = 0; // rbx
@@ -508,18 +508,18 @@ pub fn create_kthread(params: &KthreadParams) -> Result<Tid, CreateError> {
         *frame.add(6) = kthread_trampoline as *const () as u64; // return address → trampoline
         (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
     }
-    // Enregistrer dans la run queue.
+    // Register in run queue.
     {
         let _preempt = PreemptGuard::new();
         if params.target_cpu as usize >= MAX_CPUS {
-            // SAFETY: thread_ptr créé via Box::into_raw() ci-dessus, pas encore enfilé.
+            // SAFETY: thread_ptr created via Box::into_raw() above, not yet enqueued.
             unsafe {
                 drop(Box::from_raw(thread_ptr));
             }
             TID_ALLOCATOR.free(tid_raw);
             return Err(CreateError::InvalidCpu);
         }
-        // SAFETY: cpu valide, thread_ptr valide.
+        // SAFETY: valid cpu, valid thread_ptr.
         unsafe {
             let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
             run_queue(CpuId(params.target_cpu)).enqueue(tcb_ptr);

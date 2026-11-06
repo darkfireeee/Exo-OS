@@ -1,27 +1,27 @@
 // kernel/src/process/resource/rlimit.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Limites de ressources POSIX (getrlimit/setrlimit) — Exo-OS Couche 1.5
+// POSIX resource limits (getrlimit/setrlimit) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Valeur infinie (illimité).
+/// Infinite value (unlimited).
 pub const RLIM_INFINITY: u64 = u64::MAX;
 
-/// Ressources limitées (Linux x86_64).
+/// Limited resources (Linux x86_64).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum RLimitKind {
-    CPU = 0,     // Temps CPU en secondes
-    FSIZE = 1,   // Taille fichier max
-    DATA = 2,    // Segment data max
-    STACK = 3,   // Taille pile utilisateur
-    CORE = 4,    // Taille core dump
-    RSS = 5,     // Résidence mémoire
-    NPROC = 6,   // Nombre de processus
-    NOFILE = 7,  // Nombre de fd ouverts
-    MEMLOCK = 8, // Mémoire lockée
-    AS = 9,      // Espace d'adressage
-    LOCKS = 10,  // Verrous fichier
+    CPU = 0,     // CPU time in seconds
+    FSIZE = 1,   // Max file size
+    DATA = 2,    // Max data segment
+    STACK = 3,   // User stack size
+    CORE = 4,    // Core dump size
+    RSS = 5,     // Resident set size
+    NPROC = 6,   // Number of processes
+    NOFILE = 7,  // Number of open fds
+    MEMLOCK = 8, // Locked memory
+    AS = 9,      // Address space
+    LOCKS = 10,  // File locks
     SIGPENDING = 11,
     MSGQUEUE = 12,
     NICE = 13,
@@ -34,7 +34,7 @@ impl RLimitKind {
 
     pub fn from_u8(n: u8) -> Option<Self> {
         if n < 16 {
-            // SAFETY : n < COUNT, tous les discriminants de 0 à 15 sont valides.
+            // SAFETY: n < COUNT, all discriminants from 0 to 15 are valid.
             Some(unsafe { core::mem::transmute::<u8, RLimitKind>(n) })
         } else {
             None
@@ -42,7 +42,7 @@ impl RLimitKind {
     }
 }
 
-/// Paire (soft, hard).
+/// Pair (soft, hard).
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct RLimit {
@@ -56,7 +56,7 @@ impl RLimit {
         hard: RLIM_INFINITY,
     };
 
-    /// Valides par défaut pour un process utilisateur.
+    /// Default values for a user process.
     pub const DEFAULT_NOFILE: Self = Self {
         soft: 1024,
         hard: 4096,
@@ -79,7 +79,7 @@ impl RLimit {
     }
 }
 
-/// Table des limites pour un processus.
+/// Limits table for a process.
 #[derive(Clone)]
 #[repr(C)]
 pub struct RLimitTable {
@@ -93,7 +93,7 @@ impl RLimitTable {
         limits[RLimitKind::STACK as usize] = RLimit::DEFAULT_STACK;
         limits[RLimitKind::NPROC as usize] = RLimit::DEFAULT_NPROC;
         limits[RLimitKind::AS as usize] = RLimit::DEFAULT_AS;
-        // RLIMIT_CORE = 0 par défaut (pas de core dump).
+        // RLIMIT_CORE = 0 by default (no core dump).
         limits[RLimitKind::CORE as usize] = RLimit {
             soft: 0,
             hard: RLIM_INFINITY,
@@ -105,11 +105,11 @@ impl RLimitTable {
         self.limits[kind as usize]
     }
 
-    /// setrlimit(2) : modifie une limite.
-    /// Règle POSIX : soft <= hard, et root peut élever hard.
+    /// setrlimit(2): modifies a limit.
+    /// POSIX rule: soft <= hard, and root can raise hard.
     pub fn set(&mut self, kind: RLimitKind, new: RLimit, is_root: bool) -> Result<(), RlimitError> {
         let current = self.limits[kind as usize];
-        // Vérifications POSIX
+        // POSIX checks
         if new.soft > new.hard {
             return Err(RlimitError::InvalidInput);
         }

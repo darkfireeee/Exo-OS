@@ -1,7 +1,7 @@
 // kernel/src/process/group/job_control.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Contrôle de tache POSIX (tcsetpgrp / SIGTTIN / SIGTTOU) — Exo-OS
+// POSIX job control (tcsetpgrp / SIGTTIN / SIGTTOU) — Exo-OS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::pgrp::PgId;
@@ -16,15 +16,15 @@ pub enum JobControlError {
     NotTerminal,
 }
 
-/// Terminal de contrôle : stocke le PGID du groupe au premier plan.
-/// Un seul TTY de contrôle par session.
+/// Controlling terminal: stores the PGID of the foreground group.
+/// Only one controlling TTY per session.
 #[repr(C)]
 pub struct ControlTerminal {
-    /// PGID du groupe de processus au premier plan.
+    /// Foreground process group PGID.
     pub fg_pgid: AtomicU32,
-    /// Numéro du terminal (minor number).
+    /// Terminal number (minor number).
     pub tty_dev: AtomicU32,
-    /// SID qui élève ce terminal.
+    /// SID elevating this terminal.
     pub owner_sid: AtomicU32,
 }
 
@@ -44,7 +44,7 @@ impl ControlTerminal {
     }
 }
 
-/// Table des terminaux de contrôle (un par session au plus).
+/// Controlling terminals table (at most one per session).
 const MAX_CTTY: usize = 256;
 
 struct CttyTable {
@@ -72,7 +72,7 @@ impl CttyTable {
 
 static CTTY_TABLE: CttyTable = CttyTable::new();
 
-/// tcsetpgrp(fd, pgid) : définit le groupe de premier plan du TTY.
+/// tcsetpgrp(fd, pgid): sets the foreground group of the TTY.
 pub fn tcsetpgrp(caller_pid: Pid, pgid: PgId) -> Result<(), JobControlError> {
     use crate::process::core::registry::PROCESS_REGISTRY;
     let pcb = PROCESS_REGISTRY
@@ -80,12 +80,12 @@ pub fn tcsetpgrp(caller_pid: Pid, pgid: PgId) -> Result<(), JobControlError> {
         .ok_or(JobControlError::NotTerminal)?;
     let sid = pcb.session_id();
 
-    // Trouver le terminal de contrôle de cette session.
+    // Find controlling terminal for this session.
     let ctty = CTTY_TABLE
         .find_by_sid(sid)
         .ok_or(JobControlError::NotTerminal)?;
 
-    // Vérifier que le groupe cible est dans la même session.
+    // Verify that the target group is in the same session.
     use super::pgrp::PGROUP_TABLE;
     let pgrp = PGROUP_TABLE
         .find(pgid)
@@ -98,7 +98,7 @@ pub fn tcsetpgrp(caller_pid: Pid, pgid: PgId) -> Result<(), JobControlError> {
     Ok(())
 }
 
-/// tcgetpgrp() : retourne le PGID du groupe de premier plan.
+/// tcgetpgrp(): returns the PGID of the foreground group.
 pub fn tcgetpgrp(caller_pid: Pid) -> Result<PgId, JobControlError> {
     use crate::process::core::registry::PROCESS_REGISTRY;
     let pcb = PROCESS_REGISTRY
@@ -111,8 +111,8 @@ pub fn tcgetpgrp(caller_pid: Pid) -> Result<PgId, JobControlError> {
     Ok(PgId(ctty.fg_pgid.load(Ordering::Acquire)))
 }
 
-/// Vérifie si `caller_pid` est dans le groupe de premier plan.
-/// Si non et que TOSTOP est actif, envoie SIGTTOU.
+/// Checks if `caller_pid` is in the foreground group.
+/// If not and TOSTOP is active, sends SIGTTOU.
 pub fn check_tty_output(caller_pid: Pid) -> bool {
     use crate::process::core::registry::PROCESS_REGISTRY;
     use crate::process::signal::delivery::send_signal_to_pid;
@@ -125,20 +125,20 @@ pub fn check_tty_output(caller_pid: Pid) -> bool {
     let sid = pcb.session_id();
     let ctty = match CTTY_TABLE.find_by_sid(sid) {
         Some(c) => c,
-        None => return true, // Pas de TTY de contrôle : OK
+        None => return true, // No controlling TTY: OK
     };
     let fg = ctty.fg_pgid.load(Ordering::Acquire);
     let my_pgid = pcb.pgroup_id();
     if my_pgid != fg {
-        // Groupe d'arrière-plan : envoyer SIGTTOU
+        // Background group: send SIGTTOU
         let _ = send_signal_to_pid(caller_pid, Signal::SIGTTOU);
         return false;
     }
     true
 }
 
-/// Vérifie si `caller_pid` peut lire depuis le TTY de contrôle.
-/// Si non, envoie SIGTTIN.
+/// Checks if `caller_pid` can read from the controlling TTY.
+/// If not, sends SIGTTIN.
 pub fn check_tty_input(caller_pid: Pid) -> bool {
     use crate::process::core::registry::PROCESS_REGISTRY;
     use crate::process::signal::delivery::send_signal_to_pid;

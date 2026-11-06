@@ -1,23 +1,23 @@
 // kernel/src/process/namespace/mount_ns.rs
 //
-// Espace de noms de montage (CLONE_NEWNS) — Exo-OS Couche 1.5
-// Note : l'arbre de montage réel est implémenté dans fs/ (Couche 3).
-// Ce module conserve uniquement l'identité et les références.
+// Mount namespace (CLONE_NEWNS) — Exo-OS Layer 1.5
+// Note: the actual mount tree is implemented in fs/ (Layer 3).
+// This module only retains identity and references.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-/// Espace de noms de montage.
+/// Mount namespace.
 #[repr(C)]
 pub struct MountNamespace {
-    /// Identifiant unique.
+    /// Unique identifier.
     pub id: u32,
-    /// Namespace parent (0 = racine).
+    /// Parent namespace (0 = root).
     pub parent_id: u32,
-    /// Nombre de processus utilisant ce namespace.
+    /// Number of processes using this namespace.
     pub refcount: AtomicU32,
-    /// Pointeur opaque vers la racine VFS (résolu par fs/).
+    /// Opaque pointer to VFS root (resolved by fs/).
     pub vfs_root_ptr: AtomicU32,
-    /// Validité.
+    /// Validity.
     pub valid: AtomicU32,
 }
 
@@ -42,5 +42,5 @@ impl MountNamespace {
 
 unsafe impl Sync for MountNamespace {}
 
-/// Namespace de montage racine (partagé par tous les processus init).
+/// Root mount namespace (shared by all init processes).
 pub static ROOT_MOUNT_NS: MountNamespace = MountNamespace::new_root();

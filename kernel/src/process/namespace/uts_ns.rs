@@ -1,6 +1,6 @@
 // kernel/src/process/namespace/uts_ns.rs
 //
-// Espace de noms UTS (nom d'hôte) — Exo-OS Couche 1.5
+// UTS namespace (hostname) — Exo-OS Layer 1.5
 
 use crate::scheduler::sync::spinlock::SpinLock;
 use core::cell::UnsafeCell;
@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 const HOSTNAME_MAX: usize = 64;
 const DOMAINNAME_MAX: usize = 64;
 
-/// Espace de noms UTS.
+/// UTS namespace.
 #[repr(C)]
 pub struct UtsNamespace {
     pub id: u32,
@@ -25,7 +25,7 @@ pub struct UtsNamespace {
 impl UtsNamespace {
     const fn new_root() -> Self {
         let mut hostname = [0u8; HOSTNAME_MAX];
-        // "exo-os" en ASCII
+        // "exo-os" in ASCII
         hostname[0] = b'e';
         hostname[1] = b'x';
         hostname[2] = b'o';
@@ -59,7 +59,7 @@ impl UtsNamespace {
             return false;
         }
         let _g = self.lock.lock();
-        // SAFETY: sous spinlock, UnsafeCell protège l'accès exclusif.
+        // SAFETY: under spinlock, UnsafeCell protects exclusive access.
         unsafe {
             let h: &mut [u8; HOSTNAME_MAX] = &mut *self.hostname.get();
             h[..src.len()].copy_from_slice(src);
@@ -78,5 +78,5 @@ impl UtsNamespace {
 
 unsafe impl Sync for UtsNamespace {}
 
-/// Namespace UTS racine.
+/// Root UTS namespace.
 pub static ROOT_UTS_NS: UtsNamespace = UtsNamespace::new_root();

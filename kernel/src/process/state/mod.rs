@@ -1,6 +1,6 @@
 // kernel/src/process/state/mod.rs
 //
-// Machine à états du processus et pont DMA Wakeup.
+// Process state machine and DMA Wakeup bridge.
 
 pub mod transitions;
 pub mod wakeup;

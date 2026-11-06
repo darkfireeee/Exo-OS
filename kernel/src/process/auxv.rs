@@ -1,89 +1,89 @@
-//! process/auxv.rs — Vecteur auxiliaire (auxv) pour do_exec()
+//! process/auxv.rs — Auxiliary vector (auxv) for do_exec()
 //!
-//! ## Référence spec : ExoFS_Syscall_Analyse.md §8 – BUG-04 / Exécution TLS
+//! ## Spec reference: ExoFS_Syscall_Analyse.md §8 – BUG-04 / TLS execution
 //!
-//! Le vecteur auxv est une liste de paires (type: u64, valeur: u64) placée
-//! sur la pile de l'espace utilisateur lors de `execve()`, après argv et envp.
+//! The auxv vector is a list of pairs (type: u64, value: u64) placed
+//! on the userspace stack during `execve()`, after argv and envp.
 //!
-//! ## Constantes AT_*
-//! Toutes les constantes AT_* Linux standard plus les extensions Exo-OS.
+//! ## AT_* constants
+//! All standard Linux AT_* constants plus Exo-OS extensions.
 //!
-//! ## Fonction push_auxv
-//! Construit le vecteur auxv sur la pile userspace et retourne le nouveau
-//! pointeur de pile après écriture.
+//! ## push_auxv function
+//! Builds the auxv vector on the userspace stack and returns the new
+//! stack pointer after writing.
 //!
-//! ## Règle BUG-04
-//! AT_SIGNAL_TCB (51) doit être inclus pour que exo-rt puisse localiser le
-//! SignalTcb sans adresse fixe (SIG-18 : jamais d'adresse fixe, ASLR).
+//! ## Rule BUG-04
+//! AT_SIGNAL_TCB (51) must be included so exo-rt can locate the
+//! SignalTcb without a fixed address (SIG-18: never a fixed address, ASLR).
 
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes AT_* standard Linux
+// Standard Linux AT_* constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fin du vecteur auxv.
+/// End of auxv vector.
 pub const AT_NULL: u64 = 0;
-/// Ignoré.
+/// Ignored.
 pub const AT_IGNORE: u64 = 1;
-/// Descripteur de fichier du fichier exécutable.
+/// File descriptor of executable file.
 pub const AT_EXECFD: u64 = 2;
-/// Adresse des en-têtes de programme ELF.
+/// Address of ELF program headers.
 pub const AT_PHDR: u64 = 3;
-/// Taille d'une entrée d'en-tête de programme.
+/// Size of a program header entry.
 pub const AT_PHENT: u64 = 4;
-/// Nombre d'en-têtes de programme.
+/// Number of program headers.
 pub const AT_PHNUM: u64 = 5;
-/// Taille d'une page système.
+/// System page size.
 pub const AT_PAGESZ: u64 = 6;
-/// Adresse de base de l'interpréteur ELF.
+/// Base address of ELF interpreter.
 pub const AT_BASE: u64 = 7;
-/// Flags du programme.
+/// Program flags.
 pub const AT_FLAGS: u64 = 8;
-/// Point d'entrée du programme.
+/// Program entry point.
 pub const AT_ENTRY: u64 = 9;
-/// Non-zero si le programme n'est PAR l'ELF interpréteur.
+/// Non-zero if the program is NOT the ELF interpreter.
 pub const AT_NOTELF: u64 = 10;
-/// UID réel.
+/// Real UID.
 pub const AT_UID: u64 = 11;
-/// UID effectif.
+/// Effective UID.
 pub const AT_EUID: u64 = 12;
-/// GID réel.
+/// Real GID.
 pub const AT_GID: u64 = 13;
-/// GID effectif.
+/// Effective GID.
 pub const AT_EGID: u64 = 14;
-/// Chaîne identifiant la plateforme.
+/// Platform identifying string.
 pub const AT_PLATFORM: u64 = 15;
-/// Bitmask HWCAP des capacités hardware.
+/// HWCAP bitmask of hardware capabilities.
 pub const AT_HWCAP: u64 = 16;
-/// Fréquence des ticks de l'horloge.
+/// Clock tick frequency.
 pub const AT_CLKTCK: u64 = 17;
-/// Adresse virtuelle du fichier vDSO.
+/// Virtual address of vDSO file.
 pub const AT_SYSINFO: u64 = 32;
-/// Adresse de la page ELF du vDSO (pour fast-path clock_gettime).
+/// Address of vDSO ELF page (for fast-path clock_gettime).
 pub const AT_SYSINFO_EHDR: u64 = 33;
-/// Bitmask HWCAP2 étendu.
+/// Extended HWCAP2 bitmask.
 pub const AT_HWCAP2: u64 = 26;
-/// Pointeur vers 16 bytes de données aléatoires (cookie sécurité).
+/// Pointer to 16 bytes of random data (security cookie).
 pub const AT_RANDOM: u64 = 25;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Extensions Exo-OS
+// Exo-OS extensions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresse virtuelle du SignalTcb (SIG-18 — jamais fixe, ASLR).
-/// Utilisé par exo-rt pour localiser les handlers de signaux.
+/// Virtual address of SignalTcb (SIG-18 — never fixed, ASLR).
+/// Used by exo-rt to locate signal handlers.
 pub const AT_SIGNAL_TCB: u64 = 51;
 
-/// Token de capability initial du processus (Exo-OS security layer).
-/// Passé par le noyau lors de exec() depuis init_server.
+/// Initial process capability token (Exo-OS security layer).
+/// Passed by kernel during exec() from init_server.
 pub const AT_CAP_TOKEN: u64 = 52;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structure auxv
+// auxv structure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une paire (type, valeur) du vecteur auxiliaire.
+/// An auxiliary vector pair (type, value).
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct AuxEntry {
@@ -96,7 +96,7 @@ impl AuxEntry {
     pub const fn new(a_type: u64, a_val: u64) -> Self {
         Self { a_type, a_val }
     }
-    /// Entrée de terminaison.
+    /// Terminating entry.
     #[inline]
     pub const fn null() -> Self {
         Self {
@@ -107,48 +107,48 @@ impl AuxEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Paramètres de construction du vecteur auxv
+// auxv vector build parameters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Informations ELF nécessaires à la construction du vecteur auxv.
+/// ELF information required to build the auxv vector.
 pub struct AuxvParams {
-    /// Adresse des en-têtes de programme (PT_PHDR ou calculée depuis EHDR).
+    /// Address of program headers (PT_PHDR or computed from EHDR).
     pub phdr_vaddr: u64,
-    /// Nombre d'entrées de programme (e_phnum).
+    /// Number of program entries (e_phnum).
     pub phnum: u64,
-    /// Point d'entrée du programme (e_entry, après relocation pour PIE).
+    /// Program entry point (e_entry, after relocation for PIE).
     pub entry_vaddr: u64,
-    /// Adresse de base de l'interpréteur (ld-linux, ld-exo).
+    /// Interpreter base address (ld-linux, ld-exo).
     pub interp_base: u64,
-    /// Adresse de la page ELF vDSO (pour fast-path syscalls).
+    /// vDSO ELF page address (for fast-path syscalls).
     pub vdso_ehdr_vaddr: u64,
-    /// Adresse du SignalTcb mappé en userspace (SIG-18).
+    /// Address of SignalTcb mapped in userspace (SIG-18).
     pub signal_tcb_vaddr: u64,
-    /// Token de capability initial.
+    /// Initial capability token.
     pub cap_token: u64,
-    /// UID/GID du processus.
+    /// Process UID/GID.
     pub uid: u32,
     pub gid: u32,
-    /// Pointeur vers 16 bytes aléatoires DÉJÀ sur la pile.
+    /// Pointer to 16 random bytes ALREADY on the stack.
     pub random_ptr: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Construction du vecteur auxv
+// auxv vector construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Construit la liste des entrées auxv à partir des paramètres d'exécution.
+/// Builds the list of auxv entries from execution parameters.
 ///
-/// Retourne un Vec<AuxEntry> à sérialiser sur la pile userspace.
-/// OOM-02 : try_reserve explicite.
+/// Returns a Vec<AuxEntry> to serialize onto the userspace stack.
+/// OOM-02: explicit try_reserve.
 #[allow(clippy::result_unit_err)]
 pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     let mut v: Vec<AuxEntry> = Vec::new();
-    // Nombre maximal connu : ~16 entrées + AT_NULL.
+    // Maximum known count: ~16 entries + AT_NULL.
     v.try_reserve(20).map_err(|_| ())?;
 
     v.push(AuxEntry::new(AT_PHDR, params.phdr_vaddr));
-    v.push(AuxEntry::new(AT_PHENT, 56)); // Elf64_Phdr = 56 bytes standard
+    v.push(AuxEntry::new(AT_PHENT, 56)); // Elf64_Phdr = standard 56 bytes
     v.push(AuxEntry::new(AT_PHNUM, params.phnum));
     v.push(AuxEntry::new(AT_PAGESZ, 4096));
     v.push(AuxEntry::new(AT_BASE, params.interp_base));
@@ -162,12 +162,12 @@ pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     v.push(AuxEntry::new(AT_CLKTCK, 100));
     v.push(AuxEntry::new(AT_HWCAP, 0));
 
-    // vDSO : présent seulement si l'adresse de la page est non nulle.
+    // vDSO: present only if the page address is non-zero.
     if params.vdso_ehdr_vaddr != 0 {
         v.push(AuxEntry::new(AT_SYSINFO_EHDR, params.vdso_ehdr_vaddr));
     }
 
-    // Extensions Exo-OS
+    // Exo-OS extensions
     if params.signal_tcb_vaddr != 0 {
         v.push(AuxEntry::new(AT_SIGNAL_TCB, params.signal_tcb_vaddr));
     }
@@ -175,14 +175,14 @@ pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
         v.push(AuxEntry::new(AT_CAP_TOKEN, params.cap_token));
     }
 
-    // Terminaison obligatoire
+    // Mandatory termination
     v.push(AuxEntry::null());
     Ok(v)
 }
 
-/// Sérialise le vecteur auxv en bytes (pour copy_to_user sur la pile).
+/// Serializes the auxv vector into bytes (for copy_to_user onto the stack).
 ///
-/// RECUR-01 : while, pas de for.
+/// RECUR-01: while, no for.
 #[allow(clippy::result_unit_err)]
 pub fn serialize_auxv(entries: &[AuxEntry]) -> Result<Vec<u8>, ()> {
     let byte_count = entries
@@ -194,7 +194,7 @@ pub fn serialize_auxv(entries: &[AuxEntry]) -> Result<Vec<u8>, ()> {
     let mut i = 0usize;
     while i < entries.len() {
         let e = &entries[i];
-        // SAFETY: AuxEntry est #[repr(C)] — layout binaire stable.
+        // SAFETY: AuxEntry is #[repr(C)] — stable binary layout.
         let bytes = unsafe {
             core::slice::from_raw_parts(
                 e as *const AuxEntry as *const u8,
@@ -212,27 +212,27 @@ pub fn serialize_auxv(entries: &[AuxEntry]) -> Result<Vec<u8>, ()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// push_auxv : point d'entrée pour do_exec()
+// push_auxv: entry point for do_exec()
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Écrit le vecteur auxv sur la pile userspace et retourne le SP résultant.
+/// Writes the auxv vector onto the userspace stack and returns the resulting SP.
 ///
-/// `stack_top` : pointeur vers le sommet de la pile AVANT l'écriture auxv.
-/// Retourne le nouveau SP (stack_top - taille_auxv), aligné sur 8 bytes.
+/// `stack_top`: pointer to top of stack BEFORE writing auxv.
+/// Returns the new SP (stack_top - auxv_size), aligned to 8 bytes.
 ///
-/// ## Usage dans do_exec()
+/// ## Usage in do_exec()
 /// ```ignore
 /// let new_sp = push_auxv(user_stack_top, &params)?;
-/// // Puis écrire environ/argv au-dessus de new_sp.
+/// // Then write environ/argv above new_sp.
 /// ```
 #[allow(clippy::result_unit_err)]
 pub fn push_auxv(stack_top: u64, params: &AuxvParams) -> Result<u64, ()> {
     let entries = build_auxv(params)?;
     let bytes = serialize_auxv(&entries)?;
     let size = bytes.len() as u64;
-    // Aligner vers le bas sur 8 bytes.
+    // Align downwards to 8 bytes.
     let sp = (stack_top.saturating_sub(size)) & !7u64;
-    // Écrire via copy_to_user (valide le pointeur avant l'écriture).
+    // Write via copy_to_user (validates pointer before writing).
     match crate::syscall::validation::copy_to_user(sp as *mut u8, bytes.as_ptr(), bytes.len()) {
         Ok(_) => Ok(sp),
         Err(_) => Err(()),

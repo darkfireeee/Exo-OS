@@ -1,7 +1,7 @@
 // kernel/src/process/core/mod.rs
 //
-// Sous-module core/ du module process/ — types fondamentaux.
-// Ne dépend que de memory/ et scheduler/.
+// Core submodule of the process/ module — fundamental types.
+// Only depends on memory/ and scheduler/.
 
 pub mod pcb;
 pub mod pid;

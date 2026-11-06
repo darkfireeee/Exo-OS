@@ -1,51 +1,51 @@
 // kernel/src/process/resource/usage.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Comptabilité des ressources (getrusage) — Exo-OS Couche 1.5
+// Resource accounting (getrusage) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Cible de getrusage(2).
+/// Target for getrusage(2).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(i32)]
 pub enum RUsageWho {
-    /// Processus courant.
+    /// Current process.
     RSelf = 0,
-    /// Processus enfants terminés.
+    /// Terminated child processes.
     RChildren = -1,
-    /// Thread courant.
+    /// Current thread.
     RThread = 1,
 }
 
-/// Statistiques de ressource (struct rusage POSIX).
+/// Resource statistics (POSIX struct rusage).
 #[repr(C)]
 pub struct RUsage {
-    /// Temps CPU utilisateur (µs).
+    /// User CPU time (µs).
     pub utime_us: AtomicU64,
-    /// Temps CPU système (µs).
+    /// System CPU time (µs).
     pub stime_us: AtomicU64,
-    /// Utilisation mémoire maximale (RSS en pages).
+    /// Maximum memory usage (RSS in pages).
     pub maxrss_pages: AtomicU64,
-    /// Fautes de page mineures.
+    /// Minor page faults.
     pub minor_faults: AtomicU64,
-    /// Fautes de page majeures.
+    /// Major page faults.
     pub major_faults: AtomicU64,
-    /// Commutations de contexte volontaires.
+    /// Voluntary context switches.
     pub vol_ctx_switches: AtomicU64,
-    /// Commutations de contexte non volontaires.
+    /// Involuntary context switches.
     pub invol_ctx_switches: AtomicU64,
-    /// Nombre de syscalls.
+    /// Number of syscalls.
     pub syscalls: AtomicU64,
-    /// Nombre d'appels read().
+    /// Number of read() calls.
     pub inblock: AtomicU64,
-    /// Nombre d'appels write().
+    /// Number of write() calls.
     pub outblock: AtomicU64,
-    /// Signaux reçus.
+    /// Signals received.
     pub signals_received: AtomicU64,
-    /// Nombre de messages IPC envoyés.
+    /// Number of IPC messages sent.
     pub msgsnd: AtomicU64,
-    /// Nombre de messages IPC reçus.
+    /// Number of IPC messages received.
     pub msgrcv: AtomicU64,
 }
 
@@ -74,7 +74,7 @@ impl RUsage {
         }
     }
 
-    // Les méthodes de mise à jour sont des wrappers atomiques :
+    // Update methods are atomic wrappers:
 
     pub fn add_utime(&self, us: u64) {
         self.utime_us.fetch_add(us, Ordering::Relaxed);
@@ -118,7 +118,7 @@ impl RUsage {
         self.signals_received.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Accumule les statistiques d'un enfant terminé dans les statistiques enfant.
+    /// Accumulates statistics of a terminated child into child statistics.
     pub fn accumulate_child(&self, child: &RUsage) {
         self.utime_us
             .fetch_add(child.utime_us.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -134,7 +134,7 @@ impl RUsage {
         );
     }
 
-    /// Copie snapshot vers un buffer C-style (pour syscall getrusage).
+    /// Copies snapshot to a C-style buffer (for getrusage syscall).
     pub fn snapshot(&self) -> RUsageSnapshot {
         RUsageSnapshot {
             utime_us: self.utime_us.load(Ordering::Relaxed),
@@ -154,7 +154,7 @@ impl RUsage {
     }
 }
 
-/// Snapshot non-atomique de RUsage (pour copie vers userland).
+/// Non-atomic snapshot of RUsage (for copying to userland).
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct RUsageSnapshot {

@@ -1,6 +1,6 @@
 // kernel/src/process/lifecycle/mod.rs
 //
-// Sous-module lifecycle/ — cycle de vie des processus/threads.
+// Submodule lifecycle/ — process/thread life cycle.
 
 pub mod create;
 pub mod exec;

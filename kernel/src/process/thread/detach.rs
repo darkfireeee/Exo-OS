@@ -1,33 +1,33 @@
 // kernel/src/process/thread/detach.rs
 //
-// pthread_detach — marque un thread comme détaché.
-// Un thread détaché libère ses ressources automatiquement à la terminaison.
-// Aucun join() n'est possible après detach().
+// pthread_detach — marks a thread as detached.
+// A detached thread automatically frees its resources upon termination.
+// No join() is possible after detach().
 
 use crate::process::core::tcb::ProcessThread;
 use core::sync::atomic::Ordering;
 
-/// Erreur de detach.
+/// Detach error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetachError {
-    /// Déjà détaché.
+    /// Already detached.
     AlreadyDetached,
-    /// Déjà joiné (join en cours).
+    /// Already joined (join in progress).
     JoinInProgress,
-    /// Pointeur invalide.
+    /// Invalid pointer.
     InvalidThread,
 }
 
-/// Détache le thread cible.
-/// Après un appel réussi, le thread libère ses ressources automatiquement.
+/// Detaches target thread.
+/// After a successful call, the thread frees its resources automatically.
 ///
 /// # Safety
-/// `target` doit pointer vers un ProcessThread valide.
+/// `target` must point to a valid ProcessThread.
 pub unsafe fn thread_detach(target: *mut ProcessThread) -> Result<(), DetachError> {
-    // SAFETY: target garanti valide par l'appelant.
+    // SAFETY: target is guaranteed valid by caller.
     let thread = unsafe { &*target };
 
-    // CAS : false → true (atomique).
+    // CAS: false -> true (atomic).
     match thread
         .detached
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
@@ -37,7 +37,7 @@ pub unsafe fn thread_detach(target: *mut ProcessThread) -> Result<(), DetachErro
     }
 }
 
-/// Vérifie si un thread est détaché.
+/// Checks if a thread is detached.
 #[inline(always)]
 pub fn is_detached(thread: &ProcessThread) -> bool {
     thread.detached.load(Ordering::Relaxed)

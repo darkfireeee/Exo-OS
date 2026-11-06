@@ -1,7 +1,7 @@
 // kernel/src/process/signal/mod.rs
 //
-// Module signal/ — déplacé depuis scheduler/ (RÈGLE SIGNAL-01 DOC1).
-// Signaux POSIX = cycle de vie processus, pas scheduling.
+// Module signal/ — moved from scheduler/ (RULE SIGNAL-01 DOC1).
+// POSIX signals = process lifecycle, not scheduling.
 
 pub mod default;
 pub mod delivery;

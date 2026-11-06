@@ -1,14 +1,14 @@
-//! # process/core/pcb/mod.rs — ProcessControlBlock (Exo-OS Couche 1.5)
+//! # process/core/pcb/mod.rs — ProcessControlBlock (Exo-OS Layer 1.5)
 //!
-//! Le PCB est partagé entre tous les threads d'un même processus.
-//! Accès protégé par un spinlock interne ; les champs atomiques sont lus
-//! sans verrou depuis les hot paths (scheduler, signal delivery).
+//! The PCB is shared between all threads of the same process.
+//! Access protected by an internal spinlock; atomic fields are read
+//! lock-free from hot paths (scheduler, signal delivery).
 //!
-//! RÈGLES :
-//!   • Jamais d'import fs/ ou ipc/ directs — traits abstraits uniquement.
-//!   • PCB libéré via RAII (Drop) avec cleanup ordonné.
-//!   • Les champs file_table et mmap_regions sont des index opaques
-//!     enregistrés as handle — pas de type concret fs/.
+//! RULES:
+//!   • Never direct imports of fs/ or ipc/ — abstract traits only.
+//!   • PCB released via RAII (Drop) with orderly cleanup.
+//!   • file_table and mmap_regions fields are opaque indexes
+//!     registered as handles — no concrete fs/ type.
 
 pub mod file_table;
 pub mod types;
@@ -28,101 +28,101 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::table::CapTable;
 use types::try_box_new;
 
-/// Process Control Block — structure centrale par processus.
+/// Process Control Block — central per-process structure.
 ///
-/// Partagée entre tous les threads du processus.
-/// Protégée par son propre spinlock pour les champs mutables non atomiques.
+/// Shared between all threads of the process.
+/// Protected by its own spinlock for non-atomic mutable fields.
 pub struct ProcessControlBlock {
-    // ── Identité ──────────────────────────────────────────────────────────────
-    /// PID du processus.
+    // ── Identity ──────────────────────────────────────────────────────────────
+    /// Process PID.
     pub pid: Pid,
-    /// Nom court issu du binaire exécuté, exposé par SYS_EXO_PROCESS_LIST.
+    /// Short name from executed binary, exposed by SYS_EXO_PROCESS_LIST.
     pub name: SpinLock<[u8; PROCESS_NAME_LEN]>,
-    /// PID du processus parent.
+    /// Parent process PID.
     pub ppid: AtomicU32,
-    /// PID du leader de thread group (= pid du premier thread, tgid POSIX).
+    /// Thread group leader PID (= first thread's pid, POSIX tgid).
     pub tgid: Pid,
     /// Session ID.
     pub sid: AtomicU32,
     /// Process group ID.
     pub pgid: AtomicU32,
 
-    // ── État ──────────────────────────────────────────────────────────────────
-    /// État courant du processus.
+    // ── State ─────────────────────────────────────────────────────────────────
+    /// Current process state.
     pub state: AtomicU32, // ProcessState as u32
-    /// Flags de processus (process_flags::*).
+    /// Process flags (process_flags::*).
     pub flags: AtomicU32,
-    /// Code de sortie (renseigné par exit()).
+    /// Exit code (populated by exit()).
     pub exit_code: AtomicU32,
-    /// Umask POSIX par processus.
+    /// POSIX umask per process.
     pub umask: AtomicU32,
 
     // ── Threads ───────────────────────────────────────────────────────────────
-    /// Nombre de threads actifs dans ce processus.
+    /// Number of active threads in this process.
     pub thread_count: AtomicU32,
-    /// ID du thread principal (TID = PID au sens POSIX).
+    /// Main thread ID (TID = PID in the POSIX sense).
     pub main_thread: ThreadId,
-    /// Registre borné des threads du processus, utilisé par exit_group().
+    /// Bounded register of process threads, used by exit_group().
     pub thread_slots:
         [AtomicPtr<crate::process::core::tcb::ProcessThread>; MAX_THREADS_PER_PROCESS],
 
-    // ── Ressources ────────────────────────────────────────────────────────────
+    // ── Resources ─────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
     pub creds: SpinLock<Credentials>,
-    /// Table des fichiers ouverts.
+    /// Open file table.
     pub files: SpinLock<OpenFileTable>,
 
-    // ── Mémoire virtuelle ──────────────────────────────────────────────────────
-    /// Pointeur opaque vers l'espace d'adressage virtuel (géré par memory/virt/).
+    // ── Virtual memory ────────────────────────────────────────────────────────
+    /// Opaque pointer to virtual address space (managed by memory/virt/).
     pub address_space: AtomicUsize, // *mut opaque
-    /// CR3 courant (base de la PML4 physique).
+    /// Current CR3 (physical PML4 base).
     pub cr3: AtomicU64,
-    /// Break courant absolu du heap utilisateur.
+    /// Absolute current break of user heap.
     pub brk_current: AtomicU64,
-    /// Break initial absolu publié par le chargeur ELF.
+    /// Absolute initial break published by ELF loader.
     pub brk_start: AtomicU64,
 
-    // ── Compteurs de performance ───────────────────────────────────────────────
-    /// Temps CPU utilisateur total (ns).
+    // ── Performance counters ──────────────────────────────────────────────────
+    /// Total user CPU time (ns).
     pub utime_ns: AtomicU64,
-    /// Temps CPU système total (ns).
+    /// Total system CPU time (ns).
     pub stime_ns: AtomicU64,
     /// Major page faults (swap-in).
     pub major_faults: AtomicU64,
     /// Minor page faults (demand paging).
     pub minor_faults: AtomicU64,
-    /// Octets lus depuis des devices.
+    /// Bytes read from devices.
     pub io_read_bytes: AtomicU64,
-    /// Octets écrits vers des devices.
+    /// Bytes written to devices.
     pub io_write_bytes: AtomicU64,
 
-    // ── Signaux ────────────────────────────────────────────────────────────────
-    /// Table des handlers de signaux installés (partagée entre tous les threads).
+    // ── Signals ───────────────────────────────────────────────────────────────
+    /// Table of installed signal handlers (shared across all threads).
     pub sig_handlers: SpinLock<SigHandlerTable>,
-    /// Adresse virtuelle de la page SignalTcb partagée Kernel/Userspace (AT_SIGNAL_TCB = 51).
+    /// Virtual address of shared Kernel/Userspace SignalTcb page (AT_SIGNAL_TCB = 51).
     pub signal_tcb_vaddr: AtomicU64,
-    /// Pointeur vers le ProcessThread principal (TID = PID).
+    /// Pointer to main ProcessThread (TID = PID).
     pub main_thread_rawptr: AtomicPtr<crate::process::core::tcb::ProcessThread>,
 
     // ── Namespaces ────────────────────────────────────────────────────────────
-    /// Index (handle) dans la table de PID namespaces.
+    /// Index (handle) in PID namespaces table.
     pub pid_ns: u32,
-    /// Index dans la table de mount namespaces.
+    /// Index in mount namespaces table.
     pub mnt_ns: u32,
-    /// Index dans la table de net namespaces.
+    /// Index in net namespaces table.
     pub net_ns: u32,
-    /// Index dans la table d'UTS namespaces.
+    /// Index in UTS namespaces table.
     pub uts_ns: u32,
-    /// Index dans la table de user namespaces.
+    /// Index in user namespaces table.
     pub user_ns: u32,
 
     // ── Capabilities (FIX-P2-A03) ─────────────────────────────────────────
-    /// Table de capabilities propre au processus.
+    /// Process-specific capability table.
     pub cap_table: Box<CapTable>,
 }
 
 impl ProcessControlBlock {
-    /// Crée un nouveau PCB pour `fork()` / `create_process()`.
+    /// Creates a new PCB for `fork()` / `create_process()`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pid: Pid,
@@ -147,7 +147,7 @@ impl ProcessControlBlock {
         .expect("ProcessControlBlock::new: allocation échouée")
     }
 
-    /// Crée un PCB sans paniquer en cas d'OOM.
+    /// Creates a PCB without panicking on OOM.
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         pid: Pid,
@@ -199,7 +199,7 @@ impl ProcessControlBlock {
         })
     }
 
-    // ── Accesseurs d'état ──────────────────────────────────────────────────────
+    // ── State accessors ───────────────────────────────────────────────────────
 
     #[inline]
     fn copy_normalized_name(dst: &mut [u8; PROCESS_NAME_LEN], src: &[u8]) -> usize {
@@ -283,7 +283,7 @@ impl ProcessControlBlock {
 
     #[inline(always)]
     pub fn state(&self) -> ProcessState {
-        // SAFETY: seules des valeurs ProcessState valides sont stockées via set_state.
+        // SAFETY: only valid ProcessState values are stored via set_state.
         unsafe { core::mem::transmute(self.state.load(Ordering::Acquire) as u8) }
     }
 
@@ -308,58 +308,58 @@ impl ProcessControlBlock {
             .fetch_or(process_flags::EXITING, Ordering::Release);
     }
 
-    /// Lit l'umask POSIX du processus.
+    /// Reads process POSIX umask.
     #[inline(always)]
     pub fn umask(&self) -> u32 {
         self.umask.load(Ordering::Acquire)
     }
 
-    /// Remplace l'umask POSIX et retourne l'ancienne valeur.
+    /// Replaces POSIX umask and returns previous value.
     #[inline(always)]
     pub fn swap_umask(&self, mask: u32) -> u32 {
         self.umask.swap(mask & 0o777, Ordering::AcqRel)
     }
 
-    /// Incrémente le compteur de threads actifs.
+    /// Increments active thread count.
     #[inline(always)]
     pub fn inc_threads(&self) -> u32 {
         self.thread_count.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Décrémente et retourne le nouveau compteur.
+    /// Decrements and returns new thread count.
     #[inline(always)]
     pub fn dec_threads(&self) -> u32 {
         self.thread_count.fetch_sub(1, Ordering::Relaxed) - 1
     }
 
-    /// Accumule le temps CPU utilisateur (appelé lors de context switch).
+    /// Accumulates user CPU time (called on context switch).
     #[inline(always)]
     pub fn add_utime(&self, ns: u64) {
         self.utime_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
-    /// Accumule le temps CPU système.
+    /// Accumulates system CPU time.
     #[inline(always)]
     pub fn add_stime(&self, ns: u64) {
         self.stime_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
-    /// Retourne true si le processus est root (euid == 0).
+    /// Returns true if process is root (euid == 0).
     pub fn is_root(&self) -> bool {
         self.creds.lock().is_root()
     }
 
     // ────────────────────────────────────────────────────────────────────────────
-    // Mutateurs de credentials POSIX
+    // POSIX credentials mutators
     // ────────────────────────────────────────────────────────────────────────────
 
-    /// Retourne une copie des credentials courants.
+    /// Returns a copy of current credentials.
     #[inline]
     pub fn get_creds(&self) -> Credentials {
         *self.creds.lock()
     }
 
-    /// `setuid(uid)` — met à jour uid et fsuid.
+    /// `setuid(uid)` — updates uid and fsuid.
     #[inline]
     pub fn set_uid(&self, uid: u32) {
         let mut c = self.creds.lock();
@@ -367,7 +367,7 @@ impl ProcessControlBlock {
         c.fsuid = uid;
     }
 
-    /// `setgid(gid)` — met à jour gid et fsgid.
+    /// `setgid(gid)` — updates gid and fsgid.
     #[inline]
     pub fn set_gid(&self, gid: u32) {
         let mut c = self.creds.lock();
@@ -399,7 +399,7 @@ impl ProcessControlBlock {
         self.creds.lock().fsgid = fsgid;
     }
 
-    /// `setresuid(ruid, euid, suid)` — -1 signifie "ne pas changer".
+    /// `setresuid(ruid, euid, suid)` — u32::MAX means "do not change".
     #[inline]
     pub fn set_resuid(&self, ruid: u32, euid: u32, suid: u32) {
         let mut c = self.creds.lock();
@@ -415,7 +415,7 @@ impl ProcessControlBlock {
         }
     }
 
-    /// `setresgid(rgid, egid, sgid)` — u32::MAX signifie "ne pas changer".
+    /// `setresgid(rgid, egid, sgid)` — u32::MAX means "do not change".
     #[inline]
     pub fn set_resgid(&self, rgid: u32, egid: u32, sgid: u32) {
         let mut c = self.creds.lock();
@@ -431,23 +431,23 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Pointeur vers l'espace d'adressage (opaque).
+    /// Pointer to address space (opaque).
     #[inline(always)]
     pub fn address_space_ptr(&self) -> *mut u8 {
         self.address_space.load(Ordering::Relaxed) as *mut u8
     }
 
     // ────────────────────────────────────────────────────────────────────────────
-    // Accesseurs PID / groupe / session
+    // PID / group / session accessors
     // ────────────────────────────────────────────────────────────────────────────
 
-    /// PID du processus.
+    /// Process PID.
     #[inline(always)]
     pub fn pid(&self) -> Pid {
         self.pid
     }
 
-    /// PID du parent.
+    /// Parent PID.
     #[inline(always)]
     pub fn ppid(&self) -> Pid {
         Pid(self.ppid.load(Ordering::Acquire))
@@ -459,7 +459,7 @@ impl ProcessControlBlock {
         self.pgid.load(Ordering::Acquire)
     }
 
-    /// Définit le PGID.
+    /// Sets PGID.
     #[inline(always)]
     pub fn set_pgroup_id(&self, pgid: u32) {
         self.pgid.store(pgid, Ordering::Release);
@@ -471,31 +471,31 @@ impl ProcessControlBlock {
         self.sid.load(Ordering::Acquire)
     }
 
-    /// Définit le SID.
+    /// Sets SID.
     #[inline(always)]
     pub fn set_session_id(&self, sid: u32) {
         self.sid.store(sid, Ordering::Release);
     }
 
-    /// Vrai si ce processus est leader de session (SID == PID).
+    /// True if this process is session leader (SID == PID).
     #[inline(always)]
     pub fn is_session_leader(&self) -> bool {
         self.flags.load(Ordering::Relaxed) & process_flags::SESSION_LEADER != 0
     }
 
-    /// Vrai si ce processus est leader de groupe (PGID == PID).
+    /// True if this process is process group leader (PGID == PID).
     #[inline(always)]
     pub fn is_pgroup_leader(&self) -> bool {
         self.pgid.load(Ordering::Acquire) == self.pid.0
     }
 
-    /// Pointeur vers le thread principal du processus (TID = PID).
+    /// Pointer to main thread of process (TID = PID).
     #[inline(always)]
     pub fn main_thread_ptr(&self) -> *mut crate::process::core::tcb::ProcessThread {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
-    /// Enregistre un thread dans le registre borné du processus.
+    /// Registers a thread in the bounded register of the process.
     pub fn register_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) -> bool {
         if ptr.is_null() {
             return false;
@@ -521,7 +521,7 @@ impl ProcessControlBlock {
         false
     }
 
-    /// Retire un thread du registre borné.
+    /// Removes a thread from the bounded register.
     pub fn unregister_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
         if ptr.is_null() {
             return;
@@ -536,7 +536,7 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Parcourt les threads connus du processus.
+    /// Iterates over known process threads.
     pub fn for_each_thread_ptr<F>(&self, mut f: F)
     where
         F: FnMut(*mut crate::process::core::tcb::ProcessThread),
@@ -549,7 +549,7 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Retourne un thread vivant pouvant recevoir un signal.
+    /// Returns a living thread able to receive a signal.
     #[inline]
     pub fn find_alive_thread(&self) -> *mut crate::process::core::tcb::ProcessThread {
         let ptr = self.main_thread_ptr();
@@ -564,7 +564,7 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Définit le pointeur vers le thread principal.
+    /// Sets the pointer to the main thread.
     #[inline(always)]
     pub fn set_main_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
         self.main_thread_rawptr.store(ptr, Ordering::Release);
@@ -573,15 +573,15 @@ impl ProcessControlBlock {
         }
     }
 
-    /// Libère tous les threads enregistrés dans ce PCB.
+    /// Cleans up all threads registered in this PCB.
     pub fn cleanup_all_threads(&self) {
         let main_ptr = self.main_thread_rawptr.swap(core::ptr::null_mut(), Ordering::AcqRel);
 
         for slot in &self.thread_slots {
             let ptr = slot.swap(core::ptr::null_mut(), Ordering::AcqRel);
             if !ptr.is_null() && ptr != main_ptr {
-                // SAFETY: thread secondaire alloué par Box::into_raw.
-                // Le thread est Dead et retiré de toute runqueue.
+                // SAFETY: secondary thread allocated by Box::into_raw.
+                // Thread is Dead and removed from any runqueue.
                 unsafe {
                     let thread_box = alloc::boxed::Box::from_raw(ptr);
                     let tid = thread_box.tid;
@@ -592,8 +592,8 @@ impl ProcessControlBlock {
         }
 
         if !main_ptr.is_null() {
-            // SAFETY: main thread alloué par Box::into_raw.
-            // Le processus est Dead/Zombie et n'est plus exécuté par aucun CPU.
+            // SAFETY: main thread allocated by Box::into_raw.
+            // Process is Dead/Zombie and no longer executed by any CPU.
             unsafe {
                 let thread_box = alloc::boxed::Box::from_raw(main_ptr);
                 let tid = thread_box.tid;
@@ -610,7 +610,7 @@ impl Drop for ProcessControlBlock {
     }
 }
 
-// SAFETY: ProcessControlBlock est partagé entre threads du même processus.
-// Tous les champs mutables sont soit atomiques, soit protégés par SpinLock.
+// SAFETY: ProcessControlBlock is shared among threads of the same process.
+// All mutable fields are either atomic or protected by SpinLock.
 unsafe impl Send for ProcessControlBlock {}
 unsafe impl Sync for ProcessControlBlock {}

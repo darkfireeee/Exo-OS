@@ -1,6 +1,6 @@
 // kernel/src/process/group/mod.rs
 //
-// Groupes de processus et sessions POSIX (SID, PGID).
+// Process groups and POSIX sessions (SID, PGID).
 
 pub mod job_control;
 pub mod pgrp;

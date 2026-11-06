@@ -1,6 +1,6 @@
 // kernel/src/process/resource/mod.rs
 //
-// Limites et comptabilité des ressources.
+// Resource limits and accounting.
 
 pub mod cgroup;
 pub mod rlimit;

@@ -1,19 +1,19 @@
 // kernel/src/process/core/pid.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// PID / TID Allocator — allocateur lock-free par bitmap radix (Exo-OS Couche 1.5)
+// PID / TID Allocator — lock-free radix bitmap allocator (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Conception :
-//   • Bitmap plate de 512 mots u64 → 32 768 PID simultanés.
-//   • Allocation O(1) amortie : CLZ + scan word-by-word.
-//   • Séparation PID (processus) / TID (threads) via deux allocateurs indépendants.
-//   • PID_MIN = 1, PID_MAX = 32 767 ; TID_MAX = 131 071.
-//   • PID 0 réservé (idle/swapper), PID 1 réservé (init).
-//   • Thread-safe : CAS atomique sur chaque word bitmap.
-//   • Instrumentation : compteurs alloc/free/current_count atomiques.
+// Design:
+//   • Flat bitmap of 512 u64 words → 32,768 concurrent PIDs.
+//   • Amortized O(1) allocation: CLZ + word-by-word scan.
+//   • Separation of PID (processes) / TID (threads) via two independent allocators.
+//   • PID_MIN = 1, PID_MAX = 32,767; TID_MAX = 131,071.
+//   • PID 0 reserved (idle/swapper), PID 1 reserved (init).
+//   • Thread-safe: atomic CAS on each bitmap word.
+//   • Instrumentation: atomic alloc/free/current_count counters.
 //
-// RÈGLE : Aucune allocation heap dans ce fichier (zone NO-ALLOC partielle).
+// RULE: No heap allocation in this file (partial NO-ALLOC zone).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
@@ -23,12 +23,12 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Process ID — non-zéro, unique globalement.
+/// Process ID — non-zero, globally unique.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
 pub struct Pid(pub u32);
 
-/// Thread ID — non-zéro, unique globalement.
+/// Thread ID — non-zero, globally unique.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(transparent)]
 pub struct Tid(pub u32);
@@ -77,32 +77,32 @@ impl fmt::Display for Tid {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacité maximale du bitmap PID (entrées).
-pub const PID_BITMAP_WORDS: usize = 512; // 512 × 64 = 32 768 PIDs
-pub const TID_BITMAP_WORDS: usize = 2048; // 2048 × 64 = 131 072 TIDs
+/// Maximum capacity of the PID bitmap (entries).
+pub const PID_BITMAP_WORDS: usize = 512; // 512 × 64 = 32,768 PIDs
+pub const TID_BITMAP_WORDS: usize = 2048; // 2048 × 64 = 131,072 TIDs
 
-pub const PID_FIRST_USABLE: u32 = 2; // 0=idle, 1=init réservés
+pub const PID_FIRST_USABLE: u32 = 2; // 0=idle, 1=init reserved
 pub const PID_MAX: u32 = (PID_BITMAP_WORDS as u32 * 64) - 1;
 pub const TID_FIRST_USABLE: u32 = 1;
 pub const TID_MAX: u32 = (TID_BITMAP_WORDS as u32 * 64) - 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PidBitmap — structure bitmap statique
+// PidBitmap — static bitmap structure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bitmap plate de N mots AtomicU64.
-/// Bit à 1 = ID LIBRE, bit à 0 = ID UTILISÉ.
+/// Flat bitmap of N AtomicU64 words.
+/// Bit set to 1 = ID FREE, bit set to 0 = ID USED.
 struct PidBitmap<const N: usize> {
     words: [AtomicU64; N],
 }
 
 impl<const N: usize> PidBitmap<N> {
     const fn new_all_free() -> Self {
-        // SAFETY: AtomicU64::new(u64::MAX) est une constante valide.
-        // Tous les bits à 1 = tous libres.
+        // SAFETY: AtomicU64::new(u64::MAX) is a valid constant.
+        // All bits set to 1 = all free.
         #[allow(clippy::declare_interior_mutable_const)]
         const WORD_FREE: AtomicU64 = AtomicU64::new(u64::MAX);
         Self {
@@ -110,9 +110,9 @@ impl<const N: usize> PidBitmap<N> {
         }
     }
 
-    /// Alloue le premier ID libre >= `first_usable`.
-    /// Retourne `None` si épuisé.
-    /// Algorithme : scan word par word, CLZ pour trouver bit libre.
+    /// Allocates the first free ID >= `first_usable`.
+    /// Returns `None` if exhausted.
+    /// Algorithm: word-by-word scan, CLZ to find a free bit.
     fn alloc(&self, first_usable: u32) -> Option<u32> {
         let start_word = (first_usable / 64) as usize;
         let total_words = N;
@@ -121,13 +121,13 @@ impl<const N: usize> PidBitmap<N> {
             let val = self.words[w].load(Ordering::Relaxed);
             if val == 0 {
                 continue;
-            } // mot plein
+            } // word full
 
-            // Trouver le bit libre le moins significatif.
-            let bit = val.trailing_zeros(); // position du premier bit à 1
+            // Find least significant free bit.
+            let bit = val.trailing_zeros(); // position of first bit set to 1
             let mask = 1u64 << bit;
 
-            // Tenter de marquer comme utilisé (1→0) avec CAS.
+            // Attempt to mark as used (1→0) with CAS.
             if self.words[w]
                 .compare_exchange(val, val & !mask, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
@@ -136,18 +136,18 @@ impl<const N: usize> PidBitmap<N> {
                 if id >= first_usable {
                     return Some(id);
                 }
-                // ID trop petit (< first_usable) — le relibérer et continuer.
+                // ID too low (< first_usable) — release it and continue.
                 self.words[w].fetch_or(mask, Ordering::Relaxed);
                 continue;
             }
-            // CAS échoué (race) — recommencer ce word.
-            // Pour simplifier, on passe au suivant (prochaine allocation réussira).
+            // CAS failed (race) — retry this word.
+            // For simplicity, move to the next word (next allocation will succeed).
         }
         None
     }
 
-    /// Libère l'ID donné (remet le bit à 1).
-    /// Panique (debug) si l'ID était déjà libre.
+    /// Frees the given ID (resets bit to 1).
+    /// Panics (debug) if the ID was already free.
     fn free(&self, id: u32) {
         let w = (id / 64) as usize;
         let bit = id % 64;
@@ -160,7 +160,7 @@ impl<const N: usize> PidBitmap<N> {
         );
     }
 
-    /// Vérifie si l'ID est utilisé (bit à 0).
+    /// Checks whether the ID is used (bit set to 0).
     fn is_used(&self, id: u32) -> bool {
         let w = (id / 64) as usize;
         let bit = id % 64;
@@ -169,41 +169,41 @@ impl<const N: usize> PidBitmap<N> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PidAllocator — wrapper avec compteurs de statistiques
+// PidAllocator — wrapper with statistics counters
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Allocateur PID avec instrumentation complète.
+/// PID allocator with full instrumentation.
 pub struct PidAllocator {
     bitmap: &'static PidBitmapPid,
     first_usable: u32,
     #[allow(dead_code)]
     total_capacity: u32,
-    /// Nombre d'allocations réussies depuis le boot.
+    /// Number of successful allocations since boot.
     alloc_count: AtomicU64,
-    /// Nombre de libérations depuis le boot.
+    /// Number of frees since boot.
     free_count: AtomicU64,
-    /// Nombre courant d'IDs utilisés.
+    /// Current number of used IDs.
     current_used: AtomicU32,
-    /// Nombre max d'IDs simultanément utilisés (high-water mark).
+    /// Maximum number of concurrently used IDs (high-water mark).
     peak_used: AtomicU32,
-    /// Nombre d'échecs d'allocation (épuisement).
+    /// Number of allocation failures (exhaustion).
     exhausted: AtomicU64,
 }
 
-// Alias de type pour les bitmaps statiques.
+// Type alias for static bitmaps.
 type PidBitmapPid = PidBitmap<PID_BITMAP_WORDS>;
 type PidBitmapTid = PidBitmap<TID_BITMAP_WORDS>;
 
 static PID_BITMAP_STORAGE: PidBitmapPid = PidBitmap::new_all_free();
 static TID_BITMAP_STORAGE: PidBitmapTid = PidBitmap::new_all_free();
 
-// SAFETY: PidBitmap n'accède à ses champs que via des atomiques.
+// SAFETY: PidBitmap only accesses its fields via atomics.
 unsafe impl Sync for PidBitmapPid {}
 unsafe impl Sync for PidBitmapTid {}
 
 pub static PID_ALLOCATOR: PidAllocator = PidAllocator {
-    // SAFETY: PID_BITMAP_STORAGE est un tableau statique aligné avec le layout correct;
-    //         PidBitmapPid est un newtype transparent autour du même type sous-jacent.
+    // SAFETY: PID_BITMAP_STORAGE is an aligned static array with correct layout;
+    //         PidBitmapPid is a transparent newtype around the same underlying type.
     bitmap: unsafe { &*(&PID_BITMAP_STORAGE as *const PidBitmapPid) },
     first_usable: PID_FIRST_USABLE,
     total_capacity: PID_MAX,
@@ -215,8 +215,8 @@ pub static PID_ALLOCATOR: PidAllocator = PidAllocator {
 };
 
 pub static TID_ALLOCATOR: PidAllocator = PidAllocator {
-    // SAFETY: TID_BITMAP_STORAGE est un tableau statique aligné ; cast en PidBitmapPid valide
-    //         car PidBitmapTid et PidBitmapPid ont le même layout (même type sous-jacent).
+    // SAFETY: TID_BITMAP_STORAGE is an aligned static array; cast to PidBitmapPid is valid
+    //         because PidBitmapTid and PidBitmapPid share the same layout (same underlying type).
     bitmap: unsafe { &*(&TID_BITMAP_STORAGE as *const PidBitmapTid as *const PidBitmapPid) },
     first_usable: TID_FIRST_USABLE,
     total_capacity: TID_MAX,
@@ -227,29 +227,29 @@ pub static TID_ALLOCATOR: PidAllocator = PidAllocator {
     exhausted: AtomicU64::new(0),
 };
 
-// SAFETY: PidAllocator n'accède à ses champs atomiques que via Atomic*.
+// SAFETY: PidAllocator only accesses its atomic fields via Atomic*.
 unsafe impl Sync for PidAllocator {}
 unsafe impl Send for PidAllocator {}
 
-/// Erreur d'allocation PID/TID.
+/// PID/TID allocation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PidAllocError {
-    /// Plus d'IDs disponibles.
+    /// No more IDs available.
     Exhausted,
-    /// L'ID demandé est déjà utilisé (réservation explicite uniquement).
+    /// Requested ID is already in use (explicit reservation only).
     AlreadyUsed,
 }
 
 impl PidAllocator {
-    /// Alloue un nouveau PID/TID.
-    /// Retourne `Err(Exhausted)` si tous les IDs sont utilisés.
+    /// Allocates a new PID/TID.
+    /// Returns `Err(Exhausted)` if all IDs are in use.
     #[inline]
     pub fn alloc(&self) -> Result<u32, PidAllocError> {
         match self.bitmap.alloc(self.first_usable) {
             Some(id) => {
                 self.alloc_count.fetch_add(1, Ordering::Relaxed);
                 let cur = self.current_used.fetch_add(1, Ordering::Relaxed) + 1;
-                // Mise à jour du high-water mark sans lock.
+                // Lock-free update of high-water mark.
                 let mut peak = self.peak_used.load(Ordering::Relaxed);
                 while cur > peak {
                     match self.peak_used.compare_exchange_weak(
@@ -271,7 +271,7 @@ impl PidAllocator {
         }
     }
 
-    /// Libère un PID/TID précédemment alloué.
+    /// Frees a previously allocated PID/TID.
     #[inline]
     pub fn free(&self, id: u32) {
         self.bitmap.free(id);
@@ -279,46 +279,46 @@ impl PidAllocator {
         self.current_used.fetch_sub(1, Ordering::Relaxed);
     }
 
-    /// Vérifie si un ID est actuellement utilisé.
+    /// Checks if an ID is currently in use.
     #[inline(always)]
     pub fn is_used(&self, id: u32) -> bool {
         self.bitmap.is_used(id)
     }
 
-    /// Nombre d'IDs actuellement en usage.
+    /// Number of IDs currently in use.
     #[inline(always)]
     pub fn current_count(&self) -> u32 {
         self.current_used.load(Ordering::Relaxed)
     }
 
-    /// Nombre total d'allocations depuis le boot.
+    /// Total number of allocations since boot.
     #[inline(always)]
     pub fn total_allocs(&self) -> u64 {
         self.alloc_count.load(Ordering::Relaxed)
     }
 
-    /// Nombre d'échecs d'allocation (épuisement).
+    /// Number of allocation failures (exhaustion).
     #[inline(always)]
     pub fn exhaustion_count(&self) -> u64 {
         self.exhausted.load(Ordering::Relaxed)
     }
 
-    /// High-water mark d'utilisation simultanée.
+    /// Concurrent usage high-water mark.
     #[inline(always)]
     pub fn peak_count(&self) -> u32 {
         self.peak_used.load(Ordering::Relaxed)
     }
 }
 
-/// Initialise les allocateurs PID et TID.
-/// Réserve PID 0 (idle) et PID 1 (init) comme utilisés.
+/// Initializes PID and TID allocators.
+/// Reserves PID 0 (idle) and PID 1 (init) as used.
 ///
 /// # Safety
-/// Appelé une seule fois depuis le BSP au boot.
+/// Called once from the BSP at boot.
 pub unsafe fn init(_max_pids: usize, _max_tids: usize) {
-    // Réserver PID 0 = idle.
+    // Reserve PID 0 = idle.
     PID_BITMAP_STORAGE.words[0].fetch_and(!(1u64 << 0), Ordering::Relaxed);
-    // Réserver PID 1 = init.
+    // Reserve PID 1 = init.
     PID_BITMAP_STORAGE.words[0].fetch_and(!(1u64 << 1), Ordering::Relaxed);
     PID_ALLOCATOR.current_used.store(2, Ordering::Relaxed);
 }

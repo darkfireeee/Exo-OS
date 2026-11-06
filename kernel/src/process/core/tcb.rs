@@ -1,20 +1,20 @@
 // kernel/src/process/core/tcb.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ProcessThread — Extension process/ du ThreadControlBlock scheduler
+// ProcessThread — process/ extension of the scheduler's ThreadControlBlock
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Architecture :
-//   Le scheduler/core/task.rs définit `ThreadControlBlock` (256 bytes, hot path).
-//   Ce fichier définit `ProcessThread` qui ENVELOPPE le TCB scheduler et ajoute
-//   les données niveau process (adresse de stack, TLS, signaux...) sans toucher
-//   aux 128 bytes du TCB scheduler.
+// Architecture:
+//   scheduler/core/task.rs defines `ThreadControlBlock` (256 bytes, hot path).
+//   This file defines `ProcessThread` which WRAPS the scheduler TCB and adds
+//   process-level data (stack address, TLS, signals...) without modifying
+//   the 128 bytes of the scheduler TCB.
 //
-// RÈGLES :
-//   • ProcessThread est alloué par lifecycle/create.rs, libéré par lifecycle/exit.rs.
-//   • Le pointeur `sched_tcb` pointe vers un TCB en mémoire statique ou heap.
-//   • Tous les accès à sched_tcb depuis process/ sont documentaires.
-//   • PROC-04 : signal_pending est ÉCRIT ici (process/signal/), LU par scheduler.
+// RULES:
+//   • ProcessThread is allocated by lifecycle/create.rs, freed by lifecycle/exit.rs.
+//   • The `sched_tcb` pointer points to a TCB in static memory or heap.
+//   • All accesses to sched_tcb from process/ are documented.
+//   • PROC-04: signal_pending is WRITTEN here (process/signal/), READ by scheduler.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::pid::{Pid, Tid};
@@ -96,15 +96,15 @@ fn try_process_thread_box(
     }
 }
 
-/// Taille du stack kernel par thread.
+/// Kernel stack size per thread.
 ///
-/// Les chemins userspace critiques (fork/exec/IPC) traversent assez de Rust
-/// noyau pour que 16 KiB soit fragile en debug. Le chemin `do_fork` (clone CoW,
-/// clone fds, namespaces, credentials, hash BLAKE3 d'identité) consomme à
-/// lui seul ~56–64 KiB en build debug : 64 KiB débordait la guard page de ~360
-/// octets (overflow noyau → ExoPhoenix). 256 KiB garde une marge confortable
-/// pour les forks imbriqués (fork→execve) tout en restant modeste (vmalloc, 256
-/// MiB RAM, qq dizaines de threads).
+/// Critical userspace paths (fork/exec/IPC) traverse enough kernel
+/// Rust for 16 KiB to be fragile in debug. The `do_fork` path (CoW clone,
+/// fds clone, namespaces, credentials, identity BLAKE3 hash) alone
+/// consumes ~56–64 KiB in debug build: 64 KiB overflowed the guard page by ~360
+/// bytes (kernel overflow → ExoPhoenix). 256 KiB keeps a comfortable margin
+/// for nested forks (fork→execve) while remaining modest (vmalloc, 256
+/// MiB RAM, a few dozen threads).
 pub const KSTACK_SIZE: usize = 256 * 1024;
 const KSTACK_PAGE_SIZE: usize = crate::memory::core::constants::PAGE_SIZE;
 const KSTACK_USABLE_PAGES: usize = KSTACK_SIZE / KSTACK_PAGE_SIZE;
@@ -112,7 +112,7 @@ const KSTACK_TOTAL_PAGES: usize = KSTACK_USABLE_PAGES + 2;
 
 const _: () = assert!(KSTACK_SIZE.is_multiple_of(KSTACK_PAGE_SIZE));
 
-/// Canari de stack pour détecter les débordements.
+/// Stack canary to detect overflows.
 const STACK_CANARY: u64 = 0xDEAD_BEEF_CAFE_BABE;
 
 struct KernelStackPtAlloc;
@@ -141,34 +141,34 @@ enum KernelStackBacking {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ThreadAddress — adresses de l'espace utilisateur d'un thread
+// ThreadAddress — userspace addresses of a thread
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Adresses liées au cycle de vie du thread côté userspace.
+/// Addresses tied to the thread lifecycle on the userspace side.
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct ThreadAddress {
-    /// Base du stack utilisateur alloué (plus basse adresse).
+    /// Base of allocated user stack (lowest address).
     pub stack_base: u64,
-    /// Taille du stack utilisateur (bytes).
+    /// User stack size (bytes).
     pub stack_size: u64,
-    /// Registre d’instruction de retour (RIP initial au lancement).
+    /// Return instruction register (initial RIP at startup).
     pub entry_point: u64,
-    /// Pointeur de cadre utilisateur initial (RSP au démarrage).
+    /// Initial user frame pointer (RSP at startup).
     pub initial_rsp: u64,
-    /// Pointeur vers la TLS statique (FS.base pour x86_64).
+    /// Pointer to static TLS (FS.base for x86_64).
     pub tls_base: u64,
-    /// Premier argument injecté en RDI au point d'entrée initial.
+    /// First argument injected into RDI at initial entry point.
     pub entry_arg0: u64,
-    /// Pointeur vers la structure `pthread_t` userspace.
+    /// Pointer to userspace `pthread_t` structure.
     pub pthread_ptr: u64,
-    /// Zone `sigaltstack` (stack alternatif pour signaux).
+    /// `sigaltstack` area (alternative stack for signals).
     pub sigaltstack_base: u64,
     pub sigaltstack_size: u64,
 }
 
 impl ThreadAddress {
-    /// Adresse du sommet du sigaltstack (base + size).
+    /// Address of top of sigaltstack (base + size).
     #[inline(always)]
     pub fn sigaltstack_top(&self) -> u64 {
         self.sigaltstack_base.saturating_add(self.sigaltstack_size)
@@ -176,27 +176,27 @@ impl ThreadAddress {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KernelStack — stack kernel dédié du thread
+// KernelStack — dedicated kernel stack of the thread
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stack kernel alloué dynamiquement pour un thread.
+/// Dynamically allocated kernel stack for a thread.
 ///
-/// Le chemin normal alloue une région physique dédiée :
-/// `[guard !PRESENT][stack utile][guard !PRESENT]`. Si le noyau est encore trop
-/// tôt dans le boot pour modifier la PML4, le backend heap garde le canari bas.
+/// The normal path allocates a dedicated physical region:
+/// `[guard !PRESENT][usable stack][guard !PRESENT]`. If the kernel is still too
+/// early in boot to modify PML4, the heap backend retains the bottom canary.
 pub struct KernelStack {
-    /// Pointeur vers la mémoire allouée (bas du buffer).
+    /// Pointer to allocated memory (bottom of buffer).
     base: *mut u8,
-    /// Taille totale en bytes.
+    /// Total size in bytes.
     size: usize,
-    /// Adresse du sommet (base + size, aligné 16).
+    /// Address of top (base + size, 16-aligned).
     top: u64,
     backing: KernelStackBacking,
 }
 
 impl KernelStack {
-    /// Alloue un nouveau stack kernel de `size` bytes.
-    /// Pose un canari 8 bytes au bas et, si possible, deux vraies pages garde.
+    /// Allocates a new kernel stack of `size` bytes.
+    /// Places an 8-byte canary at the bottom and, if possible, two real guard pages.
     pub fn alloc(size: usize, tid: Tid) -> Option<Self> {
         Self::alloc_guarded(size, tid).or_else(|| Self::alloc_heap_canary(size))
     }
@@ -206,20 +206,20 @@ impl KernelStack {
             return None;
         }
         let layout = Layout::from_size_align(size, 16).ok()?;
-        // SAFETY: layout est valide, on vérifie le pointeur.
+        // SAFETY: layout is valid, we check the pointer.
         let base = unsafe { alloc(layout) };
         if base.is_null() {
             return None;
         }
-        // Écriture du canari au bas du stack.
-        // SAFETY: base pointe vers `size` bytes alloués, canari à offset 0.
+        // Write canary at the bottom of the stack.
+        // SAFETY: base points to `size` allocated bytes, canary at offset 0.
         unsafe {
             core::ptr::write(base as *mut u64, STACK_CANARY);
         }
-        // SAFETY: base a été alloué avec `size` bytes ; base.add(size) pointe juste après la fin,
-        //         ce qui est un pointeur valide (sentinel, jamais déréférencé).
+        // SAFETY: base was allocated with `size` bytes; base.add(size) points just past the end,
+        //         which is a valid pointer (sentinel, never dereferenced).
         let top = unsafe { base.add(size) } as u64;
-        // Aligner sur 16 bytes (x86_64 ABI) : le top doit être 16-aligné - 8.
+        // Align to 16 bytes (x86_64 ABI): top must be 16-aligned - 8.
         let top_aligned = (top & !0xF) - 8;
         Some(Self {
             base,
@@ -327,19 +327,19 @@ impl KernelStack {
         })
     }
 
-    /// Adresse du sommet utile (valeur initiale du RSP kernel).
+    /// Address of usable top (initial value of kernel RSP).
     #[inline(always)]
     pub fn top_addr(&self) -> u64 {
         self.top
     }
 
-    /// Vérifie le canari — retourne false si débordement détecté.
+    /// Checks the canary — returns false if overflow detected.
     pub fn check_canary(&self) -> bool {
-        // SAFETY: base a été alloué avec au moins 8 bytes et le canari y est posé.
+        // SAFETY: base was allocated with at least 8 bytes and the canary is placed there.
         unsafe { core::ptr::read(self.base as *const u64) == STACK_CANARY }
     }
 
-    /// Taille en bytes.
+    /// Size in bytes.
     #[inline(always)]
     pub fn size(&self) -> usize {
         self.size
@@ -350,7 +350,7 @@ impl Drop for KernelStack {
     fn drop(&mut self) {
         match self.backing {
             KernelStackBacking::Heap => {
-                // SAFETY: base a été alloué avec ce layout.
+                // SAFETY: base was allocated with this layout.
                 unsafe {
                     let layout = Layout::from_size_align_unchecked(self.size, 16);
                     dealloc(self.base, layout);
@@ -378,68 +378,68 @@ impl Drop for KernelStack {
     }
 }
 
-// SAFETY: KernelStack non partagé entre threads (propriété exclusive).
+// SAFETY: KernelStack not shared across threads (exclusive ownership).
 unsafe impl Send for KernelStack {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ProcessThread — vue process/ d'un thread
+// ProcessThread — process/ view of a thread
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// ProcessThread : extension du TCB scheduler avec les données niveau process.
+/// ProcessThread: scheduler TCB extension with process-level data.
 ///
-/// Propriétaire unique du stack kernel et du TCB scheduler.
-/// Référencé depuis le ProcessControlBlock de son processus parent.
+/// Unique owner of the kernel stack and the scheduler TCB.
+/// Referenced from the ProcessControlBlock of its parent process.
 pub struct ProcessThread {
-    // ── TCB scheduler (hot path) ───────────────────────────────────────────────
-    /// TCB scheduler — propriété exclusive de ce ProcessThread.
-    /// Borrowé de manière exclusive par le scheduler pour les context switches.
+    // ── Scheduler TCB (hot path) ───────────────────────────────────────────────
+    /// Scheduler TCB — exclusive ownership of this ProcessThread.
+    /// Borrowed exclusively by the scheduler for context switches.
     pub(crate) sched_tcb: Box<ThreadControlBlock>,
 
-    // ── Stack kernel ───────────────────────────────────────────────────────────
-    /// Stack kernel dédié à ce thread.
+    // ── Kernel stack ───────────────────────────────────────────────────────────
+    /// Kernel stack dedicated to this thread.
     pub kernel_stack: KernelStack,
 
-    // ── Identité process ───────────────────────────────────────────────────────
-    /// PID du processus propriétaire.
+    // ── Process identity ───────────────────────────────────────────────────────
+    /// PID of owning process.
     pub pid: Pid,
-    /// TID de ce thread.
+    /// TID of this thread.
     pub tid: Tid,
 
-    // ── Adresses userspace ─────────────────────────────────────────────────────
-    /// Adresses du thread côté userspace.
+    // ── Userspace addresses ────────────────────────────────────────────────────
+    /// Thread addresses on the userspace side.
     pub addresses: ThreadAddress,
 
     // ── TLS (Thread Local Storage) ─────────────────────────────────────────────
-    /// Base FS du segment TLS. Le nom historique conserve l'ABI interne existante.
+    /// FS base of the TLS segment. Historic name preserves existing internal ABI.
     pub tls_gs_base: AtomicU64,
-    /// Bloc TLS statique (segment .tdata/.tbss du binaire).
-    pub tls_block: AtomicUsize, // *mut u8 opaque
-    /// Taille du bloc TLS.
+    /// Static TLS block (.tdata/.tbss segment of binary).
+    pub tls_block: AtomicUsize, // opaque *mut u8
+    /// TLS block size.
     pub tls_size: usize,
 
-    // ── État de join ───────────────────────────────────────────────────────────
-    /// true = thread detaché (le joineur n'attendra pas).
+    // ── Join state ─────────────────────────────────────────────────────────────
+    /// true = detached thread (joiner will not wait).
     pub detached: AtomicBool,
-    /// true = join terminé (résultat disponible dans join_result).
+    /// true = join completed (result available in join_result).
     pub join_done: AtomicBool,
-    /// Valeur de retour du thread (ptr vers donnée userspace).
+    /// Return value of thread (ptr to userspace data).
     pub join_result: AtomicU64,
 
-    // ── Files de signaux ───────────────────────────────────────────────────────
-    /// File de signaux standard (signaux 1..31).
+    // ── Signal queues ──────────────────────────────────────────────────────────
+    /// Standard signal queue (signals 1..31).
     pub sig_queue: SigQueue,
-    /// File de signaux temps-réel (signaux 32..63).
+    /// Real-time signal queue (signals 32..63).
     pub rt_sig_queue: RTSigQueue,
 }
 
 impl ProcessThread {
-    /// Crée un nouveau ProcessThread avec un stack kernel frais.
+    /// Creates a new ProcessThread with a fresh kernel stack.
     ///
     /// # Arguments
-    /// * `tid`   — TID alloué depuis TID_ALLOCATOR.
-    /// * `pid`   — PID du processus propriétaire.
-    /// * `cr3`   — CR3 de l'espace d'adressage.
-    /// * `policy`/`prio` — politique et priorité d'ordonnancement.
+    /// * `tid`   — TID allocated from TID_ALLOCATOR.
+    /// * `pid`   — PID of owning process.
+    /// * `cr3`   — CR3 of address space.
+    /// * `policy`/`prio` — scheduling policy and priority.
     pub fn new(
         tid: Tid,
         pid: Pid,
@@ -486,7 +486,7 @@ impl ProcessThread {
         Some(thread)
     }
 
-    /// Crée un thread kernel dédié (pid=0, KTHREAD flag).
+    /// Creates a dedicated kernel thread (pid=0, KTHREAD flag).
     pub fn new_kthread(tid: Tid, cr3: u64) -> Option<Box<Self>> {
         if !crate::memory::heap::is_heap_ready() {
             return None;
@@ -513,53 +513,53 @@ impl ProcessThread {
         Some(thread)
     }
 
-    /// Référence au TCB scheduler (short-lived, hot path).
+    /// Reference to scheduler TCB (short-lived, hot path).
     #[inline(always)]
     pub fn tcb(&self) -> &ThreadControlBlock {
         &self.sched_tcb
     }
 
-    /// Référence mutable au TCB scheduler.
+    /// Mutable reference to scheduler TCB.
     #[inline(always)]
     pub fn tcb_mut(&mut self) -> &mut ThreadControlBlock {
         &mut self.sched_tcb
     }
 
-    /// Pointeur brut vers le TCB (utilisé par les run queues).
+    /// Raw pointer to TCB (used by run queues).
     #[inline(always)]
     pub fn tcb_ptr(&self) -> *mut ThreadControlBlock {
         &*self.sched_tcb as *const ThreadControlBlock as *mut ThreadControlBlock
     }
 
-    /// Vérifie l'intégrité du canari kernel stack.
+    /// Checks kernel stack canary integrity.
     #[inline(always)]
     pub fn check_stack_canary(&self) -> bool {
         self.kernel_stack.check_canary()
     }
 
-    /// Elève le signal_pending dans le TCB scheduler (PROC-04).
-    /// Appelé UNIQUEMENT depuis process/signal/delivery.rs.
+    /// Raises signal_pending in the scheduler TCB (PROC-04).
+    /// Called ONLY from process/signal/delivery.rs.
     #[inline(always)]
     pub fn raise_signal_pending(&self) {
         self.sched_tcb.set_signal_pending();
-        // Requérir un reschedule pour livraison rapide.
+        // Request a reschedule for prompt delivery.
         self.sched_tcb.request_preemption();
     }
 
-    /// Lit l'état courant du thread via le TCB scheduler.
+    /// Reads current thread state via scheduler TCB.
     #[inline(always)]
     pub fn state(&self) -> TaskState {
         self.sched_tcb.state()
     }
 
-    /// Définit l'état du thread.
+    /// Sets thread state.
     #[inline(always)]
     pub fn set_state(&self, s: TaskState) {
         self.sched_tcb.set_state(s);
     }
 }
 
-// SAFETY: ProcessThread est accédé depuis un seul CPU à la fois (propriété scheduler).
-// Les champs atomiques permettent les lectures concurrentes ciblées ; la
-// structure complète ne doit pas être partagée comme référence Sync.
+// SAFETY: ProcessThread is accessed from a single CPU at a time (scheduler ownership).
+// Atomic fields allow targeted concurrent reads; the complete
+// structure must not be shared as a Sync reference.
 unsafe impl Send for ProcessThread {}

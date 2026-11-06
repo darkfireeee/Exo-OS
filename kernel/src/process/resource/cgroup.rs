@@ -1,18 +1,18 @@
 // kernel/src/process/resource/cgroup.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// cgroups v2 (basique) — Exo-OS Couche 1.5
+// cgroups v2 (basic) — Exo-OS Layer 1.5
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-/// Nombre maximum de cgroups.
+/// Maximum number of cgroups.
 const MAX_CGROUPS: usize = 256;
-/// Référence au cgroup racine.
+/// Reference to root cgroup.
 pub const ROOT_CGROUP_ID: u32 = 0;
 
-/// Contrôleurs cgroup v2 supportés.
+/// Supported cgroup v2 controllers.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum CgroupController {
     Cpu,
@@ -21,15 +21,15 @@ pub enum CgroupController {
     Pids,
 }
 
-/// Politiques CPU pour un cgroup.
+/// CPU policies for a cgroup.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct CpuPolicy {
-    /// Quota CPU en µs par période (0 = illimité).
+    /// CPU quota in µs per period (0 = unlimited).
     pub quota_us: u64,
-    /// Période de quota (µs).
+    /// Quota period (µs).
     pub period_us: u64,
-    /// Poids relatif (1..10000 similaire CFS).
+    /// Relative weight (1..10000 similar to CFS).
     pub weight: u32,
 }
 
@@ -41,13 +41,13 @@ impl CpuPolicy {
     };
 }
 
-/// Politiques mémoire pour un cgroup.
+/// Memory policies for a cgroup.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct MemPolicy {
-    /// Limite mémoire (octets, 0 = illimité).
+    /// Memory limit (bytes, 0 = unlimited).
     pub limit_bytes: u64,
-    /// Limite swap (octets).
+    /// Swap limit (bytes).
     pub swap_bytes: u64,
 }
 
@@ -58,11 +58,11 @@ impl MemPolicy {
     };
 }
 
-/// Politiques PID pour un cgroup.
+/// PID policies for a cgroup.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct PidPolicy {
-    /// Nombre max de processus (0 = illimité).
+    /// Maximum number of processes (0 = unlimited).
     pub max: u32,
 }
 
@@ -70,28 +70,28 @@ impl PidPolicy {
     const DEFAULT: Self = Self { max: 0 };
 }
 
-/// Un cgroup (nœud de la hiérarchie).
+/// A cgroup (hierarchy node).
 #[repr(C)]
 pub struct Cgroup {
-    /// Identifiant unique (index dans la table).
+    /// Unique identifier (index in table).
     pub id: u32,
-    /// ID du cgroup parent (0 = racine).
+    /// Parent cgroup ID (0 = root).
     pub parent_id: u32,
-    /// Nombre de processus membres.
+    /// Number of member processes.
     pub pop: AtomicU32,
-    /// Compteur de références.
+    /// Reference counter.
     pub refcount: AtomicU32,
-    /// Validité.
+    /// Validity.
     pub valid: AtomicU32,
-    /// Verrou de configuration.
+    /// Configuration lock.
     pub lock: SpinLock<()>,
-    /// Politique CPU.
+    /// CPU policy.
     pub cpu: CpuPolicy,
-    /// Politique mémoire.
+    /// Memory policy.
     pub mem: MemPolicy,
-    /// Politique PID.
+    /// PID policy.
     pub pids: PidPolicy,
-    // Compteurs d'utilisation
+    // Usage counters
     pub cpu_time_us: AtomicU64,
     pub mem_usage: AtomicU64,
     pub pid_count: AtomicU32,
@@ -118,7 +118,7 @@ impl Cgroup {
 
 unsafe impl Sync for Cgroup {}
 
-/// Table globale des cgroups.
+/// Global cgroup table.
 pub struct CgroupTable {
     slots: [Cgroup; MAX_CGROUPS],
     lock: SpinLock<()>,
@@ -142,17 +142,17 @@ impl CgroupTable {
         }
     }
 
-    /// Référence au cgroup racine.
+    /// Reference to root cgroup.
     pub fn root(&self) -> &Cgroup {
         &self.slots[0]
     }
 
-    /// Crée un nouveau cgroup enfant de `parent_id`.
+    /// Creates a new cgroup child of `parent_id`.
     pub fn create(&self, parent_id: u32) -> Option<u32> {
         let _guard = self.lock.lock();
         for (idx, slot) in self.slots.iter().enumerate() {
             if slot.valid.load(Ordering::Acquire) == 0 && idx > 0 {
-                // SAFETY: write_lock exclusif; slot libre (valid==0), accessible seulement après store(valid,1).
+                // SAFETY: exclusive write_lock; free slot (valid==0), accessible only after store(valid, 1).
                 unsafe {
                     let s = slot as *const Cgroup as *mut Cgroup;
                     (*s).id = idx as u32;
@@ -174,7 +174,7 @@ impl CgroupTable {
         None
     }
 
-    /// Accède à un cgroup par ID.
+    /// Accesses a cgroup by ID.
     pub fn get(&self, id: u32) -> Option<&Cgroup> {
         let id = id as usize;
         if id >= MAX_CGROUPS {
@@ -188,22 +188,22 @@ impl CgroupTable {
         }
     }
 
-    /// Ajoute un processus à un cgroup.
+    /// Adds a process to a cgroup.
     pub fn add_process(&self, cg_id: u32) {
         if let Some(cg) = self.get(cg_id) {
             cg.pop.fetch_add(1, Ordering::Relaxed);
             cg.pid_count.fetch_add(1, Ordering::Relaxed);
-            // Vérifier limite PID
+            // Check PID limit
             let max = cg.pids.max;
             if max > 0 && cg.pid_count.load(Ordering::Acquire) > max {
-                // Signaler overflow (en pratique, le fork() doit vérifier AVANT d'ajouter).
+                // Signal overflow (in practice, fork() must check BEFORE adding).
                 cg.pid_count.fetch_sub(1, Ordering::Relaxed);
                 cg.pop.fetch_sub(1, Ordering::Relaxed);
             }
         }
     }
 
-    /// Retire un processus d'un cgroup.
+    /// Removes a process from a cgroup.
     pub fn remove_process(&self, cg_id: u32) {
         if let Some(cg) = self.get(cg_id) {
             cg.pop.fetch_sub(1, Ordering::Relaxed);
@@ -214,7 +214,7 @@ impl CgroupTable {
         }
     }
 
-    /// Comptabilise du temps CPU (appelé par arch/timer).
+    /// Accounts for CPU time (called by arch/timer).
     pub fn account_cpu(&self, cg_id: u32, us: u64) {
         if let Some(cg) = self.get(cg_id) {
             cg.cpu_time_us.fetch_add(us, Ordering::Relaxed);
@@ -222,11 +222,11 @@ impl CgroupTable {
     }
 }
 
-/// Table globale.
+/// Global table.
 static CGROUP_TABLE: CgroupTable = CgroupTable::new();
 static CGROUP_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Handle vers un cgroup (type opaque utilisé dans le PCB).
+/// Handle to a cgroup (opaque type used in PCB).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct CgroupHandle(pub u32);
@@ -235,12 +235,12 @@ impl CgroupHandle {
     pub const ROOT: Self = Self(ROOT_CGROUP_ID);
 }
 
-/// Initialise le cgroup racine.
+/// Initializes root cgroup.
 ///
-/// Idempotent: le boot l'appelle avant `scheduler::init()` pour que les
-/// runqueues ne puissent jamais observer un cgroup racine absent, puis
-/// `process::init()` le rappelle pendant l'initialisation complète process.
-/// Les champs non-atomiques (id, parent_id) sont déjà 0 par construction statique.
+/// Idempotent: boot calls this before `scheduler::init()` so runqueues
+/// can never observe a missing root cgroup, then `process::init()` calls it
+/// again during full process initialization.
+/// Non-atomic fields (id, parent_id) are already 0 by static construction.
 pub fn init() {
     if CGROUP_INITIALIZED.swap(true, Ordering::AcqRel) {
         return;
@@ -256,7 +256,7 @@ pub fn is_initialized() -> bool {
     CGROUP_INITIALIZED.load(Ordering::Acquire)
 }
 
-/// Accède à la table globale.
+/// Accesses global table.
 pub fn cgroup_table() -> &'static CgroupTable {
     &CGROUP_TABLE
 }

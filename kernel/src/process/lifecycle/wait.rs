@@ -1,14 +1,14 @@
 // kernel/src/process/lifecycle/wait.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// waitpid() — Attente de la terminaison d'un processus fils (Exo-OS Couche 1.5)
+// waitpid() — Waiting for child process termination (Exo-OS Layer 1.5)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémentation :
-//   • Scan de la registry pour trouver le fils Zombie.
-//   • Si non trouvé et WNOHANG absent : blocage sur une wait_queue.
-//   • La SIGCHLD handler réveille la wait_queue.
-//   • Retour du PID terminé + code de sortie.
+// Implementation:
+//   • Scan registry to find Zombie child.
+//   • If not found and WNOHANG absent: block on wait_queue.
+//   • SIGCHLD handler wakes up wait_queue.
+//   • Return terminated PID + exit code.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::process::core::pcb::ProcessState;
@@ -21,18 +21,18 @@ use core::sync::atomic::Ordering;
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Options de waitpid (WNOHANG, WUNTRACED, WCONTINUED).
+/// Options for waitpid (WNOHANG, WUNTRACED, WCONTINUED).
 #[derive(Copy, Clone, Default, Debug)]
 pub struct WaitOptions(pub u32);
 
 impl WaitOptions {
-    /// Retour immédiat si aucun fils n'est terminé.
+    /// Immediate return if no child has terminated.
     pub const WNOHANG: u32 = 1 << 0;
-    /// Rapporté quand un fils est arrêté (SIGSTOP).
+    /// Reported when a child is stopped (SIGSTOP).
     pub const WUNTRACED: u32 = 1 << 1;
-    /// Rapporté quand un fils reprend (SIGCONT).
+    /// Reported when a child resumes (SIGCONT).
     pub const WCONTINUED: u32 = 1 << 2;
-    /// Attendre n'importe quel fils (pid=-1).
+    /// Wait for any child (pid=-1).
     pub const WALL: u32 = 1 << 3;
 
     pub fn has(self, flag: u32) -> bool {
@@ -40,44 +40,44 @@ impl WaitOptions {
     }
 }
 
-/// Résultat d'un waitpid réussi.
+/// Result of a successful waitpid.
 #[derive(Debug, Clone, Copy)]
 pub struct WaitResult {
-    /// PID du fils terminé (ou arrêté/continué).
+    /// Terminated (or stopped/continued) child PID.
     pub pid: Pid,
-    /// Code de sortie brut (wstatus POSIX : exit_code << 8).
+    /// Raw exit status (POSIX wstatus: exit_code << 8).
     pub wstatus: u32,
-    /// Raison de la terminaison.
+    /// Termination reason.
     pub reason: WaitReason,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitReason {
-    /// Terminaison normale (exit()).
+    /// Normal termination (exit()).
     Exited,
-    /// Tué par un signal.
+    /// Killed by a signal.
     Signaled,
-    /// Arrêté (SIGSTOP).
+    /// Stopped (SIGSTOP).
     Stopped,
-    /// Repris (SIGCONT).
+    /// Resumed (SIGCONT).
     Continued,
 }
 
-/// Erreur de waitpid.
+/// waitpid error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitError {
-    /// Aucun fils correspondant (ECHILD).
+    /// No matching child (ECHILD).
     NoChild,
-    /// Aucun fils terminé et WNOHANG positionné (EAGAIN).
+    /// No terminated child and WNOHANG set (EAGAIN).
     WouldBlock,
-    /// Attente interrompue par un signal (EINTR).
+    /// Wait interrupted by signal (EINTR).
     Interrupted,
-    /// PID demandé invalide.
+    /// Invalid requested PID.
     InvalidPid,
 }
 
 impl WaitResult {
-    /// Encode un code de sortie normal (exit_code << 8, signal=0).
+    /// Encodes a normal exit code (exit_code << 8, signal=0).
     pub fn exited(pid: Pid, code: u8) -> Self {
         Self {
             pid,
@@ -86,7 +86,7 @@ impl WaitResult {
         }
     }
 
-    /// Encode un code de terminaison par signal (code POSIX).
+    /// Encodes a termination code by signal (POSIX code).
     pub fn signaled(pid: Pid, sig: u8, core_dumped: bool) -> Self {
         let dump_bit = if core_dumped { 0x80u32 } else { 0 };
         Self {
@@ -98,32 +98,32 @@ impl WaitResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WaitTable — table des parents en attente
+// WaitTable — waiting parents table
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::scheduler::sync::spinlock::SpinLock;
 use crate::scheduler::sync::wait_queue::WaitQueue;
 
-/// Entrée dans la table d'attente des parents.
+/// Entry in waiting parents table.
 #[allow(dead_code)]
 struct WaitEntry {
-    /// PID du parent attendant.
+    /// Waiting parent PID.
     parent_pid: u32,
-    /// PID du fils attendu (0 = n'importe quel fils du parent).
+    /// Awaited child PID (0 = any child of parent).
     child_pid: u32,
-    /// Résultat déposé par SIGCHLD / exit().
+    /// Result posted by SIGCHLD / exit().
     result_pid: core::sync::atomic::AtomicU32,
     result_code: core::sync::atomic::AtomicU32,
 }
 
-/// Table des wait en cours — max 512 entrees simultanées.
+/// Active wait table — max 512 simultaneous entries.
 #[allow(dead_code)]
 struct WaitTable {
     entries: SpinLock<[Option<WaitEntry>; 512]>,
     queue: WaitQueue,
 }
 
-// SAFETY: WaitTable accessible depuis plusieurs CPUs, protégé par SpinLock.
+// SAFETY: WaitTable accessible across multiple CPUs, protected by SpinLock.
 unsafe impl Sync for WaitTable {}
 
 static WAIT_TABLE: WaitQueue = WaitQueue::new();
@@ -132,51 +132,51 @@ static WAIT_TABLE: WaitQueue = WaitQueue::new();
 // do_waitpid
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Attend la terminaison d'un processus fils.
+/// Waits for a child process to terminate.
 ///
 /// # Arguments
-/// * `caller_pid`  — PID du processus appelant.
-/// * `wait_pid`    — PID à attendre (−0 = n'importe quel fils).
-/// * `opts`        — flags d'attente.
-/// * `caller_tcb`  — TCB du thread appelant (pour blocage).
+/// * `caller_pid` — calling process PID.
+/// * `wait_pid` — PID to wait for (−0 = any child).
+/// * `opts` — wait flags.
+/// * `caller_tcb` — calling thread TCB (for blocking).
 pub fn do_waitpid(
     caller_pid: Pid,
     wait_pid: i32,
     opts: WaitOptions,
     caller_tcb: &crate::scheduler::core::task::ThreadControlBlock,
 ) -> Result<WaitResult, WaitError> {
-    // Scan rapide : chercher un fils déjà Zombie dans la registry.
+    // Fast scan: look for an already Zombie child in the registry.
     let result = reap_zombie_child(caller_pid, wait_pid, opts);
     if let Some(r) = result {
         return Ok(r);
     }
-    // Aucun fils Zombie trouvé.
+    // No Zombie child found.
     if opts.has(WaitOptions::WNOHANG) {
-        // Vérifier si au moins un fils existe.
+        // Check if at least one child exists.
         if has_children(caller_pid) {
             return Err(WaitError::WouldBlock);
         } else {
             return Err(WaitError::NoChild);
         }
     }
-    // Bloquer — attendre la notification via SIGCHLD/wait_queue.
-    // NOTE : la wait_queue utilise l'EmergencyPool (RÈGLE WAITQ-01).
-    // Boucle : les wakeup spurieux sont tolérés.
+    // Block — wait for notification via SIGCHLD/wait_queue.
+    // NOTE: wait_queue uses EmergencyPool (RULE WAITQ-01).
+    // Loop: spurious wakeups are tolerated.
     loop {
-        // Tenter de récolter immédiatement avant d'interrompre sur signal pending
+        // Attempt to reap immediately before interrupting on pending signal
         if let Some(r) = reap_zombie_child(caller_pid, wait_pid, opts) {
             return Ok(r);
         }
-        // Vérifier signal pending (EINTR si signal non-SIGCHLD).
+        // Check pending signal (EINTR if non-SIGCHLD signal).
         if caller_tcb.has_signal_pending() {
             return Err(WaitError::Interrupted);
         }
-        // Se mettre en attente sur WAIT_TABLE.
-        // SAFETY: WaitQueue EmergencyPool (WAITQ-01); caller_tcb TCB courant, pas d'alias &mut actif.
+        // Put self on wait in WAIT_TABLE.
+        // SAFETY: WaitQueue EmergencyPool (WAITQ-01); caller_tcb current TCB, no active &mut alias.
         unsafe {
             WAIT_TABLE.wait_interruptible(caller_tcb as *const _ as *mut _);
         }
-        // Réessayer.
+        // Retry.
         if let Some(r) = reap_zombie_child(caller_pid, wait_pid, opts) {
             return Ok(r);
         }
@@ -186,7 +186,7 @@ pub fn do_waitpid(
     }
 }
 
-/// Réveille tous les parents en attente (appelé par SIGCHLD delivery).
+/// Wakes up all waiting parents (called by SIGCHLD delivery).
 pub fn wake_waiting_parents(child_pid: Pid, parent_pid: Pid) {
     let _ = (child_pid, parent_pid);
     WAIT_TABLE.notify_all();
@@ -221,9 +221,9 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
             .free_addr_space(addr_space_ptr);
     }
-    // FIX-SEC-T1.1 : remettre à zéro l'état de restriction zero-trust AVANT de
-    // recycler le PID — un futur process réutilisant ce numéro doit repartir sans
-    // restriction héritée du défunt.
+    // FIX-SEC-T1.1: reset zero-trust restriction state to zero BEFORE
+    // recycling PID — a future process reusing this number must start without
+    // restrictions inherited from the deceased.
     crate::security::zero_trust::clear_process_restrictions(candidate.pid.0);
     PID_ALLOCATOR.free(candidate.pid.0);
 
@@ -238,7 +238,7 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     Some(wait_res)
 }
 
-/// Scanne la registry pour trouver un fils Zombie du parent.
+/// Scans registry to find a Zombie child of parent.
 fn scan_zombie_children(
     parent_pid: Pid,
     wait_pid: i32,
@@ -266,7 +266,7 @@ fn scan_zombie_children(
     found
 }
 
-/// Vérifie si le parent a au moins un fils actif.
+/// Checks if parent has at least one active child.
 fn has_children(parent_pid: Pid) -> bool {
     let mut found = false;
     PROCESS_REGISTRY.for_each(|pcb| {
