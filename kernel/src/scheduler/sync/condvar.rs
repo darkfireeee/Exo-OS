@@ -1,20 +1,20 @@
 // kernel/src/scheduler/sync/condvar.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CondVar — variable de condition pour KMutex
+// CondVar — condition variable for KMutex
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémente le motif classique :
+// Implements classic pattern:
 //   mutex.lock_blocking(tid, tcb)
 //   while !condition {
-//       condvar.wait_on(tcb, &mut mutex_guard);  ← relâche le mutex, dort, réacquiert
+//       condvar.wait_on(tcb, &mut mutex_guard);  ← releases mutex, sleeps, reacquires
 //   }
 //
-// RÈGLE WAITQ-01 : les WaitNodes sont alloués depuis l'EmergencyPool.
+// RULE WAITQ-01: WaitNodes are allocated from EmergencyPool.
 //
-// GARANTIE : wait_on() est équivalent à POSIX pthread_cond_wait() — aucune perte
-// de signal si notify_one/all est appelé après l'insertion du thread dans la queue
-// mais avant qu'il ne dorme (grâce au numéro de séquence).
+// GUARANTEE: wait_on() is equivalent to POSIX pthread_cond_wait() — zero signal
+// loss if notify_one/all is called after thread insertion into queue
+// but before it sleeps (thanks to sequence number).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
@@ -23,16 +23,16 @@ use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Compteurs d'instrumentation.
+/// Instrumentation counters.
 pub static CONDVAR_WAITS: AtomicU64 = AtomicU64::new(0);
 pub static CONDVAR_WAKEUPS: AtomicU64 = AtomicU64::new(0);
 pub static CONDVAR_SPURIOUS: AtomicU64 = AtomicU64::new(0);
 
 pub struct CondVar {
     waiters: WaitQueue,
-    /// Numéro de séquence : incrémenté à chaque notify_one/notify_all.
-    /// Permet de détecter un signal arrivé AVANT que wait_on() dorme
-    /// (évite la perte de signal — race condition classique).
+    /// Sequence number: incremented on each notify_one/notify_all.
+    /// Allows detecting a signal arriving BEFORE wait_on() sleeps
+    /// (prevents lost wakeups — classic race condition).
     seq: AtomicU64,
 }
 
@@ -55,47 +55,47 @@ impl CondVar {
 
     // ─── Notification ────────────────────────────────────────────────────────
 
-    /// Réveille exactement un thread en attente sur cette CondVar.
+    /// Wakes up exactly one thread waiting on this CondVar.
     ///
     /// # Safety
-    /// Appelé avec le mutex associé tenu ET préemption désactivée.
+    /// Called with associated mutex held AND preemption disabled.
     pub unsafe fn notify_one(&mut self) {
         self.seq.fetch_add(1, Ordering::Release);
         self.waiters.wake_one();
         CONDVAR_WAKEUPS.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Réveille tous les threads en attente.
+    /// Wakes up all waiting threads.
     ///
     /// # Safety
-    /// Appelé avec le mutex associé tenu ET préemption désactivée.
+    /// Called with associated mutex held AND preemption disabled.
     pub unsafe fn notify_all(&mut self) {
         self.seq.fetch_add(1, Ordering::Release);
         let n = self.waiters.wake_all();
         CONDVAR_WAKEUPS.fetch_add(n as u64, Ordering::Relaxed);
     }
 
-    // ─── Attente ──────────────────────────────────────────────────────────────
+    // ─── Wait ───────────────────────────────────────────────────────────────
 
-    /// Relâche `guard`, bloque le thread courant sur la CondVar, puis réacquiert
-    /// le mutex avant de retourner.
+    /// Releases `guard`, blocks current thread on CondVar, then reacquires
+    /// mutex before returning.
     ///
-    /// Équivalent POSIX de `pthread_cond_wait(cond, mutex)` :
-    ///  1. Lire le numéro de séquence (snapshot atomique).
-    ///  2. Allouer un WaitNode depuis l'EmergencyPool (RÈGLE WAITQ-01).
-    ///  3. Insérer dans la liste d'attente.
-    ///  4. Relâcher le mutex (Drop sur `guard`).
-    ///  5. Marquer le TCB comme Sleeping.
-    ///  6. Attendre jusqu'au changement du numéro de séquence (reveil).
-    ///  7. Réacquérir le mutex via `lock_blocking()`.
+    /// POSIX equivalent of `pthread_cond_wait(cond, mutex)`:
+    ///  1. Read sequence number (atomic snapshot).
+    ///  2. Allocate a WaitNode from EmergencyPool (RULE WAITQ-01).
+    ///  3. Insert into wait list.
+    ///  4. Release mutex (Drop on `guard`).
+    ///  5. Mark TCB as Sleeping.
+    ///  6. Wait until sequence number changes (wakeup).
+    ///  7. Reacquire mutex via `lock_blocking()`.
     ///
     /// # Safety
-    /// - `tcb` doit pointer vers le TCB valide du thread courant.
-    /// - Appelé avec le mutex tenu (fourni via `guard`).
-    /// - Préemption désactivée chez l'appelant (ou IrqGuard actif).
+    /// - `tcb` must point to valid TCB of current thread.
+    /// - Called with mutex held (provided via `guard`).
+    /// - Preemption disabled at caller (or active IrqGuard).
     ///
-    /// # Retour
-    /// Retourne un guard sur le mutex nouvellement réacquis.
+    /// # Return
+    /// Returns a guard on the newly reacquired mutex.
     pub unsafe fn wait_on<'a, T>(
         &mut self,
         tcb: *mut ThreadControlBlock,
@@ -103,15 +103,15 @@ impl CondVar {
     ) -> KMutexGuard<'a, T> {
         CONDVAR_WAITS.fetch_add(1, Ordering::Relaxed);
 
-        // Snapshot du numéro de séquence (conservé pour diagnostic / tests).
+        // Sequence number snapshot (preserved for diagnostic / tests).
         let _seq_before = self.seq.load(Ordering::Acquire);
 
-        // Allouer un WaitNode depuis l'EmergencyPool (RÈGLE WAITQ-01).
+        // Allocate a WaitNode from EmergencyPool (RULE WAITQ-01).
         let node_opt: Option<NonNull<WaitNode>> = WaitNode::alloc(tcb, 0);
 
-        // Extraire le mutex et le TID du thread avant de relâcher le guard.
-        // SAFETY: Le guard contient une référence au mutex — on récupère le TID
-        // via le TCB (tid est dans la CL1, lecture seule ici).
+        // Extract mutex and thread TID before releasing guard.
+        // SAFETY: Guard contains a reference to mutex — retrieve TID
+        // via TCB (tid is in CL1, read-only here).
         let tid = if !tcb.is_null() {
             (*tcb).tid as u32
         } else {
@@ -120,40 +120,40 @@ impl CondVar {
         let mutex_ref = guard.mutex;
 
         if let Some(node) = node_opt {
-            // Insérer dans la wait queue AVANT de relâcher le mutex.
-            // Cela garantit qu'un notify_one() après le relâchement ne sera pas perdu.
+            // Insert into wait queue BEFORE releasing mutex.
+            // Ensures a notify_one() after release is not lost.
             self.waiters.insert(node);
         }
 
-        // Marquer le TCB comme endormi AVANT de relâcher le mutex.
+        // Mark TCB as asleep BEFORE releasing mutex.
         if !tcb.is_null() {
             (*tcb).set_state(TaskState::Sleeping);
         }
 
-        // Relâcher le mutex (Drop du guard).
+        // Release mutex (Drop guard).
         drop(guard);
 
-        // BUG-FIX O : utiliser schedule_block() au lieu d'une boucle active.
-        // La boucle active précédente causait deux problèmes critiques :
-        //   1. Brûlait 100% CPU pendant toute la durée de l'attente.
-        //   2. Double-scheduling : notify_one() appelait rq.enqueue() pendant
-        //      que ce thread tournait encore sur son CPU, autorisant une exécution
-        //      simultanée du même TCB sur deux CPUs différents.
-        // schedule_block() suspend proprement le thread en appelant context_switch
-        // vers le prochain thread de la run queue, sans re-enqueuer le courant.
-        // Le thread sera repris uniquement quand notify_one()/notify_all() appelle
+        // BUG-FIX O: use schedule_block() instead of a busy loop.
+        // The previous busy loop caused two critical issues:
+        //   1. Burned 100% CPU during the entire wait.
+        //   2. Double-scheduling: notify_one() called rq.enqueue() while
+        //      this thread was still spinning on its CPU, permitting concurrent
+        //      execution of the same TCB on two distinct CPUs.
+        // schedule_block() properly suspends the thread by calling context_switch
+        // to the next thread of the run queue, without re-enqueuing the current one.
+        // The thread will be resumed only when notify_one()/notify_all() calls
         // wake_one() → try_transition(Sleeping, Runnable) + rq.enqueue().
         if !tcb.is_null() {
             let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
             if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                 let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
-                // SAFETY: cpu_raw < MAX_CPUS, run queue initialisée par scheduler::init().
+                // SAFETY: cpu_raw < MAX_CPUS, run queue initialized by scheduler::init().
                 let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
                 crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
             }
         }
 
-        // Marquer le thread comme de nouveau prêt s'il est encore endormi.
+        // Mark thread as ready again if still asleep.
         if !tcb.is_null() {
             let state = (*tcb).state();
             if state == TaskState::Sleeping {
@@ -162,17 +162,17 @@ impl CondVar {
             }
         }
 
-        // Réacquérir le mutex.
+        // Reacquire mutex.
         mutex_ref.lock_blocking(tid, tcb)
     }
 
-    /// Séquence de notification courante (lecture externe pour tests/debug).
+    /// Current notification sequence (external read for tests/debug).
     #[inline(always)]
     pub fn seq(&self) -> u64 {
         self.seq.load(Ordering::Relaxed)
     }
 
-    /// Nombre de threads actuellement en attente.
+    /// Number of threads currently waiting.
     #[inline(always)]
     pub fn waiters_count(&self) -> usize {
         self.waiters.count()

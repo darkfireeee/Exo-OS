@@ -1,18 +1,18 @@
 // kernel/src/scheduler/sync/wait_queue.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Wait Queue — file d'attente de threads (Exo-OS · Couche 1)
+// Wait Queue — thread wait queue (Exo-OS · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE WAITQ-01 : Les WaitNode sont alloués EXCLUSIVEMENT depuis l'EmergencyPool
-//   (jamais depuis l'allocateur heap — risque de deadlock pendant la réclamation).
+// RULE WAITQ-01: WaitNodes are allocated EXCLUSIVELY from EmergencyPool
+//   (never from heap allocator — risk of deadlock during reclamation).
 //
-// Fonctionnement :
-//   • Un thread qui doit attendre appelle `wait_queue_wait()` avec un WaitNode
-//     pré-alloué depuis l'EmergencyPool.
-//   • Il est inséré dans la liste de la WaitQueue, son état passe à BLOCKED.
-//   • `wait_queue_wake_one()` / `wait_queue_wake_all()` réveillent les threads.
-//   • Le WaitNode est libéré vers l'EmergencyPool APRÈS le réveil.
+// Operation:
+//   • A thread needing to wait calls `wait_queue_wait()` with a WaitNode
+//     pre-allocated from EmergencyPool.
+//   • It is inserted into WaitQueue list, its state transitions to BLOCKED.
+//   • `wait_queue_wake_one()` / `wait_queue_wake_all()` wake threads up.
+//   • The WaitNode is freed back to EmergencyPool AFTER wakeup.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::spinlock::SpinLock;
@@ -23,20 +23,20 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EmergencyPool FFI (Couche 0 — memory/)
+// EmergencyPool FFI (Layer 0 — memory/)
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" {
-    /// Alloue un WaitNode depuis l'EmergencyPool. Retourne null si épuisé.
+    /// Allocates a WaitNode from EmergencyPool. Returns null if exhausted.
     fn emergency_pool_alloc_wait_node() -> *mut WaitNode;
-    /// Libère un WaitNode vers l'EmergencyPool.
+    /// Frees a WaitNode back to EmergencyPool.
     fn emergency_pool_free_wait_node(node: *mut WaitNode);
-    /// Publie/réinitialise le pool de blocs scheduler pendant le boot.
+    /// Publishes/reinitializes scheduler block pool during boot.
     fn emergency_pool_init_wait_node_pool();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WaitNode — nœud d'une liste chaînée intrusive
+// WaitNode — node of an intrusive linked list
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -44,7 +44,7 @@ pub struct WaitNode {
     pub tcb: *mut ThreadControlBlock,
     pub next: *mut WaitNode,
     pub prev: *mut WaitNode,
-    /// Drapeaux : bit 0 = EXCLUSIVE (réveiller un seul thread).
+    /// Flags: bit 0 = EXCLUSIVE (wake single thread).
     pub flags: u32,
     _pad: u32,
 }
@@ -61,10 +61,10 @@ const _: () = assert!(
 impl WaitNode {
     pub const EXCLUSIVE: u32 = 1 << 0;
 
-    /// Alloue un nœud depuis l'EmergencyPool.
+    /// Allocates a node from EmergencyPool.
     ///
     /// # Safety
-    /// RÈGLE WAITQ-01 : appel OBLIGATOIRE via cette fonction — jamais `Box::new`.
+    /// RULE WAITQ-01: MANDATORY call through this function — never `Box::new`.
     pub unsafe fn alloc(tcb: *mut ThreadControlBlock, flags: u32) -> Option<NonNull<WaitNode>> {
         let ptr = emergency_pool_alloc_wait_node();
         let node = NonNull::new(ptr)?;
@@ -76,22 +76,22 @@ impl WaitNode {
         Some(node)
     }
 
-    /// Libère le nœud vers l'EmergencyPool.
+    /// Frees node back to EmergencyPool.
     ///
     /// # Safety
-    /// Le nœud ne doit plus être dans aucune liste.
+    /// Node must no longer be in any list.
     pub unsafe fn free(node: NonNull<WaitNode>) {
         emergency_pool_free_wait_node(node.as_ptr());
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WaitQueue — liste d'attente protégée par spinlock
+// WaitQueue — wait list protected by spinlock
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::cell::UnsafeCell;
 
-/// Données mutables de la file d'attente (toujours accédées sous `lock`).
+/// Mutable data of wait queue (always accessed under `lock`).
 struct WaitQueueData {
     head: *mut WaitNode,
     count: usize,
@@ -102,8 +102,8 @@ pub struct WaitQueue {
     lock: SpinLock<()>,
 }
 
-// SAFETY: WaitQueue est protégé par un SpinLock. Les mutations passent par
-// UnsafeCell::get() sous la protection du lock. Sûr Sync/Send.
+// SAFETY: WaitQueue is protected by a SpinLock. Mutations occur via
+// UnsafeCell::get() under lock protection. Safe Sync/Send.
 unsafe impl Send for WaitQueue {}
 unsafe impl Sync for WaitQueue {}
 
@@ -124,10 +124,10 @@ impl WaitQueue {
         }
     }
 
-    /// Insère un nœud à la fin de la liste (FIFO).
+    /// Inserts a node at end of list (FIFO).
     ///
     /// # Safety
-    /// Le `node` doit être valide et non encore dans une liste.
+    /// `node` must be valid and not currently in any list.
     pub unsafe fn insert(&self, node: NonNull<WaitNode>) {
         let _g = self.lock.lock();
         let d = &mut *self.data.get();
@@ -148,10 +148,10 @@ impl WaitQueue {
         d.count += 1;
     }
 
-    /// Retire un nœud de la liste.
+    /// Removes a node from list.
     ///
     /// # Safety
-    /// Le `node` doit être dans cette liste.
+    /// `node` must be in this list.
     pub unsafe fn remove(&self, node: NonNull<WaitNode>) {
         let _g = self.lock.lock();
         let d = &mut *self.data.get();
@@ -171,11 +171,11 @@ impl WaitQueue {
         }
     }
 
-    /// Réveille le premier thread en attente.
-    /// Thread-safe — prend le lock interne.
+    /// Wakes up first waiting thread.
+    /// Thread-safe — acquires internal lock.
     pub fn notify_one(&self) -> bool {
         let _g = self.lock.lock();
-        // SAFETY: sous le lock, accès exclusif à data.
+        // SAFETY: under lock, exclusive access to data.
         unsafe {
             let d = &mut *self.data.get();
             if d.head.is_null() {
@@ -192,14 +192,14 @@ impl WaitQueue {
 
             let tcb = (*node).tcb;
             if !tcb.is_null() {
-                // BUG-FIX K : vérifier que la transition CAS réussit.
-                // Si le thread n'est pas en état Sleeping (ex. déjà Runnable
-                // à cause d'un timeout ou signal concurrent), ne PAS l'enfiler
-                // dans la run queue : il y est peut-être déjà → double-scheduling.
+                // BUG-FIX K: verify CAS transition succeeds.
+                // If thread is not in Sleeping state (e.g. already Runnable
+                // due to concurrent timeout or signal), DO NOT enqueue
+                // into run queue: it might already be there → double-scheduling.
                 let transitioned = (*tcb).try_transition(TaskState::Sleeping, TaskState::Runnable);
                 if transitioned {
-                    // BUG-FIX L : valider les bornes de cpu_id avant run_queue().
-                    // En release mode, debug_assert est no-op → UB si cpu hors limites.
+                    // BUG-FIX L: validate cpu_id bounds before run_queue().
+                    // In release mode, debug_assert is no-op → UB if cpu out of bounds.
                     let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                         let _irq = crate::scheduler::core::preempt::IrqGuard::new();
@@ -215,8 +215,8 @@ impl WaitQueue {
         }
     }
 
-    /// Réveille TOUS les threads en attente.
-    /// Thread-safe — prend le lock interne.
+    /// Wakes up ALL waiting threads.
+    /// Thread-safe — acquires internal lock.
     pub fn notify_all(&self) -> usize {
         let mut woken = 0usize;
         while self.notify_one() {
@@ -227,64 +227,64 @@ impl WaitQueue {
 
     pub fn is_empty(&self) -> bool {
         let _g = self.lock.lock();
-        // SAFETY: sous le lock.
+        // SAFETY: under lock.
         unsafe { (*self.data.get()).head.is_null() }
     }
 
     pub fn count(&self) -> usize {
         let _g = self.lock.lock();
-        // SAFETY: sous le lock.
+        // SAFETY: under lock.
         unsafe { (*self.data.get()).count }
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Compatibilité amont — wrappers &mut self délégant vers &self
+    // Upstream compatibility — &mut self wrappers delegating to &self
     // ─────────────────────────────────────────────────────────────────────
 
-    /// Alias de `notify_one` pour compatibilité.
+    /// Alias of `notify_one` for compatibility.
     ///
     /// # Safety
-    /// Appelé en contexte valide avec accès thread-safe.
+    /// Called in valid context with thread-safe access.
     #[inline]
     pub unsafe fn wake_one(&self) -> bool {
         self.notify_one()
     }
 
-    /// Alias de `notify_all` pour compatibilité.
+    /// Alias of `notify_all` for compatibility.
     ///
     /// # Safety
-    /// Appelé en contexte valide avec accès thread-safe.
+    /// Called in valid context with thread-safe access.
     #[inline]
     pub unsafe fn wake_all(&self) -> usize {
         self.notify_all()
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Blocage interruptible
+    // Interruptible blocking
     // ─────────────────────────────────────────────────────────────────────
 
-    /// Bloque le thread courant jusqu'au prochain `notify_one`/`notify_all`.
-    /// Retourne `true` si réveillé, `false` si interrompu par signal (-EINTR).
+    /// Blocks current thread until next `notify_one`/`notify_all`.
+    /// Returns `true` if woken, `false` if interrupted by signal (-EINTR).
     ///
-    /// RÈGLE WAITQ-01 : WaitNode alloué depuis l'EmergencyPool.
+    /// RULE WAITQ-01: WaitNode allocated from EmergencyPool.
     ///
     /// # Safety
-    /// `tcb` doit pointer vers le TCB du thread courant.
-    /// Appelé avec le thread dans un état cohérent (Running).
+    /// `tcb` must point to TCB of current thread.
+    /// Called with thread in a consistent state (Running).
     pub unsafe fn wait_interruptible(&self, tcb: *mut ThreadControlBlock) -> bool {
-        // 1. Allouer un WaitNode depuis l'EmergencyPool.
+        // 1. Allocate a WaitNode from EmergencyPool.
         let node = match WaitNode::alloc(tcb, 0) {
             Some(n) => n,
-            None => return false, // EmergencyPool épuisé
+            None => return false, // EmergencyPool exhausted
         };
 
-        // 2. Mettre l'état en Sleeping AVANT d'insérer (évite réveil manqué).
+        // 2. Set state to Sleeping BEFORE inserting (avoids missed wakeup).
         (*tcb).set_state(TaskState::Sleeping);
 
-        // 3. Insérer dans la file d'attente.
+        // 3. Insert into wait queue.
         self.insert(node);
 
-        // 4. Vérification du signal (APRÈS insertion — fenêtre de réveil manqué évitée).
+        // 4. Signal check (AFTER insertion — missed wakeup window avoided).
         if (*tcb).has_signal_pending() {
             self.remove(node);
             WaitNode::free(node);
@@ -292,34 +292,34 @@ impl WaitQueue {
             return false; // -EINTR
         }
 
-        // 5. Bloquer — schedule_block ne revient que quand le thread est réveillé.
-        // V-38 / PREEMPT-BLOCK : INTERDIT de bloquer sous PreemptGuard actif.
+        // 5. Block — schedule_block only returns when thread is woken.
+        // V-38 / PREEMPT-BLOCK: FORBIDDEN to block under active PreemptGuard.
         crate::scheduler::core::preempt::assert_preempt_enabled();
         let cpu_id = CpuId((*tcb).cpu_id.load(Ordering::Relaxed) as u32);
         let rq = run_queue(cpu_id);
         crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
 
-        // 6. Après réveil : nœud déjà libéré par le waker.
+        // 6. After wakeup: node already freed by waker.
         !(*tcb).has_signal_pending()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Métriques
+// Metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static WAITQ_WAKEUPS: AtomicU64 = AtomicU64::new(0);
 pub static WAITQ_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 
-/// Initialise le sous-système wait_queue.
+/// Initializes wait_queue subsystem.
 ///
-/// Vérifie que l'EmergencyPool est déjà initialisé.
+/// Verifies that EmergencyPool is already initialized.
 ///
 /// # Safety
-/// Appelé depuis `scheduler::init()`, après `memory::init()`.
+/// Called from `scheduler::init()`, after `memory::init()`.
 pub unsafe fn init() {
     emergency_pool_init_wait_node_pool();
-    // Vérification : tenter une alloc/free de test depuis l'EmergencyPool.
+    // Verification: attempt test alloc/free from EmergencyPool.
     let test = emergency_pool_alloc_wait_node();
     if test.is_null() {
         crate::arch::x86_64::terminal::debug_write(b"WaitQueue: EmergencyPool non initialise\n");

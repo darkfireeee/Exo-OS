@@ -1,14 +1,14 @@
 // kernel/src/scheduler/stats/per_cpu.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Statistiques par CPU — compteurs atomiques hautes performances
+// Per-CPU statistics — high-performance atomic counters
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::smp::topology::MAX_CPUS;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc de statistiques par CPU (cache-aligné sur 64 octets)
+// Per-CPU statistics block (cache-aligned to 64 bytes)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[repr(C, align(64))]
@@ -47,7 +47,7 @@ impl CpuStats {
 static CPU_STATS: [CpuStats; MAX_CPUS] = [const { CpuStats::new() }; MAX_CPUS];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Accesseurs
+// Accessors
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn stats(cpu: usize) -> Option<&'static CpuStats> {

@@ -1,77 +1,77 @@
 // kernel/src/scheduler/timer/clock.rs
 //
 // ═════════════════════════════════════════════════════════════════════════════
-// Horloge scheduler — shim vers ktime_get_ns() (Exo-OS · Couche 1)
+// Scheduler clock — shim to ktime_get_ns() (Exo-OS · Layer 1)
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// ## Règle ARCH-TIME-01
-//   scheduler/timer/clock.rs NE mesure PAS le TSC, NE calibre PAS.
-//   scheduler_now_ns() = ktime_get_ns() — une ligne.
-//   Le TSC et sa calibration appartiennent EXCLUSIVEMENT à
+// ## Rule ARCH-TIME-01
+//   scheduler/timer/clock.rs DOES NOT measure TSC, DOES NOT calibrate.
+//   scheduler_now_ns() = ktime_get_ns() — one line.
+//   TSC and its calibration belong EXCLUSIVELY to
 //   `arch/x86_64/time/` (sources/, calibration/, ktime.rs).
 //
-// ## Ce que ce module fournit
-//   - `monotonic_ns()` / `monotonic_us()` — temps monotone, délèguent à ktime
-//   - `realtime_ns()` — temps UNIX, délègue à ktime
-//   - `scheduler_now_ns()` — alias sémantique pour le tick handler
-//   - `rdtsc()` / `rdtscp()` — lectures brutes pour profiling perf uniquement
-//     (pas pour le temps kernel — RÈGLE ARCH-TIME-02)
-//   - `init()` — shim de compatibilité ; en Phase 2b ktime est init'd par
-//     `time_init()` avant le scheduler, donc init() ici ne fait rien.
+// ## What this module provides
+//   - `monotonic_ns()` / `monotonic_us()` — monotonic time, delegates to ktime
+//   - `realtime_ns()` — UNIX time, delegates to ktime
+//   - `scheduler_now_ns()` — semantic alias for tick handler
+//   - `rdtsc()` / `rdtscp()` — raw reads for perf profiling only
+//     (not for kernel time — RULE ARCH-TIME-02)
+//   - `init()` — compatibility shim; in Phase 2b ktime is init'd by
+//     `time_init()` before scheduler, so init() here is a no-op.
 //
-// ## Ce que ce module NE fournit PAS (supprimé par rapport à Phase 2a)
-//   - TSC_HZ local          → utiliser `ktime::ktime_tsc_hz()` directement
-//   - TSC_AT_BOOT local     → utiliser `ktime::ktime_get_ns()` au besoin
-//   - tsc_to_ns() local     → utiliser `ktime::ktime_get_ns()` / déltas ktime
-//   Ces doublons violaient ARCH-TIME-01 et créaient une incohérence si la
-//   dérive TSC était corrigée dans ktime mais pas dans ce module.
+// ## What this module DOES NOT provide (removed from Phase 2a)
+//   - Local TSC_HZ          → use `ktime::ktime_tsc_hz()` directly
+//   - Local TSC_AT_BOOT     → use `ktime::ktime_get_ns()` as needed
+//   - Local tsc_to_ns()     → use `ktime::ktime_get_ns()` / ktime deltas
+//   These duplicates violated ARCH-TIME-01 and created inconsistency if
+//   TSC drift was corrected in ktime but not in this module.
 // ═════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Shim d'initialisation de compatibilité — no-op en Phase 2b.
+/// Compatibility initialization shim — no-op in Phase 2b.
 ///
-/// En Phase 2b, `time::time_init()` est appelé avant `scheduler::init()`.
-/// `ktime_get_ns()` est donc déjà opérationnel quand le scheduler démarre.
+/// In Phase 2b, `time::time_init()` is called before `scheduler::init()`.
+/// `ktime_get_ns()` is therefore already operational when scheduler starts.
 ///
-/// Conservé pour ne pas casser les call-sites existants.
+/// Kept to avoid breaking existing call-sites.
 ///
 /// # Safety
-/// Appelable depuis le BSP uniquement, avant l'activation du SMP.
+/// Callable from BSP only, before SMP activation.
 #[allow(unused_variables)]
 pub unsafe fn init(_tsc_hz: u64) {
-    // Phase 2b : rien à faire ici.
-    // La fréquence TSC est stockée dans KtimeState (ktime.rs)
-    // et mise à jour par drift/periodic.rs.
+    // Phase 2b: nothing to do here.
+    // TSC frequency is stored in KtimeState (ktime.rs)
+    // and updated by drift/periodic.rs.
     //
-    // Si ktime n'est pas encore initialisé (erreur de séquence), on détecte
-    // cela via l'assertion dans hrtimer::init() :
+    // If ktime is not yet initialized (sequence bug), detected
+    // via assertion in hrtimer::init():
     //   assert!(ktime_get_ns() > 0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Lectures TSC brutes — perf et diagnostics UNIQUEMENT
+// Raw TSC reads — perf and diagnostics ONLY
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// RÈGLE ARCH-TIME-02 : Ces fonctions NE DOIVENT PAS être utilisées pour
-// mesurer le temps kernel (timeouts, deltas, deadlines).
-// Utiliser ktime_get_ns() / monotonic_ns() à la place.
-// Ces fonctions restent utiles pour le profiling micro (mesure de latence
-// d'une fonction en cycles) là où ktime serait trop lourd.
+// RULE ARCH-TIME-02: These functions MUST NOT be used to
+// measure kernel time (timeouts, deltas, deadlines).
+// Use ktime_get_ns() / monotonic_ns() instead.
+// These functions remain useful for micro profiling (measuring latency
+// of a function in cycles) where ktime would add overhead.
 
-/// Lit le TSC via RDTSC (non sérialisé) — usage profiling uniquement.
+/// Reads TSC via RDTSC (non-serialized) — profiling usage only.
 ///
-/// RÈGLE ARCH-TIME-02 : NE PAS utiliser pour les délais/timeouts noyau.
-/// Pour le temps kernel, appeler `monotonic_ns()`.
+/// RULE ARCH-TIME-02: DO NOT use for kernel delays/timeouts.
+/// For kernel time, call `monotonic_ns()`.
 #[inline(always)]
 pub fn rdtsc() -> u64 {
     let lo: u32;
     let hi: u32;
-    // SAFETY: RDTSC est disponible sur tout x86_64.
-    //         Non sérialisé — peut être réordonné par le CPU ou le compilateur.
-    //         Acceptable uniquement pour le profiling, pas pour le temps kernel.
+    // SAFETY: RDTSC is available on all x86_64.
+    //         Non-serialized — can be reordered by CPU or compiler.
+    //         Acceptable only for profiling, not for kernel time.
     unsafe {
         core::arch::asm!(
             "rdtsc",
@@ -83,79 +83,79 @@ pub fn rdtsc() -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
-/// Lit le TSC avec la meilleure lecture ordonnée disponible — usage profiling uniquement.
+/// Reads TSC with best available ordered read — profiling usage only.
 ///
-/// RÈGLE ARCH-TIME-02 : NE PAS utiliser pour les délais/timeouts noyau.
-/// Préférer `monotonic_ns()` qui intègre l'offset per-CPU SMP.
+/// RULE ARCH-TIME-02: DO NOT use for kernel delays/timeouts.
+/// Prefer `monotonic_ns()` which incorporates SMP per-CPU offset.
 #[inline(always)]
 pub fn rdtscp() -> u64 {
     crate::arch::x86_64::time::sources::tsc::read_ordered_with_cpu().0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Temps monotone (ns depuis le boot) — RÈGLE ARCH-TIME-01
+// Monotonic time (ns since boot) — RULE ARCH-TIME-01
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le temps monotone en nanosecondes depuis le boot.
+/// Returns monotonic time in nanoseconds since boot.
 ///
-/// RÈGLE ARCH-TIME-01 : délègue à `ktime_get_ns()` — une ligne.
-/// Utilise le seqlock ISR-safe + TSC calibré + offset per-CPU SMP.
+/// RULE ARCH-TIME-01: delegates to `ktime_get_ns()` — one line.
+/// Uses ISR-safe seqlock + calibrated TSC + SMP per-CPU offset.
 ///
-/// Alias sémantique pour le tick handler et le scheduler :
+/// Semantic alias for tick handler and scheduler:
 /// `scheduler_now_ns()` → `monotonic_ns()` → `ktime_get_ns()`.
 #[inline]
 pub fn monotonic_ns() -> u64 {
     crate::arch::x86_64::time::ktime::ktime_get_ns()
 }
 
-/// Temps monotone en microsecondes depuis le boot.
+/// Monotonic time in microseconds since boot.
 #[inline]
 pub fn monotonic_us() -> u64 {
     monotonic_ns() / 1_000
 }
 
-/// Alias sémantique utilisé par le tick handler et pick_next_task().
+/// Semantic alias used by tick handler and pick_next_task().
 ///
-/// RÈGLE ARCH-TIME-01 : scheduler_now_ns() = ktime_get_ns() — une ligne.
-/// Ne lit pas le TSC directement — applique l'offset per-CPU SMP.
+/// RULE ARCH-TIME-01: scheduler_now_ns() = ktime_get_ns() — one line.
+/// Does not read TSC directly — applies SMP per-CPU offset.
 #[inline(always)]
 pub fn scheduler_now_ns() -> u64 {
     crate::arch::x86_64::time::ktime::ktime_get_ns()
 }
 
-/// Retourne le delta en ns entre maintenant et `start_ns`.
+/// Returns delta in ns between now and `start_ns`.
 ///
-/// RÈGLE ARCH-TIME-04 : comme ktime ne régresse jamais, le résultat est ≥ 0.
+/// RULE ARCH-TIME-04: as ktime never regresses, result is ≥ 0.
 #[inline(always)]
 pub fn elapsed_since_ns(start_ns: u64) -> u64 {
     monotonic_ns().wrapping_sub(start_ns)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Temps réel (ns depuis l'epoch UNIX)
+// Real time (ns since UNIX epoch)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le temps réel UNIX en nanosecondes.
+/// Returns UNIX real time in nanoseconds.
 ///
-/// RÈGLE ARCH-TIME-01 : délègue à `ktime_get_wall_ns()`.
-/// La synchronisation wall-clock est gérée par ktime.rs via `set_wall_time()`.
+/// RULE ARCH-TIME-01: delegates to `ktime_get_wall_ns()`.
+/// Wall-clock synchronization is managed by ktime.rs via `set_wall_time()`.
 #[inline]
 pub fn realtime_ns() -> u64 {
     crate::arch::x86_64::time::ktime::ktime_get_wall_ns()
 }
 
-/// Met à jour l'horloge réelle (appelé depuis RTC/NTP userspace).
+/// Updates real clock (called from userspace RTC/NTP).
 ///
-/// Délègue à `ktime::set_wall_time()` pour garantir la cohérence seqlock.
+/// Delegates to `ktime::set_wall_time()` to ensure seqlock consistency.
 ///
 /// # Safety
-/// Appelable une seule fois par source de synchronisation (RTC ou NTP).
-/// Thread-safe via le seqlock WALL_STATE dans ktime.rs.
+/// Callable once per sync source (RTC or NTP).
+/// Thread-safe via WALL_STATE seqlock in ktime.rs.
 pub unsafe fn set_realtime_from_epoch(epoch_ns: u64) {
     crate::arch::x86_64::time::ktime::set_wall_time(epoch_ns);
 }
 
-/// Retourne l'offset UNIX en ns (wall_ns = monotonic_ns + offset).
+/// Returns UNIX offset in ns (wall_ns = monotonic_ns + offset).
 #[inline]
 pub fn realtime_offset_ns() -> u64 {
     crate::arch::x86_64::time::ktime::ktime_rtoffset_ns()

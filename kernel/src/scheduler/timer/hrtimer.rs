@@ -1,25 +1,25 @@
 // kernel/src/scheduler/timer/hrtimer.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// HRTimer — minuteries haute résolution (ns) à base de liste triée
+// HRTimer — high-resolution timers (ns) based on sorted list
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Supporte jusqu'à MAX_HRTIMERS minuteries simultanées par CPU.
-// La liste est triée par expiration croissante (pas d'arbre rouge-noir en
-// no_alloc — tableau fixe trié par insertion).
+// Supports up to MAX_HRTIMERS concurrent timers per CPU.
+// List is sorted by increasing expiry (no red-black tree in
+// no_alloc — fixed array sorted by insertion).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::timer::clock::monotonic_ns;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_HRTIMERS: usize = 128;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structure d'une minuterie
+// Timer structure
 // ─────────────────────────────────────────────────────────────────────────────
 
 type HrTimerCallback = unsafe fn(u32, u64);
@@ -44,7 +44,7 @@ impl HrTimerEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Liste de minuteries par CPU
+// Per-CPU timer list
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct HrTimerList {
@@ -62,7 +62,7 @@ impl HrTimerList {
         }
     }
 
-    /// Insère une minuterie triée par expiration. Retourne son ID ou 0 si plein.
+    /// Inserts a timer sorted by expiry. Returns its ID or 0 if full.
     fn insert(&mut self, expiry_ns: u64, data: u64, cb: HrTimerCallback) -> u32 {
         if self.count >= MAX_HRTIMERS {
             return 0;
@@ -76,7 +76,7 @@ impl HrTimerList {
             data,
             callback: Some(cb),
         };
-        // Insertion triée par expiry_ns.
+        // Insertion sorted by expiry_ns.
         let mut pos = self.count;
         for i in 0..self.count {
             if self.entries[i].expiry_ns > expiry_ns {
@@ -84,7 +84,7 @@ impl HrTimerList {
                 break;
             }
         }
-        // Décaler vers la droite.
+        // Shift right.
         let mut j = self.count;
         while j > pos {
             self.entries[j] = self.entries[j - 1];
@@ -95,7 +95,7 @@ impl HrTimerList {
         id
     }
 
-    /// Annule la minuterie par ID.
+    /// Cancels timer by ID.
     fn cancel(&mut self, id: u32) -> bool {
         for i in 0..self.count {
             if self.entries[i].id == id {
@@ -112,13 +112,13 @@ impl HrTimerList {
         false
     }
 
-    /// Déclenche toutes les minuteries expirées. Retourne leur nombre.
+    /// Fires all expired timers. Returns count.
     unsafe fn fire_expired(&mut self) -> usize {
         let now = monotonic_ns();
         let mut fired = 0usize;
         while self.count > 0 && self.entries[0].expiry_ns <= now {
             let e = self.entries[0];
-            // Retirer en premier pour éviter la réentrance.
+            // Remove first to prevent reentrancy.
             let mut j = 0;
             while j + 1 < self.count {
                 self.entries[j] = self.entries[j + 1];
@@ -136,7 +136,7 @@ impl HrTimerList {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Instances globales (une par CPU — indexées par CPU ID)
+// Global instances (one per CPU — indexed by CPU ID)
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::scheduler::smp::topology::MAX_CPUS;
@@ -149,33 +149,33 @@ pub static HRTIMER_FIRED: AtomicU64 = AtomicU64::new(0);
 pub static HRTIMER_CANCELLED: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise les listes hrtimer pour `nr_cpus` CPUs.
+/// Initializes hrtimer lists for `nr_cpus` CPUs.
 ///
 /// # Safety
-/// Appelé une seule fois depuis `scheduler::init()`.
+/// Called once from `scheduler::init()`.
 pub unsafe fn init(nr_cpus: usize) {
     for cpu in 0..nr_cpus.min(MAX_CPUS) {
         HR_LISTS[cpu].write(HrTimerList::new());
     }
 }
 
-/// Arme une minuterie sur le CPU `cpu`, déclenchée `delay_ns` après maintenant.
+/// Arms a timer on CPU `cpu`, firing `delay_ns` after now.
 ///
 /// # Safety
-/// Préemption désactivée requise ; le CPU doit être initialisé.
+/// Requires preemption disabled; CPU must be initialized.
 pub unsafe fn arm(cpu: usize, delay_ns: u64, data: u64, cb: HrTimerCallback) -> u32 {
     let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let expiry = monotonic_ns().saturating_add(delay_ns);
     HR_LISTS[cpu].assume_init_mut().insert(expiry, data, cb)
 }
 
-/// Annule la minuterie `id` sur le CPU `cpu`.
+/// Cancels timer `id` on CPU `cpu`.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn cancel(cpu: usize, id: u32) -> bool {
     let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let r = HR_LISTS[cpu].assume_init_mut().cancel(id);
@@ -185,11 +185,11 @@ pub unsafe fn cancel(cpu: usize, id: u32) -> bool {
     r
 }
 
-/// Déclenche les minuteries expirées sur le CPU `cpu`.
-/// Appelé depuis le tick handler après chaque tick.
+/// Fires expired timers on CPU `cpu`.
+/// Called from tick handler after each tick.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn fire_expired(cpu: usize) -> usize {
     let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let fired = HR_LISTS[cpu].assume_init_mut().fire_expired();

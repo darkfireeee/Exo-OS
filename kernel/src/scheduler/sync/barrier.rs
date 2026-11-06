@@ -1,6 +1,6 @@
 // kernel/src/scheduler/sync/barrier.rs
 //
-// Barrière de synchronisation — attend que N threads arrivent au point commun.
+// Synchronization barrier — waits for N threads to arrive at a rendezvous point.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -19,18 +19,18 @@ impl KBarrier {
         }
     }
 
-    /// Signale l'arrivée du thread courant. Retourne `true` si c'est le dernier
-    /// (la barrière est franchie).
+    /// Signals arrival of current thread. Returns `true` if this is the last thread
+    /// (barrier is tripped).
     pub fn wait(&self) -> bool {
         let gen = self.generation.load(Ordering::Acquire);
         let prev = self.arrived.fetch_add(1, Ordering::AcqRel);
         if prev + 1 == self.target {
-            // Réinitialiser pour la prochaine utilisation.
+            // Reset for next generation.
             self.arrived.store(0, Ordering::Release);
             self.generation.fetch_add(1, Ordering::Release);
             return true;
         }
-        // Boucle active jusqu'à la fin de la génération courante.
+        // Spin loop until current generation advances.
         loop {
             let cur_gen = self.generation.load(Ordering::Acquire);
             if cur_gen != gen {

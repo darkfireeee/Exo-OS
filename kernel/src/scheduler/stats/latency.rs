@@ -1,23 +1,23 @@
 // kernel/src/scheduler/stats/latency.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Histogramme de latence — mesures p50/p99/p999 via buckets AtomicU64
+// Latency histogram — p50/p99/p999 measurements via AtomicU64 buckets
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Buckets log2 : chaque bucket k couvre [2^k ns, 2^(k+1) ns).
-//   Bucket 0 : [0, 1ns)
-//   Bucket 10 : [1µs, 2µs)
-//   Bucket 20 : [1ms, 2ms)
-//   Bucket 30 : [1s, 2s)
+// Log2 buckets: each bucket k covers [2^k ns, 2^(k+1) ns).
+//   Bucket 0: [0, 1ns)
+//   Bucket 10: [1µs, 2µs)
+//   Bucket 20: [1ms, 2ms)
+//   Bucket 30: [1s, 2s)
 //
-// BUCKETS = 40 (couvre 0–1100s, plus que suffisant pour la latence scheduler).
+// BUCKETS = 40 (covers 0–1100s, more than enough for scheduler latency).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 const BUCKETS: usize = 40;
 
-/// Histogramme de latence global (un seul pour tout l'OS).
+/// Global latency histogram (single one for the entire OS).
 pub struct LatencyHist {
     buckets: [AtomicU64; BUCKETS],
     total: AtomicU64,
@@ -41,13 +41,13 @@ impl LatencyHist {
         }
     }
 
-    /// Enregistre une mesure de latence (en nanosecondes).
+    /// Records a latency measurement (in nanoseconds).
     pub fn record(&self, ns: u64) {
         let bucket = bucket_for(ns).min(BUCKETS - 1);
         self.buckets[bucket].fetch_add(1, Ordering::Relaxed);
         self.total.fetch_add(1, Ordering::Relaxed);
         self.sum_ns.fetch_add(ns, Ordering::Relaxed);
-        // Mise à jour du max.
+        // Update max.
         let mut cur_max = self.max_ns.load(Ordering::Relaxed);
         while ns > cur_max {
             match self.max_ns.compare_exchange_weak(
@@ -62,7 +62,7 @@ impl LatencyHist {
         }
     }
 
-    /// Percentile P (0–100). Retourne la borne inférieure du bucket correspondant.
+    /// Percentile P (0–100). Returns lower bound of corresponding bucket.
     pub fn percentile_pct(&self, p: u64) -> u64 {
         let total = self.total.load(Ordering::Relaxed);
         if total == 0 {
@@ -123,10 +123,10 @@ impl LatencyHist {
     }
 }
 
-/// Retourne le numéro de bucket pour une latence `ns`.
-/// Bucket k couvre [bucket_floor(k), bucket_floor(k+1)) où bucket_floor(k) = 2^(k-1) pour k>=1.
-/// Formule : k = nombre de bits de `ns` = `u64::BITS - ns.leading_zeros()`.
-/// Exemples : ns=0→0, ns=1→1, ns=2..3→2, ns=4..7→3, ns=8..15→4.
+/// Returns bucket number for latency `ns`.
+/// Bucket k covers [bucket_floor(k), bucket_floor(k+1)) where bucket_floor(k) = 2^(k-1) for k>=1.
+/// Formula: k = bit length of `ns` = `u64::BITS - ns.leading_zeros()`.
+/// Examples: ns=0→0, ns=1→1, ns=2..3→2, ns=4..7→3, ns=8..15→4.
 #[inline]
 fn bucket_for(ns: u64) -> usize {
     if ns == 0 {
@@ -136,7 +136,7 @@ fn bucket_for(ns: u64) -> usize {
     }
 }
 
-/// Retourne la borne inférieure du bucket `k` (en ns).
+/// Returns lower bound of bucket `k` (in ns).
 #[inline]
 fn bucket_floor(k: usize) -> u64 {
     if k == 0 {
@@ -147,20 +147,20 @@ fn bucket_floor(k: usize) -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Histogrammes globaux nommés
+// Named global histograms
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Latence de context_switch (ns).
+/// Context switch latency (ns).
 pub static SWITCH_LATENCY: LatencyHist = LatencyHist::new();
-/// Latence de wakeup (ns).
+/// Wakeup latency (ns).
 pub static WAKEUP_LATENCY: LatencyHist = LatencyHist::new();
-/// Latence pick_next_task (ns).
+/// pick_next_task latency (ns).
 pub static PICKNEXT_LATENCY: LatencyHist = LatencyHist::new();
-/// Latence IPI (ns).
+/// IPI latency (ns).
 pub static IPI_LATENCY: LatencyHist = LatencyHist::new();
 
 /// # Safety
 /// CPL 0.
 pub unsafe fn init() {
-    // Histogrammes initialisés à la compilation — rien à faire.
+    // Histograms compile-time initialized — nothing to do.
 }

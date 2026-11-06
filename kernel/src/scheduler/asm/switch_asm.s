@@ -2,27 +2,27 @@
 // CONTEXT SWITCH ASM — Exo-OS Scheduler (x86_64)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE SWITCH-ASM (V7-C-02 + CORR-18) :
-//   • Sauvegarder les 6 registres callee-saved ABI System V UNIQUEMENT :
-//     rbx, rbp, r12, r13, r14, r15   (6 × 8 = 48B + rip implicite = 56B)
-//   • NE PAS toucher MXCSR ni x87 FCW :
-//     Le kernel est compilé avec -mmx,-sse,-sse2,+soft-float → pas d'instructions
-//     SSE générées par le compilateur → MXCSR ne peut pas être corrompu par le
-//     kernel. L'état FPU complet (MXCSR, FCW, registres x87/SSE/AVX) est géré
-//     exclusivement par scheduler/fpu/save_restore.rs via XSAVE/XRSTOR.
-//   • NE PAS toucher FS/GS base : géré par switch.rs via rdmsr/wrmsr (CORR-11).
-//   • CR3 switché ICI, AVANT la restauration des registres (KPTI atomique)
+// RULE SWITCH-ASM (V7-C-02 + CORR-18):
+//   • Save ONLY the 6 System V ABI callee-saved registers:
+//     rbx, rbp, r12, r13, r14, r15   (6 × 8 = 48B + implicit rip = 56B)
+//   • DO NOT touch MXCSR nor x87 FCW:
+//     The kernel is compiled with -mmx,-sse,-sse2,+soft-float -> no compiler-generated
+//     SSE instructions -> MXCSR cannot be corrupted by the
+//     kernel. The full FPU state (MXCSR, FCW, x87/SSE/AVX registers) is managed
+//     exclusively by scheduler/fpu/save_restore.rs via XSAVE/XRSTOR.
+//   • DO NOT touch FS/GS base: handled by switch.rs via rdmsr/wrmsr (CORR-11).
+//   • CR3 switched HERE, BEFORE restoring registers (atomic KPTI)
 //
-// NB : Le TCB contient 15 GPRs pour le cas d'une préemption par IRQ (le handler
-//      IRQ empile tous les GPRs). switch_asm.s est optimisé pour le yield
-//      coopératif uniquement (6 GPRs callee-saved). Ces deux chemins sont
-//      distincts et compatibles — voir CORR-18 pour l'explication complète.
+// Note: The TCB contains 15 GPRs for IRQ preemption (the IRQ handler
+//       pushes all GPRs). switch_asm.s is optimized for cooperative yield
+//       only (6 callee-saved GPRs). These two paths are distinct
+//       and compatible — see CORR-18 for the full explanation.
 //
-// Signature (System V ABI) :
+// Signature (System V ABI):
 //   context_switch_asm(
 //     old_kernel_rsp: *mut u64,   // rdi
 //     new_kernel_rsp: u64,        // rsi
-//     new_cr3:        u64,        // rdx  (0 = pas de switch CR3)
+//     new_cr3:        u64,        // rdx  (0 = no CR3 switch)
 //   )
 //
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -32,35 +32,35 @@
 .type context_switch_asm, @function
 
 context_switch_asm:
-    // ── Sauvegarder les 6 registres callee-saved du thread SORTANT ───────────
-    // (V7-C-02 : SANS MXCSR ni x87 FCW — gérés par XSAVE/XRSTOR dans fpu/)
+    // ── Save the 6 callee-saved registers of the OUTGOING thread ─────────────
+    // (V7-C-02: WITHOUT MXCSR nor x87 FCW — managed by XSAVE/XRSTOR in fpu/)
     pushq   %r15
     pushq   %r14
     pushq   %r13
     pushq   %r12
     pushq   %rbp
     pushq   %rbx
-    // Total : 6 × 8 = 48B sur pile (+ rip implicite = 56B)
+    // Total: 6 × 8 = 48B on stack (+ implicit rip = 56B)
 
-    // Sauvegarder RSP du thread SORTANT dans son TCB (champ kstack_ptr).
-    // rdi = &TCB::kstack_ptr du thread sortant
+    // Save OUTGOING thread RSP in its TCB (kstack_ptr field).
+    // rdi = &TCB::kstack_ptr of the outgoing thread
     movq    %rsp, (%rdi)
 
-    // ── Switch CR3 si nécessaire (KPTI) ──────────────────────────────────────
-    // rdx = new_cr3 (0 = même espace d'adressage, pas de TLB flush)
+    // ── Switch CR3 if necessary (KPTI) ───────────────────────────────────────
+    // rdx = new_cr3 (0 = same address space, no TLB flush)
     testq   %rdx, %rdx
     jz      .L_skip_cr3
 
-    // Switch CR3 atomique — invalide TLB user automatiquement.
-    // CR3 est switché AVANT la restauration des registres (KPTI invariant).
+    // Atomic CR3 switch — invalidates user TLB automatically.
+    // CR3 is switched BEFORE restoring registers (KPTI invariant).
     movq    %rdx, %cr3
 
 .L_skip_cr3:
-    // ── Charger RSP du thread ENTRANT depuis son TCB (champ kstack_ptr) ───────
-    // rsi = TCB::kstack_ptr du thread entrant
+    // ── Load INCOMING thread RSP from its TCB (kstack_ptr field) ─────────────
+    // rsi = TCB::kstack_ptr of incoming thread
     movq    %rsi, %rsp
 
-    // ── Restaurer les 6 registres callee-saved du thread ENTRANT ─────────────
+    // ── Restore the 6 callee-saved registers of the INCOMING thread ───────────
     popq    %rbx
     popq    %rbp
     popq    %r12
@@ -68,24 +68,24 @@ context_switch_asm:
     popq    %r14
     popq    %r15
 
-    // Retour — continue dans le contexte du nouveau thread.
-    // Le ret consomme l'adresse de retour pushée lors de l'appel précédent
-    // context_switch_asm() de ce thread (quand il était lui-même le sortant).
+    // Return — resume in the context of the new thread.
+    // ret consumes the return address pushed during the previous
+    // context_switch_asm() call for this thread (when it was outgoing).
     ret
 
 .size context_switch_asm, . - context_switch_asm
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SWITCH VERS UN NOUVEAU THREAD — Premier démarrage (jamais switché avant)
+// SWITCH TO A NEW THREAD — First start (never switched before)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Utilisé lors de la création d'un thread. Le stack kernel du nouveau thread
-// est préparé avec l'adresse de `thread_entry_trampoline` comme adresse de retour.
+// Used when creating a thread. The new thread's kernel stack
+// is prepared with the address of `thread_entry_trampoline` as the return address.
 //
-// Signature :
+// Signature:
 //   switch_to_new_thread(
-//     old_kernel_rsp: *mut u64,   // rdi — NULL si bootstrap
+//     old_kernel_rsp: *mut u64,   // rdi — NULL if bootstrap
 //     new_kernel_rsp: u64,        // rsi
 //     new_cr3:        u64,        // rdx
 //   )
@@ -97,70 +97,70 @@ context_switch_asm:
 .type switch_to_new_thread, @function
 
 switch_to_new_thread:
-    // Sauvegarder prev seulement si old_kernel_rsp != NULL
+    // Save prev only if old_kernel_rsp != NULL
     testq   %rdi, %rdi
     jz      .L_no_save
 
-    // FIX-SWITCH-ASM-01 : sauvegarder UNIQUEMENT les 6 registres callee-saved,
-    // SANS les 16 octets MXCSR+FCW (V7-C-02 : gérés par XSAVE/XRSTOR).
-    // Layout identique à context_switch_asm → restauration compatible.
+    // FIX-SWITCH-ASM-01: save ONLY the 6 callee-saved registers,
+    // WITHOUT the 16 bytes MXCSR+FCW (V7-C-02: managed by XSAVE/XRSTOR).
+    // Identical layout to context_switch_asm -> compatible restoration.
     pushq   %r15
     pushq   %r14
     pushq   %r13
     pushq   %r12
     pushq   %rbp
     pushq   %rbx
-    // Total : 6 × 8 = 48B sur pile (+ rip implicite = 56B)
+    // Total: 6 × 8 = 48B on stack (+ implicit rip = 56B)
     movq    %rsp, (%rdi)
 
 .L_no_save:
-    // Switch CR3 si nécessaire
+    // Switch CR3 if necessary
     testq   %rdx, %rdx
     jz      .L_new_no_cr3
     movq    %rdx, %cr3
 
 .L_new_no_cr3:
-    // Charger le nouveau stack pointer
+    // Load the new stack pointer
     movq    %rsi, %rsp
 
-    // Pour un tout nouveau thread, le "stack" a été préparé par le code Rust
-    // de création de thread avec le layout suivant (SANS la zone MXCSR+FCW) :
-    //   [kernel_rsp+ 0] = rbx initial (0)
-    //   [kernel_rsp+ 8] = rbp initial (0)
-    //   [kernel_rsp+16] = r12 initial (0)
-    //   [kernel_rsp+24] = r13 initial (0)
-    //   [kernel_rsp+32] = r14 initial (0)
-    //   [kernel_rsp+40] = r15 initial (0)
-    //   [kernel_rsp+48] = adresse de retour → thread_entry_trampoline
+    // For a brand new thread, the "stack" was prepared by the Rust thread
+    // creation code with the following layout (WITHOUT the MXCSR+FCW area):
+    //   [kernel_rsp+ 0] = initial rbx (0)
+    //   [kernel_rsp+ 8] = initial rbp (0)
+    //   [kernel_rsp+16] = initial r12 (0)
+    //   [kernel_rsp+24] = initial r13 (0)
+    //   [kernel_rsp+32] = initial r14 (0)
+    //   [kernel_rsp+40] = initial r15 (0)
+    //   [kernel_rsp+48] = return address -> thread_entry_trampoline
     //
-    // On dépile les 6 registres (48 bytes), puis ret saute vers thread_entry_trampoline.
+    // Pop the 6 registers (48 bytes), then ret jumps to thread_entry_trampoline.
     popq    %rbx
     popq    %rbp
     popq    %r12
     popq    %r13
     popq    %r14
     popq    %r15
-    // Les 16 bytes MXCSR+FCW ne sont pas sur le stack initial → skip
+    // The 16 bytes MXCSR+FCW are not on the initial stack -> skip
     ret
 
 .size switch_to_new_thread, . - switch_to_new_thread
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// KTHREAD TRAMPOLINE — Premier démarrage d'un kthread (Exo-OS)
+// KTHREAD TRAMPOLINE — First start of a kthread (Exo-OS)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Appelé lors du PREMIER context_switch vers un kthread nouvellement créé.
+// Called during the FIRST context_switch to a newly created kthread.
 //
-// Context : context_switch_asm a restauré le frame préparé par create_kthread() :
-//   r12 = entry_fn   (fn(usize)->!)   ← slot r12 du frame stack
-//   r13 = arg        (usize)          ← slot r13 du frame stack
+// Context: context_switch_asm restored the frame prepared by create_kthread():
+//   r12 = entry_fn   (fn(usize)->!)   <- r12 slot of stack frame
+//   r13 = arg        (usize)          <- r13 slot of stack frame
 //
-// Convention SystemV AMD64 :
-//   Premier argument entier → rdi
+// SystemV AMD64 convention:
+//   First integer argument -> rdi
 //
-// Ce trampoline déplace l'arg dans rdi puis saute à entry_fn.
-// entry_fn est déclarée -> ! donc ne retourne JAMAIS.
+// This trampoline moves arg into rdi then jumps to entry_fn.
+// entry_fn is declared -> ! so it NEVER returns.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 .section .text
@@ -168,33 +168,33 @@ switch_to_new_thread:
 .type kthread_trampoline, @function
 
 kthread_trampoline:
-    movq    %r13, %rdi      // arg → rdi (1er paramètre SystemV AMD64)
-    sti                     // premier contexte kthread: IF doit être actif
-    jmpq    *%r12           // saute à entry_fn(arg) — ne revient jamais
+    movq    %r13, %rdi      // arg -> rdi (1st parameter SystemV AMD64)
+    sti                     // first kthread context: IF must be active
+    jmpq    *%r12           // jump to entry_fn(arg) — never returns
 
 .size kthread_trampoline, . - kthread_trampoline
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FORK CHILD TRAMPOLINE — Premier démarrage d'un processus fils (fork)
+// FORK CHILD TRAMPOLINE — First start of a child process (fork)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Appelé par switch_to_new_thread lors du PREMIER ordonnancement d'un processus
-// créé via do_fork(). Le stack kernel du fils a été préparé par do_fork() :
+// Called by switch_to_new_thread during the FIRST scheduling of a process
+// created via do_fork(). The child's kernel stack was prepared by do_fork():
 //
-//   [kernel_rsp + 0..48)  = 6 registres callee-saved = 0 (format switch_to_new_thread)
-//   [kernel_rsp + 48]     = fork_child_trampoline  ← adresse de retour switch_to_new_thread
-//   [kernel_rsp + 56..104) = caller-saved regs userspace (rdi,rsi,rdx,r10,r8,r9)
-//   [kernel_rsp + 104]     = child_rip  ← RSP pointe ici après les 6 pops ci-dessous
+//   [kernel_rsp + 0..48)   = 6 callee-saved registers = 0 (switch_to_new_thread format)
+//   [kernel_rsp + 48]      = fork_child_trampoline  <- switch_to_new_thread return address
+//   [kernel_rsp + 56..104) = userspace caller-saved regs (rdi,rsi,rdx,r10,r8,r9)
+//   [kernel_rsp + 104]     = child_rip  <- RSP points here after the 6 pops below
 //   [kernel_rsp + 112]     = GDT_USER_CS64 (CS ring3)
 //   [kernel_rsp + 120]     = 0x0202    (RFLAGS : IF=1)
-//   [kernel_rsp + 128]     = child_rsp (RSP userspace)
+//   [kernel_rsp + 128]     = child_rsp (userspace RSP)
 //   [kernel_rsp + 136]     = GDT_USER_DS   (SS ring3)
 //
-// Invariant : GS = kernel GS (le scheduler n'a PAS fait SWAPGS).
-//             On doit faire SWAPGS avant IRETQ pour restaurer GS userspace.
+// Invariant: GS = kernel GS (scheduler has NOT executed SWAPGS).
+//            We must execute SWAPGS before IRETQ to restore userspace GS.
 //
-// RÈGLE PROC-08 : TLB parent flushé dans do_fork() — aucun flush ici nécessaire.
+// RULE PROC-08: Parent TLB flushed in do_fork() — no flush needed here.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 .section .text
@@ -202,40 +202,40 @@ kthread_trampoline:
 .type fork_child_trampoline, @function
 
 fork_child_trampoline:
-    popq    %rdi            // restaurer les registres visibles après syscall
+    popq    %rdi            // restore visible registers after syscall
     popq    %rsi
     popq    %rdx
     popq    %r10
     popq    %r8
     popq    %r9
-    xor     %eax, %eax      // rax = 0 : le fils retourne 0 de fork()
-    clts                    // autoriser FPU/SIMD dès le premier retour Ring3
-    movq    %gs:0x48, %rax  // KPTI user CR3 publié par switch.rs (0 si inactif)
+    xor     %eax, %eax      // rax = 0: child returns 0 from fork()
+    clts                    // allow FPU/SIMD upon first Ring3 return
+    movq    %gs:0x48, %rax  // KPTI user CR3 published by switch.rs (0 if inactive)
     testq   %rax, %rax
     jz      .L_fork_child_no_kpti
     movq    %rax, %cr3
 .L_fork_child_no_kpti:
-    xor     %eax, %eax      // préserver la sémantique fork(): retour fils = 0
-    swapgs                  // restaurer GS userspace (noyau avait GS kernel)
-    iretq                   // dépile RIP, CS, RFLAGS, RSP, SS → retour Ring3
+    xor     %eax, %eax      // preserve fork() semantics: child return = 0
+    swapgs                  // restore userspace GS (kernel had kernel GS)
+    iretq                   // pop RIP, CS, RFLAGS, RSP, SS -> return to Ring3
 
 .size fork_child_trampoline, . - fork_child_trampoline
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// USER ENTRY TRAMPOLINE — Premier demarrage de PID 1 / exec initial
+// USER ENTRY TRAMPOLINE — First start of PID 1 / initial exec
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Layout identique au fork child frame:
+// Identical layout to fork child frame:
 //   [kernel_rsp + 48] = user_entry_trampoline
-//   [kernel_rsp + 56] = RIP userspace
-//   [kernel_rsp + 64] = CS ring3
+//   [kernel_rsp + 56] = userspace RIP
+//   [kernel_rsp + 64] = ring3 CS
 //   [kernel_rsp + 72] = RFLAGS
-//   [kernel_rsp + 80] = RSP userspace
-//   [kernel_rsp + 88] = SS ring3
+//   [kernel_rsp + 80] = userspace RSP
+//   [kernel_rsp + 88] = ring3 SS
 //
-// Contrairement a fork(), ce chemin ne doit pas heriter de registres parent.
-// r12 transporte l'argument ABI optionnel fourni par ElfLoadResult::entry_arg0.
+// Unlike fork(), this path must not inherit parent registers.
+// r12 conveys the optional ABI argument provided by ElfLoadResult::entry_arg0.
 
 .section .text
 .global user_entry_trampoline
@@ -243,11 +243,11 @@ fork_child_trampoline:
 
 user_entry_trampoline:
     xor     %eax, %eax      // rax = 0
-    mov     %r12, %rdi      // rdi = handoff/boot_info/null pour _start()
+    mov     %r12, %rdi      // rdi = handoff/boot_info/null for _start()
     xor     %esi, %esi      // rsi = 0
     xor     %edx, %edx      // rdx = 0
-    clts                    // le bootstrap Ring1 peut utiliser core::ptr SSE
-    movq    %gs:0x48, %rax  // KPTI user CR3 publié par switch.rs (0 si inactif)
+    clts                    // Ring1 bootstrap can use core::ptr SSE
+    movq    %gs:0x48, %rax  // KPTI user CR3 published by switch.rs (0 if inactive)
     testq   %rax, %rax
     jz      .L_user_entry_no_kpti
     movq    %rax, %cr3

@@ -1,20 +1,20 @@
 // kernel/src/scheduler/policies/deadline.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Politique SCHED_DEADLINE — EDF (Earliest Deadline First)
+// SCHED_DEADLINE policy — EDF (Earliest Deadline First)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// SCHED_DEADLINE est une politique temps-réel stricte basée sur EDF.
-// Chaque thread paramétré précise :
-//   runtime_ns  — budget d'exécution par période
-//   deadline_ns — échéance relative depuis l'activation
-//   period_ns   — période de réactivation
+// SCHED_DEADLINE is a strict real-time policy based on EDF.
+// Each configured thread specifies:
+//   runtime_ns  — execution budget per period
+//   deadline_ns — relative deadline from activation
+//   period_ns   — reactivation period
 //
-// Test d'admission : Σ(runtime_i / period_i) ≤ 1.0
-// Si le test échoue, `admit_thread()` retourne `Err(AdmissionDenied)`.
+// Admission test: Σ(runtime_i / period_i) ≤ 1.0
+// If test fails, `admit_thread()` returns `Err(AdmissionDenied)`.
 //
-// Schedulability : à chaque wakeup, `deadline_abs = now + deadline_ns`.
-// La run queue EDF trie par `deadline_abs` croissant.
+// Schedulability: on each wakeup, `deadline_abs = now + deadline_ns`.
+// The EDF run queue sorts by increasing `deadline_abs`.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::{DeadlineParams, SchedPolicy, ThreadControlBlock};
@@ -22,38 +22,38 @@ use crate::scheduler::timer::clock::monotonic_ns;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Comptabilité d'admission
+// Admission accounting
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numérateur de la fraction utilisée = Σ runtime_i × SCALE / period_i.
-/// SCALE = 1_000_000 pour éviter les flottants.
+/// Numerator of utilized fraction = Σ runtime_i × SCALE / period_i.
+/// SCALE = 1_000_000 to avoid floating point math.
 const ADMIT_SCALE: u64 = 1_000_000;
 
-/// Utilisation cumulée × SCALE (max = ADMIT_SCALE = 100%).
+/// Cumulative utilization × SCALE (max = ADMIT_SCALE = 100%).
 static ADMITTED_UTILIZATION: AtomicU64 = AtomicU64::new(0);
-/// Nombre de threads DEADLINE admis.
+/// Number of admitted DEADLINE threads.
 pub static DEADLINE_THREADS_ADMITTED: AtomicU64 = AtomicU64::new(0);
-/// Nombre de refus d'admission.
+/// Number of admission denials.
 pub static DEADLINE_ADMISSION_DENIED: AtomicU64 = AtomicU64::new(0);
-/// Expirations de deadline détectées.
+/// Detected deadline misses.
 pub static DEADLINE_MISSES: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Erreur d'admission
+// Admission error
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadlineError {
-    /// Test d'admission échoué (surcharge).
+    /// Admission test failed (overload).
     AdmissionDenied,
-    /// Paramètres invalides (period=0, deadline>period, runtime>deadline).
+    /// Invalid parameters (period=0, deadline>period, runtime>deadline).
     InvalidParams,
-    /// Manque de capacité dans la run queue EDF.
+    /// Lack of capacity in EDF run queue.
     QueueFull,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Validation des paramètres
+// Parameter validation
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn validate_params(p: &DeadlineParams) -> Result<(), DeadlineError> {
@@ -70,21 +70,21 @@ fn validate_params(p: &DeadlineParams) -> Result<(), DeadlineError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test d'admission
+// Admission test
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tente d'admettre un nouveau thread DEADLINE.
+/// Attempts to admit a new DEADLINE thread.
 ///
-/// Effectue `Σ(runtime/period) ≤ 1.0` via CAS sur `ADMITTED_UTILIZATION`.
-/// Retourne `Ok(fraction)` (fraction = runtime/period × SCALE) si admis,
-/// ou `Err(AdmissionDenied)` si la charge dépasse la capacité.
+/// Performs `Σ(runtime/period) ≤ 1.0` via CAS on `ADMITTED_UTILIZATION`.
+/// Returns `Ok(fraction)` (fraction = runtime/period × SCALE) if admitted,
+/// or `Err(AdmissionDenied)` if load exceeds capacity.
 pub fn admit_thread(p: &DeadlineParams) -> Result<u64, DeadlineError> {
     validate_params(p)?;
 
     // fraction = runtime_ns × SCALE / period_ns
     let fraction = p.runtime_ns.saturating_mul(ADMIT_SCALE) / p.period_ns;
 
-    // CAS loop pour mise à jour atomique.
+    // CAS loop for atomic update.
     loop {
         let current = ADMITTED_UTILIZATION.load(Ordering::Acquire);
         let new_util = current.saturating_add(fraction);
@@ -99,17 +99,17 @@ pub fn admit_thread(p: &DeadlineParams) -> Result<u64, DeadlineError> {
             DEADLINE_THREADS_ADMITTED.fetch_add(1, Ordering::Relaxed);
             return Ok(fraction);
         }
-        // Contention CAS — réessai.
+        // CAS contention — retry.
         core::hint::spin_loop();
     }
 }
 
-/// Libère la fraction d'utilisation lors de la terminaison/descheduling du thread.
+/// Releases utilization fraction upon thread termination/descheduling.
 ///
-/// # BUG-FIX E : utiliser fetch_update + saturating_sub pour éviter l'underflow
-/// silencieux sur u64. L'ancien `fetch_sub` pouvait faire passer
-/// ADMITTED_UTILIZATION et DEADLINE_THREADS_ADMITTED à u64::MAX≈1.8×10¹⁹ si
-/// `release_thread()` était appelé en excès (bug de double-libération).
+/// # BUG-FIX E: use fetch_update + saturating_sub to avoid silent underflow
+/// on u64. Previous `fetch_sub` could cause ADMITTED_UTILIZATION and
+/// DEADLINE_THREADS_ADMITTED to wrap to u64::MAX≈1.8×10¹⁹ if
+/// `release_thread()` was called excessively (double-free bug).
 pub fn release_thread(fraction: u64) {
     let _ = ADMITTED_UTILIZATION.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
         Some(v.saturating_sub(fraction))
@@ -120,12 +120,12 @@ pub fn release_thread(fraction: u64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gestion de l'échéance absolue
+// Absolute deadline management
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Recalcule `deadline_abs` au réveil d'un thread DEADLINE.
+/// Recalculates `deadline_abs` upon DEADLINE thread wakeup.
 ///
-/// EDF : upon activation, deadline_abs = now + deadline_params.deadline_ns
+/// EDF: upon activation, deadline_abs = now + deadline_params.deadline_ns
 pub fn refresh_deadline(tcb: &mut ThreadControlBlock) {
     let now = monotonic_ns();
     let deadline_ns = tcb.dl_period;
@@ -133,8 +133,8 @@ pub fn refresh_deadline(tcb: &mut ThreadControlBlock) {
         .store(now.saturating_add(deadline_ns), Ordering::Release);
 }
 
-/// Vérifie si le thread a manqué son échéance.
-/// Incrémente `DEADLINE_MISSES` et retourne `true` si c'est le cas.
+/// Checks if thread missed its deadline.
+/// Increments `DEADLINE_MISSES` and returns `true` if so.
 pub fn check_deadline_miss(tcb: &ThreadControlBlock) -> bool {
     let now = monotonic_ns();
     let deadline_abs = tcb.deadline_abs.load(Ordering::Relaxed);
@@ -145,8 +145,8 @@ pub fn check_deadline_miss(tcb: &ThreadControlBlock) -> bool {
     false
 }
 
-/// Retourne le temps restant (en ns) avant l'échéance absolue du thread.
-/// Retourne 0 si l'échéance est déjà dépassée ou non initialisée.
+/// Returns remaining time (in ns) before thread absolute deadline.
+/// Returns 0 if deadline already passed or uninitialized.
 pub fn remaining_budget(tcb: &ThreadControlBlock) -> u64 {
     let now = monotonic_ns();
     let deadline_abs = tcb.deadline_abs.load(Ordering::Relaxed);
@@ -157,9 +157,9 @@ pub fn remaining_budget(tcb: &ThreadControlBlock) -> u64 {
     }
 }
 
-/// Appelé lors du tick timer pour un thread DEADLINE.
-/// Décrémente le budget restant, retourne `true` si le budget est épuisé
-/// (le thread doit se bloquer jusqu'à sa prochaine période).
+/// Called during timer tick for a DEADLINE thread.
+/// Decrements remaining budget, returns `true` if budget is exhausted
+/// (thread must block until its next period).
 pub fn deadline_tick(tcb: &ThreadControlBlock, elapsed_ns: u64) -> bool {
     if tcb.policy != SchedPolicy::Deadline {
         return false;

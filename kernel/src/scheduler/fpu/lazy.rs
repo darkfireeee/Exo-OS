@@ -1,37 +1,37 @@
 // kernel/src/scheduler/fpu/lazy.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// LAZY FPU — Gestion différée de la FPU par thread (Exo-OS Scheduler · Couche 1)
+// LAZY FPU — Deferred per-thread FPU management (Exo-OS Scheduler · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// PRINCIPE du Lazy FPU (DOC3 + arch x86_64) :
-//   1. Au démarrage et après chaque context switch : CR0.TS = 1
-//      → la première instruction FP/SIMD du thread déclenche #NM (Device Not Available)
-//   2. Handler #NM : restaurer la FPU pour ce thread (xrstor), CR0.TS = 0
-//   3. Avant le prochain context switch : si FPU_LOADED → sauvegarder (xsave), CR0.TS = 1
+// PRINCIPLE of Lazy FPU (DOC3 + arch x86_64):
+//   1. At startup and after each context switch: CR0.TS = 1
+//      → the first FP/SIMD instruction of the thread triggers #NM (Device Not Available)
+//   2. #NM Handler: restore FPU for this thread (xrstor), CR0.TS = 0
+//   3. Before next context switch: if FPU_LOADED → save (xsave), CR0.TS = 1
 //
-// Avantage : les threads qui n'utilisent PAS la FPU n'ont aucun coût de sauvegarde.
+// Advantage: threads that DO NOT use the FPU incur zero save overhead.
 //
-// RÈGLE FPU-01 (DOC3) : Ce module gère la POLITIQUE (flag lazy_fpu_used dans TCB).
-//   Les instructions ASM brutes sont dans arch/x86_64/cpu/fpu.rs.
+// RULE FPU-01 (DOC3): This module manages the POLICY (lazy_fpu_used flag in TCB).
+//   Raw ASM instructions reside in arch/x86_64/cpu/fpu.rs.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::ThreadControlBlock;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// État global d'initialisation
+// Global initialization state
 // ─────────────────────────────────────────────────────────────────────────────
 
 static FPU_LAZY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// Initialise le mécanisme Lazy FPU sur le CPU courant.
+/// Initializes the Lazy FPU mechanism on current CPU.
 ///
-/// - Active CR0.TS = 1 (tout thread considéré sans FPU chargée).
-/// - Doit être appelé sur CHAQUE CPU (BSP + APs).
-///   Correspond au step 4 de la séquence d'initialisation scheduler (DOC3).
+/// - Sets CR0.TS = 1 (every thread considered without loaded FPU).
+/// - Must be called on EVERY CPU (BSP + APs).
+///   Corresponds to step 4 of scheduler initialization sequence (DOC3).
 pub fn init() {
-    // SAFETY: cr0_set_ts() set le bit TS dans CR0. Sûr au boot avant tout thread.
+    // SAFETY: cr0_set_ts() sets the TS bit in CR0. Safe at boot before any thread runs.
     unsafe {
         cr0_set_ts();
     }
@@ -39,13 +39,13 @@ pub fn init() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Manipulation de CR0.TS
+// CR0.TS manipulation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Active CR0.TS (Task Switched) → déclenche #NM sur prochaine instruction FP.
+/// Sets CR0.TS (Task Switched) → triggers #NM on next FP instruction.
 ///
 /// # Safety
-/// Modifie directement le registre de contrôle CR0 (Ring 0).
+/// Directly modifies CR0 control register (Ring 0).
 #[inline(always)]
 pub unsafe fn cr0_set_ts() {
     #[cfg(target_arch = "x86_64")]
@@ -58,21 +58,21 @@ pub unsafe fn cr0_set_ts() {
     );
 }
 
-/// Désactive CR0.TS → accès FP autorisé sans #NM.
-/// Appelé par le handler #NM après xrstor réussi.
+/// Clears CR0.TS → FP access allowed without #NM.
+/// Called by #NM handler after successful xrstor.
 ///
 /// # Safety
-/// Exécute l'instruction privilégiée CLTS en Ring 0.
+/// Executes privileged CLTS instruction in Ring 0.
 #[inline(always)]
 pub unsafe fn cr0_clear_ts() {
     #[cfg(target_arch = "x86_64")]
     core::arch::asm!("clts", options(nostack, nomem),);
 }
 
-/// Retourne vrai si CR0.TS est activé.
+/// Returns true if CR0.TS is set.
 ///
 /// # Safety
-/// Lit directement le registre de contrôle CR0.
+/// Directly reads CR0 control register.
 #[inline(always)]
 pub unsafe fn cr0_ts_is_set() -> bool {
     #[cfg(target_arch = "x86_64")]
@@ -92,78 +92,78 @@ pub unsafe fn cr0_ts_is_set() -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// mark_fpu_not_loaded() — appelé après chaque context switch
+// mark_fpu_not_loaded() — called after each context switch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Marque la FPU comme non-chargée pour le prochain thread.
-/// Appelé depuis `switch.rs` après `context_switch_asm()` retourne.
+/// Marks FPU as not loaded for next thread.
+/// Called from `switch.rs` after `context_switch_asm()` returns.
 ///
-/// RÈGLE SWITCH-02 (DOC3) : cette fonction est le "mark APRÈS" la sauvegarde.
+/// RULE SWITCH-02 (DOC3): this function is the "mark AFTER" the save.
 ///
 /// # Safety
-/// Modifie CR0.TS en Ring 0.
+/// Modifies CR0.TS in Ring 0.
 #[inline(always)]
 pub unsafe fn mark_fpu_not_loaded() {
     cr0_set_ts();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handler #NM — Device Not Available
+// #NM Handler — Device Not Available
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Handler pour l'exception #NM (Device Not Available, vecteur 7).
+/// Handler for #NM exception (Device Not Available, vector 7).
 ///
-/// Déclenché quand un thread execute une instruction FP/SIMD et que CR0.TS = 1.
+/// Triggered when a thread executes an FP/SIMD instruction and CR0.TS = 1.
 ///
-/// Séquence :
-/// 1. Vérifier que l'exception vient bien de CR0.TS (et non d'une faute réelle).
-/// 2. Désactiver CR0.TS (clts).
-/// 3. Restaurer le contexte FPU du thread courant (`xrstor_for`).
-/// 4. Mettre à jour FPU_LOADED = true dans le TCB.
-/// 5. Retour de l'exception — l'instruction sera rejouée.
+/// Sequence:
+/// 1. Verify exception genuinely originates from CR0.TS (not a genuine fault).
+/// 2. Clear CR0.TS (clts).
+/// 3. Restore FPU context for current thread (`xrstor_for`).
+/// 4. Update FPU_LOADED = true in TCB.
+/// 5. Return from exception — instruction will be retried.
 ///
 /// # Safety
-/// Appelé depuis le vecteur d'interruption, avec préemption désactivée.
+/// Called from interrupt vector, with preemption disabled.
 pub unsafe fn handle_nm_exception(tcb: &mut ThreadControlBlock) {
-    // SAFETY: clts est sûr ici car on va immédiatement restaurer la FPU.
+    // SAFETY: clts is safe here because we will immediately restore FPU.
     cr0_clear_ts();
 
-    // BUG-FIX M : allouer FpuState avant la première utilisation FPU.
-    // Sans cette allocation, xrstor_for() initialise les registres x87/SSE
-    // par défaut mais il n'existe aucune zone de sauvegarde.
-    // À chaque context switch suivant, xsave_current() voit fpu_state_ptr == NULL
-    // et retourne SANS sauvegarder l'état → l'état FPU est perdu sans bruit
-    // jusqu'à ce qu'une allocation réussisse.
+    // BUG-FIX M: allocate FpuState before first FPU usage.
+    // Without this allocation, xrstor_for() initializes x87/SSE registers
+    // to default but no save area exists.
+    // On every subsequent context switch, xsave_current() sees fpu_state_ptr == NULL
+    // and returns WITHOUT saving state → FPU state is silently lost
+    // until an allocation succeeds.
     if tcb.fpu_state_ptr == 0 {
         super::save_restore::alloc_fpu_state(tcb);
-        // Si l'allocation échoue (IN_RECLAIM ou OOM), fpu_state_ptr reste NULL.
-        // xrstor_for() gérera ce cas : init par défaut, FPU_LOADED = true, mais
-        // l'état sera perdu au prochain switch (dégradation gracieuse).
+        // If allocation fails (IN_RECLAIM or OOM), fpu_state_ptr remains NULL.
+        // xrstor_for() handles this case: default init, FPU_LOADED = true, but
+        // state will be lost on next switch (graceful degradation).
     }
 
-    // Restaurer l'état FPU ou initialiser pour la première fois.
+    // Restore FPU state or initialize for the first time.
     super::save_restore::xrstor_for(tcb);
-    // xrstor_for positionne déjà FPU_LOADED = true dans le TCB.
+    // xrstor_for already sets FPU_LOADED = true in TCB.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers d'interrogation
+// Query helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vrai si ce thread a utilisé la FPU dans sa tranche courante.
+/// True if this thread used FPU in its current timeslice.
 #[inline(always)]
 pub fn is_fpu_used(tcb: &ThreadControlBlock) -> bool {
-    // FPU_LOADED = true signifie que la FPU était chargée lors du dernier switch.
-    // C'est l'indication que ce thread utilise la FPU.
+    // FPU_LOADED = true means FPU was loaded during last switch.
+    // Indicates this thread uses FPU.
     tcb.fpu_loaded()
 }
 
-/// Vrai si le Lazy FPU est initialisé sur ce CPU.
+/// True if Lazy FPU is initialized on this CPU.
 #[inline(always)]
 pub fn is_initialized() -> bool {
     #[cfg(target_os = "none")]
     {
-        // SAFETY: kernel ring0 ; CR0.TS est l'état canonique per-CPU.
+        // SAFETY: kernel ring0; CR0.TS is canonical per-CPU state.
         unsafe { cr0_ts_is_set() }
     }
     #[cfg(not(target_os = "none"))]
@@ -173,29 +173,29 @@ pub fn is_initialized() -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// C ABI EXPORT — pont pour arch/x86_64/exceptions.rs (handler #NM)
+// C ABI EXPORT — bridge for arch/x86_64/exceptions.rs (#NM handler)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// arch/ ne peut pas importer scheduler/ directement (cycle de dépendances Rust).
-// Cette fonction `#[no_mangle] extern "C"` est déclarée via `extern "C"` dans
-// arch/x86_64/exceptions.rs et résolue à l'édition des liens.
+// arch/ cannot import scheduler/ directly (Rust dependency cycle).
+// This `#[no_mangle] extern "C"` function is declared via `extern "C"` in
+// arch/x86_64/exceptions.rs and resolved at link time.
 //
-// RÈGLE FPU-02 (DOC3) : Le handler #NM DOIT déléguer à ce module.
+// RULE FPU-02 (DOC3): The #NM handler MUST delegate to this module.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pont C ABI pour `do_device_not_avail` (arch/x86_64/exceptions.rs).
+/// C ABI bridge for `do_device_not_avail` (arch/x86_64/exceptions.rs).
 ///
-/// `tcb_ptr` : pointeur vers le `ThreadControlBlock` courant (lu depuis GS:[0x20]).
-///   - Si null : simple effacement CR0.TS (thread non-scheduler ou phase de boot).
-///   - Sinon  : délégation complète à `handle_nm_exception()`.
+/// `tcb_ptr`: pointer to current `ThreadControlBlock` (read from GS:[0x20]).
+///   - If null: simple CR0.TS clear (non-scheduler thread or boot phase).
+///   - Else: complete delegation to `handle_nm_exception()`.
 ///
 /// # Safety
-/// Appelé depuis un handler d'interruption, préemption implicitement désactivée.
-/// `tcb_ptr`, si non-null, DOIT pointer vers un TCB valide.
+/// Called from interrupt handler, preemption implicitly disabled.
+/// `tcb_ptr`, if non-null, MUST point to a valid TCB.
 #[no_mangle]
 pub unsafe extern "C" fn sched_fpu_handle_nm(tcb_ptr: *mut u8) {
     if tcb_ptr.is_null() {
-        // Phase de boot ou idle sans TCB — effacer CR0.TS uniquement.
+        // Boot phase or idle without TCB — clear CR0.TS only.
         cr0_clear_ts();
         return;
     }
@@ -207,13 +207,13 @@ pub unsafe extern "C" fn sched_fpu_handle_nm(tcb_ptr: *mut u8) {
 mod p2_7_fpu_tests {
     use super::*;
 
-    /// P2-7 / Test 4a — FPU_LAZY_INITIALIZED : state machine init/check.
+    /// P2-7 / Test 4a — FPU_LAZY_INITIALIZED: state machine init/check.
     ///
-    /// Runnable sur host : on valide la sémantique atomique sans toucher CR0.
+    /// Runnable on host: validates atomic semantics without touching CR0.
     #[test]
     fn fpu_lazy_init_flag_set_after_init() {
-        // Utilise un AtomicBool local pour isoler du static global
-        // (évite les interférences si init() a déjà tourné).
+        // Use local AtomicBool to isolate from global static
+        // (avoids interference if init() has already run).
         let local = AtomicBool::new(false);
         assert!(
             !local.load(Ordering::Relaxed),
@@ -227,13 +227,13 @@ mod p2_7_fpu_tests {
         );
     }
 
-    /// P2-7 / Test 4b — cr0_ts_is_set() fallback hors x86_64.
+    /// P2-7 / Test 4b — cr0_ts_is_set() fallback outside x86_64.
     ///
-    /// Sur host non-x86_64 : retourne toujours false (fallback cfg).
-    /// Sur x86_64 bare-metal : retourne l'état réel de CR0.TS.
+    /// On non-x86_64 host: always returns false (fallback cfg).
+    /// On x86_64 bare-metal: returns real CR0.TS state.
     ///
-    /// IMPORTANT: sur host x86_64 (Ring 3), lire CR0 provoquerait une faute
-    /// privilégiée ; on valide donc uniquement la liaison de symbole.
+    /// IMPORTANT: on x86_64 host (Ring 3), reading CR0 triggers a privileged
+    /// fault; only symbol linkage is validated.
     #[test]
     fn cr0_ts_is_set_returns_bool() {
         #[cfg(not(target_arch = "x86_64"))]
@@ -257,12 +257,12 @@ mod p2_7_fpu_tests {
         }
     }
 
-    /// P2-7 / Test 4c — Séquence complète lazy FPU (bare-metal uniquement).
+    /// P2-7 / Test 4c — Complete lazy FPU sequence (bare-metal only).
     ///
-    /// Vérifie la séquence : cr0_set_ts() → ts_is_set()==true
-    ///                       → cr0_clear_ts() → ts_is_set()==false
+    /// Verifies sequence: cr0_set_ts() → ts_is_set()==true
+    ///                   → cr0_clear_ts() → ts_is_set()==false
     ///
-    /// Nécessite Ring 0 pour écrire CR0 → ignoré sur host.
+    /// Requires Ring 0 to write CR0 → ignored on host.
     #[test]
     #[cfg_attr(not(target_os = "none"), ignore = "P2-7: Ring 0 requis pour CR0")]
     fn fpu_lazy_cr0_set_clear_sequence() {
@@ -273,7 +273,7 @@ mod p2_7_fpu_tests {
             cr0_clear_ts();
             assert!(!cr0_ts_is_set(), "CR0.TS doit être 0 après cr0_clear_ts()");
 
-            // Rétablir CR0.TS pour préserver l'invariant lazy FPU.
+            // Restore CR0.TS to preserve lazy FPU invariant.
             cr0_set_ts();
         }
     }

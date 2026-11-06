@@ -1,8 +1,8 @@
 // kernel/src/scheduler/fpu/mod.rs
 //
-// Module FPU du scheduler — séparation logique état / instructions ASM.
-// arch/x86_64/cpu/fpu.rs = instructions brutes (XSAVE/XRSTOR/FXSAVE).
-// Ce module = politique (lazy, quand sauvegarder, pour quel thread).
+// FPU scheduler module — logical separation of state / ASM instructions.
+// arch/x86_64/cpu/fpu.rs = raw instructions (XSAVE/XRSTOR/FXSAVE).
+// This module = policy (lazy, when to save, for which thread).
 
 pub mod lazy;
 pub mod save_restore;

@@ -1,48 +1,48 @@
 // kernel/src/scheduler/sync/seqlock.rs
 //
 // ═════════════════════════════════════════════════════════════════════════════
-// SeqLock — Verrou séquentiel ISR-safe (Exo-OS · Couche 1)
+// SeqLock — ISR-safe sequential lock (Exo-OS · Layer 1)
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// ## Principe
-//   Un SeqLock permet à des lecteurs multiples de lire des données sans jamais
-//   se bloquer, au prix d'un retry si un écrivain est actif au même moment.
+// ## Principle
+//   A SeqLock allows multiple readers to read data without ever blocking,
+//   at the cost of a retry if a writer is active concurrently.
 //
-//   Invariant de compteur :
-//     - Pair   = état stable (aucun write en cours)
-//     - Impair = write en cours (lecteurs doivent retry)
+//   Counter invariant:
+//     - Even = stable state (no active write)
+//     - Odd  = write in progress (readers must retry)
 //
-//   Lecteur :
-//     1. Lire seq1 via Acquire → si impair, spin_loop et retry
-//     2. Copier les données
-//     3. Lire seq2 via Acquire → si seq1 != seq2, les données ont bougé → retry
-//     4. Données cohérentes : retourner
+//   Reader:
+//     1. Read seq1 via Acquire → if odd, spin_loop and retry
+//     2. Copy data
+//     3. Read seq2 via Acquire → if seq1 != seq2, data changed → retry
+//     4. Data consistent: return
 //
-//   Écrivain :
-//     1. seq.fetch_add(1, Release) → seq devient impair (write start)
-//     2. Mettre à jour les données
-//     3. seq.fetch_add(1, Release) → seq redevient pair (write end)
+//   Writer:
+//     1. seq.fetch_add(1, Release) → seq becomes odd (write start)
+//     2. Update data
+//     3. seq.fetch_add(1, Release) → seq becomes even again (write end)
 //
-// ## Règles (ARCH-TIME-03)
-//   RÈGLE SEQLOCK-01 : Jamais de Mutex dans ktime_get_ns() ni dans une ISR.
-//     → ktime_get_ns() utilise ce pattern directement (cf. ktime.rs).
-//   RÈGLE SEQLOCK-02 : Le write ne doit JAMAIS appeler les données qu'il
-//     protège (dépendance circulaire).
-//   RÈGLE SEQLOCK-03 : Les données protégées par SeqLock<T> DOIVENT être
-//     Copy — un SeqLock sur une chaîne allouée heap est un antipattern.
-//   RÈGLE SEQLOCK-04 : L'écrivain ne doit PAS être préempté entre
-//     write_begin() et write_end() — utiliser PreemptGuard.
+// ## Rules (ARCH-TIME-03)
+//   RULE SEQLOCK-01: Never Mutex in ktime_get_ns() nor in an ISR.
+//     → ktime_get_ns() uses this pattern directly (cf. ktime.rs).
+//   RULE SEQLOCK-02: Write must NEVER call into the data it protects
+//     (circular dependency).
+//   RULE SEQLOCK-03: Data protected by SeqLock<T> MUST be Copy —
+//     a SeqLock on a heap-allocated string is an antipattern.
+//   RULE SEQLOCK-04: Writer must NOT be preempted between
+//     write_begin() and write_end() — use PreemptGuard.
 //
-// ## Complexité
-//   Lecture  : O(1) amortissant — O(N) en contention haute (rare)
-//   Écriture : O(1) — 2 fetch_add atomiques + stores Relaxed
-//   Mémoire  : sizeof(T) + 8 octets (le compteur seq)
+// ## Complexity
+//   Read   : O(1) amortized — O(N) under heavy contention (rare)
+//   Write  : O(1) — 2 atomic fetch_adds + Relaxed stores
+//   Memory : sizeof(T) + 8 bytes (the seq counter)
 //
-// ## Cas d'usage
-//   - ktime::KtimeState  — horloge monotone + offset per-CPU (ktime.rs)
-//   - ktime::WallState   — offset epoch UNIX (ktime.rs)
-//   - Toute donnée petite (≤ 2 cache lines) lue fréquemment depuis ISR
-//   - À NE PAS utiliser pour des buffers larges (overhead copie côté lecteur)
+// ## Use cases
+//   - ktime::KtimeState  — monotonic clock + per-CPU offset (ktime.rs)
+//   - ktime::WallState   — UNIX epoch offset (ktime.rs)
+//   - Any small data (≤ 2 cache lines) frequently read from ISR
+//   - DO NOT use for large buffers (copy overhead on reader side)
 // ═════════════════════════════════════════════════════════════════════════════
 
 use core::cell::UnsafeCell;
@@ -52,24 +52,24 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // SeqLock<T>
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// SeqLock générique pour des données `Copy`.
+/// Generic SeqLock for `Copy` data.
 ///
-/// Garantit des lectures cohérentes sans jamais bloquer le lecteur, y compris
-/// depuis une ISR (pas de Mutex, pas de spin continu).
+/// Guarantees consistent reads without ever blocking the reader, including
+/// from an ISR (no Mutex, no continuous spin).
 ///
-/// ## Contrainte de taille
-/// T doit tenir dans une ou deux cache lines (≤ 128 octets) pour que le
-/// pattern lecteur soit efficace. Au-delà, preferez un RwLock.
+/// ## Size constraint
+/// T must fit in one or two cache lines (≤ 128 bytes) for the
+/// reader pattern to remain efficient. Beyond that, prefer a RwLock.
 #[repr(C)]
 pub struct SeqLock<T: Copy> {
-    /// Compteur séquentiel : pair = stable, impair = write en cours.
+    /// Sequential counter: even = stable, odd = write in progress.
     seq: AtomicU64,
-    /// Données protégées.
+    /// Protected data.
     data: UnsafeCell<T>,
 }
 
-// SAFETY: SeqLock est Send+Sync si T l'est — les accès concurrents sont sûrs
-// grâce au protocole seqlock (les lectures copient via retry).
+// SAFETY: SeqLock is Send+Sync if T is — concurrent accesses are safe
+// thanks to the seqlock protocol (reads copy via retry).
 unsafe impl<T: Copy + Send> Send for SeqLock<T> {}
 unsafe impl<T: Copy + Send + Sync> Sync for SeqLock<T> {}
 
@@ -80,8 +80,8 @@ impl<T: Copy + Default> Default for SeqLock<T> {
 }
 
 impl<T: Copy> SeqLock<T> {
-    /// Crée un `SeqLock` avec la valeur initiale donnée.
-    /// Le compteur démarre à 0 (pair = état stable).
+    /// Creates a `SeqLock` with given initial value.
+    /// Counter starts at 0 (even = stable state).
     pub const fn new(value: T) -> Self {
         Self {
             seq: AtomicU64::new(0),
@@ -89,52 +89,52 @@ impl<T: Copy> SeqLock<T> {
         }
     }
 
-    // ── Lecture ───────────────────────────────────────────────────────────────
+    // ── Read ─────────────────────────────────────────────────────────────────
 
-    /// Lit les données de manière cohérente avec retry seqlock.
+    /// Reads data consistently with seqlock retry.
     ///
-    /// ISR-safe : jamais de lock, pas d'alloc, retry si write en cours.
+    /// ISR-safe: never locks, no alloc, retries if write in progress.
     ///
-    /// ## Nombre de retries
-    /// En pratique < 5 retries sauf contention extrême (écrivain très fréquent).
-    /// Si T est volumineux, chaque retry copie T → préférer read_with() pour
-    /// minimiser la taille de la copie.
+    /// ## Retry count
+    /// In practice < 5 retries except under extreme contention (very frequent writer).
+    /// If T is large, each retry copies T → prefer read_with() to
+    /// minimize copy size.
     #[inline(always)]
     pub fn read(&self) -> T {
         loop {
-            // 1. Seq AVANT — doit être pair.
+            // 1. Seq BEFORE — must be even.
             let seq1 = self.seq.load(Ordering::Acquire);
             if seq1 & 1 != 0 {
-                // Write en cours → spin et retry.
+                // Write in progress → spin and retry.
                 core::hint::spin_loop();
                 continue;
             }
 
-            // 2. Copier les données (T est Copy → copie sur la pile).
-            //    SAFETY: la lecture est cohérente si seq ne change pas.
-            //    Si un write arrive entre seq1 et seq2, on détecte via seq2 ≠ seq1.
+            // 2. Copy data (T is Copy → stack copy).
+            //    SAFETY: read is consistent if seq does not change.
+            //    If a write occurs between seq1 and seq2, detected via seq2 ≠ seq1.
             let value = unsafe { *self.data.get() };
 
-            // 3. Vérifier que seq n'a pas changé.
+            // 3. Verify seq did not change.
             let seq2 = self.seq.load(Ordering::Acquire);
             if seq1 == seq2 {
                 return value;
             }
 
-            // Write s'est intercalé → retry.
+            // Write slipped in → retry.
             core::hint::spin_loop();
         }
     }
 
-    /// Lit les données et les passe à une fonction de projection.
+    /// Reads data and passes it to a projection function.
     ///
-    /// Évite une copie complète de T si seul un champ est nécessaire.
-    /// Le closure F est appelé avec une référence TEMPORAIRE à T — ne pas
-    /// conserver de référence au-delà de l'appel.
+    /// Avoids a full copy of T if only one field is needed.
+    /// Closure F is called with a TEMPORARY reference to T — do not
+    /// retain reference beyond call.
     ///
     /// ## Safety
-    /// F doit être non-bloquante et sans effet de bord observable
-    /// (peut être appelée plusieurs fois en cas de retry).
+    /// F must be non-blocking and without observable side effects
+    /// (may be called multiple times upon retry).
     #[inline(always)]
     pub fn read_with<R, F: Fn(&T) -> R>(&self, f: F) -> R {
         loop {
@@ -143,7 +143,7 @@ impl<T: Copy> SeqLock<T> {
                 core::hint::spin_loop();
                 continue;
             }
-            // SAFETY: F lit via référence immutable dans la fenêtre seqlock.
+            // SAFETY: F reads via immutable reference within seqlock window.
             let result = unsafe { f(&*self.data.get()) };
             let seq2 = self.seq.load(Ordering::Acquire);
             if seq1 == seq2 {
@@ -153,78 +153,78 @@ impl<T: Copy> SeqLock<T> {
         }
     }
 
-    // ── Écriture ──────────────────────────────────────────────────────────────
+    // ── Write ────────────────────────────────────────────────────────────────
 
-    /// Écrit de nouvelles données de manière atomique vis-à-vis des lecteurs.
+    /// Writes new data atomically with respect to readers.
     ///
-    /// RÈGLE SEQLOCK-04 : caller doit avoir désactivé la préemption
-    /// (via `PreemptGuard`) si un ordonnanceur est actif.
+    /// RULE SEQLOCK-04: caller must have disabled preemption
+    /// (via `PreemptGuard`) if a scheduler is active.
     ///
     /// ## Safety
-    /// - Thread d'écriture exclusif — un seul écrivain à la fois.
-    ///   (SeqLock *sans* lock ne détecte pas les writes concurrents —
-    ///   si plusieurs écrivains possibles, utiliser `write_guarded()`)
-    /// - Pas de `read()` ni `read_with()` dans le corps de l'écrivain.
+    /// - Exclusive writer thread — only one writer at a time.
+    ///   (SeqLock *without* lock does not detect concurrent writes —
+    ///   if multiple writers possible, use `write_guarded()`)
+    /// - No `read()` or `read_with()` inside writer body.
     #[inline]
     pub unsafe fn write(&self, value: T) {
-        // seq impair = write start.
+        // seq odd = write start.
         self.seq.fetch_add(1, Ordering::AcqRel);
-        // Barrière : les stores suivants sont visibles APRÈS le seq impair.
+        // Barrier: subsequent stores are visible AFTER odd seq.
         core::sync::atomic::fence(Ordering::Release);
 
-        // Mettre à jour les données.
-        // SAFETY: exclusivité garantie par le contrat d'appel (un seul écrivain).
+        // Update data.
+        // SAFETY: exclusivity guaranteed by call contract (single writer).
         *self.data.get() = value;
 
-        // Barrière : les stores data sont visibles AVANT le seq pair.
+        // Barrier: data stores are visible BEFORE even seq.
         core::sync::atomic::fence(Ordering::Release);
-        // seq pair = write end.
+        // seq even = write end.
         self.seq.fetch_add(1, Ordering::Release);
     }
 
-    /// Modifie les données via un closure de mise à jour.
+    /// Modifies data via an update closure.
     ///
-    /// F reçoit une référence mutable à T et peut la modifier en place,
-    /// sans construire d'abord la valeur entière (utile si T est large).
+    /// F receives a mutable reference to T and can modify in-place,
+    /// without constructing whole value first (useful if T is large).
     ///
     /// ## Safety
-    /// Mêmes contraintes que `write()` — un seul écrivain à la fois.
-    /// F ne doit pas appeler `read()` ou `read_with()` sur ce même SeqLock.
+    /// Same constraints as `write()` — single writer at a time.
+    /// F must not call `read()` or `read_with()` on this same SeqLock.
     #[inline]
     pub unsafe fn update<F: FnOnce(&mut T)>(&self, f: F) {
         self.seq.fetch_add(1, Ordering::AcqRel);
         core::sync::atomic::fence(Ordering::Release);
-        // SAFETY: exclusivité garantie par contrat d'appel.
+        // SAFETY: exclusivity guaranteed by call contract.
         f(&mut *self.data.get());
         core::sync::atomic::fence(Ordering::Release);
         self.seq.fetch_add(1, Ordering::Release);
     }
 
-    // ── Accès non-protégés (init seulement) ───────────────────────────────────
+    // ── Unprotected access (init only) ───────────────────────────────────────
 
-    /// Initialise les données SANS signaler de write (pour la phase d'init).
+    /// Initializes data WITHOUT signaling a write (for init phase).
     ///
-    /// À n'appeler qu'UNE SEULE FOIS avant que d'autres threads puissent lire
-    /// (typiquement depuis BSP avant SMP init). Le seq reste à 0 → pair → stable.
+    /// To be called only ONCE before other threads can read
+    /// (typically from BSP before SMP init). seq remains 0 → even → stable.
     ///
     /// ## Safety
-    /// - Doit être appelé avant tout appel concurrent à `read()`.
-    /// - Doit correspondre à une valeur initiale cohérente (pas d'undefined behavior).
+    /// - Must be called before any concurrent call to `read()`.
+    /// - Must correspond to consistent initial value (no undefined behavior).
     #[inline]
     pub unsafe fn init_once(&self, value: T) {
-        // Stocker directement — pas de signal write car personne ne lit encore.
+        // Store directly — no write signal since nobody reads yet.
         *self.data.get() = value;
-        // Seq pair (= 0) → stable. Fence pour rendre visible avant les reads.
+        // Even seq (= 0) → stable. Fence to make visible before reads.
         core::sync::atomic::fence(Ordering::Release);
     }
 
-    /// Retourne le numéro de séquence courant (diagnostics uniquement).
+    /// Returns current sequence number (diagnostics only).
     #[inline(always)]
     pub fn seq_number(&self) -> u64 {
         self.seq.load(Ordering::Relaxed)
     }
 
-    /// Retourne `true` si un write est actuellement en cours (seq impair).
+    /// Returns `true` if a write is currently in progress (odd seq).
     #[inline(always)]
     pub fn write_in_progress(&self) -> bool {
         self.seq.load(Ordering::Relaxed) & 1 != 0
@@ -232,30 +232,30 @@ impl<T: Copy> SeqLock<T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SeqGuard — Guard RAII pour l'écriture (garantit le write_end par Drop)
+// SeqGuard — RAII Guard for writing (guarantees write_end on Drop)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Guard RAII pour une section d'écriture SeqLock.
+/// RAII guard for a SeqLock write section.
 ///
-/// Émet `seq.fetch_add(1)` à la création (write start) et au drop (write end).
-/// Garantit que le compteur repasse toujours à pair même en cas de panique.
+/// Emits `seq.fetch_add(1)` on creation (write start) and on drop (write end).
+/// Guarantees counter always returns to even even in case of panic.
 ///
-/// ## Exemple
+/// ## Example
 /// ```rust,ignore
 /// let _guard = SeqWriteGuard::new(&my_seqlock.seq);
-/// // Écrire dans my_seqlock.data ici...
-/// // _guard dropped → write_end automatique
+/// // Write into my_seqlock.data here...
+/// // _guard dropped → automatic write_end
 /// ```
 pub struct SeqWriteGuard<'a> {
     seq: &'a AtomicU64,
 }
 
 impl<'a> SeqWriteGuard<'a> {
-    /// Commence une section d'écriture (seq devient impair).
+    /// Starts a write section (seq becomes odd).
     ///
     /// ## Safety
-    /// - Un seul `SeqWriteGuard` actif à la fois sur le même SeqLock.
-    /// - Ne pas appeler `read()` sur le même SeqLock pendant ce guard.
+    /// - Only one active `SeqWriteGuard` at a time on the same SeqLock.
+    /// - Do not call `read()` on the same SeqLock while this guard is held.
     #[inline]
     pub unsafe fn new(seq: &'a AtomicU64) -> Self {
         seq.fetch_add(1, Ordering::AcqRel);
@@ -267,23 +267,23 @@ impl<'a> SeqWriteGuard<'a> {
 impl<'a> Drop for SeqWriteGuard<'a> {
     #[inline]
     fn drop(&mut self) {
-        // Barrière : rendre les stores data visibles AVANT de repasser à pair.
+        // Barrier: make data stores visible BEFORE returning to even.
         core::sync::atomic::fence(Ordering::Release);
         self.seq.fetch_add(1, Ordering::Release);
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SeqLockU64 — Spécialisation optimisée pour un unique u64
+// SeqLockU64 — Optimized specialization for a single u64
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// SeqLock optimisé pour un unique `u64` — pas de copie, lecture atomique.
+/// Optimized SeqLock for a single `u64` — zero copy, atomic read.
 ///
-/// Sur x86_64, la lecture d'un u64 aligné est naturellement atomique (64-bit
-/// load). Le seqlock garantit simplement la cohérence si la valeur est mise à
-/// jour depuis plusieurs cœurs en même temps que le contenu d'un multi-field.
+/// On x86_64, reading an aligned u64 is naturally atomic (64-bit
+/// load). The seqlock simply guarantees consistency if the value is updated
+/// from multiple cores concurrently with the contents of a multi-field.
 ///
-/// Utilisé par `ktime.rs` pour les champs individuels (tsc_hz, ns_base…).
+/// Used by `ktime.rs` for individual fields (tsc_hz, ns_base...).
 pub struct SeqLockU64 {
     seq: AtomicU64,
     value: AtomicU64,
@@ -297,7 +297,7 @@ impl SeqLockU64 {
         }
     }
 
-    /// Lecture cohérente — ISR-safe, wait-free.
+    /// Consistent read — ISR-safe, wait-free.
     #[inline(always)]
     pub fn read(&self) -> u64 {
         loop {
@@ -315,10 +315,10 @@ impl SeqLockU64 {
         }
     }
 
-    /// Écriture atomique.
+    /// Atomic write.
     ///
     /// ## Safety
-    /// Un seul écrivain à la fois.
+    /// Single writer at a time.
     #[inline]
     pub unsafe fn write(&self, v: u64) {
         self.seq.fetch_add(1, Ordering::AcqRel);
@@ -330,7 +330,7 @@ impl SeqLockU64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests unitaires (cfg(test) — no_std compatible via core::)
+// Unit tests (cfg(test) — no_std compatible via core::)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -350,7 +350,7 @@ mod tests {
             hz: 3_000_000_000,
         });
 
-        // Vérifier la valeur initiale.
+        // Verify initial value.
         let snap = lock.read();
         assert_eq!(snap.ns, 0);
         assert_eq!(snap.hz, 3_000_000_000);
@@ -371,9 +371,9 @@ mod tests {
     #[test]
     fn test_seqlock_seq_invariant() {
         let lock = SeqLock::new(0u64);
-        // Après init : seq doit être pair.
+        // After init: seq must be even.
         assert_eq!(lock.seq_number() & 1, 0);
-        // Pas de write en cours.
+        // No active write.
         assert!(!lock.write_in_progress());
     }
 

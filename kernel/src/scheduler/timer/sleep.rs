@@ -105,10 +105,10 @@ fn clear_sleep_timer(cookie: SleepTimerCookie) {
     }
 }
 
-/// Annule toute minuterie de sommeil encore liée à ce TCB.
+/// Cancels any sleep timer still bound to this TCB.
 ///
-/// Appelé au retour d'un sleep réveillé autrement que par son timer et depuis
-/// `do_exit()` avant que le reaper puisse observer le thread comme mort.
+/// Called upon return from a sleep woken other than by its timer and from
+/// `do_exit()` before reaper can observe the thread as dead.
 pub fn cancel_sleep_timer_for_tcb(tcb: &ThreadControlBlock) {
     let raw = tcb as *const ThreadControlBlock as u64;
     let mut index = 0usize;
@@ -161,10 +161,10 @@ unsafe fn sleep_timer_wake(_id: u32, data: u64) {
     }
 
     if !tcb_ref.try_transition(TaskState::Sleeping, TaskState::Runnable) {
-        // HARDENING lost-wake : si le thread est Runnable mais PAS dans la
-        // file (réveillé par un chemin qui a transitionné sans enfil er — p.ex.
-        // raise_signal_pending), on l'enfile maintenant. Pas de double-enqueue
-        // possible : enqueue() vérifie try_mark_queued().
+        // HARDENING lost-wake: if thread is Runnable but NOT in
+        // queue (woken by a path that transitioned without enqueuing — e.g.
+        // raise_signal_pending), enqueue it now. No double-enqueue
+        // possible: enqueue() verifies try_mark_queued().
         if tcb_ref.state() == TaskState::Runnable && !tcb_ref.is_queued() {
             let rq = run_queue(CpuId(cpu_raw as u32));
             rq.enqueue(tcb_nn);

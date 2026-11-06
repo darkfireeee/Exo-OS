@@ -1,17 +1,17 @@
 // kernel/src/scheduler/timer/tick.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Tick périodique — HZ=1000 (1ms par tick)
+// Periodic tick — HZ=1000 (1ms per tick)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Appelé depuis le gestionnaire d'interruption timer (IRQ0 ou LAPIC timer).
-// Effectue, dans l'ordre :
-//   1. Mise à jour de l'horloge monotone (statistique)
-//   2. Mise à jour du vruntime du thread courant (CFS)
-//   3. Vérification de préemption CFS
-//   4. Vérification de quantum RR
-//   5. Déclenchement des hrtimers expirés
-//   6. Équilibrage de charge (tous les BALANCE_INTERVAL_TICKS ticks)
+// Called from timer interrupt handler (IRQ0 or LAPIC timer).
+// Performs, in order:
+//   1. Update monotonic clock (statistics)
+//   2. Update current thread vruntime (CFS)
+//   3. CFS preemption check
+//   4. RR quantum check
+//   5. Fire expired hrtimers
+//   6. Load balancing (every BALANCE_INTERVAL_TICKS ticks)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::hrtimer;
@@ -26,20 +26,20 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const HZ: u64 = 1000;
 pub const TICK_NS: u64 = 1_000_000_000 / HZ;
 const GI03_DEFERRED_TICK_INTERVAL: u64 = 10;
 
-// Temps accumulé sur le CPU courant depuis la dernière sélection du thread (par CPU).
+// Accumulated time on current CPU since last thread selection (per CPU).
 static ELAPSED_NS: [AtomicU64; MAX_CPUS] =
     [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// Dernier pointeur TCB observé par CPU — permet de détecter un changement de thread
-/// et de remettre ELAPSED_NS à zéro pour ne pas imputer le temps de l'ancien thread
-/// au nouveau (BUG-FIX R).
+/// Last TCB pointer observed per CPU — allows detecting thread switch
+/// and resetting ELAPSED_NS to zero to avoid charging previous thread's time
+/// to the new one (BUG-FIX R).
 static LAST_TCB_PTR: [AtomicUsize; MAX_CPUS] =
     [const { AtomicUsize::new(0) }; MAX_CPUS];
 
@@ -47,14 +47,14 @@ pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 pub static TICK_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handler principal du tick
+// Main tick handler
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appelé à chaque tick timer sur le CPU `cpu_id` avec le thread courant.
+/// Called on every timer tick on CPU `cpu_id` with current thread.
 ///
 /// # Safety
-/// Appelé depuis un contexte d'interruption (préemption implicitement désactivée).
-/// Le pointeur `current` doit être valide.
+/// Called from interrupt context (preemption implicitly disabled).
+/// The `current` pointer must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControlBlock) {
     let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -64,20 +64,20 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
         None => return,
     };
 
-    // ── 1. Statistiques CPU (instrumentation globale) ────────────────────
+    // ── 1. CPU statistics (global instrumentation) ─────────────────────
     crate::scheduler::stats::per_cpu::inc_ticks(cpu_id as usize);
 
-    // ── 2. Vruntime CFS ──────────────────────────────────────────────────
+    // ── 2. CFS vruntime ──────────────────────────────────────────────────
     let rq = runqueue::run_queue(CpuId(cpu_id));
     let ready_nr = rq.nr_running_usize();
 
-    // Accumuler l'elapsed sur ce CPU.
+    // Accumulate elapsed time on this CPU.
     let cpu_idx = (cpu_id as usize).min(MAX_CPUS - 1);
 
-    // BUG-FIX R : remettre ELAPSED_NS à zéro quand un nouveau thread est détecté.
-    // Sans ce correctif, un thread qui vient de prendre le CPU hérite du temps
-    // accumulé par le thread précédent (switch volontaire : yield, sleep, mutex)
-    // et peut être préempté dès son premier tick, indépendamment de son quantum CFS.
+    // BUG-FIX R: reset ELAPSED_NS to zero when a new thread is detected.
+    // Without this fix, a thread newly scheduled inherits time
+    // accumulated by the previous thread (voluntary switch: yield, sleep, mutex)
+    // and may be preempted on its very first tick, regardless of its CFS slice.
     let current_ptr = current as usize;
     if LAST_TCB_PTR[cpu_idx].load(Ordering::Relaxed) != current_ptr {
         ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
@@ -88,20 +88,20 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     match tcb.policy {
         SchedPolicy::Normal | SchedPolicy::Batch => {
-            // Le vruntime CFS est comptabilise au context switch avec le delta
-            // TSC exact. Le tick ne fait que décider si la tranche est expirée;
-            // cela évite de sous-facturer les serveurs qui dorment avant 1ms.
+            // CFS vruntime is accounted at context switch with exact
+            // TSC delta. The tick only decides if the slice has expired;
+            // this avoids undercharging servers sleeping before 1ms.
 
-            // Le thread courant est retiré de la runqueue pendant qu'il tourne:
-            // l'inclure dans nr/total_weight évite de désactiver la préemption
-            // quand un seul autre thread CFS est prêt.
+            // Current thread is dequeued from runqueue while running:
+            // including it in nr/total_weight avoids disabling preemption
+            // when only one other CFS thread is ready.
             let nr = ready_nr.saturating_add(1);
             let tw = rq
                 .total_cfs_weight()
                 .saturating_add(tcb.priority.cfs_weight() as u64);
             let slice = timeslice_for(tcb, nr, tw);
 
-            // ── 3. Préemption CFS ───────────────────────────────────────
+            // ── 3. CFS preemption ───────────────────────────────────────
             if tick_check_preempt(tcb, elapsed, slice, nr) {
                 tcb.sched_state
                     .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
@@ -110,18 +110,18 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
             }
         }
         SchedPolicy::RoundRobin if rr_tick(tcb, elapsed) => {
-            // ── 4. Quantum RR ──────────────────────────────────────────
+            // ── 4. RR quantum ──────────────────────────────────────────
             tcb.sched_state
                 .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
             ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
             TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
         }
         SchedPolicy::Deadline if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) => {
-            // ── 4b. Budget SCHED_DEADLINE ──────────────────────────────
-            // BUG-FIX S : vérifier l'épuisement du budget EDF à chaque tick.
-            // Sans ce correctif, les threads SCHED_DEADLINE n'appelaient jamais
-            // `deadline_tick()`, ignoraient leur `runtime_ns` et s'exécutaient
-            // indéfiniment sans respecter leur budget par période.
+            // ── 4b. SCHED_DEADLINE budget ──────────────────────────────
+            // BUG-FIX S: verify EDF budget exhaustion on every tick.
+            // Without this fix, SCHED_DEADLINE threads never called
+            // `deadline_tick()`, ignored their `runtime_ns` and ran
+            // indefinitely without respecting their budget per period.
             tcb.sched_state
                 .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
             ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
@@ -134,33 +134,33 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     hrtimer::fire_expired(cpu_id as usize);
 
     // ── 5b. Deadline miss check (BUG-FIX D) ──────────────────────────────
-    // Avant ce correctif, dl_tick() n'était jamais appelé : les threads
-    // SCHED_DEADLINE ne détectaient jamais leurs deadline misses.
+    // Before this fix, dl_tick() was never called: SCHED_DEADLINE threads
+    // never detected their deadline misses.
     crate::scheduler::timer::deadline_timer::dl_tick(cpu_id as usize);
 
-    // ── 5c. Maintenance GI-03 (BSP, 100 Hz) ───────────────────────────────
-    // Watchdog IRQ + drainage des fautes IOMMU hors ISR matériel dédié.
+    // ── 5c. GI-03 maintenance (BSP, 100 Hz) ───────────────────────────────
+    // IRQ watchdog + drainage of IOMMU faults outside dedicated hardware ISR.
     if cpu_id == 0 && tick.is_multiple_of(GI03_DEFERRED_TICK_INTERVAL) {
         crate::arch::x86_64::irq::watchdog::watchdog_tick();
         crate::drivers::iommu::fault_handler::process_iommu_faults();
     }
 
-    // ── 6. Équilibrage de charge ──────────────────────────────────────────
+    // ── 6. Load balancing ──────────────────────────────────────────
     if tick.is_multiple_of(BALANCE_INTERVAL_TICKS) {
         balance_cpu(CpuId(cpu_id));
     }
 }
 
-/// Initialise le sous-système tick pour `nr_cpus` CPUs.
+/// Initializes tick subsystem for `nr_cpus` CPUs.
 ///
 /// # Safety
-/// Appelé une seule fois depuis `scheduler::init()`.
+/// Called once from `scheduler::init()`.
 pub unsafe fn init(_nr_cpus: usize) {
     TICK_COUNT.store(0, Ordering::Relaxed);
     TICK_PREEMPTIONS.store(0, Ordering::Relaxed);
 }
 
-/// Réinitialise les compteurs tick locaux d'un CPU AP avant publication.
+/// Resets local tick counters of an AP CPU before publication.
 #[inline]
 pub fn reset_tick_counters(cpu_id: usize) {
     let idx = cpu_id.min(MAX_CPUS - 1);
@@ -169,33 +169,33 @@ pub fn reset_tick_counters(cpu_id: usize) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// C ABI EXPORT — pont pour arch/x86_64/exceptions.rs (handler IPI reschedule)
+// C ABI EXPORT — bridge for arch/x86_64/exceptions.rs (reschedule IPI handler)
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Réponse à l'IPI 0xF1 (reschedule_ipi) envoyé par un autre CPU via
-// `arch_send_reschedule_ipi()` dans arch/x86_64/sched_iface.rs.
+// Response to IPI 0xF1 (reschedule_ipi) sent by another CPU via
+// `arch_send_reschedule_ipi()` in arch/x86_64/sched_iface.rs.
 //
-// Action : positionner NEED_RESCHED sur le TCB courant + EOI est géré par arch.
-// Le reschedule effectif aura lieu au retour du handler d'interruption,
-// lors de la vérification des flags NEED_RESCHED en mode kernel (ou IRET vers
-// user space si le code supporte la préemption kernel).
+// Action: set NEED_RESCHED on current TCB + EOI is handled by arch.
+// Effective reschedule will take place upon return from interrupt handler,
+// during NEED_RESCHED flags check in kernel mode (or IRET to
+// user space if kernel preemption is supported).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pont C ABI pour `do_ipi_reschedule` (arch/x86_64/exceptions.rs).
+/// C ABI bridge for `do_ipi_reschedule` (arch/x86_64/exceptions.rs).
 ///
-/// `tcb_ptr` : pointeur vers le `ThreadControlBlock` courant (lu depuis GS:[0x20]).
-///   - Si null : IPI reçu avant l'init scheduler — ignoré silencieusement.
-///   - Sinon : positionne le flag `NEED_RESCHED` sur ce thread pour
-///     déclencher un reschedule au retour d'interruption.
+/// `tcb_ptr`: pointer to current `ThreadControlBlock` (read from GS:[0x20]).
+///   - If null: IPI received before scheduler init — silently ignored.
+///   - Else: sets `NEED_RESCHED` flag on this thread to
+///     trigger a reschedule upon return from interrupt.
 ///
 /// # Safety
-/// Appelé depuis un handler d'interruption, préemption implicitement désactivée.
-/// `tcb_ptr`, si non-null, DOIT pointer vers un TCB valide.
+/// Called from interrupt handler, preemption implicitly disabled.
+/// `tcb_ptr`, if non-null, MUST point to a valid TCB.
 #[no_mangle]
 pub unsafe extern "C" fn sched_ipi_reschedule(tcb_ptr: *mut u8) {
     let tcb = match NonNull::new(tcb_ptr as *mut ThreadControlBlock) {
         Some(p) => &mut *p.as_ptr(),
-        None => return, // boot ou idle sans TCB — ignorer
+        None => return, // boot or idle without TCB — ignore
     };
     tcb.sched_state
         .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);

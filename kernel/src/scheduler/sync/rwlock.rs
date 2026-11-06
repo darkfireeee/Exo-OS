@@ -1,11 +1,11 @@
 // kernel/src/scheduler/sync/rwlock.rs
 //
-// RwLock — plusieurs lecteurs simultanés, un seul écrivain exclusif.
+// RwLock — multiple concurrent readers, single exclusive writer.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicI32, Ordering};
 
-/// Compteur : > 0 = nb lecteurs, -1 = verrou écriture, 0 = libre.
+/// Counter: > 0 = reader count, -1 = write lock, 0 = free.
 pub struct KRwLock<T> {
     state: AtomicI32,
     data: UnsafeCell<T>,
@@ -95,11 +95,11 @@ impl<'a, T> Drop for KWriteGuard<'a, T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Alias de compatibilité (certains modules utilisent le nom générique RwLock)
+// Compatibility aliases (some modules use the generic RwLock name)
 // ─────────────────────────────────────────────────────────────────────────────
-/// Alias public vers [`KRwLock`] pour les crates qui utilisent le nom générique.
+/// Public alias to [`KRwLock`] for crates using the generic name.
 pub type RwLock<T> = KRwLock<T>;
-/// Alias vers [`KReadGuard`].
+/// Alias to [`KReadGuard`].
 pub type RwLockReadGuard<'a, T> = KReadGuard<'a, T>;
-/// Alias vers [`KWriteGuard`].
+/// Alias to [`KWriteGuard`].
 pub type RwLockWriteGuard<'a, T> = KWriteGuard<'a, T>;

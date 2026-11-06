@@ -1,20 +1,20 @@
 // kernel/src/scheduler/policies/realtime.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Politique Temps-Réel : SCHED_FIFO + SCHED_RR (Exo-OS · Couche 1)
+// Real-Time Policy: SCHED_FIFO + SCHED_RR (Exo-OS · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// SCHED_FIFO : aucune préemption au sein d'une même priorité.
-//              Un thread RT tourne jusqu'à ce qu'il se bloque ou cède.
-//              Un thread RT de priorité plus haute peut préempter.
+// SCHED_FIFO: no preemption within the same priority.
+//             An RT thread runs until it blocks or yields.
+//             A higher priority RT thread can preempt.
 //
-// SCHED_RR   : identique à FIFO mais chaque thread a un quantum de 10ms.
-//              À l'expiration, le thread est réinséré à la fin de sa file
-//              de priorité.
+// SCHED_RR:   identical to FIFO but each thread has a 10ms quantum.
+//             Upon expiration, the thread is re-enqueued at the end of its
+//             priority queue.
 //
-// Priorités RT : 1 (la plus basse) .. 99 (la plus haute) selon POSIX.
-//   Interne : stocké dans Priority::rt_prio (0 = idle, 100–199 = RT 1–100)
-//   La RunQueue RT utilise les niveaux 100–199 pour les files RT.
+// RT Priorities: 1 (lowest) .. 99 (highest) per POSIX.
+//   Internal: stored in Priority::rt_prio (0 = idle, 100–199 = RT 1–100)
+//   RT RunQueue uses levels 100–199 for RT queues.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::runqueue::PerCpuRunQueue;
@@ -22,14 +22,14 @@ use crate::scheduler::core::task::{SchedPolicy, ThreadControlBlock};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Quantum SCHED_RR (10ms en nanosecondes).
+/// SCHED_RR quantum (10ms in nanoseconds).
 pub const RR_TIMESLICE_NS: u64 = 10_000_000;
-/// Priorité POSIX RT la plus basse.
+/// Lowest POSIX RT priority.
 pub const RT_PRIO_MIN: u8 = 1;
-/// Priorité POSIX RT la plus haute.
+/// Highest POSIX RT priority.
 pub const RT_PRIO_MAX: u8 = 99;
 
 const _: () = assert!(RT_PRIO_MIN < RT_PRIO_MAX, "RT priority range is invalid");
@@ -38,30 +38,30 @@ const _: () = assert!(
     "RT runqueue does not cover POSIX RT priorities"
 );
 
-/// Compteur de préemptions RT sur interruption de thread plus haute priorité.
+/// Counter of RT preemptions caused by higher priority thread interruption.
 pub static RT_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
-/// Expirations de quantum RR.
+/// RR quantum expirations.
 pub static RR_QUANTUM_EXPIRATIONS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Logique SCHED_FIFO
+// SCHED_FIFO logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie si un thread RT de priorité plus haute est en attente dans la run
-/// queue, ce qui déclencherait une préemption du thread courant.
+/// Checks if a higher-priority RT thread is waiting in the run
+/// queue, which would trigger preemption of current thread.
 ///
-/// Retourne `true` si une préemption est nécessaire.
+/// Returns `true` if preemption is required.
 ///
 /// # BUG-FIX Q
-/// L'ancien code utilisait `rt_highest_prio()` qui retourne 0 (= priorité
-/// maximale RT) même quand la file RT est VIDE. Résultat : `highest_waiting (0)
-/// < running_prio` était vrai pour tout thread non-RT (prio > 0), déclenchant
-/// une préemption fantôme sans thread RT en attente.
-/// Correction : `rt_bitmap_highest_prio()` retourne `None` si la file est
-/// vide — la préemption n'est déclenchée que si un thread attend réellement.
+/// Old code used `rt_highest_prio()` which returns 0 (= maximum
+/// RT priority) even when the RT queue is EMPTY. Result: `highest_waiting (0)
+/// < running_prio` was true for any non-RT thread (prio > 0), triggering
+/// ghost preemption with no RT thread waiting.
+/// Fix: `rt_bitmap_highest_prio()` returns `None` if queue is empty
+/// — preemption is only triggered if a thread is genuinely waiting.
 pub fn fifo_should_preempt(rq: &PerCpuRunQueue, running: &ThreadControlBlock) -> bool {
     let running_prio = running.priority.0;
-    // rt_bitmap_highest_prio() retourne None si aucun thread RT n'est prêt.
+    // rt_bitmap_highest_prio() returns None if no RT thread is ready.
     match rq.rt_bitmap_highest_prio() {
         Some(highest_waiting) if highest_waiting < running_prio => {
             RT_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
@@ -72,13 +72,13 @@ pub fn fifo_should_preempt(rq: &PerCpuRunQueue, running: &ThreadControlBlock) ->
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Logique SCHED_RR
+// SCHED_RR logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appelé par le timer tick pour un thread SCHED_RR.
+/// Called by timer tick for a SCHED_RR thread.
 ///
-/// Retourne `true` si le quantum est expiré (le thread doit être réenfilé à la
-/// fin de sa file de priorité).
+/// Returns `true` if quantum expired (thread must be re-enqueued at
+/// the end of its priority queue).
 pub fn rr_tick(tcb: &ThreadControlBlock, elapsed_since_schedule_ns: u64) -> bool {
     if tcb.policy != SchedPolicy::RoundRobin {
         return false;
@@ -90,7 +90,7 @@ pub fn rr_tick(tcb: &ThreadControlBlock, elapsed_since_schedule_ns: u64) -> bool
     false
 }
 
-/// Quantum restant pour un thread SCHED_RR (en nanosecondes).
+/// Remaining quantum for a SCHED_RR thread (in nanoseconds).
 pub fn rr_remaining_slice(elapsed_since_schedule_ns: u64) -> u64 {
     RR_TIMESLICE_NS.saturating_sub(elapsed_since_schedule_ns)
 }

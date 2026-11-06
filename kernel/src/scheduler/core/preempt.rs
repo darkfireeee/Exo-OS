@@ -1,69 +1,69 @@
 // kernel/src/scheduler/core/preempt.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// PRÉEMPTION RAII — PreemptGuard (Exo-OS Scheduler · Couche 1)
+// RAII PREEMPTION — PreemptGuard (Exo-OS Scheduler · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE PREEMPT-01 (DOC3) : Ne jamais appeler preempt_disable/enable directement.
-//   Toujours passer par PreemptGuard pour garantir une réactivation par Drop.
-//   Raison : une exception entre disable et enable corromprait le compteur de
-//   préemption et provoquerait un deadlock ou un crash du scheduler.
+// RULE PREEMPT-01 (DOC3): Never call preempt_disable/enable directly.
+//   Always use PreemptGuard to guarantee re-enabling via Drop.
+//   Reason: an exception between disable and enable would corrupt the
+//   preemption counter and cause a deadlock or scheduler crash.
 //
-// RÈGLE ZONE NO-ALLOC : ce fichier ne doit jamais allouer de mémoire heap.
-// RÈGLE UNSAFE : tout bloc unsafe documenté par // SAFETY:
+// RULE NO-ALLOC ZONE: this file must never allocate heap memory.
+// RULE UNSAFE: all unsafe blocks documented by // SAFETY:
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicI32, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteur de préemption per-CPU
+// Per-CPU preemption counter
 //
-// Stocké ici en tant que static per-CPU simulé par un tableau aligné.
-// En production sur un vrai noyau, ce serait un champ dans la per-CPU data
-// structure, accédé via GS:offset. On utilise une approximation tableaux
-// statiques pour un maximum de MAX_CPUS CPUs.
+// Stored here as a per-CPU static simulated by an aligned array.
+// In production on a real kernel, this would be a field in the per-CPU data
+// structure, accessed via GS:offset. A static array approximation is used
+// for a maximum of MAX_CPUS CPUs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximal de CPUs supportés.
-/// CORR-27 : doit être ≥ SSR_MAX_CORES_LAYOUT (256) — Phase 0 obligatoire.
-/// ÉTAIT : 64 — CORRIGÉ : 256
+/// Maximum number of supported CPUs.
+/// CORR-27: must be >= SSR_MAX_CORES_LAYOUT (256) — mandatory Phase 0.
+/// WAS: 64 — FIXED: 256
 pub const MAX_CPUS: usize = 256;
 
-/// Compteurs de préemption per-CPU — un compteur par CPU logique.
+/// Per-CPU preemption counters — one counter per logical CPU.
 ///
-/// Valeur 0 : préemptible.
-/// Valeur > 0 : non préemptible (profondeur d'imbrication).
-/// Valeur < 0 : BUG — déséquilibre enable/disable (détecté en debug).
+/// Value 0: preemptible.
+/// Value > 0: non-preemptible (nesting depth).
+/// Value < 0: BUG — enable/disable imbalance (detected in debug).
 #[repr(C, align(64))]
-struct PreemptCounter(AtomicI32, [u8; 60]); // padding cache line
+struct PreemptCounter(AtomicI32, [u8; 60]); // cache line padding
 
 static PREEMPT_COUNT: [PreemptCounter; MAX_CPUS] =
     [const { PreemptCounter(AtomicI32::new(0), [0u8; 60]) }; MAX_CPUS];
 
-/// Compteur global de désactivations de préemption (instrumentation).
+/// Global preemption disable counter (instrumentation).
 static PREEMPT_DISABLE_TOTAL: AtomicI32 = AtomicI32::new(0);
 
-/// Retourne l'ID du CPU courant.
-/// Dans un vrai noyau x86_64, on lirait GS:percpu_cpu_id.
-/// Ici on appelle une fonction externe fournie par arch/.
+/// Returns current CPU ID.
+/// In a real x86_64 kernel, GS:percpu_cpu_id would be read.
+/// Here an external function provided by arch/ is called.
 #[inline(always)]
 fn current_cpu_id() -> usize {
-    // SAFETY: lecture d'une variable per-CPU via l'ABI noyau.
-    // La valeur est toujours dans [0, MAX_CPUS).
+    // SAFETY: read of a per-CPU variable via kernel ABI.
+    // The value is always in [0, MAX_CPUS).
     #[cfg(test)]
     {
         0
     }
     #[cfg(all(target_arch = "x86_64", not(test)))]
     {
-        // Lecture du champ cpu_id dans le per-CPU data (GS:0).
-        // En l'absence du mécanisme complet, on retourne 0.
+        // Read cpu_id field in per-CPU data (GS:0).
+        // In the absence of complete mechanism, return 0.
         extern "C" {
             fn arch_current_cpu() -> u32;
         }
-        // SAFETY: arch_current_cpu() est défini dans arch/x86_64 et retourne
-        // toujours une valeur dans [0, MAX_CPUS).
+        // SAFETY: arch_current_cpu() is defined in arch/x86_64 and always
+        // returns a value in [0, MAX_CPUS).
         let id = unsafe { arch_current_cpu() } as usize;
         id.min(MAX_CPUS - 1)
     }
@@ -74,26 +74,26 @@ fn current_cpu_id() -> usize {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API interne de bas niveau (PRIVÉE)
+// Low-level internal API (PRIVATE)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Désactive la préemption pour le CPU courant (incrémente compteur).
-/// PRIVÉ — utiliser PreemptGuard.
+/// Disables preemption for the current CPU (increments counter).
+/// PRIVATE — use PreemptGuard.
 #[inline(always)]
 fn preempt_disable_raw() {
     let cpu = current_cpu_id();
     let prev = PREEMPT_COUNT[cpu].0.fetch_add(1, Ordering::Acquire);
     publish_preempt_shadow(prev.saturating_add(1));
     PREEMPT_DISABLE_TOTAL.fetch_add(1, Ordering::Relaxed);
-    // Détection de débordement positif > 64 → signe d'un bug d'imbrication.
+    // Positive overflow detection > 64 -> sign of a nesting bug.
     debug_assert!(
         prev < 64,
         "preempt_disable: compteur > 64, bug d'imbrication probable"
     );
 }
 
-/// Réactive la préemption pour le CPU courant (décrémente compteur).
-/// PRIVÉ — utiliser PreemptGuard::drop.
+/// Re-enables preemption for the current CPU (decrements counter).
+/// PRIVATE — use PreemptGuard::drop.
 #[inline(always)]
 fn preempt_enable_raw() {
     let cpu = current_cpu_id();
@@ -120,7 +120,7 @@ fn publish_preempt_shadow(depth: i32) {
     }
 }
 
-/// Retourne `true` si la préemption est désactivée sur le CPU courant.
+/// Returns `true` if preemption is disabled on the current CPU.
 #[inline(always)]
 pub fn is_preempt_disabled() -> bool {
     let cpu = current_cpu_id();
@@ -138,27 +138,27 @@ pub(crate) fn preempt_enable_for_arch_compat() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PreemptGuard — RAII obligatoire
+// PreemptGuard — Mandatory RAII
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Désactive la préemption pour la durée de vie de ce guard.
+/// Disables preemption for the lifetime of this guard.
 ///
-/// # Exemple
+/// # Example
 /// ```rust,ignore
 /// {
-///     let _guard = PreemptGuard::new();  // préemption désactivée
-///     // ... section critique vis-à-vis du scheduler ...
-///     // Drop automatique → préemption réactivée
+///     let _guard = PreemptGuard::new();  // preemption disabled
+///     // ... critical section relative to the scheduler ...
+///     // Automatic drop -> preemption re-enabled
 /// }
 /// ```
 ///
-/// # Règles d'utilisation
-/// - Ne JAMAIS stocker un `PreemptGuard` dans un champ de structure persistante.
-/// - Ne JAMAIS transférer un `PreemptGuard` entre threads (non `Send`).
-/// - Durée **minimale** : juste assez pour protéger la section critique.
-/// - INTERDIT d'appeler des fonctions pouvant dormir à l'intérieur.
+/// # Usage rules
+/// - NEVER store a `PreemptGuard` in a persistent struct field.`
+/// - NEVER transfer a `PreemptGuard` across threads (not `Send`).
+/// - **Minimal** duration: just enough to protect the critical section.
+/// - FORBIDDEN to call functions that may sleep inside.
 pub struct PreemptGuard {
-    /// PhantomData *mut () rend ce type non-Send et non-Sync.
+    /// PhantomData *mut () makes this type !Send and !Sync.
     _phantom: PhantomData<*mut ()>,
 }
 
@@ -169,7 +169,7 @@ impl Default for PreemptGuard {
 }
 
 impl PreemptGuard {
-    /// Désactive la préemption et retourne un guard RAII.
+    /// Disables preemption and returns an RAII guard.
     #[inline(always)]
     #[must_use = "PreemptGuard doit être stocké dans une variable locale pour avoir un effet"]
     pub fn new() -> Self {
@@ -179,13 +179,13 @@ impl PreemptGuard {
         }
     }
 
-    /// Vérifie si la préemption est actuellement désactivée sur ce CPU.
+    /// Checks if preemption is currently disabled on this CPU.
     #[inline(always)]
     pub fn is_preempted_disabled() -> bool {
         is_preempt_disabled()
     }
 
-    /// Retourne la profondeur d'imbrication actuelle (debug).
+    /// Returns current nesting depth (debug).
     #[inline(always)]
     pub fn depth() -> i32 {
         let cpu = current_cpu_id();
@@ -200,17 +200,17 @@ impl Drop for PreemptGuard {
     }
 }
 
-// PreemptGuard est !Send (PhantomData<*mut ()>), !Sync implicite.
-// Pas de send/sync impl intentionnel.
+// PreemptGuard is !Send (PhantomData<*mut ()>), implicit !Sync.
+// Intentional lack of Send/Sync impl.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IrqGuard — désactive les interruptions + préemption (sections IRQ-safe)
+// IrqGuard — disables interrupts + preemption (IRQ-safe sections)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Désactive les IRQ matérielles ET la préemption.
-/// Utilisé pour les spinlocks IRQ-safe (scheduler tick, IPI handlers).
+/// Disables hardware IRQs AND preemption.
+/// Used for IRQ-safe spinlocks (scheduler tick, IPI handlers).
 pub struct IrqGuard {
-    /// Flags RFLAGS sauvegardés (IF bit).
+    /// Saved RFLAGS (IF bit).
     rflags: u64,
     _phantom: PhantomData<*mut ()>,
 }
@@ -222,13 +222,13 @@ impl Default for IrqGuard {
 }
 
 impl IrqGuard {
-    /// Sauvegarde RFLAGS, coupe les IRQ, désactive la préemption.
+    /// Saves RFLAGS, clears IRQs, disables preemption.
     #[inline(always)]
     #[must_use]
     pub fn new() -> Self {
         let rflags: u64;
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: pushfq/popq lisent RFLAGS; cli coupe les IRQ; ordre correct (sauvegarder avant couper).
+        // SAFETY: pushfq/popq read RFLAGS; cli clears IRQs; correct order (save before clearing).
         unsafe {
             core::arch::asm!(
                 "pushfq",
@@ -250,19 +250,19 @@ impl IrqGuard {
         }
     }
 
-    /// Vrai si les IRQ étaient activées avant ce guard (bit IF = 9 de RFLAGS).
+    /// True if IRQs were enabled before this guard (IF bit = 9 of RFLAGS).
     #[inline(always)]
     pub fn irqs_were_enabled(&self) -> bool {
         self.rflags & (1 << 9) != 0
     }
 
-    /// Libere la profondeur de preemption mais conserve les IRQ coupees.
+    /// Releases preemption depth while keeping IRQs disabled.
     ///
-    /// Le context switch ne peut pas garder un guard RAII vivant a travers le
-    /// changement de pile: son Drop s'executerait dans l'ancien contexte quand
-    /// ce thread serait reschedule. Ce helper couvre le cas scheduler:
-    /// selection sous preemption desactivee, puis saut ASM avec IF=0 et compteur
-    /// de preemption deja restaure.
+    /// Context switch cannot keep an RAII guard alive across the
+    /// stack switch: its Drop would run in the old context when
+    /// this thread is rescheduled. This helper covers the scheduler case:
+    /// selection under disabled preemption, then ASM jump with IF=0 and
+    /// preemption counter already restored.
     #[inline(always)]
     pub fn release_keep_irqs_disabled(self) -> u64 {
         let rflags = self.rflags;
@@ -271,10 +271,10 @@ impl IrqGuard {
         rflags
     }
 
-    /// Restaure l'etat IRQ capture par `release_keep_irqs_disabled`.
+    /// Restores IRQ state captured by `release_keep_irqs_disabled`.
     ///
     /// # Safety
-    /// `rflags` doit provenir d'un `IrqGuard` acquis sur ce CPU.
+    /// `rflags` must originate from an `IrqGuard` acquired on this CPU.
     #[inline(always)]
     pub unsafe fn restore_irq_flags(rflags: u64) {
         if rflags & (1 << 9) != 0 {
@@ -292,7 +292,7 @@ impl Drop for IrqGuard {
         preempt_enable_raw();
         if self.rflags & (1 << 9) != 0 {
             #[cfg(target_arch = "x86_64")]
-            // SAFETY: sti restaure le bit IF; rflags provient de pushfq/popq dans new(); restauration atomique.
+            // SAFETY: sti restores IF bit; rflags comes from pushfq/popq in new(); atomic restore.
             unsafe {
                 core::arch::asm!("sti", options(nomem, nostack));
             }
@@ -301,11 +301,11 @@ impl Drop for IrqGuard {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation
+// Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise les compteurs de préemption per-CPU pour tous les CPUs.
-/// Appelé depuis la séquence d'initialisation du scheduler (step 1).
+/// Initializes per-CPU preemption counters for all CPUs.
+/// Called from scheduler initialization sequence (step 1).
 pub fn init() {
     for i in 0..MAX_CPUS {
         PREEMPT_COUNT[i].0.store(0, Ordering::SeqCst);
@@ -313,11 +313,11 @@ pub fn init() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Assertions de cohérence (vérifiées en mode debug)
+// Consistency assertions (verified in debug mode)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Panique si la préemption n'est pas désactivée sur le CPU courant.
-/// Utilisé pour vérifier les invariants dans le scheduler.
+/// Panics if preemption is not disabled on current CPU.
+/// Used to verify invariants in the scheduler.
 #[inline(always)]
 pub fn assert_preempt_disabled() {
     assert!(
@@ -326,7 +326,7 @@ pub fn assert_preempt_disabled() {
     );
 }
 
-/// Panique si la préemption est désactivée (pour vérifier dormance autorisée).
+/// Panics if preemption is disabled (to verify sleep is allowed).
 #[inline(always)]
 pub fn assert_preempt_enabled() {
     assert!(
@@ -339,8 +339,8 @@ pub fn assert_preempt_enabled() {
 // Instrumentation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le nombre total de fois que la préemption a été désactivée
-/// depuis le boot (toutes CPUs confondues, instrumentation).
+/// Returns total number of times preemption has been disabled
+/// since boot (across all CPUs, instrumentation).
 pub fn total_preempt_disable_count() -> i32 {
     PREEMPT_DISABLE_TOTAL.load(Ordering::Relaxed)
 }

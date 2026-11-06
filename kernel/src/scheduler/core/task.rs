@@ -1,21 +1,21 @@
 // kernel/src/scheduler/core/task.rs
 //
-// Fichier : kernel/src/scheduler/core/task.rs
-// Rôle    : ThreadControlBlock — Layout canonique 256B — GI-01 Étape 9.
+// File: kernel/src/scheduler/core/task.rs
+// Role: ThreadControlBlock — Canonical 256B Layout — GI-01 Step 9.
 //
-// DÉPENDANCES :
-//   - Aucune dépendance externe (types auto-contenus)
-//   - switch_asm.s utilise les offsets [8] kstack_ptr et [56] cr3_phys
+// DEPENDENCIES:
+//   - No external dependencies (self-contained types)
+//   - switch_asm.s uses offsets [8] kstack_ptr and [56] cr3_phys
 //
-// INVARIANTS :
-//   - TCB = 256 bytes EXACT (#[repr(C, align(64))]) — vérifié compile-time
-//   - kstack_ptr  à l'offset [8]   — HARDCODÉ dans switch_asm.s
-//   - cr3_phys    à l'offset [56]  — HARDCODÉ dans switch_asm.s (KPTI)
-//   - fpu_state_ptr à l'offset [232] — lu par ExoPhoenix/Kernel B
-//   - rq_next     à l'offset [240] — intrusive runqueue
-//   - rq_prev     à l'offset [248] — intrusive runqueue
+// INVARIANTS:
+//   - TCB = EXACTLY 256 bytes (#[repr(C, align(64))]) — verified compile-time
+//   - kstack_ptr  at offset [8]   — HARDCODED in switch_asm.s
+//   - cr3_phys    at offset [56]  — HARDCODED in switch_asm.s (KPTI)
+//   - fpu_state_ptr at offset [232] — read by ExoPhoenix/Kernel B
+//   - rq_next     at offset [240] — intrusive runqueue
+//   - rq_prev     at offset [248] — intrusive runqueue
 //
-// SCHED_STATE (AtomicU64 à l'offset [24]) — encodage compact :
+// SCHED_STATE (AtomicU64 at offset [24]) — compact encoding:
 //   bits [7:0]  = TaskState value (u8)
 //   bit  [8]    = signal_pending flag
 //   bit  [9]    = KTHREAD flag
@@ -25,41 +25,41 @@
 //   bit  [13]   = IDLE
 //   bit  [14]   = IN_RECLAIM
 //   bit  [15]   = QUEUED in a scheduler run queue
-//   bits [31:16]= flags scheduler étendus (réservés)
-//   bits [63:32]= réservés ; pid est le champ direct `pid` à l'offset [92]
+//   bits [31:16]= extended scheduler flags (reserved)
+//   bits [63:32]= reserved; pid is direct field `pid` at offset [92]
 //
-// SÉCURITÉ ISR :
-//   - sched_state : AtomicU64 — accès atomiques [ISR-SAFE]
-//   - fpu_state_ptr, kstack_ptr, cr3_phys : u64 [THREAD-ONLY pour write]
-//   - rq_next/rq_prev : écrits sous spinlock RunQueue [THREAD-ONLY]
+// ISR SAFETY:
+//   - sched_state: AtomicU64 — atomic access [ISR-SAFE]
+//   - fpu_state_ptr, kstack_ptr, cr3_phys: u64 [THREAD-ONLY for write]
+//   - rq_next/rq_prev: written under RunQueue spinlock [THREAD-ONLY]
 //
-// SOURCE DE VÉRITÉ :
+// SOURCE OF TRUTH:
 //   ExoOS_Architecture_v7.md §3.2, ExoOS_Kernel_Types_v10.md,
 //   ExoOS_Corrections_01 CORR-01, GI-01_Types_TCB_SSR.md §7,
-//   ExoPhoenix_Spec_v6.md §3 (offsets alignés sur v7 — CORR-01)
+//   ExoPhoenix_Spec_v6.md §3 (offsets aligned to v7 — CORR-01)
 
 use core::sync::atomic::{AtomicU64, Ordering};
-// NOTE : les imports AtomicBool/AtomicU32/AtomicU8 supprimés — remplacés par
-// l'encodage dans sched_state (AtomicU64). Voir constantes SCHED_*_BIT.
+// NOTE: AtomicBool/AtomicU32/AtomicU8 imports removed — replaced by
+// encoding in sched_state (AtomicU64). See SCHED_*_BIT constants.
 
-// ─── Types auxiliaires ───────────────────────────────────────────────────────
+// ─── Auxiliary Types ────────────────────────────────────────────────────────
 
-/// Identifiant de thread — unique dans tout le système (64 bits).
+/// Thread identifier — system-wide unique (64 bits).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 #[repr(transparent)]
 pub struct ThreadId(pub u64);
 
-/// Identifiant de processus (32 bits, ABI POSIX compatible).
+/// Process identifier (32 bits, POSIX ABI compatible).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 #[repr(transparent)]
 pub struct ProcessId(pub u32);
 
-/// Identifiant CPU logique.
+/// Logical CPU identifier.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 #[repr(transparent)]
 pub struct CpuId(pub u32);
 
-/// Priorité d'ordonnancement (0 = RT_MAX, 139 = NORMAL_MIN, 140 = IDLE).
+/// Scheduling priority (0 = RT_MAX, 139 = NORMAL_MIN, 140 = IDLE).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 #[repr(transparent)]
 pub struct Priority(pub u8);
@@ -83,7 +83,7 @@ impl Priority {
         self.0 <= 99
     }
 
-    /// Poids CFS Linux-compatible (prio_to_weight[40]).
+    /// Linux-compatible CFS weight (prio_to_weight[40]).
     #[inline(always)]
     pub fn cfs_weight(self) -> u32 {
         const W: [u32; 40] = [
@@ -98,7 +98,7 @@ impl Priority {
     }
 }
 
-/// Politique d'ordonnancement.
+/// Scheduling policy.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]
 pub enum SchedPolicy {
@@ -111,7 +111,7 @@ pub enum SchedPolicy {
     Idle = 5,
 }
 
-/// État du thread dans la machine d'états.
+/// Thread state in state machine.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum TaskState {
@@ -125,7 +125,7 @@ pub enum TaskState {
 }
 
 impl TaskState {
-    /// Convertit depuis u8 — `Dead` pour toute valeur inconnue.
+    /// Converts from u8 — `Dead` for any unknown value.
     #[inline(always)]
     pub fn from_u8(v: u8) -> Self {
         match v {
@@ -140,7 +140,7 @@ impl TaskState {
     }
 }
 
-/// Paramètres EDF (conservé pour compat ; non embarqué dans le TCB canonique).
+/// EDF parameters (preserved for compat; not embedded in canonical TCB).
 #[derive(Copy, Clone, Debug, Default)]
 #[repr(C)]
 pub struct DeadlineParams {
@@ -149,7 +149,7 @@ pub struct DeadlineParams {
     pub period_ns: u64,
 }
 
-/// Contexte CPU (conservé pour compat ; non embarqué dans le TCB canonique).
+/// CPU context (preserved for compat; not embedded in canonical TCB).
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct CpuContext {
@@ -175,38 +175,38 @@ impl Default for CpuContext {
     }
 }
 
-// ─── Constantes sched_state ──────────────────────────────────────────────────
+// ─── sched_state Constants ───────────────────────────────────────────────────
 //
-// sched_state (AtomicU64, offset [24]) — encodage compact :
+// sched_state (AtomicU64, offset [24]) — compact encoding:
 //   bits  [7:0]  = TaskState value
 //   bit   [8]    = signal_pending
 //   bit   [9]    = KTHREAD
 //   bit   [10]   = FPU_LOADED
 //   bit   [11]   = NEED_RESCHED
 //   bit   [12]   = EXITING
-//   bits [31:13] = réservés
-//   NOTE : pid n'est PAS encodé dans sched_state — champ direct `pid: ProcessId` à [92]
+//   bits [31:13] = reserved
+//   NOTE: pid is NOT encoded in sched_state — direct field `pid: ProcessId` at [92]
 
 const SCHED_STATE_MASK: u64 = 0xFF;
-/// Signal en attente (bit 8).
+/// Pending signal (bit 8).
 pub const SCHED_SIGNAL_BIT: u64 = 1 << 8;
-/// Thread kernel, jamais userspace (bit 9).
+/// Kernel thread, never userspace (bit 9).
 pub const SCHED_KTHREAD_BIT: u64 = 1 << 9;
-/// FPU chargée dans les registres physiques (bit 10).
+/// FPU loaded into physical registers (bit 10).
 pub const SCHED_FPU_LOADED_BIT: u64 = 1 << 10;
-/// Préemption demandée — TIF_NEED_RESCHED (bit 11).
+/// Preemption requested — TIF_NEED_RESCHED (bit 11).
 pub const SCHED_NEED_RESCHED_BIT: u64 = 1 << 11;
-/// Thread en cours de terminaison (bit 12).
+/// Thread currently exiting (bit 12).
 pub const SCHED_EXITING_BIT: u64 = 1 << 12;
-/// Thread idle (bit 13).
+/// Idle thread (bit 13).
 pub const SCHED_IDLE_BIT: u64 = 1 << 13;
-/// Thread en reclaim mémoire — allocation FPU interdite (bit 14).
+/// Thread in memory reclaim — FPU allocation forbidden (bit 14).
 pub const SCHED_IN_RECLAIM_BIT: u64 = 1 << 14;
-/// Thread présent dans une run queue scheduler (bit 15).
+/// Thread present in scheduler run queue (bit 15).
 pub const SCHED_QUEUED_BIT: u64 = 1 << 15;
 
-/// Flags compat pour l'ancien code utilisant `task_flags::*`.
-/// Ces constantes ne sont PAS utilisées par le TCB canonique (encodage sched_state).
+/// Compat flags for legacy code using `task_flags::*`.
+/// These constants are NOT used by the canonical TCB (sched_state encoding).
 pub mod task_flags {
     pub const KTHREAD: u32 = 1 << 0;
     pub const FPU_LOADED: u32 = 1 << 1;
@@ -225,46 +225,46 @@ pub mod task_flags {
 // Layout exact 256 bytes, align(64).
 //
 // Cache-line 1 [0..64]   — hot path pick_next_task()
-//   [0]  tid:          u64        identifiant thread
-//   [8]  kstack_ptr:   u64        RSP kernel  ← switch_asm.s OFFSET HARDCODÉ
+//   [0]  tid:          u64        thread identifier
+//   [8]  kstack_ptr:   u64        RSP kernel  <- switch_asm.s HARDCODED OFFSET
 //   [16] priority:     u8
 //   [17] policy:       u8
 //   [18] _pad0:        [u8; 6]
-//   [24] sched_state:  AtomicU64  flags|signal|state (PID direct à [92])
-//   [32] vruntime:     AtomicU64  vruntime CFS (ns)
-//   [40] deadline_abs: u64        deadline EDF absolue (ns depuis boot)
-//   [48] cpu_affinity: AtomicU64  bitmask affinité CPU
-//   [56] cr3_phys:     u64        CR3 espace adressage  ← switch_asm.s OFFSET HARDCODÉ
+//   [24] sched_state:  AtomicU64  flags|signal|state (direct PID at [92])
+//   [32] vruntime:     AtomicU64  CFS vruntime (ns)
+//   [40] deadline_abs: u64        absolute EDF deadline (ns since boot)
+//   [48] cpu_affinity: AtomicU64  CPU affinity bitmask
+//   [56] cr3_phys:     u64        address space CR3  <- switch_asm.s HARDCODED OFFSET
 //
 // Cache-line 2 [64..128]  — warm (context switch)
-//   [64]  cpu_id:      AtomicU64  CPU courant
+//   [64]  cpu_id:      AtomicU64  current CPU
 //   [72]  fs_base:     u64        FS base (TLS)
-//   [80]  user_gs_base:u64        GS base userspace
+//   [80]  user_gs_base:u64        userspace GS base
 //   [88]  pkrs:        u32        PKRS
-//   [92]  pid:         ProcessId  PID direct (compat process/signal)
-//   [96]  signal_mask: AtomicU64  bitmask signaux bloqués
-//   [104] dl_runtime:  u64        budget EDF (ns/période)
-//   [112] dl_period:   u64        période EDF (ns)
+//   [92]  pid:         ProcessId  direct PID (compat process/signal)
+//   [96]  signal_mask: AtomicU64  blocked signals bitmask
+//   [104] dl_runtime:  u64        EDF budget (ns/period)
+//   [112] dl_period:   u64        EDF period (ns)
 //   [120] _pad2:       [u8; 8]
 //
 // Cache-lines 3-4 [128..256] — cold
 //   [128] run_time_acc:  u64
 //   [136] switch_count:  u64
 //   [144] _cold_reserve: [u8; 88]  (144+88=232)
-//     ExoShield v1.0 extensions within _cold_reserve :
+//     ExoShield v1.0 extensions within _cold_reserve:
 //       [144] shadow_stack_token : u64   (PKS domain TcbHot)
 //       [152] cet_flags          : u8    (bit 0=CET_EN, bit 1=IBT, bit 2=TOKEN_VALID)
 //       [153] threat_score_u8    : u8    (0..=100)
-//       [160] pt_buffer_phys     : u64   (Phase 4, LBR/PT futur)
-//       [168] creation_tsc       : u64   (anti-réutilisation PID / audit)
-//       [176] kstack_top         : u64   (sommet stable de pile kernel)
-//       [184] kpti_user_cr3      : u64   (shadow PML4 user par thread)
+//       [160] pt_buffer_phys     : u64   (Phase 4, future LBR/PT)
+//       [168] creation_tsc       : u64   (PID reuse prevention / audit)
+//       [176] kstack_top         : u64   (stable kernel stack top)
+//       [184] kpti_user_cr3      : u64   (per-thread user shadow PML4)
 //       [192] pl0_ssp            : u64   (CET Shadow Stack Pointer)
 //       [200] affinity_hi[0]     : u64   (CPUs 64..127)
 //       [208] affinity_hi[1]     : u64   (CPUs 128..191)
 //       [216] affinity_hi[2]     : u64   (CPUs 192..255)
-//       [224..232] réservé
-//   [232] fpu_state_ptr: u64       ← ExoPhoenix OFFSET HARDCODÉ
+//       [224..232] reserved
+//   [232] fpu_state_ptr: u64       <- ExoPhoenix HARDCODED OFFSET
 //   [240] rq_next:       u64       intrusive RunQueue
 //   [248] rq_prev:       u64       intrusive RunQueue
 
@@ -278,7 +278,7 @@ pub struct ThreadControlBlock {
     _pad0: [u8; 6],              // [18]
     pub sched_state: AtomicU64,  // [24]
     pub vruntime: AtomicU64,     // [32]
-    pub deadline_abs: AtomicU64, // [40]  deadline EDF absolue (ns depuis boot)
+    pub deadline_abs: AtomicU64, // [40]  absolute EDF deadline (ns since boot)
     pub cpu_affinity: AtomicU64, // [48]
     pub cr3_phys: u64,           // [56]  switch_asm.s HARDCODED
     // ═══ Cache-line 2 [64..128] ══════════════════════════════════════════════
@@ -286,7 +286,7 @@ pub struct ThreadControlBlock {
     pub fs_base: u64,           // [72]
     pub user_gs_base: u64,      // [80]
     pub pkrs: u32,              // [88]
-    pub pid: ProcessId,         // [92]  champ direct (compat)
+    pub pid: ProcessId,         // [92]  direct field (compat)
     pub signal_mask: AtomicU64, // [96]
     pub dl_runtime: u64,        // [104]
     pub dl_period: u64,         // [112]
@@ -300,7 +300,7 @@ pub struct ThreadControlBlock {
     pub rq_prev: u64,                   // [248]  intrusive runqueue
 } // total = 256B ✓
 
-// ─── Assertions layout statiques ─────────────────────────────────────────────
+// ─── Static layout assertions ──────────────────────────────────────────────
 use core::mem::{offset_of, size_of};
 
 const _: () = assert!(
@@ -340,19 +340,19 @@ const _: () = assert!(
     "TCB: rq_prev doit être à l'offset 248"
 );
 
-// ─── Assertions layout ExoShield v1.0 — extensions _cold_reserve ──────────
+// ─── ExoShield v1.0 layout assertions — _cold_reserve extensions ─────────
 //
-// Les champs ExoShield dans _cold_reserve utilisent des offsets relatifs au
-// début du champ _cold_reserve (offset TCB 144). Les accès se font via
-// les helpers unsafe tcb_write_cold_u64 / tcb_read_cold_u64 dans exocage.rs.
+// ExoShield fields in _cold_reserve use offsets relative to the
+// start of the _cold_reserve field (TCB offset 144). Access occurs via
+// unsafe helpers tcb_write_cold_u64 / tcb_read_cold_u64 in exocage.rs.
 //
-// Ces assertions garantissent que :
-// 1. _cold_reserve commence bien à l'offset 144
-// 2. Le sous-champ shadow_stack_token (_cold_reserve[0..7]) = TCB offset 144
-// 3. Le sous-champ cet_flags          (_cold_reserve[8])    = TCB offset 152
-// 4. Le sous-champ threat_score_u8    (_cold_reserve[9])    = TCB offset 153
-// 5. Le sous-champ pt_buffer_phys     (_cold_reserve[16..23])= TCB offset 160
-// 6. Les offsets hardcodés du TCB restent inchangés
+// These assertions guarantee that:
+// 1. _cold_reserve starts at offset 144
+// 2. shadow_stack_token subfield (_cold_reserve[0..7]) = TCB offset 144
+// 3. cet_flags subfield          (_cold_reserve[8])    = TCB offset 152
+// 4. threat_score_u8 subfield    (_cold_reserve[9])    = TCB offset 153
+// 5. pt_buffer_phys subfield     (_cold_reserve[16..23])= TCB offset 160
+// 6. Hardcoded TCB offsets remain unchanged
 
 const _: () = assert!(
     offset_of!(ThreadControlBlock, _cold_reserve) == 144,
@@ -423,7 +423,7 @@ impl ThreadControlBlock {
     const KSTACK_TOP_COLD_OFFSET: usize = 32;
     const KPTI_USER_CR3_COLD_OFFSET: usize = 40;
 
-    /// Crée un nouveau TCB utilisateur.
+    /// Creates a new user TCB.
     pub fn new(
         tid: ThreadId,
         pid: ProcessId,
@@ -469,7 +469,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Thread kernel (pid=0, flag KTHREAD dans sched_state).
+    /// Kernel thread (pid=0, KTHREAD flag in sched_state).
     pub fn new_kthread(tid: ThreadId, cr3_phys: u64, kernel_stack_top: u64) -> Self {
         let tcb = Self::new(
             tid,
@@ -484,21 +484,21 @@ impl ThreadControlBlock {
         tcb
     }
 
-    // ─── Accesseurs sched_state ───────────────────────────────────────────────
+    // ─── sched_state Accessors ────────────────────────────────────────────────
 
-    /// Lit l'état courant du thread.
+    /// Reads current thread state.
     #[inline(always)]
     pub fn task_state(&self) -> TaskState {
         TaskState::from_u8((self.sched_state.load(Ordering::Acquire) & SCHED_STATE_MASK) as u8)
     }
 
-    /// Alias backward-compat.
+    /// Backward-compat alias.
     #[inline(always)]
     pub fn state(&self) -> TaskState {
         self.task_state()
     }
 
-    /// Définit l'état du thread (Release).
+    /// Sets thread state (Release).
     #[inline(always)]
     pub fn set_task_state(&self, s: TaskState) {
         loop {
@@ -514,13 +514,13 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Alias backward-compat.
+    /// Backward-compat alias.
     #[inline(always)]
     pub fn set_state(&self, s: TaskState) {
         self.set_task_state(s);
     }
 
-    /// Transition CAS — retourne `true` si réussie.
+    /// CAS transition — returns `true` on success.
     #[inline(always)]
     pub fn try_transition(&self, from: TaskState, to: TaskState) -> bool {
         loop {
@@ -539,10 +539,10 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Transition forcée — utilisée quand l'appelant connaît l'état attendu.
+    /// Forced transition — used when caller knows expected state.
     ///
-    /// En debug, l'invariant `from -> to` est vérifié par CAS. En release, la
-    /// transition avance quand même tout en conservant les flags de `sched_state`.
+    /// In debug, the `from -> to` invariant is verified via CAS. In release, the
+    /// transition proceeds while preserving `sched_state` flags.
     #[inline(always)]
     pub fn force_transition(&self, from: TaskState, to: TaskState) {
         debug_assert!(
@@ -560,38 +560,38 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Lit le PID du thread (champ direct).
+    /// Reads thread PID (direct field).
     #[inline(always)]
     pub fn pid_val(&self) -> ProcessId {
         self.pid
     }
 
-    /// Alias backward-compat pour les appelants qui utilisait la syntaxe méthode.
+    /// Backward-compat alias for callers using method syntax.
     #[inline(always)]
     pub fn get_pid(&self) -> ProcessId {
         self.pid
     }
 
-    /// Vrai si un signal est en attente.
+    /// True if a signal is pending.
     #[inline(always)]
     pub fn has_signal_pending(&self) -> bool {
         self.sched_state.load(Ordering::Relaxed) & SCHED_SIGNAL_BIT != 0
     }
 
-    /// Alias backward-compat.
+    /// Backward-compat alias.
     #[inline(always)]
     pub fn signal_pending(&self) -> bool {
         self.has_signal_pending()
     }
 
-    /// Positionne signal_pending (appelé UNIQUEMENT depuis process/signal/).
+    /// Sets signal_pending (called ONLY from process/signal/).
     #[inline(always)]
     pub fn set_signal_pending(&self) {
         self.sched_state
             .fetch_or(SCHED_SIGNAL_BIT, Ordering::Release);
     }
 
-    /// Efface signal_pending après livraison.
+    /// Clears signal_pending after delivery.
     #[inline(always)]
     pub fn clear_signal_pending(&self) {
         self.sched_state
@@ -630,18 +630,18 @@ impl ThreadControlBlock {
         self.sched_state.load(Ordering::Relaxed) & SCHED_IDLE_BIT != 0
     }
 
-    /// Vrai si le TCB est actuellement present dans une run queue.
+    /// True if TCB is currently present in a run queue.
     #[inline(always)]
     pub fn is_queued(&self) -> bool {
         self.sched_state.load(Ordering::Acquire) & SCHED_QUEUED_BIT != 0
     }
 
-    /// Marque atomiquement le TCB comme enfile.
+    /// Atomically marks TCB as queued.
     ///
-    /// Retourne false si le bit etait deja pose. Ce bit est l'invariant global
-    /// anti-double-enqueue: sans lui, un reveil timer/IPC concurrent peut laisser
-    /// une entree de runqueue pointant vers un thread deja en execution, puis le
-    /// scheduler recharge une pile qui ne contient pas de frame `context_switch`.
+    /// Returns false if bit was already set. This bit is the global invariant
+    /// against double-enqueue: without it, a concurrent timer/IPC wakeup may leave
+    /// a runqueue entry pointing to an already executing thread, causing the
+    /// scheduler to reload a stack lacking a `context_switch` frame.
     #[inline(always)]
     pub fn try_mark_queued(&self) -> bool {
         loop {
@@ -660,7 +660,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Efface le bit runqueue apres extraction ou retrait explicite.
+    /// Clears runqueue bit after dequeue or explicit removal.
     #[inline(always)]
     pub fn clear_queued(&self) {
         self.sched_state
@@ -678,36 +678,36 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Demande une préemption (thread-safe depuis tout CPU).
+    /// Requests preemption (thread-safe from any CPU).
     #[inline(always)]
     pub fn request_preemption(&self) {
         self.sched_state
             .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
     }
 
-    // ── FIX-CET-01 : CET Shadow Stack Pointer per-thread ─────────────────────
+    // ── FIX-CET-01: Per-thread CET Shadow Stack Pointer ──────────────────────
     //
-    // Utilise _cold_reserve[48..56] (offset TCB absolu = 144 + 48 = 192).
-    // Non-overlapping avec les champs ExoShield documentés (0..48).
-    // Valeur initiale = 0 (CET non activé pour ce thread).
+    // Uses _cold_reserve[48..56] (absolute TCB offset = 144 + 48 = 192).
+    // Non-overlapping with documented ExoShield fields (0..48).
+    // Initial value = 0 (CET not enabled for this thread).
 
-    /// Lit MSR_IA32_PL0_SSP sauvegardé dans ce TCB.
+    /// Reads MSR_IA32_PL0_SSP saved in this TCB.
     #[inline(always)]
     pub fn pl0_ssp(&self) -> u64 {
-        // SAFETY: _cold_reserve est [u8; 88], offset 48..56 < 88.
+        // SAFETY: _cold_reserve is [u8; 88], offset 48..56 < 88.
         unsafe { core::ptr::read_unaligned(self._cold_reserve.as_ptr().add(48) as *const u64) }
     }
 
-    /// Sauvegarde MSR_IA32_PL0_SSP dans ce TCB (_cold_reserve[48..56]).
+    /// Saves MSR_IA32_PL0_SSP in this TCB (_cold_reserve[48..56]).
     #[inline(always)]
     pub fn set_pl0_ssp(&mut self, ssp: u64) {
-        // SAFETY: offset 48..56 dans _cold_reserve[88], non-overlapping ExoShield (0..48).
+        // SAFETY: offset 48..56 in _cold_reserve[88], non-overlapping ExoShield (0..48).
         unsafe {
             core::ptr::write_unaligned(self._cold_reserve.as_mut_ptr().add(48) as *mut u64, ssp)
         }
     }
 
-    /// Sommet stable de la pile kernel du thread (`_cold_reserve[32..40]`).
+    /// Stable kernel stack top of thread (`_cold_reserve[32..40]`).
     #[inline(always)]
     pub fn kstack_top(&self) -> u64 {
         unsafe {
@@ -719,7 +719,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Initialise/rafraîchit le sommet stable de pile kernel.
+    /// Initializes/refreshes stable kernel stack top.
     #[inline(always)]
     pub fn init_kstack_top(&mut self, kernel_stack_top: u64) {
         unsafe {
@@ -732,7 +732,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// CR3 user KPTI caché pour l'espace d'adressage de ce thread.
+    /// Cached KPTI user CR3 for this thread's address space.
     #[inline(always)]
     pub fn kpti_user_cr3(&self) -> u64 {
         unsafe {
@@ -744,7 +744,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Mémorise le CR3 user KPTI construit pour ce thread.
+    /// Remembers KPTI user CR3 built for this thread.
     #[inline(always)]
     pub fn set_kpti_user_cr3(&mut self, cr3: u64) {
         unsafe {
@@ -757,13 +757,13 @@ impl ThreadControlBlock {
         }
     }
 
-    /// TSC de création du thread, stocké dans `_cold_reserve[24..32]`.
+    /// Thread creation TSC, stored in `_cold_reserve[24..32]`.
     #[inline(always)]
     pub fn creation_tsc(&self) -> u64 {
         unsafe { core::ptr::read_unaligned(self._cold_reserve.as_ptr().add(24) as *const u64) }
     }
 
-    /// Met à jour le TSC de création du thread.
+    /// Updates thread creation TSC.
     #[inline(always)]
     pub fn set_creation_tsc(&mut self, creation_tsc: u64) {
         unsafe {
@@ -774,7 +774,7 @@ impl ThreadControlBlock {
         }
     }
 
-    /// Lit et efface NEED_RESCHED atomiquement.
+    /// Reads and clears NEED_RESCHED atomically.
     #[inline(always)]
     pub fn take_need_resched(&self) -> bool {
         self.sched_state
@@ -795,7 +795,7 @@ impl ThreadControlBlock {
         self.cpu_id.store(cpu.0 as u64, Ordering::Release);
     }
 
-    /// Vrai si le thread peut tourner sur le CPU donné.
+    /// True if thread is allowed to run on given CPU.
     #[inline(always)]
     pub fn allowed_on(&self, cpu: CpuId) -> bool {
         self.cpu_affinity_mask().contains(cpu)
@@ -809,8 +809,8 @@ impl ThreadControlBlock {
             3 => 72,
             _ => return None,
         };
-        // SAFETY: ces offsets 8-alignés de `_cold_reserve` sont réservés aux
-        // trois mots d'affinité CPU supplémentaires du scheduler.
+        // SAFETY: these 8-aligned offsets of `_cold_reserve` are reserved for
+        // the three additional CPU affinity words of the scheduler.
         Some(unsafe { &*(self._cold_reserve.as_ptr().add(offset) as *const AtomicU64) })
     }
 
@@ -851,7 +851,7 @@ impl ThreadControlBlock {
         self.set_cpu_affinity_mask(crate::scheduler::smp::affinity::CpuSet::single(cpu));
     }
 
-    /// Avance le vruntime CFS (delta_ns, weight = priority.cfs_weight()).
+    /// Advances CFS vruntime (delta_ns, weight = priority.cfs_weight()).
     #[inline(always)]
     pub fn advance_vruntime(&self, delta_ns: u64, weight: u32) {
         const NICE_0_LOAD: u64 = 1024;
@@ -864,8 +864,8 @@ impl ThreadControlBlock {
     }
 }
 
-// SAFETY: champs mutables gérés par atomiques ; kstack_ptr/cr3_phys/fpu_state_ptr
-// modifiés uniquement par le CPU propriétaire (invariants scheduler).
+// SAFETY: mutable fields managed atomically; kstack_ptr/cr3_phys/fpu_state_ptr
+// modified only by owning CPU (scheduler invariants).
 unsafe impl Send for ThreadControlBlock {}
 unsafe impl Sync for ThreadControlBlock {}
 
@@ -905,27 +905,27 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques par thread — séparées du TCB.
+// Per-thread statistics — separate from TCB.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs de performance par thread — alloués séparément du TCB (TCB = 256B).
+/// Per-thread performance counters — allocated separately from TCB (TCB = 256B).
 #[repr(C, align(64))]
 pub struct TaskStats {
-    /// Context switches volontaires (sleep, yield, mutex wait…).
+    /// Voluntary context switches (sleep, yield, mutex wait...).
     pub voluntary_switches: AtomicU64,
-    /// Context switches involontaires (préemptions timer + IPI).
+    /// Involuntary context switches (timer + IPI preemptions).
     pub involuntary_switches: AtomicU64,
-    /// Temps total en Running (ns).
+    /// Total time in Running (ns).
     pub run_time_ns: AtomicU64,
-    /// Temps total bloqué (sleep + uninterruptible, ns).
+    /// Total blocked time (sleep + uninterruptible, ns).
     pub blocked_time_ns: AtomicU64,
-    /// Migrations inter-CPU.
+    /// Inter-CPU migrations.
     pub migrations: AtomicU64,
-    /// Page faults utilisateur.
+    /// User page faults.
     pub page_faults: AtomicU64,
-    /// Timestamp dernier démarrage sur CPU (ns monotone).
+    /// Last CPU start timestamp (monotonic ns).
     pub last_start_ns: AtomicU64,
-    /// Priority inversions détectées par le kernel mutex.
+    /// Priority inversions detected by kernel mutex.
     pub priority_inversions: AtomicU64,
 }
 

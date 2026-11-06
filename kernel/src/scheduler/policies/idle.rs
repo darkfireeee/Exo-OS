@@ -1,83 +1,83 @@
 // kernel/src/scheduler/policies/idle.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Politique SCHED_IDLE — Tâche de fond et boucle HLT
+// SCHED_IDLE policy — Background task and HLT loop
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// La tâche idle est la tâche permanente de dernier recours sur chaque CPU.
-// Elle tourne uniquement quand la run queue est vide.
+// The idle task is the permanent last-resort task on each CPU.
+// It runs only when the run queue is empty.
 //
-// Comportement :
-//  1. Vérifie si un thread est en attente dans la run queue.
-//  2. Si oui → cède immédiatement (reschedule).
-//  3. Sinon  → exécute `hlt` pour économiser l'énergie.
+// Behavior:
+//  1. Checks if a thread is waiting in the run queue.
+//  2. If yes → yields immediately (reschedule).
+//  3. Otherwise → executes `hlt` to save power.
 //
-// La boucle idle est aussi le point de délégation vers energy::c_states
-// pour choisir le C-state optimal selon l'inactivité prévue.
+// The idle loop is also the delegation point to energy::c_states
+// to select the optimal C-state according to expected idle time.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::{ThreadControlBlock, SCHED_IDLE_BIT};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Métriques idle
+// Idle metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de fois que le CPU est entré dans la boucle idle.
+/// Number of times CPU entered idle loop.
 pub static IDLE_ENTRIES: AtomicU64 = AtomicU64::new(0);
-/// Nombre d'itérations de la boucle idle (= HLT exécutés).
+/// Number of idle loop iterations (= HLTs executed).
 pub static IDLE_HLT_COUNT: AtomicU64 = AtomicU64::new(0);
-/// Nombre de fois que la boucle idle a détecté du travail et cedé.
+/// Number of times idle loop detected work and yielded.
 pub static IDLE_WAKEUPS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Marquage de la tâche idle
+// Idle task marking
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Marque un TCB comme étant la tâche idle de son CPU.
+/// Marks a TCB as being the idle task for its CPU.
 pub fn mark_idle_thread(tcb: &mut ThreadControlBlock) {
     tcb.sched_state.fetch_or(SCHED_IDLE_BIT, Ordering::Relaxed);
 }
 
-/// Retourne `true` si le TCB est la tâche idle.
+/// Returns `true` if TCB is the idle task.
 pub fn is_idle_thread(tcb: &ThreadControlBlock) -> bool {
     tcb.is_idle()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Point d'entrée de la boucle idle
+// Idle loop entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une itération de la boucle idle.
+/// One iteration of the idle loop.
 ///
-/// Doit être appelée en boucle depuis la tâche idle créée par le kernel init.
-/// Retourne `true` si du travail a été détecté (le scheduler devrait reprendre
-/// la main), `false` si on a dormi via HLT.
+/// Must be called in a loop from the idle task created during kernel init.
+/// Returns `true` if work was detected (scheduler should regain control),
+/// `false` if slept via HLT.
 ///
 /// # Safety
-/// Appelé avec la préemption activée et les IRQ activées.
+/// Called with preemption enabled and IRQs enabled.
 pub unsafe fn idle_iteration(nr_running: usize) -> bool {
     if nr_running > 0 {
-        // Travail disponible — signaler NEED_RESCHED et redonner la main.
+        // Work available — signal NEED_RESCHED and yield.
         IDLE_WAKEUPS.fetch_add(1, Ordering::Relaxed);
         return true;
     }
 
-    // Aucun thread prêt — exécuter HLT (attend la prochaine IRQ).
+    // No ready thread — execute HLT (waits for next IRQ).
     IDLE_HLT_COUNT.fetch_add(1, Ordering::Relaxed);
     core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
 
-    // Après le retour de HLT (une IRQ a été reçue), laisser le scheduler décider.
+    // After return from HLT (an IRQ was received), let scheduler decide.
     false
 }
 
-/// Point d'entrée principal pour la tâche idle d'un CPU.
+/// Main entry point for a CPU's idle task.
 ///
-/// Initialise les métriques puis boucle indéfiniment.
-/// Cette fonction ne doit jamais retourner.
+/// Initializes metrics then loops indefinitely.
+/// This function must never return.
 ///
 /// # Safety
-/// Appelé uniquement depuis la task idle de chaque CPU.
+/// Called only from each CPU's idle task.
 pub unsafe fn idle_loop(get_nr_running: unsafe fn() -> usize) -> ! {
     IDLE_ENTRIES.fetch_add(1, Ordering::Relaxed);
     loop {

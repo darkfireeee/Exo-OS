@@ -1,15 +1,15 @@
 // kernel/src/scheduler/energy/frequency.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Gestion de la fréquence CPU — P-states et DVFS
+// CPU frequency management — P-states and DVFS
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le scheduling RT ajuste le budget de temps en tenant compte de la fréquence
-// courante : un thread dont l'exécution doit terminer en 1ms à 3GHz
-// a besoin de 1.5ms à 2GHz.
+// RT scheduling adjusts time budgets taking into account the current
+// frequency: a thread whose execution must complete in 1ms at 3GHz
+// needs 1.5ms at 2GHz.
 //
-// Il y a jusqu'à MAX_PSTATES niveaux de fréquence disponibles, numérotés P0
-// (liaison max) à Pn (minimum).
+// There are up to MAX_PSTATES frequency levels available, numbered P0
+// (maximum link) to Pn (minimum).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::smp::topology::MAX_CPUS;
@@ -18,24 +18,24 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 const MAX_PSTATES: usize = 16;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table des P-states (fréquences nominales en MHz)
+// P-state table (nominal frequencies in MHz)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static mut PSTATE_TABLE: [u32; MAX_PSTATES] = [0u32; MAX_PSTATES];
 static PSTATE_COUNT: AtomicU32 = AtomicU32::new(0);
 
-/// Enregistre la table des P-states disponibles (fréquences en MHz, du plus haut
-/// au plus bas). Appelé depuis la plateforme au boot.
+/// Registers table of available P-states (frequencies in MHz, highest
+/// to lowest). Called from platform during boot.
 ///
 /// # Safety
-/// Appelé une seule fois avant toute utilisation de la fréquence.
+/// Called once before any frequency usage.
 pub unsafe fn set_pstate_table(freqs_mhz: &[u32]) {
     let n = freqs_mhz.len().min(MAX_PSTATES);
     PSTATE_TABLE[..n].copy_from_slice(&freqs_mhz[..n]);
     PSTATE_COUNT.store(n as u32, Ordering::Release);
 }
 
-/// Fréquence du P-state `p` en MHz. Retourne 0 si hors bornes.
+/// Frequency of P-state `p` in MHz. Returns 0 if out of bounds.
 pub fn pstate_freq_mhz(p: usize) -> u32 {
     let n = PSTATE_COUNT.load(Ordering::Relaxed) as usize;
     if p < n {
@@ -46,10 +46,10 @@ pub fn pstate_freq_mhz(p: usize) -> u32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P-state courant par CPU
+// Current P-state per CPU
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// P-state courant de chaque CPU (index dans PSTATE_TABLE ; 0 = plus haute fréquence).
+/// Current P-state of each CPU (index in PSTATE_TABLE; 0 = highest frequency).
 static CURRENT_PSTATE: [AtomicU32; MAX_CPUS] =
     [const { AtomicU32::new(0) }; MAX_CPUS];
 
@@ -61,23 +61,23 @@ pub fn current_pstate(cpu: usize) -> u32 {
     }
 }
 
-/// Retourne la fréquence courante du CPU `cpu` en MHz.
+/// Returns current frequency of CPU `cpu` in MHz.
 pub fn current_freq_mhz(cpu: usize) -> u32 {
     pstate_freq_mhz(current_pstate(cpu) as usize)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFI vers arch pour changer le P-state
+// FFI to arch to change P-state
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" {
     fn arch_set_cpu_pstate(cpu: u32, pstate: u32);
 }
 
-/// Demande le passage du CPU `cpu` au P-state `p`.
+/// Requests transitioning CPU `cpu` to P-state `p`.
 ///
 /// # Safety
-/// Appelé avec préemption désactivée.
+/// Called with preemption disabled.
 pub unsafe fn set_pstate(cpu: usize, p: u32) {
     if cpu >= MAX_CPUS {
         return;
@@ -89,21 +89,21 @@ pub unsafe fn set_pstate(cpu: usize, p: u32) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Correction du budget RT selon la fréquence
+// RT budget adjustment according to frequency
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ajuste un budget en ns défini à la fréquence maximale (P0) vers la fréquence
-/// courante du CPU `cpu`.
+/// Adjusts a budget in ns defined at maximum frequency (P0) to the current
+/// frequency of CPU `cpu`.
 ///
 /// budget_at_current_freq = budget_at_max × (freq_max / freq_current)
-/// (avec freq_max = PSTATE_TABLE[0])
+/// (with freq_max = PSTATE_TABLE[0])
 pub fn scale_budget_ns(budget_ns: u64, cpu: usize) -> u64 {
     let freq_max = pstate_freq_mhz(0);
     let freq_cur = current_freq_mhz(cpu);
     if freq_cur == 0 || freq_max == 0 {
         return budget_ns;
     }
-    // Scaling integer-safe : budget × freq_max / freq_cur
+    // Integer-safe scaling: budget × freq_max / freq_cur
     ((budget_ns as u128 * freq_max as u128) / freq_cur as u128) as u64
 }
 

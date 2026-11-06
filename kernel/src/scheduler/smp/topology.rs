@@ -1,56 +1,56 @@
 // kernel/src/scheduler/smp/topology.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Topologie SMP/NUMA — détection et accès aux distances inter-CPU
+// SMP/NUMA topology — detection and access to inter-CPU distances
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::CpuId;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes --- limites statiques (tables .bss, no_alloc)
+// Constants --- static limits (.bss tables, no_alloc)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_CPUS: usize = 256;
 pub const MAX_NODES: usize = 16;
-/// Sentinel : CPU non présent.
+/// Sentinel: absent CPU.
 pub const CPU_ABSENT: u32 = u32::MAX;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Données topologiques
+// Topological data
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de CPU logiques détectés.
+/// Number of logical CPUs detected.
 static NR_CPUS: AtomicU32 = AtomicU32::new(1);
-/// Nombre de nœuds NUMA détectés.
+/// Number of NUMA nodes detected.
 static NR_NODES: AtomicU32 = AtomicU32::new(1);
 
-/// Table CPU → nœud NUMA. Index = cpu_id, valeur = node_id.
+/// CPU → NUMA node table. Index = cpu_id, value = node_id.
 static mut CPU_TO_NODE: [u8; MAX_CPUS] = [0u8; MAX_CPUS];
 
-/// Table CPU → CPU physique (HT sibling). `CPU_ABSENT` si pas de HT.
+/// CPU → physical CPU table (HT sibling). `CPU_ABSENT` if no HT.
 static mut CPU_SIBLING: [u32; MAX_CPUS] = [CPU_ABSENT; MAX_CPUS];
 
-/// Matrice de distance NUMA NR_NODES × NR_NODES.
-/// distance[node_a][node_b] : coût de migration inter-nœud (1 = local, >1 = distant).
+/// NUMA distance matrix NR_NODES × NR_NODES.
+/// distance[node_a][node_b]: inter-node migration cost (1 = local, >1 = distant).
 static mut NUMA_DISTANCE: [[u8; MAX_NODES]; MAX_NODES] = [[1u8; MAX_NODES]; MAX_NODES];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation (appelée depuis scheduler::init par le BSP)
+// Initialization (called from scheduler::init by BSP)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise la topologie SMP.
+/// Initializes SMP topology.
 ///
 /// # Safety
-/// Doit être appelé avant tout autre accès aux tables de topologie,
-/// et avant l'activation des APs.
+/// Must be called before any other access to topology tables,
+/// and before AP activation.
 pub unsafe fn init(nr_cpus: usize, nr_nodes: usize) {
     let nr_cpus = nr_cpus.min(MAX_CPUS);
     let nr_nodes = nr_nodes.min(MAX_NODES);
     NR_CPUS.store(nr_cpus as u32, Ordering::Release);
     NR_NODES.store(nr_nodes as u32, Ordering::Release);
 
-    // Distance locale = 10 (standard SLIT), distante = 20.
+    // Local distance = 10 (SLIT standard), distant = 20.
     for a in 0..nr_nodes {
         for b in 0..nr_nodes {
             NUMA_DISTANCE[a][b] = if a == b { 10 } else { 20 };
@@ -58,10 +58,10 @@ pub unsafe fn init(nr_cpus: usize, nr_nodes: usize) {
     }
 }
 
-/// Enregistre le nœud NUMA d'un CPU.
+/// Registers NUMA node of a CPU.
 ///
 /// # Safety
-/// Doit être appelé pendant l'init, avant que le CPU soit mis en ligne.
+/// Must be called during init, before CPU is brought online.
 pub unsafe fn set_cpu_node(cpu: CpuId, node: u8) {
     let idx = cpu.0 as usize;
     if idx < MAX_CPUS {
@@ -69,10 +69,10 @@ pub unsafe fn set_cpu_node(cpu: CpuId, node: u8) {
     }
 }
 
-/// Enregistre le sibling (HyperThread) d'un CPU.
+/// Registers sibling (HyperThread) of a CPU.
 ///
 /// # Safety
-/// Doit être appelé pendant l'init.
+/// Must be called during init.
 pub unsafe fn set_cpu_sibling(cpu: CpuId, sibling: CpuId) {
     let idx = cpu.0 as usize;
     if idx < MAX_CPUS {
@@ -80,10 +80,10 @@ pub unsafe fn set_cpu_sibling(cpu: CpuId, sibling: CpuId) {
     }
 }
 
-/// Définit la distance entre deux nœuds NUMA (symétrique).
+/// Defines distance between two NUMA nodes (symmetric).
 ///
 /// # Safety
-/// Doit être appelé pendant l'init.
+/// Must be called during init.
 pub unsafe fn set_numa_distance(a: usize, b: usize, dist: u8) {
     if a < MAX_NODES && b < MAX_NODES {
         NUMA_DISTANCE[a][b] = dist;
@@ -92,7 +92,7 @@ pub unsafe fn set_numa_distance(a: usize, b: usize, dist: u8) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Accesseurs (read-only après init)
+// Accessors (read-only after init)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn nr_cpus() -> usize {
@@ -102,11 +102,11 @@ pub fn nr_nodes() -> usize {
     NR_NODES.load(Ordering::Relaxed) as usize
 }
 
-/// Retourne le nœud NUMA du CPU `cpu`.
+/// Returns NUMA node of CPU `cpu`.
 pub fn cpu_node(cpu: CpuId) -> u8 {
     let idx = cpu.0 as usize;
-    // SAFETY: idx < MAX_CPUS garanti par le if; CPU_TO_NODE est un tableau statique
-    // initialisé par topology_init() avant tout appel à cpu_node().
+    // SAFETY: idx < MAX_CPUS guaranteed by if; CPU_TO_NODE is a static array
+    // initialized by topology_init() before any call to cpu_node().
     if idx < MAX_CPUS {
         unsafe { CPU_TO_NODE[idx] }
     } else {
@@ -114,11 +114,11 @@ pub fn cpu_node(cpu: CpuId) -> u8 {
     }
 }
 
-/// Retourne le sibling HT du CPU `cpu`, ou `CPU_ABSENT`.
+/// Returns HT sibling of CPU `cpu`, or `CPU_ABSENT`.
 pub fn cpu_sibling(cpu: CpuId) -> u32 {
     let idx = cpu.0 as usize;
-    // SAFETY: idx < MAX_CPUS garanti par le if; CPU_SIBLING est initialisé par
-    // topology_init() en lecture seule après le boot.
+    // SAFETY: idx < MAX_CPUS guaranteed by if; CPU_SIBLING is initialized by
+    // topology_init() as read-only after boot.
     if idx < MAX_CPUS {
         unsafe { CPU_SIBLING[idx] }
     } else {
@@ -126,10 +126,10 @@ pub fn cpu_sibling(cpu: CpuId) -> u32 {
     }
 }
 
-/// Retourne la distance NUMA entre deux nœuds.
+/// Returns NUMA distance between two nodes.
 pub fn numa_distance(a: usize, b: usize) -> u8 {
-    // SAFETY: a < MAX_NODES && b < MAX_NODES garantit que les indices sont dans
-    // les bornes du tableau 2D statique NUMA_DISTANCE.
+    // SAFETY: a < MAX_NODES && b < MAX_NODES ensures indices are within
+    // bounds of the static 2D array NUMA_DISTANCE.
     if a < MAX_NODES && b < MAX_NODES {
         unsafe { NUMA_DISTANCE[a][b] }
     } else {
@@ -137,7 +137,7 @@ pub fn numa_distance(a: usize, b: usize) -> u8 {
     }
 }
 
-/// Retourne `true` si le CPU `cpu` est sur le même nœud NUMA que `reference`.
+/// Returns `true` if CPU `cpu` is on same NUMA node as `reference`.
 pub fn same_node(cpu: CpuId, reference: CpuId) -> bool {
     cpu_node(cpu) == cpu_node(reference)
 }

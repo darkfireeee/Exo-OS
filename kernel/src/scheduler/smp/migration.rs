@@ -1,15 +1,15 @@
 // kernel/src/scheduler/smp/migration.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Migration de threads — déplacement d'un thread d'un CPU à un autre
+// Thread migration — moving a thread from one CPU to another
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Les migrations se font via IPI : le CPU source envoie un IPI au CPU cible
-// avec le TCB à migrer. Le CPU cible intègre le thread dans sa run queue lors
-// du prochain tick.
+// Migrations are performed via IPI: source CPU sends an IPI to target CPU
+// with the TCB to migrate. Target CPU integrates the thread into its run queue
+// on the next tick.
 //
-// Canal de migration : tableau circulaire lock-free par CPU cible
-// (jusqu'à MIGRATION_QUEUE_DEPTH migrations en attente).
+// Migration channel: per-target-CPU lock-free circular array
+// (up to MIGRATION_QUEUE_DEPTH pending migrations).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::topology::{nr_cpus, MAX_CPUS};
@@ -18,12 +18,12 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Canal de migration par CPU
+// Per-CPU migration channel
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MIGRATION_QUEUE_DEPTH: usize = 16;
 
-/// File circulaire de migration pour un CPU cible.
+/// Circular migration queue for a target CPU.
 struct MigrationQueue {
     head: AtomicU32,
     tail: AtomicU32,
@@ -39,23 +39,23 @@ impl MigrationQueue {
         }
     }
 
-    /// Enfile `tcb` dans la queue. Retourne `false` si pleine.
+    /// Enqueues `tcb` into queue. Returns `false` if full.
     fn push(&self, tcb: NonNull<ThreadControlBlock>) -> bool {
         let tail = self.tail.load(Ordering::Acquire);
         let next = (tail + 1) % MIGRATION_QUEUE_DEPTH as u32;
         if next == self.head.load(Ordering::Acquire) {
-            return false; // Pleine.
+            return false; // Full.
         }
         self.slots[tail as usize].store(tcb.as_ptr(), Ordering::Release);
         self.tail.store(next, Ordering::Release);
         true
     }
 
-    /// Défile le prochain TCB. Retourne `None` si vide.
+    /// Dequeues next TCB. Returns `None` if empty.
     fn pop(&self) -> Option<NonNull<ThreadControlBlock>> {
         let head = self.head.load(Ordering::Acquire);
         if head == self.tail.load(Ordering::Acquire) {
-            return None; // Vide.
+            return None; // Empty.
         }
         let ptr = self.slots[head as usize].load(Ordering::Acquire);
         let next = (head + 1) % MIGRATION_QUEUE_DEPTH as u32;
@@ -65,14 +65,14 @@ impl MigrationQueue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tableaux globaux (statique, no_alloc)
+// Global arrays (static, no_alloc)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static MIGRATION_QUEUES: [MigrationQueue; MAX_CPUS] =
     [const { MigrationQueue::new() }; MAX_CPUS];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFI vers l'arch (envoi IPI)
+// FFI to arch (IPI sending)
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" {
@@ -80,7 +80,7 @@ extern "C" {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Métriques
+// Metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static MIGRATIONS_SENT: AtomicU64 = AtomicU64::new(0);
@@ -88,33 +88,33 @@ pub static MIGRATIONS_RECEIVED: AtomicU64 = AtomicU64::new(0);
 pub static MIGRATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Demande la migration du thread `tcb` vers le CPU `target`.
+/// Requests migration of thread `tcb` to CPU `target`.
 ///
-/// Le thread est enfilé dans la queue de migration du CPU cible, et un IPI de
-/// reschedule est envoyé.
+/// Thread is enqueued into target CPU migration queue, and a reschedule
+/// IPI is sent.
 ///
 /// # Safety
-/// Le TCB doit être retiré de la run queue source AVANT cet appel.
+/// TCB must be dequeued from source run queue BEFORE this call.
 pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId) {
     let target_idx = target.0 as usize;
     if target_idx >= nr_cpus() {
         return;
     }
 
-    // MIGRATED flag: encodé dans sched_state si nécessaire — no-op pour les stats seules.
+    // MIGRATED flag: encoded in sched_state if necessary — no-op for stats alone.
 
     if !MIGRATION_QUEUES[target_idx].push(tcb) {
-        // Queue pleine. Le thread a DÉJÀ été retiré de la run queue source
-        // par cfs_dequeue_for_migration(). Sans réenfilage, il disparaît
-        // définitivement (le commentaire original était erroné).
-        // BUG-FIX J : réenfiler sur le CPU home pour ne pas perdre le thread.
+        // Queue full. The thread was ALREADY dequeued from source run queue
+        // by cfs_dequeue_for_migration(). Without re-enqueuing, it disappears
+        // permanently (original comment was mistaken).
+        // BUG-FIX J: re-enqueue on home CPU to avoid losing the thread.
         MIGRATIONS_DROPPED.fetch_add(1, Ordering::Relaxed);
         let home_raw = tcb.as_ref().cpu_id.load(Ordering::Acquire) as usize;
         if home_raw < nr_cpus() {
-            // SAFETY: home_raw < nr_cpus() ≤ MAX_CPUS, run queue initialisée.
+            // SAFETY: home_raw < nr_cpus() ≤ MAX_CPUS, run queue initialized.
             let home_cpu = CpuId(home_raw as u32);
             crate::scheduler::core::runqueue::run_queue(home_cpu).enqueue(tcb);
         }
@@ -124,19 +124,19 @@ pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId)
     arch_send_reschedule_ipi(target.0);
 }
 
-/// Traite les migrations en attente pour le CPU courant.
+/// Processes pending migrations for current CPU.
 ///
-/// `drain_cb` est appelé pour chaque TCB reçu.
+/// `drain_cb` is called for each received TCB.
 ///
 /// # Safety
-/// CPL 0, `cpu` doit être le CPU local, et `drain_cb` doit être sûr à invoquer pour chaque TCB.
+/// CPL 0, `cpu` must be local CPU, and `drain_cb` must be safe to invoke for each TCB.
 pub unsafe fn drain_pending_migrations(
     cpu: CpuId,
     drain_cb: unsafe fn(tcb: NonNull<ThreadControlBlock>),
 ) {
     let q = &MIGRATION_QUEUES[cpu.0 as usize];
     while let Some(tcb) = q.pop() {
-        // Mettre à jour le CPU courant dans le TCB.
+        // Update current CPU in TCB.
         let tcb_mut = &mut *(tcb.as_ptr());
         tcb_mut.cpu_id.store(cpu.0 as u64, Ordering::Release);
         MIGRATIONS_RECEIVED.fetch_add(1, Ordering::Relaxed);

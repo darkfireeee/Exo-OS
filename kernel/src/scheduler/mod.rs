@@ -1,22 +1,22 @@
 // kernel/src/scheduler/mod.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Module Scheduler — point d'entrée et séquence d'initialisation
+// Scheduler Module — entry point and initialization sequence
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Couche 1 : dépend UNIQUEMENT de memory/ (Couche 0).
-// Aucun import de process/, ipc/, fs/, security/.
+// Layer 1: depends ONLY on memory/ (Layer 0).
+// No imports from process/, ipc/, fs/, security/.
 //
-// Séquence d'init (DOC3) :
+// Init sequence (DOC3):
 //   1. preempt::init()
 //   2. runqueue::init_percpu()
-//   3. fpu::save_restore::init()   (détecte taille XSAVE)
+//   3. fpu::save_restore::init()   (detects XSAVE size)
 //   4. fpu::lazy::init()           (CR0.TS=1)
-//   5. timer::clock::init()        (calibrage TSC)
+//   5. timer::clock::init()        (TSC calibration)
 //   6. timer::tick::init()         (HZ=1000)
 //   7. timer::hrtimer::init()
 //   8. timer::deadline_timer::init()
-//   9. sync::wait_queue::init()    (verif EmergencyPool)
+//   9. sync::wait_queue::init()    (verifies EmergencyPool)
 //  10. energy::c_states::init()
 //  11. smp::topology_init()
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -30,7 +30,7 @@ pub mod stats;
 pub mod sync;
 pub mod timer;
 
-// Re-exports principaux.
+// Main re-exports.
 pub use self::core::pick_next::pick_next_task;
 pub use self::core::preempt::{IrqGuard, PreemptGuard};
 pub use self::core::runqueue::{init_percpu as rq_init_percpu, run_queue};
@@ -45,17 +45,17 @@ pub use self::timer::clock::monotonic_ns;
 pub use self::timer::tick::scheduler_tick;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Séquence d'initialisation globale
+// Global initialization sequence
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres d'initialisation du scheduler.
+/// Scheduler initialization parameters.
 pub struct SchedInitParams {
-    /// Nombre de CPUs logiques.
+    /// Number of logical CPUs.
     pub nr_cpus: usize,
-    /// Nombre de nœuds NUMA.
+    /// Number of NUMA nodes.
     pub nr_nodes: usize,
-    // RÈGLE SCHED-INIT-01 : tsc_hz supprimé — vient de ktime_get_ns() via time_init().
-    // scheduler::init() est appelé APRÈS time::time_init().
+    // RULE SCHED-INIT-01: tsc_hz removed — comes from ktime_get_ns() via time_init().
+    // scheduler::init() is called AFTER time::time_init().
 }
 
 impl Default for SchedInitParams {
@@ -67,69 +67,69 @@ impl Default for SchedInitParams {
     }
 }
 
-/// Initialise le sous-système scheduler.
+/// Initializes the scheduler subsystem.
 ///
-/// Doit être appelé par le BSP APRÈS que `memory::init()` a été exécuté
-/// (l'EmergencyPool doit être disponible avant `sync::wait_queue::init()`).
+/// Must be called by the BSP AFTER `memory::init()` has executed
+/// (the EmergencyPool must be available prior to `sync::wait_queue::init()`).
 ///
 /// # Safety
-/// Appelé une seule fois, depuis le BSP, avant l'activation des APs.
+/// Called once, from the BSP, before APs are activated.
 pub unsafe fn init(params: &SchedInitParams) {
-    // BUG-FIX H : clamp nr_cpus à MAX_CPUS pour éviter des accès out-of-bounds
-    // sur PER_CPU_RQ (64 entrées) si l'appelant passe nr_cpus > 64.
+    // BUG-FIX H: clamp nr_cpus to MAX_CPUS to prevent out-of-bounds access
+    // on PER_CPU_RQ (64 entries) if the caller passes nr_cpus > 64.
     let nr_cpus = params
         .nr_cpus
         .clamp(1, crate::scheduler::core::preempt::MAX_CPUS);
     let nr_nodes = params.nr_nodes.max(1);
-    // tsc_hz vient de ktime_get_ns() (time_init() appelé avant) — RÈGLE SCHED-INIT-01.
+    // tsc_hz comes from ktime_get_ns() (time_init() called before) — RULE SCHED-INIT-01.
 
-    // Étape 1 — Compteurs de préemption.
+    // Step 1 — Preemption counters.
     self::core::preempt::init();
 
-    // Étape 2 — Run queues par CPU.
+    // Step 2 — Per-CPU run queues.
     self::core::runqueue::init_percpu(nr_cpus);
 
-    // Étape 3 — Détection XSAVE.
+    // Step 3 — XSAVE detection.
     self::fpu::save_restore::init();
 
-    // Étape 4 — Lazy FPU (CR0.TS=1 sur le BSP).
+    // Step 4 — Lazy FPU (CR0.TS=1 on the BSP).
     self::fpu::lazy::init();
 
-    // Étape 5 — Horloge scheduler (délègue à ktime_get_ns — ARCH-TIME-01).
+    // Step 5 — Scheduler clock (delegates to ktime_get_ns — ARCH-TIME-01).
     self::timer::clock::init(0);
     self::timer::tick::init(nr_cpus);
 
-    // Étape 7 — HRTimers.
+    // Step 7 — HRTimers.
     self::timer::hrtimer::init(nr_cpus);
 
-    // Étape 8 — Deadline timers.
+    // Step 8 — Deadline timers.
     self::timer::deadline_timer::init(nr_cpus);
 
-    // Étape 8b — le tick scheduler devient propriétaire du LAPIC timer.
+    // Step 8b — scheduler tick takes ownership of the LAPIC timer.
     crate::arch::x86_64::apic::local_apic::init_scheduler_timer(
         crate::arch::x86_64::idt::VEC_IRQ_TIMER,
     );
 
-    // Étape 9 — Wait queues (vérifie que l'EmergencyPool est prêt).
+    // Step 9 — Wait queues (verifies EmergencyPool is ready).
     self::sync::wait_queue::init();
 
-    // Étape 10 — C-states.
+    // Step 10 — C-states.
     self::energy::c_states::init(nr_cpus);
 
-    // Étape 11 — Topologie SMP.
+    // Step 11 — SMP topology.
     self::smp::topology_init(nr_cpus, nr_nodes);
 }
 
-/// Initialise le scheduler sur un AP (Application Processor).
+/// Initializes the scheduler on an AP (Application Processor).
 ///
-/// Appelé par chaque AP après son démarrage.
+/// Called by each AP after startup.
 ///
 /// # Safety
-/// Appelé depuis le contexte de boot de chaque AP.
+/// Called from the boot context of each AP.
 pub unsafe fn init_ap(cpu_id: u32) {
-    // CR0.TS=1 sur cet AP (FPU lazy).
+    // CR0.TS=1 on this AP (lazy FPU).
     self::fpu::lazy::init();
     self::timer::tick::reset_tick_counters(cpu_id as usize);
 
-    // La run queue de ce CPU est déjà initialisée par init_percpu().
+    // This CPU's run queue is already initialized by init_percpu().
 }

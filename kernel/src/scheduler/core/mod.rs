@@ -1,6 +1,6 @@
 // kernel/src/scheduler/core/mod.rs
 //
-// Module core du scheduler — réexporte toutes les API publiques.
+// Scheduler core module — re-exports all public APIs.
 
 pub mod boot_idle;
 pub mod pick_next;

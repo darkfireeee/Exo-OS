@@ -1,15 +1,15 @@
 // kernel/src/scheduler/sync/spinlock.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// SpinLock — verrous tournants IRQ-safe (Exo-OS · Couche 1)
+// SpinLock — IRQ-safe spinlocks (Exo-OS · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Deux variantes :
-//   SpinLock<T>        — spinlock simple (pas d'IRQ save)
-//   IrqSpinLock<T>     — spinlock + disable IRQ (pour code IRQ/non-IRQ)
+// Two variants:
+//   SpinLock<T>        — simple spinlock (no IRQ save)
+//   IrqSpinLock<T>     — spinlock + disable IRQ (for IRQ/non-IRQ code)
 //
-// RÈGLE PREEMPT-01 respectée : la préemption est implicitement désactivée via
-// les RAII guards.
+// RULE PREEMPT-01 respected: preemption is implicitly disabled via
+// RAII guards.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::cell::UnsafeCell;
@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::scheduler::core::preempt::PreemptGuard;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SpinLock<T> — verrou tournant simple
+// SpinLock<T> — simple spinlock
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct SpinLock<T> {
@@ -45,11 +45,11 @@ impl<T> SpinLock<T> {
         }
     }
 
-    /// Acquiert le verrou (boucle active).
+    /// Acquires lock (busy spin).
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
         let preempt = PreemptGuard::new();
         loop {
-            // Essai optimiste (non-serialisant) avant le LOCK CMPXCHG.
+            // Optimistic check (non-serializing) before LOCK CMPXCHG.
             if !self.locked.load(Ordering::Relaxed)
                 && self
                     .locked
@@ -67,7 +67,7 @@ impl<T> SpinLock<T> {
         }
     }
 
-    /// Essai sans blocage. Retourne `None` si le verrou est déjà pris.
+    /// Non-blocking attempt. Returns `None` if lock is already held.
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
         let preempt = PreemptGuard::new();
         self.locked
@@ -80,7 +80,7 @@ impl<T> SpinLock<T> {
             })
     }
 
-    /// Libère sans garde (interne).
+    /// Unlocks without guard (internal).
     unsafe fn unlock(&self) {
         self.locked.store(false, Ordering::Release);
     }
@@ -95,21 +95,21 @@ pub struct SpinLockGuard<'a, T> {
 impl<'a, T> Deref for SpinLockGuard<'a, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        // SAFETY: Le guard est vivant => le verrou est acquis => accès exclusif à data.
+        // SAFETY: Guard is alive => lock is held => exclusive access to data.
         unsafe { &*self.lock.data.get() }
     }
 }
 
 impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: &mut self garantit l'unicité; le verrou est acquis => exclusivité.
+        // SAFETY: &mut self guarantees uniqueness; lock is held => exclusivity.
         unsafe { &mut *self.lock.data.get() }
     }
 }
 
 impl<'a, T> Drop for SpinLockGuard<'a, T> {
     fn drop(&mut self) {
-        // SAFETY: unlock() ne doit être appelé qu'une fois — garanti par Drop.
+        // SAFETY: unlock() must be called only once — guaranteed by Drop.
         unsafe {
             self.lock.unlock();
         }
@@ -117,7 +117,7 @@ impl<'a, T> Drop for SpinLockGuard<'a, T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IrqSpinLock<T> — verrou tournant + disable IRQ
+// IrqSpinLock<T> — spinlock + disable IRQ
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct IrqSpinLock<T> {
@@ -134,10 +134,10 @@ impl<T> IrqSpinLock<T> {
         }
     }
 
-    /// Acquiert le verrou en désactivant les IRQ. Les IRQ sont restaurées lors
-    /// du drop du guard.
+    /// Acquires lock disabling IRQs. IRQs are restored upon
+    /// guard drop.
     pub fn lock_irq(&self) -> IrqSpinLockGuard<'_, T> {
-        // Sauvegarder les IRQ et les désactiver.
+        // Save IRQs and disable them.
         let rflags = save_and_disable_irq();
         let guard = self.inner.lock();
         IrqSpinLockGuard {
@@ -181,8 +181,8 @@ impl<'a, T> DerefMut for IrqSpinLockGuard<'a, T> {
 
 impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
     fn drop(&mut self) {
-        // AUDIT-SCHED2 : libérer le verrou EN PREMIER, PUIS restaurer les IRQ.
-        // Sinon, une IRQ survenue verrou-tenu peut causer un deadlock avec le même verrou dans l'ISR.
+        // AUDIT-SCHED2: release lock FIRST, THEN restore IRQs.
+        // Otherwise, an IRQ arriving with lock held could deadlock with same lock in ISR.
         unsafe {
             core::mem::ManuallyDrop::drop(&mut self.guard);
         }
@@ -191,13 +191,13 @@ impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Primitives d'IRQ (inline asm)
+// IRQ primitives (inline asm)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline(always)]
 pub fn save_and_disable_irq() -> u64 {
     let rflags: u64;
-    // SAFETY: pushfq/pop lisent RFLAGS; cli désactive les IRQ atomiquement; état restauré par restore_irq().
+    // SAFETY: pushfq/pop read RFLAGS; cli atomically disables IRQs; state restored by restore_irq().
     unsafe {
         core::arch::asm!(
             "pushfq",
@@ -213,7 +213,7 @@ pub fn save_and_disable_irq() -> u64 {
 #[inline(always)]
 pub fn restore_irq(rflags: u64) {
     if rflags & (1 << 9) != 0 {
-        // SAFETY: sti restaure l'état IRQ sauvegardé; bit IF était 1, on le remet à 1.
+        // SAFETY: sti restores saved IRQ state; IF bit was 1, setting back to 1.
         unsafe {
             core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
         }

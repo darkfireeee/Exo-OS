@@ -1,11 +1,11 @@
 // kernel/src/scheduler/timer/deadline_timer.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Deadline Timer — planification EDF basée sur les échéances absolues
+// Deadline Timer — EDF scheduling based on absolute deadlines
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Gère la queue de threads SCHED_DEADLINE triés par échéance absolue croissante.
-// Intègre la détection de miss d'échéance et la reprogrammation de la prochaine période.
+// Manages SCHED_DEADLINE thread queue sorted by increasing absolute deadline.
+// Integrates deadline miss detection and reprogramming of the next period.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::task::ThreadControlBlock;
@@ -15,7 +15,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// File EDF par CPU — tableau trié par deadline_abs_ns croissant
+// Per-CPU EDF queue — array sorted by increasing deadline_abs_ns
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MAX_DL_TASKS: usize = 64;
@@ -45,7 +45,7 @@ impl DeadlineQueue {
                 .deadline_abs
                 .load(core::sync::atomic::Ordering::Relaxed)
         };
-        // Insertion triée par deadline_abs_ns croissant.
+        // Insertion sorted by increasing deadline_abs_ns.
         let mut pos = self.count;
         for i in 0..self.count {
             let d = unsafe {
@@ -70,7 +70,7 @@ impl DeadlineQueue {
         true
     }
 
-    /// Extrait le thread avec l'échéance la plus proche.
+    /// Extracts thread with earliest deadline.
     fn pop_earliest(&mut self) -> Option<NonNull<ThreadControlBlock>> {
         if self.count == 0 {
             return None;
@@ -86,7 +86,7 @@ impl DeadlineQueue {
         tcb
     }
 
-    /// Retourne (sans extraire) le thread avec l'échéance la plus proche.
+    /// Returns (without extracting) thread with earliest deadline.
     #[allow(dead_code)]
     fn peek_earliest(&self) -> Option<NonNull<ThreadControlBlock>> {
         self.tasks[0]
@@ -94,7 +94,7 @@ impl DeadlineQueue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Instances globales
+// Global instances
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::mem::MaybeUninit;
@@ -107,25 +107,25 @@ pub static DL_DEQUEUES: AtomicU64 = AtomicU64::new(0);
 pub static DL_MISS_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise les queues deadline.
+/// Initializes deadline queues.
 ///
 /// # Safety
-/// Appelé une seule fois depuis scheduler::init().
+/// Called once from scheduler::init().
 pub unsafe fn init(nr_cpus: usize) {
     for cpu in 0..nr_cpus.min(MAX_CPUS) {
         DL_QUEUES[cpu].write(DeadlineQueue::new());
     }
 }
 
-/// Enfile un thread SCHED_DEADLINE dans la queue EDF du CPU `cpu`.
+/// Enqueues a SCHED_DEADLINE thread into EDF queue of CPU `cpu`.
 ///
-/// Rafraîchit l'échéance absolue via `refresh_deadline()` avant insertion.
+/// Refreshes absolute deadline via `refresh_deadline()` prior to insertion.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn dl_enqueue(cpu: usize, tcb_ptr: NonNull<ThreadControlBlock>) -> bool {
     let tcb = &mut *tcb_ptr.as_ptr();
     refresh_deadline(tcb);
@@ -138,10 +138,10 @@ pub unsafe fn dl_enqueue(cpu: usize, tcb_ptr: NonNull<ThreadControlBlock>) -> bo
     }
 }
 
-/// Extrait le thread EDF de priorité la plus haute (échéance la plus proche).
+/// Extracts highest priority EDF thread (earliest deadline).
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn dl_pick_next(cpu: usize) -> Option<NonNull<ThreadControlBlock>> {
     let q = DL_QUEUES[cpu].assume_init_mut();
     let tcb_opt = q.pop_earliest();
@@ -152,11 +152,11 @@ pub unsafe fn dl_pick_next(cpu: usize) -> Option<NonNull<ThreadControlBlock>> {
     tcb_opt
 }
 
-/// Retire un thread SCHED_DEADLINE spécifique de la queue EDF du CPU `cpu`.
-/// Utilisé lors d'une migration ou d'une terminaison de thread.
+/// Removes a specific SCHED_DEADLINE thread from EDF queue of CPU `cpu`.
+/// Used during thread migration or termination.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn dl_remove(cpu: usize, target: NonNull<ThreadControlBlock>) -> bool {
     let q = DL_QUEUES[cpu].assume_init_mut();
     for i in 0..q.count {
@@ -175,10 +175,10 @@ pub unsafe fn dl_remove(cpu: usize, target: NonNull<ThreadControlBlock>) -> bool
     false
 }
 
-/// Vérifie les miss d'échéance sur le CPU `cpu` à chaque tick.
+/// Checks for deadline misses on CPU `cpu` on every tick.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Requires preemption disabled.
 pub unsafe fn dl_tick(cpu: usize) {
     let q = DL_QUEUES[cpu].assume_init_mut();
     for i in 0..q.count {

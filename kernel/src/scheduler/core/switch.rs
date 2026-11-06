@@ -1,21 +1,21 @@
 // kernel/src/scheduler/core/switch.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONTEXT SWITCH — Dispatch vers switch_asm.s (Exo-OS Scheduler · Couche 1)
+// CONTEXT SWITCH — Dispatch to switch_asm.s (Exo-OS Scheduler · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLES (GI-02 + Corrections) :
-//   RÈGLE SWITCH-01 : check_signal_pending() LIT uniquement — jamais de livraison
-//   RÈGLE SWITCH-02 : Lazy FPU AVANT le switch, CR0.TS=1 AVANT l'ASM (TLA-01)
-//   RÈGLE SIGNAL-01 : scheduler/ NE connaît PAS process::signal::*
-//                     Il lit seulement le flag AtomicBool signal_pending du TCB
-//   RÈGLE SWITCH-ASM : switch_asm.s sauvegarde rbx,rbp,r12-r15 UNIQUEMENT (V7-C-02)
-//                      PAS de MXCSR/FCW — gérés par XSAVE/XRSTOR dans fpu/
-//                      CR3 switché dans switch_asm AVANT restauration des registres (KPTI)
-//   CORR-11 : FS/GS base sauvegardés via rdmsr/wrmsr dans context_switch()
-//   V7-C-03 : TSS.RSP0 mis à jour après chaque switch (sinon IRQ sur mauvaise pile)
-//   ZONE NO-ALLOC : aucune allocation récurrente dans ce chemin chaud
-//                   (shadow KPTI construit une seule fois par TCB si requis)
+// RULES (GI-02 + Fixes):
+//   RULE SWITCH-01: check_signal_pending() READS only — never delivers
+//   RULE SWITCH-02: Lazy FPU BEFORE switch, CR0.TS=1 BEFORE ASM (TLA-01)
+//   RULE SIGNAL-01: scheduler/ DOES NOT know process::signal::*
+//                   It only reads the AtomicBool signal_pending flag of the TCB
+//   RULE SWITCH-ASM: switch_asm.s saves rbx,rbp,r12-r15 ONLY (V7-C-02)
+//                    NO MXCSR/FCW — handled by XSAVE/XRSTOR in fpu/
+//                    CR3 switched in switch_asm BEFORE restoring registers (KPTI)
+//   CORR-11: FS/GS base saved via rdmsr/wrmsr in context_switch()
+//   V7-C-03: TSS.RSP0 updated after each switch (otherwise IRQ on wrong stack)
+//   NO-ALLOC ZONE: no recurring allocation in this hot path
+//                  (shadow KPTI built once per TCB if required)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::preempt::MAX_CPUS;
@@ -38,22 +38,22 @@ use crate::scheduler::fpu;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pointeur "thread courant" par CPU — mis à jour à chaque context switch
+// "Current thread" pointer per CPU — updated on each context switch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tableau cross-CPU : publie le TCB courant de chaque CPU après un switch.
+/// Cross-CPU array: publishes the current TCB of each CPU after a switch.
 ///
-/// Contrat :
-/// - lecture locale : préférer `percpu::read_current_tcb()` via GS:[0x20]
-/// - lecture distante : utiliser ce tableau avec la paire Release/Acquire
-/// - publication : effectuée APRÈS mise à jour des slots GS locaux
+/// Contract:
+/// - local read: prefer `percpu::read_current_tcb()` via GS:[0x20]
+/// - remote read: use this array with Release/Acquire pair
+/// - publication: performed AFTER updating local GS slots
 pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
     [const { AtomicUsize::new(0) }; MAX_CPUS];
 
-/// Hook optionnel appelé sur le thread sortant avant la transition d'état.
+/// Optional hook called on the outgoing thread before state transition.
 ///
-/// Les couches supérieures l'installent au boot ; le scheduler garde seulement
-/// un pointeur de fonction pour éviter une dépendance directe sur security/.
+/// Upper layers install it at boot; scheduler only keeps a
+/// function pointer to avoid a direct dependency on security/.
 pub type ContextSwitchOutHook = fn(&ThreadControlBlock);
 
 static CONTEXT_SWITCH_OUT_HOOK: AtomicUsize = AtomicUsize::new(0);
@@ -64,7 +64,7 @@ static IDLE_SCHED_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(target_arch = "x86_64", debug_assertions))]
 #[inline]
 fn idle_sched_trace(_message: &[u8]) {
-    // Tracing debug désactivé pour éviter l'inondation de terminal
+    // Debug tracing disabled to avoid terminal flood
 }
 
 #[cfg(not(all(target_arch = "x86_64", debug_assertions)))]
@@ -76,22 +76,22 @@ pub fn install_context_switch_out_hook(hook: ContextSwitchOutHook) {
     CONTEXT_SWITCH_OUT_HOOK.store(hook as usize, Ordering::Release);
 }
 
-/// Retourne le pointeur brut vers le TCB du thread courant sur ce CPU.
+/// Returns raw pointer to current thread's TCB on this CPU.
 ///
-/// Lit le slot per-CPU canonique `gs:[0x20]` initialisé par `percpu::set_current_tcb()`.
+/// Reads canonical per-CPU slot `gs:[0x20]` initialized by `percpu::set_current_tcb()`.
 ///
 /// # Safety
-/// Le pointeur est non-null si le scheduler est initialisé et un thread tourne.
+/// The pointer is non-null if scheduler is initialized and a thread is running.
 #[inline]
 pub fn current_thread_raw() -> *mut ThreadControlBlock {
-    // BUG-C2A FIX: lire depuis gs:[0x20] per-CPU, pas l'index 0.
-    // Pendant les toutes premières phases de boot, le slot GS peut encore être
-    // nul alors que la publication canonique cross-CPU a déjà eu lieu.
-    // On retombe alors sur CURRENT_THREAD_PER_CPU[cpu] pour éviter un faux null
-    // pendant la couture BSP/AP.
-    // SAFETY: read_current_tcb() lit le pointeur TCB depuis gs:[0x20] du CPU
-    // courant via un accès MSR/segment Ring 0. Aucune déréférence ici — on ne
-    // fait que convertir le pointeur publié en usize pour tester sa nullité.
+    // BUG-C2A FIX: read from per-CPU gs:[0x20], not index 0.
+    // During early boot phases, the GS slot may still be null while canonical
+    // cross-CPU publication has already occurred.
+    // We then fall back to CURRENT_THREAD_PER_CPU[cpu] to avoid false null
+    // during BSP/AP seam.
+    // SAFETY: read_current_tcb() reads TCB pointer from gs:[0x20] of current CPU
+    // via Ring 0 MSR/segment access. No dereference here — we only convert the
+    // published pointer to usize to test for null.
     let gs_tcb = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() as usize };
     if gs_tcb != 0 {
         return gs_tcb as *mut ThreadControlBlock;
@@ -105,18 +105,18 @@ pub fn current_thread_raw() -> *mut ThreadControlBlock {
     CURRENT_THREAD_PER_CPU[cpu_id].load(Ordering::Acquire) as *mut ThreadControlBlock
 }
 
-/// Bloque le thread courant.
+/// Blocks current thread.
 ///
-/// À appeler APRÈS avoir inséré le thread dans une file d'attente (futex bucket,
-/// IpcWaitQueue, etc.) pour garantir qu'un réveil ne sera pas manqué.
+/// To be called AFTER inserting thread into a wait queue (futex bucket,
+/// IpcWaitQueue, etc.) to guarantee a wakeup is not missed.
 ///
-/// Le thread reprend depuis cet appel après que `wake_enqueue()` a été appelé
-/// sur son TCB par la partie réveillante.
+/// The thread resumes from this call after `wake_enqueue()` is called
+/// on its TCB by the waking entity.
 ///
 /// # Safety
-/// - La préemption doit être désactivée ou l'appelant doit garantir qu'un réveil
-///   ne peut pas arriver entre l'insertion dans la file et cet appel.
-/// - Le thread doit avoir un mécanisme de réveil en place (waiter.woken, etc.).
+/// - Preemption must be disabled or caller must guarantee that a wakeup
+///   cannot arrive between queue insertion and this call.
+/// - Thread must have a wakeup mechanism in place (waiter.woken, etc.).
 pub unsafe fn block_current_thread() {
     use crate::scheduler::core::runqueue::run_queue;
 
@@ -127,7 +127,7 @@ pub unsafe fn block_current_thread() {
 
     let tcb_ptr = current_thread_raw();
     if tcb_ptr.is_null() {
-        // Scheduler non encore initialisé — spin court.
+        // Scheduler not yet initialized — short spin.
         for _ in 0..1_000 {
             core::hint::spin_loop();
         }
@@ -140,9 +140,9 @@ pub unsafe fn block_current_thread() {
         let rq = run_queue(cpu_id);
         match tcb.state() {
             TaskState::Runnable => {
-                // SAFETY: tcb provient de current_thread_raw() (non-null vérifié)
-                // et rq est la run-queue du CPU possédant ce thread. La préemption
-                // est désactivée par le contrat de block_current_thread() (unsafe fn).
+                // SAFETY: tcb comes from current_thread_raw() (verified non-null)
+                // and rq is the run-queue of the CPU owning this thread. Preemption
+                // is disabled by the contract of block_current_thread() (unsafe fn).
                 unsafe {
                     finish_preblock_wake(rq, tcb);
                 }
@@ -163,118 +163,116 @@ pub unsafe fn block_current_thread() {
             }
         }
         schedule_block(rq, tcb);
-        // Le thread reprend ici après que wake_enqueue() a été appelé.
+        // Thread resumes here after wake_enqueue() is called.
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ASM context switch — intégré via global_asm! (switch_asm.s)
+// ASM context switch — embedded via global_asm! (switch_asm.s)
 //
-// Inclure le fichier .s complet dans l'unité de compilation Rust évite la
-// nécessité d'un build.rs/cc pour compiler un .s externe. Le linker voit
-// les symboles `context_switch_asm` et `switch_to_new_thread` directement
-// dans l'rlib produit.
+// Including full .s file in the Rust compilation unit avoids needing a
+// build.rs/cc to compile an external .s. The linker sees the symbols
+// `context_switch_asm` and `switch_to_new_thread` directly in the produced rlib.
 // ─────────────────────────────────────────────────────────────────────────────
 core::arch::global_asm!(include_str!("../asm/switch_asm.s"), options(att_syntax));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFI vers l'ASM de context switch
+// FFI to context switch ASM
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" {
-    /// Context switch ASM complet.
+    /// Full ASM context switch.
     ///
-    /// Sauvegarde/restaure uniquement les registres callee-saved ABI
-    /// (rbx, rbp, r12-r15) et la pile kernel du thread sortant. L'état FPU
-    /// (XSAVE/XRSTOR, MXCSR et x87 FCW compris) est géré par `scheduler::fpu`.
-    /// Le CR3 est switché si `new_cr3 != 0`.
+    /// Saves/restores only ABI callee-saved registers (rbx, rbp, r12-r15)
+    /// and outgoing thread kernel stack. FPU state (XSAVE/XRSTOR, including
+    /// MXCSR and x87 FCW) is handled by `scheduler::fpu`.
+    /// CR3 is switched if `new_cr3 != 0`.
     ///
     /// # Arguments (System V ABI)
-    /// - `old_kernel_rsp` : `*mut u64` pointant vers `TCB::kstack_ptr` du thread sortant
-    /// - `new_kernel_rsp` : valeur du `TCB::kstack_ptr` du thread entrant
-    /// - `new_cr3`        : registre CR3 du thread entrant (0 = pas de switch CR3)
+    /// - `old_kernel_rsp`: `*mut u64` pointing to outgoing thread's `TCB::kstack_ptr`
+    /// - `new_kernel_rsp`: value of incoming thread's `TCB::kstack_ptr`
+    /// - `new_cr3`: CR3 register of incoming thread (0 = no CR3 switch)
     fn context_switch_asm(old_kernel_rsp: *mut u64, new_kernel_rsp: u64, new_cr3: u64);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Signal pending check — HOT PATH, ≤ 5 cycles
+// Signal pending check — HOT PATH, <= 5 cycles
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie si un signal est en attente sur ce thread.
+/// Checks if a signal is pending on this thread.
 ///
-/// RÈGLE SWITCH-01 :
-///   - LIT uniquement le flag `signal_pending` du TCB.
-///   - NE livre PAS les signaux — la livraison s'effectue depuis arch/syscall.rs
-///     ou arch/exceptions.rs au retour vers userspace.
-///   - NE connaît PAS `process::signal::*`.
+/// RULE SWITCH-01:
+///   - READS only the `signal_pending` flag of the TCB.
+///   - DOES NOT deliver signals — delivery occurs from arch/syscall.rs
+///     or arch/exceptions.rs upon return to userspace.
+///   - DOES NOT know `process::signal::*`.
 ///
-/// En hot path scheduler, Ordering::Relaxed est correct : la cohérence
-/// de vue sera établie par l'Acquire au retour userspace dans arch/.
+/// On scheduler hot path, Ordering::Relaxed is correct: view coherence
+/// will be established by the Acquire on return to userspace in arch/.
 #[inline(always)]
 pub fn check_signal_pending(tcb: &ThreadControlBlock) -> bool {
     tcb.has_signal_pending()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// context_switch() — point d'entrée Rust du switch
+// context_switch() — Rust entry point for switch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Effectue le context switch de `prev` vers `next`.
+/// Performs context switch from `prev` to `next`.
 ///
-/// # Séquence (GI-02 complète)
-/// 1. Lazy FPU : si `prev` a utilisé la FPU → XSAVE (sans toucher MXCSR/FCW V7-C-02).
-/// 2. Restaurer l'etat FPU/SIMD entrant et garder CR0.TS clair pour Ring 3.
-/// 3. Sauvegarder PKRS (Intel PKS).
-/// 4. Sauvegarder CET PL0_SSP si shadow stack actif.
-/// 5. Sauvegarder FS.base et user_gs_base via rdmsr (CORR-11).
-/// 6. Marquer `prev` → Runnable.
-/// 7. Calculer `next_cr3` et comptabiliser le runtime de `prev`.
-/// 8. Appeler `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
-///    L'ASM sauvegarde/restaure 6 callee-saved GPRs. CR3 switché si différent.
-/// 9. Restaurer PKRS de `next`.
-/// 10. Restaurer CET PL0_SSP de `next` si shadow stack actif.
-/// 11. Marquer `next` → Running, puis mettre à jour pile kernel/TSS.RSP0.
-/// 12. Restaurer FS.base puis user_gs_base, enfin publier GS current_tcb.
+/// # Sequence (Full GI-02)
+/// 1. Lazy FPU: if `prev` used FPU -> XSAVE (without touching MXCSR/FCW V7-C-02).
+/// 2. Restore incoming FPU/SIMD state and keep CR0.TS clear for Ring 3.
+/// 3. Save PKRS (Intel PKS).
+/// 4. Save CET PL0_SSP if shadow stack active.
+/// 5. Save FS.base and user_gs_base via rdmsr (CORR-11).
+/// 6. Mark `prev` -> Runnable.
+/// 7. Compute `next_cr3` and account for runtime of `prev`.
+/// 8. Call `context_switch_asm(prev_rsp_ptr, next_rsp, next_cr3)`.
+///    ASM saves/restores 6 callee-saved GPRs. CR3 switched if different.
+/// 9. Restore PKRS of `next`.
+/// 10. Restore CET PL0_SSP of `next` if shadow stack active.
+/// 11. Mark `next` -> Running, then update kernel stack/TSS.RSP0.
+/// 12. Restore FS.base then user_gs_base, finally publish GS current_tcb.
 ///
-/// # Sécurité
 /// # Safety
-/// - Appelé avec préemption désactivée (IrqGuard ou PreemptGuard).
-/// - `prev` et `next` DOIVENT être des pointeurs valides.
+/// - Called with preemption disabled (IrqGuard or PreemptGuard).
+/// - `prev` and `next` MUST be valid pointers.
 ///
-/// # RÈGLE ABSOLUE
-/// Cette fonction NE doit JAMAIS appeler `process::signal::*`.
-/// Elle ne fait que lire `signal_pending` via `check_signal_pending()`.
+/// # ABSOLUTE RULE
+/// This function MUST NEVER call `process::signal::*`.
+/// It only reads `signal_pending` via `check_signal_pending()`.
 pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadControlBlock) {
     let features = cpu_features_or_none();
     let has_pks = features.is_some_and(|cpu| cpu.has_pks());
     let has_cet_ss = features.is_some_and(|cpu| cpu.has_cet_ss());
-    // FIX-IBPB (Security_Audit_Passe2 §B-01) : IBPB (Indirect Branch Predictor Barrier)
-    // doit être émis lors d'un context-switch cross-processus pour prévenir Spectre v2.
-    // Gated sur :
-    //   1. CPU supportant IBPB (has_ibpb via CPUID SPEC_CTRL ou IBPB_AMD)
-    //   2. Changement de processus (prev.pid ≠ next.pid) — les switch intra-process
-    //      (threads du même processus) n'ont pas besoin d'IBPB.
-    //   3. Processus Ring3 uniquement (pid != 0 ; les kthreads partagent Ring0 BTB).
+    // FIX-IBPB (Security_Audit_Passe2 §B-01): IBPB (Indirect Branch Predictor Barrier)
+    // must be issued during cross-process context switch to prevent Spectre v2.
+    // Gated on:
+    //   1. CPU supporting IBPB (has_ibpb via CPUID SPEC_CTRL or IBPB_AMD)
+    //   2. Process change (prev.pid != next.pid) — intra-process switches
+    //      (threads of the same process) do not need IBPB.
+    //   3. Ring 3 processes only (pid != 0; kthreads share Ring 0 BTB).
     let ibpb_needed =
         features.is_some_and(|cpu| cpu.has_ibpb()) && prev.pid != next.pid && next.pid.0 != 0;
     if ibpb_needed {
-        // SAFETY: MSR_IA32_PRED_CMD (0x49) est garanti présent par has_ibpb().
-        // L'écriture est atomique et visible sur le CPU local uniquement.
-        // PRED_CMD_IBPB (bit 0) vide le prédicteur de branchements indirect.
+        // SAFETY: MSR_IA32_PRED_CMD (0x49) is guaranteed present by has_ibpb().
+        // Write is atomic and visible on local CPU only.
+        // PRED_CMD_IBPB (bit 0) flushes indirect branch predictor.
         unsafe { msr::write_msr(MSR_IA32_PRED_CMD, PRED_CMD_IBPB) };
     }
 
-    // ── Etape 1 : sauvegarde FPU/SIMD du thread sortant ──────────────────────
-    // Les binaires Ring3 Rust utilisent SSE pour des copies de structures
-    // meme sans flottants explicites. Un mode lazy qui repose sur #NM rend le
-    // premier shell fragile; on sauvegarde/restaure donc au switch.
+    // ── Step 1: outgoing thread FPU/SIMD save ────────────────────────────────
+    // Ring 3 Rust binaries use SSE for struct copying even without explicit floats.
+    // A lazy mode relying on #NM makes the initial shell fragile;
+    // therefore we save/restore upon switch.
     if prev.fpu_loaded() {
         fpu::save_restore::xsave_current(prev);
     }
     prev.set_fpu_loaded(false);
-    // SAFETY: Ring 0, préemption désactivée (contrat de context_switch, unsafe fn).
-    // cr0_clear_ts() efface CR0.TS pour autoriser SSE/AVX ; xrstor_for(next)
-    // restaure l'état FPU de `next` depuis sa zone XSAVE par-thread alignée.
+    // SAFETY: Ring 0, preemption disabled (contract of context_switch, unsafe fn).
+    // cr0_clear_ts() clears CR0.TS to enable SSE/AVX; xrstor_for(next)
+    // restores FPU state of `next` from its aligned per-thread XSAVE area.
     unsafe {
         fpu::lazy::cr0_clear_ts();
         if next.is_kthread() {
@@ -284,74 +282,74 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         }
     }
 
-    // ── Étape 3 : Sauvegarde PKRS (S6) si le CPU supporte PKS ───────────────
+    // ── Step 3: Save PKRS (S6) if CPU supports PKS ─────────────────────────
     if has_pks {
-        // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
+        // SAFETY: Ring 0 MSR access, capability verified via CPUID.
         prev.pkrs = unsafe { msr::read_msr(msr::MSR_IA32_PKRS) as u32 };
     }
 
-    // ── Étape 4 : Sauvegarder MSR_IA32_PL0_SSP si CET Shadow Stack actif ────
+    // ── Step 4: Save MSR_IA32_PL0_SSP if CET Shadow Stack active ────────────
     //
-    // Intel SDM Vol.1 §8.3.3 : en mode software task switch, la sauvegarde du
-    // Shadow Stack Pointer est à la charge du noyau. Si CET n'est pas actif,
-    // le MSR 0x6A4 n'existe pas → on court-circuite via has_cet_ss().
+    // Intel SDM Vol.1 §8.3.3: in software task switch mode, saving the
+    // Shadow Stack Pointer is kernel responsibility. If CET is inactive,
+    // MSR 0x6A4 does not exist -> short-circuit via has_cet_ss().
     if has_cet_ss {
-        // SAFETY: MSR 0x6A4 existant si has_cet_ss() == true. Ring 0.
+        // SAFETY: MSR 0x6A4 exists if has_cet_ss() == true. Ring 0.
         let ssp = unsafe { msr::read_msr(MSR_IA32_PL0_SSP) };
         prev.set_pl0_ssp(ssp);
     }
 
-    // ── Étape 5 : Sauvegarder FS/GS base du thread sortant (CORR-11) ─────────
+    // ── Step 5: Save outgoing thread FS/GS base (CORR-11) ───────────────────
     //
-    // On est en Ring 0 → SWAPGS a été effectué à l'entrée kernel.
-    //   MSR_FS_BASE       (0xC0000100) = FS.base courant (TLS userspace prev)
-    //   MSR_KERNEL_GS_BASE (0xC0000102) = GS.base caché (valeur userspace prev)
-    //     [GS.base actuel (0xC0000101) = per-CPU kernel data — ne pas sauvegarder]
+    // In Ring 0 -> SWAPGS executed on kernel entry.
+    //   MSR_FS_BASE        (0xC0000100) = current FS.base (prev userspace TLS)
+    //   MSR_KERNEL_GS_BASE (0xC0000102) = shadow GS.base (prev userspace value)
+    //     [current GS.base (0xC0000101) = per-CPU kernel data — do not save]
     //
-    // ERREUR SILENCIEUSE S-06 : sauvegarder 0xC0000101 au lieu de 0xC0000102
-    //   → TLS Ring 3 corrompu après chaque context switch entre threads différents.
+    // SILENT ERROR S-06: saving 0xC0000101 instead of 0xC0000102
+    //   -> Ring 3 TLS corrupted after each context switch between different threads.
     //
-    // SAFETY: rdmsr en Ring 0 sur MSR valides et supportés (x86_64 requis).
+    // SAFETY: rdmsr in Ring 0 on valid and supported MSRs (x86_64 required).
     prev.fs_base = unsafe { msr::read_msr(MSR_FS_BASE) };
     prev.user_gs_base = unsafe { msr::read_msr(MSR_KERNEL_GS_BASE) };
 
     let hook = CONTEXT_SWITCH_OUT_HOOK.load(Ordering::Acquire);
     if hook != 0 {
-        // SAFETY: hook != 0 garantit qu'un pointeur de fonction valide a été
-        // publié via register_context_switch_out_hook() (signature
-        // ContextSwitchOutHook). La transmutation usize→fn pointer est correcte
-        // car l'adresse provient d'un `fn` du même ABI stockée atomiquement.
+        // SAFETY: hook != 0 guarantees a valid function pointer was published
+        // via install_context_switch_out_hook() (signature ContextSwitchOutHook).
+        // usize -> fn pointer transmutation is sound because address originates
+        // from a `fn` of the same ABI stored atomically.
         let hook_fn: ContextSwitchOutHook = unsafe { core::mem::transmute(hook) };
         hook_fn(prev);
     }
 
-    // ── Étape 6 : Transition d'état de prev ──────────────────────────────────
-    // Si le thread sortant était Running → il redevient Runnable (sera ré-enfilé).
-    // Si il était dans un état bloquant (Sleeping, Uninterruptible) → on ne change pas.
+    // ── Step 6: State transition of prev ────────────────────────────────────
+    // If outgoing thread was Running -> becomes Runnable (will be re-enqueued).
+    // If it was in a blocking state (Sleeping, Uninterruptible) -> leave unchanged.
     let prev_state = prev.state();
     if prev_state == TaskState::Running {
         prev.set_state(TaskState::Runnable);
     }
 
-    // ── Étape 7 : préparer CR3 + runtime, puis Étape 8 : ASM context switch ─
-    // FIX-CR3-RESYNC : on recharge TOUJOURS le CR3 du thread cible (s'il en a un,
-    // i.e. thread user). L'ancienne optim « skip si prev.cr3 == next.cr3 »
-    // supposait que le CR3 matériel valait déjà prev.cr3_phys — faux dès qu'un
-    // chemin (execve/handoff/fork-trampoline) change le CR3 matériel sans repasser
-    // par ce switch. Résultat observé : init (PID 1) s'exécutait sur un CR3 ≠ de
-    // son `tcb.cr3_phys`, donc le demand-paging mappait dans la mauvaise table →
-    // boucle de #PF instruction-fetch. `tcb.cr3_phys` est la source de vérité
-    // (mise à jour par execve) ; le matériel doit la suivre à chaque switch.
-    // new_cr3 == 0 ⇒ l'ASM ne recharge pas (threads kernel sans espace user).
+    // ── Step 7: prepare CR3 + runtime, then Step 8: ASM context switch ──────
+    // FIX-CR3-RESYNC: ALWAYS reload target thread CR3 (if it has one,
+    // i.e. user thread). The old optimization "skip if prev.cr3 == next.cr3"
+    // assumed hardware CR3 was already prev.cr3_phys — false once a path
+    // (execve/handoff/fork-trampoline) changes hardware CR3 without going through
+    // this switch. Observed result: init (PID 1) ran on a CR3 != its
+    // `tcb.cr3_phys`, so demand-paging mapped into wrong table ->
+    // #PF instruction-fetch loop. `tcb.cr3_phys` is the ground truth
+    // (updated by execve); hardware must follow on each switch.
+    // new_cr3 == 0 => ASM does not reload (kernel threads without user space).
     let new_cr3 = if next.cr3_phys != 0 { next.cr3_phys } else { 0 };
 
-    // Comptabiliser le temps réellement passé en Running par `prev`.
+    // Account for actual time spent in Running by `prev`.
     let now_tsc = tsc::read_tsc();
     let cpu_idx = percpu::current_cpu_id() as usize;
     if cpu_idx < MAX_CPUS {
-        // SAFETY: cpu_idx < MAX_CPUS borne l'accès au tableau per-CPU statique ;
-        // chaque cœur n'écrit que son propre slot (pas de partage mutable), donc
-        // la &mut est exclusive sur ce CPU. Préemption désactivée.
+        // SAFETY: cpu_idx < MAX_CPUS bounds access to static per-CPU array;
+        // each core writes only its own slot (no cross-CPU mutable sharing), so
+        // &mut is exclusive on this CPU. Preemption disabled.
         let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         let last = cpu_data.last_switch_tsc;
         if last != 0 {
@@ -366,12 +364,12 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         }
     }
 
-    // Publier `next` AVANT le saut ASM.
+    // Publish `next` BEFORE ASM jump.
     //
-    // Un thread jamais schedule ne revient pas a l'instruction suivant
-    // `context_switch_asm`: son premier `ret` saute vers son trampoline de
-    // demarrage. Les etats per-CPU doivent donc deja designer `next` avant de
-    // charger sa pile kernel.
+    // A never-scheduled thread does not return to instruction following
+    // `context_switch_asm`: its first `ret` jumps to its startup trampoline.
+    // Per-CPU state must therefore already designate `next` before loading
+    // its kernel stack.
     next.assign_cpu(CpuId(cpu_idx as u32));
 
     let next_kstack_top = next.kstack_top();
@@ -380,10 +378,10 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         let mut user_cr3 = next.kpti_user_cr3();
         if user_cr3 == 0 && next.pid.0 != 0 && next.cr3_phys != 0 {
             let trampoline_phys = PhysAddr::new(crate::arch::x86_64::smp::init::TRAMPOLINE_PHYS);
-            // SAFETY: construit la PML4 shadow KPTI pour `next` à partir de son
-            // CR3 kernel (non-nul, pid != 0 vérifiés ci-dessus), du trampoline
-            // SMP physique et du sommet de pile kernel valide. Ring 0, mappings
-            // contrôlés par le walker de tables ; échec → halt CPU.
+            // SAFETY: builds KPTI shadow PML4 for `next` from its kernel CR3
+            // (non-null, pid != 0 checked above), SMP physical trampoline, and
+            // valid kernel stack top. Ring 0, mappings controlled by table walker;
+            // failure -> halt CPU.
             user_cr3 = unsafe {
                 match build_user_shadow_pml4(
                     PhysAddr::new(next.cr3_phys),
@@ -413,41 +411,41 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     }
 
     if has_pks {
-        // SAFETY: accès MSR ring0, capability vérifiée via CPUID.
+        // SAFETY: Ring 0 MSR access, capability verified via CPUID.
         unsafe { msr::write_msr(msr::MSR_IA32_PKRS, next.pkrs as u64) };
     }
 
     if has_cet_ss {
         let ssp = next.pl0_ssp();
-        // SAFETY: MSR 0x6A4 existant si has_cet_ss(), Ring 0, valeur par-thread.
+        // SAFETY: MSR 0x6A4 exists if has_cet_ss(), Ring 0, per-thread value.
         unsafe { msr::write_msr(MSR_IA32_PL0_SSP, ssp) };
     }
 
     next.set_state(TaskState::Running);
     next.switch_count = next.switch_count.wrapping_add(1);
 
-    // SAFETY: next_kstack_top est le sommet de la pile kernel de `next` (alloué
-    // au spawn). On publie ce RSP0 dans l'état per-CPU et la TSS du cœur courant
-    // (cpu_idx < MAX_CPUS) pour que la prochaine entrée Ring3→Ring0 utilise la
-    // bonne pile. Ring 0, préemption désactivée.
+    // SAFETY: next_kstack_top is kernel stack top of `next` (allocated at
+    // spawn). We publish this RSP0 in per-CPU state and TSS of current core
+    // (cpu_idx < MAX_CPUS) so next Ring3->Ring0 entry uses the right stack.
+    // Ring 0, preemption disabled.
     unsafe {
         percpu::set_kernel_rsp(next_kstack_top);
         tss::update_rsp0(cpu_idx, next_kstack_top);
     }
 
-    // SAFETY: wrmsr en Ring 0 sur MSR valides et supportés.
+    // SAFETY: wrmsr in Ring 0 on valid and supported MSRs.
     unsafe {
         msr::write_msr(MSR_FS_BASE, next.fs_base);
         msr::write_msr(MSR_KERNEL_GS_BASE, next.user_gs_base);
     }
 
-    // Publier seulement après FS puis user-GS, conformément à ContextSwitch.tla.
+    // Publish only after FS then user-GS, conforming to ContextSwitch.tla.
     core::sync::atomic::fence(Ordering::SeqCst);
     percpu::set_current_tcb(next as *mut ThreadControlBlock);
 
     if cpu_idx < MAX_CPUS {
-        // SAFETY: cpu_idx < MAX_CPUS ; accès exclusif au slot per-CPU du cœur
-        // courant (pas de partage mutable cross-CPU). Ring 0, préemption off.
+        // SAFETY: cpu_idx < MAX_CPUS; exclusive access to current core's per-CPU
+        // slot (no cross-CPU mutable sharing). Ring 0, preemption off.
         let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
         cpu_data.last_switch_tsc = tsc::read_tsc();
@@ -455,9 +453,9 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
             .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
 
-    // SAFETY: prev.kstack_ptr et next.kstack_ptr pointent vers des stacks kernel
-    // valides, alloues au boot et jamais liberes pendant la duree de vie du thread.
-    // context_switch_asm garantit la sauvegarde complète des callee-saved ABI.
+    // SAFETY: prev.kstack_ptr and next.kstack_ptr point to valid kernel stacks,
+    // allocated at boot and never freed during thread lifetime.
+    // context_switch_asm guarantees complete save of ABI callee-saved registers.
     if next.is_kthread() {
         idle_sched_trace(b"context_switch: ->kthread\n");
     }
@@ -466,16 +464,16 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Yield volontaire
+// Voluntary yield
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Yield volontaire du thread courant.
-/// Place le thread courant en fin de file CFS avant d'appeler context_switch.
+/// Voluntary yield of current thread.
+/// Places current thread at end of CFS queue before calling context_switch.
 ///
-/// Appelé depuis : sys_sched_yield(), mutex_lock() (contention), condvar_wait().
+/// Called from: sys_sched_yield(), mutex_lock() (contention), condvar_wait().
 ///
 /// # Safety
-/// `rq` et `current` doivent être valides, exécuté dans le contexte du thread courant.
+/// `rq` and `current` must be valid, executed in context of current thread.
 pub unsafe fn schedule_yield(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
@@ -488,8 +486,8 @@ pub unsafe fn schedule_yield(
     let (selected_next, irq_flags) = {
         let irq = IrqGuard::new();
 
-        // Ré-enqueuer le courant AVANT de choisir le suivant (round-robin CFS).
-        // SAFETY: current est une référence mutable valide, non nulle par construction.
+        // Re-enqueue current BEFORE picking next (CFS round-robin).
+        // SAFETY: current is a valid mutable reference, non-null by construction.
         if current.is_queued() {
             let _ = rq.remove(ptr);
             current.clear_queued();
@@ -503,9 +501,8 @@ pub unsafe fn schedule_yield(
         let selected = match pick_next_task(rq, None) {
             PickResult::Switch(next) if next != ptr => Some(next),
             PickResult::Switch(_) => {
-                // Le courant a été choisi puis retiré de la run queue. Si un
-                // autre thread est prêt, on le prend et on remet le courant en
-                // attente derrière lui; sinon le yield devient un no-op.
+                // Current was chosen and dequeued. If another thread is ready,
+                // pick it and re-enqueue current behind it; otherwise yield is a no-op.
                 let replacement = if rq.nr_running_usize() > 0 {
                     match pick_next_task(rq, None) {
                         PickResult::Switch(next) if next != ptr => Some(next),
@@ -548,19 +545,19 @@ pub unsafe fn schedule_yield(
     };
     let irq_flags = irq_flags.unwrap_or(0);
 
-    // SAFETY: next provient de la run queue, toujours valide.
+    // SAFETY: next comes from run queue, always valid.
     let next_ref = &mut *next.as_ptr();
     if !core::ptr::eq(current, next_ref) {
         context_switch(current, next_ref);
-        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
-        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
+        // SAFETY: restores IF flag captured by IrqGuard on entry to
+        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
         true
     } else {
-        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
-        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
+        // SAFETY: restores IF flag captured by IrqGuard on entry to
+        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
@@ -583,9 +580,9 @@ unsafe fn schedule_current(force: bool) -> bool {
 
     let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
     let should_schedule = if force {
-        // Un yield coopératif est une demande explicite de sélection. Ne pas
-        // le conditionner à nr_running: ce compteur peut être transitoirement
-        // en retard sur la structure CFS/RT pendant les chemins fork/IPC.
+        // A cooperative yield is an explicit selection request. Do not
+        // condition it on nr_running: this counter may be transiently
+        // behind the CFS/RT structure during fork/IPC paths.
         true
     } else {
         current.need_resched()
@@ -598,40 +595,40 @@ unsafe fn schedule_current(force: bool) -> bool {
     schedule_yield(rq, current)
 }
 
-/// Honore un `NEED_RESCHED` posé par le tick timer ou une IPI avant de revenir
-/// en userspace.
+/// Honors `NEED_RESCHED` set by tick timer or IPI before returning
+/// to userspace.
 ///
-/// Le helper est volontairement petit : il ne déclenche un switch que si le TCB
-/// courant demande explicitement une préemption.
+/// Helper is intentionally small: only triggers a switch if current TCB
+/// explicitly requests preemption.
 ///
 /// # Safety
-/// CPL 0, contexte d'interruption ou sortie d'appel système.
+/// CPL 0, interrupt context or system call exit.
 pub unsafe fn schedule_current_if_needed() -> bool {
     schedule_current(false)
 }
 
-/// Point de rescheduling coopératif pour les syscalls qui attendent en boucle
-/// courte tant que les vraies queues de sommeil ne sont pas encore câblées.
+/// Cooperative rescheduling point for syscalls spinning in short loops
+/// while true sleep queues are not yet wired.
 ///
 /// # Safety
-/// CPL 0, appelé hors section critique non-préemptible.
+/// CPL 0, called outside non-preemptible critical sections.
 pub unsafe fn cooperative_reschedule() -> bool {
     schedule_current(true)
 }
 
-/// Une tentative de scheduling depuis le thread idle de boot du CPU courant.
+/// A scheduling attempt from current CPU's boot idle thread.
 ///
-/// `kernel_main` arrive ici sur le stack de boot BSP, avec un TCB idle deja
-/// publie comme `current_tcb`. La fin de boot ne doit pas faire `cli; hlt`,
-/// sinon les kthreads deja enfilees et les futurs processus utilisateur ne
-/// peuvent jamais prendre le CPU. Ce helper choisit un thread runnable, relache
-/// la section preempt avant le switch, puis bascule depuis le TCB idle courant.
+/// `kernel_main` arrives here on BSP boot stack, with idle TCB already
+/// published as `current_tcb`. End of boot must not do `cli; hlt`,
+/// otherwise already enqueued kthreads and future user processes
+/// can never acquire the CPU. This helper picks a runnable thread, releases
+/// preempt section before switch, then transitions from current idle TCB.
 ///
-/// Retourne `true` si un context switch a ete tente.
+/// Returns `true` if context switch was attempted.
 ///
 /// # Safety
-/// Le scheduler et la run queue du CPU doivent etre initialises, et le TCB
-/// courant doit etre le TCB idle publie pour ce CPU ou un TCB kernel valide.
+/// Scheduler and CPU run queue must be initialized, and current TCB
+/// must be the published idle TCB for this CPU or a valid kernel TCB.
 pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
     use crate::scheduler::core::preempt::IrqGuard;
@@ -683,27 +680,27 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     let current = &mut *current_nn.as_ptr();
     idle_sched_trace(b"idle_sched: switch\n");
     context_switch(current, &mut *next.as_ptr());
-    // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
-    // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
+    // SAFETY: restores IF flag captured by IrqGuard on entry to
+    // critical section; irq_flags is locally saved RFLAGS, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }
     true
 }
 // ─────────────────────────────────────────────────────────────────────────────
-// schedule_block — blocage du thread courant (sans ré-enfilage)
+// schedule_block — blocking current thread (without re-enqueuing)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Termine une course de réveil arrivée avant le vrai blocage.
+/// Completes a wakeup race that arrived before actual blocking.
 ///
-/// Le protocole sleep/wait est en deux phases : l'appelant publie d'abord le
-/// thread comme `Sleeping`, puis appelle `schedule_block()`. Un timer ou un
-/// waker peut légalement faire `Sleeping -> Runnable` et l'enfiler entre ces
-/// deux opérations. Comme le thread tourne encore sur ce CPU, il faut retirer
-/// l'entrée de runqueue et revenir à `Running` au lieu de bloquer.
+/// Sleep/wait protocol is two-phase: caller first publishes thread as
+/// `Sleeping`, then calls `schedule_block()`. A timer or waker can legally
+/// perform `Sleeping -> Runnable` and enqueue it between these two operations.
+/// Since thread is still running on this CPU, the runqueue entry must be removed
+/// and state returned to `Running` instead of blocking.
 ///
 /// # Safety
-/// `current` doit être le TCB courant du CPU associé à `rq`.
+/// `current` must be current TCB of CPU associated with `rq`.
 pub unsafe fn finish_preblock_wake(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
@@ -717,17 +714,17 @@ pub unsafe fn finish_preblock_wake(
     current.set_state(TaskState::Running);
 }
 
-/// Bloque le thread courant sans le ré-enqueuer dans la run queue.
+/// Blocks current thread without re-enqueuing into run queue.
 ///
-/// À appeler après avoir inséré le thread dans une WaitQueue et
-/// positionné son état sur `Sleeping` ou `Uninterruptible`.
-/// Le thread ne sera reschedule que lorsqu'un appel à `wake_one`/`wake_all`
-/// repositionnera son état sur `Runnable` ET l'enfilera de nouveau dans la RQ.
+/// To be called after inserting thread into a WaitQueue and
+/// setting its state to `Sleeping` or `Uninterruptible`.
+/// Thread will only be rescheduled when a call to `wake_one`/`wake_all`
+/// transitions state to `Runnable` AND re-enqueues it into RQ.
 ///
 /// # Safety
-/// - Préemption désactivée requise (PreemptGuard ou IrqGuard).
-/// - `current` doit avoir son état déjà positionné sur Sleeping/Uninterruptible.
-///   Ne PAS appeler si on souhaite conserver l'état Running ou Runnable.
+/// - Preemption disabled required (PreemptGuard or IrqGuard).
+/// - `current` must already have state set to Sleeping/Uninterruptible.
+///   Do NOT call if intending to preserve Running or Runnable state.
 pub unsafe fn schedule_block(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
     current: &mut ThreadControlBlock,
@@ -806,28 +803,28 @@ pub unsafe fn schedule_block(
         current.state(),
         TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
     ) {
-        // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
-        // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
+        // SAFETY: restores IF flag captured by IrqGuard on entry to
+        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
         unsafe {
             IrqGuard::restore_irq_flags(irq_flags);
         }
         return;
     }
 
-    // SAFETY: next provient de la run queue ou du TCB idle publié pour ce CPU.
+    // SAFETY: next comes from run queue or published idle TCB for this CPU.
     context_switch(current, &mut *next.as_ptr());
-    // SAFETY: restaure le flag IF capturé par IrqGuard à l'entrée de la
-    // section critique ; irq_flags est la valeur RFLAGS sauvée localement, Ring 0.
+    // SAFETY: restores IF flag captured by IrqGuard on entry to
+    // critical section; irq_flags is locally saved RFLAGS, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }
 }
 
-/// Enfile un TCB après réveil depuis WaitQueue.
-/// À appeler depuis `wake_one`/`wake_all` pour que le thread soit reschedule.
+/// Enqueues a TCB after wakeup from WaitQueue.
+/// To be called from `wake_one`/`wake_all` so thread gets rescheduled.
 ///
 /// # Safety
-/// Préemption désactivée requise.
+/// Preemption disabled required.
 #[inline(always)]
 pub unsafe fn wake_enqueue(
     rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,

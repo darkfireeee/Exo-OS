@@ -1,18 +1,18 @@
 // kernel/src/scheduler/policies/cfs.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CFS — Completely Fair Scheduler (Exo-OS Scheduler · Couche 1)
+// CFS — Completely Fair Scheduler (Exo-OS Scheduler · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// CFS implante un scheduling proportionnel : chaque thread reçoit une part
-// du CPU proportionnelle à son poids (basé sur nice/priority).
+// CFS implements proportional scheduling: each thread receives a share
+// of the CPU proportional to its weight (based on nice/priority).
 //
-// Invariant principal : le thread avec le plus petit `vruntime` est toujours
-// choisi en premier. Le vruntime est pondéré pour compenser les différences
-// de priorité (threads plus prioritaires avancent plus lentement).
+// Core invariant: the thread with the smallest `vruntime` is always
+// picked first. vruntime is weighted to compensate for priority
+// differences (higher priority threads advance more slowly).
 //
-// Ce module fournit la logique de décision CFS ; la run queue (min-heap trié
-// par vruntime) est dans core/runqueue.rs.
+// This module provides CFS decision logic; the run queue (min-heap sorted
+// by vruntime) resides in core/runqueue.rs.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::scheduler::core::runqueue::{CFS_MIN_GRANULARITY_US, CFS_TARGET_LATENCY_MS};
@@ -20,15 +20,15 @@ use crate::scheduler::core::task::{SchedPolicy, ThreadControlBlock};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes CFS
+// CFS constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Quantum minimal garanti pour chaque thread même en cas de file longue (ns).
+/// Minimum slice guaranteed to each thread even with a deep queue (ns).
 pub const CFS_MIN_SLICE_NS: u64 = CFS_MIN_GRANULARITY_US * 1000;
-/// Période de latence cible (ns) — time dans laquelle tout thread doit tourner.
+/// Target latency period (ns) — time window within which every thread must run.
 pub const CFS_TARGET_PERIOD_NS: u64 = CFS_TARGET_LATENCY_MS * 1_000_000;
-/// Seuil de wakeup preemption : si le thread sortant a avancé son vruntime de
-/// plus que ce seuil par rapport au min_vruntime, on préempte immédiatement.
+/// Wakeup preemption threshold: if outgoing thread advanced its vruntime by
+/// more than this threshold relative to min_vruntime, preempt immediately.
 pub const CFS_WAKEUP_PREEMPT_NS: u64 = 1_000_000; // 1ms
 
 const _: () = assert!(
@@ -40,22 +40,22 @@ const _: () = assert!(
     "CFS wakeup preemption threshold must fit inside the target period"
 );
 
-/// Compteur global de préemptions CFS (instrumentation).
+/// Global CFS preemption counter (instrumentation).
 pub static CFS_PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
-/// Compteur global de wakeup-preemptions (instrumentation).
-/// BUG-FIX I : correction de la typo (PREMPT → PREEMPT).
+/// Global wakeup-preemption counter (instrumentation).
+/// BUG-FIX I: typo fix (PREMPT → PREEMPT).
 pub static CFS_WAKEUP_PREEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Logique CFS
+// CFS logic
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule le quantum alloué à `tcb` selon le nombre de threads dans la run queue.
+/// Computes timeslice allocated to `tcb` according to number of threads in run queue.
 ///
-/// Formule Linux CFS :
+/// Linux CFS formula:
 ///   slice = max(target_period × weight / total_weight, min_granularity)
 ///
-/// Avec `nr_tasks` threads de même poids :
+/// With `nr_tasks` threads of equal weight:
 ///   slice = target_period / nr_tasks  (≥ min_granularity)
 pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u64) -> u64 {
     if nr_tasks == 0 {
@@ -70,17 +70,17 @@ pub fn timeslice_for(tcb: &ThreadControlBlock, nr_tasks: usize, total_weight: u6
     raw_slice.max(CFS_MIN_SLICE_NS)
 }
 
-/// Vérifie si le thread courant doit être préempté au profit d'un thread plus
-/// léger (à vruntime plus petit) venant de se réveiller.
+/// Checks if current thread should be preempted in favor of a lighter thread
+/// (with smaller vruntime) that just woke up.
 ///
-/// RÈGLE : appelé dans `wakeup_thread()` après réinsertion dans la queue CFS.
-/// Retourne `true` si une préemption est souhaitable.
+/// RULE: called in `wakeup_thread()` after reinsertion into CFS queue.
+/// Returns `true` if preemption is desirable.
 pub fn should_preempt_on_wakeup(
     running: &ThreadControlBlock,
     woken: &ThreadControlBlock,
     _min_vruntime: u64,
 ) -> bool {
-    // Ne préempter que si le thread actuel n'est pas RT.
+    // Only preempt if current thread is not RT.
     if running.priority.is_realtime() {
         return false;
     }
@@ -88,9 +88,9 @@ pub fn should_preempt_on_wakeup(
     let running_vr = running.vruntime.load(Ordering::Relaxed);
     let woken_vr = woken.vruntime.load(Ordering::Relaxed);
 
-    // FIX-VRUNTIME-01 : utiliser wrapping_add pour éviter le panic en debug
-    // et le wrap silencieux en release. Sémantique correcte : préempter si le
-    // thread réveillé a couru significativement MOINS que le thread courant.
+    // FIX-VRUNTIME-01: use wrapping_add to avoid debug panic
+    // and silent release wrap. Correct semantics: preempt if
+    // woken thread has run significantly LESS than current thread.
     let woken_vr_bumped = woken_vr.wrapping_add(CFS_WAKEUP_PREEMPT_NS);
     if woken_vr_bumped < running_vr {
         CFS_WAKEUP_PREEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -99,22 +99,22 @@ pub fn should_preempt_on_wakeup(
     false
 }
 
-/// Normalise le vruntime d'un thread nouvellement enfilé pour éviter qu'il
-/// monopolise le CPU en revenant toujours avec un vruntime très bas.
+/// Normalizes vruntime of a newly enqueued thread to prevent it
+/// from monopolizing CPU by always returning with a very low vruntime.
 ///
-/// Règle CFS : placer le nouveau thread à `max(son_vr, min_vruntime - timeslice/2)`.
+/// CFS rule: place new thread at `max(own_vr, min_vruntime - timeslice/2)`.
 pub fn normalize_vruntime_on_enqueue(tcb: &ThreadControlBlock, min_vruntime: u64, slice_ns: u64) {
     let current_vr = tcb.vruntime.load(Ordering::Relaxed);
     let floor = min_vruntime.saturating_sub(slice_ns / 2);
     if current_vr < floor {
-        // SAFETY: on est l'unique producteur — la run queue a la main sur le TCB.
+        // SAFETY: we are the sole producer — run queue owns the TCB.
         tcb.vruntime.store(floor, Ordering::Relaxed);
     }
 }
 
-/// Appelé par le timer tick pour vérifier si le thread courant a épuisé son quantum.
+/// Called by timer tick to check if current thread has exhausted its timeslice.
 ///
-/// Retourne `true` si le thread doit être préempté.
+/// Returns `true` if thread should be preempted.
 pub fn tick_check_preempt(
     tcb: &ThreadControlBlock,
     elapsed_ns: u64,
@@ -125,7 +125,7 @@ pub fn tick_check_preempt(
         return false;
     }
     if nr_tasks <= 1 {
-        // Seul thread → aucune préemption nécessaire.
+        // Sole thread → no preemption necessary.
         return false;
     }
     if elapsed_ns >= slice_ns {

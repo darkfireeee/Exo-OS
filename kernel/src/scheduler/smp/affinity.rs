@@ -1,7 +1,7 @@
 // kernel/src/scheduler/smp/affinity.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// Affinité CPU — gestion des masques de CPU autorisés pour chaque thread
+// CPU affinity — management of allowed CPU masks for each thread
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::topology::{nr_cpus, MAX_CPUS};
@@ -9,12 +9,12 @@ use crate::scheduler::core::task::CpuId;
 use core::sync::atomic::AtomicU64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CpuMask — masque de CPUs (jusqu'à 256 CPUs sur 4 × u64)
+// CpuMask — CPU mask (up to 256 CPUs across 4 × u64)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MASK_WORDS: usize = 4; // 4 × 64 = 256 bits
 
-/// Masque de CPUs autorisés.
+/// Allowed CPU mask.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CpuSet {
@@ -29,7 +29,7 @@ impl CpuSet {
         bits: [u64::MAX; MASK_WORDS],
     };
 
-    /// Masque vide.
+    /// Empty mask.
     pub const fn empty() -> Self {
         Self::EMPTY
     }
@@ -39,7 +39,7 @@ impl CpuSet {
         Self { bits }
     }
 
-    /// Masque avec tous les CPUs actifs (jusqu'à `nr_cpus()`).
+    /// Mask with all active CPUs (up to `nr_cpus()`).
     pub fn full() -> Self {
         let mut m = Self::empty();
         for cpu in 0..nr_cpus().min(MAX_CPUS) {
@@ -48,7 +48,7 @@ impl CpuSet {
         m
     }
 
-    /// Active le bit du CPU `cpu`.
+    /// Sets bit for CPU `cpu`.
     pub fn set(&mut self, cpu: CpuId) {
         let cpu = cpu.0 as usize;
         if cpu < MAX_CPUS {
@@ -56,7 +56,7 @@ impl CpuSet {
         }
     }
 
-    /// Désactive le bit du CPU `cpu`.
+    /// Clears bit for CPU `cpu`.
     pub fn clear(&mut self, cpu: CpuId) {
         let cpu = cpu.0 as usize;
         if cpu < MAX_CPUS {
@@ -64,7 +64,7 @@ impl CpuSet {
         }
     }
 
-    /// Retourne `true` si le CPU `cpu` est dans le masque.
+    /// Returns `true` if CPU `cpu` is in mask.
     pub fn test(&self, cpu: CpuId) -> bool {
         self.contains(cpu)
     }
@@ -79,7 +79,7 @@ impl CpuSet {
         }
     }
 
-    /// Retourne le premier CPU du masque, ou `None` si le masque est vide.
+    /// Returns first CPU in mask, or `None` if mask is empty.
     pub fn first(&self) -> Option<CpuId> {
         self.first_cpu()
     }
@@ -95,12 +95,12 @@ impl CpuSet {
         None
     }
 
-    /// Nombre de CPUs actifs dans le masque.
+    /// Number of active CPUs in mask.
     pub fn count(&self) -> usize {
         self.bits.iter().map(|w| w.count_ones() as usize).sum()
     }
 
-    /// Intersection (ET logique) de deux masques.
+    /// Intersection (bitwise AND) of two masks.
     pub fn and(&self, other: &Self) -> Self {
         let mut out = Self::empty();
         for i in 0..MASK_WORDS {
@@ -109,12 +109,12 @@ impl CpuSet {
         out
     }
 
-    /// Retourne `true` si le masque est vide.
+    /// Returns `true` if mask is empty.
     pub fn is_empty(&self) -> bool {
         self.bits.iter().all(|&w| w == 0)
     }
 
-    /// Retourne un masque avec un seul CPU autorisé.
+    /// Returns a mask with a single allowed CPU.
     pub fn single(cpu: CpuId) -> Self {
         let mut out = Self::EMPTY;
         out.set(cpu);
@@ -130,22 +130,22 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Vérification d'affinité
+// Affinity verification
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alias de compatibilité pour les call-sites migrés progressivement.
+/// Compatibility alias for progressively migrated call-sites.
 pub fn cpu_allowed(affinity: &CpuSet, cpu: CpuId) -> bool {
     affinity.contains(cpu)
 }
 
-/// Retourne un masque d'affinité stable depuis un CpuMask.
+/// Returns stable affinity mask from a CpuMask.
 pub fn affinity_mask_from_cpu_mask(mask: &CpuMask) -> CpuSet {
     *mask
 }
 
-/// Vérifie qu'au moins un CPU actif est dans l'affinité du thread.
-/// Retourne l'affinité inchangée si valide, ou un masque avec TOUS les CPUs
-/// si le masque résultant est vide (protection anti-deadlock).
+/// Verifies that at least one active CPU is in thread affinity.
+/// Returns affinity unchanged if valid, or a mask with ALL CPUs
+/// if resulting mask is empty (anti-deadlock protection).
 pub fn sanitize_affinity(affinity: CpuSet) -> CpuSet {
     if affinity.is_empty() {
         CpuSet::full()
@@ -154,5 +154,5 @@ pub fn sanitize_affinity(affinity: CpuSet) -> CpuSet {
     }
 }
 
-/// Métriques.
+/// Metrics.
 pub static AFFINITY_VIOLATIONS: AtomicU64 = AtomicU64::new(0);

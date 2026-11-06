@@ -1,16 +1,16 @@
 // kernel/src/scheduler/fpu/save_restore.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// XSAVE/XRSTOR — Sauvegarde/Restauration FPU (Exo-OS Scheduler · Couche 1)
+// XSAVE/XRSTOR — FPU Save/Restore (Exo-OS Scheduler · Layer 1)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE FPU-01 (V7-C-02 + GI-02) :
-//   Ce module gère LA LOGIQUE — les instructions ASM brutes (xsave/xrstor/fxsave)
-//   sont dans arch/x86_64/cpu/fpu.rs. NE PAS dupliquer les instructions ici.
-//   Les appels vers arch/ sont via FFI extern "C".
+// RULE FPU-01 (V7-C-02 + GI-02):
+//   This module manages THE LOGIC — raw ASM instructions (xsave/xrstor/fxsave)
+//   reside in arch/x86_64/cpu/fpu.rs. DO NOT duplicate instructions here.
+//   Calls to arch/ are via extern "C" FFI.
 //
-//   MXCSR et x87 FCW sont gérés EXCLUSIVEMENT par XSAVE/XRSTOR ici.
-//   switch_asm.s ne touche PAS MXCSR ni FCW (V7-C-02 — kernel compilé sans SSE).
+//   MXCSR and x87 FCW are handled EXCLUSIVELY by XSAVE/XRSTOR here.
+//   switch_asm.s does NOT touch MXCSR or FCW (V7-C-02 — kernel compiled without SSE).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::state::{FpuState, XSAVE_AREA_SIZE};
@@ -18,7 +18,7 @@ use crate::scheduler::core::task::ThreadControlBlock;
 use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFI vers arch/x86_64/cpu/fpu.rs (instructions ASM brutes)
+// FFI to arch/x86_64/cpu/fpu.rs (raw ASM instructions)
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" {
@@ -31,39 +31,39 @@ extern "C" {
     fn arch_has_avx() -> u8;
 }
 
-/// Cache statique de la disponibilité XSAVE (lu une seule fois au boot).
+/// Static cache of XSAVE availability (read once at boot).
 static HAS_XSAVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Initialise le module save_restore (détecte XSAVE, appelle detect_xsave_size).
-/// Appelé depuis scheduler::init(), step 3.
+/// Initializes save_restore module (detects XSAVE, calls detect_xsave_size).
+/// Called from scheduler::init(), step 3.
 pub fn init() {
     super::state::detect_xsave_size();
-    // SAFETY: arch_has_xsave() lit CPUID, aucun effet de bord.
+    // SAFETY: arch_has_xsave() reads CPUID, no side effects.
     let has = unsafe { arch_has_xsave() != 0 };
     HAS_XSAVE.store(has, Ordering::Release);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sauvegarder l'état FPU du thread courant
+// Save FPU state of current thread
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sauvegarde l'état FPU du thread courant dans son `FpuState`.
+/// Saves FPU state of current thread into its `FpuState`.
 ///
-/// Appelé depuis `switch.rs` (step 1 avant context_switch_asm) lorsque
+/// Called from `switch.rs` (step 1 before context_switch_asm) when
 /// `prev.fpu_loaded() == true`.
 ///
 /// # Safety
-/// - `tcb.fpu_state_ptr` doit pointer vers un `FpuState` valide, aligné 64 bytes.
-/// - La FPU doit être chargée dans les registres physiques (FPU_LOADED flag).
+/// - `tcb.fpu_state_ptr` must point to a valid `FpuState`, 64-byte aligned.
+/// - FPU must be loaded in physical registers (FPU_LOADED flag).
 pub unsafe fn xsave_current(tcb: &mut ThreadControlBlock) {
     let state_ptr = tcb.fpu_state_ptr as *mut FpuState;
     if state_ptr.is_null() {
-        // FpuState pas encore allouée — rien à sauvegarder.
-        // BUG-FIX N : marquer FPU comme non chargée même dans ce cas.
-        // Sans ce store, prev.fpu_loaded reste `true` après le context switch,
-        // créant une incohérence visible lors d'un éventuel accès concurrent
-        // (ex. migration). Le flag est corrigé par context_switch step-4 quand
-        // ce thread est reprogrammé comme `next`, mais l'expliciter ici est plus sûr.
+        // FpuState not yet allocated — nothing to save.
+        // BUG-FIX N: mark FPU as not loaded even in this case.
+        // Without this store, prev.fpu_loaded remains `true` after context switch,
+        // creating visible inconsistency during potential concurrent access
+        // (e.g. migration). The flag is corrected by context_switch step-4 when
+        // this thread is rescheduled as `next`, but being explicit here is safer.
         tcb.set_fpu_loaded(false);
         return;
     }
@@ -72,8 +72,8 @@ pub unsafe fn xsave_current(tcb: &mut ThreadControlBlock) {
     state.refresh_size();
     state.generation = state.generation.wrapping_add(1);
 
-    // SAFETY: state.as_mut_ptr() est aligné 64 bytes (garanti par FpuState::repr(align(64))).
-    // T7-002 FIX: Utiliser le masque XCR0 réel supporté pour éviter un #GP matériel.
+    // SAFETY: state.as_mut_ptr() is 64-byte aligned (guaranteed by FpuState::repr(align(64))).
+    // T7-002 FIX: Use actual supported XCR0 mask to avoid hardware #GP.
     if HAS_XSAVE.load(Ordering::Relaxed) {
         let xcr0 = crate::arch::x86_64::cpu::fpu::read_xcr0();
         arch_xsave64(state.as_mut_ptr(), xcr0);
@@ -81,22 +81,22 @@ pub unsafe fn xsave_current(tcb: &mut ThreadControlBlock) {
         arch_fxsave64(state.as_mut_ptr());
     }
 
-    // Marquer la FPU comme non chargée dans le TCB.
+    // Mark FPU as not loaded in TCB.
     tcb.set_fpu_loaded(false);
 }
 
-/// Restaure l'état FPU d'un thread dans les registres physiques.
+/// Restores FPU state of a thread into physical registers.
 ///
-/// Appelé depuis le handler #NM (Device Not Available) lorsque
-/// `fpu_loaded() == false` et que le thread utilise une instruction FP.
+/// Called from #NM handler (Device Not Available) when
+/// `fpu_loaded() == false` and the thread executes an FP instruction.
 ///
 /// # Safety
-/// - `tcb.fpu_state_ptr` doit pointer vers un `FpuState` valide.
-/// - Appelé avec préemption désactivée (pour éviter migration entre XRSTOR et FPU_LOADED).
+/// - `tcb.fpu_state_ptr` must point to a valid `FpuState`.
+/// - Called with preemption disabled (to avoid migration between XRSTOR and FPU_LOADED).
 pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
     let state_ptr = tcb.fpu_state_ptr as *mut FpuState;
     if state_ptr.is_null() {
-        // Ce thread n'a jamais sauvegardé de FPU → charger l'état initial.
+        // This thread never saved FPU state → load initial state.
         init_fpu_registers();
         tcb.set_fpu_loaded(true);
         return;
@@ -104,7 +104,7 @@ pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
 
     let state = &*state_ptr;
 
-    // SAFETY: state.as_ptr() est aligné 64 bytes. T7-002 FIX: masque XCR0 valide pour éviter #GP.
+    // SAFETY: state.as_ptr() is 64-byte aligned. T7-002 FIX: valid XCR0 mask to avoid #GP.
     if HAS_XSAVE.load(Ordering::Relaxed) {
         let xcr0 = crate::arch::x86_64::cpu::fpu::read_xcr0();
         arch_xrstor64(state.as_ptr(), xcr0);
@@ -115,57 +115,57 @@ pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
     tcb.set_fpu_loaded(true);
 }
 
-/// Initialise les registres FPU à leur état par défaut (FINIT + LDMXCSR).
+/// Initializes FPU registers to their default state (FINIT + LDMXCSR).
 unsafe fn init_fpu_registers() {
     let mxcsr_val: u32 = 0x1F80;
-    // SAFETY: instructions FPU standard disponibles sur tout x86_64.
+    // SAFETY: standard FPU instructions available on all x86_64.
     core::arch::asm!(
         "fninit",
         "ldmxcsr [{mxcsr}]",
-        mxcsr = in(reg) &mxcsr_val,  // Mode arrondi par défaut, masques actifs
+        mxcsr = in(reg) &mxcsr_val,  // Default rounding mode, masks active
         options(nostack),
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Allocation de FpuState pour un thread (première utilisation FPU)
+// FpuState allocation for a thread (first FPU usage)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alloue une zone FpuState pour le thread `tcb` lors de sa première
-/// utilisation FPU (#NM quand fpu_state_ptr == NULL).
+/// Allocates an FpuState area for thread `tcb` upon its first
+/// FPU usage (#NM when fpu_state_ptr == NULL).
 ///
-/// Retourne `true` si l'allocation a réussi.
+/// Returns `true` if allocation succeeded.
 ///
-/// RÈGLE : Utilise l'allocateur heap kernel (global_allocator). Ne peut PAS
-/// être appelé depuis un contexte IN_RECLAIM (deadlock potentiel).
+/// RULE: Uses kernel heap allocator (global_allocator). CANNOT
+/// be called from an IN_RECLAIM context (potential deadlock).
 ///
 /// # Safety
-/// Modifie les pointeurs FPU internes de `tcb`. Ne doit pas être appelé en concurrence
-/// sur le même TCB.
+/// Modifies internal FPU pointers of `tcb`. Must not be called concurrently
+/// on the same TCB.
 pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     use core::alloc::Layout;
 
-    // BUG-FIX F : interdire les allocations depuis un contexte IN_RECLAIM.
-    // Appeler l'allocateur heap depuis IN_RECLAIM peut créer un deadlock si
-    // l'allocateur lui-même attend l'EmergencyPool (RÈGLE FPU-03).
+    // BUG-FIX F: forbid allocations from an IN_RECLAIM context.
+    // Calling heap allocator from IN_RECLAIM can cause deadlock if
+    // the allocator itself waits on EmergencyPool (RULE FPU-03).
     if tcb.sched_state.load(Ordering::Acquire) & crate::scheduler::core::task::SCHED_IN_RECLAIM_BIT
         != 0
     {
         return false;
     }
 
-    // Layout : 2688 bytes, aligné 64 bytes.
+    // Layout: 2688 bytes, 64-byte aligned.
     let layout = Layout::new::<FpuState>();
 
-    // Utilise l'API Rust standard (alloc::alloc::alloc) qui délègue au
-    // #[global_allocator] KernelAllocator — évite l'appel FFI direct à
-    // __rust_alloc qui n'est pas résolu sur cible bare-metal sans usage alloc.
+    // Uses standard Rust API (alloc::alloc::alloc) which delegates to
+    // #[global_allocator] KernelAllocator — avoids direct FFI call to
+    // __rust_alloc which is unresolved on bare-metal target without alloc usage.
     let ptr = alloc::alloc::alloc(layout);
     if ptr.is_null() {
         return false;
     }
 
-    // Initialiser la zone FpuState à l'état par défaut x87/SSE.
+    // Initialize FpuState area to x87/SSE default state.
     let fpu = &mut *(ptr as *mut FpuState);
     core::ptr::write(fpu, FpuState::new());
     fpu.active_size = XSAVE_AREA_SIZE.load(Ordering::Relaxed);
@@ -174,10 +174,10 @@ pub unsafe fn alloc_fpu_state(tcb: &mut ThreadControlBlock) -> bool {
     true
 }
 
-/// Libère la zone FPU associée à un thread en fin de vie.
+/// Frees FPU area associated with a terminating thread.
 ///
 /// # Safety
-/// Le TCB ne doit plus pouvoir être planifié après cet appel.
+/// TCB must not be schedulable after this call.
 pub unsafe fn free_fpu_state(tcb: &mut ThreadControlBlock) {
     use core::alloc::Layout;
 
