@@ -1,20 +1,20 @@
-// ipc/rpc/raw.rs — call_raw : appel RPC synchrone depuis la couche syscall
+// ipc/rpc/raw.rs — call_raw: synchronous RPC call from syscall layer
 //
-// `call_raw` encapsule un échange requête/réponse synchrone en utilisant
-// deux mailboxes raw (serveur + répondeur éphémère).
+// `call_raw` encapsulates a synchronous request/response exchange using
+// two raw mailboxes (server + ephemeral responder).
 //
-// Protocole :
-//   1. Alloue un EndpointId de réponse éphémère (cookie unique).
-//   2. Préfixe le message avec un en-tête `RawCallHeader` contenant ce cookie.
-//   3. Envoie vers la mailbox du serveur (`server_ep`).
-//   4. Attend le message de retour sur la mailbox éphémère.
-//   5. Libère la mailbox éphémère et retourne le payload de réponse.
+// Protocol:
+//   1. Allocates an ephemeral reply EndpointId (unique cookie).
+//   2. Prefixes message with a `RawCallHeader` header containing this cookie.
+//   3. Sends to server mailbox (`server_ep`).
+//   4. Awaits return message on the ephemeral mailbox.
+//   5. Releases ephemeral mailbox and returns reply payload.
 //
-// Cette approche est synchrone et no-alloc. L'attente rend la main au
-// scheduler afin que le serveur userspace puisse traiter la requête.
+// This approach is synchronous and no-alloc. Waiting yields back to the
+// scheduler so userspace server can process the request.
 //
-// RÈGLE IPC-CALL-01 : call_raw est TOUJOURS synchrone (pas de callback).
-// RÈGLE IPC-CALL-02 : les mailboxes éphémères sont libérées après chaque appel.
+// RULE IPC-CALL-01: call_raw is ALWAYS synchronous (no callbacks).
+// RULE IPC-CALL-02: ephemeral mailboxes are released after each call.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -26,7 +26,7 @@ const RAW_NOWAIT: u32 = 0x0001;
 const CALL_TIMEOUT_NS: u64 = 300_000_000_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteur de cookies — unique par appel, jamais réutilisé dans la session.
+// Cookie counter — unique per call, never reused in session.
 // ─────────────────────────────────────────────────────────────────────────────
 
 static CALL_COOKIE: AtomicU64 = AtomicU64::new(1);
@@ -37,23 +37,23 @@ fn next_cookie() -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RawCallHeader — en-tête préfixé dans chaque message call_raw
+// RawCallHeader — header prefixed to each call_raw message
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Magic pour valider l'en-tête.
+/// Magic to validate header.
 pub const CALL_MAGIC: u32 = 0x4558_4F43; // "EXOC"
 
-/// En-tête préfixé au payload d'un appel raw.
+/// Header prefixed to raw call payload.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct RawCallHeader {
-    /// Magic de validation.
+    /// Validation magic.
     magic: u32,
-    /// Longueur du payload qui suit (sans cet en-tête).
+    /// Length of trailing payload (without this header).
     payload_len: u32,
-    /// Cookie de corrélation (unique par appel).
+    /// Correlation cookie (unique per call).
     cookie: u64,
-    /// Endpoint de réponse éphémère.
+    /// Ephemeral reply endpoint.
     reply_ep: u64,
 }
 
@@ -61,14 +61,14 @@ const CALL_HEADER_SIZE: usize = core::mem::size_of::<RawCallHeader>();
 pub const MAX_CALL_PAYLOAD: usize = MAX_MSG_SIZE - CALL_HEADER_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EndpointId éphémère — basé sur le cookie pour unicité
+// Ephemeral EndpointId — based on cookie for uniqueness
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Construit un EndpointId éphémère depuis un cookie.
-/// On utilise un namespace private (bit 63 = 1) pour éviter les collisions
-/// avec les endpoints utilisateur.
+/// Constructs an ephemeral EndpointId from a cookie.
+/// Uses private namespace (bit 63 = 1) to avoid collisions
+/// with user endpoints.
 fn ephemeral_ep(cookie: u64) -> Option<EndpointId> {
-    // Bit 63 = 1 → namespace "réponse éphémère kernel"
+    // Bit 63 = 1 -> namespace "kernel ephemeral reply"
     let id = (1u64 << 63) | (cookie & 0x7FFF_FFFF_FFFF_FFFF);
     EndpointId::new(id)
 }
@@ -163,18 +163,18 @@ fn recv_reply(
 // call_raw
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Appel RPC synchrone vers `server_ep`.
+/// Synchronous RPC call to `server_ep`.
 ///
-/// - `msg`      : payload de la requête (≤ `MAX_CALL_PAYLOAD` bytes)
-/// - `reply_buf`: buffer pour le payload de réponse
+/// - `msg`      : request payload (<= `MAX_CALL_PAYLOAD` bytes)
+/// - `reply_buf`: buffer for reply payload
 ///
-/// Retourne le nombre d'octets de réponse, ou une `IpcError`.
+/// Returns number of reply bytes, or an `IpcError`.
 ///
-/// # Erreurs
+/// # Errors
 /// - `MessageTooLarge`  : `msg.len()` > MAX_CALL_PAYLOAD
-/// - `OutOfResources`   : impossible d'allouer une mailbox éphémère
-/// - `NotFound`         : serveur introuvable (mailbox non ouverte)
-/// - `Timeout`          : le serveur n'a pas répondu dans le délai
+/// - `OutOfResources`   : unable to allocate an ephemeral mailbox
+/// - `NotFound`         : server not found (mailbox not open)
+/// - `Timeout`          : server did not reply within deadline
 pub fn call_raw(
     server_ep: EndpointId,
     msg: &[u8],
@@ -184,7 +184,7 @@ pub fn call_raw(
         return Err(IpcError::MessageTooLarge);
     }
 
-    // 1. Allouer un cookie et un endpoint de réponse éphémère.
+    // 1. Allocate cookie and ephemeral reply endpoint.
     let cookie = next_cookie();
     let reply_ep = ephemeral_ep(cookie).ok_or(IpcError::InternalError)?;
 
@@ -192,7 +192,7 @@ pub fn call_raw(
         return Err(IpcError::OutOfResources);
     }
 
-    // 2. Construire le message : en-tête + payload.
+    // 2. Build message: header + payload.
     let header = RawCallHeader {
         magic: CALL_MAGIC,
         payload_len: msg.len() as u32,
@@ -201,14 +201,14 @@ pub fn call_raw(
     };
 
     let mut call_buf = [0u8; MAX_MSG_SIZE];
-    // Sérialiser l'en-tête (little-endian natif, repr(C)).
-    // SAFETY: RawCallHeader est repr(C) et call_buf est suffisamment grand.
+    // Serialize header (native little-endian, repr(C)).
+    // SAFETY: RawCallHeader is repr(C) and call_buf is large enough.
     unsafe {
         core::ptr::write_unaligned(call_buf.as_mut_ptr() as *mut RawCallHeader, header);
     }
     call_buf[CALL_HEADER_SIZE..CALL_HEADER_SIZE + msg.len()].copy_from_slice(msg);
 
-    // 3. Envoyer vers la mailbox du serveur.
+    // 3. Send to server mailbox.
     let deadline_ns = monotonic_ns().saturating_add(CALL_TIMEOUT_NS);
     let send_result = send_request(
         server_ep,
@@ -220,11 +220,11 @@ pub fn call_raw(
         return Err(e);
     }
 
-    // 4. Attendre la réponse sur la mailbox éphémère.
+    // 4. Await reply on ephemeral mailbox.
     let mut raw_reply = [0u8; MAX_MSG_SIZE];
     let recv_result = recv_reply(reply_ep, &mut raw_reply, deadline_ns);
 
-    // 5. Libérer la mailbox éphémère.
+    // 5. Release ephemeral mailbox.
     channel_raw::mailbox_close(reply_ep);
 
     let n = recv_result?;
@@ -232,8 +232,8 @@ pub fn call_raw(
         return Err(IpcError::ProtocolError);
     }
 
-    // Vérifier l'en-tête de réponse.
-    // SAFETY: n >= CALL_HEADER_SIZE, raw_reply est aligné.
+    // Verify reply header.
+    // SAFETY: n >= CALL_HEADER_SIZE, raw_reply is aligned.
     let reply_hdr: RawCallHeader =
         unsafe { core::ptr::read_unaligned(raw_reply.as_ptr() as *const RawCallHeader) };
     if reply_hdr.magic != CALL_MAGIC || reply_hdr.cookie != cookie {
@@ -248,22 +248,22 @@ pub fn call_raw(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers serveur : parser / construire les réponses
+// Server helpers: parse / construct replies
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat du parsing d'un message reçu via la mailbox d'un serveur.
+/// Result of parsing a message received via a server's mailbox.
 pub struct CallRequest<'a> {
-    /// Payload de la requête (sans l'en-tête).
+    /// Request payload (without header).
     pub payload: &'a [u8],
-    /// Cookie de corrélation (à copier dans la réponse).
+    /// Correlation cookie (to copy into reply).
     pub cookie: u64,
-    /// Endpoint de réponse (extrait des derniers octets).
+    /// Reply endpoint (extracted from trailing bytes).
     pub reply_ep: Option<EndpointId>,
 }
 
-/// Parse un message brut reçu (côté serveur).
+/// Parses a received raw message (server side).
 ///
-/// Retourne `None` si `buf` n'est pas un message call_raw valide.
+/// Returns `None` if `buf` is not a valid call_raw message.
 pub fn parse_call<'a>(buf: &'a [u8]) -> Option<CallRequest<'a>> {
     if buf.len() < CALL_HEADER_SIZE {
         return None;
@@ -289,7 +289,7 @@ pub fn parse_call<'a>(buf: &'a [u8]) -> Option<CallRequest<'a>> {
     })
 }
 
-/// Construit et envoie une réponse vers `reply_ep` (côté serveur).
+/// Constructs and sends a reply towards `reply_ep` (server side).
 pub fn send_reply(reply_ep: EndpointId, cookie: u64, reply_data: &[u8]) -> Result<(), IpcError> {
     if reply_data.len() > MAX_CALL_PAYLOAD {
         return Err(IpcError::MessageTooLarge);
@@ -303,7 +303,7 @@ pub fn send_reply(reply_ep: EndpointId, cookie: u64, reply_data: &[u8]) -> Resul
     };
 
     let mut buf = [0u8; MAX_MSG_SIZE];
-    // SAFETY: repr(C) + buf assez grand.
+    // SAFETY: repr(C) + buf large enough.
     unsafe {
         core::ptr::write_unaligned(buf.as_mut_ptr() as *mut RawCallHeader, header);
     }
@@ -326,7 +326,7 @@ mod tests {
             reply_ep: reply_ep.get(),
         };
         let mut buf = [0u8; CALL_HEADER_SIZE + 4];
-        // SAFETY: `buf` est assez grand pour contenir l'en-tête `repr(C)`.
+        // SAFETY: `buf` is large enough to hold `repr(C)` header.
         unsafe {
             core::ptr::write_unaligned(buf.as_mut_ptr() as *mut RawCallHeader, header);
         }

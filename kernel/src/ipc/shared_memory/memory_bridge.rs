@@ -1,8 +1,8 @@
-// ipc/shared_memory/memory_bridge.rs — Pont IPC -> memory pour map_shm_into_process.
+// ipc/shared_memory/memory_bridge.rs — IPC -> memory bridge for map_shm_into_process.
 //
-// La couche memory ne doit pas importer les tables IPC. Ce module expose les
-// callbacks inverses: IPC garde ses descripteurs et memory reçoit seulement les
-// informations nécessaires au mappage virtuel.
+// The memory layer must not import IPC tables. This module exposes the
+// reverse callbacks: IPC retains its descriptors and memory receives only the
+// information required for virtual mapping.
 
 use core::sync::atomic::Ordering;
 

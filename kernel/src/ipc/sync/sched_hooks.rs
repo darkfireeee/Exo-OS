@@ -1,23 +1,23 @@
 // kernel/src/ipc/sync/sched_hooks.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// SCHED HOOKS — Points d'injection scheduler pour la synchronisation IPC
-// (Exo-OS · IPC Couche 2a)
+// SCHED HOOKS — Scheduler injection points for IPC synchronization
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module centralise l'intégration scheduler → IPC pour le blocage réel
-// des threads. Il remplace le spin-poll omniprésent dans les primitives IPC
-// (futex, wait_queue, canal synchrone, event, barrier).
+// This module centralizes scheduler -> IPC integration for actual thread
+// blocking. It replaces omnipresent spin-polling in IPC primitives
+// (futex, wait_queue, synchronous channel, event, barrier).
 //
-// ARCHITECTURE :
-//   BLOCK_HOOK   : fn() injectée par scheduler/ — bloque le thread courant
-//   wake_thread  : appelle directement scheduler/ (ipc/ peut l'importer)
-//   SLEEP_REGISTRY : table tid → *TCB pour retrouver les TCBs en attente IPC
+// ARCHITECTURE:
+//   BLOCK_HOOK   : fn() injected by scheduler/ — blocks current thread
+//   wake_thread  : calls scheduler/ directly (ipc/ may import it)
+//   SLEEP_REGISTRY : tid -> *TCB table to look up TCBs waiting on IPC
 //
-// RÈGLE : install_block_hook() est appelé depuis la séquence d'init noyau
-//         (après scheduler::init), pas depuis le scheduler lui-même.
+// RULE: install_block_hook() is called from the kernel init sequence
+//       (after scheduler::init), not from the scheduler itself.
 //
-// COUCHE : ipc/ dépend de scheduler/ (autorisé — voir DOC5).
+// LAYER: ipc/ depends on scheduler/ (authorized — see DOC5).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::ptr::NonNull;
@@ -30,26 +30,26 @@ use crate::scheduler::core::task::{TaskState, ThreadControlBlock};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hook de blocage — fourni par le scheduler au boot
+// Blocking hook — provided by scheduler at boot
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type du hook : suspend le thread courant, retourne après réveil.
+/// Hook type: suspends the current thread, returns after wakeup.
 pub type BlockFn = unsafe fn();
 
-/// Hook injecté par scheduler::init(). None = spin-poll (avant init).
+/// Hook injected by scheduler::init(). None = spin-poll (before init).
 static BLOCK_HOOK: SpinLock<Option<BlockFn>> = SpinLock::new(None);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registre des threads IPC endormis (tid → *TCB)
+// Registry of sleeping IPC threads (tid -> *TCB)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de threads IPC pouvant dormir simultanément.
+/// Maximum number of IPC threads that can sleep simultaneously.
 pub const MAX_SLEEPING_IPC: usize = 128;
 
 #[repr(C)]
 struct SleepEntry {
     tid: u64,
-    tcb_ptr: usize, // *mut ThreadControlBlock encodé en usize
+    tcb_ptr: usize, // *mut ThreadControlBlock encoded as usize
 }
 
 impl SleepEntry {
@@ -74,7 +74,7 @@ enum RegisterResult {
     Full,
 }
 
-// SAFETY: accès protégé par SpinLock.
+// SAFETY: access protected by SpinLock.
 unsafe impl Send for SleepRegistry {}
 
 impl SleepRegistry {
@@ -85,7 +85,7 @@ impl SleepRegistry {
         }
     }
 
-    /// Enregistre (tid, tcb), ou consomme un réveil anticipé.
+    /// Registers (tid, tcb), or consumes an early wakeup.
     fn register(&mut self, tid: u64, tcb: *mut ThreadControlBlock) -> RegisterResult {
         for e in self.entries.iter_mut() {
             if e.tid == tid && e.is_pending_wake() {
@@ -103,7 +103,7 @@ impl SleepRegistry {
         RegisterResult::Full
     }
 
-    /// Désenregistre et retourne le TCB pour `tid`, ou null si absent.
+    /// Unregisters and returns the TCB for `tid`, or null if absent.
     fn pop(&mut self, tid: u64) -> *mut ThreadControlBlock {
         for e in self.entries.iter_mut() {
             if e.tid == tid && !e.is_free() && !e.is_pending_wake() {
@@ -134,48 +134,48 @@ impl SleepRegistry {
 static SLEEP_REGISTRY: SpinLock<SleepRegistry> = SpinLock::new(SleepRegistry::new());
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Installe le hook de blocage depuis le scheduler.
+/// Installs the blocking hook from the scheduler.
 ///
-/// Appelé UNE SEULE FOIS durant la séquence d'initialisation noyau,
-/// après `scheduler::init()`, avant tout usage IPC bloquant.
+/// Called ONCE during the kernel initialization sequence,
+/// after `scheduler::init()`, before any blocking IPC usage.
 pub fn install_block_hook(block: BlockFn) {
     *BLOCK_HOOK.lock() = Some(block);
 }
 
-/// Retourne `true` si le hook de blocage est installé.
+/// Returns `true` if the blocking hook is installed.
 #[inline]
 pub fn hooks_installed() -> bool {
     BLOCK_HOOK.lock().is_some()
 }
 
-/// Retourne le ThreadId du thread courant (0 si inconnu).
+/// Returns the ThreadId of the current thread (0 if unknown).
 ///
-/// Utilisé par les canaux synchrones pour enregistrer leur TID avant blocage.
+/// Used by synchronous channels to record their TID before blocking.
 #[inline]
 pub fn current_tid() -> u64 {
     let tcb_ptr = current_thread_raw();
     if tcb_ptr.is_null() {
         return 0;
     }
-    // SAFETY: tcb_ptr non-null (vérifié ci-dessus); pointe dans le pool statique de TCBs.
+    // SAFETY: tcb_ptr non-null (checked above); points into static pool of TCBs.
     unsafe { (*tcb_ptr).tid }
 }
 
-/// Bloque le thread courant identifié par `tid`.
+/// Blocks the current thread identified by `tid`.
 ///
-/// Enregistre le couple (tid, tcb) dans SLEEP_REGISTRY AVANT de bloquer,
-/// ce qui permet à `wake_thread(tid)` de retrouver le TCB.
+/// Registers the (tid, tcb) pair in SLEEP_REGISTRY BEFORE blocking,
+/// allowing `wake_thread(tid)` to find the TCB.
 ///
-/// Après réveil (par `wake_thread`), sort du registre et retourne.
-/// Si BLOCK_HOOK n'est pas installé, effectue un spin court (avant scheduler init).
+/// After wakeup (by `wake_thread`), removes from registry and returns.
+/// If BLOCK_HOOK is not installed, performs a short spin (before scheduler init).
 ///
 /// # Safety
-/// - Le thread doit être dans une file d'attente IPC (IpcWaiter actif, futex waiter, etc.)
-/// - L'appelant doit vérifier le drapeau `woken` AVANT d'appeler cette fonction
-///   pour éviter un blocage si le réveil a déjà eu lieu.
+/// - The thread must be in an IPC wait queue (active IpcWaiter, futex waiter, etc.)
+/// - The caller must check the `woken` flag BEFORE calling this function
+///   to avoid blocking if wakeup already occurred.
 pub unsafe fn block_current(tid: u64) {
     let tcb_ptr = current_thread_raw();
 
@@ -205,34 +205,34 @@ pub unsafe fn block_current(tid: u64) {
         }
     }
 
-    // FIX-BLOCKHOOK (deadlock IPC) : copier la fonction de blocage et relâcher
-    // le verrou BLOCK_HOOK AVANT de bloquer.
+    // FIX-BLOCKHOOK (IPC deadlock): copy blocking function and release
+    // the BLOCK_HOOK lock BEFORE blocking.
     //
-    // L'ancien code `if let Some(block_fn) = *BLOCK_HOOK.lock() { block_fn() }`
-    // gardait le SpinLockGuard vivant pendant TOUT le corps du `if let` — donc
-    // À TRAVERS le context switch effectué par block_fn(). Conséquences :
-    //   1. Tout autre thread appelant block_current() (ou hooks_installed())
-    //      pendant ce temps spinne à l'infini → deadlock dès que DEUX threads
-    //      dorment en IPC (vfs_server + tty_server au boot du shell).
-    //   2. Le PreemptGuard porté par le guard violait le contrat
-    //      `PreemptGuard::depth() == 0` de block_current_thread() (panic en
-    //      build debug).
+    // Old code `if let Some(block_fn) = *BLOCK_HOOK.lock() { block_fn() }`
+    // kept the SpinLockGuard alive during the ENTIRE body of `if let` — thus
+    // ACROSS the context switch performed by block_fn(). Consequences:
+    //   1. Any other thread calling block_current() (or hooks_installed())
+    //      meanwhile spun indefinitely -> deadlock as soon as TWO threads
+    //      sleep in IPC (vfs_server + tty_server during shell boot).
+    //   2. The PreemptGuard held by the guard violated the contract
+    //      `PreemptGuard::depth() == 0` of block_current_thread() (panic in
+    //      debug build).
     let block_fn_opt = {
         let guard = BLOCK_HOOK.lock();
         match *guard {
             Some(f) => Some(f),
             None => None,
         }
-    }; // ← guard BLOCK_HOOK relâché ici, AVANT le blocage.
+    }; // ← BLOCK_HOOK guard released here, BEFORE blocking.
 
     if let Some(block_fn) = block_fn_opt {
         block_fn();
-        // Après réveil : désenregistrer si pas encore fait par wake_thread.
+        // After wakeup: unregister if not yet done by wake_thread.
         if !tcb_ptr.is_null() {
             SLEEP_REGISTRY.lock().pop(tid);
         }
     } else {
-        // Avant init scheduler : spin court (~10 µs à 3 GHz).
+        // Before scheduler init: short spin (~10 us at 3 GHz).
         for _ in 0..10_000 {
             core::hint::spin_loop();
         }
@@ -243,11 +243,11 @@ pub unsafe fn block_current(tid: u64) {
     }
 }
 
-/// Réveille le thread identifié par `tid`.
+/// Wakes the thread identified by `tid`.
 ///
-/// Trouve le TCB via SLEEP_REGISTRY, tente la transition TaskState::Sleeping →
-/// Runnable, et l'enfile dans la run queue de son CPU.
-/// No-op si le thread n'est pas enregistré (réveil anticipé ou appelé deux fois).
+/// Finds TCB via SLEEP_REGISTRY, attempts TaskState::Sleeping ->
+/// Runnable transition, and enqueues it into the run queue of its CPU.
+/// No-op if the thread is not registered (early wakeup or called twice).
 pub fn wake_thread(tid: u64) {
     let tcb_ptr = {
         let mut reg = SLEEP_REGISTRY.lock();
@@ -259,16 +259,16 @@ pub fn wake_thread(tid: u64) {
         reg.mark_pending_wake(tid);
         return;
     }
-    // SAFETY: tcb_ptr non-null (testé ci-dessus); TCB dans pool statique, non libéré pendant l'exécution.
+    // SAFETY: tcb_ptr non-null (tested above); TCB in static pool, not freed during execution.
     unsafe {
         let tcb = &mut *tcb_ptr;
         let cpu_id = tcb.current_cpu();
         if (cpu_id.0 as usize) < MAX_CPUS {
             let _irq = IrqGuard::new();
             let rq = run_queue(cpu_id);
-            // CAS Sleeping → Runnable protège contre les doubles-réveils.
+            // CAS Sleeping -> Runnable protects against double wakeups.
             if tcb.try_transition(TaskState::Sleeping, TaskState::Runnable) {
-                // SAFETY: tcb_ptr est valide (vit dans le pool statique de TCBs).
+                // SAFETY: tcb_ptr is valid (lives in static pool of TCBs).
                 rq.enqueue(NonNull::new_unchecked(tcb_ptr));
             }
         }

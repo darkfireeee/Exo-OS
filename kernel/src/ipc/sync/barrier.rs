@@ -1,16 +1,16 @@
-// ipc/sync/barrier.rs — Barrière de synchronisation IPC pour Exo-OS
+// ipc/sync/barrier.rs — IPC synchronization barrier for Exo-OS
 //
-// Ce module implémente une barrière cyclique (reusable barrier) pour N threads.
-// Chaque participant appelle `arrive_and_wait()` ; tous sont bloqués jusqu'à
-// ce que les N participants soient arrivés, puis tous sont libérés simultanément.
+// This module implements a cyclic barrier (reusable barrier) for N threads.
+// Each participant calls `arrive_and_wait()`; all are blocked until
+// all N participants have arrived, then all are released simultaneously.
 //
-// La barrière est cyclique : après libération, le compteur est remis à zéro
-// automatiquement. Un numéro de phase (generation) protège contre les réveils
-// spurieux et les races d'un cycle sur l'autre.
+// The barrier is cyclic: after release, the counter is reset to zero
+// automatically. A phase number (generation) protects against spurious
+// wakeups and races from one cycle to the next.
 //
-// RÈGLE BARRIER-01 : pas d'allocation dynamique, table statique globale.
-// RÈGLE BARRIER-02 : spin-wait borné par un timeout configurable.
-// RÈGLE BARRIER-03 : génération AtomicU32 garantit la correction cyclique.
+// RULE BARRIER-01: no dynamic allocation, global static table.
+// RULE BARRIER-02: spin-wait bounded by configurable timeout.
+// RULE BARRIER-03: AtomicU32 generation guarantees cyclic correctness.
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -18,59 +18,59 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::IpcError;
 
 // ---------------------------------------------------------------------------
-// Barrière IPC principale
+// Main IPC barrier
 // ---------------------------------------------------------------------------
 
-/// Nombre maximum de participants par barrière
+/// Maximum number of participants per barrier
 pub const MAX_BARRIER_PARTIES: usize = 256;
 
-/// Nombre maximum de barrières dans la table globale
+/// Maximum number of barriers in global table
 pub const MAX_IPC_BARRIERS: usize = 64;
 
-/// États de phase de la barrière
+/// Phase states of the barrier
 mod phase_state {
     pub const WAITING: u32 = 0;
     #[allow(dead_code)]
     pub const RELEASING: u32 = 1;
 }
 
-/// Résultat d'un appel à `arrive_and_wait()`
+/// Result of an `arrive_and_wait()` call
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarrierResult {
-    /// Ce thread était le dernier arrivé (thread leader)
+    /// This thread was the last to arrive (leader thread)
     Leader,
-    /// Ce thread a été libéré normalement
+    /// This thread was released normally
     Follower,
 }
 
-/// Barrière de synchronisation IPC cyclique (reusable).
+/// Cyclic IPC synchronization barrier (reusable).
 ///
-/// Supporte jusqu'à `MAX_BARRIER_PARTIES` participants.  
-/// Réutilisable après chaque cycle grâce au numéro de génération.
+/// Supports up to `MAX_BARRIER_PARTIES` participants.  
+/// Reusable after each cycle thanks to generation counter.
 #[repr(C, align(64))]
 pub struct IpcBarrier {
-    /// Identifiant opaque
+    /// Opaque identifier
     pub id: u32,
-    /// Nombre de participants requis pour franchir la barrière
+    /// Number of participants required to cross the barrier
     parties: AtomicU32,
-    /// Compteur d'arrivées pour le cycle courant
+    /// Arrival counter for current cycle
     arrived: AtomicU32,
-    /// Numéro de génération (phase courante)
+    /// Generation number (current phase)
     generation: AtomicU32,
-    /// Phase de la barrière
+    /// Barrier phase
     phase: AtomicU32,
-    /// Nombre de cycles complétés
+    /// Number of completed cycles
     pub cycles: AtomicU64,
-    /// Nombre total d'arrivées
+    /// Total number of arrivals
     pub total_arrives: AtomicU64,
-    /// Nombre de timeouts
+    /// Number of timeouts
     pub total_timeouts: AtomicU64,
-    /// Barrière active (non détruite)
+    /// Active barrier (not destroyed)
     pub active: AtomicBool,
     _pad: [u8; 15],
 }
 
-// SAFETY: tous les champs sont atomiques ou primitifs
+// SAFETY: all fields are atomic or primitive
 unsafe impl Sync for IpcBarrier {}
 unsafe impl Send for IpcBarrier {}
 
@@ -90,17 +90,17 @@ impl IpcBarrier {
         }
     }
 
-    /// Retourne le nombre de participants
+    /// Returns number of participants
     pub fn parties(&self) -> u32 {
         self.parties.load(Ordering::Relaxed)
     }
 
-    /// Retourne le nombre de participants ayant déjà franchi ce cycle
+    /// Returns number of participants that have already arrived in this cycle
     pub fn arrived_count(&self) -> u32 {
         self.arrived.load(Ordering::Relaxed)
     }
 
-    /// Retourne la génération (phase) courante
+    /// Returns current generation (phase)
     pub fn current_generation(&self) -> u32 {
         self.generation.load(Ordering::Relaxed)
     }
@@ -109,16 +109,16 @@ impl IpcBarrier {
     // arrive_and_wait()
     // -----------------------------------------------------------------------
 
-    /// Arrive à la barrière et attend que tous les `parties` participants
-    /// soient arrivés.
+    /// Arrives at the barrier and waits until all `parties` participants
+    /// have arrived.
     ///
-    /// - `spin_max` : nombre de spins avant timeout (0 = infini)
+    /// - `spin_max`: number of spins before timeout (0 = infinite)
     ///
-    /// # Retour
-    /// - `Ok(BarrierResult::Leader)` — ce thread était le dernier (libère les autres)
-    /// - `Ok(BarrierResult::Follower)` — réveil normal
-    /// - `Err(IpcError::Timeout)` — timeout expiré
-    /// - `Err(IpcError::Closed)` — barrière détruite pendant l'attente
+    /// # Return
+    /// - `Ok(BarrierResult::Leader)` — this thread was the last (releases others)
+    /// - `Ok(BarrierResult::Follower)` — normal wakeup
+    /// - `Err(IpcError::Timeout)` — timeout expired
+    /// - `Err(IpcError::Closed)` — barrier destroyed during wait
     pub fn arrive_and_wait(&self, spin_max: u64) -> Result<BarrierResult, IpcError> {
         if !self.active.load(Ordering::Acquire) {
             return Err(IpcError::Closed);
@@ -126,24 +126,24 @@ impl IpcBarrier {
 
         self.total_arrives.fetch_add(1, Ordering::Relaxed);
 
-        // Sauvegarder la génération courante AVANT d'incrémenter `arrived`
+        // Save current generation BEFORE incrementing `arrived`
         let gen = self.generation.load(Ordering::Acquire);
         let parties = self.parties.load(Ordering::Relaxed);
 
-        // Incrémenter le compteur d'arrivées
+        // Increment arrival counter
         let my_arrival = self.arrived.fetch_add(1, Ordering::AcqRel) + 1;
 
         if my_arrival == parties {
-            // Ce thread est le LEADER : libérer tous les waiters
+            // This thread is LEADER: release all waiters
             self.cycles.fetch_add(1, Ordering::Relaxed);
-            // Remettre le compteur à zéro
+            // Reset counter to zero
             self.arrived.store(0, Ordering::Relaxed);
-            // Passer à la génération suivante — réveille tous les waiters
+            // Move to next generation — wakes all waiters
             self.generation.fetch_add(1, Ordering::Release);
             return Ok(BarrierResult::Leader);
         }
 
-        // Ce thread doit attendre que la génération change
+        // This thread must wait for generation to change
         let limit = if spin_max == 0 { u64::MAX } else { spin_max };
         let mut spins = 0u64;
 
@@ -162,16 +162,16 @@ impl IpcBarrier {
 
             let current_gen = self.generation.load(Ordering::Acquire);
             if current_gen != gen {
-                // La génération a changé : la barrière a été franchie
+                // Generation changed: barrier was crossed
                 return Ok(BarrierResult::Follower);
             }
 
             if spins >= limit {
-                // Vérifier une dernière fois si la barrière a été franchie avant de déclarer timeout
+                // Check one last time if barrier was crossed before declaring timeout
                 if self.generation.load(Ordering::Acquire) != gen {
                     return Ok(BarrierResult::Follower);
                 }
-                // T8-043 FIX : Décrémenter arrived sous CAS uniquement si la génération n'a pas tourné
+                // T8-043 FIX: decrement arrived under CAS only if generation has not advanced
                 let mut cur = self.arrived.load(Ordering::Acquire);
                 while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
                     match self.arrived.compare_exchange_weak(
@@ -194,11 +194,11 @@ impl IpcBarrier {
     }
 
     // -----------------------------------------------------------------------
-    // Arrivée sans attente (non-blocking)
+    // Non-blocking arrival
     // -----------------------------------------------------------------------
 
-    /// Arrive à la barrière sans attendre.
-    /// Retourne `true` si ce thread a complété le cycle (était le dernier).
+    /// Arrives at the barrier without waiting.
+    /// Returns `true` if this thread completed the cycle (was the last).
     pub fn arrive(&self) -> bool {
         if !self.active.load(Ordering::Acquire) {
             return false;
@@ -215,9 +215,9 @@ impl IpcBarrier {
         }
     }
 
-    /// Attend que la génération avance (sans incrémenter `arrived`).
+    /// Waits for generation to advance (without incrementing `arrived`).
     ///
-    /// Utile pour `arrive()` non-bloquant suivi d'un wait séparé.
+    /// Useful for non-blocking `arrive()` followed by a separate wait.
     pub fn wait_for_phase(&self, expected_gen: u32, spin_max: u64) -> Result<(), IpcError> {
         let limit = if spin_max == 0 { u64::MAX } else { spin_max };
         let mut spins = 0u64;
@@ -238,24 +238,24 @@ impl IpcBarrier {
     }
 
     // -----------------------------------------------------------------------
-    // Reset et destruction
+    // Reset and destruction
     // -----------------------------------------------------------------------
 
-    /// Réinitialise la barrière (force reset d'urgence).
-    /// Réveille tous les waiters via changement de génération.
+    /// Resets the barrier (emergency force reset).
+    /// Wakes all waiters via generation change.
     pub fn reset(&self) {
         self.arrived.store(0, Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
     }
 
-    /// Marque la barrière comme détruite. Les waiters actuels retourneront Closed.
+    /// Marks barrier as destroyed. Current waiters will return Closed.
     pub fn destroy(&self) {
         self.active.store(false, Ordering::Release);
-        // Libérer les waiters bloqués en avançant la génération
+        // Release blocked waiters by advancing generation
         self.generation.fetch_add(1, Ordering::Release);
     }
 
-    /// Récupère les statistiques
+    /// Retrieves statistics
     pub fn snapshot(&self) -> IpcBarrierStats {
         IpcBarrierStats {
             id: self.id,
@@ -281,7 +281,7 @@ pub struct IpcBarrierStats {
 }
 
 // ---------------------------------------------------------------------------
-// Table globale de barrières IPC
+// Global IPC barrier table
 // ---------------------------------------------------------------------------
 
 struct BarrierSlot {
@@ -303,7 +303,7 @@ struct IpcBarrierTable {
     count: AtomicU32,
 }
 
-// SAFETY : accès via CAS + MaybeUninit
+// SAFETY: access via CAS + MaybeUninit
 unsafe impl Sync for IpcBarrierTable {}
 
 impl IpcBarrierTable {
@@ -327,7 +327,7 @@ impl IpcBarrierTable {
                     .is_ok()
                 {
                     let ptr = self.slots[i].barrier.as_ptr() as *mut IpcBarrier;
-                    // SAFETY: CAS AcqRel garantit l'exclusivité du slot; MaybeUninit<IpcBarrier> write-once.
+                    // SAFETY: CAS AcqRel guarantees slot exclusivity; MaybeUninit<IpcBarrier> write-once.
                     unsafe { ptr.write(IpcBarrier::new(id, parties)) }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
@@ -374,15 +374,15 @@ impl IpcBarrierTable {
 static IPC_BARRIER_TABLE: IpcBarrierTable = IpcBarrierTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Crée une barrière pour `parties` participants. Retourne l'index (handle).
+/// Creates a barrier for `parties` participants. Returns index (handle).
 pub fn barrier_create(id: u32, parties: u32) -> Option<usize> {
     IPC_BARRIER_TABLE.alloc(id, parties)
 }
 
-/// Arrive et attend que tous les participants soient là.
+/// Arrives and waits until all participants are present.
 pub fn barrier_arrive_and_wait(idx: usize, spin_max: u64) -> Result<BarrierResult, IpcError> {
     IPC_BARRIER_TABLE
         .get(idx)
@@ -390,7 +390,7 @@ pub fn barrier_arrive_and_wait(idx: usize, spin_max: u64) -> Result<BarrierResul
         .arrive_and_wait(spin_max)
 }
 
-/// Arrive sans attendre. Retourne true si ce thread complète le cycle.
+/// Arrives without waiting. Returns true if this thread completes the cycle.
 pub fn barrier_arrive(idx: usize) -> Result<bool, IpcError> {
     Ok(IPC_BARRIER_TABLE
         .get(idx)
@@ -398,7 +398,7 @@ pub fn barrier_arrive(idx: usize) -> Result<bool, IpcError> {
         .arrive())
 }
 
-/// Attend que la génération expectedgen avance.
+/// Waits for expected_gen generation to advance.
 pub fn barrier_wait_phase(idx: usize, expected_gen: u32, spin_max: u64) -> Result<(), IpcError> {
     IPC_BARRIER_TABLE
         .get(idx)
@@ -406,12 +406,12 @@ pub fn barrier_wait_phase(idx: usize, expected_gen: u32, spin_max: u64) -> Resul
         .wait_for_phase(expected_gen, spin_max)
 }
 
-/// Retourne la génération courante (pour un arrive non-bloquant).
+/// Returns current generation (for non-blocking arrival).
 pub fn barrier_generation(idx: usize) -> Option<u32> {
     IPC_BARRIER_TABLE.get(idx).map(|b| b.current_generation())
 }
 
-/// Réinitialise d'urgence la barrière.
+/// Emergency resets the barrier.
 pub fn barrier_reset(idx: usize) -> Result<(), IpcError> {
     IPC_BARRIER_TABLE
         .get(idx)
@@ -419,17 +419,17 @@ pub fn barrier_reset(idx: usize) -> Result<(), IpcError> {
         .map(|b| b.reset())
 }
 
-/// Détruit la barrière et libère son slot.
+/// Destroys barrier and frees its slot.
 pub fn barrier_destroy(idx: usize) -> bool {
     IPC_BARRIER_TABLE.free(idx)
 }
 
-/// Nombre de barrières actives.
+/// Number of active barriers.
 pub fn barrier_count() -> u32 {
     IPC_BARRIER_TABLE.count()
 }
 
-/// Snapshot de statistiques.
+/// Statistics snapshot.
 pub fn barrier_stats(idx: usize) -> Option<IpcBarrierStats> {
     IPC_BARRIER_TABLE.get(idx).map(|b| b.snapshot())
 }

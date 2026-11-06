@@ -1,20 +1,20 @@
-// ipc/message/priority.rs — File de priorité IPC pour Exo-OS
+// ipc/message/priority.rs — IPC priority queue for Exo-OS
 //
-// Ce module implémente une file de priorité IPC à deux niveaux :
-//   - Niveau REALTIME (priorité > PRIORITY_RT_THRESHOLD) : SpscRing dédié
-//   - Niveau NORMAL (priorité <= PRIORITY_RT_THRESHOLD) : SpscRing standard
+// This module implements a two-level IPC priority queue:
+//   - REALTIME level (priority > PRIORITY_RT_THRESHOLD): dedicated SpscRing
+//   - NORMAL level (priority <= PRIORITY_RT_THRESHOLD): standard SpscRing
 //
-// Le déqueue lit toujours d'abord le niveau REALTIME, puis NORMAL.
-// En cas de file RT pleine, les messages RT sont rétrogradés en NORMAL
-// avec le flag `DEGRADED` positionné.
+// Dequeue always reads REALTIME first, then NORMAL.
+// If the RT queue is full, RT messages are downgraded to NORMAL
+// with the `DEGRADED` flag set.
 //
-// Une file de priorité peut également être weightée : le poids détermine
-// combien de messages normaux sont lus entre deux messages RT (pour éviter
-// la famine).
+// A priority queue can also be weighted: the weight determines
+// how many normal messages are read between two RT messages (to prevent
+// starvation).
 //
-// RÈGLE PRIO-01 : deux rings statiques par PriorityQueue, pas de tri en O(N).
-// RÈGLE PRIO-02 : le niveau RT est TOUJOURS consommé en premier.
-// RÈGLE PRIO-03 : pas de starvation → ratio configurable RT:NORMAL.
+// RULE PRIO-01: two static rings per PriorityQueue, no O(N) sorting.
+// RULE PRIO-02: RT level is ALWAYS consumed first.
+// RULE PRIO-03: no starvation -> configurable RT:NORMAL ratio.
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -24,35 +24,35 @@ use crate::ipc::message::builder::IpcMessage;
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
-// Constantes
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Seuil de priorité pour la file REALTIME (>= → RT)
+/// Priority threshold for REALTIME queue (>= -> RT)
 pub const PRIORITY_RT_THRESHOLD: u8 = 192;
 
-/// Capacité du ring RT (plus petite : les messages RT sont rares)
+/// RT ring capacity (smaller: RT messages are rare)
 pub const PRIORITY_RT_RING_CAP: usize = 64;
 
-/// Capacité du ring NORMAL
+/// NORMAL ring capacity
 pub const PRIORITY_NORMAL_RING_CAP: usize = 256;
 
-/// Ratio RT:NORMAL pour l'anti-starvation (consommer N_NORMAL entre chaque RT)
+/// RT:NORMAL ratio for anti-starvation (consume N_NORMAL between each RT)
 pub const PRIORITY_ANTI_STARVATION_RATIO: u32 = 8;
 
-/// Nombre maximum de PriorityQueue dans la table globale
+/// Maximum number of PriorityQueues in global table
 pub const MAX_PRIORITY_QUEUES: usize = 64;
 
 // ---------------------------------------------------------------------------
-// Index de message pour la file de priorité
+// Message index for priority queue
 // ---------------------------------------------------------------------------
 //
-// Pour éviter de copier des IpcMessage (>4KB) dans le ring, on stocke un
-// `PrioMsgSlot` compact : header + payload inline 256 bytes max.
-// Pour les payloads plus grand, utiliser le StreamChannel.
+// To avoid copying IpcMessages (>4KB) into the ring, we store a
+// compact `PrioMsgSlot`: header + inline payload 256 bytes max.
+// For larger payloads, use StreamChannel.
 
 pub const PRIO_INLINE_PAYLOAD: usize = 256;
 
-/// Slot de message dans la file de priorité
+/// Message slot in priority queue
 #[repr(C, align(64))]
 pub struct PrioMsgSlot {
     pub seq: u64,
@@ -101,14 +101,14 @@ impl PrioMsgSlot {
     }
 }
 
-// SAFETY: PrioMsgSlot est Copy-able en termes de données
+// SAFETY: PrioMsgSlot is Copy-able in terms of data
 unsafe impl Sync for PrioMsgSlot {}
 
 // ---------------------------------------------------------------------------
-// Ring statique pour la file de priorité
+// Static ring for priority queue
 // ---------------------------------------------------------------------------
 
-/// Ring circulaire borné pour PrioMsgSlot (pas de dépendance à SpscRing<T>)
+/// Bounded circular ring for PrioMsgSlot (no dependency on SpscRing<T>)
 struct PrioRing<const N: usize> {
     slots: [MaybeUninit<PrioMsgSlot>; N],
     head: AtomicU32,
@@ -132,7 +132,7 @@ impl<const N: usize> PrioRing<N> {
             let tail = self.tail.load(Ordering::Relaxed);
             let head = self.head.load(Ordering::Acquire);
             if tail.wrapping_sub(head) >= self.capacity {
-                return false; // plein
+                return false; // full
             }
             match self.tail.compare_exchange_weak(
                 tail,
@@ -142,7 +142,7 @@ impl<const N: usize> PrioRing<N> {
             ) {
                 Ok(_) => {
                     let idx = (tail % self.capacity) as usize;
-                    // SAFETY: slot exclusif via CAS tail
+                    // SAFETY: exclusive slot via CAS tail
                     unsafe {
                         (self.slots[idx].as_ptr() as *mut PrioMsgSlot).write(slot);
                     }
@@ -158,7 +158,7 @@ impl<const N: usize> PrioRing<N> {
             let head = self.head.load(Ordering::Relaxed);
             let tail = self.tail.load(Ordering::Acquire);
             if head == tail {
-                return None; // vide
+                return None; // empty
             }
             match self.head.compare_exchange_weak(
                 head,
@@ -168,7 +168,7 @@ impl<const N: usize> PrioRing<N> {
             ) {
                 Ok(_) => {
                     let idx = (head % self.capacity) as usize;
-                    // SAFETY: slot initialisé (tail > head)
+                    // SAFETY: initialized slot (tail > head)
                     let slot = unsafe { self.slots[idx].assume_init_read() };
                     return Some(slot);
                 }
@@ -190,23 +190,23 @@ impl<const N: usize> PrioRing<N> {
     }
 }
 
-// SAFETY: PrioRing accès concurrent via CAS
+// SAFETY: PrioRing concurrent access via CAS
 unsafe impl<const N: usize> Sync for PrioRing<N> {}
 
 // ---------------------------------------------------------------------------
-// PriorityQueue — file à deux niveaux
+// PriorityQueue — two-level queue
 // ---------------------------------------------------------------------------
 
-/// File de priorité IPC à deux niveaux (RT + NORMAL).
+/// Two-level IPC priority queue (RT + NORMAL).
 pub struct PriorityQueue {
     pub id: u32,
-    /// Ring RT (haute priorité)
+    /// RT ring (high priority)
     rt_ring: PrioRing<PRIORITY_RT_RING_CAP>,
-    /// Ring NORMAL (priorité standard)
+    /// NORMAL ring (standard priority)
     normal_ring: PrioRing<PRIORITY_NORMAL_RING_CAP>,
-    /// Compteur pour l'anti-starvation
+    /// Counter for anti-starvation
     normal_reads_since_last_rt: AtomicU32,
-    /// Statistiques
+    /// Statistics
     pub rt_enqueued: AtomicU64,
     pub normal_enqueued: AtomicU64,
     pub rt_dequeued: AtomicU64,
@@ -215,7 +215,7 @@ pub struct PriorityQueue {
     pub rt_full_drops: AtomicU64,
 }
 
-// SAFETY: PrioRing est Sync
+// SAFETY: PrioRing is Sync
 unsafe impl Sync for PriorityQueue {}
 unsafe impl Send for PriorityQueue {}
 
@@ -239,9 +239,9 @@ impl PriorityQueue {
     // Enqueue
     // -----------------------------------------------------------------------
 
-    /// Enfile un message. Les messages RT (priority >= PRIORITY_RT_THRESHOLD)
-    /// vont dans le ring RT ; les autres dans le ring NORMAL.
-    /// Si le ring RT est plein, le message est rétrogradé en NORMAL.
+    /// Enqueues a message. RT messages (priority >= PRIORITY_RT_THRESHOLD)
+    /// go to the RT ring; others to the NORMAL ring.
+    /// If the RT ring is full, the message is downgraded to NORMAL.
     pub fn enqueue(&self, msg: &IpcMessage) -> Result<(), IpcError> {
         let slot = PrioMsgSlot::from_message(msg);
         if msg.priority >= PRIORITY_RT_THRESHOLD {
@@ -250,9 +250,9 @@ impl PriorityQueue {
                 IPC_STATS.record(StatEvent::MessageSent);
                 return Ok(());
             } else {
-                // RT ring plein : dégrader
+                // RT ring full: downgrade
                 self.rt_degraded.fetch_add(1, Ordering::Relaxed);
-                // Re-créer le slot (consommé au-dessus)
+                // Re-create slot (consumed above)
                 let slot2 = PrioMsgSlot::from_message(msg);
                 if self.normal_ring.push(slot2) {
                     self.normal_enqueued.fetch_add(1, Ordering::Relaxed);
@@ -280,9 +280,9 @@ impl PriorityQueue {
     // Dequeue
     // -----------------------------------------------------------------------
 
-    /// Défile le prochain message selon la politique de priorité :
-    /// 1. Si ring RT non vide ET (compteur anti-starvation < RATIO ou normal vide) → RT
-    /// 2. Sinon → NORMAL
+    /// Dequeues the next message according to priority policy:
+    /// 1. If RT ring not empty AND (anti-starvation counter < RATIO or normal empty) -> RT
+    /// 2. Otherwise -> NORMAL
     pub fn dequeue(&self) -> Option<PrioMsgSlot> {
         let normal_count = self.normal_reads_since_last_rt.load(Ordering::Relaxed);
         let rt_empty = self.rt_ring.is_empty();
@@ -292,7 +292,7 @@ impl PriorityQueue {
             return None;
         }
 
-        // Politique : RT ou anti-starvation?
+        // Policy: RT or anti-starvation?
         let take_rt = !rt_empty && (normal_empty || normal_count < PRIORITY_ANTI_STARVATION_RATIO);
 
         if take_rt {
@@ -304,7 +304,7 @@ impl PriorityQueue {
             }
         }
 
-        // Consommer depuis NORMAL
+        // Consume from NORMAL
         if let Some(slot) = self.normal_ring.pop() {
             self.normal_dequeued.fetch_add(1, Ordering::Relaxed);
             self.normal_reads_since_last_rt
@@ -313,7 +313,7 @@ impl PriorityQueue {
             return Some(slot);
         }
 
-        // Si RT disponible malgré ratio
+        // If RT available despite ratio
         if let Some(slot) = self.rt_ring.pop() {
             self.rt_dequeued.fetch_add(1, Ordering::Relaxed);
             self.normal_reads_since_last_rt.store(0, Ordering::Relaxed);
@@ -324,22 +324,22 @@ impl PriorityQueue {
         None
     }
 
-    /// Tentative de défile non-bloquante (alias de dequeue).
+    /// Non-blocking dequeue attempt (alias of dequeue).
     pub fn try_dequeue(&self) -> Option<PrioMsgSlot> {
         self.dequeue()
     }
 
-    /// Vérifie si la file est vide.
+    /// Checks if queue is empty.
     pub fn is_empty(&self) -> bool {
         self.rt_ring.is_empty() && self.normal_ring.is_empty()
     }
 
-    /// Nombre total de messages dans les deux rings.
+    /// Total number of messages in both rings.
     pub fn len(&self) -> u32 {
         self.rt_ring.len() + self.normal_ring.len()
     }
 
-    /// Snapshot de statistiques.
+    /// Statistics snapshot.
     pub fn snapshot(&self) -> PriorityQueueStats {
         PriorityQueueStats {
             id: self.id,
@@ -369,7 +369,7 @@ pub struct PriorityQueueStats {
 }
 
 // ---------------------------------------------------------------------------
-// Table globale de files de priorité
+// Global priority queue table
 // ---------------------------------------------------------------------------
 
 struct PrioQueueSlot {
@@ -409,7 +409,7 @@ impl PriorityQueueTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel garantit l'exclusivité; queue MaybeUninit<PriorityQueue> write-once.
+                    // SAFETY: AcqRel CAS guarantees exclusivity; queue MaybeUninit<PriorityQueue> write-once.
                     unsafe {
                         (self.slots[i].queue.as_ptr() as *mut PriorityQueue)
                             .write(PriorityQueue::new(id));
@@ -452,7 +452,7 @@ impl PriorityQueueTable {
 static PRIO_QUEUE_TABLE: PriorityQueueTable = PriorityQueueTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
 pub fn prio_queue_create(id: u32) -> Option<usize> {

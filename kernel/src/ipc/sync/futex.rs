@@ -1,26 +1,26 @@
 // kernel/src/ipc/sync/futex.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// FUTEX IPC — SHIM DÉLÉGATION PURE → memory::utils::futex_table
-// (Exo-OS · IPC Couche 2a)
+// FUTEX IPC — PURE DELEGATION SHIM -> memory::utils::futex_table
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE IPC-02 : CE MODULE NE CONTIENT AUCUNE LOGIQUE FUTEX LOCALE.
-//   Délégation pure à memory::utils::futex_table::FUTEX_TABLE.
-//   La table futex UNIQUE réside en memory/ (COUCHE 0) et est partagée
-//   par tous les sous-systèmes (ipc/, scheduler/, process/).
+// RULE IPC-02: THIS MODULE CONTAINS NO LOCAL FUTEX LOGIC.
+//   Pure delegation to memory::utils::futex_table::FUTEX_TABLE.
+//   The SINGLE futex table resides in memory/ (LAYER 0) and is shared
+//   by all subsystems (ipc/, scheduler/, process/).
 //
-//   RAISON : point de vérité unique — évite races cross-subsystems.
-//            périmètre de preuve TLA+/Coq limité à la table mémoire.
+//   REASON: single source of truth — avoids cross-subsystem races.
+//           TLA+/Coq proof scope limited to the memory table.
 //
-// Ce module fournit :
-//   • FutexKey    — clé IPC (adresse virtuelle physmap de l'AtomicU32)
-//   • futex_wait  — WAIT avec spin-poll sur waiter.woken issu de memory/
-//   • futex_wake  — WAKE (délègue directement)
-//   • futex_stats — statistiques lues depuis memory::utils::FUTEX_STATS
+// This module provides:
+//   • FutexKey    — IPC key (physmap virtual address of the AtomicU32)
+//   • futex_wait  — WAIT with spin-poll on waiter.woken from memory/
+//   • futex_wake  — WAKE (delegates directly)
+//   • futex_stats — statistics read from memory::utils::FUTEX_STATS
 //
-// La gestion des buckets, la liste chaînée de waiters et la logique wake
-// résident EXCLUSIVEMENT dans memory::utils::futex_table.
+// Bucket management, the linked list of waiters, and wake logic
+// reside EXCLUSIVELY in memory::utils::futex_table.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -33,19 +33,19 @@ use crate::memory::utils::futex_table::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FutexKey — clé identifiant un futex IPC par adresse virtuelle (physmap)
+// FutexKey — key identifying an IPC futex by virtual address (physmap)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Clé d'un futex IPC = adresse virtuelle de l'AtomicU32 partagé.
-/// Pour un AtomicU32 dans une page SHM, l'adresse virtuelle physmap
-/// est partagée entre tous les espaces d'adressage (même physmap).
-/// Compatible avec memory::utils::futex_table (virt_addr comme clé).
+/// Key of an IPC futex = virtual address of the shared AtomicU32.
+/// For an AtomicU32 in an SHM page, the physmap virtual address
+/// is shared across all address spaces (same physmap).
+/// Compatible with memory::utils::futex_table (virt_addr as key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct FutexKey(pub u64);
 
 impl FutexKey {
-    /// Construit une clé depuis une référence à un AtomicU32.
+    /// Constructs a key from a reference to an AtomicU32.
     #[inline(always)]
     pub fn from_addr(addr: &AtomicU32) -> Self {
         Self(addr as *const _ as u64)
@@ -53,74 +53,74 @@ impl FutexKey {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WaiterState — résultat d'un futex_wait
+// WaiterState — result of a futex_wait
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cause du réveil d'un waiter IPC.
+/// Wakeup cause of an IPC waiter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum WaiterState {
-    /// Réveillé normalement par futex_wake().
+    /// Woken normally by futex_wake().
     Woken = 0,
-    /// *addr ≠ expected — pas de blocage (retour immédiat).
+    /// *addr != expected — no blocking (immediate return).
     ValueMismatch = 1,
-    /// Timeout ou annulation (futex_cancel).
+    /// Timeout or cancellation (futex_cancel).
     Cancelled = 2,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FutexIpcStats — snapshot des compteurs depuis memory/utils/FUTEX_STATS
+// FutexIpcStats — counter snapshot from memory/utils/FUTEX_STATS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques futex IPC — miroir de memory::utils::futex_table::FUTEX_STATS.
+/// IPC futex statistics — mirror of memory::utils::futex_table::FUTEX_STATS.
 #[derive(Debug, Clone, Copy)]
 pub struct FutexIpcStats {
-    /// Nombre d'appels WAIT depuis le boot.
+    /// Total WAIT calls since boot.
     pub waits_total: u64,
-    /// Nombre d'appels WAKE depuis le boot.
+    /// Total WAKE calls since boot.
     pub wakes_total: u64,
-    /// Nombre de timeouts (futex_cancel suite à spin_max dépassé).
+    /// Total timeouts (futex_cancel following exceeded spin_max).
     pub timeouts_total: u64,
-    /// Nombre de WAIT où *addr ≠ expected (retour immédiat).
+    /// Total WAITs where *addr != expected (immediate return).
     pub value_mismatches: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonction de réveil IPC — délègue à sched_hooks::wake_thread (scheduler)
+// IPC wakeup function — delegates to sched_hooks::wake_thread (scheduler)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// WakeFn injectée dans FutexWaiter : réveille réellement le thread via scheduler.
-/// Signature : fn(tid: u64, code: i32) — compatible avec memory::utils::futex_table.
+/// WakeFn injected into FutexWaiter: actually wakes the thread via scheduler.
+/// Signature: fn(tid: u64, code: i32) — compatible with memory::utils::futex_table.
 fn ipc_futex_wake_fn(tid: u64, _code: i32) {
     super::sched_hooks::wake_thread(tid);
 }
 
-/// No-op de réveil (avant installation des hooks ou pour les callers sans scheduler).
+/// Wakeup no-op (before hook installation or for callers without scheduler).
 #[allow(dead_code)]
 fn nop_wake_fn(_tid: u64, _code: i32) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique — SHIM vers memory::utils::futex_table
+// Public API — SHIM to memory::utils::futex_table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// WAIT IPC : si *addr == expected, enfile ce thread dans la table globale
-/// memory::utils::futex_table puis spin-poll jusqu'à réveil ou timeout.
+/// IPC WAIT: if *addr == expected, enqueues this thread into global table
+/// memory::utils::futex_table then spin-polls until wakeup or timeout.
 ///
-/// DÉLÈGUE À : memory::utils::futex_table::futex_wait() (enfilement)
-///             puis spin-poll sur waiter.woken (AtomicBool du waiter globale)
+/// DELEGATES TO: memory::utils::futex_table::futex_wait() (enqueueing)
+///               then spin-poll on waiter.woken (global waiter AtomicBool)
 ///
-/// # Paramètres
-/// - `addr`      : référence vers l'AtomicU32 partagé dans la page SHM.
-/// - `key`       : FutexKey = adresse virtuelle de `addr` (physmap).
-/// - `expected`  : valeur attendue dans `*addr`.
-/// - `thread_id` : TID du thread (pour corrélation wake ciblé).
-/// - `spin_max`  : tours de spin max avant timeout (0 = infini).
-/// - `wake_fn`   : callback scheduler injecté ; `None` → nop_wake_fn.
+/// # Parameters
+/// - `addr`      : reference to shared AtomicU32 in SHM page.
+/// - `key`       : FutexKey = virtual address of `addr` (physmap).
+/// - `expected`  : expected value in `*addr`.
+/// - `thread_id` : thread TID (for targeted wake correlation).
+/// - `spin_max`  : max spin iterations before timeout (0 = infinite).
+/// - `wake_fn`   : injected scheduler callback; `None` -> nop_wake_fn.
 ///
 /// # Safety
-/// - `addr` doit pointer vers un u32 atomique valide dans une page SHM.
-/// - La durée de vie du waiter alloué sur la pile est garantie par le
-///   spin-loop : la fonction ne retourne pas tant que le waiter est actif.
+/// - `addr` must point to a valid atomic u32 in an SHM page.
+/// - Lifetime of stack-allocated waiter is guaranteed by the
+///   spin loop: the function does not return as long as the waiter is active.
 pub unsafe fn futex_wait(
     _addr: &AtomicU32,
     key: FutexKey,
@@ -129,11 +129,11 @@ pub unsafe fn futex_wait(
     spin_max: u64,
     wake_fn: Option<WakeFn>,
 ) -> Result<WaiterState, IpcError> {
-    // Utiliser ipc_futex_wake_fn par défaut : réveille réellement le thread.
-    // Si le caller fournit une wake_fn explicite, l'utiliser à la place.
+    // Use ipc_futex_wake_fn by default: actually wakes the thread.
+    // If caller provides an explicit wake_fn, use it instead.
     let wfn = wake_fn.unwrap_or(ipc_futex_wake_fn);
 
-    // Allouer le FutexWaiter sur la pile — sa durée de vie = durée du wait.
+    // Allocate FutexWaiter on stack — its lifetime = wait duration.
     let mut waiter = FutexWaiter::new(key.0, expected, thread_id, wfn);
     let wptr = &mut waiter as *mut FutexWaiter;
     struct WaiterGuard {
@@ -159,7 +159,7 @@ pub unsafe fn futex_wait(
         }
     }
 
-    // Déléguer l'enfilement à memory::utils::futex_table (RÈGLE IPC-02).
+    // Delegate enqueueing to memory::utils::futex_table (RULE IPC-02).
     let result = mem_futex_wait(key.0, expected, wptr, wfn);
 
     match result {
@@ -170,8 +170,8 @@ pub unsafe fn futex_wait(
                 ptr: wptr,
                 active: true,
             };
-            // Le waiter est dans le bucket de memory/utils/futex_table.
-            // Stratégie : spin court puis blocage réel via sched_hooks.
+            // Waiter is in memory/utils/futex_table bucket.
+            // Strategy: short spin then real blocking via sched_hooks.
             const SPIN_BEFORE_BLOCK: u64 = 64;
             let mut phase_spins: u64 = 0;
             let mut total_spins: u64 = 0;
@@ -186,28 +186,28 @@ pub unsafe fn futex_wait(
                     return Ok(WaiterState::Woken);
                 }
 
-                // Timeout explicite (spin_max non nul) — T8-013 FIX : cumulatif sur total_spins
+                // Explicit timeout (non-zero spin_max) — T8-013 FIX: cumulative over total_spins
                 if spin_max != 0 && total_spins >= spin_max {
                     mem_futex_cancel(wptr);
                     guard.disarm();
                     return Err(IpcError::Timeout);
                 }
 
-                // Après la phase de spin courte : bloquer via le scheduler.
+                // After short spin phase: block via scheduler.
                 if phase_spins >= SPIN_BEFORE_BLOCK {
-                    // Vérifier à nouveau avant de bloquer (évite réveil manqué).
+                    // Check again before blocking (avoids missed wakeup).
                     if waiter.woken.load(Ordering::Acquire) {
                         guard.disarm();
                         return Ok(WaiterState::Woken);
                     }
-                    // Blocage réel — retourne après que ipc_futex_wake_fn a été appelée.
-                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
+                    // Real blocking — returns after ipc_futex_wake_fn has been called.
+                    // RULE PREEMPT-BLOCK (B6): blocking with active PreemptGuard = guaranteed deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                         "futex_wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
                     );
                     super::sched_hooks::block_current(thread_id);
-                    // Réinitialiser uniquement le spin de la phase courante.
+                    // Reset spin of current phase only.
                     phase_spins = 0;
                 }
             }
@@ -215,38 +215,38 @@ pub unsafe fn futex_wait(
     }
 }
 
-/// WAKE IPC : réveille jusqu'à `n` threads attendant sur `key`.
+/// IPC WAKE: wakes up to `n` threads waiting on `key`.
 ///
-/// DÉLÈGUE À : memory::utils::futex_table::futex_wake()
+/// DELEGATES TO: memory::utils::futex_table::futex_wake()
 ///
-/// Retourne le nombre de threads effectivement réveillés.
+/// Returns the number of threads actually woken.
 ///
 /// # Safety
-/// - `key` doit correspondre à des waiters valides dans la table globale.
+/// - `key` must correspond to valid waiters in the global table.
 pub unsafe fn futex_wake(key: FutexKey, n: u32) -> u32 {
     mem_futex_wake(key.0, n, 0)
 }
 
-/// WAKE ALL IPC : réveille tous les threads sur `key`.
+/// IPC WAKE ALL: wakes all threads on `key`.
 ///
-/// DÉLÈGUE À : memory::utils::futex_table::futex_wake_n()
+/// DELEGATES TO: memory::utils::futex_table::futex_wake_n()
 pub unsafe fn futex_wake_all(key: FutexKey) -> u32 {
     mem_futex_wake_n(key.0, u32::MAX)
 }
 
-/// CANCEL IPC : annule un waiter inscrit (timeout, fermeture canal).
+/// IPC CANCEL: cancels an enrolled waiter (timeout, channel closure).
 ///
-/// DÉLÈGUE À : memory::utils::futex_table::futex_cancel()
+/// DELEGATES TO: memory::utils::futex_table::futex_cancel()
 ///
-/// # Safety : `waiter` doit être dans la table globale.
+/// # Safety: `waiter` must be in the global table.
 pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
     mem_futex_cancel(waiter);
 }
 
-/// REQUEUE IPC : réveille `max_wake` threads sur `src`, requeue `max_requeue`
-/// vers `dst`. Utile pour les condvars (pthread_cond_broadcast IPC).
+/// IPC REQUEUE: wakes `max_wake` threads on `src`, requeues `max_requeue`
+/// to `dst`. Useful for condvars (pthread_cond_broadcast IPC).
 ///
-/// DÉLÈGUE À : memory::utils::futex_table::futex_requeue()
+/// DELEGATES TO: memory::utils::futex_table::futex_requeue()
 pub unsafe fn futex_requeue(
     src: FutexKey,
     dst: FutexKey,
@@ -256,8 +256,8 @@ pub unsafe fn futex_requeue(
     mem_futex_requeue(src.0, dst.0, max_wake, max_requeue, 0)
 }
 
-/// Retourne un snapshot des statistiques depuis memory::utils::FUTEX_STATS.
-/// La source de vérité est la table mémoire — pas de doublon local.
+/// Returns a snapshot of statistics from memory::utils::FUTEX_STATS.
+/// The source of truth is the memory table — no local duplicate.
 pub fn futex_stats() -> FutexIpcStats {
     FutexIpcStats {
         waits_total: FUTEX_STATS.wait_calls.load(Ordering::Relaxed),

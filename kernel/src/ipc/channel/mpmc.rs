@@ -1,17 +1,17 @@
-// ipc/channel/mpmc.rs — Canal Multi-Producteurs / Multi-Consommateurs pour Exo-OS
+// ipc/channel/mpmc.rs — Multi-Producer / Multi-Consumer Channel for Exo-OS
 //
-// Ce canal encapsule le ring::MpmcRing (algorithme Dmitry Vyukov CAS-based)
-// pour offrir une interface de haut niveau avec gestion des droits, statistiques
-// et politique de débordement configurable.
+// This channel wraps ring::MpmcRing (Dmitry Vyukov CAS-based algorithm)
+// to provide a high-level interface with rights management, statistics,
+// and configurable overflow policy.
 //
-// Caractéristiques :
-//   - N émetteurs simultanés — CAS lock-free sur la tête de file
-//   - M récepteurs simultanés — CAS lock-free sur la queue
-//   - Politique d'overflow : DROP_OLDEST, DROP_NEWEST, BLOCK
-//   - Capacite effective : RING_SIZE = 16 slots (puissance de 2).
-//     PATCH-IPC-01: la doc precedente indiquait "4096 slots" par erreur.
-//     Pour changer la capacite, modifier RING_SIZE dans ipc/core/constants.rs.
-//   - Statistiques temps-réel (AtomicU64, pas de mutex)
+// Features:
+//   - N concurrent senders — lock-free CAS on queue head
+//   - M concurrent receivers — lock-free CAS on queue tail
+//   - Overflow policy: DROP_OLDEST, DROP_NEWEST, BLOCK
+//   - Effective capacity: RING_SIZE = 16 slots (power of 2).
+//     PATCH-IPC-01: previous docs mistakenly stated "4096 slots".
+//     To change capacity, modify RING_SIZE in ipc/core/constants.rs.
+//   - Real-time statistics (AtomicU64, no mutex)
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -26,18 +26,18 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ---------------------------------------------------------------------------
-// Politique de débordement
+// Overflow policy
 // ---------------------------------------------------------------------------
 
-/// Comportement quand la file est pleine
+/// Behavior when queue is full
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum OverflowPolicy {
-    /// Rejeter le message entrant (défaut)
+    /// Reject incoming message (default)
     DropNewest = 0,
-    /// Supprimer le plus ancien message pour faire de la place
+    /// Evict oldest message to make room
     DropOldest = 1,
-    /// Bloquer l'émetteur (spin-wait jusqu'à place disponible)
+    /// Block sender (spin-wait until room is available)
     Block = 2,
 }
 
@@ -52,10 +52,10 @@ impl OverflowPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques MPMC
+// MPMC statistics
 // ---------------------------------------------------------------------------
 
-/// Compteurs de performance d'un canal MPMC
+/// Performance counters of an MPMC channel
 #[repr(C, align(64))]
 pub struct MpmcStats {
     pub sends_ok: AtomicU64,
@@ -84,7 +84,7 @@ impl MpmcStats {
         }
     }
 
-    /// Snapshot cohérent (lecture à séquentialité relaxée)
+    /// Consistent snapshot (relaxed sequentiality read)
     pub fn snapshot(&self) -> MpmcStatsSnapshot {
         MpmcStatsSnapshot {
             sends_ok: self.sends_ok.load(Ordering::Relaxed),
@@ -112,44 +112,44 @@ pub struct MpmcStatsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// MpmcChannel — structure principale
+// MpmcChannel — main structure
 // ---------------------------------------------------------------------------
 
-/// Canal MPMC utilisant le ring CAS lock-free de Vyukov.
+/// MPMC channel using Vyukov's lock-free CAS ring.
 ///
-/// La capacite effective est `MPMC_RING_SIZE` (= `RING_SIZE` = 16 slots).
-/// PATCH-IPC-01: reference canonique -> ipc/core/constants.rs::RING_SIZE.
-/// Plusieurs producteurs et consommateurs peuvent opérer simultanément
-/// sans mutex.
+/// Effective capacity is `MPMC_RING_SIZE` (= `RING_SIZE` = 16 slots).
+/// PATCH-IPC-01: canonical reference -> ipc/core/constants.rs::RING_SIZE.
+/// Multiple producers and consumers can operate concurrently
+/// without mutexes.
 #[repr(C, align(64))]
 pub struct MpmcChannel {
-    /// Identifiant unique du canal
+    /// Unique channel identifier
     pub id: ChannelId,
-    /// Anneau de données sous-jacent
+    /// Underlying data ring
     ring: MpmcRing,
-    /// Statistiques locales
+    /// Local statistics
     pub stats: MpmcStats,
-    /// Compteur d'opérations concurrentes actives (drain avant libération/réutilisation).
+    /// Active concurrent operations counter (drain before freeing/reusing).
     pub active_ops: AtomicU32,
-    /// Canal fermé
+    /// Closed channel
     closed: AtomicU32,
-    /// Politique de débordement (OverflowPolicy encodée en u8)
+    /// Overflow policy (OverflowPolicy encoded as u8)
     overflow_policy: AtomicU32,
-    /// Nombre de producteurs enregistrés
+    /// Number of registered producers
     producer_count: AtomicU32,
-    /// Nombre de consommateurs enregistrés
+    /// Number of registered consumers
     consumer_count: AtomicU32,
-    /// Nombre de messages en attente (approximatif)
+    /// Number of messages en attente (approximatif)
     pending: AtomicUsize,
     _pad: [u8; 20],
 }
 
-// SAFETY: MpmcRing est Sync (atomic CAS internes), AtomicU64 est Sync.
+// SAFETY: MpmcRing is Sync (internal atomic CAS), AtomicU64 is Sync.
 unsafe impl Sync for MpmcChannel {}
 unsafe impl Send for MpmcChannel {}
 
 impl MpmcChannel {
-    /// Crée un nouveau canal MPMC.
+    /// Creates a new MPMC channel.
     pub fn new(policy: OverflowPolicy) -> Self {
         let c = Self {
             id: alloc_channel_id(),
@@ -201,12 +201,12 @@ impl MpmcChannel {
     }
 
     // -----------------------------------------------------------------------
-    // ENVOI
+    // SEND
     // -----------------------------------------------------------------------
 
-    /// Envoie `data` dans le canal MPMC.
+    /// Sends `data` into MPMC channel.
     ///
-    /// Comportement configurable en cas de file pleine (cf. OverflowPolicy).
+    /// Configurable behavior when queue is full (see OverflowPolicy).
     pub fn send(&self, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -237,13 +237,13 @@ impl MpmcChannel {
                         Err(IpcError::QueueFull)
                     }
                     OverflowPolicy::DropOldest => {
-                        // Consommer (et jeter) le plus ancien message
+                        // Consume (and discard) oldest message
                         let mut discard = [0u8; MAX_MSG_SIZE];
                         if self.ring.pop_into(&mut discard).is_ok() {
                             self.pending.fetch_sub(1, Ordering::Relaxed);
                             self.stats.overflow_drops.fetch_add(1, Ordering::Relaxed);
                         }
-                        // Réessayer
+                        // Retry
                         match self.ring.push_copy(data, flags) {
                             Ok(_) => {
                                 self.pending.fetch_add(1, Ordering::Relaxed);
@@ -255,14 +255,14 @@ impl MpmcChannel {
                         }
                     }
                     OverflowPolicy::Block => {
-                        // Spin-wait jusqu'à place disponible
+                        // Spin-wait until room is available
                         self.stats.sends_blocked.fetch_add(1, Ordering::Relaxed);
                         let mut spins: u32 = 0;
                         loop {
                             core::hint::spin_loop();
                             spins += 1;
                             if spins % 128 == 0 {
-                                // SAFETY: reschedule coopératif sans détention de verrou.
+                                // SAFETY: cooperative reschedule without holding locks.
                                 unsafe {
                                     crate::scheduler::core::switch::cooperative_reschedule();
                                 }
@@ -292,12 +292,12 @@ impl MpmcChannel {
     }
 
     // -----------------------------------------------------------------------
-    // RÉCEPTION
+    // RECEIVE
     // -----------------------------------------------------------------------
 
-    /// Reçoit un message du canal MPMC (consommation).
+    /// Receives a message from MPMC channel (consumption).
     ///
-    /// Thread-safe — plusieurs consommateurs peuvent appeler recv() simultanément.
+    /// Thread-safe — multiple consumers can call recv() concurrently.
     pub fn recv(&self, buf: &mut [u8], flags: MsgFlags) -> Result<(usize, MsgFlags), IpcError> {
         if self.is_closed() && self.ring.is_empty_approx() {
             return Err(IpcError::Closed);
@@ -321,7 +321,7 @@ impl MpmcChannel {
                 Err(e) => Err(e),
             }
         } else {
-            // Spin-wait bloquant
+            // Blocking spin-wait
             let mut spins: u32 = 0;
             loop {
                 match self.ring.pop_into(buf) {
@@ -338,7 +338,7 @@ impl MpmcChannel {
                         core::hint::spin_loop();
                         spins += 1;
                         if spins % 128 == 0 {
-                            // SAFETY: reschedule coopératif sans détention de verrou.
+                            // SAFETY: cooperative reschedule without holding locks.
                             unsafe {
                                 crate::scheduler::core::switch::cooperative_reschedule();
                             }
@@ -356,8 +356,8 @@ impl MpmcChannel {
         }
     }
 
-    /// Tente de lire jusqu'à `max` messages en une seule opération (batch).
-    /// Retourne le nombre de messages effectivement lus.
+    /// Attempts to read up to `max` messages in a single operation (batch).
+    /// Returns number of messages actually read.
     pub fn recv_batch(
         &self,
         bufs: &mut [[u8; MAX_MSG_SIZE]],
@@ -392,10 +392,10 @@ impl MpmcChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Utilitaires
+    // Utilities
     // -----------------------------------------------------------------------
 
-    /// Taille approximative de la file (peut être inexacte sous concurrence).
+    /// Approximate size of queue (may be inaccurate under concurrency).
     pub fn len_approx(&self) -> usize {
         self.pending.load(Ordering::Relaxed)
     }
@@ -409,13 +409,13 @@ impl MpmcChannel {
     }
 
     // -----------------------------------------------------------------------
-    // ENVOI/RÉCEPTION CAP-CHECKED — IPC-04 (v6)
+    // CAP-CHECKED SEND/RECV — IPC-04 (v6)
     // -----------------------------------------------------------------------
 
-    /// Envoie avec vérification capability (RÈGLE IPC-04 v6).
+    /// Sends with capability check (RULE IPC-04 v6).
     ///
-    /// Appelle `security::access_control::check_access()` avant le vrai envoi.
-    /// # Droits requis : `Rights::IPC_SEND`
+    /// Calls `security::access_control::check_access()` before actual send.
+    /// # Required rights: `Rights::IPC_SEND`
     #[inline]
     pub fn send_checked(
         &self,
@@ -428,8 +428,8 @@ impl MpmcChannel {
         self.send(data, flags)
     }
 
-    /// Reçoit avec vérification capability (RÈGLE IPC-04 v6).
-    /// # Droits requis : `Rights::IPC_RECV`
+    /// Receives with capability check (RULE IPC-04 v6).
+    /// # Required rights: `Rights::IPC_RECV`
     #[inline]
     pub fn recv_checked(
         &self,
@@ -444,10 +444,10 @@ impl MpmcChannel {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de canaux MPMC
+// Global static MPMC channel table
 // ---------------------------------------------------------------------------
 
-/// Taille de la table globale des canaux MPMC
+/// Size of global MPMC channel table
 pub const MPMC_CHANNEL_TABLE_SIZE: usize = 256;
 
 struct MpmcChannelTable {
@@ -456,13 +456,13 @@ struct MpmcChannelTable {
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock<MpmcChannelTable>
+// SAFETY: access protected by SpinLock<MpmcChannelTable>
 unsafe impl Send for MpmcChannelTable {}
 
 impl MpmcChannelTable {
     #[allow(dead_code)]
     const fn new() -> Self {
-        // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
+        // SAFETY: mem::zeroed() avoids const-eval memory limits for large arrays.
         unsafe { core::mem::zeroed() }
     }
 
@@ -480,7 +480,7 @@ impl MpmcChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < MPMC_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit l'initialisation
+            // SAFETY: used[idx] guarantees initialization
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -500,23 +500,23 @@ impl MpmcChannelTable {
 }
 
 static MPMC_CHANNEL_TABLE: SpinLock<MpmcChannelTable> =
-    // SAFETY: SpinLock<MpmcChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
+    // SAFETY: all-zero SpinLock<MpmcChannelTable> valid: AtomicBool false = unlocked, empty table.
     unsafe { core::mem::zeroed() };
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée un canal MPMC avec la politique d'overflow spécifiée.
+/// Creates an MPMC channel with specified overflow policy.
 pub fn mpmc_channel_create(policy: OverflowPolicy) -> Result<usize, IpcError> {
     let mut tbl = MPMC_CHANNEL_TABLE.lock();
     tbl.alloc(policy).ok_or(IpcError::OutOfResources)
 }
 
-/// Envoie un message dans le canal MPMC identifié par `idx`.
+/// Sends a message into MPMC channel identified by `idx`.
 pub fn mpmc_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
-    // SAFETY: tbl.get() interne vérifie used[idx] < TABLE_SIZE avant de retourner.
+    // SAFETY: internal tbl.get() verifies used[idx] < TABLE_SIZE before returning.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     if chan_ref.is_closed() {
@@ -529,14 +529,14 @@ pub fn mpmc_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
     res
 }
 
-/// Reçoit un message du canal MPMC identifié par `idx`.
+/// Receives a message from MPMC channel identified by `idx`.
 pub fn mpmc_channel_recv(
     idx: usize,
     buf: &mut [u8],
     flags: MsgFlags,
 ) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
-    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[idx] before returning.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     if chan_ref.is_closed() {
@@ -549,22 +549,22 @@ pub fn mpmc_channel_recv(
     res
 }
 
-/// Ferme et détruit le canal MPMC identifié par `idx`.
+/// Closes and destroys MPMC channel identified by `idx`.
 pub fn mpmc_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
-    // SAFETY: tbl.get() vérifie used[idx].
+    // SAFETY: tbl.get() verifies used[idx].
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     chan.close();
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     drop(tbl);
 
-    // Drain coopératif des opérations concurrentes en vol avant libération du slot
+    // Cooperative drain of concurrent in-flight operations before freeing slot
     let mut spins = 0u32;
     while chan_ref.active_ops.load(Ordering::SeqCst) > 0 {
         core::hint::spin_loop();
         spins = spins.wrapping_add(1);
         if spins % 64 == 0 {
-            // SAFETY: cooperative_reschedule() cède le CPU au scheduler si des threads sont prêts.
+            // SAFETY: cooperative_reschedule() yields CPU to scheduler if threads are ready.
             unsafe {
                 let _ = crate::scheduler::core::switch::cooperative_reschedule();
             }
@@ -578,12 +578,12 @@ pub fn mpmc_channel_destroy(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Retourne le nombre de canaux MPMC actifs.
+/// Returns number of active MPMC channels.
 pub fn mpmc_channel_count() -> usize {
     MPMC_CHANNEL_TABLE.lock().count
 }
 
-/// Envoie dans le canal MPMC `idx` avec vérification capability (IPC-04 v6).
+/// Sends into MPMC channel `idx` with capability check (IPC-04 v6).
 pub fn mpmc_channel_send_checked(
     idx: usize,
     data: &[u8],
@@ -592,7 +592,7 @@ pub fn mpmc_channel_send_checked(
     token: CapToken,
 ) -> Result<MessageId, IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
-    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[idx] before returning.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     if chan_ref.is_closed() {
@@ -605,7 +605,7 @@ pub fn mpmc_channel_send_checked(
     res
 }
 
-/// Reçoit depuis le canal MPMC `idx` avec vérification capability (IPC-04 v6).
+/// Receives from MPMC channel `idx` with capability check (IPC-04 v6).
 pub fn mpmc_channel_recv_checked(
     idx: usize,
     buf: &mut [u8],
@@ -614,7 +614,7 @@ pub fn mpmc_channel_recv_checked(
     token: CapToken,
 ) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = MPMC_CHANNEL_TABLE.lock();
-    // SAFETY: tbl.get() vérifie used[idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[idx] before returning.
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static MpmcChannel = unsafe { &*(chan as *const MpmcChannel) };
     if chan_ref.is_closed() {

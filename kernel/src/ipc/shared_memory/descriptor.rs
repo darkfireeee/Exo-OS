@@ -1,13 +1,13 @@
-// ipc/shared_memory/descriptor.rs — Descripteur de région SHM pour Exo-OS
+// ipc/shared_memory/descriptor.rs — SHM region descriptor for Exo-OS
 //
-// ShmDescriptor est la structure principale décrivant une région de mémoire
-// partagée IPC : identifiant, taille, propriétaire, permissions, liste des
-// pages physiques associées.
+// ShmDescriptor is the main structure describing an IPC shared memory
+// region: identifier, size, owner, permissions, list of associated
+// physical pages.
 //
-// Contraintes :
-//   - Taille maximale : SHM_MAX_PAGES * PAGE_SIZE (256 × 4 KiB = 1 MiB)
-//   - Pas d'allocation dynamique — liste de pages inline (MAX_SHM_PAGES_PER_DESC)
-//   - Toutes les pages doivent avoir le flag NO_COW
+// Constraints:
+//   - Maximum size: SHM_MAX_PAGES * PAGE_SIZE (256 × 4 KiB = 1 MiB)
+//   - No dynamic allocation — inline page list (MAX_SHM_PAGES_PER_DESC)
+//   - All pages must have the NO_COW flag
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -17,10 +17,10 @@ use crate::ipc::shared_memory::page::{PhysAddr, PAGE_SIZE};
 use crate::ipc::shared_memory::pool::{shm_page_alloc, shm_page_free, shm_page_phys};
 
 // ---------------------------------------------------------------------------
-// Identifiants SHM
+// SHM Identifiers
 // ---------------------------------------------------------------------------
 
-/// Identifiant unique d'une région SHM
+/// Unique identifier of an SHM region
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ShmId(u32);
@@ -41,7 +41,7 @@ impl ShmId {
     }
 }
 
-/// Compteur pour générer des ShmId uniques
+/// Counter to generate unique ShmIds
 static SHM_ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 pub fn alloc_shm_id() -> ShmId {
@@ -50,10 +50,10 @@ pub fn alloc_shm_id() -> ShmId {
 }
 
 // ---------------------------------------------------------------------------
-// Permissions SHM
+// SHM Permissions
 // ---------------------------------------------------------------------------
 
-/// Permissions d'accès à une région SHM
+/// Access permissions for an SHM region
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShmPermissions(pub u8);
 
@@ -72,26 +72,26 @@ impl ShmPermissions {
 }
 
 // ---------------------------------------------------------------------------
-// Nombre maximal de pages par descripteur
+// Maximum number of pages per descriptor
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de pages physiques par région SHM (limite inline)
+/// Maximum number of physical pages per SHM region (inline limit)
 pub const MAX_SHM_PAGES_PER_DESC: usize = 64; // 64 × 4 KiB = 256 KiB max
 
 // ---------------------------------------------------------------------------
-// État d'une région SHM
+// SHM region state
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ShmState {
-    /// Non initialisée
+    /// Uninitialized
     Uninitialized = 0,
-    /// Active et accessible
+    /// Active and accessible
     Active = 1,
-    /// En cours de fermeture (plus de nouveaux mappings autorisés)
+    /// Closing in progress (no new mappings allowed)
     Closing = 2,
-    /// Détruite
+    /// Destroyed
     Destroyed = 3,
 }
 
@@ -107,47 +107,47 @@ impl ShmState {
 }
 
 // ---------------------------------------------------------------------------
-// ShmDescriptor — structure principale
+// ShmDescriptor — main structure
 // ---------------------------------------------------------------------------
 
-/// Descripteur d'une région de mémoire partagée IPC.
+/// Descriptor of an IPC shared memory region.
 ///
-/// Contient l'ensemble des métadonnées et la liste des pages physiques
-/// composant la région.
+/// Contains all metadata and the list of physical pages
+/// composing the region.
 #[repr(C, align(64))]
 pub struct ShmDescriptor {
-    /// Identifiant unique de la région
+    /// Unique identifier of the region
     pub id: ShmId,
-    /// Processus propriétaire
+    /// Owner process
     pub owner: ProcessId,
-    /// État courant
+    /// Current state
     pub state: AtomicU32,
-    /// Permissions déclarées à la création
+    /// Permissions declared at creation
     pub permissions: u8,
     _perm_pad: [u8; 3],
-    /// Nombre de pages allouées
+    /// Number of allocated pages
     pub page_count: AtomicU32,
-    /// Taille totale en octets (page_count * PAGE_SIZE)
+    /// Total size in bytes (page_count * PAGE_SIZE)
     pub size_bytes: u64,
-    /// Compteur de mappings actifs (référencements par des processus)
+    /// Active mapping count (references by processes)
     pub mapping_count: AtomicU32,
-    /// Timestamp de création (ns depuis boot)
+    /// Creation timestamp (ns since boot)
     pub created_at: AtomicU64,
-    /// Timestamp du dernier accès
+    /// Last access timestamp
     pub last_access: AtomicU64,
-    /// Nombre d'accès totaux
+    /// Total access count
     pub access_count: AtomicU64,
-    /// Indices des pages dans le pool SHM (MAX_SHM_PAGES_PER_DESC entmax)
+    /// Page indices in the SHM pool (MAX_SHM_PAGES_PER_DESC max)
     pub pages: [AtomicU32; MAX_SHM_PAGES_PER_DESC],
     _pad: [u8; 8],
 }
 
-// SAFETY: ShmId(u32) + ProcessId(u32) sont Copy ; AtomicU32/AtomicU64 sont Sync
+// SAFETY: ShmId(u32) + ProcessId(u32) are Copy; AtomicU32/AtomicU64 are Sync
 unsafe impl Sync for ShmDescriptor {}
 unsafe impl Send for ShmDescriptor {}
 
 impl ShmDescriptor {
-    /// Crée un descripteur non-initialisé
+    /// Creates an uninitialized descriptor
     pub const fn new_uninit() -> Self {
         const INIT_ATOMIC: AtomicU32 = AtomicU32::new(u32::MAX);
         Self {
@@ -179,7 +179,7 @@ impl ShmDescriptor {
         self.page_count.load(Ordering::Acquire) as usize
     }
 
-    /// Retourne l'adresse physique de la page `i` de la région.
+    /// Returns the physical address of page `i` of the region.
     pub fn page_phys(&self, i: usize) -> Option<PhysAddr> {
         if i >= self.page_count() {
             return None;
@@ -188,7 +188,7 @@ impl ShmDescriptor {
         shm_page_phys(idx)
     }
 
-    /// Retourne l'index pool de la page `i`.
+    /// Returns the pool index of page `i`.
     pub fn page_pool_idx(&self, i: usize) -> Option<usize> {
         if i >= self.page_count() {
             return None;
@@ -201,14 +201,14 @@ impl ShmDescriptor {
         }
     }
 
-    /// Incrémente le compteur de mappings actifs.
+    /// Increments the active mapping counter.
     pub fn add_mapping(&self) {
         self.mapping_count.fetch_add(1, Ordering::Relaxed);
         self.access_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Décrémente le compteur de mappings actifs.
-    /// Retourne `true` si plus aucun mapping actif.
+    /// Decrements the active mapping counter.
+    /// Returns `true` if there are no more active mappings.
     pub fn remove_mapping(&self) -> bool {
         let mut current = self.mapping_count.load(Ordering::Acquire);
         loop {
@@ -251,7 +251,7 @@ impl ShmDescriptor {
         }
     }
 
-    /// Libère toutes les pages allouées et passe à l'état Destroyed.
+    /// Frees all allocated pages and transitions to the Destroyed state.
     pub fn destroy(&self) {
         self.state
             .store(ShmState::Destroyed as u32, Ordering::Release);
@@ -268,13 +268,13 @@ impl ShmDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// Allocateur de répertoire de descripteurs
+// Descriptor directory allocator
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de régions SHM pouvant coexister simultanément
+/// Maximum number of SHM regions that can coexist simultaneously
 pub const MAX_SHM_REGIONS: usize = 1024;
 
-/// Entrée dans le répertoire des descripteurs SHM
+/// Entry in the SHM descriptor directory
 pub struct ShmDescEntry {
     pub desc: MaybeUninit<ShmDescriptor>,
     pub used: bool,
@@ -289,13 +289,13 @@ impl ShmDescEntry {
     }
 }
 
-/// Répertoire global des descripteurs SHM (protégé par SpinLock)
+/// Global SHM descriptor directory (protected by SpinLock)
 pub struct ShmDescDirectory {
     entries: [ShmDescEntry; MAX_SHM_REGIONS],
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock dans la table globale
+// SAFETY: access protected by SpinLock in the global table
 unsafe impl Send for ShmDescDirectory {}
 
 impl ShmDescDirectory {
@@ -307,7 +307,7 @@ impl ShmDescDirectory {
         }
     }
 
-    /// Alloue un nouveau descripteur et retourne son index.
+    /// Allocates a new descriptor and returns its index.
     pub fn alloc(
         &mut self,
         owner: ProcessId,
@@ -318,7 +318,7 @@ impl ShmDescDirectory {
             return Err(IpcError::InvalidArgument);
         }
 
-        // Chercher un slot libre
+        // Look for a free slot
         for i in 0..MAX_SHM_REGIONS {
             if !self.entries[i].used {
                 let mut desc = ShmDescriptor::new_uninit();
@@ -326,7 +326,7 @@ impl ShmDescDirectory {
                 desc.owner = owner;
                 desc.permissions = perms.0;
 
-                // Allouer les pages depuis le pool
+                // Allocate pages from the pool
                 let mut allocated = 0usize;
                 for j in 0..n_pages {
                     match shm_page_alloc() {
@@ -335,7 +335,7 @@ impl ShmDescDirectory {
                             allocated += 1;
                         }
                         None => {
-                            // Annuler les allocations déjà faites
+                            // Roll back allocations already made
                             for k in 0..allocated {
                                 let idx = desc.pages[k].load(Ordering::Relaxed) as usize;
                                 shm_page_free(idx);
@@ -360,13 +360,13 @@ impl ShmDescDirectory {
 
     pub fn free(&mut self, idx: usize) -> bool {
         if idx < MAX_SHM_REGIONS && self.entries[idx].used {
-            // SAFETY: used est true → desc est initialisé
+            // SAFETY: used is true -> desc is initialized
             let desc = unsafe { self.entries[idx].desc.assume_init_ref() };
             if desc.mapping_count() != 0 {
                 return false;
             }
             desc.destroy();
-            // SAFETY: desc initialisé (used true); used → false immédiatement après, empêche double-drop.
+            // SAFETY: desc initialized (used is true); used -> false immediately after, prevents double-drop.
             unsafe { self.entries[idx].desc.assume_init_drop() };
             self.entries[idx].used = false;
             self.count -= 1;
@@ -394,11 +394,11 @@ use crate::scheduler::sync::spinlock::SpinLock;
 pub static SHM_DESC_DIR: SpinLock<ShmDescDirectory> = SpinLock::new(ShmDescDirectory::new());
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée une nouvelle région SHM de `n_pages` pages.
-/// Retourne l'index dans le répertoire.
+/// Creates a new SHM region of `n_pages` pages.
+/// Returns the index in the directory.
 pub fn shm_create(
     owner: ProcessId,
     perms: ShmPermissions,
@@ -408,21 +408,21 @@ pub fn shm_create(
     dir.alloc(owner, perms, n_pages)
 }
 
-/// Retourne l'ID SHM associé à l'index `idx`.
+/// Returns the SHM ID associated with index `idx`.
 pub fn shm_get_id(idx: usize) -> Option<ShmId> {
     let dir = SHM_DESC_DIR.lock();
     let desc = unsafe { dir.get(idx) }?;
     Some(desc.id)
 }
 
-/// Retourne la taille en octets de la région `idx`.
+/// Returns the size in bytes of region `idx`.
 pub fn shm_get_size(idx: usize) -> Option<u64> {
     let dir = SHM_DESC_DIR.lock();
     let desc = unsafe { dir.get(idx) }?;
     Some(desc.size_bytes)
 }
 
-/// Détruit la région SHM `idx` (libère toutes ses pages).
+/// Destroys SHM region `idx` (frees all its pages).
 pub fn shm_destroy(idx: usize) -> Result<(), IpcError> {
     {
         let dir = SHM_DESC_DIR.lock();
@@ -441,7 +441,7 @@ pub fn shm_destroy(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Retourne le nombre de régions SHM actives.
+/// Returns the number of active SHM regions.
 pub fn shm_region_count() -> usize {
     SHM_DESC_DIR.lock().count()
 }

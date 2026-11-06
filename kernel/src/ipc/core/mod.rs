@@ -1,6 +1,6 @@
 // kernel/src/ipc/core/mod.rs
 //
-// Module core IPC — réexporte les types fondamentaux, constantes et moteur de transfert.
+// IPC core module — re-exports fundamental types, constants, and transfer engine.
 
 core::arch::global_asm!(include_str!("fastcall_asm.s"), options(att_syntax));
 
@@ -18,22 +18,22 @@ pub use types::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FFI — fonctions ASM fast path (fastcall_asm.s)
+// FFI — fast path ASM functions (fastcall_asm.s)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Message IPC rapide — 80 bytes (header 16 + data 64).
-/// Conçu pour tenir dans une cache line et demi.
+/// Fast IPC message — 80 bytes (header 16 + data 64).
+/// Designed to fit in one and a half cache lines.
 #[derive(Copy, Clone)]
 #[repr(C, align(8))]
 pub struct IpcFastMsg {
-    /// Identifiant du message (0 = allouer).
+    /// Message identifier (0 = allocate).
     pub msg_id: u64,
-    /// Drapeaux MsgFlags.
+    /// MsgFlags flags.
     pub flags: u32,
-    /// Longueur des données (0..=64).
+    /// Data length (0..=64).
     pub len: u16,
     pub _pad: u16,
-    /// Données inline (max 64 bytes pour le fast path).
+    /// Inline data (max 64 bytes for fast path).
     pub data: [u8; 64],
 }
 
@@ -49,8 +49,8 @@ impl IpcFastMsg {
     }
 }
 
-// Ces fonctions sont implémentées dans fastcall_asm.s et appelées depuis
-// ring/spsc.rs comme primitives de bas niveau.
+// These functions are implemented in fastcall_asm.s and called from
+// ring/spsc.rs as low-level primitives.
 extern "C" {
     pub fn ipc_fast_send(msg: *const IpcFastMsg, channel_id: u64) -> u64;
     pub fn ipc_fast_recv(dst: *mut IpcFastMsg, channel_id: u64) -> u64;
@@ -63,28 +63,28 @@ extern "C" {
     pub fn ipc_ring_fence();
 }
 
-// Fonctions Rust appelées depuis l'ASM (no_mangle pour linkage).
-// Implémentées dans ring/spsc.rs.
+// Rust functions called from ASM (no_mangle for linkage).
+// Implemented in ring/spsc.rs.
 /// # Safety
-/// `msg` doit pointer vers un `IpcFastMsg` valide en mémoire.
+/// `msg` must point to a valid `IpcFastMsg` in memory.
 #[no_mangle]
 pub unsafe extern "C" fn ipc_ring_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     use crate::ipc::ring::spsc::spsc_fast_write;
-    // SAFETY: msg est un pointeur valide (vérifié par ipc_fast_send asm).
+    // SAFETY: msg is a valid pointer (verified by ipc_fast_send asm).
     spsc_fast_write(msg, channel_id)
 }
 
 /// # Safety
-/// `dst` doit pointer vers un `IpcFastMsg` valide en écriture.
+/// `dst` must point to a valid writable `IpcFastMsg`.
 #[no_mangle]
 pub unsafe extern "C" fn ipc_ring_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     use crate::ipc::ring::spsc::spsc_fast_read;
-    // SAFETY: dst est un pointeur valide (vérifié par ipc_fast_recv asm).
+    // SAFETY: dst is a valid pointer (verified by ipc_fast_recv asm).
     spsc_fast_read(dst, channel_id)
 }
 
 /// # Safety
-/// `dst` doit pointer vers un `IpcFastMsg` valide en écriture.
+/// `dst` must point to a valid writable `IpcFastMsg`.
 #[no_mangle]
 pub unsafe extern "C" fn ipc_ring_fast_wait_reply(
     dst: *mut IpcFastMsg,
@@ -92,6 +92,6 @@ pub unsafe extern "C" fn ipc_ring_fast_wait_reply(
     timeout_ns: u64,
 ) -> u64 {
     use crate::ipc::ring::spsc::spsc_wait_reply;
-    // SAFETY: dst est un pointeur valide (vérifié par ipc_fast_call asm).
+    // SAFETY: dst is a valid pointer (verified by ipc_fast_call asm).
     spsc_wait_reply(dst, channel_id, timeout_ns)
 }

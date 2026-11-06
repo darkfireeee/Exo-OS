@@ -1,20 +1,20 @@
 // kernel/src/ipc/ring/batch.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// BATCH TRANSFERS — transferts groupés pour amortir le coût par message
-// (Exo-OS · IPC Couche 2a)
+// BATCH TRANSFERS — batched transfers to amortize per-message overhead
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Au lieu d'envoyer chaque message individuellement (coût fixe par message :
-// atomics, barrières), le batching groupe N messages en une seule opération.
+// Instead of sending each message individually (fixed overhead per message:
+// atomics, memory barriers), batching groups N messages into a single operation.
 //
-// BÉNÉFICES :
-//   • Réduit le nombre d'opérations atomiques de N → 1.
-//   • Améliore la localité cache (N messages dans la même cache line).
-//   • Déblogage en masse : wake un seul waiter pour N messages.
+// BENEFITS:
+//   • Reduces number of atomic operations from N -> 1.
+//   • Improves cache locality (N messages in the same cache line).
+//   • Mass unblocking: wakes a single waiter for N messages.
 //
-// CONTRAINTE : introduit une latence de buffering (FUSION_BATCH_THRESHOLD msgs
-//              ou FUSION_MAX_DELAY_TICKS ticks de scheduler).
+// CONSTRAINT: introduces buffering latency (FUSION_BATCH_THRESHOLD msgs
+//              or FUSION_MAX_DELAY_TICKS scheduler ticks).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::spsc::SpscRing;
@@ -23,20 +23,20 @@ use crate::ipc::core::{IpcError, MsgFlags};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchBuffer — tampon local pour les messages en attente d'envoi
+// BatchBuffer — local buffer for messages awaiting transmission
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale d'un batch (limité par FUSION_BATCH_THRESHOLD).
+/// Maximum batch size (bounded by FUSION_BATCH_THRESHOLD).
 pub const MAX_BATCH_SIZE: usize = 32;
 
-/// Un message en attente dans le batch buffer.
+/// A pending message in the batch buffer.
 #[derive(Clone)]
 pub struct BatchEntry {
-    /// Flags du message.
+    /// Message flags.
     pub flags: MsgFlags,
-    /// Longueur du payload.
+    /// Payload length.
     pub len: u16,
-    /// Payload inline (max 4080 bytes, mais en pratique ≤ 512 pour batching).
+    /// Inline payload (max 4080 bytes, but in practice <= 512 for batching).
     pub data: [u8; 512],
 }
 
@@ -50,14 +50,14 @@ impl BatchEntry {
     }
 }
 
-/// Tampon de batch côté producteur.
-/// Accumulé localement, vidé vers le ring en une seule opération.
+/// Producer-side batch buffer.
+/// Accumulated locally, flushed to ring in a single operation.
 pub struct BatchBuffer {
-    /// Messages en attente de flush.
+    /// Messages pending flush.
     entries: [BatchEntry; MAX_BATCH_SIZE],
-    /// Nombre de messages accumulés.
+    /// Number of accumulated messages.
     count: usize,
-    /// Tick d'expiration : au-delà, flush forcé.
+    /// Expiration tick: beyond this, forced flush.
     expire_tick: AtomicU64,
 }
 
@@ -71,12 +71,12 @@ impl BatchBuffer {
         }
     }
 
-    /// Ajoute un message au batch. Retourne `true` si le batch doit être flushé maintenant.
+    /// Adds a message to the batch. Returns `true` if the batch should be flushed now.
     pub fn add(&mut self, src: &[u8], flags: MsgFlags, current_tick: u64) -> bool {
-        // Limite de payload par message dans un batch.
+        // Payload limit per message in a batch.
         let len = src.len().min(512);
         if self.count == 0 {
-            // Premier message du nouveau batch — définir l'expiration.
+            // First message of new batch — define expiration.
             self.expire_tick.store(
                 current_tick + crate::ipc::core::constants::FUSION_MAX_DELAY_TICKS,
                 Ordering::Relaxed,
@@ -90,24 +90,24 @@ impl BatchBuffer {
             entry.data[..len].copy_from_slice(&src[..len]);
             self.count += 1;
         }
-        // Flush si : batch plein OU seuil atteint.
+        // Flush if: batch full OR threshold reached.
         self.count >= FUSION_BATCH_THRESHOLD || self.count >= MAX_BATCH_SIZE
     }
 
-    /// Vérifie si le batch a expiré (tick courant > expire_tick).
+    /// Checks if batch has expired (current tick > expire_tick).
     #[inline(always)]
     pub fn is_expired(&self, current_tick: u64) -> bool {
         self.count > 0 && current_tick >= self.expire_tick.load(Ordering::Relaxed)
     }
 
-    /// Retourne le nombre de messages accumulés.
+    /// Returns number of accumulated messages.
     #[inline(always)]
     pub fn count(&self) -> usize {
         self.count
     }
 
-    /// Vide le batch vers un ring SPSC.
-    /// Retourne le nombre de messages effectivement envoyés.
+    /// Flushes batch to an SPSC ring.
+    /// Returns number of messages successfully sent.
     pub fn flush_to_ring(&mut self, ring: &SpscRing) -> usize {
         let mut sent = 0;
         for i in 0..self.count {
@@ -115,10 +115,10 @@ impl BatchBuffer {
             let data = &entry.data[..entry.len as usize];
             match ring.push_copy(data, entry.flags) {
                 Ok(_) => sent += 1,
-                Err(_) => break, // ring plein — réessayer au prochain tick
+                Err(_) => break, // ring full — retry at next tick
             }
         }
-        // Décaler les messages non envoyés vers le début.
+        // Shift unsent messages toward beginning.
         if sent > 0 && sent < self.count {
             for i in 0..(self.count - sent) {
                 self.entries[i] = self.entries[sent + i].clone();
@@ -131,7 +131,7 @@ impl BatchBuffer {
         sent
     }
 
-    /// Vide le batch (discard).
+    /// Clears batch (discard).
     #[inline(always)]
     pub fn clear(&mut self) {
         self.count = 0;
@@ -140,26 +140,26 @@ impl BatchBuffer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchReceiver — réception groupée depuis un ring
+// BatchReceiver — batched reception from a ring
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une réception en batch.
+/// Result of a batched reception.
 pub struct BatchReceiveResult {
-    /// Nombre de messages reçus.
+    /// Number of received messages.
     pub received: usize,
-    /// Bytes totaux transférés.
+    /// Total bytes transferred.
     pub bytes: usize,
 }
 
-/// Vide autant de messages que possible depuis un ring vers un tableau de buffers.
+/// Drains as many messages as possible from a ring into an array of buffers.
 ///
 /// # Arguments
-/// - `ring`    : ring source.
-/// - `bufs`    : tableau de buffers destination; chaque entrée est (ptr, len).
-/// - `max`     : nombre maximum de messages à recevoir.
+/// - `ring`    : source ring.
+/// - `bufs`    : array of destination buffers; each entry is (ptr, len).
+/// - `max`     : maximum number of messages to receive.
 ///
 /// # Safety
-/// Chaque buffer dans `bufs` doit être valide et mutable.
+/// Each buffer in `bufs` must be valid and mutable.
 pub fn batch_receive(
     ring: &SpscRing,
     bufs: &mut [([u8; crate::ipc::core::MAX_MSG_SIZE], usize)],

@@ -1,18 +1,18 @@
-// ipc/sync/event.rs — Événement IPC binaire et compteur pour Exo-OS
+// ipc/sync/event.rs — Binary IPC event and counting event for Exo-OS
 //
-// Ce module implémente deux primitives de synchronisation légères :
+// This module implements two lightweight synchronization primitives:
 //
-// 1. `IpcEvent` — événement binaire (set/clear/wait) à base d'AtomicU32.
-//    Un seul bit d'état suffit. Supporte le mode "auto-reset" (le flag est
-//    effacé dès qu'un waiter est réveillé) et le mode "manual-reset"
-//    (reste positionné jusqu'à clear() explicite).
+// 1. `IpcEvent` — binary event (set/clear/wait) based on AtomicU32.
+//    A single state bit suffices. Supports "auto-reset" mode (the flag is
+//    cleared as soon as a waiter is woken) and "manual-reset" mode
+//    (remains set until explicit clear()).
 //
-// 2. `IpcCountingEvent` — compteur d'événements (sémaphore léger) :
-//    chaque `signal()` incrémente un compteur ; `wait()` le décrémente.
-//    Si le compteur est nul, le thread spin-attend.
+// 2. `IpcCountingEvent` — counting event (lightweight semaphore):
+//    each `signal()` increments a counter; `wait()` decrements it.
+//    If the counter is zero, the thread spin-waits.
 //
-// RÈGLE EVENT-01 : pas de Vec, pas de Box. Les tables sont statiques.
-// RÈGLE EVENT-02 : le spin-wait inclut un compteur de timeout.
+// RULE EVENT-01: no Vec, no Box. Tables are static.
+// RULE EVENT-02: spin-wait includes a timeout counter.
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -20,43 +20,43 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::IpcError;
 
 // ---------------------------------------------------------------------------
-// IpcEvent — événement binaire
+// IpcEvent — binary event
 // ---------------------------------------------------------------------------
 
-/// Mode de réinitialisation de l'événement
+/// Event reset mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum EventMode {
-    /// L'événement est effacé automatiquement lors du premier réveil
+    /// The event is cleared automatically upon first wakeup
     AutoReset = 0,
-    /// L'événement reste positionné jusqu'à `clear()` explicite
+    /// The event remains set until explicit `clear()`
     ManualReset = 1,
 }
 
-/// États internes de l'IpcEvent
+/// Internal states of IpcEvent
 mod event_state {
     pub const CLEAR: u32 = 0;
     pub const SET: u32 = 1;
 }
 
-/// Événement IPC binaire.  
+/// Binary IPC event.  
 ///
-/// Thread-safe, no_std. Le spin-wait est borné par `spin_max` iterations.
+/// Thread-safe, no_std. Spin-wait is bounded by `spin_max` iterations.
 #[repr(C, align(64))]
 pub struct IpcEvent {
-    /// Nom opaque (debug)
+    /// Opaque name (debug)
     pub id: u32,
-    /// État courant
+    /// Current state
     state: AtomicU32,
-    /// Mode auto-reset vs manual-reset
+    /// Auto-reset vs manual-reset mode
     mode: AtomicU32,
-    /// Nombre de waiters courants
+    /// Current number of waiters
     waiter_count: AtomicU32,
-    /// Compteur d'opérations actives (anti-UAF sur destruction concurrente)
+    /// Active operations counter (anti-UAF on concurrent destruction)
     pub active_ops: AtomicU32,
-    /// Marqueur de destruction/fermeture
+    /// Destruction/closure marker
     closed: AtomicBool,
-    /// Statistiques
+    /// Statistics
     pub total_sets: AtomicU64,
     pub total_clears: AtomicU64,
     pub total_waits: AtomicU64,
@@ -64,7 +64,7 @@ pub struct IpcEvent {
     _pad: [u8; 16],
 }
 
-// SAFETY: tous les champs internes sont atomiques
+// SAFETY: all internal fields are atomic
 unsafe impl Sync for IpcEvent {}
 unsafe impl Send for IpcEvent {}
 
@@ -85,35 +85,35 @@ impl IpcEvent {
         }
     }
 
-    /// Ferme l'événement et signale la destruction aux waiters.
+    /// Closes the event and signals destruction to waiters.
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
     }
 
-    /// Positionne l'événement (réveille les waiters si AUTO_RESET ou tous si MANUAL).
+    /// Sets the event (wakes waiters if AUTO_RESET or all if MANUAL).
     pub fn set(&self) {
         self.state.store(event_state::SET, Ordering::Release);
         self.total_sets.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Efface l'événement manuellement.
+    /// Manually clears the event.
     pub fn clear(&self) {
         self.state.store(event_state::CLEAR, Ordering::Release);
         self.total_clears.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Vérifie l'état sans attendre.
+    /// Checks the state without waiting.
     pub fn is_set(&self) -> bool {
         self.state.load(Ordering::Acquire) == event_state::SET
     }
 
-    /// Attend que l'événement soit positionné.
+    /// Waits for the event to be set.
     ///
-    /// - `spin_max=0` → attente infinie
-    /// - En mode AUTO_RESET : efface l'événement atomiquement avant de retourner
+    /// - `spin_max=0` -> infinite wait
+    /// - In AUTO_RESET mode: atomically clears the event before returning
     ///
-    /// Retourne `Ok(())` si l'événement a été détecté,  
-    /// `Err(IpcError::Timeout)` si le timeout a expiré.
+    /// Returns `Ok(())` if event was detected,  
+    /// `Err(IpcError::Timeout)` if timeout expired.
     pub fn wait(&self, spin_max: u64) -> Result<(), IpcError> {
         self.waiter_count.fetch_add(1, Ordering::Relaxed);
         self.total_waits.fetch_add(1, Ordering::Relaxed);
@@ -125,7 +125,7 @@ impl IpcEvent {
             core::hint::spin_loop();
             spins += 1;
             if spins % 128 == 0 {
-                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                // SAFETY: cooperative_reschedule temporarily yields if scheduler is active
                 unsafe {
                     let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
@@ -139,7 +139,7 @@ impl IpcEvent {
             if self.state.load(Ordering::Acquire) == event_state::SET {
                 let mode = self.mode.load(Ordering::Relaxed);
                 if mode == EventMode::AutoReset as u32 {
-                    // CAS pour prendre l'événement en exclusion mutuelle
+                    // CAS to acquire event in mutual exclusion
                     match self.state.compare_exchange(
                         event_state::SET,
                         event_state::CLEAR,
@@ -151,12 +151,12 @@ impl IpcEvent {
                             return Ok(());
                         }
                         Err(_) => {
-                            // Un autre thread a pris l'événement, continuer à attendre
+                            // Another thread acquired the event, keep waiting
                             continue;
                         }
                     }
                 } else {
-                    // ManualReset : tout le monde est réveillé
+                    // ManualReset: everyone is woken
                     self.waiter_count.fetch_sub(1, Ordering::Relaxed);
                     return Ok(());
                 }
@@ -170,12 +170,12 @@ impl IpcEvent {
         }
     }
 
-    /// Attend et efface en une seule opération (atomique pour AUTO_RESET).
+    /// Waits and clears in a single operation (atomic for AUTO_RESET).
     pub fn wait_and_clear(&self, spin_max: u64) -> Result<(), IpcError> {
         self.wait(spin_max)
     }
 
-    /// Snapshot statistiques
+    /// Statistics snapshot
     pub fn snapshot(&self) -> IpcEventStats {
         IpcEventStats {
             id: self.id,
@@ -201,16 +201,16 @@ pub struct IpcEventStats {
 }
 
 // ---------------------------------------------------------------------------
-// IpcCountingEvent — sémaphore léger basé sur un compteur atomique
+// IpcCountingEvent — lightweight semaphore based on an atomic counter
 // ---------------------------------------------------------------------------
 
-/// Valeur maximale du compteur (protection overflow)
+/// Maximum counter value (overflow protection)
 pub const MAX_EVENT_COUNT: u32 = 65535;
 
-/// Sémaphore léger IPC.
+/// Lightweight IPC semaphore.
 ///
-/// `signal()` → incrémente le compteur.  
-/// `wait()` → décrémente si compteur > 0, sinon spin-wait.
+/// `signal()` -> increments counter.  
+/// `wait()` -> decrements if counter > 0, otherwise spin-wait.
 #[repr(C, align(64))]
 pub struct IpcCountingEvent {
     pub id: u32,
@@ -244,8 +244,8 @@ impl IpcCountingEvent {
         }
     }
 
-    /// Incrémente le compteur (signal). Revient immédiatement.
-    /// Retourne `Err(IpcError::Overflow)` si déjà au maximum.
+    /// Increments the counter (signal). Returns immediately.
+    /// Returns `Err(IpcError::Invalid)` if already at maximum.
     pub fn signal(&self) -> Result<(), IpcError> {
         let max = self.max_count.load(Ordering::Relaxed);
         loop {
@@ -268,7 +268,7 @@ impl IpcCountingEvent {
         }
     }
 
-    /// Attend que le compteur soit > 0 puis décrémente.
+    /// Waits for counter to be > 0 then decrements.
     pub fn wait(&self, spin_max: u64) -> Result<(), IpcError> {
         self.total_waits.fetch_add(1, Ordering::Relaxed);
         let limit = if spin_max == 0 { u64::MAX } else { spin_max };
@@ -278,7 +278,7 @@ impl IpcCountingEvent {
             core::hint::spin_loop();
             spins += 1;
             if spins % 128 == 0 {
-                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                // SAFETY: cooperative_reschedule temporarily yields if scheduler is active
                 unsafe {
                     let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
@@ -304,7 +304,7 @@ impl IpcCountingEvent {
         }
     }
 
-    /// Tente de décrémenter sans attendre.
+    /// Attempts to decrement without waiting.
     pub fn try_wait(&self) -> bool {
         loop {
             let old = self.count.load(Ordering::Acquire);
@@ -321,12 +321,12 @@ impl IpcCountingEvent {
         }
     }
 
-    /// Valeur courante du compteur.
+    /// Current counter value.
     pub fn count(&self) -> u32 {
         self.count.load(Ordering::Relaxed)
     }
 
-    /// Reset le compteur à `initial`.
+    /// Resets counter to `initial`.
     pub fn reset(&self, initial: u32) {
         let max = self.max_count.load(Ordering::Relaxed);
         let v = if initial > max { max } else { initial };
@@ -335,13 +335,13 @@ impl IpcCountingEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Table globale d'événements IPC
+// Global IPC event table
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal d'IpcEvent dans la table globale
+/// Maximum number of IpcEvents in global table
 pub const MAX_IPC_EVENTS: usize = 128;
 
-/// Slot dans la table globale
+/// Slot in global table
 #[repr(C)]
 struct EventSlot {
     event: MaybeUninit<IpcEvent>,
@@ -357,13 +357,13 @@ impl EventSlot {
     }
 }
 
-/// Table globale des IpcEvent
+/// Global table of IpcEvents
 struct IpcEventTable {
     slots: [EventSlot; MAX_IPC_EVENTS],
     count: AtomicU32,
 }
 
-// SAFETY: accès protégé par CAS sur `occupied`
+// SAFETY: access protected by CAS on `occupied`
 unsafe impl Sync for IpcEventTable {}
 
 impl IpcEventTable {
@@ -384,7 +384,7 @@ impl IpcEventTable {
                     .is_ok()
                 {
                     let ptr = self.slots[i].event.as_ptr() as *mut IpcEvent;
-                    // SAFETY: CAS AcqRel garantit l'exclusivité; MaybeUninit<IpcEvent> write-once.
+                    // SAFETY: CAS AcqRel guarantees exclusivity; MaybeUninit<IpcEvent> write-once.
                     unsafe {
                         ptr.write(IpcEvent::new(id, mode));
                     }
@@ -427,11 +427,11 @@ impl IpcEventTable {
     }
 }
 
-// Table statique globale
+// Global static table
 static IPC_EVENT_TABLE: IpcEventTable = IpcEventTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
 struct ActiveOpGuard<'a>(&'a AtomicU32);
@@ -442,13 +442,13 @@ impl<'a> Drop for ActiveOpGuard<'a> {
     }
 }
 
-/// Crée un événement IPC dans la table globale.
-/// Retourne l'index (handle) de l'événement.
+/// Creates an IPC event in the global table.
+/// Returns the index (handle) of the event.
 pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
     IPC_EVENT_TABLE.alloc(id, mode)
 }
 
-/// Positionne l'événement `idx`.
+/// Sets event `idx`.
 pub fn event_set(idx: usize) -> Result<(), IpcError> {
     let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
     e.active_ops.fetch_add(1, Ordering::AcqRel);
@@ -457,7 +457,7 @@ pub fn event_set(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Efface l'événement `idx`.
+/// Clears event `idx`.
 pub fn event_clear(idx: usize) -> Result<(), IpcError> {
     let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
     e.active_ops.fetch_add(1, Ordering::AcqRel);
@@ -466,12 +466,12 @@ pub fn event_clear(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Vérifie l'état de l'événement sans attendre.
+/// Checks the event state without waiting.
 pub fn event_is_set(idx: usize) -> Option<bool> {
     IPC_EVENT_TABLE.get(idx).map(|e| e.is_set())
 }
 
-/// Attend l'événement `idx` avec spin-max.
+/// Waits for event `idx` with spin-max.
 pub fn event_wait(idx: usize, spin_max: u64) -> Result<(), IpcError> {
     let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
     e.active_ops.fetch_add(1, Ordering::AcqRel);
@@ -479,7 +479,7 @@ pub fn event_wait(idx: usize, spin_max: u64) -> Result<(), IpcError> {
     e.wait(spin_max)
 }
 
-/// Détruit un événement (libère son slot).
+/// Destroys an event (frees its slot).
 pub fn event_destroy(idx: usize) -> bool {
     if let Some(event) = IPC_EVENT_TABLE.get(idx) {
         event.close();
@@ -488,7 +488,7 @@ pub fn event_destroy(idx: usize) -> bool {
             core::hint::spin_loop();
             spins += 1;
             if spins % 128 == 0 {
-                // SAFETY: cooperative_reschedule cède temporairement la main si l'ordonnanceur est actif
+                // SAFETY: cooperative_reschedule temporarily yields if scheduler is active
                 unsafe {
                     let _ = crate::scheduler::core::switch::cooperative_reschedule();
                 }
@@ -498,12 +498,12 @@ pub fn event_destroy(idx: usize) -> bool {
     IPC_EVENT_TABLE.free(idx)
 }
 
-/// Compteur d'événements créés.
+/// Counter of created events.
 pub fn event_count() -> u32 {
     IPC_EVENT_TABLE.count()
 }
 
-/// Récupère le snapshot de statistiques pour un événement.
+/// Retrieves statistics snapshot for an event.
 pub fn event_stats(idx: usize) -> Option<IpcEventStats> {
     IPC_EVENT_TABLE.get(idx).map(|e| e.snapshot())
 }

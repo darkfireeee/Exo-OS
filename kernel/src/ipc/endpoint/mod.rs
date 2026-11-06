@@ -1,6 +1,6 @@
 // kernel/src/ipc/endpoint/mod.rs
 //
-// Module endpoint IPC.
+// IPC endpoint module.
 
 pub mod connection;
 pub mod descriptor;

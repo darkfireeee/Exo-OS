@@ -1,38 +1,38 @@
-// ipc/shared_memory/page.rs — Gestion de pages partagées (NO_COW) pour Exo-OS
+// ipc/shared_memory/page.rs — Shared pages management (NO_COW) for Exo-OS
 //
-// Ce module gère les pages physiques utilisées pour la mémoire partagée IPC.
-// Chaque page est identifiée par son adresse physique et possède un compteur de
-// référence atomique. Le flag NO_COW est obligatoire : la page ne doit jamais
-// être dupliquée lors d'un fork (contrainte architecturale Exo-OS).
+// This module manages physical pages used for IPC shared memory.
+// Each page is identified by its physical address and holds an atomic reference
+// count. The NO_COW flag is mandatory: the page must never be duplicated
+// upon fork (Exo-OS architectural constraint).
 //
-// Règles :
-//   RÈGLE NO-ALLOC : pas de Vec/Box en zone chaude
-//   FLAG NO_COW obligatoire sur toutes les pages SHM IPC
+// Rules:
+//   RULE NO-ALLOC: no Vec/Box on hot path
+//   FLAG NO_COW mandatory on all IPC SHM pages
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
-// Flags de page partagée
+// Shared page flags
 // ---------------------------------------------------------------------------
 
-/// Flags de mappage d'une page SHM
+/// Mapping flags of an SHM page
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageFlags(pub u32);
 
 impl PageFlags {
-    /// Page lisible
+    /// Readable page
     pub const READ: Self = Self(1 << 0);
-    /// Page écrivable
+    /// Writable page
     pub const WRITE: Self = Self(1 << 1);
-    /// Page exécutable (normalement interdit pour SHM IPC)
+    /// Executable page (normally forbidden for IPC SHM)
     pub const EXECUTE: Self = Self(1 << 2);
-    /// Pas de Copy-on-Write — OBLIGATOIRE pour SHM IPC
+    /// No Copy-on-Write — MANDATORY for IPC SHM
     pub const NO_COW: Self = Self(1 << 3);
-    /// Page épinglée en mémoire (non swappable)
+    /// Page pinned in memory (non-swappable)
     pub const PINNED: Self = Self(1 << 4);
-    /// Page mappée dans plusieurs espaces d'adressage
+    /// Page mapped in multiple address spaces
     pub const SHARED: Self = Self(1 << 5);
-    /// Combined lecture + écriture + no_cow + pinned (défaut SHM)
+    /// Combined read + write + no_cow + pinned (SHM default)
     pub const SHM_DEFAULT: Self =
         Self(Self::READ.0 | Self::WRITE.0 | Self::NO_COW.0 | Self::PINNED.0 | Self::SHARED.0);
 
@@ -50,22 +50,22 @@ impl PageFlags {
 }
 
 // ---------------------------------------------------------------------------
-// Identification de page
+// Page identification
 // ---------------------------------------------------------------------------
 
-/// Taille d'une page standard (4 KiB)
+/// Standard page size (4 KiB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Taille d'une huge page (2 MiB)
+/// Huge page size (2 MiB)
 pub const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
 
-/// Adresse physique alignée sur PAGE_SIZE — wrapper néwtypé
+/// Physical address aligned to PAGE_SIZE — newtyped wrapper
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct PhysAddr(pub u64);
 
 impl PhysAddr {
-    /// Adresse physique nulle (sentinelle)
+    /// Null physical address (sentinel)
     pub const NULL: Self = Self(0);
 
     #[inline]
@@ -73,13 +73,13 @@ impl PhysAddr {
         self.0 == 0
     }
 
-    /// Vérifie que l'adresse est alignée sur `align` (doit être une puissance de 2)
+    /// Checks that address is aligned to `align` (must be a power of 2)
     #[inline]
     pub fn is_aligned(self, align: usize) -> bool {
         (self.0 & (align as u64 - 1)) == 0
     }
 
-    /// Calcule l'index de page à partir de l'adresse physique de base.
+    /// Computes page index from base physical address.
     #[inline]
     pub fn page_index(self, base: PhysAddr) -> Option<usize> {
         if self.0 < base.0 {
@@ -94,38 +94,38 @@ impl PhysAddr {
 }
 
 // ---------------------------------------------------------------------------
-// Descripteur de page SHM
+// SHM page descriptor
 // ---------------------------------------------------------------------------
 
-/// Descripteur d'une page physique appartenant au pool SHM IPC.
-/// Taille : 64 octets exactement (une cache line).
+/// Descriptor of a physical page belonging to the IPC SHM pool.
+/// Size: exactly 64 bytes (one cache line).
 #[repr(C, align(64))]
 pub struct ShmPage {
-    /// Adresse physique de la page
+    /// Physical address of the page
     pub phys_addr: PhysAddr,
-    /// Compteur de références atomique
+    /// Atomic reference count
     pub refcount: AtomicU32,
-    /// Flags de la page (PageFlags encodés)
+    /// Page flags (encoded PageFlags)
     pub flags: AtomicU32,
-    /// Index dans le pool parent
+    /// Index in parent pool
     pub pool_index: AtomicU32,
-    /// Génération (version de réutilisation — détection ABA)
+    /// Generation (reuse version — ABA detection)
     pub generation: AtomicU32,
-    /// Identifiant du dernier processus ayant mappé cette page
+    /// Identifier of last process mapping this page
     pub last_mapper_pid: AtomicU32,
-    /// Timestamp d'allocation (ns depuis boot)
+    /// Allocation timestamp (ns since boot)
     pub alloc_ts: AtomicU64,
-    /// Nombre de fois que cette page a été réutilisée
+    /// Number of times this page has been reused
     pub reuse_count: AtomicU32,
     _pad: [u8; 4],
 }
 
-// SAFETY: tous les champs mutables sont atomiques
+// SAFETY: all mutable fields are atomic
 unsafe impl Sync for ShmPage {}
 unsafe impl Send for ShmPage {}
 
 impl ShmPage {
-    /// Crée un descripteur de page non-initialisé (phys_addr = NULL)
+    /// Creates an uninitialized page descriptor (phys_addr = NULL)
     pub const fn new_uninit() -> Self {
         Self {
             phys_addr: PhysAddr::NULL,
@@ -140,14 +140,14 @@ impl ShmPage {
         }
     }
 
-    /// Initialise la page avec une adresse physique et ses flags.
+    /// Initializes page with a physical address and its flags.
     ///
     /// # Safety
-    /// Doit être appelé une seule fois au boot, avant tout accès concurrent.
-    /// `phys_addr` est un champ non-atomique : l'assignation se fait via
-    /// un raw pointer write (pattern write-once sur static).
+    /// Must be called only once at boot, prior to any concurrent access.
+    /// `phys_addr` is a non-atomic field: assignment occurs via
+    /// a raw pointer write (write-once pattern on static).
     pub fn init(&self, phys: PhysAddr, pool_idx: u32, flags: PageFlags) {
-        // SAFETY: init() appelé une seule fois avant tout accès concurrent; phys write-once sur static.
+        // SAFETY: init() called only once prior to any concurrent access; phys write-once on static.
         unsafe {
             self.set_phys_unchecked(phys);
         }
@@ -157,19 +157,19 @@ impl ShmPage {
         self.refcount.store(0, Ordering::Release);
     }
 
-    /// Incrémente le compteur de références.
-    /// Retourne le nouveau compteur.
+    /// Increments reference count.
+    /// Returns new count.
     pub fn ref_acquire(&self) -> u32 {
         self.refcount.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Décrémente le compteur de références.
-    /// Retourne `true` si la page est maintenant libre (refcount == 0).
+    /// Decrements reference count.
+    /// Returns `true` if page is now free (refcount == 0).
     pub fn ref_release(&self) -> bool {
         let mut cur = self.refcount.load(Ordering::Acquire);
         loop {
             if cur == 0 {
-                // Double libération prévenue : éviter le wrap u32 (T8-026)
+                // Double free prevented: avoid u32 wrap (T8-026)
                 return false;
             }
             match self.refcount.compare_exchange_weak(
@@ -180,7 +180,7 @@ impl ShmPage {
             ) {
                 Ok(_) => {
                     if cur == 1 {
-                        // Incrémenter la génération pour invalider les références pendantes
+                        // Increment generation to invalidate dangling references
                         self.generation.fetch_add(1, Ordering::Release);
                         self.reuse_count.fetch_add(1, Ordering::Relaxed);
                         return true;
@@ -208,29 +208,29 @@ impl ShmPage {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// Vérifie que le flag NO_COW est bien positionné.
+    /// Verifies that NO_COW flag is set.
     pub fn assert_no_cow(&self) -> bool {
         self.flags().contains(PageFlags::NO_COW)
     }
 }
 
-// SAFETY: phys_addr est assigné une seule fois à l'init ; lecture ultérieure est safe.
-// (Rust ne peut pas exprimer ça en type — on utilise UnsafeCell mais le champ est
-// en fait write-once donc une simple lecture directe est acceptable ici.)
+// SAFETY: phys_addr is assigned only once at init; subsequent read is safe.
+// (Rust cannot express this in the type system — UnsafeCell is normally used but
+// field is actually write-once, so direct read is acceptable here.)
 impl ShmPage {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn set_phys_unchecked(&self, phys: PhysAddr) {
-        // SAFETY: addr_of! crée un *const sans référence intermédiaire — évite l'UB
-        // de mutation via &T. Écriture unique à l'init, le champ est write-once.
+        // SAFETY: addr_of! creates a *const without intermediate reference — avoids UB
+        // of mutation via &T. Single write at init, the field is write-once.
         core::ptr::write(core::ptr::addr_of!(self.phys_addr) as *mut PhysAddr, phys);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Itérateur de pages libres (pour le pool)
+// Free page iterator (for pool)
 // ---------------------------------------------------------------------------
 
-/// Statistiques de pages SHM
+/// SHM page statistics
 #[derive(Debug, Clone, Copy)]
 pub struct ShmPageStats {
     pub total_pages: usize,

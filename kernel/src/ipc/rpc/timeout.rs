@@ -1,95 +1,95 @@
-// ipc/rpc/timeout.rs — Gestion des timeouts RPC pour Exo-OS
+// ipc/rpc/timeout.rs — RPC timeout management for Exo-OS
 //
-// Ce module implémente la politique de timeout et de retry pour les appels RPC :
-//   - `RpcTimeout` : configuration de timeout + backoff exponentiel
-//   - `RpcDeadline` : échéance absolue calculée à partir d'un timestamp de boot
-//   - `RetryPolicy` : politique de retry (N tentatives + backoff)
-//   - Constantes : RPC_DEFAULT_TIMEOUT_NS, RPC_MAX_RETRIES, etc.
+// This module implements the timeout and retry policy for RPC calls:
+//   - `RpcTimeout`: timeout configuration + exponential backoff
+//   - `RpcDeadline`: absolute deadline computed from boot timestamp
+//   - `RetryPolicy`: retry policy (N attempts + backoff)
+//   - Constants: RPC_DEFAULT_TIMEOUT_NS, RPC_MAX_RETRIES, etc.
 //
-// RÈGLE TIMEOUT-01 : pas de timer hardware ici — le module lit le compteur
-//                    TSC via crate::arch::tsc::rdtsc() (ou une function pointer).
-// RÈGLE TIMEOUT-02 : backoff exponentiel borné par RPC_MAX_BACKOFF_NS.
+// RULE TIMEOUT-01: no hardware timer here — the module reads the TSC counter
+//                  via crate::arch::tsc::rdtsc() (or an fn pointer).
+// RULE TIMEOUT-02: exponential backoff bounded by RPC_MAX_BACKOFF_NS.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
 // ---------------------------------------------------------------------------
-// Constantes de timeout
+// Timeout constants
 // ---------------------------------------------------------------------------
 
-/// Timeout RPC par défaut : 5 ms en nanosecondes
+/// Default RPC timeout: 5 ms in nanoseconds
 pub const RPC_DEFAULT_TIMEOUT_NS: u64 = 5_000_000;
 
-/// Timeout RPC minimum : 100 µs
+/// Minimum RPC timeout: 100 µs
 pub const RPC_MIN_TIMEOUT_NS: u64 = 100_000;
 
-/// Timeout RPC maximum : 1 s
+/// Maximum RPC timeout: 1 s
 pub const RPC_MAX_TIMEOUT_NS: u64 = 1_000_000_000;
 
-/// Nombre maximum de tentatives par appel RPC (inclut la première)
+/// Maximum number of attempts per RPC call (includes first attempt)
 pub const RPC_MAX_RETRIES: u32 = 3;
 
-/// Délai initial de backoff : 1 ms
+/// Initial backoff delay: 1 ms
 pub const RPC_INITIAL_BACKOFF_NS: u64 = 1_000_000;
 
-/// Délai maximal de backoff : 50 ms
+/// Maximum backoff delay: 50 ms
 pub const RPC_MAX_BACKOFF_NS: u64 = 50_000_000;
 
-/// Facteur de multiplication du backoff (en fixedpoint ×2)
+/// Backoff multiplication factor (fixedpoint x2)
 pub const RPC_BACKOFF_FACTOR: u64 = 2;
 
 // ---------------------------------------------------------------------------
-// Source de temps
+// Time source
 // ---------------------------------------------------------------------------
 
-/// Type de fonction de lecture du temps courant (en nanosecondes depuis le boot)
+/// Current time reading function type (in nanoseconds since boot)
 pub type TimeFn = fn() -> u64;
 
-/// Fonction de temps par défaut : retourne 0 (utilisable avant init de l'horloge)
+/// Default time function: returns 0 (usable before clock init)
 #[allow(dead_code)]
 fn time_zero() -> u64 {
     0
 }
 
-/// Pointeur de fonction de temps configurable
-/// Initialisé à 0 (cast de fn pointer interdit en const, installé au runtime).
+/// Configurable time function pointer
+/// Initialized to 0 (casting fn pointer forbidden in const, installed at runtime).
 static TIME_FN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// Installe une fonction de lecture du temps.
-/// Doit être appelée par l'arch layer lors de l'init du TSC.
+/// Installs a time reading function.
+/// Must be called by the arch layer during TSC init.
 pub fn install_time_fn(f: TimeFn) {
     TIME_FN.store(f as usize, Ordering::Release);
 }
 
-/// Lit le temps courant via la fonction installée.
-/// Retourne 0 si l'horloge n'est pas encore initialisée (avant install_time_fn()).
+/// Reads current time via installed function.
+/// Returns 0 if clock is not yet initialized (before install_time_fn()).
 pub fn now_ns() -> u64 {
     let f_ptr = TIME_FN.load(Ordering::Relaxed);
     if f_ptr == 0 {
-        // Horloge non initialisée : retourner 0 (avant init du TSC).
+        // Clock not initialized: return 0 (before TSC init).
         return 0;
     }
-    // SAFETY: f_ptr a été stocké via install_time_fn() depuis une TimeFn valide.
+    // SAFETY: f_ptr was stored via install_time_fn() from a valid TimeFn.
     let f: TimeFn = unsafe { core::mem::transmute(f_ptr) };
     f()
 }
 
 // ---------------------------------------------------------------------------
-// RpcTimeout — configuration de timeout
+// RpcTimeout — timeout configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration de timeout pour un appel RPC.
+/// Timeout configuration for an RPC call.
 #[derive(Debug, Clone, Copy)]
 pub struct RpcTimeout {
-    /// Durée du timeout en ns (0 = utiliser RPC_DEFAULT_TIMEOUT_NS)
+    /// Timeout duration in ns (0 = use RPC_DEFAULT_TIMEOUT_NS)
     pub duration_ns: u64,
-    /// Timestamp de début (ns depuis boot), 0 = non initialisé
+    /// Start timestamp (ns since boot), 0 = uninitialized
     pub start_ns: u64,
 }
 
 impl RpcTimeout {
-    /// Timeout avec durée spécifique
+    /// Timeout with specific duration
     pub fn with_ns(duration_ns: u64) -> Self {
         let d = duration_ns.clamp(RPC_MIN_TIMEOUT_NS, RPC_MAX_TIMEOUT_NS);
         Self {
@@ -98,12 +98,12 @@ impl RpcTimeout {
         }
     }
 
-    /// Timeout par défaut (5 ms)
+    /// Default timeout (5 ms)
     pub fn default() -> Self {
         Self::with_ns(RPC_DEFAULT_TIMEOUT_NS)
     }
 
-    /// Crée un timeout infini (attente indéfinie)
+    /// Creates infinite timeout (indefinite wait)
     pub fn infinite() -> Self {
         Self {
             duration_ns: 0,
@@ -111,17 +111,17 @@ impl RpcTimeout {
         }
     }
 
-    /// Vérifie si le timeout est infini
+    /// Checks if timeout is infinite
     pub fn is_infinite(&self) -> bool {
         self.duration_ns == 0
     }
 
-    /// Démarre le timeout (enregistre le timestamp de début)
+    /// Starts timeout (records start timestamp)
     pub fn start(&mut self) {
         self.start_ns = now_ns();
     }
 
-    /// Vérifie si le timeout est expiré
+    /// Checks if timeout has expired
     pub fn is_expired(&self) -> bool {
         if self.is_infinite() {
             return false;
@@ -133,7 +133,7 @@ impl RpcTimeout {
         elapsed >= self.duration_ns
     }
 
-    /// Temps restant en ns (0 si expiré ou infini)
+    /// Remaining time in ns (0 if expired or infinite)
     pub fn remaining_ns(&self) -> u64 {
         if self.is_infinite() {
             return u64::MAX;
@@ -145,8 +145,8 @@ impl RpcTimeout {
         self.duration_ns.saturating_sub(elapsed)
     }
 
-    /// Nombre de spins suggérés pour attendre ce timeout.
-    /// Heuristique : 1 ns ≈ 1 spin à ~1 GHz.
+    /// Suggested number of spins to await this timeout.
+    /// Heuristic: 1 ns ≈ 1 spin @ ~1 GHz.
     pub fn to_spin_max(&self) -> u64 {
         if self.is_infinite() {
             return 0;
@@ -156,7 +156,7 @@ impl RpcTimeout {
 }
 
 // ---------------------------------------------------------------------------
-// RpcDeadline — échéance absolue
+// RpcDeadline — absolute deadline
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
@@ -191,10 +191,10 @@ impl RpcDeadline {
 }
 
 // ---------------------------------------------------------------------------
-// RetryPolicy — politique de retry avec backoff exponentiel
+// RetryPolicy — retry policy with exponential backoff
 // ---------------------------------------------------------------------------
 
-/// État interne d'un retryeur.
+/// Internal state of a retryer.
 pub struct RetryState {
     pub max_retries: u32,
     pub attempt: u32,
@@ -203,7 +203,7 @@ pub struct RetryState {
 }
 
 impl RetryState {
-    /// Initialise une politique de retry avec timeout.
+    /// Initializes a retry policy with timeout.
     pub fn new(max_retries: u32, timeout: RpcTimeout) -> Self {
         let n = if max_retries > RPC_MAX_RETRIES {
             RPC_MAX_RETRIES
@@ -218,18 +218,18 @@ impl RetryState {
         }
     }
 
-    /// Politique par défaut (max retries = RPC_MAX_RETRIES, timeout = défaut)
+    /// Default policy (max retries = RPC_MAX_RETRIES, timeout = default)
     pub fn default() -> Self {
         Self::new(RPC_MAX_RETRIES, RpcTimeout::default())
     }
 
-    /// Vérifie si une nouvelle tentative est possible.
+    /// Checks if a new attempt is possible.
     pub fn should_retry(&self) -> bool {
         self.attempt < self.max_retries && !self.timeout.is_expired()
     }
 
-    /// Prépare la prochaine tentative.
-    /// Retourne `Ok(wait_ns)` si retry possible, `Err(Timeout)` sinon.
+    /// Prepares next attempt.
+    /// Returns `Ok(wait_ns)` if retry is possible, `Err(Timeout)` otherwise.
     pub fn next_attempt(&mut self) -> Result<u64, IpcError> {
         if self.attempt >= self.max_retries {
             return Err(IpcError::Retry);
@@ -239,7 +239,7 @@ impl RetryState {
         }
         self.attempt += 1;
         let wait = self.backoff_ns;
-        // Backoff exponentiel borné
+        // Bounded exponential backoff
         self.backoff_ns = self
             .backoff_ns
             .saturating_mul(RPC_BACKOFF_FACTOR)
@@ -247,22 +247,22 @@ impl RetryState {
         Ok(wait)
     }
 
-    /// Spin-wait pour `ns` nanosecondes (approximation par itérations).
+    /// Spin-waits for `ns` nanoseconds (iteration approximation).
     pub fn spin_wait_ns(ns: u64) {
-        let spins = ns.min(10_000_000); // borne à 10M iterations max
+        let spins = ns.min(10_000_000); // bounded to 10M iterations max
         for _ in 0..spins {
             core::hint::spin_loop();
         }
     }
 
-    /// Nombre de tentatives effectuées
+    /// Number of performed attempts
     pub fn attempts(&self) -> u32 {
         self.attempt
     }
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques globales des timeouts RPC
+// Global RPC timeout statistics
 // ---------------------------------------------------------------------------
 
 pub struct RpcTimeoutStats {

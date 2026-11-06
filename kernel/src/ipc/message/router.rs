@@ -1,20 +1,20 @@
-// ipc/message/router.rs — Table de routage IPC multi-saut pour Exo-OS
+// ipc/message/router.rs — Multi-hop IPC routing table for Exo-OS
 //
-// Ce module implémente un routeur de messages IPC : chaque EndpointId peut
-// être associé à un next-hop (un autre EndpointId) dans une table statique.
-// Le routeur permet le forwarding transparent des messages entre endpoints
-// sans connaissance explicite du destinataire final.
+// This module implements an IPC message router: each EndpointId can
+// be associated with a next-hop (another EndpointId) in a static table.
+// The router enables transparent forwarding of messages between endpoints
+// without explicit knowledge of the final recipient.
 //
-// Architecture :
-//   - `RoutingTable` : tableau statique de MAX_ROUTES entrées (EndpointId src → dst)
-//   - `IpcRouter` : encapsule la table avec verrou par lecture/écriture spinlock
-//   - `route()` : résout le next-hop en O(1) si table compacte, O(N) sinon
-//   - `forward()` : route + retourne le descripteur de message modifié (dst remplacé)
-//   - Support de routes multi-sauts (max MAX_HOPS avant déclarer loop)
+// Architecture:
+//   - `RoutingTable`: static table of MAX_ROUTES entries (EndpointId src -> dst)
+//   - `IpcRouter`: encapsulates table with spinlock read/write lock
+//   - `route()`: resolves next-hop in O(1) if compact table, O(N) otherwise
+//   - `forward()`: routes + returns modified message descriptor (dst replaced)
+//   - Multi-hop route support (max MAX_HOPS before declaring a loop)
 //
-// RÈGLE ROUTE-01 : table statique, pas d'allocation.
-// RÈGLE ROUTE-02 : MAX_HOPS = 8 pour éviter les boucles infinies.
-// RÈGLE ROUTE-03 : les routes circulaires sont détectées et retournent Err(Loop).
+// RULE ROUTE-01: static table, no allocation.
+// RULE ROUTE-02: MAX_HOPS = 8 to prevent infinite loops.
+// RULE ROUTE-03: circular routes are detected and return Err(Loop).
 
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -25,36 +25,36 @@ use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
-// Constantes
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Nombre maximum de routes dans la table
+/// Maximum number of routes in table
 pub const MAX_ROUTES: usize = 512;
 
-/// Nombre maximum de sauts avant de détecter une boucle
+/// Maximum number of hops before detecting a loop
 pub const MAX_HOPS: usize = 8;
 
 // ---------------------------------------------------------------------------
-// Entrée de route
+// Route entry
 // ---------------------------------------------------------------------------
 
-/// Une entrée dans la table de routage : src_id → next_hop + métadonnées.
+/// An entry in the routing table: src_id -> next_hop + metadata.
 #[repr(C, align(32))]
 pub struct RouteEntry {
-    /// Endpoint source (clé de recherche)
+    /// Source endpoint (lookup key)
     pub src: AtomicU32,
-    /// Next-hop (EndpointId destination)
+    /// Next-hop (destination EndpointId)
     pub next_hop: AtomicU32,
-    /// Coût de la route (pour sélection de chemin si plusieurs routes vers même src)
+    /// Route cost (for path selection if multiple routes to same src)
     pub cost: AtomicU32,
-    /// L'entrée est valide
+    /// Entry is valid
     pub valid: AtomicBool,
-    /// Statistiques de forwarding
+    /// Forwarding statistics
     pub fwd_count: AtomicU64,
     _pad: [u8; 3],
 }
 
-// SAFETY: tous les champs sont atomiques
+// SAFETY: all fields are atomic
 unsafe impl Sync for RouteEntry {}
 unsafe impl Send for RouteEntry {}
 
@@ -76,19 +76,19 @@ impl RouteEntry {
 }
 
 // ---------------------------------------------------------------------------
-// RoutingTable — table statique
+// RoutingTable — static table
 // ---------------------------------------------------------------------------
 
-/// Table de routage IPC statique.
+/// Static IPC routing table.
 ///
-/// Recherche linéaire O(N) — N ≤ MAX_ROUTES = 512.
-/// Pour un noyau avec peu d'endpoints, c'est optimal (cache-friendly).
+/// Linear lookup O(N) — N <= MAX_ROUTES = 512.
+/// For a kernel with few endpoints, this is optimal (cache-friendly).
 struct RoutingTable {
     entries: [RouteEntry; MAX_ROUTES],
     count: AtomicU32,
 }
 
-// SAFETY: RouteEntry est Sync
+// SAFETY: RouteEntry is Sync
 unsafe impl Sync for RoutingTable {}
 
 impl RoutingTable {
@@ -99,21 +99,21 @@ impl RoutingTable {
         }
     }
 
-    /// Ajoute ou remplace une route src → next_hop.
+    /// Adds or replaces a route src -> next_hop.
     fn add(&self, src: u32, next_hop: u32, cost: u32) -> Result<(), IpcError> {
-        // Chercher une entrée existante pour src
+        // Search for an existing entry for src
         for i in 0..MAX_ROUTES {
             if self.entries[i].valid.load(Ordering::Relaxed)
                 && self.entries[i].src.load(Ordering::Relaxed) == src
             {
-                // Mise à jour
+                // Update
                 self.entries[i].next_hop.store(next_hop, Ordering::Relaxed);
                 self.entries[i].cost.store(cost, Ordering::Relaxed);
                 return Ok(());
             }
         }
 
-        // Chercher un slot libre
+        // Search for a free slot
         for i in 0..MAX_ROUTES {
             if !self.entries[i].valid.load(Ordering::Relaxed) {
                 self.entries[i].src.store(src, Ordering::Relaxed);
@@ -128,7 +128,7 @@ impl RoutingTable {
         Err(IpcError::NullEndpoint)
     }
 
-    /// Supprime la route pour `src`.
+    /// Removes route for `src`.
     fn remove(&self, src: u32) -> bool {
         for i in 0..MAX_ROUTES {
             if self.entries[i].is_match(src) {
@@ -140,7 +140,7 @@ impl RoutingTable {
         false
     }
 
-    /// Résout le next-hop pour `src`. Retourne None si aucune route.
+    /// Resolves next-hop for `src`. Returns None if no route.
     fn lookup(&self, src: u32) -> Option<u32> {
         for i in 0..MAX_ROUTES {
             if self.entries[i].is_match(src) {
@@ -151,15 +151,15 @@ impl RoutingTable {
         None
     }
 
-    /// Résout avec détection de boucle (multi-sauts).
-    /// Retourne le EndpointId final après MAX_HOPS sauts max.
+    /// Resolves with loop detection (multi-hop).
+    /// Returns the final EndpointId after MAX_HOPS hops max.
     fn resolve_final(&self, start: u32) -> Result<u32, IpcError> {
         let mut current = start;
         let mut hops = 0usize;
 
         loop {
             match self.lookup(current) {
-                None => return Ok(current), // fin de chaîne
+                None => return Ok(current), // end of chain
                 Some(next) => {
                     if next == start || next == current {
                         return Err(IpcError::Loop);
@@ -180,23 +180,23 @@ impl RoutingTable {
 }
 
 // ---------------------------------------------------------------------------
-// IpcRouter — routeur principal
+// IpcRouter — main router
 // ---------------------------------------------------------------------------
 
-/// Routeur IPC principal.
+/// Main IPC router.
 ///
-/// Accès concurrent protégé par SpinLock.
+/// Concurrent access protected by SpinLock.
 pub struct IpcRouter {
     table: SpinLock<RoutingTable>,
-    /// Nombre total de messages forwardés
+    /// Total forwarded messages
     pub forwarded: AtomicU64,
-    /// Nombre de routes non trouvées (miss)
+    /// Number of routes not found (misses)
     pub miss: AtomicU64,
-    /// Nombre de boucles détectées
+    /// Number of loops detected
     pub loops_detected: AtomicU64,
 }
 
-// SAFETY: SpinLock<RoutingTable> est Sync
+// SAFETY: SpinLock<RoutingTable> is Sync
 unsafe impl Sync for IpcRouter {}
 unsafe impl Send for IpcRouter {}
 
@@ -211,10 +211,10 @@ impl IpcRouter {
     }
 
     // -----------------------------------------------------------------------
-    // Gestion des routes
+    // Route management
     // -----------------------------------------------------------------------
 
-    /// Ajoute une route src → next_hop avec un coût optionnel.
+    /// Adds a route src -> next_hop with an optional cost.
     pub fn add_route(
         &self,
         src: EndpointId,
@@ -225,13 +225,13 @@ impl IpcRouter {
         guard.add(src.0.get() as u32, next_hop.0.get() as u32, cost)
     }
 
-    /// Supprime la route pour src.
+    /// Removes route for src.
     pub fn remove_route(&self, src: EndpointId) -> bool {
         let guard = self.table.lock();
         guard.remove(src.0.get() as u32)
     }
 
-    /// Lookup direct : next-hop immédiat pour src.
+    /// Direct lookup: immediate next-hop for src.
     pub fn next_hop(&self, src: EndpointId) -> Option<EndpointId> {
         let guard = self.table.lock();
         guard
@@ -240,7 +240,7 @@ impl IpcRouter {
             .map(EndpointId)
     }
 
-    /// Résolution finale multi-sauts : retourne l'endpoint terminal.
+    /// Multi-hop final resolution: returns terminal endpoint.
     pub fn resolve(&self, src: EndpointId) -> Result<EndpointId, IpcError> {
         let guard = self.table.lock();
         match guard.resolve_final(src.0.get() as u32) {
@@ -254,19 +254,19 @@ impl IpcRouter {
         }
     }
 
-    /// Nombre de routes actives.
+    /// Active route count.
     pub fn route_count(&self) -> u32 {
         let guard = self.table.lock();
         guard.route_count()
     }
 
     // -----------------------------------------------------------------------
-    // Forwarding de messages
+    // Message forwarding
     // -----------------------------------------------------------------------
 
-    /// Route un message : résout la destination finale et met à jour msg.dst.
+    /// Routes a message: resolves final destination and updates msg.dst.
     ///
-    /// Si aucune route n'est trouvée, msg.dst reste inchangé (livraison directe).
+    /// If no route is found, msg.dst remains unchanged (direct delivery).
     pub fn route_message(&self, msg: &mut IpcMessage) -> Result<(), IpcError> {
         let guard = self.table.lock();
         let dst_raw = msg.dst.0.get() as u32;
@@ -290,15 +290,15 @@ impl IpcRouter {
         }
     }
 
-    /// Vérifie si un endpoint est atteignable (chemin existe).
+    /// Checks if an endpoint is reachable (path exists).
     pub fn is_reachable(&self, dst: EndpointId) -> bool {
-        // Un endpoint est toujours lui-même atteignable.
-        // La résolution est réussie si pas de boucle.
+        // An endpoint is always reachable to itself.
+        // Resolution succeeds if no loop exists.
         let guard = self.table.lock();
         guard.resolve_final(dst.0.get() as u32).is_ok()
     }
 
-    /// Snapshot des statistiques du routeur.
+    /// Router statistics snapshot.
     pub fn snapshot(&self) -> IpcRouterStats {
         IpcRouterStats {
             forwarded: self.forwarded.load(Ordering::Relaxed),
@@ -318,44 +318,44 @@ pub struct IpcRouterStats {
 }
 
 // ---------------------------------------------------------------------------
-// Instance globale
+// Global instance
 // ---------------------------------------------------------------------------
 
-/// Routeur IPC global.
+/// Global IPC router.
 ///
-/// Toutes les opérations de routage passent par cette instance.
+/// All routing operations go through this instance.
 pub static IPC_ROUTER: IpcRouter = IpcRouter::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Ajoute une route dans le routeur global.
+/// Adds a route to global router.
 pub fn router_add(src: EndpointId, next_hop: EndpointId) -> Result<(), IpcError> {
     IPC_ROUTER.add_route(src, next_hop, 1)
 }
 
-/// Supprime une route du routeur global.
+/// Removes a route from global router.
 pub fn router_remove(src: EndpointId) -> bool {
     IPC_ROUTER.remove_route(src)
 }
 
-/// Résout le next-hop pour un endpoint.
+/// Resolves next-hop for an endpoint.
 pub fn router_lookup(src: EndpointId) -> Option<EndpointId> {
     IPC_ROUTER.next_hop(src)
 }
 
-/// Résout l'endpoint terminal (multi-sauts).
+/// Resolves terminal endpoint (multi-hop).
 pub fn router_resolve(src: EndpointId) -> Result<EndpointId, IpcError> {
     IPC_ROUTER.resolve(src)
 }
 
-/// Route un message (modifie msg.dst si forwarding nécessaire).
+/// Routes a message (modifies msg.dst if forwarding is needed).
 pub fn router_dispatch(msg: &mut IpcMessage) -> Result<(), IpcError> {
     IPC_ROUTER.route_message(msg)
 }
 
-/// Statistiques du routeur global.
+/// Global router statistics.
 pub fn router_stats() -> IpcRouterStats {
     IPC_ROUTER.snapshot()
 }

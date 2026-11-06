@@ -1,22 +1,22 @@
-// ipc/rpc/client.rs — Client RPC IPC pour Exo-OS
+// ipc/rpc/client.rs — IPC RPC client for Exo-OS
 //
-// Ce module implémente un client RPC IPC synchrone.
-// Un client envoie un RpcCallFrame sérialisé à un endpoint serveur et attend
-// la RpcReplyFrame en retour via un SyncChannel IPC.
+// This module implements a synchronous IPC RPC client.
+// A client sends a serialized RpcCallFrame to a server endpoint and awaits
+// the returning RpcReplyFrame via an IPC SyncChannel.
 //
-// Architecture :
-//   - `RpcClient` : handle client avec cookie counter + endpoint + retry state
-//   - `call()` : sérialise l'appel, l'envoie, spin-attend la réponse
-//   - `RpcClientTable` : table statique de MAX_RPC_CLIENTS clients
+// Architecture:
+//   - `RpcClient`: client handle with cookie counter + endpoint + retry state
+//   - `call()`: serializes call, sends it, spin-waits for reply
+//   - `RpcClientTable`: static table of MAX_RPC_CLIENTS clients
 //
-// Dépendances :
-//   - `ipc::channel::sync` pour le transport synchrone
-//   - `ipc::rpc::protocol` pour les trames
-//   - `ipc::rpc::timeout` pour la politique de retry
+// Dependencies:
+//   - `ipc::channel::sync` for synchronous transport
+//   - `ipc::rpc::protocol` for frames
+//   - `ipc::rpc::timeout` for retry policy
 //
-// RÈGLE CLIENT-01 : call() est SYNCHRONE — bloque jusqu'à réponse ou timeout.
-// RÈGLE CLIENT-02 : cookie unique par appel (AtomicU64 incrémentiel).
-// RÈGLE CLIENT-03 : retry transparent avec backoff exponentiel.
+// RULE CLIENT-01: call() is SYNCHRONOUS — blocks until reply or timeout.
+// RULE CLIENT-02: unique cookie per call (incremental AtomicU64).
+// RULE CLIENT-03: transparent retry with exponential backoff.
 
 use core::mem::MaybeUninit;
 use core::num::NonZeroU64;
@@ -30,28 +30,28 @@ use crate::ipc::rpc::timeout::{RetryState, RpcTimeout, RPC_TIMEOUT_STATS};
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
-// Constantes
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Nombre maximum de clients RPC dans la table globale
+/// Maximum number of RPC clients in global table
 pub const MAX_RPC_CLIENTS: usize = 64;
 
-/// Taille du buffer de sérialisation d'appel/réponse (header + payload max)
+/// Serialization buffer size for call/reply (header + max payload)
 pub const RPC_CALL_BUF_SIZE: usize = 64 + MAX_RPC_PAYLOAD;
 
 // ---------------------------------------------------------------------------
-// Résultat d'un appel RPC
+// Result of an RPC call
 // ---------------------------------------------------------------------------
 
-/// Résultat d'un appel RPC.
+/// Result of an RPC call.
 pub struct RpcResult {
-    /// Statut de la réponse
+    /// Reply status
     pub status: RpcStatus,
-    /// Payload de réponse (copié inline)
+    /// Reply payload (copied inline)
     pub payload: [u8; MAX_RPC_PAYLOAD],
-    /// Taille du payload
+    /// Payload size
     pub payload_len: usize,
-    /// Cookie de corrélation (pour vérification)
+    /// Correlation cookie (for verification)
     pub cookie: u64,
 }
 
@@ -75,14 +75,14 @@ impl RpcResult {
 }
 
 // ---------------------------------------------------------------------------
-// Transport abstrait : fn pointer
+// Abstract transport: fn pointer
 // ---------------------------------------------------------------------------
 
-/// Fonction de transport RPC : prend un call_buf sérialisé, retourne la
-/// réponse dans reply_buf. Retourne le nombre d'octets de réponse.
+/// RPC transport function: takes a serialized call_buf, returns
+/// reply in reply_buf. Returns number of reply bytes.
 ///
-/// Cette abstraction permet d'utiliser différents transports
-/// (SyncChannel, mémoire partagée directe, loopback...).
+/// This abstraction allows using different transports
+/// (SyncChannel, direct shared memory, loopback...).
 pub type RpcTransportFn = fn(
     server_ep: EndpointId,
     caller_ep: EndpointId,
@@ -94,31 +94,31 @@ pub type RpcTransportFn = fn(
 // RpcClient
 // ---------------------------------------------------------------------------
 
-/// Client RPC IPC.
+/// IPC RPC client.
 ///
-/// Maintient un compteur de cookies, un endpoint client, et une fonction
-/// de transport configurable.
+/// Maintains a cookie counter, a client endpoint, and a configurable
+/// transport function.
 pub struct RpcClient {
     pub id: u32,
-    /// Endpoint client (source des appels) stocké comme u64 (EndpointId.0.get()).
+    /// Client endpoint (source of calls) stored as u64 (EndpointId.0.get()).
     pub client_ep: AtomicU64,
-    /// PID du processus client
+    /// Client process PID
     pub pid: AtomicU32,
-    /// Client actif
+    /// Client active
     pub active: AtomicBool,
     _pad: [u8; 3],
-    /// Compteur de cookies (incrémental)
+    /// Cookie counter (incremental)
     cookie_counter: AtomicU64,
-    /// Transport configuré (fn pointer)
+    /// Configured transport (fn pointer)
     transport: core::sync::atomic::AtomicUsize,
-    /// Statistiques
+    /// Statistics
     pub total_calls: AtomicU64,
     pub total_errors: AtomicU64,
     pub total_timeouts: AtomicU64,
     pub total_retries_used: AtomicU64,
 }
 
-// SAFETY: AtomicUsize pour fn pointer
+// SAFETY: AtomicUsize for fn pointer
 unsafe impl Sync for RpcClient {}
 unsafe impl Send for RpcClient {}
 
@@ -159,7 +159,7 @@ impl RpcClient {
         if p == 0 {
             return None;
         }
-        // SAFETY: fn pointer stocké via start()
+        // SAFETY: fn pointer stored via start()
         Some(unsafe { core::mem::transmute::<usize, RpcTransportFn>(p) })
     }
 
@@ -167,14 +167,14 @@ impl RpcClient {
     // call()
     // -----------------------------------------------------------------------
 
-    /// Effectue un appel RPC synchrone.
+    /// Performs a synchronous RPC call.
     ///
-    /// - `server_ep` : endpoint du serveur cible
-    /// - `method_id` : méthode à invoquer
-    /// - `args` : payload de l'appel (octets)
-    /// - `timeout` : politique de timeout
+    /// - `server_ep`: target server endpoint
+    /// - `method_id`: method to invoke
+    /// - `args`: call payload (bytes)
+    /// - `timeout`: timeout policy
     ///
-    /// Retourne `RpcResult` ou `Err(IpcError)`.
+    /// Returns `RpcResult` or `Err(IpcError)`.
     pub fn call(
         &self,
         server_ep: EndpointId,
@@ -187,8 +187,8 @@ impl RpcClient {
         }
 
         let transport = self.transport_fn().ok_or(IpcError::Internal)?;
-        // SAFETY: client_ep est toujours non-nul après start() — chargement d'une valeur
-        //         stockée via ep.0.get() dans start(), donc jamais 0 sur client actif.
+        // SAFETY: client_ep is always non-null after start() — loads a value
+        //         stored via ep.0.get() in start(), thus never 0 on active client.
         let ep_raw = self.client_ep.load(Ordering::Relaxed);
         if ep_raw == 0 {
             return Err(IpcError::InvalidEndpoint);
@@ -203,7 +203,7 @@ impl RpcClient {
         let mut retry = RetryState::new(1, timeout);
 
         loop {
-            // --- Sérialiser l'appel ---
+            // --- Serialize call ---
             let plen = args.len().min(MAX_RPC_PAYLOAD);
             let header = RpcHeader::new_call(
                 method_id,
@@ -226,15 +226,15 @@ impl RpcClient {
                 .serialize(&mut call_buf)
                 .map_err(|_| IpcError::Invalid)?;
 
-            // --- Envoyer + recevoir ---
+            // --- Send + receive ---
             let mut reply_buf = [0u8; RPC_CALL_BUF_SIZE];
             match transport(server_ep, client_ep, &call_buf[..call_size], &mut reply_buf) {
                 Ok(reply_size) if reply_size > 0 => {
-                    // Désérialiser la réponse
+                    // Deserialize reply
                     match RpcReplyFrame::deserialize(&reply_buf[..reply_size]) {
                         Ok(reply) => {
                             if reply.header.cookie != cookie {
-                                // Mauvais cookie — réponse périmée
+                                // Bad cookie — stale reply
                                 continue;
                             }
 
@@ -275,7 +275,7 @@ impl RpcClient {
                         }
                     }
                 }
-                Ok(_) => {} // réponse vide — retry
+                Ok(_) => {} // empty reply — retry
                 Err(IpcError::Timeout) => {
                     if retry.should_retry() {
                         let wait_ns = retry.next_attempt()?;
@@ -295,7 +295,7 @@ impl RpcClient {
                 }
             }
 
-            // Timeout ?
+            // Timeout?
             if retry.timeout.is_expired() {
                 self.total_timeouts.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::RpcTimeout);
@@ -304,7 +304,7 @@ impl RpcClient {
         }
     }
 
-    /// Appel RPC avec le timeout par défaut.
+    /// RPC call with default timeout.
     pub fn call_default(
         &self,
         server_ep: EndpointId,
@@ -314,7 +314,7 @@ impl RpcClient {
         self.call(server_ep, method_id, args, RpcTimeout::default())
     }
 
-    /// Appel RPC avec retry (max retries = RPC_MAX_RETRIES).
+    /// RPC call with retry (max retries = RPC_MAX_RETRIES).
     pub fn call_with_retry(
         &self,
         server_ep: EndpointId,
@@ -349,11 +349,11 @@ impl RpcClient {
 
     pub fn snapshot(&self) -> RpcClientStats {
         let ep_raw = self.client_ep.load(Ordering::Relaxed);
-        // SAFETY: ep_raw est 0 uniquement avant start() ; on utilise une sentinelle dans ce cas.
+        // SAFETY: ep_raw is 0 only prior to start(); a sentinel is used in this case.
         let client_ep = if ep_raw != 0 {
             EndpointId(unsafe { NonZeroU64::new_unchecked(ep_raw) })
         } else {
-            EndpointId(unsafe { NonZeroU64::new_unchecked(u64::MAX) }) // sentinelle "invalide"
+            EndpointId(unsafe { NonZeroU64::new_unchecked(u64::MAX) }) // "invalid" sentinel
         };
         RpcClientStats {
             id: self.id,
@@ -377,7 +377,7 @@ pub struct RpcClientStats {
 }
 
 // ---------------------------------------------------------------------------
-// Table globale de clients RPC
+// Global RPC client table
 // ---------------------------------------------------------------------------
 
 struct RpcClientSlot {
@@ -417,7 +417,7 @@ impl RpcClientTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel garantit l'exclusivité; client MaybeUninit<RpcClient> write-once.
+                    // SAFETY: CAS AcqRel guarantees exclusivity; client MaybeUninit<RpcClient> write-once.
                     unsafe {
                         (self.slots[i].client.as_ptr() as *mut RpcClient).write(RpcClient::new(id));
                     }
@@ -462,10 +462,10 @@ impl RpcClientTable {
 static RPC_CLIENT_TABLE: RpcClientTable = RpcClientTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Crée un client RPC.
+/// Creates an RPC client.
 pub fn rpc_client_create(
     ep: EndpointId,
     pid: ProcessId,
@@ -476,7 +476,7 @@ pub fn rpc_client_create(
     Some(idx)
 }
 
-/// Appel RPC depuis le client `idx`.
+/// RPC call from client `idx`.
 pub fn rpc_call(
     idx: usize,
     server_ep: EndpointId,
@@ -495,7 +495,7 @@ pub fn rpc_call(
         .call(server_ep, method_id, args, timeout)
 }
 
-/// Appel RPC avec retry.
+/// RPC call with retry.
 pub fn rpc_call_retry(
     idx: usize,
     server_ep: EndpointId,
@@ -511,12 +511,12 @@ pub fn rpc_call_retry(
         .call_with_retry(server_ep, method_id, args, max_retries, timeout)
 }
 
-/// Détruit un client RPC.
+/// Destroys an RPC client.
 pub fn rpc_client_destroy(idx: usize) -> bool {
     RPC_CLIENT_TABLE.free(idx)
 }
 
-/// Statistiques d'un client.
+/// Client statistics.
 pub fn rpc_client_stats(idx: usize) -> Option<RpcClientStats> {
     RPC_CLIENT_TABLE.get(idx).map(|c| c.snapshot())
 }

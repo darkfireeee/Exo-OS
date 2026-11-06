@@ -2,20 +2,20 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUSION RING — Adaptive batching ring
-// (Exo-OS · IPC Couche 2a)
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le Fusion Ring adapte dynamiquement sa stratégie entre :
-//   • MODE DIRECT   : chaque message envoyé immédiatement (faible charge)
-//   • MODE BATCH    : accumulation jusqu'à THRESHOLD ou délai (forte charge)
+// The Fusion Ring dynamically adapts its strategy between:
+//   • DIRECT MODE   : each message sent immediately (low load)
+//   • BATCH MODE    : accumulation up to THRESHOLD or delay (high load)
 //
-// La décision est basée sur un compteur de messages en vol et une EWA
-// (Exponential Weighted Average) du débit observé.
+// The decision is based on a counter of in-flight messages and an EWA
+// (Exponential Weighted Average) of observed throughput.
 //
-// INVARIANTS :
-//   • Latence garantie ≤ FUSION_MAX_DELAY_TICKS × tick_period.
-//   • Débordement impossible : si le BatchBuffer est plein → flush immédiat.
-//   • Thread-safe pour un seul producteur et un seul consommateur.
+// INVARIANTS:
+//   • Guaranteed latency <= FUSION_MAX_DELAY_TICKS x tick_period.
+//   • Overflow impossible: if BatchBuffer is full -> immediate flush.
+//   • Thread-safe for a single producer and a single consumer.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::batch::BatchBuffer;
@@ -24,32 +24,32 @@ use crate::ipc::core::{IpcError, MsgFlags};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mode de fonctionnement du Fusion Ring
+// Operating mode of the Fusion Ring
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mode courant du Fusion Ring.
+/// Current mode of the Fusion Ring.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum FusionMode {
-    /// Envoi direct sans buffering (faible charge).
+    /// Direct transmission without buffering (low load).
     Direct = 0,
-    /// Accumulation + flush différé (forte charge).
+    /// Accumulation + deferred flush (high load).
     Batch = 1,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FusionMetrics — métriques adaptatives
+// FusionMetrics — adaptive metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs pour la prise de décision d'adaptation.
+/// Counters for adaptation decision making.
 struct FusionMetrics {
-    /// Messages envoyés depuis la dernière période d'observation.
+    /// Messages sent since last observation period.
     msgs_since_last: AtomicU64,
-    /// Dernier tick d'observation.
+    /// Last observation tick.
     last_obs_tick: AtomicU64,
-    /// EWA du débit msgs/tick.
+    /// EWA of throughput in msgs/tick.
     ewa_throughput: AtomicU32,
-    /// Nombre de switchs de mode (diagnostic).
+    /// Number of mode switches (diagnostic).
     mode_switches: AtomicU64,
 }
 
@@ -63,12 +63,12 @@ impl FusionMetrics {
         }
     }
 
-    /// Met à jour l'EWA du débit. Appelé à chaque tick scheduler.
-    /// Formule EWA : ewa = (ewa * 7 + instant) >> 3
+    /// Updates throughput EWA. Called at each scheduler tick.
+    /// EWA formula: ewa = (ewa * 7 + instant) >> 3
     fn update(&self, current_tick: u64) {
         let last = self.last_obs_tick.load(Ordering::Relaxed);
         if current_tick == last {
-            return; // même tick, pas de mise à jour
+            return; // same tick, no update
         }
         let dt = (current_tick - last).max(1);
         let msgs = self.msgs_since_last.swap(0, Ordering::Relaxed);
@@ -79,7 +79,7 @@ impl FusionMetrics {
         self.last_obs_tick.store(current_tick, Ordering::Relaxed);
     }
 
-    /// Retourne le débit EWA en msgs/tick.
+    /// Returns EWA throughput in msgs/tick.
     fn throughput_ewa(&self) -> u32 {
         self.ewa_throughput.load(Ordering::Relaxed)
     }
@@ -89,27 +89,27 @@ impl FusionMetrics {
 // FusionRing
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Seuil de débit pour passer en mode Batch (msgs/tick).
+/// Throughput threshold to switch to Batch mode (msgs/tick).
 const BATCH_THRESHOLD_THROUGHPUT: u32 = 100;
-/// Seuil de débit pour repasser en mode Direct.
+/// Throughput threshold to switch back to Direct mode.
 const DIRECT_THRESHOLD_THROUGHPUT: u32 = 20;
 
-/// Ring adaptatif — mode Direct en dessous du seuil, Batch au-dessus.
+/// Adaptive ring — Direct mode below threshold, Batch mode above.
 pub struct FusionRing {
-    /// Ring sous-jacent (SPSC).
+    /// Underlying ring (SPSC).
     inner: SpscRing,
-    /// Tampon de batch côté producteur.
+    /// Producer-side batch buffer.
     batch: BatchBuffer,
-    /// Mode courant.
+    /// Current mode.
     mode: AtomicU32, // 0 = Direct, 1 = Batch
-    /// Métriques pour l'adaptation.
+    /// Metrics for adaptation.
     metrics: FusionMetrics,
-    /// Tick courant (mis à jour par le scheduler tick handler).
+    /// Current tick (updated by scheduler tick handler).
     current_tick: AtomicU64,
 }
 
 impl FusionRing {
-    /// Crée un FusionRing en mode Direct.
+    /// Creates a FusionRing in Direct mode.
     pub const fn new() -> Self {
         Self {
             inner: SpscRing::new(),
@@ -120,12 +120,12 @@ impl FusionRing {
         }
     }
 
-    /// Initialise le ring sous-jacent.
+    /// Initializes underlying ring.
     pub fn init(&self) {
         self.inner.init();
     }
 
-    /// Met à jour le tick courant (appelé depuis le scheduler tick handler).
+    /// Updates current tick (called from scheduler tick handler).
     #[inline(always)]
     pub fn tick(&self, tick: u64) {
         self.current_tick.store(tick, Ordering::Relaxed);
@@ -133,7 +133,7 @@ impl FusionRing {
         self.adapt_mode();
     }
 
-    /// Adapte le mode en fonction du débit observé.
+    /// Adapts mode according to observed throughput.
     fn adapt_mode(&self) {
         let ewa = self.metrics.throughput_ewa();
         let mode = self.mode.load(Ordering::Relaxed);
@@ -146,17 +146,17 @@ impl FusionRing {
         }
     }
 
-    /// Envoie un message (adaptatif).
+    /// Sends a message (adaptive).
     pub fn send(&mut self, src: &[u8], flags: MsgFlags) -> Result<(), IpcError> {
         let tick = self.current_tick.load(Ordering::Relaxed);
         self.metrics.msgs_since_last.fetch_add(1, Ordering::Relaxed);
 
         let mode = self.mode.load(Ordering::Relaxed);
         if mode == 0 {
-            // MODE DIRECT — envoi immédiat.
+            // DIRECT MODE — immediate transmission.
             self.inner.push_copy(src, flags).map(|_| ())
         } else {
-            // MODE BATCH — accumuler puis flush si nécessaire.
+            // BATCH MODE — accumulate then flush if necessary.
             let should_flush = self.batch.add(src, flags, tick);
             if should_flush || self.batch.is_expired(tick) {
                 let _ = self.batch.flush_to_ring(&self.inner);
@@ -165,7 +165,7 @@ impl FusionRing {
         }
     }
 
-    /// Flush forcé du batch (ex : fin de quantum, fermeture canal).
+    /// Forced flush of batch (e.g., end of quantum, channel closing).
     pub fn flush(&mut self) -> usize {
         if self.batch.count() > 0 {
             self.batch.flush_to_ring(&self.inner)
@@ -174,12 +174,12 @@ impl FusionRing {
         }
     }
 
-    /// Reçoit un message.
+    /// Receives a message.
     pub fn recv(&self, dst: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         self.inner.pop_into(dst)
     }
 
-    /// Mode courant du ring.
+    /// Current ring mode.
     #[inline(always)]
     pub fn mode(&self) -> FusionMode {
         if self.mode.load(Ordering::Relaxed) == 0 {
@@ -189,13 +189,13 @@ impl FusionRing {
         }
     }
 
-    /// Nombre de messages en attente dans le ring.
+    /// Number of pending messages in the ring.
     #[inline(always)]
     pub fn pending(&self) -> usize {
         self.inner.len_approx() + self.batch.count()
     }
 
-    /// Statistiques diagnostiques.
+    /// Diagnostic statistics.
     pub fn mode_switches(&self) -> u64 {
         self.metrics.mode_switches.load(Ordering::Relaxed)
     }

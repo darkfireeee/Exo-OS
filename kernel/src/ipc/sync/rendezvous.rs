@@ -1,16 +1,16 @@
-// ipc/sync/rendezvous.rs — Point de rendez-vous IPC généralisé pour Exo-OS
+// ipc/sync/rendezvous.rs — Generalized IPC rendezvous point for Exo-OS
 //
-// Ce module implémente un rendez-vous N-voies (N-way rendezvous) :
-// N threads doivent tous arriver au point de rendez-vous avant que l'un
-// d'eux puisse continuer. Contrairement à la barrière cyclique, le rendez-vous
-// est à usage unique par défaut, mais peut être réarmé explicitement.
+// This module implements an N-way rendezvous:
+// all N threads must arrive at the rendezvous point before any of them
+// can proceed. Unlike a cyclic barrier, the rendezvous
+// is single-use by default, but can be rearmed explicitly.
 //
-// Variante disponible : RendezvousExchange<T: Copy> permettant à deux threads
-// d'échanger simultanément une valeur (rendezvous symétrique bilatéral).
+// Available variant: RendezvousExchange<T: Copy> allowing two threads
+// to simultaneously exchange a value (bilateral symmetric rendezvous).
 //
-// RÈGLE RNDV-01 : pas d'allocation. Tables statiques uniquement.
-// RÈGLE RNDV-02 : exchange atomique via CAS à deux phases (offer/take).
-// RÈGLE RNDV-03 : spin-wait borné. Timeout → désinscription propre.
+// RULE RNDV-01: no allocation. Static tables only.
+// RULE RNDV-02: atomic exchange via two-phase CAS (offer/take).
+// RULE RNDV-03: bounded spin-wait. Timeout -> clean deregistration.
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -18,24 +18,24 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::ipc::core::types::IpcError;
 
 // ---------------------------------------------------------------------------
-// Rendez-vous N-voies
+// N-way rendezvous
 // ---------------------------------------------------------------------------
 
-/// Nombre maximum de participants par rendez-vous
+/// Maximum number of participants per rendezvous
 pub const MAX_RENDEZVOUS_PARTIES: usize = 64;
 
-/// Nombre maximum de rendez-vous dans la table globale
+/// Maximum number of rendezvous in the global table
 pub const MAX_RENDEZVOUS_ENTRIES: usize = 64;
 
-/// État du rendez-vous
+/// Rendezvous state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum RendezvousState {
-    /// En attente de tous les participants
+    /// Waiting for all participants
     Waiting = 0,
-    /// Tous les participants sont arrivés — libération en cours
+    /// All participants have arrived — release in progress
     Releasing = 1,
-    /// Détruit / invalidé
+    /// Destroyed / invalidated
     Destroyed = 2,
 }
 
@@ -49,22 +49,22 @@ impl RendezvousState {
     }
 }
 
-/// Rendez-vous IPC N-voies à usage unique (peut être réarmé).
+/// Single-use N-way IPC rendezvous (can be rearmed).
 #[repr(C, align(64))]
 pub struct IpcRendezvous {
     pub id: u32,
-    /// Nombre de participants requis
+    /// Number of required participants
     parties: AtomicU32,
-    /// Nombre de participants arrivés
+    /// Number of arrived participants
     arrived: AtomicU32,
-    /// État interne
+    /// Internal state
     state: AtomicU32,
-    /// Génération (anti-spurious wakeup)
+    /// Generation (anti-spurious wakeup)
     generation: AtomicU32,
-    /// Actif (non détruit)
+    /// Active (not destroyed)
     pub active: AtomicBool,
     _pad: [u8; 3],
-    /// Statistiques
+    /// Statistics
     pub total_meetings: AtomicU64,
     pub total_timeouts: AtomicU64,
 }
@@ -95,10 +95,10 @@ impl IpcRendezvous {
         self.arrived.load(Ordering::Relaxed)
     }
 
-    /// Arrive au rendez-vous et attend.
+    /// Arrives at the rendezvous and waits.
     ///
-    /// Retourne `Ok(true)` pour le thread leader (dernier arrivé),
-    /// `Ok(false)` pour les autres.
+    /// Returns `Ok(true)` for the leader thread (last to arrive),
+    /// `Ok(false)` for others.
     pub fn meet(&self, spin_max: u64) -> Result<bool, IpcError> {
         if !self.active.load(Ordering::Acquire) {
             return Err(IpcError::Closed);
@@ -109,16 +109,16 @@ impl IpcRendezvous {
         let my_arrival = self.arrived.fetch_add(1, Ordering::AcqRel) + 1;
 
         if my_arrival == parties {
-            // Ce thread est le leader
+            // This thread is the leader
             self.state
                 .store(RendezvousState::Releasing as u32, Ordering::Release);
             self.total_meetings.fetch_add(1, Ordering::Relaxed);
-            // Avancer la génération pour libérer les autres
+            // Advance generation to release others
             self.generation.fetch_add(1, Ordering::Release);
             return Ok(true);
         }
 
-        // Attendre que le leader libère
+        // Wait for leader to release
         let limit = if spin_max == 0 { u64::MAX } else { spin_max };
         let mut spins = 0u64;
 
@@ -143,7 +143,7 @@ impl IpcRendezvous {
                 if self.generation.load(Ordering::Acquire) != gen {
                     return Ok(false);
                 }
-                // Timeout : décrémenter sans wrap si la génération n'a pas tourné (T8-043)
+                // Timeout: decrement without wrapping if generation has not advanced (T8-043)
                 let mut cur = self.arrived.load(Ordering::Acquire);
                 while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
                     match self.arrived.compare_exchange_weak(
@@ -165,19 +165,19 @@ impl IpcRendezvous {
         }
     }
 
-    /// Réarme le rendez-vous pour un prochain cycle.
+    /// Rearms the rendezvous for a next cycle.
     pub fn rearm(&self) {
         self.arrived.store(0, Ordering::Release);
         self.state
             .store(RendezvousState::Waiting as u32, Ordering::Release);
     }
 
-    /// Détruit le rendez-vous.
+    /// Destroys the rendezvous.
     pub fn destroy(&self) {
         self.active.store(false, Ordering::Release);
         self.state
             .store(RendezvousState::Destroyed as u32, Ordering::Release);
-        // Libérer les éventuels waiters
+        // Release any waiters
         self.generation.fetch_add(1, Ordering::Release);
     }
 
@@ -202,42 +202,42 @@ pub struct IpcRendezvousStats {
 }
 
 // ---------------------------------------------------------------------------
-// Échange symétrique 2-voies : RendezvousExchange<T>
+// 2-way symmetric exchange: RendezvousExchange<T>
 // ---------------------------------------------------------------------------
 
-/// Taille maximale d'une valeur échangeable
+/// Maximum size of an exchangeable value
 pub const MAX_EXCHANGE_SIZE: usize = 512;
 
-/// État de l'échange bilatéral
+/// Bilateral exchange state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ExchangeState {
-    /// Personne n'attend
+    /// No one is waiting
     Empty = 0,
-    /// Thread A prépare son offre dans offer_buf (T8-016 FIX)
+    /// Thread A is preparing its offer in offer_buf (T8-016 FIX)
     WritingOffer = 1,
-    /// Thread A a déposé sa valeur et attend
+    /// Thread A deposited its value and is waiting
     OfferPending = 2,
-    /// Thread B a récupéré, dépôt en cours
+    /// Thread B retrieved, deposit in progress
     Completing = 3,
 }
 
-/// Slot d'échange inline (pas de pointeur, données copiées)
+/// Inline exchange slot (no pointer, copied data)
 #[repr(C, align(64))]
 pub struct ExchangeSlot {
     state: AtomicU32,
-    /// Identité du thread offrant (pour exclusion)
+    /// Offering thread identity (for exclusion)
     offerer_thread: AtomicU32,
-    /// Taille des données (pour validation)
+    /// Data size (for validation)
     data_size: AtomicU32,
-    /// Buffer d'offre (données du thread A)
+    /// Offer buffer (Thread A data)
     offer_buf: [u8; MAX_EXCHANGE_SIZE],
-    /// Buffer de réponse (données du thread B)
+    /// Reply buffer (Thread B data)
     reply_buf: [u8; MAX_EXCHANGE_SIZE],
-    /// Résultat disponible (thread A attend reply_buf)
+    /// Result available (Thread A waiting for reply_buf)
     result_ready: AtomicBool,
     _pad: [u8; 3],
-    /// Statistiques
+    /// Statistics
     pub exchanges: AtomicU64,
     pub timeouts: AtomicU64,
 }
@@ -260,14 +260,14 @@ impl ExchangeSlot {
         }
     }
 
-    /// Échange de données entre deux threads.
+    /// Data exchange between two threads.
     ///
-    /// Thread A appelle `exchange(my_data, out_buf)` → bloque jusqu'à ce que
-    /// Thread B appelle aussi `exchange(...)`.
+    /// Thread A calls `exchange(my_data, out_buf)` -> blocks until
+    /// Thread B also calls `exchange(...)`.
     ///
-    /// Les deux threads ressortent avec les données de l'autre.
+    /// Both threads return with the other's data.
     ///
-    /// `data` doit avoir la même taille `size` pour les deux threads.
+    /// `data` must have the same `size` for both threads.
     pub fn exchange(
         &self,
         thread_id: u32,
@@ -281,7 +281,7 @@ impl ExchangeSlot {
 
         let size = data.len() as u32;
 
-        // Tenter de devenir l'offrant (CAS Empty → WritingOffer)
+        // Attempt to become offerer (CAS Empty -> WritingOffer)
         let became_offerer = self
             .state
             .compare_exchange(
@@ -293,23 +293,23 @@ impl ExchangeSlot {
             .is_ok();
 
         if became_offerer {
-            // --- Thread A : déposer l'offre ---
+            // --- Thread A: deposit offer ---
             self.offerer_thread.store(thread_id, Ordering::Relaxed);
             self.data_size.store(size, Ordering::Relaxed);
 
-            // Copier mes données dans offer_buf
-            // SAFETY: offer_buf est un tableau inline, data.len() <= MAX_EXCHANGE_SIZE
+            // Copy my data into offer_buf
+            // SAFETY: offer_buf is an inline array, data.len() <= MAX_EXCHANGE_SIZE
             unsafe {
                 let dst = self.offer_buf.as_ptr() as *mut u8;
                 core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
             }
 
             self.result_ready.store(false, Ordering::Release);
-            // T8-016 FIX : Publier OfferPending seulement après que les données soient entièrement écrites
+            // T8-016 FIX: publish OfferPending only after data is fully written
             self.state
                 .store(ExchangeState::OfferPending as u32, Ordering::Release);
 
-            // Attendre que Thread B complète l'échange
+            // Wait for Thread B to complete exchange
             let limit = if spin_max == 0 { u64::MAX } else { spin_max };
             let mut spins = 0u64;
             loop {
@@ -321,22 +321,22 @@ impl ExchangeSlot {
                     }
                 }
                 if self.result_ready.load(Ordering::Acquire) {
-                    // Lire la réponse de B dans reply_buf
-                    // SAFETY: B a écrit reply_buf avant de mettre result_ready
+                    // Read B's response in reply_buf
+                    // SAFETY: B wrote reply_buf before setting result_ready
                     let recv_len = data.len().min(out.len());
                     unsafe {
                         let src = self.reply_buf.as_ptr();
                         core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                     }
                     self.exchanges.fetch_add(1, Ordering::Relaxed);
-                    // Réinitialiser result_ready et state après que Thread A a fini de lire reply_buf
+                    // Reset result_ready and state after Thread A finished reading reply_buf
                     self.result_ready.store(false, Ordering::Release);
                     self.state
                         .store(ExchangeState::Empty as u32, Ordering::Release);
                     return Ok(());
                 }
                 if spins >= limit {
-                    // T8-016 FIX : Annuler l'offre seulement si Thread B n'est pas déjà en train de compléter
+                    // T8-016 FIX: cancel offer only if Thread B is not already completing
                     if self
                         .state
                         .compare_exchange(
@@ -353,7 +353,7 @@ impl ExchangeSlot {
                 }
             }
         } else {
-            // --- Thread B : tenter de prendre l'offre ---
+            // --- Thread B: attempt to take offer ---
             let limit = if spin_max == 0 { u64::MAX } else { spin_max };
             let mut spins = 0u64;
             loop {
@@ -367,7 +367,7 @@ impl ExchangeSlot {
 
                 let st = self.state.load(Ordering::Acquire);
                 if st == ExchangeState::OfferPending as u32 {
-                    // CAS OfferPending → Completing
+                    // CAS OfferPending -> Completing
                     if self
                         .state
                         .compare_exchange(
@@ -378,25 +378,25 @@ impl ExchangeSlot {
                         )
                         .is_ok()
                     {
-                        // Lire l'offre de A
-                        // SAFETY: A a initialisé offer_buf sous OfferPending
+                        // Read A's offer
+                        // SAFETY: A initialized offer_buf under OfferPending
                         let offer_size = self.data_size.load(Ordering::Relaxed) as usize;
                         let recv_len = offer_size.min(out.len());
-                        // SAFETY: offer_buf initialisé par A sous OfferPending (Acquire/Release sur state).
+                        // SAFETY: offer_buf initialized by A under OfferPending (Acquire/Release on state).
                         unsafe {
                             let src = self.offer_buf.as_ptr();
                             core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                         }
 
-                        // Écrire notre réponse dans reply_buf
+                        // Write our reply in reply_buf
                         let write_len = data.len().min(MAX_EXCHANGE_SIZE);
-                        // SAFETY: reply_buf exclusif en état Completing — seul B écrit ici.
+                        // SAFETY: reply_buf exclusive in Completing state — only B writes here.
                         unsafe {
                             let dst = self.reply_buf.as_ptr() as *mut u8;
                             core::ptr::copy_nonoverlapping(data.as_ptr(), dst, write_len);
                         }
 
-                        // Signaler à A que l'échange est prêt (A remettra state à Empty après lecture)
+                        // Signal to A that exchange is ready (A will reset state to Empty after reading)
                         self.result_ready.store(true, Ordering::Release);
                         return Ok(());
                     }
@@ -412,7 +412,7 @@ impl ExchangeSlot {
 }
 
 // ---------------------------------------------------------------------------
-// Tables globales
+// Global tables
 // ---------------------------------------------------------------------------
 
 struct RendezvousTableEntry {
@@ -456,7 +456,7 @@ impl IpcRendezvousTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel garantit l'exclusivité du slot; rdv MaybeUninit write-once.
+                    // SAFETY: CAS AcqRel guarantees slot exclusivity; rdv MaybeUninit write-once.
                     unsafe {
                         (self.slots[i].rdv.as_ptr() as *mut IpcRendezvous)
                             .write(IpcRendezvous::new(id, parties));
@@ -499,7 +499,7 @@ impl IpcRendezvousTable {
     }
 }
 
-/// Nombre maximal d'échanges symétrique dans la table
+/// Maximum number of symmetric exchanges in the table
 pub const MAX_EXCHANGE_SLOTS: usize = 64;
 
 struct ExchangeTable {
@@ -528,7 +528,7 @@ impl ExchangeTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel garantit l'exclusivité; slots[i] MaybeUninit<ExchangeSlot> write-once.
+                    // SAFETY: CAS AcqRel guarantees exclusivity; slots[i] MaybeUninit<ExchangeSlot> write-once.
                     unsafe {
                         (self.slots[i].as_ptr() as *mut ExchangeSlot).write(ExchangeSlot::new());
                     }
@@ -570,16 +570,16 @@ static IPC_RENDEZVOUS_TABLE: IpcRendezvousTable = IpcRendezvousTable::new();
 static IPC_EXCHANGE_TABLE: ExchangeTable = ExchangeTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique : rendez-vous N-voies
+// Public API: N-way rendezvous
 // ---------------------------------------------------------------------------
 
-/// Crée un rendez-vous pour `parties` participants. Retourne l'index (handle).
+/// Creates a rendezvous for `parties` participants. Returns index (handle).
 pub fn rendezvous_create(id: u32, parties: u32) -> Option<usize> {
     IPC_RENDEZVOUS_TABLE.alloc(id, parties)
 }
 
-/// Attend que tous les `parties` soient présents.
-/// Retourne `true` si ce thread était le dernier (leader).
+/// Waits until all `parties` are present.
+/// Returns `true` if this thread was the last (leader).
 pub fn rendezvous_meet(idx: usize, spin_max: u64) -> Result<bool, IpcError> {
     IPC_RENDEZVOUS_TABLE
         .get(idx)
@@ -587,7 +587,7 @@ pub fn rendezvous_meet(idx: usize, spin_max: u64) -> Result<bool, IpcError> {
         .meet(spin_max)
 }
 
-/// Réarme le rendez-vous pour un prochain cycle.
+/// Rearms the rendezvous for a next cycle.
 pub fn rendezvous_rearm(idx: usize) -> Result<(), IpcError> {
     IPC_RENDEZVOUS_TABLE
         .get(idx)
@@ -595,34 +595,34 @@ pub fn rendezvous_rearm(idx: usize) -> Result<(), IpcError> {
         .map(|r| r.rearm())
 }
 
-/// Détruit le rendez-vous et libère son slot.
+/// Destroys rendezvous and frees its slot.
 pub fn rendezvous_destroy(idx: usize) -> bool {
     IPC_RENDEZVOUS_TABLE.free(idx)
 }
 
-/// Récupère le nombre de participants arrivés.
+/// Retrieves number of arrived participants.
 pub fn rendezvous_arrived(idx: usize) -> Option<u32> {
     IPC_RENDEZVOUS_TABLE.get(idx).map(|r| r.arrived_count())
 }
 
-/// Statistiques du rendez-vous.
+/// Rendezvous statistics.
 pub fn rendezvous_stats(idx: usize) -> Option<IpcRendezvousStats> {
     IPC_RENDEZVOUS_TABLE.get(idx).map(|r| r.snapshot())
 }
 
 // ---------------------------------------------------------------------------
-// API publique : échange symétrique
+// Public API: symmetric exchange
 // ---------------------------------------------------------------------------
 
-/// Crée un slot d'échange symétrique.
+/// Creates a symmetric exchange slot.
 pub fn exchange_create() -> Option<usize> {
     IPC_EXCHANGE_TABLE.alloc()
 }
 
-/// Échange des données entre deux threads.
+/// Exchanges data between two threads.
 ///
-/// Les deux threads appellent cette fonction simultanément.
-/// Chacun reçoit les données de l'autre dans `out`.
+/// Both threads call this function simultaneously.
+/// Each receives the other's data in `out`.
 pub fn exchange_swap(
     idx: usize,
     thread_id: u32,
@@ -636,7 +636,7 @@ pub fn exchange_swap(
         .exchange(thread_id, data, out, spin_max)
 }
 
-/// Détruit un slot d'échange.
+/// Destroys an exchange slot.
 pub fn exchange_destroy(idx: usize) -> bool {
     IPC_EXCHANGE_TABLE.free(idx)
 }

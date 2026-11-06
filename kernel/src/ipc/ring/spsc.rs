@@ -2,20 +2,20 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 // SPSC RING — Single-Producer Single-Consumer ultra-fast
-// (Exo-OS · IPC Couche 2a)
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Implémentation d'une file FIFO lock-free SPSC avec barrières Release/Acquire.
-// C'est le chemin le plus rapide pour l'IPC kernel-to-kernel ou thread-to-thread
-// sur le même pair de comunicants.
+// Implementation of a lock-free SPSC FIFO queue with Release/Acquire barriers.
+// This is the fastest path for kernel-to-kernel or thread-to-thread IPC
+// between the same pair of communicants.
 //
-// ALGORITHME :
-//   • Producteur : lit head, accède cell[head % N], écrit données, avance head.
-//   • Consommateur : lit tail, accède cell[tail % N], lit données, avance tail.
-//   • Tail et Head sont sur des cache lines séparées (false-sharing éliminé).
-//   • Séquences dans chaque slot évitent d'avoir besoin d'un lock global.
+// ALGORITHM:
+//   • Producer: reads head, accesses cell[head % N], writes data, advances head.
+//   • Consumer: reads tail, accesses cell[tail % N], reads data, advances tail.
+//   • Tail and Head are on separate cache lines (false sharing eliminated).
+//   • Sequences in each slot prevent needing a global lock.
 //
-// PERFORMANCE CIBLE : > 50 millions de msgs/s en SPSC par canal @ 3 GHz.
+// TARGET PERFORMANCE: > 50 million msgs/s in SPSC per channel @ 3 GHz.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::slot::SlotCell;
@@ -28,11 +28,11 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{fence, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Capacité SPSC — alias public de RING_SIZE
+// SPSC capacity — public alias of RING_SIZE
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre de slots dans un ring SPSC (= RING_SIZE).
-/// Re-exporté pour usage dans les modules message/ et channel/.
+/// Number of slots in an SPSC ring (= RING_SIZE).
+/// Re-exported for use in message/ and channel/ modules.
 pub const SPSC_CAPACITY: usize = RING_SIZE;
 
 const _: () = assert!(
@@ -50,40 +50,40 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SpscRing — la structure principale
+// SpscRing — main structure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cache line padding pour AtomicU64 — sépare tête et queue du ring.
-/// AtomicU64 = 8 bytes, padding = 56 bytes → total 64 bytes = 1 cache line.
+/// Cache line padding for AtomicU64 — separates head and tail of the ring.
+/// AtomicU64 = 8 bytes, padding = 56 bytes -> total 64 bytes = 1 cache line.
 #[repr(C, align(64))]
 struct CachePad(AtomicU64, [u8; 56]);
 
-/// Ring SPSC avec head et tail sur des cache lines distinctes.
+/// SPSC ring with head and tail on distinct cache lines.
 ///
-/// # Utilisation
+/// # Usage
 /// ```
 /// let ring = SpscRing::new();
 /// ring.init();
-/// // Dans le producteur :
+/// // In producer:
 /// ring.push_copy(&data, data.len(), MsgFlags::default())?;
-/// // Dans le consommateur :
+/// // In consumer:
 /// ring.pop_into(&mut buf)?;
 /// ```
 pub struct SpscRing {
-    /// Position du prochain slot à écrire (cache line 0).
+    /// Position of next slot to write (cache line 0).
     head: CachePad,
-    /// Position du prochain slot à lire (cache line 1).
+    /// Position of next slot to read (cache line 1).
     tail: CachePad,
-    /// Slots du ring (16 MiB environ — alloués en SHM en production).
+    /// Ring slots (~16 MiB — allocated in SHM in production).
     cells: UnsafeCell<[SlotCell; RING_SIZE]>,
 }
 
-// SAFETY: accès aux cells régulé par le protocole head/tail/sequence.
+// SAFETY: access to cells regulated by the head/tail/sequence protocol.
 unsafe impl Send for SpscRing {}
 unsafe impl Sync for SpscRing {}
 
 impl SpscRing {
-    /// Construit un SpscRing — head et tail sur des cache lines séparées.
+    /// Constructs an SpscRing — head and tail on separate cache lines.
     /// Note: `CachePad` = AtomicU64(8B) + padding(56B) = 64B = 1 cache line.
     pub const fn new() -> Self {
         Self {
@@ -93,10 +93,10 @@ impl SpscRing {
         }
     }
 
-    /// Initialise les séquences de toutes les cellules.
-    /// Doit être appelé une seule fois après construction.
+    /// Initializes sequences of all cells.
+    /// Must be called only once after construction.
     pub fn init(&self) {
-        // SAFETY: init() est appelé une seule fois avant toute utilisation.
+        // SAFETY: init() is called only once prior to any usage.
         let cells = unsafe { &mut *self.cells.get() };
         for (i, cell) in cells.iter_mut().enumerate() {
             cell.sequence.store(i as u64, Ordering::Relaxed);
@@ -104,23 +104,23 @@ impl SpscRing {
         fence(Ordering::Release);
     }
 
-    /// Retourne la cellule à la position `pos`.
-    /// Utilise array_index_nospec (RÈGLE IPC-08 — Spectre v1).
+    /// Returns cell at position `pos`.
+    /// Uses array_index_nospec (RULE IPC-08 — Spectre v1).
     #[inline(always)]
     fn cell_at(&self, pos: u64) -> &SlotCell {
         let cells = unsafe { &*self.cells.get() };
-        // array_index_nospec : empêche la spéculation CPU hors bornes (Spectre v1).
+        // array_index_nospec: prevents out-of-bounds CPU speculation (Spectre v1).
         let idx = array_index_nospec((pos as usize) & RING_MASK, RING_SIZE);
         &cells[idx]
     }
 
-    // ───────────────────────── PRODUCTEUR ─────────────────────────────────
+    // ───────────────────────── PRODUCER ─────────────────────────────────
 
-    /// Envoie un message (copie de données depuis slice).
+    /// Sends a message (data copy from slice).
     ///
-    /// # Retour
-    /// - `Ok(MessageId)`  : succès.
-    /// - `Err(WouldBlock)`: ring plein (non bloquant).
+    /// # Return
+    /// - `Ok(MessageId)`  : success.
+    /// - `Err(WouldBlock)`: ring full (non-blocking).
     /// - `Err(MessageTooLarge)`: len > MAX_MSG_SIZE.
     #[inline]
     pub fn push_copy(&self, src: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
@@ -131,14 +131,14 @@ impl SpscRing {
         let cell = self.cell_at(pos);
         let seq = cell.load_seq();
 
-        // Slot libre si seq == pos (pas encore occupé).
+        // Free slot if seq == pos (not yet occupied).
         if seq != pos {
-            // seq < pos → ring plein ; seq > pos → impossible en SPSC.
+            // seq < pos -> ring full; seq > pos -> impossible in SPSC.
             return Err(IpcError::QueueFull);
         }
 
         let id = alloc_message_id();
-        // SAFETY: seul producteur (SPSC); seq == pos prouve que le consommateur a libéré ce slot.
+        // SAFETY: single producer (SPSC); seq == pos proves consumer has freed this slot.
         unsafe {
             let slot = (*cell.slot.get()).assume_init_mut();
             slot.header = MessageHeader::new_inline(id, flags, src.len());
@@ -147,14 +147,14 @@ impl SpscRing {
             }
         }
 
-        // Release : rend le slot visible au consommateur.
+        // Release: makes slot visible to consumer.
         cell.store_seq(pos + 1);
         self.head.0.store(pos + 1, Ordering::Release);
         Ok(id)
     }
 
-    /// Envoie un message zero-copy (données déjà dans un buffer partagé).
-    /// `zc_ref` est encodé dans les 8 premiers bytes du payload.
+    /// Sends a zero-copy message (data already in shared buffer).
+    /// `zc_ref` is encoded in the first 8 bytes of payload.
     #[inline]
     pub fn push_zerocopy(
         &self,
@@ -168,7 +168,7 @@ impl SpscRing {
         }
         let id = alloc_message_id();
         let f = MsgFlags(flags.0 | MsgFlags::ZEROCOPY.0);
-        // SAFETY: SPSC — seul producteur actif.
+        // SAFETY: SPSC — single active producer.
         unsafe {
             let slot = (*cell.slot.get()).assume_init_mut();
             slot.header = MessageHeader::new_zerocopy(id, f);
@@ -183,32 +183,32 @@ impl SpscRing {
         Ok(id)
     }
 
-    // ───────────────────────── CONSOMMATEUR ──────────────────────────────
+    // ───────────────────────── CONSUMER ──────────────────────────────
 
-    /// Reçoit un message dans `dst`. Retourne le nombre de bytes copiés.
+    /// Receives a message into `dst`. Returns number of copied bytes.
     ///
-    /// # Retour
-    /// - `Ok((n, flags))` : n bytes copiés, drapeaux du message.
-    /// - `Err(QueueEmpty)` : ring vide.
+    /// # Return
+    /// - `Ok((n, flags))` : n bytes copied, message flags.
+    /// - `Err(QueueEmpty)` : ring empty.
     #[inline]
     pub fn pop_into(&self, dst: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         let pos = self.tail.0.load(Ordering::Relaxed);
         let cell = self.cell_at(pos);
         let seq = cell.load_seq();
 
-        // Slot disponible si seq == pos + 1.
+        // Slot available if seq == pos + 1.
         if seq != pos + 1 {
             return Err(IpcError::QueueEmpty);
         }
 
-        // SAFETY: seq == pos + 1 → produit et visible. SPSC → seul consommateur.
+        // SAFETY: seq == pos + 1 -> produced and visible. SPSC -> single consumer.
         let (header, len) = unsafe {
             let slot = (*cell.slot.get()).assume_init_ref();
             let h = slot.header;
             let ln = slot.header.len as usize;
             if ln > dst.len() {
-                // Ne pas consommer le slot : le message reste en tête du ring pour que
-                // l'appelant puisse allouer un buffer plus grand et retenter.
+                // Do not consume slot: message remains at ring head so caller
+                // can allocate a larger buffer and retry.
                 return Err(IpcError::MessageTooLarge);
             }
             if ln > 0 {
@@ -218,14 +218,14 @@ impl SpscRing {
         };
         let _ = header;
 
-        // Libère le slot : pos + RING_SIZE = prochain tour du producteur.
+        // Releases slot: pos + RING_SIZE = next lap of producer.
         cell.store_seq(pos + RING_SIZE as u64);
         self.tail.0.store(pos + 1, Ordering::Release);
         Ok((len, MsgFlags(header.flags)))
     }
 
-    /// Inspecte le prochain message sans le consommer (peek).
-    /// Retourne l'en-tête sans copier le payload.
+    /// Inspects next message without consuming it (peek).
+    /// Returns header without copying payload.
     #[inline]
     pub fn peek_header(&self) -> Option<MessageHeader> {
         let pos = self.tail.0.load(Ordering::Relaxed);
@@ -233,12 +233,12 @@ impl SpscRing {
         if cell.load_seq() != pos + 1 {
             return None;
         }
-        // SAFETY: seq == pos + 1 → données disponibles.
+        // SAFETY: seq == pos + 1 -> data available.
         let h = unsafe { (*cell.slot.get()).assume_init_ref().header };
         Some(h)
     }
 
-    /// Retourne vrai si le ring est vide.
+    /// Returns true if ring is empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let pos = self.tail.0.load(Ordering::Relaxed);
@@ -246,7 +246,7 @@ impl SpscRing {
         cell.load_seq() != pos + 1
     }
 
-    /// Retourne vrai si le ring est plein.
+    /// Returns true if ring is full.
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         let pos = self.head.0.load(Ordering::Relaxed);
@@ -254,7 +254,7 @@ impl SpscRing {
         cell.load_seq() != pos
     }
 
-    /// Nombre approximatif de messages en attente.
+    /// Approximate number of pending messages.
     #[inline(always)]
     pub fn len_approx(&self) -> usize {
         let h = self.head.0.load(Ordering::Relaxed);
@@ -264,22 +264,22 @@ impl SpscRing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions no_mangle appelées depuis fastcall_asm.s
+// no_mangle functions called from fastcall_asm.s
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale de rings SPSC actifs (indexée par channel_id % MAX_SPSC_RINGS).
-/// En production, remplacée par une structure allouée dynamiquement depuis
-/// le pool SHM. Ici : table statique pour le bootstrap et les tests.
-// CORRECTION P1-04 : augmenter MAX_SPSC_RINGS pour supporter plus de canaux IPC.
-// 4096 rings × ~200 bytes/ring ≈ 800 KiB .bss — acceptable pour le kernel.
-// Aspirationnel : 65536 (MAX_CHANNELS) — sera revisité avec allocation dynamique.
+/// Global table of active SPSC rings (indexed by channel_id % MAX_SPSC_RINGS).
+/// In production, replaced by a dynamically allocated structure from
+/// the SHM pool. Here: static table for bootstrap and tests.
+// FIX P1-04: increase MAX_SPSC_RINGS to support more IPC channels.
+// 4096 rings x ~200 bytes/ring ≈ 800 KiB .bss — acceptable for the kernel.
+// Aspirational: 65536 (MAX_CHANNELS) — will be revisited with dynamic allocation.
 const MAX_SPSC_RINGS: usize = 4096;
 
 static SPSC_RINGS: [SpscRing; MAX_SPSC_RINGS] = [const { SpscRing::new() }; MAX_SPSC_RINGS];
 
 static SPSC_INIT: AtomicU64 = AtomicU64::new(0);
 
-/// Initialise tous les rings de la table statique (appelé au boot IPC).
+/// Initializes all rings in the static table (called at IPC boot).
 pub fn init_spsc_rings() {
     if SPSC_INIT
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
@@ -291,8 +291,8 @@ pub fn init_spsc_rings() {
     }
 }
 
-/// Accède au ring correspondant à un channel_id.
-/// array_index_nospec (RÈGLE IPC-08) : empêche la spéculation hors-bornes.
+/// Accesses ring corresponding to a channel_id.
+/// array_index_nospec (RULE IPC-08): prevents out-of-bounds speculation.
 #[inline(always)]
 fn ring_for(channel_id: u64) -> Result<&'static SpscRing, IpcError> {
     let raw_idx = usize::try_from(channel_id).map_err(|_| IpcError::InvalidParam)?;
@@ -303,10 +303,10 @@ fn ring_for(channel_id: u64) -> Result<&'static SpscRing, IpcError> {
     Ok(&SPSC_RINGS[idx])
 }
 
-/// Écriture rapide pour fastcall_asm.s.
+/// Fast write for fastcall_asm.s.
 ///
 /// # Safety
-/// `msg` doit être un pointeur valide vers une `IpcFastMsg`.
+/// `msg` must be a valid pointer to an `IpcFastMsg`.
 pub unsafe fn spsc_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     let m = &*msg;
     let len = m.len as usize;
@@ -322,10 +322,10 @@ pub unsafe fn spsc_fast_write(msg: *const IpcFastMsg, channel_id: u64) -> u64 {
     }
 }
 
-/// Lecture rapide pour fastcall_asm.s.
+/// Fast read for fastcall_asm.s.
 ///
 /// # Safety
-/// `dst` doit être un pointeur valide vers une `IpcFastMsg`.
+/// `dst` must be a valid pointer to an `IpcFastMsg`.
 pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     let m = &mut *dst;
     let ring = match ring_for(channel_id) {
@@ -343,12 +343,12 @@ pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     }
 }
 
-/// Attente de réponse (polling loop + yield) pour fast call.
+/// Reply wait (polling loop + yield) for fast call.
 ///
 /// # Safety
-/// `dst` doit être un pointeur valide vers une `IpcFastMsg`.
+/// `dst` must be a valid pointer to an `IpcFastMsg`.
 pub unsafe fn spsc_wait_reply(dst: *mut IpcFastMsg, channel_id: u64, timeout_ns: u64) -> u64 {
-    // Polling avec compteur de spin avant yield.
+    // Polling with spin counter before yield.
     const SPIN_LIMIT: u64 = 10_000;
     let ring = match ring_for(channel_id) {
         Ok(ring) => ring,
@@ -374,8 +374,8 @@ pub unsafe fn spsc_wait_reply(dst: *mut IpcFastMsg, channel_id: u64, timeout_ns:
         }
         spins += 1;
         if spins > SPIN_LIMIT {
-            // Yield au scheduler pour laisser d'autres threads tourner.
-            // SAFETY: appel kernel safe depuis contexte kernel.
+            // Yield to scheduler to let other threads run.
+            // SAFETY: safe kernel call from kernel context.
             extern "C" {
                 fn arch_cpu_relax();
             }

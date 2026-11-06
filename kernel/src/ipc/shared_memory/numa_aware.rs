@@ -1,17 +1,17 @@
-// ipc/shared_memory/numa_aware.rs — Allocation SHM avec affinité NUMA pour Exo-OS
+// ipc/shared_memory/numa_aware.rs — SHM allocation with NUMA affinity for Exo-OS
 //
-// Sur les systèmes NUMA (Non-Uniform Memory Access), allouer la mémoire partagée
-// sur le nœud NUMA du processus demandeur améliore significativement les performances.
+// On NUMA (Non-Uniform Memory Access) systems, allocating shared memory
+// on the requesting process's NUMA node significantly improves performance.
 //
-// Ce module maintient :
-//   - Une partition du pool SHM par nœud NUMA (NUMA_PAGES_PER_NODE pages chacun)
-//   - Des bitmaps d'allocation indépendants par nœud
-//   - Un fallback sur le pool global si le nœud local est épuisé
-//   - Des statistiques de hits/misses NUMA
+// This module maintains:
+//   - A partition of the SHM pool per NUMA node (NUMA_PAGES_PER_NODE pages each)
+//   - Independent allocation bitmaps per node
+//   - Fallback to the global pool if the local node is exhausted
+//   - NUMA hit/miss statistics
 //
-// Configuration :
-//   MAX_NUMA_NODES = 8 (adapté pour la plupart des serveurs)
-//   NUMA_PAGES_PER_NODE = SHM_POOL_PAGES / MAX_NUMA_NODES = 32 pages par nœud
+// Configuration:
+//   MAX_NUMA_NODES = 8 (suited for most servers)
+//   NUMA_PAGES_PER_NODE = SHM_POOL_PAGES / MAX_NUMA_NODES = 32 pages per node
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
@@ -22,16 +22,16 @@ use crate::ipc::shared_memory::descriptor::{shm_create, ShmPermissions};
 use crate::ipc::shared_memory::pool::{shm_page_alloc, shm_page_free};
 
 // ---------------------------------------------------------------------------
-// Configuration NUMA
+// NUMA configuration
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de nœuds NUMA supportés
+/// Maximum number of supported NUMA nodes
 pub const MAX_NUMA_NODES: usize = 8;
 
-/// Pages SHM allouées par nœud NUMA
+/// SHM pages allocated per NUMA node
 pub const NUMA_PAGES_PER_NODE: usize = SHM_POOL_PAGES / MAX_NUMA_NODES; // 32
 
-/// Identifiant de nœud NUMA
+/// NUMA node identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct NumaNodeId(pub u32);
@@ -50,25 +50,25 @@ impl NumaNodeId {
 }
 
 // ---------------------------------------------------------------------------
-// Bitmap par nœud NUMA
+// NUMA node bitmap
 // ---------------------------------------------------------------------------
 
-/// Nombre de mots u64 pour le bitmap d'un nœud (32 pages = 1 mot)
+/// Number of u64 words for a node's bitmap (32 pages = 1 word)
 pub const NUMA_BITMAP_WORDS: usize = (NUMA_PAGES_PER_NODE + 63) / 64; // = 1
 
-/// Bitmap d'allocation pour un nœud NUMA
+/// Allocation bitmap for a NUMA node
 #[repr(C, align(64))]
 pub struct NumaBitmap {
-    /// bits[i] = 1 → page locale i libre, 0 → occupée
+    /// bits[i] = 1 -> local page i free, 0 -> occupied
     bits: [AtomicU64; NUMA_BITMAP_WORDS],
-    /// Offset de début dans le pool global (page_index_base + local_offset)
+    /// Start offset in the global pool (page_index_base + local_offset)
     page_base: AtomicU32,
-    /// Nombre de pages libres dans ce nœud
+    /// Number of free pages in this node
     free_count: AtomicUsize,
     _pad: [u8; 20],
 }
 
-// SAFETY: tous les champs sont atomiques ou write-once (page_base)
+// SAFETY: all fields are atomic or write-once (page_base)
 unsafe impl Sync for NumaBitmap {}
 unsafe impl Send for NumaBitmap {}
 
@@ -83,24 +83,24 @@ impl NumaBitmap {
         }
     }
 
-    /// Initialise le bitmap : `base` = premier index pool de ce nœud.
+    /// Initializes the bitmap: `base` = first pool index of this node.
     pub fn init(&self, base: usize) {
         self.page_base.store(base as u32, Ordering::Relaxed);
-        // Marquer toutes les pages comme libres (1 = libre)
+        // Mark all pages as free (1 = free)
         let full_words = NUMA_PAGES_PER_NODE / 64;
         let rem = NUMA_PAGES_PER_NODE % 64;
         for w in 0..full_words {
             self.bits[w].store(u64::MAX, Ordering::Relaxed);
         }
         if rem > 0 {
-            // Seulement `rem` bits valides dans le dernier mot
+            // Only `rem` valid bits in the last word
             self.bits[full_words].store((1u64 << rem) - 1, Ordering::Relaxed);
         }
         self.free_count
             .store(NUMA_PAGES_PER_NODE, Ordering::Release);
     }
 
-    /// Alloue une page locale. Retourne son index dans le pool global, ou None.
+    /// Allocates a local page. Returns its index in the global pool, or None.
     pub fn alloc_local(&self) -> Option<usize> {
         let base = self.page_base.load(Ordering::Relaxed) as usize;
 
@@ -120,7 +120,7 @@ impl NumaBitmap {
                             self.free_count.fetch_sub(1, Ordering::Relaxed);
                             return Some(base + local_idx);
                         }
-                        // Restaurer le bit (dépassement)
+                        // Restore bit (out of bounds)
                         word.fetch_or(mask, Ordering::Release);
                         return None;
                     }
@@ -134,11 +134,11 @@ impl NumaBitmap {
         None
     }
 
-    /// Libère la page d'index global `pool_idx` dans ce nœud.
+    /// Frees page with global index `pool_idx` in this node.
     pub fn free_local(&self, pool_idx: usize) -> bool {
         let base = self.page_base.load(Ordering::Relaxed) as usize;
         if pool_idx < base || pool_idx >= base + NUMA_PAGES_PER_NODE {
-            return false; // pas notre nœud
+            return false; // not our node
         }
         let local = pool_idx - base;
         let wi = local / 64;
@@ -154,18 +154,18 @@ impl NumaBitmap {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques NUMA
+// NUMA statistics
 // ---------------------------------------------------------------------------
 
 #[repr(C, align(64))]
 pub struct NumaStats {
-    /// Allocations satisfaites sur le nœud local
+    /// Allocations satisfied on the local node
     pub local_hits: AtomicU64,
-    /// Allocations tombées sur fallback global (miss NUMA)
+    /// Allocations falling back to global pool (NUMA miss)
     pub remote_misses: AtomicU64,
-    /// Libérations sur le nœud local
+    /// Frees on the local node
     pub local_frees: AtomicU64,
-    /// Libérations sur autre nœud (migration)
+    /// Frees on another node (migration)
     pub remote_frees: AtomicU64,
     _pad: [u8; 32],
 }
@@ -200,19 +200,19 @@ pub struct NumaStatsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Gestionnaire NUMA global
+// Global NUMA manager
 // ---------------------------------------------------------------------------
 
-/// Gestionnaire NUMA : répartit le pool SHM entre MAX_NUMA_NODES nœuds.
+/// NUMA manager: partitions the SHM pool among MAX_NUMA_NODES nodes.
 pub struct NumaManager {
     nodes: [NumaBitmap; MAX_NUMA_NODES],
-    /// Nombre de nœuds NUMA actifs (détectés au démarrage)
+    /// Number of active NUMA nodes (detected at boot)
     active_nodes: AtomicUsize,
     pub stats: NumaStats,
     initialized: AtomicU32,
 }
 
-// SAFETY: NumaBitmap est Sync, NumaStats est Sync
+// SAFETY: NumaBitmap is Sync, NumaStats is Sync
 unsafe impl Sync for NumaManager {}
 unsafe impl Send for NumaManager {}
 
@@ -227,11 +227,11 @@ impl NumaManager {
         }
     }
 
-    /// Initialise le gestionnaire NUMA en partitionnant le pool SHM.
-    /// `n_nodes` = nombre de nœuds NUMA détectés (1 si non-NUMA).
+    /// Initializes the NUMA manager by partitioning the SHM pool.
+    /// `n_nodes` = number of detected NUMA nodes (1 if non-NUMA).
     ///
     /// # SAFETY
-    /// Doit être appelé après `init_shm_pool()`, une seule fois.
+    /// Must be called once after `init_shm_pool()`.
     pub unsafe fn init(&self, n_nodes: usize) {
         if n_nodes == 0 {
             return;
@@ -256,14 +256,14 @@ impl NumaManager {
     }
 
     // -----------------------------------------------------------------------
-    // Allocation NUMA-aware
+    // NUMA-aware allocation
     // -----------------------------------------------------------------------
 
-    /// Alloue une page en priorisant `preferred_node`.
-    /// Fallback sur le pool global si le nœud local est épuisé.
+    /// Allocates a page prioritizing `preferred_node`.
+    /// Fallback to the global pool if the local node is exhausted.
     pub fn alloc_page(&self, preferred_node: NumaNodeId) -> Option<usize> {
         if !self.is_initialized() {
-            // Fallback : pool global
+            // Fallback: global pool
             self.stats.remote_misses.fetch_add(1, Ordering::Relaxed);
             return shm_page_alloc();
         }
@@ -271,13 +271,13 @@ impl NumaManager {
         let n = self.active_nodes();
         let preferred = preferred_node.index().min(n.saturating_sub(1));
 
-        // Tentative sur le nœud préféré
+        // Attempt on preferred node
         if let Some(idx) = self.nodes[preferred].alloc_local() {
             self.stats.local_hits.fetch_add(1, Ordering::Relaxed);
             return Some(idx);
         }
 
-        // Tentative sur les autres nœuds (round-robin)
+        // Attempt on other nodes (round-robin)
         for delta in 1..n {
             let node = (preferred + delta) % n;
             if let Some(idx) = self.nodes[node].alloc_local() {
@@ -286,12 +286,12 @@ impl NumaManager {
             }
         }
 
-        // Dernier recours : pool global (pages non-NUMA)
+        // Last resort: global pool (non-NUMA pages)
         self.stats.remote_misses.fetch_add(1, Ordering::Relaxed);
         shm_page_alloc()
     }
 
-    /// Libère une page (détection automatique du nœud).
+    /// Frees a page (automatic node detection).
     pub fn free_page(&self, pool_idx: usize) {
         if !self.is_initialized() {
             shm_page_free(pool_idx);
@@ -302,18 +302,18 @@ impl NumaManager {
         for i in 0..n {
             if self.nodes[i].free_local(pool_idx) {
                 self.stats.local_frees.fetch_add(1, Ordering::Relaxed);
-                // Aussi libérer dans le pool global pour cohérence
+                // Also free in global pool for consistency
                 shm_page_free(pool_idx);
                 return;
             }
         }
 
-        // Page hors partition NUMA (pool global)
+        // Page outside NUMA partition (global pool)
         self.stats.remote_frees.fetch_add(1, Ordering::Relaxed);
         shm_page_free(pool_idx);
     }
 
-    /// Retourne le nombre de pages libres sur `node`.
+    /// Returns the number of free pages on `node`.
     pub fn node_free_pages(&self, node: NumaNodeId) -> usize {
         if !node.is_valid() || node.index() >= self.active_nodes() {
             return 0;
@@ -321,31 +321,31 @@ impl NumaManager {
         self.nodes[node.index()].free_count()
     }
 
-    /// Snapshot des statistiques NUMA.
+    /// Snapshot of NUMA statistics.
     pub fn snapshot_stats(&self) -> NumaStatsSnapshot {
         self.stats.snapshot()
     }
 }
 
-/// Instance globale du gestionnaire NUMA
+/// Global NUMA manager instance
 pub static NUMA_MANAGER: NumaManager = NumaManager::new();
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Initialise le gestionnaire NUMA avec `n_nodes` nœuds.
-/// À appeler depuis ipc_init() après init_shm_pool().
+/// Initializes the NUMA manager with `n_nodes` nodes.
+/// To be called from ipc_init() after init_shm_pool().
 pub unsafe fn numa_init(n_nodes: usize) {
     NUMA_MANAGER.init(n_nodes);
 }
 
-/// Alloue une région SHM préférentiellement sur le nœud NUMA `preferred_node`.
+/// Allocates an SHM region preferentially on NUMA node `preferred_node`.
 ///
-/// # Comportement
-/// - Essaie d'allouer toutes les pages sur le nœud préféré
-/// - Fallback automatique sur les autres nœuds / pool global
-/// - Toutes les pages ont le flag NO_COW
+/// # Behavior
+/// - Attempts to allocate all pages on the preferred node
+/// - Automatic fallback to other nodes / global pool
+/// - All pages have the NO_COW flag
 pub fn numa_shm_alloc(
     owner: ProcessId,
     perms: ShmPermissions,
@@ -358,11 +358,11 @@ pub fn numa_shm_alloc(
 
     let size_class = ShmSizeClass::for_size(n_pages * crate::ipc::shared_memory::page::PAGE_SIZE);
 
-    // Allouer le descripteur SHM depuis le pool global (T8-011 FIX : évite
-    // la réservation redondante et la double libération corrompant le refcount).
+    // Allocate SHM descriptor from global pool (T8-011 FIX: avoids
+    // redundant reservation and double free corrupting refcount).
     let desc_idx = shm_create(owner, perms, n_pages)?;
 
-    // Mettre à jour les statistiques NUMA selon le placement effectif des pages
+    // Update NUMA statistics according to actual page placement
     if NUMA_MANAGER.is_initialized() {
         let pref_idx = preferred_node.index().min(NUMA_MANAGER.active_nodes().saturating_sub(1));
         let dir = crate::ipc::shared_memory::descriptor::SHM_DESC_DIR.lock();
@@ -393,17 +393,17 @@ pub fn numa_shm_alloc(
     })
 }
 
-/// Libère une région SHM allouée via `numa_shm_alloc()`.
+/// Frees an SHM region allocated via `numa_shm_alloc()`.
 pub fn numa_shm_free(handle: ShmHandle) -> Result<(), IpcError> {
     crate::ipc::shared_memory::descriptor::shm_destroy(handle.desc_idx)
 }
 
-/// Retourne le snapshot des statistiques NUMA.
+/// Returns a snapshot of NUMA statistics.
 pub fn numa_stats() -> NumaStatsSnapshot {
     NUMA_MANAGER.snapshot_stats()
 }
 
-/// Retourne le nombre de pages libres sur le nœud `node`.
+/// Returns the number of free pages on node `node`.
 pub fn numa_node_free_pages(node: NumaNodeId) -> usize {
     NUMA_MANAGER.node_free_pages(node)
 }

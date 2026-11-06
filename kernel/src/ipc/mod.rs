@@ -1,36 +1,36 @@
-// ipc/mod.rs — Module racine IPC pour Exo-OS
+// ipc/mod.rs — Root IPC module for Exo-OS
 //
-// Ce module est le point d'entrée unique pour tout le sous-système IPC.
-// Il agrège tous les sous-modules et expose les primitives nécessaires
-// aux autres couches du noyau (process, scheduler, fs, drivers).
+// This module is the single entry point for the entire IPC subsystem.
+// It aggregates all submodules and exposes the primitives needed
+// by other kernel layers (process, scheduler, fs, drivers).
 //
-// Architecture du sous-système IPC :
+// IPC subsystem architecture:
 //
-//   core/          — types, constantes, séquences, transferts, fastcall asm
+//   core/          — types, constants, sequences, transfers, fastcall asm
 //   ring/          — ring buffers SPSC, MPMC, zero-copy, batch, fusion
-//   endpoint/      — descripteurs, registre, connexions, lifecycle
+//   endpoint/      — descriptors, registry, connections, lifecycle
 //   channel/       — sync, async, mpmc, broadcast, typed, streaming
-//   shared_memory/ — pages, pool, descripteurs, mappings, allocateur, NUMA
+//   shared_memory/ — pages, pool, descriptors, mappings, allocator, NUMA
 //   sync/          — futex, wait_queue, event, barrier, rendezvous
-//   stats/         — compteurs statistiques AtomicU64 globaux
+//   stats/         — global AtomicU64 statistical counters
 //   message/       — builder, serializer, router, priority
 //   rpc/           — protocol, server, client, timeout
 //
-// Initialisation :
-//   Appeler `ipc_init(base_phys, n_numa_nodes)` au boot.
+// Initialization:
+//   Call `ipc_init(base_phys, n_numa_nodes)` at boot.
 //
-// Ordre de verrouillage (regle_bonus.md) :
-//   IPC locks = niveau 4 (après Memory→Scheduler→Security)
-// IPC locks — niveau 4 dans l'ordre canonique ExoOS :
-// Memory(1) → Scheduler(2) → Security(3) → IPC(4) → FS(5)
-// NE JAMAIS acquérir un lock Memory/Scheduler dans un contexte IPC verrouillé.
+// Lock ordering (regle_bonus.md):
+//   IPC locks = level 4 (after Memory -> Scheduler -> Security)
+// IPC locks — level 4 in the ExoOS canonical order:
+// Memory(1) -> Scheduler(2) -> Security(3) -> IPC(4) -> FS(5)
+// NEVER acquire a Memory/Scheduler lock within a locked IPC context.
 //
 //
-// RÈGLE IPC-ROOT-01 : ipc_init() doit être appelé AVANT toute opération IPC.
-// RÈGLE IPC-ROOT-02 : pas d'import de modules fs/ ou process/ depuis ce module.
+// RULE IPC-ROOT-01: ipc_init() must be called BEFORE any IPC operation.
+// RULE IPC-ROOT-02: no imports of fs/ or process/ modules from this module.
 
 // ---------------------------------------------------------------------------
-// Sous-modules
+// Submodules
 // ---------------------------------------------------------------------------
 
 pub mod capability_bridge;
@@ -45,38 +45,38 @@ pub mod stats;
 pub mod sync;
 
 // ---------------------------------------------------------------------------
-// Re-exports principaux pour usage externe depuis kernel/
+// Main re-exports for external usage from kernel/
 // ---------------------------------------------------------------------------
 
 use crate::rust_core::sync::atomic::{AtomicU8, Ordering};
 use exo_types::IpcEndpoint;
 
-// core/ — types fondamentaux
+// core/ — fundamental types
 pub use core::{
     constants::{IPC_MAX_CHANNELS, IPC_MAX_ENDPOINTS, IPC_MAX_PROCESSES, IPC_VERSION},
     types::{ChannelId, EndpointId, IpcError, MessageFlags, MessageType, ProcessId},
 };
 
-// stats/ — compteurs globaux
+// stats/ — global counters
 pub use stats::counters::{IpcStatsSnapshot, StatEvent, IPC_STATS};
 
-// endpoint/ — API principale d'endpoint
+// endpoint/ — main endpoint API
 pub use endpoint::{
     do_accept as endpoint_accept, do_connect as endpoint_connect, endpoint_close, endpoint_create,
     endpoint_destroy, endpoint_listen,
 };
 
-// capability_bridge/ — compat vers security::access_control
+// capability_bridge/ — compat toward security::access_control
 pub use capability_bridge::{
     capability_to_ipc_error, check_channel_access, check_endpoint_access, check_shm_access,
 };
 
-// channel/ — API channels
+// channel/ — channels API
 pub use channel::sync::{
     sync_channel_create, sync_channel_destroy, sync_channel_recv, sync_channel_send,
 };
 
-// shared_memory/ — API SHM
+// shared_memory/ — SHM API
 pub use shared_memory::{
     allocator::{shm_alloc, shm_free},
     mapping::{
@@ -87,7 +87,7 @@ pub use shared_memory::{
     pool::init_shm_pool,
 };
 
-// sync/ — API synchronisation IPC
+// sync/ — IPC synchronization API
 pub use sync::{
     barrier::{barrier_arrive_and_wait, barrier_create, barrier_destroy},
     event::{event_create, event_destroy, event_set, event_wait},
@@ -97,13 +97,13 @@ pub use sync::{
     },
 };
 
-// message/ — API message
+// message/ — message API
 pub use message::{
     builder::{msg_control, msg_data, msg_signal, IpcMessage, IpcMessageBuilder},
     router::{router_add, router_dispatch, router_remove},
 };
 
-// rpc/ — API RPC
+// rpc/ — RPC API
 pub use rpc::{
     client::{rpc_call, rpc_client_create, rpc_client_destroy},
     protocol::{MethodId, RpcStatus, RPC_MAGIC},
@@ -111,11 +111,11 @@ pub use rpc::{
     timeout::{install_time_fn, RpcTimeout},
 };
 
-/// Envoie une notification IRQ bornée et non bloquante à un endpoint driver.
+/// Sends a bounded, non-blocking IRQ notification to a driver endpoint.
 ///
-/// Payload canonique :
-/// - octet 0  : numéro IRQ
-/// - octets 1..8 : wave generation little-endian
+/// Canonical payload:
+/// - byte 0   : IRQ number
+/// - bytes 1..8: wave generation little-endian
 pub fn send_irq_notification(
     endpoint: &IpcEndpoint,
     irq: u8,
@@ -135,7 +135,7 @@ pub fn send_irq_notification(
 }
 
 // ---------------------------------------------------------------------------
-// Initialisation globale IPC
+// Global IPC initialization
 // ---------------------------------------------------------------------------
 
 const IPC_INIT_DONE: u8 = 1 << 0;
@@ -144,52 +144,52 @@ const IPC_VMM_HOOKS_DONE: u8 = 1 << 2;
 
 static IPC_INIT_STATE: AtomicU8 = AtomicU8::new(0);
 
-/// Initialise le sous-système IPC.
+/// Initializes the IPC subsystem.
 ///
-/// Doit être appelée une seule fois au boot, avant tout usage IPC.
+/// Must be called once at boot, before any IPC usage.
 ///
-/// # Paramètres
-/// - `shm_base_phys` : adresse physique de base du pool SHM (alignée 4K)
-/// - `n_numa_nodes` : nombre de nœuds NUMA disponibles (1..=8)
+/// # Parameters
+/// - `shm_base_phys`: base physical address of the SHM pool (4K-aligned)
+/// - `n_numa_nodes`: number of available NUMA nodes (1..=8)
 ///
-/// # Sécurité
-/// Doit être appelée en contexte de démarrage, core 0, interruptions désactivées.
+/// # Safety
+/// Must be called in startup context, core 0, interrupts disabled.
 pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
-    // Garde de ré-entrance : ne pas réinitialiser les pools et compteurs si déjà fait.
+    // Re-entrancy guard: do not reinitialize pools and counters if already done.
     if IPC_INIT_STATE.load(Ordering::Acquire) & IPC_INIT_DONE != 0 {
         return;
     }
 
-    // 1. Initialiser le pool de pages SHM
-    // SAFETY: shm_base_phys aligné 4K, mémoire physique réservée SHM, appelé une seule fois au boot.
+    // 1. Initialize the SHM page pool
+    // SAFETY: shm_base_phys 4K-aligned, reserved physical memory for SHM, called once at boot.
     unsafe {
         shared_memory::pool::init_shm_pool(shm_base_phys);
     }
 
-    // 2. Initialiser le gestionnaire NUMA
-    // SAFETY: appelé une seule fois, n_numa_nodes validé par numa_init()
+    // 2. Initialize the NUMA manager
+    // SAFETY: called once, n_numa_nodes validated by numa_init()
     unsafe {
         shared_memory::numa_aware::numa_init(n_numa_nodes as usize);
     }
 
-    // 3. Enregistrer les stats IPC (reset compteurs)
+    // 3. Register IPC stats (reset counters)
     stats::counters::IPC_STATS.reset_all();
 
-    // 4. Publier le registre d'endpoints, statique mais initialisé explicitement.
+    // 4. Publish the endpoint registry, static but explicitly initialized.
     unsafe {
         endpoint::registry::init_endpoint_registry();
     }
 
-    // 5. Connecter le provider SHM inverse vers memory::virtual.
+    // 5. Connect the reverse SHM provider toward memory::virtual.
     shared_memory::memory_bridge::register_with_memory();
 
-    // 6. Log minimal d'initialisation (au niveau du kernel)
-    // Note : on ne peut pas utiliser log!/println! ici (no_std), mais un hook
-    // d'initialisation peut être fourni par l'arch layer via les callbacks.
+    // 6. Minimal initialization log (kernel level)
+    // Note: cannot use log!/println! here (no_std), but an init hook
+    // can be provided by the arch layer via callbacks.
     IPC_INIT_STATE.fetch_or(IPC_INIT_DONE, Ordering::Release);
 }
 
-/// Retourne le snapshot des statistiques IPC globales.
+/// Returns a snapshot of global IPC statistics.
 pub fn ipc_stats_snapshot() -> IpcStatsSnapshot {
     IPC_STATS.snapshot()
 }
@@ -210,35 +210,34 @@ pub fn ipc_vmm_hooks_ready() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Hooks d'intégration — scheduler et VMM
+// Integration hooks — scheduler and VMM
 // ---------------------------------------------------------------------------
 
-/// Connecte le hook de blocage réel du scheduler à l'IPC.
+/// Connects the real scheduler blocking hook to IPC.
 ///
-/// Doit être appelé UNE SEULE FOIS, après `scheduler::init()` et AVANT tout
-/// appel IPC bloquant (futex_wait, sync_channel_send/recv, wait_queue).
+/// Must be called ONCE, after `scheduler::init()` and BEFORE any
+/// blocking IPC call (futex_wait, sync_channel_send/recv, wait_queue).
 ///
-/// Sans cet appel, les primitives IPC tombent en mode spin-poll de secours
-/// (dégradé, acceptable en monocœur ou lors des tests unitaires).
+/// Without this call, IPC primitives fall back to emergency spin-poll mode
+/// (degraded, acceptable on uniprocessor or during unit tests).
 ///
-/// `block_fn` : suspend le thread courant jusqu'à réveil explicite.
-///              Fournie par `scheduler::block_current_thread`.
+/// `block_fn`: suspends current thread until explicit wakeup.
+///             Provided by `scheduler::block_current_thread`.
 pub fn ipc_install_scheduler_hooks(block_fn: sync::sched_hooks::BlockFn) {
     sync::sched_hooks::install_block_hook(block_fn);
     IPC_INIT_STATE.fetch_or(IPC_SCHED_HOOKS_DONE, Ordering::Release);
 }
 
-/// Connecte les hooks VMM de mappage/démappage SHM à l'IPC.
+/// Connects the VMM SHM mapping/unmapping hooks to IPC.
 ///
-/// Doit être appelé UNE SEULE FOIS, après que le gestionnaire de mémoire
-/// virtuelle est opérationnel et que les tables de pages des processus
-/// sont gérées.
+/// Must be called ONCE, after the virtual memory manager is operational
+/// and process page tables are managed.
 ///
-/// Sans ces hooks, `shm_map()` retourne `MappingFailed` en production.
-/// Le mode simulé virt=phys existe uniquement avec la feature `dev_no_vmm`.
+/// Without these hooks, `shm_map()` returns `MappingFailed` in production.
+/// The simulated virt=phys mode exists only with the `dev_no_vmm` feature.
 ///
 /// - `map_page_fn`   : `unsafe fn(phys: u64, virt: u64, flags: u32, pid: u32) -> i32`
-///                     0 = succès, non-zéro = erreur.
+///                     0 = success, non-zero = error.
 /// - `unmap_page_fn` : `unsafe fn(virt: u64, pid: u32) -> i32`
 pub fn ipc_install_vmm_hooks(
     map_page_fn: shared_memory::mapping::MapPageFn,

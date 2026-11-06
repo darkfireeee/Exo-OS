@@ -1,20 +1,20 @@
 // kernel/src/ipc/endpoint/lifecycle.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// LIFECYCLE — Création, destruction, cleanup des endpoints
-// (Exo-OS · IPC Couche 2a)
+// LIFECYCLE — Creation, destruction, and cleanup of endpoints
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Gère le cycle de vie complet d'un endpoint :
+// Manages the complete lifecycle of an endpoint:
 //   CREATE → LISTEN → [accept/connect cycles...] → DRAIN → CLOSE → DESTROY
 //
-// CLEANUP :
-//   À la fermeture, toutes les connexions en cours reçoivent un message
-//   CHANNEL_CLOSED avant que l'endpoint soit marqué Destroyed.
-//   Les threads en attente dans le backlog reçoivent ConnRefused.
+// CLEANUP:
+//   Upon closing, all in-progress connections receive a
+//   CHANNEL_CLOSED message before the endpoint is marked Destroyed.
+//   Threads waiting in backlog receive ConnRefused.
 //
-// RÈGLE : l'endpoint n'est jamais libéré tant qu'active_conns > 0.
-//         Une période de drain est obligatoire.
+// RULE: endpoint is never released while active_conns > 0.
+//       A drain period is mandatory.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::descriptor::{EndpointDesc, EndpointName, EndpointState};
@@ -26,10 +26,10 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EndpointPool — pool statique d'EndpointDesc
+// EndpointPool — static pool of EndpointDesc
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État d'un slot dans le pool.
+/// State of a slot in the pool.
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(dead_code)]
@@ -38,14 +38,14 @@ enum SlotState {
     InUse = 1,
 }
 
-/// Pool statique d'endpoints.
+/// Static pool of endpoints.
 ///
-/// Alloue MAX_ENDPOINTS descripteurs d'endpoints sans heap.
-/// L'allocation est protégée par un SpinLock sur le bitmap.
+/// Allocates MAX_ENDPOINTS endpoint descriptors without heap.
+/// Allocation is protected by a SpinLock on the bitmap.
 struct EndpointPool {
-    /// Bitmap des slots libres / occupés (MAX_ENDPOINTS / 64 mots).
+    /// Bitmap of free / occupied slots (MAX_ENDPOINTS / 64 words).
     bitmap: [AtomicU64; MAX_ENDPOINTS / 64],
-    /// Nombre d'endpoints actifs.
+    /// Number of active endpoints.
     active: AtomicU64,
 }
 
@@ -57,17 +57,17 @@ impl EndpointPool {
         }
     }
 
-    /// Alloue un slot libre. Retourne l'index ou None si pool épuisé.
+    /// Allocates a free slot. Returns index or None if pool is exhausted.
     fn alloc(&self) -> Option<usize> {
         for (word_idx, word) in self.bitmap.iter().enumerate() {
             let bits = word.load(Ordering::Relaxed);
             if bits == u64::MAX {
-                continue; // tous occupés
+                continue; // all occupied
             }
-            // Trouver le premier bit à 0.
+            // Find the first bit set to 0.
             let bit = (!bits).trailing_zeros() as usize;
             let mask = 1u64 << bit;
-            // CAS pour réserver le slot.
+            // CAS to reserve slot.
             if word
                 .compare_exchange_weak(bits, bits | mask, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
@@ -79,7 +79,7 @@ impl EndpointPool {
         None
     }
 
-    /// Libère un slot.
+    /// Releases a slot.
     fn free(&self, idx: usize) {
         debug_assert!(idx < MAX_ENDPOINTS, "idx hors bornes");
         let word = idx / 64;
@@ -94,26 +94,26 @@ impl EndpointPool {
     }
 }
 
-// Pool global.
+// Global pool.
 static EP_POOL_BITMAP: EndpointPool = EndpointPool::new();
 
-// Tableau des descripteurs — accès via index obtenu depuis EndpointPool.
-// SAFETY: accès protégé par le protocole bitmap + SpinLock par descripteur.
+// Descriptor table — accessed via index obtained from EndpointPool.
+// SAFETY: access protected by bitmap protocol + SpinLock per descriptor.
 static EP_POOL_DESCS: SpinLock<[Option<EndpointDescBox>; MAX_ENDPOINTS]> =
     SpinLock::new([const { None }; MAX_ENDPOINTS]);
 
-/// Wrapper newtype pour rendre EndpointDesc Option-able statiquement.
+/// Newtype wrapper to make EndpointDesc statically Option-able.
 struct EndpointDescBox(core::mem::MaybeUninit<EndpointDesc>);
 
 impl EndpointDescBox {
     fn init(desc: EndpointDesc) -> Self {
         Self(core::mem::MaybeUninit::new(desc))
     }
-    /// # Safety : appelé uniquement quand le slot est In Use.
+    /// # Safety: called only when slot is InUse.
     unsafe fn as_ref(&self) -> &EndpointDesc {
         self.0.assume_init_ref()
     }
-    /// # Safety : appelé uniquement quand le slot est In Use.
+    /// # Safety: called only when slot is InUse.
     #[allow(dead_code)]
     unsafe fn as_mut(&mut self) -> &mut EndpointDesc {
         self.0.assume_init_mut()
@@ -121,17 +121,17 @@ impl EndpointDescBox {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique du lifecycle
+// Public lifecycle API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Crée et enregistre un nouvel endpoint.
+/// Creates and registers a new endpoint.
 ///
 /// # Arguments
-/// - `name`  : nom ASCII de l'endpoint (max 64 chars).
-/// - `owner` : thread propriétaire initial.
+/// - `name`  : ASCII name of endpoint (max 64 chars).
+/// - `owner` : initial owning thread.
 ///
-/// # Retour
-/// `Ok(EndpointId)` — l'identifiant unique de l'endpoint créé.
+/// # Return
+/// `Ok(EndpointId)` — unique identifier of created endpoint.
 pub fn endpoint_create(name: &[u8], owner: ThreadId) -> Result<EndpointId, IpcError> {
     let ep_name = EndpointName::from_bytes(name)?;
     let ep_id = alloc_endpoint_id();
@@ -144,9 +144,9 @@ pub fn endpoint_create(name: &[u8], owner: ThreadId) -> Result<EndpointId, IpcEr
         pool[idx] = Some(EndpointDescBox::init(desc));
     }
 
-    // Enregistrement dans le registre nom → id.
+    // Registration in name -> id registry.
     if let Err(e) = register_endpoint(name, ep_id) {
-        // Rollback : libérer le slot.
+        // Rollback: free the slot.
         {
             let mut pool = EP_POOL_DESCS.lock();
             pool[idx] = None;
@@ -158,15 +158,15 @@ pub fn endpoint_create(name: &[u8], owner: ThreadId) -> Result<EndpointId, IpcEr
     Ok(ep_id)
 }
 
-/// Met l'endpoint en écoute (transition Created → Listening).
+/// Puts endpoint into listening mode (transition Created -> Listening).
 pub fn endpoint_listen(ep_id: EndpointId) -> Result<(), IpcError> {
     with_endpoint(ep_id, |desc| desc.start_listen())
 }
 
-/// Initie la fermeture d'un endpoint (transition → Draining).
+/// Initiates endpoint shutdown (transition -> Draining).
 ///
-/// Les connexions existantes continueront jusqu'à leur fermeture naturelle.
-/// Les nouvelles connexions sont refusées.
+/// Existing connections will continue until their natural closure.
+/// New connections are refused.
 pub fn endpoint_close(ep_id: EndpointId) -> Result<(), IpcError> {
     with_endpoint(ep_id, |desc| {
         desc.state
@@ -175,7 +175,7 @@ pub fn endpoint_close(ep_id: EndpointId) -> Result<(), IpcError> {
     })
 }
 
-/// Détruit un endpoint (uniquement si active_conns == 0).
+/// Destroys an endpoint (only if active_conns == 0).
 pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> {
     let mut pool = EP_POOL_DESCS.lock();
     let slot_idx = pool.iter().position(|slot| {
@@ -205,18 +205,18 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
     }
 
     pool[idx] = None;
-    drop(pool); // libérer le lock avant de modifier le bitmap et le registre
+    drop(pool); // release lock before modifying bitmap and registry
     EP_POOL_BITMAP.free(idx);
     unregister_endpoint(name);
     Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper : accès à un endpoint par son id
+// Helper: endpoint access by id
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Exécute une closure sur le descripteur d'un endpoint identifié par son id.
-/// Retourne `Err(EndpointNotFound)` si l'id est inconnu.
+/// Executes a closure on the descriptor of an endpoint identified by its id.
+/// Returns `Err(EndpointNotFound)` if id is unknown.
 fn with_endpoint<F, R>(ep_id: EndpointId, f: F) -> Result<R, IpcError>
 where
     F: FnOnce(&EndpointDesc) -> Result<R, IpcError>,
@@ -232,7 +232,7 @@ where
     Err(IpcError::EndpointNotFound)
 }
 
-/// Retourne le nombre d'endpoints actifs dans le pool.
+/// Returns number of active endpoints in pool.
 pub fn active_endpoint_count() -> u64 {
     EP_POOL_BITMAP.active_count()
 }

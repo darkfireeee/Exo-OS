@@ -1,171 +1,171 @@
-// ipc/stats/counters.rs — Compteurs statistiques IPC globaux pour Exo-OS
+// ipc/stats/counters.rs — Global IPC statistical counters for Exo-OS
 //
-// Ce module fournit l'instrumentation centralisée pour l'ensemble du sous-système
-// IPC. Chaque événement significatif (envoi, réception, drop, erreur, latence...)
-// est enregistré via `IPC_STATS.record(StatEvent)`.
+// This module provides centralized instrumentation for the entire IPC
+// subsystem. Each significant event (send, receive, drop, error, latency...)
+// is recorded via `IPC_STATS.record(StatEvent)`.
 //
-// Architecture :
-//   - `StatEvent` : enum exhaustif de tous les événements IPC mesurables
-//   - `IpcStats` : tableau de compteurs atomiques indexé par StatEvent
-//   - `IPC_STATS` : instance statique globale (zéro allocation)
-//   - `IpcStatsSnapshot` : instantané immutable pour inspection
+// Architecture:
+//   - `StatEvent`: exhaustive enum of all measurable IPC events
+//   - `IpcStats`: array of atomic counters indexed by StatEvent
+//   - `IPC_STATS`: global static instance (zero allocation)
+//   - `IpcStatsSnapshot`: immutable snapshot for inspection
 //
-// RÈGLE STATS-01 : tous les compteurs sont AtomicU64 — jamais de mutex.
-// RÈGLE STATS-02 : record() est inlinée et O(1).
-// RÈGLE STATS-03 : les canaux channel/ peuvent importer {IPC_STATS, StatEvent}
-//                  directement depuis ce fichier.
+// RULE STATS-01: all counters are AtomicU64 — never a mutex.
+// RULE STATS-02: record() is inlined and O(1).
+// RULE STATS-03: channel/ channels can import {IPC_STATS, StatEvent}
+//                directly from this file.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ---------------------------------------------------------------------------
-// StatEvent — tous les événements mesurables du sous-système IPC
+// StatEvent — all measurable events of the IPC subsystem
 // ---------------------------------------------------------------------------
 
-/// Identificateur d'événement IPC statistique.
+/// Statistical IPC event identifier.
 ///
-/// Chaque variant correspond à un compteur dédié dans `IpcStats`.
-/// L'ordre est stable — ne pas réorganiser sans mettre à jour STAT_COUNT.
+/// Each variant corresponds to a dedicated counter in `IpcStats`.
+/// The ordering is stable — do not reorder without updating STAT_COUNT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum StatEvent {
     // --- Messages ---
-    /// Message envoyé avec succès
+    /// Message sent successfully
     MessageSent = 0,
-    /// Message reçu avec succès
+    /// Message received successfully
     MessageReceived = 1,
-    /// Message abandonné (overflow/queue pleine)
+    /// Message dropped (overflow/queue full)
     MessageDropped = 2,
-    /// Message dont la livraison a échoué (endpoint mort, etc.)
+    /// Message whose delivery failed (dead endpoint, etc.)
     MessageFailed = 3,
 
-    // --- Canaux ---
-    /// Canal créé
+    // --- Channels ---
+    /// Channel created
     ChannelCreated = 4,
-    /// Canal fermé
+    /// Channel closed
     ChannelClosed = 5,
-    /// Canal détruit
+    /// Channel destroyed
     ChannelDestroyed = 6,
-    /// Envoi bloquant (channel full, wait)
+    /// Blocking send (channel full, wait)
     ChannelSendBlocked = 7,
-    /// Réception bloquante (channel empty, wait)
+    /// Blocking receive (channel empty, wait)
     ChannelRecvBlocked = 8,
-    /// Timeout lors d'une opération sur canal
+    /// Timeout during channel operation
     ChannelTimeout = 9,
 
-    // --- Mémoire partagée ---
-    /// Allocation SHM réussie
+    // --- Shared memory ---
+    /// Successful SHM allocation
     ShmAllocated = 10,
-    /// Libération SHM
+    /// SHM free
     ShmFreed = 11,
-    /// Échec d'allocation SHM
+    /// SHM allocation failure
     ShmAllocFailed = 12,
-    /// Mapping SHM dans un espace processus
+    /// SHM mapping into a process space
     ShmMapped = 13,
-    /// Unmapping SHM
+    /// SHM unmapping
     ShmUnmapped = 14,
 
     // --- Futex ---
-    /// Appel futex_wait()
+    /// futex_wait() call
     FutexWait = 15,
-    /// Réveil futex_wake()
+    /// futex_wake() wakeup
     FutexWake = 16,
-    /// Timeout futex_wait()
+    /// futex_wait() timeout
     FutexTimeout = 17,
-    /// Requeue futex
+    /// futex requeue
     FutexRequeue = 18,
 
     // --- Ring buffers ---
-    /// Push dans un ring réussi
+    /// Successful push into a ring
     RingPush = 19,
-    /// Pop d'un ring réussi
+    /// Successful pop from a ring
     RingPop = 20,
-    /// Ring plein (push échoué)
+    /// Ring full (push failed)
     RingFull = 21,
-    /// Ring vide (pop échoué)
+    /// Ring empty (pop failed)
     RingEmpty = 22,
 
     // --- Endpoints ---
-    /// Endpoint créé
+    /// Endpoint created
     EndpointCreated = 23,
-    /// Endpoint détruit
+    /// Endpoint destroyed
     EndpointDestroyed = 24,
-    /// Connexion entre endpoints
+    /// Connection between endpoints
     EndpointConnected = 25,
-    /// Déconnexion entre endpoints
+    /// Disconnection between endpoints
     EndpointDisconnected = 26,
 
     // --- Capabilities ---
-    /// Vérification de capability réussie
+    /// Capability check succeeded
     CapCheck = 27,
-    /// Vérification de capability échouée (access denied)
+    /// Capability check failed (access denied)
     CapDenied = 28,
-    /// Capability créée
+    /// Capability created
     CapCreated = 29,
-    /// Capability révoquée
+    /// Capability revoked
     CapRevoked = 30,
 
     // --- RPC ---
-    /// Appel RPC émis
+    /// RPC call issued
     RpcCall = 31,
-    /// Appel RPC complété
+    /// RPC call completed
     RpcReturn = 32,
-    /// Appel RPC timeout
+    /// RPC call timeout
     RpcTimeout = 33,
-    /// Appel RPC erreur de protocole
+    /// RPC call protocol error
     RpcProtocolError = 34,
 
-    // --- Synchronisation ---
-    /// Wake sur wait_queue IPC
+    // --- Synchronization ---
+    /// Wake on IPC wait_queue
     WaitQueueWake = 35,
-    /// Timeout wait_queue
+    /// wait_queue timeout
     WaitQueueTimeout = 36,
     /// Event set
     EventSet = 37,
     /// Event wait
     EventWait = 38,
-    /// Barrière franchie
+    /// Barrier crossed
     BarrierCrossed = 39,
-    /// Rendez-vous complété
+    /// Rendezvous met
     RendezvousMet = 40,
 
-    // --- Transfert ---
-    /// Transfert de descripteur entre processus
+    // --- Transfer ---
+    /// Descriptor transfer between processes
     DescriptorTransfer = 41,
-    /// Transfert zero-copy
+    /// Zero-copy transfer
     ZeroCopyTransfer = 42,
 
-    // --- Erreurs génériques ---
-    /// Erreur générique IPC
+    // --- Generic errors ---
+    /// Generic IPC error
     GenericError = 43,
-    /// Paramètre invalide
+    /// Invalid parameter
     InvalidParam = 44,
 }
 
-/// Nombre total d'événements statistiques
+/// Total number of statistical events
 pub const STAT_COUNT: usize = 45;
 
 // ---------------------------------------------------------------------------
-// IpcStats — table centrale de compteurs atomiques
+// IpcStats — central table of atomic counters
 // ---------------------------------------------------------------------------
 
-/// Table de compteurs statistiques IPC.
+/// Table of IPC statistical counters.
 ///
-/// Indexée par `StatEvent as usize`. Tous les compteurs sont AtomicU64.
-/// `record()` est inlinée et se réduit à un `fetch_add` x86 LOCK.
+/// Indexed by `StatEvent as usize`. All counters are AtomicU64.
+/// `record()` is inlined and boils down to an x86 LOCK `fetch_add`.
 pub struct IpcStats {
     counters: [AtomicU64; STAT_COUNT],
 }
 
-// SAFETY: AtomicU64 est Sync
+// SAFETY: AtomicU64 is Sync
 unsafe impl Sync for IpcStats {}
 unsafe impl Send for IpcStats {}
 
 impl IpcStats {
-    /// Constructeur const — utilisable en static
+    /// Const constructor — usable in static
     pub const fn new() -> Self {
-        // Macro locale : générer STAT_COUNT fois AtomicU64::new(0)
-        // On ne peut pas utiliser [expr; N] avec AtomicU64 non-Copy,
-        // donc on énumère explicitement.
+        // Local macro: generate AtomicU64::new(0) STAT_COUNT times.
+        // We cannot use [expr; N] with non-Copy AtomicU64,
+        // so we enumerate explicitly.
         Self {
             counters: [
                 AtomicU64::new(0),
@@ -217,15 +217,15 @@ impl IpcStats {
         }
     }
 
-    /// Enregistre un événement IPC (O(1), inlineable).
+    /// Records an IPC event (O(1), inlineable).
     #[inline(always)]
     pub fn record(&self, event: StatEvent) {
-        // SAFETY: event as usize < STAT_COUNT garanti par le repr(usize) borné
+        // SAFETY: event as usize < STAT_COUNT guaranteed by bounded repr(usize)
         debug_assert!((event as usize) < STAT_COUNT);
         self.counters[event as usize].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Enregistre N occurrences d'un événement.
+    /// Records N occurrences of an event.
     #[inline(always)]
     pub fn record_n(&self, event: StatEvent, n: u64) {
         if n == 0 {
@@ -234,26 +234,26 @@ impl IpcStats {
         self.counters[event as usize].fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Lit la valeur courante d'un compteur.
+    /// Reads current value of a counter.
     #[inline]
     pub fn get(&self, event: StatEvent) -> u64 {
         self.counters[event as usize].load(Ordering::Relaxed)
     }
 
-    /// Remet un compteur à zéro.
+    /// Resets a counter to zero.
     #[inline]
     pub fn reset(&self, event: StatEvent) {
         self.counters[event as usize].store(0, Ordering::Relaxed);
     }
 
-    /// Remet tous les compteurs à zéro.
+    /// Resets all counters to zero.
     pub fn reset_all(&self) {
         for c in self.counters.iter() {
             c.store(0, Ordering::Relaxed);
         }
     }
 
-    /// Produit un instantané immutable (copie des valeurs courantes).
+    /// Produces an immutable snapshot (copy of current values).
     pub fn snapshot(&self) -> IpcStatsSnapshot {
         let mut values = [0u64; STAT_COUNT];
         for (i, c) in self.counters.iter().enumerate() {
@@ -264,12 +264,12 @@ impl IpcStats {
 }
 
 // ---------------------------------------------------------------------------
-// Instance statique globale
+// Global static instance
 // ---------------------------------------------------------------------------
 
-/// Instance globale des compteurs statistiques IPC.
+/// Global instance of IPC statistical counters.
 ///
-/// Importable depuis n'importe quel fichier du module IPC :
+/// Importable from any file in the IPC module:
 /// ```rust
 /// use crate::ipc::stats::counters::{IPC_STATS, StatEvent};
 /// IPC_STATS.record(StatEvent::MessageSent);
@@ -277,51 +277,51 @@ impl IpcStats {
 pub static IPC_STATS: IpcStats = IpcStats::new();
 
 // ---------------------------------------------------------------------------
-// IpcStatsSnapshot — instantané immutable
+// IpcStatsSnapshot — immutable snapshot
 // ---------------------------------------------------------------------------
 
-/// Copie instantanée de tous les compteurs IPC.
+/// Instantaneous copy of all IPC counters.
 ///
-/// Obtenu via `IPC_STATS.snapshot()`. Les valeurs ne varient plus après
-/// la capture.
+/// Obtained via `IPC_STATS.snapshot()`. Values no longer change after
+/// capture.
 #[derive(Debug, Clone)]
 pub struct IpcStatsSnapshot {
     values: [u64; STAT_COUNT],
 }
 
 impl IpcStatsSnapshot {
-    /// Récupère la valeur d'un compteur dans le snapshot.
+    /// Retrieves counter value in the snapshot.
     pub fn get(&self, event: StatEvent) -> u64 {
         self.values[event as usize]
     }
 
-    /// Messages envoyés
+    /// Messages sent
     pub fn messages_sent(&self) -> u64 {
         self.get(StatEvent::MessageSent)
     }
-    /// Messages reçus
+    /// Messages received
     pub fn messages_received(&self) -> u64 {
         self.get(StatEvent::MessageReceived)
     }
-    /// Messages abandonnés
+    /// Messages dropped
     pub fn messages_dropped(&self) -> u64 {
         self.get(StatEvent::MessageDropped)
     }
 
-    /// Allocations SHM
+    /// SHM allocations
     pub fn shm_allocated(&self) -> u64 {
         self.get(StatEvent::ShmAllocated)
     }
-    /// Libérations SHM
+    /// SHM frees
     pub fn shm_freed(&self) -> u64 {
         self.get(StatEvent::ShmFreed)
     }
 
-    /// Appels RPC
+    /// RPC calls
     pub fn rpc_calls(&self) -> u64 {
         self.get(StatEvent::RpcCall)
     }
-    /// Timeouts RPC
+    /// RPC timeouts
     pub fn rpc_timeouts(&self) -> u64 {
         self.get(StatEvent::RpcTimeout)
     }
@@ -335,7 +335,7 @@ impl IpcStatsSnapshot {
         self.get(StatEvent::FutexWake)
     }
 
-    /// Taux de drop messages (0-100 si sent > 0)
+    /// Message drop rate (0-100 if sent > 0)
     pub fn message_drop_rate_pct(&self) -> u64 {
         let sent = self.messages_sent();
         if sent == 0 {
@@ -344,8 +344,8 @@ impl IpcStatsSnapshot {
         (self.messages_dropped() * 100) / sent
     }
 
-    /// Affiche un résumé formaté dans un buffer &mut str de capacité `buf`.
-    /// Retourne le nombre de bytes écrits.
+    /// Formats a summary into a buffer of capacity `buf`.
+    /// Returns the number of bytes written.
     pub fn format_summary(&self, buf: &mut [u8]) -> usize {
         use core::fmt::Write;
         struct BufWriter<'a> {

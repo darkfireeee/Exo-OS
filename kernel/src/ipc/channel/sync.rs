@@ -1,15 +1,15 @@
-// ipc/channel/sync.rs — Canal synchrone (rendezvous) pour l'IPC noyau Exo-OS
+// ipc/channel/sync.rs — Synchronous channel (rendezvous) for Exo-OS kernel IPC
 //
-// Ce canal implémente le pattern rendezvous : l'émetteur est bloqué jusqu'à
-// ce que le récepteur accepte explicitement le message. Garantie de livraison
-// forte : aucun message ne peut être perdu (pas de file tampon). Utilisé pour
-// les appels synchrones critiques où la confirmation de réception est requise.
+// This channel implements the rendezvous pattern: the sender is blocked until
+// the receiver explicitly accepts the message. Strong delivery guarantee:
+// no message can be lost (no buffer queue). Used for critical synchronous calls
+// where reception confirmation is required.
 //
-// Caractéristiques :
-//   - Zéro copie optionnelle via ZeroCopyRef
-//   - Timeout configurable (délai wall-clock en nanosecondes)
-//   - Intégration WaitQueue scheduler pour suspension efficace
-//   - Pas d'allocation : tout est statique ou sur la pile
+// Features:
+//   - Optional zero-copy via ZeroCopyRef
+//   - Configurable timeout (wall-clock delay in nanoseconds)
+//   - WaitQueue scheduler integration for efficient suspension
+//   - No allocation: everything is static or on the stack
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
@@ -25,22 +25,22 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ---------------------------------------------------------------------------
-// États internes d'un rendez-vous en cours
+// Internal states of an ongoing rendezvous
 // ---------------------------------------------------------------------------
 
-/// Phase du protocole rendezvous
+/// Rendezvous protocol phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum RendezVousState {
-    /// Canal vide, personne n'attend
+    /// Empty channel, nobody waiting
     Idle = 0,
-    /// Un émetteur est en cours d'écriture (réservation exclusive du slot, T8-005)
+    /// A sender is currently writing (exclusive slot reservation, T8-005)
     SenderWriting = 1,
-    /// Un émetteur a déposé un message et attend le récepteur
+    /// A sender deposited a message and awaits the receiver
     SenderWaiting = 2,
-    /// Le récepteur a pris le message, il signale l'émetteur
+    /// The receiver took the message, signaling the sender
     ReceiverAcked = 3,
-    /// Timeout ou annulation
+    /// Timeout or cancellation
     Cancelled = 4,
 }
 
@@ -84,41 +84,41 @@ fn wake_tid(tid: u64) {
 }
 
 // ---------------------------------------------------------------------------
-// Slot de rendezvous — stockage inline du message (no-alloc)
+// Rendezvous slot — inline message storage (no-alloc)
 // ---------------------------------------------------------------------------
 
-/// Taille maximale du payload inline pour un canal synchrone
+/// Maximum inline payload size for a synchronous channel
 pub const SYNC_INLINE_SIZE: usize = MAX_MSG_SIZE;
 
-/// Slot inline partagé entre l'émetteur et le récepteur.
-/// Protected par un AtomicU32 d'état pour accès sans mutex sur le chemin rapide.
+/// Inline slot shared between sender and receiver.
+/// Protected by an AtomicU32 state for mutex-free fast-path access.
 #[repr(C, align(64))]
 pub struct SyncSlot {
-    /// État courant du rendezvous (RendezVousState encodé)
+    /// Current rendezvous state (encoded RendezVousState)
     pub state: AtomicU32,
-    /// Numéro de séquence pour détecter les ABA
+    /// Sequence number to detect ABA
     pub sequence: AtomicU64,
-    /// Longueur du payload copié dans `data`
+    /// Length of payload copied into `data`
     pub payload_len: AtomicUsize,
-    /// Flags du message
+    /// Message flags
     pub flags: AtomicU32,
-    /// Référence zero-copy (valide si flag ZEROCOPY est positionné)
+    /// Zero-copy reference (valid if ZEROCOPY flag is set)
     pub zc_ref: UnsafeCell<ZeroCopyRef>,
-    /// Payload inline
+    /// Inline payload
     pub data: UnsafeCell<[u8; SYNC_INLINE_SIZE]>,
-    /// Identifiant du message pour corrélation
+    /// Message identifier for correlation
     pub msg_id: AtomicU64,
-    /// Horodatage de dépôt (ns depuis boot)
+    /// Deposit timestamp (ns since boot)
     pub timestamp_ns: AtomicU64,
-    /// TID de l'émetteur bloqué (pour le réveil par le récepteur)
+    /// Blocked sender TID (for wake-up by receiver)
     pub sender_tid: AtomicU64,
-    /// TID du récepteur bloqué (pour le réveil par l'émetteur)
+    /// Blocked receiver TID (for wake-up by sender)
     pub receiver_tid: AtomicU64,
 }
 
-// SAFETY: SyncSlot est une structure de données partagée entre threads mais
-// tous les accès aux champs mutables passent par des atomiques ou sont protégés
-// par la sémantique du protocole d'état (state machine stricte).
+// SAFETY: SyncSlot is a shared data structure between threads but
+// all mutable field accesses go through atomics or are protected
+// by the state protocol semantics (strict state machine).
 unsafe impl Sync for SyncSlot {}
 unsafe impl Send for SyncSlot {}
 
@@ -138,8 +138,8 @@ impl SyncSlot {
         }
     }
 
-    /// Réinitialise le slot à Idle pour le prochain rendezvous.
-    /// SAFETY: doit être appelé seulement quand le slot est libre (pas de course).
+    /// Resets slot to Idle for next rendezvous.
+    /// SAFETY: must be called only when slot is free (no race).
     pub unsafe fn reset(&self) {
         self.payload_len.store(0, Ordering::Relaxed);
         self.flags.store(0, Ordering::Relaxed);
@@ -154,10 +154,10 @@ impl SyncSlot {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques locales du canal synchrone
+// Local statistics for synchronous channel
 // ---------------------------------------------------------------------------
 
-/// Compteurs de performance propres à un SyncChannel
+/// Performance counters specific to a SyncChannel
 #[repr(C, align(64))]
 pub struct SyncChannelStats {
     pub sends_ok: AtomicU64,
@@ -184,39 +184,39 @@ impl SyncChannelStats {
 }
 
 // ---------------------------------------------------------------------------
-// SyncChannel — structure principale
+// SyncChannel — main structure
 // ---------------------------------------------------------------------------
 
-/// Canal synchrone (rendezvous) entre exactement un émetteur et un récepteur.
+/// Synchronous channel (rendezvous) between exactly one sender and one receiver.
 ///
-/// Protocole en deux phases :
-///  1. `send()` : copie le message dans `slot`, passe à `SenderWaiting`,
-///     puis boucle spin (ou suspend via scheduler) jusqu'à `ReceiverAcked`.
-///  2. `recv()` : attend `SenderWaiting`, copie depuis `slot`,
-///     passe à `ReceiverAcked` pour débloquer l'émetteur.
+/// Two-phase protocol:
+///  1. `send()`: copies message into `slot`, transitions to `SenderWaiting`,
+///     then spin loops (or suspends via scheduler) until `ReceiverAcked`.
+///  2. `recv()`: waits for `SenderWaiting`, copies from `slot`,
+///     transitions to `ReceiverAcked` to unblock sender.
 #[repr(C, align(64))]
 pub struct SyncChannel {
-    /// Identifiant unique du canal
+    /// Unique channel identifier
     pub id: ChannelId,
-    /// Slot de données partagé
+    /// Shared data slot
     pub slot: SyncSlot,
-    /// Statistiques locales
+    /// Local statistics
     pub stats: SyncChannelStats,
-    /// Canal ouvert ou fermé
+    /// Open or closed channel
     pub closed: AtomicU32,
-    /// Timeout d'envoi en nanosecondes (0 = infini)
+    /// Send timeout in nanoseconds (0 = infinite)
     pub send_timeout_ns: AtomicU64,
-    /// Compteur d'opérations en cours pour prévenir UAF sur destroy (T8-002)
+    /// Active operations counter to prevent UAF on destroy (T8-002)
     pub active_ops: AtomicU32,
     _pad: [u8; 20],
 }
 
-// SAFETY: ChannelId est Copy, SyncSlot est Sync+Send, AtomicU32 est Sync+Send.
+// SAFETY: ChannelId is Copy, SyncSlot is Sync+Send, AtomicU32 is Sync+Send.
 unsafe impl Sync for SyncChannel {}
 unsafe impl Send for SyncChannel {}
 
 impl SyncChannel {
-    /// Crée un nouveau canal synchrone avec un identifiant unique alloué.
+    /// Creates a new synchronous channel with an allocated unique identifier.
     pub fn new() -> Self {
         Self {
             id: alloc_channel_id(),
@@ -229,18 +229,18 @@ impl SyncChannel {
         }
     }
 
-    /// Retourne `true` si le canal est fermé.
+    /// Returns `true` if channel is closed.
     #[inline]
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire) != 0
     }
 
-    /// Ferme le canal — réveille tout émetteur/récepteur bloqué avec Cancelled.
+    /// Closes channel — wakes up any blocked sender/receiver with Cancelled.
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
         let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         let receiver_tid = self.slot.receiver_tid.load(Ordering::Relaxed);
-        // Signaler toute attente en cours
+        // Signal any pending wait
         let state = self.slot.state.load(Ordering::Acquire);
         if RendezVousState::from_u32(state) == RendezVousState::SenderWaiting {
             self.slot
@@ -252,15 +252,15 @@ impl SyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // ENVOI — chemin émetteur
+    // SEND — sender path
     // -----------------------------------------------------------------------
 
-    /// Envoie un message et attend la confirmation du récepteur (rendezvous).
+    /// Sends a message and awaits receiver confirmation (rendezvous).
     ///
-    /// # Erreurs
-    /// - `IpcError::Closed` — canal fermé
-    /// - `IpcError::Timeout` — délai dépassé sans récepteur
-    /// - `IpcError::WouldBlock` — NOWAIT positionné et aucun récepteur prêt
+    /// # Errors
+    /// - `IpcError::Closed` — channel closed
+    /// - `IpcError::Timeout` — timeout exceeded without receiver
+    /// - `IpcError::WouldBlock` — NOWAIT set and no receiver ready
     /// - `IpcError::MessageTooLarge` — payload > MAX_MSG_SIZE
     pub fn send(&self, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
         if self.is_closed() {
@@ -271,7 +271,7 @@ impl SyncChannel {
             return Err(IpcError::MessageTooLarge);
         }
 
-        // T8-005 FIX : Attente et réservation exclusive par CAS atomique Idle → SenderWriting
+        // T8-005 FIX: Wait and exclusive reservation via atomic CAS Idle -> SenderWriting
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
         let deadline_ns = deadline_from(timeout_ns);
         let mut spins: u32 = 0;
@@ -304,21 +304,20 @@ impl SyncChannel {
             }
         }
 
-        // Déposer le message dans le slot
+        // Deposit message into slot
         let mid = alloc_message_id();
         self.slot.msg_id.store(mid.get(), Ordering::Relaxed);
         self.slot.payload_len.store(data.len(), Ordering::Relaxed);
         self.slot.flags.store(flags.bits(), Ordering::Relaxed);
 
-        // SAFETY: seul l'émetteur écrit ici (état SenderWriting réservé)
+        // SAFETY: only sender writes here (reserved SenderWriting state)
         unsafe {
             let dst = self.slot.data.get() as *mut u8;
             core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
         }
 
-        // Transition SenderWriting → SenderWaiting (Release pour rendre les writes visibles)
-        // Enregistrer le TID de l'émetteur avant la transition pour que le
-        // récepteur puisse nous réveiller après avoir pris le message.
+        // Transition SenderWriting -> SenderWaiting (Release to make writes visible)
+        // Record sender TID before transition so receiver can wake us up after taking the message.
         let my_tid = crate::ipc::sync::sched_hooks::current_tid();
         self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
         self.slot
@@ -326,8 +325,8 @@ impl SyncChannel {
             .store(RendezVousState::SenderWaiting as u32, Ordering::Release);
         wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
 
-        // Attendre ReceiverAcked ou Cancelled.
-        // Stratégie : spin court (≤ 64 tours) puis blocage réel via scheduler.
+        // Wait for ReceiverAcked or Cancelled.
+        // Strategy: short spin (<= 64 rounds) then real block via scheduler.
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
         let deadline_ns = deadline_from(timeout_ns);
         let mut spins: u64 = 0;
@@ -338,7 +337,7 @@ impl SyncChannel {
             let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             match s {
                 RendezVousState::ReceiverAcked => {
-                    // SAFETY: slot.state == ReceiverAcked, seul l'émetteur reset ici
+                    // SAFETY: slot.state == ReceiverAcked, only sender resets here
                     unsafe { self.slot.reset() };
                     self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
                     self.stats
@@ -348,7 +347,7 @@ impl SyncChannel {
                     return Ok(mid);
                 }
                 RendezVousState::Cancelled => {
-                    // SAFETY: état Cancelled — seul l'émetteur réinitialise ici.
+                    // SAFETY: Cancelled state — only sender resets here.
                     unsafe { self.slot.reset() };
                     self.stats.sends_cancelled.fetch_add(1, Ordering::Relaxed);
                     return Err(IpcError::Closed);
@@ -376,20 +375,20 @@ impl SyncChannel {
                 return Err(IpcError::Timeout);
             }
 
-            // Après la phase de spin courte : blocage réel.
+            // After short spin phase: real block.
             if spins == 64 {
-                // Vérifier une dernière fois avant de bloquer.
+                // Check one last time before blocking.
                 let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
                 if s2 == RendezVousState::ReceiverAcked || s2 == RendezVousState::Cancelled {
-                    continue; // Sera traité à la prochaine itération
+                    continue; // Will be handled on next iteration
                 }
                 if timeout_ns == 0 {
-                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                         "SyncChannel::send (attente ack): block_current() avec PreemptGuard actif"
                     );
-                    // SAFETY: block_current() sûr si PreemptGuard::depth() == 0.
+                    // SAFETY: block_current() safe if PreemptGuard::depth() == 0.
                     unsafe {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
@@ -403,7 +402,7 @@ impl SyncChannel {
         }
     }
 
-    /// Envoi zero-copy : partage une page physique via ZeroCopyRef.
+    /// Zero-copy send: shares a physical page via ZeroCopyRef.
     pub fn send_zerocopy(
         &self,
         zc_ref: ZeroCopyRef,
@@ -413,7 +412,7 @@ impl SyncChannel {
             return Err(IpcError::Closed);
         }
 
-        // T8-006 FIX : Attente et réservation exclusive par CAS atomique Idle → SenderWriting
+        // T8-006 FIX: Wait and exclusive reservation via atomic CAS Idle -> SenderWriting
         let timeout_ns = self.send_timeout_ns.load(Ordering::Relaxed);
         let deadline_ns = deadline_from(timeout_ns);
         let mut spins: u32 = 0;
@@ -453,12 +452,12 @@ impl SyncChannel {
         f.insert(MsgFlags::ZEROCOPY);
         self.slot.flags.store(f.bits(), Ordering::Relaxed);
 
-        // SAFETY: seul l'émetteur écrit zc_ref ici (état SenderWriting réservé)
+        // SAFETY: only sender writes zc_ref here (reserved SenderWriting state)
         unsafe {
             *self.slot.zc_ref.get() = zc_ref;
         }
 
-        // Enregistrer le TID avant la transition pour le réveil par le récepteur.
+        // Record TID before transition for wake-up by receiver.
         let my_tid = crate::ipc::sync::sched_hooks::current_tid();
         self.slot.sender_tid.store(my_tid, Ordering::Relaxed);
         self.slot
@@ -474,14 +473,14 @@ impl SyncChannel {
             spins += 1;
             let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             if s == RendezVousState::ReceiverAcked {
-                // SAFETY: ReceiverAcked — seul l'émetteur réinitialise (protocole 1-émetteur).
+                // SAFETY: ReceiverAcked — only sender resets (1-sender protocol).
                 unsafe { self.slot.reset() };
                 self.stats.sends_ok.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
                 return Ok(mid);
             }
             if s == RendezVousState::Cancelled || self.is_closed() {
-                // SAFETY: Cancelled / closed — même invariant propriétaire que ci-dessus.
+                // SAFETY: Cancelled / closed — same owner invariant as above.
                 unsafe { self.slot.reset() };
                 return Err(IpcError::Closed);
             }
@@ -495,19 +494,19 @@ impl SyncChannel {
                 wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
                 return Err(IpcError::Timeout);
             }
-            // Blocage réel après 64 itérations de spin.
+            // Real blocking after 64 spin iterations.
             if spins == 64 {
                 let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
                 if s2 != RendezVousState::SenderWaiting {
                     continue;
                 }
                 if timeout_ns == 0 {
-                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                         "SyncChannel::send_zerocopy: block_current() avec PreemptGuard actif"
                     );
-                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, send_zerocopy).
+                    // SAFETY: block_current() safe if depth()==0 (debug_assert above, send_zerocopy).
                     unsafe {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
@@ -522,15 +521,15 @@ impl SyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // RÉCEPTION — chemin récepteur
+    // RECV — receiver path
     // -----------------------------------------------------------------------
 
-    /// Reçoit un message du canal.
+    /// Receives a message from the channel.
     ///
-    /// # Retour
-    /// - `Ok((MessageId, longueur_copiée, MsgFlags))` — message reçu
-    /// - `Err(IpcError::WouldBlock)` — aucun émetteur prêt (si NOWAIT)
-    /// - `Err(IpcError::Closed)` — canal fermé
+    /// # Return
+    /// - `Ok((MessageId, copied_length, MsgFlags))` — message received
+    /// - `Err(IpcError::WouldBlock)` — no sender ready (if NOWAIT)
+    /// - `Err(IpcError::Closed)` — channel closed
     pub fn recv(
         &self,
         buf: &mut [u8],
@@ -540,8 +539,8 @@ impl SyncChannel {
             return Err(IpcError::Closed);
         }
 
-        // Attendre qu'un émetteur soit là.
-        // Stratégie : spin court (≤ 64) puis blocage réel.
+        // Wait for a sender to be present.
+        // Strategy: short spin (<= 64) then real block.
         if flags.contains(MsgFlags::NOWAIT) {
             let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
             if s != RendezVousState::SenderWaiting {
@@ -563,12 +562,12 @@ impl SyncChannel {
                 core::hint::spin_loop();
                 spins += 1;
                 if spins == 64 {
-                    // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock.
+                    // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                         "SyncChannel::recv: block_current() appelé avec PreemptGuard actif"
                     );
-                    // SAFETY: block_current() sûr si depth()==0 (debug_assert ci-dessus, recv path).
+                    // SAFETY: block_current() safe if depth()==0 (debug_assert above, recv path).
                     unsafe {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
@@ -580,52 +579,51 @@ impl SyncChannel {
             }
         }
 
-        // --- Lecture des métadonnées (Acquire assure la visibilité du store
-        // précédent de l'émetteur) ---
+        // --- Read metadata (Acquire ensures visibility of sender's previous store) ---
         let msg_flags_raw = self.slot.flags.load(Ordering::Acquire);
         let msg_flags = MsgFlags::from_bits_truncate(msg_flags_raw);
         let len = self.slot.payload_len.load(Ordering::Relaxed);
         let mid_raw = self.slot.msg_id.load(Ordering::Relaxed);
 
-        // SAFETY: NonZeroU64 garantie par alloc_message_id — l'émetteur a
-        // écrit msg_id avant la transition vers SenderWaiting.
+        // SAFETY: NonZeroU64 guaranteed by alloc_message_id — sender wrote
+        // msg_id before transition to SenderWaiting.
         let mid = unsafe { MessageId::new_unchecked(mid_raw) };
 
         if msg_flags.contains(MsgFlags::ZEROCOPY) {
-            // Mode zero-copy : retourner la référence sans copie de données
+            // Zero-copy mode: return reference without copying data
             let copy_len = 0usize;
             let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
             self.slot
                 .state
                 .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
-            // Réveiller l'émetteur s'il est bloqué.
+            // Wake sender if blocked.
             wake_tid(sender_tid);
             self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageReceived);
             return Ok((mid, copy_len, msg_flags));
         }
 
-        // Vérifier que le buffer de destination est suffisant
+        // Check that destination buffer is sufficient
         if len > buf.len() {
             return Err(IpcError::MessageTooLarge);
         }
 
-        // Copie inline
+        // Inline copy
         let copy_len = len;
         if copy_len > 0 {
-            // SAFETY: émetteur terminé avant transition SenderWaiting (Release/Acquire); récepteur unique.
+            // SAFETY: sender completed before SenderWaiting transition (Release/Acquire); single receiver.
             unsafe {
                 let src = self.slot.data.get() as *const u8;
                 core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), copy_len);
             }
         }
 
-        // Signaler l'émetteur — transition vers ReceiverAcked.
+        // Signal sender — transition to ReceiverAcked.
         let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         self.slot
             .state
             .store(RendezVousState::ReceiverAcked as u32, Ordering::Release);
-        // Réveiller l'émetteur s'il est bloqué dans le scheduler.
+        // Wake sender if blocked in scheduler.
         wake_tid(sender_tid);
 
         self.stats.recvs_ok.fetch_add(1, Ordering::Relaxed);
@@ -636,8 +634,8 @@ impl SyncChannel {
         Ok((mid, copy_len, msg_flags))
     }
 
-    /// Reçoit une référence zero-copy depuis le canal.
-    /// Retourne `Some(ZeroCopyRef)` si le message courant est en mode ZC.
+    /// Receives a zero-copy reference from channel.
+    /// Returns `Some(ZeroCopyRef)` if current message is in ZC mode.
     pub fn recv_zerocopy(&self) -> Option<ZeroCopyRef> {
         let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
         if s != RendezVousState::SenderWaiting {
@@ -648,7 +646,7 @@ impl SyncChannel {
         if !msg_flags.contains(MsgFlags::ZEROCOPY) {
             return None;
         }
-        // SAFETY: état SenderWaiting et flag ZEROCOPY — l'émetteur a écrit zc_ref
+        // SAFETY: SenderWaiting state and ZEROCOPY flag — sender wrote zc_ref
         let zc = unsafe { *self.slot.zc_ref.get() };
         let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         self.slot
@@ -661,17 +659,17 @@ impl SyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Utilitaires
+    // Utilities
     // -----------------------------------------------------------------------
 
-    /// Retourne `true` si un émetteur est en attente de rendez-vous.
+    /// Returns `true` if a sender is waiting for rendezvous.
     #[inline]
     pub fn has_pending_sender(&self) -> bool {
         RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire))
             == RendezVousState::SenderWaiting
     }
 
-    /// Snapshot des statistiques (copie atomique des compteurs).
+    /// Statistics snapshot (atomic copy of counters).
     pub fn snapshot_stats(&self) -> SyncChannelSnapshot {
         SyncChannelSnapshot {
             sends_ok: self.stats.sends_ok.load(Ordering::Relaxed),
@@ -684,15 +682,15 @@ impl SyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // ENVOI CAP-CHECKED — IPC-04 (v6) : appel direct security::access_control
+    // CAP-CHECKED SEND — IPC-04 (v6): direct security::access_control call
     // -----------------------------------------------------------------------
 
-    /// Envoie avec vérification capability (RÈGLE IPC-04 v6).
+    /// Sends with capability check (RULE IPC-04 v6).
     ///
-    /// Appelle `security::access_control::check_access()` avant le vrai envoi.
-    /// Points d'entrée syscall utilisent cette variante.
+    /// Calls `security::access_control::check_access()` before actual send.
+    /// Syscall entry points use this variant.
     ///
-    /// # Droits requis : `Rights::IPC_SEND`
+    /// # Required rights: `Rights::IPC_SEND`
     #[inline]
     pub fn send_checked(
         &self,
@@ -705,9 +703,9 @@ impl SyncChannel {
         self.send(data, flags)
     }
 
-    /// Reçoit avec vérification capability (RÈGLE IPC-04 v6).
+    /// Receives with capability check (RULE IPC-04 v6).
     ///
-    /// # Droits requis : `Rights::IPC_RECV`
+    /// # Required rights: `Rights::IPC_RECV`
     #[inline]
     pub fn recv_checked(
         &self,
@@ -721,7 +719,7 @@ impl SyncChannel {
     }
 }
 
-/// Snapshot immutable des statistiques
+/// Immutable statistics snapshot
 #[derive(Debug, Clone, Copy)]
 pub struct SyncChannelSnapshot {
     pub sends_ok: u64,
@@ -733,13 +731,13 @@ pub struct SyncChannelSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de canaux synchrones
+// Global static synchronous channel table
 // ---------------------------------------------------------------------------
 
-/// Capacité de la table globale de canaux synchrones
+/// Capacity of global synchronous channel table
 pub const SYNC_CHANNEL_TABLE_SIZE: usize = 512;
 
-/// Table statique globale de canaux synchrones alloués
+/// Global static table of allocated synchronous channels
 static SYNC_CHANNEL_TABLE: SpinLock<SyncChannelTable> = SpinLock::new(SyncChannelTable::new());
 
 pub struct SyncChannelTable {
@@ -748,17 +746,17 @@ pub struct SyncChannelTable {
     count: usize,
 }
 
-// SAFETY: tous les accès sont protégés par SpinLock<SyncChannelTable>
+// SAFETY: all accesses are protected by SpinLock<SyncChannelTable>
 unsafe impl Send for SyncChannelTable {}
 
 impl SyncChannelTable {
     pub const fn new() -> Self {
-        // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
+        // SAFETY: mem::zeroed() avoids const-eval memory limits for large arrays.
         unsafe { core::mem::zeroed() }
     }
 
-    /// Alloue un nouveau canal synchrone dans la table.
-    /// Retourne l'index ou `None` si la table est pleine.
+    /// Allocates a new synchronous channel in table.
+    /// Returns index or `None` if table is full.
     pub fn alloc(&mut self) -> Option<usize> {
         for i in 0..SYNC_CHANNEL_TABLE_SIZE {
             if !self.used[i] {
@@ -771,10 +769,10 @@ impl SyncChannelTable {
         None
     }
 
-    /// Libère un canal par index.
+    /// Frees channel by index.
     pub fn free(&mut self, idx: usize) -> bool {
         if idx < SYNC_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit que le slot est initialisé
+            // SAFETY: used[idx] guarantees slot is initialized
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -784,8 +782,8 @@ impl SyncChannelTable {
         }
     }
 
-    /// Accès à un canal par index (reference non-mut).
-    /// SAFETY: l'appelant doit s'assurer que used[idx] est true.
+    /// Access to channel by index (non-mut reference).
+    /// SAFETY: caller must ensure used[idx] is true.
     pub unsafe fn get_unchecked(&self, idx: usize) -> &SyncChannel {
         self.slots[idx].assume_init_ref()
     }
@@ -796,22 +794,22 @@ impl SyncChannelTable {
 }
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée un nouveau canal synchrone et retourne son index dans la table globale.
+/// Creates a new synchronous channel and returns its index in global table.
 pub fn sync_channel_create() -> Result<usize, IpcError> {
     let mut tbl = SYNC_CHANNEL_TABLE.lock();
     tbl.alloc().ok_or(IpcError::OutOfResources)
 }
 
-/// Envoie sur le canal synchrone identifié par `idx`.
+/// Sends on synchronous channel identified by `idx`.
 pub fn sync_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
     let tbl = SYNC_CHANNEL_TABLE.lock();
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
-    // SAFETY: used[idx] est true, vérifié ci-dessus sous spinlock
+    // SAFETY: used[idx] is true, verified above under spinlock
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
     let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -822,7 +820,7 @@ pub fn sync_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Mes
     res
 }
 
-/// Reçoit depuis le canal synchrone identifié par `idx`.
+/// Receives from synchronous channel identified by `idx`.
 pub fn sync_channel_recv(
     idx: usize,
     buf: &mut [u8],
@@ -832,7 +830,7 @@ pub fn sync_channel_recv(
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
-    // SAFETY: used[idx] vérifié sous spinlock ci-dessus.
+    // SAFETY: used[idx] verified under spinlock above.
     let chan_ptr: *const SyncChannel = unsafe { tbl.get_unchecked(idx) as *const SyncChannel };
     let chan_ref: &'static SyncChannel = unsafe { &*chan_ptr };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -843,30 +841,30 @@ pub fn sync_channel_recv(
     res
 }
 
-/// Ferme le canal synchrone identifié par `idx`.
+/// Closes synchronous channel identified by `idx`.
 pub fn sync_channel_close(idx: usize) -> Result<(), IpcError> {
     let tbl = SYNC_CHANNEL_TABLE.lock();
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
-    // SAFETY: used[idx] vérifié sous spinlock ci-dessus.
+    // SAFETY: used[idx] verified under spinlock above.
     let chan = unsafe { tbl.get_unchecked(idx) };
     chan.close();
     drop(tbl);
     Ok(())
 }
 
-/// Détruit et libère le canal synchrone identifié par `idx`.
+/// Destroys and frees synchronous channel identified by `idx`.
 pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let mut tbl = SYNC_CHANNEL_TABLE.lock();
     if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
         return Err(IpcError::InvalidHandle);
     }
-    // Fermer le canal pour réveiller les threads en attente avant la destruction
+    // Close channel to wake up waiting threads before destruction
     let chan = unsafe { tbl.get_unchecked(idx) };
     chan.close();
 
-    // T8-002 FIX : attendre que les opérations en vol soient terminées avant de libérer le slot
+    // T8-002 FIX: wait until in-flight operations are complete before freeing slot
     let mut spins = 0u32;
     while chan.active_ops.load(Ordering::Acquire) != 0 {
         if spins >= 256 {
@@ -887,15 +885,15 @@ pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Retourne le nombre de canaux synchrones actifs.
+/// Returns number of active synchronous channels.
 pub fn sync_channel_count() -> usize {
     SYNC_CHANNEL_TABLE.lock().count()
 }
 
-/// Envoie sur le canal synchrone `idx` avec vérification capability (IPC-04 v6).
+/// Sends on synchronous channel `idx` with capability check (IPC-04 v6).
 ///
-/// Utilisé par la couche syscall. Les appels kernel-interne peuvent utiliser
-/// `sync_channel_send()` directement.
+/// Used by syscall layer. Internal kernel calls can use
+/// `sync_channel_send()` directly.
 pub fn sync_channel_send_checked(
     idx: usize,
     data: &[u8],
@@ -916,7 +914,7 @@ pub fn sync_channel_send_checked(
     res
 }
 
-/// Reçoit depuis le canal synchrone `idx` avec vérification capability (IPC-04 v6).
+/// Receives from synchronous channel `idx` with capability check (IPC-04 v6).
 pub fn sync_channel_recv_checked(
     idx: usize,
     buf: &mut [u8],

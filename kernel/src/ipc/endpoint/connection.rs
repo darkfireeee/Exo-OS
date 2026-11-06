@@ -1,17 +1,17 @@
 // kernel/src/ipc/endpoint/connection.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONNECTION — Établissement de connexion + handshake IPC
-// (Exo-OS · IPC Couche 2a)
+// CONNECTION — Connection establishment + IPC handshake
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Le protocole de connexion est :
-//   1. CLIENT : `connect(endpoint_name, token)` → enqueue PendingConnection dans backlog.
-//   2. SERVEUR : `accept()` → dequeue PendingConnection, crée un canal bidirectionnel.
-//   3. HANDSHAKE : échange de version et de capabilities sur le canal créé.
-//   4. ÉTABLI : les deux parties ont leur ChannelId pour communiquer.
+// Connection protocol:
+//   1. CLIENT: `connect(endpoint_name, token)` -> enqueue PendingConnection into backlog.
+//   2. SERVER: `accept()` -> dequeue PendingConnection, creates bidirectional channel.
+//   3. HANDSHAKE: version and capability exchange on created channel.
+//   4. ESTABLISHED: both peers obtain their ChannelId to communicate.
 //
-// RÈGLE : zéro allocation heap — canaux créés depuis un pool statique.
+// RULE: zero heap allocation — channels created from a static pool.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::descriptor::{EndpointDesc, PendingConnection};
@@ -22,44 +22,44 @@ use crate::security::capability::{CapTable, CapToken, Rights};
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ConnectionState — état d'une connexion établie
+// ConnectionState — established connection state
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum ConnectionState {
-    /// En attente d'acceptation (dans le backlog).
+    /// Awaiting acceptance (in backlog).
     Pending = 0,
-    /// Handshake en cours.
+    /// Handshake in progress.
     Handshaking = 1,
-    /// Connexion établie, prête à l'emploi.
+    /// Connection established, ready for use.
     Established = 2,
-    /// Fermeture initiée par l'un des pairs.
+    /// Closure initiated by one peer.
     Closing = 3,
-    /// Connexion fermée.
+    /// Connection closed.
     Closed = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HandshakeMsg — message échangé lors du handshake
+// HandshakeMsg — message exchanged during handshake
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Message de handshake — 32 bytes.
+/// Handshake message — 32 bytes.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct HandshakeMsg {
-    /// Magic IPC.
+    /// IPC Magic.
     pub magic: u32,
-    /// Version du protocole.
+    /// Protocol version.
     pub version: u8,
-    /// Type : 0 = SYN, 1 = SYN-ACK, 2 = ACK.
+    /// Type: 0 = SYN, 1 = SYN-ACK, 2 = ACK.
     pub kind: u8,
     pub _pad: u16,
-    /// Cookie pour corrélation.
+    /// Cookie for correlation.
     pub cookie: u64,
-    /// EndpointId cible.
+    /// Target EndpointId.
     pub ep_id: u64,
-    /// ThreadId de l'initiateur.
+    /// Initiator ThreadId.
     pub tid: u32,
     pub _pad2: u32,
 }
@@ -120,27 +120,27 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ActiveConnection — connexion établie
+// ActiveConnection — established connection
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Connexion active entre deux threads.
+/// Active connection between two threads.
 #[repr(C, align(32))]
 pub struct ActiveConnection {
-    /// Identifiant du canal client → serveur.
+    /// Channel identifier client -> server.
     pub c2s_channel: ChannelId,
-    /// Identifiant du canal serveur → client.
+    /// Channel identifier server -> client.
     pub s2c_channel: ChannelId,
-    /// Thread client.
+    /// Client thread.
     pub client_tid: ThreadId,
-    /// Thread serveur.
+    /// Server thread.
     pub server_tid: ThreadId,
-    /// Endpoint auquel la connexion est rattachée.
+    /// Endpoint to which connection is attached.
     pub endpoint_id: EndpointId,
-    /// État de la connexion.
+    /// Connection state.
     pub state: AtomicU32,
-    /// Cookie de corrélation.
+    /// Correlation cookie.
     pub cookie: u64,
-    /// Timestamp d'établissement.
+    /// Establishment timestamp.
     pub established_tick: AtomicU64,
 }
 
@@ -182,32 +182,32 @@ impl ActiveConnection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ConnectionManager — pool de connexions actives
+// ConnectionManager — active connection pool
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un `connect()`.
+/// Result of `connect()`.
 pub struct ConnectResult {
     pub channel_id: ChannelId,
     pub cookie: Cookie,
 }
 
-/// Résultat d'un `accept()`.
+/// Result of `accept()`.
 pub struct AcceptResult {
     pub connection: PendingConnection,
     pub s2c_channel: ChannelId,
 }
 
-/// Effectue la demande de connexion depuis le client.
+/// Performs connection request from client.
 ///
 /// # Arguments
-/// - `ep_id`  : endpoint cible.
-/// - `ep`     : descripteur de l'endpoint.
-/// - `client` : thread client.
-/// - `table`  : table de capabilities du client.
-/// - `token`  : token capability du client.
+/// - `ep_id`  : target endpoint.
+/// - `ep`     : endpoint descriptor.
+/// - `client` : client thread.
+/// - `table`  : client capability table.
+/// - `token`  : client capability token.
 ///
-/// # Retour
-/// `Ok(ConnectResult)` avec le ChannelId alloué pour recevoir la réponse.
+/// # Return
+/// `Ok(ConnectResult)` with allocated ChannelId to receive reply.
 pub fn do_connect(
     _ep_id: EndpointId,
     ep: &EndpointDesc,
@@ -215,7 +215,7 @@ pub fn do_connect(
     table: &CapTable,
     token: CapToken,
 ) -> Result<ConnectResult, IpcError> {
-    // Vérification capability : CONNECT requis.
+    // Capability check: CONNECT required.
     crate::ipc::capability_bridge::check_endpoint_access(table, token, Rights::IPC_CONNECT)
         .map_err(|_| IpcError::PermissionDenied)?;
 
@@ -230,21 +230,21 @@ pub fn do_connect(
         requester: client,
         channel_id: channel_id.get(),
         cookie: cookie.get(),
-        timestamp_ticks: 0, // mis à jour par l'appelant avec le tick courant
+        timestamp_ticks: 0, // updated by caller with current tick
     };
 
     ep.enqueue_connection(pending)?;
     Ok(ConnectResult { channel_id, cookie })
 }
 
-/// Accepte la prochaine connexion en attente.
+/// Accepts the next pending connection.
 ///
 /// # Arguments
-/// - `ep`     : descripteur de l'endpoint.
-/// - `server` : thread serveur (doit être propriétaire de l'endpoint).
+/// - `ep`     : endpoint descriptor.
+/// - `server` : server thread (must own the endpoint).
 ///
-/// # Retour
-/// `Ok(AcceptResult)` avec le PendingConnection et le canal serveur→client.
+/// # Return
+/// `Ok(AcceptResult)` with PendingConnection and server->client channel.
 pub fn do_accept(ep: &EndpointDesc, server: ThreadId) -> Result<AcceptResult, IpcError> {
     if !ep.is_owner(server) {
         return Err(IpcError::PermissionDenied);

@@ -1,20 +1,20 @@
-// ipc/channel/async.rs — Canal asynchrone (notifications sans runtime async) pour Exo-OS
+// ipc/channel/async.rs — Asynchronous channel (notifications without async runtime) for Exo-OS
 //
-// Ce module implémente un canal asynchrone sans runtime async/await complet.
-// Les threads peuvent enregistrer des callbacks de réveil (Waker-like) qui seront
-// appelés quand un message est disponible.
+// This module implements an asynchronous channel without a full async/await runtime.
+// Threads can register wake-up callbacks (Waker-like) that will be
+// invoked when a message becomes available.
 //
-// Architecture :
-//   - File d'attente de messages (SpscRing ou MpmcRing selon le mode)
-//   - Table de wakers statique (MAX_ASYNC_WAKERS = 32)
-//   - Notification via AtomicBool "ready" par waker enregistré
-//   - Hook de réveil vers le scheduler (appel optionnel si configuré)
-//   - Pas de Future/Poll/Waker std — noyau no_std
+// Architecture:
+//   - Message queue (SpscRing or MpmcRing depending on mode)
+//   - Static waker table (MAX_ASYNC_WAKERS = 32)
+//   - Notification via AtomicBool "ready" per registered waker
+//   - Wake-up hook into scheduler (optional call if configured)
+//   - No std Future/Poll/Waker — no_std kernel
 //
-// Patterns d'utilisation :
-//   1. Polling actif : `try_recv()` + spin courte durée
-//   2. Event-driven : enregistrer un waker → être notifié → appeler `try_recv()`
-//   3. Completion callback : enregistrer un `fn(*mut ()) -> ()` appelé à réception
+// Usage patterns:
+//   1. Active polling: `try_recv()` + short spin
+//   2. Event-driven: register waker -> get notified -> call `try_recv()`
+//   3. Completion callback: register `fn(*mut ()) -> ()` called on reception
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -28,32 +28,32 @@ use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
-// Waker noyau simplifié
+// Simplified kernel waker
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de wakers enregistrés par canal asynchrone
+/// Maximum number of registered wakers per asynchronous channel
 pub const MAX_ASYNC_WAKERS: usize = 32;
 
-/// Type de pointeur de fonction de réveil.
-/// `data` = pointeur opaque passé à la registration.
+/// Wake-up function pointer type.
+/// `data` = opaque pointer passed during registration.
 pub type WakeFn = unsafe fn(data: *mut ());
 
-/// Waker enregistré sur un canal asynchrone
+/// Waker registered on an asynchronous channel
 #[repr(C, align(32))]
 pub struct AsyncWaker {
-    /// Fonction de réveil (None = waker libre)
+    /// Wake-up function (None = free waker)
     wake_fn: Option<WakeFn>,
-    /// Donnée opaque transmise au wake_fn
+    /// Opaque data passed to wake_fn
     data: *mut (),
-    /// Ce waker a été déclenché mais pas encore traité
+    /// This waker was fired but not yet processed
     fired: AtomicBool,
-    /// Waker actif (enregistré)
+    /// Active waker (registered)
     active: AtomicBool,
     _pad: [u8; 6],
 }
 
-// SAFETY: wake_fn et data sont définis par le registrant qui garantit leur validité
-// pendant toute la durée de registration. AtomicBool est Sync.
+// SAFETY: wake_fn and data are defined by registrant who guarantees their validity
+// for the entire registration duration. AtomicBool is Sync.
 unsafe impl Sync for AsyncWaker {}
 unsafe impl Send for AsyncWaker {}
 
@@ -89,15 +89,15 @@ impl AsyncWaker {
         self.fired.load(Ordering::Acquire)
     }
 
-    /// Déclenche le waker : appelle wake_fn(data) si actif.
+    /// Fires waker: calls wake_fn(data) if active.
     ///
     /// # SAFETY
-    /// Le registrant garantit que `data` reste valide jusqu'à déregistration.
+    /// Registrant guarantees that `data` remains valid until deregistration.
     pub unsafe fn fire(&self) {
         if self.active.load(Ordering::Acquire) {
             if let Some(f) = self.wake_fn {
                 self.fired.store(true, Ordering::Release);
-                // SAFETY: garantie par le contrat du registrant
+                // SAFETY: guaranteed by registrant contract
                 f(self.data);
             }
         }
@@ -105,7 +105,7 @@ impl AsyncWaker {
 }
 
 // ---------------------------------------------------------------------------
-// Table de wakers
+// Waker table
 // ---------------------------------------------------------------------------
 
 pub struct WakerTable {
@@ -113,7 +113,7 @@ pub struct WakerTable {
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock
+// SAFETY: access protected by SpinLock
 unsafe impl Send for WakerTable {}
 
 impl WakerTable {
@@ -124,7 +124,7 @@ impl WakerTable {
         }
     }
 
-    /// Enregistre un waker. Retourne l'index ou `None` si plein.
+    /// Registers a waker. Returns index or `None` if full.
     pub fn register(&mut self, f: WakeFn, data: *mut ()) -> Option<usize> {
         for i in 0..MAX_ASYNC_WAKERS {
             if !self.entries[i].is_active() {
@@ -136,7 +136,7 @@ impl WakerTable {
         None
     }
 
-    /// Déregistre le waker à l'index `idx`.
+    /// Unregisters waker at index `idx`.
     pub fn unregister(&mut self, idx: usize) -> bool {
         if idx < MAX_ASYNC_WAKERS && self.entries[idx].is_active() {
             self.entries[idx].deactivate();
@@ -147,18 +147,18 @@ impl WakerTable {
         }
     }
 
-    /// Déclenche tous les wakers actifs (interne, appelant détient le verrou).
+    /// Fires all active wakers (internal, caller holds lock).
     pub fn fire_all(&self) {
         for i in 0..MAX_ASYNC_WAKERS {
             if self.entries[i].is_active() {
-                // SAFETY: contrat du registrant (data valide jusqu'à déregistration)
+                // SAFETY: registrant contract (data valid until deregistration)
                 unsafe { self.entries[i].fire() };
             }
         }
     }
 
-    /// Extrait les callbacks des wakers actifs sans les appeler sous verrou,
-    /// évitant tout interblocage si le callback interagit avec la table.
+    /// Collects callbacks of active wakers without calling them under lock,
+    /// avoiding deadlocks if callback interacts with table.
     pub fn collect_active_wakers(&mut self) -> ([(Option<WakeFn>, *mut ()); MAX_ASYNC_WAKERS], usize) {
         let mut list = [(None, core::ptr::null_mut()); MAX_ASYNC_WAKERS];
         let mut n = 0;
@@ -178,7 +178,7 @@ impl WakerTable {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques du canal asynchrone
+// Asynchronous channel statistics
 // ---------------------------------------------------------------------------
 
 #[repr(C, align(64))]
@@ -228,35 +228,35 @@ pub struct AsyncChannelStatsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// AsyncChannel — structure principale
+// AsyncChannel — main structure
 // ---------------------------------------------------------------------------
 
-/// Canal asynchrone avec notification par waker.
+/// Asynchronous channel with waker notification.
 ///
-/// Mécanisme :
-///   - `send()` → push dans SpscRing → notifie les wakers enregistrés
-///   - `try_recv()` → pop depuis SpscRing (non-bloquant)
-///   - `register_waker()` → sera appelé à chaque send()
-///   - `pending_count()` → nombre approximatif de messages en attente
+/// Mechanism:
+///   - `send()` -> push into SpscRing -> notifies registered wakers
+///   - `try_recv()` -> pop from SpscRing (non-blocking)
+///   - `register_waker()` -> will be called on each send()
+///   - `pending_count()` -> approximate count of pending messages
 #[repr(C, align(64))]
 pub struct AsyncChannel {
     pub id: ChannelId,
-    /// Ring de messages
+    /// Message ring
     ring: SpscRing,
-    /// Table de wakers (protégée par SpinLock)
+    /// Waker table (protected by SpinLock)
     wakers: SpinLock<WakerTable>,
-    /// Statistiques locales
+    /// Local statistics
     pub stats: AsyncChannelStats,
-    /// Compteur d'opérations concurrentes actives (drain avant libération/réutilisation).
+    /// Active concurrent operations counter (drain before freeing/reusing).
     pub active_ops: AtomicU32,
-    /// Nombre de messages en attente (approximatif)
+    /// Number of pending messages (approximate)
     pending: AtomicUsize,
-    /// Canal fermé
+    /// Closed channel
     closed: AtomicU32,
     _pad: [u8; 16],
 }
 
-// SAFETY: SpscRing est Sync, SpinLock<WakerTable> est Sync
+// SAFETY: SpscRing is Sync, SpinLock<WakerTable> is Sync
 unsafe impl Sync for AsyncChannel {}
 unsafe impl Send for AsyncChannel {}
 
@@ -282,7 +282,7 @@ impl AsyncChannel {
 
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
-        // Notifier les wakers que le canal est fermé (hors verrou pour éviter interblocage)
+        // Notify wakers that channel is closed (outside lock to avoid deadlock)
         let (callbacks, n) = {
             let mut tbl = self.wakers.lock();
             tbl.collect_active_wakers()
@@ -295,32 +295,32 @@ impl AsyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Gestion des wakers
+    // Waker management
     // -----------------------------------------------------------------------
 
-    /// Enregistre un waker qui sera appelé à chaque message disponible.
-    /// Retourne l'index du waker pour pouvoir le déregistrer.
+    /// Registers a waker that will be called on each available message.
+    /// Returns waker index for deregistration.
     pub fn register_waker(&self, f: WakeFn, data: *mut ()) -> Option<usize> {
         let mut tbl = self.wakers.lock();
         tbl.register(f, data)
     }
 
-    /// Désenregistre le waker à l'index `waker_idx`.
+    /// Deregisters waker at index `waker_idx`.
     pub fn unregister_waker(&self, waker_idx: usize) -> bool {
         let mut tbl = self.wakers.lock();
         tbl.unregister(waker_idx)
     }
 
-    /// Retourne le nombre de wakers actifs.
+    /// Returns number of active wakers.
     pub fn waker_count(&self) -> usize {
         self.wakers.lock().count()
     }
 
     // -----------------------------------------------------------------------
-    // Envoi
+    // Send
     // -----------------------------------------------------------------------
 
-    /// Envoie `data` dans le canal asynchrone et notifie les wakers.
+    /// Sends `data` into asynchronous channel and notifies wakers.
     pub fn send(&self, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -340,7 +340,7 @@ impl AsyncChannel {
                 self.pending.fetch_add(1, Ordering::Relaxed);
                 IPC_STATS.record(StatEvent::MessageSent);
 
-                // Notifier les wakers enregistrés (hors verrou)
+                // Notify registered wakers (outside lock)
                 let (callbacks, count) = {
                     let mut tbl = self.wakers.lock();
                     tbl.collect_active_wakers()
@@ -367,11 +367,11 @@ impl AsyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Réception
+    // Receive
     // -----------------------------------------------------------------------
 
-    /// Tente de recevoir un message sans blocage.
-    /// Retourne `IpcError::WouldBlock` si aucun message disponible.
+    /// Attempts to receive a message without blocking.
+    /// Returns `IpcError::WouldBlock` if no message available.
     pub fn try_recv(&self, buf: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         if self.is_closed() && self.ring.is_empty() {
             return Err(IpcError::Closed);
@@ -392,7 +392,7 @@ impl AsyncChannel {
         }
     }
 
-    /// Réception bloquante (spin-wait fini).
+    /// Blocking receive (bounded spin-wait).
     pub fn recv(&self, buf: &mut [u8], timeout_spins: u32) -> Result<(usize, MsgFlags), IpcError> {
         let mut spins = 0u32;
         loop {
@@ -414,7 +414,7 @@ impl AsyncChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Utilitaires
+    // Utilities
     // -----------------------------------------------------------------------
 
     pub fn pending_count(&self) -> usize {
@@ -431,7 +431,7 @@ impl AsyncChannel {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de canaux asynchrones
+// Global static asynchronous channel table
 // ---------------------------------------------------------------------------
 
 pub const ASYNC_CHANNEL_TABLE_SIZE: usize = 256;
@@ -442,13 +442,13 @@ struct AsyncChannelTable {
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock
+// SAFETY: access protected by SpinLock
 unsafe impl Send for AsyncChannelTable {}
 
 impl AsyncChannelTable {
     #[allow(dead_code)]
     const fn new() -> Self {
-        // SAFETY: MaybeUninit zeros valides + AtomicBool false = table vide; jamais lu avant init.
+        // SAFETY: all-zero MaybeUninit valid + AtomicBool false = empty table; never read before init.
         unsafe { core::mem::zeroed() }
     }
 
@@ -466,7 +466,7 @@ impl AsyncChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < ASYNC_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit que slots[idx] est initialisé; used → false empêche double-drop.
+            // SAFETY: used[idx] guarantees slots[idx] is initialized; used -> false prevents double-drop.
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -486,20 +486,20 @@ impl AsyncChannelTable {
 }
 
 static ASYNC_CHANNEL_TABLE: SpinLock<AsyncChannelTable> =
-    // SAFETY: SpinLock<AsyncChannelTable> tout-zéro valide: AtomicBool false = déverrouillé, table vide.
+    // SAFETY: all-zero SpinLock<AsyncChannelTable> valid: AtomicBool false = unlocked, empty table.
     unsafe { core::mem::zeroed() };
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée un canal asynchrone. Retourne son index.
+/// Creates an asynchronous channel. Returns its index.
 pub fn async_channel_create() -> Result<usize, IpcError> {
     let mut tbl = ASYNC_CHANNEL_TABLE.lock();
     tbl.alloc().ok_or(IpcError::OutOfResources)
 }
 
-/// Enregistre un waker sur le canal `idx`.
+/// Registers a waker on channel `idx`.
 pub fn async_channel_register_waker(
     idx: usize,
     f: WakeFn,
@@ -520,7 +520,7 @@ pub fn async_channel_register_waker(
     res
 }
 
-/// Désenregistre un waker.
+/// Deregisters a waker.
 pub fn async_channel_unregister_waker(chan_idx: usize, waker_idx: usize) -> Result<(), IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -539,7 +539,7 @@ pub fn async_channel_unregister_waker(chan_idx: usize, waker_idx: usize) -> Resu
     res
 }
 
-/// Envoie `data` sur le canal asynchrone `idx`.
+/// Sends `data` on asynchronous channel `idx`.
 pub fn async_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<MessageId, IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -554,7 +554,7 @@ pub fn async_channel_send(idx: usize, data: &[u8], flags: MsgFlags) -> Result<Me
     res
 }
 
-/// Reçoit un message sans blocage du canal `idx`.
+/// Receives a message without blocking from channel `idx`.
 pub fn async_channel_try_recv(idx: usize, buf: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -569,7 +569,7 @@ pub fn async_channel_try_recv(idx: usize, buf: &mut [u8]) -> Result<(usize, MsgF
     res
 }
 
-/// Ferme et détruit le canal asynchrone `idx`.
+/// Closes and destroys asynchronous channel `idx`.
 pub fn async_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = ASYNC_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -577,13 +577,13 @@ pub fn async_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let chan_ref: &'static AsyncChannel = unsafe { &*(chan as *const AsyncChannel) };
     drop(tbl);
 
-    // Drain coopératif des opérations concurrentes en vol avant libération du slot
+    // Cooperative drain of concurrent in-flight operations before freeing slot
     let mut spins = 0u32;
     while chan_ref.active_ops.load(Ordering::SeqCst) > 0 {
         core::hint::spin_loop();
         spins = spins.wrapping_add(1);
         if spins % 64 == 0 {
-            // SAFETY: cooperative_reschedule() cède le CPU au scheduler si des threads sont prêts.
+            // SAFETY: cooperative_reschedule() yields CPU to scheduler if threads are ready.
             unsafe {
                 let _ = crate::scheduler::core::switch::cooperative_reschedule();
             }
@@ -597,7 +597,7 @@ pub fn async_channel_destroy(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Nombre de canaux asynchrones actifs.
+/// Number of active asynchronous channels.
 pub fn async_channel_count() -> usize {
     ASYNC_CHANNEL_TABLE.lock().count
 }

@@ -1,19 +1,19 @@
-// ipc/channel/broadcast.rs — Canal de diffusion (one-to-many) pour Exo-OS
+// ipc/channel/broadcast.rs — Broadcast channel (one-to-many) for Exo-OS
 //
-// Implémente le pattern publish/subscribe : un publish envoie UNE fois et TOUS
-// les abonnés reçoivent une copie independante du message.
+// Implements publish/subscribe pattern: a publish sends ONCE and ALL
+// subscribers receive an independent copy of the message.
 //
-// Architecture :
-//   - Liste statique d'abonnés (MAX_BROADCAST_SUBSCRIBERS = 64)
-//   - Chaque abonné possède un SpscRing privé
-//   - Publication = copie du message dans chaque ring abonné
-//   - Pas d'allocation dynamique, pas de Vec/Box
-//   - Statistiques per-abonné + globales AtomicU64
+// Architecture:
+//   - Static list of subscribers (MAX_BROADCAST_SUBSCRIBERS = 16)
+//   - Each subscriber has a private SpscRing
+//   - Publishing = copy message into each subscriber ring
+//   - No dynamic allocation, no Vec/Box
+//   - Per-subscriber + global AtomicU64 statistics
 //
-// Règles respectées :
-//   - RÈGLE NO-ALLOC : pas de Vec/Box/Arc/Rc
-//   - Isolation des abonnés : un ring plein n'affecte pas les autres (DROP_SUBSCRIBER)
-//   - Aucune importation de process/ ou fs/
+// Rules observed:
+//   - RULE NO-ALLOC: no Vec/Box/Arc/Rc
+//   - Subscriber isolation: a full ring does not affect others (DROP_SUBSCRIBER)
+//   - No imports from process/ or fs/
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -28,41 +28,41 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ---------------------------------------------------------------------------
-// Constantes du broadcast
+// Broadcast constants
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal d'abonnés par canal de broadcast
-/// (limité pour contenir le budget mémoire statique — SpscRing par abonné).
+/// Maximum number of subscribers per broadcast channel
+/// (bounded to limit static memory budget — SpscRing per subscriber).
 pub const MAX_BROADCAST_SUBSCRIBERS: usize = 16;
 
-/// Identifiant d'abonné : index dans le tableau des abonnés
+/// Subscriber identifier: index in subscribers array
 pub type SubscriberId = u32;
 
-/// Valeur sentinelle — abonné invalide / non enregistré
+/// Sentinel value — invalid / unregistered subscriber
 pub const SUBSCRIBER_INVALID: SubscriberId = u32::MAX;
 
 // ---------------------------------------------------------------------------
-// Slot abonné
+// Subscriber slot
 // ---------------------------------------------------------------------------
 
-/// Ring privé d'un abonné avec ses compteurs de performance
+/// Private ring of a subscriber with its performance counters
 #[repr(C, align(64))]
 pub struct SubscriberSlot {
-    /// Ring SPSC dédié à cet abonné
+    /// Dedicated SPSC ring for this subscriber
     ring: SpscRing,
-    /// Abonné actif
+    /// Active subscriber
     active: AtomicBool,
-    /// Identifiant opaque (ex: ThreadId du consommateur)
+    /// Opaque identifier (e.g. consumer ThreadId)
     owner_id: AtomicU64,
-    /// Compteur de messages reçus
+    /// Count of received messages
     msgs_received: AtomicU64,
-    /// Compteur de messages droppés (ring plein)
+    /// Count of dropped messages (ring full)
     msgs_dropped: AtomicU64,
     _pad: [u8; 14],
 }
 
-// SAFETY: SpscRing est Sync (barrières AtomicU64 internes), tous les autres
-// champs sont atomiques.
+// SAFETY: SpscRing is Sync (internal AtomicU64 barriers), all other
+// fields are atomic.
 unsafe impl Sync for SubscriberSlot {}
 unsafe impl Send for SubscriberSlot {}
 
@@ -78,15 +78,15 @@ impl SubscriberSlot {
         }
     }
 
-    /// Initialise et active cet abonné.
+    /// Initializes and activates this subscriber.
     pub fn activate(&self, owner_id: u64) {
         self.owner_id.store(owner_id, Ordering::Relaxed);
-        // SAFETY: on initialise le ring avant de marquer active
+        // SAFETY: initialize ring before marking active
         self.ring.init();
         self.active.store(true, Ordering::Release);
     }
 
-    /// Tente d'activer l'abonné de manière atomique (CAS).
+    /// Attempts to activate subscriber atomically (CAS).
     pub fn try_activate(&self, owner_id: u64) -> bool {
         if self
             .active
@@ -101,13 +101,13 @@ impl SubscriberSlot {
         }
     }
 
-    /// Désactive l'abonné (ne consomme plus les futurs messages).
+    /// Deactivates subscriber (no longer consumes future messages).
     pub fn deactivate(&self) {
         self.active.store(false, Ordering::Release);
         self.owner_id.store(0, Ordering::Relaxed);
     }
 
-    /// Tente de désactiver l'abonné de manière atomique (CAS).
+    /// Attempts to deactivate subscriber atomically (CAS).
     pub fn try_deactivate(&self) -> bool {
         if self
             .active
@@ -125,8 +125,8 @@ impl SubscriberSlot {
         self.active.load(Ordering::Acquire)
     }
 
-    /// Écrit un message dans le ring de cet abonné.
-    /// Retourne `true` si réussi, `false` si ring plein (message droppé).
+    /// Writes a message into this subscriber's ring.
+    /// Returns `true` if successful, `false` if ring is full (message dropped).
     pub fn deliver(&self, data: &[u8], flags: MsgFlags) -> bool {
         if !self.is_active() {
             return false;
@@ -143,7 +143,7 @@ impl SubscriberSlot {
         }
     }
 
-    /// Lit un message depuis le ring de cet abonné.
+    /// Reads a message from this subscriber's ring.
     pub fn consume(&self, buf: &mut [u8]) -> Result<(usize, MsgFlags), IpcError> {
         if !self.is_active() {
             return Err(IpcError::Closed);
@@ -161,7 +161,7 @@ impl SubscriberSlot {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques globales du canal broadcast
+// Global broadcast channel statistics
 // ---------------------------------------------------------------------------
 
 #[repr(C, align(64))]
@@ -211,35 +211,35 @@ pub struct BroadcastStatsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// BroadcastChannel — structure principale
+// BroadcastChannel — main structure
 // ---------------------------------------------------------------------------
 
-/// Canal de diffusion : un producteur, N consommateurs indépendants.
+/// Broadcast channel: one producer, N independent consumers.
 ///
-/// Chaque abonné dispose d'un SpscRing privé. La méthode `publish()` itère
-/// sur tous les abonnés actifs et copie le message dans chacun.
-/// La livraison est best-effort : si le ring d'un abonné est plein, le message
-/// est droppé pour cet abonné uniquement.
+/// Each subscriber has a private SpscRing. The `publish()` method iterates
+/// over all active subscribers and copies message into each.
+/// Delivery is best-effort: if a subscriber's ring is full, the message
+/// is dropped for that subscriber only.
 #[repr(C, align(64))]
 pub struct BroadcastChannel {
-    /// Identifiant unique du canal
+    /// Unique channel identifier
     pub id: ChannelId,
-    /// Tableau statique des slots abonnés
+    /// Static array of subscriber slots
     subscribers: [SubscriberSlot; MAX_BROADCAST_SUBSCRIBERS],
-    /// Bitmap de présence des abonnés (protection de la table sous SpinLock)
+    /// Subscriber presence bitmap (protection of table under SpinLock)
     subscriber_bitmap: AtomicU64,
-    /// Nombre d'abonnés actifs
+    /// Number of active subscribers
     subscriber_count: AtomicU32,
-    /// Statistiques globales
+    /// Global statistics
     pub stats: BroadcastStats,
-    /// Canal fermé
+    /// Closed channel
     closed: AtomicU32,
-    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    /// In-flight operations counter (anti-UAF on destroy)
     pub active_ops: AtomicU32,
     _pad: [u8; 20],
 }
 
-// SAFETY: SubscriberSlot est Sync, BroadcastStats est Sync (AtomicU64)
+// SAFETY: SubscriberSlot is Sync, BroadcastStats is Sync (AtomicU64)
 unsafe impl Sync for BroadcastChannel {}
 unsafe impl Send for BroadcastChannel {}
 
@@ -268,7 +268,7 @@ impl BroadcastChannel {
 
     pub fn close(&self) {
         self.closed.store(1, Ordering::Release);
-        // Désactiver tous les abonnés de manière atomique
+        // Deactivate all subscribers atomically
         for i in 0..MAX_BROADCAST_SUBSCRIBERS {
             if self.subscribers[i].try_deactivate() {
                 let mask = 1u64 << (i % 64);
@@ -280,16 +280,16 @@ impl BroadcastChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Gestion des abonnés
+    // Subscriber management
     // -----------------------------------------------------------------------
 
-    /// S'abonner au canal.
-    /// Retourne l'identifiant d'abonné (index) ou `None` si saturé.
+    /// Subscribes to channel.
+    /// Returns subscriber identifier (index) or `None` if full.
     pub fn subscribe(&self, owner_id: u64) -> Option<SubscriberId> {
         if self.is_closed() {
             return None;
         }
-        // Chercher un slot libre et l'activer atomiquement (CAS)
+        // Find a free slot and activate it atomically (CAS)
         for i in 0..MAX_BROADCAST_SUBSCRIBERS {
             if self.subscribers[i].try_activate(owner_id) {
                 let mask = 1u64 << (i % 64);
@@ -302,7 +302,7 @@ impl BroadcastChannel {
         None
     }
 
-    /// Se désabonner du canal.
+    /// Unsubscribes from channel.
     pub fn unsubscribe(&self, sub_id: SubscriberId) -> bool {
         let idx = sub_id as usize;
         if idx >= MAX_BROADCAST_SUBSCRIBERS {
@@ -324,14 +324,14 @@ impl BroadcastChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Publication
+    // Publishing
     // -----------------------------------------------------------------------
 
-    /// Publie `data` vers TOUS les abonnés actifs.
+    /// Publishes `data` to ALL active subscribers.
     ///
-    /// Retourne `(MessageId, delivered, dropped)` :
-    ///   - `delivered` : nombre d'abonnés ayant reçu le message
-    ///   - `dropped`   : nombre d'abonnés dont le ring était plein
+    /// Returns `(MessageId, delivered, dropped)`:
+    ///   - `delivered`: number of subscribers that received message
+    ///   - `dropped`: number of subscribers whose ring was full
     pub fn publish(&self, data: &[u8], flags: MsgFlags) -> Result<(MessageId, u32, u32), IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -344,7 +344,7 @@ impl BroadcastChannel {
         let mut delivered: u32 = 0;
         let mut dropped: u32 = 0;
 
-        // Itérer sur les abonnés actifs via le bitmap
+        // Iterate over active subscribers via bitmap
         let mut bitmap = self.subscriber_bitmap.load(Ordering::Acquire);
         while bitmap != 0 {
             let bit = bitmap.trailing_zeros() as usize;
@@ -378,10 +378,10 @@ impl BroadcastChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Consommation (par abonné)
+    // Consumption (per subscriber)
     // -----------------------------------------------------------------------
 
-    /// L'abonné `sub_id` lit son prochain message.
+    /// Subscriber `sub_id` reads its next message.
     pub fn recv(
         &self,
         sub_id: SubscriberId,
@@ -396,12 +396,12 @@ impl BroadcastChannel {
         Ok(result)
     }
 
-    /// Snapshot des statistiques globales.
+    /// Snapshot of global statistics.
     pub fn snapshot_stats(&self) -> BroadcastStatsSnapshot {
         self.stats.snapshot()
     }
 
-    /// Per-abonné : nombre de messages reçus / droppés.
+    /// Per-subscriber: number of received / dropped messages.
     pub fn subscriber_stats(&self, sub_id: SubscriberId) -> Option<(u64, u64)> {
         let idx = sub_id as usize;
         if idx >= MAX_BROADCAST_SUBSCRIBERS || !self.subscribers[idx].is_active() {
@@ -414,12 +414,12 @@ impl BroadcastChannel {
     }
 
     // -----------------------------------------------------------------------
-    // PUBLICATION/ABONNEMENT CAP-CHECKED — IPC-04 (v6)
+    // CAP-CHECKED PUBLISHING/SUBSCRIPTION — IPC-04 (v6)
     // -----------------------------------------------------------------------
 
-    /// Publie vers tous les abonnés avec vérification capability (RÈGLE IPC-04 v6).
+    /// Publishes to all subscribers with capability check (RULE IPC-04 v6).
     ///
-    /// # Droits requis : `Rights::IPC_SEND`
+    /// # Required rights: `Rights::IPC_SEND`
     #[inline]
     pub fn publish_checked(
         &self,
@@ -432,9 +432,9 @@ impl BroadcastChannel {
         self.publish(data, flags)
     }
 
-    /// S'abonne au canal avec vérification capability (RÈGLE IPC-04 v6).
+    /// Subscribes to channel with capability check (RULE IPC-04 v6).
     ///
-    /// # Droits requis : `Rights::IPC_RECV`
+    /// # Required rights: `Rights::IPC_RECV`
     #[inline]
     pub fn subscribe_checked(
         &self,
@@ -446,9 +446,9 @@ impl BroadcastChannel {
         Ok(self.subscribe(owner_id))
     }
 
-    /// L'abonné `sub_id` lit son prochain message, avec vérification capability.
+    /// Subscriber `sub_id` reads its next message with capability check.
     ///
-    /// # Droits requis : `Rights::IPC_RECV`
+    /// # Required rights: `Rights::IPC_RECV`
     #[inline]
     pub fn recv_checked(
         &self,
@@ -463,7 +463,7 @@ impl BroadcastChannel {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de canaux broadcast
+// Global static broadcast channel table
 // ---------------------------------------------------------------------------
 
 pub const BROADCAST_CHANNEL_TABLE_SIZE: usize = 16;
@@ -474,13 +474,13 @@ struct BroadcastChannelTable {
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock
+// SAFETY: access protected by SpinLock
 unsafe impl Send for BroadcastChannelTable {}
 
 impl BroadcastChannelTable {
     #[allow(dead_code)]
     const fn new() -> Self {
-        // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
+        // SAFETY: mem::zeroed() avoids const-eval memory limits for large arrays.
         unsafe { core::mem::zeroed() }
     }
 
@@ -500,7 +500,7 @@ impl BroadcastChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < BROADCAST_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit l'init
+            // SAFETY: used[idx] guarantees init
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -519,32 +519,32 @@ impl BroadcastChannelTable {
     }
 }
 
-// SAFETY: La section .bss est zéro-initialisée par le bootloader.
-// SpinLock<BroadcastChannelTable> tout-zéro = valide (lock free, table vide).
-// MaybeUninit::uninit() = 0 byte de const-eval, la mémoire vient du .bss.
+// SAFETY: .bss section is zero-initialized by bootloader.
+// SpinLock<BroadcastChannelTable> all-zero = valid (unlocked, empty table).
+// MaybeUninit::uninit() = 0 const-eval bytes, memory comes from .bss.
 static BROADCAST_TABLE: core::mem::MaybeUninit<SpinLock<BroadcastChannelTable>> =
     core::mem::MaybeUninit::uninit();
 
 #[inline(always)]
 fn broadcast_table() -> &'static SpinLock<BroadcastChannelTable> {
-    // SAFETY: .bss est zéro-initialisé au boot. SpinLock all-zeros = déverrouillé.
+    // SAFETY: .bss is zero-initialized at boot. SpinLock all-zeros = unlocked.
     unsafe { BROADCAST_TABLE.assume_init_ref() }
 }
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée un canal de broadcast. Retourne son index.
+/// Creates a broadcast channel. Returns its index.
 pub fn broadcast_create() -> Result<usize, IpcError> {
     let mut tbl = broadcast_table().lock();
     tbl.alloc().ok_or(IpcError::OutOfResources)
 }
 
-/// S'abonner au canal broadcast `chan_idx`. Retourne le SubscriberId.
+/// Subscribes to broadcast channel `chan_idx`. Returns SubscriberId.
 pub fn broadcast_subscribe(chan_idx: usize, owner_id: u64) -> Result<SubscriberId, IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -554,10 +554,10 @@ pub fn broadcast_subscribe(chan_idx: usize, owner_id: u64) -> Result<SubscriberI
     res
 }
 
-/// Se désabonner du canal `chan_idx`.
+/// Unsubscribes from channel `chan_idx`.
 pub fn broadcast_unsubscribe(chan_idx: usize, sub_id: SubscriberId) -> Result<(), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -571,14 +571,14 @@ pub fn broadcast_unsubscribe(chan_idx: usize, sub_id: SubscriberId) -> Result<()
     }
 }
 
-/// Publier un message vers tous les abonnés du canal `chan_idx`.
+/// Publishes a message to all subscribers of channel `chan_idx`.
 pub fn broadcast_publish(
     chan_idx: usize,
     data: &[u8],
     flags: MsgFlags,
 ) -> Result<(MessageId, u32, u32), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -588,14 +588,14 @@ pub fn broadcast_publish(
     res
 }
 
-/// Recevoir un message pour l'abonné `sub_id` sur le canal `chan_idx`.
+/// Receives a message for subscriber `sub_id` on channel `chan_idx`.
 pub fn broadcast_recv(
     chan_idx: usize,
     sub_id: SubscriberId,
     buf: &mut [u8],
 ) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -605,10 +605,10 @@ pub fn broadcast_recv(
     res
 }
 
-/// Ferme et détruit le canal broadcast.
+/// Closes and destroys broadcast channel.
 pub fn broadcast_destroy(chan_idx: usize) -> Result<(), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.close();
@@ -634,10 +634,10 @@ pub fn broadcast_destroy(chan_idx: usize) -> Result<(), IpcError> {
 }
 
 // ---------------------------------------------------------------------------
-// API cap-checked — IPC-04 (v6)
+// Cap-checked API — IPC-04 (v6)
 // ---------------------------------------------------------------------------
 
-/// Publier avec vérification capability (IPC-04 v6).
+/// Publishes with capability check (IPC-04 v6).
 pub fn broadcast_publish_checked(
     chan_idx: usize,
     data: &[u8],
@@ -646,7 +646,7 @@ pub fn broadcast_publish_checked(
     token: CapToken,
 ) -> Result<(MessageId, u32, u32), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -656,7 +656,7 @@ pub fn broadcast_publish_checked(
     res
 }
 
-/// S'abonner avec vérification capability (IPC-04 v6).
+/// Subscribes with capability check (IPC-04 v6).
 pub fn broadcast_subscribe_checked(
     chan_idx: usize,
     owner_id: u64,
@@ -664,7 +664,7 @@ pub fn broadcast_subscribe_checked(
     token: CapToken,
 ) -> Result<SubscriberId, IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);
@@ -676,7 +676,7 @@ pub fn broadcast_subscribe_checked(
     res
 }
 
-/// Recevoir avec vérification capability (IPC-04 v6).
+/// Receives with capability check (IPC-04 v6).
 pub fn broadcast_recv_checked(
     chan_idx: usize,
     sub_id: SubscriberId,
@@ -685,7 +685,7 @@ pub fn broadcast_recv_checked(
     token: CapToken,
 ) -> Result<(usize, MsgFlags), IpcError> {
     let tbl = broadcast_table().lock();
-    // SAFETY: tbl.get() vérifie used[chan_idx] avant de retourner.
+    // SAFETY: tbl.get() verifies used[chan_idx] before returning.
     let chan = unsafe { tbl.get(chan_idx) }.ok_or(IpcError::InvalidHandle)?;
     let chan_ref: &'static BroadcastChannel = unsafe { &*(chan as *const BroadcastChannel) };
     chan_ref.active_ops.fetch_add(1, Ordering::Acquire);

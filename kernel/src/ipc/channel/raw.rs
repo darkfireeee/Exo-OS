@@ -1,15 +1,15 @@
-// ipc/channel/raw.rs — API raw IPC pour la couche syscall (Exo-OS)
+// ipc/channel/raw.rs — Raw IPC API for syscall layer (Exo-OS)
 //
-// Fournit `send_raw` / `recv_raw` : pont entre les handles u64 du syscall
-// exo_ipc_send / exo_ipc_recv et les canaux IPC internes.
+// Provides `send_raw` / `recv_raw`: bridge between u64 handles of syscall
+// exo_ipc_send / exo_ipc_recv and internal IPC channels.
 //
-// Architecture : table statique de MAX_RAW_SLOTS mailboxes ring-buffer.
-// Chaque mailbox est identifiée par un EndpointId (u64) et contient un
-// anneau circulaire de messages inline (no-alloc).
+// Architecture: static table of MAX_RAW_SLOTS ring-buffer mailboxes.
+// Each mailbox is identified by an EndpointId (u64) and contains a
+// circular ring of inline messages (no-alloc).
 //
-// RÈGLE NO-ALLOC : zéro Vec/Box/Arc. Tout est statique.
-// RÈGLE IPC-RAW-01 : auto-open à la première écriture (send_raw crée le slot).
-// RÈGLE IPC-RAW-02 : un dépassement de ring (slot plein) incrémente drop_count.
+// RULE NO-ALLOC: zero Vec/Box/Arc. Everything is static.
+// RULE IPC-RAW-01: auto-open on first write (send_raw creates the slot).
+// RULE IPC-RAW-02: ring overflow (full slot) increments drop_count.
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -21,13 +21,13 @@ use crate::scheduler::sync::spinlock::SpinLock;
 use crate::security::capability::{CapTable, CapToken, Rights};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Dimensionnement
+// Sizing
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de mailboxes raw simultanées.
+/// Maximum number of concurrent raw mailboxes.
 pub const MAX_RAW_SLOTS: usize = 128;
 
-/// Profondeur de l'anneau par mailbox (puissance de 2).
+/// Ring depth per mailbox (power of 2).
 pub const RAW_RING_DEPTH: usize = 16;
 
 const RAW_RING_MASK: usize = RAW_RING_DEPTH - 1;
@@ -38,7 +38,7 @@ const _: () = assert!(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// InnerMsg — un message dans l'anneau (no-alloc)
+// InnerMsg — a message in the ring (no-alloc)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct InnerMsg {
@@ -56,13 +56,13 @@ impl InnerMsg {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// InnerRing — anneau circulaire (sous SpinLock)
+// InnerRing — circular ring (under SpinLock)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct InnerRing {
-    head: usize,  // lecture (consommateur)
-    tail: usize,  // écriture (producteur)
-    count: usize, // messages présents
+    head: usize,  // read (consumer)
+    tail: usize,  // write (producer)
+    count: usize, // present messages
     msgs: [InnerMsg; RAW_RING_DEPTH],
 }
 
@@ -72,7 +72,7 @@ impl InnerRing {
             head: 0,
             tail: 0,
             count: 0,
-            // NOTE: const array init avec fonction const
+            // NOTE: const array init with const function
             msgs: {
                 let arr = [const { InnerMsg::empty() }; RAW_RING_DEPTH];
                 arr
@@ -80,7 +80,7 @@ impl InnerRing {
         }
     }
 
-    /// Enfile un message. Retourne `false` si l'anneau est plein.
+    /// Enqueues a message. Returns `false` if ring is full.
     #[inline]
     fn enqueue(&mut self, data: &[u8]) -> bool {
         if self.count == RAW_RING_DEPTH {
@@ -95,10 +95,10 @@ impl InnerRing {
         true
     }
 
-    /// Défile un message. Retourne `None` si vide.
+    /// Dequeues a message. Returns `None` if empty.
     ///
-    /// Si le buffer appelant est trop petit, le message reste en tete de file :
-    /// aucun dequeue partiel n'est autorise, afin d'eviter la troncature IPC.
+    /// If calling buffer is too small, message remains at queue head:
+    /// no partial dequeue is allowed, avoiding IPC truncation.
     #[inline]
     fn dequeue(&mut self, buf: &mut [u8]) -> Result<Option<usize>, IpcError> {
         if self.count == 0 {
@@ -126,7 +126,7 @@ impl InnerRing {
         self.count == RAW_RING_DEPTH
     }
 
-    /// Réinitialise l'anneau (utilisé lors de `mailbox_close`).
+    /// Resets ring (used during `mailbox_close`).
     fn reset(&mut self) {
         self.head = 0;
         self.tail = 0;
@@ -135,21 +135,21 @@ impl InnerRing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RawSlot — une mailbox assignée à un endpoint
+// RawSlot — a mailbox assigned to an endpoint
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct RawSlot {
-    /// 0 = slot libre, >0 = endpoint_id propriétaire.
+    /// 0 = free slot, >0 = owner endpoint_id.
     endpoint_id: AtomicU64,
-    /// Anneau de messages protégé par spinlock.
+    /// Message ring protected by spinlock.
     ring: SpinLock<InnerRing>,
-    /// TCB du récepteur bloqué sur cette mailbox (0 = aucun).
+    /// TCB of receiver blocked on this mailbox (0 = none).
     ///
-    /// RÈGLE IPC-RAW-03 : lu/écrit UNIQUEMENT sous `ring` verrouillé. Le
-    /// récepteur ne peut donc pas quitter `recv_ipc_message` (et libérer son
-    /// TCB) pendant qu'un émetteur le réveille.
+    /// RULE IPC-RAW-03: read/written ONLY under locked `ring`. The
+    /// receiver therefore cannot leave `recv_ipc_message` (and free its
+    /// TCB) while a sender wakes it up.
     waiter: AtomicUsize,
-    /// Compteurs statistiques.
+    /// Statistical counters.
     send_count: AtomicU64,
     recv_count: AtomicU64,
     drop_count: AtomicU64,
@@ -167,38 +167,38 @@ impl RawSlot {
         }
     }
 
-    /// Extrait le récepteur enregistré, s'il existe, pour réveil hors verrou.
+    /// Extracts registered receiver, if any, for wake-up outside lock.
     ///
-    /// Doit être appelé avec `ring` verrouillé (RÈGLE IPC-RAW-03).
-    /// FIX-IPC-LOCKORD-01 : l'ancien `wake_waiter_locked` acquérait le verrou
-    /// runqueue (niveau Scheduler = 2) en tenant le verrou IPC (niveau 4),
-    /// violant la hiérarchie documentée dans ipc/mod.rs (Memory→Scheduler→
-    /// Security→IPC) et créant un risque d'inversion de deadlock. Le réveil
-    /// est désormais effectué APRÈS relâchement du verrou d'anneau.
+    /// Must be called with `ring` locked (RULE IPC-RAW-03).
+    /// FIX-IPC-LOCKORD-01: former `wake_waiter_locked` acquired runqueue
+    /// lock (Scheduler level = 2) while holding IPC lock (level 4),
+    /// violating hierarchy documented in ipc/mod.rs (Memory->Scheduler->
+    /// Security->IPC) and risking deadlock inversion. Wake-up is now
+    /// performed AFTER releasing ring lock.
     #[inline]
     fn take_waiter_locked(&self) -> *mut ThreadControlBlock {
         self.waiter.swap(0, Ordering::AcqRel) as *mut ThreadControlBlock
     }
 
-    /// Réveille le récepteur extrait par `take_waiter_locked`.
-    /// À appeler HORS du verrou d'anneau. No-op si le pointeur est nul
-    /// (le récepteur a déjà été servi ou aucun waiter n'était enregistré).
+    /// Wakes up receiver extracted by `take_waiter_locked`.
+    /// Call OUTSIDE ring lock. No-op if pointer is null
+    /// (receiver was already served or no waiter was registered).
     #[inline]
     fn wake_waiter(waiter: *mut ThreadControlBlock) {
         if !waiter.is_null() {
-            // SAFETY: le pointeur a été publié par le récepteur sous le verrou
-            // d'anneau et extrait atomiquement (swap) sous le même verrou : il
-            // reste vivant jusqu'au réveil (le récepteur ne peut pas libérer
-            // son TCB sans reprendre le verrou, et le waiter a déjà été retiré).
+            // SAFETY: pointer was published by receiver under ring lock
+            // and extracted atomically (swap) under the same lock: it
+            // remains live until wake-up (receiver cannot free its TCB
+            // without re-acquiring lock, and waiter has already been removed).
             unsafe { wake_receiver(waiter) };
         }
     }
 }
 
-/// Transition Sleeping → Runnable + enqueue du récepteur IPC bloqué.
+/// Transition Sleeping -> Runnable + enqueue of blocked IPC receiver.
 ///
-/// Si le récepteur n'est pas (encore) endormi, l'appel est un no-op : il
-/// re-sondera l'anneau au plus tard à l'expiration de sa sieste bornée.
+/// If receiver is not (yet) sleeping, call is a no-op: it will
+/// re-probe ring at the latest when its bounded sleep expires.
 unsafe fn wake_receiver(tcb: *mut ThreadControlBlock) {
     use crate::scheduler::core::preempt::{IrqGuard, MAX_CPUS};
     use crate::scheduler::core::runqueue::run_queue;
@@ -227,27 +227,27 @@ unsafe fn wake_receiver(tcb: *mut ThreadControlBlock) {
     }
 }
 
-// SAFETY: toutes les mutations passent par SpinLock ou AtomicU64.
+// SAFETY: all mutations go through SpinLock or AtomicU64.
 unsafe impl Sync for RawSlot {}
 unsafe impl Send for RawSlot {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table globale statique
+// Static global table
 // ─────────────────────────────────────────────────────────────────────────────
 
 static RAW_TABLE: [RawSlot; MAX_RAW_SLOTS] = [const { RawSlot::new() }; MAX_RAW_SLOTS];
 
-/// Nombre de mailboxes ouvertes.
+/// Number of open mailboxes.
 static OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions internes
+// Internal functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lookup interne : retourne l'index du slot pour `ep_id` ou `None`.
+/// Internal lookup: returns slot index for `ep_id` or `None`.
 #[inline]
 fn find_slot(ep_id: u64) -> Option<usize> {
-    // Sonde linéaire depuis la position idéale.
+    // Linear probe from ideal position.
     let start = (ep_id as usize).wrapping_mul(2654435761) % MAX_RAW_SLOTS;
     for i in 0..MAX_RAW_SLOTS {
         let idx = (start + i) % MAX_RAW_SLOTS;
@@ -259,23 +259,23 @@ fn find_slot(ep_id: u64) -> Option<usize> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API de gestion de mailbox
+// Mailbox management API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ouvre une mailbox pour `ep_id`.
+/// Opens a mailbox for `ep_id`.
 ///
-/// Idempotent : si un slot existe déjà pour cet `ep_id`, retourne `true`.
-/// Retourne `false` si la table est pleine.
+/// Idempotent: if a slot already exists for this `ep_id`, returns `true`.
+/// Returns `false` if table is full.
 pub fn mailbox_open(ep_id: EndpointId) -> bool {
     let id = ep_id.get();
     if id == 0 {
         return false;
     }
-    // Idempotence : déjà ouvert ?
+    // Idempotence: already open?
     if find_slot(id).is_some() {
         return true;
     }
-    // Trouver un slot libre.
+    // Find a free slot.
     let start = (id as usize).wrapping_mul(2654435761) % MAX_RAW_SLOTS;
     for i in 0..MAX_RAW_SLOTS {
         let idx = (start + i) % MAX_RAW_SLOTS;
@@ -288,17 +288,17 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
             return true;
         }
     }
-    false // table pleine
+    false // table full
 }
 
-/// Ferme la mailbox associée à `ep_id` et vide son anneau.
+/// Closes mailbox associated with `ep_id` and empties its ring.
 pub fn mailbox_close(ep_id: EndpointId) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
         let slot = &RAW_TABLE[idx];
         let waiter = {
-            // T8-007 FIX : verrouiller l'anneau avant le CAS pour garantir
-            // qu'aucun send_raw en cours ne puisse enfiler un message pendant ou après le reset.
+            // T8-007 FIX: lock ring before CAS to guarantee
+            // that no in-progress send_raw can enqueue a message during or after reset.
             let mut ring = slot.ring.lock();
             if slot
                 .endpoint_id
@@ -317,23 +317,23 @@ pub fn mailbox_close(ep_id: EndpointId) {
     }
 }
 
-/// Nombre de mailboxes actuellement ouvertes.
+/// Number of currently open mailboxes.
 #[inline]
 pub fn mailbox_open_count() -> usize {
     OPEN_COUNT.load(Ordering::Relaxed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API principale — send_raw / recv_raw
+// Main API — send_raw / recv_raw
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie `data` dans la mailbox de `ep_id`.
+/// Sends `data` into mailbox of `ep_id`.
 ///
-/// Si le slot n'existe pas encore, il est créé automatiquement (auto-open).
-/// `flags` : bitmask
-///   - `0x0001` (NOWAIT) — retourne `Err(WouldBlock)` si anneau plein.
+/// If slot does not exist yet, it is created automatically (auto-open).
+/// `flags`: bitmask
+///   - `0x0001` (NOWAIT) — returns `Err(WouldBlock)` if ring is full.
 ///
-/// Retourne un `MessageId` unique alloué côté kernel.
+/// Returns unique kernel-allocated `MessageId`.
 pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId, IpcError> {
     if data.len() > MAX_MSG_SIZE {
         return Err(IpcError::MessageTooLarge);
@@ -344,7 +344,7 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
         return Err(IpcError::NullEndpoint);
     }
 
-    // Auto-open si nécessaire.
+    // Auto-open if necessary.
     if find_slot(id).is_none() {
         if !mailbox_open(ep_id) {
             return Err(IpcError::OutOfResources);
@@ -357,11 +357,11 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
 
     {
         let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01 : re-vérifier la propriété du slot SOUS le
-        // verrou. Sans cette garde, un `mailbox_close` concurrent peut libérer
-        // le slot (CAS endpoint_id→0) puis un `mailbox_open` peut le réattribuer
-        // à un AUTRE endpoint : le message serait alors déposé dans la mailbox
-        // d'un tiers (fuite inter-endpoint).
+        // FIX-IPC-RAW-TOCTOU-01: re-verify slot ownership UNDER lock.
+        // Without this guard, concurrent `mailbox_close` can free slot
+        // (CAS endpoint_id->0) and `mailbox_open` can reassign it to ANOTHER
+        // endpoint: message would be deposited in a third party's mailbox
+        // (inter-endpoint leak).
         if slot.endpoint_id.load(Ordering::Acquire) != id {
             return Err(IpcError::NotFound);
         }
@@ -370,25 +370,25 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
             let waiter = slot.take_waiter_locked();
-            // Réveil HORS verrou (FIX-IPC-LOCKORD-01) — voir drop(ring) ci-dessous.
+            // Wake-up OUTSIDE lock (FIX-IPC-LOCKORD-01) — see drop(ring) below.
             drop(ring);
             wake_waiter_outside_lock(waiter);
             return Ok(alloc_message_id());
         }
-        // Anneau plein.
+        // Full ring.
         if nowait {
             slot.drop_count.fetch_add(1, Ordering::Relaxed);
             return Err(IpcError::WouldBlock);
         }
     }
 
-    // Attente spin courte avec relâchement du lock.
+    // Short spin wait with lock release.
     let mut spins: u32 = 0;
     loop {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01 : même garde dans la boucle d'attente.
+        // FIX-IPC-RAW-TOCTOU-01: same guard in wait loop.
         if slot.endpoint_id.load(Ordering::Acquire) != id {
             return Err(IpcError::NotFound);
         }
@@ -415,18 +415,18 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
     }
 }
 
-/// Wrapper libre pour réveiller un waiter hors verrou (FIX-IPC-LOCKORD-01).
+/// Free wrapper to wake a waiter outside lock (FIX-IPC-LOCKORD-01).
 #[inline]
 fn wake_waiter_outside_lock(waiter: *mut ThreadControlBlock) {
     RawSlot::wake_waiter(waiter);
 }
 
-/// Variante strictement non bloquante de `send_raw`.
+/// Strictly non-blocking variant of `send_raw`.
 ///
-/// Contraintes :
-/// - ne spin jamais sur le verrou d'anneau ;
-/// - retourne `WouldBlock` si le slot est occupé ou si l'anneau est plein ;
-/// - adaptée aux contextes IRQ/ISR qui doivent rester bornés.
+/// Constraints:
+/// - never spins on ring lock;
+/// - returns `WouldBlock` if slot is busy or ring is full;
+/// - suited for IRQ/ISR contexts that must remain bounded.
 pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, IpcError> {
     if data.len() > MAX_MSG_SIZE {
         return Err(IpcError::MessageTooLarge);
@@ -448,7 +448,7 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
         return Err(IpcError::WouldBlock);
     };
 
-    // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou.
+    // FIX-IPC-RAW-TOCTOU-01: ownership re-verification under lock.
     if slot.endpoint_id.load(Ordering::Acquire) != id {
         return Err(IpcError::NotFound);
     }
@@ -467,8 +467,8 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
     Err(IpcError::WouldBlock)
 }
 
-/// Tente de recevoir un message ; si l'anneau est vide et qu'un TCB est fourni,
-/// enregistre atomiquement `waiter_tcb` comme waiter sous le verrou d'anneau.
+/// Attempts to receive a message; if ring is empty and TCB is provided,
+/// atomically registers `waiter_tcb` as waiter under ring lock.
 pub fn recv_raw_or_register_waiter(
     ep_id: EndpointId,
     buf: &mut [u8],
@@ -481,8 +481,8 @@ pub fn recv_raw_or_register_waiter(
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
     let mut ring = slot.ring.lock();
-    // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou
-    // (évite de lire un message d'un endpoint précédent sur un slot réattribué).
+    // FIX-IPC-RAW-TOCTOU-01: ownership re-verification under lock
+    // (avoids reading message from previous endpoint on a reassigned slot).
     if slot.endpoint_id.load(Ordering::Acquire) != id {
         return Err(IpcError::NotFound);
     }
@@ -503,7 +503,7 @@ pub fn recv_raw_or_register_waiter(
     }
 }
 
-/// Retire le waiter enregistré sur la mailbox si c'est bien `tcb`.
+/// Clears registered waiter on mailbox if it matches `tcb`.
 pub fn clear_waiter(ep_id: EndpointId, tcb: *mut ThreadControlBlock) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
@@ -518,12 +518,12 @@ pub fn clear_waiter(ep_id: EndpointId, tcb: *mut ThreadControlBlock) {
     }
 }
 
-/// Reçoit un message de la mailbox de `ep_id` dans `buf`.
+/// Receives a message from `ep_id` mailbox into `buf`.
 ///
-/// `flags` :
-///   - `0x0001` (NOWAIT) — retourne `Err(WouldBlock)` si aucun message.
+/// `flags`:
+///   - `0x0001` (NOWAIT) — returns `Err(WouldBlock)` if no message.
 ///
-/// Retourne le nombre d'octets copiés dans `buf`.
+/// Returns number of bytes copied into `buf`.
 pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, IpcError> {
     let id = ep_id.get();
     if id == 0 {
@@ -536,7 +536,7 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
 
     {
         let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01 : re-vérification de propriété sous verrou.
+        // FIX-IPC-RAW-TOCTOU-01: ownership re-verification under lock.
         if slot.endpoint_id.load(Ordering::Acquire) != id {
             return Err(IpcError::NotFound);
         }
@@ -554,13 +554,13 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
         }
     }
 
-    // Attente spin.
+    // Spin wait.
     let mut spins: u32 = 0;
     loop {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
         let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01 : garde dans la boucle d'attente également.
+        // FIX-IPC-RAW-TOCTOU-01: guard in wait loop as well.
         if slot.endpoint_id.load(Ordering::Acquire) != id {
             return Err(IpcError::NotFound);
         }
@@ -588,10 +588,10 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'une mailbox active.
+/// Statistics for an active mailbox.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct RawSlotStats {
     pub endpoint_id: u64,
@@ -600,8 +600,8 @@ pub struct RawSlotStats {
     pub drop_count: u64,
 }
 
-/// Snapshot des stats de toutes les mailboxes actives.
-/// Retourne un tableau de `MAX_RAW_SLOTS` éléments (`None` = slot libre).
+/// Statistics snapshot of all active mailboxes.
+/// Returns an array of `MAX_RAW_SLOTS` elements (`None` = free slot).
 pub fn raw_stats_snapshot() -> [Option<RawSlotStats>; MAX_RAW_SLOTS] {
     let mut out = [None; MAX_RAW_SLOTS];
     for i in 0..MAX_RAW_SLOTS {
@@ -619,15 +619,15 @@ pub fn raw_stats_snapshot() -> [Option<RawSlotStats>; MAX_RAW_SLOTS] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API capability-checked — IPC-04 (v6) : appel direct security/access_control/
+// Capability-checked API — IPC-04 (v6): direct security/access_control/ call
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoie dans la mailbox de `ep_id` avec vérification capability (RÈGLE IPC-04 v6).
+/// Sends to `ep_id` mailbox with capability check (RULE IPC-04 v6).
 ///
-/// Identique à `send_raw()` mais vérifie `Rights::IPC_SEND` via
-/// `security::access_control::check_access()` avant toute opération.
-/// Utilisé par la couche syscall (appels depuis l'espace utilisateur).
-/// Les appels kernel-internes peuvent utiliser `send_raw()` directement.
+/// Identical to `send_raw()` but checks `Rights::IPC_SEND` via
+/// `security::access_control::check_access()` before any operation.
+/// Used by syscall layer (calls from userspace).
+/// Internal kernel calls can use `send_raw()` directly.
 pub fn send_raw_checked(
     ep_id: EndpointId,
     data: &[u8],
@@ -639,9 +639,9 @@ pub fn send_raw_checked(
     send_raw(ep_id, data, flags)
 }
 
-/// Reçoit depuis la mailbox de `ep_id` avec vérification capability (RÈGLE IPC-04 v6).
+/// Receives from `ep_id` mailbox with capability check (RULE IPC-04 v6).
 ///
-/// # Droits requis : `Rights::IPC_RECV`
+/// # Required rights: `Rights::IPC_RECV`
 pub fn recv_raw_checked(
     ep_id: EndpointId,
     buf: &mut [u8],

@@ -1,29 +1,29 @@
 # kernel/src/ipc/core/fastcall_asm.s
 #
 # ═══════════════════════════════════════════════════════════════════════════════
-# FAST IPC — Inline ASM (évite le syscall complet)
-# (Exo-OS · IPC Couche 2a · x86_64)
+# FAST IPC — Inline ASM (avoids full syscall)
+# (Exo-OS · IPC Layer 2a · x86_64)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Ces fonctions implémentent un fast path IPC pour les messages petits (<= 64B).
-# Au lieu de passer par le syscall complet (SYSCALL/SYSRET + save context),
-# on utilise un appel direct kernel-to-kernel via une gate dédiée.
+# These functions implement a fast path IPC for small messages (<= 64B).
+# Instead of going through a full syscall (SYSCALL/SYSRET + save context),
+# a direct kernel-to-kernel call is used via a dedicated gate.
 #
-# Cibles de performance :
-#   ipc_fast_send  : < 200 ns sur x86_64 moderne (≈ 400 cycles @ 2GHz)
+# Performance targets:
+#   ipc_fast_send  : < 200 ns on modern x86_64 (≈ 400 cycles @ 2GHz)
 #   ipc_fast_recv  : < 200 ns
 #
-# CONVENTION D'APPEL (System V ABI) :
-#   rdi = pointeur vers IpcFastMsg (struct caller-alloué sur la stack)
+# CALLING CONVENTION (System V ABI):
+#   rdi = pointer to IpcFastMsg (caller-allocated struct on stack)
 #   rsi = ChannelId (u64)
-#   rax = code de retour (0 = succès, errno IPC sinon)
-#   rdx = longueur reçue (pour ipc_fast_recv)
+#   rax = return code (0 = success, IPC errno otherwise)
+#   rdx = received length (for ipc_fast_recv)
 #
-# REGISTRES CLOBBERÉS (non callee-saved) : rax, rcx, r10, r11
-# REGISTRES PRÉSERVÉS (callee-saved) : rbx, rbp, r12-r15, rsp
+# CLOBBERED REGISTERS (caller-saved): rax, rcx, r10, r11
+# PRESERVED REGISTERS (callee-saved): rbx, rbp, r12-r15, rsp
 #
-# SAFETY : Ces fonctions ne doivent être appelées que depuis du code kernel
-# avec les vérifications de capability déjà effectuées (voir channel/sync.rs).
+# SAFETY: These functions must only be called from kernel code
+# with capability checks already performed (see channel/sync.rs).
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .section .text
@@ -33,63 +33,63 @@
 .global ipc_ring_fence
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ipc_ring_fence — barrière mémoire légère pour ring IPC
-#   Garantit que les stores précédents sont visibles avant l'incrémentation
-#   du tail pointer du ring.
-#   Équivalent de sfence — mais sfence est pour stores WC.
-#   On utilise une barrière Release via LOCK XADD sur une variable dummy.
+# ipc_ring_fence — lightweight memory barrier for IPC ring
+#   Guarantees that previous stores are visible before incrementing
+#   the ring's tail pointer.
+#   Equivalent to sfence — but sfence is for WC stores.
+#   We use a Release barrier via LOCK XADD on a dummy variable.
 # ─────────────────────────────────────────────────────────────────────────────
 .type ipc_ring_fence, @function
 ipc_ring_fence:
-    # MFENCE : garantit l'ordre total stores/loads — nécessaire pour MPMC.
-    # Sur Skylake+, MFENCE coûte ~30-40 cycles. Acceptable pour un ring fence.
+    # MFENCE: guarantees total store/load order — required for MPMC.
+    # On Skylake+, MFENCE costs ~30-40 cycles. Acceptable for a ring fence.
     mfence
     ret
 .size ipc_ring_fence, . - ipc_ring_fence
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ipc_fast_send — envoi rapide d'un message ≤ 64 bytes
+# ipc_fast_send — fast send of a message <= 64 bytes
 #
-#   Signature Rust :
+#   Rust signature:
 #     extern "C" fn ipc_fast_send(
 #         msg: *const IpcFastMsg,  // rdi
 #         channel_id: u64,         // rsi
-#     ) -> u64;                    // rax = 0 ou IpcError code
+#     ) -> u64;                    // rax = 0 or IpcError code
 #
-#   IpcFastMsg layout (64 bytes) :
-#     [0..8]  : msg_id      (u64, zéro = allouer un nouveau)
+#   IpcFastMsg layout (64 bytes):
+#     [0..8]  : msg_id      (u64, zero = allocate a new one)
 #     [8..12] : flags       (u32)
-#     [12..14]: len         (u16, ≤ 64 bytes)
+#     [12..14]: len         (u16, <= 64 bytes)
 #     [14..16]: _pad        (u16)
 #     [16..80]: data        ([u8; 64])
 # ─────────────────────────────────────────────────────────────────────────────
 .type ipc_fast_send, @function
 ipc_fast_send:
-    # Sauvegarder les callee-saved utilisés comme temporaires.
+    # Save callee-saved registers used as temporaries.
     push    %rbx
     push    %r12
 
     # rdi = msg ptr, rsi = channel_id
-    mov     %rdi, %rbx          # rbx = msg ptr (stable sur toute la fonction)
+    mov     %rdi, %rbx          # rbx = msg ptr (stable across entire function)
     mov     %rsi, %r12          # r12 = channel_id
 
-    # Vérifier alignement msg ptr (mod 8 == 0).
+    # Check msg ptr alignment (mod 8 == 0).
     test    $7, %rdi
     jnz     .Lfast_send_einval
 
-    # Charger len depuis msg+12 (u16).
+    # Load len from msg+12 (u16).
     movzwl  12(%rbx), %ecx
     cmp     $64, %ecx
     ja      .Lfast_send_emsgsize
 
-    # Appeler la fonction Rust de fast send via le ring SPSC.
-    # La logique de tail pointer avancement est en Rust — on fait juste
-    # le prefetch du slot suivant pour réduire la latence du prochain appel.
-    # rdi déjà = msg ptr, rsi = channel_id (déjà set).
-    # On appelle ipc_ring_fast_write() (fonction Rust no_mangle).
+    # Call Rust fast send function via SPSC ring.
+    # Tail pointer advancement logic is in Rust — we only perform
+    # next slot prefetching to reduce latency of the next call.
+    # rdi already = msg ptr, rsi = channel_id (already set).
+    # Call ipc_ring_fast_write() (Rust no_mangle function).
     call    ipc_ring_fast_write
 
-    # rax = résultat (0 = OK, errno sinon).
+    # rax = result (0 = OK, errno otherwise).
     pop     %r12
     pop     %rbx
     ret
@@ -109,37 +109,37 @@ ipc_fast_send:
 .size ipc_fast_send, . - ipc_fast_send
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ipc_fast_recv — réception rapide (polling, non bloquant)
+# ipc_fast_recv — fast receive (polling, non-blocking)
 #
-#   Signature Rust :
+#   Rust signature:
 #     extern "C" fn ipc_fast_recv(
 #         dst: *mut IpcFastMsg,  // rdi
 #         channel_id: u64,       // rsi
-#     ) -> u64;                  // rax = 0 (ok) ou 1 (WouldBlock) ou errno
+#     ) -> u64;                  // rax = 0 (ok) or 1 (WouldBlock) or errno
 #
-#   Retourne la longueur dans rdx si succès.
+#   Returns length in rdx on success.
 # ─────────────────────────────────────────────────────────────────────────────
 .type ipc_fast_recv, @function
 ipc_fast_recv:
     push    %rbx
     push    %r12
 
-    # Vérifier alignement dst.
+    # Check dst alignment.
     test    $7, %rdi
     jnz     .Lfast_recv_einval
 
     mov     %rdi, %rbx
     mov     %rsi, %r12
 
-    # Acquérir la barrière mémoire avant lecture du ring.
-    # L'acquire est implicite dans les atomic loads Rust — on insère
-    # un LFENCE ici pour les reads non-Rust (MMIO, prefetch manuel).
+    # Acquire memory barrier before reading ring.
+    # Acquire is implicit in Rust atomic loads — we insert
+    # an LFENCE here for non-Rust reads (MMIO, manual prefetch).
     lfence
 
-    # Appeler la fonction Rust de fast recv via le ring SPSC.
+    # Call Rust fast recv function via SPSC ring.
     call    ipc_ring_fast_read
 
-    # rax = résultat, rdx = longueur si succès.
+    # rax = result, rdx = length on success.
     pop     %r12
     pop     %rbx
     ret
@@ -154,12 +154,12 @@ ipc_fast_recv:
 .size ipc_fast_recv, . - ipc_fast_recv
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ipc_fast_call — envoi + attente réponse synchrone (RPC fast path)
+# ipc_fast_call — send + wait for synchronous reply (RPC fast path)
 #
-#   Optimisation : évite two context switches en restant sur le CPU
-#   si le serveur est sur le même cœur (donor scheduling).
+#   Optimization: avoids two context switches by remaining on CPU
+#   if the server is on the same core (donor scheduling).
 #
-#   Signature Rust :
+#   Rust signature:
 #     extern "C" fn ipc_fast_call(
 #         req: *const IpcFastMsg,  // rdi
 #         rep: *mut IpcFastMsg,    // rsi
@@ -174,13 +174,13 @@ ipc_fast_call:
     push    %r13
     push    %r14
 
-    # Sauvegarder les arguments callee-clobber.
+    # Save caller arguments.
     mov     %rdi, %rbx          # req
     mov     %rsi, %r12          # rep
     mov     %rdx, %r13          # channel_id
     mov     %rcx, %r14          # timeout_ns
 
-    # Vérification null/alignement.
+    # Null/alignment check.
     test    %rbx, %rbx
     jz      .Lfast_call_einval
     test    %r12, %r12
@@ -190,14 +190,14 @@ ipc_fast_call:
     test    $7, %r12
     jnz     .Lfast_call_einval
 
-    # 1. Envoyer la requête.
+    # 1. Send request.
     mov     %rbx, %rdi
     mov     %r13, %rsi
     call    ipc_ring_fast_write
     test    %rax, %rax
     jnz     .Lfast_call_err
 
-    # 2. Attendre la réponse (polling + yield si timeout).
+    # 2. Wait for reply (polling + yield on timeout).
     mov     %r12, %rdi
     mov     %r13, %rsi
     mov     %r14, %rdx

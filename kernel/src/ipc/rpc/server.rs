@@ -1,22 +1,22 @@
-// ipc/rpc/server.rs — Serveur RPC IPC pour Exo-OS
+// ipc/rpc/server.rs — IPC RPC server for Exo-OS
 //
-// Ce module implémente un serveur RPC IPC capable d'enregistrer jusqu'à
-// MAX_RPC_METHODS méthodes, chacune associée à un handler fn pointer.
+// This module implements an IPC RPC server capable of registering up to
+// MAX_RPC_METHODS methods, each associated with an fn pointer handler.
 //
-// Architecture :
-//   - `MethodHandler` : fn pointer de type `RpcHandlerFn`
-//   - `MethodEntry` : entrée de table (MethodId + handler + stats)
-//   - `RpcServer` : table de méthodes + endpoint dédié + boucle de dispatch
-//   - `RpcServerTable` : table statique de MAX_RPC_SERVERS serveurs
+// Architecture:
+//   - `MethodHandler`: fn pointer of type `RpcHandlerFn`
+//   - `MethodEntry`: table entry (MethodId + handler + stats)
+//   - `RpcServer`: method table + dedicated endpoint + dispatch loop
+//   - `RpcServerTable`: static table of MAX_RPC_SERVERS servers
 //
-// Lifecycle :
-//   1. `rpc_server_create(ep)` — crée un serveur sur un endpoint
-//   2. `rpc_server_register(idx, method_id, handler)` — enregistre une méthode
-//   3. `rpc_server_dispatch(idx, call_buf, reply_buf)` — traite un appel entrant
+// Lifecycle:
+//   1. `rpc_server_create(ep)` — creates a server on an endpoint
+//   2. `rpc_server_register(idx, method_id, handler)` — registers a method
+//   3. `rpc_server_dispatch(idx, call_buf, reply_buf)` — handles an incoming call
 //
-// RÈGLE SERVER-01 : pas de thread dédié ici — le kernel appelle dispatch()
-//                   depuis son scheduler de messages IPC.
-// RÈGLE SERVER-02 : les handler fn pointers sont statiques (pas de closure).
+// RULE SERVER-01: no dedicated thread here — the kernel calls dispatch()
+//                 from its IPC message scheduler.
+// RULE SERVER-02: handler fn pointers are static (no closures).
 
 use core::mem::MaybeUninit;
 use core::num::NonZeroU64;
@@ -30,24 +30,24 @@ use crate::ipc::rpc::protocol::{
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
-// Constantes
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Nombre maximum de méthodes par serveur
+/// Maximum number of methods per server
 pub const MAX_RPC_METHODS: usize = 64;
 
-/// Nombre maximum de serveurs RPC dans la table globale
+/// Maximum number of RPC servers in global table
 pub const MAX_RPC_SERVERS: usize = 32;
 
 // ---------------------------------------------------------------------------
-// Signature d'un handler de méthode RPC
+// Signature of an RPC method handler
 // ---------------------------------------------------------------------------
 
-/// Signature d'un handler RPC.
+/// Signature of an RPC handler.
 ///
-/// - `call` : trame d'appel déjà désérialisée
-/// - `reply_payload` : buffer à remplir par le handler
-/// - Retourne : taille du payload de réponse, ou Err(IpcError)
+/// - `call`: already deserialized call frame
+/// - `reply_payload`: buffer to fill by the handler
+/// - Returns: reply payload size, or Err(IpcError)
 pub type RpcHandlerFn =
     fn(call: &RpcCallFrame, reply_payload: &mut [u8]) -> Result<usize, IpcError>;
 
@@ -55,7 +55,7 @@ pub type RpcHandlerFn =
 // MethodEntry
 // ---------------------------------------------------------------------------
 
-/// Entrée dans la table des méthodes d'un serveur RPC.
+/// Entry in the method table of an RPC server.
 #[repr(C, align(32))]
 pub struct MethodEntry {
     pub method_id: AtomicU32,
@@ -63,12 +63,12 @@ pub struct MethodEntry {
     _pad: [u8; 3],
     /// Handler (fn pointer)
     pub handler: core::sync::atomic::AtomicUsize,
-    /// Statistiques
+    /// Statistics
     pub call_count: AtomicU64,
     pub error_count: AtomicU64,
 }
 
-// SAFETY: tous les champs sont atomiques ou fn pointers
+// SAFETY: all fields are atomic or fn pointers
 unsafe impl Sync for MethodEntry {}
 unsafe impl Send for MethodEntry {}
 
@@ -93,7 +93,7 @@ impl MethodEntry {
         if p == 0 {
             return None;
         }
-        // SAFETY: handler est une fn pointer statique enregistrée via register()
+        // SAFETY: handler is a static fn pointer registered via register()
         Some(unsafe { core::mem::transmute::<usize, RpcHandlerFn>(p) })
     }
 
@@ -117,27 +117,27 @@ impl MethodEntry {
 // RpcServer
 // ---------------------------------------------------------------------------
 
-/// Serveur RPC IPC.
+/// IPC RPC server.
 ///
-/// Enregistre des méthodes et dispatche les appels entrants.
+/// Registers methods and dispatches incoming calls.
 #[repr(C, align(64))]
 pub struct RpcServer {
     pub id: u32,
-    /// Endpoint associé à ce serveur
+    /// Endpoint associated with this server
     pub endpoint: AtomicU64,
-    /// Serveur actif
+    /// Server active
     pub active: AtomicBool,
     _pad0: [u8; 3],
-    /// Table des méthodes
+    /// Method table
     methods: [MethodEntry; MAX_RPC_METHODS],
     method_count: AtomicU32,
-    /// Statistiques globales
+    /// Global statistics
     pub total_calls: AtomicU64,
     pub total_errors: AtomicU64,
     pub total_not_found: AtomicU64,
 }
 
-// SAFETY: MethodEntry est Sync
+// SAFETY: MethodEntry is Sync
 unsafe impl Sync for RpcServer {}
 unsafe impl Send for RpcServer {}
 
@@ -163,7 +163,7 @@ impl RpcServer {
     pub fn start(&self, ep: EndpointId) {
         self.endpoint.store(ep.0.get(), Ordering::Relaxed);
         self.active.store(true, Ordering::Release);
-        // Enregistrer les méthodes builtins
+        // Register builtin methods
         let _ = self.register_builtin();
     }
 
@@ -178,16 +178,16 @@ impl RpcServer {
     }
 
     // -----------------------------------------------------------------------
-    // Enregistrement des méthodes
+    // Method registration
     // -----------------------------------------------------------------------
 
-    /// Enregistre un handler pour `method_id`.
+    /// Registers a handler for `method_id`.
     pub fn register(&self, method_id: MethodId, handler: RpcHandlerFn) -> Result<(), IpcError> {
         if !method_id.is_valid() {
             return Err(IpcError::Invalid);
         }
 
-        // Mise à jour si déjà existant
+        // Update if already existing
         for i in 0..MAX_RPC_METHODS {
             if self.methods[i].is_match(method_id.0) {
                 self.methods[i]
@@ -197,7 +197,7 @@ impl RpcServer {
             }
         }
 
-        // Nouveau slot
+        // New slot
         for i in 0..MAX_RPC_METHODS {
             if !self.methods[i].valid.load(Ordering::Relaxed) {
                 if self.methods[i]
@@ -220,7 +220,7 @@ impl RpcServer {
         Err(IpcError::Full)
     }
 
-    /// Désenregistre une méthode.
+    /// Unregisters a method.
     pub fn unregister(&self, method_id: MethodId) -> bool {
         for i in 0..MAX_RPC_METHODS {
             if self.methods[i].is_match(method_id.0) {
@@ -236,12 +236,12 @@ impl RpcServer {
     // Dispatch
     // -----------------------------------------------------------------------
 
-    /// Dispatche un appel RPC depuis un buffer sérialisé.
+    /// Dispatches an RPC call from a serialized buffer.
     ///
-    /// - `call_buf` : buffer contenant la trame RpcCallFrame sérialisée
-    /// - `reply_buf` : buffer où écrire la trame RpcReplyFrame sérialisée
+    /// - `call_buf`: buffer containing serialized RpcCallFrame
+    /// - `reply_buf`: buffer to write serialized RpcReplyFrame into
     ///
-    /// Retourne le nombre d'octets écrits dans `reply_buf`.
+    /// Returns number of bytes written to `reply_buf`.
     pub fn dispatch(&self, call_buf: &[u8], reply_buf: &mut [u8]) -> Result<usize, IpcError> {
         if !self.active.load(Ordering::Acquire) {
             return Err(IpcError::Closed);
@@ -249,7 +249,7 @@ impl RpcServer {
 
         self.total_calls.fetch_add(1, Ordering::Relaxed);
 
-        // Désérialiser l'appel
+        // Deserialize call
         let call = RpcCallFrame::deserialize(call_buf).map_err(|_| {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::RpcProtocolError);
@@ -264,10 +264,10 @@ impl RpcServer {
         let method_id = MethodId(call.header.method_id);
         let mut payload_buf = [0u8; MAX_RPC_PAYLOAD];
 
-        // Trouver et invoquer le handler
+        // Find and invoke handler
         let result = self.invoke_method(method_id, &call, &mut payload_buf);
 
-        // Construire la réponse
+        // Construct reply
         let (status, plen) = match result {
             Ok(n) => (RpcStatus::Ok, n),
             Err(IpcError::NotFound) => {
@@ -311,8 +311,8 @@ impl RpcServer {
         let ep_raw = self.endpoint.load(Ordering::Relaxed);
         RpcServerStats {
             id: self.id,
-            // SAFETY: ep_raw vient d'un store d'un EndpointId valide (non-nul).
-            // 0 = serveur non encore démarré → INVALID.
+            // SAFETY: ep_raw comes from a store of a valid (non-null) EndpointId.
+            // 0 = server not yet started -> INVALID.
             endpoint: if ep_raw == 0 {
                 EndpointId::INVALID
             } else {
@@ -337,11 +337,11 @@ pub struct RpcServerStats {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers builtins
+// Builtin handlers
 // ---------------------------------------------------------------------------
 
 fn builtin_ping(call: &RpcCallFrame, reply: &mut [u8]) -> Result<usize, IpcError> {
-    // Echo du payload dans la réponse
+    // Echo payload into reply
     let plen = call.header.payload_len as usize;
     let copy_len = plen.min(reply.len());
     if copy_len > 0 {
@@ -351,17 +351,17 @@ fn builtin_ping(call: &RpcCallFrame, reply: &mut [u8]) -> Result<usize, IpcError
 }
 
 fn builtin_introspect(_call: &RpcCallFrame, reply: &mut [u8]) -> Result<usize, IpcError> {
-    // Retourne le nombre de méthodes en 4 octets LE
+    // Returns number of methods in 4 bytes LE
     if reply.len() < 4 {
         return Ok(0);
     }
-    // Valeur symbolique — le serveur actuel est accessible via contexte global
+    // Symbolic value — current server is accessible via global context
     reply[..4].copy_from_slice(&(MAX_RPC_METHODS as u32).to_le_bytes());
     Ok(4)
 }
 
 // ---------------------------------------------------------------------------
-// Table globale de serveurs RPC
+// Global RPC server table
 // ---------------------------------------------------------------------------
 
 struct RpcServerSlot {
@@ -401,7 +401,7 @@ impl RpcServerTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel garantit l'exclusivité; server MaybeUninit<RpcServer> write-once.
+                    // SAFETY: CAS AcqRel guarantees exclusivity; server MaybeUninit<RpcServer> write-once.
                     unsafe {
                         (self.slots[i].server.as_ptr() as *mut RpcServer).write(RpcServer::new(id));
                     }
@@ -446,17 +446,17 @@ impl RpcServerTable {
 static RPC_SERVER_TABLE: RpcServerTable = RpcServerTable::new();
 
 // ---------------------------------------------------------------------------
-// API publique
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Crée un serveur RPC et l'associe à un endpoint.
+/// Creates an RPC server and associates it with an endpoint.
 pub fn rpc_server_create(ep: EndpointId) -> Option<usize> {
     let idx = RPC_SERVER_TABLE.alloc(ep.0.get() as u32)?;
     RPC_SERVER_TABLE.get(idx)?.start(ep);
     Some(idx)
 }
 
-/// Enregistre une méthode sur le serveur.
+/// Registers a method on the server.
 pub fn rpc_server_register(
     idx: usize,
     method_id: MethodId,
@@ -468,7 +468,7 @@ pub fn rpc_server_register(
         .register(method_id, handler)
 }
 
-/// Dispatche un appel RPC entrant.
+/// Dispatches an incoming RPC call.
 pub fn rpc_server_dispatch(
     idx: usize,
     call_buf: &[u8],
@@ -480,12 +480,12 @@ pub fn rpc_server_dispatch(
         .dispatch(call_buf, reply_buf)
 }
 
-/// Arrête et détruit un serveur.
+/// Stops and destroys a server.
 pub fn rpc_server_destroy(idx: usize) -> bool {
     RPC_SERVER_TABLE.free(idx)
 }
 
-/// Statistiques d'un serveur.
+/// Server statistics.
 pub fn rpc_server_stats(idx: usize) -> Option<RpcServerStats> {
     RPC_SERVER_TABLE.get(idx).map(|s| s.snapshot())
 }

@@ -1,52 +1,52 @@
-// ipc/rpc/protocol.rs — Protocole binaire RPC IPC pour Exo-OS
+// ipc/rpc/protocol.rs — Binary IPC RPC protocol for Exo-OS
 //
-// Ce module définit le protocole binaire des appels RPC IPC :
-//   - `RpcHeader` : en-tête de trame RPC (repr(C), 64 bytes)
-//   - `RpcCallFrame` / `RpcReplyFrame` : trames request/response
-//   - `RpcStatus` : codes de retour RPC
-//   - `MethodId` : identifiant 32 bits d'une méthode (namespace + method)
-//   - Constantes : RPC_MAGIC, RPC_VERSION, MAX_RPC_PAYLOAD
+// This module defines the binary protocol for IPC RPC calls:
+//   - `RpcHeader`: RPC frame header (repr(C), 64 bytes)
+//   - `RpcCallFrame` / `RpcReplyFrame`: request/response frames
+//   - `RpcStatus`: RPC return codes
+//   - `MethodId`: 32-bit method identifier (namespace + method)
+//   - Constants: RPC_MAGIC, RPC_VERSION, MAX_RPC_PAYLOAD
 //
-// Format sur le fil :
+// Wire format:
 //   [RpcHeader 64 bytes] [payload N bytes]
 //
-// RÈGLE RPC-01 : magic = 0xEA04_5250 ("EA\x04RP")
-// RÈGLE RPC-02 : version = 1 (incompatible si différent)
-// RÈGLE RPC-03 : cookie u64 unique par appel (assigné par le client)
+// RULE RPC-01: magic = 0xEA04_5250 ("EA\x04RP")
+// RULE RPC-02: version = 1 (incompatible if different)
+// RULE RPC-03: unique u64 cookie per call (assigned by client)
 
 use core::mem::size_of;
 
 use crate::ipc::core::types::{EndpointId, IpcError, ProcessId};
 
 // ---------------------------------------------------------------------------
-// Constantes du protocole
+// Protocol constants
 // ---------------------------------------------------------------------------
 
-/// Magic number d'une trame RPC valide
+/// Magic number of a valid RPC frame
 pub const RPC_MAGIC: u32 = 0xEA04_5250;
 
-/// Version courante du protocole RPC
+/// Current RPC protocol version
 pub const RPC_VERSION: u8 = 1;
 
-/// Taille maximale du payload d'un appel ou d'une réponse RPC (octets)
+/// Maximum payload size of an RPC call or reply (bytes)
 pub const MAX_RPC_PAYLOAD: usize = 4096;
 
-/// Identifiant de méthode réservé : invalide
+/// Reserved method identifier: invalid
 pub const METHOD_ID_INVALID: u32 = 0;
 
-/// Identifiant de méthode : ping (test de connectivité)
+/// Method identifier: ping (connectivity test)
 pub const METHOD_ID_PING: u32 = 1;
 
-/// Identifiant de méthode : introspection (liste des méthodes)
+/// Method identifier: introspection (method listing)
 pub const METHOD_ID_INTROSPECT: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // MethodId
 // ---------------------------------------------------------------------------
 
-/// Identifiant de méthode RPC.
+/// RPC method identifier.
 ///
-/// Encodage : bits 31-16 = namespace (service), bits 15-0 = method.
+/// Encoding: bits 31-16 = namespace (service), bits 15-0 = method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct MethodId(pub u32);
@@ -70,30 +70,30 @@ impl MethodId {
 }
 
 // ---------------------------------------------------------------------------
-// RpcStatus — codes de retour
+// RpcStatus — return codes
 // ---------------------------------------------------------------------------
 
-/// Codes de statut d'un appel RPC.
+/// Status codes of an RPC call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum RpcStatus {
-    /// Succès
+    /// Success
     Ok = 0,
-    /// Méthode inconnue
+    /// Unknown method
     MethodNotFound = 1,
-    /// Payload invalide ou trop grand
+    /// Invalid or too large payload
     InvalidPayload = 2,
-    /// Timeout côté serveur
+    /// Server-side timeout
     ServerTimeout = 3,
-    /// Serveur occupé
+    /// Server busy
     ServerBusy = 4,
-    /// Permission refusée
+    /// Permission denied
     Denied = 5,
-    /// Erreur interne serveur
+    /// Server internal error
     InternalError = 6,
-    /// Endpoint serveur invalide
+    /// Invalid server endpoint
     EndpointInvalid = 7,
-    /// Version de protocole incompatible
+    /// Incompatible protocol version
     VersionMismatch = 8,
 }
 
@@ -116,7 +116,7 @@ impl RpcStatus {
         matches!(self, Self::Ok)
     }
 
-    /// Indique si l'erreur est transitoire (retry utile) ou fatale (échec immédiat).
+    /// Indicates whether error is transient (retry useful) or fatal (immediate failure).
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -126,7 +126,7 @@ impl RpcStatus {
 
     pub fn to_ipc_error(self) -> IpcError {
         match self {
-            Self::Ok => IpcError::Invalid, // ne devrait pas être appelé sur Ok
+            Self::Ok => IpcError::Invalid, // should not be called on Ok
             Self::MethodNotFound => IpcError::NotFound,
             Self::InvalidPayload => IpcError::Invalid,
             Self::ServerTimeout => IpcError::Timeout,
@@ -140,41 +140,41 @@ impl RpcStatus {
 }
 
 // ---------------------------------------------------------------------------
-// RpcHeader — en-tête de trame RPC (64 bytes, repr(C))
+// RpcHeader — RPC frame header (64 bytes, repr(C))
 // ---------------------------------------------------------------------------
 
-/// En-tête de trame RPC.
+/// RPC frame header.
 ///
-/// Présent en début de toute trame call ou reply.
+/// Present at the start of any call or reply frame.
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(8))]
 pub struct RpcHeader {
     /// Magic number (RPC_MAGIC)
     pub magic: u32,
-    /// Version du protocole (RPC_VERSION)
+    /// Protocol version (RPC_VERSION)
     pub version: u8,
-    /// Type : 0 = Call, 1 = Reply
+    /// Type: 0 = Call, 1 = Reply
     pub frame_type: u8,
-    /// Flags (réservé, 0)
+    /// Flags (reserved, 0)
     pub flags: u16,
-    /// Identifiant de méthode (MethodId)
+    /// Method identifier (MethodId)
     pub method_id: u32,
-    /// Cookie unique (client assigne, server répercute)
+    /// Unique cookie (client assigns, server echoes)
     pub cookie: u64,
-    /// Endpoint appelant
+    /// Calling endpoint
     pub caller_ep: u32,
-    /// Endpoint serveur
+    /// Server endpoint
     pub server_ep: u32,
-    /// PID du processus appelant
+    /// Calling process PID
     pub caller_pid: u32,
-    /// Statut de la réponse (valide seulement pour frame_type=Reply)
+    /// Reply status (valid only for frame_type=Reply)
     pub status: u32,
-    /// Taille du payload en octets
+    /// Payload size in bytes
     pub payload_len: u32,
-    /// Timeout souhaité par le client (nanosecondes, 0=défaut)
+    /// Client-desired timeout (nanoseconds, 0=default)
     pub timeout_ns: u64,
     _pad: [u8; 8],
-    // Total : 4+1+1+2+4+8+4+4+4+4+4+8+8 = 56... + 8 pad = 64 bytes ✓
+    // Total: 4+1+1+2+4+8+4+4+4+4+4+8+8 = 56... + 8 pad = 64 bytes ✓
 }
 
 impl RpcHeader {
@@ -240,14 +240,14 @@ impl RpcHeader {
         RpcStatus::from_u32(self.status)
     }
 
-    /// Sérialise l'en-tête dans `buf[offset..]`.
-    /// Retourne offset + RpcHeader::SIZE.
+    /// Serializes header into `buf[offset..]`.
+    /// Returns offset + RpcHeader::SIZE.
     pub fn serialize_into(&self, buf: &mut [u8], offset: usize) -> Result<usize, IpcError> {
         let end = offset + Self::SIZE;
         if end > buf.len() {
             return Err(IpcError::Invalid);
         }
-        // SAFETY: repr(C), pas de pointeurs
+        // SAFETY: repr(C), no pointers
         unsafe {
             let src = self as *const Self as *const u8;
             buf[offset..end].copy_from_slice(core::slice::from_raw_parts(src, Self::SIZE));
@@ -255,14 +255,14 @@ impl RpcHeader {
         Ok(end)
     }
 
-    /// Désérialise un RpcHeader depuis `buf[offset..]`.
+    /// Deserializes an RpcHeader from `buf[offset..]`.
     pub fn deserialize_from(buf: &[u8], offset: usize) -> Result<(Self, usize), IpcError> {
         let end = offset + Self::SIZE;
         if end > buf.len() {
             return Err(IpcError::Invalid);
         }
         let mut h = core::mem::MaybeUninit::<Self>::uninit();
-        // SAFETY: repr(C), taille exacte
+        // SAFETY: repr(C), exact size
         unsafe {
             let dst = h.as_mut_ptr() as *mut u8;
             dst.copy_from_nonoverlapping(buf[offset..end].as_ptr(), Self::SIZE);
@@ -272,10 +272,10 @@ impl RpcHeader {
 }
 
 // ---------------------------------------------------------------------------
-// RpcCallFrame / RpcReplyFrame — trames complètes avec payload inline
+// RpcCallFrame / RpcReplyFrame — complete frames with inline payload
 // ---------------------------------------------------------------------------
 
-/// Trame d'appel RPC avec payload inline (stack-allocated).
+/// RPC call frame with inline payload (stack-allocated).
 #[repr(C, align(64))]
 pub struct RpcCallFrame {
     pub header: RpcHeader,
@@ -308,7 +308,7 @@ impl RpcCallFrame {
         &self.payload[..self.header.payload_len as usize]
     }
 
-    /// Sérialise la trame complète dans `buf`. Retourne le nombre d'octets écrits.
+    /// Serializes complete frame into `buf`. Returns number of written bytes.
     pub fn serialize(&self, buf: &mut [u8]) -> Result<usize, IpcError> {
         let plen = self.header.payload_len as usize;
         let total = RpcHeader::SIZE + plen;
@@ -322,7 +322,7 @@ impl RpcCallFrame {
         Ok(off + plen)
     }
 
-    /// Désérialise depuis un buffer.
+    /// Deserializes from a buffer.
     pub fn deserialize(buf: &[u8]) -> Result<Self, IpcError> {
         let (header, off) = RpcHeader::deserialize_from(buf, 0)?;
         if !header.is_valid() || !header.is_call() {
@@ -344,7 +344,7 @@ impl RpcCallFrame {
     }
 }
 
-/// Trame de réponse RPC avec payload inline.
+/// RPC reply frame with inline payload.
 #[repr(C, align(64))]
 pub struct RpcReplyFrame {
     pub header: RpcHeader,
@@ -415,12 +415,12 @@ impl RpcReplyFrame {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Calcule la taille totale d'une trame RPC (header + payload).
+/// Computes total size of an RPC frame (header + payload).
 pub fn rpc_frame_size(payload_len: usize) -> usize {
     RpcHeader::SIZE + payload_len
 }
 
-/// Vérifie qu'un buffer contient une trame RPC valide (magic + version).
+/// Verifies that a buffer contains a valid RPC frame (magic + version).
 pub fn rpc_frame_valid(buf: &[u8]) -> bool {
     if buf.len() < RpcHeader::SIZE {
         return false;

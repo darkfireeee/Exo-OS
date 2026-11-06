@@ -1,6 +1,6 @@
 // kernel/src/ipc/ring/mod.rs
 //
-// Module ring — rings de communication IPC.
+// Ring module — IPC communication rings.
 
 pub mod batch;
 pub mod fusion;

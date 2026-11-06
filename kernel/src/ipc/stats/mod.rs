@@ -1,4 +1,4 @@
-// ipc/stats/mod.rs — Module statistiques IPC
+// ipc/stats/mod.rs — IPC statistics module
 
 pub mod counters;
 

@@ -1,12 +1,12 @@
-// ipc/channel/mod.rs — Module racine des canaux IPC pour Exo-OS
+// ipc/channel/mod.rs — Root module for IPC channels for Exo-OS
 //
-// Ce module regroupe tous les types de canaux disponibles :
-//   - SyncChannel    : rendezvous (émetteur bloqué jusqu'à réception)
-//   - AsyncChannel   : non-bloquant avec notification par waker
-//   - MpmcChannel    : multi-producteurs / multi-consommateurs lock-free
-//   - BroadcastChannel : diffusion one-to-many (pub/sub)
-//   - TypedChannel<T> : canal générique typé (T: Copy)
-//   - StreamChannel  : streaming zero-copy pour grands volumes
+// This module groups all available channel types:
+//   - SyncChannel      : rendezvous (sender blocked until reception)
+//   - AsyncChannel     : non-blocking with waker notification
+//   - MpmcChannel      : multi-producer / multi-consumer lock-free
+//   - BroadcastChannel : one-to-many broadcast (pub/sub)
+//   - TypedChannel<T>  : generic typed channel (T: Copy)
+//   - StreamChannel    : zero-copy streaming for large volumes
 
 pub mod r#async;
 pub mod broadcast;
@@ -20,7 +20,7 @@ pub mod typed;
 // Re-exports
 // ---------------------------------------------------------------------------
 
-// Canal brut (raw mailbox) — bridge syscall ↔ IPC
+// Raw channel (raw mailbox) — syscall <-> IPC bridge
 pub use raw::{
     mailbox_close,
     mailbox_open,
@@ -29,13 +29,13 @@ pub use raw::{
     recv_raw,
     recv_raw_checked,
     send_raw,
-    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    // IPC-04 (v6) — cap-checked variants for syscall layer
     send_raw_checked,
     RawSlotStats,
     MAX_RAW_SLOTS,
 };
 
-// Canal synchrone (rendezvous)
+// Synchronous channel (rendezvous)
 pub use sync::{
     sync_channel_close,
     sync_channel_count,
@@ -44,7 +44,7 @@ pub use sync::{
     sync_channel_recv,
     sync_channel_recv_checked,
     sync_channel_send,
-    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    // IPC-04 (v6) — cap-checked variants for syscall layer
     sync_channel_send_checked,
     RendezVousState,
     SyncChannel,
@@ -55,14 +55,14 @@ pub use sync::{
     SYNC_INLINE_SIZE,
 };
 
-// Canal asynchrone
+// Asynchronous channel
 pub use r#async::{
     async_channel_count, async_channel_create, async_channel_destroy, async_channel_register_waker,
     async_channel_send, async_channel_try_recv, async_channel_unregister_waker, AsyncChannel,
     AsyncChannelStats, AsyncChannelStatsSnapshot, AsyncWaker, WakeFn, WakerTable, MAX_ASYNC_WAKERS,
 };
 
-// Canal MPMC
+// MPMC channel
 pub use mpmc::{
     mpmc_channel_count,
     mpmc_channel_create,
@@ -70,7 +70,7 @@ pub use mpmc::{
     mpmc_channel_recv,
     mpmc_channel_recv_checked,
     mpmc_channel_send,
-    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    // IPC-04 (v6) — cap-checked variants for syscall layer
     mpmc_channel_send_checked,
     MpmcChannel,
     MpmcStats,
@@ -79,12 +79,12 @@ pub use mpmc::{
     MPMC_CHANNEL_TABLE_SIZE,
 };
 
-// Canal broadcast
+// Broadcast channel
 pub use broadcast::{
     broadcast_create,
     broadcast_destroy,
     broadcast_publish,
-    // IPC-04 (v6) — variantes cap-checked pour la couche syscall
+    // IPC-04 (v6) — cap-checked variants for syscall layer
     broadcast_publish_checked,
     broadcast_recv,
     broadcast_recv_checked,
@@ -100,13 +100,13 @@ pub use broadcast::{
     SUBSCRIBER_INVALID,
 };
 
-// Canal typé générique
+// Generic typed channel
 pub use typed::{
     typed_channel_count, typed_channel_destroy, TypedChannel, TypedChannelInner, TypedChannelTable,
     TypedReceiver, TypedSender, MAX_TYPED_VALUE_SIZE,
 };
 
-// Canal streaming
+// Streaming channel
 pub use streaming::{
     stream_alloc_buffer, stream_channel_create, stream_channel_destroy, stream_pop, stream_push,
     stream_release_buffer, StreamBuffer, StreamChannel, StreamGranule, StreamPool, StreamStats,

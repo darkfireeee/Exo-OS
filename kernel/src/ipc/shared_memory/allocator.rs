@@ -1,16 +1,16 @@
-// ipc/shared_memory/allocator.rs — Allocateur SHM lock-free avec niveaux de taille
+// ipc/shared_memory/allocator.rs — Lock-free SHM allocator with size classes
 //
-// Fournit une interface d'allocation de régions SHM en s'appuyant sur le pool
-// de pages (pool.rs) et l'allocateur de descripteurs (descriptor.rs).
+// Provides an SHM region allocation interface relying on the page
+// pool (pool.rs) and the descriptor allocator (descriptor.rs).
 //
-// Stratégie : buddy-like avec 4 niveaux de taille prédéfinis :
+// Strategy: buddy-like with 4 predefined size levels:
 //   - Small  : 1 page  (4 KiB)
 //   - Medium : 4 pages (16 KiB)
 //   - Large  : 16 pages (64 KiB)
 //   - Huge   : 64 pages (256 KiB)
 //
-// Chaque niveau maintient une freelist de descripteurs réutilisables.
-// L'allocation tente le niveau exact, puis remonte si nécessaire.
+// Each level maintains a freelist of reusable descriptors.
+// Allocation attempts the exact level, then moves up if necessary.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,10 +21,10 @@ use crate::ipc::shared_memory::descriptor::{
 use crate::ipc::shared_memory::pool::shm_pool_stats;
 
 // ---------------------------------------------------------------------------
-// Niveaux de taille
+// Size classes
 // ---------------------------------------------------------------------------
 
-/// Niveau de taille d'une allocation SHM
+/// Size class of an SHM allocation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(usize)]
 pub enum ShmSizeClass {
@@ -39,7 +39,7 @@ pub enum ShmSizeClass {
 }
 
 impl ShmSizeClass {
-    /// Retourne le nombre de pages correspondant au niveau
+    /// Returns the number of pages corresponding to the size class
     pub fn pages(self) -> usize {
         match self {
             Self::Small => 1,
@@ -49,12 +49,12 @@ impl ShmSizeClass {
         }
     }
 
-    /// Retourne la taille en octets
+    /// Returns the size in bytes
     pub fn bytes(self) -> usize {
         self.pages() * crate::ipc::shared_memory::page::PAGE_SIZE
     }
 
-    /// Classe minimale pour une taille en bytes
+    /// Minimum class for a size in bytes
     pub fn for_size(bytes: usize) -> Self {
         if bytes <= Self::Small.bytes() {
             Self::Small
@@ -71,7 +71,7 @@ impl ShmSizeClass {
 }
 
 // ---------------------------------------------------------------------------
-// Compteurs per-class
+// Per-class counters
 // ---------------------------------------------------------------------------
 
 #[repr(C, align(64))]
@@ -101,7 +101,7 @@ static CLASS_COUNTERS: [ClassCounters; ShmSizeClass::COUNT] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Statistiques globales de l'allocateur
+// Global allocator statistics
 // ---------------------------------------------------------------------------
 
 static ALLOC_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -110,7 +110,7 @@ static ALLOC_FAIL: AtomicU64 = AtomicU64::new(0);
 static BYTES_ALLOCATED: AtomicU64 = AtomicU64::new(0);
 static BYTES_FREED: AtomicU64 = AtomicU64::new(0);
 
-/// Snapshot des statistiques de l'allocateur SHM
+/// Snapshot of SHM allocator statistics
 #[derive(Debug, Clone, Copy)]
 pub struct ShmAllocatorStats {
     pub alloc_total: u64,
@@ -136,39 +136,39 @@ pub fn shm_allocator_stats() -> ShmAllocatorStats {
 }
 
 // ---------------------------------------------------------------------------
-// Handle d'allocation : résultat retourné au demandeur
+// Allocation handle: result returned to requester
 // ---------------------------------------------------------------------------
 
-/// Handle retourné lors d'une allocation SHM réussie.
-/// Contient l'index de descripteur et les métadonnées de la région.
+/// Handle returned upon a successful SHM allocation.
+/// Contains descriptor index and region metadata.
 #[derive(Debug, Clone, Copy)]
 pub struct ShmHandle {
-    /// Index dans SHM_DESC_DIR
+    /// Index in SHM_DESC_DIR
     pub desc_idx: usize,
-    /// Identifiant unique de la région
+    /// Unique identifier of the region
     pub shm_id: ShmId,
-    /// Taille allouée en octets
+    /// Allocated size in bytes
     pub size_bytes: usize,
-    /// Classe de taille effective
+    /// Effective size class
     pub size_class: ShmSizeClass,
-    /// Nombre de pages allouées
+    /// Number of allocated pages
     pub page_count: usize,
 }
 
 // ---------------------------------------------------------------------------
-// Allocateur principal
+// Main allocator
 // ---------------------------------------------------------------------------
 
-/// Alloue une région SHM de la taille minimale couvrant `requested_bytes`.
+/// Allocates an SHM region of minimum size covering `requested_bytes`.
 ///
-/// # Algorithme
-/// 1. Déterminer la ShmSizeClass minimale
-/// 2. Appeler shm_create() qui alloue les pages depuis le pool
-/// 3. Retourner un ShmHandle
+/// # Algorithm
+/// 1. Determine minimum ShmSizeClass
+/// 2. Call shm_create() which allocates pages from pool
+/// 3. Return an ShmHandle
 ///
-/// # Erreurs
-/// - `IpcError::OutOfResources` — pool de pages épuisé ou MAX_SHM_REGIONS atteint
-/// - `IpcError::InvalidArgument` — taille 0 ou > Huge.bytes()
+/// # Errors
+/// - `IpcError::OutOfResources` — page pool exhausted or MAX_SHM_REGIONS reached
+/// - `IpcError::InvalidArgument` — size 0 or > Huge.bytes()
 pub fn shm_alloc(
     owner: ProcessId,
     perms: ShmPermissions,
@@ -212,8 +212,8 @@ pub fn shm_alloc(
     }
 }
 
-/// Alloue une région SHM de taille exacte en pages.
-/// Permet d'allouer un nombre arbitraire de pages (≤ MAX_SHM_PAGES_PER_DESC).
+/// Allocates an SHM region of exact size in pages.
+/// Allows allocating an arbitrary number of pages (<= MAX_SHM_PAGES_PER_DESC).
 pub fn shm_alloc_pages(
     owner: ProcessId,
     perms: ShmPermissions,
@@ -249,7 +249,7 @@ pub fn shm_alloc_pages(
     }
 }
 
-/// Libère la région SHM décrite par `handle`.
+/// Frees the SHM region described by `handle`.
 pub fn shm_free(handle: ShmHandle) -> Result<(), IpcError> {
     let class = handle.size_class;
     CLASS_COUNTERS[class as usize]
@@ -260,7 +260,7 @@ pub fn shm_free(handle: ShmHandle) -> Result<(), IpcError> {
     shm_destroy(handle.desc_idx)
 }
 
-/// Libère la région SHM par son index de descripteur.
+/// Frees the SHM region by its descriptor index.
 pub fn shm_free_by_idx(desc_idx: usize) -> Result<(), IpcError> {
     let size_bytes = crate::ipc::shared_memory::descriptor::shm_get_size(desc_idx).unwrap_or(0);
     FREE_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -269,16 +269,16 @@ pub fn shm_free_by_idx(desc_idx: usize) -> Result<(), IpcError> {
 }
 
 // ---------------------------------------------------------------------------
-// Utilitaire : défragmentation / compactage (no-op dans cette implémentation,
-// mais fourni pour l'interface future)
+// Utility: defragmentation / compaction (no-op in this implementation,
+// but provided for future interface)
 // ---------------------------------------------------------------------------
 
-/// Retourne le nombre de pages libres dans le pool SHM.
+/// Returns the number of free pages in the SHM pool.
 pub fn shm_free_page_count() -> usize {
     shm_pool_stats().free_pages
 }
 
-/// Vérifie si l'allocateur peut satisfaire une allocation de `n_pages`.
+/// Checks if the allocator can satisfy an allocation of `n_pages`.
 pub fn shm_can_alloc(n_pages: usize) -> bool {
     let stats = shm_pool_stats();
     stats.free_pages >= n_pages && shm_region_count() < MAX_SHM_REGIONS

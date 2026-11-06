@@ -1,18 +1,18 @@
-// ipc/shared_memory/mapping.rs — Mappage des régions SHM dans les espaces d'adressage
+// ipc/shared_memory/mapping.rs — Mapping SHM regions into address spaces
 //
-// Ce module gère l'association entre une région SHM (ShmDescriptor) et un
-// espace d'adressage virtuel d'un processus.
+// This module manages the association between an SHM region (ShmDescriptor) and a
+// process virtual address space.
 //
-// Dans Exo-OS, le memory manager gère les tables de pages. Ce module est une
-// couche IPC qui :
-//   1. Enregistre les mappings actifs (quelle région → quel processus)
-//   2. Valide les permissions à chaque accès
-//   3. Délègue le mappage réel au memory manager (interface opaque)
-//   4. Applique le flag NO_COW à toutes les pages mappées
+// In Exo-OS, the memory manager manages page tables. This module is an
+// IPC layer that:
+//   1. Records active mappings (which region -> which process)
+//   2. Validates permissions on each access
+//   3. Delegates the actual mapping to the memory manager (opaque interface)
+//   4. Applies the NO_COW flag to all mapped pages
 //
-// Les hooks de mappage (MapPageFn / UnmapPageFn) sont connectés au boot via
-// `ipc::ipc_install_vmm_hooks()`. Sans hook installé, shm_map() échoue en
-// production ; le mode simulé virt=phys est limité à la feature `dev_no_vmm`.
+// Mapping hooks (MapPageFn / UnmapPageFn) are connected at boot via
+// `ipc::ipc_install_vmm_hooks()`. Without installed hooks, shm_map() fails in
+// production; simulated virt=phys mode is restricted to the `dev_no_vmm` feature.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -22,10 +22,10 @@ use crate::ipc::shared_memory::page::{PageFlags, PhysAddr, PAGE_SIZE};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
-// Adresse virtuelle
+// Virtual address
 // ---------------------------------------------------------------------------
 
-/// Adresse virtuelle dans l'espace d'un processus
+/// Virtual address in a process's space
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct VirtAddr(pub u64);
@@ -49,20 +49,20 @@ impl VirtAddr {
 }
 
 // ---------------------------------------------------------------------------
-// Hook vers le memory manager (interface future)
+// Memory manager hook (future interface)
 // ---------------------------------------------------------------------------
 
-/// Type de pointeur de fonction pour mapper une page physique en virtuel.
-/// À connecter avec memory::virtual::map_page() lors de l'intégration.
+/// Function pointer type to map a physical page into virtual memory.
+/// To connect with memory::virtual::map_page() during integration.
 ///
-/// Arguments : (phys_addr, virt_addr, flags, process_id)
-/// Retour     : 0 = ok, non-zéro = erreur
+/// Arguments: (phys_addr, virt_addr, flags, process_id)
+/// Return:    0 = ok, non-zero = error
 pub type MapPageFn = unsafe fn(phys: u64, virt: u64, flags: u32, pid: u32) -> i32;
 
-/// Hook optionnel de mappage de page (None = mappage simulé)
+/// Optional page mapping hook (None = simulated mapping)
 static MAP_PAGE_HOOK: SpinLock<Option<MapPageFn>> = SpinLock::new(None);
 
-/// Hook optionnel de démappage de page
+/// Optional page unmapping hook
 pub type UnmapPageFn = unsafe fn(virt: u64, pid: u32) -> i32;
 static UNMAP_PAGE_HOOK: SpinLock<Option<UnmapPageFn>> = SpinLock::new(None);
 static VMM_HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -73,56 +73,56 @@ fn refresh_vmm_hooks_ready() {
     VMM_HOOKS_INSTALLED.store(ready, Ordering::Release);
 }
 
-/// Enregistre le hook de mappage fourni par le memory manager.
+/// Registers the mapping hook provided by the memory manager.
 pub fn register_map_hook(f: MapPageFn) {
     *MAP_PAGE_HOOK.lock() = Some(f);
     refresh_vmm_hooks_ready();
 }
 
-/// Enregistre le hook de démappage fourni par le memory manager.
+/// Registers the unmapping hook provided by the memory manager.
 pub fn register_unmap_hook(f: UnmapPageFn) {
     *UNMAP_PAGE_HOOK.lock() = Some(f);
     refresh_vmm_hooks_ready();
 }
 
-/// Retourne vrai si les hooks VMM réels sont installés.
+/// Returns true if real VMM hooks are installed.
 #[inline]
 pub fn vmm_hooks_ready() -> bool {
     VMM_HOOKS_INSTALLED.load(Ordering::Acquire)
 }
 
 // ---------------------------------------------------------------------------
-// Enregistrement de mapping
+// Mapping registration
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de mappings actifs simultanément
+/// Maximum number of simultaneously active mappings
 pub const MAX_SHM_MAPPINGS: usize = 2048;
 
 const SHM_MAPPING_FREE: u32 = 0;
 const SHM_MAPPING_RESERVED: u32 = 1;
 const SHM_MAPPING_ACTIVE: u32 = 2;
 
-/// Représente un mapping actif : (région, processus, adresse virtuelle)
+/// Represents an active mapping: (region, process, virtual address)
 #[repr(C, align(64))]
 pub struct ShmMapping {
-    /// Index de la région SHM dans SHM_DESC_DIR
+    /// Index of the SHM region in SHM_DESC_DIR
     pub desc_idx: AtomicU32,
-    /// Identifiant du processus qui a demandé le mapping
+    /// Identifier of the process requesting the mapping
     pub process_id: AtomicU32,
-    /// Adresse virtuelle de début du mapping dans l'espace du processus
+    /// Virtual base address of the mapping in the process space
     pub virt_base: AtomicU64,
-    /// Permissions effectives du mapping (intersection créateur + demandeur)
+    /// Effective permissions of the mapping (intersection of creator + requester)
     pub permissions: AtomicU32,
-    /// Nombre de pages mappées
+    /// Number of mapped pages
     pub mapped_pages: AtomicU32,
-    /// Timestamp de création du mapping
+    /// Creation timestamp of the mapping
     pub created_at: AtomicU64,
-    /// Mapping actif / libéré
+    /// Active / freed mapping
     pub active: AtomicU32,
     _pad: [u8; 12],
 }
 
-// SAFETY: tous les champs sont atomiques
+// SAFETY: all fields are atomic
 unsafe impl Sync for ShmMapping {}
 unsafe impl Send for ShmMapping {}
 
@@ -162,16 +162,16 @@ impl ShmMapping {
 }
 
 // ---------------------------------------------------------------------------
-// Table des mappings actifs
+// Active mappings table
 // ---------------------------------------------------------------------------
 
-/// Table globale des mappings SHM actifs
+/// Global table of active SHM mappings
 pub(crate) struct ShmMappingTable {
     entries: [ShmMapping; MAX_SHM_MAPPINGS],
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock
+// SAFETY: access protected by SpinLock
 unsafe impl Send for ShmMappingTable {}
 
 impl ShmMappingTable {
@@ -232,30 +232,30 @@ pub(crate) static SHM_MAPPING_TABLE: SpinLock<ShmMappingTable> =
     SpinLock::new(ShmMappingTable::new());
 
 // ---------------------------------------------------------------------------
-// Opération de mappage
+// Mapping operation
 // ---------------------------------------------------------------------------
 
-/// Résultat d'une opération de mappage SHM
+/// Result of an SHM mapping operation
 #[derive(Debug, Clone, Copy)]
 pub struct ShmMapResult {
-    /// Index du mapping dans la table
+    /// Mapping index in the table
     pub mapping_idx: usize,
-    /// Adresse virtuelle de début
+    /// Virtual base address
     pub virt_base: VirtAddr,
-    /// Taille mappée en octets
+    /// Mapped size in bytes
     pub mapped_size: u64,
 }
 
-/// Mappe la région SHM `desc_idx` dans l'espace d'adressage du processus `pid`.
+/// Maps SHM region `desc_idx` into the address space of process `pid`.
 ///
-/// `hint_virt` : adresse virtuelle souhaitée (0 = laissé au memory manager).
-/// Permissions : intersection des droits de la région et de `requested_perms`.
+/// `hint_virt`: desired virtual address (0 = left to memory manager).
+/// Permissions: intersection of region rights and `requested_perms`.
 ///
-/// # Erreurs
-/// - `IpcError::InvalidHandle` — région inexistante ou détruite
-/// - `IpcError::PermissionDenied` — permissions insuffisantes
-/// - `IpcError::OutOfResources` — table de mappings pleine
-/// - `IpcError::MappingFailed` — erreur du memory manager
+/// # Errors
+/// - `IpcError::InvalidHandle` — nonexistent or destroyed region
+/// - `IpcError::PermissionDenied` — insufficient permissions
+/// - `IpcError::OutOfResources` — mapping table full
+/// - `IpcError::MappingFailed` — memory manager error
 pub fn shm_map(
     desc_idx: usize,
     pid: ProcessId,
@@ -267,14 +267,14 @@ pub fn shm_map(
         return Err(IpcError::MappingFailed);
     }
 
-    // Vérifier que la région existe, est active et autorise les permissions demandées
+    // Check that the region exists, is active, and authorizes requested permissions
     let (n_pages, region_perms, size_bytes) = {
         let dir = SHM_DESC_DIR.lock();
         let desc = unsafe { dir.get(desc_idx) }.ok_or(IpcError::InvalidHandle)?;
         if !desc.is_active() {
             return Err(IpcError::InvalidHandle);
         }
-        // Calculer les permissions effectives (intersection)
+        // Calculate effective permissions (intersection)
         let rp = ShmPermissions(requested_perms.0 & desc.permissions);
         if requested_perms.can_write() && !rp.can_write() {
             return Err(IpcError::PermissionDenied);
@@ -285,7 +285,7 @@ pub fn shm_map(
         (n, rp, sz)
     };
 
-    // Allouer un slot de mapping
+    // Allocate a mapping slot
     let mapping_idx = {
         let mut tbl = SHM_MAPPING_TABLE.lock();
         match tbl.alloc() {
@@ -300,20 +300,20 @@ pub fn shm_map(
         }
     };
 
-    // Calculer ou utiliser l'adresse virtuelle
-    // Si hint_virt == NULL, on utilise une adresse virtuelle fictive basée sur
-    // l'adresse physique de la première page (le memory manager réel placerait
-    // correctement dans l'espace d'adressage du processus).
+    // Calculate or use virtual address
+    // If hint_virt == NULL, we use a dummy virtual address based on
+    // the physical address of the first page (the real memory manager would place
+    // it correctly in the process's address space).
     let virt_base = if hint_virt.is_null() {
         let phys = {
             let dir = SHM_DESC_DIR.lock();
-            // SAFETY: desc_idx alloué par alloc() dans SHM_DESC_DIR; verrou tenu pendant l'accès.
+            // SAFETY: desc_idx allocated by alloc() in SHM_DESC_DIR; lock held during access.
             unsafe { dir.get(desc_idx) }
                 .and_then(|d| d.page_phys(0))
                 .unwrap_or(PhysAddr::NULL)
         };
-        // Adresse virtuelle = adresse physique dans l'implémentation stub
-        // (sera remplacé par memory::virtual::find_vma() lors de l'intégration)
+        // Virtual address = physical address in stub implementation
+        // (will be replaced by memory::virtual::find_vma() during integration)
         VirtAddr(phys.0)
     } else {
         if !hint_virt.is_page_aligned() || !hint_virt.is_canonical() {
@@ -327,8 +327,8 @@ pub fn shm_map(
         hint_virt
     };
 
-    // Extraire les adresses physiques sous le lock, puis relâcher SHM_DESC_DIR
-    // avant d'invoquer les hooks VMM pour prévenir toute inversion de verrous (T8-025).
+    // Extract physical addresses under lock, then release SHM_DESC_DIR
+    // before invoking VMM hooks to prevent lock inversion (T8-025).
     let mut phys_addrs = [PhysAddr::NULL; MAX_SHM_PAGES_PER_DESC];
     {
         let dir = SHM_DESC_DIR.lock();
@@ -341,12 +341,12 @@ pub fn shm_map(
         }
     }
 
-    // Appeler le hook de mappage pour chaque page
+    // Call mapping hook for each page
     {
         let map_hook = *MAP_PAGE_HOOK.lock();
         if let Some(map_fn) = map_hook {
             let mut page_flags = PageFlags::SHM_DEFAULT;
-            // T8-001 FIX : retirer WRITE si les permissions de la région sont read-only
+            // T8-001 FIX: remove WRITE if region permissions are read-only
             if !region_perms.can_write() {
                 page_flags.remove(PageFlags::WRITE);
             }
@@ -356,15 +356,15 @@ pub fn shm_map(
                     let virt = virt_base.0 + (i * PAGE_SIZE) as u64;
                     let result = unsafe { map_fn(phys.0, virt, page_flags.0, pid.0) };
                     if result != 0 {
-                        // Annuler les mappings précédents
+                        // Roll back previous mappings
                         if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
                             for j in 0..i {
                                 let v = virt_base.0 + (j * PAGE_SIZE) as u64;
-                                // SAFETY: unmap_fn est un hook validé; v est dans la région mappée (j < i < n_pages).
+                                // SAFETY: unmap_fn is a validated hook; v is in the mapped region (j < i < n_pages).
                                 unsafe { unmap_fn(v, pid.0) };
                             }
                         }
-                        // Libérer le compte de mapping
+                        // Release mapping count
                         let dir2 = SHM_DESC_DIR.lock();
                         if let Some(d) = unsafe { dir2.get(desc_idx) } {
                             d.remove_mapping();
@@ -375,10 +375,10 @@ pub fn shm_map(
                 }
             }
         }
-        // Si pas de hook → mappage simulé (dev/test mode)
+        // If no hook -> simulated mapping (dev/test mode)
     }
 
-    // Enregistrer le mapping dans la table
+    // Register mapping in table
     {
         let tbl = SHM_MAPPING_TABLE.lock();
         let m = &tbl.entries[mapping_idx];
@@ -398,12 +398,12 @@ pub fn shm_map(
     })
 }
 
-/// Démappe la région SHM identifiée par `mapping_idx`.
+/// Unmaps the SHM region identified by `mapping_idx`.
 pub fn shm_unmap(mapping_idx: usize) -> Result<(), IpcError> {
     shm_unmap_for_process(mapping_idx, None)
 }
 
-/// Démappe la région SHM identifiée par `mapping_idx` pour le processus spécifié (si spécifié).
+/// Unmaps the SHM region identified by `mapping_idx` for the specified process (if specified).
 pub fn shm_unmap_for_process(mapping_idx: usize, expected_pid: Option<ProcessId>) -> Result<(), IpcError> {
     let (desc_idx, pid, virt_base, n_pages) = {
         let mut tbl = SHM_MAPPING_TABLE.lock();
@@ -420,23 +420,23 @@ pub fn shm_unmap_for_process(mapping_idx: usize, expected_pid: Option<ProcessId>
         let desc = m.desc_idx() as usize;
         let virt = VirtAddr(m.virt_base.load(Ordering::Relaxed));
         let pages = m.mapped_pages.load(Ordering::Relaxed) as usize;
-        // Libérer atomiquement le slot de mapping sous le verrou de table
-        // avant d'appeler les hooks VMM afin de garantir qu'aucun autre thread
-        // ne puisse exécuter un double démappage concurrent (T8-010).
+        // Atomically free the mapping slot under table lock
+        // before calling VMM hooks to ensure no other thread
+        // can execute a concurrent double unmap (T8-010).
         tbl.free(mapping_idx);
         (desc, actual_pid, virt, pages)
     };
 
-    // Appeler le hook de démappage
+    // Call unmapping hook
     if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
         for i in 0..n_pages {
             let virt = virt_base.0 + (i * PAGE_SIZE) as u64;
-            // SAFETY: virt + pid proviennent d'un mapping valide
+            // SAFETY: virt + pid come from a valid mapping
             unsafe { unmap_fn(virt, pid.0) };
         }
     }
 
-    // Décrémenter le compteur de mappings sur la région
+    // Decrement mapping counter on the region
     let dir = SHM_DESC_DIR.lock();
     if let Some(desc) = unsafe { dir.get(desc_idx) } {
         desc.remove_mapping();
@@ -464,7 +464,7 @@ pub fn shm_unmap_all_for_desc(desc_idx: usize) -> usize {
     unmapped
 }
 
-/// Retourne le nombre de mappings actifs.
+/// Returns the number of active mappings.
 pub fn shm_mapping_count() -> usize {
     SHM_MAPPING_TABLE.lock().count
 }

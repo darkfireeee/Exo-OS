@@ -1,12 +1,12 @@
-// ipc/sync/wait_queue.rs — File d'attente IPC (wrapper du scheduler) pour Exo-OS
+// ipc/sync/wait_queue.rs — IPC wait queue (scheduler wrapper) for Exo-OS
 //
-// Ce module fournit une file d'attente IPC-spécifique qui enveloppe la
-// WaitQueue du scheduler (scheduler::sync::wait_queue) avec une logique
-// propre à l'IPC : gestion des timeouts, identification par ChannelId,
-// statistiques dédiées et politique de réveil configurable.
+// This module provides an IPC-specific wait queue wrapping the
+// scheduler WaitQueue (scheduler::sync::wait_queue) with IPC-specific
+// logic: timeout handling, ChannelId identification,
+// dedicated statistics, and configurable wakeup policy.
 //
-// RÈGLE WAITQ-01 : WaitNode provient de l'EmergencyPool du scheduler.
-// Ce module ne duplique pas la logique — il délègue au scheduler.
+// RULE WAITQ-01: WaitNode comes from the scheduler EmergencyPool.
+// This module does not duplicate logic — it delegates to the scheduler.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -21,39 +21,39 @@ fn timeout_expired(enqueued_at: u64, timeout_ns: u64) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Politique de réveil
+// Wakeup policy
 // ---------------------------------------------------------------------------
 
-/// Politique de réveil d'une IpcWaitQueue
+/// Wakeup policy of an IpcWaitQueue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum WakePolicy {
-    /// Réveiller exactement un waiter (FIFO)
+    /// Wake up exactly one waiter (FIFO)
     One = 0,
-    /// Réveiller tous les waiters
+    /// Wake up all waiters
     All = 1,
-    /// Réveiller jusqu'à N waiters
+    /// Wake up up to N waiters
     UpToN = 2,
 }
 
 // ---------------------------------------------------------------------------
-// Waiter IPC
+// IPC Waiter
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de waiters par IpcWaitQueue
+/// Maximum number of waiters per IpcWaitQueue
 pub const MAX_IPC_WAITERS: usize = 64;
 
-/// Raison de réveil d'un waiter
+/// Wakeup reason of a waiter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum WakeReason {
-    /// Réveil normal (condition satisfaite)
+    /// Normal wakeup (condition satisfied)
     Signaled = 0,
-    /// Timeout expiré
+    /// Timeout expired
     Timeout = 1,
-    /// Canal/ressource fermé
+    /// Channel/resource closed
     Closed = 2,
-    /// Interruption (signal ou annulation)
+    /// Interruption (signal or cancellation)
     Interrupted = 3,
 }
 
@@ -68,27 +68,27 @@ impl WakeReason {
     }
 }
 
-/// Un waiter dans la file IPC
+/// A waiter in the IPC queue
 #[repr(C, align(64))]
 pub struct IpcWaiter {
-    /// Thread en attente (TaskId opaque)
+    /// Waiting thread (opaque TaskId)
     pub thread_id: AtomicU64,
-    /// Le waiter est actif (inscrit dans la queue)
+    /// The waiter is active (enrolled in the queue)
     pub active: AtomicBool,
-    /// Réveillé
+    /// Woken
     pub woken: AtomicBool,
-    /// Raison du réveil
+    /// Wakeup reason
     pub reason: AtomicU32,
-    /// Numéro de séquence (anti-spurious)
+    /// Sequence number (anti-spurious)
     pub seq: AtomicU32,
-    /// Timestamp d'inscription (ns depuis boot)
+    /// Enrollment timestamp (ns since boot)
     pub enqueued_at: AtomicU64,
-    /// Timeout (0 = infini, en nanosecondes depuis enqueued_at)
+    /// Timeout (0 = infinite, in nanoseconds since enqueued_at)
     pub timeout_ns: AtomicU64,
     _pad: [u8; 16],
 }
 
-// SAFETY: tous les champs sont atomiques
+// SAFETY: all fields are atomic
 unsafe impl Sync for IpcWaiter {}
 unsafe impl Send for IpcWaiter {}
 
@@ -145,31 +145,31 @@ impl IpcWaiter {
 }
 
 // ---------------------------------------------------------------------------
-// IpcWaitQueue — file d'attente IPC
+// IpcWaitQueue — IPC wait queue
 // ---------------------------------------------------------------------------
 
-/// File d'attente IPC pour un canal ou une ressource.
+/// IPC wait queue for a channel or resource.
 ///
-/// Stocke jusqu'à MAX_IPC_WAITERS threads en attente.
-/// Les réveils respectent la politique configurée.
+/// Stores up to MAX_IPC_WAITERS waiting threads.
+/// Wakeups respect the configured policy.
 #[repr(C, align(64))]
 pub struct IpcWaitQueue {
-    /// Identifiant du canal/ressource associé (pour corrélation)
+    /// Associated channel/resource identifier (for correlation)
     pub channel_id: ChannelId,
-    /// Tableau statique de waiters
+    /// Static array of waiters
     waiters: [IpcWaiter; MAX_IPC_WAITERS],
-    /// Nombre de waiters actifs
+    /// Number of active waiters
     count: AtomicU32,
-    /// Politique de réveil par défaut
+    /// Default wakeup policy
     policy: AtomicU32,
-    /// Compteurs de statistiques
+    /// Statistical counters
     pub total_waits: AtomicU64,
     pub total_woken: AtomicU64,
     pub total_timeouts: AtomicU64,
     _pad: [u8; 16],
 }
 
-// SAFETY: IpcWaiter est Sync
+// SAFETY: IpcWaiter is Sync
 unsafe impl Sync for IpcWaitQueue {}
 unsafe impl Send for IpcWaitQueue {}
 
@@ -197,14 +197,14 @@ impl IpcWaitQueue {
     }
 
     // -----------------------------------------------------------------------
-    // Inscription d'un waiter
+    // Waiter enrollment
     // -----------------------------------------------------------------------
 
-    /// Inscrit le thread `thread_id` comme waiter avec un timeout optionnel.
-    /// Retourne l'index du waiter, ou `None` si la queue est pleine.
+    /// Enrolls thread `thread_id` as waiter with an optional timeout.
+    /// Returns the waiter index, or `None` if the queue is full.
     pub fn enqueue(&self, thread_id: u64, timeout_ns: u64, now_ns: u64) -> Option<usize> {
         for i in 0..MAX_IPC_WAITERS {
-            // T8-015 FIX : CAS atomique false -> true pour réserver le slot de façon exclusive
+            // T8-015 FIX: atomic CAS false -> true to reserve slot exclusively
             if self.waiters[i]
                 .active
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -228,20 +228,20 @@ impl IpcWaitQueue {
     }
 
     // -----------------------------------------------------------------------
-    // Attente
+    // Waiting
     // -----------------------------------------------------------------------
 
-    /// Attend d'être réveillé en bloquant réellement le thread via le scheduler.
+    /// Waits to be woken by actually blocking the thread via the scheduler.
     ///
-    /// STRATÉGIE : spin court (≤ 64 tours) pour les réveils immédiats,
-    /// puis blocage réel via `sched_hooks::block_current()`.
+    /// STRATEGY: short spin (<= 64 iterations) for immediate wakeups,
+    /// then real blocking via `sched_hooks::block_current()`.
     ///
-    /// L'appelant doit avoir appelé `enqueue()` AVANT et avoir récupéré `waiter_idx`.
-    /// Après retour (Signaled ou erreur), le waiter est désenregistré.
+    /// The caller must have called `enqueue()` BEFORE and retrieved `waiter_idx`.
+    /// Upon return (Signaled or error), the waiter is unregistered.
     ///
-    /// # Retour
-    /// - `Ok(WakeReason)` — cause du réveil
-    /// - `Err(IpcError::Timeout)` — timeout expiré
+    /// # Return
+    /// - `Ok(WakeReason)` — cause of wakeup
+    /// - `Err(IpcError::Timeout)` — timeout expired
     pub fn wait_for_wake(
         &self,
         waiter_idx: usize,
@@ -259,7 +259,7 @@ impl IpcWaitQueue {
         const SPIN_BEFORE_BLOCK: u32 = 64;
 
         loop {
-            // 1. Vérifier le drapeau woken en priorité (évite le blocage si réveil rapide).
+            // 1. Check woken flag first (avoids blocking if fast wakeup).
             if w.is_woken() {
                 let reason = w.wake_reason();
                 w.dequeue();
@@ -279,7 +279,7 @@ impl IpcWaitQueue {
                 };
             }
 
-            // 2. Vérifier fermeture.
+            // 2. Check closure.
             if check_closed() {
                 w.wake(WakeReason::Closed);
                 w.dequeue();
@@ -287,7 +287,7 @@ impl IpcWaitQueue {
                 return Err(IpcError::Closed);
             }
 
-            // 3. Vérifier timeout avec l'horloge monotone réelle.
+            // 3. Check timeout with real monotonic clock.
             if timeout_expired(enqueued_at, timeout_ns) && !w.is_woken() {
                 w.wake(WakeReason::Timeout);
                 w.dequeue();
@@ -296,16 +296,16 @@ impl IpcWaitQueue {
                 return Err(IpcError::Timeout);
             }
 
-            // 4. Phase spin courte (≤ SPIN_BEFORE_BLOCK tours) pour les réveils rapides.
+            // 4. Short spin phase (<= SPIN_BEFORE_BLOCK iterations) for fast wakeups.
             if spin_count < SPIN_BEFORE_BLOCK {
                 core::hint::spin_loop();
                 spin_count += 1;
                 continue;
             }
 
-            // 5. Une attente finie ne doit pas dormir sans timer armé : on rend
-            // le CPU puis on reteste le deadline. Les attentes infinies peuvent
-            // utiliser le vrai sommeil scheduler jusqu'au wake explicite.
+            // 5. A finite wait must not sleep without an armed timer: yield
+            // the CPU then recheck deadline. Infinite waits can
+            // use true scheduler sleep until explicit wake.
             if timeout_ns != 0 {
                 unsafe {
                     let _ = crate::scheduler::core::switch::cooperative_reschedule();
@@ -314,13 +314,13 @@ impl IpcWaitQueue {
                 continue;
             }
 
-            // 6. Blocage réel via le scheduler.
-            // RÈGLE PREEMPT-BLOCK (B6) : bloquer avec PreemptGuard actif = deadlock garanti.
+            // 6. Real blocking via the scheduler.
+            // RULE PREEMPT-BLOCK (B6): blocking with active PreemptGuard = guaranteed deadlock.
             debug_assert!(
                 crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                 "IpcWaitQueue::wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
             );
-            // SAFETY: le waiter est actif dans la table, un réveil est attendu.
+            // SAFETY: waiter is active in table, wakeup is expected.
             unsafe {
                 super::sched_hooks::block_current(tid);
             }
@@ -329,12 +329,12 @@ impl IpcWaitQueue {
     }
 
     // -----------------------------------------------------------------------
-    // Réveil
+    // Wakeup
     // -----------------------------------------------------------------------
 
-    /// Réveille les waiters selon la politique configurée.
-    /// `reason` : raison fournie aux waiters.
-    /// Retourne le nombre de waiters réveillés.
+    /// Wakes up waiters according to configured policy.
+    /// `reason`: reason provided to waiters.
+    /// Returns the number of woken waiters.
     pub fn wake(&self, reason: WakeReason) -> u32 {
         let policy_raw = self.policy.load(Ordering::Relaxed);
         let policy = match policy_raw {
@@ -345,7 +345,7 @@ impl IpcWaitQueue {
         self.wake_with_policy(reason, policy, u32::MAX)
     }
 
-    /// Réveille avec politique et limite N explicites.
+    /// Wakes up with explicit policy and limit N.
     pub fn wake_with_policy(&self, reason: WakeReason, policy: WakePolicy, max_n: u32) -> u32 {
         let mut woken = 0u32;
         for i in 0..MAX_IPC_WAITERS {
@@ -358,7 +358,7 @@ impl IpcWaitQueue {
             if w.is_active() && !w.is_woken() {
                 let tid = w.thread_id.load(Ordering::Relaxed);
                 if w.try_wake(reason) {
-                    // Réveiller le thread au niveau scheduler (si bloqué).
+                    // Wake thread at scheduler level (if blocked).
                     super::sched_hooks::wake_thread(tid);
                     woken += 1;
                 }
@@ -368,7 +368,7 @@ impl IpcWaitQueue {
         woken
     }
 
-    /// Réveille un waiter spécifique par son thread_id.
+    /// Wakes up a specific waiter by its thread_id.
     pub fn wake_thread(&self, thread_id: u64, reason: WakeReason) -> bool {
         for i in 0..MAX_IPC_WAITERS {
             let w = &self.waiters[i];
@@ -383,14 +383,14 @@ impl IpcWaitQueue {
         false
     }
 
-    /// Réveille tous les waiters avec `Closed` (ex : canal fermé).
+    /// Wakes all waiters with `Closed` (e.g. channel closed).
     pub fn close_all(&self) {
         self.wake_with_policy(WakeReason::Closed, WakePolicy::All, u32::MAX);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot de statistiques
+// Statistics snapshot
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]

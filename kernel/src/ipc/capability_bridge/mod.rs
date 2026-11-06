@@ -1,8 +1,8 @@
 // kernel/src/ipc/capability_bridge/mod.rs
 //
-// Compatibilité IPC -> security::access_control.
-// IPC garde ce module comme façade stable, mais la vérification réelle passe
-// par le checker unifié security/access_control.
+// Compatibility IPC -> security::access_control.
+// IPC keeps this module as a stable facade, but actual verification goes
+// through the unified security/access_control checker.
 
 pub mod check;
 

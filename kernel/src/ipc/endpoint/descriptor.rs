@@ -1,17 +1,17 @@
 // kernel/src/ipc/endpoint/descriptor.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENDPOINT DESCRIPTOR — Description complète d'un endpoint IPC
-// (Exo-OS · IPC Couche 2a)
+// ENDPOINT DESCRIPTOR — Full description of an IPC endpoint
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Un EndpointDesc décrit un point de communication nommé :
-//   • Identificateur unique (EndpointId)
-//   • Liste des propriétaires (ThreadId) pouvant accepter des connexions
-//   • File de connexions entrantes (backlog)
-//   • État (Listening, Closed, Drain)
+// An EndpointDesc describes a named communication point:
+//   • Unique identifier (EndpointId)
+//   • List of owners (ThreadId) allowed to accept connections
+//   • Incoming connection queue (backlog)
+//   • State (Listening, Closed, Drain)
 //
-// RÈGLE : zéro allocation heap ici — structures à taille fixe (Zone NO-ALLOC).
+// RULE: zero heap allocation here — fixed-size structures (NO-ALLOC Zone).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::ipc::core::constants::{ENDPOINT_BACKLOG, MAX_ENDPOINT_NAME_LEN, MAX_ENDPOINT_OWNERS};
@@ -20,40 +20,40 @@ use crate::scheduler::core::task::ThreadId;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EndpointState — machine d'états d'un endpoint
+// EndpointState — endpoint state machine
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État d'un endpoint IPC.
+/// State of an IPC endpoint.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum EndpointState {
-    /// Endpoint créé, pas encore en écoute.
+    /// Endpoint created, not yet listening.
     Created = 0,
-    /// En écoute — accepte des connexions.
+    /// Listening — accepts connections.
     Listening = 1,
-    /// Fermé — rejette toutes les connexions.
+    /// Closed — rejects all connections.
     Closed = 2,
-    /// En cours de fermeture (drain des messages en vol).
+    /// Draining in-flight messages during shutdown.
     Draining = 3,
-    /// Détruit — la structure peut être réutilisée.
+    /// Destroyed — structure can be reused.
     Destroyed = 4,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PendingConnection — connexion en attente dans le backlog
+// PendingConnection — connection pending in backlog
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une connexion en attente d'acceptation.
+/// A connection pending acceptance.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct PendingConnection {
-    /// Thread demandeur.
+    /// Requesting thread.
     pub requester: ThreadId,
-    /// Canal proposé pour la connexion.
+    /// Channel proposed for connection.
     pub channel_id: u64,
-    /// Cookie pour corréler la réponse.
+    /// Cookie to correlate the reply.
     pub cookie: u64,
-    /// Timestamp de la demande (ticks).
+    /// Request timestamp (ticks).
     pub timestamp_ticks: u64,
 }
 
@@ -71,10 +71,10 @@ impl PendingConnection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EndpointName — nom ASCII null-terminé
+// EndpointName — null-terminated ASCII name
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nom d'un endpoint — max 64 bytes ASCII.
+/// Endpoint name — max 64 bytes ASCII.
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct EndpointName {
@@ -88,7 +88,7 @@ impl EndpointName {
         len: 0,
     };
 
-    /// Crée un nom depuis un slice ASCII.
+    /// Creates a name from an ASCII slice.
     pub fn from_bytes(src: &[u8]) -> Result<Self, IpcError> {
         if src.len() >= MAX_ENDPOINT_NAME_LEN {
             return Err(IpcError::InvalidParam);
@@ -99,12 +99,12 @@ impl EndpointName {
         Ok(name)
     }
 
-    /// Retourne le slice de bytes du nom.
+    /// Returns byte slice of name.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }
 
-    /// Retourne la longueur du nom.
+    /// Returns length of name.
     pub fn len(&self) -> usize {
         self.len as usize
     }
@@ -113,50 +113,50 @@ impl EndpointName {
         self.len == 0
     }
 
-    /// Compare deux noms (insensible à la casse non requis).
+    /// Compares two names (case sensitivity not required).
     pub fn eq_bytes(&self, other: &[u8]) -> bool {
         self.as_bytes() == other
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EndpointDesc — descripteur principal
+// EndpointDesc — main descriptor
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Descripteur complet d'un endpoint IPC.
-/// Taille fixe — alloué depuis un pool statique (endpoint/registry.rs).
+/// Full descriptor of an IPC endpoint.
+/// Fixed size — allocated from a static pool (endpoint/registry.rs).
 #[repr(C, align(64))]
 pub struct EndpointDesc {
-    /// Identifiant unique de l'endpoint.
+    /// Unique identifier of endpoint.
     pub id: EndpointId,
-    /// État courant (atomique pour lecture sans lock).
+    /// Current state (atomic for lock-free read).
     pub state: AtomicU32,
-    /// Nombre de connexions actives.
+    /// Number of active connections.
     pub active_conns: AtomicU32,
-    /// Génération (incrémentée à chaque fermeture/réouverture).
+    /// Generation (incremented on each close/reopen).
     pub generation: AtomicU64,
-    /// Propriétaires qui peuvent accepter des connexions (max MAX_ENDPOINT_OWNERS).
+    /// Owners allowed to accept connections (max MAX_ENDPOINT_OWNERS).
     pub owners: [ThreadId; MAX_ENDPOINT_OWNERS],
-    /// Nombre de propriétaires actifs.
+    /// Number of active owners.
     pub owner_count: u32,
-    /// Drapeaux de configuration (ex : BROADCAST, RPC, STREAMING).
+    /// Configuration flags (e.g. BROADCAST, RPC, STREAMING).
     pub config_flags: u32,
-    /// Nom de l'endpoint (ASCII).
+    /// Endpoint name (ASCII).
     pub name: EndpointName,
-    /// Backlog : file des connexions en attente d'acceptation.
+    /// Backlog: queue of connections pending acceptance.
     pub backlog: [PendingConnection; ENDPOINT_BACKLOG],
-    /// Tête du backlog (index prochain à accepter).
+    /// Backlog head (next index to accept).
     pub backlog_head: AtomicU32,
-    /// Queue du backlog (index prochain slot libre).
+    /// Backlog tail (next free slot index).
     pub backlog_tail: AtomicU32,
-    /// Compteur total de connexions acceptées.
+    /// Total counter of accepted connections.
     pub total_accepted: AtomicU64,
-    /// Compteur total de connexions refusées (backlog plein).
+    /// Total counter of refused connections (backlog full).
     pub total_refused: AtomicU64,
 }
 
 impl EndpointDesc {
-    /// Crée un nouveau descripteur d'endpoint.
+    /// Creates a new endpoint descriptor.
     pub fn new(id: EndpointId, name: EndpointName, owner: ThreadId) -> Self {
         let mut owners = [ThreadId(0); MAX_ENDPOINT_OWNERS];
         owners[0] = owner;
@@ -177,7 +177,7 @@ impl EndpointDesc {
         }
     }
 
-    /// Retourne l'état courant.
+    /// Returns current state.
     #[inline(always)]
     pub fn state(&self) -> EndpointState {
         match self.state.load(Ordering::Acquire) {
@@ -186,11 +186,11 @@ impl EndpointDesc {
             2 => EndpointState::Closed,
             3 => EndpointState::Draining,
             4 => EndpointState::Destroyed,
-            _ => EndpointState::Closed, // valeur invalide → fermé par sécurité
+            _ => EndpointState::Closed, // invalid value -> closed for safety
         }
     }
 
-    /// Transition vers l'état Listening.
+    /// Transitions to Listening state.
     pub fn start_listen(&self) -> Result<(), IpcError> {
         self.state
             .compare_exchange(
@@ -203,14 +203,14 @@ impl EndpointDesc {
             .map_err(|_| IpcError::InvalidParam)
     }
 
-    /// Retourne vrai si l'endpoint accepte des connexions.
+    /// Returns true if endpoint accepts connections.
     #[inline(always)]
     pub fn is_listening(&self) -> bool {
         self.state.load(Ordering::Acquire) == EndpointState::Listening as u32
     }
 
-    /// Enqueue une connexion dans le backlog.
-    /// Retourne `Err(WouldBlock)` si le backlog est plein.
+    /// Enqueues a connection into backlog.
+    /// Returns `Err(WouldBlock)` if backlog is full.
     pub fn enqueue_connection(&self, conn: PendingConnection) -> Result<(), IpcError> {
         let tail = self.backlog_tail.load(Ordering::Relaxed);
         let head = self.backlog_head.load(Ordering::Acquire);
@@ -219,7 +219,7 @@ impl EndpointDesc {
             self.total_refused.fetch_add(1, Ordering::Relaxed);
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: tail ∈ [0,ENDPOINT_BACKLOG), place vérifiée (next != head), producteur unique.
+        // SAFETY: tail in [0, ENDPOINT_BACKLOG), space verified (next != head), single producer.
         unsafe {
             let slot = core::ptr::addr_of!(self.backlog[tail as usize]) as *mut PendingConnection;
             core::ptr::write(slot, conn);
@@ -228,14 +228,14 @@ impl EndpointDesc {
         Ok(())
     }
 
-    /// Dequeue une connexion du backlog.
+    /// Dequeues a connection from backlog.
     pub fn dequeue_connection(&self) -> Option<PendingConnection> {
         let head = self.backlog_head.load(Ordering::Relaxed);
         let tail = self.backlog_tail.load(Ordering::Acquire);
         if head == tail {
-            return None; // backlog vide
+            return None; // empty backlog
         }
-        // SAFETY: head est dans [0, ENDPOINT_BACKLOG) et tail != head.
+        // SAFETY: head is in [0, ENDPOINT_BACKLOG) and tail != head.
         let conn = unsafe { core::ptr::read(&self.backlog[head as usize]) };
         let next = (head + 1) % ENDPOINT_BACKLOG as u32;
         self.backlog_head.store(next, Ordering::Release);
@@ -243,7 +243,7 @@ impl EndpointDesc {
         Some(conn)
     }
 
-    /// Retourne le nombre de connexions en attente dans le backlog.
+    /// Returns number of pending connections in backlog.
     #[inline(always)]
     pub fn backlog_len(&self) -> usize {
         let h = self.backlog_head.load(Ordering::Relaxed) as usize;
@@ -251,12 +251,12 @@ impl EndpointDesc {
         t.wrapping_sub(h) % ENDPOINT_BACKLOG
     }
 
-    /// Vérifie si un ThreadId est propriétaire de cet endpoint.
+    /// Checks whether a ThreadId owns this endpoint.
     pub fn is_owner(&self, tid: ThreadId) -> bool {
         self.owners[..self.owner_count as usize].contains(&tid)
     }
 
-    /// Ajoute un propriétaire supplémentaire.
+    /// Adds an additional owner.
     pub fn add_owner(&mut self, tid: ThreadId) -> Result<(), IpcError> {
         if self.owner_count as usize >= MAX_ENDPOINT_OWNERS {
             return Err(IpcError::ResourceExhausted);

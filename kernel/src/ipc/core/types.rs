@@ -1,61 +1,61 @@
 // kernel/src/ipc/core/types.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// TYPES FONDAMENTAUX IPC — MessageId, ChannelId, EndpointId, Cookie
-// (Exo-OS · IPC Couche 2a)
+// FUNDAMENTAL IPC TYPES — MessageId, ChannelId, EndpointId, Cookie
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// RÈGLE IPC-COUCHE : ipc/ se situe en Couche 2a.
-//   DÉPEND DE : memory/ (Couche 0) + scheduler/ (Couche 1) + security/capability/
-//   N'IMPORTE JAMAIS : fs/, process/ (Couches supérieures)
+// RULE IPC-LAYER: ipc/ resides in Layer 2a.
+//   DEPENDS ON: memory/ (Layer 0) + scheduler/ (Layer 1) + security/capability/
+//   NEVER IMPORTS: fs/, process/ (Upper layers)
 //
-// RÈGLE UNSAFE : tout bloc unsafe précédé de // SAFETY:
-// RÈGLE NO-ALLOC : ce fichier — zéro Vec/Box/Arc (types de base uniquement)
+// RULE UNSAFE: every unsafe block preceded by // SAFETY:
+// RULE NO-ALLOC: this file — zero Vec/Box/Arc (basic types only)
 //
-// Contrat sender_pid:
-// Les messages IPC exposés aux serveurs peuvent contenir un champ sender_pid
-// dans les premiers octets du payload. Ce champ n'est pas fiable depuis
-// userspace: `SYS_EXO_IPC_SEND` le remplace par le PID réel seulement si
-// l'appelant pose le flag ABI IPC_FLAG_INJECT_SRC_PID. Les formats raw dont les
-// quatre premiers octets ne sont pas un sender_pid ne sont donc plus corrompus
-// par une heuristique de taille.
+// sender_pid contract:
+// IPC messages exposed to servers may contain a sender_pid field
+// in the first bytes of the payload. This field is untrusted from
+// userspace: `SYS_EXO_IPC_SEND` replaces it with the real PID only if
+// the caller sets the ABI flag IPC_FLAG_INJECT_SRC_PID. Raw formats whose
+// first four bytes are not a sender_pid are therefore no longer corrupted
+// by a size heuristic.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use core::fmt;
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// Re-export ProcessId depuis scheduler (ProcessId est défini là-bas comme ProcessId(pub u32)).
+// Re-export ProcessId from scheduler (ProcessId is defined there as ProcessId(pub u32)).
 pub use crate::scheduler::ProcessId;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Identifiants opaques — Newtype wrappers autour de u64
-// Les valeurs 0 sont réservées comme "invalide / non initialisé".
+// Opaque identifiers — Newtype wrappers around u64
+// Value 0 is reserved as "invalid / uninitialized".
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant unique d'un message IPC.
-/// Généré de manière monotone, jam ais réutilisé (rollover = panique en debug).
+/// Unique identifier of an IPC message.
+/// Monotonically generated, never reused (rollover = panic in debug).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct MessageId(pub NonZeroU64);
 
 impl MessageId {
-    /// Crée un MessageId depuis une valeur brute non-nulle.
+    /// Creates a MessageId from a raw non-zero value.
     #[inline(always)]
     pub fn new(v: u64) -> Option<Self> {
         NonZeroU64::new(v).map(Self)
     }
 
-    /// Crée un MessageId depuis une valeur brute sans vérification.
+    /// Creates a MessageId from a raw value without checking.
     ///
     /// # Safety
-    /// `v` ne doit pas être nul.
+    /// `v` must not be zero.
     #[inline(always)]
     pub unsafe fn new_unchecked(v: u64) -> Self {
         Self(NonZeroU64::new_unchecked(v))
     }
 
-    /// Retourne la valeur sous-jacente.
+    /// Returns the underlying value.
     #[inline(always)]
     pub fn get(self) -> u64 {
         self.0.get()
@@ -68,14 +68,14 @@ impl fmt::Debug for MessageId {
     }
 }
 
-/// Identifiant unique d'un canal IPC (bidirectionnel ou unidirectionnel).
+/// Unique identifier of an IPC channel (bidirectional or unidirectional).
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct ChannelId(pub NonZeroU64);
 
 impl ChannelId {
-    /// Sentinel « pendant » — valeur invalide utilisée comme valeur initiale
-    /// avant qu'un `ChannelId` réel soit alloué.
+    /// "Dangling" sentinel — invalid value used as initial value
+    /// before an actual `ChannelId` is allocated.
     pub const DANGLING: Self = Self(match NonZeroU64::new(u64::MAX) {
         Some(v) => v,
         None => panic!("u64::MAX is non-zero"),
@@ -98,8 +98,8 @@ impl fmt::Debug for ChannelId {
     }
 }
 
-/// Identifiant unique d'un endpoint (point de communication nommé).
-/// Un endpoint peut accepter des connexions entrantes.
+/// Unique identifier of an endpoint (named communication point).
+/// An endpoint can accept incoming connections.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct EndpointId(pub NonZeroU64);
@@ -115,15 +115,15 @@ impl EndpointId {
         self.0.get()
     }
 
-    /// Sentinel « invalide » — valeur sentinelle utilisée à la place de
-    /// `EndpointId(0)` qui est impossible (`NonZeroU64`).
+    /// "Invalid" sentinel — sentinel value used in place of
+    /// `EndpointId(0)` which is impossible (`NonZeroU64`).
     pub const INVALID: Self = Self(match NonZeroU64::new(u64::MAX) {
         Some(v) => v,
         None => panic!("u64::MAX is non-zero"),
     });
 
-    /// Convertit en ObjectId pour le système de capabilities.
-    /// Les 32 bits hauts encodent le type (0x01 = endpoint IPC).
+    /// Converts to ObjectId for the capability system.
+    /// High 32 bits encode the type (0x01 = IPC endpoint).
     #[inline(always)]
     pub fn to_object_id(self) -> u64 {
         (0x01u64 << 32) | (self.0.get() & 0xFFFF_FFFF)
@@ -136,8 +136,8 @@ impl fmt::Debug for EndpointId {
     }
 }
 
-/// Cookie opaque — valeur 64 bits arbitraire attachée à un message ou connexion.
-/// Permet de corréler des requêtes/réponses sans état côté serveur.
+/// Opaque cookie — arbitrary 64-bit value attached to a message or connection.
+/// Allows correlating requests/replies statelessly on server side.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
 pub struct Cookie(pub u64);
@@ -162,71 +162,71 @@ impl Cookie {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Générateurs monotones thread-safe
+// Thread-safe monotonic generators
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Générateur d'identifiants monotones pour les messages.
+/// Monotonic identifier generator for messages.
 static MSG_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Alloue un MessageId unique, monotone.
-/// En cas de rollover (u64 max), le système est en panne — panique en debug.
+/// Allocates a unique, monotonic MessageId.
+/// Upon rollover (u64 max), system is exhausted — panics in debug.
 #[inline]
 pub fn alloc_message_id() -> MessageId {
     let v = MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     debug_assert!(v != 0, "MessageId counter rollover — system exhausted");
-    // SAFETY: v est issu d'un fetch_add depuis 1 — jamais nul jusqu'au rollover.
+    // SAFETY: v originates from a fetch_add from 1 — never zero until rollover.
     MessageId(unsafe { NonZeroU64::new_unchecked(v) })
 }
 
-/// Générateur d'identifiants monotones pour les canaux.
+/// Monotonic identifier generator for channels.
 static CHAN_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Alloue un ChannelId unique, monotone.
+/// Allocates a unique, monotonic ChannelId.
 #[inline]
 pub fn alloc_channel_id() -> ChannelId {
     let v = CHAN_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     debug_assert!(v != 0, "ChannelId counter rollover");
-    // SAFETY: v >= 1 par construction.
+    // SAFETY: v >= 1 by construction.
     ChannelId(unsafe { NonZeroU64::new_unchecked(v) })
 }
 
-/// Générateur d'identifiants monotones pour les endpoints.
+/// Monotonic identifier generator for endpoints.
 static EP_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// Alloue un EndpointId unique, monotone.
+/// Allocates a unique, monotonic EndpointId.
 #[inline]
 pub fn alloc_endpoint_id() -> EndpointId {
     let v = EP_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     debug_assert!(v != 0, "EndpointId counter rollover");
-    // SAFETY: v >= 1 par construction.
+    // SAFETY: v >= 1 by construction.
     EndpointId(unsafe { NonZeroU64::new_unchecked(v) })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Drapeaux de message
+// Message flags
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux bitmask pour un message IPC.
+/// Bitmask flags for an IPC message.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 #[repr(transparent)]
 pub struct MsgFlags(pub u32);
 
 impl MsgFlags {
-    /// Aucun flag positionné.
+    /// No flag set.
     pub const EMPTY: Self = Self(0);
-    /// Message temps-réel (priorité maximale dans les queues).
+    /// Real-time message (highest priority in queues).
     pub const RT: Self = Self(1 << 0);
-    /// Message de réponse (corrèle à un MessageId existant).
+    /// Reply message (correlates to an existing MessageId).
     pub const REPLY: Self = Self(1 << 1);
-    /// Zero-copy : le contenu est une référence physique, pas une copie.
+    /// Zero-copy: content is a physical reference, not a copy.
     pub const ZEROCOPY: Self = Self(1 << 2);
-    /// Broadcast : livrer à tous les récepteurs.
+    /// Broadcast: deliver to all receivers.
     pub const BROADCAST: Self = Self(1 << 3);
-    /// Message d'erreur.
+    /// Error message.
     pub const ERROR: Self = Self(1 << 4);
-    /// Synchrone : bloque l'émetteur jusqu'à l'acquittement.
+    /// Synchronous: blocks sender until acknowledgement.
     pub const SYNC: Self = Self(1 << 5);
-    /// Non bloquant : retourne immédiatement si queue pleine.
+    /// Non-blocking: returns immediately if queue is full.
     pub const NOWAIT: Self = Self(1 << 6);
 
     #[inline(always)]
@@ -249,25 +249,25 @@ impl MsgFlags {
         Self(self.0 & !flag.0)
     }
 
-    /// Retourne la valeur brute du bitmask (compatibilité bitflags).
+    /// Returns the raw bitmask value (bitflags compatibility).
     #[inline(always)]
     pub fn bits(self) -> u32 {
         self.0
     }
 
-    /// Construit depuis une valeur brute en tronquant les bits inconnus.
+    /// Constructs from a raw value by truncating unknown bits.
     #[inline(always)]
     pub fn from_bits_truncate(v: u32) -> Self {
         Self(v & 0x7F)
     }
 
-    /// Positionne un flag en place (compatibilité bitflags `.insert()`).
+    /// Sets a flag in place (bitflags `.insert()` compatibility).
     #[inline(always)]
     pub fn insert(&mut self, flag: Self) {
         self.0 |= flag.0;
     }
 
-    /// Retire un flag en place.
+    /// Clears a flag in place.
     #[inline(always)]
     pub fn remove(&mut self, flag: Self) {
         self.0 &= !flag.0;
@@ -287,74 +287,74 @@ impl From<MessageFlags> for MsgFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Résultats et erreurs IPC
+// IPC results and errors
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs IPC — exhaustive, pas de _ catch-all.
+/// IPC errors — exhaustive, no _ catch-all.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum IpcError {
-    /// Opération non bloquante sur une file pleine.
+    /// Non-blocking operation on a full queue.
     WouldBlock = 1,
-    /// Endpoint introuvable dans le registre.
+    /// Endpoint not found in registry.
     EndpointNotFound = 2,
-    /// Canal fermé par l'autre extrémité.
+    /// Channel closed by peer.
     ChannelClosed = 3,
-    /// Permission refusée par le système de capabilities.
+    /// Permission denied by capability system.
     PermissionDenied = 4,
-    /// Message trop grand (dépasse MAX_MSG_SIZE).
+    /// Message too large (exceeds MAX_MSG_SIZE).
     MessageTooLarge = 5,
-    /// Timeout expiré.
+    /// Timeout expired.
     Timeout = 6,
-    /// Ressource IPC épuisée (pool SHM, CapToken, etc.).
+    /// IPC resource exhausted (SHM pool, CapToken, etc.).
     ResourceExhausted = 7,
-    /// Connexion refusée (endpoint non en écoute).
+    /// Connection refused (endpoint not listening).
     ConnRefused = 8,
-    /// Déjà connecté.
+    /// Already connected.
     AlreadyConnected = 9,
-    /// Paramètre non valide.
+    /// Invalid parameter.
     InvalidParam = 10,
-    /// Échec handshake (version, magic mismatch).
+    /// Handshake failed (version, magic mismatch).
     HandshakeFailed = 11,
-    /// Opération interrompue par un signal.
+    /// Operation interrupted by signal.
     Interrupted = 12,
-    /// Erreur interne inattendue du kernel.
+    /// Unexpected kernel internal error.
     InternalError = 13,
-    /// Pool SHM saturé.
+    /// SHM pool saturated.
     ShmPoolFull = 14,
-    /// Séquence hors ordre.
+    /// Out-of-order sequence.
     OutOfOrder = 15,
-    /// Handle IPC invalide ou expiré.
+    /// Invalid or expired IPC handle.
     InvalidHandle = 16,
-    /// Canal / connexion fermé(e) — alias expressif pour ChannelClosed.
+    /// Channel / connection closed — expressive alias for ChannelClosed.
     Closed = 17,
-    /// Erreur interne kernel — alias expressif pour InternalError.
+    /// Kernel internal error — expressive alias for InternalError.
     Internal = 18,
-    /// Argument / données invalide(s) — alias expressif pour InvalidParam.
+    /// Invalid argument / data — expressive alias for InvalidParam.
     Invalid = 19,
-    /// File/ring pleine.
+    /// Queue/ring full.
     Full = 20,
-    /// Boucle de routage détectée.
+    /// Routing loop detected.
     Loop = 21,
-    /// Ressource introuvable.
+    /// Resource not found.
     NotFound = 22,
-    /// Endpoint nul (EndpointId 0) passé à une opération.
+    /// Null endpoint (EndpointId 0) passed to an operation.
     NullEndpoint = 23,
-    /// Endpoint invalide (corrompu, désalloué, mauvais type).
+    /// Invalid endpoint (corrupted, deallocated, wrong type).
     InvalidEndpoint = 24,
-    /// Opération à réessayer (backoff exponentiel).
+    /// Operation to retry (exponential backoff).
     Retry = 25,
-    /// Argument invalide — alias pour InvalidParam avec sémantique plus forte.
+    /// Invalid argument — alias for InvalidParam with stronger semantics.
     InvalidArgument = 26,
-    /// Ressources IPC épuisées (table pleine, pool vide, etc.).
+    /// IPC resources exhausted (full table, empty pool, etc.).
     OutOfResources = 27,
-    /// File/ring pleine lors d'un push (non bloquant).
+    /// Queue/ring full on push (non-blocking).
     QueueFull = 28,
-    /// File/ring vide lors d'un pop (non bloquant).
+    /// Queue/ring empty on pop (non-blocking).
     QueueEmpty = 29,
-    /// Erreur de protocole (magic/version mismatch, séquence invalide).
+    /// Protocol error (magic/version mismatch, invalid sequence).
     ProtocolError = 30,
-    /// Échec de mapping mémoire IPC (SHM, zero-copy page fault).
+    /// IPC memory mapping failed (SHM, zero-copy page fault).
     MappingFailed = 31,
 }
 
@@ -397,7 +397,7 @@ impl fmt::Display for IpcError {
 }
 
 impl IpcError {
-    /// Normalise les alias expressifs vers les variantes canoniques.
+    /// Normalizes expressive aliases to canonical variants.
     #[inline]
     pub const fn normalize(self) -> Self {
         match self {
@@ -411,13 +411,13 @@ impl IpcError {
         }
     }
 
-    /// Vrai pour toutes les variantes signifiant fermeture de canal/endpoint.
+    /// True for all variants meaning channel/endpoint closure.
     #[inline]
     pub const fn is_closed(self) -> bool {
         matches!(self.normalize(), Self::ChannelClosed)
     }
 
-    /// Vrai pour les variantes de file pleine / opération non bloquante.
+    /// True for full-queue / non-blocking operation variants.
     #[inline]
     pub const fn is_queue_full(self) -> bool {
         matches!(self.normalize(), Self::WouldBlock)
@@ -425,34 +425,34 @@ impl IpcError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MessageFlags — drapeaux bitmask pour les messages dans message/
+// MessageFlags — bitmask flags for messages in message/
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux de message IPC (utilisés par message/builder.rs, serializer.rs, etc.)
-/// Représenté sur 16 bits pour tenir dans MsgFrameHeader.
+/// IPC message flags (used by message/builder.rs, serializer.rs, etc.)
+/// Represented on 16 bits to fit in MsgFrameHeader.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 #[repr(transparent)]
 pub struct MessageFlags(pub u16);
 
 impl MessageFlags {
-    /// Aucun flag positionné.
+    /// No flag set.
     pub const NONE: Self = Self(0);
-    /// Message temps-réel.
+    /// Real-time message.
     pub const RT: Self = Self(1 << 0);
-    /// Message de réponse.
+    /// Reply message.
     pub const REPLY: Self = Self(1 << 1);
     /// Zero-copy.
     pub const ZEROCOPY: Self = Self(1 << 2);
     /// Broadcast.
     pub const BROADCAST: Self = Self(1 << 3);
-    /// Erreur.
+    /// Error.
     pub const ERROR: Self = Self(1 << 4);
-    /// Synchrone.
+    /// Synchronous.
     pub const SYNC: Self = Self(1 << 5);
-    /// Non bloquant.
+    /// Non-blocking.
     pub const NOWAIT: Self = Self(1 << 6);
 
-    /// Retourne la valeur brute.
+    /// Returns raw value.
     #[inline(always)]
     pub const fn empty() -> Self {
         Self::NONE
@@ -463,7 +463,7 @@ impl MessageFlags {
         self.0
     }
 
-    /// Construit depuis une valeur brute en tronquant les bits inconnus.
+    /// Constructs from raw value by truncating unknown bits.
     #[inline(always)]
     pub fn from_bits_truncate(v: u16) -> Self {
         Self(v & 0x7F)
@@ -488,27 +488,27 @@ impl From<MsgFlags> for MessageFlags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MessageType — type sémantique d'un message
+// MessageType — semantic message type
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type sémantique d'un message IPC.
+/// Semantic type of an IPC message.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 #[repr(u8)]
 pub enum MessageType {
     #[default]
-    /// Message de données brutes.
+    /// Raw data message.
     Data = 0,
-    /// Message de contrôle du canal.
+    /// Channel control message.
     Control = 1,
-    /// Notification de signal.
+    /// Signal notification.
     Signal = 2,
-    /// Réponse RPC.
+    /// RPC reply.
     RpcReply = 3,
 }
 
 impl MessageType {
-    /// Crée un MessageType depuis un octet brut.
-    /// Valeurs inconnues → `Data` (politique dégradée, pas de panique).
+    /// Creates a MessageType from a raw byte.
+    /// Unknown values -> `Data` (degraded policy, no panic).
     #[inline(always)]
     pub fn from_u8(v: u8) -> Self {
         match v {
@@ -520,7 +520,7 @@ impl MessageType {
         }
     }
 
-    /// Retourne la valeur brute.
+    /// Returns the raw value.
     #[inline(always)]
     pub fn as_u8(self) -> u8 {
         self as u8
@@ -528,20 +528,20 @@ impl MessageType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IpcCapError — variante IPC de CapError (v6 — accès via security::access_control)
+// IpcCapError — IPC variant of CapError (v6 — access via security::access_control)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreur de capability spécifique à IPC.
+/// IPC-specific capability error.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u32)]
 pub enum IpcCapError {
-    /// Token révoqué ou génération incorrecte.
+    /// Revoked token or incorrect generation.
     Revoked = 1,
-    /// Objet capability introuvable.
+    /// Capability object not found.
     ObjectNotFound = 2,
-    /// Droits insuffisants pour cette opération.
+    /// Insufficient rights for this operation.
     InsufficientRights = 3,
-    /// Délégation interdite (flag DELEGATE absent).
+    /// Delegation denied (DELEGATE flag missing).
     DelegationDenied = 4,
 }
 
@@ -557,32 +557,32 @@ impl From<IpcCapError> for IpcError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Spectre v1 mitigation — array_index_nospec (RÈGLE IPC-08)
+// Spectre v1 mitigation — array_index_nospec (RULE IPC-08)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mitige Spectre v1 lors des accès aux buffers indexés.
+/// Mitigates Spectre v1 during indexed buffer accesses.
 ///
-/// Retourne `index` si `index < size`, 0 sinon — en utilisant un masque
-/// calculé sans branchement sur le bit de signe du résultat `index - size`.
+/// Returns `index` if `index < size`, 0 otherwise — using a mask
+/// computed without branching on the sign bit of `index - size`.
 ///
-/// Le CPU ne peut pas spéculer au-delà des bornes du buffer car le masque
-/// force l'index hors-bornes à 0 avant l'accès mémoire.
+/// The CPU cannot speculate beyond buffer bounds because the mask
+/// forces out-of-bounds index to 0 before memory access.
 ///
-/// UTILISATION OBLIGATOIRE (IPC-08) sur tout accès de type :
+/// MANDATORY USAGE (IPC-08) on any access of the form:
 ///   `buffer[unsafe_index_from_user_or_ring]`
 ///
-/// # Exemple
+/// # Example
 /// ```no_run
 /// let safe_idx = array_index_nospec(user_idx, RING_SIZE);
 /// let cell = &buffer[safe_idx];
 /// ```
 #[inline(always)]
 pub fn array_index_nospec(index: usize, size: usize) -> usize {
-    // Technique Linux kernel : arithmetic right-shift du signe de (index - size).
-    // Si index < size  : index.wrapping_sub(size) → valeur négative (signed) → MSB=1
-    //                    → shift donne 0xFFFF...FF → mask est all-ones → index inchangé.
-    // Si index >= size : index.wrapping_sub(size) → ≥ 0 (signed) → MSB=0
-    //                    → shift donne 0x0000...00 → mask est all-zeros → résultat = 0.
+    // Linux kernel technique: arithmetic right-shift of sign of (index - size).
+    // If index < size  : index.wrapping_sub(size) -> negative value (signed) -> MSB=1
+    //                    -> shift yields 0xFFFF...FF -> mask is all-ones -> index unchanged.
+    // If index >= size : index.wrapping_sub(size) -> >= 0 (signed) -> MSB=0
+    //                    -> shift yields 0x0000...00 -> mask is all-zeros -> result = 0.
     let mask = (index.wrapping_sub(size) as isize >> (isize::BITS - 1)) as usize;
     index & mask
 }

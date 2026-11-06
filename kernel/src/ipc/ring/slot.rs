@@ -1,18 +1,18 @@
 // kernel/src/ipc/ring/slot.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// SLOT MANAGEMENT — gestion des slots dans les rings IPC
-// (Exo-OS · IPC Couche 2a)
+// SLOT MANAGEMENT — slot management in IPC rings
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Un slot est l'unité atomique de communication dans un ring.
-// Chaque slot possède un état (Sequence State) qui contrôle qui peut
-// lire ou écrire dedans, sans lock.
+// A slot is the atomic communication unit within a ring.
+// Each slot has a state (Sequence State) controlling who can
+// read or write into it, without locks.
 //
-// TECHNIQUE : Sequence-based ring (Dmitry Vyukov MPMC Queue).
-// L'état d'un slot est encodé dans un AtomicU64 qui contient le numéro
-// de séquence du slot. Le producteur attend seq == pos, le consommateur
-// attend seq == pos + 1.
+// TECHNIQUE: Sequence-based ring (Dmitry Vyukov MPMC Queue).
+// A slot's state is encoded in an AtomicU64 containing the slot's
+// sequence number. The producer waits for seq == pos, the consumer
+// waits for seq == pos + 1.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use crate::ipc::core::constants::RING_SIZE;
@@ -23,31 +23,31 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SlotCell — cellule atomique d'un ring
+// SlotCell — atomic cell of a ring
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Une cellule du ring : numéro de séquence + données.
-/// Le numéro de séquence encode l'état de la cellule :
-///   - seq == index          → libre (prêt pour un producteur)
-///   - seq == index + 1      → données disponibles (prêt pour un consommateur)
-///   - autre                 → en cours d'écriture ou de lecture
+/// A ring cell: sequence number + data.
+/// The sequence number encodes the cell state:
+///   - seq == index          -> free (ready for producer)
+///   - seq == index + 1      -> data available (ready for consumer)
+///   - other                 -> write or read in progress
 #[repr(C, align(64))]
 pub struct SlotCell {
-    /// Numéro de séquence atomique — détermine qui peut accéder au slot.
+    /// Atomic sequence number — determines who can access the slot.
     pub sequence: AtomicU64,
-    /// Données inlinées dans le slot.
+    /// Inlined data in the slot.
     pub slot: UnsafeCell<MaybeUninit<RingSlot>>,
-    /// Padding pour éviter la false sharing (compléter à 64 bytes minimum).
+    /// Padding to avoid false sharing (fills to 64 bytes minimum).
     _pad: [u8; 0],
 }
 
-// SAFETY: SlotCell est accédée uniquement via les atomics et les accords
-// de séquence. L'UnsafeCell est protégée par le protocole séquentiel.
+// SAFETY: SlotCell is accessed only via atomics and sequence agreements.
+// UnsafeCell is protected by the sequential protocol.
 unsafe impl Send for SlotCell {}
 unsafe impl Sync for SlotCell {}
 
 impl SlotCell {
-    /// Initialise une cellule avec son index (séquence initiale = index).
+    /// Initializes a cell with its index (initial sequence = index).
     pub const fn new_at(index: u64) -> Self {
         Self {
             sequence: AtomicU64::new(index),
@@ -56,32 +56,32 @@ impl SlotCell {
         }
     }
 
-    /// Charge le numéro de séquence (Acquire).
+    /// Loads sequence number (Acquire).
     #[inline(always)]
     pub fn load_seq(&self) -> u64 {
         self.sequence.load(Ordering::Acquire)
     }
 
-    /// Stocke le numéro de séquence (Release).
+    /// Stores sequence number (Release).
     #[inline(always)]
     pub fn store_seq(&self, seq: u64) {
         self.sequence.store(seq, Ordering::Release)
     }
 
-    /// Accède au slot de données de manière exclusive (précondition : séquence acquise).
+    /// Accesses data slot exclusively (precondition: sequence acquired).
     ///
     /// # Safety
-    /// L'appelant doit posséder l'accès exclusif au slot via le protocole de séquence.
+    /// Caller must hold exclusive access to slot via sequence protocol.
     #[inline(always)]
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut MaybeUninit<RingSlot> {
         &mut *self.slot.get()
     }
 
-    /// Accède au slot de données en lecture (précondition : séquence acquise).
+    /// Accesses data slot for reading (precondition: sequence acquired).
     ///
     /// # Safety
-    /// L'appelant doit posséder l'accès en lecture via le protocole de séquence.
+    /// Caller must hold read access via sequence protocol.
     #[inline(always)]
     pub unsafe fn data_ref(&self) -> &MaybeUninit<RingSlot> {
         &*self.slot.get()
@@ -89,32 +89,32 @@ impl SlotCell {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RingBuffer — tableau statique de RING_SIZE SlotCells
+// RingBuffer — static array of RING_SIZE SlotCells
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Buffer ring de taille fixe RING_SIZE.
-/// Alloué statiquement ou embarqué dans une structure plus grande.
+/// Fixed-size ring buffer of RING_SIZE.
+/// Statically allocated or embedded in a larger structure.
 ///
-/// NOTE : taille totale ≈ RING_SIZE × sizeof(SlotCell)
-///       = 4096 × 4112 bytes ≈ 16 MiB par ring.
-/// En pratique, les rings sont créés dynamiquement depuis le pool SHM
-/// plutôt qu'alloués statiquement tous. Un seul ring static = ring système.
+/// NOTE: total size ≈ RING_SIZE x sizeof(SlotCell)
+///       = 4096 x 4112 bytes ≈ 16 MiB per ring.
+/// In practice, rings are created dynamically from the SHM pool
+/// rather than all statically allocated. A single static ring = system ring.
 pub struct RingBuffer {
     cells: [SlotCell; RING_SIZE],
 }
 
 impl RingBuffer {
-    /// Initialise un ring buffer (séquences = index pour chaque cellule).
+    /// Initializes a ring buffer (sequences = index for each cell).
     pub fn init(&mut self) {
         for (i, cell) in self.cells.iter().enumerate() {
             cell.sequence.store(i as u64, Ordering::Relaxed);
         }
-        // Barrière finale pour que tous les stores soient visibles.
+        // Final barrier so that all stores become visible.
         core::sync::atomic::fence(Ordering::Release);
     }
 
-    /// Accède à la cellule à l'index `pos % RING_SIZE`.
-    /// Utilise array_index_nospec (RÈGLE IPC-08 — Spectre v1).
+    /// Accesses cell at index `pos % RING_SIZE`.
+    /// Uses array_index_nospec (RULE IPC-08 — Spectre v1).
     #[inline(always)]
     pub fn cell_at(&self, pos: u64) -> &SlotCell {
         let idx = array_index_nospec((pos as usize) & (RING_SIZE - 1), RING_SIZE);
@@ -123,22 +123,22 @@ impl RingBuffer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SlotGuard — RAII pour la libération automatique des slots
+// SlotGuard — RAII for automatic slot release
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Garde RAII sur un slot ring.
-/// Au Drop, avance la séquence pour signaler la fin de la lecture/écriture.
+/// RAII guard on a ring slot.
+/// On Drop, advances sequence to signal end of read/write.
 pub struct SlotWriteGuard<'a> {
     cell: &'a SlotCell,
-    /// Séquence à écrire au Drop (= pos + 1 pour signaler "données disponibles").
+    /// Sequence to write on Drop (= pos + 1 to signal "data available").
     commit_seq: u64,
-    /// Abort au lieu de commit si Drop est appelé sans commit().
+    /// Abort instead of commit if Drop is called without commit().
     aborted: bool,
 }
 
 impl<'a> SlotWriteGuard<'a> {
-    /// Crée une garde d'écriture.
-    /// `commit_seq` est pos + 1 pour un ring standard.
+    /// Creates a write guard.
+    /// `commit_seq` is pos + 1 for a standard ring.
     pub fn new(cell: &'a SlotCell, commit_seq: u64) -> Self {
         Self {
             cell,
@@ -147,26 +147,26 @@ impl<'a> SlotWriteGuard<'a> {
         }
     }
 
-    /// Accède aux données du slot pour écriture.
+    /// Accesses slot data for writing.
     ///
     /// # Safety
-    /// L'appelant est le seul producteur actif sur ce slot.
+    /// Caller is the sole active producer on this slot.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn data_mut(&self) -> &mut MaybeUninit<RingSlot> {
         self.cell.data_mut()
     }
 
-    /// Confirme l'écriture.
+    /// Commits the write.
     pub fn commit(mut self) {
         self.aborted = false;
         self.cell.store_seq(self.commit_seq);
-        core::mem::forget(self); // évite le Drop
+        core::mem::forget(self); // avoids Drop
     }
 
-    /// Annule l'écriture (restaure seq = commit_seq - 1).
+    /// Aborts write (restores seq = commit_seq - 1).
     pub fn abort(mut self) {
         self.aborted = true;
-        // Restaurer la séquence d'origine = pos (commit_seq - 1).
+        // Restore original sequence = pos (commit_seq - 1).
         self.cell.store_seq(self.commit_seq.wrapping_sub(1));
         core::mem::forget(self);
     }
@@ -174,9 +174,9 @@ impl<'a> SlotWriteGuard<'a> {
 
 impl<'a> Drop for SlotWriteGuard<'a> {
     fn drop(&mut self) {
-        // Si ni commit ni abort n'ont été appelés, c'est un bug — paniquer en debug.
+        // If neither commit nor abort was called, it's a bug — panic in debug.
         if !self.aborted {
-            // Restaurer pour éviter la corruption du ring.
+            // Restore to prevent ring corruption.
             self.cell.store_seq(self.commit_seq.wrapping_sub(1));
             debug_assert!(
                 false,
@@ -186,10 +186,10 @@ impl<'a> Drop for SlotWriteGuard<'a> {
     }
 }
 
-/// Garde RAII sur un slot ring en lecture.
+/// RAII guard on a ring slot in read mode.
 pub struct SlotReadGuard<'a> {
     cell: &'a SlotCell,
-    /// Séquence à écrire au Drop (= pos + RING_SIZE pour réutiliser le slot).
+    /// Sequence to write on Drop (= pos + RING_SIZE to reuse slot).
     release_seq: u64,
     released: bool,
 }
@@ -203,15 +203,15 @@ impl<'a> SlotReadGuard<'a> {
         }
     }
 
-    /// Accède aux données du slot en lecture.
+    /// Accesses slot data in read mode.
     ///
     /// # Safety
-    /// L'appelant est le seul consommateur actif sur ce slot.
+    /// Caller is the sole active consumer on this slot.
     pub unsafe fn data_ref(&self) -> &MaybeUninit<RingSlot> {
         self.cell.data_ref()
     }
 
-    /// Libère le slot (le réinjecte dans le ring pour le producteur suivant).
+    /// Releases slot (returns it to ring for next producer).
     pub fn release(mut self) {
         self.released = true;
         self.cell.store_seq(self.release_seq);

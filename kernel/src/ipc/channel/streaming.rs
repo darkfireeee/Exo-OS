@@ -1,18 +1,18 @@
-// ipc/channel/streaming.rs — Canal de streaming continu pour Exo-OS
+// ipc/channel/streaming.rs — Continuous streaming channel for Exo-OS
 //
-// Conçu pour les transferts de grandes quantités de données (flux vidéo, audio,
-// DMA buffers). Utilise le ZeroCopyRing pour partager des pages physiques entre
-// producteur et consommateur sans aucune copie.
+// Designed for transfers of large amounts of data (video/audio streams,
+// DMA buffers). Uses ZeroCopyRing to share physical pages between
+// producer and consumer with zero copies.
 //
-// Architecture :
-//   - ZeroCopyRing interne (512 slots de ZeroCopyRef)
-//   - Chaque ZeroCopyRef référence une page physique pré-allouée
-//   - Producteur : prend un buffer libre, remplit, envoie via push()
-//   - Consommateur : reçoit via pop(), consomme, libère via release()
-//   - Flow control : le producteur ne peut pas outrepasser le consommateur
-//     (ring plein = backpressure, pas de drop)
+// Architecture:
+//   - Internal ZeroCopyRing (512 slots of ZeroCopyRef)
+//   - Each ZeroCopyRef references a pre-allocated physical page
+//   - Producer: acquires a free buffer, fills it, sends via push()
+//   - Consumer: receives via pop(), consumes, releases via release()
+//   - Flow control: producer cannot overtake consumer
+//     (full ring = backpressure, no drops)
 //
-// Granularité : configurable de 4 Ko (PAGE_SIZE) à 2 Mo (HUGE_PAGE)
+// Granularity: configurable from 4 KiB (PAGE_SIZE) to 2 MiB (HUGE_PAGE)
 
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -24,16 +24,16 @@ use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ---------------------------------------------------------------------------
-// Granularité des buffers streaming
+// Streaming buffer granularity
 // ---------------------------------------------------------------------------
 
-/// Taille granule d'un buffer streaming (octets)
+/// Granule size of a streaming buffer (bytes)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum StreamGranule {
-    /// 4 KiB — page standard
+    /// 4 KiB — standard page
     Page4K = 4096,
-    /// 16 KiB — 4 pages consécutives
+    /// 16 KiB — 4 consecutive pages
     Page16K = 16384,
     /// 64 KiB
     Page64K = 65536,
@@ -50,28 +50,28 @@ impl StreamGranule {
 }
 
 // ---------------------------------------------------------------------------
-// Pool de buffers streaming pré-alloués
+// Pre-allocated streaming buffer pool
 // ---------------------------------------------------------------------------
 
-/// Nombre maximal de buffers dans le pool d'un canal streaming
+/// Maximum number of buffers in the pool of a streaming channel
 pub const STREAM_POOL_SIZE: usize = SHM_POOL_PAGES; // 256
 
-/// Structure d'un buffer streaming en pool.
-/// Les buffers ne sont pas vraiment alloués ici (noyau no_std sans allocateur
-/// général) — on simule des adresses physiques monotones croissantes.
-/// La mémoire physique réelle est supposée réservée par le memory manager.
+/// Structure of an in-pool streaming buffer.
+/// Buffers are not genuinely allocated here (no_std kernel without general
+/// allocator) — monotonic increasing physical addresses are simulated.
+/// Actual physical memory is assumed to be reserved by the memory manager.
 #[repr(C, align(64))]
 pub struct StreamBuffer {
-    /// Référence zero-copy vers la page physique
+    /// Zero-copy reference to physical page
     pub zc: ZeroCopyBuffer,
-    /// Taille utile actuelle (remplie par le producteur)
+    /// Current useful size (filled by producer)
     pub data_len: AtomicUsize,
-    /// Buffer disponible dans le pool (non acquis)
+    /// Buffer available in pool (not acquired)
     pub available: AtomicU32,
     _pad: [u8; 28],
 }
 
-// SAFETY: ZeroCopyBuffer est Sync via refcount atomique
+// SAFETY: ZeroCopyBuffer is Sync via atomic refcount
 unsafe impl Sync for StreamBuffer {}
 unsafe impl Send for StreamBuffer {}
 
@@ -80,26 +80,26 @@ impl StreamBuffer {
         Self {
             zc: ZeroCopyBuffer::new_uninit(),
             data_len: AtomicUsize::new(0),
-            available: AtomicU32::new(1), // disponible dès la création
+            available: AtomicU32::new(1), // available upon creation
             _pad: [0u8; 28],
         }
     }
 
-    /// Initialise le buffer avec une adresse physique simulée.
+    /// Initializes buffer with simulated physical address.
     pub fn init(&mut self, phys_addr: u64, capacity: usize) {
         self.zc = ZeroCopyBuffer::init(phys_addr, capacity as u32, 0);
         self.available.store(1, Ordering::Release);
     }
 
-    /// Acquiert le buffer pour le producteur.
-    /// Retourne `true` si acquis, `false` si déjà en usage.
+    /// Acquires buffer for producer.
+    /// Returns `true` if acquired, `false` if already in use.
     pub fn acquire(&self) -> bool {
         self.available
             .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
 
-    /// Libère le buffer après consommation.
+    /// Releases buffer after consumption.
     pub fn release(&self) {
         self.data_len.store(0, Ordering::Relaxed);
         self.available.store(1, Ordering::Release);
@@ -111,10 +111,10 @@ impl StreamBuffer {
 }
 
 // ---------------------------------------------------------------------------
-// Pool de buffers du canal streaming
+// Streaming channel buffer pool
 // ---------------------------------------------------------------------------
 
-/// Pool statique de buffers streaming
+/// Static streaming buffer pool
 #[repr(C, align(64))]
 pub struct StreamPool {
     buffers: [StreamBuffer; STREAM_POOL_SIZE],
@@ -122,7 +122,7 @@ pub struct StreamPool {
     base_phys: AtomicU64,
 }
 
-// SAFETY: accès protégé par les atomiques de StreamBuffer
+// SAFETY: access protected by StreamBuffer atomics
 unsafe impl Sync for StreamPool {}
 unsafe impl Send for StreamPool {}
 
@@ -135,8 +135,8 @@ impl StreamPool {
         }
     }
 
-    /// Initialise le pool avec une adresse physique de base.
-    /// Chaque buffer occupe `granule` octets d'espace physique contigu.
+    /// Initializes pool with base physical address.
+    /// Each buffer occupies `granule` bytes of contiguous physical space.
     pub fn init(&mut self, base_phys: u64, granule: StreamGranule, count: usize) {
         let count = count.min(STREAM_POOL_SIZE);
         let granule_bytes = granule.bytes();
@@ -150,12 +150,12 @@ impl StreamPool {
         self.total = count;
     }
 
-    /// Alloue un buffer libre. Retourne son index ou `None`.
+    /// Allocates a free buffer. Returns its index or `None`.
     pub fn alloc_buffer(&self) -> Option<usize> {
         (0..self.total).find(|&i| self.buffers[i].acquire())
     }
 
-    /// Libère le buffer à l'index `idx`.
+    /// Releases buffer at index `idx`.
     pub fn free_buffer(&self, idx: usize) -> bool {
         if idx < self.total {
             self.buffers[idx].release();
@@ -165,11 +165,11 @@ impl StreamPool {
         }
     }
 
-    /// Retourne un ZeroCopyRef vers le buffer `idx`.
+    /// Returns a ZeroCopyRef to buffer `idx`.
     pub fn make_ref(&self, idx: usize, data_len: usize) -> Option<ZeroCopyRef> {
         if idx < self.total {
             let buf = &self.buffers[idx];
-            // Vérifier que le buffer a bien été acquis et que data_len ne dépasse pas la capacité
+            // Check that buffer was acquired and data_len does not exceed capacity
             if buf.is_available() || data_len > buf.zc.capacity as usize {
                 return None;
             }
@@ -192,7 +192,7 @@ impl StreamPool {
 }
 
 // ---------------------------------------------------------------------------
-// Statistiques du canal streaming
+// Streaming channel statistics
 // ---------------------------------------------------------------------------
 
 #[repr(C, align(64))]
@@ -250,29 +250,29 @@ pub struct StreamStatsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// StreamChannel — structure principale
+// StreamChannel — main structure
 // ---------------------------------------------------------------------------
 
-/// Canal de streaming zero-copy basé sur ZeroCopyRing + pool de buffers.
+/// Zero-copy streaming channel based on ZeroCopyRing + buffer pool.
 #[repr(C, align(64))]
 pub struct StreamChannel {
     pub id: ChannelId,
-    /// Anneau zero-copy pour les transferts
+    /// Zero-copy ring for transfers
     ring: ZeroCopyRing,
-    /// Pool de buffers physiques
+    /// Physical buffer pool
     pool: StreamPool,
-    /// Statistiques locales
+    /// Local statistics
     pub stats: StreamStats,
-    /// Canal fermé
+    /// Closed channel
     closed: AtomicU32,
-    /// Granule configurée
+    /// Configured granule
     granule: AtomicU32,
-    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    /// In-flight operations counter (anti-UAF on destroy)
     pub active_ops: AtomicU32,
     _pad: [u8; 20],
 }
 
-// SAFETY: ZeroCopyRing est Sync, StreamPool est Sync
+// SAFETY: ZeroCopyRing is Sync, StreamPool is Sync
 unsafe impl Sync for StreamChannel {}
 unsafe impl Send for StreamChannel {}
 
@@ -290,7 +290,7 @@ impl StreamChannel {
         }
     }
 
-    /// Initialise le canal avec une base physique et une granularité.
+    /// Initializes channel with physical base and granularity.
     pub fn init(&mut self, base_phys: u64, granule: StreamGranule, buffer_count: usize) {
         self.id = alloc_channel_id();
         self.pool.init(base_phys, granule, buffer_count);
@@ -306,11 +306,11 @@ impl StreamChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Côté producteur
+    // Producer side
     // -----------------------------------------------------------------------
 
-    /// Alloue un buffer depuis le pool pour le producteur.
-    /// Retourne l'index du buffer alloué.
+    /// Allocates a buffer from pool for producer.
+    /// Returns allocated buffer index.
     pub fn alloc_buffer(&self) -> Result<usize, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -320,7 +320,7 @@ impl StreamChannel {
         Ok(idx)
     }
 
-    /// Envoie le buffer `buf_idx` (rempli avec `data_len` octets utiles).
+    /// Sends buffer `buf_idx` (filled with `data_len` useful bytes).
     pub fn push(&self, buf_idx: usize, data_len: usize) -> Result<MessageId, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -342,7 +342,7 @@ impl StreamChannel {
                 Ok(mid)
             }
             Err(_) => {
-                // Backpressure : ring plein, libérer le buffer
+                // Backpressure: full ring, release buffer
                 self.pool.free_buffer(buf_idx);
                 self.stats.pushes_full.fetch_add(1, Ordering::Relaxed);
                 self.stats
@@ -354,11 +354,11 @@ impl StreamChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Côté consommateur
+    // Consumer side
     // -----------------------------------------------------------------------
 
-    /// Reçoit le prochain ZeroCopyRef depuis le ring.
-    /// Le consommateur doit appeler `release_buffer()` après traitement.
+    /// Receives next ZeroCopyRef from ring.
+    /// Consumer must call `release_buffer()` after processing.
     pub fn pop(&self) -> Result<ZeroCopyRef, IpcError> {
         if self.is_closed() && self.ring.is_empty() {
             return Err(IpcError::Closed);
@@ -377,7 +377,7 @@ impl StreamChannel {
         }
     }
 
-    /// Libère un buffer identifié par son pool_idx après consommation.
+    /// Releases buffer identified by its pool_idx after consumption.
     pub fn release_buffer(&self, pool_idx: usize) -> bool {
         let freed = self.pool.free_buffer(pool_idx);
         if freed {
@@ -387,7 +387,7 @@ impl StreamChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Utilitaires
+    // Utilities
     // -----------------------------------------------------------------------
 
     pub fn pool_available(&self) -> usize {
@@ -404,7 +404,7 @@ impl StreamChannel {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de canaux streaming
+// Global static streaming channel table
 // ---------------------------------------------------------------------------
 
 pub const STREAM_CHANNEL_TABLE_SIZE: usize = 64;
@@ -415,12 +415,12 @@ struct StreamChannelTable {
     count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock
+// SAFETY: access protected by SpinLock
 unsafe impl Send for StreamChannelTable {}
 
 impl StreamChannelTable {
     const fn new() -> Self {
-        // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
+        // SAFETY: mem::zeroed() avoids const-eval memory limits for large arrays.
         unsafe { core::mem::zeroed() }
     }
 
@@ -445,7 +445,7 @@ impl StreamChannelTable {
 
     fn free(&mut self, idx: usize) -> bool {
         if idx < STREAM_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit que slots[idx] est initialisé; used → false empêche double-drop.
+            // SAFETY: used[idx] guarantees slots[idx] is initialized; used -> false prevents double-drop.
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -468,11 +468,11 @@ static STREAM_CHANNEL_TABLE: SpinLock<StreamChannelTable> =
     SpinLock::new(StreamChannelTable::new());
 
 // ---------------------------------------------------------------------------
-// API publique de haut niveau
+// High-level public API
 // ---------------------------------------------------------------------------
 
-/// Crée un canal streaming avec `buffer_count` buffers de taille `granule`.
-/// `base_phys` = adresse physique de base de la région mémoire pré-allouée.
+/// Creates a streaming channel with `buffer_count` buffers of size `granule`.
+/// `base_phys` = base physical address of pre-allocated memory region.
 pub fn stream_channel_create(
     base_phys: u64,
     granule: StreamGranule,
@@ -483,7 +483,7 @@ pub fn stream_channel_create(
         .ok_or(IpcError::OutOfResources)
 }
 
-/// Alloue un buffer producteur sur le canal `idx`.
+/// Allocates a producer buffer on channel `idx`.
 pub fn stream_alloc_buffer(idx: usize) -> Result<usize, IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -495,7 +495,7 @@ pub fn stream_alloc_buffer(idx: usize) -> Result<usize, IpcError> {
     res
 }
 
-/// Envoie le buffer `buf_idx` (avec `data_len` octets utiles) sur le canal `idx`.
+/// Sends buffer `buf_idx` (with `data_len` useful bytes) on channel `idx`.
 pub fn stream_push(idx: usize, buf_idx: usize, data_len: usize) -> Result<MessageId, IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -507,7 +507,7 @@ pub fn stream_push(idx: usize, buf_idx: usize, data_len: usize) -> Result<Messag
     res
 }
 
-/// Reçoit le prochain ZeroCopyRef du canal `idx`.
+/// Receives next ZeroCopyRef from channel `idx`.
 pub fn stream_pop(idx: usize) -> Result<ZeroCopyRef, IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -519,7 +519,7 @@ pub fn stream_pop(idx: usize) -> Result<ZeroCopyRef, IpcError> {
     res
 }
 
-/// Libère le buffer `pool_idx` après consommation sur le canal `idx`.
+/// Releases buffer `pool_idx` after consumption on channel `idx`.
 pub fn stream_release_buffer(idx: usize, pool_idx: usize) -> Result<(), IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -535,7 +535,7 @@ pub fn stream_release_buffer(idx: usize, pool_idx: usize) -> Result<(), IpcError
     }
 }
 
-/// Ferme et détruit le canal streaming `idx`.
+/// Closes and destroys streaming channel `idx`.
 pub fn stream_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = STREAM_CHANNEL_TABLE.lock();
     let chan = unsafe { tbl.get(idx) }.ok_or(IpcError::InvalidHandle)?;

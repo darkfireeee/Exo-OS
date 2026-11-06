@@ -1,52 +1,52 @@
 // kernel/src/ipc/core/sequence.rs
 //
 // ═══════════════════════════════════════════════════════════════════════════════
-// NUMÉROS DE SÉQUENCE — Ordering garantis pour IPC
-// (Exo-OS · IPC Couche 2a)
+// SEQUENCE NUMBERS — Guaranteed ordering for IPC
+// (Exo-OS · IPC Layer 2a)
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Ce module garantit l'ordre causal des messages dans un canal IPC.
-// Chaque canal maintient un compteur de séquence (u64) côté émetteur.
-// Le récepteur valide l'ordre et détecte les pertes/doublons via une
-// fenêtre glissante (sliding window bitmask).
+// This module guarantees causal ordering of messages in an IPC channel.
+// Each channel maintains a sequence counter (u64) on the sender side.
+// The receiver validates order and detects loss/duplicates via a
+// sliding window bitmask.
 //
-// PERFORMANCE : toutes les opérations sont O(1), lock-free côté émetteur.
-// CONTRAINTE : zéro allocation heap (conforme Zone NO-ALLOC).
+// PERFORMANCE: all operations are O(1), lock-free on sender side.
+// CONSTRAINT: zero heap allocation (conforms to NO-ALLOC zone).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::constants::SEQ_WINDOW_SIZE;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SeqSender — côté émetteur (monotone croissant)
+// SeqSender — sender side (monotonically increasing)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Générateur de numéros de séquence — côté émetteur.
-/// Un SeqSender est propre à un canal/direction.
+/// Sequence number generator — sender side.
+/// A SeqSender is specific to a channel/direction.
 #[repr(C, align(8))]
 pub struct SeqSender {
-    /// Numéro de séquence du prochain message à envoyer.
+    /// Sequence number of the next message to send.
     next_seq: AtomicU64,
 }
 
 impl SeqSender {
-    /// Crée un nouveau SeqSender commençant à la séquence 1.
-    /// La séquence 0 est réservée comme "invalide".
+    /// Creates a new SeqSender starting at sequence 1.
+    /// Sequence 0 is reserved as "invalid".
     pub const fn new() -> Self {
         Self {
             next_seq: AtomicU64::new(1),
         }
     }
 
-    /// Alloue le prochain numéro de séquence.
-    /// Retourne la valeur et l'incrémente de manière atomique.
-    /// Thread-safe pour plusieurs producteurs sur le même canal.
+    /// Allocates the next sequence number.
+    /// Returns the value and increments it atomically.
+    /// Thread-safe for multiple producers on the same channel.
     #[inline(always)]
     pub fn next(&self) -> u64 {
         self.next_seq.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Consulte le numéro courant sans l'incrémenter.
+    /// Reads current number without incrementing.
     #[inline(always)]
     pub fn current(&self) -> u64 {
         self.next_seq.load(Ordering::Relaxed)
@@ -60,41 +60,41 @@ impl Default for SeqSender {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SeqReceiver — côté récepteur (validation fenêtre glissante)
+// SeqReceiver — receiver side (sliding window validation)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de la validation d'un numéro de séquence.
+/// Result of sequence number validation.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SeqCheck {
-    /// Message dans l'ordre attendu : à traiter immédiatement.
+    /// Message in expected order: process immediately.
     InOrder,
-    /// Message en avance sur la fenêtre : à mettre en tampon.
+    /// Message ahead of window: buffer it.
     Future { gap: u64 },
-    /// Message déjà reçu (doublon à rejeter).
+    /// Message already received (duplicate to reject).
     Duplicate,
-    /// Message trop ancien, hors fenêtre (à rejeter).
+    /// Message too old, outside window (reject).
     TooOld,
 }
 
-/// Validateur côté récepteur.
-/// Maintient l'état nécessaire à la détection d'ordre et doublons.
+/// Receiver-side validator.
+/// Maintains state required for order and duplicate detection.
 ///
-/// CONTRAINTE : utilise uniquement de l'espace statique (pas de Vec).
-/// La fenêtre est un bitmask de SEQ_WINDOW_BITS bits (u128 max 128 bits).
+/// CONSTRAINT: uses static storage only (no Vec).
+/// The window is a bitmask of SEQ_WINDOW_BITS bits (u128 max 128 bits).
 pub struct SeqReceiver {
-    /// Prochain numéro de séquence attendu en ordre.
+    /// Next sequence number expected in order.
     expected: AtomicU64,
-    /// Bitmask de présence pour la fenêtre [expected .. expected + WINDOW).
-    /// Bit i = 1 si le message expected+i a déjà été reçu.
+    /// Presence bitmask for window [expected .. expected + WINDOW).
+    /// Bit i = 1 if message expected+i has already been received.
     window: AtomicU64,
-    /// Compteur de messages hors-ordre détectés.
+    /// Counter of detected out-of-order messages.
     out_of_order_count: AtomicU64,
-    /// Compteur de messages dupliqués rejetés.
+    /// Counter of rejected duplicate messages.
     duplicate_count: AtomicU64,
 }
 
 impl SeqReceiver {
-    /// Crée un récepteur s'attendant à recevoir la séquence 1 en premier.
+    /// Creates a receiver expecting sequence 1 first.
     pub const fn new() -> Self {
         Self {
             expected: AtomicU64::new(1),
@@ -104,27 +104,27 @@ impl SeqReceiver {
         }
     }
 
-    /// Valide et enregistre la réception d'un numéro de séquence.
+    /// Validates and records receipt of a sequence number.
     ///
-    /// # Retour
-    /// - `InOrder`     : message dans l'ordre, traiter maintenant.
-    /// - `Future {gap}`: message en avance de `gap` positions, à tamponner.
-    /// - `Duplicate`   : déjà reçu, ignorer.
-    /// - `TooOld`      : hors fenêtre, ignorer.
+    /// # Return
+    /// - `InOrder`     : message in order, process now.
+    /// - `Future {gap}`: message ahead by `gap` positions, buffer it.
+    /// - `Duplicate`   : already received, ignore.
+    /// - `TooOld`      : outside window, ignore.
     ///
-    /// # Note concurrence
-    /// Cette fonction n'est pas atomique sur l'ensemble de l'opération.
-    /// Elle est conçue pour un usage mono-consommateur (SPSC ou protégé par lock).
+    /// # Concurrency note
+    /// This function is not atomic across the entire operation.
+    /// It is designed for single-consumer usage (SPSC or lock-protected).
     pub fn check_and_advance(&self, seq: u64) -> SeqCheck {
         let expected = self.expected.load(Ordering::Acquire);
 
         if seq == expected {
-            // Cas rapide : message dans l'ordre.
-            // Avancer la fenêtre en consommant les bits consécutifs déjà reçus.
+            // Fast path: message in order.
+            // Advance window by consuming consecutive bits already received.
             let mut new_expected = expected + 1;
             let mut win = self.window.load(Ordering::Relaxed);
 
-            // Avancer tant que le bit suivant est déjà présent.
+            // Advance as long as the next bit is already present.
             while (win & 1) != 0 {
                 win >>= 1;
                 new_expected += 1;
@@ -136,14 +136,14 @@ impl SeqReceiver {
         } else if seq > expected {
             let gap = seq - expected;
             if gap >= SEQ_WINDOW_SIZE {
-                // Trop loin dans le futur — on ne peut pas bufferiser.
+                // Too far in the future — cannot buffer.
                 SeqCheck::Future { gap }
             } else {
-                // Dans la fenêtre — marquer le bit.
+                // Inside the window — mark the bit.
                 let bit = 1u64 << (gap - 1);
                 let win = self.window.fetch_or(bit, Ordering::Relaxed);
                 if win & bit != 0 {
-                    // Bit déjà présent → doublon.
+                    // Bit already set -> duplicate.
                     self.duplicate_count.fetch_add(1, Ordering::Relaxed);
                     SeqCheck::Duplicate
                 } else {
@@ -152,34 +152,34 @@ impl SeqReceiver {
                 }
             }
         } else {
-            // seq < expected — message déjà dépassé/consommé.
-            // Le protocole Exo-OS classe ce cas en `TooOld`; `Duplicate` est
-            // réservé aux messages futurs déjà tamponnés dans la fenêtre.
+            // seq < expected — message already past/consumed.
+            // The Exo-OS protocol classifies this case as `TooOld`; `Duplicate` is
+            // reserved for future messages already buffered in the window.
             let _behind = expected - seq;
             SeqCheck::TooOld
         }
     }
 
-    /// Retourne le prochain numéro attendu.
+    /// Returns the next expected number.
     #[inline(always)]
     pub fn expected(&self) -> u64 {
         self.expected.load(Ordering::Relaxed)
     }
 
-    /// Statistiques : messages hors-ordre.
+    /// Statistics: out-of-order messages.
     #[inline(always)]
     pub fn out_of_order_count(&self) -> u64 {
         self.out_of_order_count.load(Ordering::Relaxed)
     }
 
-    /// Statistiques : doublons détectés.
+    /// Statistics: detected duplicates.
     #[inline(always)]
     pub fn duplicate_count(&self) -> u64 {
         self.duplicate_count.load(Ordering::Relaxed)
     }
 
-    /// Réinitialise le récepteur à la séquence donnée.
-    /// À utiliser lors de la reconnexion ou du reset d'un canal.
+    /// Resets the receiver to the given sequence.
+    /// To be used upon reconnection or channel reset.
     pub fn reset(&self, start_seq: u64) {
         self.expected.store(start_seq, Ordering::Release);
         self.window.store(0, Ordering::Relaxed);
@@ -195,10 +195,10 @@ impl Default for SeqReceiver {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SeqPair — paire émetteur/récepteur pour un canal unidirectionnel
+// SeqPair — sender/receiver pair for a unidirectional channel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un canal unidirectionnel complet pour la gestion de séquence.
+/// A complete unidirectional channel for sequence management.
 pub struct SeqPair {
     pub sender: SeqSender,
     pub receiver: SeqReceiver,
@@ -220,7 +220,7 @@ impl Default for SeqPair {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests internes
+// Internal tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -239,14 +239,14 @@ mod tests {
     #[test]
     fn test_out_of_order_then_gap_fill() {
         let recv = SeqReceiver::new();
-        // Arrive séq 2 avant séq 1.
+        // Seq 2 arrives before seq 1.
         assert!(matches!(
             recv.check_and_advance(2),
             SeqCheck::Future { gap: 1 }
         ));
-        // Maintenant séq 1 arrive → doit déclencher InOrder et avancer.
+        // Now seq 1 arrives -> must trigger InOrder and advance.
         assert_eq!(recv.check_and_advance(1), SeqCheck::InOrder);
-        // expected doit avoir sauté à 3 (2 était déjà dans la fenêtre).
+        // expected must have jumped to 3 (2 was already in window).
         assert_eq!(recv.expected(), 3);
     }
 
@@ -254,8 +254,8 @@ mod tests {
     fn test_duplicate_detection() {
         let recv = SeqReceiver::new();
         assert_eq!(recv.check_and_advance(1), SeqCheck::InOrder);
-        // Renvoyer le même numéro.
+        // Resend the same number.
         assert_eq!(recv.check_and_advance(1), SeqCheck::TooOld);
-        assert_eq!(recv.duplicate_count(), 0); // TooOld, pas Duplicate
+        assert_eq!(recv.duplicate_count(), 0); // TooOld, not Duplicate
     }
 }

@@ -1,16 +1,16 @@
-// ipc/channel/typed.rs — Canal typé générique pour Exo-OS
+// ipc/channel/typed.rs — Generic typed channel for Exo-OS
 //
-// TypedChannel<T: Copy + Sized> encapsule la sérialisation/désérialisation
-// des valeurs Rust via une copie mémoire brute (transmute-safe pour types Copy).
-// Construit au-dessus du SpscRing pour les paires (sender, receiver) dédiées,
-// ou du MpmcRing en mode multi-thread.
+// TypedChannel<T: Copy + Sized> wraps serialization/deserialization
+// of Rust values via raw memory copy (transmute-safe for Copy types).
+// Built on top of SpscRing for dedicated (sender, receiver) pairs,
+// or MpmcRing in multi-thread mode.
 //
-// Sécurité :
-//   - T doit implémenter Copy + Sized — transmute brut sans risque de drop
-//   - Taille de T bornée par MAX_TYPED_VALUE_SIZE (512 octets)
-//   - Aucune allocation dynamique
+// Safety:
+//   - T must implement Copy + Sized — raw transmute with no risk of drop
+//   - Size of T bounded by MAX_TYPED_VALUE_SIZE (512 bytes)
+//   - No dynamic allocation
 //
-// Usage typique :
+// Typical usage:
 //   let (tx, rx) = TypedChannel::<SomeCmd>::create();
 //   tx.send(SomeCmd::Halt).unwrap();
 //   let cmd = rx.recv().unwrap();
@@ -26,13 +26,13 @@ use crate::ipc::ring::spsc::SpscRing;
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
-// Contrainte de taille
+// Size constraint
 // ---------------------------------------------------------------------------
 
-/// Taille maximale d'une valeur typée transmissible via TypedChannel (bornée par MAX_MSG_SIZE du SpscRing)
+/// Maximum size of a typed value transmissible via TypedChannel (bounded by SpscRing MAX_MSG_SIZE)
 pub const MAX_TYPED_VALUE_SIZE: usize = crate::ipc::core::constants::MAX_MSG_SIZE;
 
-/// Erreur de compilation si T est trop grand — vérification dans TypedChannel::create()
+/// Compilation error if T is too large — check inside TypedChannel::create()
 const fn assert_type_size<T>() {
     assert!(
         size_of::<T>() <= MAX_TYPED_VALUE_SIZE,
@@ -41,31 +41,31 @@ const fn assert_type_size<T>() {
 }
 
 // ---------------------------------------------------------------------------
-// Emitters et récepteurs "handles" distincts pour contrainte unique-owner
+// Distinct sender and receiver "handles" for single-owner constraint
 // ---------------------------------------------------------------------------
 
-/// Handle émetteur d'un TypedChannel<T>
+/// Sender handle of a TypedChannel<T>
 pub struct TypedSender<T: Copy + Sized> {
     channel_idx: usize,
     _phantom: PhantomData<T>,
 }
 
-/// Handle récepteur d'un TypedChannel<T>
+/// Receiver handle of a TypedChannel<T>
 pub struct TypedReceiver<T: Copy + Sized> {
     channel_idx: usize,
     _phantom: PhantomData<T>,
 }
 
-// SAFETY: T est Copy — pas de Drop, le handle ne contient qu'un index entier
+// SAFETY: T is Copy — no Drop, handle only contains an integer index
 unsafe impl<T: Copy + Sized + Send> Send for TypedSender<T> {}
 unsafe impl<T: Copy + Sized + Send> Send for TypedReceiver<T> {}
 
 // ---------------------------------------------------------------------------
-// Canal typé interne
+// Internal typed channel
 // ---------------------------------------------------------------------------
 
-/// La structure interne partagée entre TypedSender/TypedReceiver.
-/// Stockée dans la table statique TYPED_CHANNEL_TABLE.
+/// Internal structure shared between TypedSender/TypedReceiver.
+/// Stored in static table TYPED_CHANNEL_TABLE.
 #[repr(C, align(64))]
 pub struct TypedChannelInner {
     pub id: ChannelId,
@@ -74,14 +74,14 @@ pub struct TypedChannelInner {
     recvs: AtomicU64,
     drops: AtomicU64,
     closed: AtomicU32,
-    /// Compteur d'opérations en cours (anti-UAF sur destroy)
+    /// In-flight operations counter (anti-UAF on destroy)
     pub active_ops: AtomicU32,
-    /// Taille de type T enregistrée à la création (vérification runtime)
+    /// Type T size recorded at creation (runtime verification)
     type_size: u32,
     _pad: [u8; 24],
 }
 
-// SAFETY: SpscRing est Sync via ses barrières atomiques internes
+// SAFETY: SpscRing is Sync via its internal atomic barriers
 unsafe impl Sync for TypedChannelInner {}
 unsafe impl Send for TypedChannelInner {}
 
@@ -110,10 +110,10 @@ impl TypedChannelInner {
         self.closed.store(1, Ordering::Release);
     }
 
-    /// Envoie la représentation brute de `val` dans le ring.
+    /// Sends raw representation of `val` into ring.
     ///
     /// # SAFETY
-    /// Appelant doit garantir que size_of::<T>() == self.type_size
+    /// Caller must guarantee that size_of::<T>() == self.type_size
     pub unsafe fn push_raw(
         &self,
         ptr: *const u8,
@@ -123,7 +123,7 @@ impl TypedChannelInner {
         if self.is_closed() {
             return Err(IpcError::Closed);
         }
-        // SAFETY: ptr pointe sur [u8; len] valide issu d'un T: Copy
+        // SAFETY: ptr points to valid [u8; len] originating from T: Copy
         let data = core::slice::from_raw_parts(ptr, len);
         let mid = alloc_message_id();
         self.ring.push_copy(data, flags)?;
@@ -132,10 +132,10 @@ impl TypedChannelInner {
         Ok(mid)
     }
 
-    /// Reçoit et reconstruit un T depuis le ring.
+    /// Receives and reconstructs a T from ring.
     ///
     /// # SAFETY
-    /// Appelant doit garantir que buf a une taille >= self.type_size
+    /// Caller must guarantee that buf has size >= self.type_size
     pub unsafe fn pop_raw(&self, ptr: *mut u8, len: usize) -> Result<usize, IpcError> {
         if self.is_closed() {
             return Err(IpcError::Closed);
@@ -149,7 +149,7 @@ impl TypedChannelInner {
 }
 
 // ---------------------------------------------------------------------------
-// Table statique globale de TypedChannelInner
+// Global static TypedChannelInner table
 // ---------------------------------------------------------------------------
 
 pub const TYPED_CHANNEL_TABLE_SIZE: usize = 256;
@@ -160,12 +160,12 @@ pub struct TypedChannelTable {
     pub count: usize,
 }
 
-// SAFETY: accès protégé par SpinLock<TypedChannelTable> dans la table globale
+// SAFETY: access protected by SpinLock<TypedChannelTable> in global table
 unsafe impl Send for TypedChannelTable {}
 
 impl TypedChannelTable {
     pub const fn new() -> Self {
-        // SAFETY: mem::zeroed() évite la limite mémoire du const-eval pour grands tableaux.
+        // SAFETY: mem::zeroed() avoids const-eval memory limits for large arrays.
         unsafe { core::mem::zeroed() }
     }
 
@@ -183,7 +183,7 @@ impl TypedChannelTable {
 
     pub fn free(&mut self, idx: usize) -> bool {
         if idx < TYPED_CHANNEL_TABLE_SIZE && self.used[idx] {
-            // SAFETY: used[idx] garantit l'init
+            // SAFETY: used[idx] guarantees init
             unsafe { self.slots[idx].assume_init_drop() };
             self.used[idx] = false;
             self.count -= 1;
@@ -204,23 +204,23 @@ impl TypedChannelTable {
 
 use crate::scheduler::sync::spinlock::SpinLock;
 
-// SAFETY: La section .bss est zéro-initialisée par le bootloader.
-// SpinLock<TypedChannelTable> tout-zéro = valide (lock free, table vide).
-// MaybeUninit::uninit() = 0 byte de const-eval, la mémoire vient du .bss.
+// SAFETY: .bss section is zero-initialized by bootloader.
+// SpinLock<TypedChannelTable> all-zero = valid (lock free, empty table).
+// MaybeUninit::uninit() = 0 const-eval bytes, memory comes from .bss.
 static TYPED_CHANNEL_TABLE: core::mem::MaybeUninit<SpinLock<TypedChannelTable>> =
     core::mem::MaybeUninit::uninit();
 
 #[inline(always)]
 fn typed_table() -> &'static SpinLock<TypedChannelTable> {
-    // SAFETY: .bss est zéro-initialisé au boot. SpinLock all-zeros = déverrouillé.
+    // SAFETY: .bss is zero-initialized at boot. SpinLock all-zeros = unlocked.
     unsafe { TYPED_CHANNEL_TABLE.assume_init_ref() }
 }
 
 // ---------------------------------------------------------------------------
-// TypedChannel<T> — API publique
+// TypedChannel<T> — public API
 // ---------------------------------------------------------------------------
 
-/// Canal typé générique. Utilisation :
+/// Generic typed channel. Usage:
 /// ```
 /// let (tx, rx) = TypedChannel::<u64>::create().unwrap();
 /// tx.send(42u64, MsgFlags::empty()).unwrap();
@@ -232,11 +232,11 @@ pub struct TypedChannel<T: Copy + Sized> {
 }
 
 impl<T: Copy + Sized> TypedChannel<T> {
-    /// Crée une paire (TypedSender<T>, TypedReceiver<T>).
+    /// Creates a pair (TypedSender<T>, TypedReceiver<T>).
     ///
-    /// Panique à la compilation si `size_of::<T>() > MAX_TYPED_VALUE_SIZE`.
+    /// Panics at compile time if `size_of::<T>() > MAX_TYPED_VALUE_SIZE`.
     pub fn create() -> Result<(TypedSender<T>, TypedReceiver<T>), IpcError> {
-        // Vérifie la taille à la compilation (via const fn)
+        // Check size at compile time (via const fn)
         assert_type_size::<T>();
 
         let type_size = size_of::<T>();
@@ -258,7 +258,7 @@ impl<T: Copy + Sized> TypedChannel<T> {
 }
 
 impl<T: Copy + Sized> TypedSender<T> {
-    /// Envoie la valeur `val` de type T via le canal typé.
+    /// Sends value `val` of type T via typed channel.
     pub fn send(&self, val: T, flags: MsgFlags) -> Result<MessageId, IpcError> {
         let tbl = typed_table().lock();
         let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -268,13 +268,13 @@ impl<T: Copy + Sized> TypedSender<T> {
         drop(tbl);
 
         let size = size_of::<T>();
-        // SAFETY: val est T: Copy, la mémoire de size octets de &val est valide
+        // SAFETY: val is T: Copy, memory of size bytes at &val is valid
         let res = unsafe { inner_ref.push_raw(&val as *const T as *const u8, size, flags) };
         inner_ref.active_ops.fetch_sub(1, Ordering::Release);
         res
     }
 
-    /// Ferme le canal (côté émetteur — notifie le récepteur).
+    /// Closes channel (sender side — notifies receiver).
     pub fn close(&self) {
         let tbl = typed_table().lock();
         if let Some(inner) = unsafe { tbl.get(self.channel_idx) } {
@@ -288,12 +288,12 @@ impl<T: Copy + Sized> TypedSender<T> {
 }
 
 impl<T: Copy + Sized> TypedReceiver<T> {
-    /// Reçoit une valeur de type T depuis le canal.
+    /// Receives a value of type T from channel.
     ///
-    /// # Erreurs
-    /// - `IpcError::WouldBlock` — aucun message disponible
-    /// - `IpcError::Closed` — canal fermé
-    /// - `IpcError::ProtocolError` — taille reçue != size_of::<T>()
+    /// # Errors
+    /// - `IpcError::WouldBlock` — no message available
+    /// - `IpcError::Closed` — channel closed
+    /// - `IpcError::ProtocolError` — received size != size_of::<T>()
     pub fn recv(&self) -> Result<T, IpcError> {
         let tbl = typed_table().lock();
         let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
@@ -304,10 +304,10 @@ impl<T: Copy + Sized> TypedReceiver<T> {
 
         let size = size_of::<T>();
 
-        // Allouer T non-initialisé sur la pile (zéro-alloc)
+        // Allocate uninitialized T on stack (zero-alloc)
         let mut val = MaybeUninit::<T>::uninit();
 
-        // SAFETY: val est T: Copy, les bytes non-initialisés seront remplis par pop_raw
+        // SAFETY: val is T: Copy, uninitialized bytes will be filled by pop_raw
         let pop_res = unsafe { inner_ref.pop_raw(val.as_mut_ptr() as *mut u8, size) };
         inner_ref.active_ops.fetch_sub(1, Ordering::Release);
         let read_len = pop_res?;
@@ -316,13 +316,13 @@ impl<T: Copy + Sized> TypedReceiver<T> {
             return Err(IpcError::ProtocolError);
         }
 
-        // SAFETY: pop_raw a écrit exactement `size` octets = sizeof(T)
+        // SAFETY: pop_raw wrote exactly `size` bytes = sizeof(T)
         Ok(unsafe { val.assume_init() })
     }
 
-    /// Tente de recevoir une valeur sans blocage.
+    /// Attempts to receive a value without blocking.
     pub fn try_recv(&self) -> Result<T, IpcError> {
-        // Vérifier d'abord si le ring a un message
+        // First check if ring has a message
         let tbl = typed_table().lock();
         let inner = unsafe { tbl.get(self.channel_idx) }.ok_or(IpcError::InvalidHandle)?;
         if inner.ring.is_empty() {
@@ -337,15 +337,15 @@ impl<T: Copy + Sized> TypedReceiver<T> {
     }
 }
 
-// Implémentation Drop pour libérer le canal de la table globale
-// Note : en noyau, on ne libère pas automatiquement — les deux handles
-// doivent être fermés explicitement via TypedSender::close() + typed_channel_destroy()
+// Drop implementation to free channel from global table
+// Note: in kernel, we do not automatically free — both handles
+// must be explicitly closed via TypedSender::close() + typed_channel_destroy()
 
 // ---------------------------------------------------------------------------
-// API publique globale
+// Global public API
 // ---------------------------------------------------------------------------
 
-/// Détruit et libère le canal typé identifié par `idx`.
+/// Destroys and frees typed channel identified by `idx`.
 pub fn typed_channel_destroy(idx: usize) -> Result<(), IpcError> {
     let tbl = typed_table().lock();
     let inner_ref: &'static TypedChannelInner = match unsafe { tbl.get(idx) } {
@@ -378,7 +378,7 @@ pub fn typed_channel_destroy(idx: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
-/// Retourne le nombre de canaux typés actifs.
+/// Returns number of active typed channels.
 pub fn typed_channel_count() -> usize {
     typed_table().lock().count
 }

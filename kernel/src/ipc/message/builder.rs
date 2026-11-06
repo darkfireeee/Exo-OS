@@ -1,14 +1,14 @@
-// ipc/message/builder.rs — Constructeur fluent de messages IPC pour Exo-OS
+// ipc/message/builder.rs — Fluent IPC message builder for Exo-OS
 //
-// Ce module implémente un builder pattern pour assembler des messages IPC
-// de manière sûre et ergonomique. Un `IpcMessageBuilder` accumule les métadonnées
-// (flags, endpoint source/destination, type, priorité) et le payload inline
-// dans un buffer stack-allocated, puis produit un `IpcMessage` prêt à être
-// transmis.
+// This module implements a builder pattern to assemble IPC messages
+// safely and ergonomically. An `IpcMessageBuilder` accumulates metadata
+// (flags, source/destination endpoint, type, priority) and inline payload
+// in a stack-allocated buffer, then produces an `IpcMessage` ready to be
+// transmitted.
 //
-// RÈGLE MSG-01 : pas d'allocation heap. Le payload est inline (max MAX_MSG_INLINE).
-// RÈGLE MSG-02 : le builder est stack-allocated et jamais boxé.
-// RÈGLE MSG-03 : build() produit un IpcMessage complet ou retourne une erreur.
+// RULE MSG-01: no heap allocation. Payload is inline (max MAX_MSG_INLINE).
+// RULE MSG-02: the builder is stack-allocated and never boxed.
+// RULE MSG-03: build() produces a complete IpcMessage or returns an error.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -16,13 +16,13 @@ use crate::ipc::core::types::{EndpointId, IpcError, MessageFlags, MessageType, P
 use crate::ipc::stats::counters::{StatEvent, IPC_STATS};
 
 // ---------------------------------------------------------------------------
-// Constantes
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Taille maximale du payload inline dans un IpcMessage (octets).
+/// Maximum inline payload size in an IpcMessage (bytes).
 ///
-/// Doit rester bornée par le slot SPSC (`ipc::core::MAX_MSG_SIZE`) pour éviter
-/// toute troncature silencieuse quand un message builder passe ensuite par le
+/// Must remain bounded by the SPSC slot (`ipc::core::MAX_MSG_SIZE`) to prevent
+/// any silent truncation when a built message subsequently passes through the
 /// fast path ring.
 pub const MAX_MSG_INLINE: usize = crate::ipc::core::constants::MAX_MSG_SIZE;
 
@@ -31,14 +31,14 @@ const _: () = assert!(
     "IpcMessage inline depasse la capacite du ring SPSC"
 );
 
-/// Capacité maximale des descripteurs jointes à un message
+/// Maximum capacity of descriptors attached to a message
 pub const MAX_MSG_DESCRIPTORS: usize = 8;
 
 // ---------------------------------------------------------------------------
-// IpcDescriptor — handle transmissible
+// IpcDescriptor — transferable handle
 // ---------------------------------------------------------------------------
 
-/// Descripteur transmis avec un message (file descriptor, capability, SHM handle, etc.)
+/// Descriptor transmitted with a message (file descriptor, capability, SHM handle, etc.)
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct IpcDescriptor {
@@ -60,47 +60,47 @@ impl IpcDescriptor {
 }
 
 // ---------------------------------------------------------------------------
-// IpcMessage — message IPC complet
+// IpcMessage — complete IPC message
 // ---------------------------------------------------------------------------
 
-/// Message IPC complet : header + payload inline + descripteurs.
+/// Complete IPC message: header + inline payload + descriptors.
 ///
-/// Struct packed pour faciliter le passage sur les ring buffers.
-/// Total : MAX_MSG_INLINE + 192 bytes max.
+/// Packed struct to facilitate passing over ring buffers.
+/// Total: MAX_MSG_INLINE + 192 bytes max.
 #[repr(C, align(64))]
 pub struct IpcMessage {
     // --- Header (64 bytes) ---
-    /// Numéro de séquence (assigné par le builder ou l'endpoint)
+    /// Sequence number (assigned by builder or endpoint)
     pub seq: u64,
-    /// Endpoint source
+    /// Source endpoint
     pub src: EndpointId,
-    /// Endpoint destination
+    /// Destination endpoint
     pub dst: EndpointId,
-    /// Type de message
+    /// Message type
     pub msg_type: MessageType,
-    /// Flags de message
+    /// Message flags
     pub flags: MessageFlags,
-    /// Priorité (0=basse … 255=temps réel)
+    /// Priority (0=low ... 255=real-time)
     pub priority: u8,
-    /// Nombre de descripteurs joints
+    /// Number of attached descriptors
     pub desc_count: u8,
-    /// Taille réelle du payload (octets)
+    /// Actual payload size (bytes)
     pub payload_len: u16,
-    /// Processus émetteur
+    /// Sending process
     pub sender_pid: ProcessId,
-    /// Cookie d'identification correlation (pour RPC reply-matching)
+    /// Correlation identification cookie (for RPC reply-matching)
     pub cookie: u64,
     _pad: [u8; 14],
 
-    // --- Descripteurs (8 × 16 octets = 128 bytes) ---
+    // --- Descriptors (8 × 16 bytes = 128 bytes) ---
     pub descriptors: [IpcDescriptor; MAX_MSG_DESCRIPTORS],
 
-    // --- Payload inline (borne par le ring SPSC) ---
+    // --- Inline payload (bounded by SPSC ring) ---
     payload: [u8; MAX_MSG_INLINE],
 }
 
 impl IpcMessage {
-    /// Nouveau message vide (tous les champs à zéro / sentinelles).
+    /// New empty message (all fields zeroed / sentinels).
     pub const fn empty() -> Self {
         Self {
             seq: 0,
@@ -124,18 +124,18 @@ impl IpcMessage {
         }
     }
 
-    /// Accès en lecture au payload
+    /// Read access to payload
     pub fn payload(&self) -> &[u8] {
         &self.payload[..self.payload_len as usize]
     }
 
-    /// Accès en écriture au payload (dangereux : ne pas dépasser payload_len)
+    /// Write access to payload (dangerous: do not exceed payload_len)
     pub fn payload_mut(&mut self) -> &mut [u8] {
         let len = self.payload_len as usize;
         &mut self.payload[..len]
     }
 
-    /// Copie le payload dans `out`. Retourne le nombre d'octets copiés.
+    /// Copies payload to `out`. Returns number of copied bytes.
     pub fn copy_payload_to(&self, out: &mut [u8]) -> usize {
         let len = (self.payload_len as usize).min(out.len());
         out[..len].copy_from_slice(&self.payload[..len]);
@@ -144,7 +144,7 @@ impl IpcMessage {
 }
 
 // ---------------------------------------------------------------------------
-// Compteur de séquence global
+// Global sequence counter
 // ---------------------------------------------------------------------------
 
 static MSG_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -154,12 +154,12 @@ fn next_seq() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// IpcMessageBuilder — API fluent
+// IpcMessageBuilder — fluent API
 // ---------------------------------------------------------------------------
 
-/// Builder stack-allocated pour IpcMessage.
+/// Stack-allocated builder for IpcMessage.
 ///
-/// # Exemple
+/// # Example
 /// ```rust
 /// let msg = IpcMessageBuilder::new()
 ///     .src(my_ep)
@@ -185,7 +185,7 @@ pub struct IpcMessageBuilder {
 }
 
 impl IpcMessageBuilder {
-    /// Crée un nouveau builder avec des valeurs par défaut saines.
+    /// Creates a new builder with healthy defaults.
     pub fn new() -> Self {
         Self {
             src: EndpointId::INVALID,
@@ -209,54 +209,54 @@ impl IpcMessageBuilder {
     }
 
     // -----------------------------------------------------------------------
-    // Méthodes de configuration (chainables)
+    // Configuration methods (chainable)
     // -----------------------------------------------------------------------
 
-    /// Endpoint source
+    /// Source endpoint
     pub fn src(mut self, ep: EndpointId) -> Self {
         self.src = ep;
         self
     }
 
-    /// Endpoint destination
+    /// Destination endpoint
     pub fn dst(mut self, ep: EndpointId) -> Self {
         self.dst = ep;
         self
     }
 
-    /// Type de message
+    /// Message type
     pub fn msg_type(mut self, t: MessageType) -> Self {
         self.msg_type = t;
         self
     }
 
-    /// Flags de message
+    /// Message flags
     pub fn flags(mut self, f: MessageFlags) -> Self {
         self.flags = f;
         self
     }
 
-    /// Priorité (0–255)
+    /// Priority (0–255)
     pub fn priority(mut self, p: u8) -> Self {
         self.priority = p;
         self
     }
 
-    /// Processus émetteur
+    /// Sending process
     pub fn sender(mut self, pid: ProcessId) -> Self {
         self.sender_pid = pid;
         self
     }
 
-    /// Cookie de corrélation (pour RPC reply-matching)
+    /// Correlation cookie (for RPC reply-matching)
     pub fn cookie(mut self, c: u64) -> Self {
         self.cookie = c;
         self
     }
 
-    /// Payload : copie `data` dans le buffer inline.  
-    /// Tronque silencieusement si trop grand ? Non — retourne une erreur
-    /// dans `build()` via `self.error`.
+    /// Payload: copies `data` into inline buffer.  
+    /// Silently truncate if too large? No — returns an error
+    /// in `build()` via `self.error`.
     pub fn payload(mut self, data: &[u8]) -> Self {
         if data.len() > MAX_MSG_INLINE {
             self.error = Some(IpcError::Invalid);
@@ -268,7 +268,7 @@ impl IpcMessageBuilder {
         self
     }
 
-    /// Payload depuis un slice de u32 (big-endian)
+    /// Payload from a slice of u32 (little-endian)
     pub fn payload_u32(mut self, values: &[u32]) -> Self {
         let byte_len = values.len() * 4;
         if byte_len > MAX_MSG_INLINE {
@@ -283,7 +283,7 @@ impl IpcMessageBuilder {
         self
     }
 
-    /// Ajoute un descripteur au message.
+    /// Adds a descriptor to message.
     pub fn add_descriptor(mut self, desc: IpcDescriptor) -> Self {
         if self.desc_count >= MAX_MSG_DESCRIPTORS {
             self.error = Some(IpcError::Invalid);
@@ -298,10 +298,10 @@ impl IpcMessageBuilder {
     // build()
     // -----------------------------------------------------------------------
 
-    /// Construit le message IPC final.
+    /// Builds final IPC message.
     ///
-    /// Retourne `Err` si une erreur a été enregistrée during building, ou
-    /// si la destination est invalide (EndpointId(0)).
+    /// Returns `Err` if an error was recorded during building, or
+    /// if destination is invalid (EndpointId(0)).
     pub fn build(self) -> Result<IpcMessage, IpcError> {
         if let Some(e) = self.error {
             IPC_STATS.record(StatEvent::InvalidParam);
@@ -325,12 +325,12 @@ impl IpcMessageBuilder {
         msg.desc_count = self.desc_count as u8;
         msg.payload_len = self.payload_len as u16;
 
-        // Copie du payload inline
+        // Copy inline payload
         if self.payload_len > 0 {
             msg.payload[..self.payload_len].copy_from_slice(&self.payload_buf[..self.payload_len]);
         }
 
-        // Copie des descripteurs
+        // Copy descriptors
         for i in 0..self.desc_count {
             msg.descriptors[i] = self.descriptors[i];
         }
@@ -347,10 +347,10 @@ impl Default for IpcMessageBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers pour messages courants
+// Helpers for common messages
 // ---------------------------------------------------------------------------
 
-/// Crée un message de donnée simple (data message).
+/// Creates a simple data message.
 pub fn msg_data(src: EndpointId, dst: EndpointId, data: &[u8]) -> Result<IpcMessage, IpcError> {
     IpcMessageBuilder::new()
         .src(src)
@@ -360,7 +360,7 @@ pub fn msg_data(src: EndpointId, dst: EndpointId, data: &[u8]) -> Result<IpcMess
         .build()
 }
 
-/// Crée un message de contrôle.
+/// Creates a control message.
 pub fn msg_control(src: EndpointId, dst: EndpointId, cmd: u32) -> Result<IpcMessage, IpcError> {
     let buf = cmd.to_le_bytes();
     IpcMessageBuilder::new()
@@ -371,7 +371,7 @@ pub fn msg_control(src: EndpointId, dst: EndpointId, cmd: u32) -> Result<IpcMess
         .build()
 }
 
-/// Crée un message de signal (notification légère, pas de payload).
+/// Creates a signal message (lightweight notification, no payload).
 pub fn msg_signal(src: EndpointId, dst: EndpointId, signum: u32) -> Result<IpcMessage, IpcError> {
     let buf = signum.to_le_bytes();
     IpcMessageBuilder::new()
@@ -383,7 +383,7 @@ pub fn msg_signal(src: EndpointId, dst: EndpointId, signum: u32) -> Result<IpcMe
         .build()
 }
 
-/// Crée un message de réponse RPC (pour reply-matching via cookie).
+/// Creates an RPC reply message (for reply-matching via cookie).
 pub fn msg_rpc_reply(
     src: EndpointId,
     dst: EndpointId,
