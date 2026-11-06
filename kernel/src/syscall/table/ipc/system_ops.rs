@@ -1,4 +1,4 @@
-//! # syscall/table/ipc/system_ops.rs — Handlers pour journaux kernel, liste des processus, perf et Phoenix
+//! # syscall/table/ipc/system_ops.rs — Handlers for kernel logs, process list, perf, and Phoenix
 
 use core::sync::atomic::Ordering;
 
@@ -8,7 +8,7 @@ use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{copy_to_user, UserBuf};
 
-/// `exo_log(buf_ptr, len, level)` — log direct vers le ring buffer kernel par tranches de 256 octets.
+/// `exo_log(buf_ptr, len, level)` — direct log to kernel ring buffer in 256-byte chunks.
 pub fn sys_exo_log(buf_ptr: u64, len: u64, level: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_LOG);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
@@ -68,7 +68,7 @@ struct ExoProcessInfo {
     stime_ns: u64,
 }
 
-/// `exo_process_list(buf, capacity, entry_size)` — snapshot de la registry PCB.
+/// `exo_process_list(buf, capacity, entry_size)` — snapshot of the PCB registry.
 pub fn sys_exo_process_list(
     buf_ptr: u64,
     capacity: u64,
@@ -133,7 +133,7 @@ fn perf_value(value: u64) -> i64 {
     core::cmp::min(value, i64::MAX as u64) as i64
 }
 
-/// `exo_perf_read(metric, index)` — lecture de compteurs kernel bornés.
+/// `exo_perf_read(metric, index)` — read bounded kernel counters.
 pub fn sys_exo_perf_read(metric: u64, index: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PERF_READ);
     match metric {
@@ -173,7 +173,7 @@ pub fn sys_exo_perf_disable(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a
     0
 }
 
-/// `exo_phoenix_state_set(state)` — synchronise une transition Phoenix root.
+/// `exo_phoenix_state_set(state)` — synchronizes a root Phoenix transition.
 pub fn sys_exo_phoenix_state_set(
     state: u64,
     _a2: u64,
@@ -209,7 +209,7 @@ pub fn sys_exo_phoenix_state_set(
     }
 }
 
-/// `exo_phoenix_state_get()` — retourne l'état Phoenix courant.
+/// `exo_phoenix_state_get()` — returns current Phoenix state.
 pub fn sys_exo_phoenix_state_get(
     _a1: u64,
     _a2: u64,

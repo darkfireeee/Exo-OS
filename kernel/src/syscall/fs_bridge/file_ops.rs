@@ -170,8 +170,8 @@ pub fn write_blob_bytes_at(blob_id: BlobId, offset: u64, bytes: &[u8]) -> Result
     Ok(bytes.len() as i64)
 }
 
-/// `read(fd, buf, count)` → octets lus.
-/// PONT : `crate::fs::vfs::read(fd, buf_slice)` — activé quand `pub mod fs;`
+/// `read(fd, buf, count)` -> bytes read.
+/// BRIDGE: `crate::fs::vfs::read(fd, buf_slice)` - enabled when `pub mod fs;`
 #[inline]
 pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
     if buf_ptr == 0 {
@@ -269,7 +269,7 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     Ok(read_len as i64)
 }
 
-/// `write(fd, buf, count)` → octets écrits.
+/// `write(fd, buf, count)` -> bytes written.
 #[inline]
 pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsBridgeError> {
     if buf_ptr == 0 {
@@ -461,7 +461,7 @@ pub fn fs_pwritev(
     })
 }
 
-/// `lseek(fd, offset, whence)` → nouvelle position.
+/// `lseek(fd, offset, whence)` -> new position.
 #[inline]
 pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
@@ -532,11 +532,11 @@ pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError
 
 /// `fsync(fd)` / `fdatasync(fd)`.
 ///
-/// FIX-EXOFS-ROB-4 (AUDIT-EXOFS §3) : `fsync` durabilise désormais données ET
-/// métadonnées (POSIX exige les deux). Pour `fdatasync` (`data_only == true`),
-/// seules les données du blob sont forcées sur disque (pas de commit d'epoch des
-/// métadonnées), conformément à la sémantique POSIX. L'ancien code persistait le
-/// blob mais ignorait `data_only` et ne committait jamais d'epoch.
+/// FIX-EXOFS-ROB-4 (AUDIT-EXOFS §3): `fsync` now persists both data AND
+/// metadata (POSIX requires both). For `fdatasync` (`data_only == true`),
+/// only blob data is flushed to disk (no metadata epoch commit),
+/// in accordance with POSIX semantics. The former code persisted the
+/// blob but ignored `data_only` and never committed an epoch.
 #[inline]
 pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
@@ -550,7 +550,7 @@ pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError
         return Ok(0);
     }
 
-    // Forcer les données du blob sur le disque.
+    // Flush blob data to disk.
     if let Some(data) = BLOB_CACHE.get(&entry.blob_id) {
         match object_store::persist_blob_data_if_disk(entry.blob_id, &data, true) {
             Ok(_) => {
@@ -560,9 +560,9 @@ pub fn fs_fsync(fd: u32, data_only: bool, pid: u32) -> Result<i64, FsBridgeError
         }
     }
 
-    // fsync (≠ fdatasync) : sceller un epoch pour durabiliser les métadonnées
-    // (PathIndex, taille, table d'objets) en plus des données. fdatasync s'arrête
-    // après la persistance des données.
+    // fsync (!= fdatasync): seal an epoch to persist metadata
+    // (PathIndex, size, object table) in addition to data. fdatasync stops
+    // after data persistence.
     if !data_only {
         match crate::fs::exofs::syscall::epoch_commit::commit_current_epoch() {
             Ok(_) | Err(ExofsError::CommitInProgress) => {}

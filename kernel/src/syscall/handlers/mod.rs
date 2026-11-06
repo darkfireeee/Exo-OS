@@ -1,8 +1,8 @@
-//! # syscall/handlers/mod.rs — Thin wrappers syscall
+//! # syscall/handlers/mod.rs — Syscall thin wrappers
 //!
-//! Ce module regroupe les wrappers POSIX et ExoFS.
-//! RÈGLE SYS-03 : these files contiennent UNIQUEMENT des thin wrappers.
-//! Toute logique métier est déléguée aux modules internes (fd::, process::, etc.).
+//! This module groups POSIX and ExoFS wrappers.
+//! RULE SYS-03: these files contain ONLY thin wrappers.
+//! All business logic is delegated to internal modules (fd::, process::, etc.).
 
 pub mod fd;
 pub mod fs_posix;

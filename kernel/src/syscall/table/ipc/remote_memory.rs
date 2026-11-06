@@ -1,4 +1,4 @@
-//! # syscall/table/ipc/remote_memory.rs — Opérations de mémoire inter-processus pour serveurs privilégiés
+//! # syscall/table/ipc/remote_memory.rs — Inter-process memory operations for privileged servers
 
 use crate::syscall::table::common::*;
 use crate::memory::core::{phys_to_virt, PhysAddr, VirtAddr};
@@ -32,8 +32,8 @@ fn caller_can_manage_target_memory(caller_pid: u32) -> bool {
     }
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
         Some(pcb) => {
-            // T9-003 FIX : Authentification stricte — doit être un enfant direct d'init (PID 1),
-            // root (euid 0) ET avoir la classe de service réservée vérifiée.
+            // T9-003 FIX: Strict authentication — must be a direct child of init (PID 1),
+            // root (euid 0) AND have the reserved service class verified.
             if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
                 return false;
             }
@@ -51,7 +51,7 @@ fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
     }
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
         Some(pcb) => {
-            // T9-003 FIX : Doit être un enfant direct d'init (PID 1), root (euid 0) et service autorisé.
+            // T9-003 FIX: Must be a direct child of init (PID 1), root (euid 0), and authorized service.
             if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
                 return false;
             }
@@ -73,8 +73,8 @@ fn user_as_for_pid(pid: u32) -> Result<&'static crate::memory::virt::UserAddress
     if as_ptr.is_null() {
         return Err(ENOMEM);
     }
-    // SAFETY: le PCB reste dans PROCESS_REGISTRY pendant le syscall et
-    // address_space pointe vers un UserAddressSpace créé par lifecycle/create.
+    // SAFETY: the PCB remains in PROCESS_REGISTRY during the syscall and
+    // address_space points to a UserAddressSpace created by lifecycle/create.
     Ok(unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) })
 }
 
@@ -118,9 +118,9 @@ fn remote_user_phys(
 
 /// `exo_mem_copy_from_pid(target_pid, remote_src, local_dst, len, flags)`.
 ///
-/// Réservé aux serveurs racine qui doivent servir des requêtes IPC avec des
-/// pointeurs appartenant au client. Le buffer local est toujours copié via
-/// `copy_to_user`; le buffer distant est traduit via la PML4 du PID cible.
+/// Reserved for root servers that must serve IPC requests with
+/// pointers belonging to the client. The local buffer is always copied via
+/// `copy_to_user`; the remote buffer is translated via the PML4 of the target PID.
 pub fn sys_exo_mem_copy_from_pid(
     target_pid: u64,
     remote_src: u64,
@@ -166,8 +166,8 @@ pub fn sys_exo_mem_copy_from_pid(
         };
         let n = (len - copied).min(page_avail).min(scratch.len());
         let src_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *const u8;
-        // SAFETY: `remote_user_phys` a validé la traduction du PID cible et
-        // `scratch` est un buffer kernel local de taille `n`.
+        // SAFETY: `remote_user_phys` validated the target PID translation and
+        // `scratch` is a local kernel buffer of size `n`.
         unsafe {
             core::ptr::copy_nonoverlapping(src_ptr, scratch.as_mut_ptr(), n);
         }
@@ -234,8 +234,8 @@ pub fn sys_exo_mem_copy_to_pid(
             return if copied == 0 { EFAULT } else { copied as i64 };
         }
         let dst_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *mut u8;
-        // SAFETY: `remote_user_phys(..., write=true)` garantit une page user
-        // présente et writable; `scratch` contient `n` octets copiés du caller.
+        // SAFETY: `remote_user_phys(..., write=true)` guarantees a user page
+        // present and writable; `scratch` contains `n` bytes copied from the caller.
         unsafe {
             core::ptr::copy_nonoverlapping(scratch.as_ptr(), dst_ptr, n);
         }
@@ -244,7 +244,7 @@ pub fn sys_exo_mem_copy_to_pid(
     copied as i64
 }
 
-/// `exo_mem_map_pid(target_pid, hint, len, prot, flags)` réservé à memory_server.
+/// `exo_mem_map_pid(target_pid, hint, len, prot, flags)` reserved for memory_server.
 pub fn sys_exo_mem_map_pid(
     target_pid: u64,
     hint: u64,
@@ -284,7 +284,7 @@ pub fn sys_exo_mem_map_pid(
     }
 }
 
-/// `exo_mem_munmap_pid(target_pid, addr)` réservé à memory_server.
+/// `exo_mem_munmap_pid(target_pid, addr)` reserved for memory_server.
 pub fn sys_exo_mem_munmap_pid(
     target_pid: u64,
     addr: u64,
@@ -312,7 +312,7 @@ pub fn sys_exo_mem_munmap_pid(
     }
 }
 
-/// `exo_mem_mprotect_pid(target_pid, addr, len, prot)` réservé à memory_server.
+/// `exo_mem_mprotect_pid(target_pid, addr, len, prot)` reserved for memory_server.
 pub fn sys_exo_mem_mprotect_pid(
     target_pid: u64,
     addr: u64,

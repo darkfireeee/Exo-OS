@@ -1,26 +1,26 @@
 //! # syscall/fast_path.rs — Fast path syscalls (<100 cycles)
 //!
-//! Implémente les syscalls qui ne nécessitent aucun verrou, aucune allocation,
-//! et se résolvent en lisant des données per-CPU ou des compteurs atomiques.
+//! Implements syscalls that require no lock, no allocation,
+//! and resolve by reading per-CPU data or atomic counters.
 //!
-//! ## Cible de performance
-//! | Syscall          | Cible      | Commentaire                              |
-//! |------------------|------------|------------------------------------------|
-//! | `getpid`         | <50 cyc    | Lecture TCB per-CPU via GS:[0x20]        |
-//! | `gettid`         | <50 cyc    | Lecture TCB per-CPU via GS:[0x20]        |
-//! | `getuid/geteuid` | <80 cyc    | Lecture PCB credentials (atomique)       |
-//! | `getgid/getegid` | <80 cyc    | Idem                                     |
-//! | `getppid`        | <80 cyc    | Lecture PCB parent_pid (atomique)        |
-//! | `getcpu`         | <50 cyc    | Lecture GS:[0x10] (cpu_id atomique)      |
-//! | `clock_gettime`  | <150 cyc   | RDTSC + multiply (MONOTONIC uniquement)  |
-//! | `sched_yield`    | ~500 cyc   | schedule_yield() — context switch éventuel |
+//! ## Performance Target
+//! | Syscall          | Target     | Comment                                    |
+//! |------------------|------------|--------------------------------------------|
+//! | `getpid`         | <50 cyc    | Reads per-CPU TCB via GS:[0x20]            |
+//! | `gettid`         | <50 cyc    | Reads per-CPU TCB via GS:[0x20]            |
+//! | `getuid/geteuid` | <80 cyc    | Reads PCB credentials (atomic)             |
+//! | `getgid/getegid` | <80 cyc    | Same                                       |
+//! | `getppid`        | <80 cyc    | Reads PCB parent_pid (atomic)              |
+//! | `getcpu`         | <50 cyc    | Reads GS:[0x10] (atomic cpu_id)            |
+//! | `clock_gettime`  | <150 cyc   | RDTSC + multiply (MONOTONIC only)          |
+//! | `sched_yield`    | ~500 cyc   | schedule_yield() — eventual context switch |
 //!
-//! ## Règles NO-ALLOC (regle_bonus.md)
-//! Ce module n'utilise jamais `alloc`, `Vec`, `Box`, `Rc`, `Arc`.
-//! Seuls les registres et la pile sont utilisés.
+//! ## NO-ALLOC Rules (regle_bonus.md)
+//! This module never uses `alloc`, `Vec`, `Box`, `Rc`, `Arc`.
+//! Only registers and the stack are used.
 //!
-//! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
-//! Tout `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
+//! ## UNSAFE CONTRACT RULE (regle_bonus.md)
+//! Every `unsafe {}` block is preceded by a `// SAFETY:` comment.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,11 +29,11 @@ use crate::scheduler::core::task::{ProcessId, ThreadControlBlock, ThreadId};
 use crate::scheduler::timer::clock::monotonic_ns;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Masque RFLAGS — seuls les flags autorisés sont restaurables depuis userspace.
-/// IF(9), DF(10), TF(8), AC(18) sont filtrés par SFMASK (voir arch/syscall.rs).
+/// RFLAGS mask — only allowed flags can be restored from userspace.
+/// IF(9), DF(10), TF(8), AC(18) are filtered by SFMASK (see arch/syscall.rs).
 #[allow(dead_code)]
 const RFLAGS_USER_MASK: u64 = 0x003F_FFFF;
 
@@ -48,7 +48,7 @@ pub const CLOCK_MONOTONIC_COARSE: u32 = 6;
 pub const CLOCK_BOOTTIME: u32 = 7;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Instrumentation fast-path
+// Fast-path instrumentation
 // ─────────────────────────────────────────────────────────────────────────────
 
 static FP_GETPID_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -60,7 +60,7 @@ static FP_GETCPU_COUNT: AtomicU64 = AtomicU64::new(0);
 static FP_CLOCKGET_COUNT: AtomicU64 = AtomicU64::new(0);
 static FP_YIELD_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Statistiques fast-path renvoyées par [`fast_path_stats`].
+/// Fast-path statistics returned by [`fast_path_stats`].
 #[derive(Copy, Clone, Debug, Default)]
 pub struct FastPathStats {
     pub getpid: u64,
@@ -73,7 +73,7 @@ pub struct FastPathStats {
     pub yield_cnt: u64,
 }
 
-/// Retourne un snapshot des compteurs fast-path.
+/// Returns a snapshot of fast-path counters.
 pub fn fast_path_stats() -> FastPathStats {
     FastPathStats {
         getpid: FP_GETPID_COUNT.load(Ordering::Relaxed),
@@ -88,18 +88,18 @@ pub fn fast_path_stats() -> FastPathStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Accès au TCB du thread courant via GS:[0x20]
+// Access to current thread TCB via GS:[0x20]
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne un pointeur brut vers le TCB du thread courant.
+/// Returns a raw pointer to the current thread's TCB.
 ///
-/// Lit directement `GS:[0x20]` (voir percpu.rs layout).
-/// Ne peut être appelé que depuis le contexte kernel Ring 0.
+/// Directly reads `GS:[0x20]` (see percpu.rs layout).
+/// May only be called from Ring 0 kernel context.
 ///
 /// # Safety
-/// - Le GS doit être le GS kernel (après SWAPGS).
-/// - La valeur GS:[0x20] pointe vers un `ThreadControlBlock` valide.
-/// - L'appelant ne doit PAS stocker le pointeur au-delà du point de préemption.
+/// - GS must be the kernel GS (after SWAPGS).
+/// - The value at GS:[0x20] points to a valid `ThreadControlBlock`.
+/// - The caller must NOT store the pointer past a preemption point.
 #[inline(always)]
 unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
     #[cfg(test)]
@@ -118,29 +118,29 @@ unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
     }
 }
 
-/// Retourne le `ThreadId` du thread courant.
+/// Returns the `ThreadId` of the current thread.
 ///
 /// # Safety
-/// Doit être appelé dans le contexte kernel (GS kernel actif).
+/// Must be called in kernel context (active kernel GS).
 #[inline(always)]
 unsafe fn current_tid() -> ThreadId {
     let tcb = current_tcb_ptr();
-    // SAFETY: le TCB est valide si current_tcb_ptr() renvoie un pointeur non-nul.
-    // En cas de TCB nul (avant le premier switch), TID 0 est retourné.
+    // SAFETY: the TCB is valid if current_tcb_ptr() returns a non-null pointer.
+    // In case of a null TCB (before first switch), TID 0 is returned.
     if tcb.is_null() {
         return ThreadId(0);
     }
     ThreadId((*tcb).tid)
 }
 
-/// Retourne le `ProcessId` du thread courant.
+/// Returns the `ProcessId` of the current thread.
 ///
 /// # Safety
-/// Doit être appelé dans le contexte kernel (GS kernel actif).
+/// Must be called in kernel context (active kernel GS).
 #[inline(always)]
 unsafe fn current_pid() -> ProcessId {
     let tcb = current_tcb_ptr();
-    // SAFETY: identique à current_tid().
+    // SAFETY: identical to current_tid().
     if tcb.is_null() {
         return ProcessId(0);
     }
@@ -148,21 +148,21 @@ unsafe fn current_pid() -> ProcessId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Représentation timespec POSIX (struct timespec)
+// POSIX timespec representation (struct timespec)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Représentation C `struct timespec` — layout conforme POSIX ABI x86_64.
+/// C `struct timespec` representation — x86_64 POSIX ABI compliant layout.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timespec {
-    /// Secondes entières depuis l'époque (CLOCK_REALTIME) ou le boot (CLOCK_MONOTONIC).
+    /// Full seconds since epoch (CLOCK_REALTIME) or boot (CLOCK_MONOTONIC).
     pub tv_sec: i64,
-    /// Nanosecondes (0..999_999_999).
+    /// Nanoseconds (0..999_999_999).
     pub tv_nsec: i64,
 }
 
 impl Timespec {
-    /// Construit un `Timespec` depuis un nombre de nanosecondes total.
+    /// Constructs a `Timespec` from a total number of nanoseconds.
     #[inline]
     pub const fn from_ns(ns: u64) -> Self {
         Self {
@@ -173,31 +173,31 @@ impl Timespec {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Credentials "current" — stub en attente de l'intégration process/ complète
+// "Current" credentials — stub pending full process/ integration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Accès aux credentials du processus courant.
+/// Accesses the credentials of the current process.
 ///
-/// Dans un kernel complet, cette fonction lirait le TCB→PCB→credentials.
-/// L'implémentation actuelle lit directement le PCB via la registry process.
+/// In a complete kernel, this function would read TCB→PCB→credentials.
+/// The current implementation directly reads the PCB via the process registry.
 #[inline]
 fn current_creds() -> Credentials {
-    // Accès via le registry process. Si le registry n'est pas encore initialisé
-    // (boot précoce), retourne des credentials root (uid=0).
+    // Access via the process registry. If the registry is not yet initialized
+    // (early boot), returns root credentials (uid=0).
     //
-    // Production-ready : le registry process est initialisé avant toute activation
-    // user-space, donc cette branche "boot" ne s'exécute jamais depuis userspace.
+    // Production-ready: the process registry is initialized before any userspace
+    // activation, so this "boot" branch never executes from userspace.
     let pid = unsafe { current_pid() };
     if pid.0 == 0 {
-        // Noyau sans processus courant (idle task ou boot)
+        // Kernel without current process (idle task or boot)
         return Credentials::root();
     }
-    // Accès au registry process global (protégé RCU).
-    // ProcessId (scheduler) → Pid (process) : même repr u32.
+    // Access to global process registry (RCU-protected).
+    // ProcessId (scheduler) → Pid (process): same u32 repr.
     let process_pid = crate::process::core::pid::Pid(pid.0);
     match crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(process_pid) {
         Some(pcb) => {
-            // SAFETY: SpinLock<Credentials> — verrouillage court, pas d'alloc.
+            // SAFETY: SpinLock<Credentials> — short hold time, no alloc.
             let creds = pcb.creds.lock();
             Credentials {
                 uid: creds.uid,
@@ -207,12 +207,12 @@ fn current_creds() -> Credentials {
                 ppid: pcb.ppid.load(Ordering::Relaxed),
             }
         }
-        // Fail-closed : si le PID non-zéro n'a pas de PCB, refuser les privilèges root (AUDIT-SEC)
+        // Fail-closed: if non-zero PID has no PCB, deny root privileges (AUDIT-SEC)
         None => Credentials::nobody(),
     }
 }
 
-/// Credentials d'un processus lus depuis le PCB.
+/// Process credentials read from PCB.
 #[derive(Copy, Clone, Debug)]
 struct Credentials {
     uid: u32,
@@ -245,97 +245,97 @@ impl Credentials {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers fast-path — implémentation directe sans table de dispatch
+// Fast-path handlers — direct implementation without dispatch table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le PID du processus courant depuis GS:[0x20].
+/// Returns the current process PID from GS:[0x20].
 ///
-/// Expose la fonction privée `current_pid()` pour les autres modules syscall
-/// (notamment `compat/posix.rs`) qui ont besoin du PID sans passer par le handler.
+/// Exposes the private function `current_pid()` to other syscall modules
+/// (notably `compat/posix.rs`) that need the PID without going through a handler.
 ///
-/// Retourne 0 si appelé avant le premier context switch (boot).
+/// Returns 0 if called before the first context switch (boot).
 #[inline(always)]
 pub fn syscall_current_pid() -> u32 {
-    // SAFETY: appelé depuis le contexte kernel Ring-0, GS kernel actif.
+    // SAFETY: called from Ring-0 kernel context, active kernel GS.
     unsafe { current_pid() }.0
 }
 
-/// `getpid()` — retourne le PID du processus courant.
+/// `getpid()` — returns the current process PID.
 ///
-/// Performance : ~40–60 cycles (lecture GS:[0x20] + champ TCB).
-/// Zone NO-ALLOC : uniquement lecture de mémoire statique/atomique.
+/// Performance: ~40–60 cycles (reads GS:[0x20] + TCB field).
+/// NO-ALLOC zone: reads static/atomic memory only.
 #[inline]
 pub fn sys_getpid() -> i64 {
     FP_GETPID_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: Appelé depuis syscall_rust_handler, GS est le kernel GS.
+    // SAFETY: Called from syscall_rust_handler, GS is the kernel GS.
     let pid = unsafe { current_pid() };
     pid.0 as i64
 }
 
-/// `gettid()` — retourne le TID du thread courant.
+/// `gettid()` — returns the current thread TID.
 ///
-/// Performance : ~40–60 cycles.
+/// Performance: ~40–60 cycles.
 #[inline]
 pub fn sys_gettid() -> i64 {
     FP_GETTID_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: GS kernel actif depuis l'entrée syscall.
+    // SAFETY: Active kernel GS since syscall entry.
     let tid = unsafe { current_tid() };
     tid.0 as i64
 }
 
-/// `getuid()` — retourne le UID réel du processus courant.
+/// `getuid()` — returns the real UID of the current process.
 ///
-/// Performance : ~70–90 cycles (lecture PCB via registry).
+/// Performance: ~70–90 cycles (PCB read via registry).
 #[inline]
 pub fn sys_getuid() -> i64 {
     FP_GETUID_COUNT.fetch_add(1, Ordering::Relaxed);
     current_creds().uid as i64
 }
 
-/// `geteuid()` — retourne l'UID effectif.
+/// `geteuid()` — returns the effective UID.
 #[inline]
 pub fn sys_geteuid() -> i64 {
     FP_GETUID_COUNT.fetch_add(1, Ordering::Relaxed);
     current_creds().euid as i64
 }
 
-/// `getgid()` — retourne le GID réel.
+/// `getgid()` — returns the real GID.
 #[inline]
 pub fn sys_getgid() -> i64 {
     FP_GETGID_COUNT.fetch_add(1, Ordering::Relaxed);
     current_creds().gid as i64
 }
 
-/// `getegid()` — retourne le GID effectif.
+/// `getegid()` — returns the effective GID.
 #[inline]
 pub fn sys_getegid() -> i64 {
     FP_GETGID_COUNT.fetch_add(1, Ordering::Relaxed);
     current_creds().egid as i64
 }
 
-/// `getppid()` — retourne le PID du parent.
+/// `getppid()` — returns the parent PID.
 #[inline]
 pub fn sys_getppid() -> i64 {
     FP_GETPPID_COUNT.fetch_add(1, Ordering::Relaxed);
     current_creds().ppid as i64
 }
 
-/// `getcpu(cpu, node, tcache)` — retourne le CPU et le nœud NUMA courants.
+/// `getcpu(cpu, node, tcache)` — returns current CPU and NUMA node.
 ///
-/// Arguments :
-/// - `arg1` : pointeur userspace vers `u32` CPU (peut être NULL)
-/// - `arg2` : pointeur userspace vers `u32` NUMA node (peut être NULL)
-/// - `arg3` : ignoré (tcache obsolète depuis Linux 2.6.24)
+/// Arguments:
+/// - `arg1`: userspace pointer to `u32` CPU (may be NULL)
+/// - `arg2`: userspace pointer to `u32` NUMA node (may be NULL)
+/// - `arg3`: ignored (tcache obsolete since Linux 2.6.24)
 ///
-/// Performance : ~50 cycles.
+/// Performance: ~50 cycles.
 pub fn sys_getcpu(cpu_ptr: u64, node_ptr: u64, _tcache: u64) -> i64 {
     FP_GETCPU_COUNT.fetch_add(1, Ordering::Relaxed);
 
     let cpu_id = current_cpu_id();
-    // Nœud NUMA : pour l'instant 0 (architecture future NUMA l'enrichira).
+    // NUMA node: currently 0 (future NUMA architecture will enrich this).
     let numa_node: u32 = 0;
 
-    // Écriture optionnelle vers userspace
+    // Optional write to userspace
     if cpu_ptr != 0 {
         if let Err(_) = crate::syscall::validation::write_user_typed::<u32>(cpu_ptr, cpu_id) {
             return super::numbers::EFAULT;
@@ -349,16 +349,16 @@ pub fn sys_getcpu(cpu_ptr: u64, node_ptr: u64, _tcache: u64) -> i64 {
     0
 }
 
-/// `clock_gettime(clkid, timespec_ptr)` — lit une horloge POSIX.
+/// `clock_gettime(clkid, timespec_ptr)` — reads a POSIX clock.
 ///
-/// Horloges supportées :
-/// - `CLOCK_MONOTONIC` / `CLOCK_MONOTONIC_RAW` / `CLOCK_BOOTTIME` :
-///   TSC → nanosecondes via `monotonic_ns()`.
-/// - `CLOCK_REALTIME` / `CLOCK_REALTIME_COARSE` :
-///   `monotonic_ns()` + offset réel (CLOCK_REALTIME_OFFSET).
-/// - `CLOCK_MONOTONIC_COARSE` : identique MONOTONIC (granularité tick).
+/// Supported clocks:
+/// - `CLOCK_MONOTONIC` / `CLOCK_MONOTONIC_RAW` / `CLOCK_BOOTTIME`:
+///   TSC → nanoseconds via `monotonic_ns()`.
+/// - `CLOCK_REALTIME` / `CLOCK_REALTIME_COARSE`:
+///   `monotonic_ns()` + real offset (CLOCK_REALTIME_OFFSET).
+/// - `CLOCK_MONOTONIC_COARSE`: identical to MONOTONIC (tick granularity).
 ///
-/// Performance : ~120–150 cycles (RDTSC + multiply + write_user).
+/// Performance: ~120–150 cycles (RDTSC + multiply + write_user).
 pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
     FP_CLOCKGET_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -376,14 +376,14 @@ pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
             monotonic_ns()
         }
         CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
-            // Offset réel = monotonic + REALTIME_OFFSET (mis à jour par settimeofday / NTP).
-            // L'offset est stocké dans un AtomicU64 global du module timer/clock.
+            // Real offset = monotonic + REALTIME_OFFSET (updated by settimeofday / NTP).
+            // The offset is stored in a global AtomicU64 of the timer/clock module.
             monotonic_ns().saturating_add(crate::scheduler::timer::clock::realtime_offset_ns())
         }
         // CLOCK_PROCESS_CPUTIME_ID / CLOCK_THREAD_CPUTIME_ID
         CLOCK_PROCESS_CPUTIME | CLOCK_THREAD_CPUTIME => {
-            // TaskStats est séparé du TCB (TCB = 128B fixe, pas de champ stats).
-            // Retourne 0 en attendant un pointeur TaskStats dans le TCB étendu.
+            // TaskStats is separate from TCB (TCB = 128B fixed, no stats field).
+            // Returns 0 pending TaskStats pointer in extended TCB.
             0u64
         }
         _ => return super::numbers::EINVAL,
@@ -396,12 +396,12 @@ pub fn sys_clock_gettime(clkid: u64, ts_ptr: u64) -> i64 {
     }
 }
 
-/// `gettimeofday(tv_ptr, tz_ptr)` — retourne l'heure et (optionnellement) la timezone.
+/// `gettimeofday(tv_ptr, tz_ptr)` — returns time and (optionally) timezone.
 ///
-/// La timezone est dépréciée (retourne toujours UTC+0) conformément aux
-/// recommandations POSIX.1-2008.
+/// Timezone is deprecated (always returns UTC+0) conforming to
+/// POSIX.1-2008 recommendations.
 ///
-/// Performance : ~130 cycles.
+/// Performance: ~130 cycles.
 pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
     // Validation
     if tv_ptr == 0 {
@@ -416,7 +416,7 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
     if let Err(e) = crate::syscall::validation::write_user_typed::<Timeval>(tv_ptr, timeval) {
         return e.to_errno();
     }
-    // Timezone : timezone fixe UTC, daylight=0.
+    // Timezone: fixed UTC timezone, daylight=0.
     if tz_ptr != 0 {
         let tz = Timezone {
             tz_minuteswest: 0,
@@ -429,18 +429,18 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64) -> i64 {
     0
 }
 
-/// `sched_yield()` — abandonne volontairement le CPU.
+/// `sched_yield()` — voluntarily yields the CPU.
 ///
-/// Appelle `schedule_yield()` du scheduler qui effectue un context switch
-/// si un autre thread est prêt. Sinon, retourne immédiatement.
+/// Calls scheduler's `schedule_yield()` which performs a context switch
+/// if another thread is ready. Otherwise, returns immediately.
 ///
-/// Performance : ~500–800 cycles (identique au context switch normal).
+/// Performance: ~500–800 cycles (identical to normal context switch).
 pub fn sys_sched_yield() -> i64 {
     FP_YIELD_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: GS:[0x20] est le pointeur TCB du thread courant, invariant percpu.
-    // Non-nul dès que le scheduler est initialisé et qu'un thread tourne.
-    // run_queue() renvoie une référence statique valide (arène percpu).
-    // schedule_yield() est reentrance-safe : désactive la préemption en interne.
+    // SAFETY: GS:[0x20] is the current thread's TCB pointer, percpu invariant.
+    // Non-null as soon as scheduler is initialized and a thread is running.
+    // run_queue() returns a valid static reference (percpu arena).
+    // schedule_yield() is reentrance-safe: disables preemption internally.
     unsafe {
         #[cfg(test)]
         let tcb_ptr: u64 = 0;
@@ -463,10 +463,10 @@ pub fn sys_sched_yield() -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structures C auxiliaires
+// Auxiliary C structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `struct timeval` — POSIX ABI x86_64.
+/// `struct timeval` — x86_64 POSIX ABI.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timeval {
@@ -474,7 +474,7 @@ pub struct Timeval {
     pub tv_usec: i64,
 }
 
-/// `struct timezone` — POSIX (obsolète).
+/// `struct timezone` — POSIX (obsolete).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Timezone {
@@ -483,17 +483,17 @@ pub struct Timezone {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Dispatcher rapide — point d'entrée pour dispatch.rs
+// Fast dispatcher — entry point for dispatch.rs
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tente de satisfaire un syscall par le fast-path.
+/// Attempts to satisfy a syscall via fast-path.
 ///
-/// Retourne `Some(result)` si le syscall est géré, `None` sinon.
-/// Le caller (dispatch.rs) tombera dans le slow-path sur `None`.
+/// Returns `Some(result)` if the syscall is handled, `None` otherwise.
+/// The caller (dispatch.rs) falls back to the slow-path on `None`.
 ///
 /// # Performance
-/// La branche fast-path est prédictée prise (BSP → `inline(always)` ici serait
-/// contre-productif car la fonction est appelée une seule fois par syscall).
+/// The fast-path branch is predicted taken (BSP → `inline(always)` here would be
+/// counter-productive as the function is called once per syscall).
 #[inline]
 pub fn try_fast_path(
     nr: u64,

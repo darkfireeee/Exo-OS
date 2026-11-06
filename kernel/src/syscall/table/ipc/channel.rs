@@ -1,4 +1,4 @@
-//! # syscall/table/ipc/channel.rs — Envoi, réception, RPC et contrôle d'accès IPC natif
+//! # syscall/table/ipc/channel.rs — Sending, receiving, RPC, and native IPC access control
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -14,7 +14,7 @@ pub(super) const IPC_FLAG_INJECT_SRC_PID: u64 = 0x0002;
 pub(super) const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 pub(super) const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
 
-/// Seuil de bascule pile/tas pour `sys_exo_ipc_call`.
+/// Stack/heap threshold switch for `sys_exo_ipc_call`.
 const STACK_RPC_BUF_MAX: usize = 512;
 
 #[inline]
@@ -53,15 +53,15 @@ pub(super) fn validate_ipc_envelope_auth(
         ABI_IPC_ENVELOPE_SIZE, IPC_CAP_TOKEN_OFFSET, IPC_CAP_TOKEN_SIZE,
     };
 
-    // FIX-IPC-AUTH (Security_Audit_Passe2 §A-02) : les messages hors-format
-    // reçoivent NotRequired UNIQUEMENT pour les endpoints de réponse éphémères du kernel.
+    // FIX-IPC-AUTH (Security_Audit_Passe2 §A-02): non-format messages
+    // receive NotRequired ONLY for kernel ephemeral reply endpoints.
     if is_kernel_ephemeral_reply_endpoint(endpoint) {
         return Ok(IpcEnvelopeAuth::NotRequired);
     }
     if caller_can_inject {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
     }
-    // Messages hors-format ABI non éphémères → refus explicite.
+    // Non-ephemeral ABI non-format messages -> explicit rejection.
     if payload.len() != ABI_IPC_ENVELOPE_SIZE {
         return Err(EACCES);
     }
@@ -324,7 +324,7 @@ pub fn sys_exo_ipc_send(
         return e.to_errno();
     }
 
-    // Buffer statique sur la pile (MAX_MSG_SIZE = 240 octets) : 0 allocation SLUB/Heap
+    // Static buffer on the stack (MAX_MSG_SIZE = 240 bytes): 0 SLUB/Heap allocation
     let mut payload_buf = [0u8; crate::ipc::core::constants::MAX_MSG_SIZE];
     let payload = &mut payload_buf[..len];
     if len != 0 {
@@ -431,7 +431,7 @@ pub fn sys_exo_ipc_call(
         None => return EINVAL,
     };
 
-    // Chemin rapide sans allocation sur la pile pour toutes les tailles <= 512 octets
+    // Fast path without allocation on the stack for all sizes <= 512 bytes
     if send_len <= STACK_RPC_BUF_MAX && recv_len <= STACK_RPC_BUF_MAX {
         let mut req_buf = [0u8; STACK_RPC_BUF_MAX];
         let mut resp_buf = [0u8; STACK_RPC_BUF_MAX];

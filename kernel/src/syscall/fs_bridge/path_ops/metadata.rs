@@ -1,4 +1,4 @@
-//! # syscall/fs_bridge/path_ops/metadata.rs — Lecture de répertoire, attributs, permissions et statx
+//! # syscall/fs_bridge/path_ops/metadata.rs — Directory reading, attributes, permissions and statx
 
 use super::super::*;
 use super::operations::fs_open;
@@ -58,7 +58,7 @@ pub fn fs_getdents64(fd: u32, dirp: u64, count: usize, pid: u32) -> Result<i64, 
             d_type: dirent_type_from_kind(entry_ref.kind),
         };
 
-        // SAFETY: LinuxDirent64 est #[repr(C)] et POD.
+        // SAFETY: LinuxDirent64 is #[repr(C)] and POD.
         let header_bytes = unsafe {
             core::slice::from_raw_parts(
                 &header as *const LinuxDirent64 as *const u8,
@@ -308,9 +308,9 @@ pub fn fs_sync(pid: u32) -> Result<i64, FsBridgeError> {
         return Ok(0);
     }
 
-    // FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2) : `sync()` déclenche un commit d'epoch
-    // transactionnel (durabilité atomique données + métadonnées) au lieu d'une
-    // persistance brute blob par blob.
+    // FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2): `sync()` triggers a transactional epoch
+    // commit (atomic data + metadata durability) instead of raw
+    // blob-by-blob persistence.
     match crate::fs::exofs::syscall::epoch_commit::commit_current_epoch() {
         Ok(_) | Err(ExofsError::CommitInProgress) => Ok(0),
         Err(_) => Err(FsBridgeError::Io),

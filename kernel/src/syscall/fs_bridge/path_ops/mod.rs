@@ -1,10 +1,10 @@
-//! # syscall/fs_bridge/path_ops/mod.rs — Résolution de chemins, arborescence, symlinks et métadonnées
+//! # syscall/fs_bridge/path_ops/mod.rs — Path resolution, tree traversal, symlinks and metadata
 //!
-//! Ce module ségrègue la logique de traversée et manipulation du système de fichiers en sous-modules :
-//! - `resolution` : Normalisation des chemins, hash Blake3, parcours et indexation de répertoire.
-//! - `operations` : Primitives VFS POSIX (open, stat, lstat, fstat, mkdir, rmdir, unlink, rename, link).
-//! - `symlinks`   : Gestion et résolution des liens symboliques POSIX (symlink, readlink).
-//! - `metadata`   : Lecture de répertoires (getdents64), droits, attributs, statx, synchronisation.
+//! This module segregates filesystem traversal and manipulation logic into submodules:
+//! - `resolution` : Path normalization, Blake3 hashing, traversal and directory indexing.
+//! - `operations` : POSIX VFS primitives (open, stat, lstat, fstat, mkdir, rmdir, unlink, rename, link).
+//! - `symlinks`   : POSIX symbolic link handling and resolution (symlink, readlink).
+//! - `metadata`   : Directory reading (getdents64), permissions, attributes, statx, synchronization.
 
 pub mod metadata;
 pub mod operations;

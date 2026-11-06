@@ -1,4 +1,4 @@
-//! # syscall/table/common.rs — Types communs, statistiques et validateurs d'arguments
+//! # syscall/table/common.rs — Common types, statistics, and argument validators
 
 use crate::syscall::numbers::{EINVAL, ENOSYS, SYSCALL_TABLE_SIZE};
 use core::sync::atomic::{AtomicU64, Ordering};

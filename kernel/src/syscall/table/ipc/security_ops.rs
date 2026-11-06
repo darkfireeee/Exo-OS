@@ -1,10 +1,10 @@
-//! # syscall/table/ipc/security_ops.rs — Handlers pour Capabilities, Pledge et ExoShield Drain
+//! # syscall/table/ipc/security_ops.rs — Handlers for Capabilities, Pledge, and ExoShield Drain
 
 use crate::syscall::table::common::*;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{copy_from_user, copy_to_user, UserBuf};
 
-/// `exo_cap_create(type, rights, target_pid, token_out_ptr)` → handle ou errno.
+/// `exo_cap_create(type, rights, target_pid, token_out_ptr)` -> handle or errno.
 pub fn sys_exo_cap_create(
     cap_type: u64,
     rights: u64,
@@ -69,7 +69,7 @@ pub fn sys_exo_cap_revoke(handle: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _
     }
 }
 
-/// `exo_cap_check(token_ptr, rights, target_pid, expected_type)` → 0 ou errno.
+/// `exo_cap_check(token_ptr, rights, target_pid, expected_type)` -> 0 or errno.
 pub fn sys_exo_cap_check(
     token_ptr: u64,
     required_rights: u64,
@@ -127,14 +127,14 @@ pub fn sys_exo_cap_check(
     }
 }
 
-/// `exo_pledge(promises, flags, …)` — restreint **irréversiblement** le process
-/// courant (sandbox style pledge() OpenBSD, TIER 2.10). `promises` = bitmask de
-/// `pledge_flags` ; les capacités NON promises deviennent des restrictions
-/// zero-trust enforced au bord syscall (cf. `syscall_restriction_mask` / TIER 1.1).
-/// **Monotone** : ne fait que durcir (RÈGLE PLEDGE-01) — un re-pledge ajoute des
-/// restrictions, n'en retire jamais. Init (PID 1) ne peut pas pledge (PLEDGE-03).
+/// `exo_pledge(promises, flags, ...)` — **irreversibly** restricts the current
+/// process (OpenBSD pledge()-style sandbox, TIER 2.10). `promises` = bitmask of
+/// `pledge_flags`; unpromised capabilities become zero-trust restrictions
+/// enforced at the syscall boundary (see `syscall_restriction_mask` / TIER 1.1).
+/// **Monotonic**: only hardens (RULE PLEDGE-01) — re-pledging adds
+/// restrictions, never removes any. Init (PID 1) cannot pledge (PLEDGE-03).
 ///
-/// Retour : `0` si appliqué (ou rien à restreindre), `EPERM` si init / PID hors-plage.
+/// Returns: `0` if applied (or nothing to restrict), `EPERM` if init / PID out of range.
 pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PLEDGE);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
@@ -143,10 +143,10 @@ pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, 
     }
     let restrictions = crate::security::zero_trust::pledge_promises_to_restrictions(promises);
     if restrictions == 0 {
-        // Toutes les capacités enforced sont promises → rien à restreindre (succès).
+        // All enforced capabilities are promised -> nothing to restrict (success).
         return 0;
     }
-    // restrict_process est monotone et refuse init (PID 1) / PID hors-plage.
+    // restrict_process is monotonic and rejects init (PID 1) / PID out of range.
     if crate::security::zero_trust::restrict_process(caller_pid, restrictions) {
         0
     } else {
@@ -154,11 +154,11 @@ pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, 
     }
 }
 
-/// `exo_shield_drain(buf_ptr, count, …)` — draine le feed d'événements de sécurité
-/// kernel→exo_shield (TIER 3.1). **Réservé au serveur exo_shield** (gaté sur sa
-/// classe de service) pour éviter toute fuite d'événements vers un process
-/// arbitraire. Copie au plus `min(count, 64)` `ShieldEvent` dans `buf_ptr` ;
-/// retourne le nombre drainé (≥ 0) ou un errno négatif.
+/// `exo_shield_drain(buf_ptr, count, ...)` — drains the kernel->exo_shield security
+/// event feed (TIER 3.1). **Reserved for the exo_shield server** (gated on its
+/// service class) to prevent event leaks to an arbitrary process.
+/// Copies at most `min(count, 64)` `ShieldEvent` into `buf_ptr`;
+/// returns the drained count (>= 0) or a negative errno.
 pub fn sys_exo_shield_drain(
     buf_ptr: u64,
     count: u64,
@@ -174,7 +174,7 @@ pub fn sys_exo_shield_drain(
     if caller_pid == 0 {
         return EPERM;
     }
-    // Seul exo_shield draine le feed.
+    // Only exo_shield drains the feed.
     if crate::security::ipc_policy::service_class_of(crate::process::core::pid::Pid(caller_pid))
         != crate::security::ipc_policy::ServiceClass::ExoShield
     {
@@ -185,7 +185,7 @@ pub fn sys_exo_shield_drain(
     if count == 0 {
         return 0;
     }
-    // Au plus 64 événements / appel (≈ 2.5 KiB) — borne la copie + le lock.
+    // At most 64 events / call (~2.5 KiB) — bounds copy + lock.
     let n = count.min(64);
     let bytes = n * SHIELD_EVENT_SIZE;
     if UserBuf::validate(buf_ptr, bytes, 64 * SHIELD_EVENT_SIZE).is_err() {

@@ -1,59 +1,58 @@
 // kernel/src/syscall/fixup.rs
 //
-// Table de fixup pour les page faults kernel durant copy_from_user / copy_to_user.
+// Fixup table for kernel page faults during copy_from_user / copy_to_user.
 //
-// ## Problème
-// Quand un handler syscall appelle copy_from_user() ou copy_to_user() et que
-// la page userspace n'est pas présente (CoW non résolu, demand paging, page
-// invalide), un #PF se déclenche en contexte RING 0. Sans table de fixup,
-// do_page_fault() panique avec "KernelFault".
+// ## Problem
+// When a syscall handler calls copy_from_user() or copy_to_user() and the
+// userspace page is not present (unresolved CoW, demand paging, invalid page),
+// a #PF is triggered in RING 0 context. Without a fixup table,
+// do_page_fault() panics with "KernelFault".
 //
 // ## Solution
-// Chaque site d'accès userspace dans copy_from_user / copy_to_user enregistre
-// une paire (fault_rip, recovery_rip) :
-//   - fault_rip    : adresse de l'instruction qui peut faulter
-//   - recovery_rip : adresse où reprendre si le fault est non-récupérable
+// Each userspace access site in copy_from_user / copy_to_user registers
+// a pair (fault_rip, recovery_rip):
+//   - fault_rip    : address of the instruction that can fault
+//   - recovery_rip : address where execution resumes if fault is unrecoverable
 //
-// do_page_fault() consulte cette table AVANT de paniquer. Si fault_rip est
-// connu, il patche frame->rip = recovery_rip et retourne. La fonction de copie
-// reprend au point de recovery avec un indicateur d'erreur.
+// do_page_fault() checks this table BEFORE panicking. If fault_rip is
+// known, it patches frame->rip = recovery_rip and returns. The copy function
+// resumes at the recovery point with an error indicator.
 //
-// ## Implémentation
-// Rust ne peut pas annoter des instructions individuelles avec des labels ASM
-// de la même façon que C (__ex_table). On utilise donc une approche légèrement
-// différente : copy_from_user_safe et copy_to_user_safe sont des wrappers ASM
-// qui s'enregistrent dans une table statique avant la boucle critique et
-// se désenregistrent après. La table contient une entrée par CPU (les copies
-// user sont séquentielles par thread).
+// ## Implementation
+// Rust cannot annotate individual instructions with ASM labels in the same way
+// as C (__ex_table). We therefore use a slightly different approach:
+// copy_from_user_safe and copy_to_user_safe are ASM wrappers that register
+// in a static table before the critical loop and unregister after.
+// The table contains one entry per CPU (user copies are sequential per thread).
 //
-// Architecture :
-//   KernelCopyState par CPU (dans percpu) :
-//     - active: bool       — une copie est en cours sur ce CPU
-//     - fault_rsp: u64     — RSP au moment de l'entrée dans la copie
-//     - recovery_fn: usize — adresse de la fonction de recovery (retourne EFAULT)
+// Architecture:
+//   KernelCopyState per CPU (in percpu):
+//     - active: bool       — a copy is in progress on this CPU
+//     - fault_rsp: u64     — RSP upon entry into copy
+//     - recovery_fn: usize — recovery function address (returns EFAULT)
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-/// Nombre maximum de CPUs supportés (doit matcher MAX_CPUS)
+/// Maximum number of supported CPUs (must match MAX_CPUS)
 const FIXUP_MAX_CPUS: usize = 256;
 
-/// État de copie kernel→user / user→kernel pour un CPU.
+/// Kernel→user / user→kernel copy state for a CPU.
 ///
-/// Quand une copie user est active sur un CPU, `active` est vrai et
-/// `recovery_rsp` / `recovery_rip` indiquent où reprendre en cas de #PF.
+/// When a user copy is active on a CPU, `active` is true and
+/// `recovery_rsp` / `recovery_rip` indicate where to resume in case of #PF.
 #[repr(C, align(64))]
 pub struct KernelCopyState {
-    /// Une copie userspace est en cours sur ce CPU.
+    /// A userspace copy is in progress on this CPU.
     pub active: AtomicBool,
     _pad0: [u8; 7],
-    /// RSP au moment de l'entrée dans la fonction de copie (pour unwinding).
+    /// RSP at entry into the copy function (for unwinding).
     pub recovery_rsp: AtomicU64,
-    /// RIP de reprise : l'instruction après le site de fault retournera EFAULT.
+    /// Resume RIP: the instruction following the fault site will return EFAULT.
     pub recovery_rip: AtomicUsize,
     _pad1: [u8; 40],
 }
 
-// SAFETY: tous les champs sont atomiques.
+// SAFETY: all fields are atomic.
 unsafe impl Send for KernelCopyState {}
 unsafe impl Sync for KernelCopyState {}
 
@@ -69,82 +68,82 @@ impl KernelCopyState {
     }
 }
 
-// Assertion compile-time : chaque entrée doit tenir dans une cache line (64B)
+// Compile-time assertion: each entry must fit into a cache line (64B)
 const _: () = assert!(
     core::mem::size_of::<KernelCopyState>() == 64,
     "KernelCopyState doit faire exactement 64 bytes (1 cache line)"
 );
 
-/// Table globale des états de copie, indexée par cpu_id.
+/// Global table of copy states, indexed by cpu_id.
 static COPY_STATES: [KernelCopyState; FIXUP_MAX_CPUS] = {
-    // Rust ne supporte pas `[expr; N]` pour N>32 avec const fn non-Copy,
-    // on utilise un tableau initialisé manuellement via transmute-free trick.
-    // Solution : tableau de MaybeUninit initialisé dans init_fixup_table().
-    // Pour éviter un UnsafeCell global, on initialise avec new() via const.
+    // Rust does not support `[expr; N]` for N>32 with non-Copy const fn,
+    // so we use an array initialized manually via a transmute-free trick.
+    // Solution: MaybeUninit array initialized in init_fixup_table().
+    // To avoid a global UnsafeCell, we initialize with new() via const.
     const INIT: KernelCopyState = KernelCopyState::new();
     [INIT; FIXUP_MAX_CPUS]
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre le début d'une copie userspace sur le CPU courant.
+/// Registers the start of a userspace copy on the current CPU.
 ///
-/// Doit être appelé AVANT tout accès à un pointeur userspace.
-/// `recovery_rip` est l'adresse où reprendre si le #PF n'est pas récupérable
-/// (typiquement l'instruction `return Err(SyscallError::Fault)`).
+/// Must be called BEFORE any access to a userspace pointer.
+/// `recovery_rip` is the address where execution resumes if #PF is not recoverable
+/// (typically the `return Err(SyscallError::Fault)` instruction).
 ///
 /// # Safety
-/// `recovery_rip` doit pointer vers du code kernel valide dans la même fonction.
+/// `recovery_rip` must point to valid kernel code in the same function.
 #[inline]
 pub unsafe fn fixup_enter(cpu_id: usize, recovery_rip: usize) {
     if cpu_id >= FIXUP_MAX_CPUS {
         return;
     }
     let state = &COPY_STATES[cpu_id];
-    // Lire RSP courant pour le unwinding (non utilisé dans cette implémentation
-    // simplifiée, mais disponible pour un unwinder futur)
+    // Read current RSP for unwinding (unused in this simplified
+    // implementation, but available for a future unwinder)
     let rsp: u64;
     core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags));
     state.recovery_rsp.store(rsp, Ordering::Relaxed);
     state.recovery_rip.store(recovery_rip, Ordering::Relaxed);
-    // Publier `active` en dernier (Release) pour que recovery_rip/rsp
-    // soient visibles avant que le handler #PF lise active.
+    // Publish `active` last (Release) so that recovery_rip/rsp
+    // are visible before the #PF handler reads active.
     state.active.store(true, Ordering::Release);
 }
 
-/// Désenregistre la copie userspace sur le CPU courant.
+/// Unregisters the userspace copy on the current CPU.
 ///
-/// Doit être appelé APRÈS la fin de la boucle d'accès userspace,
-/// succès ou erreur.
+/// Must be called AFTER the userspace access loop finishes,
+/// whether on success or error.
 #[inline]
 pub fn fixup_exit(cpu_id: usize) {
     if cpu_id >= FIXUP_MAX_CPUS {
         return;
     }
-    // Acquire pour que tout read/write de la copie soit visible avant la
-    // désactivation.
+    // Acquire so that any read/write from the copy is visible before
+    // deactivation.
     COPY_STATES[cpu_id].active.store(false, Ordering::Release);
 }
 
-/// Consulte la table de fixup pour un #PF kernel sur `fault_rip`.
+/// Consults the fixup table for a kernel #PF at `fault_rip`.
 ///
-/// Appelé par do_page_fault() avant de paniquer.
+/// Called by do_page_fault() before panicking.
 ///
-/// Retourne `Some(recovery_rip)` si une copie userspace est en cours sur
-/// `cpu_id` (le fault peut être intercepté), `None` sinon (panic légitime).
+/// Returns `Some(recovery_rip)` if a userspace copy is in progress on
+/// `cpu_id` (the fault can be intercepted), `None` otherwise (legitimate panic).
 ///
 /// # Safety
-/// Doit être appelé depuis le handler #PF kernel, avec les interruptions
-/// désactivées (garanties par le handler x86-64).
+/// Must be called from the kernel #PF handler, with interrupts
+/// disabled (guaranteed by the x86-64 handler).
 #[inline]
 pub fn fixup_lookup(cpu_id: usize) -> Option<usize> {
     if cpu_id >= FIXUP_MAX_CPUS {
         return None;
     }
     let state = &COPY_STATES[cpu_id];
-    // Acquire pour synchroniser avec fixup_enter (Release sur active).
+    // Acquire to synchronize with fixup_enter (Release on active).
     if !state.active.load(Ordering::Acquire) {
         return None;
     }
@@ -156,44 +155,44 @@ pub fn fixup_lookup(cpu_id: usize) -> Option<usize> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wrappers copy_from/to_user avec protection fixup
+// copy_from/to_user wrappers with fixup protection
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Copie `len` octets de `src` (userspace) vers `dst` (kernel), avec fixup #PF.
+/// Copies `len` bytes from `src` (userspace) to `dst` (kernel), with #PF fixup.
 ///
-/// En cas de page fault non récupérable sur `src`, retourne `Err(EFAULT)`
-/// au lieu de paniquer.
+/// In case of an unrecoverable page fault on `src`, returns `false` (or Err)
+/// instead of panicking.
 ///
-/// Remplace copy_from_user() dans validation.rs.
+/// Replaces copy_from_user() in validation.rs.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
     if len == 0 {
         return true;
     }
 
-    // Label de recovery : si le #PF se produit pendant la boucle ci-dessous,
-    // le handler patche RIP sur ce label et `faulted` vaut true au retour.
+    // Recovery label: if #PF occurs during the loop below,
+    // the handler patches RIP to this label and `faulted` is true on return.
     //
-    // Implémentation : on utilise une variable atomique CPU-locale pour
-    // signaler le fault plutôt qu'un vrai setjmp/longjmp. Le handler #PF
-    // appelle fixup_signal_fault(cpu_id) qui set FAULTED[cpu_id].
+    // Implementation: we use a CPU-local atomic variable to
+    // signal the fault rather than true setjmp/longjmp. The #PF handler
+    // calls fixup_signal_fault(cpu_id) which sets FAULTED[cpu_id].
     FAULTED[cpu_id.min(FIXUP_MAX_CPUS - 1)].store(false, Ordering::Relaxed);
 
-    // Calculer l'adresse de recovery : l'instruction qui vérifie FAULTED
-    // après la boucle. On utilise une étiquette Rust via un bloc.
+    // Compute recovery address: the instruction that checks FAULTED
+    // after the loop. We use a Rust label via a block.
     let recovery_addr = fault_recovery_stub as *const () as usize;
 
-    // SAFETY: recovery_addr est une fonction kernel valide.
+    // SAFETY: recovery_addr is a valid kernel function.
     unsafe {
         fixup_enter(cpu_id, recovery_addr);
     }
 
-    // Boucle d'accès userspace — faultable
-    // SAFETY: src validé par l'appelant (validate_user_range). dst est kernel.
+    // Userspace access loop — faultable
+    // SAFETY: src validated by caller (validate_user_range). dst is kernel.
     let ok = unsafe {
         let mut faulted_mid = false;
         for i in 0..len {
-            // Si un fault intermédiaire a été signalé par le handler #PF
+            // If an intermediate fault was signaled by the #PF handler
             if FAULTED[cpu_id.min(FIXUP_MAX_CPUS - 1)].load(Ordering::Relaxed) {
                 faulted_mid = true;
                 break;
@@ -206,8 +205,8 @@ pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usi
 
     fixup_exit(cpu_id);
 
-    // Vérifier une dernière fois (le handler peut avoir signalé pendant la
-    // dernière itération)
+    // Check one last time (the handler may have signaled during the
+    // last iteration)
     if FAULTED[cpu_id.min(FIXUP_MAX_CPUS - 1)].load(Ordering::Relaxed) {
         return false;
     }
@@ -215,7 +214,7 @@ pub fn copy_from_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usi
     ok
 }
 
-/// Copie `len` octets de `src` (kernel) vers `dst` (userspace), avec fixup #PF.
+/// Copies `len` bytes from `src` (kernel) to `dst` (userspace), with #PF fixup.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_to_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize) -> bool {
     if len == 0 {
@@ -225,7 +224,7 @@ pub fn copy_to_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize
     FAULTED[cpu_id.min(FIXUP_MAX_CPUS - 1)].store(false, Ordering::Relaxed);
     let recovery_addr = fault_recovery_stub as *const () as usize;
 
-    // SAFETY: recovery_addr est une fonction kernel valide.
+    // SAFETY: recovery_addr is a valid kernel function.
     unsafe {
         fixup_enter(cpu_id, recovery_addr);
     }
@@ -253,43 +252,43 @@ pub fn copy_to_user_safe(dst: *mut u8, src: *const u8, len: usize, cpu_id: usize
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Signal de fault et stub de recovery
+// Fault signal and recovery stub
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tableau de flags "fault signalé" par CPU.
-/// Set par le handler #PF quand fixup_lookup() retourne Some.
+/// Array of "fault signaled" flags per CPU.
+/// Set by the #PF handler when fixup_lookup() returns Some.
 static FAULTED: [AtomicBool; FIXUP_MAX_CPUS] = {
     const INIT_BOOL: AtomicBool = AtomicBool::new(false);
     [INIT_BOOL; FIXUP_MAX_CPUS]
 };
 
-/// Signale un fault pour le CPU `cpu_id`.
+/// Signals a fault for CPU `cpu_id`.
 ///
-/// Appelé par do_page_fault() quand fixup_lookup() a retourné Some.
-/// Désactive le fixup et pose le flag FAULTED pour que copy_from/to_user_safe
-/// retourne false.
+/// Called by do_page_fault() when fixup_lookup() returned Some.
+/// Deactivates fixup and sets FAULTED flag so copy_from/to_user_safe
+/// returns false.
 #[inline]
 pub fn fixup_signal_fault(cpu_id: usize) {
     if cpu_id >= FIXUP_MAX_CPUS {
         return;
     }
     FAULTED[cpu_id].store(true, Ordering::Release);
-    // Désactiver le fixup pour que le prochain accès kernel faulte normalement
+    // Deactivate fixup so the next kernel access faults normally
     fixup_exit(cpu_id);
 }
 
-/// Stub de recovery — adresse enregistrée dans recovery_rip.
+/// Recovery stub — address registered in recovery_rip.
 ///
-/// Cette fonction n'est jamais appelée directement. Son adresse sert de
-/// cible pour fixup_lookup(). Le handler #PF n'utilise pas cette adresse
-/// pour un jump réel (on utilise fixup_signal_fault à la place), mais
-/// elle est conservée pour une future implémentation via longjmp kernel.
+/// This function is never called directly. Its address serves as a
+/// target for fixup_lookup(). The #PF handler does not use this address
+/// for an actual jump (we use fixup_signal_fault instead), but
+/// it is preserved for a future implementation via kernel longjmp.
 #[inline(never)]
 #[cold]
 extern "C" fn fault_recovery_stub() {
-    // Point de récupération symbolique — le handler #PF appelle
-    // fixup_signal_fault() qui set FAULTED, la boucle dans copy_from/to_user_safe
-    // détecte le flag et retourne false (EFAULT).
+    // Symbolic recovery point — the #PF handler calls
+    // fixup_signal_fault() which sets FAULTED; the loop in copy_from/to_user_safe
+    // detects the flag and returns false (EFAULT).
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,7 +301,7 @@ mod tests {
 
     #[test]
     fn fixup_lookup_inactive_returns_none() {
-        // Sur le CPU 0 sans copie active, lookup retourne None
+        // On CPU 0 without active copy, lookup returns None
         COPY_STATES[0].active.store(false, Ordering::Release);
         assert!(fixup_lookup(0).is_none());
     }

@@ -1,4 +1,4 @@
-//! # syscall/fs_bridge/path_ops/operations.rs — Opérations VFS / POSIX sur les fichiers et dossiers
+//! # syscall/fs_bridge/path_ops/operations.rs — POSIX / VFS operations on files and directories
 
 use super::super::*;
 use super::resolution::*;
@@ -128,7 +128,7 @@ pub fn fs_stat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeErro
     Ok(0)
 }
 
-/// `lstat(path, stat_ptr)` — ne suit pas le symlink terminal.
+/// `lstat(path, stat_ptr)` — does not follow the terminal symlink.
 #[inline]
 pub fn fs_lstat(path: &[u8], stat_ptr: u64, pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
@@ -195,9 +195,9 @@ pub fn fs_openat(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    // Cas supportés sans ambiguïté:
-    // - AT_FDCWD + chemin relatif/absolu
-    // - chemin absolu, quel que soit dirfd (sémantique POSIX)
+    // Unambiguously supported cases:
+    // - AT_FDCWD + relative/absolute path
+    // - absolute path, regardless of dirfd (POSIX semantics)
     if dirfd == AT_FDCWD || path.starts_with(b"/") {
         return fs_open(path, flags, mode, pid);
     }

@@ -1,10 +1,10 @@
-//! # syscall/table/fs/io.rs — Handlers I/O de lecture/écriture, vecteurs et flux
+//! # syscall/table/fs/io.rs — I/O read/write, vectored, and stream handlers
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;
 use crate::syscall::validation::{validate_fd, UserBuf, IO_BUF_MAX};
 
-/// `read(fd, buf, count)` → nombre d'octets lus ou errno.
+/// `read(fd, buf, count)` -> number of bytes read or errno.
 pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_READ);
     if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
@@ -24,22 +24,22 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
         Err(e) => return e.to_errno(),
     };
     let len = count as usize;
-    // Borne maximale pour éviter les timeout : IO_BUF_MAX
+    // Maximum bound to prevent timeouts: IO_BUF_MAX
     if len > IO_BUF_MAX {
         return E2BIG;
     }
-    // Valider le buffer de destination
+    // Validate destination buffer
     let _validated_buf = match UserBuf::validate(buf_ptr, len, IO_BUF_MAX) {
         Ok(b) => b,
         Err(e) => return e.to_errno(),
     };
-    // CORRECTION P0-04 : câbler vers fs_bridge
+    // FIX P0-04: wire to fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_read(fd as u32, buf_ptr, len, pid))
 }
 
-/// `write(fd, buf, count)` → nombre d'octets écrits ou errno.
+/// `write(fd, buf, count)` -> number of bytes written or errno.
 pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WRITE);
     if let Some(sock_fd) = crate::syscall::net_bridge::socket_handle_from_raw(fd) {
@@ -66,7 +66,7 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
         Ok(b) => b,
         Err(e) => return e.to_errno(),
     };
-    // CORRECTION P0-04 : câbler vers fs_bridge
+    // FIX P0-04: wire to fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_write(fd as u32, buf_ptr, len, pid))
@@ -121,7 +121,7 @@ pub fn sys_pwrite64(fd: u64, buf_ptr: u64, count: u64, offset: u64, _a5: u64, _a
 /// `readv(fd, iov, iovcnt)`.
 pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_READV);
-    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    // POSIX UIO_MAXIOV / IOV_MAX bound = 1024
     if iovcnt > 1024 {
         return EINVAL;
     }
@@ -183,7 +183,7 @@ pub fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u6
 /// `writev(fd, iov, iovcnt)`.
 pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_WRITEV);
-    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    // POSIX UIO_MAXIOV / IOV_MAX bound = 1024
     if iovcnt > 1024 {
         return EINVAL;
     }
@@ -245,7 +245,7 @@ pub fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64, _a4: u64, _a5: u64, _a6: u
 /// `preadv(fd, iov, iovcnt, offset)`.
 pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PREADV);
-    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    // POSIX UIO_MAXIOV / IOV_MAX bound = 1024
     if iovcnt > 1024 {
         return EINVAL;
     }
@@ -270,7 +270,7 @@ pub fn sys_preadv(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6
 /// `pwritev(fd, iov, iovcnt, offset)`.
 pub fn sys_pwritev(fd: u64, iov_ptr: u64, iovcnt: u64, offset: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PWRITEV);
-    // Borne POSIX UIO_MAXIOV / IOV_MAX = 1024
+    // POSIX UIO_MAXIOV / IOV_MAX bound = 1024
     if iovcnt > 1024 {
         return EINVAL;
     }

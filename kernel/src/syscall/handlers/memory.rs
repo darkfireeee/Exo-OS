@@ -1,11 +1,11 @@
-//! # syscall/handlers/memory.rs — Thin wrappers mémoire (mmap, munmap, mprotect, brk)
+//! # syscall/handlers/memory.rs — Memory thin wrappers (mmap, munmap, mprotect, brk)
 //!
-//! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
-//! Délègue à memory::virtual::mmap (déjà intégré dans table.rs).
+//! RULE SYS-03: THIN WRAPPERS ONLY.
+//! Delegates to memory::virtual::mmap (already integrated into table.rs).
 
 use crate::syscall::errno::{EINVAL, ENOMEM};
 
-/// `mmap(addr, len, prot, flags, fd, off)` → adresse mappée ou errno.
+/// `mmap(addr, len, prot, flags, fd, off)` -> mapped address or errno.
 pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -> i64 {
     if len == 0 {
         return EINVAL;
@@ -23,7 +23,7 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
     }
 }
 
-/// `munmap(addr, len)` → 0 ou errno.
+/// `munmap(addr, len)` -> 0 or errno.
 pub fn sys_munmap(addr: u64, len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if len == 0 {
         return EINVAL;
@@ -34,7 +34,7 @@ pub fn sys_munmap(addr: u64, len: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
 }
 
-/// `mprotect(addr, len, prot)` → 0 ou errno.
+/// `mprotect(addr, len, prot)` -> 0 or errno.
 pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if len == 0 {
         return EINVAL;
@@ -45,7 +45,7 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
     }
 }
 
-/// `brk(addr)` → nouvelle borne du segment data ou errno.
+/// `brk(addr)` -> new boundary of data segment or errno.
 pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     match crate::memory::virt::mmap::do_brk(addr) {
         Ok(new_brk) => {

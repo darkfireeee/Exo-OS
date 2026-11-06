@@ -1,4 +1,4 @@
-//! # syscall/table/fs/exofs_wrappers.rs — Wrappers pour les appels natifs ExoFS
+//! # syscall/table/fs/exofs_wrappers.rs — Wrappers for native ExoFS calls
 
 pub use crate::fs::exofs::syscall::{
     sys_exofs_epoch_commit, sys_exofs_export_object, sys_exofs_gc_trigger,
@@ -10,9 +10,9 @@ pub use crate::fs::exofs::syscall::{
     sys_exofs_snapshot_list, sys_exofs_snapshot_mount,
 };
 
-/// Wrapper ABI pour SYS_EXOFS_OBJECT_SET_META.
+/// ABI wrapper for SYS_EXOFS_OBJECT_SET_META.
 ///
-/// Nouveau contrat: a1=args_ptr(SetMetaArgs), a2=cap_token, a3..a6 ignorés.
+/// New contract: a1=args_ptr(SetMetaArgs), a2=cap_token, a3..a6 ignored.
 pub fn sys_exofs_object_set_meta_abi(
     args_ptr: u64,
     cap_token: u64,

@@ -1,11 +1,11 @@
-//! # syscall/table/fs/descriptors.rs — Handlers de gestion des descripteurs de fichiers
+//! # syscall/table/fs/descriptors.rs — File descriptor management handlers
 
 use crate::fs::exofs::syscall::object_fd::open_flags;
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;
 use crate::syscall::validation::{read_user_path, validate_fd, validate_flags};
 
-/// `open(path, flags, mode)` → fd ou errno.
+/// `open(path, flags, mode)` -> fd or errno.
 pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_OPEN);
     let pid = current_pid_u32();
@@ -14,7 +14,7 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
         Err(e) => return e.to_errno(),
     };
     // Flags O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_NONBLOCK
-    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
+    // FIX-SYSCALL-OPENFLAGS-01: includes O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
     let allowed_flags = 0x007F_FFFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f,
@@ -24,7 +24,7 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
         Ok(v) => v,
         Err(e) => return e,
     };
-    // CORRECTION P0-04 : câbler vers fs_bridge
+    // FIX P0-04: wire to fs_bridge
     use crate::syscall::fs_bridge;
     fs_bridge::bridge_result(fs_bridge::fs_open(path.as_bytes(), flags as u32, mode, pid))
 }
@@ -50,7 +50,7 @@ pub fn sys_creat(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     ))
 }
 
-/// `close(fd)` → 0 ou errno.
+/// `close(fd)` -> 0 or errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLOSE);
     use crate::syscall::net_bridge;
@@ -61,13 +61,13 @@ pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
-    // CORRECTION P0-04 : câbler vers fs_bridge
+    // FIX P0-04: wire to fs_bridge
     use crate::syscall::fs_bridge;
     let pid = current_pid_u32();
     fs_bridge::bridge_result(fs_bridge::fs_close(fd as u32, pid))
 }
 
-/// `lseek(fd, offset, whence)` → nouvelle position ou errno.
+/// `lseek(fd, offset, whence)` -> new position or errno.
 pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_LSEEK);
     if crate::syscall::net_bridge::socket_handle_from_raw(fd).is_some() {
@@ -98,7 +98,7 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
         Ok(p) => p,
         Err(e) => return e.to_errno(),
     };
-    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
+    // FIX-SYSCALL-OPENFLAGS-01: includes O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
     let allowed_flags = 0x007F_FFFFu64;
     let flags = match validate_flags(flags, allowed_flags) {
         Ok(f) => f,
@@ -122,7 +122,7 @@ pub fn sys_openat(dirfd: u64, path_ptr: u64, flags: u64, mode: u64, _a5: u64, _a
     ))
 }
 
-/// `dup(oldfd)` → nouveau fd ou errno.
+/// `dup(oldfd)` -> new fd or errno.
 pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DUP);
     let fd = match validate_fd(oldfd) {

@@ -22,60 +22,60 @@ use crate::fs::exofs::syscall::object_store;
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
-// SAFETY: accès protégé par le SpinMutex ci-dessous.
+// SAFETY: access protected by the SpinMutex below.
 unsafe impl Sync for CwdMap {}
 
 pub static mut CWD_MAP: CwdMap = CwdMap {
     slots: [const { CwdEntry::empty() }; CWD_MAP_SIZE],
 };
 
-/// Erreurs retournées par le bridge fs.
+/// Errors returned by the fs bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsBridgeError {
-    /// fs/ non encore initialisé (FS_READY = false).
+    /// fs/ not yet initialized (FS_READY = false).
     NotReady,
-    /// Descripteur de fichier invalide.
+    /// Invalid file descriptor.
     BadFd,
-    /// Chemin invalide ou trop long.
+    /// Invalid or too long path.
     BadPath,
-    /// Fichier non trouvé.
+    /// File not found.
     NotFound,
-    /// Permission refusée.
+    /// Permission denied.
     PermDenied,
-    /// Pointeur userspace invalide (EFAULT).
+    /// Invalid userspace pointer (EFAULT).
     Fault,
-    /// Argument invalide.
+    /// Invalid argument.
     Invalid,
-    /// Espace disque insuffisant.
+    /// Insufficient disk space.
     NoSpace,
-    /// Memoire kernel insuffisante.
+    /// Insufficient kernel memory.
     NoMemory,
-    /// Existe déjà.
+    /// Already exists.
     Exists,
-    /// Pas un répertoire.
+    /// Not a directory.
     NotDir,
-    /// Est un répertoire (pas un fichier ordinaire).
+    /// Is a directory (not a regular file).
     IsDir,
-    /// Répertoire non vide.
+    /// Directory not empty.
     NotEmpty,
-    /// Boucle de symlinks.
+    /// Symlink loop.
     Loop,
-    /// Erreur I/O non spécifiée.
+    /// Unspecified I/O error.
     Io,
-    /// Opération non bloquante sans donnée disponible.
+    /// Non-blocking operation with no data available.
     WouldBlock,
-    /// Appel bloquant interrompu par un signal.
+    /// Blocking call interrupted by a signal.
     Interrupted,
-    /// Écriture sur pipe sans lecteur.
+    /// Write to pipe with no reader.
     BrokenPipe,
-    /// Recherche invalide (pipe, socket, etc.) (ESPIPE).
+    /// Illegal seek (pipe, socket, etc.) (ESPIPE).
     IllegalSeek,
-    /// Tampon trop petit pour le résultat (ERANGE).
+    /// Buffer too small for result (ERANGE).
     Range,
 }
 
 impl FsBridgeError {
-    /// Convertit en errno POSIX (valeur négative).
+    /// Converts to POSIX errno (negative value).
     pub fn to_errno(self) -> i64 {
         match self {
             FsBridgeError::NotReady => -11,   // EAGAIN
@@ -202,9 +202,9 @@ pub const TTY_MSG_IOCTL: u32 = 0x133;
 
 pub const TTY_LINE_MAX: usize = 184;
 
-// PATCH-TTY-01: timeout reduit de 5 s a 500 ms.
-// Un write() utilisateur qui attend 5 s sur un tty_server lent gele le shell.
-// 500 ms est suffisant pour absorber une contention IPC normale.
+// PATCH-TTY-01: timeout reduced from 5 s to 500 ms.
+// A user write() waiting 5 s on a slow tty_server freezes the shell.
+// 500 ms is sufficient to absorb normal IPC contention.
 pub const TTY_SEND_TIMEOUT_NS: u64 = 500_000_000;
 
 pub const PATH_INDEX_KIND_DIR: u8 = 0;
@@ -759,7 +759,7 @@ pub fn read_signed_offset(ptr: u64) -> Result<u64, FsBridgeError> {
     Ok(value as u64)
 }
 
-/// Convertit un `Result<i64, FsBridgeError>` en code de retour syscall.
+/// Converts a `Result<i64, FsBridgeError>` to a syscall return code.
 #[inline(always)]
 pub fn bridge_result(r: Result<i64, FsBridgeError>) -> i64 {
     match r {

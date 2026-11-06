@@ -1,15 +1,15 @@
-//! # syscall/compat/posix.rs — Conformité POSIX.1-2017 des syscalls
+//! # syscall/compat/posix.rs — POSIX.1-2017 syscall compliance
 //!
-//! Ce module centralise :
-//! 1. Les constantes POSIX manquantes des fichiers d'en-tête.
-//! 2. Les wrappers POSIX complémentaires (fonctions qui existent en POSIX
-//!    mais dont l'implémentation est répartie dans plusieurs modules kernel).
-//! 3. Les helpers de conversion entre types Exo-OS et types POSIX ABI.
-//! 4. La validation des arguments POSIX (ex: valeurs `whence` pour lseek).
+//! This module centralizes:
+//! 1. Missing POSIX constants from header files.
+//! 2. Complementary POSIX wrappers (functions that exist in POSIX
+//!    whose implementation is spread across multiple kernel modules).
+//! 3. Conversion helpers between Exo-OS types and POSIX ABI types.
+//! 4. Validation of POSIX arguments (e.g. `whence` values for lseek).
 //!
-//! ## Syscalls POSIX couverts par ce module
+//! ## POSIX syscalls covered by this module
 //! - `getgroups` / `setgroups`
-//! - `setuid` / `setgid` / `setresuid` / `setresgid` et variantes
+//! - `setuid` / `setgid` / `setresuid` / `setresgid` and variants
 //! - `umask`
 //! - `setsid` / `getsid`
 //! - `setpgid` / `getpgid`
@@ -17,11 +17,11 @@
 //! - `getdents64`
 //! - `readlink` / `readlinkat`
 //!
-//! Les syscalls mathématiquement simples (getuid, getgid, etc.) sont
-//! dans `fast_path.rs`. Ce module gère ceux qui nécessitent des
-//! structures de données ou de la logique.
+//! Mathematically simple syscalls (getuid, getgid, etc.) reside in
+//! `fast_path.rs`. This module handles those requiring data
+//! structures or logic.
 //!
-//! ## Référence POSIX
+//! ## POSIX Reference
 //! POSIX.1-2017 (IEEE Std 1003.1-2017)
 
 use crate::process::core::pcb::process_flags;
@@ -33,7 +33,7 @@ use crate::syscall::validation::{read_user_typed, write_user_typed, SyscallError
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteur
+// Counter
 // ─────────────────────────────────────────────────────────────────────────────
 
 static POSIX_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -42,16 +42,16 @@ static POSIX_CALL_COUNT: AtomicU64 = AtomicU64::new(0);
 fn inc_posix() {
     POSIX_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
 }
-/// Retourne le nombre de syscalls POSIX traités par ce module.
+/// Returns the number of POSIX syscalls processed by this module.
 pub fn posix_call_count() -> u64 {
     POSIX_CALL_COUNT.load(Ordering::Relaxed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes POSIX — Flags open(2) / lseek(2) / mmap(2) / etc.
+// POSIX constants — Flags open(2) / lseek(2) / mmap(2) / etc.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags `open(2)` / `openat(2)` — conforme POSIX.1-2017 + Linux extras.
+/// Flags `open(2)` / `openat(2)` — POSIX.1-2017 compliant + Linux extras.
 pub mod open_flags {
     pub const O_RDONLY: u32 = 0x0000;
     pub const O_WRONLY: u32 = 0x0001;
@@ -72,12 +72,12 @@ pub mod open_flags {
     pub const O_SYNC: u32 = 0x0010_1000;
     pub const O_PATH: u32 = 0x0020_0000;
     pub const O_TMPFILE: u32 = 0x0040_0000;
-    /// Masque de tous les flags autorisés (pour validate_flags)
-    // FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
+    /// Mask of all allowed flags (for validate_flags)
+    // FIX-SYSCALL-OPENFLAGS-01 : includes O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (T9-008)
     pub const ALLOWED_MASK: u64 = 0x007F_FFFFu64;
 }
 
-/// Valeurs `whence` pour `lseek(2)`.
+/// `whence` values for `lseek(2)`.
 pub mod seek_whence {
     pub const SEEK_SET: u32 = 0;
     pub const SEEK_CUR: u32 = 1;
@@ -116,7 +116,7 @@ pub mod prot_flags {
     pub const PROT_GROWSUP: u32 = 0x0200_0000;
 }
 
-/// Signals POSIX (identique à Linux pour compatibilité glibc).
+/// Signals POSIX (identical to Linux for glibc compatibility).
 pub mod signals {
     pub const SIGHUP: u32 = 1;
     pub const SIGINT: u32 = 2;
@@ -148,29 +148,29 @@ pub mod signals {
     pub const SIGIO: u32 = 29;
     pub const SIGPWR: u32 = 30;
     pub const SIGSYS: u32 = 31;
-    /// Premier signal temps-réel
+    /// First real-time signal
     pub const SIGRTMIN: u32 = 32;
-    /// Dernier signal temps-réel
+    /// Last real-time signal
     pub const SIGRTMAX: u32 = 64;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers de validation POSIX
+// POSIX validation helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valide les flags `open()` / `openat()`.
-/// Retourne les flags nettoyés ou EINVAL si des bits réservés sont levés.
+/// Validates `open()` / `openat()` flags.
+/// Returns cleaned flags or EINVAL if reserved bits are set.
 #[inline]
 pub fn validate_open_flags(flags: u32) -> Result<u32, SyscallError> {
-    // Les bits au-delà de ALLOWED_MASK sont réservés → EINVAL
+    // Bits beyond ALLOWED_MASK are reserved → EINVAL
     if (flags as u64) & !open_flags::ALLOWED_MASK != 0 {
         return Err(SyscallError::Invalid);
     }
-    // O_RDONLY=0 est valide même si la valeur est 0
+    // O_RDONLY=0 is valid even if value is 0
     Ok(flags)
 }
 
-/// Valide les protections mmap.
+/// Validates mmap protections.
 #[inline]
 pub fn validate_prot(prot: u32) -> Result<u32, SyscallError> {
     use prot_flags::*;
@@ -185,20 +185,20 @@ pub fn validate_prot(prot: u32) -> Result<u32, SyscallError> {
     Ok(prot)
 }
 
-/// Valide les flags `mmap()`.
+/// Validates `mmap()` flags.
 #[inline]
 pub fn validate_mmap_flags(flags: u32) -> Result<u32, SyscallError> {
-    // MAP_SHARED XOR MAP_PRIVATE est requis
+    // MAP_SHARED XOR MAP_PRIVATE is required
     let shared = flags & mmap_flags::MAP_SHARED != 0;
     let private = flags & mmap_flags::MAP_PRIVATE != 0;
     if shared == private {
-        // Ni l'un ni l'autre, ou les deux → EINVAL
+        // Neither or both → EINVAL
         return Err(SyscallError::Invalid);
     }
     Ok(flags)
 }
 
-/// Valide la valeur `whence` de `lseek()`.
+/// Validates `lseek()` `whence` value.
 #[inline]
 pub fn validate_lseek_whence(whence: u64) -> Result<u32, SyscallError> {
     match whence {
@@ -208,7 +208,7 @@ pub fn validate_lseek_whence(whence: u64) -> Result<u32, SyscallError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers POSIX — Identité / groupes
+// POSIX handlers — Identity / groups
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `setuid(uid)` — POSIX.1-2017 § setuid().
@@ -220,8 +220,8 @@ pub fn sys_setuid(uid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
         None => EINVAL,
         Some(pcb) => {
             let c = pcb.get_creds();
-            // POSIX.1-2017 : root met à jour real, effective et saved uid.
-            // Non-privilégié : met à jour uniquement effective uid si uid32 == uid ou suid.
+            // POSIX.1-2017: root updates real, effective and saved uid.
+            // Non-privileged: updates only effective uid if uid32 == uid or suid.
             if c.is_root() {
                 pcb.set_uid(uid32);
                 pcb.set_euid(uid32);
@@ -246,8 +246,8 @@ pub fn sys_setgid(gid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
         None => EINVAL,
         Some(pcb) => {
             let c = pcb.get_creds();
-            // POSIX.1-2017 : root met à jour real, effective et saved gid.
-            // Non-privilégié : met à jour uniquement effective gid si gid32 == gid ou sgid.
+            // POSIX.1-2017: root updates real, effective and saved gid.
+            // Non-privileged: updates only effective gid if gid32 == gid ou sgid.
             if c.is_root() {
                 pcb.set_gid(gid32);
                 pcb.set_egid(gid32);
@@ -264,7 +264,7 @@ pub fn sys_setgid(gid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
 }
 
 /// `setresuid(ruid, euid, suid)` — POSIX + Linux.
-/// Valeur -1 (u32::MAX) = ne pas modifier ce champ.
+/// Value -1 (u32::MAX) = do not modify this field.
 pub fn sys_setresuid(ruid: u64, euid: u64, suid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     let r32 = ruid as u32;
@@ -275,7 +275,7 @@ pub fn sys_setresuid(ruid: u64, euid: u64, suid: u64, _a4: u64, _a5: u64, _a6: u
         None => EINVAL,
         Some(pcb) => {
             let c = pcb.get_creds();
-            // Chaque valeur doit être u32::MAX (ne pas changer), ou l'un des IDs courants, ou 0 si root.
+            // Each value must be u32::MAX (do not change), or one of current IDs, or 0 if root.
             let ok_uid =
                 |v: u32| v == u32::MAX || c.is_root() || v == c.uid || v == c.euid || v == c.suid;
             if ok_uid(r32) && ok_uid(e32) && ok_uid(s32) {
@@ -288,7 +288,7 @@ pub fn sys_setresuid(ruid: u64, euid: u64, suid: u64, _a4: u64, _a5: u64, _a6: u
     }
 }
 
-/// `getresuid(ruid_ptr, euid_ptr, suid_ptr)` — écrit les 3 UIDs en espace user.
+/// `getresuid(ruid_ptr, euid_ptr, suid_ptr)` — writes the 3 UIDs to userspace.
 pub fn sys_getresuid(
     ruid_ptr: u64,
     euid_ptr: u64,
@@ -315,7 +315,7 @@ pub fn sys_getresuid(
 }
 
 /// `setresgid(rgid, egid, sgid)` — POSIX + Linux.
-/// Valeur u32::MAX = ne pas modifier ce champ.
+/// Value u32::MAX = do not modify this field.
 pub fn sys_setresgid(rgid: u64, egid: u64, sgid: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     let r32 = rgid as u32;
@@ -338,7 +338,7 @@ pub fn sys_setresgid(rgid: u64, egid: u64, sgid: u64, _a4: u64, _a5: u64, _a6: u
     }
 }
 
-/// `getresgid(rgid_ptr, egid_ptr, sgid_ptr)` — écrit les 3 GIDs en espace user.
+/// `getresgid(rgid_ptr, egid_ptr, sgid_ptr)` — writes the 3 GIDs to userspace.
 pub fn sys_getresgid(
     rgid_ptr: u64,
     egid_ptr: u64,
@@ -364,8 +364,8 @@ pub fn sys_getresgid(
     }
 }
 
-/// `setsid()` — crée une nouvelle session pour le processus courant.
-/// Échoue si le processus est déjà leader de groupe (POSIX.1-2017).
+/// `setsid()` — creates a new session for the current process.
+/// Fails if process is already group leader (POSIX.1-2017).
 pub fn sys_setsid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     let caller = Pid(syscall_current_pid());
@@ -373,12 +373,12 @@ pub fn sys_setsid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
         None => EINVAL,
         Some(pcb) => {
             if pcb.is_pgroup_leader() {
-                return EPERM; // Échec si déjà leader de groupe de processus
+                return EPERM; // Fails if already process group leader
             }
             let new_sid = caller.0;
             pcb.set_session_id(new_sid);
             pcb.set_pgroup_id(new_sid);
-            // SAFETY: fetch_or sur AtomicU32 — pas d'alloc, pas de droits manquants.
+            // SAFETY: fetch_or on AtomicU32 — no alloc, no missing rights.
             pcb.flags
                 .fetch_or(process_flags::SESSION_LEADER, Ordering::Release);
             new_sid as i64
@@ -386,7 +386,7 @@ pub fn sys_setsid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     }
 }
 
-/// `getsid(pid)` — retourne le SID du processus `pid` (ou du processus courant si pid=0).
+/// `getsid(pid)` — returns the SID of process `pid` (or current process if pid=0).
 pub fn sys_getsid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     let target = if pid == 0 {
@@ -400,7 +400,7 @@ pub fn sys_getsid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     }
 }
 
-/// `setpgid(pid, pgid)` — délègue vers process::group::pgrp::setpgid.
+/// `setpgid(pid, pgid)` — delegates to process::group::pgrp::setpgid.
 pub fn sys_setpgid(pid: u64, pgid: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     use crate::process::core::pid::Pid;
@@ -413,7 +413,7 @@ pub fn sys_setpgid(pid: u64, pgid: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     }
 }
 
-/// `getpgid(pid)` — retourne le PGID du processus `pid` (ou du processus courant si pid=0).
+/// `getpgid(pid)` — returns the PGID of process `pid` (or current process if pid=0).
 pub fn sys_getpgid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     let target = if pid == 0 {
@@ -428,26 +428,26 @@ pub fn sys_getpgid(pid: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers POSIX — umask, times, getdents64
+// POSIX handlers — umask, times, getdents64
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `umask(mask)` — modifie le masque de création de fichier.
-/// Note : le PCB ne stocke pas encore de champ `umask` dédié.
-/// Cette implémentation retourne le masque demandé (stub partiel, mieux que ENOSYS).
-/// Note Tâche-5 : ajouter `umask: AtomicU32` dans PCB et stocker la valeur réelle.
+/// `umask(mask)` — modifies file creation mask.
+/// Note: PCB does not yet store a dedicated `umask` field.
+/// This implementation returns requested mask (partial stub, better than ENOSYS).
+/// Note Task-5: add `umask: AtomicU32` in PCB and store real value.
 pub fn sys_umask(mask: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    // Masque toujours limité aux 9 bits de permission fichier.
+    // Mask always limited to 9 file permission bits.
     (mask & 0o777) as i64
 }
 
-/// `getdents64(fd, dirp, count)` — câblé lors de l'activation de fs/.
+/// `getdents64(fd, dirp, count)` — wired when activating fs/.
 pub fn sys_getdents64(fd: u64, dirp: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     crate::syscall::table::sys_getdents64(fd, dirp, count, 0, 0, 0)
 }
 
-/// `readlink(path, buf, bufsize)` — câblé lors de l'activation de fs/.
+/// `readlink(path, buf, bufsize)` — wired when activating fs/.
 pub fn sys_readlink(
     path_ptr: u64,
     buf_ptr: u64,
@@ -460,7 +460,7 @@ pub fn sys_readlink(
     crate::syscall::table::sys_readlink(path_ptr, buf_ptr, bufsize, 0, 0, 0)
 }
 
-/// `readlinkat(dirfd, path, buf, bufsize)` — câblé lors de l'activation de fs/.
+/// `readlinkat(dirfd, path, buf, bufsize)` — wired when activating fs/.
 pub fn sys_readlinkat(
     dirfd: u64,
     path_ptr: u64,
@@ -473,7 +473,7 @@ pub fn sys_readlinkat(
     crate::syscall::table::sys_readlinkat(dirfd, path_ptr, buf_ptr, bufsize, 0, 0)
 }
 
-/// `times(tbuf)` — retourne les temps CPU consommés.
+/// `times(tbuf)` — returns consumed CPU times.
 pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     // struct tms { utime, stime, cutime, cstime : i64 }
@@ -492,16 +492,16 @@ pub fn sys_times(tbuf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
             return e.to_errno();
         }
     }
-    // POSIX CLK_TCK = 100 : un tick vaut 10 ms.
+    // POSIX CLK_TCK = 100: one tick is 10 ms.
     let ticks = crate::scheduler::timer::clock::monotonic_ns() / 10_000_000;
     ticks as i64
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers POSIX — Identification de groupes
+// POSIX handlers — Group identification
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `getgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
+/// `getgroups(size, list_ptr)` — wired during credentials integration.
 pub fn sys_getgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     if size != 0 && list_ptr == 0 {
@@ -510,7 +510,7 @@ pub fn sys_getgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     0
 }
 
-/// `setgroups(size, list_ptr)` — câblé lors de l'intégration credentials.
+/// `setgroups(size, list_ptr)` — wired during credentials integration.
 pub fn sys_setgroups(size: u64, list_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     if size != 0 && list_ptr == 0 {
@@ -537,7 +537,7 @@ struct LinuxCapData {
     inheritable: u32,
 }
 
-/// `capget(hdrp, datap)` — câblé lors de l'intégration security/capability.
+/// `capget(hdrp, datap)` — wired during security/capability integration.
 pub fn sys_capget(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     if hdrp == 0 {
@@ -556,7 +556,7 @@ pub fn sys_capget(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     0
 }
 
-/// `capset(hdrp, datap)` — câblé lors de l'intégration security/capability.
+/// `capset(hdrp, datap)` — wired during security/capability integration.
 pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     if hdrp == 0 || datap == 0 {
@@ -583,22 +583,22 @@ pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     }
 }
 
-/// `personality(persona)` — Linux syscall 135 (compat x86_64).
-/// Retourne 0 (PER_LINUX standard).
+/// `personality(persona)` — Linux syscall 135 (x86_64 compat).
+/// Returns 0 (standard PER_LINUX).
 pub fn sys_personality(_persona: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
     0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers d'export : table de mapping numéro → handler POSIX
+// Export helpers: number → POSIX handler mapping table
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::syscall::table::SyscallHandler;
 
-/// Retourne le handler POSIX pour un numéro donné, ou `None` si non géré ici.
+/// Returns the POSIX handler for a given number, or `None` if not handled here.
 ///
-/// Appelé depuis `table::get_handler()` en complément du match principal.
+/// Called from `table::get_handler()` in addition to the main match.
 pub fn get_posix_handler(nr: u64) -> Option<SyscallHandler> {
     match nr {
         SYS_SETUID => Some(sys_setuid),

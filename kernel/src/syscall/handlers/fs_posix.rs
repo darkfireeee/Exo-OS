@@ -1,9 +1,9 @@
-//! # syscall/handlers/fs_posix.rs — Thin wrappers POSIX FS de compatibilité
+//! # syscall/handlers/fs_posix.rs — POSIX FS compatibility thin wrappers
 //!
-//! RÈGLE SYS-03 : thin wrappers uniquement.
-//! Ces fonctions restent hors de la table de dispatch principale, mais elles
-//! doivent déléguer au même `fs_bridge` que `table.rs` lorsqu'une opération
-//! existe. Les vraies absences POSIX restent explicitement en `ENOSYS`.
+//! RULE SYS-03: thin wrappers only.
+//! These functions remain outside the main dispatch table, but they
+//! must delegate to the same `fs_bridge` as `table.rs` when an operation
+//! exists. Real POSIX omissions explicitly remain `ENOSYS`.
 
 use crate::syscall::fast_path::syscall_current_pid;
 use crate::syscall::fs_bridge;
@@ -13,7 +13,7 @@ use crate::syscall::validation::{read_user_path, validate_fd, validate_flags, US
 const AT_FDCWD: i32 = -100;
 const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
 const AT_REMOVEDIR: u64 = 0x200;
-// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
+// FIX-SYSCALL-OPENFLAGS-01: includes O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
 const OPEN_FLAGS_MASK: u64 = 0x007F_FFFF;
 
 #[inline]
@@ -30,10 +30,10 @@ fn supports_at_dirfd(dirfd: i32, path: &[u8]) -> bool {
 // Handler : stat / fstat / lstat / newfstatat
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `stat(path, stat_ptr)` → 0 ou errno.
+/// `stat(path, stat_ptr)` -> 0 or errno.
 ///
-/// Séquence : PATH_RESOLVE(path) → ObjectId → OBJECT_STAT(oid) → copy_to_user(stat).
-/// LIB-05 : ObjectId n'est PAS exposé à l'appelant.
+/// Sequence: PATH_RESOLVE(path) -> ObjectId -> OBJECT_STAT(oid) -> copy_to_user(stat).
+/// LIB-05: ObjectId is NOT exposed to caller.
 pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -45,7 +45,7 @@ pub fn sys_stat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
     fs_bridge::bridge_result(fs_bridge::fs_stat(path.as_bytes(), stat_ptr, current_pid()))
 }
 
-/// `lstat(path, stat_ptr)` — ne suit pas les liens symboliques.
+/// `lstat(path, stat_ptr)` — does not follow symbolic links.
 pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -98,7 +98,7 @@ pub fn sys_newfstatat(
 // Handler : mkdir / rmdir / unlink / rename
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `mkdir(path, mode)` → 0 ou errno.
+/// `mkdir(path, mode)` -> 0 or errno.
 pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -111,7 +111,7 @@ pub fn sys_mkdir(path_ptr: u64, mode: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     ))
 }
 
-/// `rmdir(path)` → 0 ou errno.
+/// `rmdir(path)` -> 0 or errno.
 pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -120,7 +120,7 @@ pub fn sys_rmdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
     fs_bridge::bridge_result(fs_bridge::fs_rmdir(path.as_bytes(), current_pid()))
 }
 
-/// `unlink(path)` → 0 ou errno.
+/// `unlink(path)` -> 0 or errno.
 pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -129,7 +129,7 @@ pub fn sys_unlink(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u6
     fs_bridge::bridge_result(fs_bridge::fs_unlink(path.as_bytes(), current_pid()))
 }
 
-/// `rename(old, new)` → 0 ou errno.
+/// `rename(old, new)` -> 0 or errno.
 pub fn sys_rename(old_ptr: u64, new_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let old = match read_user_path(old_ptr) {
         Ok(p) => p,
@@ -143,7 +143,7 @@ pub fn sys_rename(old_ptr: u64, new_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6:
     ENOSYS
 }
 
-/// `link(old, new)` → 0 ou errno.
+/// `link(old, new)` -> 0 or errno.
 pub fn sys_link(old_ptr: u64, new_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let old = match read_user_path(old_ptr) {
         Ok(p) => p,
@@ -157,7 +157,7 @@ pub fn sys_link(old_ptr: u64, new_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     ENOSYS
 }
 
-/// `symlink(target, linkpath)` → 0 ou errno.
+/// `symlink(target, linkpath)` -> 0 or errno.
 pub fn sys_symlink(target_ptr: u64, path_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let target = match read_user_path(target_ptr) {
         Ok(p) => p,
@@ -174,7 +174,7 @@ pub fn sys_symlink(target_ptr: u64, path_ptr: u64, _a3: u64, _a4: u64, _a5: u64,
     ))
 }
 
-/// `readlink(path, buf, bufsize)` → octets écrits ou errno.
+/// `readlink(path, buf, bufsize)` -> bytes written or errno.
 pub fn sys_readlink(
     path_ptr: u64,
     buf_ptr: u64,
@@ -201,12 +201,12 @@ pub fn sys_readlink(
     ))
 }
 
-/// `getcwd(buf, size)` → longueur du chemin ou errno.
+/// `getcwd(buf, size)` -> path length or errno.
 pub fn sys_getcwd(buf_ptr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     crate::syscall::table::sys_getcwd(buf_ptr, size, 0, 0, 0, 0)
 }
 
-/// `chdir(path)` → 0 ou errno.
+/// `chdir(path)` -> 0 or errno.
 pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let path = match read_user_path(path_ptr) {
         Ok(p) => p,
@@ -220,10 +220,10 @@ pub fn sys_chdir(path_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64
 // Handler : getdents64 — BUG-02 FIX
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `getdents64(fd, buf, count)` → octets remplis ou errno.
+/// `getdents64(fd, buf, count)` -> bytes filled or errno.
 ///
-/// **BUG-02 FIX** : Ce syscall était absent (liste '???'). Sans lui : ls/find/opendir()
-/// sont impossibles. Délègue vers le même `fs_bridge` que la table principale.
+/// **BUG-02 FIX**: This syscall was missing ('???' list). Without it: ls/find/opendir()
+/// are impossible. Delegates to the same `fs_bridge` as the main table.
 pub fn sys_getdents64(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     crate::syscall::table::sys_getdents64(fd, buf_ptr, count, 0, 0, 0)
 }

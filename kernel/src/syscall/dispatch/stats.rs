@@ -1,17 +1,17 @@
-//! # syscall/dispatch/stats.rs — Instrumentation et compteurs de dispatch syscall
+//! # syscall/dispatch/stats.rs — Syscall dispatch instrumentation and counters
 //!
-//! Mesure et enregistre les statistiques du pipeline syscall :
-//! - Total de requêtes traitées
-//! - Répartition fast-path vs table slow-path
-//! - Erreurs ENOSYS
-//! - Numéros compat Linux appliqués
-//! - Échantillonnage de latence TSC
+//! Measures and records syscall pipeline statistics:
+//! - Total requests processed
+//! - Breakdown fast-path vs slow-path table
+//! - ENOSYS errors
+//! - Applied Linux compat numbers
+//! - TSC latency sampling
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use crate::arch::x86_64::cpu::tsc::read_tsc;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteurs d'instrumentation atomiques
+// Atomic instrumentation counters
 // ─────────────────────────────────────────────────────────────────────────────
 
 static DISPATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -19,7 +19,7 @@ static DISPATCH_FAST_PATH: AtomicU64 = AtomicU64::new(0);
 static DISPATCH_SLOW_PATH: AtomicU64 = AtomicU64::new(0);
 static DISPATCH_ENOSYS: AtomicU64 = AtomicU64::new(0);
 static DISPATCH_COMPAT: AtomicU64 = AtomicU64::new(0);
-/// Somme des latences dispatch (cycles TSC). Échantillonné 1/256.
+/// Sum of dispatch latencies (TSC cycles). Sampled 1/256.
 static DISPATCH_LATENCY_CYC: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
@@ -51,7 +51,7 @@ pub fn inc_compat() {
 pub fn sample_latency(tsc_start: u64) {
     let tsc_end = read_tsc();
     let elapsed = tsc_end.saturating_sub(tsc_start);
-    // Échantillonnage : bit 7 de tsc_end pour éviter le modulo coûteux (1/256).
+    // Sampling: bit 7 of tsc_end to avoid expensive modulo (1/256).
     if (tsc_end & 0xFF) == 0 {
         DISPATCH_LATENCY_CYC.fetch_add(elapsed, Ordering::Relaxed);
     }
@@ -75,7 +75,7 @@ pub fn exec_trace(message: &[u8]) {
 #[inline]
 pub fn exec_trace(_message: &[u8]) {}
 
-/// Snapshot des compteurs de dispatch.
+/// Snapshot of dispatch counters.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DispatchStats {
     pub total: u64,
@@ -86,7 +86,7 @@ pub struct DispatchStats {
     pub latency_cyc: u64,
 }
 
-/// Retourne un snapshot instantané des compteurs.
+/// Returns an instant snapshot of counters.
 pub fn dispatch_stats() -> DispatchStats {
     DispatchStats {
         total: DISPATCH_TOTAL.load(Ordering::Relaxed),
@@ -98,8 +98,8 @@ pub fn dispatch_stats() -> DispatchStats {
     }
 }
 
-/// Réinitialise tous les compteurs de dispatch à zéro.
-/// Utilisé par les tests et le démarrage d'un profil.
+/// Resets all dispatch counters to zero.
+/// Used by tests and profiling startup.
 pub fn reset_dispatch_stats() {
     DISPATCH_TOTAL.store(0, Ordering::Relaxed);
     DISPATCH_FAST_PATH.store(0, Ordering::Relaxed);

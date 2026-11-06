@@ -1,14 +1,14 @@
-//! # syscall/fs_bridge — Pont VFS / POSIX d'Exo-OS
+//! # syscall/fs_bridge — Exo-OS VFS / POSIX bridge
 //!
-//! Ce module ségrègue les fonctionnalités du pont FS en sous-modules spécialisés :
-//! - `types`     : Erreurs FsBridgeError, structures ABI POSIX (Stat, Dirent...) et conversions
-//! - `cwd`       : Répertoire de travail courant par processus (CWD), umask et limites rlimit
-//! - `fd`        : Résolution et gestion des descripteurs de fichiers (open/close/dup/fcntl/flock)
-//! - `special`   : Périphériques TTY, pseudo-fichiers IPC (pipe, socketpair, eventfd, splice)
-//! - `file_ops`  : Primitives d'accès direct aux blobs et opérations d'I/O (read, write, lseek...)
-//! - `path_ops`  : Résolution de chemins arborescents, indexation, symlinks et métadonnées
-//! - `poll`      : Multiplexage I/O synchrone et asynchrone (poll, select, epoll, inotify)
-//! - `tests`     : Suite de tests unitaires et d'intégration
+//! This module segregates FS bridge features into specialized submodules:
+//! - `types`     : FsBridgeError errors, POSIX ABI structures (Stat, Dirent...) and conversions
+//! - `cwd`       : Per-process current working directory (CWD), umask and rlimit bounds
+//! - `fd`        : File descriptor resolution and management (open/close/dup/fcntl/flock)
+//! - `special`   : TTY devices, IPC pseudo-files (pipe, socketpair, eventfd, splice)
+//! - `file_ops`  : Direct blob access primitives and I/O operations (read, write, lseek...)
+//! - `path_ops`  : Tree path resolution, indexing, symlinks and metadata
+//! - `poll`      : Synchronous and asynchronous I/O multiplexing (poll, select, epoll, inotify)
+//! - `tests`     : Unit and integration test suite
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -31,20 +31,20 @@ pub use file_ops::*;
 pub use path_ops::*;
 pub use poll::*;
 
-/// Indique si le sous-système fs/ est initialisé et prêt.
-/// Mis à `true` par `fs_bridge_init()` lors du boot.
+/// Indicates whether the fs/ subsystem is initialized and ready.
+/// Set to `true` by `fs_bridge_init()` during boot.
 static FS_READY: AtomicBool = AtomicBool::new(false);
 
-/// Initialise le bridge fs.
-/// À appeler depuis la séquence de boot après `fs::init()`.
+/// Initializes the fs bridge.
+/// To be called from the boot sequence after `fs::init()`.
 ///
 /// # Safety
-/// Doit être appelé exactement une fois depuis le BSP.
+/// Must be called exactly once from the BSP.
 pub unsafe fn fs_bridge_init() {
     FS_READY.store(true, Ordering::Release);
 }
 
-/// Retourne `true` si le sous-système fs/ est prêt.
+/// Returns `true` if the fs/ subsystem is ready.
 #[inline(always)]
 pub fn is_fs_ready() -> bool {
     FS_READY.load(Ordering::Acquire)

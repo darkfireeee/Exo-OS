@@ -1,92 +1,92 @@
 /*
- * kernel/src/syscall/entry.s — Entrée syscall Exo-OS (SYSCALL/SYSRET, x86_64)
+ * kernel/src/syscall/entry.s — Exo-OS syscall entry (SYSCALL/SYSRET, x86_64)
  *
- * Ce fichier documente l'entrée ASM du module syscall/ en référençant
- * explicitement l'implémentation principale dans arch/x86_64/syscall.rs.
+ * This file documents the ASM entry of the syscall/ module by explicitly
+ * referencing the main implementation in arch/x86_64/syscall.rs.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * ARCHITECTURE DE L'ENTRÉE SYSCALL
+ * SYSCALL ENTRY ARCHITECTURE
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * L'entrée ASM effective est définie dans :
+ * The actual ASM entry is defined in:
  *   kernel/src/arch/x86_64/syscall.rs → global_asm!("syscall_entry_asm")
  *
- * Raison : Rust `global_asm!` permet d'intégrer le code machine directement
- * dans l'objet .rlib du kernel, sans fichier .s séparé à compiler et linker.
- * Le point d'entrée `syscall_entry_asm` est déclaré `extern "C"` et son
- * adresse est chargée dans MSR_LSTAR par `arch::x86_64::syscall::init_syscall()`.
+ * Reason: Rust `global_asm!` integrates machine code directly into the kernel
+ * .rlib object, without requiring a separate .s file to compile and link.
+ * The entry point `syscall_entry_asm` is declared `extern "C"` and its
+ * address is loaded into MSR_LSTAR by `arch::x86_64::syscall::init_syscall()`.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * SÉQUENCE D'EXÉCUTION (référence pour lecture)
+ * EXECUTION SEQUENCE (reference for reading)
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * [Ring 3 - userspace]
  *   SYSCALL instruction
- *     → CPU sauve RIP → RCX
- *     → CPU sauve RFLAGS → R11
- *     → CPU masque RFLAGS via MSR_SFMASK (IF, TF, DF, AC)
- *     → CPU charge CS:RIP depuis MSR_LSTAR  ← "syscall_entry_asm"
- *     → CPU charge SS depuis MSR_STAR[47:32] + 8
+ *     → CPU saves RIP → RCX
+ *     → CPU saves RFLAGS → R11
+ *     → CPU masks RFLAGS via MSR_SFMASK (IF, TF, DF, AC)
+ *     → CPU loads CS:RIP from MSR_LSTAR  ← "syscall_entry_asm"
+ *     → CPU loads SS from MSR_STAR[47:32] + 8
  *
- * [Ring 0 - kernel mode, GS = user GS avant SWAPGS]
+ * [Ring 0 - kernel mode, GS = user GS before SWAPGS]
  *   swapgs                          → GS = kernel GS
  *   mov gs:[0x08], rsp              → save user RSP
- *   mov rsp, gs:[0x00]              → load kernel RSP (RSP0 de la TSS)
- *   push rcx                        → [rsp+120] RIP retour
- *   push r11                        → [rsp+112] RFLAGS userspace
+ *   mov rsp, gs:[0x00]              → load kernel RSP (RSP0 of the TSS)
+ *   push rcx                        → [rsp+120] return RIP
+ *   push r11                        → [rsp+112] userspace RFLAGS
  *   push rbp                        → [rsp+104]
  *   push rbx                        → [rsp+ 96]
  *   push r12..r15                   → [rsp 64..88]
- *   push gs:[0x08]                  → [rsp+ 56] RSP userspace
- *   push rsi..rax                   → [rsp 0..48]  args + numéro syscall
- *   mov rbx, rsp                    → pointeur frame (callee-saved)
- *   and rsp, -16                    → alignement ABI AMD64
+ *   push gs:[0x08]                  → [rsp+ 56] userspace RSP
+ *   push rsi..rax                   → [rsp 0..48]  args + syscall number
+ *   mov rbx, rsp                    → frame pointer (callee-saved)
+ *   and rsp, -16                    → AMD64 ABI alignment
  *   mov rdi, rbx                    → arg1 = &SyscallFrame
- *   call syscall_rust_handler       → handler Rust principal
- *   mov rsp, rbx                    → restaurer rsp avant pops
- *   mov rax, [rsp]                  → valeur retour (frame.rax)
- *   [pop tous les registres...]
- *   mov rsp, gs:[0x08]              → restaurer RSP userspace
- *   swapgs                          → restaurer GS userspace
- *   sysretq                         → retour Ring 3
+ *   call syscall_rust_handler       → main Rust handler
+ *   mov rsp, rbx                    → restore rsp before pops
+ *   mov rax, [rsp]                  → return value (frame.rax)
+ *   [pop all registers...]
+ *   mov rsp, gs:[0x08]              → restore userspace RSP
+ *   swapgs                          → restore userspace GS
+ *   sysretq                         → return to Ring 3
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * LAYOUT SyscallFrame (DOIT correspondre à arch/x86_64/syscall.rs)
+ * SyscallFrame LAYOUT (MUST match arch/x86_64/syscall.rs)
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Offset  Registre  Utilisation
+ * Offset  Register  Usage
  * ──────  ────────  ───────────────────────────────────────────────────────
- *   0     rax       numéro syscall (entrée) / valeur retour (sortie)
+ *   0     rax       syscall number (input) / return value (output)
  *   8     r9        arg6
  *  16     r8        arg5
  *  24     r10       arg4
  *  32     rdx       arg3
  *  40     rdi       arg1
  *  48     rsi       arg2
- *  56     (rsp)     RSP userspace sauvegardé
+ *  56     (rsp)     saved userspace RSP
  *  64     r15       callee-saved
  *  72     r14       callee-saved
  *  80     r13       callee-saved
  *  88     r12       callee-saved
  *  96     rbx       callee-saved
  * 104     rbp       callee-saved
- * 112     r11       RFLAGS userspace (sauvé par SYSCALL hw)
- * 120     rcx       RIP retour userspace (sauvé par SYSCALL hw)
+ * 112     r11       userspace RFLAGS (saved by hw SYSCALL)
+ * 120     rcx       userspace return RIP (saved by hw SYSCALL)
  *
- * Taille totale : 128 bytes (16 × 8)
+ * Total size: 128 bytes (16 × 8)
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * MSR CONFIGURATION (arch/x86_64/syscall.rs → init_syscall())
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * MSR_IA32_EFER  : bit SCE activé  (EFER_SCE = 0x0001)
+ * MSR_IA32_EFER  : SCE bit enabled  (EFER_SCE = 0x0001)
  * MSR_STAR       : [47:32]=KERNEL_CS  [63:48]=USER_CS32
- * MSR_LSTAR      : adresse de syscall_entry_asm (mode 64-bit)
- * MSR_CSTAR      : adresse de syscall_cstar_noop (compat 32-bit, ENOSYS)
- * MSR_SFMASK     : masque IF(9) | TF(8) | DF(10) | AC(18)
+ * MSR_LSTAR      : address of syscall_entry_asm (64-bit mode)
+ * MSR_CSTAR      : address of syscall_cstar_noop (32-bit compat, ENOSYS)
+ * MSR_SFMASK     : mask IF(9) | TF(8) | DF(10) | AC(18)
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * PIPELINE RUST (appelé depuis syscall_rust_handler)
+ * RUST PIPELINE (called from syscall_rust_handler)
  * ═══════════════════════════════════════════════════════════════════════════
  *
  *   syscall_rust_handler(&mut SyscallFrame)
@@ -96,47 +96,47 @@
  *           ├─ table::get_handler(nr)
  *           │     └─ handler(arg1..arg6) → i64
  *           └─ post_dispatch()
- *                 └─ signal::delivery::handle_pending_signals()  [si pending]
+ *                 └─ signal::delivery::handle_pending_signals()  [if pending]
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * KPTI / PCID (future intégration)
+ * KPTI / PCID (future integration)
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Lorsque KPTI sera activé, un switch CR3 sera inséré dans le stub ASM
- * AVANT d'accéder à la pile kernel (pour passer de la "shadow page table"
- * userspace à la page table kernel complète).
+ * When KPTI is enabled, a CR3 switch will be inserted into the ASM stub
+ * BEFORE accessing the kernel stack (to transition from the userspace
+ * "shadow page table" to the complete kernel page table).
  *
- * Séquence KPTI (non implémentée, marquée pour implémentation future) :
+ * KPTI sequence (unimplemented, marked for future implementation):
  *   SWAPGS
  *   mov gs:[0x08], rsp              → save user RSP
- *   mov rsp, gs:[0x30]              → RSP trampoline (page partagée U/K)
- *   push rcx / push r11             → sur la trampoline stack
- *   mov rax, gs:[0x38]              → CR3 kernel (avec PCID flush bit)
- *   mov cr3, rax                    → switch CR3 kernel
- *   mov rsp, gs:[0x00]              → RSP kernel réel
+ *   mov rsp, gs:[0x30]              → trampoline RSP (shared U/K page)
+ *   push rcx / push r11             → on trampoline stack
+ *   mov rax, gs:[0x38]              → kernel CR3 (with PCID flush bit)
+ *   mov cr3, rax                    → switch to kernel CR3
+ *   mov rsp, gs:[0x00]              → actual kernel RSP
  *   [push frame, call handler, pop frame...]
- *   mov rax, gs:[0x40]              → CR3 user (PCID non-flush)
- *   mov cr3, rax                    → retour page table user
+ *   mov rax, gs:[0x40]              → user CR3 (non-flush PCID)
+ *   mov cr3, rax                    → return to user page table
  *   SWAPGS
  *   SYSRETQ
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * SÉCURITÉ
+ * SECURITY
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * SPECTRE-V2 : L'IA32_SPEC_CTRL est lu/écrit par arch/x86_64/spectre/
- *              pour activer IBRS à l'entrée et le désactiver au retour.
- *              Non implémenté ici ; syscall_entry_asm le fera via spectre_mitigate_entry().
+ * SPECTRE-V2: IA32_SPEC_CTRL is read/written by arch/x86_64/spectre/
+ *             to enable IBRS on entry and disable it on return.
+ *             Unimplemented here; syscall_entry_asm will do it via spectre_mitigate_entry().
  *
- * SMEP : activé dans CR4 (boot) — empêche l'exécution d'adresses userspace en Ring 0.
- * SMAP : activé dans CR4 (boot) — empêche la lecture d'adresses userspace sans STAC.
- *        Les accès userspace dans validation.rs devront encadrer avec STAC/CLAC.
+ * SMEP: enabled in CR4 (boot) — prevents execution of userspace addresses in Ring 0.
+ * SMAP: enabled in CR4 (boot) — prevents reading userspace addresses without STAC.
+ *       Userspace accesses in validation.rs must wrap with STAC/CLAC.
  */
 
 /*
- * Aucun code ASM ici : l'implémentation réelle est dans
- * arch/x86_64/syscall.rs sous la forme `core::arch::global_asm!`.
+ * No ASM code here: the actual implementation is in
+ * arch/x86_64/syscall.rs in the form of `core::arch::global_asm!`.
  *
- * Ce fichier sert de documentation de référence et est inclus via
- * `build.rs` uniquement pour la documentation (jamais assemblé seul).
+ * This file serves as reference documentation and is included via
+ * `build.rs` only for documentation (never assembled standalone).
  */

@@ -1,4 +1,4 @@
-//! # syscall/table/time.rs — Handlers temps, horloges, nanosleep et futex
+//! # syscall/table/time.rs — Time, clocks, nanosleep, and futex handlers
 
 use super::common::*;
 use crate::syscall::fast_path::Timespec;
@@ -13,10 +13,10 @@ pub fn sys_gettimeofday(tv_ptr: u64, tz_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers Scheduler (delay, nanosleep, futex)
+// Scheduler handlers (delay, nanosleep, futex)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `nanosleep(req_ptr, rem_ptr)` — suspend le thread pendant une durée.
+/// `nanosleep(req_ptr, rem_ptr)` — suspends the thread for a duration.
 pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_NANOSLEEP);
     if req_ptr == 0 {
@@ -29,7 +29,7 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
         return EINVAL;
     }
-    // FIX-SYSCALL-NANOSLEEP-01 : calcul saturant anti-overflow
+    // FIX-SYSCALL-NANOSLEEP-01: saturating calculation to prevent overflow
     let ns = (ts.tv_sec as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
@@ -94,7 +94,7 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
     {
         return -crate::syscall::errno::EFAULT;
     }
-    // futex est dans memory/utils/futex_table.rs (RÈGLE SCHED-03 DOC3).
+    // futex is in memory/utils/futex_table.rs (RULE SCHED-03 DOC3).
     match crate::memory::utils::futex_table::sys_futex(
         uaddr,
         op as u32,

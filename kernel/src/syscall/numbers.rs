@@ -1,49 +1,49 @@
-//! # syscall/numbers.rs — Numéros d'appels système Exo-OS
+//! # syscall/numbers.rs — Exo-OS system call numbers
 //!
-//! Définit les constantes numériques de tous les syscalls supportés.
+//! Defines numeric constants for all supported syscalls.
 //!
-//! ## Compatibilité
-//! - [0..299]   : numéros compatibles Linux x86_64 (même ABI que glibc)
-//! - [300..399] : extensions Exo-OS (IPC natif, capabilities, sécurité)
-//! - [400..436] : réservés pour usage futur
+//! ## Compatibility
+//! - [0..299]   : Linux x86_64 compatible numbers (same ABI as glibc)
+//! - [300..399] : Exo-OS extensions (native IPC, capabilities, security)
+//! - [400..436] : reserved for future use
 //! - [437]      : SYS_OPENAT2 (Linux compat)
-//! - [438..440] : réservés pour usage futur
+//! - [438..440] : reserved for future use
 //! - [441]      : SYS_EPOLL_PWAIT2 (Linux compat)
-//! - [442..499] : réservés pour usage futur
-//! - [500..520] : ExoFS syscalls natifs
-//! - [521]      : informations framebuffer de boot pour fb_server Ring1
-//! - [522..529] : réservés pour usage futur
+//! - [442..499] : reserved for future use
+//! - [500..520] : Native ExoFS syscalls
+//! - [521]      : boot framebuffer information for Ring1 fb_server
+//! - [522..529] : reserved for future use
 //! - [530..549] : GI-03 drivers syscalls
-//! - 550        : SYSCALL_TABLE_SIZE (taille totale de la table)
+//! - 550        : SYSCALL_TABLE_SIZE (total table size)
 //!
-//! ## Règle architecturale
-//! Les numéros Linux sont repris à l'identique pour permettre une libc
-//! musl/glibc sans patch. Les syscalls Exo-OS natifs commencent à 300
-//! pour éviter tout conflit avec de futurs ajouts Linux.
+//! ## Architectural Rule
+//! Linux numbers are kept identical to allow unpatched
+//! musl/glibc libc. Native Exo-OS syscalls start at 300
+//! to avoid any conflict with future Linux additions.
 //!
-//! ## ABI Registres (Linux/Exo-OS 64-bit)
+//! ## Register ABI (Linux/Exo-OS 64-bit)
 //! ```
-//! rax = numéro syscall (entrée) / valeur retour (sortie)
+//! rax = syscall number (in) / return value (out)
 //! rdi = arg1   rsi = arg2   rdx = arg3
 //! r10 = arg4   r8  = arg5   r9  = arg6
-//! rcx = RIP retour (sauvé par SYSCALL hardware)
-//! r11 = RFLAGS (sauvé par SYSCALL hardware)
+//! rcx = return RIP (saved by hardware SYSCALL)
+//! r11 = RFLAGS (saved by hardware SYSCALL)
 //! ```
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Taille totale de la table de dispatch
+// Total dispatch table size
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille de la table syscall (un slot par numéro possible).
-/// 550 = couvre POSIX (0–499) + ExoFS (500–520) + framebuffer (521)
+/// Syscall table size (one slot per possible number).
+/// 550 = covers POSIX (0–499) + ExoFS (500–520) + framebuffer (521)
 /// + GI-03 drivers (530–549).
 pub const SYSCALL_TABLE_SIZE: usize = 550;
 
-/// Numéro invalide (retourne -ENOSYS)
+/// Invalid number (returns -ENOSYS)
 pub const SYSCALL_INVALID: u64 = u64::MAX;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 0–99 : I/O, Fichiers, Mémoire (Linux-compatible)
+// Block 0–99: I/O, Files, Memory (Linux-compatible)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SYS_READ: u64 = 0;
@@ -148,7 +148,7 @@ pub const SYS_GETRUSAGE: u64 = 98;
 pub const SYS_SYSINFO: u64 = 99;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 100–199 : Temps, Processus, Signaux (Linux-compatible)
+// Block 100–199: Time, Processes, Signals (Linux-compatible)
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SYS_TIMES: u64 = 100;
@@ -285,7 +285,7 @@ pub const SYS_PIPE2: u64 = 293;
 pub const SYS_INOTIFY_INIT1: u64 = 294;
 pub const SYS_PREADV: u64 = 295;
 pub const SYS_PWRITEV: u64 = 296;
-pub const SYS_GETCPU: u64 = 309; // conflit: remappé en 298 côté Linux, voir compat
+pub const SYS_GETCPU: u64 = 309; // conflict: remapped to 298 on Linux side, see compat
 pub const SYS_RENAMEAT2: u64 = 316;
 pub const SYS_GETRANDOM: u64 = 318;
 pub const SYS_COPY_FILE_RANGE: u64 = 326;
@@ -296,58 +296,58 @@ pub const SYS_OPENAT2: u64 = 437;
 pub const SYS_EPOLL_PWAIT2: u64 = 441;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 300–399 : Syscalls natifs Exo-OS
+// Block 300–399: Native Exo-OS syscalls
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Envoyer un message IPC natif Exo-OS
+/// Send a native Exo-OS IPC message
 pub const SYS_EXO_IPC_SEND: u64 = 300;
-/// Recevoir un message IPC natif Exo-OS
+/// Receive a native Exo-OS IPC message
 pub const SYS_EXO_IPC_RECV: u64 = 301;
-/// Recevoir en mode non-bloquant
+/// Receive in non-blocking mode
 pub const SYS_EXO_IPC_RECV_NB: u64 = 302;
-/// Appel IPC synchrone (send + recv atomique)
+/// Synchronous IPC call (atomic send + recv)
 pub const SYS_EXO_IPC_CALL: u64 = 303;
-/// Créer un endpoint IPC
+/// Create an IPC endpoint
 pub const SYS_EXO_IPC_CREATE: u64 = 304;
-/// Détruire un endpoint IPC
+/// Destroy an IPC endpoint
 pub const SYS_EXO_IPC_DESTROY: u64 = 305;
-/// Résoudre un endpoint IPC par nom
+/// Resolve an IPC endpoint by name
 pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
-/// Copier depuis l'espace d'adressage d'un PID vers le processus appelant
+/// Copy from the address space of a target PID to calling process
 pub const SYS_EXO_MEM_COPY_FROM_PID: u64 = 307;
-/// Copier depuis le processus appelant vers l'espace d'adressage d'un PID
+/// Copy from calling process to the address space of a target PID
 pub const SYS_EXO_MEM_COPY_TO_PID: u64 = 308;
-/// Partager une page de mémoire via capability
+/// Share a memory page via capability
 pub const SYS_EXO_MEM_SHARE: u64 = 310;
-/// Révoquer un partage mémoire
+/// Revoke a memory share
 pub const SYS_EXO_MEM_REVOKE: u64 = 311;
-/// Mapper une VMA dans l'espace d'un PID cible depuis memory_server
+/// Map a VMA into target PID space from memory_server
 pub const SYS_EXO_MEM_MAP_PID: u64 = 312;
-/// Démapper une VMA dans l'espace d'un PID cible depuis memory_server
+/// Unmap a VMA from target PID space from memory_server
 pub const SYS_EXO_MEM_MUNMAP_PID: u64 = 313;
-/// Modifier les protections d'une VMA d'un PID cible depuis memory_server
+/// Modify VMA protections in target PID space from memory_server
 pub const SYS_EXO_MEM_MPROTECT_PID: u64 = 314;
-/// Obtenir une capability
+/// Obtain a capability
 pub const SYS_EXO_CAP_CREATE: u64 = 320;
-/// Déléguer une capability à un autre processus
+/// Delegate a capability to another process
 pub const SYS_EXO_CAP_DELEGATE: u64 = 321;
-/// Révoquer une capability
+/// Revoke a capability
 pub const SYS_EXO_CAP_REVOKE: u64 = 322;
-/// Vérifier si une capability est valide
+/// Check if a capability is valid
 pub const SYS_EXO_CAP_CHECK: u64 = 323;
-/// Restreindre irréversiblement le process courant (sandbox pledge OpenBSD-like).
-/// `promises` = bitmask de `pledge_flags` ; les capacités NON promises deviennent
-/// des restrictions zero-trust enforced au bord syscall (TIER 2.10).
+/// Irreversibly restrict current process (OpenBSD pledge-like sandbox).
+/// `promises` = bitmask of `pledge_flags`; unpromised capabilities become
+/// zero-trust restrictions enforced at the syscall boundary (TIER 2.10).
 pub const SYS_EXO_PLEDGE: u64 = 324;
-/// Drainer le feed d'événements de sécurité kernel→exo_shield (TIER 3.1).
-/// Réservé au serveur exo_shield (gaté sur sa classe de service). Copie jusqu'à
-/// `count` `ShieldEvent` dans `buf` ; retourne le nombre d'événements drainés.
+/// Drain the security event feed kernel→exo_shield (TIER 3.1).
+/// Reserved for exo_shield server (gated on its service class). Copies up to
+/// `count` `ShieldEvent`s into `buf`; returns the number of drained events.
 pub const SYS_EXO_SHIELD_DRAIN: u64 = 325;
-/// Lire un compteur de performance kernel
+/// Read a kernel performance counter
 pub const SYS_EXO_PERF_READ: u64 = 342;
-/// Activer les événements de performance
+/// Enable performance events
 pub const SYS_EXO_PERF_ENABLE: u64 = 343;
-/// Désactiver les événements de performance
+/// Disable performance events
 pub const SYS_EXO_PERF_DISABLE: u64 = 344;
 
 pub const EXO_PERF_SYSCALL_COUNT: u64 = 1;
@@ -362,194 +362,194 @@ pub const EXO_PERF_DISPATCH_TOTAL: u64 = 9;
 pub const EXO_PERF_DISPATCH_FAST_PATH: u64 = 10;
 pub const EXO_PERF_DISPATCH_SLOW_PATH: u64 = 11;
 pub const EXO_PERF_DISPATCH_ENOSYS: u64 = 12;
-/// Activer/désactiver le mode debug d'un processus (Ring 0 uniquement)
+/// Enable/disable process debug mode (Ring 0 only)
 pub const SYS_EXO_DEBUG_ATTACH: u64 = 340;
-/// Lire les registres d'un processus en debug
+/// Read registers of a debugged process
 pub const SYS_EXO_DEBUG_REGS: u64 = 341;
-/// Log kernel direct (ring 0 permissions requises)
+/// Direct kernel log (Ring 0 permissions required)
 pub const SYS_EXO_LOG: u64 = 350;
-/// Lister les processus vivants depuis la registry kernel
+/// List living processes from kernel registry
 pub const SYS_EXO_PROCESS_LIST: u64 = 351;
-/// Synchroniser l'état Phoenix global depuis un serveur root
+/// Synchronize global Phoenix state from a root server
 pub const SYS_EXO_PHOENIX_STATE_SET: u64 = 352;
-/// Lire l'état Phoenix global
+/// Read global Phoenix state
 pub const SYS_EXO_PHOENIX_STATE_GET: u64 = 353;
-/// Sonde eBPF Exo-OS
+/// Exo-OS eBPF probe
 pub const SYS_EXO_BPF: u64 = 360;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 500–518 : ExoFS natif (filesystem objet ExoOS)
+// Block 500–518: Native ExoFS (ExoOS object filesystem)
 // ─────────────────────────────────────────────────────────────────────────────
-// RÈGLE SYS-10 : Syscalls 0-499 = POSIX standard. Syscalls 500-518 = ExoFS natif.
-// Ces constantes sont PUBLIQUES — utilisées par exo-libc ET exo-rt.
+// RULE SYS-10: Syscalls 0-499 = standard POSIX. Syscalls 500-518 = native ExoFS.
+// These constants are PUBLIC — used by exo-libc AND exo-rt.
 
-/// ExoFS : résolution de chemin → ObjectId   (path → BlobId + ObjectId)
+/// ExoFS: path resolution → ObjectId   (path → BlobId + ObjectId)
 pub const SYS_EXOFS_PATH_RESOLVE: u64 = 500;
-/// ExoFS : ouverture d'un objet existant      (ObjectId + droits → fd)
+/// ExoFS: open existing object         (ObjectId + rights → fd)
 pub const SYS_EXOFS_OBJECT_OPEN: u64 = 501;
-/// ExoFS : lecture d'un objet                 (fd, offset, buf, len)
+/// ExoFS: read object                  (fd, offset, buf, len)
 pub const SYS_EXOFS_OBJECT_READ: u64 = 502;
-/// ExoFS : écriture dans un objet             (fd, offset, buf, len)
+/// ExoFS: write to object              (fd, offset, buf, len)
 pub const SYS_EXOFS_OBJECT_WRITE: u64 = 503;
-/// ExoFS : création d'un nouvel objet
+/// ExoFS: create new object
 pub const SYS_EXOFS_OBJECT_CREATE: u64 = 504;
-/// ExoFS : suppression d'un objet
+/// ExoFS: delete object
 pub const SYS_EXOFS_OBJECT_DELETE: u64 = 505;
-/// ExoFS : métadonnées d'un objet (stat-like)
+/// ExoFS: object metadata (stat-like)
 pub const SYS_EXOFS_OBJECT_STAT: u64 = 506;
-/// ExoFS : mise à jour des métadonnées
+/// ExoFS: update metadata
 pub const SYS_EXOFS_OBJECT_SET_META: u64 = 507;
-/// ExoFS : hash du contenu (audité SEC-09 — copy_from_user obligatoire)
+/// ExoFS: content hash (audited SEC-09 — copy_from_user mandatory)
 pub const SYS_EXOFS_GET_CONTENT_HASH: u64 = 508;
-/// ExoFS : création d'un snapshot
+/// ExoFS: create snapshot
 pub const SYS_EXOFS_SNAPSHOT_CREATE: u64 = 509;
-/// ExoFS : liste des snapshots disponibles
+/// ExoFS: list available snapshots
 pub const SYS_EXOFS_SNAPSHOT_LIST: u64 = 510;
-/// ExoFS : montage d'un snapshot en lecture seule
+/// ExoFS: mount snapshot in read-only mode
 pub const SYS_EXOFS_SNAPSHOT_MOUNT: u64 = 511;
-/// ExoFS : création d'une relation entre objets
+/// ExoFS: create relation between objects
 pub const SYS_EXOFS_RELATION_CREATE: u64 = 512;
-/// ExoFS : requête sur les relations
+/// ExoFS: query relations
 pub const SYS_EXOFS_RELATION_QUERY: u64 = 513;
-/// ExoFS : déclenchement manuel du GC (garbage collector)
+/// ExoFS: manual GC trigger (garbage collector)
 pub const SYS_EXOFS_GC_TRIGGER: u64 = 514;
-/// ExoFS : requête de quota capability
+/// ExoFS: capability quota query
 pub const SYS_EXOFS_QUOTA_QUERY: u64 = 515;
-/// ExoFS : export d'un objet vers userspace
+/// ExoFS: export object to userspace
 pub const SYS_EXOFS_EXPORT_OBJECT: u64 = 516;
-/// ExoFS : import d'un objet depuis userspace
+/// ExoFS: import object from userspace
 pub const SYS_EXOFS_IMPORT_OBJECT: u64 = 517;
-/// ExoFS : commit d'une epoch (3 barrières NVMe — atomicité garantie)
+/// ExoFS: epoch commit (3 NVMe barriers — guaranteed atomicity)
 pub const SYS_EXOFS_EPOCH_COMMIT: u64 = 518;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 519–520 : Extensions ExoFS — correctifs BUG-01/BUG-02
+// Block 519–520: ExoFS Extensions — fixes BUG-01/BUG-02
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// FIX BUG-01 : open() POSIX combiné Ring0 — enchaîne path_resolve() + object_open()
-/// atomiquement. Utilisé par musl-exo : #define __NR_open 519
-/// Signature : (path_ptr, path_len, flags, mode) → fd
+/// FIX BUG-01: combined Ring0 POSIX open() — chains path_resolve() + object_open()
+/// atomically. Used by musl-exo: #define __NR_open 519
+/// Signature: (path_ptr, path_len, flags, mode) → fd
 pub const SYS_EXOFS_OPEN_BY_PATH: u64 = 519;
 
-/// FIX BUG-02 : getdents64 ExoFS — list le contenu d'un répertoire.
-/// Utilisé par ls, find, opendir(). Sans ce syscall : ls/find/opendir() impossibles.
-/// Signature : (fd, buf_ptr, buf_len) → octets remplis
+/// FIX BUG-02: ExoFS getdents64 — lists directory content.
+/// Used by ls, find, opendir(). Without this syscall: ls/find/opendir() impossible.
+/// Signature: (fd, buf_ptr, buf_len) → bytes populated
 pub const SYS_EXOFS_READDIR: u64 = 520;
 
-/// Terminal v0.2 : expose les infos framebuffer de boot au serveur Ring1.
-/// Signature : (out_ptr: *mut FramebufferInfoWire) -> 0
+/// Terminal v0.2: exposes boot framebuffer info to Ring1 server.
+/// Signature: (out_ptr: *mut FramebufferInfoWire) -> 0
 pub const SYS_FRAMEBUFFER_INFO: u64 = 521;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bloc 530–549 : GI-03 Drivers (IRQ / DMA / PCI / IOMMU / I/O ports)
+// Block 530–549: GI-03 Drivers (IRQ / DMA / PCI / IOMMU / I/O ports)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// GI-03 : enregistrement d'un routage IRQ canonique.
+/// GI-03: canonical IRQ routing registration.
 pub const SYS_IRQ_REGISTER: u64 = 530;
-/// GI-03 : acquittement d'une IRQ traitée.
+/// GI-03: processed IRQ acknowledgement.
 pub const SYS_IRQ_ACK: u64 = 531;
-/// GI-03 : mapping MMIO (PID appelant, claim requis).
+/// GI-03: MMIO mapping (calling PID, claim required).
 pub const SYS_MMIO_MAP: u64 = 532;
-/// GI-03 : unmapping MMIO (PID appelant).
+/// GI-03: MMIO unmapping (calling PID).
 pub const SYS_MMIO_UNMAP: u64 = 533;
-/// GI-03 : allocation DMA (retourne IOVA, virt CPU optionnel via out ptr).
+/// GI-03: DMA allocation (returns IOVA, optional CPU virt via out ptr).
 pub const SYS_DMA_ALLOC: u64 = 534;
-/// GI-03 : libération DMA allouée.
+/// GI-03: free allocated DMA.
 pub const SYS_DMA_FREE: u64 = 535;
-/// GI-03 : synchronisation DMA CPU/device.
+/// GI-03: CPU/device DMA synchronization.
 pub const SYS_DMA_SYNC: u64 = 536;
-/// GI-03 : lecture config PCI (device claimé par PID appelant).
+/// GI-03: PCI config read (device claimed by calling PID).
 pub const SYS_PCI_CFG_READ: u64 = 537;
-/// GI-03 : écriture config PCI (device claimé par PID appelant).
+/// GI-03: PCI config write (device claimed by calling PID).
 pub const SYS_PCI_CFG_WRITE: u64 = 538;
-/// GI-03 : contrôle Bus Master PCI (device claimé par PID appelant).
+/// GI-03: PCI Bus Master control (device claimed by calling PID).
 pub const SYS_PCI_BUS_MASTER: u64 = 539;
-/// GI-03 : claim PCI sécurisé (CORR-32).
+/// GI-03: secure PCI claim (CORR-32).
 pub const SYS_PCI_CLAIM: u64 = 540;
-/// GI-03 : map DMA d'un buffer vers IOVA.
+/// GI-03: buffer DMA map to IOVA.
 pub const SYS_DMA_MAP: u64 = 541;
-/// GI-03 : unmap DMA IOVA.
+/// GI-03: DMA IOVA unmap.
 pub const SYS_DMA_UNMAP: u64 = 542;
-/// GI-03 : allocation MSI/MSI-X (handle opaque).
+/// GI-03: MSI/MSI-X allocation (opaque handle).
 pub const SYS_MSI_ALLOC: u64 = 543;
-/// GI-03 : configuration MSI par index de vecteur.
+/// GI-03: MSI configuration by vector index.
 pub const SYS_MSI_CONFIG: u64 = 544;
-/// GI-03 : libération d'un handle MSI.
+/// GI-03: free MSI handle.
 pub const SYS_MSI_FREE: u64 = 545;
-/// GI-03 : association topologie PCI (owner/parenting).
+/// GI-03: PCI topology association (owner/parenting).
 pub const SYS_PCI_SET_TOPOLOGY: u64 = 546;
-/// GI-03 : découverte contrôlée d'un périphérique PCI par vendor/device/class.
+/// GI-03: controlled PCI device discovery by vendor/device/class.
 pub const SYS_PCI_FIND_DEVICE: u64 = 547;
-/// GI-03 : lecture bornée d'un port I/O pour drivers Ring1 autorisés.
+/// GI-03: bounded I/O port read for authorized Ring1 drivers.
 pub const SYS_IOPORT_READ: u64 = 548;
-/// GI-03 : écriture bornée d'un port I/O pour drivers Ring1 autorisés.
+/// GI-03: bounded I/O port write for authorized Ring1 drivers.
 pub const SYS_IOPORT_WRITE: u64 = 549;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX BUG-03 : Aliases process pour exo-rt
+// FIX BUG-03: Process aliases for exo-rt
 // ─────────────────────────────────────────────────────────────────────────────
-// exo-rt référence SYS_PROC_CLONE et SYS_PROC_EXEC mais numbers.rs listait
-// fork=57 et execve=59 sans alias. Ces constantes sont OBLIGATOIRES pour que
-// exo-rt compile.
+// exo-rt references SYS_PROC_CLONE and SYS_PROC_EXEC but numbers.rs listed
+// fork=57 and execve=59 without aliases. These constants are MANDATORY for
+// exo-rt to compile.
 
-/// Alias exo-rt pour fork() avec CoW kernel — identique à SYS_FORK (57).
+/// exo-rt alias for fork() with kernel CoW — identical to SYS_FORK (57).
 pub const SYS_PROC_CLONE: u64 = SYS_FORK;
-/// Alias exo-rt pour execve() — identique à SYS_EXECVE (59).
+/// exo-rt alias for execve() — identical to SYS_EXECVE (59).
 pub const SYS_PROC_EXEC: u64 = SYS_EXECVE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Codes d'erreur Exo-OS (compatibles Linux errno)
+// Exo-OS error codes (Linux errno compatible)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Opération non supportée
+/// Operation not supported
 pub const ENOSYS: i64 = -38;
-/// Argument invalide
+/// Invalid argument
 pub const EINVAL: i64 = -22;
-/// Accès refusé
+/// Permission denied
 pub const EACCES: i64 = -13;
-/// Pointeur invalide / mauvaise adresse
+/// Bad address / invalid pointer
 pub const EFAULT: i64 = -14;
-/// Trop grand
+/// Argument list too long
 pub const E2BIG: i64 = -7;
 pub const EMSGSIZE: i64 = -90;
-/// Ressource occupée
+/// Device or resource busy
 pub const EBUSY: i64 = -16;
-/// Interruption par signal
+/// Interrupted by signal
 pub const EINTR: i64 = -4;
-/// Mauvais descripteur de fichier
+/// Bad file descriptor
 pub const EBADF: i64 = -9;
-/// Tentative sur un objet inexistant
+/// No such file or directory
 pub const ENOENT: i64 = -2;
-/// Mémoire insuffisante
+/// Out of memory
 pub const ENOMEM: i64 = -12;
-/// Opération serait bloquante (non-bloquant demandé)
+/// Resource temporarily unavailable (would block)
 pub const EAGAIN: i64 = -11;
-/// Limite de descripteurs atteinte
+/// Too many open files
 pub const EMFILE: i64 = -24;
-/// Capacité non disponible / refusée
+/// Operation not permitted / capability denied
 pub const EPERM: i64 = -1;
-/// Dépassement de capacité numérique
+/// Value too large for defined data type
 pub const EOVERFLOW: i64 = -75;
-/// Fichier existe déjà
+/// File exists
 pub const EEXIST: i64 = -17;
-/// N'est pas un répertoire
+/// Not a directory
 pub const ENOTDIR: i64 = -20;
-/// Est un répertoire
+/// Is a directory
 pub const EISDIR: i64 = -21;
-/// Espace insuffisant sur le périphérique
+/// No space left on device
 pub const ENOSPC: i64 = -28;
-/// Opération non supportée
+/// Operation not supported
 pub const ENOTSUP: i64 = -95;
-/// Alias POSIX/Linux de ENOTSUP
+/// POSIX/Linux alias of ENOTSUP
 pub const EOPNOTSUPP: i64 = -95;
-/// Recherche invalide (pipe, socket, FIFO)
+/// Illegal seek (pipe, socket, FIFO)
 pub const ESPIPE: i64 = -29;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers de classification
+// Classification helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie si un numéro syscall est dans la plage Linux-compatible
+/// Checks if a syscall number is in the Linux-compatible range
 #[inline(always)]
 pub const fn is_linux_compat(nr: u64) -> bool {
     nr < 300
@@ -567,26 +567,26 @@ pub const fn is_linux_compat(nr: u64) -> bool {
         )
 }
 
-/// Vérifie si un numéro syscall est natif Exo-OS
+/// Checks if a syscall number is native Exo-OS
 #[inline(always)]
 pub const fn is_exoos_native(nr: u64) -> bool {
     nr >= 300 && nr < 400 && !is_linux_compat(nr)
 }
 
-/// Vérifie si un numéro est dans la table valide
+/// Checks if a number is within the valid table range
 #[inline(always)]
 pub const fn is_valid_syscall(nr: u64) -> bool {
     (nr as usize) < SYSCALL_TABLE_SIZE
 }
 
-/// Vérifie si un numéro syscall est ExoFS natif (500–520)
+/// Checks if a syscall number is native ExoFS (500–520)
 #[inline(always)]
 pub const fn is_exofs_syscall(nr: u64) -> bool {
     nr >= SYS_EXOFS_PATH_RESOLVE && nr <= SYS_EXOFS_READDIR
 }
 
-/// Numéros de syscall candidats au fast-path (<100 cycles, pas d'alloc, no-lock)
-/// Utilisé par dispatch.rs pour court-circuiter la table principale.
+/// Syscall numbers eligible for fast-path (<100 cycles, no alloc, no-lock)
+/// Used by dispatch.rs to bypass the main table.
 pub const FAST_PATH_SYSCALLS: &[u64] = &[
     SYS_GETPID,
     SYS_GETTID,
@@ -602,27 +602,27 @@ pub const FAST_PATH_SYSCALLS: &[u64] = &[
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-KRN-11 (rapport_analyse §6.4) : macro syscall_stub! pour distinguer les
-// syscalls non-implémentés (ENOSYS réel) des stubs prévus (à implémenter).
+// FIX-KRN-11 (analysis report §6.4): syscall_stub! macro to distinguish
+// unimplemented syscalls (real ENOSYS) from planned stubs (to implement).
 //
-// Usage dans table.rs :
-//   syscall_stub!(sys_sendfile,   "sendfile pas encore implémenté");
-//   syscall_stub!(sys_splice,     "splice pas encore implémenté");
+// Usage in table.rs:
+//   syscall_stub!(sys_sendfile,   "sendfile not yet implemented");
+//   syscall_stub!(sys_splice,     "splice not yet implemented");
 //
-// Sans cette macro, tous les ENOSYS étaient indistinguables dans les métriques
-// et impossible de savoir si c'était un oubli ou une décision architecturale.
+// Without this macro, all ENOSYS were indistinguishable in metrics
+// and impossible to determine whether it was an oversight or architectural decision.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Génère un handler syscall qui retourne ENOSYS avec un commentaire documenté.
-/// Le commentaire apparaît dans cargo doc et dans les rapports d'audit ENOSYS.
+/// Generates a syscall handler that returns ENOSYS with a documented comment.
+/// The comment appears in cargo doc and in ENOSYS audit reports.
 #[macro_export]
 macro_rules! syscall_stub {
     ($name:ident, $reason:expr) => {
         #[allow(non_snake_case)]
         pub fn $name(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
             // STUB: $reason
-            // Ce syscall est intentionnellement non-implémenté en v0.2.0.
-            // Utiliser syscall_stub! pour documenter pourquoi (vs silencieux).
+            // This syscall is intentionally unimplemented in v0.2.0.
+            // Use syscall_stub! to document why (vs silent).
             $crate::syscall::numbers::ENOSYS
         }
     };

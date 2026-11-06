@@ -1,26 +1,26 @@
-//! # syscall/validation.rs — Validation des arguments userspace
+//! # syscall/validation.rs — Userspace argument validation
 //!
-//! Fournit les primitives de validation et de copie mémoire
-//! sécurisée entre l'espace utilisateur et le kernel.
+//! Provides validation primitives and secure memory copying
+//! between user space and the kernel.
 //!
-//! ## Modèle de sécurité
+//! ## Security Model
 //!
-//! Toute donnée provenant de Ring 3 est **non fiable** jusqu'à validation.
-//! Les règles sont :
-//! 1. Pointeur non-NULL
-//! 2. Dans la plage canonique userspace (< [`USER_ADDR_MAX`])
-//! 3. Toute la plage [ptr, ptr+len) doit être en espace utilisateur
-//! 4. Pas de débordement arithmétique sur `ptr + len`
-//! 5. Alignement correct pour les types non-packed
+//! Any data coming from Ring 3 is **untrusted** until validated.
+//! The rules are:
+//! 1. Non-NULL pointer
+//! 2. Within canonical userspace range (< [`USER_ADDR_MAX`])
+//! 3. Entire range [ptr, ptr+len) must be in user space
+//! 4. No arithmetic overflow on `ptr + len`
+//! 5. Proper alignment for non-packed types
 //!
 //! ## copy_from_user / copy_to_user
-//! Les fonctions ne déréférencent jamais directement l'adresse Ring 3 en
-//! contexte noyau. Sur la cible kernel, elles traduisent l'adresse utilisateur
-//! via l'espace d'adressage courant, déclenchent au besoin le même chemin de
-//! demand-paging/CoW qu'un #PF userspace, puis copient via la physmap kernel.
+//! The functions never directly dereference the Ring 3 address in
+//! kernel context. On the kernel target, they translate the user address
+//! via the current address space, trigger if needed the same
+//! demand-paging/CoW path as a userspace #PF, then copy via the kernel physmap.
 //!
-//! ## RÈGLE CONTRAT UNSAFE (regle_bonus.md)
-//! Tout bloc `unsafe {}` est précédé d'un commentaire `// SAFETY:`.
+//! ## UNSAFE CONTRACT RULE (regle_bonus.md)
+//! Every `unsafe {}` block is preceded by a `// SAFETY:` comment.
 
 use core::fmt;
 use core::mem;
@@ -31,27 +31,27 @@ use alloc::vec::Vec;
 use super::numbers::{E2BIG, EFAULT, EINVAL, ENOMEM};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes de plage d'adresses
+// Address range constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Début du kernel en adresse virtuelle (x86_64 haut canonique)
-/// Toute adresse ≥ USER_ADDR_MAX appartient au kernel.
+/// Beginning of kernel in virtual address space (x86_64 higher-half canonical)
+/// Any address ≥ USER_ADDR_MAX belongs to the kernel.
 pub const USER_ADDR_MAX: u64 = 0x0000_8000_0000_0000;
 
-/// Longueur maximale d'un chemin de fichier
+/// Maximum length of a file path
 pub const PATH_MAX: usize = 4096;
 
-/// Longueur maximale d'une chaîne générique passée en syscall
+/// Maximum length of a generic string passed in a syscall
 pub const STRING_MAX: usize = 65536;
 
-/// Taille maximale d'un buffer I/O en un seul syscall (256 MiB)
+/// Maximum size of an I/O buffer in a single syscall (256 MiB)
 pub const IO_BUF_MAX: usize = 256 * 1024 * 1024;
 
-/// Nombre maximal de paramètres argv/envp dans execve
+/// Maximum number of argv/envp parameters in execve
 pub const ARGV_MAX: usize = 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteurs d'instrumentation
+// Instrumentation counters
 // ─────────────────────────────────────────────────────────────────────────────
 
 static VALIDATION_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -59,35 +59,35 @@ static VALIDATION_FAULT_COUNT: AtomicU64 = AtomicU64::new(0);
 static COPY_FROM_USER_BYTES: AtomicU64 = AtomicU64::new(0);
 static COPY_TO_USER_BYTES: AtomicU64 = AtomicU64::new(0);
 
-/// Retourne le nombre total de validations effectuées
+/// Returns total number of validations performed
 #[inline]
 pub fn validation_count() -> u64 {
     VALIDATION_COUNT.load(Ordering::Relaxed)
 }
-/// Retourne le nombre de fautes de validation (EFAULT levé)
+/// Returns number of validation faults (EFAULT raised)
 #[inline]
 pub fn validation_fault_count() -> u64 {
     VALIDATION_FAULT_COUNT.load(Ordering::Relaxed)
 }
-/// Retourne le total d'octets copiés depuis userspace
+/// Returns total bytes copied from userspace
 #[inline]
 pub fn copy_from_user_bytes_total() -> u64 {
     COPY_FROM_USER_BYTES.load(Ordering::Relaxed)
 }
-/// Retourne le total d'octets copiés vers userspace
+/// Returns total bytes copied to userspace
 #[inline]
 pub fn copy_to_user_bytes_total() -> u64 {
     COPY_TO_USER_BYTES.load(Ordering::Relaxed)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UserPtr<T> — pointeur typé provenant de l'espace utilisateur
+// UserPtr<T> — typed pointer from user space
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Wrapper de type autour d'un pointeur brut provenant de Ring 3.
+/// Type wrapper around a raw pointer coming from Ring 3.
 ///
-/// Non déréférençable directement. Doit être validé via
-/// [`UserPtr::validate`] avant tout accès, ce qui retourne un
+/// Cannot be dereferenced directly. Must be validated via
+/// [`UserPtr::validate`] before any access, which returns a
 /// [`ValidatedUserPtr<T>`].
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -96,13 +96,13 @@ pub struct UserPtr<T> {
     _phantom: core::marker::PhantomData<*mut T>,
 }
 
-// SAFETY: UserPtr est uniquement un entier encodant une adresse Ring 3.
-// Il n'est pas déréférencé directement, donc Send+Sync sont sûrs.
+// SAFETY: UserPtr is merely an integer encoding a Ring 3 address.
+// It is not directly dereferenced, so Send+Sync are safe.
 unsafe impl<T> Send for UserPtr<T> {}
 unsafe impl<T> Sync for UserPtr<T> {}
 
 impl<T> UserPtr<T> {
-    /// Construit un `UserPtr` depuis une adresse brute (issue d'un registre syscall).
+    /// Constructs a `UserPtr` from a raw address (from a syscall register).
     #[inline]
     pub fn from_raw(addr: u64) -> Self {
         Self {
@@ -111,25 +111,25 @@ impl<T> UserPtr<T> {
         }
     }
 
-    /// Retourne l'adresse brute sans validation.
+    /// Returns the raw address without validation.
     #[inline]
     pub fn as_raw(&self) -> u64 {
         self.addr
     }
 
-    /// Retourne `true` si le pointeur est nul.
+    /// Returns `true` if the pointer is null.
     #[inline]
     pub fn is_null(&self) -> bool {
         self.addr == 0
     }
 
-    /// Valide le pointeur et retourne un [`ValidatedUserPtr<T>`].
+    /// Validates the pointer and returns a [`ValidatedUserPtr<T>`].
     ///
-    /// Vérifie :
+    /// Checks:
     /// - Non-NULL
-    /// - Dans la plage canonique userspace
-    /// - Aligné sur `align_of::<T>()`
-    /// - La plage `[addr, addr + size_of::<T>())` ne dépasse pas `USER_ADDR_MAX`
+    /// - Within canonical userspace range
+    /// - Aligned to `align_of::<T>()`
+    /// - Range `[addr, addr + size_of::<T>())` does not exceed `USER_ADDR_MAX`
     pub fn validate(&self) -> Result<ValidatedUserPtr<T>, SyscallError> {
         VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
         validate_user_range(self.addr, mem::size_of::<T>(), mem::align_of::<T>())?;
@@ -139,7 +139,7 @@ impl<T> UserPtr<T> {
         })
     }
 
-    /// Valide un pointeur nullable (`NULL` est accepté → retourne `None`).
+    /// Validates a nullable pointer (`NULL` is accepted → returns `None`).
     pub fn validate_nullable(&self) -> Result<Option<ValidatedUserPtr<T>>, SyscallError> {
         if self.addr == 0 {
             return Ok(None);
@@ -155,24 +155,24 @@ impl<T> fmt::Debug for UserPtr<T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ValidatedUserPtr<T> — pointeur validé, déréférençable sous unsafe
+// ValidatedUserPtr<T> — validated pointer, dereferenceable under unsafe
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pointeur utilisateur dont la plage et l'alignement ont été vérifiés.
-/// Peut être copié via `copy_from_user` / `copy_to_user`.
+/// User pointer whose range and alignment have been verified.
+/// Can be copied via `copy_from_user` / `copy_to_user`.
 pub struct ValidatedUserPtr<T> {
     addr: u64,
     _phantom: core::marker::PhantomData<*mut T>,
 }
 
 impl<T: Copy> ValidatedUserPtr<T> {
-    /// Copie la valeur T depuis l'espace utilisateur.
+    /// Copies value T from user space.
     ///
-    /// Utilise des lectures volatiles pour éviter les optimisations compilateur.
+    /// Uses volatile reads to prevent compiler optimizations.
     ///
     /// # Errors
-    /// Retourne [`SyscallError::Fault`] si un page fault se produit
-    /// (dans un kernel complet, géré via la table de fixups).
+    /// Returns [`SyscallError::Fault`] if a page fault occurs
+    /// (in a full kernel, handled via fixup table).
     pub fn read(&self) -> Result<T, SyscallError> {
         let mut value = mem::MaybeUninit::<T>::uninit();
         copy_from_user(
@@ -180,11 +180,11 @@ impl<T: Copy> ValidatedUserPtr<T> {
             self.addr as *const u8,
             mem::size_of::<T>(),
         )?;
-        // SAFETY: copy_from_user a rempli tous les octets de value si Ok.
+        // SAFETY: copy_from_user populated all bytes of value if Ok.
         Ok(unsafe { value.assume_init() })
     }
 
-    /// Écrit une valeur T vers l'espace utilisateur.
+    /// Writes value T to user space.
     pub fn write(&self, value: T) -> Result<(), SyscallError> {
         copy_to_user(
             self.addr as *mut u8,
@@ -195,7 +195,7 @@ impl<T: Copy> ValidatedUserPtr<T> {
 }
 
 impl<T> ValidatedUserPtr<T> {
-    /// Retourne l'adresse validée.
+    /// Returns the validated address.
     #[inline]
     pub fn as_raw(&self) -> u64 {
         self.addr
@@ -203,21 +203,21 @@ impl<T> ValidatedUserPtr<T> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UserBuf — slice d'octets userspace validée
+// UserBuf — validated userspace byte slice
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Représente un buffer utilisateur (adresse + longueur) entièrement validé.
+/// Represents a fully validated user buffer (address + length).
 pub struct UserBuf {
     addr: u64,
     len: usize,
 }
 
 impl UserBuf {
-    /// Valide un buffer (adresse + longueur) en espace utilisateur.
+    /// Validates a buffer (address + length) in user space.
     ///
-    /// - `ptr` : adresse de départ (issue d'un registre syscall)
-    /// - `len` : taille en octets
-    /// - `max` : limite supérieure autorisée (`IO_BUF_MAX`, `PATH_MAX`, etc.)
+    /// - `ptr`: starting address (from a syscall register)
+    /// - `len`: size in bytes
+    /// - `max`: maximum allowed upper bound (`IO_BUF_MAX`, `PATH_MAX`, etc.)
     pub fn validate(ptr: u64, len: usize, max: usize) -> Result<Self, SyscallError> {
         VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
         if len > max {
@@ -228,9 +228,9 @@ impl UserBuf {
         Ok(Self { addr: ptr, len })
     }
 
-    /// Copie le contenu du buffer utilisateur dans `dst`.
+    /// Copies the user buffer content into `dst`.
     ///
-    /// `dst` doit avoir une longueur exactement égale à `self.len`.
+    /// `dst` must have length exactly equal to `self.len`.
     pub fn read_into(&self, dst: &mut [u8]) -> Result<(), SyscallError> {
         if dst.len() != self.len {
             return Err(SyscallError::Invalid);
@@ -238,7 +238,7 @@ impl UserBuf {
         copy_from_user(dst.as_mut_ptr(), self.addr as *const u8, self.len)
     }
 
-    /// Copie `src` dans le buffer utilisateur.
+    /// Copies `src` into the user buffer.
     pub fn write_from(&self, src: &[u8]) -> Result<(), SyscallError> {
         if src.len() > self.len {
             return Err(SyscallError::TooBig);
@@ -246,17 +246,17 @@ impl UserBuf {
         copy_to_user(self.addr as *mut u8, src.as_ptr(), src.len())
     }
 
-    /// Retourne la longueur validée.
+    /// Returns the validated length.
     #[inline]
     pub fn len(&self) -> usize {
         self.len
     }
-    /// Retourne true si le buffer est vide.
+    /// Returns true if the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-    /// Retourne l'adresse validée.
+    /// Returns the validated address.
     #[inline]
     pub fn addr(&self) -> u64 {
         self.addr
@@ -264,30 +264,30 @@ impl UserBuf {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UserStr — chaîne C null-terminée depuis userspace
+// UserStr — null-terminated C string from userspace
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Représente une chaîne C null-terminée validée depuis l'espace utilisateur.
+/// Represents a validated null-terminated C string from user space.
 ///
-/// Le contenu est copié dans un buffer kernel interne lors de la validation.
+/// Content is copied into an internal kernel buffer during validation.
 pub struct UserStr {
-    /// Buffer kernel contenant la chaîne UTF-8 copiée (sans le '\0').
+    /// Kernel buffer containing copied UTF-8 string (without '\0').
     ///
-    /// Stockage heap: les chemins/argv/envp ne doivent jamais materialiser un
-    /// buffer PATH_MAX/STRING_MAX dans une frame de syscall.
+    /// Heap storage: paths/argv/envp must never materialize a
+    /// PATH_MAX/STRING_MAX buffer in a syscall frame.
     buf: Vec<u8>,
 }
 
 impl UserStr {
-    /// Lit et valide une chaîne C null-terminée depuis userspace.
+    /// Reads and validates a null-terminated C string from userspace.
     ///
-    /// - `ptr` : adresse de la chaîne (issue d'un registre syscall)
-    /// - `max` : longueur maximale tolérée (sans '\0')
+    /// - `ptr`: string address (from a syscall register)
+    /// - `max`: maximum tolerated length (excluding '\0')
     ///
     /// # Errors
-    /// - [`SyscallError::Fault`]   si `ptr` est invalide
-    /// - [`SyscallError::TooBig`]  si aucun '\0' avant `max` octets
-    /// - [`SyscallError::Invalid`] si la chaîne contient des octets invalides
+    /// - [`SyscallError::Fault`]   if `ptr` is invalid
+    /// - [`SyscallError::TooBig`]  if no '\0' before `max` bytes
+    /// - [`SyscallError::Invalid`] if string contains invalid bytes
     pub fn from_user(ptr: u64, max: usize) -> Result<Self, SyscallError> {
         VALIDATION_COUNT.fetch_add(1, Ordering::Relaxed);
         if ptr == 0 || ptr >= USER_ADDR_MAX {
@@ -330,7 +330,7 @@ impl UserStr {
         }
         #[cfg(not(target_os = "none"))]
         {
-            // Conserver la boucle hôte pour les tests unitaires std
+            // Keep host loop for std unit tests
             let mut offset = 0usize;
             loop {
                 if offset >= capped_max {
@@ -347,60 +347,60 @@ impl UserStr {
         }
     }
 
-    /// Retourne la chaîne comme slice d'octets (sans le null terminal).
+    /// Returns the string as a byte slice (without trailing null).
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf
     }
 
-    /// Retourne la longueur sans le null-terminal.
+    /// Returns the length excluding trailing null.
     #[inline]
     pub fn len(&self) -> usize {
         self.buf.len()
     }
 
-    /// Retourne true si la chaîne est vide.
+    /// Returns true if the string is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
     }
 
-    /// Tente de convertir en &str (UTF-8 strict).
+    /// Attempts to convert to &str (strict UTF-8).
     pub fn as_str(&self) -> Result<&str, SyscallError> {
         core::str::from_utf8(&self.buf).map_err(|_| SyscallError::Invalid)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SyscallError — erreurs de validation remontées vers dispatch
+// SyscallError — validation errors propagated to dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs retournées par les fonctions de validation.
-/// Converties en codes errno Linux par [`SyscallError::to_errno`].
+/// Errors returned by validation functions.
+/// Converted to Linux errno codes by [`SyscallError::to_errno`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SyscallError {
-    /// Adresse utilisateur invalide (NULL, hors plage, ou non mappée)
+    /// Invalid user address (NULL, out of range, or unmapped)
     Fault,
-    /// Argument numérique invalide (valeur hors plage, flag inconnu, etc.)
+    /// Invalid numeric argument (out-of-range value, unknown flag, etc.)
     Invalid,
-    /// Taille ou longueur dépasse la limite autorisée
+    /// Size or length exceeds allowed limit
     TooBig,
-    /// Accès refusé (capability ou permission manquante)
+    /// Permission denied (missing capability or permission)
     Access,
-    /// Ressource non trouvée
+    /// Resource not found
     NotFound,
-    /// Ressource occupée ou verrou non disponible
+    /// Resource busy or lock unavailable
     Busy,
-    /// Interruption par signal
+    /// Interrupted by signal
     Interrupted,
-    /// Memoire insuffisante pendant une copie/validation kernel
+    /// Out of memory during kernel copy/validation
     NoMemory,
-    /// Opération non supportée
+    /// Operation not supported
     NotSupported,
 }
 
 impl SyscallError {
-    /// Convertit en code errno Linux (valeur négative).
+    /// Converts to Linux errno code (negative value).
     #[inline]
     pub const fn to_errno(self) -> i64 {
         match self {
@@ -435,19 +435,19 @@ impl fmt::Display for SyscallError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Primitives internes de validation
+// Internal validation primitives
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie qu'un intervalle [addr, addr+len) est entièrement en userspace.
+/// Verifies that a range [addr, addr+len) is entirely in userspace.
 ///
-/// Conditions vérifiées :
-/// 1. `addr` non-NULL (sauf si `len == 0`)
+/// Checked conditions:
+/// 1. `addr` non-NULL (unless `len == 0`)
 /// 2. `addr < USER_ADDR_MAX`
-/// 3. `addr + len ≤ USER_ADDR_MAX` (pas de débordement, pas de chevauchement kernel)
-/// 4. Alignement sur `align` (doit être une puissance de 2)
+/// 3. `addr + len ≤ USER_ADDR_MAX` (no overflow, no kernel overlap)
+/// 4. Alignment to `align` (must be a power of 2)
 #[inline]
 fn validate_user_range(addr: u64, len: usize, align: usize) -> Result<(), SyscallError> {
-    // Cas spécial longueur nulle : seul NULL refusé pour cohérence POSIX
+    // Special case for zero length: only NULL rejected for POSIX consistency
     if len == 0 {
         return Ok(());
     }
@@ -456,12 +456,12 @@ fn validate_user_range(addr: u64, len: usize, align: usize) -> Result<(), Syscal
         record_fault();
         return Err(SyscallError::Fault);
     }
-    // Début dans le kernel
+    // Start inside kernel
     if addr >= USER_ADDR_MAX {
         record_fault();
         return Err(SyscallError::Fault);
     }
-    // Vérification anti-wrap : addr + len ne doit pas déborder u64 ni franchir USER_ADDR_MAX
+    // Anti-wrap check: addr + len must not overflow u64 nor exceed USER_ADDR_MAX
     let end = addr.checked_add(len as u64).ok_or_else(|| {
         record_fault();
         SyscallError::Fault
@@ -470,7 +470,7 @@ fn validate_user_range(addr: u64, len: usize, align: usize) -> Result<(), Syscal
         record_fault();
         return Err(SyscallError::Fault);
     }
-    // Vérification alignement (align doit être puissance de 2)
+    // Alignment check (align must be power of 2)
     debug_assert!(
         align.is_power_of_two(),
         "align doit être une puissance de 2"
@@ -497,7 +497,7 @@ fn current_user_address_space() -> Option<&'static crate::memory::virt::UserAddr
         return None;
     }
 
-    // SAFETY: l'address space appartient au PCB vivant du thread courant.
+    // SAFETY: address space belongs to living PCB of current thread.
     Some(unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) })
 }
 
@@ -596,8 +596,8 @@ fn copy_from_user_resolved(dst: *mut u8, src: *const u8, len: usize) -> Result<(
         let chunk = core::cmp::min(PAGE_SIZE - page_off, len - copied);
         let phys = resolve_user_page(user_as, user_addr, false)?;
         let kernel_src = phys_to_virt(phys).as_u64() as *const u8;
-        // SAFETY: resolve_user_page garantit que la source est l'alias physmap
-        // de la page utilisateur courante; dst couvre len octets kernel.
+        // SAFETY: resolve_user_page guarantees source is physmap alias
+        // of current user page; dst covers len kernel bytes.
         unsafe {
             core::ptr::copy_nonoverlapping(kernel_src, dst.add(copied), chunk);
         }
@@ -621,8 +621,8 @@ fn copy_to_user_resolved(dst: *mut u8, src: *const u8, len: usize) -> Result<(),
         let chunk = core::cmp::min(PAGE_SIZE - page_off, len - copied);
         let phys = resolve_user_page(user_as, user_addr, true)?;
         let kernel_dst = phys_to_virt(phys).as_u64() as *mut u8;
-        // SAFETY: resolve_user_page a validé/résolu une page userspace writable
-        // et retourne son alias physmap kernel; src couvre len octets kernel.
+        // SAFETY: resolve_user_page validated/resolved a writable userspace page
+        // and returns its kernel physmap alias; src covers len kernel bytes.
         unsafe {
             core::ptr::copy_nonoverlapping(src.add(copied), kernel_dst, chunk);
         }
@@ -631,10 +631,10 @@ fn copy_to_user_resolved(dst: *mut u8, src: *const u8, len: usize) -> Result<(),
     Ok(())
 }
 
-/// Copie `len` octets depuis `src` (userspace) vers `dst` (kernel).
+/// Copies `len` bytes from `src` (userspace) to `dst` (kernel).
 ///
 /// # Safety
-/// `dst` doit pointer vers un buffer kernel valide de longueur >= `len`.
+/// `dst` must point to a valid kernel buffer of length >= `len`.
 pub fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
     if len == 0 {
         return Ok(());
@@ -655,10 +655,10 @@ pub fn copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), Sy
     Ok(())
 }
 
-/// Copie `len` octets depuis `src` (kernel) vers `dst` (userspace).
+/// Copies `len` bytes from `src` (kernel) to `dst` (userspace).
 ///
 /// # Safety
-/// `src` doit pointer vers `len` octets de données kernel valides.
+/// `src` must point to `len` bytes of valid kernel data.
 pub fn copy_to_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), SyscallError> {
     if len == 0 {
         return Ok(());
@@ -679,22 +679,22 @@ pub fn copy_to_user(dst: *mut u8, src: *const u8, len: usize) -> Result<(), Sysc
     Ok(())
 }
 
-/// Incrément interne du compteur de fautes de validation.
+/// Internal increment of validation fault counter.
 #[inline(always)]
 fn record_fault() {
     VALIDATION_FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique de haut niveau — helpers directs pour les handlers syscall
+// High-level public API — direct helpers for syscall handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Valide et lit un `T` depuis un pointeur userspace.
+/// Validates and reads a `T` from a userspace pointer.
 ///
-/// Combine `UserPtr::validate()` et `ValidatedUserPtr::read()` en une seule
-/// opération. Retourne l'errno en cas d'échec.
+/// Combines `UserPtr::validate()` and `ValidatedUserPtr::read()` into a single
+/// operation. Returns errno on failure.
 ///
-/// # Exemple
+/// # Example
 /// ```no_run
 /// let timespec: Timespec = read_user_typed::<Timespec>(frame.rsi)?;
 /// ```
@@ -702,14 +702,14 @@ pub fn read_user_typed<T: Copy>(ptr_raw: u64) -> Result<T, SyscallError> {
     UserPtr::<T>::from_raw(ptr_raw).validate()?.read()
 }
 
-/// Valide et écrit un `T` vers un pointeur userspace.
+/// Validates and writes a `T` to a userspace pointer.
 pub fn write_user_typed<T: Copy>(ptr_raw: u64, value: T) -> Result<(), SyscallError> {
     UserPtr::<T>::from_raw(ptr_raw).validate()?.write(value)
 }
 
-/// Valide un buffer `(ptr, len)` et copie les données dans un `Vec` kernel.
+/// Validates a buffer `(ptr, len)` and copies data into a kernel `Vec`.
 ///
-/// `max` est la limite de taille autorisée (ex: `IO_BUF_MAX` pour `read()`).
+/// `max` is the allowed size limit (e.g. `IO_BUF_MAX` for `read()`).
 pub fn read_user_buf_to_vec(
     ptr: u64,
     len: usize,
@@ -724,14 +724,14 @@ pub fn read_user_buf_to_vec(
     Ok(vec)
 }
 
-/// Valide un chemin de fichier C null-terminé depuis userspace.
+/// Validates a null-terminated C file path from userspace.
 ///
-/// Longueur maximale : [`PATH_MAX`] (4096 octets).
+/// Maximum length: [`PATH_MAX`] (4096 bytes).
 pub fn read_user_path(ptr: u64) -> Result<UserStr, SyscallError> {
     UserStr::from_user(ptr, PATH_MAX)
 }
 
-/// Valide un argument entier comme descripteur de fichier (≥0 et <65536).
+/// Validates an integer argument as a file descriptor (≥0 and <65536).
 #[inline]
 pub fn validate_fd(raw: u64) -> Result<i32, SyscallError> {
     if raw > 65535 {
@@ -740,7 +740,7 @@ pub fn validate_fd(raw: u64) -> Result<i32, SyscallError> {
     Ok(raw as i32)
 }
 
-/// Valide un ensemble de flags en vérifiant qu'aucun bit non supporté n'est levé.
+/// Validates a set of flags, verifying no unsupported bits are set.
 #[inline]
 pub fn validate_flags(raw: u64, allowed_mask: u64) -> Result<u64, SyscallError> {
     if raw & !allowed_mask != 0 {
@@ -749,7 +749,7 @@ pub fn validate_flags(raw: u64, allowed_mask: u64) -> Result<u64, SyscallError> 
     Ok(raw)
 }
 
-/// Valide un PID (doit être > 0 et < 4194304).
+/// Validates a PID (must be > 0 and < 4194304).
 #[inline]
 pub fn validate_pid(raw: u64) -> Result<u32, SyscallError> {
     if raw == 0 || raw >= 4194304 {
@@ -758,10 +758,10 @@ pub fn validate_pid(raw: u64) -> Result<u32, SyscallError> {
     Ok(raw as u32)
 }
 
-/// Valide un signal livrable (1..=63, POSIX + temps-reel).
+/// Validates a deliverable signal (1..=63, POSIX + real-time).
 ///
-/// `kill(pid, 0)` est une sonde d'existence : elle est traitee par le handler
-/// `kill` avant cet appel, car le signal 0 n'est jamais livrable.
+/// `kill(pid, 0)` is an existence check: it is handled by the `kill`
+/// handler before this call, because signal 0 is never deliverable.
 #[inline]
 pub fn validate_signal(raw: u64) -> Result<u32, SyscallError> {
     if raw == 0 || raw > crate::process::signal::delivery::MAX_SIGNAL_NUMBER as u64 {
@@ -770,7 +770,7 @@ pub fn validate_signal(raw: u64) -> Result<u32, SyscallError> {
     Ok(raw as u32)
 }
 
-/// Valide un CLOCK_ID (valeurs POSIX standard).
+/// Validates a CLOCK_ID (standard POSIX values).
 #[inline]
 pub fn validate_clockid(raw: u64) -> Result<u32, SyscallError> {
     // POSIX clock IDs : 0=REALTIME, 1=MONOTONIC, 2=PROCESS_CPUTIME_ID,
@@ -783,7 +783,7 @@ pub fn validate_clockid(raw: u64) -> Result<u32, SyscallError> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests unitaires (cfg(test) → jamais compilés dans le kernel binaire)
+// Unit tests (cfg(test) → never compiled into kernel binary)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -805,21 +805,21 @@ mod tests {
 
     #[test]
     fn test_validate_valid_range() {
-        // Adresse canonique userspace valide
+        // Valid canonical userspace address
         let result = validate_user_range(0x0000_0000_0040_0000, 4096, 1);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_wrap_overflow() {
-        // addr + len déborde u64
+        // addr + len overflows u64
         let result = validate_user_range(u64::MAX - 4, 16, 1);
         assert!(matches!(result, Err(SyscallError::Fault)));
     }
 
     #[test]
     fn test_validate_end_past_usermax() {
-        // addr valide mais s'étend dans le kernel
+        // valid addr but extends into kernel
         let result = validate_user_range(USER_ADDR_MAX - 8, 16, 1);
         assert!(matches!(result, Err(SyscallError::Fault)));
     }

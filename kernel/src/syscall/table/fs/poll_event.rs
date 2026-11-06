@@ -1,4 +1,4 @@
-//! # syscall/table/fs/poll_event.rs — Handlers de multiplexage I/O, tubes et événements
+//! # syscall/table/fs/poll_event.rs — I/O multiplexing, pipes, and event handlers
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;

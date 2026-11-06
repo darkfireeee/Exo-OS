@@ -1,4 +1,4 @@
-//! # syscall/table/fs/sockets.rs — Handlers de l'interface réseau BSD Sockets
+//! # syscall/table/fs/sockets.rs — BSD Sockets network interface handlers
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;

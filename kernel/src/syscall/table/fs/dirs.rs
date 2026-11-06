@@ -1,4 +1,4 @@
-//! # syscall/table/fs/dirs.rs — Handlers pour la navigation dans les répertoires et état FS processus
+//! # syscall/table/fs/dirs.rs — Handlers for directory navigation and process FS state
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;

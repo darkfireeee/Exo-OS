@@ -1,14 +1,14 @@
-//! # syscall/handlers/misc.rs — Thin wrappers divers (getuid, getgid, uname, sysinfo)
+//! # syscall/handlers/misc.rs — Miscellaneous thin wrappers (getuid, getgid, uname, sysinfo)
 //!
-//! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
-//! ABI-03 : INTERDIT de retourner un pointeur kernel dans rax.
+//! RULE SYS-03: THIN WRAPPERS ONLY.
+//! ABI-03: FORBIDDEN to return a kernel pointer in rax.
 
 use crate::syscall::errno::{EFAULT, EINVAL, ENOSYS};
 use crate::syscall::validation::USER_ADDR_MAX;
 
-/// `getpid()` → PID du processus courant.
+/// `getpid()` -> PID of the current process.
 pub fn sys_getpid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // Fast-path a déjà intercepté getpid — ce handler est le fallback.
+    // Fast-path has already intercepted getpid — this handler is the fallback.
     let pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
@@ -22,7 +22,7 @@ pub fn sys_getpid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     pid_val as i64
 }
 
-/// `getppid()` → PID du parent.
+/// `getppid()` -> PID of parent.
 pub fn sys_getppid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let pid_val: u32 = unsafe {
         let ptr: u64;
@@ -41,7 +41,7 @@ pub fn sys_getppid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
 }
 
-/// `gettid()` → TID du thread courant.
+/// `gettid()` -> TID of current thread.
 pub fn sys_gettid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let tid_val: u64 = unsafe {
         let ptr: u64;
@@ -54,29 +54,29 @@ pub fn sys_gettid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     tid_val as i64
 }
 
-/// `getuid()` → UID réel.
+/// `getuid()` -> real UID.
 pub fn sys_getuid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // ABI-03 : retourner la valeur UID, pas un pointeur kernel.
-    // Délègue → process::core::creds::get_uid()
-    0 // root UID par défaut (not yet implemented)
+    // ABI-03: return UID value, not a kernel pointer.
+    // Delegates -> process::core::creds::get_uid()
+    0 // root UID by default (not yet implemented)
 }
 
-/// `getgid()` → GID réel.
+/// `getgid()` -> real GID.
 pub fn sys_getgid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     0
 }
 
-/// `geteuid()` → UID effectif.
+/// `geteuid()` -> effective UID.
 pub fn sys_geteuid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     0
 }
 
-/// `getegid()` → GID effectif.
+/// `getegid()` -> effective GID.
 pub fn sys_getegid(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     0
 }
 
-/// `uname(utsname_ptr)` → 0 ou errno.
+/// `uname(utsname_ptr)` -> 0 or errno.
 ///
 /// Remplit `struct utsname` (6 × 65 bytes = 390 bytes) :
 ///   sysname[65], nodename[65], release[65], version[65], machine[65], domainname[65]
@@ -107,7 +107,7 @@ pub fn sys_uname(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     }
 }
 
-/// `sysinfo(info_ptr)` → 0 ou errno.
+/// `sysinfo(info_ptr)` -> 0 or errno.
 pub fn sys_sysinfo(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if info_ptr == 0 || info_ptr >= USER_ADDR_MAX {
         return EFAULT;
@@ -147,10 +147,10 @@ pub fn sys_sysinfo(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     }
 }
 
-/// `arch_prctl(code, addr)` → 0 ou errno.
+/// `arch_prctl(code, addr)` -> 0 or errno.
 ///
-/// Utilisé pour configurer FS_BASE (TLS) via ARCH_SET_FS (0x1002).
-/// BUG-04 FIX : do_exec() doit aussi appeler set_fs_base directement (PROC-10).
+/// Used to configure FS_BASE (TLS) via ARCH_SET_FS (0x1002).
+/// BUG-04 FIX: do_exec() must also call set_fs_base directly (PROC-10).
 pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     const ARCH_SET_GS: u64 = 0x1001;
     const ARCH_SET_FS: u64 = 0x1002;
@@ -161,7 +161,7 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
             if !crate::memory::core::address::is_user_canonical(addr) {
                 return EINVAL;
             }
-            // Mettre à jour le TCB du thread courant
+            // Update TCB of current thread
             let tcb_ptr: u64;
             unsafe {
                 core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
@@ -170,7 +170,7 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
                     tcb.fs_base = addr;
                 }
             }
-            // Écrire IA32_FS_BASE MSR — initialise le TLS Ring3.
+            // Write IA32_FS_BASE MSR — initializes Ring3 TLS.
             unsafe {
                 core::arch::x86_64::_mm_mfence();
                 // wrmsrl(IA32_FS_BASE=0xC000_0100, addr)
@@ -255,7 +255,7 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     }
 }
 
-/// `set_tid_address(tidptr)` → TID courant.
+/// `set_tid_address(tidptr)` -> current TID.
 pub fn sys_set_tid_address(tidptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     if tidptr != 0 && tidptr >= USER_ADDR_MAX {
         return EFAULT;
@@ -269,7 +269,7 @@ pub fn sys_prctl(opt: u64, arg2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) ->
     ENOSYS
 }
 
-/// `sched_yield()` → 0 (cède le CPU au prochain thread prêt).
+/// `sched_yield()` -> 0 (yields CPU to next ready thread).
 pub fn sys_sched_yield(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     unsafe {
         let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();

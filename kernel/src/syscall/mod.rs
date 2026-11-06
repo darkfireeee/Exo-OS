@@ -1,46 +1,46 @@
-//! # kernel/src/syscall/mod.rs — Module syscall d'Exo-OS
+//! # kernel/src/syscall/mod.rs — Exo-OS syscall module
 //!
-//! ## Vue d'ensemble
+//! ## Overview
 //!
-//! Ce module orchestre l'intégralité de l'interface syscall du noyau.
-//! Il est structuré en couches indépendantes :
+//! This module orchestrates the kernel's entire syscall interface.
+//! It is structured into independent layers:
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────────────┐
 //! │  arch/x86_64/syscall.rs                                  │
-//! │  syscall_rust_handler(frame)  ← SYSCALL matériel         │
+//! │  syscall_rust_handler(frame)  ← Hardware SYSCALL         │
 //! └──────────────────┬───────────────────────────────────────┘
-//!                    │ appel direct
+//!                    │ direct call
 //! ┌──────────────────▼───────────────────────────────────────┐
 //! │  syscall::dispatch::dispatch(frame)                      │
-//! │  ├─ validation numéro      numbers::is_valid_syscall()   │
+//! │  ├─ number validation      numbers::is_valid_syscall()   │
 //! │  ├─ fast-path              fast_path::try_fast_path()    │
-//! │  ├─ traduction compat      compat::translate_linux_nr()  │
+//! │  ├─ compat translation     compat::translate_linux_nr()  │
 //! │  ├─ dispatch table         table::get_handler()          │
-//! │  └─ livraison signaux      post_dispatch()               │
+//! │  └─ signal delivery        post_dispatch()               │
 //! └──────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! ## Modules
 //!
-//! | Module       | Rôle                                              |
+//! | Module       | Role                                              |
 //! |--------------|---------------------------------------------------|
-//! | `numbers`    | Constantes SYS_* et errno                        |
-//! | `validation` | Types sûrs pour les arguments userspaces          |
-//! | `fast_path`  | Handlers ultra-rapides (<150 cycles, sans verrou) |
-//! | `table`      | Table O(1) + handlers slow-path                  |
-//! | `dispatch`   | Pipeline complet de dispatch                      |
-//! | `compat`     | Couches linux.rs + posix.rs                       |
+//! | `numbers`    | SYS_* constants and errno                         |
+//! | `validation` | Safe types for userspace arguments                |
+//! | `fast_path`  | Ultra-fast handlers (<150 cycles, lockless)       |
+//! | `table`      | O(1) table + slow-path handlers                   |
+//! | `dispatch`   | Full dispatch pipeline                            |
+//! | `compat`     | linux.rs + posix.rs layers                        |
 //!
-//! ## Règles architecturales respectées
+//! ## Respected Architectural Rules
 //!
-//! - **SIGNAL-01 (DOC1)** : livraison des signaux uniquement au retour vers
+//! - **SIGNAL-01 (DOC1)**: signal delivery only upon return to
 //!   userspace, via `dispatch::post_dispatch()`.
-//! - **SCHED-03 (DOC3)** : futex logé dans `memory::utils::futex_table`.
-//! - **regle_bonus** : ordonnancement des verrous Memory < Sched < Security < IPC < FS
-//!   (= Memory acquis en premier, FS acquis en dernier) ; chaque `unsafe` précédé
-//!   de `// SAFETY:`.
-//! - **NO-ALLOC** sur les chemins chauds (`fast_path`, dispatch fast branch).
+//! - **SCHED-03 (DOC3)**: futex housed in `memory::utils::futex_table`.
+//! - **regle_bonus**: lock ordering Memory < Sched < Security < IPC < FS
+//!   (= Memory acquired first, FS acquired last); each `unsafe` preceded
+//!   by `// SAFETY:`.
+//! - **NO-ALLOC** on hot paths (`fast_path`, dispatch fast branch).
 
 pub mod compat;
 pub mod dispatch;
@@ -51,21 +51,21 @@ pub mod net_bridge;
 pub mod numbers;
 pub mod table;
 pub mod validation;
-// Nouveaux modules — correctifs BUG-01..BUG-09
+// New modules — fixes BUG-01..BUG-09
 pub mod abi;
 pub mod errno;
 pub mod handlers;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports publics
+// Public re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numéros de syscall et codes d'erreur POSIX/Linux.
+/// Syscall numbers and POSIX/Linux error codes.
 pub use numbers::{
     is_exofs_syscall,
     is_exoos_native,
     is_linux_compat,
-    // Classificateurs
+    // Classifiers
     is_valid_syscall,
     EACCES,
     EAGAIN,
@@ -120,7 +120,7 @@ pub use numbers::{
     SYS_EXO_CAP_REVOKE,
     SYS_EXO_IPC_CALL,
     SYS_EXO_IPC_RECV,
-    // Numéros Exo-OS natifs
+    // Native Exo-OS numbers
     SYS_EXO_IPC_SEND,
     SYS_EXO_LOG,
     SYS_EXO_MEM_COPY_FROM_PID,
@@ -170,7 +170,7 @@ pub use numbers::{
     SYS_PROC_CLONE,
     SYS_PROC_EXEC,
     SYS_PWRITE64,
-    // Numéros Linux-compat
+    // Linux-compat numbers
     SYS_READ,
     SYS_RT_SIGACTION,
     SYS_RT_SIGPROCMASK,
@@ -182,38 +182,38 @@ pub use numbers::{
     SYS_WRITE,
 };
 
-/// Mapping KernelError/ExofsError → errno (BUG fix ERRNO-MISSING).
+/// KernelError/ExofsError → errno mapping (BUG fix ERRNO-MISSING).
 pub use errno::{exofs_err_to_errno, kernel_err_to_errno, result_to_retval};
 
-/// Types ABI : SyscallArgs, SyscallResult, check adresse canonique (BUG-05).
+/// ABI types: SyscallArgs, SyscallResult, canonical address check (BUG-05).
 pub use abi::{is_canonical_address, SyscallArgs, SyscallResult};
 
-/// Types de validation des arguments userspaces.
+/// Validation types for userspace arguments.
 pub use validation::{
     copy_from_user, copy_to_user, read_user_path, read_user_typed, validate_clockid, validate_fd,
     validate_flags, validate_pid, validate_signal, write_user_typed, SyscallError, UserBuf,
     UserPtr, UserStr, ValidatedUserPtr, IO_BUF_MAX, PATH_MAX, USER_ADDR_MAX,
 };
 
-/// Point d'entrée unique du dispatch syscall, appelé par arch/.
+/// Single entry point for syscall dispatch, called by arch/.
 pub use dispatch::dispatch;
 
-/// Stats de dispatch pour le monitoring.
+/// Dispatch statistics for monitoring.
 pub use dispatch::{dispatch_stats, reset_dispatch_stats, DispatchStats};
 
-/// Stats fast-path.
+/// Fast-path statistics.
 pub use fast_path::{fast_path_stats, FastPathStats};
 
-/// Stats par syscall.
+/// Per-syscall statistics.
 pub use table::syscall_stats_for;
 
-/// Stats compat.
+/// Compat statistics.
 pub use compat::compat_stats;
 
-/// Constantes open flags, mmap, prot — utilisées par table.rs et userland.
+/// Open flags, mmap, prot constants — used by table.rs and userland.
 pub use compat::posix::{mmap_flags, open_flags, prot_flags, seek_whence, signals};
 
-/// Pont POSIX/FS public — réutilisable par les handlers et l'intégration kernel.
+/// Public POSIX/FS bridge — reusable by handlers and kernel integration.
 pub use fs_bridge::{
     bridge_result as fs_bridge_result, fs_bridge_init, fs_close, fs_dup, fs_dup2, fs_fcntl,
     fs_fstat, fs_getdents64, fs_lseek, fs_lstat, fs_mkdir, fs_open, fs_openat, fs_read,
@@ -221,7 +221,7 @@ pub use fs_bridge::{
     is_fs_ready, FsBridgeError,
 };
 
-/// Entrées syscall ExoFS natives exportées pour l'ABI et l'intégration userland.
+/// Native ExoFS syscall entries exported for ABI and userland integration.
 pub use crate::fs::exofs::syscall::{
     dispatch_exofs_syscall, dispatch_exofs_syscall_counted, sys_exofs_epoch_commit,
     sys_exofs_export_object, sys_exofs_gc_trigger, sys_exofs_get_content_hash,
@@ -232,44 +232,44 @@ pub use crate::fs::exofs::syscall::{
     sys_exofs_snapshot_create, sys_exofs_snapshot_list, sys_exofs_snapshot_mount, ExofsSyscallArgs,
 };
 
-// Lien vers le SyscallFrame défini dans arch/
+// Link to SyscallFrame defined in arch/
 pub use crate::arch::x86_64::syscall::SyscallFrame;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation du module
+// Module initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système syscall.
+/// Initializes the syscall subsystem.
 ///
-/// Doit être appelé depuis `kernel_main()` après l'initialisation de
-/// `arch::x86_64::syscall::init_syscall()` (qui configure les MSRs).
+/// Must be called from `kernel_main()` after initializing
+/// `arch::x86_64::syscall::init_syscall()` (which sets up MSRs).
 ///
-/// Cette fonction :
-/// 1. Remet à zéro tous les compteurs de stats.
-/// 2. Valide que la table de dispatch est cohérente.
-/// 3. Journalise le début de service.
+/// This function:
+/// 1. Resets all stats counters to zero.
+/// 2. Validates that the dispatch table is consistent.
+/// 3. Logs start of service.
 pub fn init() {
-    // Remet les compteurs à zéro (au cas où le noyau serait rechargé en mémoire)
+    // Reset counters to zero (in case the kernel is reloaded into memory)
     reset_dispatch_stats();
-    // Note : la journalisation sera activée lors de l'intégration du log ring.
+    // Note: logging will be enabled when integrating the log ring.
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agrégat de statistiques global
+// Global statistics aggregate
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques globales du sous-système syscall.
+/// Global statistics for the syscall subsystem.
 #[derive(Debug, Clone, Copy)]
 pub struct SyscallModuleStats {
-    /// Statistiques du pipeline de dispatch
+    /// Dispatch pipeline statistics
     pub dispatch: DispatchStats,
-    /// Statistiques du fast-path
+    /// Fast-path statistics
     pub fast_path: FastPathStats,
-    /// Statistiques de la couche de compatibilité
+    /// Compatibility layer statistics
     pub compat: compat::CompatStats,
 }
 
-/// Retourne un instantané de toutes les statistiques syscall.
+/// Returns a snapshot of all syscall statistics.
 pub fn module_stats() -> SyscallModuleStats {
     SyscallModuleStats {
         dispatch: dispatch_stats(),

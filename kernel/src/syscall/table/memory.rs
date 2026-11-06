@@ -1,17 +1,17 @@
-//! # syscall/table/memory.rs — Handlers de gestion mémoire (mmap, brk, mprotect, madvise)
+//! # syscall/table/memory.rs — Memory management handlers (mmap, brk, mprotect, madvise)
 
 use super::common::{checked_i32_sysarg, checked_u32_sysarg, checked_usize_sysarg, stat_inc};
 use crate::syscall::numbers::*;
 use core::sync::atomic::Ordering;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers Mémoire (délégués vers memory/)
+// Memory handlers (delegated to memory/)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `mmap(addr, len, prot, flags, fd, off)` → adresse mappée ou errno.
+/// `mmap(addr, len, prot, flags, fd, off)` -> mapped address or errno.
 pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -> i64 {
     stat_inc(SYS_MMAP);
-    // Longueur doit être > 0 et multiple de PAGE_SIZE
+    // Length must be > 0 and multiple of PAGE_SIZE
     if len == 0 {
         return EINVAL;
     }
@@ -32,7 +32,7 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
         Err(e) => return e,
     };
     let _len_pages = len.saturating_add(4095) / 4096;
-    // Déléguer à memory/virtual/mmap.rs
+    // Delegate to memory/virtual/mmap.rs
     match crate::memory::virt::mmap::do_mmap(addr, len, prot, flags, fd, off) {
         Ok(va) => va as i64,
         Err(e) => e.to_kernel_errno() as i64,
@@ -75,7 +75,7 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
     }
 }
 
-/// `brk(addr)` → nouvelle borne du segment data ou errno.
+/// `brk(addr)` -> new boundary of data segment or errno.
 pub fn sys_brk(addr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_BRK);
     match crate::memory::virt::mmap::do_brk(addr) {

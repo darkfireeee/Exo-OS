@@ -1,4 +1,4 @@
-//! # syscall/table/fs/path_ops.rs — Handlers d'opérations sur les chemins VFS et métadonnées
+//! # syscall/table/fs/path_ops.rs — VFS path operations and metadata handlers
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;
@@ -34,7 +34,7 @@ pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     fs_bridge::bridge_result(fs_bridge::fs_fstat(fd as u32, stat_ptr, pid))
 }
 
-/// `lstat(path, stat_buf)` — ne suit pas le symlink terminal.
+/// `lstat(path, stat_buf)` — does not follow the terminal symlink.
 pub fn sys_lstat(path_ptr: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_LSTAT);
     let pid = current_pid_u32();

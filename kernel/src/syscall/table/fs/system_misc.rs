@@ -1,4 +1,4 @@
-//! # syscall/table/fs/system_misc.rs — Handlers divers (limites, reboot, mremap, msync, temps)
+//! # syscall/table/fs/system_misc.rs — Miscellaneous handlers (limits, reboot, mremap, msync, time)
 
 use crate::syscall::numbers::*;
 use crate::syscall::table::common::*;

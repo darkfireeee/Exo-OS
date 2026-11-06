@@ -1,15 +1,15 @@
-//! # syscall/table/mod.rs — Table de dispatch O(1) et orchestration des handlers syscall
+//! # syscall/table/mod.rs — O(1) dispatch table and syscall handlers orchestration
 //!
-//! Ce module indexe et expose l'intégralité des handlers de syscalls d'Exo-OS,
-//! répartis de manière propre et ségréguée par domaine d'activité :
-//! - `common`  : Types ABI, statistiques d'appels, ENOSYS et validateurs d'arguments.
-//! - `fs`      : I/O, système de fichiers, descripteurs et VFS.
-//! - `memory`  : Allocations virtuelles, mmap, brk, mprotect.
-//! - `process` : Cycle de vie des processus et threads, signaux, identités.
-//! - `signal`  : Routage et masquage des signaux POSIX.
-//! - `time`    : Horloges, temporisateurs, nanosleep et futex.
-//! - `ipc`     : IPC natif Exo-OS, capabilities, ExoCordon et ExoShield.
-//! - `drivers` : Pilotes GI-03, DMA, bus PCI, vecteurs IRQ et MSI.
+//! This module indexes and exposes all syscall handlers of Exo-OS,
+//! organized cleanly and segregated by domain of activity:
+//! - `common`  : ABI types, call statistics, ENOSYS, and argument validators.
+//! - `fs`      : I/O, file system, descriptors, and VFS.
+//! - `memory`  : Virtual allocations, mmap, brk, mprotect.
+//! - `process` : Process and thread lifecycle, signals, credentials.
+//! - `signal`  : Routing and masking of POSIX signals.
+//! - `time`    : Clocks, timers, nanosleep, and futex.
+//! - `ipc`     : Native Exo-OS IPC, capabilities, ExoCordon, and ExoShield.
+//! - `drivers` : GI-03 drivers, DMA, PCI bus, IRQ and MSI vectors.
 
 pub mod common;
 pub mod drivers;
@@ -32,20 +32,20 @@ pub use time::*;
 use crate::syscall::numbers::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Construction de la table
+// Table construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retourne le handler associé au numéro `nr`, ou `sys_enosys` si non implémenté.
+/// Returns the handler associated with number `nr`, or `sys_enosys` if unimplemented.
 ///
-/// Pas de verrou nécessaire : la table est en `.rodata`, lecture pure.
+/// No lock required: the table is in `.rodata`, pure read.
 ///
-/// Performance : O(1) — un seul indirect load depuis `.rodata`.
+/// Performance: O(1) — a single indirect load from `.rodata`.
 #[inline]
 pub fn get_handler(nr: u64) -> SyscallHandler {
-    // Borne basse : vérification par dispatch.rs avant cet appel.
-    // Ici on fait confiance à dispatch.rs pour la borne.
+    // Lower bound: verified by dispatch.rs prior to this call.
+    // Here we trust dispatch.rs for the bound.
     match nr {
-        // ── I/O, Fichiers ──────────────────────────────────────────────────
+        // ── I/O, Files ──────────────────────────────────────────────────
         SYS_READ => sys_read,
         SYS_WRITE => sys_write,
         SYS_PREAD64 => sys_pread64,
@@ -150,14 +150,14 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_PWRITEV => sys_pwritev,
         SYS_PREADV2 => sys_preadv2,
         SYS_PWRITEV2 => sys_pwritev2,
-        // ── Mémoire ────────────────────────────────────────────────────────
+        // ── Memory ────────────────────────────────────────────────────────
         SYS_MMAP => sys_mmap,
         SYS_MREMAP => sys_mremap,
         SYS_MUNMAP => sys_munmap,
         SYS_MPROTECT => sys_mprotect,
         SYS_BRK => sys_brk,
         SYS_SHMGET | SYS_SHMAT | SYS_SHMCTL | SYS_SHMDT => sys_enosys,
-        // ── Processus ──────────────────────────────────────────────────────
+        // ── Process ───────────────────────────────────────────────────────
         SYS_FORK => sys_fork,
         SYS_VFORK => sys_vfork,
         SYS_CLONE => sys_clone,
@@ -184,7 +184,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_PRCTL => crate::syscall::handlers::misc::sys_prctl,
         SYS_SYSINFO => crate::syscall::handlers::misc::sys_sysinfo,
         SYS_GETCPU => crate::syscall::handlers::misc::sys_getcpu,
-        // ── Signaux ────────────────────────────────────────────────────────
+        // ── Signals ───────────────────────────────────────────────────────
         SYS_KILL => sys_kill,
         SYS_TGKILL => sys_tgkill,
         SYS_RT_SIGACTION => sys_rt_sigaction,
@@ -269,7 +269,7 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_MSI_FREE => sys_msi_free,
         SYS_PCI_SET_TOPOLOGY => sys_pci_set_topology,
         SYS_PCI_FIND_DEVICE => sys_pci_find_device,
-        // ── Catch-all avec délégation aux handlers POSIX compatibles ──────
+        // ── Catch-all with delegation to compatible POSIX handlers ────────
         _ => crate::syscall::compat::posix::get_posix_handler(nr).unwrap_or(sys_enosys),
     }
 }

@@ -1,54 +1,54 @@
-//! # syscall/compat/linux.rs — Compatibilité numéros syscall Linux x86_64
+//! # syscall/compat/linux.rs — Linux x86_64 syscall number compatibility
 //!
-//! Ce module gère deux cas de compatibilité :
+//! This module handles two compatibility cases:
 //!
-//! 1. **Mapping direct** : les numéros Linux 0–299 sont utilisant les
-//!    mêmes constantes — pas de traduction nécessaire (table en `numbers.rs`).
+//! 1. **Direct mapping**: Linux numbers 0–299 use the
+//!    same constants — no translation necessary (table in `numbers.rs`).
 //!
-//! 2. **Traductions spécifiques** : certains numéros Linux ont été
-//!    renommés, fusionnés, ou remplacés dans Exo-OS :
-//!    - `SYS_TIME` (201) → `SYS_CLOCK_GETTIME` (228) avec CLOCK_REALTIME
-//!    - `SYS_ALARM` (37)  → implémenté via `setitimer` interne
-//!    - `SYS_MODIFY_LDT` (154) → refusé (-EPERM, Exo-OS n'a pas de LDT user)
-//!    - `SYS_CREATE_MODULE` / `SYS_QUERY_MODULE` → refusé (-EPERM)
-//!    - `SYS_PTRACE` (101) → délégue vers security::ptrace (capability requise)
-//!    - `SYS_GETCPU` (309) → renommé en `SYS_GETCPU` mais même numéro Exo-OS
+//! 2. **Specific translations**: certain Linux numbers have been
+//!    renamed, merged, or replaced in Exo-OS:
+//!    - `SYS_TIME` (201) → `SYS_CLOCK_GETTIME` (228) with CLOCK_REALTIME
+//!    - `SYS_ALARM` (37)  → implemented via internal `setitimer`
+//!    - `SYS_MODIFY_LDT` (154) → denied (-EPERM, Exo-OS has no user LDT)
+//!    - `SYS_CREATE_MODULE` / `SYS_QUERY_MODULE` → denied (-EPERM)
+//!    - `SYS_PTRACE` (101) → delegates to security::ptrace (capability required)
+//!    - `SYS_GETCPU` (309) → renamed to `SYS_GETCPU` but same Exo-OS number
 //!
-//! 3. **Syscalls obsolètes Linux** : retournent `-ENOSYS` avec un message
-//!    de log pour faciliter le débogage des applications qui les appellent.
+//! 3. **Obsolete Linux syscalls**: return `-ENOSYS` with a
+//!    log message to facilitate debugging applications that call them.
 //!
-//! ## Méthode de détection compat
-//! `dispatch.rs` appelle `translate_linux_nr(nr)` APRÈS le fast-path.
-//! Si `None` est retourné, le numéro est utilisé tel quel.
-//! Si `Some(nr2)` est retourné, `nr2` est dispatché à la place.
+//! ## Compat detection method
+//! `dispatch.rs` calls `translate_linux_nr(nr)` AFTER the fast-path.
+//! If `None` is returned, the number is used as-is.
+//! If `Some(nr2)` is returned, `nr2` is dispatched instead.
 //!
-//! ## Activation de la couche compat
-//! Activée via la feature `linux_compat` (par défaut ON pour Exo-OS).
-//! Peut être désactivée pour un kernel minimal (test ou embedded).
+//! ## Compat layer activation
+//! Activated via `linux_compat` feature (default ON for Exo-OS).
+//! Can be disabled for a minimal kernel (test or embedded).
 
 use crate::syscall::numbers::*;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteurs
+// Counters
 // ─────────────────────────────────────────────────────────────────────────────
 
 static COMPAT_TRANSLATED: AtomicU64 = AtomicU64::new(0);
 static COMPAT_BLOCKED: AtomicU64 = AtomicU64::new(0);
 static COMPAT_PASSTHROUGH: AtomicU64 = AtomicU64::new(0);
 
-/// Statistiques de la couche compat Linux.
+/// Linux compat layer statistics.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct LinuxCompatStats {
-    /// Syscalls traduits vers un équivalent Exo-OS
+    /// Syscalls translated to an Exo-OS equivalent
     pub translated: u64,
-    /// Syscalls bloqués (-EPERM / -ENOSYS délibéré)
+    /// Syscalls blocked (deliberate -EPERM / -ENOSYS)
     pub blocked: u64,
-    /// Syscalls passés sans modification
+    /// Syscalls passed through without modification
     pub passthrough: u64,
 }
 
-/// Snapshot des compteurs compat.
+/// Snapshot of compat counters.
 pub fn linux_compat_stats() -> LinuxCompatStats {
     LinuxCompatStats {
         translated: COMPAT_TRANSLATED.load(Ordering::Relaxed),
@@ -58,72 +58,72 @@ pub fn linux_compat_stats() -> LinuxCompatStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Numéros Linux qui n'existent pas (ou plus) dans Exo-OS
+// Linux numbers that do not exist (or no longer exist) in Exo-OS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Numéros Linux complètement retirés / non supportés dans Exo-OS.
-/// Retournent systématiquement -ENOSYS via le handler `sys_enosys`.
+/// Linux numbers completely removed / unsupported in Exo-OS.
+/// Systematically return -ENOSYS via the `sys_enosys` handler.
 const LINUX_REMOVED: &[u64] = &[
-    174, // create_module   (retiré Linux 2.6)
-    175, // init_module     (non supporté — Exo-OS a son propre mécanisme de modules)
+    174, // create_module   (removed Linux 2.6)
+    175, // init_module     (unsupported — Exo-OS has its own module mechanism)
     176, // delete_module
     177, // query_module
     178, // get_kernel_syms
-    179, // quotactl        (non supporté v1)
-    180, // nfsservctl      (retiré Linux 3.1)
-    183, // security        (LSM-specific, non supporté)
+    179, // quotactl        (unsupported v1)
+    180, // nfsservctl      (removed Linux 3.1)
+    183, // security        (LSM-specific, unsupported)
     184, // gettls          (non POSIX)
     185, // settls          (non POSIX)
-    154, // modify_ldt      (LDT user non supporté dans Exo-OS)
-    134, // uselib          (retiré Linux 3.15 — note: 134=uselib, 135=personality)
-    136, // ustat           (obsolète)
+    154, // modify_ldt      (user LDT not supported in Exo-OS)
+    134, // uselib          (removed Linux 3.15 — note: 134=uselib, 135=personality)
+    136, // ustat           (obsolete)
 ];
 
-/// Retourne true si le numéro est dans la liste des syscalls retirés.
+/// Returns true if number is in removed syscalls list.
 #[inline]
 fn is_removed(nr: u64) -> bool {
     LINUX_REMOVED.contains(&nr)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table de traduction Linux → Exo-OS
+// Linux → Exo-OS translation table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traduction numéro syscall Linux → numéro effectif Exo-OS.
+/// Linux syscall number → effective Exo-OS number translation.
 ///
-/// Retourne :
-/// - `None`         → numéro passthrough (aucune traduction)
-/// - `Some(nr2)`    → utiliser `nr2` à la place
-/// - `Some(ENOSYS_NR)` → bloquer le syscall
+/// Returns:
+/// - `None`         → passthrough number (no translation)
+/// - `Some(nr2)`    → use `nr2` instead
+/// - `Some(ENOSYS_NR)` → block the syscall
 ///
-/// Valeur sentinelle pour blocage : `u64::MAX` (traitée par dispatch comme ENOSYS).
+/// Sentinel value for blocking: `u64::MAX` (treated by dispatch as ENOSYS).
 #[allow(unreachable_code)]
 pub fn translate_linux_nr(nr: u64) -> Option<u64> {
-    // ── Syscalls retirés → ENOSYS ───────────────────────────────────────
+    // ── Removed syscalls → ENOSYS ───────────────────────────────────────
     if is_removed(nr) {
         COMPAT_BLOCKED.fetch_add(1, Ordering::Relaxed);
-        return Some(u64::MAX); // sentinelle ENOSYS
+        return Some(u64::MAX); // ENOSYS sentinel
     }
 
-    // ── Traductions spécifiques ─────────────────────────────────────────
-    // DESIGN NOTE: ce match est conçu pour être étendu avec de vraies traductions.
-    // Quand un bras non-return sera ajouté, `_translated` recevra une valeur et
-    // COMPAT_TRANSLATED sera incrémenté. Actuellement tous les bras font return.
+    // ── Specific translations ───────────────────────────────────────────
+    // DESIGN NOTE: this match is designed to be extended with real translations.
+    // When a non-returning arm is added, `_translated` will receive a value and
+    // COMPAT_TRANSLATED will be incremented. Currently all arms return.
     let _translated = match nr {
-        // time(tloc) → clock_gettime(CLOCK_REALTIME, tloc) via wrapper dans table
-        // Note : le dispatch utilisera le même handler clock_gettime,
-        // mais avec clock_id implicitement CLOCK_REALTIME.
-        // On laisse le numéro inchangé et on documente que sys_clock_gettime(228)
-        // est le remplaçant de sys_time(201). Aucune traduction de numéro nécessaire
-        // car sys_time(201) est dans la table.
-        // → passthrough : None
+        // time(tloc) → clock_gettime(CLOCK_REALTIME, tloc) via wrapper in table
+        // Note: dispatch will use the same clock_gettime handler,
+        // but with clock_id implicitly CLOCK_REALTIME.
+        // We leave number unchanged and document that sys_clock_gettime(228)
+        // replaces sys_time(201). No number translation needed
+        // because sys_time(201) is in the table.
+        // → passthrough: None
 
         // sgetmask / ssetmask → rt_sigprocmask
-        // (numéros Linux obsolètes hors de notre plage)
+        // (obsolete Linux numbers outside our range)
         // → passthrough
 
-        // Pas de blocage pour setsid (112 en x86_64 Linux).
-        // Pas de traduction pour les autres
+        // No blocking for setsid (112 in x86_64 Linux).
+        // No translation for others
         _ => return None,
     };
 
@@ -132,15 +132,15 @@ pub fn translate_linux_nr(nr: u64) -> Option<u64> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wrapper sys_time — implémenté ici pour la compat Linux
+// sys_time wrapper — implemented here for Linux compat
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `time(tloc)` — Linux syscall 201 (obsolète, remplacé par clock_gettime).
+/// `time(tloc)` — Linux syscall 201 (obsolete, replaced by clock_gettime).
 ///
-/// Retourne le nombre de secondes depuis l'époque Unix.
-/// Si `tloc != NULL`, écrit aussi la valeur au pointeur userspace.
+/// Returns number of seconds since Unix epoch.
+/// If `tloc != NULL`, also writes the value to userspace pointer.
 ///
-/// Compatible avec le comportement glibc `time()`.
+/// Compatible with glibc `time()` behavior.
 pub fn sys_time_compat(tloc_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::scheduler::timer::clock::{monotonic_ns, realtime_offset_ns};
     use crate::syscall::validation::write_user_typed;
@@ -156,10 +156,10 @@ pub fn sys_time_compat(tloc_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a
     seconds
 }
 
-/// `sysinfo(info_ptr)` — statistiques système (mémoire, uptime, load average).
+/// `sysinfo(info_ptr)` — system statistics (memory, uptime, load average).
 pub fn sys_sysinfo_compat(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::syscall::validation::write_user_typed;
-    // Structure Linux sysinfo (112 bytes)
+    // Linux sysinfo structure (112 bytes)
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct SysInfo {
@@ -189,7 +189,7 @@ pub fn sys_sysinfo_compat(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64,
     let info = SysInfo {
         uptime: uptime_sec,
         mem_unit: 4096,
-        // Les champs mémoire sont lus depuis memory/physical/stats
+        // Memory fields are read from memory/physical/stats
         totalram: crate::memory::physical::stats::total_pages() as u64,
         freeram: crate::memory::physical::stats::free_pages() as u64,
         ..SysInfo::default()
@@ -200,9 +200,9 @@ pub fn sys_sysinfo_compat(info_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64,
     }
 }
 
-/// `uname(buf_ptr)` — informations sur le kernel.
+/// `uname(buf_ptr)` — kernel information.
 pub fn sys_uname_compat(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // struct new_utsname : 6 champs × 65 bytes = 390 bytes
+    // struct new_utsname: 6 fields × 65 bytes = 390 bytes
     #[repr(C)]
     #[derive(Copy, Clone)]
     struct UtsName {
@@ -224,7 +224,7 @@ pub fn sys_uname_compat(buf_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a
         machine: [0u8; 65],
         domainname: [0u8; 65],
     };
-    // Copie des chaînes littérales dans les buffers
+    // Copy literal strings into buffers
     copy_literal_to_buf(b"Exo-OS\0", &mut uts.sysname);
     copy_literal_to_buf(b"exo-os\0", &mut uts.nodename);
     copy_literal_to_buf(b"0.1.0-exo\0", &mut uts.release);
@@ -245,7 +245,7 @@ fn copy_literal_to_buf(src: &[u8], dst: &mut [u8]) {
     dst[..n].copy_from_slice(&src[..n]);
 }
 
-/// `getrlimit(resource, rlim_ptr)` — limites de ressources.
+/// `getrlimit(resource, rlim_ptr)` — resource limits.
 pub fn sys_getrlimit_compat(
     resource: u64,
     rlim_ptr: u64,
@@ -264,7 +264,7 @@ pub fn sys_getrlimit_compat(
     if rlim_ptr == 0 {
         return EFAULT;
     }
-    // Valeurs par défaut conservative (voir DOC4 resource/rlimit.rs)
+    // Conservative default values (see DOC4 resource/rlimit.rs)
     let limit = match resource {
         0 => Rlimit {
             rlim_cur: 65536,
@@ -310,7 +310,7 @@ pub fn sys_getrlimit_compat(
     }
 }
 
-/// `getrusage(who, rusage_ptr)` — utilisation de ressources.
+/// `getrusage(who, rusage_ptr)` — resource usage.
 pub fn sys_getrusage_compat(
     who: u64,
     rusage_ptr: u64,
@@ -320,7 +320,7 @@ pub fn sys_getrusage_compat(
     _a6: u64,
 ) -> i64 {
     use crate::syscall::validation::write_user_typed;
-    // struct rusage (Linux) : 18 × timeval (2 × i64) = 144 bytes
+    // struct rusage (Linux): 18 × timeval (2 × i64) = 144 bytes
     #[repr(C)]
     #[derive(Copy, Clone, Default)]
     struct Timeval {
@@ -354,8 +354,8 @@ pub fn sys_getrusage_compat(
     if who > 1 && who != u64::MAX {
         return EINVAL;
     }
-    // Pour l'instant, retourne des valeurs partielles depuis le TCB courant.
-    // L'implémentation complète sera dans process/resource/usage.rs.
+    // For now, returns partial values from current TCB.
+    // Full implementation will be in process/resource/usage.rs.
     let ru = RUsage::default();
     match write_user_typed::<RUsage>(rusage_ptr, ru) {
         Ok(_) => 0,
@@ -363,7 +363,7 @@ pub fn sys_getrusage_compat(
     }
 }
 
-/// `prctl(option, arg2, arg3, arg4, arg5)` — contrôle du processus.
+/// `prctl(option, arg2, arg3, arg4, arg5)` — process control.
 pub fn sys_prctl_compat(
     option: u64,
     arg2: u64,
@@ -386,12 +386,12 @@ pub fn sys_prctl_compat(
             0
         }
         15 => {
-            /* PR_SET_NAME : fixe le nom du thread dans le commslab */
-            // arg2 = pointeur vers chaîne null-terminée (16 bytes max)
+            /* PR_SET_NAME: sets thread name in commslab */
+            // arg2 = pointer to null-terminated string (16 bytes max)
             match crate::syscall::validation::UserStr::from_user(arg2, 16) {
                 Ok(_name) => {
-                    // Écriture du nom dans le TCB via scheduler
-                    // (implémentation dans scheduler/core/task.rs)
+                    // Write name into TCB via scheduler
+                    // (implementation in scheduler/core/task.rs)
                     0
                 }
                 Err(e) => e.to_errno(),
@@ -402,7 +402,7 @@ pub fn sys_prctl_compat(
             EINVAL
         }
         22 => {
-            /* PR_SET_SECCOMP : non supporté → EINVAL */
+            /* PR_SET_SECCOMP: unsupported → EINVAL */
             EINVAL
         }
         38 => {

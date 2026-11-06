@@ -1,4 +1,4 @@
-//! # syscall/fs_bridge/path_ops/symlinks.rs — Opérations sur les liens symboliques POSIX
+//! # syscall/fs_bridge/path_ops/symlinks.rs — POSIX symbolic link operations
 
 use super::super::*;
 use super::resolution::*;

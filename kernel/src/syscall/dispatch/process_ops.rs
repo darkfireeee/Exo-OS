@@ -1,7 +1,7 @@
-//! # syscall/dispatch/process_ops.rs — Traitements spéciaux pour fork, vfork et execve
+//! # syscall/dispatch/process_ops.rs — Special handling for fork, vfork and execve
 //!
-//! Ces appels système requièrent un accès direct et une modification de la `SyscallFrame`
-//! matérielle (RIP de retour, RSP userspace, pointeurs d'arguments, rechargement CR3).
+//! These system calls require direct access and modification of the hardware
+//! `SyscallFrame` (return RIP, userspace RSP, argument pointers, CR3 reload).
 
 extern crate alloc;
 
@@ -11,21 +11,21 @@ use crate::arch::x86_64::syscall::SyscallFrame;
 use super::stats::{exec_trace, syscall_trace};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Traitement spécial fork / vfork (SYS_FORK = 57, SYS_VFORK = 58)
+// Special processing for fork / vfork (SYS_FORK = 57, SYS_VFORK = 58)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Traite `SYS_FORK` ou `SYS_VFORK` directement depuis la frame arch.
+/// Processes `SYS_FORK` or `SYS_VFORK` directly from the arch frame.
 ///
-/// Fork a besoin de `frame.rcx` (RIP de retour = point de bifurcation) et
-/// `frame.rsp` (RSP userspace). Ces valeurs ne transitent pas dans les arguments
-/// syscall normaux (rdi..r9), donc le handler normal ne peut pas les lire.
+/// Fork needs `frame.rcx` (return RIP = bifurcation point) and
+/// `frame.rsp` (userspace RSP). These values do not pass in standard syscall
+/// arguments (rdi..r9), so the normal handler cannot read them.
 ///
-/// ## Protocole (POSIX fork)
-/// 1. Lit TCB courant via `gs:[0x20]` → PID → PCB.
-/// 2. Récupère le `ProcessThread` via `pcb.main_thread_ptr()`.
-/// 3. Construit `ForkContext` depuis la frame syscall complète.
-/// 4. Appelle `do_fork()` — crée PCB/TCB fils, CoW, TLB flush, enqueue RunQueue.
-/// 5. Retourne `child_pid` au parent (fils démarre via `fork_child_trampoline`).
+/// ## Protocol (POSIX fork)
+/// 1. Reads current TCB via `gs:[0x20]` → PID → PCB.
+/// 2. Retrieves `ProcessThread` via `pcb.main_thread_ptr()`.
+/// 3. Constructs `ForkContext` from complete syscall frame.
+/// 4. Calls `do_fork()` — creates child PCB/TCB, CoW, TLB flush, enqueues RunQueue.
+/// 5. Returns `child_pid` to parent (child starts via `fork_child_trampoline`).
 pub fn handle_fork_like_inplace(
     frame: &SyscallFrame,
     fork_flags: crate::process::lifecycle::fork::ForkFlags,
@@ -38,8 +38,8 @@ pub fn handle_fork_like_inplace(
     use crate::scheduler::core::task::ThreadControlBlock;
     use crate::syscall::errno::{EAGAIN, EFAULT, EINTR, EINVAL, ENOMEM};
 
-    // Lire TCB courant.
-    // SAFETY: GS kernel actif, gs:[0x20] = pointeur TCB (PerCpuData).
+    // Read current TCB.
+    // SAFETY: Active kernel GS, gs:[0x20] = TCB pointer (PerCpuData).
     let tcb_ptr: u64;
     unsafe {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
@@ -48,7 +48,7 @@ pub fn handle_fork_like_inplace(
         return EAGAIN;
     }
 
-    // SAFETY: tcb_ptr non-nul et maintenu par le scheduler.
+    // SAFETY: non-null tcb_ptr maintained by scheduler.
     let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
     let pid = Pid(tcb.pid.0);
 
@@ -62,7 +62,7 @@ pub fn handle_fork_like_inplace(
         return EAGAIN;
     }
 
-    // SAFETY: thread_ptr maintenu par pcb, valide tant que pcb est dans PROCESS_REGISTRY.
+    // SAFETY: thread_ptr maintained by pcb, valid as long as pcb is in PROCESS_REGISTRY.
     let thread = unsafe { &*thread_ptr };
 
     let ctx = ForkContext {
@@ -70,9 +70,9 @@ pub fn handle_fork_like_inplace(
         parent_pcb: pcb,
         flags: fork_flags,
         target_cpu: tcb.current_cpu().0,
-        child_rip: frame.rcx,     // RIP de retour sauvé par SYSCALL hw
-        child_rsp: frame.rsp,     // RSP userspace sauvé au stub ASM
-        parent_rflags: frame.r11, // RFLAGS sauvés par SYSCALL hw — CORRECTION P2-02
+        child_rip: frame.rcx,     // Return RIP saved by hw SYSCALL
+        child_rsp: frame.rsp,     // Userspace RSP saved at ASM stub
+        parent_rflags: frame.r11, // RFLAGS saved by hw SYSCALL — CORRECTION P2-02
         user_rbx: frame.rbx,
         user_rbp: frame.rbp,
         user_r12: frame.r12,
@@ -91,8 +91,8 @@ pub fn handle_fork_like_inplace(
         Ok(result) => {
             syscall_trace(b"sys_fork: do_fork ok\n");
             if fork_flags.has(crate::process::lifecycle::fork::ForkFlags::VFORK) {
-                // SAFETY: tcb_ptr pointe le TCB courant; `do_fork` est terminé et
-                // aucune référence immutable au TCB n'est réutilisée après ce point.
+                // SAFETY: tcb_ptr points to current TCB; `do_fork` finished and
+                // no immutable reference to TCB is reused after this point.
                 let tcb_mut = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
                 if wait_for_vfork_completion(result.child_pid, tcb_mut).is_err() {
                     return EINTR;
@@ -116,15 +116,15 @@ pub fn handle_fork_like_inplace(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Traitement spécial execve (SYS_EXECVE = 59)
+// Special processing for execve (SYS_EXECVE = 59)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Copie un tableau de chaînes null-terminé depuis l'espace utilisateur.
+/// Copies a null-terminated array of strings from user space.
 ///
-/// `argv_ptr` pointe vers un tableau de pointeurs `char*` terminé par NULL.
-/// Retourne `Some(Vec<String>)` ou `None` si une adresse est invalide.
+/// `argv_ptr` points to an array of `char*` pointers terminated by NULL.
+/// Returns `Some(Vec<String>)` or `None` if an address is invalid.
 ///
-/// EXEC-01 : seule fonction autorisée à lire argv/envp depuis userspace.
+/// EXEC-01: only function authorized to read argv/envp from userspace.
 pub fn copy_userspace_argv(
     argv_ptr: u64,
     max_args: usize,
@@ -142,7 +142,7 @@ pub fn copy_userspace_argv(
     let mut saw_null = false;
 
     for i in 0..max_args {
-        // Lire le i-ème pointeur (u64) du tableau.
+        // Read the i-th pointer (u64) from the array.
         let ptr_addr = match argv_ptr.checked_add(i as u64 * 8) {
             Some(a) if a <= USER_ADDR_MAX.saturating_sub(8) => a,
             _ => return None,
@@ -155,14 +155,14 @@ pub fn copy_userspace_argv(
         if str_ptr == 0 {
             saw_null = true;
             break;
-        } // terminateur NULL du tableau
+        } // NULL terminator of the array
         if str_ptr >= USER_ADDR_MAX {
             return None;
         }
 
         let user_str = UserStr::from_user(str_ptr, 4096).ok()?;
 
-        // Conversion UTF-8 permissive (remplace les octets invalides par U+FFFD).
+        // Permissive UTF-8 conversion (replaces invalid bytes with U+FFFD).
         result.push(String::from_utf8_lossy(user_str.as_bytes()).into_owned());
     }
 
@@ -173,22 +173,22 @@ pub fn copy_userspace_argv(
     }
 }
 
-/// Traite `SYS_EXECVE` directement depuis la frame arch.
+/// Processes `SYS_EXECVE` directly from the arch frame.
 ///
-/// En cas de succès, `do_execve()` remplace l'image du processus mais retourne
-/// normalement en Rust. Ce handler met alors à jour la frame arch pour que
-/// SYSRETQ saute directement au nouveau point d'entrée ELF.
+/// On success, `do_execve()` replaces the process image but returns
+/// normally in Rust. This handler then updates the arch frame so that
+/// SYSRETQ jumps directly to the new ELF entry point.
 ///
-/// ## Protocole
-/// 1. Lit path depuis userspace via `frame.rdi`.
-/// 2. Récupère TCB → PCB → ProcessThread.
-/// 3. Appelle `do_execve()`.
-/// 4. Succès : `frame.rcx = entry_point`, `frame.rsp = initial_rsp`, `frame.rax = 0`.
-/// 5. Échec : `frame.rax = -errno`.
+/// ## Protocol
+/// 1. Reads path from userspace via `frame.rdi`.
+/// 2. Retrieves TCB → PCB → ProcessThread.
+/// 3. Calls `do_execve()`.
+/// 4. Success: `frame.rcx = entry_point`, `frame.rsp = initial_rsp`, `frame.rax = 0`.
+/// 5. Failure: `frame.rax = -errno`.
 ///
-/// ## Note : argv/envp
-/// Les tableaux `argv` et `envp` sont copiés avant le remplacement d'image via
-/// les primitives userspace centralisées (`copy_from_user` / `UserStr`).
+/// ## Note: argv/envp
+/// The `argv` and `envp` arrays are copied before image replacement via
+/// centralized userspace primitives (`copy_from_user` / `UserStr`).
 pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
     use crate::process::core::pid::Pid;
     use crate::process::core::registry::PROCESS_REGISTRY;
@@ -199,7 +199,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
 
     exec_trace(b"execve: enter\n");
 
-    // Lire le chemin depuis userspace.
+    // Read path from userspace.
     let user_path = match read_user_path(frame.rdi) {
         Ok(p) => p,
         Err(e) => {
@@ -216,7 +216,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             return;
         }
     };
-    // DIAG E9: print étiqueté du chemin execve (non-ambigu, greppable en mode trace).
+    // DIAG E9: labeled print of execve path (unambiguous, greppable in trace mode).
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     {
         crate::arch::x86_64::terminal::debug_write(b"\n<EXEC ");
@@ -224,8 +224,8 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
         crate::arch::x86_64::terminal::debug_write(b">");
     }
 
-    // Lire TCB courant.
-    // SAFETY: GS kernel actif.
+    // Read current TCB.
+    // SAFETY: Active kernel GS.
     let tcb_ptr: u64;
     unsafe {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
@@ -236,7 +236,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
         return;
     }
 
-    // SAFETY: tcb_ptr maintenu par le scheduler.
+    // SAFETY: tcb_ptr maintained by scheduler.
     let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
     let pid = Pid(tcb.pid.0);
 
@@ -256,12 +256,12 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
         return;
     }
 
-    // SAFETY: thread_ptr maintenu par pcb.
+    // SAFETY: thread_ptr maintained by pcb.
     let thread = unsafe { &mut *thread_ptr };
 
-    // ARGV-01 (EXEC-01) : copier argv/envp depuis userspace avant do_execve().
-    // frame.rsi = argv_ptr (tableau de char* null-terminé)
-    // frame.rdx = envp_ptr (tableau de char* null-terminé)
+    // ARGV-01 (EXEC-01): copy argv/envp from userspace before do_execve().
+    // frame.rsi = argv_ptr (null-terminated array of char*)
+    // frame.rdx = envp_ptr (null-terminated array of char*)
     let argv_strings = match copy_userspace_argv(frame.rsi, 1024) {
         Some(v) => v,
         None => {
@@ -286,11 +286,11 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
     match do_execve(thread, pcb, &path, &argv_refs, &envp_refs) {
         Ok(()) => {
             exec_trace(b"execve: ok\n=OK\n");
-            // Succès : lire le nouveau point d'entrée depuis le ProcessThread mis à jour.
+            // Success: read new entry point from updated ProcessThread.
             let new_rip = thread.addresses.entry_point;
             let new_rsp = thread.addresses.initial_rsp;
 
-            // Mettre à jour la frame pour SYSRETQ.
+            // Update frame for SYSRETQ.
             frame.rbx = 0;
             frame.rbp = 0;
             frame.r12 = 0;
@@ -298,13 +298,13 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             frame.r14 = 0;
             frame.r15 = 0;
             frame.rdi = thread.addresses.entry_arg0;
-            frame.rcx = new_rip; // RIP → nouveau point d'entrée ELF
-            frame.rsp = new_rsp; // RSP → nouvelle pile userspace
-            frame.r11 = 0x0202; // RFLAGS : IF=1, bit réservé=1
-            frame.rax = 0; // "succès" (non retourné — SYSRETQ saute)
+            frame.rcx = new_rip; // RIP → new ELF entry point
+            frame.rsp = new_rsp; // RSP → new userspace stack
+            frame.r11 = 0x0202; // RFLAGS: IF=1, reserved bit=1
+            frame.rax = 0; // "success" (not returned — SYSRETQ jumps)
 
-            // SYSRETQ lit gs:[0x08] pour restaurer le RSP userspace (stub ASM).
-            // SAFETY: GS kernel actif, gs:[0x08] = user_rsp slot du PerCpuData.
+            // SYSRETQ reads gs:[0x08] to restore userspace RSP (ASM stub).
+            // SAFETY: Active kernel GS, gs:[0x08] = user_rsp slot of PerCpuData.
             unsafe {
                 core::arch::asm!(
                     "mov qword ptr gs:[0x08], {rsp}",
@@ -313,16 +313,16 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
                 );
             }
 
-            // FIX-EXEC-CR3 : execve remplace l'espace d'adressage SANS context
-            // switch. Le stub de retour syscall (syscall.rs) recharge CR3 depuis
-            // le slot per-CPU gs:[0x48] (user CR3), qui n'est mis à jour que par
-            // `set_current_cr3()` lors d'un context switch. Sans cette
-            // republication, SYSRETQ revient avec l'ANCIEN CR3 : le processus
-            // reprend au nouveau RIP d'entrée mais dans l'ancien espace
-            // d'adressage (init et les serveurs sont tous liés à la même base
-            // virtuelle), exécutant le code de l'ancienne image → boucle
-            // fork/execve sans jamais charger la nouvelle image.
-            // DIAG E9: 'K' = chemin fix CR3 execve exécuté.
+            // FIX-EXEC-CR3: execve replaces address space WITHOUT context
+            // switch. The syscall return stub (syscall.rs) reloads CR3 from
+            // the per-CPU slot gs:[0x48] (user CR3), which is only updated by
+            // `set_current_cr3()` during a context switch. Without this
+            // republication, SYSRETQ returns with the OLD CR3: the process
+            // resumes at new entry RIP but in old address space
+            // (init and servers are all linked to the same virtual base),
+            // executing old image code → fork/execve loop without
+            // ever loading the new image.
+            // DIAG E9: 'K' = execve CR3 fix path executed.
             #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
             unsafe { core::arch::asm!("out 0xE9, al", in("al") b'K', options(nomem, nostack)) };
             let new_kernel_cr3 = thread.sched_tcb.cr3_phys;
@@ -330,16 +330,16 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
                 crate::arch::x86_64::spectre::kpti::set_current_cr3(new_kernel_cr3, new_user_cr3);
             } else {
-                // KPTI désactivé : gs:[0x40] et gs:[0x48] DOIVENT rester à 0.
-                // Appeler set_current_cr3() avec KPTI off écrivait new_kernel_cr3
-                // dans gs:[0x40] et 0 dans gs:[0x48] ; comme context_switch() ne
-                // met pas à jour gs:[0x40] quand KPTI est off, toute entrée
-                // syscall/IRQ/exception ultérieure d'un autre processus (PID 1)
-                // rechargeait le CR3 de cet execve depuis gs:[0x40] et revenait
-                // en Ring 3 (gs:[0x48]==0) sur le mauvais espace d'adressage (#25).
+                // KPTI disabled: gs:[0x40] and gs:[0x48] MUST remain 0.
+                // Calling set_current_cr3() with KPTI off wrote new_kernel_cr3
+                // into gs:[0x40] and 0 into gs:[0x48]; as context_switch() does
+                // not update gs:[0x40] when KPTI is off, any subsequent
+                // syscall/IRQ/exception entry of another process (PID 1)
+                // reloaded CR3 from this execve from gs:[0x40] and returned
+                // to Ring 3 (gs:[0x48]==0) on the wrong address space (#25).
                 crate::arch::x86_64::smp::percpu::set_kpti_cr3_slots(0, 0);
-                // SAFETY: new_kernel_cr3 = PML4 de la nouvelle image, moitié
-                // noyau synchronisée par do_execve(); Ring 0.
+                // SAFETY: new_kernel_cr3 = PML4 of new image, kernel half
+                // synchronized by do_execve(); Ring 0.
                 unsafe {
                     core::arch::asm!("mov cr3, {}", in(reg) new_kernel_cr3, options(nostack, nomem));
                 }

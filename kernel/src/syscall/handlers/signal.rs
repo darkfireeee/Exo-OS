@@ -1,12 +1,12 @@
-//! # syscall/handlers/signal.rs — Thin wrappers signaux (sigaction, kill, sigreturn)
+//! # syscall/handlers/signal.rs — Signal thin wrappers (sigaction, kill, sigreturn)
 //!
-//! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT.
-//! RÈGLE SIG-01 : INTERDIT AtomicPtr<sigaction> dans SignalTcb — TOCTOU triviale.
-//! RÈGLE SIG-02 : SigactionEntry stocke les valeurs DIRECTEMENT (handler_vaddr).
-//! RÈGLE SIG-07 : SIGKILL(9) et SIGSTOP(19) non-maskables — rejetés dans sigmask.
-//! RÈGLE SIG-13 : magic 0x5349474E vérifié au sigreturn AVANT tout restore.
-//! RÈGLE SIG-14 : INTERDIT sigreturn sans vérifier magic — injection de faux contexte.
-//! RÈGLE SIG-18 : INTERDIT écriture signal frame sans copy_to_user().
+//! RULE SYS-03: THIN WRAPPERS ONLY.
+//! RULE SIG-01: FORBIDDEN AtomicPtr<sigaction> in SignalTcb — trivial TOCTOU.
+//! RULE SIG-02: SigactionEntry stores values DIRECTLY (handler_vaddr).
+//! RULE SIG-07: SIGKILL(9) and SIGSTOP(19) non-maskable — rejected in sigmask.
+//! RULE SIG-13: magic 0x5349474E verified at sigreturn BEFORE any restore.
+//! RULE SIG-14: FORBIDDEN sigreturn without verifying magic — injection of fake context.
+//! RULE SIG-18: FORBIDDEN writing signal frame without copy_to_user().
 
 use crate::process::core::pid::Pid;
 use crate::process::core::registry::PROCESS_REGISTRY;
@@ -17,22 +17,22 @@ use crate::syscall::validation::{
     read_user_typed, validate_signal, write_user_typed, USER_ADDR_MAX,
 };
 
-/// Layout Linux du struct sigaction (x86_64) tel que passé par userspace.
-/// Taille : 32 bytes — DOIT correspondre à l'ABI Linux glibc/musl.
+/// Linux layout of struct sigaction (x86_64) as passed by userspace.
+/// Size: 32 bytes — MUST match Linux glibc/musl ABI.
 #[derive(Copy, Clone)]
 #[repr(C)]
 struct LinuxSigaction {
-    sa_handler: u64,  // offset  0 : SIG_DFL=0, SIG_IGN=1, ou adresse handler
-    sa_flags: u64,    // offset  8 : SA_RESTART | SA_SIGINFO | SA_ONSTACK…
-    sa_restorer: u64, // offset 16 : adresse stub rt_sigreturn
-    sa_mask: u64,     // offset 24 : masque de signaux bloqués pendant handler
+    sa_handler: u64,  // offset  0: SIG_DFL=0, SIG_IGN=1, or handler address
+    sa_flags: u64,    // offset  8: SA_RESTART | SA_SIGINFO | SA_ONSTACK...
+    sa_restorer: u64, // offset 16: rt_sigreturn stub address
+    sa_mask: u64,     // offset 24: mask of signals blocked during handler
 }
 
-/// Retourne le pointeur TCB du thread courant depuis gs:[0x20].
-/// Retourne 0 si aucun thread n'est actif (boot/idle).
+/// Returns TCB pointer of current thread from gs:[0x20].
+/// Returns 0 if no thread is active (boot/idle).
 ///
 /// # Safety
-/// Le GS kernel doit être actif (SWAPGS effectué dans le stub syscall).
+/// Kernel GS must be active (SWAPGS executed in syscall stub).
 #[inline]
 unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
     let p: u64;
@@ -41,23 +41,23 @@ unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes signaux POSIX
+// POSIX signal constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SIGKILL: u32 = 9;
 pub const SIGSTOP: u32 = 19;
 
-/// Masque des signaux non-maskables (SIG-07).
+/// Mask of non-maskable signals (SIG-07).
 pub const NON_MASKABLE_SIGNALS: u64 = (1u64 << SIGKILL) | (1u64 << SIGSTOP);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `rt_sigaction(signum, act_ptr, oldact_ptr, sigsetsize)` → 0 ou errno.
+/// `rt_sigaction(signum, act_ptr, oldact_ptr, sigsetsize)` -> 0 or errno.
 ///
-/// SIG-01 : act_ptr est copié via lecture userspace validée — jamais déréférencé directement.
-/// SIG-02 : handler_vaddr stocké en valeur dans SigAction, pas AtomicPtr.
+/// SIG-01: act_ptr is copied via validated userspace read — never dereferenced directly.
+/// SIG-02: handler_vaddr stored by value in SigAction, not AtomicPtr.
 pub fn sys_rt_sigaction(
     signum: u64,
     act_ptr: u64,
@@ -70,14 +70,14 @@ pub fn sys_rt_sigaction(
         Ok(s) => s,
         Err(e) => return e.to_errno(),
     };
-    // SIGKILL et SIGSTOP — non modifiables (SIG-07)
+    // SIGKILL and SIGSTOP — immutable (SIG-07)
     if sig == SIGKILL || sig == SIGSTOP {
         return EINVAL;
     }
     if sigsetsize != 8 {
         return EINVAL;
     }
-    // Valider les pointeurs (SYS-01)
+    // Validate pointers (SYS-01)
     if act_ptr != 0 && act_ptr >= USER_ADDR_MAX {
         return EFAULT;
     }
@@ -85,8 +85,8 @@ pub fn sys_rt_sigaction(
         return EFAULT;
     }
 
-    // Obtenir le PCB du processus courant via le TCB.
-    // SAFETY: GS kernel actif, gs:[0x20] = pointeur TCB valide ou 0.
+    // Obtain current process PCB via TCB.
+    // SAFETY: kernel GS active, gs:[0x20] = valid TCB pointer or 0.
     let tcb_ptr = unsafe { current_tcb_ptr() };
     if tcb_ptr.is_null() {
         return ENOSYS;
@@ -97,13 +97,13 @@ pub fn sys_rt_sigaction(
         None => return EFAULT,
     };
 
-    // Lire l'ancienne action et l'écrire dans oldact_ptr si demandé.
+    // Read old action and write it to oldact_ptr if requested.
     if oldact_ptr != 0 {
         let old_action = {
             let handlers = pcb.sig_handlers.lock();
             handlers.get(sig as u8)
         };
-        // Construire le LinuxSigaction depuis SigAction (pour l'ABI userspace).
+        // Construct LinuxSigaction from SigAction (for userspace ABI).
         let linux_old = LinuxSigaction {
             sa_handler: if old_action.kind == SigActionKind::Ignore {
                 1
@@ -121,7 +121,7 @@ pub fn sys_rt_sigaction(
         }
     }
 
-    // Lire et installer la nouvelle action si act_ptr est fourni.
+    // Read and install new action if act_ptr is provided.
     if act_ptr != 0 {
         let linux_act = match read_user_typed::<LinuxSigaction>(act_ptr) {
             Ok(act) => act,
@@ -129,7 +129,7 @@ pub fn sys_rt_sigaction(
         };
 
         let kind = if linux_act.sa_handler == 0 {
-            SigActionKind::Term // SIG_DFL — l'action réelle dépend du signal, Term par défaut
+            SigActionKind::Term // SIG_DFL — actual action depends on signal, Term by default
         } else if linux_act.sa_handler == 1 {
             SigActionKind::Ignore // SIG_IGN
         } else {
@@ -148,10 +148,10 @@ pub fn sys_rt_sigaction(
         handlers.set(sig as u8, new_action);
     }
 
-    0 // succès
+    0 // success
 }
 
-/// `rt_sigprocmask(how, set_ptr, oldset_ptr, sigsetsize)` → 0 ou errno.
+/// `rt_sigprocmask(how, set_ptr, oldset_ptr, sigsetsize)` -> 0 or errno.
 pub fn sys_rt_sigprocmask(
     how: u64,
     set_ptr: u64,
@@ -160,7 +160,7 @@ pub fn sys_rt_sigprocmask(
     _a5: u64,
     _a6: u64,
 ) -> i64 {
-    // how : SIG_BLOCK=0, SIG_UNBLOCK=1, SIG_SETMASK=2
+    // how: SIG_BLOCK=0, SIG_UNBLOCK=1, SIG_SETMASK=2
     if how > 2 {
         return EINVAL;
     }
@@ -174,25 +174,25 @@ pub fn sys_rt_sigprocmask(
         return EFAULT;
     }
 
-    // Obtenir le TCB du thread courant.
-    // SAFETY: GS kernel actif dans le contexte syscall.
+    // Obtain TCB of current thread.
+    // SAFETY: kernel GS active in syscall context.
     let tcb_ptr = unsafe { current_tcb_ptr() };
     if tcb_ptr.is_null() {
         return ENOSYS;
     }
     let tcb = unsafe { &*tcb_ptr };
 
-    // Lire l'ancien masque.
+    // Read old mask.
     let old_mask = tcb.signal_mask.load(core::sync::atomic::Ordering::Acquire);
 
-    // Écrire oldset si demandé.
+    // Write oldset if requested.
     if oldset_ptr != 0 {
         if write_user_typed(oldset_ptr, old_mask).is_err() {
             return EFAULT;
         }
     }
 
-    // Appliquer le nouveau masque si set_ptr est fourni.
+    // Apply new mask if set_ptr is provided.
     if set_ptr != 0 {
         let new_set = match read_user_typed::<u64>(set_ptr) {
             Ok(set) => set,
@@ -205,30 +205,30 @@ pub fn sys_rt_sigprocmask(
             2 => new_set,             // SIG_SETMASK
             _ => return EINVAL,
         };
-        // Forcer SIGKILL/SIGSTOP non-bloquables et retirer le bit invalide 64.
+        // Force SIGKILL/SIGSTOP unblockable and remove invalid bit 64.
         let safe_mask = crate::process::signal::mask::SigMask::from(computed).0;
         tcb.signal_mask
             .store(safe_mask, core::sync::atomic::Ordering::Release);
     }
 
-    0 // succès
+    0 // success
 }
 
-/// `rt_sigreturn()` — retour depuis un handler signal.
+/// `rt_sigreturn()` — return from a signal handler.
 ///
-/// SIG-13 : vérification magic 0x5349474E avant tout restore.
-/// SIG-14 : INTERDIT de restaurer sans vérifier le magic.
+/// SIG-13: verify magic 0x5349474E before any restore.
+/// SIG-14: FORBIDDEN to restore without verifying magic.
 pub fn sys_rt_sigreturn(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // NOTE: ce handler de table n'est pas le chemin réel. `dispatch.rs`
-    // intercepte SYS_RT_SIGRETURN avec la frame arch et appelle
-    // handle_sigreturn_inplace(), seul endroit où les registres peuvent être
-    // restaurés correctement. Si ce handler est atteint, la table a été
-    // réorganisée de façon incohérente.
+    // NOTE: this table handler is not the actual path. `dispatch.rs`
+    // intercepts SYS_RT_SIGRETURN with the arch frame and calls
+    // handle_sigreturn_inplace(), the only place where registers can be
+    // restored correctly. If this handler is reached, the table has been
+    // reorganized inconsistently.
     crate::arch::x86_64::terminal::debug_write(b"rt_sigreturn: handler table atteint\n");
     EINVAL
 }
 
-/// `kill(pid, sig)` → 0 ou errno.
+/// `kill(pid, sig)` -> 0 or errno.
 pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::process::signal::delivery::{send_signal_number_to_pid, SendError};
 
@@ -238,8 +238,8 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
     let target_pid = signed_pid as i32;
     let real_pid: u32 = if target_pid <= 0 {
-        // pid==0 : envoyer au groupe courant → approx. avec le PID courant.
-        // pid<0  : groupes de processus — non implémenté.
+        // pid==0: send to current group -> approx. with current PID.
+        // pid<0: process groups — not implemented.
         if target_pid == 0 {
             unsafe {
                 let ptr: u64;
@@ -257,7 +257,7 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         target_pid as u32
     };
 
-    // Vérification des privilèges POSIX pour kill (AUDIT-SEC3)
+    // Verify POSIX privileges for kill (AUDIT-SEC3)
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid != real_pid {
         let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
@@ -296,10 +296,10 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
 }
 
-/// `tgkill(tgid, tid, sig)` → 0 ou errno.
+/// `tgkill(tgid, tid, sig)` -> 0 or errno.
 ///
-/// Envoie un signal à un thread spécifique (tid) dans le groupe (tgid).
-/// Phase 3 : cible le thread principal du processus.
+/// Sends a signal to a specific thread (tid) in the group (tgid).
+/// Phase 3: targets the main thread of the process.
 pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::process::signal::delivery::send_signal_to_tcb;
     use crate::process::signal::queue::SigInfo;
@@ -311,8 +311,8 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         return ESRCH;
     }
 
-    // Lire le PID de l'appelant pour remplir le SigInfo.
-    // SAFETY: GS kernel actif dans le contexte syscall.
+    // Read caller PID to fill SigInfo.
+    // SAFETY: kernel GS active in syscall context.
     let sender_pid: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nostack, nomem));
@@ -327,7 +327,7 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         None => return ESRCH,
     };
 
-    // Vérification des privilèges POSIX pour tgkill
+    // Verify POSIX privileges for tgkill
     let target_pid = tgid as u32;
     if sender_pid != target_pid {
         let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(sender_pid)) {
@@ -345,7 +345,7 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         }
     }
 
-    // Cibler le thread spécifique `tid` s'il existe dans le groupe, sinon fallback main_thread.
+    // Target specific thread `tid` if it exists in the group, otherwise fallback to main_thread.
     let mut thread_ptr = core::ptr::null_mut();
     for slot in &pcb.thread_slots {
         let p = slot.load(core::sync::atomic::Ordering::Acquire);
@@ -370,21 +370,21 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         Err(e) => return e.to_errno(),
     };
 
-    // SAFETY: thread_ptr maintenu par le PCB.
+    // SAFETY: thread_ptr retained by PCB.
     let thread = unsafe { &*thread_ptr };
     let info = SigInfo::from_kill(sig as u8, sender_pid, 0);
     send_signal_to_tcb(thread, sig as u8, info);
     0
 }
 
-/// `sigaltstack(ss, oss)` → 0 ou errno.
+/// `sigaltstack(ss, oss)` -> 0 or errno.
 ///
-/// Lit/écrit le sigaltstack du thread courant.
-/// Layout `struct stack_t` x86_64 (24 bytes) :
-///   [0]  ss_sp    (u64) — adresse de base de la pile alternative
+/// Reads/writes current thread sigaltstack.
+/// Layout `struct stack_t` x86_64 (24 bytes):
+///   [0]  ss_sp    (u64) — base address of alternate stack
 ///   [8]  ss_flags (i32) — SS_ONSTACK=1, SS_DISABLE=2
 ///   [12] _pad     (u32)
-///   [16] ss_size  (u64) — taille en octets
+///   [16] ss_size  (u64) — size in bytes
 pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::process::signal::handler::{SigAltStack, SS_DISABLE};
 
@@ -395,8 +395,8 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         return EFAULT;
     }
 
-    // Lire la TCB courante depuis gs:[0x20].
-    // SAFETY: GS kernel actif pendant un syscall.
+    // Read current TCB from gs:[0x20].
+    // SAFETY: kernel GS active during a syscall.
     let tcb_ptr = unsafe { current_tcb_ptr() };
     if tcb_ptr.is_null() {
         return ENOSYS;
@@ -424,10 +424,10 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         return EFAULT;
     }
 
-    // SAFETY: thread_ptr maintenu par le PCB ; appelant = thread courant.
+    // SAFETY: thread_ptr retained by PCB; caller = current thread.
     let thread = unsafe { &mut *thread_ptr };
 
-    // Exporter l'ancien sigaltstack si oss_ptr est fourni.
+    // Export old sigaltstack if oss_ptr is provided.
     if oss_ptr != 0 {
         let old = SigAltStack {
             ss_sp: thread.addresses.sigaltstack_base,
@@ -444,7 +444,7 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         }
     }
 
-    // Installer le nouveau sigaltstack si ss_ptr est fourni.
+    // Install new sigaltstack if ss_ptr is provided.
     if ss_ptr != 0 {
         let ss = match read_user_typed::<SigAltStack>(ss_ptr) {
             Ok(ss) => ss,
@@ -453,11 +453,11 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         const MINSIGSTKSZ: u64 = 2048;
 
         if ss.ss_flags & SS_DISABLE != 0 {
-            // SS_DISABLE : désactiver le sigaltstack courant.
+            // SS_DISABLE: disable current sigaltstack.
             thread.addresses.sigaltstack_base = 0;
             thread.addresses.sigaltstack_size = 0;
         } else if ss.ss_flags != 0 {
-            return EINVAL; // flags inconnus
+            return EINVAL; // unknown flags
         } else {
             if ss.ss_size < MINSIGSTKSZ {
                 return EINVAL;

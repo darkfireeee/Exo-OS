@@ -1,46 +1,46 @@
-//! # syscall/table/process.rs — Handlers cycle de vie des processus (fork, exec, wait, uid/gid)
+//! # syscall/table/process.rs — Process lifecycle handlers (fork, exec, wait, uid/gid)
 
 use super::common::*;
 use crate::syscall::numbers::*;
 use crate::syscall::validation::{read_user_path, read_user_typed};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers Process / Thread (délégués vers process/)
+// Process / Thread handlers (delegated to process/)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `fork()` → PID fils dans le parent, 0 dans le fils, ou errno.
+/// `fork()` -> child PID in parent, 0 in child, or errno.
 ///
 /// # PATCH-P0-FORK-STUB
-/// Ce handler est du **code mort** pour SYS_FORK.
-/// Le dispatch.rs intercepte SYS_FORK à l'étape [5b] via `handle_fork_like_inplace()`
-/// AVANT d'atteindre la slow-path table. `do_fork()` dans process/lifecycle/fork.rs
-/// est l'implémentation réelle. Ce stub ne sera jamais appelé en production.
-/// Il est conservé ici comme filet de sécurité explicite.
+/// This handler is **dead code** for SYS_FORK.
+/// dispatch.rs intercepts SYS_FORK at step [5b] via `handle_fork_like_inplace()`
+/// BEFORE reaching the slow-path table. `do_fork()` in process/lifecycle/fork.rs
+/// is the actual implementation. This stub will never be called in production.
+/// It is preserved here as an explicit safety net.
 pub fn sys_fork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_FORK);
-    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
-    // Si atteint, c'est un bug dans le dispatch — retourner ENOSYS explicitement.
+    // STRATA-DISPATCH-01: this point is normally unreachable.
+    // If reached, it is a bug in dispatch — return ENOSYS explicitly.
     ENOSYS
 }
 
-/// `vfork()` — intercepté par dispatch.rs [5b] via `handle_fork_like_inplace(ForkFlags::VFORK)`.
+/// `vfork()` — intercepted by dispatch.rs [5b] via `handle_fork_like_inplace(ForkFlags::VFORK)`.
 ///
 /// # PATCH-P0-FORK-STUB
-/// Code mort identique à sys_fork. Voir commentaire ci-dessus.
+/// Dead code identical to sys_fork. See comment above.
 pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_VFORK);
-    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
+    // STRATA-DISPATCH-01: this point is normally unreachable.
     ENOSYS
 }
 
-/// `clone(flags, stack, ptid, ctid, tls)` — crée un nouveau thread via create_thread.
+/// `clone(flags, stack, ptid, ctid, tls)` — creates a new thread via create_thread.
 ///
-/// Convention Exo-OS :
-/// - `stack`     : RSP initial du thread fils et slot `arg` du wrapper musl.
-/// - `tls`       : base FS quand `CLONE_SETTLS` est présent.
-/// - `entry`     : 6e registre syscall; le wrapper x86_64 musl y porte `func`.
-/// - `ctid`/`ptid`: pointeurs TID POSIX conservés pour le protocole clone.
-/// - CLONE_DETACHED (0x0040_0000) : thread détaché.
+/// Exo-OS convention:
+/// - `stack`: initial RSP of child thread and `arg` slot of musl wrapper.
+/// - `tls`: FS base when `CLONE_SETTLS` is present.
+/// - `entry`: 6th syscall register; musl x86_64 wrapper passes `func` in it.
+/// - `ctid`/`ptid`: POSIX TID pointers preserved for clone protocol.
+/// - CLONE_DETACHED (0x0040_0000): detached thread.
 pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: u64) -> i64 {
     stat_inc(SYS_CLONE);
 
@@ -78,8 +78,8 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
         return EINVAL;
     }
 
-    // Récupérer le PID du thread courant via GS:[0x20].
-    // SAFETY: GS:[0x20] est initialisé par context_switch avant toute entrée syscall.
+    // Retrieve PID of current thread via GS:[0x20].
+    // SAFETY: GS:[0x20] is initialized by context_switch before any syscall entry.
     let current_pid_val: u32 = unsafe {
         let ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
@@ -91,7 +91,7 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
             .0
     };
 
-    // Trouver le PCB du processus courant dans le registry global.
+    // Find current process PCB in global registry.
     let pcb_ref = match crate::process::core::registry::PROCESS_REGISTRY
         .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
     {
@@ -99,8 +99,8 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
         None => return -3i64, // ESRCH
     };
 
-    // Le wrapper musl x86_64 garde `func` dans r9 pendant SYS_clone. Tolérer
-    // l'ancien chemin Exo-OS uniquement quand `tls` n'est pas une base TLS.
+    // The musl x86_64 wrapper keeps `func` in r9 during SYS_clone. Tolerate
+    // legacy Exo-OS path only when `tls` is not a TLS base.
     let start_func = if entry != 0 {
         entry
     } else if flags & CLONE_SETTLS == 0 && tls != 0 {
@@ -121,7 +121,7 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
         0
     };
 
-    // Stack : l'appelant fournit RSP ou on conserve le fallback historique.
+    // Stack: caller provides RSP or we preserve legacy fallback.
     let stack_addr = stack;
     let stack_size = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
     let detached = (flags & CLONE_DETACHED) != 0;
@@ -154,13 +154,13 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
     }
 }
 
-/// `execve(path, argv, envp)` — intercepté par dispatch.rs [5c] via `handle_execve_inplace()`.
+/// `execve(path, argv, envp)` — intercepted by dispatch.rs [5c] via `handle_execve_inplace()`.
 ///
 /// # PATCH-P0-FORK-STUB
-/// Ce handler est du **code mort** pour SYS_EXECVE.
-/// Le dispatch.rs intercepte SYS_EXECVE à l'étape [5c] AVANT d'atteindre la table.
-/// `do_execve()` dans process/lifecycle/exec.rs est l'implémentation réelle.
-/// Ce stub ne sera jamais appelé en production.
+/// This handler is **dead code** for SYS_EXECVE.
+/// dispatch.rs intercepts SYS_EXECVE at step [5c] BEFORE reaching the table.
+/// `do_execve()` in process/lifecycle/exec.rs is the actual implementation.
+/// This stub will never be called in production.
 pub fn sys_execve(
     path_ptr: u64,
     argv_ptr: u64,
@@ -170,8 +170,8 @@ pub fn sys_execve(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXECVE);
-    // STRATA-DISPATCH-01: ce point est normalement inatteignable.
-    // La lecture du path est conservée pour éviter un avertissement unused_variable.
+    // STRATA-DISPATCH-01: this point is normally unreachable.
+    // Path reading is retained to avoid unused_variable warning.
     let _ = match read_user_path(path_ptr) {
         Ok(p) => p,
         Err(e) => return e.to_errno(),
@@ -180,20 +180,20 @@ pub fn sys_execve(
     ENOSYS
 }
 
-/// `exit(status)` — marque le processus zombie, réveille le parent, puis cède le CPU.
+/// `exit(status)` — marks process as zombie, wakes up parent, then yields CPU.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT);
     let exit_code = (status & 0xFF) as u32;
-    // SAFETY: GS:[0x20] est le TCB du thread courant initialisé par context_switch.
-    // L'appel est valide depuis le contexte syscall (kernel GS actif après SWAPGS).
+    // SAFETY: GS:[0x20] is current thread TCB initialized by context_switch.
+    // Call is valid from syscall context (kernel GS active after SWAPGS).
     unsafe {
         let tcb_ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
         if tcb_ptr != 0 {
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
 
-            // Stocker le code de sortie dans le PCB pour waitpid() (BUG-1 FIX).
-            // REGISTRY.find_by_pid() est lockless — sûr depuis un contexte syscall.
+            // Store exit code in PCB for waitpid() (BUG-1 FIX).
+            // REGISTRY.find_by_pid() is lockless — safe from syscall context.
             let pid = crate::process::core::pid::Pid(tcb.pid.0);
             if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
                 use core::sync::atomic::Ordering;
@@ -215,15 +215,15 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
                 crate::process::lifecycle::fork::notify_vfork_completion(pid);
             }
 
-            // Transition Dead → pick_next_task ignorera ce thread.
+            // Transition Dead -> pick_next_task will ignore this thread.
             tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
             let cpu_id = tcb.current_cpu();
             let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
-            // schedule_block sélectionne le prochain thread et effectue le context switch.
+            // schedule_block selects next thread and performs context switch.
             crate::scheduler::core::switch::schedule_block(rq, &mut *(tcb_ptr as *mut _));
         }
     }
-    // Unreachable après schedule_block avec état Dead (satisfait le type -> i64).
+    // Unreachable after schedule_block with Dead state (satisfies -> i64 type).
     #[allow(clippy::empty_loop)]
     loop {
         unsafe {
@@ -232,15 +232,15 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     }
 }
 
-/// `exit_group(status)` — termine tous les threads du groupe de processus.
+/// `exit_group(status)` — terminates all threads in process group.
 ///
-/// Délègue vers sys_exit() pour l'instant.
-/// L'itération sur tous les threads frères requiert process/ pleinement intégré.
+/// Delegates to sys_exit() for now.
+/// Iterating over all sibling threads requires fully integrated process/.
 pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXIT_GROUP);
     let exit_code = (status & 0xFF) as u32;
 
-    // SAFETY: GS:[0x20] est le TCB courant pendant le syscall.
+    // SAFETY: GS:[0x20] is current TCB during syscall.
     unsafe {
         let tcb_ptr: u64;
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
@@ -309,7 +309,7 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 }
 
 /// `wait4(pid, wstatus, options, rusage)`.
-/// do_waitpid(caller_pid, wait_pid, WaitOptions, &tcb) câblé lors de l'intégration.
+/// do_waitpid(caller_pid, wait_pid, WaitOptions, &tcb) wired during integration.
 pub fn sys_wait4(
     pid: u64,
     wstatus_ptr: u64,

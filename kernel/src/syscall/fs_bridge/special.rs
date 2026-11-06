@@ -22,7 +22,7 @@ use crate::fs::exofs::syscall::object_store;
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
-/// FIX-V8 : journalise une seule fois le mode console E9 avant tty_server.
+/// FIX-V8: log E9 console mode only once before tty_server.
 #[cfg(target_arch = "x86_64")]
 pub static TTY_E9ONLY_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -171,7 +171,7 @@ pub fn tty_send(req: &TtyRequestWire) -> Result<(), FsBridgeError> {
 }
 
 pub fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
-    // Tap console headless : recopie la sortie console sur le port debug E9 uniquement en trace debug.
+    // Headless console tap: mirror console output to debug port E9 only during debug trace.
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     crate::arch::x86_64::terminal::debug_write(bytes);
     let mut written = 0usize;
@@ -201,8 +201,8 @@ pub fn tty_write_bytes(pid: u32, bytes: &[u8]) -> Result<i64, FsBridgeError> {
     Ok(bytes.len() as i64)
 }
 
-/// Écriture TTY sans allocation sur le heap : copie les tranches de mémoire utilisateur
-/// directement dans les requêtes de ligne TTY allouées sur la pile (184 octets max).
+/// TTY write without heap allocation: copies user memory slices
+/// directly into stack-allocated TTY line requests (184 bytes max).
 pub fn tty_write_from_user(pid: u32, buf_ptr: u64, count: usize) -> Result<i64, FsBridgeError> {
     let mut written = 0usize;
     while written < count {
@@ -861,7 +861,7 @@ pub fn fs_unix_accept(
     Ok(s_fd as i64)
 }
 
-/// `sendto` sur socket `AF_UNIX`.
+/// `sendto` on `AF_UNIX` socket.
 pub fn fs_unix_sendto(
     fd: u32,
     buf_ptr: u64,
@@ -887,7 +887,7 @@ pub fn fs_unix_sendto(
     append_socket_payload(peer, &input)
 }
 
-/// `recvfrom` sur socket `AF_UNIX`.
+/// `recvfrom` on `AF_UNIX` socket.
 pub fn fs_unix_recvfrom(
     fd: u32,
     buf_ptr: u64,
@@ -940,7 +940,7 @@ struct UnixCmsghdr {
     cmsg_type: i32,
 }
 
-/// `sendmsg` sur socket `AF_UNIX` avec support `SCM_RIGHTS`.
+/// `sendmsg` on `AF_UNIX` socket with `SCM_RIGHTS` support.
 pub fn fs_unix_sendmsg(
     fd: u32,
     msg_ptr: u64,
@@ -1020,7 +1020,7 @@ pub fn fs_unix_sendmsg(
     append_socket_payload(peer, &payload)
 }
 
-/// `recvmsg` sur socket `AF_UNIX` avec support `SCM_RIGHTS`.
+/// `recvmsg` on `AF_UNIX` socket with `SCM_RIGHTS` support.
 pub fn fs_unix_recvmsg(
     fd: u32,
     msg_ptr: u64,

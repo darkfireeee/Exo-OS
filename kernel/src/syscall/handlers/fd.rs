@@ -1,9 +1,9 @@
-//! # syscall/handlers/fd.rs — Thin wrappers I/O (read, write, open, close, dup, fstat)
+//! # syscall/handlers/fd.rs — I/O thin wrappers (read, write, open, close, dup, fstat)
 //!
-//! RÈGLE SYS-03 : THIN WRAPPERS UNIQUEMENT — zéro logique métier.
-//! RÈGLE SYS-01 : copy_from_user() OBLIGATOIRE pour tout pointeur Ring3.
-//! RÈGLE SYS-05 : Valider longueurs AVANT copy_from_user.
-//! RÈGLE SYS-07 : verify_cap() appelé dans le handler AVANT délégation.
+//! RULE SYS-03: THIN WRAPPERS ONLY — zero business logic.
+//! RULE SYS-01: copy_from_user() MANDATORY for any Ring3 pointer.
+//! RULE SYS-05: Validate lengths BEFORE copy_from_user.
+//! RULE SYS-07: verify_cap() called in handler BEFORE delegation.
 
 use crate::syscall::errno::{E2BIG, EFAULT, EINVAL, ENOSYS};
 use crate::syscall::validation::{
@@ -11,7 +11,7 @@ use crate::syscall::validation::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compteurs d'appels (instrumentation)
+// Call counters (instrumentation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -23,20 +23,20 @@ static CNT_DUP: AtomicU64 = AtomicU64::new(0);
 static CNT_FSTAT: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Flags open() autorisés (O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | etc.)
+// Allowed open() flags (O_RDONLY/O_WRONLY/O_RDWR | O_CREAT | O_EXCL | etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// FIX-SYSCALL-OPENFLAGS-01 : inclut O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
+// FIX-SYSCALL-OPENFLAGS-01: includes O_DIRECTORY|O_NOFOLLOW|O_NOATIME|O_CLOEXEC|O_SYNC|O_DIRECT|O_LARGEFILE|O_PATH|O_TMPFILE (0x007F_FFFF)
 const OPEN_FLAGS_MASK: u64 = 0x007F_FFFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `read(fd, buf, count)` → octets lus ou errno.
+/// `read(fd, buf, count)` -> bytes read or errno.
 ///
-/// SYS-01 : valide UserBuf avant délégation.
-/// SYS-05 : rejettte count=0 (EINVAL) et count>IO_BUF_MAX (E2BIG).
+/// SYS-01: validate UserBuf before delegation.
+/// SYS-05: reject count=0 (EINVAL) and count>IO_BUF_MAX (E2BIG).
 pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_READ.fetch_add(1, Ordering::Relaxed);
     if count == 0 {
@@ -53,12 +53,12 @@ pub fn sys_read(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64)
         Ok(b) => b,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → fd::io::do_read() (câblé lors de l'intégration fs/)
+    // Delegates -> fd::io::do_read() (wired during fs/ integration)
     let _ = (fd, buf);
     ENOSYS
 }
 
-/// `write(fd, buf, count)` → octets écrits ou errno.
+/// `write(fd, buf, count)` -> bytes written or errno.
 pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_WRITE.fetch_add(1, Ordering::Relaxed);
     if count == 0 {
@@ -75,15 +75,15 @@ pub fn sys_write(fd: u64, buf_ptr: u64, count: u64, _a4: u64, _a5: u64, _a6: u64
         Ok(b) => b,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → fd::io::do_write()
+    // Delegates -> fd::io::do_write()
     let _ = (fd, buf);
     ENOSYS
 }
 
-/// `open(path, flags, mode)` → fd ou errno.
+/// `open(path, flags, mode)` -> fd or errno.
 ///
-/// NOTE : musl-exo doit pointer __NR_open vers SYS_EXOFS_OPEN_BY_PATH (519),
-/// pas ce syscall (BUG-01). Ce handler reste pour compatibilité POSIX directe.
+/// NOTE: musl-exo must point __NR_open to SYS_EXOFS_OPEN_BY_PATH (519),
+/// not this syscall (BUG-01). This handler remains for direct POSIX compatibility.
 pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_OPEN.fetch_add(1, Ordering::Relaxed);
     let path = match read_user_path(path_ptr) {
@@ -94,24 +94,24 @@ pub fn sys_open(path_ptr: u64, flags: u64, mode: u64, _a4: u64, _a5: u64, _a6: u
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → fs/exofs/syscall/open_by_path (combiné : PATH_RESOLVE + OBJECT_OPEN)
+    // Delegates -> fs/exofs/syscall/open_by_path (combined: PATH_RESOLVE + OBJECT_OPEN)
     let _ = (path, flags, mode);
     ENOSYS
 }
 
-/// `close(fd)` → 0 ou errno.
+/// `close(fd)` -> 0 or errno.
 pub fn sys_close(fd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_CLOSE.fetch_add(1, Ordering::Relaxed);
     let fd = match validate_fd(fd) {
         Ok(f) => f,
         Err(e) => return e.to_errno(),
     };
-    // Délègue → fd::table::close_fd()
+    // Delegates -> fd::table::close_fd()
     let _ = fd;
     ENOSYS
 }
 
-/// `dup(oldfd)` → nouveau fd ou errno.
+/// `dup(oldfd)` -> new fd or errno.
 pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_DUP.fetch_add(1, Ordering::Relaxed);
     let fd = match validate_fd(oldfd) {
@@ -122,7 +122,7 @@ pub fn sys_dup(oldfd: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> 
     ENOSYS
 }
 
-/// `dup2(oldfd, newfd)` → newfd ou errno.
+/// `dup2(oldfd, newfd)` -> newfd or errno.
 pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_DUP.fetch_add(1, Ordering::Relaxed);
     let old = match validate_fd(oldfd) {
@@ -137,7 +137,7 @@ pub fn sys_dup2(oldfd: u64, newfd: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) 
     ENOSYS
 }
 
-/// `fstat(fd, stat_buf_ptr)` → 0 ou errno.
+/// `fstat(fd, stat_buf_ptr)` -> 0 or errno.
 pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     CNT_FSTAT.fetch_add(1, Ordering::Relaxed);
     let fd = match validate_fd(fd) {
@@ -147,16 +147,16 @@ pub fn sys_fstat(fd: u64, stat_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     if stat_ptr == 0 {
         return EFAULT;
     }
-    // Valider l'adresse stat_ptr (pointeur userspace — SYS-01)
+    // Validate stat_ptr address (userspace pointer — SYS-01)
     if stat_ptr >= crate::syscall::validation::USER_ADDR_MAX {
         return EFAULT;
     }
-    // Délègue → fs/exofs/syscall/object_stat via fd→ObjectId
+    // Delegates -> fs/exofs/syscall/object_stat via fd->ObjectId
     let _ = (fd, stat_ptr);
     ENOSYS
 }
 
-/// `lseek(fd, offset, whence)` → nouvelle position ou errno.
+/// `lseek(fd, offset, whence)` -> new position or errno.
 pub fn sys_lseek(fd: u64, offset: u64, whence: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     let fd = match validate_fd(fd) {
         Ok(f) => f,

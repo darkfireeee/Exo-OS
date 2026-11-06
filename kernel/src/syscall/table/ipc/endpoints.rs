@@ -1,4 +1,4 @@
-//! # syscall/table/ipc/endpoints.rs — Gestion et enregistrement des endpoints IPC et mailboxes
+//! # syscall/table/ipc/endpoints.rs — IPC endpoints and mailboxes management and registration
 
 use crate::syscall::table::common::*;
 use crate::ipc::core::types::EndpointId;
@@ -174,7 +174,7 @@ pub(super) fn exo_ipc_endpoint_pid(endpoint: u64) -> u32 {
     }
 }
 
-/// `exo_ipc_create(name_ptr, name_len, endpoint)` — ouvre la mailbox raw du serveur.
+/// `exo_ipc_create(name_ptr, name_len, endpoint)` — opens server raw mailbox.
 pub fn sys_exo_ipc_create(
     name_ptr: u64,
     name_len: u64,
@@ -251,7 +251,7 @@ pub fn sys_exo_ipc_create(
     }
 }
 
-/// `exo_ipc_destroy(endpoint)` — ferme la mailbox raw du serveur.
+/// `exo_ipc_destroy(endpoint)` — closes server raw mailbox.
 pub fn sys_exo_ipc_destroy(endpoint: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_IPC_DESTROY);
     let endpoint_pid = exo_ipc_endpoint_pid(endpoint);
@@ -272,7 +272,7 @@ pub fn sys_exo_ipc_destroy(endpoint: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     0
 }
 
-/// `exo_ipc_lookup(name_ptr, name_len)` — résout un endpoint IPC par nom.
+/// `exo_ipc_lookup(name_ptr, name_len)` — resolves an IPC endpoint by name.
 pub fn sys_exo_ipc_lookup(
     name_ptr: u64,
     name_len: u64,

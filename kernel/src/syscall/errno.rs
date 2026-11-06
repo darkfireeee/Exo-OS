@@ -1,155 +1,155 @@
-//! # syscall/errno.rs — Mapping KernelError / ExofsError → errno POSIX
+//! # syscall/errno.rs — Mapping KernelError / ExofsError → POSIX errno
 //!
-//! ## Règles (ERRNO-01 à ERRNO-03)
+//! ## Rules (ERRNO-01 to ERRNO-03)
 //!
-//! - **ERRNO-01** : `rax = -(errno as i64) as u64`. Jamais errno positif dans rax.
-//! - **ERRNO-02** : INTERDIT de retourner -1 avec errno=0.
-//! - **ERRNO-03** : Ce module DOIT couvrir TOUS les variants de KernelError et ExofsError.
+//! - **ERRNO-01**: `rax = -(errno as i64) as u64`. Never a positive errno in rax.
+//! - **ERRNO-02**: FORBIDDEN to return -1 with errno=0.
+//! - **ERRNO-03**: This module MUST cover ALL variants of KernelError and ExofsError.
 //!
-//! ## BUG ERRNO-MISSING — corrigé ici
-//! L'ancien code ne listait que 3 cas (NoSpace, NotFound, Denied).
-//! Ce module couvre les 15+ variants requis.
+//! ## BUG ERRNO-MISSING — fixed here
+//! The old code only listed 3 cases (NoSpace, NotFound, Denied).
+//! This module covers the 15+ required variants.
 //!
-//! ## Utilisation
+//! ## Usage
 //! ```rust
 //! use crate::syscall::errno::kernel_err_to_errno;
 //! let retval: i64 = kernel_err_to_errno(KernelError::NotFound);  // → -2 (ENOENT)
 //! ```
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Import des types d'erreur kernel
+// Import of kernel error types
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::fs::exofs::core::ExofsError;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Codes errno POSIX — valeurs NÉGATIVES (rax = -errno)
+// POSIX errno codes — NEGATIVE values (rax = -errno)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Opération non permise (EPERM)
+/// Operation not permitted (EPERM)
 pub const EPERM: i64 = -1;
-/// Objet ou chemin absent (ENOENT)
+/// No such file or directory (ENOENT)
 pub const ENOENT: i64 = -2;
-/// Processus cible inexistant (ESRCH)
+/// No such process (ESRCH)
 pub const ESRCH: i64 = -3;
-/// Signal reçu pendant sleep (EINTR)
+/// Interrupted system call during sleep (EINTR)
 pub const EINTR: i64 = -4;
-/// Pas de processus fils (ECHILD)
+/// No child processes (ECHILD)
 pub const ECHILD: i64 = -10;
-/// Erreur I/O physique (EIO)
+/// Physical I/O error (EIO)
 pub const EIO: i64 = -5;
-/// Argument trop grand — len > MAX (E2BIG)
+/// Argument list too long — len > MAX (E2BIG)
 pub const E2BIG: i64 = -7;
-/// Message trop long pour le buffer/protocole IPC (EMSGSIZE)
+/// Message too long for IPC buffer/protocol (EMSGSIZE)
 pub const EMSGSIZE: i64 = -90;
-/// Mauvais descripteur de fichier (EBADF)
+/// Bad file descriptor (EBADF)
 pub const EBADF: i64 = -9;
-/// Ressource temporairement indisponible / non-bloquant (EAGAIN)
+/// Resource temporarily unavailable / non-blocking (EAGAIN)
 pub const EAGAIN: i64 = -11;
-/// Mémoire insuffisante (ENOMEM)
+/// Out of memory (ENOMEM)
 pub const ENOMEM: i64 = -12;
-/// Permission refusée — capability Denied (EACCES)
+/// Permission denied — capability Denied (EACCES)
 pub const EACCES: i64 = -13;
-/// Mauvaise adresse userspace (EFAULT)
+/// Bad userspace address (EFAULT)
 pub const EFAULT: i64 = -14;
-/// Ressource occupée (EBUSY)
+/// Device or resource busy (EBUSY)
 pub const EBUSY: i64 = -16;
-/// Fichier/objet existe déjà (EEXIST)
+/// File/object already exists (EEXIST)
 pub const EEXIST: i64 = -17;
-/// N'est pas un répertoire (ENOTDIR)
+/// Not a directory (ENOTDIR)
 pub const ENOTDIR: i64 = -20;
-/// Est un répertoire (EISDIR)
+/// Is a directory (EISDIR)
 pub const EISDIR: i64 = -21;
-/// Argument invalide — len=0, ptr null, flags invalides (EINVAL)
+/// Invalid argument — len=0, null ptr, invalid flags (EINVAL)
 pub const EINVAL: i64 = -22;
-/// Trop de fichiers ouverts (EMFILE)
+/// Too many open files (EMFILE)
 pub const EMFILE: i64 = -24;
-/// Espace disque épuisé (ENOSPC)
+/// No space left on device (ENOSPC)
 pub const ENOSPC: i64 = -28;
-/// Recherche invalide (pipe, socket, FIFO) (ESPIPE)
+/// Illegal seek (pipe, socket, FIFO) (ESPIPE)
 pub const ESPIPE: i64 = -29;
-/// Résultat hors plage — overflow (ERANGE)
+/// Result out of range — overflow (ERANGE)
 pub const ERANGE: i64 = -34;
-/// Syscall non implémenté (ENOSYS)
+/// Function not implemented (ENOSYS)
 pub const ENOSYS: i64 = -38;
-/// Format de données invalide (EBADMSG)
+/// Invalid data format (EBADMSG)
 pub const EBADMSG: i64 = -74;
-/// Débordement arithmétique (EOVERFLOW)
+/// Arithmetic overflow (EOVERFLOW)
 pub const EOVERFLOW: i64 = -75;
-/// Opération non supportée (ENOTSUP / EOPNOTSUPP)
+/// Operation not supported (ENOTSUP / EOPNOTSUPP)
 pub const ENOTSUP: i64 = -95;
-/// Répertoire non vide (ENOTEMPTY)
+/// Directory not empty (ENOTEMPTY)
 pub const ENOTEMPTY: i64 = -39;
-/// Attente expirée (ETIMEDOUT)
+/// Connection timed out (ETIMEDOUT)
 pub const ETIMEDOUT: i64 = -110;
-/// Quota capability dépassé (EDQUOT)
+/// Capability quota exceeded (EDQUOT)
 pub const EDQUOT: i64 = -122;
-/// Clé révoquée (EKEYREV — custom ExoOS)
+/// Key has been revoked (EKEYREV — custom ExoOS)
 pub const EKEYREV: i64 = -126;
-/// Format disque incompatible (EPROTO)
+/// Incompatible disk format (EPROTO)
 pub const EPROTO: i64 = -71;
-/// Epoch inexistante (ENOEPOCH — custom ExoOS)
+/// Non-existent epoch (ENOEPOCH — custom ExoOS)
 pub const ENOEPOCH: i64 = -130;
-/// GC table pleine (EGCFULL — custom ExoOS)
+/// GC table full (EGCFULL — custom ExoOS)
 pub const EGCFULL: i64 = -131;
-/// Epoch table pleine (EEPOCHFULL — custom ExoOS)
+/// Epoch table full (EEPOCHFULL — custom ExoOS)
 pub const EEPOCHFULL: i64 = -133;
-/// Erreur de commit NVMe (ECOMMIT — custom ExoOS)
+/// NVMe commit error (ECOMMIT — custom ExoOS)
 pub const ECOMMIT: i64 = -134;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KernelError — défini localement (miroir de l'enum kernel/process/error)
+// KernelError — defined locally (mirror of kernel/process/error enum)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Erreurs génériques du kernel — couvre les 15 variants requis par ERRNO-03.
+/// Generic kernel errors — covers the 15 variants required by ERRNO-03.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelError {
-    /// Objet ou chemin absent.
+    /// Object or path not found.
     NotFound,
-    /// Mémoire insuffisante — jamais panic, retourner ENOMEM.
+    /// Out of memory — never panic, return ENOMEM.
     NoMemory,
-    /// Argument invalide (len=0, ptr null, flags invalides).
+    /// Invalid argument (len=0, null ptr, invalid flags).
     InvalidArg,
-    /// Espace disque épuisé.
+    /// Disk space exhausted.
     NoSpace,
-    /// Permission refusée (capability Denied).
+    /// Permission denied (capability Denied).
     AccessDenied,
-    /// Corruption détectée (magic, checksum).
+    /// Corruption detected (magic, checksum).
     Corrupt,
-    /// Objet non exécutable (ObjectKind != Code).
+    /// Non-executable object (ObjectKind != Code).
     NotExecutable,
-    /// Attente expirée.
+    /// Operation timed out.
     TimedOut,
-    /// Non-bloquant + pas de données (O_NONBLOCK).
+    /// Non-blocking + no data (O_NONBLOCK).
     WouldBlock,
     /// len > MAX (E2BIG).
     TooBig,
-    /// Signal reçu pendant une attente.
+    /// Signal received during sleep.
     Interrupted,
-    /// Syscall non implémenté.
+    /// Syscall not implemented.
     NotSupported,
-    /// Quota capability dépassé.
+    /// Capability quota exceeded.
     QuotaExceeded,
-    /// Format de version incompatible.
+    /// Incompatible version format.
     VersionMismatch,
-    /// Ressource déjà existante.
+    /// Resource already exists.
     AlreadyExists,
-    /// Mauvais descripteur de fichier.
+    /// Bad file descriptor.
     BadFd,
-    /// Erreur I/O physique.
+    /// Physical I/O error.
     IoError,
-    /// Ressource occupée.
+    /// Resource busy.
     Busy,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mapping KernelError → errno POSIX (ERRNO-03 : couverture COMPLÈTE)
+// Mapping KernelError → POSIX errno (ERRNO-03: COMPLETE coverage)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit une `KernelError` en code errno POSIX négatif.
+/// Converts a `KernelError` into a negative POSIX errno code.
 ///
-/// RÈGLE ERRNO-01 : la valeur retournée est TOUJOURS négative.
-/// RÈGLE ERRNO-03 : TOUS les variants sont couverts.
+/// RULE ERRNO-01: the returned value is ALWAYS negative.
+/// RULE ERRNO-03: ALL variants are covered.
 #[inline]
 pub fn kernel_err_to_errno(e: KernelError) -> i64 {
     match e {
@@ -175,13 +175,13 @@ pub fn kernel_err_to_errno(e: KernelError) -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mapping ExofsError → errno POSIX (ERRNO-03 : couverture COMPLÈTE)
+// Mapping ExofsError → POSIX errno (ERRNO-03: COMPLETE coverage)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit une `ExofsError` en code errno POSIX négatif.
+/// Converts an `ExofsError` into a negative POSIX errno code.
 ///
-/// RÈGLE ERRNO-01 : la valeur retournée est TOUJOURS négative.
-/// RÈGLE ERRNO-03 : TOUS les variants ExofsError sont mappés.
+/// RULE ERRNO-01: the returned value is ALWAYS negative.
+/// RULE ERRNO-03: ALL ExofsError variants are mapped.
 #[inline]
 pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
     match e {
@@ -201,7 +201,7 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
         ExofsError::WrongObjectKind => EINVAL,
         ExofsError::WrongObjectClass => EINVAL,
         ExofsError::InvalidArgument => EINVAL,
-        // FIX: anciens noms remplacés par les variants corrects de ExofsError
+        // FIX: old names replaced by correct variants of ExofsError
         ExofsError::PermissionDenied => EACCES,
         ExofsError::SecretBlobIdLeakPrevented => EACCES,
         ExofsError::QuotaExceeded => EDQUOT,
@@ -259,10 +259,10 @@ pub fn exofs_err_to_errno(e: ExofsError) -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper générique pour les handlers — retourne i64 depuis Result<i64, E>
+// Generic helper for handlers — returns i64 from Result<i64, E>
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Utilitaire — convertit `Result<i64, KernelError>` en `i64` (0/errno).
+/// Utility — converts `Result<i64, KernelError>` to `i64` (0/errno).
 #[inline]
 pub fn result_to_retval(r: Result<i64, KernelError>) -> i64 {
     match r {
@@ -271,7 +271,7 @@ pub fn result_to_retval(r: Result<i64, KernelError>) -> i64 {
     }
 }
 
-/// Utilitaire — convertit `Result<i64, ExofsError>` en `i64` (0/errno).
+/// Utility — converts `Result<i64, ExofsError>` to `i64` (0/errno).
 #[inline]
 pub fn exofs_result_to_retval(r: Result<i64, ExofsError>) -> i64 {
     match r {

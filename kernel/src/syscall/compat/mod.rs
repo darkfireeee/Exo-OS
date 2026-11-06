@@ -1,13 +1,13 @@
-//! # syscall/compat/mod.rs — Couche de compatibilité ABI
+//! # syscall/compat/mod.rs — ABI compatibility layer
 //!
-//! Ce sous-module regroupe deux couches complémentaires :
+//! This submodule groups two complementary layers:
 //!
-//! | Module     | Rôle                                                          |
+//! | Module     | Role                                                          |
 //! |------------|---------------------------------------------------------------|
-//! | `linux`    | Traduit les numéros Linux supprimés / renommés               |
-//! | `posix`    | Handlers POSIX.1-2017 + constantes + validation des args      |
+//! | `linux`    | Translates removed / renamed Linux numbers                    |
+//! | `posix`    | POSIX.1-2017 handlers + constants + arg validation            |
 //!
-//! ## Pipeline d'appel (dispatch.rs)
+//! ## Call Pipeline (dispatch.rs)
 //!
 //! ```text
 //! dispatch()
@@ -16,9 +16,9 @@
 //!   └─ get_handler()            table.rs  ←  compat::posix::get_posix_handler()
 //! ```
 //!
-//! `dispatch.rs` appelle `translate_linux_nr` pour remap/bloquer les numéros
-//! obsolètes, puis `get_handler` qui délègue vers `get_posix_handler` en
-//! second recours pour les numéros POSIX non inclus dans la table principale.
+//! `dispatch.rs` calls `translate_linux_nr` to remap/block obsolete numbers,
+//! then `get_handler` which delegates to `get_posix_handler` as a
+//! secondary resort for POSIX numbers not included in the main table.
 
 pub mod linux;
 pub mod posix;
@@ -30,20 +30,20 @@ pub use posix::{
     validate_lseek_whence, validate_mmap_flags, validate_open_flags, validate_prot,
 };
 
-/// Statistiques globales de la couche compat (linux + posix agrégés).
+/// Global statistics for the compat layer (aggregated linux + posix).
 #[derive(Debug, Clone, Copy)]
 pub struct CompatStats {
-    /// Appels traduits par linux.rs (ancien numéro → nouveau)
+    /// Calls translated by linux.rs (old number → new)
     pub linux_translated: u64,
-    /// Appels bloqués par linux.rs (numéros supprimés → ENOSYS)
+    /// Calls blocked by linux.rs (removed numbers → ENOSYS)
     pub linux_blocked: u64,
-    /// Appels passthrough (non modifiés)
+    /// Passthrough calls (unmodified)
     pub linux_passthrough: u64,
-    /// Appels traités par posix.rs
+    /// Calls processed by posix.rs
     pub posix_calls: u64,
 }
 
-/// Retourne les statistiques de compatibilité agrégées.
+/// Returns aggregated compatibility statistics.
 pub fn compat_stats() -> CompatStats {
     let ls = linux_compat_stats();
     CompatStats {

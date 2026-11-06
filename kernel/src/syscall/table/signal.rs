@@ -1,23 +1,23 @@
-//! # syscall/table/signal.rs — Handlers des signaux POSIX (kill, sigaction, sigaltstack)
+//! # syscall/table/signal.rs — POSIX signal handlers (kill, sigaction, sigaltstack)
 
 use super::common::stat_inc;
 use crate::syscall::numbers::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handlers Signaux (délégués vers process/signal/)
+// Signal handlers (delegated to process/signal/)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `kill(pid, sig)` — envoie le signal `sig` au processus `pid`.
+/// `kill(pid, sig)` — sends signal `sig` to process `pid`.
 ///
-/// ## RÈGLE SIGNAL-01 (DOC1)
-/// kill() soumet le signal via process::signal::delivery.
-/// La livraison effective se fait au retour userspace du thread cible.
+/// ## RULE SIGNAL-01 (DOC1)
+/// kill() submits the signal via process::signal::delivery.
+/// Actual delivery occurs upon return to userspace of the target thread.
 pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_KILL);
     crate::syscall::handlers::signal::sys_kill(pid, sig, 0, 0, 0, 0)
 }
 
-/// `tgkill(tgid, tid, sig)` — câblé via send_signal_to_tcb lors de l'intégration.
+/// `tgkill(tgid, tid, sig)` — wired via send_signal_to_tcb during integration.
 pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_TGKILL);
     crate::syscall::handlers::signal::sys_tgkill(tgid, tid, sig, 0, 0, 0)
@@ -49,7 +49,7 @@ pub fn sys_rt_sigprocmask(
     crate::syscall::handlers::signal::sys_rt_sigprocmask(how, set_ptr, oldset_ptr, size, 0, 0)
 }
 
-/// `sigaltstack(ss_ptr, old_ss_ptr)` — configure le stack alternatif pour les signaux.
+/// `sigaltstack(ss_ptr, old_ss_ptr)` — configures the alternate stack for signals.
 pub fn sys_sigaltstack(
     ss_ptr: u64,
     old_ss_ptr: u64,

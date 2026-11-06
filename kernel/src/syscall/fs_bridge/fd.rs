@@ -73,7 +73,7 @@ pub fn resolve_fd(pid: u32, fd: u32) -> Result<ResolvedFd, FsBridgeError> {
         });
     }
 
-    // Si le processus possède une table de descripteurs, un fd absent est strictement invalide (T9-001 FIX).
+    // If the process has a descriptor table, an absent fd is strictly invalid (T9-001 FIX).
     if process_has_fd_table(pid) || fd <= 2 {
         return Err(FsBridgeError::BadFd);
     }
@@ -234,7 +234,7 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
             let _ = OBJECT_TABLE.close(old_handle as u32);
         }
     }
-    // POSIX spécifie que FD_CLOEXEC doit toujours être effacé sur newfd lors de dup2
+    // POSIX specifies that FD_CLOEXEC must always be cleared on newfd during dup2
     let dup_flags = resolved.flags & !O_CLOEXEC;
     if is_tty_handle(resolved.handle) {
         if install_process_fd_at(pid, newfd, TTY_PTS0_HANDLE as u64, dup_flags) {

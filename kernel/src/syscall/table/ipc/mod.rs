@@ -1,12 +1,12 @@
-//! # syscall/table/ipc/mod.rs — Handlers IPC natifs, Capabilities, ExoCordon, ExoShield et services système
+//! # syscall/table/ipc/mod.rs — Native IPC, Capabilities, ExoCordon, ExoShield, and system service handlers
 //!
-//! Ce module organise de façon propre et modulaire l'ensemble des handlers d'appels système
-//! liés aux communications inter-processus et à la sécurité système :
-//! - `endpoints`     : Enregistrement, découverte et cycle de vie des mailboxes IPC.
-//! - `channel`       : Envoi (send), réception (recv), appels synchrones (call) et politique ExoCordon.
-//! - `remote_memory` : Opérations mémoires inter-processus (copy_from/to_pid, mmap/munmap/mprotect_pid) réservées aux serveurs racine.
-//! - `security_ops`  : Gestion des capabilities (create/revoke/check), sandbox Pledge et surveillance ExoShield.
-//! - `system_ops`    : Ring buffer de logs kernel, snapshot des processus PCB, métriques de performance et transitions Phoenix.
+//! This module organizes cleanly and modularly all system call handlers
+//! related to inter-process communication and system security:
+//! - `endpoints`     : Registration, discovery, and lifecycle of IPC mailboxes.
+//! - `channel`       : Sending (send), receiving (recv), synchronous calls (call), and ExoCordon policy.
+//! - `remote_memory` : Inter-process memory operations (copy_from/to_pid, mmap/munmap/mprotect_pid) reserved for root servers.
+//! - `security_ops`  : Capability management (create/revoke/check), Pledge sandbox, and ExoShield monitoring.
+//! - `system_ops`    : Kernel log ring buffer, PCB process snapshot, performance metrics, and Phoenix transitions.
 
 pub mod channel;
 pub mod endpoints;

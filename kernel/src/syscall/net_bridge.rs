@@ -1,11 +1,11 @@
 #![allow(dead_code)]
-// syscall/net_bridge.rs -- pont BSD sockets -> network_server
+// syscall/net_bridge.rs -- BSD sockets -> network_server bridge
 //
-// Architecture V4: les syscalls reseau Ring 3 ne manipulent pas de memoire
-// partagee inter-process. Le noyau copie les petites structures userspace,
-// encode un NetMsg fixe (48B), puis effectue un appel IPC raw synchrone vers
-// network_server. Les buffers applicatifs longs ne sont pas transmis au serveur
-// dans cette phase; le serveur gere l'etat socket et retourne des tailles.
+// Architecture V4: Ring 3 network syscalls do not manipulate inter-process
+// shared memory. The kernel copies small userspace structures,
+// encodes a fixed NetMsg (48B), then performs a synchronous raw IPC call to
+// network_server. Long application buffers are not transmitted to the server
+// in this phase; the server manages socket state and returns lengths.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -101,10 +101,10 @@ struct LinuxMsghdr {
 
 const _: () = assert!(core::mem::size_of::<LinuxMsghdr>() == 56);
 
-/// Active le pont reseau apres l'initialisation de base du noyau.
+/// Activates the network bridge after kernel base initialization.
 ///
 /// # Safety
-/// Appeler une seule fois depuis le chemin boot BSP, apres l'initialisation IPC.
+/// Call once from the BSP boot path, after IPC initialization.
 pub unsafe fn net_bridge_preinit() {
     NET_READY.store(true, Ordering::Release);
 }
@@ -584,8 +584,8 @@ pub fn net_sendto(
     Ok(total_sent as i64)
 }
 
-const RECV_TIMEOUT_NS: u64 = 2_000_000_000; // 2 secondes
-const RECV_RETRY_NAP_NS: u64 = 5_000_000;   // 5 ms entre chaque poll
+const RECV_TIMEOUT_NS: u64 = 2_000_000_000; // 2 seconds
+const RECV_RETRY_NAP_NS: u64 = 5_000_000;   // 5 ms between each poll
 const MSG_DONTWAIT: u32 = 0x40;
 
 pub fn net_recvfrom(
@@ -698,7 +698,7 @@ pub fn net_recvfrom(
             peer_addr_recorded = true;
         }
         total_recv += data_len;
-        // Si MSG_PEEK (0x02) ou tranche partielle/EOF, arrêter la boucle.
+        // If MSG_PEEK (0x02) or partial chunk/EOF, break the loop.
         if data_len < chunk_len || (flags & 0x02) != 0 {
             break;
         }

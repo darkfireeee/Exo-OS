@@ -1,4 +1,4 @@
-//! # syscall/table/drivers.rs — Handlers des pilotes matériels GI-03 (DMA, PCI, IRQ, MSI, MMIO)
+//! # syscall/table/drivers.rs — Hardware driver GI-03 handlers (DMA, PCI, IRQ, MSI, MMIO)
 
 use super::common::*;
 use crate::arch::x86_64::irq::{
@@ -19,7 +19,7 @@ use pci_types::PciAddress;
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers pour DMA/PCI (réutilisables)
+// Helpers for DMA/PCI (reusable)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline]
@@ -92,7 +92,7 @@ fn ps2_keyboard_vector() -> u8 {
     IrqVector::VECTOR_IRQ_BASE + 1
 }
 
-/// Encode/decode ABI simplifié BDF sur 32 bits :
+/// Simplified ABI 32-bit BDF encode/decode:
 /// - bits 31..16 : segment
 /// - bits 15..8  : bus
 /// - bits 7..3   : device
@@ -258,10 +258,10 @@ pub fn sys_irq_ack(
     }
 }
 
-/// ABI GI-03 : `sys_ioport_read(port, width)`.
+/// ABI GI-03: `sys_ioport_read(port, width)`.
 ///
-/// Transition terminal v0.2.0: seul le driver Ring1 `ps2_driver` peut accéder
-/// aux ports i8042 clavier (0x60/0x64), en octets.
+/// Terminal transition v0.2.0: only Ring1 driver `ps2_driver` may access
+/// i8042 keyboard ports (0x60/0x64), in bytes.
 pub fn sys_ioport_read(port: u64, width: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_IOPORT_READ);
 
@@ -294,7 +294,7 @@ pub fn sys_ioport_write(port: u64, value: u64, width: u64, _a4: u64, _a5: u64, _
     0
 }
 
-/// ABI GI-03 : `sys_mmio_map(phys_addr, size)` pour le PID appelant.
+/// ABI GI-03: `sys_mmio_map(phys_addr, size)` for calling PID.
 pub fn sys_mmio_map(phys_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MMIO_MAP);
 
@@ -314,7 +314,7 @@ pub fn sys_mmio_map(phys_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     }
 }
 
-/// ABI GI-03 : `sys_mmio_unmap(virt_addr, size)` pour le PID appelant.
+/// ABI GI-03: `sys_mmio_unmap(virt_addr, size)` for calling PID.
 pub fn sys_mmio_unmap(virt_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_MMIO_UNMAP);
 
@@ -333,12 +333,12 @@ pub fn sys_mmio_unmap(virt_addr: u64, size: u64, _a3: u64, _a4: u64, _a5: u64, _
     }
 }
 
-/// ABI GI-03 canonique :
+/// Canonical ABI GI-03:
 /// `sys_dma_alloc(size, direction) -> (virt, iova)`.
-/// Réalisation registre noyau :
-/// - `rax` retourne l'IOVA
-/// - `arg3` (`user_virt_out`) reçoit l'adresse CPU virtuelle si non nul
-/// - `arg4`/`arg5` restent des extensions de compatibilité (`map_flags`, `domain_hint`)
+/// Kernel register implementation:
+/// - `rax` returns IOVA
+/// - `arg3` (`user_virt_out`) receives CPU virtual address if non-null
+/// - `arg4`/`arg5` remain compatibility extensions (`map_flags`, `domain_hint`)
 pub fn sys_dma_alloc(
     size: u64,
     direction: u64,
@@ -391,9 +391,9 @@ pub fn sys_dma_alloc(
     }
 }
 
-/// ABI GI-03 canonique :
+/// Canonical ABI GI-03:
 /// `sys_dma_free(iova, size)`.
-/// `arg3` reste un hint de domaine pour le noyau tant que la couche userland n'est pas finalisée.
+/// `arg3` remains a domain hint for kernel until userland layer is finalized.
 pub fn sys_dma_free(iova: u64, size: u64, domain_hint: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_FREE);
 
@@ -422,7 +422,7 @@ pub fn sys_dma_free(iova: u64, size: u64, domain_hint: u64, _a4: u64, _a5: u64, 
     }
 }
 
-/// ABI GI-03 canonique : `sys_dma_sync(iova, size, direction)`.
+/// Canonical ABI GI-03 : `sys_dma_sync(iova, size, direction)`.
 pub fn sys_dma_sync(iova: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_DMA_SYNC);
 
@@ -447,7 +447,7 @@ pub fn sys_dma_sync(iova: u64, size: u64, direction: u64, _a4: u64, _a5: u64, _a
     }
 }
 
-/// ABI GI-03 : `sys_pci_cfg_read(offset)` pour le device claimé du PID appelant.
+/// ABI GI-03: `sys_pci_cfg_read(offset)` for claimed device of calling PID.
 pub fn sys_pci_cfg_read(offset: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PCI_CFG_READ);
 
@@ -466,7 +466,7 @@ pub fn sys_pci_cfg_read(offset: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6
     }
 }
 
-/// ABI GI-03 : `sys_pci_cfg_write(offset, value)` pour le device claimé du PID appelant.
+/// ABI GI-03: `sys_pci_cfg_write(offset, value)` for claimed device of calling PID.
 pub fn sys_pci_cfg_write(offset: u64, value: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PCI_CFG_WRITE);
 
@@ -485,7 +485,7 @@ pub fn sys_pci_cfg_write(offset: u64, value: u64, _a3: u64, _a4: u64, _a5: u64, 
     }
 }
 
-/// ABI GI-03 : `sys_pci_bus_master(enable)` pour le device claimé du PID appelant.
+/// ABI GI-03: `sys_pci_bus_master(enable)` for claimed device of calling PID.
 pub fn sys_pci_bus_master(enable: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_PCI_BUS_MASTER);
 
@@ -690,9 +690,9 @@ pub fn sys_pci_set_topology(
 
 /// ABI GI-03 : `sys_pci_find_device(vendor, device, class, subclass, index, out_ptr)`.
 ///
-/// `vendor`/`device` à 0 signifient wildcard. `class`/`subclass` à une valeur
-/// supérieure à 255 signifient wildcard. Le résultat est écrit dans
-/// `PciDeviceInfo` côté userspace et contient le BDF, IRQ et BAR0.
+/// `vendor`/`device` set to 0 mean wildcard. `class`/`subclass` set to a value
+/// greater than 255 mean wildcard. The result is written into
+/// `PciDeviceInfo` in userspace and contains the BDF, IRQ, and BAR0.
 pub fn sys_pci_find_device(
     vendor_filter: u64,
     device_filter: u64,
@@ -747,26 +747,26 @@ pub struct FramebufferInfoWire {
     pub size_bytes: u64,
 }
 
-/// `framebuffer_info(out)` -> infos du framebuffer de boot pour fb_server Ring1.
-/// SYS_FRAMEBUFFER_INFO — exposé uniquement aux processus Ring1 de confiance.
+/// `framebuffer_info(out)` -> boot framebuffer info for Ring1 fb_server.
+/// SYS_FRAMEBUFFER_INFO — exposed only to trusted Ring1 processes.
 ///
-/// SECURITY: Ce syscall retourne l'adresse physique du framebuffer.
-/// Seul le premier appelant (fb_server) est autorise ; tout autre PID
-/// recoit EACCES. L'autorisation est stockee dans FB_INFO_AUTHORIZED_PID.
+/// SECURITY: This syscall returns the physical address of the framebuffer.
+/// Only the first caller (fb_server) is authorized; any other PID
+/// receives EACCES. The authorization is stored in FB_INFO_AUTHORIZED_PID.
 static FB_INFO_AUTHORIZED_PID: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
 
 pub fn sys_framebuffer_info(out_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use core::sync::atomic::Ordering;
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    // Autoriser uniquement le premier appelant (fb_server au boot).
-    // Tout PID different est rejete avec EACCES.
+    // Authorize only the first caller (fb_server at boot).
+    // Any different PID is rejected with EACCES.
     let prev =
         FB_INFO_AUTHORIZED_PID.compare_exchange(0, caller_pid, Ordering::AcqRel, Ordering::Acquire);
     match prev {
-        Ok(_) => {}                                       // premier appelant autorise
-        Err(authorized) if authorized == caller_pid => {} // rappel idempotent
-        Err(_) => return EACCES,                          // PID non autorise
+        Ok(_) => {}                                       // first caller authorized
+        Err(authorized) if authorized == caller_pid => {} // idempotent re-invocation
+        Err(_) => return EACCES,                          // unauthorized PID
     }
     stat_inc(SYS_FRAMEBUFFER_INFO);
     if out_ptr == 0 {

@@ -1,4 +1,4 @@
-//! # syscall/fs_bridge/path_ops/resolution.rs — Résolution, normalisation et indexation des chemins
+//! # syscall/fs_bridge/path_ops/resolution.rs — Path resolution, normalization and indexing
 
 use super::super::*;
 use alloc::vec::Vec;
