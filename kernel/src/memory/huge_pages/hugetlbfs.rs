@@ -302,23 +302,24 @@ impl HugeTlbPool {
                 }
             }
         } else {
-            // Shrink: free unused pages.
+            // Shrink: free unused pages and compact active slots so count does not leak capacity.
             let to_free = current_free - target_count;
             let mut freed = 0usize;
             let mut inner = self.inner.lock();
-            let count = inner.count;
-            for slot in inner.slots[..count].iter_mut() {
-                if freed >= to_free {
-                    break;
-                }
+            let mut i = 0usize;
+            while i < inner.count && freed < to_free {
+                let slot = inner.slots[i];
                 if slot.order == size as u8 && !slot.occupied && slot.phys != 0 {
                     let frame = Frame::from_phys_addr(PhysAddr::new(slot.phys));
                     let _ = free_pages(frame, size.order());
-                    slot.phys = 0;
-                    slot.occupied = false;
-                    slot.order = 0;
+                    let last = inner.count - 1;
+                    inner.slots[i] = inner.slots[last];
+                    inner.slots[last] = HugeTlbSlot::EMPTY;
+                    inner.count = last;
                     HUGETLB_STATS.pool_size.fetch_sub(1, Ordering::Relaxed);
                     freed += 1;
+                } else {
+                    i += 1;
                 }
             }
         }

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ─── Horloge interne ─────────────────────────────────────────────────────────
+// ─── Internal Clock ──────────────────────────────────────────────────────────
 
 static THROUGHPUT_TICK: AtomicU64 = AtomicU64::new(0);
 
@@ -79,7 +79,7 @@ impl ThroughputWindow {
 
     pub fn push(&self, sample: ThroughputSample) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % THROUGHPUT_WINDOW_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             (*self.samples.get())[idx] = sample;
         }
@@ -106,7 +106,7 @@ impl ThroughputWindow {
                 .wrapping_add(THROUGHPUT_WINDOW_SIZE)
                 .wrapping_sub(i + 1))
                 % THROUGHPUT_WINDOW_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             sum = sum.saturating_add(unsafe { (*self.samples.get())[idx].bytes_read });
             i = i.wrapping_add(1);
         }
@@ -126,7 +126,7 @@ impl ThroughputWindow {
                 .wrapping_add(THROUGHPUT_WINDOW_SIZE)
                 .wrapping_sub(i + 1))
                 % THROUGHPUT_WINDOW_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             sum = sum.saturating_add(unsafe { (*self.samples.get())[idx].bytes_written });
             i = i.wrapping_add(1);
         }
@@ -144,7 +144,7 @@ impl ThroughputWindow {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx =
             (head.wrapping_add(THROUGHPUT_WINDOW_SIZE).wrapping_sub(1)) % THROUGHPUT_WINDOW_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         Some(unsafe { (*self.samples.get())[idx] })
     }
 
@@ -159,7 +159,7 @@ impl ThroughputWindow {
                 .wrapping_add(THROUGHPUT_WINDOW_SIZE)
                 .wrapping_sub(i + 1))
                 % THROUGHPUT_WINDOW_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             v.push(unsafe { (*self.samples.get())[idx] });
             i = i.wrapping_add(1);
         }
@@ -176,7 +176,7 @@ impl ThroughputWindow {
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < THROUGHPUT_WINDOW_SIZE {
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             unsafe {
                 (*self.samples.get())[i] = ThroughputSample::zero();
             }
@@ -229,7 +229,7 @@ impl ThroughputTracker {
         self.write_ops.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Pousse les compteurs dans la fenêtre et remet à zéro pour la prochaine période.
+    /// Pushes counters into the window and resets them for the next period.
     pub fn flush_period(&self, dt: u64) {
         let br = self.bytes_read.swap(0, Ordering::Relaxed);
         let bw = self.bytes_written.swap(0, Ordering::Relaxed);
@@ -334,7 +334,7 @@ impl ThroughputSnapshot {
     pub fn total_bytes(&self) -> u64 {
         self.total_read.saturating_add(self.total_written)
     }
-    /// Ratio lecture/total en ‰ (ARITH-02).
+    /// Read/total ratio in ‰ (ARITH-02).
     pub fn read_ratio_ppt(&self) -> u64 {
         let t = self.total_bytes();
         if t == 0 {
@@ -358,7 +358,7 @@ impl ThroughputSnapshot {
     pub fn is_high_throughput(&self, threshold_bpt: u64) -> bool {
         self.avg_total_bpt() >= threshold_bpt
     }
-    /// Équilibre read/write : écart de ≤20% entre les pics.
+    /// Read/write balance: difference of <=20% between peaks.
     pub fn is_balanced(&self) -> bool {
         let r = self.peak_read_bpt;
         let w = self.peak_write_bpt;
@@ -420,11 +420,11 @@ impl ThroughputRate {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ThroughputThresholds {
-    /// Seuil d'alerte débit lecture (B/tick).
+    /// Read throughput alert threshold (B/tick).
     pub max_read_bpt: u64,
-    /// Seuil d'alerte débit écriture (B/tick).
+    /// Write throughput alert threshold (B/tick).
     pub max_write_bpt: u64,
-    /// Seuil min de débit pour considérer le système actif (B/tick).
+    /// Minimum throughput threshold to consider the system active (B/tick).
     pub min_active_bpt: u64,
 }
 

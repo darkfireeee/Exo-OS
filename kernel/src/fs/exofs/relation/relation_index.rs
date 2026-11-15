@@ -1,8 +1,8 @@
-//! relation_index.rs — Index rapide des relations par BlobId ExoFS
+//! relation_index.rs — Fast relation index by BlobId in ExoFS
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -14,10 +14,10 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum d'entrées d'index (limites mémoire kernel).
+/// Maximum number of index entries (kernel memory limits).
 pub const INDEX_MAX_ENTRIES: usize = 131072;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,9 +38,9 @@ pub struct IndexStats {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct IndexInner {
-    /// by_from[blob_key] = Vec<RelationId> des relations sortantes.
+    /// by_from[blob_key] = Vec<RelationId> of outgoing relations.
     by_from: BTreeMap<[u8; 32], Vec<RelationId>>,
-    /// by_to[blob_key]   = Vec<RelationId> des relations entrantes.
+    /// by_to[blob_key]   = Vec<RelationId> of incoming relations.
     by_to: BTreeMap<[u8; 32], Vec<RelationId>>,
     stats: IndexStats,
 }
@@ -66,7 +66,7 @@ impl IndexInner {
         id: RelationId,
     ) -> ExofsResult<()> {
         if let Some(v) = map.get_mut(&key) {
-            // Déduplique : ne pas insérer si déjà présent.
+            // Deduplicate: do not insert if already present.
             if v.contains(&id) {
                 return Ok(());
             }
@@ -127,47 +127,47 @@ impl IndexInner {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationIndex (publique, thread-safe)
+// RelationIndex (public, thread-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Index rapide des relations par BlobId.
+/// Fast relation index by BlobId.
 ///
-/// Maintient deux map :
-///   `by_from[blob] → [RelationId…]` (arcs sortants)
-///   `by_to[blob]   → [RelationId…]` (arcs entrants)
+/// Maintains two maps:
+///   `by_from[blob] -> [RelationId...]` (outgoing edges)
+///   `by_to[blob]   -> [RelationId...]` (incoming edges)
 pub struct RelationIndex {
     inner: SpinLock<IndexInner>,
 }
 
 impl RelationIndex {
-    /// Constructeur `const` pour initialisation statique.
+    /// `const` constructor for static initialization.
     pub const fn new_const() -> Self {
         RelationIndex {
             inner: SpinLock::new(IndexInner::new_empty()),
         }
     }
 
-    /// Indexe une nouvelle relation.
+    /// Indexes a new relation.
     pub fn insert(&self, rel: &Relation) -> ExofsResult<()> {
         self.inner.lock().insert_relation(rel)
     }
 
-    /// Désindexe une relation.
+    /// Unindexes a relation.
     pub fn remove(&self, rel: &Relation) {
         self.inner.lock().remove_relation(rel);
     }
 
-    /// IDs des relations sortantes de `blob`.
+    /// IDs of outgoing relations from `blob`.
     pub fn ids_from(&self, blob: &BlobId) -> Vec<RelationId> {
         self.inner.lock().ids_from(blob.as_bytes())
     }
 
-    /// IDs des relations entrantes vers `blob`.
+    /// IDs of incoming relations towards `blob`.
     pub fn ids_to(&self, blob: &BlobId) -> Vec<RelationId> {
         self.inner.lock().ids_to(blob.as_bytes())
     }
 
-    /// IDs des relations dans la direction donnée.
+    /// IDs of relations in given direction.
     pub fn ids_in_direction(&self, blob: &BlobId, direction: RelationDirection) -> Vec<RelationId> {
         match direction {
             RelationDirection::Outgoing => self.ids_from(blob),
@@ -185,17 +185,17 @@ impl RelationIndex {
         }
     }
 
-    /// `true` si le blob est source d'au moins une relation.
+    /// `true` if the blob is source of at least one relation.
     pub fn has_outgoing(&self, blob: &BlobId) -> bool {
         self.inner.lock().by_from.contains_key(blob.as_bytes())
     }
 
-    /// `true` si le blob est destination d'au moins une relation.
+    /// `true` if the blob is destination of at least one relation.
     pub fn has_incoming(&self, blob: &BlobId) -> bool {
         self.inner.lock().by_to.contains_key(blob.as_bytes())
     }
 
-    /// Nombre de relations sortantes du blob.
+    /// Number of outgoing relations from the blob.
     pub fn out_degree(&self, blob: &BlobId) -> usize {
         self.inner
             .lock()
@@ -205,7 +205,7 @@ impl RelationIndex {
             .unwrap_or(0)
     }
 
-    /// Nombre de relations entrantes vers le blob.
+    /// Number of incoming relations towards the blob.
     pub fn in_degree(&self, blob: &BlobId) -> usize {
         self.inner
             .lock()
@@ -215,15 +215,15 @@ impl RelationIndex {
             .unwrap_or(0)
     }
 
-    /// Supprime toutes les relations liées à un blob (dans les deux sens).
-    /// Retourne les IDs supprimés.
+    /// Removes all relations linked to a blob (in both directions).
+    /// Returns removed IDs.
     pub fn remove_all_for_blob(&self, blob: &BlobId) -> Vec<RelationId> {
         let key = *blob.as_bytes();
         let mut guard = self.inner.lock();
         let outgoing = guard.by_from.remove(&key).unwrap_or_default();
         let incoming = guard.by_to.remove(&key).unwrap_or_default();
 
-        // Nettoyer les relations sortantes de ce blob dans les `by_to` des pairs
+        // Clean outgoing relations of this blob in peer `by_to`
         for id in &outgoing {
             for v in guard.by_to.values_mut() {
                 v.retain(|r| r != id);
@@ -231,7 +231,7 @@ impl RelationIndex {
         }
         guard.by_to.retain(|_, v| !v.is_empty());
 
-        // Nettoyer les relations entrantes vers ce blob dans les `by_from` des pairs
+        // Clean incoming relations towards this blob in peer `by_from`
         for id in &incoming {
             for v in guard.by_from.values_mut() {
                 v.retain(|r| r != id);
@@ -252,49 +252,49 @@ impl RelationIndex {
         all
     }
 
-    /// Statistiques de l'index.
+    /// Index statistics.
     pub fn stats(&self) -> IndexStats {
         self.inner.lock().stats.clone()
     }
 
-    /// Vide l'index.
+    /// Clears the index.
     pub fn flush(&self) {
         self.inner.lock().flush();
     }
 
-    /// Nombre de clés sources distinctes.
+    /// Number of distinct source keys.
     pub fn n_source_blobs(&self) -> usize {
         self.inner.lock().by_from.len()
     }
 
-    /// Nombre de clés destinations distinctes.
+    /// Number of distinct destination keys.
     pub fn n_dest_blobs(&self) -> usize {
         self.inner.lock().by_to.len()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Index global des relations.
+/// Global relations index.
 pub static RELATION_INDEX: RelationIndex = RelationIndex::new_const();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité
+// Convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Indique si deux blobs sont directement connectés (dans un sens ou l'autre).
+/// Indicates whether two blobs are directly connected (in either direction).
 pub fn are_directly_connected(a: &BlobId, b: &BlobId) -> bool {
     let ids_out = RELATION_INDEX.ids_from(a);
-    // On ne peut pas charger les relations ici sans dépendance circulaire,
-    // donc on vérifie l'index by_to en sens inverse.
+    // Cannot load relations here without circular dependency,
+    // so verify by_to index in reverse direction.
     let ids_in = RELATION_INDEX.ids_to(a);
-    // Naive : vérifie via IDs to/from de b
+    // Naive: check via IDs to/from of b
     let b_out = RELATION_INDEX.ids_from(b);
     let b_in = RELATION_INDEX.ids_to(b);
-    // Deux blobs sont connectés si a est dans la même composante
-    // (au moins un ID commun entre les listes).
+    // Two blobs are connected if a is in the same component
+    // (at least one common ID between the lists).
     for id in &ids_out {
         if b_in.contains(id) {
             return true;
@@ -308,18 +308,18 @@ pub fn are_directly_connected(a: &BlobId, b: &BlobId) -> bool {
     false
 }
 
-/// Retourne tous les blobs qui sont sources directes vers `blob`.
+/// Returns all blobs that are direct sources towards `blob`.
 pub fn direct_parents(blob: &BlobId) -> Vec<RelationId> {
     RELATION_INDEX.ids_to(blob)
 }
 
-/// Retourne tous les blobs destination depuis `blob`.
+/// Returns all destination blobs from `blob`.
 pub fn direct_children(blob: &BlobId) -> Vec<RelationId> {
     RELATION_INDEX.ids_from(blob)
 }
 
-/// Vérifie la symétrie de l'index (n_from_keys et n_to_keys peuvent différer).
-/// Retourne les statistiques courantes.
+/// Checks index symmetry (n_from_keys and n_to_keys may differ).
+/// Returns current statistics.
 pub fn index_health() -> IndexStats {
     RELATION_INDEX.stats()
 }
@@ -382,7 +382,7 @@ mod tests {
         let idx = RelationIndex::new_const();
         let r = rel(4, blob(7), blob(8));
         idx.insert(&r).test_unwrap();
-        idx.insert(&r).test_unwrap(); // doublon
+        idx.insert(&r).test_unwrap(); // duplicate
         assert_eq!(idx.out_degree(&blob(7)), 1);
     }
 

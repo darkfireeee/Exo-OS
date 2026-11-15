@@ -365,6 +365,7 @@ pub fn revoke_handle_by_caller(caller_pid: u32, handle: u32) -> Result<(), Kerne
     let tbl = guard.as_ref().ok_or(KernelCapError::NotSupported)?;
     revocation::revoke(tbl, object_id);
     drop(guard);
+    crate::security::exokairos::cap_deadline_table::remove(object_id);
     remove_service_cap_meta(object_id);
     Ok(())
 }

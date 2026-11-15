@@ -275,6 +275,7 @@ pub const SYS_SPLICE: u64 = 275;
 pub const SYS_TEE: u64 = 276;
 pub const SYS_SYNC_FILE_RANGE: u64 = 277;
 pub const SYS_VMSPLICE: u64 = 278;
+pub const SYS_UTIMENSAT: u64 = 280;
 pub const SYS_EPOLL_PWAIT: u64 = 281;
 pub const SYS_EVENTFD: u64 = 284;
 pub const SYS_FALLOCATE: u64 = 285;
@@ -288,6 +289,7 @@ pub const SYS_PWRITEV: u64 = 296;
 pub const SYS_GETCPU: u64 = 309; // conflict: remapped to 298 on Linux side, see compat
 pub const SYS_RENAMEAT2: u64 = 316;
 pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_MEMFD_CREATE: u64 = 319;
 pub const SYS_COPY_FILE_RANGE: u64 = 326;
 pub const SYS_PREADV2: u64 = 327;
 pub const SYS_PWRITEV2: u64 = 328;
@@ -558,6 +560,7 @@ pub const fn is_linux_compat(nr: u64) -> bool {
             SYS_GETCPU
                 | SYS_RENAMEAT2
                 | SYS_GETRANDOM
+                | SYS_MEMFD_CREATE
                 | SYS_COPY_FILE_RANGE
                 | SYS_PREADV2
                 | SYS_PWRITEV2

@@ -1,19 +1,19 @@
-//! exoar_reader.rs — Lecture et validation d'archives ExoAR (no_std).
+//! exoar_reader.rs — Reading and validation of ExoAR archives (no_std).
 //!
-//! Ce module fournit :
-//!  - `ArchiveSource`    : trait de lecture séquentielle / aléatoire.
-//!  - `BlobReceiver`     : callback appelé pour chaque blob extrait.
-//!  - `ExoarReader`      : lecteur principal (header → entrées → footer).
-//!  - `ExoarScanner`     : scan sans extraction (validation, statistiques).
-//!  - `ExoarReaderConfig`: configuration du lecteur.
-//!  - `ExoarReadReport`  : rapport détaillé d'une lecture.
-//!  - `ExoarReadError`   : erreurs de lecture spécifiques.
+//! This module provides:
+//!  - `ArchiveSource`    : sequential / random read trait.
+//!  - `BlobReceiver`     : callback called for each extracted blob.
+//!  - `ExoarReader`      : main reader (header -> entries -> footer).
+//!  - `ExoarScanner`     : scan without extraction (validation, statistics).
+//!  - `ExoarReaderConfig`: reader configuration.
+//!  - `ExoarReadReport`  : detailed read report.
+//!  - `ExoarReadError`   : specific read errors.
 //!
-//! RÈGLE 8  : chaque magic est validé EN PREMIER, avant tout accès aux champs.
-//! RÈGLE 11 : BlobId = blake3(données brutes) — recalculé et comparé si verify_blobs = true.
-//! RECUR-01 : pas de récursion — boucles while.
-//! OOM-02   : try_reserve avant tout push.
-//! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
+//! RULE 8 : each magic is validated FIRST, before any field access.
+//! RULE 11: BlobId = blake3(raw data) — recalculated and compared if verify_blobs = true.
+//! RECUR-01: no recursion — while loops.
+//! OOM-02  : try_reserve before any push.
+//! ARITH-02: saturating_* / checked_* on all counters.
 
 extern crate alloc;
 use super::exoar_format::{
@@ -25,60 +25,60 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::mem::size_of;
 
-// ─── Trait source I/O ────────────────────────────────────────────────────────
+// ─── I/O source trait ────────────────────────────────────────────────────────
 
-/// Abstraction de lecture séquentielle sur une source d'archive.
-/// RECUR-01 : les implémentations ne doivent pas se rappeler elles-mêmes.
+/// Sequential read abstraction over an archive source.
+/// RECUR-01: implementations must not recurse.
 pub trait ArchiveSource {
-    /// Lit exactement `buf.len()` octets dans `buf`.
-    /// Retourne `ExofsError::EndOfFile` si la source est épuisée.
+    /// Reads exactly `buf.len()` bytes into `buf`.
+    /// Returns `ExofsError::EndOfFile` if source is exhausted.
     fn read_exact(&mut self, buf: &mut [u8]) -> ExofsResult<()>;
 
-    /// Retourne le nombre d'octets lus depuis le début.
+    /// Returns the number of bytes read since the start.
     fn bytes_read(&self) -> u64;
 
-    /// Avance de `n` octets sans les lire (skip).
+    /// Advances by `n` bytes without reading them (skip).
     fn skip(&mut self, n: u64) -> ExofsResult<()>;
 }
 
-/// Callback appelé pour chaque blob extrait.
+/// Callback invoked for each extracted blob.
 pub trait BlobReceiver {
-    /// Reçoit les données brutes d'un blob avec son BlobId déclaré.
-    /// Retourne `false` pour interrompre la lecture.
+    /// Receives raw data of a blob with its declared BlobId.
+    /// Returns `false` to abort reading.
     fn receive_blob(&mut self, blob_id: &[u8; 32], data: &[u8], flags: u8) -> bool;
 
-    /// Reçoit un tombstone (entrée de suppression).
+    /// Receives a tombstone (deletion entry).
     fn receive_tombstone(&mut self, _blob_id: &[u8; 32]) {}
 }
 
-// ─── Erreurs spécifiques à la lecture ────────────────────────────────────────
+// ─── Specific read errors ────────────────────────────────────────
 
-/// Erreur de lecture d'archive ExoAR.
+/// ExoAR archive read error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExoarReadError {
-    /// Magic invalide dans l'en-tête global.
+    /// Invalid magic in global header.
     BadHeaderMagic,
-    /// Version incompatible du format.
+    /// Incompatible format version.
     BadVersion,
-    /// Magic invalide dans une entrée blob.
+    /// Invalid magic in blob entry.
     BadEntryMagic,
-    /// Magic invalide dans le footer.
+    /// Invalid magic in footer.
     BadFooterMagic,
-    /// CRC32C du payload ne correspond pas.
+    /// Payload CRC32C mismatch.
     CrcMismatch { entry_idx: u32 },
-    /// BlobId déclaré ≠ blake3(données brutes) — RÈGLE 11.
+    /// Declared BlobId != blake3(raw data) — RULE 11.
     BlobIdMismatch { entry_idx: u32 },
-    /// Taille de payload dépasse EXOAR_MAX_PAYLOAD.
+    /// Payload size exceeds EXOAR_MAX_PAYLOAD.
     PayloadTooLarge { entry_idx: u32 },
-    /// Dépassement du nombre maximal d'entrées.
+    /// Exceeded maximum number of entries.
     TooManyEntries,
-    /// Fin de source prématurée.
+    /// Premature end of source.
     TruncatedArchive,
-    /// Compteur entry_count header ≠ footer.
+    /// Entry_count header != footer mismatch.
     EntryCountMismatch,
-    /// Allocation mémoire échouée.
+    /// Memory allocation failed.
     OutOfMemory,
-    /// Erreur de lecture sur la source.
+    /// Read error on source.
     IoError,
 }
 
@@ -103,22 +103,22 @@ impl From<ExoarReadError> for ExofsError {
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-/// Configuration du lecteur ExoAR.
+/// ExoAR reader configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct ExoarReaderConfig {
-    /// Vérifier le CRC32C de chaque payload.
+    /// Verify CRC32C of each payload.
     pub verify_crc: bool,
-    /// Vérifier le BlobId (blake3 des données brutes) — RÈGLE 11.
+    /// Verify BlobId (blake3 of raw data) — RULE 11.
     pub verify_blob_id: bool,
-    /// Si true, continue malgré les erreurs CRC (mode recovery).
+    /// If true, continue despite CRC errors (recovery mode).
     pub skip_crc_errors: bool,
-    /// Si true, continue malgré les erreurs de BlobId.
+    /// If true, continue despite BlobId errors.
     pub skip_blob_id_errors: bool,
-    /// Si true, ignore les tombstones (ne les passe pas au receiver).
+    /// If true, ignore tombstones (do not pass them to receiver).
     pub skip_tombstones: bool,
-    /// Taille maximale de payload acceptée (0 = EXOAR_MAX_PAYLOAD).
+    /// Maximum accepted payload size (0 = EXOAR_MAX_PAYLOAD).
     pub max_payload_size: u64,
-    /// Nombre maximal d'entrées à lire (0 = EXOAR_MAX_ENTRIES).
+    /// Maximum number of entries to read (0 = EXOAR_MAX_ENTRIES).
     pub max_entries: u32,
 }
 
@@ -176,9 +176,9 @@ impl ExoarReaderConfig {
     }
 }
 
-// ─── Rapport de lecture ───────────────────────────────────────────────────────
+// ─── Read Report ────────────────────────────────────────────────────────────
 
-/// Rapport détaillé d'une session de lecture d'archive.
+/// Detailed report of an archive read session.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExoarReadReport {
     pub entries_read: u32,
@@ -229,14 +229,14 @@ impl ExoarReadReport {
     }
 }
 
-// ─── Lecteur principal ────────────────────────────────────────────────────────
+// ─── Main Reader ─────────────────────────────────────────────────────────────
 
-/// Lecteur d'archives ExoAR.
+/// ExoAR archive reader.
 ///
-/// Séquence de lecture (RÈGLE 8 : magic EN PREMIER à chaque étape) :
-///   1. Lire + valider ExoarHeader
-///   2. Pour chaque entrée : lire ExoarEntryHeader (magic), lire payload, vérifier CRC
-///   3. Lire + valider ExoarFooter, croiser entry_count
+/// Read sequence (RULE 8: magic FIRST at each step):
+///   1. Read + validate ExoarHeader
+///   2. For each entry: read ExoarEntryHeader (magic), read payload, verify CRC
+///   3. Read + validate ExoarFooter, cross-check entry_count
 pub struct ExoarReader {
     config: ExoarReaderConfig,
 }
@@ -259,8 +259,8 @@ impl ExoarReader {
         Self::new(ExoarReaderConfig::strict())
     }
 
-    /// Lit l'archive depuis `source` et appelle `receiver` pour chaque blob.
-    /// RECUR-01 : boucle while sur les entrées.
+    /// Reads the archive from `source` and calls `receiver` for each blob.
+    /// RECUR-01: while loop over entries.
     pub fn read<S, R>(
         &self,
         source: &mut S,
@@ -272,7 +272,7 @@ impl ExoarReader {
     {
         let mut report = ExoarReadReport::new();
 
-        // 1. Lire et valider l'en-tête — RÈGLE 8 : magic EN PREMIER.
+        // 1. Read and validate header — RULE 8: magic FIRST.
         let mut hdr_buf = [0u8; size_of::<ExoarHeader>()];
         source
             .read_exact(&mut hdr_buf)
@@ -282,27 +282,27 @@ impl ExoarReader {
             return Err(ExoarReadError::BadVersion);
         }
 
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let entry_count_declared: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_epoch_base =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_epoch_target =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
         let max_entries = self.config.effective_max_entries();
         let max_payload = self.config.effective_max_payload();
 
-        // CRC global accumulé
+        // Accumulated global CRC
         let mut _global_crc = crc32c_update(0, &hdr_buf);
         let mut footer_buf: Option<[u8; size_of::<ExoarFooter>()]> = None;
         let mut stop_dispatch = false;
 
-        // 2. Lire les entrées — boucle while (RECUR-01).
+        // 2. Read entries — while loop (RECUR-01).
         let mut entry_idx: u32 = 0;
         loop {
             if entry_count_declared != 0 && entry_idx >= entry_count_declared {
@@ -329,14 +329,14 @@ impl ExoarReader {
             let ehdr =
                 ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
 
-            // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+            // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
             let payload_size: u64 =
                 unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
             }
 
-            // Lire le payload
+            // Read payload
             let usize_payload = payload_size as usize;
             let mut payload: Vec<u8> = Vec::new();
             if usize_payload > 0 {
@@ -350,9 +350,9 @@ impl ExoarReader {
                 _global_crc = crc32c_update(_global_crc, &payload);
             }
 
-            // Vérifier CRC32C du payload
+            // Verify payload CRC32C
             if self.config.verify_crc && usize_payload > 0 {
-                // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+                // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
                 let declared_crc: u32 =
                     unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if !crc32c_verify(&payload, declared_crc) {
@@ -367,7 +367,7 @@ impl ExoarReader {
                 report.payloads_verified = report.payloads_verified.saturating_add(1);
             }
 
-            // Vérifier BlobId = blake3(données brutes) — RÈGLE 11
+            // Verify BlobId = blake3(raw data) — RULE 11
             if self.config.verify_blob_id && !ehdr.is_tombstone() && !payload.is_empty() {
                 let computed = *blob_id::compute_blob_id(&payload).as_bytes();
                 if computed != ehdr.blob_id {
@@ -379,7 +379,7 @@ impl ExoarReader {
             }
 
             if !stop_dispatch && report.entries_read < max_entries {
-                // Dispatcher vers le receiver
+                // Dispatch to receiver
                 if ehdr.is_tombstone() {
                     report.tombstones_processed = report.tombstones_processed.saturating_add(1);
                     if !self.config.skip_tombstones {
@@ -402,7 +402,7 @@ impl ExoarReader {
             entry_idx = entry_idx.saturating_add(1);
         }
 
-        // 3. Lire et valider le footer — RÈGLE 8.
+        // 3. Read and validate footer — RULE 8.
         let mut ftr_buf = footer_buf.unwrap_or([0u8; size_of::<ExoarFooter>()]);
         if footer_buf.is_none() {
             source
@@ -411,7 +411,7 @@ impl ExoarReader {
         }
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let ftr_entry_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         let expected_entry_count = if entry_count_declared == 0 {
@@ -422,7 +422,7 @@ impl ExoarReader {
         if ftr_entry_count != expected_entry_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.footer_global_crc32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
@@ -432,10 +432,10 @@ impl ExoarReader {
     }
 }
 
-// ─── Scanner (validation sans extraction) ────────────────────────────────────
+// ─── Scanner (validation without extraction) ─────────────────────────────────
 
-/// Scanner ExoAR : valide l'archive sans extraire les payloads en mémoire.
-/// Utile pour vérifier l'intégrité à moindre coût mémoire.
+/// ExoAR scanner: validates the archive without extracting payloads into memory.
+/// Useful to check integrity with minimal memory overhead.
 pub struct ExoarScanner {
     config: ExoarReaderConfig,
 }
@@ -449,7 +449,7 @@ impl ExoarScanner {
         Self::new(ExoarReaderConfig::strict())
     }
 
-    /// Scan complet : (RECUR-01 : boucle while) valide header, entrées, footer.
+    /// Full scan: (RECUR-01: while loop) validates header, entries, footer.
     pub fn scan<S: ArchiveSource>(
         &self,
         source: &mut S,
@@ -465,16 +465,16 @@ impl ExoarScanner {
             return Err(ExoarReadError::BadVersion);
         }
 
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let entry_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.entry_count)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_epoch_base =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_base)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_epoch_target =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch_target)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.header_flags = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.flags)) };
 
         let max_entries = self.config.effective_max_entries();
@@ -508,14 +508,14 @@ impl ExoarScanner {
             let ehdr =
                 ExoarEntryHeader::from_bytes(&ehdr_buf).ok_or(ExoarReadError::BadEntryMagic)?;
 
-            // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+            // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
             let payload_size: u64 =
                 unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_size)) };
             if payload_size > max_payload {
                 return Err(ExoarReadError::PayloadTooLarge { entry_idx });
             }
 
-            // Lire le payload pour CRC mais sans conserver en mémoire (par blocs de 4 KiB).
+            // Read payload for CRC without retaining in memory (in 4 KiB chunks).
             let mut remaining = payload_size;
             let mut local_crc: u32 = 0;
             let mut payload_buf = [0u8; 4096];
@@ -531,7 +531,7 @@ impl ExoarScanner {
             }
 
             if self.config.verify_crc && payload_size > 0 {
-                // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+                // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
                 let declared_crc: u32 =
                     unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ehdr.payload_crc32)) };
                 if local_crc != declared_crc {
@@ -562,7 +562,7 @@ impl ExoarScanner {
         }
         let ftr = ExoarFooter::from_bytes(&ftr_buf).ok_or(ExoarReadError::BadFooterMagic)?;
 
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let ftr_count: u32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.entry_count)) };
         let expected_count = if entry_count == 0 {
@@ -573,7 +573,7 @@ impl ExoarScanner {
         if ftr_count != expected_count {
             return Err(ExoarReadError::EntryCountMismatch);
         }
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         report.footer_global_crc32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(ftr.global_crc32)) };
         report.bytes_consumed = source.bytes_read();
@@ -614,9 +614,9 @@ impl ExoarReader {
     }
 }
 
-// ─── Source en mémoire (implémentation de test) ───────────────────────────────
+// ─── In-memory Source (test implementation) ──────────────────────────────────
 
-/// Implémentation de `ArchiveSource` lisant depuis un slice en mémoire.
+/// Implementation of `ArchiveSource` reading from an in-memory slice.
 pub struct SliceSource<'a> {
     data: &'a [u8],
     pos: usize,
@@ -657,9 +657,9 @@ impl<'a> ArchiveSource for SliceSource<'a> {
     }
 }
 
-// ─── Receiver de collecte (pour tests) ───────────────────────────────────────
+// ─── Collecting Receiver (for tests) ─────────────────────────────────────────
 
-/// Receiver qui collecte tous les blobs reçus dans un Vec.
+/// Receiver collecting all received blobs into a Vec.
 pub struct CollectingReceiver {
     pub blobs: Vec<([u8; 32], Vec<u8>)>,
     pub tombstones: Vec<[u8; 32]>,
@@ -673,7 +673,7 @@ impl CollectingReceiver {
         }
     }
 
-    /// Consomme le receiver et retourne les blobs collectés.
+    /// Consumes the receiver and returns the collected blobs.
     pub fn into_blobs(self) -> Vec<([u8; 32], Vec<u8>)> {
         self.blobs
     }
@@ -699,7 +699,7 @@ impl BlobReceiver for CollectingReceiver {
     }
 }
 
-// ─── blake3 inline minimal ───────────────────────────────────────────────────
+// ─── Minimal inline blake3 ───────────────────────────────────────────────────
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn test_bad_header_magic() {
         let mut archive = build_archive(&[], 0);
-        archive[0] = 0xFF; // Corrompre le magic
+        archive[0] = 0xFF; // Corrupt magic
         let mut src = SliceSource::new(&archive);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
@@ -788,7 +788,7 @@ mod tests {
         let bid = [1u8; 32];
         let data = b"data with crc";
         let mut archive = build_archive(&[(&bid, data)], 0);
-        // Corrompre le payload (après header 128 + entry_header 96 = 224)
+        // Corrupt payload (after header 128 + entry_header 96 = 224)
         let payload_start = 128 + 96;
         if archive.len() > payload_start {
             archive[payload_start] ^= 0xFF;

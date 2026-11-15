@@ -12,8 +12,9 @@
 // RULE RNDV-02: atomic exchange via two-phase CAS (offer/take).
 // RULE RNDV-03: bounded spin-wait. Timeout -> clean deregistration.
 
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -55,12 +56,10 @@ pub struct IpcRendezvous {
     pub id: u32,
     /// Number of required participants
     parties: AtomicU32,
-    /// Number of arrived participants
-    arrived: AtomicU32,
+    /// Packed `(generation: u32) << 32 | (arrived: u32)` preventing reset/phase races
+    gen_arrived: AtomicU64,
     /// Internal state
     state: AtomicU32,
-    /// Generation (anti-spurious wakeup)
-    generation: AtomicU32,
     /// Active (not destroyed)
     pub active: AtomicBool,
     _pad: [u8; 3],
@@ -73,13 +72,17 @@ unsafe impl Sync for IpcRendezvous {}
 unsafe impl Send for IpcRendezvous {}
 
 impl IpcRendezvous {
+    #[inline]
+    const fn pack_ga(gen: u32, arrived: u32) -> u64 {
+        ((gen as u64) << 32) | (arrived as u64)
+    }
+
     pub const fn new(id: u32, parties: u32) -> Self {
         Self {
             id,
             parties: AtomicU32::new(parties),
-            arrived: AtomicU32::new(0),
+            gen_arrived: AtomicU64::new(0),
             state: AtomicU32::new(RendezvousState::Waiting as u32),
-            generation: AtomicU32::new(0),
             active: AtomicBool::new(true),
             _pad: [0u8; 3],
             total_meetings: AtomicU64::new(0),
@@ -92,7 +95,28 @@ impl IpcRendezvous {
     }
 
     pub fn arrived_count(&self) -> u32 {
-        self.arrived.load(Ordering::Relaxed)
+        (self.gen_arrived.load(Ordering::Acquire) & 0xFFFF_FFFF) as u32
+    }
+
+    #[inline]
+    fn current_generation(&self) -> u32 {
+        (self.gen_arrived.load(Ordering::Acquire) >> 32) as u32
+    }
+
+    fn advance_generation_and_zero(&self) {
+        loop {
+            let cur = self.gen_arrived.load(Ordering::Acquire);
+            let gen = (cur >> 32) as u32;
+            let next = Self::pack_ga(gen.wrapping_add(1), 0);
+            if self
+                .gen_arrived
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+            core::hint::spin_loop();
+        }
     }
 
     /// Arrives at the rendezvous and waits.
@@ -100,28 +124,70 @@ impl IpcRendezvous {
     /// Returns `Ok(true)` for the leader thread (last to arrive),
     /// `Ok(false)` for others.
     pub fn meet(&self, spin_max: u64) -> Result<bool, IpcError> {
-        if !self.active.load(Ordering::Acquire) {
-            return Err(IpcError::Closed);
-        }
-
-        let gen = self.generation.load(Ordering::Acquire);
-        let parties = self.parties.load(Ordering::Relaxed);
-        let my_arrival = self.arrived.fetch_add(1, Ordering::AcqRel) + 1;
-
-        if my_arrival == parties {
-            // This thread is the leader
-            self.state
-                .store(RendezvousState::Releasing as u32, Ordering::Release);
-            self.total_meetings.fetch_add(1, Ordering::Relaxed);
-            // Advance generation to release others
-            self.generation.fetch_add(1, Ordering::Release);
-            return Ok(true);
-        }
-
-        // Wait for leader to release
         let limit = if spin_max == 0 { u64::MAX } else { spin_max };
         let mut spins = 0u64;
+        let parties = self.parties.load(Ordering::Relaxed);
+        let gen: u32;
 
+        loop {
+            if !self.active.load(Ordering::Acquire) {
+                return Err(IpcError::Closed);
+            }
+            if self.state.load(Ordering::Acquire) == RendezvousState::Waiting as u32 {
+                let cur = self.gen_arrived.load(Ordering::Acquire);
+                let cur_gen = (cur >> 32) as u32;
+                let arrived = (cur & 0xFFFF_FFFF) as u32;
+                if arrived < parties {
+                    let next_arrived = arrived + 1;
+                    if next_arrived >= parties {
+                        let next = Self::pack_ga(cur_gen.wrapping_add(1), parties);
+                        if self
+                            .gen_arrived
+                            .compare_exchange_weak(
+                                cur,
+                                next,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            )
+                            .is_ok()
+                        {
+                            self.state
+                                .store(RendezvousState::Releasing as u32, Ordering::Release);
+                            self.total_meetings.fetch_add(1, Ordering::Relaxed);
+                            return Ok(true);
+                        }
+                    } else {
+                        let next = Self::pack_ga(cur_gen, next_arrived);
+                        if self
+                            .gen_arrived
+                            .compare_exchange_weak(
+                                cur,
+                                next,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            )
+                            .is_ok()
+                        {
+                            gen = cur_gen;
+                            break;
+                        }
+                    }
+                }
+            }
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+            if spins >= limit {
+                self.total_timeouts.fetch_add(1, Ordering::Relaxed);
+                return Err(IpcError::Timeout);
+            }
+        }
+
+        // Wait for leader to release (generation advances)
         loop {
             core::hint::spin_loop();
             spins += 1;
@@ -131,32 +197,36 @@ impl IpcRendezvous {
                 }
             }
 
-            if !self.active.load(Ordering::Relaxed) {
+            if !self.active.load(Ordering::Acquire) {
                 return Err(IpcError::Closed);
             }
 
-            if self.generation.load(Ordering::Acquire) != gen {
+            if self.current_generation() != gen {
                 return Ok(false);
             }
 
             if spins >= limit {
-                if self.generation.load(Ordering::Acquire) != gen {
-                    return Ok(false);
-                }
-                // Timeout: decrement without wrapping if generation has not advanced (T8-043)
-                let mut cur = self.arrived.load(Ordering::Acquire);
-                while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
-                    match self.arrived.compare_exchange_weak(
-                        cur,
-                        cur - 1,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    ) {
-                        Ok(_) => break,
-                        Err(actual) => cur = actual,
+                loop {
+                    let cur = self.gen_arrived.load(Ordering::Acquire);
+                    let cur_gen = (cur >> 32) as u32;
+                    if cur_gen != gen {
+                        return Ok(false);
                     }
+                    let cur_arrived = (cur & 0xFFFF_FFFF) as u32;
+                    if cur_arrived == 0 {
+                        break;
+                    }
+                    let next = Self::pack_ga(gen, cur_arrived - 1);
+                    if self
+                        .gen_arrived
+                        .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    core::hint::spin_loop();
                 }
-                if self.generation.load(Ordering::Acquire) != gen {
+                if self.current_generation() != gen {
                     return Ok(false);
                 }
                 self.total_timeouts.fetch_add(1, Ordering::Relaxed);
@@ -167,7 +237,22 @@ impl IpcRendezvous {
 
     /// Rearms the rendezvous for a next cycle.
     pub fn rearm(&self) {
-        self.arrived.store(0, Ordering::Release);
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        loop {
+            let cur = self.gen_arrived.load(Ordering::Acquire);
+            let cur_gen = (cur >> 32) as u32;
+            let next = Self::pack_ga(cur_gen, 0);
+            if self
+                .gen_arrived
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+            core::hint::spin_loop();
+        }
         self.state
             .store(RendezvousState::Waiting as u32, Ordering::Release);
     }
@@ -178,14 +263,14 @@ impl IpcRendezvous {
         self.state
             .store(RendezvousState::Destroyed as u32, Ordering::Release);
         // Release any waiters
-        self.generation.fetch_add(1, Ordering::Release);
+        self.advance_generation_and_zero();
     }
 
     pub fn snapshot(&self) -> IpcRendezvousStats {
         IpcRendezvousStats {
             id: self.id,
             parties: self.parties.load(Ordering::Relaxed),
-            arrived: self.arrived.load(Ordering::Relaxed),
+            arrived: self.arrived_count(),
             total_meetings: self.total_meetings.load(Ordering::Relaxed),
             total_timeouts: self.total_timeouts.load(Ordering::Relaxed),
         }
@@ -207,6 +292,7 @@ pub struct IpcRendezvousStats {
 
 /// Maximum size of an exchangeable value
 pub const MAX_EXCHANGE_SIZE: usize = 512;
+const EXCHANGE_ABORTED: u32 = u32::MAX;
 
 /// Bilateral exchange state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,10 +316,12 @@ pub struct ExchangeSlot {
     offerer_thread: AtomicU32,
     /// Data size (for validation)
     data_size: AtomicU32,
+    /// Reply size written by Thread B (or EXCHANGE_ABORTED on size mismatch)
+    reply_size: AtomicU32,
     /// Offer buffer (Thread A data)
-    offer_buf: [u8; MAX_EXCHANGE_SIZE],
+    offer_buf: UnsafeCell<[u8; MAX_EXCHANGE_SIZE]>,
     /// Reply buffer (Thread B data)
-    reply_buf: [u8; MAX_EXCHANGE_SIZE],
+    reply_buf: UnsafeCell<[u8; MAX_EXCHANGE_SIZE]>,
     /// Result available (Thread A waiting for reply_buf)
     result_ready: AtomicBool,
     _pad: [u8; 3],
@@ -251,8 +339,9 @@ impl ExchangeSlot {
             state: AtomicU32::new(ExchangeState::Empty as u32),
             offerer_thread: AtomicU32::new(0),
             data_size: AtomicU32::new(0),
-            offer_buf: [0u8; MAX_EXCHANGE_SIZE],
-            reply_buf: [0u8; MAX_EXCHANGE_SIZE],
+            reply_size: AtomicU32::new(0),
+            offer_buf: UnsafeCell::new([0u8; MAX_EXCHANGE_SIZE]),
+            reply_buf: UnsafeCell::new([0u8; MAX_EXCHANGE_SIZE]),
             result_ready: AtomicBool::new(false),
             _pad: [0u8; 3],
             exchanges: AtomicU64::new(0),
@@ -295,17 +384,17 @@ impl ExchangeSlot {
         if became_offerer {
             // --- Thread A: deposit offer ---
             self.offerer_thread.store(thread_id, Ordering::Relaxed);
-            self.data_size.store(size, Ordering::Relaxed);
+            self.data_size.store(size, Ordering::Release);
+            self.reply_size.store(0, Ordering::Relaxed);
 
-            // Copy my data into offer_buf
-            // SAFETY: offer_buf is an inline array, data.len() <= MAX_EXCHANGE_SIZE
+            // SAFETY: exclusive state WritingOffer owns offer_buf; data.len() <= MAX_EXCHANGE_SIZE.
             unsafe {
-                let dst = self.offer_buf.as_ptr() as *mut u8;
+                let dst = (*self.offer_buf.get()).as_mut_ptr();
                 core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
             }
 
             self.result_ready.store(false, Ordering::Release);
-            // T8-016 FIX: publish OfferPending only after data is fully written
+            // Publish OfferPending only after data is fully written
             self.state
                 .store(ExchangeState::OfferPending as u32, Ordering::Release);
 
@@ -321,11 +410,17 @@ impl ExchangeSlot {
                     }
                 }
                 if self.result_ready.load(Ordering::Acquire) {
-                    // Read B's response in reply_buf
-                    // SAFETY: B wrote reply_buf before setting result_ready
-                    let recv_len = data.len().min(out.len());
+                    let rep_sz = self.reply_size.load(Ordering::Acquire);
+                    if rep_sz == EXCHANGE_ABORTED || (rep_sz as usize) > out.len() {
+                        self.result_ready.store(false, Ordering::Release);
+                        self.state
+                            .store(ExchangeState::Empty as u32, Ordering::Release);
+                        return Err(IpcError::Invalid);
+                    }
+                    let recv_len = (rep_sz as usize).min(out.len());
+                    // SAFETY: B wrote reply_buf and reply_size before setting result_ready
                     unsafe {
-                        let src = self.reply_buf.as_ptr();
+                        let src = (*self.reply_buf.get()).as_ptr();
                         core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
                     }
                     self.exchanges.fetch_add(1, Ordering::Relaxed);
@@ -336,7 +431,7 @@ impl ExchangeSlot {
                     return Ok(());
                 }
                 if spins >= limit {
-                    // T8-016 FIX: cancel offer only if Thread B is not already completing
+                    // Cancel offer only if Thread B is not already completing
                     if self
                         .state
                         .compare_exchange(
@@ -378,25 +473,31 @@ impl ExchangeSlot {
                         )
                         .is_ok()
                     {
-                        // Read A's offer
-                        // SAFETY: A initialized offer_buf under OfferPending
-                        let offer_size = self.data_size.load(Ordering::Relaxed) as usize;
-                        let recv_len = offer_size.min(out.len());
-                        // SAFETY: offer_buf initialized by A under OfferPending (Acquire/Release on state).
-                        unsafe {
-                            let src = self.offer_buf.as_ptr();
-                            core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), recv_len);
+                        let offer_size = self.data_size.load(Ordering::Acquire) as usize;
+                        if offer_size > MAX_EXCHANGE_SIZE
+                            || offer_size > out.len()
+                            || data.len() != offer_size
+                        {
+                            self.reply_size.store(EXCHANGE_ABORTED, Ordering::Release);
+                            self.result_ready.store(true, Ordering::Release);
+                            return Err(IpcError::Invalid);
                         }
 
-                        // Write our reply in reply_buf
-                        let write_len = data.len().min(MAX_EXCHANGE_SIZE);
+                        // SAFETY: offer_buf initialized by A under OfferPending.
+                        unsafe {
+                            let src = (*self.offer_buf.get()).as_ptr();
+                            core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), offer_size);
+                        }
+
                         // SAFETY: reply_buf exclusive in Completing state — only B writes here.
                         unsafe {
-                            let dst = self.reply_buf.as_ptr() as *mut u8;
-                            core::ptr::copy_nonoverlapping(data.as_ptr(), dst, write_len);
+                            let dst = (*self.reply_buf.get()).as_mut_ptr();
+                            core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
                         }
 
-                        // Signal to A that exchange is ready (A will reset state to Empty after reading)
+                        self.reply_size
+                            .store(data.len() as u32, Ordering::Release);
+                        // Signal to A that exchange is ready (A resets state to Empty)
                         self.result_ready.store(true, Ordering::Release);
                         return Ok(());
                     }
@@ -415,17 +516,42 @@ impl ExchangeSlot {
 // Global tables
 // ---------------------------------------------------------------------------
 
+const SLOT_FREE: u8 = 0;
+const SLOT_INIT: u8 = 1;
+const SLOT_ACTIVE: u8 = 2;
+const SLOT_DESTROYING: u8 = 3;
+
 struct RendezvousTableEntry {
-    rdv: MaybeUninit<IpcRendezvous>,
-    occupied: AtomicBool,
+    rdv: UnsafeCell<MaybeUninit<IpcRendezvous>>,
+    state: AtomicU8,
+    active_ops: AtomicU32,
 }
 
 impl RendezvousTableEntry {
     const fn empty() -> Self {
         Self {
-            rdv: MaybeUninit::uninit(),
-            occupied: AtomicBool::new(false),
+            rdv: UnsafeCell::new(MaybeUninit::uninit()),
+            state: AtomicU8::new(SLOT_FREE),
+            active_ops: AtomicU32::new(0),
         }
+    }
+}
+
+struct RendezvousRef<'a> {
+    slot: &'a RendezvousTableEntry,
+    inner: &'a IpcRendezvous,
+}
+
+impl<'a> Drop for RendezvousRef<'a> {
+    fn drop(&mut self) {
+        self.slot.active_ops.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl<'a> core::ops::Deref for RendezvousRef<'a> {
+    type Target = IpcRendezvous;
+    fn deref(&self) -> &Self::Target {
+        self.inner
     }
 }
 
@@ -450,17 +576,17 @@ impl IpcRendezvousTable {
             return None;
         }
         for i in 0..MAX_RENDEZVOUS_ENTRIES {
-            if !self.slots[i].occupied.load(Ordering::Relaxed) {
+            if self.slots[i].state.load(Ordering::Relaxed) == SLOT_FREE {
                 if self.slots[i]
-                    .occupied
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .state
+                    .compare_exchange(SLOT_FREE, SLOT_INIT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel guarantees slot exclusivity; rdv MaybeUninit write-once.
+                    // SAFETY: CAS AcqRel SLOT_FREE->SLOT_INIT guarantees exclusivity before publish.
                     unsafe {
-                        (self.slots[i].rdv.as_ptr() as *mut IpcRendezvous)
-                            .write(IpcRendezvous::new(id, parties));
+                        (*self.slots[i].rdv.get()).write(IpcRendezvous::new(id, parties));
                     }
+                    self.slots[i].state.store(SLOT_ACTIVE, Ordering::Release);
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
                 }
@@ -469,42 +595,96 @@ impl IpcRendezvousTable {
         None
     }
 
-    fn get(&self, idx: usize) -> Option<&IpcRendezvous> {
+    fn get(&self, idx: usize) -> Option<RendezvousRef<'_>> {
         if idx >= MAX_RENDEZVOUS_ENTRIES {
             return None;
         }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+        let slot = &self.slots[idx];
+        if slot.state.load(Ordering::Acquire) != SLOT_ACTIVE {
             return None;
         }
-        Some(unsafe { &*self.slots[idx].rdv.as_ptr() })
+        slot.active_ops.fetch_add(1, Ordering::AcqRel);
+        if slot.state.load(Ordering::Acquire) != SLOT_ACTIVE {
+            slot.active_ops.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        let inner = unsafe { (&*slot.rdv.get()).assume_init_ref() };
+        Some(RendezvousRef { slot, inner })
     }
 
     fn free(&self, idx: usize) -> bool {
         if idx >= MAX_RENDEZVOUS_ENTRIES {
             return false;
         }
-        if let Some(r) = self.get(idx) {
-            r.destroy();
-        }
-        if self.slots[idx]
-            .occupied
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
+        let slot = &self.slots[idx];
+        if slot
+            .state
+            .compare_exchange(
+                SLOT_ACTIVE,
+                SLOT_DESTROYING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
         {
-            self.count.fetch_sub(1, Ordering::Relaxed);
-            true
-        } else {
-            false
+            return false;
         }
+        unsafe { (&*slot.rdv.get()).assume_init_ref().destroy() };
+        let mut spins = 0u64;
+        while slot.active_ops.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+        slot.state.store(SLOT_FREE, Ordering::Release);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 }
 
 /// Maximum number of symmetric exchanges in the table
 pub const MAX_EXCHANGE_SLOTS: usize = 64;
 
+struct ExchangeTableEntry {
+    slot: UnsafeCell<MaybeUninit<ExchangeSlot>>,
+    state: AtomicU8,
+    active_ops: AtomicU32,
+}
+
+impl ExchangeTableEntry {
+    const fn empty() -> Self {
+        Self {
+            slot: UnsafeCell::new(MaybeUninit::uninit()),
+            state: AtomicU8::new(SLOT_FREE),
+            active_ops: AtomicU32::new(0),
+        }
+    }
+}
+
+struct ExchangeRef<'a> {
+    entry: &'a ExchangeTableEntry,
+    inner: &'a ExchangeSlot,
+}
+
+impl<'a> Drop for ExchangeRef<'a> {
+    fn drop(&mut self) {
+        self.entry.active_ops.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl<'a> core::ops::Deref for ExchangeRef<'a> {
+    type Target = ExchangeSlot;
+    fn deref(&self) -> &Self::Target {
+        self.inner
+    }
+}
+
 struct ExchangeTable {
-    slots: [MaybeUninit<ExchangeSlot>; MAX_EXCHANGE_SLOTS],
-    occupied: [AtomicBool; MAX_EXCHANGE_SLOTS],
+    entries: [ExchangeTableEntry; MAX_EXCHANGE_SLOTS],
     count: AtomicU32,
 }
 
@@ -512,26 +692,26 @@ unsafe impl Sync for ExchangeTable {}
 
 impl ExchangeTable {
     const fn new() -> Self {
-        const UNINIT: MaybeUninit<ExchangeSlot> = MaybeUninit::uninit();
-        const FALSE: AtomicBool = AtomicBool::new(false);
+        const EMPTY: ExchangeTableEntry = ExchangeTableEntry::empty();
         Self {
-            slots: [UNINIT; MAX_EXCHANGE_SLOTS],
-            occupied: [FALSE; MAX_EXCHANGE_SLOTS],
+            entries: [EMPTY; MAX_EXCHANGE_SLOTS],
             count: AtomicU32::new(0),
         }
     }
 
     fn alloc(&self) -> Option<usize> {
         for i in 0..MAX_EXCHANGE_SLOTS {
-            if !self.occupied[i].load(Ordering::Relaxed) {
-                if self.occupied[i]
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            if self.entries[i].state.load(Ordering::Relaxed) == SLOT_FREE {
+                if self.entries[i]
+                    .state
+                    .compare_exchange(SLOT_FREE, SLOT_INIT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: CAS AcqRel guarantees exclusivity; slots[i] MaybeUninit<ExchangeSlot> write-once.
+                    // SAFETY: CAS AcqRel SLOT_FREE->SLOT_INIT guarantees exclusivity before publish.
                     unsafe {
-                        (self.slots[i].as_ptr() as *mut ExchangeSlot).write(ExchangeSlot::new());
+                        (*self.entries[i].slot.get()).write(ExchangeSlot::new());
                     }
+                    self.entries[i].state.store(SLOT_ACTIVE, Ordering::Release);
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
                 }
@@ -540,29 +720,53 @@ impl ExchangeTable {
         None
     }
 
-    fn get(&self, idx: usize) -> Option<&ExchangeSlot> {
+    fn get(&self, idx: usize) -> Option<ExchangeRef<'_>> {
         if idx >= MAX_EXCHANGE_SLOTS {
             return None;
         }
-        if !self.occupied[idx].load(Ordering::Acquire) {
+        let entry = &self.entries[idx];
+        if entry.state.load(Ordering::Acquire) != SLOT_ACTIVE {
             return None;
         }
-        Some(unsafe { &*self.slots[idx].as_ptr() })
+        entry.active_ops.fetch_add(1, Ordering::AcqRel);
+        if entry.state.load(Ordering::Acquire) != SLOT_ACTIVE {
+            entry.active_ops.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        let inner = unsafe { (&*entry.slot.get()).assume_init_ref() };
+        Some(ExchangeRef { entry, inner })
     }
 
     fn free(&self, idx: usize) -> bool {
         if idx >= MAX_EXCHANGE_SLOTS {
             return false;
         }
-        if self.occupied[idx]
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
+        let entry = &self.entries[idx];
+        if entry
+            .state
+            .compare_exchange(
+                SLOT_ACTIVE,
+                SLOT_DESTROYING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
         {
-            self.count.fetch_sub(1, Ordering::Relaxed);
-            true
-        } else {
-            false
+            return false;
         }
+        let mut spins = 0u64;
+        while entry.active_ops.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+        entry.state.store(SLOT_FREE, Ordering::Release);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 }
 

@@ -38,10 +38,11 @@ pub(super) fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::secu
         b"network_server" => Some(crate::security::ServiceClass::NetworkServer),
         b"scheduler_server" => Some(crate::security::ServiceClass::SchedulerServer),
         b"input_server" => Some(crate::security::ServiceClass::InputServer),
-        b"tty_server" => Some(crate::security::ServiceClass::TtyServer),
-        b"fb_server" => Some(crate::security::ServiceClass::FbServer),
+        b"tty_server" | b"tty_input_stream" => Some(crate::security::ServiceClass::TtyServer),
+        b"fb_server" | b"fb_server_input" => Some(crate::security::ServiceClass::FbServer),
+        b"ipc_router" => Some(crate::security::ServiceClass::IpcBroker),
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
-        b"exosh" => Some(crate::security::ServiceClass::Exosh),
+        b"exosh" | b"exosh_input_reply" => Some(crate::security::ServiceClass::Exosh),
         b"audio_server" => Some(crate::security::ServiceClass::AudioServer),
         b"usb_server" => Some(crate::security::ServiceClass::UsbServer),
         _ => None,
@@ -69,7 +70,18 @@ mod ipc_service_endpoint_class_tests {
     }
 }
 
-pub(super) fn reserve_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Result<bool, i64> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReserveEndpointOwnerOutcome {
+    ReservedNew { evicted_dead_endpoint: Option<u64> },
+    ReplacedDead,
+    AlreadyOwned,
+}
+
+pub(super) fn reserve_ipc_endpoint_owner(
+    endpoint: u64,
+    owner_pid: u32,
+    is_system: bool,
+) -> Result<ReserveEndpointOwnerOutcome, i64> {
     if endpoint == 0 || owner_pid == 0 {
         return Err(EINVAL);
     }
@@ -78,39 +90,61 @@ pub(super) fn reserve_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Resul
     if packed_pid != 0 && packed_pid != owner_pid {
         return Err(EACCES);
     }
+    #[cfg(not(test))]
+    if !is_system && packed_pid == 0 && endpoint != owner_pid as u64 {
+        return Err(EACCES);
+    }
+    let _ = is_system;
 
     let mut owners = IPC_ENDPOINT_OWNERS.lock();
     let mut empty_slot = None;
+    let mut dead_slot: Option<(usize, u64)> = None;
     let mut idx = 0usize;
     while idx < owners.len() {
         let entry = owners[idx];
         if entry.endpoint == endpoint {
             if entry.owner_pid == owner_pid {
-                return Ok(false);
+                return Ok(ReserveEndpointOwnerOutcome::AlreadyOwned);
             }
             if !crate::process::is_alive(entry.owner_pid) {
                 owners[idx] = IpcEndpointOwner {
                     endpoint,
                     owner_pid,
                 };
-                return Ok(true);
+                return Ok(ReserveEndpointOwnerOutcome::ReplacedDead);
             }
             return Err(EBUSY);
         }
         if entry.endpoint == 0 && empty_slot.is_none() {
             empty_slot = Some(idx);
+        } else if entry.endpoint != 0
+            && dead_slot.is_none()
+            && !crate::process::is_alive(entry.owner_pid)
+        {
+            dead_slot = Some((idx, entry.endpoint));
         }
         idx += 1;
     }
 
-    let Some(slot) = empty_slot else {
-        return Err(ENOMEM);
-    };
-    owners[slot] = IpcEndpointOwner {
-        endpoint,
-        owner_pid,
-    };
-    Ok(false)
+    if let Some(slot) = empty_slot {
+        owners[slot] = IpcEndpointOwner {
+            endpoint,
+            owner_pid,
+        };
+        return Ok(ReserveEndpointOwnerOutcome::ReservedNew {
+            evicted_dead_endpoint: None,
+        });
+    }
+    if let Some((slot, evicted_ep)) = dead_slot {
+        owners[slot] = IpcEndpointOwner {
+            endpoint,
+            owner_pid,
+        };
+        return Ok(ReserveEndpointOwnerOutcome::ReservedNew {
+            evicted_dead_endpoint: Some(evicted_ep),
+        });
+    }
+    Err(ENOMEM)
 }
 
 pub(super) fn release_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Result<(), i64> {
@@ -206,36 +240,51 @@ pub fn sys_exo_ipc_create(
         return EFAULT;
     }
 
-    if let Some(_class) = service_class_for_endpoint_name(name) {
-        #[cfg(not(test))]
-        {
-            let is_system = if caller_pid == 1 {
-                true
-            } else {
-                crate::process::core::registry::PROCESS_REGISTRY
-                    .find_by_pid(Pid(caller_pid))
-                    .map(|pcb| pcb.ppid().0 == 1 && pcb.creds.lock().euid == 0)
-                    .unwrap_or(false)
-            };
-            if !is_system {
-                return EPERM;
-            }
-        }
+    let is_system = if cfg!(test) {
+        true
+    } else if caller_pid == 1 {
+        true
+    } else {
+        crate::process::core::registry::PROCESS_REGISTRY
+            .find_by_pid(Pid(caller_pid))
+            .map(|pcb| pcb.ppid().0 == 1 && pcb.creds.lock().euid == 0)
+            .unwrap_or(false)
+    };
+
+    if service_class_for_endpoint_name(name).is_some() && !is_system {
+        return EPERM;
     }
 
-    let replaced_dead_owner = match reserve_ipc_endpoint_owner(endpoint, caller_pid) {
-        Ok(replaced) => replaced,
+    let reserve_outcome = match reserve_ipc_endpoint_owner(endpoint, caller_pid, is_system) {
+        Ok(outcome) => outcome,
         Err(errno) => return errno,
     };
-    if replaced_dead_owner {
-        crate::ipc::channel::raw::mailbox_close(ep);
-        crate::ipc::endpoint::unregister_endpoint_by_id(ep);
+    match reserve_outcome {
+        ReserveEndpointOwnerOutcome::ReplacedDead => {
+            crate::ipc::channel::raw::mailbox_close(ep);
+            crate::ipc::endpoint::unregister_endpoint_by_id(ep);
+        }
+        ReserveEndpointOwnerOutcome::ReservedNew {
+            evicted_dead_endpoint: Some(old_raw),
+        } => {
+            if let Some(old_ep) = EndpointId::new(old_raw) {
+                crate::ipc::channel::raw::mailbox_close(old_ep);
+                crate::ipc::endpoint::unregister_endpoint_by_id(old_ep);
+            }
+        }
+        ReserveEndpointOwnerOutcome::ReservedNew {
+            evicted_dead_endpoint: None,
+        }
+        | ReserveEndpointOwnerOutcome::AlreadyOwned => {}
     }
 
+    let newly_owned = reserve_outcome != ReserveEndpointOwnerOutcome::AlreadyOwned;
     if crate::ipc::channel::raw::mailbox_open(ep) {
         if let Err(err) = crate::ipc::endpoint::register_endpoint(name, ep) {
-            crate::ipc::channel::raw::mailbox_close(ep);
-            let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
+            if newly_owned {
+                crate::ipc::channel::raw::mailbox_close(ep);
+                let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
+            }
             return super::channel::ipc_error_to_errno(err);
         }
         if let Some(class) = service_class_for_endpoint_name(name) {
@@ -246,7 +295,9 @@ pub fn sys_exo_ipc_create(
         }
         0
     } else {
-        let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
+        if newly_owned {
+            let _ = release_ipc_endpoint_owner(endpoint, caller_pid);
+        }
         ENOMEM
     }
 }

@@ -1,9 +1,9 @@
-//! mod.rs — Orchestrateur du sous-système cache ExoFS (no_std).
+//! mod.rs — ExoFS cache subsystem orchestrator (no_std).
 //!
-//! Expose tous les caches, coordonne l'initialisation, le shutdown
-//! (flush dirty avant extinction), la vérification de santé et les
-//! statistiques agrégées globales.
-//! Règles : RECUR-01, OOM-02, ARITH-02.
+//! Exposes all caches, coordinates initialization, shutdown
+//! (dirty flush before shutdown), health checks, and global
+//! aggregated statistics.
+//! Rules: RECUR-01, OOM-02, ARITH-02.
 
 pub mod blob_cache;
 pub mod cache_eviction;
@@ -33,7 +33,7 @@ pub use path_cache::{PathCache, PATH_CACHE};
 // CacheHealthReport
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Rapport de santé multi-cache.
+/// Multi-cache health report.
 #[derive(Clone, Debug, Default)]
 pub struct CacheHealthReport {
     pub blob_used_bytes: u64,
@@ -74,31 +74,31 @@ impl CacheHealthReport {
         self.global_hits * 100 / total
     }
 
-    /// `true` si tous les caches sont en bonne santé.
+    /// `true` if all caches are healthy.
     pub fn is_healthy(&self) -> bool {
         self.pressure_level != cache_pressure::PressureLevel::Critical
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API publique
+// Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le sous-système cache (réinitialise les compteurs).
+/// Initializes the cache subsystem (resets counters).
 pub fn init() {
     CACHE_STATS.reset();
     CACHE_PRESSURE.set_max_bytes(256 * 1024 * 1024);
     CACHE_PRESSURE.update_default(0);
 }
 
-/// Flush de tous les caches dirty puis vide les caches en mémoire.
+/// Flushes all dirty caches then clears in-memory caches.
 ///
-/// Doit être appelé avant démontage ou arrêt du système.
-/// Note : dans cette implémentation no_std de référence, le flush
-/// marque toutes les entrées propres — l'I/O réelle est du ressort
-/// du appelant (layer VFS).
+/// Must be called before unmount or system shutdown.
+/// Note: in this reference no_std implementation, flush
+/// marks all entries clean — real I/O is the caller's
+/// responsibility (VFS layer).
 pub fn shutdown() {
-    // Marquer comme propre et vider chaque cache.
+    // Mark as clean and clear each cache.
     let _ = BLOB_CACHE.flush_all();
     OBJECT_CACHE.flush_all();
     EXTENT_CACHE.flush_all();
@@ -107,9 +107,9 @@ pub fn shutdown() {
     CACHE_STATS.reset();
 }
 
-/// Force l'éviction d'au moins `bytes` octets dans l'ensemble des caches.
+/// Forces eviction of at least `bytes` across all caches.
 ///
-/// Stratégie : d'abord path, puis metadata, puis extent, blob, objet.
+/// Strategy: first path, then metadata, then extent, blob, object.
 pub fn reclaim_bytes(bytes: u64) -> u64 {
     let mut freed = 0u64;
     let targets = [
@@ -119,11 +119,11 @@ pub fn reclaim_bytes(bytes: u64) -> u64 {
         bytes * 3 / 10, // blob = 30 %
     ];
 
-    // Étape 1 : path cache (le plus remplaçable).
+    // Step 1: path cache (most expendable).
     PATH_CACHE.flush_all();
     freed = freed.saturating_add(targets[0]);
 
-    // Étape 2 : metadata.
+    // Step 2: metadata.
     METADATA_CACHE.flush_all();
     freed = freed.saturating_add(targets[1]);
 
@@ -131,7 +131,7 @@ pub fn reclaim_bytes(bytes: u64) -> u64 {
         return freed;
     }
 
-    // Étape 3 : extent.
+    // Step 3: extent.
     let e = EXTENT_CACHE.evict_n(64);
     freed = freed.saturating_add(e);
 
@@ -139,14 +139,14 @@ pub fn reclaim_bytes(bytes: u64) -> u64 {
         return freed;
     }
 
-    // Étape 4 : blob.
+    // Step 4: blob.
     let b = BLOB_CACHE.evict_n(64);
     freed = freed.saturating_add(b);
 
     freed
 }
 
-/// Construit un rapport de santé instantané.
+/// Builds an instantaneous health report.
 pub fn verify_health() -> CacheHealthReport {
     let snap = CACHE_STATS.snapshot();
     CacheHealthReport {
@@ -166,12 +166,12 @@ pub fn verify_health() -> CacheHealthReport {
     }
 }
 
-/// Retourne un snapshot global des statistiques.
+/// Returns a global statistics snapshot.
 pub fn global_stats_snapshot() -> CacheStatsSnapshot {
     CACHE_STATS.snapshot()
 }
 
-/// Met à jour le moniteur de pression avec l'utilisation totale actuelle.
+/// Updates the pressure monitor with the current total utilization.
 pub fn update_pressure() -> cache_pressure::PressureLevel {
     let report = verify_health();
     CACHE_PRESSURE.update_default(report.total_used_bytes())
@@ -253,21 +253,21 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CacheOrchestrator — supervision haut-niveau
+// CacheOrchestrator — high-level supervision
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau d'agressivité du reclaim.
+/// Reclaim aggressiveness level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReclaimAggression {
-    /// Tente d'éviter les entrées dirty.
+    /// Attempts to avoid dirty entries.
     Conservative,
-    /// Évicte les entrées clean en priorité.
+    /// Evicts clean entries first.
     Moderate,
-    /// Évicte tout, y compris les dirty.
+    /// Evicts everything, including dirty.
     Aggressive,
 }
 
-/// Rapport de reclaim global.
+/// Global reclaim report.
 #[derive(Clone, Debug, Default)]
 pub struct ReclaimReport {
     pub bytes_requested: u64,
@@ -278,13 +278,13 @@ pub struct ReclaimReport {
 }
 
 impl ReclaimReport {
-    /// `true` si la cible a été atteinte.
+    /// `true` if target has been met.
     pub fn target_met(&self) -> bool {
         self.bytes_freed >= self.bytes_requested
     }
 }
 
-/// Orchestre un reclaim avec contrôle de l'agressivité.
+/// Orchestrates a reclaim with aggressiveness control.
 pub fn reclaim_with_report(bytes: u64, aggression: ReclaimAggression) -> ReclaimReport {
     let pressure_before = CACHE_PRESSURE.level();
     let freed = match aggression {
@@ -292,7 +292,7 @@ pub fn reclaim_with_report(bytes: u64, aggression: ReclaimAggression) -> Reclaim
         ReclaimAggression::Moderate => reclaim_bytes(bytes),
         ReclaimAggression::Aggressive => {
             let f = reclaim_bytes(bytes);
-            // Flush supplémentaire si insuffisant.
+            // Additional flush if insufficient.
             if f < bytes {
                 EXTENT_CACHE.flush_all();
                 let _ = BLOB_CACHE.flush_all();
@@ -311,12 +311,12 @@ pub fn reclaim_with_report(bytes: u64, aggression: ReclaimAggression) -> Reclaim
     }
 }
 
-/// Retourne `true` si le système devrait déclencher un reclaim.
+/// Returns `true` if the system should trigger a reclaim.
 pub fn should_reclaim() -> bool {
     CACHE_PRESSURE.is_under_pressure()
 }
 
-/// Politique de réaction automatique à la pression.
+/// Automatic pressure reaction policy.
 pub fn auto_pressure_response() -> Option<ReclaimReport> {
     let level = CACHE_PRESSURE.level();
     match level {
@@ -336,17 +336,17 @@ pub fn auto_pressure_response() -> Option<ReclaimReport> {
     }
 }
 
-/// Met à jour les statistiques globales et la pression, retourne un rapport complet.
+/// Updates global statistics and pressure, returns a complete report.
 pub fn tick() -> CacheHealthReport {
     update_pressure();
     verify_health()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CacheCapacityConfig — configuration des tailles maximales
+// CacheCapacityConfig — maximum size configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration des capacités maximales de chaque sous-cache.
+/// Configuration of maximum capacities for each sub-cache.
 #[derive(Clone, Debug)]
 pub struct CacheCapacityConfig {
     pub blob_max_bytes: u64,
@@ -367,12 +367,12 @@ impl Default for CacheCapacityConfig {
 }
 
 impl CacheCapacityConfig {
-    /// Applique la configuration au moniteur de pression.
+    /// Applies the configuration to the pressure monitor.
     pub fn apply(&self) {
         CACHE_PRESSURE.set_max_bytes(self.total_max_bytes);
     }
 
-    /// Vérifie la cohérence des capacités.
+    /// Verifies consistency of capacities.
     pub fn is_valid(&self) -> bool {
         let sub_total = self
             .blob_max_bytes
@@ -382,7 +382,7 @@ impl CacheCapacityConfig {
     }
 }
 
-/// Initialise le sous-système avec une configuration de capacité explicite.
+/// Initializes the subsystem with an explicit capacity configuration.
 pub fn init_with_config(cfg: &CacheCapacityConfig) {
     CACHE_STATS.reset();
     cfg.apply();
@@ -422,7 +422,7 @@ mod extra_tests {
         init();
         CACHE_PRESSURE.set_max_bytes(256 * 1024 * 1024);
         CACHE_PRESSURE.update_default(0);
-        let _ = auto_pressure_response(); // Low → None normalement
+        let _ = auto_pressure_response(); // Low -> normally None
     }
 
     #[test]

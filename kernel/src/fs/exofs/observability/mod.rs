@@ -2,16 +2,16 @@
 // ExoFS Observability — mod.rs
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
-//! Module d'observabilité ExoFS.
+//! ExoFS Observability module.
 //!
-//! Regroupe métriques, alertes, santé, latences, débits,
-//! compteurs de perf, espace disque, tracing et interface de debug.
+//! Brings together metrics, alerts, health, latencies, throughputs,
+//! perf counters, disk space, tracing, and debug interface.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ─── Sous-modules ─────────────────────────────────────────────────────────────
+// ─── Submodules ─────────────────────────────────────────────────────────────
 
 pub mod alert;
 pub mod debug_interface;
@@ -23,7 +23,7 @@ pub mod space_tracker;
 pub mod throughput_tracker;
 pub mod tracing;
 
-// ─── Re-exports principaux ───────────────────────────────────────────────────
+// ─── Main Re-exports ───────────────────────────────────────────────────
 
 // metrics
 pub use metrics::{
@@ -78,20 +78,20 @@ pub use debug_interface::{
 
 // ─── ObservabilityConfig ─────────────────────────────────────────────────────
 
-/// Configuration globale du module d'observabilité.
+/// Global configuration of the observability module.
 #[derive(Clone, Copy, Debug)]
 pub struct ObservabilityConfig {
-    /// Active la collecte de métriques.
+    /// Enables metrics collection.
     pub metrics_enabled: bool,
-    /// Active les alertes.
+    /// Enables alerts.
     pub alerts_enabled: bool,
-    /// Niveau de trace minimum.
+    /// Minimum trace level.
     pub min_trace_level: TraceLevel,
-    /// Période d'évaluation de santé en µs.
+    /// Health evaluation period in µs.
     pub health_eval_period_us: u64,
-    /// Taille de fenêtre pour le calcul de débit (nombre de périodes).
+    /// Window size for throughput calculation (number of periods).
     pub throughput_window: u64,
-    /// Activer le debug via la queue.
+    /// Enable debug via the queue.
     pub debug_enabled: bool,
 }
 
@@ -107,7 +107,7 @@ impl ObservabilityConfig {
         }
     }
 
-    /// Valide la configuration (ARITH-02 : valeurs bornées).
+    /// Validates configuration (ARITH-02: bounded values).
     pub fn validate(&self) -> ExofsResult<()> {
         if self.health_eval_period_us == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -125,7 +125,7 @@ impl ObservabilityConfig {
 
 // ─── ObservabilityStatus ─────────────────────────────────────────────────────
 
-/// État agrégé du module d'observabilité.
+/// Aggregated state of the observability module.
 #[derive(Clone, Copy, Debug)]
 pub struct ObservabilityStatus {
     pub health: HealthStatus,
@@ -150,7 +150,7 @@ impl ObservabilityStatus {
 
 // ─── ObservabilityModule ─────────────────────────────────────────────────────
 
-/// Facade principale du module d'observabilité.
+/// Main facade of the observability module.
 #[allow(dead_code)]
 pub struct ObservabilityModule {
     config: ObservabilityConfig,
@@ -167,7 +167,7 @@ impl ObservabilityModule {
         }
     }
 
-    /// Initialise tous les sous-modules avec la configuration donnée.
+    /// Initializes all submodules with the given configuration.
     pub fn init(&self, config: ObservabilityConfig, tick: u64) -> ExofsResult<()> {
         config.validate()?;
         TRACE_RING.set_min_level(config.min_trace_level);
@@ -181,13 +181,13 @@ impl ObservabilityModule {
         Ok(())
     }
 
-    /// Enregistre un événement interne (metrics + compteur).
+    /// Records an internal event (metrics + counter).
     pub fn record_event(&self) {
         self.event_count.fetch_add(1, Ordering::Relaxed);
-        EXOFS_METRICS.inc_read(1); // exemple d'instrumentation
+        EXOFS_METRICS.inc_read(1); // instrumentation example
     }
 
-    /// Retourne le statut agrégé courant.
+    /// Returns current aggregated status.
     pub fn status(&self) -> ObservabilityStatus {
         ObservabilityStatus {
             health: HEALTH.status(),
@@ -203,7 +203,7 @@ impl ObservabilityModule {
         }
     }
 
-    /// Produit un snapshot agrégeant toutes les métriques.
+    /// Produces a snapshot aggregating all metrics.
     pub fn full_snapshot(&self) -> ExofsResult<ObservabilitySnapshot> {
         let metrics = EXOFS_METRICS.snapshot();
         let space = SPACE_TRACKER.snapshot();
@@ -220,24 +220,24 @@ impl ObservabilityModule {
         })
     }
 
-    /// Temps écoulé depuis l'init en ticks.
+    /// Elapsed time since init in ticks.
     pub fn uptime(&self, current_tick: u64) -> u64 {
         current_tick.saturating_sub(self.init_tick.load(Ordering::Relaxed))
     }
 
-    /// Émet une alerte critique via les sous-modules.
+    /// Emits a critical alert via submodules.
     pub fn emit_critical(&self, tick: u64, msg: &str) {
         ALERT_LOG.critical(alert::AlertCode::new(0x0101), msg.as_bytes());
         TRACE_RING.emit(tick, ComponentId::OBSERVER, TraceLevel::Error, msg);
     }
 
-    /// Émet une alerte warning.
+    /// Emits a warning alert.
     pub fn emit_warning(&self, tick: u64, msg: &str) {
         ALERT_LOG.warning(alert::AlertCode::new(0x0201), msg.as_bytes());
         TRACE_RING.emit(tick, ComponentId::OBSERVER, TraceLevel::Warn, msg);
     }
 
-    /// Réinitialise tous les compteurs statistiques.
+    /// Resets all statistical counters.
     pub fn reset_counters(&self) {
         EXOFS_METRICS.reset();
         PERF_COUNTERS.reset();
@@ -246,12 +246,12 @@ impl ObservabilityModule {
     }
 }
 
-/// Instance globale du module.
+/// Global instance of the module.
 pub static OBSERVABILITY: ObservabilityModule = ObservabilityModule::new_const();
 
 // ─── ObservabilitySnapshot ────────────────────────────────────────────────────
 
-/// Snapshot agrégé de tout le module d'observabilité.
+/// Aggregated snapshot of the entire observability module.
 #[derive(Debug)]
 pub struct ObservabilitySnapshot {
     pub status: ObservabilityStatus,
@@ -264,27 +264,27 @@ pub struct ObservabilitySnapshot {
 }
 
 impl ObservabilitySnapshot {
-    /// Vrai si le système est dans un état nominal.
+    /// True if the system is in a nominal state.
     pub fn is_healthy(&self) -> bool {
         self.status.is_nominal()
     }
 
-    /// Total I/O en octets.
+    /// Total I/O in bytes.
     pub fn total_io_bytes(&self) -> u64 {
         self.metrics.total_bytes()
     }
 
-    /// Résumé des taux d'erreur.
+    /// Summary of error rates.
     pub fn error_rate_ppt(&self) -> u64 {
         self.status.error_rate_ppt
     }
 
-    /// Résumé du débit total.
+    /// Summary of total throughput.
     pub fn avg_throughput_bpt(&self) -> u64 {
         self.throughput.avg_total_bpt()
     }
 
-    /// Copie les métriques dans un Vec (OOM-02).
+    /// Copies metrics into a Vec (OOM-02).
     pub fn metrics_to_vec(&self) -> ExofsResult<Vec<u64>> {
         let mut v = Vec::new();
         v.try_reserve(metrics::MetricId::COUNT)
@@ -298,24 +298,24 @@ impl ObservabilitySnapshot {
     }
 }
 
-// ─── Helpers publics ─────────────────────────────────────────────────────────
+// ─── Public Helpers ─────────────────────────────────────────────────────────
 
-/// Initialise le module d'observabilité avec la config par défaut.
+/// Initializes the observability module with default config.
 pub fn observability_init(tick: u64) -> ExofsResult<()> {
     OBSERVABILITY.init(ObservabilityConfig::default_config(), tick)
 }
 
-/// Retourne vrai si le système est sain.
+/// Returns true if the system is healthy.
 pub fn is_healthy() -> bool {
     OBSERVABILITY.status().is_nominal()
 }
 
-/// Retourne le taux d'erreur global en ‰.
+/// Returns global error rate in ‰.
 pub fn global_error_rate_ppt() -> u64 {
     OBSERVABILITY.status().error_rate_ppt
 }
 
-/// Retourne le statut de santé courant.
+/// Returns current health status.
 pub fn health_status() -> HealthStatus {
     OBSERVABILITY.status().health
 }
@@ -423,7 +423,7 @@ mod tests {
             throughput_bpt: 512,
             trace_dropped: 0,
         };
-        assert!(s.is_nominal()); // Degraded sans critical est encore nominal
+        assert!(s.is_nominal()); // Degraded without critical is still nominal
     }
 
     #[test]

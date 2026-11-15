@@ -89,6 +89,8 @@ pub fn PTHREAD_CREATE(
         tls_base: 0,
         target_cpu,
         pthread_out,
+        child_tid_ptr: 0,
+        clear_child_tid: 0,
     };
     match create_thread(&params) {
         Ok(handle) => {

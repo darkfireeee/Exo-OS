@@ -33,10 +33,27 @@ pub fn sys_nanosleep(req_ptr: u64, rem_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _
     let ns = (ts.tv_sec as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
-    if !crate::scheduler::timer::sleep_ns(ns) {
+    let deadline_ns = crate::scheduler::timer::monotonic_ns().saturating_add(ns);
+    if !crate::scheduler::timer::sleep_until_ns(deadline_ns) {
+        if rem_ptr != 0 {
+            let now = crate::scheduler::timer::monotonic_ns();
+            let rem_ns = deadline_ns.saturating_sub(now);
+            let rem_ts = Timespec {
+                tv_sec: (rem_ns / 1_000_000_000) as i64,
+                tv_nsec: (rem_ns % 1_000_000_000) as i64,
+            };
+            if copy_to_user(
+                rem_ptr as *mut u8,
+                &rem_ts as *const Timespec as *const u8,
+                core::mem::size_of::<Timespec>(),
+            )
+            .is_err()
+            {
+                return EFAULT;
+            }
+        }
         return EINTR;
     }
-    let _ = rem_ptr;
     0
 }
 
@@ -77,10 +94,39 @@ pub fn sys_clock_nanosleep(
     let target_ns = (ts.tv_sec as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(ts.tv_nsec as u64);
-    if !crate::scheduler::timer::sleep_until_ns(target_ns) {
+    let mono_target_ns = if clk_id == CLOCK_REALTIME {
+        target_ns.saturating_sub(crate::scheduler::timer::clock::realtime_offset_ns())
+    } else {
+        target_ns
+    };
+    if !crate::scheduler::timer::sleep_until_ns(mono_target_ns) {
         return EINTR;
     }
     let _ = rem_ptr;
+    0
+}
+
+/// `clock_getres(clockid, res_ptr)` — writes clock resolution (1 ns) when `res_ptr != 0`.
+pub fn sys_clock_getres(clk_id: u64, res_ptr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_CLOCK_GETRES);
+    if clk_id > 7 {
+        return EINVAL;
+    }
+    if res_ptr != 0 {
+        let ts = Timespec {
+            tv_sec: 0,
+            tv_nsec: 1,
+        };
+        if copy_to_user(
+            res_ptr as *mut u8,
+            &ts as *const Timespec as *const u8,
+            core::mem::size_of::<Timespec>(),
+        )
+        .is_err()
+        {
+            return EFAULT;
+        }
+    }
     0
 }
 
@@ -94,12 +140,40 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
     {
         return -crate::syscall::errno::EFAULT;
     }
+    let op32 = op as u32;
+    let cmd = op32 & !(128 | 256);
+    let timeout_arg = if (cmd == 0 || cmd == 9) && timeout != 0 {
+        let ts = match read_user_typed::<Timespec>(timeout) {
+            Ok(t) => t,
+            Err(e) => return e.to_errno(),
+        };
+        if ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
+            return EINVAL;
+        }
+        let raw_ns = (ts.tv_sec as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(ts.tv_nsec as u64);
+        if cmd == 9 {
+            // FUTEX_WAIT_BITSET uses an absolute deadline (CLOCK_REALTIME if bit 256 set, else CLOCK_MONOTONIC).
+            let now_ns = if (op32 & 256) != 0 {
+                crate::scheduler::timer::realtime_ns()
+            } else {
+                crate::scheduler::timer::monotonic_ns()
+            };
+            raw_ns.saturating_sub(now_ns).max(1)
+        } else {
+            raw_ns.max(1)
+        }
+    } else {
+        timeout
+    };
+
     // futex is in memory/utils/futex_table.rs (RULE SCHED-03 DOC3).
     match crate::memory::utils::futex_table::sys_futex(
         uaddr,
-        op as u32,
+        op32,
         val as u32,
-        timeout,
+        timeout_arg,
         uaddr2,
         val3 as u32,
     ) {

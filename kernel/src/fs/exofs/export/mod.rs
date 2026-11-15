@@ -1,20 +1,20 @@
-//! mod.rs — Module public d'export ExoFS.
+//! mod.rs — ExoFS public export module.
 //!
-//! Ce module est le point d'entrée de toutes les capacités d'export/import ExoFS.
+//! This module is the entry point for all ExoFS export/import capabilities.
 //!
-//! Il fournit :
-//!  - `pub mod` + `pub use` re-exports de tous les types publics.
-//!  - `ExportConfig`          : configuration globale du module export.
-//!  - `ExportModule`          : façade de haut niveau pour export/import.
-//!  - `ExportHealthStatus`    : état de santé du module.
-//!  - `ExportModuleSummary`   : résumé des opérations menées.
-//!  - Fonctions de commodité  : `export_blob_to_archive`, `import_from_archive`, `verify_archive`.
+//! It provides:
+//!  - `pub mod` + `pub use` re-exports of all public types.
+//!  - `ExportConfig`          : global configuration of the export module.
+//!  - `ExportModule`          : high-level facade for export/import.
+//!  - `ExportHealthStatus`    : module health status.
+//!  - `ExportModuleSummary`   : summary of performed operations.
+//!  - Convenience functions  : `export_blob_to_archive`, `import_from_archive`, `verify_archive`.
 //!
-//! RECUR-01 : boucles while — aucune récursion.
-//! OOM-02   : try_reserve avant push.
-//! ARITH-02 : saturating_*, checked_div, wrapping_add.
+//! RECUR-01: while loops — no recursion.
+//! OOM-02  : try_reserve before push.
+//! ARITH-02: saturating_*, checked_div, wrapping_add.
 
-// ─── Sous-modules ─────────────────────────────────────────────────────────────
+// ─── Submodules ─────────────────────────────────────────────────────────────
 pub mod exoar_format;
 pub mod exoar_reader;
 pub mod exoar_writer;
@@ -25,9 +25,9 @@ pub mod stream_export;
 pub mod stream_import;
 pub mod tar_compat;
 
-// ─── Re-exports publics ───────────────────────────────────────────────────────
+// ─── Public re-exports ───────────────────────────────────────────────────────
 
-// Format ExoAR
+// ExoAR format
 pub use exoar_format::{
     crc32c_compute, crc32c_verify, ExoarEntryHeader, ExoarEntryInfo, ExoarEntryKind, ExoarFooter,
     ExoarHeader, ExoarSummary, ARCHIVE_FLAG_INCREMENTAL, ARCHIVE_FLAG_SNAPSHOT,
@@ -36,13 +36,13 @@ pub use exoar_format::{
     EXOAR_VERSION,
 };
 
-// Lecture ExoAR
+// ExoAR reader
 pub use exoar_reader::{
     ArchiveSource, BlobReceiver, CollectingReceiver, ExoarReadError, ExoarReadReport, ExoarReader,
     ExoarReaderConfig, ExoarScanner, SliceSource,
 };
 
-// Écriture ExoAR
+// ExoAR writer
 pub use exoar_writer::{
     ArchiveSink, ExoarBufferedWriter, ExoarWriteError, ExoarWriteOptions, ExoarWriteStats,
     ExoarWriter, SinkVec,
@@ -54,32 +54,32 @@ pub use export_audit::{
     ExportSessionConfig, SessionState, EXPORT_AUDIT, EXPORT_AUDIT_RING,
 };
 
-// Export incrémental
+// Incremental export
 pub use incremental_export::{
     DiffSet, EpochId, EpochRange, IncrementalBlobSource, IncrementalExport,
     IncrementalExportConfig, IncrementalExportResult, MultiEpochExportSummary, SnapshotExport,
 };
 
-// Métadonnées
+// Metadata
 pub use metadata_export::{
     BlobMeta, ChunkMeta, ExportManifest, ManifestBlobEntry, MetaBinaryHeader, MetadataBinaryWriter,
     MetadataExporter, SnapshotMeta, TextSink, VecTextSink, META_BINARY_MAGIC,
 };
 
-// Export streaming
+// Streaming export
 pub use stream_export::{
     BatchState, BlobDataProvider, FilterMode, StreamCheckpoint, StreamExportBatch,
     StreamExportConfig, StreamExportReport, StreamExporter, StreamFilter, StreamSink,
 };
 
-// Import streaming
+// Streaming import
 pub use stream_import::{
     BlobWriter, ConflictResolver, ImportCheckpoint, ImportEntryHeader, ImportSource,
     ImportStreamBuilder, SliceImportSource, StreamImportConfig, StreamImportReport, StreamImporter,
     TombstoneHandler, IMPORT_ENTRY_MAGIC, IMPORT_FLAG_TOMBSTONE, IMPORT_FLAG_VERIFIED,
 };
 
-// Compatibilité tar
+// Tar compatibility
 pub use tar_compat::{
     tar_checksum_compute, tar_checksum_verify, ExoarToTarConverter, SliceTarSource, TarBlock,
     TarEmitStats, TarEmitter, TarEntry, TarEntryKind, TarHeader, TarParseReport, TarParser,
@@ -87,37 +87,37 @@ pub use tar_compat::{
     TAR_MAGIC, TAR_NAME_MAX, TAR_VERSION,
 };
 
-// ─── Erreurs et résultats kernel ─────────────────────────────────────────────
+// ─── Kernel errors and results ─────────────────────────────────────────────
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 extern crate alloc;
 use alloc::vec::Vec;
 
-// ─── Configuration globale du module export ──────────────────────────────────
+// ─── Global export module configuration ──────────────────────────────────
 
-/// Configuration globale du module d'export ExoFS.
+/// Global configuration for the ExoFS export module.
 #[derive(Clone, Copy, Debug)]
 pub struct ExportConfig {
-    /// Identifiant de session (incrémenté à chaque session).
+    /// Session identifier (incremented for each session).
     pub session_id: u32,
-    /// Activer l'audit des opérations d'export/import.
+    /// Enable auditing of export/import operations.
     pub audit_enabled: bool,
-    /// Vérifier les blob_ids (RÈGLE 11) lors de l'export.
+    /// Verify blob_ids (RULE 11) during export.
     pub verify_blob_ids: bool,
-    /// Taille de bloc pour les transferts streaming.
+    /// Block size for streaming transfers.
     pub block_size: u32,
-    /// Nombre maximum d'entrées par opération (0 = illimité).
+    /// Maximum number of entries per operation (0 = unlimited).
     pub max_entries: u32,
-    /// Générer également un manifest texte ASCII à côté de l'archive.
+    /// Also generate an ASCII text manifest alongside the archive.
     pub generate_manifest: bool,
-    /// Stratégie de résolution de conflits lors de l'import.
+    /// Conflict resolution strategy during import.
     pub conflict: ConflictResolver,
-    /// Mode de traitement des tombstones lors de l'import.
+    /// Tombstone handling mode during import.
     pub tombstone_mode: TombstoneHandler,
 }
 
 impl ExportConfig {
-    /// Configuration par défaut — vérification activée, audit activé.
+    /// Default configuration — verification enabled, audit enabled.
     pub fn default_config(session_id: u32) -> Self {
         Self {
             session_id,
@@ -131,7 +131,7 @@ impl ExportConfig {
         }
     }
 
-    /// Configuration stricte — toute erreur interrompt l'opération.
+    /// Strict configuration — any error aborts the operation.
     pub fn strict(session_id: u32) -> Self {
         Self {
             session_id,
@@ -145,7 +145,7 @@ impl ExportConfig {
         }
     }
 
-    /// Configuration rapide — pas de vérification blob_id (performance).
+    /// Fast configuration — no blob_id verification (performance).
     pub fn fast(session_id: u32) -> Self {
         Self {
             session_id,
@@ -159,12 +159,12 @@ impl ExportConfig {
         }
     }
 
-    /// Retourne les options d'écriture ExoAR dérivées de la config.
+    /// Returns ExoAR write options derived from config.
     pub fn write_options(&self) -> ExoarWriteOptions {
         ExoarWriteOptions::default()
     }
 
-    /// Retourne la config d'import streaming dérivée.
+    /// Returns derived streaming import config.
     pub fn import_config(&self) -> StreamImportConfig {
         StreamImportConfig {
             session_id: self.session_id,
@@ -176,7 +176,7 @@ impl ExportConfig {
         }
     }
 
-    /// Retourne la config d'export streaming dérivée.
+    /// Returns derived streaming export config.
     pub fn stream_export_config(&self) -> StreamExportConfig {
         StreamExportConfig {
             session_id: self.session_id,
@@ -190,16 +190,16 @@ impl ExportConfig {
     }
 }
 
-// ─── État de santé du module ──────────────────────────────────────────────────
+// ─── Module health status ──────────────────────────────────────────────────
 
-/// État de santé du module d'export.
+/// Export module health status.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExportHealthStatus {
-    /// Module opérationnel, aucune erreur.
+    /// Operational module, no errors.
     Healthy,
-    /// Module opérationnel, quelques erreurs non critiques.
+    /// Operational module, some non-critical errors.
     Degraded,
-    /// Module défaillant, trop d'erreurs récentes.
+    /// Failing module, too many recent errors.
     Failed,
 }
 
@@ -209,9 +209,9 @@ impl ExportHealthStatus {
     }
 }
 
-// ─── Résumé des opérations ────────────────────────────────────────────────────
+// ─── Operations summary ────────────────────────────────────────────────────
 
-/// Résumé cumulatif des opérations d'export/import.
+/// Cumulative summary of export/import operations.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExportModuleSummary {
     pub total_exports: u64,
@@ -252,19 +252,19 @@ impl ExportModuleSummary {
     }
 }
 
-// ─── Façade du module export ──────────────────────────────────────────────────
+// ─── Export module facade ──────────────────────────────────────────────────
 
-/// Façade de haut niveau pour les opérations d'export/import ExoFS.
+/// High-level facade for ExoFS export/import operations.
 ///
-/// `ExportModule` est le point d'entrée principal côté kernel.
-/// Il orchestre toutes les couches sous-jacentes.
+/// `ExportModule` is the primary entry point on the kernel side.
+/// It orchestrates all underlying layers.
 pub struct ExportModule {
     config: ExportConfig,
     summary: ExportModuleSummary,
 }
 
 impl ExportModule {
-    /// Initialise le module d'export avec la configuration donnée.
+    /// Initializes export module with given configuration.
     pub fn init(config: ExportConfig) -> Self {
         Self {
             config,
@@ -272,12 +272,12 @@ impl ExportModule {
         }
     }
 
-    /// Exporte un snapshot complet des blobs vers un `ExoarBufferedWriter`.
+    /// Exports a full blob snapshot to an `ExoarBufferedWriter`.
     ///
-    /// `blob_ids` : liste des BlobId à exporter.
-    /// `provider` : source de données blob.
+    /// `blob_ids`: list of BlobIds to export.
+    /// `provider`: blob data source.
     ///
-    /// Retourne le buffer de l'archive produite.
+    /// Returns the produced archive buffer.
     pub fn export_snapshot<P: BlobDataProvider>(
         &mut self,
         provider: &P,
@@ -295,7 +295,7 @@ impl ExportModule {
         let mut i = 0usize;
         let mut blobs_exported = 0u64;
 
-        // RECUR-01 : boucle while
+        // RECUR-01: while loop
         while i < blob_ids.len() {
             let blob_id = &blob_ids[i];
             match provider.provide_blob(blob_id) {
@@ -325,7 +325,7 @@ impl ExportModule {
         Ok(buf)
     }
 
-    /// Export incrémental entre deux epochs.
+    /// Incremental export between two epochs.
     pub fn export_incremental<P: BlobDataProvider>(
         &mut self,
         provider: &P,
@@ -340,7 +340,7 @@ impl ExportModule {
         let mut writer = ExoarBufferedWriter::new(opts);
         writer.begin()?;
 
-        // Phase 1 : blobs ajoutés (RECUR-01 : boucle while)
+        // Phase 1: added blobs (RECUR-01: while loop)
         let mut i = 0usize;
         while i < added_blobs.len() {
             let blob_id = &added_blobs[i];
@@ -350,7 +350,7 @@ impl ExportModule {
             i = i.wrapping_add(1);
         }
 
-        // Phase 2 : tombstones (RECUR-01 : boucle while)
+        // Phase 2: tombstones (RECUR-01: while loop)
         let mut j = 0usize;
         while j < deleted_blobs.len() {
             writer.write_tombstone(&deleted_blobs[j], 0)?;
@@ -363,7 +363,7 @@ impl ExportModule {
         Ok(buf)
     }
 
-    /// Importe des blobs depuis une archive ExoAR en mémoire.
+    /// Imports blobs from an in-memory ExoAR archive.
     pub fn import<W: BlobWriter>(
         &mut self,
         archive: &[u8],
@@ -373,22 +373,22 @@ impl ExportModule {
             EXPORT_AUDIT.log_event(0, ExportEvent::SessionStarted);
         }
 
-        // Utiliser le StreamImporter avec l'archive comme source
+        // Use StreamImporter with the archive as source
         let mut builder = ImportStreamBuilder::new();
 
-        // Lire l'archive via ExoarReader pour extraire les blobs puis les ré-encoder
-        // en flux import. Implémentation directe via CollectingReceiver.
+        // Read archive via ExoarReader to extract blobs then re-encode them
+        // into an import stream. Direct implementation via CollectingReceiver.
         let cfg = self.config.import_config();
         let mut importer = StreamImporter::new(cfg)?;
 
-        // Conversion archive ExoAR → flux import binaire (RECUR-01 : boucle while)
+        // ExoAR archive -> binary import stream conversion (RECUR-01: while loop)
         {
             let config = ExoarReaderConfig::default();
             let mut receiver = CollectingReceiver::new();
             let mut src = SliceSource::new(archive);
             let reader = ExoarReader::new(config);
             let _ = reader.read(&mut src, &mut receiver);
-            // Construire le flux import depuis les blobs collectés
+            // Build import stream from collected blobs
             let blobs = receiver.into_blobs();
             let mut k = 0usize;
             while k < blobs.len() {
@@ -420,7 +420,7 @@ impl ExportModule {
         Ok(report)
     }
 
-    /// Vérifie l'intégrité d'une archive ExoAR.
+    /// Verifies ExoAR archive integrity.
     pub fn verify_archive(&self, archive: &[u8]) -> ExofsResult<ExoarReadReport> {
         let config = ExoarReaderConfig::strict();
         let reader = ExoarReader::new(config);
@@ -429,7 +429,7 @@ impl ExportModule {
         Ok(reader.read(&mut src, &mut receiver)?)
     }
 
-    /// Retourne l'état de santé du module.
+    /// Returns module health status.
     pub fn health_check(&self) -> ExportHealthStatus {
         let audit_errors = EXPORT_AUDIT.count_errors_in_last_n(64);
         let summary_ok = self.summary.is_clean();
@@ -440,20 +440,20 @@ impl ExportModule {
         }
     }
 
-    /// Retourne le résumé des opérations.
+    /// Returns operations summary.
     pub fn summary(&self) -> &ExportModuleSummary {
         &self.summary
     }
 
-    /// Retourne la configuration actuelle.
+    /// Returns current configuration.
     pub fn config(&self) -> &ExportConfig {
         &self.config
     }
 }
 
-// ─── Fonctions de commodité ───────────────────────────────────────────────────
+// ─── Convenience functions ───────────────────────────────────────────────────
 
-/// Exporte un seul blob vers une archive ExoAR en mémoire.
+/// Exports a single blob to an in-memory ExoAR archive.
 pub fn export_blob_to_archive(blob_id: &[u8; 32], data: &[u8]) -> ExofsResult<Vec<u8>> {
     let opts = ExoarWriteOptions::default();
     let mut writer = ExoarBufferedWriter::new(opts);
@@ -465,8 +465,8 @@ pub fn export_blob_to_archive(blob_id: &[u8; 32], data: &[u8]) -> ExofsResult<Ve
     Ok(buf)
 }
 
-/// Importe le premier blob d'une archive ExoAR en mémoire.
-/// Retourne (blob_id, data) ou `ExofsError::NotFound` si aucune entrée.
+/// Imports the first blob of an in-memory ExoAR archive.
+/// Returns (blob_id, data) or `ExofsError::NotFound` if no entries.
 pub fn import_first_from_archive(archive: &[u8]) -> ExofsResult<([u8; 32], Vec<u8>)> {
     let config = ExoarReaderConfig::default();
     let reader = ExoarReader::new(config);
@@ -477,7 +477,7 @@ pub fn import_first_from_archive(archive: &[u8]) -> ExofsResult<([u8; 32], Vec<u
     blobs.into_iter().next().ok_or(ExofsError::NotFound)
 }
 
-/// Vérifie qu'une archive ExoAR est valide (magic, CRC, entry count).
+/// Verifies that an ExoAR archive is valid (magic, CRC, entry count).
 pub fn verify_archive(archive: &[u8]) -> ExofsResult<bool> {
     let config = ExoarReaderConfig::default();
     let reader = ExoarReader::new(config);
@@ -489,7 +489,7 @@ pub fn verify_archive(archive: &[u8]) -> ExofsResult<bool> {
     }
 }
 
-/// Convertit une archive ExoAR en flux tar.
+/// Converts an ExoAR archive into a tar stream.
 pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
     let config = ExoarReaderConfig::default();
     let reader = ExoarReader::new(config);
@@ -500,13 +500,13 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
 
     let mut sink = VecTarSink::new();
     let mut converter = ExoarToTarConverter::new();
-    // Prépare les triplets (blob_id, name, data)
+    // Prepare triplets (blob_id, name, data)
     let mut triplets: Vec<([u8; 32], Vec<u8>, Vec<u8>)> = Vec::new();
     triplets
         .try_reserve(blobs.len())
         .map_err(|_| ExofsError::NoMemory)?;
 
-    // RECUR-01 : boucle while
+    // RECUR-01: while loop
     let mut i = 0usize;
     while i < blobs.len() {
         let (bid, data) = &blobs[i];
@@ -519,7 +519,7 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
         i = i.wrapping_add(1);
     }
 
-    // Construction des références
+    // Construct references
     let mut refs: Vec<([u8; 32], &[u8], &[u8])> = Vec::new();
     refs.try_reserve(triplets.len())
         .map_err(|_| ExofsError::NoMemory)?;
@@ -537,13 +537,13 @@ pub fn exoar_to_tar(archive: &[u8], mtime: u64) -> ExofsResult<Vec<u8>> {
     Ok(sink.as_slice().to_vec())
 }
 
-/// Génère un nom de fichier tar depuis un blob_id (16 premiers hex + ".exo").
+/// Generates a tar filename from a blob_id (first 16 hex chars + ".exo").
 fn hex_name_from_id(id: &[u8; 32]) -> Vec<u8> {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut name: Vec<u8> = Vec::new();
     let _ = name.try_reserve(20);
     let mut i = 0usize;
-    // RECUR-01 : boucle while — 8 premiers bytes = 16 chars hex
+    // RECUR-01: while loop — first 8 bytes = 16 hex chars
     while i < 8 {
         let b = id[i];
         name.push(HEX[(b >> 4) as usize]);

@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Module principal (façade publique)
+// ExoFS Quota — Main module (public facade)
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 //! # ExoFS Quota
 //!
-//! Ce module fournit un système de quota complet pour ExoFS :
-//! - **Politiques** : limites soft/hard bytes/blobs/inodes avec délai de grâce.
-//! - **Tracking**   : suivi par entité (user/group/project) sur tableau plat.
-//! - **Audit**      : anneau d'événements avec filtrage et statistiques.
-//! - **Namespaces** : isolation et héritage de quota par namespace.
-//! - **Enforcement**: vérification temps réel et application des limites.
-//! - **Reports**    : rapports de consommation et top-consumers.
+//! This module provides a complete quota system for ExoFS:
+//! - **Policies**   : soft/hard limits for bytes/blobs/inodes with grace period.
+//! - **Tracking**   : per-entity (user/group/project) tracking on flat array.
+//! - **Audit**      : event ring with filtering and statistics.
+//! - **Namespaces** : quota isolation and inheritance per namespace.
+//! - **Enforcement**: real-time checking and limit enforcement.
+//! - **Reports**    : consumption reports and top-consumers.
 //!
-//! ## Règles d'implémentation
-//! - RECUR-01 : aucune récursion, boucles `while` uniquement.
-//! - OOM-02   : `try_reserve(n).map_err(|_| ExofsError::NoMemory)?` avant push.
+//! ## Implementation rules
+//! - RECUR-01 : zero recursion, `while` loops only.
+//! - OOM-02   : `try_reserve(n).map_err(|_| ExofsError::NoMemory)?` before push.
 //! - ARITH-02 : `saturating_add/sub`, `checked_div`, `wrapping_add/mul`.
-//! - Jamais `FsError` : uniquement `ExofsError` / `ExofsResult`.
+//! - Never `FsError` : `ExofsError` / `ExofsResult` exclusively.
 
 pub mod quota_audit;
 pub mod quota_enforcement;
@@ -25,9 +25,9 @@ pub mod quota_policy;
 pub mod quota_report;
 pub mod quota_tracker;
 
-// ─── Réexports publics ────────────────────────────────────────────────────────
+// ─── Public re-exports ────────────────────────────────────────────────────────
 
-// Politique
+// Policy
 pub use quota_policy::{PolicyFlags, PolicyPresets, QuotaKind, QuotaLimits, QuotaPolicy};
 
 // Tracking
@@ -64,20 +64,20 @@ use alloc::vec::Vec;
 
 // ─── QuotaConfig ──────────────────────────────────────────────────────────────
 
-/// Configuration globale du module quota.
+/// Global configuration for the quota module.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaConfig {
-    /// Active l'enforcement des quotas.
+    /// Enables quota enforcement.
     pub enabled: bool,
-    /// Mode strict : refuser si la vérification échoue avec une erreur interne.
+    /// Strict mode: deny if check fails with an internal error.
     pub strict_mode: bool,
-    /// Type de quota par défaut.
+    /// Default quota type.
     pub default_kind: QuotaKind,
-    /// Délai de grâce global en ticks.
+    /// Global default grace period in ticks.
     pub grace_ticks_default: u64,
-    /// Nombre maximal d'entités par namespace.
+    /// Maximum number of entities per namespace.
     pub max_entities_per_ns: u64,
-    /// Activer l'audit de chaque opération.
+    /// Enable auditing of every operation.
     pub audit_all_ops: bool,
 }
 
@@ -138,7 +138,7 @@ impl QuotaModuleState {
 
 // ─── QuotaModule ──────────────────────────────────────────────────────────────
 
-/// Façade principale du module quota.
+/// Main facade for the quota module.
 pub struct QuotaModule {
     config: core::cell::UnsafeCell<QuotaConfig>,
     state: core::cell::UnsafeCell<QuotaModuleState>,
@@ -172,31 +172,31 @@ impl QuotaModule {
         self.lock.store(0, Ordering::Release);
     }
 
-    /// Initialise le module avec la configuration donnée.
+    /// Initializes the module with the given configuration.
     pub fn init(&self, config: QuotaConfig, tick: u64) -> ExofsResult<()> {
         config.validate()?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let state = unsafe { &mut *self.state.get() };
         if *state == QuotaModuleState::Ready {
             self.release();
             return Ok(());
         }
         *state = QuotaModuleState::Initializing;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             *self.config.get() = config;
         }
         self.release();
 
-        // Initialiser le namespace root
+        // Initialize root namespace
         let root_policy = QuotaPolicy::default_policy(config.default_kind);
         QUOTA_NAMESPACE
             .init_root(root_policy, tick)
-            .unwrap_or_default(); // peut échouer si déjà initialisé
+            .unwrap_or_default(); // may fail if already initialized
 
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         *unsafe { &mut *self.state.get() } = QuotaModuleState::Ready;
         self.release();
         Ok(())
@@ -204,7 +204,7 @@ impl QuotaModule {
 
     pub fn state(&self) -> QuotaModuleState {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let s = unsafe { *self.state.get() };
         self.release();
         s
@@ -212,7 +212,7 @@ impl QuotaModule {
 
     pub fn config(&self) -> QuotaConfig {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let c = unsafe { *self.config.get() };
         self.release();
         c
@@ -222,9 +222,9 @@ impl QuotaModule {
         self.config().enabled
     }
 
-    // ── Opérations de haut niveau ─────────────────────────────────────────────
+    // ── High-level operations ─────────────────────────────────────────────────
 
-    /// Vérifie et applique une écriture (bytes + blobs + inodes).
+    /// Checks and enforces a write (bytes + blobs + inodes).
     pub fn check_write(
         &self,
         key: QuotaKey,
@@ -239,7 +239,7 @@ impl QuotaModule {
         QUOTA_ENFORCER.check_and_apply(key, bytes, blobs, inodes, tick)
     }
 
-    /// Enregistre une consommation effective après une écriture réussie.
+    /// Records actual consumption following a successful write.
     pub fn record_write(
         &self,
         key: QuotaKey,
@@ -256,7 +256,7 @@ impl QuotaModule {
         QUOTA_TRACKER.mutate_usage(key, b, bl, ino)
     }
 
-    /// Libère une consommation (suppression de données).
+    /// Releases consumption (data deletion).
     pub fn release_write(
         &self,
         key: QuotaKey,
@@ -273,7 +273,7 @@ impl QuotaModule {
         QUOTA_TRACKER.mutate_usage(key, -b, -bl, -ino)
     }
 
-    /// Configure les limites d'une entité.
+    /// Configures limits for an entity.
     pub fn set_limits(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
         limits.validate()?;
         QUOTA_TRACKER.set_limits(key, limits)?;
@@ -282,7 +282,7 @@ impl QuotaModule {
         Ok(())
     }
 
-    /// Supprime le quota d'une entité.
+    /// Removes an entity's quota.
     pub fn remove_entity(&self, key: QuotaKey) -> ExofsResult<()> {
         QUOTA_TRACKER.remove(key)?;
         let _tick = audit_tick();
@@ -290,24 +290,24 @@ impl QuotaModule {
         Ok(())
     }
 
-    /// Génère un rapport complet.
+    /// Generates a full report.
     pub fn report(&self) -> ExofsResult<QuotaReport> {
         QuotaReport::from_tracker()
     }
 
-    /// Résumé de l'audit.
+    /// Audit summary.
     pub fn audit_summary(&self) -> AuditSummary {
         QUOTA_AUDIT.summary()
     }
 
-    /// Statistiques d'enforcement.
+    /// Enforcement statistics.
     pub fn enforcement_stats(&self) -> EnforcementStats {
         QUOTA_ENFORCER.stats()
     }
 
-    /// Réinitialise toutes les données (tracker + audit).
+    /// Resets all data (tracker + audit).
     pub fn reset_all(&self) -> ExofsResult<()> {
-        // Snapshot puis suppression de toutes les clés
+        // Snapshot then removal of all keys
         let all = QUOTA_TRACKER.snapshot_all()?;
         let n = all.len();
         let mut i = 0usize;
@@ -320,28 +320,28 @@ impl QuotaModule {
         Ok(())
     }
 
-    /// Snapshot de toutes les clés en dépassement hard.
+    /// Snapshot of all keys exceeding hard limit.
     pub fn hard_exceeded(&self) -> ExofsResult<Vec<QuotaKey>> {
         QUOTA_TRACKER.hard_exceeded_keys()
     }
 }
 
-/// Singleton global du module quota.
+/// Global singleton of the quota module.
 pub static QUOTA: QuotaModule = QuotaModule::new_const();
 
-// ─── Fonctions utilitaires globales ───────────────────────────────────────────
+// ─── Global utility functions ─────────────────────────────────────────────────
 
-/// Initialise le module quota avec la configuration par défaut.
+/// Initializes the quota module with default configuration.
 pub fn quota_init(tick: u64) -> ExofsResult<()> {
     QUOTA.init(QuotaConfig::default_config(), tick)
 }
 
-/// Vérifie et aplique un quota d'écriture.
+/// Checks and enforces a write quota.
 pub fn quota_check_write(key: QuotaKey, bytes: u64, tick: u64) -> ExofsResult<()> {
     QUOTA.check_write(key, bytes, 0, 0, tick)
 }
 
-/// Configure les limites d'une entité.
+/// Configures limits for an entity.
 pub fn quota_set_limits(key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
     QUOTA.set_limits(key, limits)
 }
@@ -395,7 +395,7 @@ mod tests {
         m.init(QuotaConfig::default_config(), 0).test_unwrap();
         let key = mk_key(301);
         m.set_limits(key, mk_limits(500)).test_unwrap();
-        // Remplir le tracker
+        // Fill tracker
         QUOTA_TRACKER.add_bytes(key, 400).test_unwrap();
         assert!(m.check_write(key, 200, 0, 0, 0).is_err());
     }

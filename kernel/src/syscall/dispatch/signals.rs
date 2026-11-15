@@ -177,7 +177,11 @@ pub fn check_and_deliver_signals(frame: &mut SyscallFrame) {
         None => return,
     };
 
-    let thread_ptr = pcb.main_thread_ptr();
+    let tid = crate::process::core::pid::Tid(tcb.tid as u32);
+    let mut thread_ptr = pcb.find_thread_by_tid(tid);
+    if thread_ptr.is_null() {
+        thread_ptr = pcb.main_thread_ptr();
+    }
     if thread_ptr.is_null() {
         return;
     }

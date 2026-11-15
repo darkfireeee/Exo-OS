@@ -1,11 +1,11 @@
-//! snapshot_mount.rs — Montage de snapshots en lecture seule
+//! snapshot_mount.rs — Read-only mounting of snapshots
 //!
-//! Gère le registre des snapshots montés, les points de montage virtuels
-//! et s'assure qu'un snapshot monté ne peut pas être supprimé ni modifié.
+//! Manages the registry of mounted snapshots, virtual mount points,
+//! and ensures that a mounted snapshot cannot be deleted or modified.
 //!
-//! Règles spec :
-//!   OOM-02   : try_reserve avant chaque push
-//!   ARITH-02 : checked_add pour compteurs
+//! Spec rules:
+//!   OOM-02   : try_reserve before each push
+//!   ARITH-02 : checked_add for counters
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -33,20 +33,20 @@ pub struct MountId(pub u64);
 // MountPoint
 // ─────────────────────────────────────────────────────────────
 
-/// Point de montage d'un snapshot
+/// Mount point of a snapshot
 #[derive(Debug, Clone)]
 pub struct MountPoint {
-    /// Identifiant de montage
+    /// Mount identifier
     pub mount_id: MountId,
-    /// Snapshot monté
+    /// Mounted snapshot
     pub snap_id: SnapshotId,
-    /// Chemin virtuel (UTF-8, null-padded)
+    /// Virtual path (UTF-8, null-padded)
     pub path: [u8; 256],
-    /// Timestamp de montage (ticks)
+    /// Mount timestamp (ticks)
     pub mounted_at: u64,
-    /// Nombre d'ouvertures actives sur ce point de montage
+    /// Number of active opens on this mount point
     pub open_count: u64,
-    /// Options de montage
+    /// Mount options
     pub opts: MountOptions,
 }
 
@@ -62,16 +62,16 @@ impl MountPoint {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Options de montage
+// Mount options
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct MountOptions {
-    /// Montage en lecture seule (toujours true pour les snapshots)
+    /// Read-only mount (always true for snapshots)
     pub readonly: bool,
-    /// Montage non-bloquant : n'attend pas les I/O
+    /// Non-blocking mount: does not wait for I/O
     pub nonblock: bool,
-    /// Montage avec strict verify (vérifie chaque accès)
+    /// Mount with strict verification (verifies each access)
     pub strict: bool,
 }
 
@@ -104,9 +104,9 @@ impl SnapshotMountRegistry {
         }
     }
 
-    // ── Montage ─────────────────────────────────────────────────────
+    // ── Mount ────────────────────────────────────────────────
 
-    /// Monte un snapshot sur le chemin virtuel `path`
+    /// Mounts a snapshot on virtual path `path`
     pub fn mount(
         &self,
         snap_id: SnapshotId,
@@ -114,15 +114,15 @@ impl SnapshotMountRegistry {
         opts: MountOptions,
         now: u64,
     ) -> ExofsResult<MountId> {
-        // Le snapshot doit exister
+        // The snapshot must exist
         let snap = SNAPSHOT_LIST.get(snap_id)?;
 
-        // Un snapshot en cours de restauration ne peut pas être monté
+        // A snapshot currently being restored cannot be mounted
         if snap.is_restoring() {
             return Err(ExofsError::InvalidState);
         }
 
-        // Construire le point de montage
+        // Build mount point
         let mount_id = MountId(self.next_id.fetch_add(1, Ordering::AcqRel));
         let mut path_arr = [0u8; 256];
         let len = path.len().min(256);
@@ -144,20 +144,20 @@ impl SnapshotMountRegistry {
         guard.insert(mount_id.0, mp);
         drop(guard);
 
-        // Marquer le snapshot comme monté
+        // Mark snapshot as mounted
         SNAPSHOT_LIST.set_flags(snap_id, flags::MOUNTED | flags::READONLY)?;
         self.n_mounts.fetch_add(1, Ordering::AcqRel);
         Ok(mount_id)
     }
 
-    // ── Démontage ───────────────────────────────────────────────────
+    // ── Unmount ──────────────────────────────────────────────
 
-    /// Démonte un point de montage
+    /// Unmounts a mount point
     pub fn umount(&self, mount_id: MountId) -> ExofsResult<()> {
         let mut guard = self.mounts.lock();
         let mp = guard.get(&mount_id.0).ok_or(ExofsError::NotFound)?;
         if mp.is_busy() {
-            return Err(ExofsError::InvalidState); // Fichiers ouverts
+            return Err(ExofsError::InvalidState); // Open files
         }
         let snap_id = mp.snap_id;
         guard.remove(&mount_id.0);
@@ -165,14 +165,14 @@ impl SnapshotMountRegistry {
 
         self.n_mounts.fetch_sub(1, Ordering::AcqRel);
 
-        // Retirer le flag MOUNTED si plus aucun montage sur ce snapshot
+        // Remove MOUNTED flag if no more mounts remain on this snapshot
         if !self.is_snap_mounted(snap_id) {
             let _ = SNAPSHOT_LIST.clear_flags(snap_id, flags::MOUNTED);
         }
         Ok(())
     }
 
-    /// Force le démontage (même si des fichiers sont ouverts)
+    /// Forces unmount (even if files are open)
     pub fn force_umount(&self, mount_id: MountId) -> ExofsResult<()> {
         let mut guard = self.mounts.lock();
         let mp = guard.remove(&mount_id.0).ok_or(ExofsError::NotFound)?;
@@ -186,9 +186,9 @@ impl SnapshotMountRegistry {
         Ok(())
     }
 
-    // ── Gestion des ouvertures ───────────────────────────────────────
+    // ── Open management ──────────────────────────────────────
 
-    /// Incrémente le compteur d'ouvertures (ARITH-02 : checked)
+    /// Increments the open counter (ARITH-02: checked)
     pub fn open(&self, mount_id: MountId) -> ExofsResult<()> {
         let mut guard = self.mounts.lock();
         let mp = guard.get_mut(&mount_id.0).ok_or(ExofsError::NotFound)?;
@@ -196,7 +196,7 @@ impl SnapshotMountRegistry {
         Ok(())
     }
 
-    /// Décrémente le compteur d'ouvertures
+    /// Decrements the open counter
     pub fn close(&self, mount_id: MountId) -> ExofsResult<()> {
         let mut guard = self.mounts.lock();
         let mp = guard.get_mut(&mount_id.0).ok_or(ExofsError::NotFound)?;
@@ -204,7 +204,7 @@ impl SnapshotMountRegistry {
         Ok(())
     }
 
-    // ── Requêtes ────────────────────────────────────────────────────
+    // ── Queries ──────────────────────────────────────────────
 
     pub fn get(&self, mount_id: MountId) -> ExofsResult<MountPoint> {
         let guard = self.mounts.lock();
@@ -250,7 +250,7 @@ impl SnapshotMountRegistry {
         Ok(out)
     }
 
-    // ── Statistiques ────────────────────────────────────────────────
+    // ── Statistics ───────────────────────────────────────────
 
     pub fn n_mounts(&self) -> usize {
         self.n_mounts.load(Ordering::Acquire)
@@ -273,7 +273,7 @@ impl SnapshotMountRegistry {
         }
     }
 
-    // ── Nettoyage ────────────────────────────────────────────────────
+    // ── Cleanup ──────────────────────────────────────────────
 
     pub fn clear(&self) {
         let mut guard = self.mounts.lock();
@@ -283,7 +283,7 @@ impl SnapshotMountRegistry {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]

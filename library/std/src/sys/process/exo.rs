@@ -38,29 +38,53 @@ impl Stdio {
 #[derive(Default)]
 pub struct Command {
     program: OsString,
+    arg0: Option<OsString>,
     args: Vec<OsString>,
     cwd: Option<OsString>,
     stdin: Option<Stdio>,
     stdout: Option<Stdio>,
     stderr: Option<Stdio>,
     env: CommandEnv,
+    uid: Option<u32>,
+    gid: Option<u32>,
+    pledge_mask: Option<u32>,
 }
 
 impl Command {
     pub fn new(program: &OsStr) -> Command {
         Command {
             program: program.to_owned(),
+            arg0: None,
             args: Vec::new(),
             cwd: None,
             stdin: None,
             stdout: None,
             stderr: None,
             env: CommandEnv::default(),
+            uid: None,
+            gid: None,
+            pledge_mask: None,
         }
     }
 
     pub fn arg(&mut self, arg: &OsStr) {
         self.args.push(arg.to_owned());
+    }
+
+    pub fn arg0(&mut self, arg: &OsStr) {
+        self.arg0 = Some(arg.to_owned());
+    }
+
+    pub fn uid(&mut self, id: u32) {
+        self.uid = Some(id);
+    }
+
+    pub fn gid(&mut self, id: u32) {
+        self.gid = Some(id);
+    }
+
+    pub fn pledge_mask(&mut self, mask: u32) {
+        self.pledge_mask = Some(mask);
     }
 
     pub fn env_mut(&mut self) -> &mut CommandEnv {
@@ -169,9 +193,40 @@ impl Command {
         }
 
         // Pre-allocate all C-strings before fork() so child never touches heap.
-        let prog_c = cstr_bytes(self.program.as_bytes())?;
+        let raw_prog = self.program.as_bytes();
+        let resolved_prog_bytes: Vec<u8> = if raw_prog.contains(&b'/') {
+            raw_prog.to_vec()
+        } else {
+            let path_env = crate::sys::env::getenv(OsStr::from_bytes(b"PATH"))
+                .map(|s| s.as_os_str().as_bytes().to_vec())
+                .unwrap_or_else(|| b"/bin:/sbin:/usr/bin".to_vec());
+            let mut found = None;
+            for dir in path_env.split(|&b| b == b':') {
+                if dir.is_empty() {
+                    continue;
+                }
+                let mut candidate = Vec::with_capacity(dir.len() + 1 + raw_prog.len() + 1);
+                candidate.extend_from_slice(dir);
+                if !dir.ends_with(b"/") {
+                    candidate.push(b'/');
+                }
+                candidate.extend_from_slice(raw_prog);
+                let mut c_cand = candidate.clone();
+                c_cand.push(0);
+                if syscall::exofs_stat(&c_cand).is_ok() {
+                    found = Some(candidate);
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| raw_prog.to_vec())
+        };
+        let prog_c = cstr_bytes(&resolved_prog_bytes)?;
+        let arg0_c = match &self.arg0 {
+            Some(a0) => cstr_bytes(a0.as_bytes())?,
+            None => cstr_bytes(raw_prog)?,
+        };
         let mut argv_storage: Vec<Vec<u8>> = Vec::with_capacity(1 + self.args.len());
-        argv_storage.push(prog_c.clone());
+        argv_storage.push(arg0_c);
         for a in &self.args {
             argv_storage.push(cstr_bytes(a.as_bytes())?);
         }
@@ -179,10 +234,18 @@ impl Command {
         argv_ptrs.push(core::ptr::null());
 
         let captured_env = self.env.capture();
+        let mut child_pledge = self.pledge_mask;
         let mut env_storage: Vec<Vec<u8>> = Vec::with_capacity(captured_env.len());
         for (k, v) in captured_env {
             let kb = k.as_bytes();
             let vb = v.as_bytes();
+            if kb == b"EXO_PLEDGE_PERMS" && child_pledge.is_none() {
+                if let Ok(s) = core::str::from_utf8(vb) {
+                    if let Ok(parsed) = s.parse::<u32>() {
+                        child_pledge = Some(parsed);
+                    }
+                }
+            }
             let mut entry = Vec::with_capacity(kb.len() + 1 + vb.len() + 1);
             entry.extend_from_slice(kb);
             entry.push(b'=');
@@ -264,6 +327,9 @@ impl Command {
             }
 
             let _ = runtime::sigprocmask_0syscall(runtime::SIG_SETMASK, Some(0), None);
+            if let Some(mask) = child_pledge {
+                let _ = syscall::exo_pledge(mask);
+            }
 
             let rc = unsafe {
                 runtime::execve(prog_c.as_ptr(), argv_ptrs.as_ptr(), envp_ptrs.as_ptr())
@@ -369,6 +435,14 @@ impl fmt::Debug for Command {
 pub struct ExitStatus(i32);
 
 impl ExitStatus {
+    pub fn from_raw(raw: i32) -> ExitStatus {
+        ExitStatus(raw)
+    }
+
+    pub fn into_raw(self) -> i32 {
+        self.0
+    }
+
     pub fn exit_ok(&self) -> Result<(), ExitStatusError> {
         if self.code() == Some(0) {
             Ok(())

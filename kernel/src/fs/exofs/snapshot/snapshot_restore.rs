@@ -1,13 +1,13 @@
-//! snapshot_restore.rs — Restauration d'un snapshot ExoFS
+//! snapshot_restore.rs — Restoration of an ExoFS snapshot
 //!
-//! Pipeline de restauration : lit chaque blob depuis une source, vérifie
-//! son identifiant (HASH-02 : verify_blob_id sur données RAW), puis
-//! l'écrit via un RestoreSink.
+//! Restoration pipeline: reads each blob from a source, verifies
+//! its identifier (HASH-02: verify_blob_id on RAW data), then
+//! writes it via a RestoreSink.
 //!
-//! Règles spec :
-//!   HASH-02  : verify_blob_id sur données RAW avant écriture
-//!   WRITE-02 : vérifier bytes_written == expected
-//!   OOM-02   : try_reserve avant chaque push
+//! Spec rules:
+//!   HASH-02  : verify_blob_id on RAW data before writing
+//!   WRITE-02 : verify bytes_written == expected
+//!   OOM-02   : try_reserve before each push
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -22,37 +22,37 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, SnapshotId};
 // Traits
 // ─────────────────────────────────────────────────────────────
 
-/// Destination de restauration : reçoit les blobs et les persiste
+/// Restoration destination: receives blobs and persists them
 pub trait RestoreSink: Send + Sync {
-    /// Écrit un blob ; doit retourner `ShortWrite` si non complet
+    /// Writes a blob; must return `ShortWrite` if incomplete
     fn write_blob(&mut self, blob_id: BlobId, data: &[u8]) -> ExofsResult<usize>;
-    /// Finalise la restauration (flush, commit)
+    /// Finalizes restoration (flush, commit)
     fn finalize(&mut self) -> ExofsResult<()>;
-    /// Rollback en cas d'erreur
+    /// Rollback on error
     fn abort(&mut self);
 }
 
-/// Source de blobs pour la restauration
+/// Blob source for restoration
 pub trait SnapshotBlobSource: Send + Sync {
-    /// Lit un blob par son identifiant
+    /// Reads a blob by its identifier
     fn read_blob(&self, snap_id: SnapshotId, blob_id: BlobId) -> ExofsResult<Vec<u8>>;
-    /// Enumère les identifiants des blobs d'un snapshot
+    /// Enumerates blob identifiers of a snapshot
     fn list_blobs(&self, snap_id: SnapshotId) -> ExofsResult<Vec<BlobId>>;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Options de restauration
+// Restoration options
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct RestoreOptions {
-    /// Vérifie l'intégrité (HASH-02) de chaque blob
+    /// Verifies integrity (HASH-02) of each blob
     pub verify_integrity: bool,
-    /// Continue sur les erreurs non-fatales (blob corrompu)
+    /// Continues on non-fatal errors (corrupted blob)
     pub resilient: bool,
-    /// Nombre max de blobs à restaurer (0 = tous)
+    /// Max number of blobs to restore (0 = all)
     pub max_blobs: usize,
-    /// Ignorer les blobs déjà présents dans la destination
+    /// Ignore blobs already present in destination
     pub skip_existing: bool,
 }
 
@@ -68,7 +68,7 @@ impl Default for RestoreOptions {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Résultat de restauration
+// Restoration result
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -111,9 +111,9 @@ impl SnapshotRestore {
         }
     }
 
-    // ── Point d'entrée ───────────────────────────────────────────────
+    // ── Entry point ──────────────────────────────────────────
 
-    /// Lance la restauration complète d'un snapshot
+    /// Starts full restoration of a snapshot
     pub fn restore<S: SnapshotBlobSource, D: RestoreSink>(
         &self,
         snap_id: SnapshotId,
@@ -121,15 +121,15 @@ impl SnapshotRestore {
         dest: &mut D,
         opts: RestoreOptions,
     ) -> ExofsResult<RestoreResult> {
-        // Vérifier que le snapshot existe
+        // Verify that snapshot exists
         let _snap_ref = SNAPSHOT_LIST.get_ref(snap_id)?;
 
-        // Marquer le snapshot en cours de restauration
+        // Mark snapshot as being restored
         SNAPSHOT_LIST.set_flags(snap_id, flags::RESTORING)?;
 
         let result = self.run_pipeline(snap_id, source, dest, opts);
 
-        // Nettoyer le flag RESTORING
+        // Clear RESTORING flag
         let _ = SNAPSHOT_LIST.clear_flags(snap_id, flags::RESTORING);
 
         match result {
@@ -141,7 +141,7 @@ impl SnapshotRestore {
         }
     }
 
-    // ── Pipeline interne ─────────────────────────────────────────────
+    // ── Internal pipeline ────────────────────────────────────────────
 
     fn run_pipeline<S: SnapshotBlobSource, D: RestoreSink>(
         &self,
@@ -200,7 +200,7 @@ impl SnapshotRestore {
             }
         }
 
-        // WRITE-02 : finalise uniquement si aucune erreur ou mode resilient
+        // WRITE-02: finalize only if zero errors or resilient mode
         if result.n_blobs_error == 0 || opts.resilient {
             dest.finalize()?;
         } else {
@@ -219,12 +219,12 @@ impl SnapshotRestore {
         dest: &mut D,
         opts: RestoreOptions,
     ) -> Result<usize, RestoreErrorKind> {
-        // Lecture depuis la source
+        // Read from source
         let data = source
             .read_blob(snap_id, blob_id)
             .map_err(|_| RestoreErrorKind::ReadFailed)?;
 
-        // HASH-02 : vérifier l'intégrité sur données RAW
+        // HASH-02: verify integrity on RAW data
         if opts.verify_integrity {
             if !verify_blob_id(&blob_id, &data) {
                 return Err(RestoreErrorKind::IntegrityFailed);
@@ -233,7 +233,7 @@ impl SnapshotRestore {
 
         let expected = data.len();
 
-        // WRITE-02 : vérifier bytes_written == expected
+        // WRITE-02: verify bytes_written == expected
         let written = dest
             .write_blob(blob_id, &data)
             .map_err(|_| RestoreErrorKind::WriteFailed)?;
@@ -244,9 +244,9 @@ impl SnapshotRestore {
         Ok(written)
     }
 
-    // ── Annulation ───────────────────────────────────────────────────
+    // ── Abort ────────────────────────────────────────────────────────
 
-    /// Annule la restauration en cours (appelable depuis un autre thread)
+    /// Aborts ongoing restoration (callable from another thread)
     pub fn abort(&self) {
         self.aborted.store(true, Ordering::Release);
     }
@@ -261,10 +261,10 @@ impl SnapshotRestore {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RestoreSink nul (utile pour dry-run / tests)
+// Null RestoreSink (useful for dry-run / tests)
 // ─────────────────────────────────────────────────────────────
 
-/// Sink qui compte les octets sans rien écrire (dry-run)
+/// Sink that counts bytes without writing anything (dry-run)
 pub struct NullRestoreSink {
     pub bytes_received: u64,
     pub blobs_received: u64,
@@ -283,7 +283,7 @@ impl RestoreSink for NullRestoreSink {
     fn write_blob(&mut self, _: BlobId, data: &[u8]) -> ExofsResult<usize> {
         self.bytes_received = self.bytes_received.saturating_add(data.len() as u64);
         self.blobs_received += 1;
-        Ok(data.len()) // WRITE-02 : retours corrects
+        Ok(data.len()) // WRITE-02: correct return value
     }
     fn finalize(&mut self) -> ExofsResult<()> {
         Ok(())
@@ -292,10 +292,10 @@ impl RestoreSink for NullRestoreSink {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SnapshotBlobSource en mémoire (tests)
+// In-memory SnapshotBlobSource (tests)
 // ─────────────────────────────────────────────────────────────
 
-/// Source en mémoire (pour tests)
+/// In-memory source (for tests)
 pub struct MemBlobSource {
     entries: alloc::collections::BTreeMap<[u8; 32], Vec<u8>>,
     snap_blobs: alloc::collections::BTreeMap<u64, Vec<BlobId>>,
@@ -309,7 +309,7 @@ impl MemBlobSource {
         }
     }
 
-    /// OOM-02 : try_reserve avant push
+    /// OOM-02: try_reserve before push
     pub fn add_blob(
         &mut self,
         snap_id: SnapshotId,
@@ -399,7 +399,7 @@ mod tests {
         let raw = b"original data";
         let bid = compute_blob_id(raw);
         let mut source = MemBlobSource::new();
-        // Injecte des données corrompues (HASH-02 : la vérification doit échouer)
+        // Injects corrupted data (HASH-02: verification must fail)
         source
             .add_blob(SnapshotId(2), bid, b"corrupted data".to_vec())
             .test_unwrap();

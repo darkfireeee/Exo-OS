@@ -195,8 +195,10 @@ pub unsafe fn futex_wait(
 
                 // After short spin phase: block via scheduler.
                 if phase_spins >= SPIN_BEFORE_BLOCK {
+                    super::sched_hooks::prepare_sleep(thread_id);
                     // Check again before blocking (avoids missed wakeup).
                     if waiter.woken.load(Ordering::Acquire) {
+                        super::sched_hooks::cancel_sleep(thread_id);
                         guard.disarm();
                         return Ok(WaiterState::Woken);
                     }

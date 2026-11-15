@@ -17,6 +17,13 @@ pub fn sys_kill(pid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i
     crate::syscall::handlers::signal::sys_kill(pid, sig, 0, 0, 0, 0)
 }
 
+/// `tkill(tid, sig)` — sends signal `sig` to thread `tid`.
+pub fn sys_tkill(tid: u64, sig: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_TKILL);
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid() as u64;
+    crate::syscall::handlers::signal::sys_tgkill(caller_pid, tid, sig, 0, 0, 0)
+}
+
 /// `tgkill(tgid, tid, sig)` — wired via send_signal_to_tcb during integration.
 pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_TGKILL);

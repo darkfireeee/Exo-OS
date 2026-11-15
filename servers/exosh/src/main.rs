@@ -15,11 +15,14 @@ use exec::*;
 fn main() {
     attach_stdio_to_tty();
     register_readiness_endpoint();
+    ensure_input_ready();
     ignore_sigint();
+    crate::terminal::register_exosh_wayland_surface();
 
     let mut state = ShellState::new();
     write_all(b"\x0cExo-OS userspace console ready\n");
-    write_all(b"Services launched by init_server. Type 'help' for commands.\n\n");
+    write_all(b"Target: x86_64-unknown-exo (Rust std + wayland-rs 0.31.11)\n");
+    write_all(b"Services launched by init_server. Type 'help' or 'exo wayland'.\n\n");
 
     loop {
         let mut line = [0u8; LINE_MAX];

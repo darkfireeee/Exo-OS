@@ -68,6 +68,8 @@ pub enum FsBridgeError {
     Interrupted,
     /// Write to pipe with no reader.
     BrokenPipe,
+    /// Socket is not connected (ENOTCONN).
+    NotConnected,
     /// Illegal seek (pipe, socket, etc.) (ESPIPE).
     IllegalSeek,
     /// Buffer too small for result (ERANGE).
@@ -96,6 +98,7 @@ impl FsBridgeError {
             FsBridgeError::WouldBlock => -11, // EAGAIN
             FsBridgeError::Interrupted => -4, // EINTR
             FsBridgeError::BrokenPipe => -32, // EPIPE
+            FsBridgeError::NotConnected => -107, // ENOTCONN
             FsBridgeError::IllegalSeek => -29, // ESPIPE
             FsBridgeError::Range => -34,      // ERANGE
         }
@@ -153,6 +156,8 @@ pub const LOCK_UN: u32 = 8;
 pub const POLLIN: i16 = 0x0001;
 
 pub const POLLOUT: i16 = 0x0004;
+
+pub const POLLHUP: i16 = 0x0010;
 
 pub const POLLNVAL: i16 = 0x0020;
 
@@ -230,6 +235,8 @@ pub const PSEUDO_EPOLL_TAG: u8 = 0xE9;
 pub const PSEUDO_INOTIFY_TAG: u8 = 0x1D;
 
 pub const PSEUDO_SOCKET_TAG: u8 = 0x5C;
+
+pub const PSEUDO_MEMFD_TAG: u8 = 0xFD;
 
 pub const SOCKET_HEADER_LEN: usize = 32;
 
@@ -334,6 +341,60 @@ pub fn remove_mode(blob_id: &BlobId) {
 pub struct LinuxTimespec {
     pub tv_sec: i64,
     pub tv_nsec: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LinuxTimeval {
+    pub tv_sec: i64,
+    pub tv_usec: i64,
+}
+
+#[derive(Clone, Copy)]
+pub struct TimeRecord {
+    pub blob_id: BlobId,
+    pub atim: LinuxTimespec,
+    pub mtim: LinuxTimespec,
+}
+
+pub static FILE_TIMES_TABLE: Mutex<Vec<TimeRecord>> = Mutex::new(Vec::new());
+
+pub fn upsert_times(blob_id: BlobId, atim: Option<LinuxTimespec>, mtim: Option<LinuxTimespec>) {
+    let mut table = FILE_TIMES_TABLE.lock();
+    for record in table.iter_mut() {
+        if record.blob_id == blob_id {
+            if let Some(a) = atim {
+                record.atim = a;
+            }
+            if let Some(m) = mtim {
+                record.mtim = m;
+            }
+            return;
+        }
+    }
+    if table.try_reserve(1).is_ok() {
+        table.push(TimeRecord {
+            blob_id,
+            atim: atim.unwrap_or_default(),
+            mtim: mtim.unwrap_or_default(),
+        });
+    }
+}
+
+pub fn stored_times(blob_id: &BlobId) -> (LinuxTimespec, LinuxTimespec) {
+    FILE_TIMES_TABLE
+        .lock()
+        .iter()
+        .find(|record| record.blob_id == *blob_id)
+        .map(|record| (record.atim, record.mtim))
+        .unwrap_or_default()
+}
+
+pub fn remove_times(blob_id: &BlobId) {
+    let mut table = FILE_TIMES_TABLE.lock();
+    if let Some(pos) = table.iter().position(|record| record.blob_id == *blob_id) {
+        table.swap_remove(pos);
+    }
 }
 
 #[repr(C)]
@@ -583,6 +644,7 @@ pub fn linux_stat_for_blob_meta(
     kind: u8,
     is_dir: bool,
 ) -> LinuxStat {
+    let (atim, mtim) = stored_times(&blob_id);
     LinuxStat {
         st_dev: 0,
         st_ino: inode_from_blob_id(&blob_id),
@@ -595,9 +657,9 @@ pub fn linux_stat_for_blob_meta(
         st_size: size as i64,
         st_blksize: STAT_BLOCK_SIZE,
         st_blocks: blocks_for_size(size),
-        st_atim: LinuxTimespec::default(),
-        st_mtim: LinuxTimespec::default(),
-        st_ctim: LinuxTimespec::default(),
+        st_atim: atim,
+        st_mtim: mtim,
+        st_ctim: mtim,
         __unused: [0; 3],
     }
 }
@@ -629,10 +691,22 @@ pub fn linux_statx_from_stat(stat: LinuxStat) -> LinuxStatx {
         stx_size: stat.st_size as u64,
         stx_blocks: stat.st_blocks as u64,
         stx_attributes_mask: 0,
-        stx_atime: LinuxStatxTimestamp::default(),
+        stx_atime: LinuxStatxTimestamp {
+            tv_sec: stat.st_atim.tv_sec,
+            tv_nsec: stat.st_atim.tv_nsec as u32,
+            __reserved: 0,
+        },
         stx_btime: LinuxStatxTimestamp::default(),
-        stx_ctime: LinuxStatxTimestamp::default(),
-        stx_mtime: LinuxStatxTimestamp::default(),
+        stx_ctime: LinuxStatxTimestamp {
+            tv_sec: stat.st_ctim.tv_sec,
+            tv_nsec: stat.st_ctim.tv_nsec as u32,
+            __reserved: 0,
+        },
+        stx_mtime: LinuxStatxTimestamp {
+            tv_sec: stat.st_mtim.tv_sec,
+            tv_nsec: stat.st_mtim.tv_nsec as u32,
+            __reserved: 0,
+        },
         stx_rdev_major: 0,
         stx_rdev_minor: 0,
         stx_dev_major: 0,
@@ -681,16 +755,34 @@ where
     Ok(total)
 }
 
+/// Duplicate an opaque handle in OBJECT_TABLE during `fork()`.
+pub fn dup_handle_for_fork(handle: u64) -> Option<u64> {
+    if is_tty_handle_u64(handle) {
+        return Some(handle);
+    }
+    if handle <= u32::MAX as u64 {
+        if let Ok(dup_fd) = OBJECT_TABLE.dup(handle as u32) {
+            return Some(dup_fd as u64);
+        }
+    }
+    Some(handle)
+}
+
+/// Close a single opaque handle removed on process exit or execve(O_CLOEXEC).
+pub fn close_handle_on_exit(handle: u64) {
+    if is_tty_handle_u64(handle) {
+        return;
+    }
+    if handle <= u32::MAX as u64 {
+        let _ = close_object_handle_with_cleanup(handle as u32);
+    }
+    let _ = crate::fs::exofs::posix_bridge::vfs_close(handle);
+}
+
 /// Close the opaque handles removed from a PCB by execve(O_CLOEXEC).
 pub fn close_exec_handles_for_pid(pid: u32, handles: &[u64]) {
     for &handle in handles {
-        if is_tty_handle_u64(handle) {
-            continue;
-        }
-        if handle <= u32::MAX as u64 {
-            let _ = OBJECT_TABLE.close(handle as u32);
-        }
-        let _ = crate::fs::exofs::posix_bridge::vfs_close(handle);
+        close_handle_on_exit(handle);
     }
     let _ = pid;
 }

@@ -45,6 +45,41 @@ use crate::syscall::table::get_handler;
 // Main dispatch entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Pairs `audit_syscall_exit` with ExoLedger process-lifecycle auditing so
+/// fast-path and early-return paths (`fork`/`vfork`/`clone`/`execve`) never leak context slots.
+#[inline]
+fn finish_audited_syscall(
+    effective_nr: u64,
+    caller_pid: u32,
+    caller_tid: u32,
+    caller_uid: u16,
+    result: i64,
+) {
+    audit_syscall_exit(caller_tid, result);
+    let is_critical_syscall = effective_nr == crate::syscall::numbers::SYS_EXECVE
+        || effective_nr == crate::syscall::numbers::SYS_CLONE
+        || effective_nr == crate::syscall::numbers::SYS_FORK
+        || effective_nr == crate::syscall::numbers::SYS_VFORK;
+    if is_critical_syscall {
+        use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
+        let outcome = if result < 0 {
+            AuditOutcome::Error
+        } else {
+            AuditOutcome::Allow
+        };
+        log_event(
+            AuditCategory::Process,
+            caller_pid,
+            caller_tid,
+            caller_uid,
+            effective_nr as u32,
+            result as i32,
+            outcome,
+            [0u8; 8],
+        );
+    }
+}
+
 /// Dispatches the system call described by `frame`.
 ///
 /// This function is called from `arch::x86_64::syscall::syscall_rust_handler`.
@@ -81,18 +116,27 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // even before its execution (AuditVerdict::DenyEperm / ::Kill).
     // Only affects sensitive syscalls defined in audit/rules.rs.
     // RULE SAU-01: triggers no recursive calls.
-    let (caller_pid, caller_tid) = {
+    let (caller_pid, caller_tid, caller_uid) = {
         let tcb_ptr = current_thread_raw();
         if tcb_ptr.is_null() {
-            (0u32, 0u32)
+            (0u32, 0u32, 0u16)
         } else {
             // SAFETY: current_thread_raw() returns a valid pointer or null.
             // Lifetime is bounded to this stack frame (no scheduler swap possible here).
             let tcb = unsafe { &*tcb_ptr };
-            (tcb.pid.0, tcb.tid as u32)
+            let pid = tcb.pid.0;
+            let uid = if pid == 0 {
+                0
+            } else {
+                crate::process::core::registry::PROCESS_REGISTRY
+                    .find_by_pid(crate::process::core::pid::Pid(pid))
+                    .map(|pcb| pcb.euid_fast() as u16)
+                    .unwrap_or(0)
+            };
+            (pid, tcb.tid as u32, uid)
         }
     };
-    match audit_syscall_entry(nr as u32, caller_pid, caller_tid, 0) {
+    match audit_syscall_entry(nr as u32, caller_pid, caller_tid, caller_uid) {
         AuditVerdict::Allow => {}
         AuditVerdict::DenyEperm => {
             frame.rax = crate::syscall::numbers::EPERM as u64;
@@ -151,6 +195,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     if let Some(result) = try_fast_path(nr, arg1, arg2, arg3, arg4, arg5, arg6) {
         stats::inc_fast_path();
         frame.rax = result as u64;
+        audit_syscall_exit(caller_tid, result);
         post_dispatch(frame, tsc_start);
         return;
     }
@@ -167,6 +212,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [5] Special case rt_sigreturn — needs access to arch frame ────────
     if effective_nr == crate::syscall::numbers::SYS_RT_SIGRETURN {
         handle_sigreturn_inplace(frame);
+        audit_syscall_exit(caller_tid, frame.rax as i64);
         post_dispatch(frame, tsc_start);
         return;
     }
@@ -178,6 +224,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             handle_fork_like_inplace(frame, crate::process::lifecycle::fork::ForkFlags::default());
         stats::syscall_trace(b"sys_fork: result\n");
         frame.rax = result as u64;
+        finish_audited_syscall(effective_nr, caller_pid, caller_tid, caller_uid, result);
         post_dispatch_defer_resched(frame, tsc_start);
         stats::syscall_trace(b"sys_fork: post\n");
         return;
@@ -191,6 +238,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
             ),
         );
         frame.rax = result as u64;
+        finish_audited_syscall(effective_nr, caller_pid, caller_tid, caller_uid, result);
         post_dispatch_defer_resched(frame, tsc_start);
         return;
     }
@@ -213,6 +261,7 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         let result = handle_fork_like_inplace(frame, fork_flags);
         frame.rsp = saved_rsp;
         frame.rax = result as u64;
+        finish_audited_syscall(effective_nr, caller_pid, caller_tid, caller_uid, result);
         post_dispatch_defer_resched(frame, tsc_start);
         return;
     }
@@ -220,6 +269,13 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [5c] Special case execve — modifies frame to jump to new binary ────
     if effective_nr == crate::syscall::numbers::SYS_EXECVE {
         handle_execve_inplace(frame);
+        finish_audited_syscall(
+            effective_nr,
+            caller_pid,
+            caller_tid,
+            caller_uid,
+            frame.rax as i64,
+        );
         // No post_dispatch after successful execve (new image). On
         // failure, the process continues in the old image and must deliver
         // its pending signals before returning to userspace.
@@ -244,34 +300,8 @@ pub fn dispatch(frame: &mut SyscallFrame) {
     // ── [8] Writing result ────────────────────────────────────────────────
     frame.rax = result as u64;
 
-    // ── [8b] Audit syscall exit (FIX-APP-02) ──────────────────────────────
-    audit_syscall_exit(caller_tid, result);
-
-    // ── [8c] Audit ExoLedger: log critical syscalls (FIX-APP-08 — GAP-08) ──
-    {
-        use crate::security::audit::logger::{log_event, AuditCategory, AuditOutcome};
-        let is_critical_syscall = effective_nr == crate::syscall::numbers::SYS_EXECVE
-            || effective_nr == crate::syscall::numbers::SYS_CLONE
-            || effective_nr == crate::syscall::numbers::SYS_FORK
-            || effective_nr == crate::syscall::numbers::SYS_VFORK;
-        if is_critical_syscall {
-            let outcome = if result < 0 {
-                AuditOutcome::Error
-            } else {
-                AuditOutcome::Allow
-            };
-            log_event(
-                AuditCategory::Process,
-                caller_pid,
-                caller_tid,
-                0u16,
-                effective_nr as u32,
-                result as i32,
-                outcome,
-                [0u8; 8],
-            );
-        }
-    }
+    // ── [8b] + [8c] Audit syscall exit & ExoLedger critical syscall logging ─
+    finish_audited_syscall(effective_nr, caller_pid, caller_tid, caller_uid, result);
 
     // ── [9] Post-dispatch: signal pending + instrumentation ───────────────
     post_dispatch(frame, tsc_start);

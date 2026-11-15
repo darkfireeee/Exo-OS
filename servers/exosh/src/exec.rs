@@ -99,23 +99,35 @@ pub fn run_pipeline(left: &[u8], right: &[u8], state: &mut ShellState) {
     let mut st1 = 0i32;
     let mut st2 = 0i32;
     unsafe {
-        let _ = syscall::syscall4(
-            syscall::SYS_WAIT4,
-            child_left as u64,
-            &mut st1 as *mut i32 as u64,
-            0,
-            0,
-        );
-        let _ = syscall::syscall4(
-            syscall::SYS_WAIT4,
-            child_right as u64,
-            &mut st2 as *mut i32 as u64,
-            0,
-            0,
-        );
+        loop {
+            let rc = syscall::syscall4(
+                syscall::SYS_WAIT4,
+                child_right as u64,
+                &mut st2 as *mut i32 as u64,
+                0,
+                0,
+            );
+            if rc != -4 {
+                break;
+            }
+        }
+        if (st2 & 0x7f) != 0 {
+            let _ = syscall::syscall2(syscall::SYS_KILL, child_left as u64, 2);
+        }
+        loop {
+            let rc = syscall::syscall4(
+                syscall::SYS_WAIT4,
+                child_left as u64,
+                &mut st1 as *mut i32 as u64,
+                0,
+                0,
+            );
+            if rc != -4 {
+                break;
+            }
+        }
     }
-    let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
-    set_tty_foreground(self_pid);
+    set_tty_foreground(0);
     state.last_status = if (st2 & 0x7f) == 0 { (st2 >> 8) & 0xff } else { 128 + (st2 & 0x7f) };
 }
 
@@ -455,17 +467,21 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
 
     set_tty_foreground(child as u32);
     let mut status = 0i32;
-    let wait_rc = unsafe {
-        syscall::syscall4(
-            syscall::SYS_WAIT4,
-            child as u64,
-            &mut status as *mut i32 as u64,
-            0,
-            0,
-        )
+    let wait_rc = loop {
+        let rc = unsafe {
+            syscall::syscall4(
+                syscall::SYS_WAIT4,
+                child as u64,
+                &mut status as *mut i32 as u64,
+                0,
+                0,
+            )
+        };
+        if rc != -4 {
+            break rc;
+        }
     };
-    let self_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
-    set_tty_foreground(self_pid);
+    set_tty_foreground(0);
     if wait_rc < 0 {
         print_errno(b"wait4", wait_rc);
     } else {

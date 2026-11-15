@@ -246,7 +246,7 @@ impl ContainerProfile {
     }
 
     /// Check whether a syscall is allowed for this container.
-    pub fn check_syscall(&self, nr: u8) -> bool {
+    pub fn check_syscall(&self, nr: u16) -> bool {
         self.syscall_filter.is_allowed(nr)
     }
 
@@ -574,7 +574,7 @@ pub fn is_pid_quarantined(pid: u32) -> bool {
 }
 
 /// Check a syscall against the PID's quarantine profile, if one exists.
-pub fn quarantine_allows_syscall(pid: u32, nr: u8) -> bool {
+pub fn quarantine_allows_syscall(pid: u32, nr: u16) -> bool {
     let manager = GLOBAL_CONTAINER_MANAGER.lock();
     manager
         .get_by_pid(pid)

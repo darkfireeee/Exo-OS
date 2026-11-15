@@ -1,18 +1,18 @@
-//! path_index_tree.rs — Table de hachage à adressage ouvert pour les entrées PathIndex.
+//! path_index_tree.rs — Open-addressing hash table for PathIndex entries.
 //!
-//! Cette structure est un composant interne utilisé par [`PathIndex`] pour stocker
-//! les entrées d un répertoire de façon efficace sans allocation dynamique par entrée.
+//! This structure is an internal component used by [`PathIndex`] to store
+//! directory entries efficiently without per-entry dynamic allocation.
 //!
-//! ## Caractéristiques
-//! - 256 buckets (adressage ouvert, sondage linéaire).
-//! - Facteur de charge max : 75 % (192 entrées).
-//! - Buckets alloués paresseusement sur le heap pour préserver les piles kernel.
-//! - Clé = hash FNV-1a u64 + tranché de nom (pour distinguer collisions).
-//! - Opérations O(1) amorti : insert, find, remove.
+//! ## Characteristics
+//! - 256 buckets (open addressing, linear probing).
+//! - Max load factor: 75% (192 entries).
+//! - Buckets lazily allocated on the heap to preserve kernel stacks.
+//! - Key = u64 SipHash/FNV-1a hash + name slice (to resolve collisions).
+//! - Amortized O(1) operations: insert, find, remove.
 //!
-//! # Règles spec appliquées
-//! - **ARITH-02** : `checked_add` / `wrapping_add` sur tous les calculs d index.
-//! - **OOM-02** : allocation faillible avant initialisation des buckets.
+//! # Applied spec rules
+//! - **ARITH-02** : `checked_add` / `wrapping_add` on all index calculations.
+//! - **OOM-02** : fallible allocation before initializing buckets.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -20,35 +20,35 @@ use alloc::vec::Vec;
 use super::path_component::{siphash_keyed, PathComponent, NAME_MAX};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 
-/// Nombre de buckets de la table (puissance de 2).
+/// Number of table buckets (power of 2).
 pub const TREE_BUCKETS: usize = 256;
-/// Facteur de charge maximal : 75 %.
+/// Maximum load factor: 75%.
 pub const TREE_MAX_LOAD: usize = (TREE_BUCKETS * 3) / 4;
-/// Valeur sentinel pour un bucket vide.
+/// Sentinel value for an empty bucket.
 const EMPTY_HASH: u64 = 0;
-/// Valeur sentinel pour un bucket supprimé (tombstone).
+/// Sentinel value for a deleted bucket (tombstone).
 const DELETED_HASH: u64 = u64::MAX;
 
 // ── TreeEntry ─────────────────────────────────────────────────────────────────
 
-/// Entrée stockée dans un bucket de la table.
+/// Entry stored in a table bucket.
 #[derive(Clone)]
 pub struct TreeEntry {
-    /// Hash FNV-1a du nom (0 = vide, u64::MAX = supprimé).
+    /// FNV-1a hash of name (0 = empty, u64::MAX = deleted).
     pub hash: u64,
-    /// Identifiant d objet associé.
+    /// Associated object identifier.
     pub oid: ObjectId,
-    /// Nom du composant (stockage inline, jamais heap).
+    /// Component name (inline storage, never heap).
     pub name: [u8; NAME_MAX + 1],
     pub name_len: u16,
-    /// Kind brut (0 = Directory, 1 = File, 2 = Symlink, …).
+    /// Raw kind (0 = Directory, 1 = File, 2 = Symlink, …).
     pub kind: u8,
 }
 
 impl TreeEntry {
-    /// Crée un bucket vide.
+    /// Creates an empty bucket.
     const fn empty() -> Self {
         TreeEntry {
             hash: EMPTY_HASH,
@@ -59,29 +59,29 @@ impl TreeEntry {
         }
     }
 
-    /// `true` si le slot est libre.
+    /// `true` if slot is free.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.hash == EMPTY_HASH
     }
-    /// `true` si le slot a été supprimé (tombstone).
+    /// `true` if slot was deleted (tombstone).
     #[inline]
     pub fn is_deleted(&self) -> bool {
         self.hash == DELETED_HASH
     }
-    /// `true` si le slot est occupé.
+    /// `true` if slot is occupied.
     #[inline]
     pub fn is_occupied(&self) -> bool {
         self.hash != EMPTY_HASH && self.hash != DELETED_HASH
     }
 
-    /// Retourne la vue &[u8] du nom.
+    /// Returns &[u8] view of the name.
     #[inline]
     pub fn name_bytes(&self) -> &[u8] {
         &self.name[..self.name_len as usize]
     }
 
-    /// Vérifie si cet slot correspond au composant `comp`.
+    /// Checks if this slot matches the component `comp`.
     #[inline]
     pub fn matches(&self, hash: u64, name: &[u8]) -> bool {
         self.is_occupied() && self.hash == hash && self.name_bytes() == name
@@ -107,21 +107,21 @@ impl core::fmt::Debug for TreeEntry {
 
 // ── PathIndexTree ─────────────────────────────────────────────────────────────
 
-/// Table de hachage à adressage ouvert pour les entrées de répertoire.
+/// Open-addressing hash table for directory entries.
 ///
-/// Taille logique fixe, avec buckets alloués paresseusement hors pile kernel.
-/// Max [`TREE_MAX_LOAD`] entrées.
+/// Fixed logical size, with buckets lazily allocated off kernel stack.
+/// Max [`TREE_MAX_LOAD`] entries.
 pub struct PathIndexTree {
     buckets: Vec<TreeEntry>,
     count: usize,
-    /// Nombre de tombstones actifs (aide à décider un rebuild).
+    /// Number of active tombstones (helps decide when to rebuild).
     tombstones: usize,
-    /// Clé secrète SipHash-2-4 (PATH-01). Générée aléatoirement au montage.
+    /// SipHash-2-4 secret key (PATH-01). Generated randomly at mount time.
     key: [u8; 16],
 }
 
 impl PathIndexTree {
-    /// Crée une table vide avec clé aléatoire fournie au montage (PATH-01).
+    /// Creates an empty table with random key provided at mount (PATH-01).
     pub fn new_with_key(key: [u8; 16]) -> Self {
         PathIndexTree {
             buckets: Vec::new(),
@@ -131,34 +131,34 @@ impl PathIndexTree {
         }
     }
 
-    /// Crée une table vide avec clé nulle (usage tests / pré-montage uniquement).
-    /// ⚠️ PATH-02 : clé nulle = vulnérable HashDoS. Utiliser new_with_key() en production.
+    /// Creates an empty table with null key (test / pre-mount usage only).
+    /// WARNING PATH-02: null key = vulnerable to HashDoS. Use new_with_key() in production.
     pub fn new() -> Self {
         Self::new_with_key([0u8; 16])
     }
 
-    /// Nombre d entrées actives.
+    /// Number of active entries.
     #[inline]
     pub fn len(&self) -> usize {
         self.count
     }
-    /// `true` si aucune entrée.
+    /// `true` if no entries.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
-    /// `true` si la table est pleine (facteur de charge atteint).
+    /// `true` if table is full (load factor reached).
     #[inline]
     pub fn is_full(&self) -> bool {
         self.count >= TREE_MAX_LOAD
     }
 
-    /// Insère une entrée dans la table.
+    /// Inserts an entry into the table.
     ///
     /// # Errors
-    /// - [`ExofsError::NoSpace`]     si la table est pleine.
-    /// - [`ExofsError::PathTooLong`] si le nom dépasse `NAME_MAX`.
-    /// - [`ExofsError::ObjectAlreadyExists`] si une entrée avec ce nom existe déjà.
+    /// - [`ExofsError::NoSpace`]     if table is full.
+    /// - [`ExofsError::PathTooLong`] if name exceeds `NAME_MAX`.
+    /// - [`ExofsError::ObjectAlreadyExists`] if an entry with this name already exists.
     pub fn insert(&mut self, comp: &PathComponent, oid: ObjectId, kind: u8) -> ExofsResult<()> {
         self.ensure_buckets()?;
         if self.is_full() {
@@ -173,7 +173,7 @@ impl PathIndexTree {
         for _ in 0..TREE_BUCKETS {
             let b = &self.buckets[idx];
             if b.is_empty() {
-                // Insérer ici (ou au tombstone si trouvé plus tôt).
+                // Insert here (or at tombstone if found earlier).
                 let dest = first_tomb.unwrap_or(idx);
                 self.write_entry(dest, hash, oid, name, kind);
                 self.count = self
@@ -197,16 +197,16 @@ impl PathIndexTree {
         Err(ExofsError::NoSpace)
     }
 
-    /// Recherche une entrée par composant.
+    /// Looks up an entry by component.
     ///
-    /// Retourne une référence vers l entrée si trouvée.
+    /// Returns a reference to the entry if found.
     pub fn find(&self, comp: &PathComponent) -> Option<&TreeEntry> {
         let name = comp.as_bytes();
         let hash = Self::safe_hash(siphash_keyed(&self.key, name));
         self.find_by_hash_name(hash, name)
     }
 
-    /// Recherche par hash et octets de nom.
+    /// Looks up by hash and name bytes.
     pub fn find_by_hash_name(&self, hash: u64, name: &[u8]) -> Option<&TreeEntry> {
         if self.buckets.len() != TREE_BUCKETS {
             return None;
@@ -226,10 +226,10 @@ impl PathIndexTree {
         None
     }
 
-    /// Supprime une entrée (pose un tombstone).
+    /// Removes an entry (places a tombstone).
     ///
     /// # Errors
-    /// - [`ExofsError::ObjectNotFound`] si l entrée n existe pas.
+    /// - [`ExofsError::ObjectNotFound`] if entry does not exist.
     pub fn remove(&mut self, comp: &PathComponent) -> ExofsResult<()> {
         if self.buckets.len() != TREE_BUCKETS {
             return Err(ExofsError::ObjectNotFound);
@@ -257,10 +257,10 @@ impl PathIndexTree {
         Err(ExofsError::ObjectNotFound)
     }
 
-    /// Met à jour l ObjectId d une entrée existante.
+    /// Updates the ObjectId of an existing entry.
     ///
     /// # Errors
-    /// - [`ExofsError::ObjectNotFound`] si l entrée n existe pas.
+    /// - [`ExofsError::ObjectNotFound`] if entry does not exist.
     pub fn update_oid(&mut self, comp: &PathComponent, new_oid: ObjectId) -> ExofsResult<()> {
         if self.buckets.len() != TREE_BUCKETS {
             return Err(ExofsError::ObjectNotFound);
@@ -283,12 +283,12 @@ impl PathIndexTree {
         Err(ExofsError::ObjectNotFound)
     }
 
-    /// Retourne un itérateur sur les entrées occupées.
+    /// Returns an iterator over occupied entries.
     pub fn iter(&self) -> TreeIter<'_> {
         TreeIter { tree: self, idx: 0 }
     }
 
-    /// Collecte toutes les entrées dans un Vec trié par hash.
+    /// Collects all entries into a Vec sorted by hash.
     ///
     /// # OOM-02
     pub fn sorted_entries(&self) -> ExofsResult<Vec<TreeEntryRef<'_>>> {
@@ -303,9 +303,9 @@ impl PathIndexTree {
         Ok(out)
     }
 
-    /// Reconstruit la table sans tombstones (compacte).
+    /// Rebuilds table without tombstones (compaction).
     ///
-    /// Crée une nouvelle table et réinsère toutes les entrées valides.
+    /// Creates a fresh table and re-inserts all valid entries.
     pub fn compact(&mut self) -> ExofsResult<()> {
         let mut fresh = PathIndexTree::new_with_key(self.key);
         for b in &self.buckets {
@@ -318,12 +318,12 @@ impl PathIndexTree {
         Ok(())
     }
 
-    /// `true` si un compactage est conseillé (>30 % de tombstones).
+    /// `true` if compaction is recommended (> 30% tombstones).
     pub fn should_compact(&self) -> bool {
         self.tombstones > TREE_BUCKETS / 3
     }
 
-    /// Vide la table.
+    /// Clears the table.
     pub fn clear(&mut self) {
         for b in &mut self.buckets {
             *b = TreeEntry::empty();
@@ -332,9 +332,9 @@ impl PathIndexTree {
         self.tombstones = 0;
     }
 
-    /// Charge les entrées depuis un slice ordonné (par hash) — utilisé par PathIndex::from_bytes.
+    /// Loads entries from an ordered slice (by hash) — used by PathIndex::from_bytes.
     ///
-    /// Les entrées doivent déjà être validées (magic + checksum vérifiés par l appelant).
+    /// Entries must already be validated (magic + checksum checked by caller).
     pub fn load_sorted(&mut self, entries: &[(u64, ObjectId, &[u8], u8)]) -> ExofsResult<()> {
         if entries.is_empty() {
             return Ok(());
@@ -365,9 +365,9 @@ impl PathIndexTree {
         Ok(())
     }
 
-    // ── Helpers privés ────────────────────────────────────────────────────────
+    // ── Private helpers ────────────────────────────────────────────────────────
 
-    /// Transforme le hash brut en hash safe (évite 0 et u64::MAX réservés).
+    /// Transforms raw hash into safe hash (avoids reserved 0 and u64::MAX).
     #[inline]
     fn safe_hash(h: u64) -> u64 {
         if h == EMPTY_HASH || h == DELETED_HASH {
@@ -410,9 +410,9 @@ impl Default for PathIndexTree {
     }
 }
 
-// ── Itérateur ─────────────────────────────────────────────────────────────────
+// ── Iterator ─────────────────────────────────────────────────────────────────
 
-/// Itérateur sur les entrées occupées de [`PathIndexTree`].
+/// Iterator over occupied entries of [`PathIndexTree`].
 pub struct TreeIter<'a> {
     tree: &'a PathIndexTree,
     idx: usize,
@@ -432,7 +432,7 @@ impl<'a> Iterator for TreeIter<'a> {
     }
 }
 
-/// Wrapper de référence pour la collection triée.
+/// Reference wrapper for sorted collection.
 pub struct TreeEntryRef<'a> {
     pub entry: &'a TreeEntry,
 }

@@ -90,8 +90,11 @@ impl ContextTable {
         (tid as usize) % MAX_CONCURRENT_SYSCALLS
     }
 
-    fn set(&mut self, ctx: SyscallContext) {
-        self.entries[Self::slot(ctx.thread_id)] = ctx;
+    fn set(&mut self, ctx: SyscallContext) -> bool {
+        let slot = &mut self.entries[Self::slot(ctx.thread_id)];
+        let newly_active = !slot.active;
+        *slot = ctx;
+        newly_active
     }
 
     fn get(&self, tid: u32) -> Option<&SyscallContext> {
@@ -103,22 +106,26 @@ impl ContextTable {
         }
     }
 
-    fn clear(&mut self, tid: u32) {
+    fn clear(&mut self, tid: u32) -> bool {
         let slot = Self::slot(tid);
-        if self.entries[slot].thread_id == tid {
+        if self.entries[slot].active && self.entries[slot].thread_id == tid {
             self.entries[slot].active = false;
+            true
+        } else {
+            false
         }
     }
 }
 
 static CTX_TABLE: spin::Mutex<ContextTable> = spin::Mutex::new(ContextTable::new());
+static CTX_ACTIVE_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // User syscall bound
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Maximum syscall number accessible to userspace.
-const MAX_USER_SYSCALL: u32 = 511;
+const MAX_USER_SYSCALL: u32 = 549;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Statistics
@@ -215,19 +222,20 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
         }
     };
 
-    // Save context for exit
-    CTX_TABLE.lock().set(SyscallContext {
-        thread_id: tid,
-        pid,
-        uid,
-        syscall_nr,
-        entry_tsc: rdtsc(),
-        verdict,
-        active: true,
-    });
-
-    // Log entry if Log or Alert
+    // Log entry and track context only when audited (avoids CTX_TABLE lock + spurious orphan exits on Skip)
     if matches!(action, RuleAction::Log | RuleAction::Alert) {
+        let newly_active = CTX_TABLE.lock().set(SyscallContext {
+            thread_id: tid,
+            pid,
+            uid,
+            syscall_nr,
+            entry_tsc: rdtsc(),
+            verdict,
+            active: true,
+        });
+        if newly_active {
+            CTX_ACTIVE_COUNT.fetch_add(1, Ordering::Release);
+        }
         log_event(
             AuditCategory::Syscall,
             pid,
@@ -248,20 +256,22 @@ pub fn audit_syscall_entry(syscall_nr: u32, pid: u32, tid: u32, uid: u16) -> Aud
 /// RULE SAU-01: No recursive syscall in this function.
 pub fn audit_syscall_exit(tid: u32, result: i64) {
     EXITS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    if CTX_ACTIVE_COUNT.load(Ordering::Acquire) == 0 {
+        return;
+    }
 
     let ctx_data = {
         let mut table = CTX_TABLE.lock();
         let data = table.get(tid).copied();
-        table.clear(tid);
+        if data.is_some() && table.clear(tid) {
+            CTX_ACTIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+        }
         data
     };
 
     let ctx = match ctx_data {
         Some(c) => c,
-        None => {
-            ORPHAN_EXITS.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
+        None => return,
     };
 
     let outcome = if result < 0 {

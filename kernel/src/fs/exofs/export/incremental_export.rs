@@ -1,19 +1,19 @@
-//! incremental_export.rs — Export incrémental basé sur les epochs ExoFS (no_std).
+//! incremental_export.rs — Incremental export based on ExoFS epochs (no_std).
 //!
-//! Ce module fournit :
-//!  - `IncrementalBlobSource` : trait d'accès aux blobs par plage d'epoch.
-//!  - `IncrementalExport`     : moteur d'export incrémental (nouveaux + suppressions).
-//!  - `IncrementalExportConfig` : configuration de l'export (filtres, limites).
-//!  - `IncrementalExportResult` : rapport détaillé de l'export.
-//!  - `DiffSet`               : ensemble de blobs ajoutés/supprimés entre deux epochs.
-//!  - `EpochRange`            : intervalle d'epochs pour filtrage.
-//!  - `SnapshotExport`        : export snapshot complet (epoch 0 → cible).
+//! This module provides:
+//!  - `IncrementalBlobSource` : trait for blob access by epoch range.
+//!  - `IncrementalExport`     : incremental export engine (new + deletions).
+//!  - `IncrementalExportConfig` : export configuration (filters, limits).
+//!  - `IncrementalExportResult` : detailed export report.
+//!  - `DiffSet`               : set of blobs added/deleted between two epochs.
+//!  - `EpochRange`            : epoch interval for filtering.
+//!  - `SnapshotExport`        : full snapshot export (epoch 0 → target).
 //!
-//! RÈGLE 8  : magic écrit EN PREMIER — délégué à ExoarWriter.
-//! RÈGLE 11 : BlobId = blake3(données brutes) — délégué à ExoarWriter.
-//! RECUR-01 : pas de récursion — boucles for/while.
-//! OOM-02   : try_reserve avant tout push.
-//! ARITH-02 : saturating_* sur tous les compteurs.
+//! RULE 8  : magic written FIRST — delegated to ExoarWriter.
+//! RULE 11 : BlobId = blake3(raw data) — delegated to ExoarWriter.
+//! RECUR-01 : no recursion — for/while loops.
+//! OOM-02   : try_reserve before any push.
+//! ARITH-02 : saturating_* on all counters.
 
 extern crate alloc;
 use super::exoar_writer::{ArchiveSink, ExoarWriteOptions, ExoarWriter};
@@ -21,9 +21,9 @@ use super::export_audit::{ExportEvent, ExportSession, EXPORT_AUDIT};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
-// ─── Identifiant d'epoch ─────────────────────────────────────────────────────
+// ─── Epoch Identifier ────────────────────────────────────────────────────────
 
-/// Identifiant d'epoch (compteur monotone de génération ExoFS).
+/// Epoch identifier (ExoFS monotonic generation counter).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EpochId(pub u64);
 
@@ -45,14 +45,14 @@ impl EpochId {
     }
 }
 
-// ─── Plage d'epochs ──────────────────────────────────────────────────────────
+// ─── Epoch Range ──────────────────────────────────────────────────────────────
 
-/// Intervalle [base, target] d'epochs pour filtrage des blobs.
+/// Interval [base, target] of epochs for blob filtering.
 #[derive(Clone, Copy, Debug)]
 pub struct EpochRange {
-    /// Epoch de départ (exclu dans l'incrémental).
+    /// Starting epoch (excluded in incremental).
     pub base: EpochId,
-    /// Epoch cible (inclu).
+    /// Target epoch (included).
     pub target: EpochId,
 }
 
@@ -61,22 +61,22 @@ impl EpochRange {
         Self { base, target }
     }
 
-    /// Retourne true si `epoch` est dans la plage (base < epoch ≤ target).
+    /// Returns true if `epoch` is in the range (base < epoch ≤ target).
     pub fn contains_exclusive(&self, epoch: EpochId) -> bool {
         epoch > self.base && epoch <= self.target
     }
 
-    /// Retourne true si `epoch` est dans la plage (base ≤ epoch ≤ target).
+    /// Returns true if `epoch` is in the range (base ≤ epoch ≤ target).
     pub fn contains_inclusive(&self, epoch: EpochId) -> bool {
         epoch >= self.base && epoch <= self.target
     }
 
-    /// Retourne le nombre d'epochs dans la plage.
+    /// Returns the number of epochs in the range.
     pub fn width(&self) -> u64 {
         self.target.0.saturating_sub(self.base.0)
     }
 
-    /// Retourne true si la plage est un snapshot complet (base = 0).
+    /// Returns true if the range is a full snapshot (base = 0).
     pub fn is_full_snapshot(&self) -> bool {
         self.base.is_zero()
     }
@@ -84,19 +84,19 @@ impl EpochRange {
 
 // ─── DiffSet ─────────────────────────────────────────────────────────────────
 
-/// Ensemble de BlobIds modifiés entre deux epochs.
-/// Séparé en blobs ajoutés et blobs supprimés.
+/// Set of BlobIds modified between two epochs.
+/// Split into added blobs and deleted blobs.
 pub struct DiffSet {
-    /// BlobIds créés ou modifiés dans la plage.
+    /// BlobIds created or modified within the range.
     pub added: Vec<[u8; 32]>,
-    /// BlobIds supprimés dans la plage (tombstones).
+    /// BlobIds deleted within the range (tombstones).
     pub deleted: Vec<[u8; 32]>,
-    /// Range d'epochs correspondant à ce diff.
+    /// Epoch range corresponding to this diff.
     pub range: EpochRange,
 }
 
 impl DiffSet {
-    /// Crée un DiffSet vide.
+    /// Creates an empty DiffSet.
     pub fn new(range: EpochRange) -> Self {
         Self {
             added: Vec::new(),
@@ -105,7 +105,7 @@ impl DiffSet {
         }
     }
 
-    /// Ajoute un BlobId dans la liste des ajouts — OOM-02 : try_reserve.
+    /// Adds a BlobId to the additions list — OOM-02: try_reserve.
     pub fn push_added(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.added
             .try_reserve(1)
@@ -114,7 +114,7 @@ impl DiffSet {
         Ok(())
     }
 
-    /// Ajoute un BlobId dans la liste des suppressions — OOM-02 : try_reserve.
+    /// Adds a BlobId to the deletions list — OOM-02: try_reserve.
     pub fn push_deleted(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.deleted
             .try_reserve(1)
@@ -132,46 +132,46 @@ impl DiffSet {
     }
 }
 
-// ─── Trait source de blobs ───────────────────────────────────────────────────
+// ─── Blob Source Trait ───────────────────────────────────────────────────────
 
-/// Trait d'accès aux blobs par plage d'epoch.
-/// RECUR-01 : ne pas s'appeler récursivement dans les implémentations.
+/// Trait for blob access by epoch range.
+/// RECUR-01: implementations must not call themselves recursively.
 pub trait IncrementalBlobSource {
-    /// Retourne le DiffSet entre `base` et `target`.
-    /// OOM-02 : l'implémentation doit utiliser try_reserve.
+    /// Returns the DiffSet between `base` and `target`.
+    /// OOM-02: implementation must use try_reserve.
     fn diff(&self, range: EpochRange) -> ExofsResult<DiffSet>;
 
-    /// Lit les données brutes d'un blob donné son BlobId.
-    /// Retourne Err(ObjectNotFound) si le blob n'existe pas.
+    /// Reads raw data of a blob given its BlobId.
+    /// Returns Err(ObjectNotFound) if blob does not exist.
     fn read_blob(&self, blob_id: &[u8; 32]) -> ExofsResult<Vec<u8>>;
 
-    /// Retourne l'epoch de création d'un blob.
+    /// Returns the creation epoch of a blob.
     fn blob_epoch(&self, blob_id: &[u8; 32]) -> ExofsResult<EpochId>;
 
-    /// Retourne l'epoch courante du système.
+    /// Returns the current system epoch.
     fn current_epoch(&self) -> EpochId;
 }
 
-// ─── Configuration de l'export incrémental ───────────────────────────────────
+// ─── Incremental Export Configuration ────────────────────────────────────────
 
-/// Configuration d'une session d'export incrémental.
+/// Configuration of an incremental export session.
 #[derive(Clone, Copy, Debug)]
 pub struct IncrementalExportConfig {
-    /// Identifiant de session (unique par session active).
+    /// Session identifier (unique per active session).
     pub session_id: u32,
-    /// Epoch de base (état précédent déjà exporté).
+    /// Base epoch (previous state already exported).
     pub epoch_base: EpochId,
-    /// Epoch cible (état à exporter).
+    /// Target epoch (state to export).
     pub epoch_target: EpochId,
-    /// Inclure les tombstones dans l'archive.
+    /// Include tombstones in the archive.
     pub include_tombstones: bool,
-    /// Vérifier le BlobId = blake3(données) — RÈGLE 11.
+    /// Verify BlobId = blake3(data) — RULE 11.
     pub verify_blob_ids: bool,
-    /// Nombre maximal de blobs à exporter (0 = illimité).
+    /// Maximum number of blobs to export (0 = unlimited).
     pub max_blobs: u32,
-    /// Taille maximale totale en bytes (0 = illimitée).
+    /// Maximum total size in bytes (0 = unlimited).
     pub max_bytes: u64,
-    /// Annuler si un blob est introuvable (plutôt que continuer).
+    /// Abort if a blob is missing (rather than continue).
     pub fail_on_missing_blob: bool,
 }
 
@@ -209,28 +209,28 @@ impl IncrementalExportConfig {
     }
 }
 
-// ─── Résultat de l'export incrémental ────────────────────────────────────────
+// ─── Incremental Export Result ───────────────────────────────────────────────
 
-/// Rapport détaillé d'une session d'export incrémental.
+/// Detailed report of an incremental export session.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct IncrementalExportResult {
-    /// Blobs ajoutés dans l'archive.
+    /// Blobs added to archive.
     pub blobs_exported: u32,
-    /// Tombstones ajoutés dans l'archive.
+    /// Tombstones added to archive.
     pub tombstones_exported: u32,
-    /// Octets totaux de payload écrits.
+    /// Total payload bytes written.
     pub bytes_exported: u64,
-    /// Blobs ignorés (filtrés ou introuvables).
+    /// Blobs skipped (filtered or not found).
     pub blobs_skipped: u32,
-    /// Erreurs rencontrées.
+    /// Errors encountered.
     pub errors: u32,
-    /// Epoch de base de cet export.
+    /// Base epoch of this export.
     pub epoch_base: u64,
-    /// Epoch cible de cet export.
+    /// Target epoch of this export.
     pub epoch_target: u64,
-    /// Taille totale de l'archive générée.
+    /// Total size of generated archive.
     pub archive_size: u64,
-    /// true si l'export s'est terminé sans erreur.
+    /// true if export completed without errors.
     pub success: bool,
 }
 
@@ -262,15 +262,15 @@ impl IncrementalExportResult {
     }
 }
 
-// ─── Moteur d'export incrémental ─────────────────────────────────────────────
+// ─── Incremental Export Engine ──────────────────────────────────────────────
 
-/// Moteur d'export incrémental ExoAR.
+/// ExoAR incremental export engine.
 ///
-/// Séquence :
-///   1. Calculer le DiffSet(epoch_base, epoch_target)
-///   2. ExoarWriter::begin() — RÈGLE 8 : magic header EN PREMIER
-///   3. Pour chaque blob ajouté : lire les données, calculate BlobId (RÈGLE 11), écrire l'entrée
-///   4. Pour chaque blob supprimé : écrire un tombstone
+/// Sequence:
+///   1. Compute DiffSet(epoch_base, epoch_target)
+///   2. ExoarWriter::begin() — RULE 8: magic header FIRST
+///   3. For each added blob: read data, calculate BlobId (RULE 11), write entry
+///   4. For each deleted blob: write tombstone
 ///   5. ExoarWriter::finalize()
 pub struct IncrementalExport {
     config: IncrementalExportConfig,
@@ -281,8 +281,8 @@ impl IncrementalExport {
         Self { config }
     }
 
-    /// Exécute l'export incrémental vers `sink`.
-    /// RECUR-01 : deux boucles while (blobs ajoutés, blobs supprimés).
+    /// Executes the incremental export to `sink`.
+    /// RECUR-01: two while loops (added blobs, deleted blobs).
     pub fn run<S, Src>(&self, sink: &mut S, source: &Src) -> ExofsResult<IncrementalExportResult>
     where
         S: ArchiveSink,
@@ -294,11 +294,11 @@ impl IncrementalExport {
         result.epoch_base = self.config.epoch_base.value();
         result.epoch_target = self.config.epoch_target.value();
 
-        // Démarrer la session d'audit
+        // Start audit session
         let mut session = ExportSession::new_export(self.config.session_id, result.epoch_base);
         session.start(&EXPORT_AUDIT);
 
-        // Calculer le diff entre les deux epochs
+        // Compute diff between the two epochs
         let range = self.config.epoch_range();
         let diff = match source.diff(range) {
             Ok(d) => d,
@@ -308,7 +308,7 @@ impl IncrementalExport {
             }
         };
 
-        // Configurer l'écrivain ExoAR
+        // Configure ExoAR writer
         let write_opts = if self.config.is_incremental() {
             ExoarWriteOptions::incremental(result.epoch_base, result.epoch_target)
         } else {
@@ -320,7 +320,7 @@ impl IncrementalExport {
             ExofsError::from(e)
         })?;
 
-        // ── Phase 1 : blobs ajoutés (RECUR-01 : boucle while) ──────────────
+        // ── Phase 1: added blobs (RECUR-01: while loop) ──────────────
         let max_blobs = if self.config.max_blobs == 0 {
             u32::MAX
         } else {
@@ -385,7 +385,7 @@ impl IncrementalExport {
             blob_idx = blob_idx.wrapping_add(1);
         }
 
-        // ── Phase 2 : tombstones (RECUR-01 : boucle while) ─────────────────
+        // ── Phase 2: tombstones (RECUR-01: while loop) ─────────────────
         if self.config.include_tombstones {
             let mut del_idx = 0usize;
             while del_idx < diff.deleted.len() {
@@ -400,7 +400,7 @@ impl IncrementalExport {
             }
         }
 
-        // Finaliser l'archive
+        // Finalize archive
         let stats = writer.finalize(sink).map_err(|e| ExofsError::from(e))?;
         result.archive_size = stats.archive_bytes;
         result.success = !result.has_errors();
@@ -413,10 +413,10 @@ impl IncrementalExport {
     }
 }
 
-// ─── Export snapshot complet ─────────────────────────────────────────────────
+// ─── Full Snapshot Export ────────────────────────────────────────────────────
 
-/// Export snapshot complet (epoch 0 → epoch_target).
-/// Identique à IncrementalExport avec epoch_base = 0.
+/// Full snapshot export (epoch 0 → epoch_target).
+/// Identical to IncrementalExport with epoch_base = 0.
 pub struct SnapshotExport {
     export: IncrementalExport,
 }
@@ -438,9 +438,9 @@ impl SnapshotExport {
     }
 }
 
-// ─── Export multi-epoch ───────────────────────────────────────────────────────
+// ─── Multi-epoch Export ──────────────────────────────────────────────────────
 
-/// Résumé d'un export multi-epoch (plusieurs plages concaténées).
+/// Summary of a multi-epoch export (multiple concatenated ranges).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MultiEpochExportSummary {
     pub archives_created: u32,
@@ -473,9 +473,9 @@ impl MultiEpochExportSummary {
     }
 }
 
-// ─── Source de test (mock) ────────────────────────────────────────────────────
+// ─── Test Source (mock) ──────────────────────────────────────────────────────
 
-/// Source de blobs factice pour les tests unitaires.
+/// Dummy blob source for unit tests.
 pub struct MockBlobSource {
     blobs: Vec<([u8; 32], Vec<u8>, EpochId)>,
     deleted: Vec<([u8; 32], EpochId)>,
@@ -572,7 +572,7 @@ mod tests {
     fn test_epoch_range_contains() {
         let r = EpochRange::new(EpochId(5), EpochId(10));
         assert!(r.contains_exclusive(EpochId(6)));
-        assert!(!r.contains_exclusive(EpochId(5))); // exclu
+        assert!(!r.contains_exclusive(EpochId(5))); // excluded
         assert!(r.contains_exclusive(EpochId(10)));
         assert!(!r.contains_exclusive(EpochId(11)));
     }
@@ -626,13 +626,13 @@ mod tests {
     #[test]
     fn test_incremental_only_new_blobs() {
         let mut src = MockBlobSource::new(EpochId(10));
-        src.add_blob(make_id(1), b"old", EpochId(2)); // avant base
-        src.add_blob(make_id(2), b"new", EpochId(7)); // dans plage
+        src.add_blob(make_id(1), b"old", EpochId(2)); // before base
+        src.add_blob(make_id(2), b"new", EpochId(7)); // within range
         let cfg = IncrementalExportConfig::new(1, EpochId(5), EpochId(10));
         let exporter = IncrementalExport::new(cfg);
         let mut sink = SinkVec::new();
         let result = exporter.run(&mut sink, &src).test_expect("export");
-        assert_eq!(result.blobs_exported, 1); // seulement le blob epoch 7
+        assert_eq!(result.blobs_exported, 1); // only blob from epoch 7
     }
 
     #[test]

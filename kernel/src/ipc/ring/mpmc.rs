@@ -165,17 +165,6 @@ impl MpmcRing {
                 continue;
             }
 
-            // Verify destination buffer is large enough BEFORE consuming slot.
-            // SAFETY: seq == pos + 1 guarantees slot was published by producer.
-            unsafe {
-                let slot = (*cell.slot.get()).assume_init_ref();
-                let ln = slot.header.len as usize;
-                if ln > dst.len() {
-                    // Preserve message at ring head without advancing tail.
-                    return Err(IpcError::MessageTooLarge);
-                }
-            }
-
             if self
                 .tail_atomic()
                 .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
@@ -185,19 +174,25 @@ impl MpmcRing {
                 continue;
             }
 
-            let (len, msg_flags) = unsafe {
+            // SAFETY: this thread exclusively won slot `pos` via the CAS above,
+            // so no producer can overwrite it until we store the next sequence.
+            let res = unsafe {
                 let slot = (*cell.slot.get()).assume_init_ref();
                 let ln = slot.header.len as usize;
                 let flags = slot.header.flags;
-                if ln > 0 {
-                    core::ptr::copy_nonoverlapping(slot.payload.as_ptr(), dst.as_mut_ptr(), ln);
+                if ln > dst.len() {
+                    Err(IpcError::MessageTooLarge)
+                } else {
+                    if ln > 0 {
+                        core::ptr::copy_nonoverlapping(slot.payload.as_ptr(), dst.as_mut_ptr(), ln);
+                    }
+                    Ok((ln, MsgFlags(flags)))
                 }
-                (ln, MsgFlags(flags))
             };
 
-            // Releases slot for next producer.
+            // Releases slot for next producer even on MessageTooLarge.
             cell.store_seq(pos + RING_SIZE as u64);
-            return Ok((len, msg_flags));
+            return res;
         }
     }
 

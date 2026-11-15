@@ -316,6 +316,11 @@ pub fn sys_exofs_object_create(
         a
     };
 
+    // Zero-Trust MLS : vérification d'écriture avant création.
+    if let Err(errno) = super::validation::check_exofs_zt_access(false, true) {
+        return errno;
+    }
+
     // FIX-SEC-T0.3 : l'arg `cap_rights` bidon est ignoré. Politique TIER 0 permissive
     // à la création (durcie en TIER 1) ; le MÉCANISME est réel : le créateur reçoit
     // ci-dessous une capability RÉELLE sur le nouvel objet.

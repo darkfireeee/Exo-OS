@@ -1,4 +1,4 @@
-//! parser.rs — Validation des en-têtes ELF, décodage des entiers et des Program Headers
+//! parser.rs — ELF header validation, integer decoding, and Program Headers
 
 use crate::arch::constants::USER_ELF_BASE_MIN;
 use crate::memory::core::layout::USER_END;

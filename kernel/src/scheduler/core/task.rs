@@ -83,6 +83,18 @@ impl Priority {
         self.0 <= 99
     }
 
+    /// Converts priority back to Linux `nice` (-20..+19).
+    #[inline(always)]
+    pub const fn to_nice(self) -> i8 {
+        if self.0 < 100 {
+            -20
+        } else if self.0 > 139 {
+            19
+        } else {
+            (self.0 as i16 - 120) as i8
+        }
+    }
+
     /// Linux-compatible CFS weight (prio_to_weight[40]).
     #[inline(always)]
     pub fn cfs_weight(self) -> u32 {
@@ -109,6 +121,36 @@ pub enum SchedPolicy {
     RoundRobin = 3,
     Deadline = 4,
     Idle = 5,
+}
+
+impl SchedPolicy {
+    /// Converts POSIX `SCHED_*` constant (`0=OTHER, 1=FIFO, 2=RR, 3=BATCH, 5=IDLE, 6=DEADLINE`)
+    /// into internal `SchedPolicy`.
+    #[inline(always)]
+    pub const fn from_posix(policy: u32) -> Option<Self> {
+        match policy {
+            0 => Some(Self::Normal),
+            1 => Some(Self::Fifo),
+            2 => Some(Self::RoundRobin),
+            3 => Some(Self::Batch),
+            5 => Some(Self::Idle),
+            6 => Some(Self::Deadline),
+            _ => None,
+        }
+    }
+
+    /// Converts internal `SchedPolicy` to POSIX `SCHED_*` constant.
+    #[inline(always)]
+    pub const fn as_posix(self) -> u32 {
+        match self {
+            Self::Normal => 0,
+            Self::Fifo => 1,
+            Self::RoundRobin => 2,
+            Self::Batch => 3,
+            Self::Idle => 5,
+            Self::Deadline => 6,
+        }
+    }
 }
 
 /// Thread state in state machine.
@@ -290,7 +332,7 @@ pub struct ThreadControlBlock {
     pub signal_mask: AtomicU64, // [96]
     pub dl_runtime: u64,        // [104]
     pub dl_period: u64,         // [112]
-    _pad2: [u8; 8],             // [120]
+    pub dl_remaining: AtomicU64,// [120] remaining EDF runtime budget (ns)
     // ═══ Cache-lines 3-4 [128..256] ══════════════════════════════════════════
     pub run_time_acc: u64,              // [128]
     pub switch_count: u64,              // [136]
@@ -459,7 +501,7 @@ impl ThreadControlBlock {
             signal_mask: AtomicU64::new(0),
             dl_runtime: 0,
             dl_period: 0,
-            _pad2: [0u8; 8],
+            dl_remaining: AtomicU64::new(0),
             run_time_acc: 0,
             switch_count: 0,
             _cold_reserve: cold_reserve,

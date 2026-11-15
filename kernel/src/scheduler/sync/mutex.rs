@@ -28,8 +28,8 @@ pub static KMUTEX_ACQUIRES: AtomicU64 = AtomicU64::new(0);
 pub struct KMutex<T> {
     /// TID of current owner. 0 = free.
     owner_tid: AtomicU32,
-    /// Wait queue of threads blocked on this mutex.
-    waiters: UnsafeCell<WaitQueue>,
+    /// Wait queue of threads blocked on this mutex (internally locked by WaitQueue's SpinLock).
+    waiters: WaitQueue,
     data: UnsafeCell<T>,
 }
 
@@ -40,7 +40,7 @@ impl<T> KMutex<T> {
     pub const fn new(value: T) -> Self {
         Self {
             owner_tid: AtomicU32::new(0),
-            waiters: UnsafeCell::new(WaitQueue::new()),
+            waiters: WaitQueue::new(),
             data: UnsafeCell::new(value),
         }
     }
@@ -108,25 +108,31 @@ impl<T> KMutex<T> {
                     (*tcb).set_state(TaskState::Sleeping);
                 }
 
-                // Insert into wait queue (FIFO) after state transition.
-                let wq = &mut *self.waiters.get();
-                wq.insert(node);
+                // Insert into wait queue (FIFO) using internal SpinLock (no &mut aliasing).
+                self.waiters.insert(node);
 
-                // BUG-FIX P: use schedule_block() instead of a busy loop.
-                // The previous busy loop caused two critical issues:
-                //   1. Burned 100% CPU during entire contention duration.
-                //   2. Double-scheduling: release() called wake_one() → enqueue()
-                //      while this thread was still running on its CPU, permitting
-                //      concurrent execution on two distinct CPUs.
-                // schedule_block() properly suspends the thread without re-enqueuing it,
-                // and returns only when the thread is woken up by wake_one().
+                // Re-check owner_tid AFTER WaitNode publication to close lost-wakeup race:
+                // if release() cleared owner_tid between CAS failure and insert(), win ownership
+                // immediately without sleeping forever.
+                if self
+                    .owner_tid
+                    .compare_exchange(0, tid, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    self.waiters.remove(node);
+                    WaitNode::free(node);
+                    if !tcb.is_null() {
+                        (*tcb).set_state(TaskState::Running);
+                    }
+                    KMUTEX_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+                    return KMutexGuard { mutex: self };
+                }
+
                 if !tcb.is_null() {
                     let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
                         let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
-                        // SAFETY: cpu_raw < MAX_CPUS, run queue initialized.
-                        let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
-                        crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
+                        crate::scheduler::core::switch::schedule_block(cpu_id, &mut *tcb);
                     }
                 }
                 // Note: WaitNode is freed by wake_one() in release().
@@ -154,8 +160,7 @@ impl<T> KMutex<T> {
         // Release ownership before waking (avoids race window).
         self.owner_tid.store(0, Ordering::Release);
         // Wake up next waiting thread (FIFO).
-        let wq = &mut *self.waiters.get();
-        wq.wake_one();
+        self.waiters.wake_one();
     }
 
     // ─── Diagnostics ──────────────────────────────────────────────────────────

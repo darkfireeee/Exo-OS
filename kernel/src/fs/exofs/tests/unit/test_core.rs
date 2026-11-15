@@ -1,4 +1,4 @@
-//! Tests unitaires — core/ types fondamentaux.
+//! Unit tests — core/ fundamental types.
 #[cfg(test)]
 mod tests {
     use crate::fs::exofs::core::*;

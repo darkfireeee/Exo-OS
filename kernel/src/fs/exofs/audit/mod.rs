@@ -1,8 +1,8 @@
-//! audit/ — Journal d'audit ExoFS (no_std).
+//! audit/ — ExoFS audit journal (no_std).
 //!
-//! Ring-buffer non-bloquant (65 536 entrées), écriture lock-free via
-//! fetch_add atomique. Fournit : écriture, lecture, filtrage, rotation
-//! et export des entrées.
+//! Non-blocking ring-buffer (65,536 entries), lock-free write via
+//! atomic fetch_add. Provides: writing, reading, filtering, rotation,
+//! and export of entries.
 
 pub mod audit_entry;
 pub mod audit_export;
@@ -21,43 +21,43 @@ pub use audit_rotation::{AuditRotation, RotationConfig, RotationReport};
 pub use audit_writer::{AuditWriter, WritePolicy, WriterContext};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de cycle de vie
+// Lifecycle functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le module audit (idempotent).
+/// Initializes the audit module (idempotent).
 ///
-/// Le ring-buffer est un `static` initialisé en `const` — aucune allocation
-/// n'est nécessaire. Cette fonction est conservée pour indiquer l'ordre
-/// d'initialisation dans `exofs::init()`.
+/// The ring-buffer is a `static` initialized with `const` — no allocation
+/// is needed. This function is kept to indicate initialization order
+/// in `exofs::init()`.
 pub fn init() {
-    // AUDIT_LOG est un static avec new_const() — rien à allouer.
+    // AUDIT_LOG is a static with new_const() — nothing to allocate.
 }
 
-/// Remet les compteurs statistiques du ring à zéro.
+/// Resets ring statistical counters to zero.
 ///
-/// À appeler lors d'une rotation ou d'un démontage propre.
+/// To be called upon rotation or clean unmount.
 pub fn reset_stats() {
     AUDIT_LOG.reset_stats();
 }
 
-/// Vérifie la sanité du ring-buffer (vérifie N entrées récentes).
+/// Verifies ring-buffer sanity (checks N recent entries).
 ///
-/// Retourne `true` si aucune entrée corrompue dans l'échantillon.
+/// Returns `true` if no corrupt entries found in sample.
 pub fn verify_health() -> bool {
     let health = AUDIT_LOG.sanity_check(64);
     health.is_clean()
 }
 
-/// Retourne `true` si le ring dépasse 80 % de remplissage.
+/// Returns `true` if ring exceeds 80% capacity.
 ///
-/// Le module appelant devrait déclencher une rotation.
+/// Calling module should trigger a rotation.
 pub fn needs_rotation() -> bool {
     AUDIT_LOG.stats().is_near_full()
 }
 
-/// Écrit un événement de refus de permission depuis n'importe quel module.
+/// Writes a permission denial event from any module.
 ///
-/// Raccourci pour éviter d'instancier un `AuditWriter` complet.
+/// Shortcut to avoid instantiating a full `AuditWriter`.
 pub fn perm_denied(actor_uid: u64, object_id: u64, op: AuditOp) {
     audit_writer::record_perm_denied(actor_uid, object_id, op);
 }

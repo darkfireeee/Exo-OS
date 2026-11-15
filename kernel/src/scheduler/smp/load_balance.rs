@@ -55,8 +55,7 @@ pub static BALANCE_NUMA_SKIP: AtomicU64 = AtomicU64::new(0);
 pub unsafe fn balance_cpu(local_cpu: CpuId) {
     BALANCE_RUNS.fetch_add(1, Ordering::Relaxed);
 
-    let local_rq = runqueue::run_queue(local_cpu);
-    let local_nr = local_rq.nr_running_usize();
+    let local_nr = runqueue::run_queue(local_cpu).nr_running_usize();
 
     // Search for busiest CPU among all CPUs.
     let mut busiest_cpu: Option<CpuId> = None;
@@ -68,8 +67,7 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
         if cpu == local_cpu {
             continue;
         }
-        let rq = runqueue::run_queue(cpu);
-        let nr = rq.nr_running_usize();
+        let nr = runqueue::run_queue(cpu).nr_running_usize();
         if nr > busiest_nr {
             busiest_nr = nr;
             busiest_cpu = Some(cpu);
@@ -98,8 +96,7 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
             if cpu_node(cpu) != local_node {
                 continue;
             }
-            let rq = runqueue::run_queue(cpu);
-            let nr = rq.nr_running_usize();
+            let nr = runqueue::run_queue(cpu).nr_running_usize();
             if nr > same_node_nr {
                 same_node_nr = nr;
                 same_node_busiest = Some(cpu);
@@ -128,45 +125,38 @@ pub unsafe fn balance_cpu(local_cpu: CpuId) {
 /// # Safety
 /// Requires preemption disabled.
 unsafe fn do_pull(dst_cpu: CpuId, src_cpu: CpuId, count: usize) {
-    if count == 0 {
+    let capped = count.min(MAX_MIGRATIONS_PER_BALANCE);
+    if capped == 0 || dst_cpu == src_cpu {
         return;
     }
 
-    // RULE LB-01: increasing acquisition order by CPU ID.
-    let (first, second, first_is_dst) = if dst_cpu < src_cpu {
-        (dst_cpu, src_cpu, true)
-    } else {
-        (src_cpu, dst_cpu, false)
-    };
-
-    let _ = first; // In a real OS: spinlock(&rq[first]); spinlock(&rq[second]);
-    let _ = second;
-
-    let src_rq = runqueue::run_queue(src_cpu);
-    let dst_rq = runqueue::run_queue(dst_cpu);
-
+    let mut pulled: [Option<core::ptr::NonNull<crate::scheduler::core::task::ThreadControlBlock>>;
+        MAX_MIGRATIONS_PER_BALANCE] = [None; MAX_MIGRATIONS_PER_BALANCE];
     let mut moved = 0usize;
-    while moved < count {
-        // Try to pull a CFS task (never an RT task — would violate RT invariants).
-        let tcb_opt = src_rq.cfs_dequeue_for_migration(dst_cpu);
-        let Some(tcb) = tcb_opt else {
-            break;
-        };
 
-        let tcb_ref = tcb.as_ref();
-        // Verify affinity.
-        if !tcb_ref.allowed_on(dst_cpu) {
-            // Re-enqueue onto source CPU if affinity prevents migration.
-            src_rq.enqueue(tcb);
-            break;
+    let _ = runqueue::with_two_run_queues(src_cpu, dst_cpu, |src_rq, _dst_rq| {
+        while moved < capped {
+            // Try to pull a CFS task (never an RT or currently-running task).
+            let Some(tcb) = src_rq.cfs_dequeue_for_migration(dst_cpu) else {
+                break;
+            };
+
+            // Double-check affinity under source lock; restore immediately if disallowed.
+            if !tcb.as_ref().allowed_on(dst_cpu) {
+                src_rq.enqueue(tcb);
+                break;
+            }
+
+            pulled[moved] = Some(tcb);
+            moved += 1;
         }
+    });
 
-        request_migration(tcb, dst_cpu);
-        moved += 1;
+    for slot in pulled.into_iter().take(moved) {
+        if let Some(tcb) = slot {
+            request_migration(tcb, dst_cpu);
+        }
     }
 
     BALANCE_MIGRATIONS.fetch_add(moved as u64, Ordering::Relaxed);
-
-    // In a real OS: spinunlock in REVERSE order (second then first).
-    let _ = (first_is_dst, dst_rq);
 }

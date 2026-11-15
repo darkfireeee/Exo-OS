@@ -1,10 +1,8 @@
-//! ExtentCache — cache d'extents (plages d'octets) pour les blobs ExoFS (no_std).
-
-//! extent_cache.rs — Cache d'extents ExoFS (no_std).
+//! extent_cache.rs — ExoFS extent cache (no_std).
 //!
-//! Un extent = plage d'octets `[offset, offset+len)` dans un blob.
-//! `EXTENT_CACHE` : instance globale statique.
-//! Règles : OOM-02, ARITH-02, RECUR-01.
+//! An extent = byte range `[offset, offset+len)` within a blob.
+//! `EXTENT_CACHE`: static global instance.
+//! Rules: OOM-02, ARITH-02, RECUR-01.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -56,9 +54,9 @@ impl ExtentEntry {
     }
 }
 
-// ── ExtentCacheKey (clef éviction = BlobId XOR offset) ────────────────────────
+// ── ExtentCacheKey (eviction key = BlobId XOR offset) ────────────────────────
 
-/// Clef EvictionPolicy : hash simple de (BlobId, offset).
+/// EvictionPolicy key: simple hash of (BlobId, offset).
 fn eviction_id(blob_id: &BlobId, offset: u64) -> BlobId {
     let mut id = *blob_id;
     let ob = offset.to_le_bytes();
@@ -95,7 +93,7 @@ impl ExtentCacheInner {
                 return Err(ExofsError::NoSpace);
             }
             for eid in &victims {
-                // Retrouver la clé ExtentKey à partir du eid (cherche par valeur).
+                // Find the ExtentKey from eid (search by value).
                 let found = self
                     .map
                     .iter()
@@ -142,7 +140,7 @@ impl ExtentCache {
             offset,
         };
         let eid = eviction_id(blob_id, offset);
-        // L'emprunt de map se termine avant d'accéder à eviction.
+        // The map borrow ends before accessing eviction.
         let hit_data = inner.map.get_mut(&key).map(|e| {
             e.touch(now);
             e.data
@@ -160,7 +158,7 @@ impl ExtentCache {
         hit_data
     }
 
-    /// Cherche tous les extents couvrant `[offset, offset+len)`.
+    /// Finds all extents covering `[offset, offset+len)`.
     pub fn get_covering(&self, blob_id: &BlobId, offset: u64, len: u64) -> Vec<(u64, Box<[u8]>)> {
         let inner = self.inner.lock();
         let end = offset.saturating_add(len);
@@ -261,7 +259,7 @@ impl ExtentCache {
 // ── Extensions ───────────────────────────────────────────────────────────────
 
 impl ExtentCache {
-    /// Marque tous les extents d'un blob comme dirty.
+    /// Marks all extents of a blob as dirty.
     pub fn mark_all_dirty(&self, blob_id: &crate::fs::exofs::core::BlobId) {
         let mut inner = self.inner.lock();
         for (k, e) in inner.map.iter_mut() {
@@ -272,7 +270,7 @@ impl ExtentCache {
         }
     }
 
-    /// Retourne les clés (offset) de tous les extents dirty d'un blob.
+    /// Returns the keys (offsets) of all dirty extents of a blob.
     pub fn dirty_offsets(&self, blob_id: &crate::fs::exofs::core::BlobId) -> Vec<u64> {
         self.inner
             .lock()
@@ -283,7 +281,7 @@ impl ExtentCache {
             .collect()
     }
 
-    /// Invalide les extents dans la plage `[offset, offset+len)`.
+    /// Invalidates extents within the range `[offset, offset+len)`.
     pub fn invalidate_range(
         &self,
         blob_id: &crate::fs::exofs::core::BlobId,
@@ -308,7 +306,7 @@ impl ExtentCache {
         }
     }
 
-    /// Évince `n` extents (les plus froids).
+    /// Evicts `n` extents (coldest).
     pub fn evict_n(&self, n: usize) -> u64 {
         let mut inner = self.inner.lock();
         let victims = inner.eviction.pick_eviction_candidates(n);
@@ -332,7 +330,7 @@ impl ExtentCache {
         freed
     }
 
-    /// Nombre total d'octets dirty.
+    /// Total number of dirty bytes.
     pub fn dirty_bytes(&self) -> u64 {
         self.inner
             .lock()
@@ -452,7 +450,7 @@ mod tests {
         c.invalidate_range(&blob(1), 0, 1024);
         assert!(c.get(&blob(1), 0).is_none());
         assert!(c.get(&blob(1), 512).is_none());
-        assert!(c.get(&blob(1), 8192).is_some()); // hors plage
+        assert!(c.get(&blob(1), 8192).is_some()); // out of range
     }
 
     #[test]

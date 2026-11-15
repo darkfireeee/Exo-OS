@@ -1,11 +1,11 @@
-//! snapshot_diff.rs — Comparaison de deux snapshots ExoFS
+//! snapshot_diff.rs — Comparison of two ExoFS snapshots
 //!
-//! Calcule le diff (blobs ajoutés, supprimés, modifiés) entre deux snapshots.
-//! Fournit un rapport détaillé avec statistiques.
+//! Computes the diff (added, removed, modified blobs) between two snapshots.
+//! Provides a detailed report with statistics.
 //!
-//! Règles spec :
-//!   OOM-02   : try_reserve avant chaque push
-//!   ARITH-02 : checked_add pour compteurs
+//! Spec rules:
+//!   OOM-02   : try_reserve before each push
+//!   ARITH-02 : checked_add for counters
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -19,16 +19,16 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, SnapshotId};
 // DiffKind
 // ─────────────────────────────────────────────────────────────
 
-/// Type d'une entrée de diff
+/// Type of a diff entry
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffKind {
-    /// Blob présent dans le snapshot de droite, absent dans celui de gauche
+    /// Blob present in right snapshot, absent in left snapshot
     Added,
-    /// Blob présent dans le snapshot de gauche, absent dans celui de droite
+    /// Blob present in left snapshot, absent in right snapshot
     Removed,
-    /// Blob présent dans les deux mais avec des données différentes
+    /// Blob present in both but with different data
     Modified,
-    /// Blob identique dans les deux snapshots (inclus si option `include_unchanged`)
+    /// Identical blob in both snapshots (included if option `include_unchanged`)
     Unchanged,
 }
 
@@ -36,18 +36,18 @@ pub enum DiffKind {
 // DiffEntry
 // ─────────────────────────────────────────────────────────────
 
-/// Entrée dans le rapport de diff
+/// Entry in the diff report
 #[derive(Debug, Clone)]
 pub struct DiffEntry {
-    /// Blob id dans le snapshot gauche (None si Added)
+    /// Blob id in left snapshot (None if Added)
     pub blob_left: Option<BlobId>,
-    /// Blob id dans le snapshot droit (None si Removed)
+    /// Blob id in right snapshot (None if Removed)
     pub blob_right: Option<BlobId>,
-    /// Type de différence
+    /// Difference type
     pub kind: DiffKind,
-    /// Taille en octets du blob gauche (0 si absent)
+    /// Size in bytes of left blob (0 if absent)
     pub size_left: u64,
-    /// Taille en octets du blob droit (0 si absent)
+    /// Size in bytes of right blob (0 if absent)
     pub size_right: u64,
 }
 
@@ -92,14 +92,14 @@ impl DiffEntry {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Options de diff
+// Diff options
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct DiffOptions {
-    /// Inclure les blobs inchangés dans le rapport
+    /// Include unchanged blobs in report
     pub include_unchanged: bool,
-    /// Taille max des entrées renvoyées (0 = illimité)
+    /// Max size of returned entries (0 = unlimited)
     pub max_entries: usize,
 }
 
@@ -116,33 +116,33 @@ impl Default for DiffOptions {
 // SnapshotDiffReport
 // ─────────────────────────────────────────────────────────────
 
-/// Rapport de diff entre deux snapshots
+/// Diff report between two snapshots
 #[derive(Debug, Clone)]
 pub struct SnapshotDiffReport {
-    /// Snapshot de gauche (référence)
+    /// Left snapshot (reference)
     pub left: SnapshotRef,
-    /// Snapshot de droite (comparé)
+    /// Right snapshot (compared)
     pub right: SnapshotRef,
-    /// Entrées du diff
+    /// Diff entries
     pub entries: Vec<DiffEntry>,
-    /// Nombre de blobs ajoutés
+    /// Number of added blobs
     pub n_added: u64,
-    /// Nombre de blobs supprimés
+    /// Number of removed blobs
     pub n_removed: u64,
-    /// Nombre de blobs modifiés (même position/index, contenu différent)
+    /// Number of modified blobs (same position/index, different content)
     pub n_modified: u64,
-    /// Nombre de blobs inchangés
+    /// Number of unchanged blobs
     pub n_unchanged: u64,
-    /// Octets ajoutés (blobs Added) — ARITH-02 : checked
+    /// Added bytes (Added blobs) — ARITH-02: checked
     pub bytes_added: u64,
-    /// Octets supprimés (blobs Removed) — ARITH-02 : checked
+    /// Removed bytes (Removed blobs) — ARITH-02: checked
     pub bytes_removed: u64,
-    /// Tronqué à `max_entries` si true
+    /// Truncated to `max_entries` if true
     pub truncated: bool,
 }
 
 impl SnapshotDiffReport {
-    /// Résumé d'une ligne pour les logs
+    /// One-line summary for logs
     pub fn summary(&self) -> DiffSummary {
         DiffSummary {
             n_added: self.n_added,
@@ -170,26 +170,26 @@ pub struct DiffSummary {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Trait d'énumération de blobs
+// Blob enumeration trait
 // ─────────────────────────────────────────────────────────────
 
-/// Fournit la liste ordonnée des blobs d'un snapshot avec leurs tailles
+/// Provides the ordered list of blobs in a snapshot with their sizes
 pub trait SnapshotBlobEnumerator: Send + Sync {
     fn list_blobs_with_sizes(&self, snap_id: SnapshotId) -> ExofsResult<Vec<(BlobId, u64)>>;
 }
 
-/// Énumérateur simple basé sur les métadonnées en RAM (tailles à 0)
+/// Simple enumerator based on in-RAM metadata (sizes at 0)
 pub struct MetaOnlyEnumerator;
 
 impl SnapshotBlobEnumerator for MetaOnlyEnumerator {
     fn list_blobs_with_sizes(&self, snap_id: SnapshotId) -> ExofsResult<Vec<(BlobId, u64)>> {
         let snap = SNAPSHOT_LIST.get(snap_id)?;
-        // Sans accès disque, on ne peut que retourner des tailles 0
-        // Dans un vrai système, cela lirait le catalogue de blobs
+        // Without disk access, we can only return size 0
+        // In a real system, this would read the blob catalog
         let mut out: Vec<(BlobId, u64)> = Vec::new();
         out.try_reserve(snap.n_blobs as usize)
             .map_err(|_| ExofsError::NoMemory)?;
-        // Racine comme seule entrée visible
+        // Root as sole visible entry
         out.push((snap.root_blob, 0));
         Ok(out)
     }
@@ -202,9 +202,9 @@ impl SnapshotBlobEnumerator for MetaOnlyEnumerator {
 pub struct SnapshotDiff;
 
 impl SnapshotDiff {
-    // ── Point d'entrée principal ─────────────────────────────────────
+    // ── Main entry point ─────────────────────────────────────
 
-    /// Compare deux snapshots via leur énumérateur de blobs
+    /// Compares two snapshots via their blob enumerator
     pub fn compare<E: SnapshotBlobEnumerator>(
         left_id: SnapshotId,
         right_id: SnapshotId,
@@ -217,16 +217,16 @@ impl SnapshotDiff {
         let mut left_blobs = enumerator.list_blobs_with_sizes(left_id)?;
         let mut right_blobs = enumerator.list_blobs_with_sizes(right_id)?;
 
-        // Trier par blob_id.as_bytes() pour la comparaison linéaire
+        // Sort by blob_id.as_bytes() for linear comparison
         left_blobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         right_blobs.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
         Self::merge_diff(left_ref, right_ref, &left_blobs, &right_blobs, opts)
     }
 
-    // ── Comparaison directe de deux listes de blobs ──────────────────
+    // ── Direct comparison of two blob lists ──────────────────
 
-    /// Calcule le diff entre deux listes de (BlobId, size) déjà triées
+    /// Computes diff between two already sorted lists of (BlobId, size)
     pub fn diff_sorted(
         left_ref: SnapshotRef,
         right_ref: SnapshotRef,
@@ -237,7 +237,7 @@ impl SnapshotDiff {
         Self::merge_diff(left_ref, right_ref, left_blobs, right_blobs, opts)
     }
 
-    // ── Fusion merge-sort O(n) ────────────────────────────────────────
+    // ── Merge-sort O(n) merge ────────────────────────────────────────
 
     fn merge_diff(
         left_ref: SnapshotRef,
@@ -329,16 +329,16 @@ impl SnapshotDiff {
         })
     }
 
-    // ── Utilitaires ───────────────────────────────────────────────────
+    // ── Utilities ───────────────────────────────────────────────────
 
-    /// Retourne true si les deux snapshots ont exactement le même root_blob
+    /// Returns true if both snapshots have exactly the same root_blob
     pub fn is_identical(left_id: SnapshotId, right_id: SnapshotId) -> ExofsResult<bool> {
         let l = SNAPSHOT_LIST.get(left_id)?;
         let r = SNAPSHOT_LIST.get(right_id)?;
         Ok(l.root_blob.ct_eq(&r.root_blob))
     }
 
-    /// Retourne les blobs uniques à gauche (Removed du point de vue de droite)
+    /// Returns blobs unique to left (Removed from the perspective of right)
     pub fn blobs_only_in<E: SnapshotBlobEnumerator>(
         only_in_id: SnapshotId,
         other_id: SnapshotId,

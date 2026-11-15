@@ -126,10 +126,9 @@ scheduler_ipi_handler_asm:
 // Reads the AtomicU32 directly.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// nr_running offset in RunQueueStats (embedded in PerCpuRunQueue)
-// Provisional value — must stay in sync with the Rust layout.
-.set RQ_STATS_OFFSET,      0     // RunQueueStats is at the start of the struct (approximation)
-.set STATS_NR_RUNNING_OFFSET, 32 // AtomicU32 nr_running
+// nr_running offset in RunQueueStats (embedded at offset 0 of PerCpuRunQueue)
+.set RQ_STATS_OFFSET,         0  // RunQueueStats is the first field of PerCpuRunQueue
+.set STATS_NR_RUNNING_OFFSET, 40 // AtomicU32 nr_running (5 * u64 counters precede it)
 
 .global yield_fast_path
 .type yield_fast_path, @function

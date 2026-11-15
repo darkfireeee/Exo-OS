@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Journal d'audit
+// ExoFS Quota — Audit log
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::quota_tracker::QuotaKey;
@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 pub const AUDIT_RING_SIZE: usize = 2048;
 pub const AUDIT_MSG_LEN: usize = 48;
 
-// ─── Horloge interne ─────────────────────────────────────────────────────────
+// ─── Internal clock ───────────────────────────────────────────────────────────
 
 static AUDIT_TICK: AtomicU64 = AtomicU64::new(0);
 pub fn audit_tick() -> u64 {
@@ -25,33 +25,33 @@ pub fn advance_audit_tick(dt: u64) {
 
 // ─── QuotaEvent ───────────────────────────────────────────────────────────────
 
-/// Type d'événement de quota auditable.
+/// Auditable quota event type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum QuotaEvent {
-    /// Dépassement de la limite souple.
+    /// Soft limit exceeded.
     SoftBreach = 0x01,
-    /// Refus par la limite dure.
+    /// Denied by hard limit.
     HardDenial = 0x02,
-    /// Nouvelle limite posée.
+    /// New limit set.
     LimitSet = 0x03,
-    /// Limite réinitialisée.
+    /// Limit reset.
     LimitReset = 0x04,
-    /// Namespace ajouté.
+    /// Namespace added.
     NamespaceAdded = 0x05,
-    /// Namespace supprimé.
+    /// Namespace removed.
     NamespaceRemoved = 0x06,
-    /// Entité créée dans le tracker.
+    /// Entity created in tracker.
     EntityCreated = 0x07,
-    /// Entité supprimée du tracker.
+    /// Entity removed from tracker.
     EntityRemoved = 0x08,
-    /// Dépassement de grâce expiré.
+    /// Grace period expired.
     GraceExpired = 0x09,
-    /// Utilisation remise à zéro.
+    /// Usage reset to zero.
     UsageReset = 0x0A,
-    /// Alerte dépassement soft imminent (>80%).
+    /// Imminent soft breach warning (>80%).
     SoftWarning = 0x0B,
-    /// Politique appliquée (changement).
+    /// Policy applied (change).
     PolicyApplied = 0x0C,
 }
 
@@ -114,7 +114,7 @@ impl QuotaEvent {
 
 // ─── QuotaAuditEntry ──────────────────────────────────────────────────────────
 
-/// Entrée d'audit (128 octets, repr C, copiable).
+/// Audit entry (128 bytes, repr C, copyable).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct QuotaAuditEntry {
@@ -203,7 +203,7 @@ impl QuotaAuditEntry {
         Ok(v)
     }
 
-    /// Utilisation en ‰ du quota (ARITH-02).
+    /// Quota utilization in ‰ (ARITH-02).
     pub fn usage_ppt(&self) -> u64 {
         if self.limit == 0 || self.limit == u64::MAX {
             return 0;
@@ -221,7 +221,7 @@ impl QuotaAuditEntry {
 #[derive(Clone, Copy, Debug)]
 pub struct AuditFilter {
     pub min_severity: u8,
-    pub event_mask: u16, // bitmask des événements (1 << event as u8)
+    pub event_mask: u16, // event bitmask (1 << event as u8)
     pub entity_id: Option<u64>,
 }
 
@@ -275,7 +275,7 @@ impl AuditFilter {
 
 // ─── QuotaAuditLog ────────────────────────────────────────────────────────────
 
-/// Journal circulaire d'audit (ring de AUDIT_RING_SIZE entrées).
+/// Circular audit log (ring of AUDIT_RING_SIZE entries).
 pub struct QuotaAuditLog {
     entries: UnsafeCell<[QuotaAuditEntry; AUDIT_RING_SIZE]>,
     lock: AtomicU64,
@@ -325,11 +325,11 @@ impl QuotaAuditLog {
         self.lock.store(0, Ordering::Release);
     }
 
-    /// Enregistre une entrée d'audit dans le ring.
+    /// Records an audit entry in the ring.
     pub fn push(&self, entry: QuotaAuditEntry) {
         self.acquire();
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % AUDIT_RING_SIZE;
-        // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
+        // SAFETY: data validity checked under exclusive atomic spinlock.
         unsafe {
             (*self.entries.get())[idx] = entry;
         }
@@ -353,7 +353,7 @@ impl QuotaAuditLog {
         self.release();
     }
 
-    /// Raccourci : journalise un événement directement.
+    /// Shortcut: logs an event directly.
     pub fn log(&self, key: QuotaKey, event: QuotaEvent, current: u64, limit: u64, msg: &str) {
         let tick = audit_tick();
         self.push(QuotaAuditEntry::new(tick, key, event, current, limit, msg));
@@ -411,7 +411,7 @@ impl QuotaAuditLog {
         );
     }
 
-    /// Dernier événement enregistré.
+    /// Most recent recorded event.
     pub fn latest(&self) -> Option<QuotaAuditEntry> {
         self.acquire();
         if self.count.load(Ordering::Relaxed) == 0 {
@@ -420,7 +420,7 @@ impl QuotaAuditLog {
         }
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(1)) % AUDIT_RING_SIZE;
-        // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
+        // SAFETY: data validity checked under exclusive atomic spinlock.
         let e = unsafe { (*self.entries.get())[idx] };
         self.release();
         if e.is_empty() {
@@ -430,7 +430,7 @@ impl QuotaAuditLog {
         }
     }
 
-    /// Retourne les n derniers événements correspondant au filtre (OOM-02, RECUR-01).
+    /// Returns the n last events matching the filter (OOM-02, RECUR-01).
     pub fn last_n_filtered(
         &self,
         n: usize,
@@ -445,7 +445,7 @@ impl QuotaAuditLog {
         let mut i = 0usize;
         while i < total && v.len() < n {
             let idx = (head.wrapping_add(AUDIT_RING_SIZE).wrapping_sub(i + 1)) % AUDIT_RING_SIZE;
-            // SAFETY: validité des données vérifiée sous spinlock atomique exclusif.
+            // SAFETY: data validity checked under exclusive atomic spinlock.
             let entry = unsafe { (*self.entries.get())[idx] };
             if filter.matches(&entry) {
                 if let Err(_) = v.try_reserve(1) {
@@ -476,7 +476,7 @@ impl QuotaAuditLog {
         self.cnt_dropped.load(Ordering::Relaxed)
     }
 
-    /// Taux de refus en ‰ (ARITH-02).
+    /// Denial rate in ‰ (ARITH-02).
     pub fn denial_rate_ppt(&self) -> u64 {
         let total = self.count();
         if total == 0 {
@@ -488,7 +488,7 @@ impl QuotaAuditLog {
             .unwrap_or(0)
     }
 
-    /// Résumé statistique.
+    /// Statistical summary.
     pub fn summary(&self) -> AuditSummary {
         AuditSummary {
             total: self.count(),
@@ -500,7 +500,7 @@ impl QuotaAuditLog {
         }
     }
 
-    /// Remet à zéro les compteurs (conserve le ring).
+    /// Resets counters to zero (preserves ring).
     pub fn reset_counters(&self) {
         self.cnt_breach.store(0, Ordering::Relaxed);
         self.cnt_denial.store(0, Ordering::Relaxed);
@@ -509,7 +509,7 @@ impl QuotaAuditLog {
     }
 }
 
-/// Singleton global du journal d'audit.
+/// Global singleton of the audit log.
 pub static QUOTA_AUDIT: QuotaAuditLog = QuotaAuditLog::new_const();
 
 // ─── AuditSummary ─────────────────────────────────────────────────────────────
@@ -538,7 +538,7 @@ impl AuditSummary {
 
 // ─── AuditSession ─────────────────────────────────────────────────────────────
 
-/// Session d'audit liée à une entité spécifique.
+/// Audit session bound to a specific entity.
 pub struct AuditSession<'a> {
     log: &'a QuotaAuditLog,
     key: QuotaKey,

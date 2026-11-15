@@ -1,26 +1,26 @@
-//! Module de compression ExoFS — LZ4 + Zstd, sélection adaptative.
+//! ExoFS compression module — LZ4 + Zstd, adaptive selection.
 //!
-//! Ce module expose l'ensemble des types publics du sous-système de compression
-//! d'ExoFS ainsi qu'une API de haut niveau permettant de compresser et décompresser
-//! des blobs en une seule ligne.
+//! This module exposes all public types for the ExoFS compression
+//! subsystem as well as a high-level API to compress and decompress
+//! blobs in a single call.
 //!
 //! # Architecture
 //!
 //! ```text
 //! mod compress
 //!   ├── algorithm          — CompressionAlgorithm, CompressLevel, AlgorithmCapabilities
-//!   ├── compress_stats     — Statistiques globales (COMPRESSION_STATS)
-//!   ├── compress_threshold — Heuristiques de compressibilité
-//!   ├── compress_header    — Format binaire de l'en-tête on-disk (32 octets)
-//!   ├── compress_choice    — Politique (CompressPolicy) + décision adaptative
-//!   ├── compress_benchmark — Benchmarks intégrés (BenchResult, BenchHistory)
-//!   ├── compress_writer    — Écriture de blob compressé (CompressWriter)
-//!   ├── decompress_reader  — Lecture/décompression (DecompressReader)
-//!   ├── lz4_wrapper        — Codec LZ4 bloc embarqué
-//!   └── zstd_wrapper       — Codec Zstd frame minimal embarqué
+//!   ├── compress_stats     — Global statistics (COMPRESSION_STATS)
+//!   ├── compress_threshold — Compressibility heuristics
+//!   ├── compress_header    — On-disk binary header format (32 bytes)
+//!   ├── compress_choice    — Policy (CompressPolicy) + adaptive decision
+//!   ├── compress_benchmark — Integrated benchmarks (BenchResult, BenchHistory)
+//!   ├── compress_writer    — Compressed blob writer (CompressWriter)
+//!   ├── decompress_reader  — Read/decompression (DecompressReader)
+//!   ├── lz4_wrapper        — Embedded LZ4 block codec
+//!   └── zstd_wrapper       — Embedded minimal Zstd frame codec
 //! ```
 //!
-//! # Utilisation rapide
+//! # Quick usage
 //!
 //! ```rust,ignore
 //! use kernel::fs::exofs::compress;
@@ -28,13 +28,13 @@
 //! // Compression
 //! let blob = compress::compress_blob(&data, CompressPolicy::default())?;
 //!
-//! // Décompression
+//! // Decompression
 //! let original = compress::decompress_blob(&blob)?;
 //! ```
 //!
-//! RÈGLE OOM-02   : try_reserve avant tout push.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE OOM-02   : try_reserve before any push.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 pub mod algorithm;
 pub mod compress_benchmark;
@@ -48,7 +48,7 @@ pub mod lz4_wrapper;
 pub mod zstd_wrapper;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports publics
+// Public re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use algorithm::{
@@ -67,7 +67,7 @@ pub use compress_stats::{
 };
 pub use compress_threshold::CompressionThreshold;
 pub use compress_writer::{CompressResult, CompressWriter, CompressionPipeline};
-// crc32_simple est pub(crate) dans compress_writer — ne peut pas être re-exporté (E0364)
+// crc32_simple is pub(crate) in compress_writer — cannot be re-exported (E0364)
 pub use decompress_reader::{DecompressReader, DecompressStats};
 pub use lz4_wrapper::Lz4Compressor;
 pub use zstd_wrapper::{
@@ -78,22 +78,22 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Configuration globale du module
+// Global module configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration globale du compresseur ExoFS.
+/// Global configuration for the ExoFS compressor.
 #[derive(Debug, Clone)]
 pub struct CompressorConfig {
-    /// Politique de compression par défaut.
+    /// Default compression policy.
     pub default_policy: CompressPolicy,
-    /// Activer la validation CRC à la décompression.
+    /// Enable CRC validation upon decompression.
     pub validate_crc: bool,
-    /// Taille minimale en octets pour tenter la compression.
+    /// Minimum size in bytes to attempt compression.
     pub min_compress_size: usize,
 }
 
 impl CompressorConfig {
-    /// Configuration par défaut raisonnable.
+    /// Reasonable default configuration.
     pub const fn default_config() -> Self {
         Self {
             default_policy: CompressPolicy::lz4_default(),
@@ -102,7 +102,7 @@ impl CompressorConfig {
         }
     }
 
-    /// Configuration haute performance (LZ4 rapide, pas de CRC).
+    /// High performance configuration (fast LZ4, no CRC).
     pub const fn fast_config() -> Self {
         Self {
             default_policy: CompressPolicy::lz4_fast(),
@@ -111,7 +111,7 @@ impl CompressorConfig {
         }
     }
 
-    /// Configuration haute densité (Zstd, CRC activé).
+    /// High density configuration (Zstd, CRC enabled).
     pub const fn dense_config() -> Self {
         Self {
             default_policy: CompressPolicy::zstd_default(),
@@ -128,20 +128,20 @@ impl Default for CompressorConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CompressModule — orchestrateur de haut niveau
+// CompressModule — high-level orchestrator
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Orchestrateur du module de compression ExoFS.
+/// ExoFS compression module orchestrator.
 ///
-/// Fournit des méthodes de haut niveau combinant écriture, lecture,
-/// et accès aux statistiques via une interface unifiée.
+/// Provides high-level methods combining writing, reading,
+/// and access to statistics via a unified interface.
 pub struct CompressModule {
     writer: CompressWriter,
     config: CompressorConfig,
 }
 
 impl CompressModule {
-    /// Crée un module avec la configuration par défaut.
+    /// Creates a module with the default configuration.
     pub fn new() -> Self {
         let config = CompressorConfig::default_config();
         Self {
@@ -150,7 +150,7 @@ impl CompressModule {
         }
     }
 
-    /// Crée un module avec une configuration personnalisée.
+    /// Creates a module with a custom configuration.
     pub fn with_config(config: CompressorConfig) -> Self {
         Self {
             writer: CompressWriter::new(config.default_policy.clone()),
@@ -158,9 +158,9 @@ impl CompressModule {
         }
     }
 
-    /// Compresse un bloc de données et retourne le blob ExoFS.
+    /// Compresses a data block and returns the ExoFS blob.
     ///
-    /// Si la taille est inférieure à `min_compress_size`, stockage brut.
+    /// If size is smaller than `min_compress_size`, raw storage is used.
     pub fn compress(&self, data: &[u8]) -> ExofsResult<Vec<u8>> {
         if data.len() < self.config.min_compress_size {
             let mut out = Vec::new();
@@ -173,7 +173,7 @@ impl CompressModule {
         Ok(result.payload)
     }
 
-    /// Décompresse un blob ExoFS.
+    /// Decompresses an ExoFS blob.
     pub fn decompress(&self, payload: &[u8]) -> ExofsResult<Vec<u8>> {
         let mut reader = if self.config.validate_crc {
             DecompressReader::new()
@@ -183,12 +183,12 @@ impl CompressModule {
         reader.decompress(payload)
     }
 
-    /// Retourne les statistiques globales de compression.
+    /// Returns global compression statistics.
     pub fn stats_snapshot(&self) -> CompressionStatsSnapshot {
         COMPRESSION_STATS.global_snapshot()
     }
 
-    /// Retourne la configuration active.
+    /// Returns the active configuration.
     pub fn config(&self) -> &CompressorConfig {
         &self.config
     }
@@ -201,36 +201,36 @@ impl Default for CompressModule {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API fonctionnelle de haut niveau
+// High-level functional API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compresse `data` avec la politique donnée.
+/// Compresses `data` with the given policy.
 ///
-/// Raccourci idiomatique sans construire de `CompressModule`.
+/// Idiomatic shortcut without constructing a `CompressModule`.
 pub fn compress_blob(data: &[u8], policy: CompressPolicy) -> ExofsResult<Vec<u8>> {
     let writer = CompressWriter::new(policy);
     Ok(writer.compress(data)?.payload)
 }
 
-/// Décompresse un blob ExoFS produit par `compress_blob`.
+/// Decompresses an ExoFS blob produced by `compress_blob`.
 pub fn decompress_blob(payload: &[u8]) -> ExofsResult<Vec<u8>> {
     let mut reader = DecompressReader::new();
     reader.decompress(payload)
 }
 
-/// Compresse avec validation CRC immédiate.
+/// Compresses with immediate CRC validation.
 pub fn compress_validated(data: &[u8], policy: CompressPolicy) -> ExofsResult<Vec<u8>> {
     let pipeline = CompressionPipeline::new(policy);
     Ok(pipeline.compress_and_validate(data)?.payload)
 }
 
-/// Retourne `true` si le payload est un blob ExoFS compressé.
+/// Returns `true` if the payload is a compressed ExoFS blob.
 pub fn is_compressed_blob(payload: &[u8]) -> bool {
     DecompressReader::is_compressed(payload)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests d'intégration
+// Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -261,7 +261,7 @@ mod integration_tests {
         let data = uniform(4096, 0xAA);
         let blob = compress_blob(&data, CompressPolicy::lz4_fast()).test_unwrap();
         let dec = decompress_blob(&blob).test_unwrap();
-        // Si compressé : roundtrip exact. Si brut : identique.
+        // If compressed: exact roundtrip. If raw: identical.
         assert!(dec.len() == data.len() || dec == data);
     }
 
@@ -277,7 +277,7 @@ mod integration_tests {
     fn test_is_compressed_after_compress() {
         let data = uniform(1024, 0x11);
         let blob = compress_blob(&data, CompressPolicy::lz4_fast()).test_unwrap();
-        // Peut être compressé ou brut selon la décision adaptative.
+        // Can be compressed or raw depending on adaptive decision.
         let _ = is_compressed_blob(&blob);
     }
 
@@ -303,7 +303,7 @@ mod integration_tests {
         });
         let data = uniform(64, 0xFF);
         let out = module.compress(&data).test_unwrap();
-        // Données trop petites → stockage brut.
+        // Data too small -> raw storage.
         assert_eq!(out.as_slice(), data.as_slice());
     }
 
@@ -341,7 +341,7 @@ mod integration_tests {
         assert_eq!(dec.len(), data.len());
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_compress_blob_returns_nonempty_for_nonempty_input() {

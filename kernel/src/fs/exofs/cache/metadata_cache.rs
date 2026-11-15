@@ -1,10 +1,8 @@
-//! MetadataCache — cache des métadonnées d'inodes/entrées de répertoire (no_std).
-
-//! metadata_cache.rs — Cache de métadonnées d'inodes ExoFS (no_std).
+//! metadata_cache.rs — ExoFS inode metadata cache (no_std).
 //!
-//! `MetaEntry` : métadonnées complètes d'un inode mis en cache.
-//! `MetadataCache` / `METADATA_CACHE` : cache global.
-//! Règles : OOM-02, ARITH-02, RECUR-01.
+//! `MetaEntry`: complete cached inode metadata.
+//! `MetadataCache` / `METADATA_CACHE`: global cache.
+//! Rules: OOM-02, ARITH-02, RECUR-01.
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -39,7 +37,7 @@ pub struct MetaEntry {
     pub gid: u32,
     pub perm: u16,
     pub link_count: u16,
-    /// Ticks de mise en cache.
+    /// Caching ticks.
     pub cached_tick: u64,
     pub dirty: bool,
 }
@@ -95,7 +93,7 @@ impl MetadataCacheInner {
     }
 
     fn evict_one(&mut self) -> bool {
-        // LRU approxé : retire l'entrée propre (!v.dirty) avec le tick le plus bas.
+        // Approximate LRU: removes clean entry (!v.dirty) with lowest tick.
         let oldest = self
             .map
             .iter()
@@ -222,7 +220,7 @@ impl MetadataCache {
 
 // ── MetaCacheStats ─────────────────────────────────────────────────────────────
 
-/// Statistiques spécifiques au cache de métadonnées.
+/// Specific statistics for metadata cache.
 pub struct MetaCacheStats {
     pub n_entries: usize,
     pub n_dirty: usize,
@@ -233,7 +231,7 @@ pub struct MetaCacheStats {
 }
 
 impl MetadataCache {
-    /// Construit un rapport de statistiques détaillé.
+    /// Constructs a detailed statistics report.
     pub fn stats(&self) -> MetaCacheStats {
         let inner = self.inner.lock();
         let mut n_dirty = 0usize;
@@ -267,7 +265,7 @@ impl MetadataCache {
         }
     }
 
-    /// Insère un lot d'entrées. S'arrête au premier échec OOM.
+    /// Inserts a batch of entries. Stops at first OOM failure.
     pub fn insert_batch(&self, metas: &[MetaEntry]) -> ExofsResult<usize> {
         let mut count = 0usize;
         for m in metas {
@@ -277,17 +275,17 @@ impl MetadataCache {
         Ok(count)
     }
 
-    /// Met à jour la taille d'un inode.
+    /// Updates the size of an inode.
     pub fn update_size(&self, inode_id: u64, new_size: u64) -> ExofsResult<()> {
         self.update(inode_id, |m| m.size = new_size)
     }
 
-    /// Met à jour le mtime d'un inode.
+    /// Updates mtime of an inode.
     pub fn update_mtime(&self, inode_id: u64, mtime: u64) -> ExofsResult<()> {
         self.update(inode_id, |m| m.mtime = mtime)
     }
 
-    /// Retourne tous les inodes d'un kind donné.
+    /// Returns all inodes of a given kind.
     pub fn by_kind(&self, kind: MetaKind) -> Vec<u64> {
         self.inner
             .lock()
@@ -298,7 +296,7 @@ impl MetadataCache {
             .collect()
     }
 
-    /// Invalide tous les inodes dirty.
+    /// Invalidates all dirty inodes.
     pub fn invalidate_all_dirty(&self) {
         let mut inner = self.inner.lock();
         let dirty: Vec<u64> = inner
@@ -312,7 +310,7 @@ impl MetadataCache {
         }
     }
 
-    /// Nombre d'inodes dirty.
+    /// Number of dirty inodes.
     pub fn n_dirty(&self) -> usize {
         self.inner.lock().map.values().filter(|m| m.dirty).count()
     }

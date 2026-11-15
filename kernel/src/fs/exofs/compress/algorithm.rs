@@ -1,9 +1,9 @@
-//! Algorithmes de compression supportés par ExoFS.
+//! Compression algorithms supported by ExoFS.
 //!
-//! Définit : algorithmes, niveaux, bornes de buffer, capacités, validation.
+//! Defines: algorithms, levels, buffer bounds, capabilities, validation.
 //!
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE ONDISK-03 : aucun AtomicU64 dans les types #[repr(C)].
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE ONDISK-03: no AtomicU64 in #[repr(C)] types.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
@@ -11,7 +11,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // CompressLevel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveaux de compression (1 = rapide, 9 = maximum).
+/// Compression levels (1 = fast, 9 = maximum).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum CompressLevel {
@@ -23,7 +23,7 @@ pub enum CompressLevel {
 }
 
 impl CompressLevel {
-    /// Construit depuis un octet on-disk. Retourne `Default` si invalide.
+    /// Constructs from an on-disk byte. Returns `Default` if invalid.
     pub const fn from_u8(v: u8) -> Self {
         match v {
             1 => Self::Fast,
@@ -34,17 +34,17 @@ impl CompressLevel {
         }
     }
 
-    /// Valeur numérique pour les appels de librairie embarquée.
+    /// Numeric value for embedded library calls.
     pub const fn as_i32(self) -> i32 {
         self as i32
     }
 
-    /// `true` si le niveau est au moins `Default`.
+    /// `true` if level is at least `Default`.
     pub const fn is_at_least_default(self) -> bool {
         (self as u8) >= (CompressLevel::Default as u8)
     }
 
-    /// Retourne le niveau immédiatement supérieur (plafonné à Maximum).
+    /// Returns the immediately higher level (clamped to Maximum).
     pub const fn next(self) -> Self {
         match self {
             Self::None => Self::Fast,
@@ -55,7 +55,7 @@ impl CompressLevel {
         }
     }
 
-    /// Retourne le niveau immédiatement inférieur (plancher à Fast).
+    /// Returns the immediately lower level (floored at Fast).
     pub const fn prev(self) -> Self {
         match self {
             Self::None => Self::None,
@@ -66,7 +66,7 @@ impl CompressLevel {
         }
     }
 
-    /// Nom lisible du niveau.
+    /// Human-readable name of the level.
     pub const fn name(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -77,7 +77,7 @@ impl CompressLevel {
         }
     }
 
-    /// Tous les niveaux valides, du plus rapide au plus lent.
+    /// All valid levels, from fastest to slowest.
     pub const ALL: [CompressLevel; 4] = [
         CompressLevel::Fast,
         CompressLevel::Default,
@@ -96,20 +96,20 @@ impl Default for CompressLevel {
 // CompressionAlgorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Algorithme de compression utilisé pour un blob.
+/// Compression algorithm used for a blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum CompressionAlgorithm {
-    /// Pas de compression.
+    /// No compression.
     None = 0,
-    /// LZ4 — rapide, faible ratio, idéal pour données chaudes.
+    /// LZ4 — fast, low ratio, ideal for hot data.
     Lz4 = 1,
-    /// Zstd — meilleur ratio, légèrement plus lent.
+    /// Zstd — better ratio, slightly slower.
     Zstd = 2,
 }
 
 impl CompressionAlgorithm {
-    /// Retourne le nom lisible de l'algorithme.
+    /// Returns the human-readable name of the algorithm.
     pub const fn name(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -118,12 +118,12 @@ impl CompressionAlgorithm {
         }
     }
 
-    /// `true` si les données sont effectivement compressées.
+    /// `true` if data is effectively compressed.
     pub const fn is_compressed(self) -> bool {
         !matches!(self, Self::None)
     }
 
-    /// Parse depuis un octet on-disk. Retourne `None` si valeur inconnue.
+    /// Parses from an on-disk byte. Returns `None` if unknown value.
     pub const fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::None),
@@ -133,12 +133,12 @@ impl CompressionAlgorithm {
         }
     }
 
-    /// Parse depuis un octet on-disk, retourne `ExofsError::NotSupported` si inconnu.
+    /// Parses from an on-disk byte, returns `ExofsError::NotSupported` if unknown.
     pub fn parse_on_disk(v: u8) -> ExofsResult<Self> {
         Self::from_u8(v).ok_or(ExofsError::NotSupported)
     }
 
-    /// Niveau de compression par défaut recommandé pour cet algorithme.
+    /// Recommended default compression level for this algorithm.
     pub const fn default_level(self) -> CompressLevel {
         match self {
             Self::None => CompressLevel::Default,
@@ -147,12 +147,12 @@ impl CompressionAlgorithm {
         }
     }
 
-    /// `true` si l'algorithme supporte les niveaux multiples.
+    /// `true` if the algorithm supports multiple levels.
     pub const fn supports_levels(self) -> bool {
         matches!(self, Self::Zstd)
     }
 
-    /// Latence relative (1 = le plus rapide, copie mémoire de référence).
+    /// Relative latency (1 = fastest, reference memory copy).
     pub const fn relative_latency(self) -> u8 {
         match self {
             Self::None => 1,
@@ -161,14 +161,14 @@ impl CompressionAlgorithm {
         }
     }
 
-    /// Tous les algorithmes, y compris None.
+    /// All algorithms, including None.
     pub const ALL: [CompressionAlgorithm; 3] = [
         CompressionAlgorithm::None,
         CompressionAlgorithm::Lz4,
         CompressionAlgorithm::Zstd,
     ];
 
-    /// Algorithmes compressants uniquement (hors None).
+    /// Compressing algorithms only (excluding None).
     pub const COMPRESSING: [CompressionAlgorithm; 2] =
         [CompressionAlgorithm::Lz4, CompressionAlgorithm::Zstd];
 }
@@ -186,30 +186,30 @@ impl core::convert::TryFrom<u8> for CompressionAlgorithm {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes de buffer
+// Buffer constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// LZ4 : sortie max = entrée + entrée/255 + 16 bytes (spécification block format).
+/// LZ4: max output = input + input/255 + 16 bytes (block format specification).
 pub const LZ4_MAX_EXPANSION_BYTES: usize = 16;
 
-/// Zstd : marge sécurité supplémentaire hors spécification stricte.
+/// Zstd: additional safety margin outside strict specification.
 pub const ZSTD_COMPRESSBOUND_MARGIN: usize = 128;
 
-/// Taille maximale d'un bloc compressé acceptée en entrée (anti-DoS).
+/// Maximum compressed block size accepted as input (anti-DoS).
 pub const MAX_COMPRESSED_BLOCK_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
-/// Taille maximale d'un bloc décompressé acceptée (anti-DoS).
+/// Maximum decompressed block size accepted (anti-DoS).
 pub const MAX_DECOMPRESSED_BLOCK_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
-/// Taille minimale pour qu'une compression soit tentée.
+/// Minimum size for compression to be attempted.
 pub const MIN_COMPRESS_INPUT: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de calcul de bornes
+// Bound computation functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule la borne supérieure du buffer de sortie.
-/// Arithmétique saturating (ARITH-02) : jamais de panique par overflow.
+/// Computes upper bound for output buffer.
+/// Saturating arithmetic (ARITH-02): never panics on overflow.
 pub fn compress_bound(algorithm: CompressionAlgorithm, input_len: usize) -> usize {
     match algorithm {
         CompressionAlgorithm::None => input_len,
@@ -223,7 +223,7 @@ pub fn compress_bound(algorithm: CompressionAlgorithm, input_len: usize) -> usiz
     }
 }
 
-/// Valide qu'une taille décompressée est dans les limites de sécurité.
+/// Validates that an uncompressed size is within safety limits.
 pub fn validate_decompressed_size(uncompressed_size: u64) -> ExofsResult<usize> {
     let sz = uncompressed_size as usize;
     if sz > MAX_DECOMPRESSED_BLOCK_SIZE {
@@ -232,7 +232,7 @@ pub fn validate_decompressed_size(uncompressed_size: u64) -> ExofsResult<usize> 
     Ok(sz)
 }
 
-/// Valide qu'une taille compressée est dans les limites de sécurité.
+/// Validates that a compressed size is within safety limits.
 pub fn validate_compressed_size(compressed_size: u64) -> ExofsResult<usize> {
     let sz = compressed_size as usize;
     if sz > MAX_COMPRESSED_BLOCK_SIZE {
@@ -242,24 +242,24 @@ pub fn validate_compressed_size(compressed_size: u64) -> ExofsResult<usize> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AlgorithmCapabilities — capacités déclarées par algorithme
+// AlgorithmCapabilities — declared capabilities per algorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Capacités d'un algorithme de compression.
+/// Capabilities of a compression algorithm.
 #[derive(Debug, Clone, Copy)]
 pub struct AlgorithmCapabilities {
     pub algorithm: CompressionAlgorithm,
     pub stream_support: bool,
     pub dict_support: bool,
     pub max_level: CompressLevel,
-    /// Débit de compression typique en MB/s.
+    /// Typical compression throughput in MB/s.
     pub compress_mbps: u32,
-    /// Débit de décompression typique en MB/s.
+    /// Typical decompression throughput in MB/s.
     pub decompress_mbps: u32,
 }
 
 impl AlgorithmCapabilities {
-    /// Retourne les capacités de l'algorithme donné.
+    /// Returns capabilities for the given algorithm.
     pub const fn for_algorithm(algo: CompressionAlgorithm) -> Self {
         match algo {
             CompressionAlgorithm::None => AlgorithmCapabilities {
@@ -289,17 +289,17 @@ impl AlgorithmCapabilities {
         }
     }
 
-    /// `true` si l'algorithme peut être utilisé pour ce niveau.
+    /// `true` if the algorithm can be used for this level.
     pub fn level_supported(&self, level: CompressLevel) -> bool {
         level <= self.max_level
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CompressionProfile — couple (algorithme, niveau) persistable
+// CompressionProfile — persistable (algorithm, level) pair
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Profil de compression sérialisable sur 2 bytes.
+/// Compression profile serializable on 2 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompressionProfile {
     pub algorithm: CompressionAlgorithm,
@@ -307,7 +307,7 @@ pub struct CompressionProfile {
 }
 
 impl CompressionProfile {
-    /// Profil par défaut : Lz4 en mode Fast.
+    /// Default profile: Lz4 in Fast mode.
     pub const fn default_lz4() -> Self {
         Self {
             algorithm: CompressionAlgorithm::Lz4,
@@ -315,7 +315,7 @@ impl CompressionProfile {
         }
     }
 
-    /// Profil haute compression : Zstd Default.
+    /// High ratio profile: Zstd Default.
     pub const fn high_ratio() -> Self {
         Self {
             algorithm: CompressionAlgorithm::Zstd,
@@ -323,7 +323,7 @@ impl CompressionProfile {
         }
     }
 
-    /// Pas de compression.
+    /// No compression.
     pub const fn none() -> Self {
         Self {
             algorithm: CompressionAlgorithm::None,
@@ -331,12 +331,12 @@ impl CompressionProfile {
         }
     }
 
-    /// Sérialise sur 2 bytes (algorithm, level).
+    /// Serializes to 2 bytes (algorithm, level).
     pub const fn to_bytes(self) -> [u8; 2] {
         [self.algorithm as u8, self.level as u8]
     }
 
-    /// Désérialise depuis 2 bytes.
+    /// Deserializes from 2 bytes.
     pub fn from_bytes(b: [u8; 2]) -> ExofsResult<Self> {
         let algorithm = CompressionAlgorithm::parse_on_disk(b[0])?;
         let level = CompressLevel::from_u8(b[1]);
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_compress_bound_no_overflow() {
-        // saturating_add : jamais de panic même avec max usize
+        // saturating_add: never panics even with max usize
         let n = compress_bound(CompressionAlgorithm::Zstd, usize::MAX - 256);
         assert!(n > 0);
     }

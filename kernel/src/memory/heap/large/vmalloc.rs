@@ -167,13 +167,20 @@ pub static VMALLOC_STATS: VmallocStats = VmallocStats::new();
 // PUBLIC API
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Computes byte offset of user payload within the backing block so that
+/// both the 64-byte [`VmallocHeader`] fits at offset 0 and the returned
+/// pointer satisfies `align` (assumed to be a power of 2 >= 8).
+#[inline]
+fn user_offset_for(align: usize) -> usize {
+    let header_sz = core::mem::size_of::<VmallocHeader>();
+    let mask = align.saturating_sub(1);
+    (header_sz + mask) & !mask
+}
+
 /// Calculates the number of pages required for `size` bytes + header.
 #[inline]
 fn pages_needed(size: usize, align: usize) -> usize {
-    // Header occupies at least 64 bytes (one cache line / 1 page when align >= PAGE_SIZE).
-    let total = size
-        .saturating_add(core::mem::size_of::<VmallocHeader>())
-        .saturating_add(align.saturating_sub(1));
+    let total = size.saturating_add(user_offset_for(align));
     (total + PAGE_SIZE - 1) / PAGE_SIZE
 }
 
@@ -226,17 +233,30 @@ fn header_metadata_valid(header: &VmallocHeader, header_addr: u64) -> bool {
 /// - `AllocError::OutOfMemory` — no frames available.
 /// - `AllocError::InvalidParams` — zero size or alignment not a power of 2.
 pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError> {
-    if size == 0 {
+    kalloc_aligned(size, 8, flags)
+}
+
+/// Allocates `size` bytes honoring power-of-2 `align` (clamped at least to 8, or `PAGE_SIZE` for DMA).
+pub fn kalloc_aligned(
+    size: usize,
+    align: usize,
+    flags: AllocFlags,
+) -> Result<NonNull<u8>, AllocError> {
+    if size == 0 || align == 0 || !align.is_power_of_two() {
         return Err(AllocError::InvalidParams);
     }
 
-    let align = if flags.contains(AllocFlags::DMA) {
-        PAGE_SIZE
+    let eff_align = if flags.contains(AllocFlags::DMA) {
+        align.max(PAGE_SIZE)
     } else {
-        8
+        align.max(8)
     };
-    let pages = pages_needed(size, align);
+    let pages = pages_needed(size, eff_align);
     let order = order_for_pages(pages);
+    if order as usize > BUDDY_MAX_ORDER {
+        VMALLOC_STATS.oom_count.fetch_add(1, Ordering::Relaxed);
+        return Err(AllocError::OutOfMemory);
+    }
 
     // Allocate physical frames via buddy.
     let frame = alloc_pages(order as usize, flags)?;
@@ -256,7 +276,7 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
             magic: VMALLOC_MAGIC,
             user_size: size,
             page_count: pages,
-            alignment: align,
+            alignment: eff_align,
             state: HEADER_ALIVE,
             buddy_order: order,
             phys_base: phys_base.as_u64(),
@@ -264,8 +284,8 @@ pub fn kalloc(size: usize, flags: AllocFlags) -> Result<NonNull<u8>, AllocError>
         });
     }
 
-    // User object begins right after header.
-    let user_ptr = virt_base.as_u64() + core::mem::size_of::<VmallocHeader>() as u64;
+    // User object starts at the requested alignment after VmallocHeader.
+    let user_ptr = virt_base.as_u64() + user_offset_for(eff_align) as u64;
 
     if !VMALLOC_REGISTRY.lock().insert(user_ptr, virt_base.as_u64()) {
         let _ = free_pages(frame, order as usize);
@@ -390,7 +410,8 @@ pub unsafe fn krealloc(
     }
     let old_user_size = header.user_size;
     let old_pages = header.page_count;
-    let new_pages = pages_needed(new_size, header.alignment);
+    let old_align = header.alignment;
+    let new_pages = pages_needed(new_size, old_align);
     if old_pages == new_pages {
         // Update user_size in header.
         header.user_size = new_size;
@@ -406,8 +427,8 @@ pub unsafe fn krealloc(
         return Ok(ptr);
     }
 
-    // Allocate + copy + free.
-    let new_ptr = kalloc(new_size, flags)?;
+    // Allocate + copy + free, preserving original alignment.
+    let new_ptr = kalloc_aligned(new_size, old_align, flags)?;
     let copy_len = old_user_size.min(new_size);
     core::ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr(), copy_len);
     kfree(ptr, old_user_size);

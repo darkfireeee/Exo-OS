@@ -1,9 +1,9 @@
-//! mount_point.rs — Table des points de montage ExoFS
+//! mount_point.rs — ExoFS mount point table
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ONDISK-03: pas d'AtomicU64 dans les structs repr(C)
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ONDISK-03: no AtomicU64 in repr(C) structs
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 
@@ -12,13 +12,13 @@ use crate::fs::exofs::path::path_component::NAME_MAX;
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de points de montage simultanés.
+/// Maximum number of simultaneous mount points.
 pub const MOUNT_TABLE_MAX: usize = 64;
 
-/// Drapeaux de montage.
+/// Mount flags.
 pub const MOUNT_FLAG_READONLY: u32 = 0x0001;
 pub const MOUNT_FLAG_NOEXEC: u32 = 0x0002;
 pub const MOUNT_FLAG_NOSUID: u32 = 0x0004;
@@ -28,27 +28,27 @@ pub const MOUNT_FLAG_BIND: u32 = 0x0008;
 // MountPoint
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un point de montage : répertoire hôte → système de fichiers monté.
+/// A mount point: host directory -> mounted filesystem.
 #[derive(Clone)]
 pub struct MountPoint {
-    /// OID du répertoire sur lequel le montage s'effectue.
+    /// OID of the directory on which the mount is performed.
     pub dir_oid: ObjectId,
-    /// Nom du point de montage (souvent le dernier composant du chemin).
+    /// Name of the mount point (often the last component of the path).
     pub name: [u8; NAME_MAX + 1],
-    /// Longueur valide du nom.
+    /// Valid length of the name.
     pub name_len: u16,
-    /// OID racine du système de fichiers monté.
+    /// Root OID of the mounted filesystem.
     pub mounted_oid: ObjectId,
-    /// Drapeaux du montage (MOUNT_FLAG_*).
+    /// Mount flags (MOUNT_FLAG_*).
     pub flags: u32,
-    /// Identifiant unique de ce montage.
+    /// Unique identifier of this mount.
     pub mount_id: u32,
-    /// Tick de création.
+    /// Creation tick.
     pub created_tick: u64,
 }
 
 impl MountPoint {
-    /// Constructeur.
+    /// Constructor.
     pub fn new(
         dir_oid: ObjectId,
         name: &[u8],
@@ -72,32 +72,32 @@ impl MountPoint {
         })
     }
 
-    /// Nom du point de montage.
+    /// Mount point name.
     #[inline]
     pub fn name_bytes(&self) -> &[u8] {
         &self.name[..self.name_len as usize]
     }
 
-    /// `true` si ce point de montage est en lecture seule.
+    /// `true` if this mount point is read-only.
     #[inline]
     pub fn is_readonly(&self) -> bool {
         self.flags & MOUNT_FLAG_READONLY != 0
     }
 
-    /// `true` si les exécutables sont interdits.
+    /// `true` if executables are prohibited.
     #[inline]
     pub fn is_noexec(&self) -> bool {
         self.flags & MOUNT_FLAG_NOEXEC != 0
     }
 
-    /// `true` si setuid est interdit.
+    /// `true` if setuid is prohibited.
     #[inline]
     pub fn is_nosuid(&self) -> bool {
         self.flags & MOUNT_FLAG_NOSUID != 0
     }
 }
 
-// `Default` pour initialisation de tableau `const`.
+// `Default` for `const` array initialization.
 impl Default for MountPoint {
     fn default() -> Self {
         MountPoint {
@@ -134,8 +134,8 @@ struct MountTableInner {
 
 impl MountTableInner {
     const fn new() -> Self {
-        // On ne peut pas encore appeler `Default::default()` en const fn
-        // donc on initialise manuellement.
+        // We cannot call `Default::default()` in const fn yet,
+        // so we initialize manually.
         MountTableInner {
             entries: [EMPTY_MOUNT; MOUNT_TABLE_MAX],
             count: 0,
@@ -143,7 +143,7 @@ impl MountTableInner {
         }
     }
 
-    /// Cherche un slot libre (name_len == 0).
+    /// Finds a free slot (name_len == 0).
     fn free_slot(&self) -> Option<usize> {
         for i in 0..MOUNT_TABLE_MAX {
             if self.entries[i].name_len == 0 {
@@ -153,7 +153,7 @@ impl MountTableInner {
         None
     }
 
-    /// Trouve le point de montage dont le dir_oid correspond.
+    /// Finds the mount point whose dir_oid matches.
     fn find_by_dir(&self, oid: &ObjectId) -> Option<usize> {
         for i in 0..MOUNT_TABLE_MAX {
             if self.entries[i].name_len != 0 && self.entries[i].dir_oid.0 == oid.0 {
@@ -163,7 +163,7 @@ impl MountTableInner {
         None
     }
 
-    /// Trouve par mount_id.
+    /// Finds by mount_id.
     fn find_by_id(&self, id: u32) -> Option<usize> {
         for i in 0..MOUNT_TABLE_MAX {
             if self.entries[i].name_len != 0 && self.entries[i].mount_id == id {
@@ -209,25 +209,25 @@ impl MountTableInner {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MountTable (publique, thread-safe)
+// MountTable (public, thread-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table des points de montage globale, protégée par SpinLock.
+/// Global mount point table, protected by SpinLock.
 pub struct MountTable {
     inner: SpinLock<MountTableInner>,
 }
 
 impl MountTable {
-    /// Constructeur `const` pour initialisation statique.
+    /// `const` constructor for static initialization.
     pub const fn new_const() -> Self {
         MountTable {
             inner: SpinLock::new(MountTableInner::new()),
         }
     }
 
-    /// Enregistre un nouveau point de montage.
+    /// Registers a new mount point.
     ///
-    /// Retourne le `mount_id` attribué.
+    /// Returns the allocated `mount_id`.
     pub fn register(
         &self,
         dir_oid: ObjectId,
@@ -240,21 +240,21 @@ impl MountTable {
         guard.insert(mp)
     }
 
-    /// Supprime le point de montage sur `dir_oid`.
+    /// Removes the mount point on `dir_oid`.
     pub fn unregister_by_dir(&self, dir_oid: &ObjectId) -> ExofsResult<()> {
         let mut guard = self.inner.lock();
         guard.remove_by_dir(dir_oid)
     }
 
-    /// Supprime le point de montage par son identifiant.
+    /// Removes the mount point by its identifier.
     pub fn unregister_by_id(&self, mount_id: u32) -> ExofsResult<()> {
         let mut guard = self.inner.lock();
         guard.remove_by_id(mount_id)
     }
 
-    /// Cherche un point de montage couvrant `dir_oid`.
+    /// Looks up a mount point covering `dir_oid`.
     ///
-    /// Retourne l'OID monté si trouvé.
+    /// Returns the mounted OID if found.
     pub fn lookup_mount(&self, dir_oid: &ObjectId) -> Option<ObjectId> {
         let guard = self.inner.lock();
         guard
@@ -262,18 +262,18 @@ impl MountTable {
             .map(|i| guard.entries[i].mounted_oid.clone())
     }
 
-    /// Retourne une copie clonée de l'entrée pour `dir_oid`.
+    /// Returns a cloned copy of the entry for `dir_oid`.
     pub fn get_entry(&self, dir_oid: &ObjectId) -> Option<MountPoint> {
         let guard = self.inner.lock();
         guard.find_by_dir(dir_oid).map(|i| guard.entries[i].clone())
     }
 
-    /// Nombre de montages actifs.
+    /// Number of active mounts.
     pub fn count(&self) -> usize {
         self.inner.lock().count
     }
 
-    /// Vérifie si un OID est couvert par un montage (lecture seule).
+    /// Checks whether an OID is covered by a mount (read-only).
     pub fn is_readonly(&self, dir_oid: &ObjectId) -> bool {
         let guard = self.inner.lock();
         match guard.find_by_dir(dir_oid) {
@@ -282,9 +282,9 @@ impl MountTable {
         }
     }
 
-    /// Itère sur tous les points de montage actifs.
+    /// Iterates over all active mount points.
     ///
-    /// Appelle `f(mp)` pour chaque entrée valide.
+    /// Calls `f(mp)` for each valid entry.
     pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&MountPoint),
@@ -297,7 +297,7 @@ impl MountTable {
         }
     }
 
-    /// Remet la table à zéro (shutdown).
+    /// Flushes the table to zero (shutdown).
     pub fn flush(&self) {
         let mut guard = self.inner.lock();
         for i in 0..MOUNT_TABLE_MAX {
@@ -308,17 +308,17 @@ impl MountTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale des points de montage.
+/// Global mount point table.
 pub static MOUNT_TABLE: MountTable = MountTable::new_const();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité
+// Convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistre un point de montage dans la table globale.
+/// Registers a mount point in the global table.
 #[inline]
 pub fn register_mount(
     dir_oid: ObjectId,
@@ -329,19 +329,19 @@ pub fn register_mount(
     MOUNT_TABLE.register(dir_oid, name, mounted_oid, flags)
 }
 
-/// Supprime un montage par son répertoire.
+/// Removes a mount by its directory.
 #[inline]
 pub fn unregister_mount_by_dir(dir_oid: &ObjectId) -> ExofsResult<()> {
     MOUNT_TABLE.unregister_by_dir(dir_oid)
 }
 
-/// Cherche si un répertoire est un point de montage.
+/// Checks whether a directory is a mount point.
 #[inline]
 pub fn lookup_mount(dir_oid: &ObjectId) -> Option<ObjectId> {
     MOUNT_TABLE.lookup_mount(dir_oid)
 }
 
-/// `true` si `dir_oid` est un point de montage (toutes flags confondues).
+/// `true` if `dir_oid` is a mount point (regardless of flags).
 #[inline]
 pub fn is_mount_point(dir_oid: &ObjectId) -> bool {
     MOUNT_TABLE.lookup_mount(dir_oid).is_some()

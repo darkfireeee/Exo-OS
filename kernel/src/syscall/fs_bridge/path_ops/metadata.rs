@@ -396,3 +396,114 @@ pub fn fs_statx(
     write_user_typed(statx_ptr, statx).map_err(|_| FsBridgeError::Fault)?;
     Ok(0)
 }
+
+/// `utimensat(dirfd, pathname, times, flags)` and `futimens(fd, times)`.
+pub fn fs_utimensat(
+    dirfd: i32,
+    path: Option<&[u8]>,
+    times_ptr: u64,
+    flags: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    const AT_SYMLINK_NOFOLLOW: u32 = 0x100;
+    const UTIME_NOW: i64 = (1 << 30) - 1;
+    const UTIME_OMIT: i64 = (1 << 30) - 2;
+
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let blob_id = match path {
+        None => {
+            if dirfd < 0 {
+                return Err(FsBridgeError::BadFd);
+            }
+            let handle = resolve_fd(pid, dirfd as u32)?.handle;
+            let entry = OBJECT_TABLE.get(handle).map_err(exofs_to_bridge_error)?;
+            entry.blob_id
+        }
+        Some(p) => {
+            if p.is_empty() {
+                return Err(FsBridgeError::NotFound);
+            }
+            if dirfd != AT_FDCWD && !p.starts_with(b"/") {
+                return Err(FsBridgeError::Invalid);
+            }
+            let follow = (flags & AT_SYMLINK_NOFOLLOW) == 0;
+            let normalized = resolve_path_with_symlinks(p, follow, false)?;
+            let (bid, _) = path_entry(&normalized)?;
+            bid
+        }
+    };
+
+    let now_ns = crate::scheduler::timer::clock::realtime_ns();
+    let now_ts = LinuxTimespec {
+        tv_sec: (now_ns / 1_000_000_000) as i64,
+        tv_nsec: (now_ns % 1_000_000_000) as i64,
+    };
+
+    let (atim, mtim) = if times_ptr == 0 {
+        (Some(now_ts), Some(now_ts))
+    } else {
+        let times =
+            crate::syscall::validation::read_user_typed::<[LinuxTimespec; 2]>(times_ptr)
+                .map_err(|_| FsBridgeError::Fault)?;
+        let parse_ts = |ts: LinuxTimespec| -> Result<Option<LinuxTimespec>, FsBridgeError> {
+            if ts.tv_nsec == UTIME_OMIT {
+                Ok(None)
+            } else if ts.tv_nsec == UTIME_NOW {
+                Ok(Some(now_ts))
+            } else if ts.tv_nsec < 0 || ts.tv_nsec >= 1_000_000_000 {
+                Err(FsBridgeError::Invalid)
+            } else {
+                Ok(Some(ts))
+            }
+        };
+        (parse_ts(times[0])?, parse_ts(times[1])?)
+    };
+
+    upsert_times(blob_id, atim, mtim);
+    Ok(0)
+}
+
+/// `memfd_create(name, flags)` -> anonymous in-memory file descriptor.
+pub fn fs_memfd_create(_name: &[u8], flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    const MFD_CLOEXEC: u32 = 0x0001;
+    const MFD_ALLOW_SEALING: u32 = 0x0002;
+    const MFD_HUGETLB: u32 = 0x0004;
+    const MFD_NOEXEC_SEAL: u32 = 0x0008;
+    const MFD_EXEC: u32 = 0x0010;
+    let allowed = MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL | MFD_EXEC;
+    if (flags & !allowed) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+
+    let blob_id = next_pseudo_blob(PSEUDO_MEMFD_TAG);
+    BLOB_CACHE
+        .insert(blob_id, alloc::vec::Vec::new())
+        .map_err(exofs_to_bridge_error)?;
+    let handle = OBJECT_TABLE
+        .open(blob_id, open_flags::O_RDWR, 0, 0, 0)
+        .map_err(exofs_to_bridge_error)?;
+
+    let fd_flags = open_flags::O_RDWR
+        | if (flags & MFD_CLOEXEC) != 0 {
+            O_CLOEXEC
+        } else {
+            0
+        };
+    if process_has_fd_table(pid) {
+        if let Some(fd) = install_process_fd(pid, handle as u64, fd_flags) {
+            return Ok(fd as i64);
+        }
+        let _ = OBJECT_TABLE.close(handle);
+        return Err(FsBridgeError::NoMemory);
+    }
+    Ok(handle as i64)
+}

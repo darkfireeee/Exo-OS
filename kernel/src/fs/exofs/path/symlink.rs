@@ -1,13 +1,13 @@
-//! symlink.rs -- Gestion des liens symboliques ExoFS.
+//! symlink.rs -- ExoFS symbolic links management.
 //!
-//! [PathSymlink] represente la cible d un lien symbolique (chemin en octets).
-//! [SymlinkStore] est une table statique de cibles (ring buffer de 128 entrees).
-//! La resolution iterative des symlinks respecte SYMLINK_MAX_DEPTH (40 niveaux).
+//! [SymlinkTarget] represents the target of a symbolic link (path in bytes).
+//! [SymlinkStore] is a static table of targets (ring buffer of 128 entries).
+//! Iterative symlink resolution respects SYMLINK_MAX_DEPTH (40 levels).
 //!
-//! ## Regles spec
-//! - **RECUR-01** : resolution iterative, jamais recursive.
-//! - **OOM-02**   : try_reserve(1) avant push.
-//! - **ARITH-02** : checked_add sur tous les calculs d offset.
+//! ## Spec rules
+//! - **RECUR-01** : iterative resolution, never recursive.
+//! - **OOM-02**   : try_reserve(1) before push.
+//! - **ARITH-02** : checked_add on all offset calculations.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -16,33 +16,33 @@ use super::path_component::{PathComponent, PathParser};
 use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 use crate::scheduler::sync::spinlock::SpinLock;
 
-// -- Constantes ---------------------------------------------------------------
+// -- Constants ---------------------------------------------------------------
 
-/// Profondeur maximale de symlinks suivis avant detection de boucle.
+/// Maximum depth of followed symlinks before loop detection.
 pub const SYMLINK_MAX_DEPTH: usize = 40;
-/// Longueur maximale d une cible de symlink.
+/// Maximum length of a symlink target.
 pub const SYMLINK_TARGET_MAX: usize = 4096;
-/// Capacite du store (ring buffer, puissance de 2).
+/// Store capacity (ring buffer, power of 2).
 pub const STORE_SIZE: usize = 128;
 const STORE_MASK: usize = STORE_SIZE - 1;
 
 // -- SymlinkTarget ------------------------------------------------------------
 
-/// Cible d un lien symbolique : chemin brut en octets (max 4096).
+/// Target of a symbolic link: raw path in bytes (max 4096).
 ///
-/// Stockage inline : pas d allocation heap par cible.
+/// Inline storage: no heap allocation per target.
 #[derive(Clone)]
 pub struct SymlinkTarget {
     bytes: [u8; SYMLINK_TARGET_MAX],
     len: u16,
-    /// OID de l objet symlink.
+    /// Symlink object OID.
     pub oid: ObjectId,
-    /// `true` si la cible est un chemin absolu.
+    /// `true` if target is an absolute path.
     pub is_absolute: bool,
 }
 
 impl SymlinkTarget {
-    /// Cree une cible de symlink depuis un tableau d octets.
+    /// Creates a symlink target from a byte slice.
     pub fn new(raw: &[u8], oid: ObjectId) -> ExofsResult<Self> {
         if raw.is_empty() {
             return Err(ExofsError::InvalidPathComponent);
@@ -64,15 +64,15 @@ impl SymlinkTarget {
         })
     }
 
-    /// Retourne les octets de la cible.
+    /// Returns target bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }
-    /// Longueur de la cible.
+    /// Target length.
     pub fn len(&self) -> usize {
         self.len as usize
     }
-    /// `true` si la cible est vide (ne devrait pas arriver).
+    /// `true` if target is empty (should not happen).
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -177,7 +177,7 @@ impl SymlinkStoreInner {
 
 // -- SymlinkStore -------------------------------------------------------------
 
-/// Store de cibles de symlinks (thread-safe, ring buffer).
+/// Symlink target store (thread-safe, ring buffer).
 pub struct SymlinkStore {
     inner: SpinLock<SymlinkStoreInner>,
 }
@@ -189,12 +189,12 @@ impl SymlinkStore {
         }
     }
 
-    /// Enregistre la cible d un symlink.
+    /// Stores a symlink target.
     pub fn store(&self, oid: &ObjectId, target: &[u8]) -> ExofsResult<()> {
         self.inner.lock().store(oid, target)
     }
 
-    /// Recherche la cible d un OID symlink. Retourne une copie.
+    /// Looks up a symlink OID target. Returns a copy.
     pub fn lookup(&self, oid: &ObjectId) -> Option<Vec<u8>> {
         let g = self.inner.lock();
         g.lookup(oid).map(|b| {
@@ -206,49 +206,49 @@ impl SymlinkStore {
         })
     }
 
-    /// Invalide l entree pour un OID.
+    /// Invalidates entry for an OID.
     pub fn invalidate(&self, oid: &ObjectId) {
         self.inner.lock().invalidate(oid);
     }
-    /// Vide le store.
+    /// Flushes the store.
     pub fn flush(&self) {
         self.inner.lock().flush();
     }
-    /// Nombre d entrees valides.
+    /// Number of valid entries.
     pub fn count(&self) -> usize {
         self.inner.lock().count()
     }
 }
 
-/// Store global des symlinks.
+/// Global symlink store.
 pub static SYMLINK_STORE: SymlinkStore = SymlinkStore::new_const();
 
-// -- SymlinkChain : resolution iterative de chaine (RECUR-01) ─────────────────
+// -- SymlinkChain : iterative chain resolution (RECUR-01) ─────────────────
 
-/// Resultat de la resolution d une chaine de symlinks.
+/// Result of resolving a chain of symlinks.
 #[derive(Debug)]
 pub struct SymlinkResolution {
-    /// Composants resolus.
+    /// Resolved components.
     pub components: Vec<PathComponent>,
-    /// Nombre de niveaux d indirection suivis.
+    /// Number of indirection levels followed.
     pub depth: usize,
-    /// `true` si le chemin final est absolu.
+    /// `true` if final path is absolute.
     pub is_absolute: bool,
 }
 
-/// Resout iterativement une chaine de symlinks.
+/// Iteratively resolves a chain of symlinks.
 ///
-/// - `initial_target` : cible du premier symlink (octets bruts).
-/// - `max_depth`       : limite SYMLINK_MAX_DEPTH.
-/// - `resolver`        : callback pour obtenir la cible d un composant.
+/// - `initial_target`: first symlink target (raw bytes).
+/// - `max_depth`     : SYMLINK_MAX_DEPTH limit.
+/// - `resolver`      : callback to obtain the target of a component.
 ///
-/// # Regles spec
-/// - **RECUR-01** : boucle iterative, pas de recursion.
-/// - **OOM-02**   : try_reserve(1) avant push.
+/// # Spec rules
+/// - **RECUR-01** : iterative loop, no recursion.
+/// - **OOM-02**   : try_reserve(1) before push.
 ///
 /// # Errors
-/// - `TooManySymlinks` si depth > max_depth.
-/// - `InvalidPathComponent` / `PathTooLong` si chemin invalide.
+/// - `TooManySymlinks` if depth > max_depth.
+/// - `InvalidPathComponent` / `PathTooLong` if invalid path.
 pub fn resolve_symlink_chain<F>(
     initial_target: &[u8],
     max_depth: usize,
@@ -262,14 +262,14 @@ where
     let mut components: Vec<PathComponent> = Vec::new();
     let mut is_absolute: bool;
 
-    // Copie initiale.
+    // Initial copy.
     let mut buf: Vec<u8> = Vec::new();
     buf.try_reserve(initial_target.len())
         .map_err(|_| ExofsError::NoMemory)?;
     buf.extend_from_slice(initial_target);
     current = buf;
 
-    // Boucle de resolution iterative.
+    // Iterative resolution loop.
     loop {
         if depth > max_depth {
             return Err(ExofsError::TooManySymlinks);
@@ -284,9 +284,9 @@ where
             match parser.next_component()? {
                 None => break,
                 Some(comp) => {
-                    // Verifier si ce composant est lui-meme un symlink.
+                    // Check if this component is itself a symlink.
                     if let Some(next_target) = resolver(comp.as_bytes()) {
-                        // Substituer.
+                        // Substitute.
                         current = next_target;
                         depth = depth.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
                         if depth > max_depth {
@@ -316,41 +316,39 @@ where
     })
 }
 
-// -- Utilitaires ──────────────────────────────────────────────────────────────
+// -- Utilities ──────────────────────────────────────────────────────────────
 
-/// Verifie si `raw` est une cible de symlink valide.
+/// Checks whether `raw` is a valid symlink target.
 pub fn is_valid_symlink_target(raw: &[u8]) -> bool {
     !raw.is_empty() && raw.len() <= SYMLINK_TARGET_MAX && !raw.contains(&0u8)
 }
 
-/// Enregistre une cible de symlink dans le store global.
+/// Registers a symlink target in the global store.
 pub fn register_symlink(oid: &ObjectId, target: &[u8]) -> ExofsResult<()> {
     SYMLINK_STORE.store(oid, target)
 }
 
-/// Invalide un symlink dans le store global.
+/// Invalidates a symlink in the global store.
 pub fn invalidate_symlink(oid: &ObjectId) {
     SYMLINK_STORE.invalidate(oid);
 }
 
-// -- Tests ────────────────────────────────────────────────────────────────────
+// -- SymlinkResolveContext : resolution context ───────────────────────────
 
-// -- SymlinkResolveContext : contexte de resolution ───────────────────────────
-
-/// Contexte de résolution d une chaine de symlinks.
+/// Context for resolving a chain of symlinks.
 ///
-/// Maintient l état complet pour une résolution itérative multi-étape.
+/// Maintains complete state for multi-step iterative resolution.
 pub struct SymlinkResolveContext {
-    /// Chemin de travail courant.
+    /// Current working path.
     current_path: Vec<u8>,
-    /// Profondeur de résolution atteinte.
+    /// Reached resolution depth.
     pub depth: usize,
-    /// Limite de profondeur.
+    /// Depth limit.
     pub limit: usize,
 }
 
 impl SymlinkResolveContext {
-    /// Crée un contexte pour le chemin initial.
+    /// Creates a context for initial path.
     pub fn new(path: &[u8], limit: usize) -> ExofsResult<Self> {
         if path.len() > SYMLINK_TARGET_MAX {
             return Err(ExofsError::PathTooLong);
@@ -367,7 +365,7 @@ impl SymlinkResolveContext {
         })
     }
 
-    /// Suit un symlink : met à jour le chemin courant.
+    /// Follows a symlink: updates current path.
     pub fn follow(&mut self, target: &[u8]) -> ExofsResult<()> {
         self.depth = self
             .depth
@@ -387,12 +385,12 @@ impl SymlinkResolveContext {
         Ok(())
     }
 
-    /// Chemin courant.
+    /// Current path.
     pub fn current(&self) -> &[u8] {
         &self.current_path
     }
 
-    /// `true` si la limite de profondeur est atteinte.
+    /// `true` if depth limit is reached.
     pub fn is_exhausted(&self) -> bool {
         self.depth >= self.limit
     }
@@ -400,7 +398,7 @@ impl SymlinkResolveContext {
 
 // -- SymlinkMetadata ----------------------------------------------------------
 
-/// Métadonnées rattachées à un lien symbolique.
+/// Metadata attached to a symbolic link.
 #[derive(Clone, Debug)]
 pub struct SymlinkMetadata {
     pub oid: ObjectId,
@@ -410,7 +408,7 @@ pub struct SymlinkMetadata {
 }
 
 impl SymlinkMetadata {
-    /// Crée des métadonnées depuis une cible.
+    /// Creates metadata from a target.
     pub fn from_target(oid: ObjectId, target: &[u8]) -> Self {
         SymlinkMetadata {
             oid,
@@ -421,14 +419,14 @@ impl SymlinkMetadata {
     }
 }
 
-// -- Fonctions de vérification structurelle -----------------------------------
+// -- Structural verification functions -----------------------------------
 
-/// Vérifie la structure d une cible de symlink.
+/// Verifies the structure of a symlink target.
 ///
-/// - Pas vide.
-/// - Longueur ≤ SYMLINK_TARGET_MAX.
-/// - Pas de NUL.
-/// - Valide UTF-8.
+/// - Not empty.
+/// - Length <= SYMLINK_TARGET_MAX.
+/// - No NUL.
+/// - Valid UTF-8.
 pub fn validate_symlink_target(raw: &[u8]) -> ExofsResult<()> {
     if raw.is_empty() {
         return Err(ExofsError::InvalidPathComponent);
@@ -443,13 +441,13 @@ pub fn validate_symlink_target(raw: &[u8]) -> ExofsResult<()> {
     Ok(())
 }
 
-/// Vérifie et retourne un `SymlinkTarget`.
+/// Verifies and returns a `SymlinkTarget`.
 pub fn checked_symlink_target(raw: &[u8], oid: ObjectId) -> ExofsResult<SymlinkTarget> {
     validate_symlink_target(raw)?;
     SymlinkTarget::new(raw, oid)
 }
 
-// -- Tests supplémentaires ---------------------------------------------------
+// -- Additional tests ---------------------------------------------------
 #[cfg(test)]
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]
@@ -552,7 +550,7 @@ mod tests {
     }
     #[test]
     fn test_depth_limit() {
-        // Resolver qui boucle toujours.
+        // Resolver that always loops.
         let result = resolve_symlink_chain(b"/loop", 40, |_| Some(b"/loop".to_vec()));
         assert!(matches!(result, Err(ExofsError::TooManySymlinks)));
     }
@@ -561,7 +559,7 @@ mod tests {
         let res = resolve_symlink_chain(
             b"/home/user/file",
             40,
-            |_| None, // Aucun composant est un symlink.
+            |_| None, // No component is a symlink.
         )
         .test_unwrap();
         assert_eq!(res.depth, 0);

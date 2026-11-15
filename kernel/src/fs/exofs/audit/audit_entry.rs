@@ -1,30 +1,30 @@
-//! audit_entry.rs — Entrée individuelle du journal d'audit ExoFS (no_std).
+//! audit_entry.rs — Individual ExoFS audit log entry (no_std).
 //!
-//! Règles appliquées :
-//!  - ARITH-02 : arithmétique vérifiée (`checked_add`)
-//!  - ONDISK-03 : structure on-disk sans AtomicU64
-//!  - Zéro récursion (RECUR-01)
+//! Applied rules:
+//!  - ARITH-02: checked arithmetic (`checked_add`)
+//!  - ONDISK-03: on-disk structure without AtomicU64
+//!  - Zero recursion (RECUR-01)
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille fixe d'une entrée on-disk en octets.
+/// Fixed on-disk entry size in bytes.
 pub const AUDIT_ENTRY_SIZE: usize = 96;
 
-/// Nombre maximum d'acteurs dans un contexte multi-principal.
+/// Maximum number of actors in a multi-principal context.
 pub const AUDIT_MAX_ACTORS: usize = 4;
 
-/// Magic de validation d'une entrée (4 premiers octets du champ reserved).
+/// Entry validation magic (first 4 bytes of reserved field).
 pub const AUDIT_ENTRY_MAGIC: u32 = 0x41554454; // "AUDT"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditOp — opération auditée
+// AuditOp — audited operation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Opération auditée.
+/// Audited operation.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuditOp {
@@ -50,7 +50,7 @@ pub enum AuditOp {
 }
 
 impl AuditOp {
-    /// Construit depuis un octet — retourne `None` si inconnu.
+    /// Constructs from a byte — returns `None` if unknown.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x01 => Some(Self::Read),
@@ -76,7 +76,7 @@ impl AuditOp {
         }
     }
 
-    /// `true` pour les opérations d'écriture (modifie l'état du FS).
+    /// `true` for mutating operations (modifies FS state).
     pub fn is_mutating(self) -> bool {
         matches!(
             self,
@@ -93,7 +93,7 @@ impl AuditOp {
         )
     }
 
-    /// `true` pour les opérations de sécurité/cryptographie.
+    /// `true` for security/cryptographic operations.
     pub fn is_security_sensitive(self) -> bool {
         matches!(
             self,
@@ -105,7 +105,7 @@ impl AuditOp {
         )
     }
 
-    /// Nom court de l'opération (ASCII, statique).
+    /// Short operation name (ASCII, static).
     pub fn name(self) -> &'static str {
         match self {
             Self::Read => "READ",
@@ -132,10 +132,10 @@ impl AuditOp {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditResult — résultat de l'opération
+// AuditResult — operation result
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une opération auditée.
+/// Result of an audited operation.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AuditResult {
@@ -148,7 +148,7 @@ pub enum AuditResult {
 }
 
 impl AuditResult {
-    /// Construit depuis un octet.
+    /// Constructs from a byte.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(Self::Success),
@@ -160,17 +160,17 @@ impl AuditResult {
         }
     }
 
-    /// `true` si l'opération a réussi.
+    /// `true` if the operation succeeded.
     pub fn is_ok(self) -> bool {
         matches!(self, Self::Success | Self::Partial)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditSeverity — criticité d'une entrée
+// AuditSeverity — entry severity
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau de criticité d'une entrée d'audit.
+/// Severity level of an audit entry.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuditSeverity {
@@ -181,7 +181,7 @@ pub enum AuditSeverity {
 }
 
 impl AuditSeverity {
-    /// Détermine la sévérité à partir de l'opération et du résultat.
+    /// Determines severity from operation and result.
     pub fn infer(op: AuditOp, result: AuditResult) -> Self {
         match result {
             AuditResult::Denied => Self::Critical,
@@ -215,38 +215,38 @@ impl AuditSeverity {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditEntry on-disk (96 octets, packed repr)
+// AuditEntry on-disk (96 bytes, packed repr)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée d'audit on-disk (96 octets, taille fixe, layout stable).
+/// On-disk audit entry (96 bytes, fixed size, stable layout).
 ///
-/// Contraintes ONDISK-03 : aucun AtomicU64, tous les champs sont primitifs.
+/// ONDISK-03 constraints: no AtomicU64, all fields are primitive.
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct AuditEntry {
-    /// Ticks CPU au moment de l'enregistrement.
+    /// CPU ticks at recording time.
     pub tick: u64,
-    /// UID de l'acteur.
+    /// Actor UID.
     pub actor_uid: u64,
-    /// Capabilities de l'acteur (bitmask).
+    /// Actor capabilities (bitmask).
     pub actor_cap: u64,
-    /// Identifiant objet cible.
+    /// Target object identifier.
     pub object_id: u64,
-    /// BlobId de l'objet cible (32 octets).
+    /// Target object BlobId (32 bytes).
     pub blob_id: [u8; 32],
-    /// Opération réalisée.
+    /// Performed operation.
     pub op: u8,
-    /// Résultat.
+    /// Result.
     pub result: u8,
-    /// Sévérité (calculée à l'écriture).
+    /// Severity (computed at write time).
     pub severity: u8,
-    /// Flags complémentaires (bit 0 = mutating, bit 1 = security).
+    /// Additional flags (bit 0 = mutating, bit 1 = security).
     pub flags: u8,
-    /// Numéro de séquence dans le ring-buffer (toujours croissant).
+    /// Ring-buffer sequence number (strictly monotonic).
     pub seq: u64,
-    /// Magic de validation.
+    /// Validation magic.
     pub magic: u32,
-    /// Réservé/expansion future.
+    /// Reserved/future expansion.
     pub _pad: [u8; 16],
 }
 
@@ -256,7 +256,7 @@ const _: () = assert!(
 );
 
 impl AuditEntry {
-    /// Construit une entrée complète.
+    /// Constructs a complete entry.
     pub fn new(
         tick: u64,
         actor_uid: u64,
@@ -291,51 +291,51 @@ impl AuditEntry {
         }
     }
 
-    /// Vérifie la validité de l'entrée.
+    /// Checks entry validity.
     pub fn is_valid(&self) -> bool {
         self.magic == AUDIT_ENTRY_MAGIC
             && AuditOp::from_u8(self.op).is_some()
             && AuditResult::from_u8(self.result).is_some()
     }
 
-    /// Retourne l'opération typée.
+    /// Returns typed operation.
     pub fn op_typed(&self) -> Option<AuditOp> {
         AuditOp::from_u8(self.op)
     }
 
-    /// Retourne le résultat typé.
+    /// Returns typed result.
     pub fn result_typed(&self) -> Option<AuditResult> {
         AuditResult::from_u8(self.result)
     }
 
-    /// Retourne la sévérité typée.
+    /// Returns typed severity.
     pub fn severity_typed(&self) -> Option<AuditSeverity> {
         AuditSeverity::from_u8(self.severity)
     }
 
-    /// `true` si l'entrée représente une opération mutante.
+    /// `true` if entry represents a mutating operation.
     pub fn is_mutating(&self) -> bool {
         self.flags & 0x01 != 0
     }
 
-    /// `true` si l'entrée est liée à la sécurité.
+    /// `true` if entry is security-related.
     pub fn is_security(&self) -> bool {
         self.flags & 0x02 != 0
     }
 
-    /// Sérialise l'entrée en un tableau d'octets bruts.
+    /// Serializes entry into a raw byte array.
     pub fn as_bytes(&self) -> &[u8; AUDIT_ENTRY_SIZE] {
-        // SAFETY: AuditEntry est repr(C,packed), taille = AUDIT_ENTRY_SIZE.
+        // SAFETY: AuditEntry is repr(C,packed), size = AUDIT_ENTRY_SIZE.
         unsafe { &*(self as *const Self as *const [u8; AUDIT_ENTRY_SIZE]) }
     }
 
-    /// Désérialise depuis un tableau d'octets bruts.
+    /// Deserializes from a raw byte array.
     pub fn from_bytes(bytes: &[u8; AUDIT_ENTRY_SIZE]) -> Self {
-        // SAFETY: même layout, copie bit-à-bit d'une structure Pod.
+        // SAFETY: same layout, bitwise copy of a Pod structure.
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
     }
 
-    /// Vérifie l'intégrité et retourne `ExofsError::InvalidMagic` si invalide.
+    /// Checks integrity and returns `ExofsError::InvalidMagic` if invalid.
     pub fn validate(&self) -> ExofsResult<()> {
         if self.magic != AUDIT_ENTRY_MAGIC {
             return Err(ExofsError::InvalidMagic);
@@ -348,10 +348,10 @@ impl AuditEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditEntryBuilder — construction par étapes
+// AuditEntryBuilder — staged construction
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Constructeur fluide d'une entrée d'audit.
+/// Fluent builder for an audit entry.
 #[derive(Default)]
 pub struct AuditEntryBuilder {
     tick: u64,
@@ -402,7 +402,7 @@ impl AuditEntryBuilder {
         self
     }
 
-    /// Finalise la construction.
+    /// Finalizes construction.
     pub fn build(self) -> ExofsResult<AuditEntry> {
         let op = self.op.ok_or(ExofsError::InvalidArgument)?;
         Ok(AuditEntry::new(
@@ -419,10 +419,10 @@ impl AuditEntryBuilder {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditSummary — agrégat statistique
+// AuditSummary — statistical aggregate
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résumé statistique d'un lot d'entrées d'audit.
+/// Statistical summary for a batch of audit entries.
 #[derive(Clone, Debug, Default)]
 pub struct AuditSummary {
     pub total: u64,
@@ -435,7 +435,7 @@ pub struct AuditSummary {
 }
 
 impl AuditSummary {
-    /// Accumule les statistiques d'une entrée.
+    /// Accumulates statistics from an entry.
     pub fn feed(&mut self, entry: &AuditEntry) {
         self.total = self.total.wrapping_add(1);
         if entry.is_security() {
@@ -461,7 +461,7 @@ impl AuditSummary {
         }
     }
 
-    /// `true` si aucun événement de sécurité critique n'a eu lieu.
+    /// `true` if no critical security events occurred.
     pub fn is_clean(&self) -> bool {
         self.denied == 0 && self.alerts == 0
     }

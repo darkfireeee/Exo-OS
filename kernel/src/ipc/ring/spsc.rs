@@ -93,10 +93,11 @@ impl SpscRing {
         }
     }
 
-    /// Initializes sequences of all cells.
-    /// Must be called only once after construction.
+    /// Initializes (or re-initializes) sequences and indices of all cells.
     pub fn init(&self) {
-        // SAFETY: init() is called only once prior to any usage.
+        self.head.0.store(0, Ordering::Relaxed);
+        self.tail.0.store(0, Ordering::Relaxed);
+        // SAFETY: init() resets ring state prior to (re-)use.
         let cells = unsafe { &mut *self.cells.get() };
         for (i, cell) in cells.iter_mut().enumerate() {
             cell.sequence.store(i as u64, Ordering::Relaxed);
@@ -205,7 +206,11 @@ impl SpscRing {
         let (header, len) = unsafe {
             let slot = (*cell.slot.get()).assume_init_ref();
             let h = slot.header;
-            let ln = slot.header.len as usize;
+            let ln = if h.is_zerocopy() {
+                core::mem::size_of::<crate::ipc::core::transfer::ZeroCopyRef>()
+            } else {
+                h.len as usize
+            };
             if ln > dst.len() {
                 // Do not consume slot: message remains at ring head so caller
                 // can allocate a larger buffer and retry.
@@ -337,6 +342,7 @@ pub unsafe fn spsc_fast_read(dst: *mut IpcFastMsg, channel_id: u64) -> u64 {
     match ring.pop_into(buf) {
         Ok(n) => {
             m.len = n.0 as u16;
+            m.flags = n.1.0;
             0
         }
         Err(e) => e as u64,

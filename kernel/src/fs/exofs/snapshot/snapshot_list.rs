@@ -1,12 +1,12 @@
-//! snapshot_list.rs — Registre mémoire global des snapshots ExoFS
+//! snapshot_list.rs — Global in-memory registry of ExoFS snapshots
 //!
-//! Fournit un singleton thread-safe `SNAPSHOT_LIST` qui indexe tous les
-//! snapshots actifs en RAM (BTreeMap par SnapshotId + index par nom).
+//! Provides a thread-safe singleton `SNAPSHOT_LIST` indexing all
+//! active snapshots in RAM (BTreeMap by SnapshotId + name index).
 //!
-//! Règles spec :
-//!   OOM-02   : try_reserve(1) avant chaque Vec::push et BTreeMap::insert
-//!   ARITH-02 : checked_add pour compteurs et stats
-//!   ONDISK-03: pas de AtomicXxx dans les structs repr(C)
+//! Spec rules:
+//!   OOM-02   : try_reserve(1) before each Vec::push and BTreeMap::insert
+//!   ARITH-02 : checked_add for counters and stats
+//!   ONDISK-03: no AtomicXxx in repr(C) structs
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -18,17 +18,17 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────
 
-/// Registre global de tous les snapshots actifs
+/// Global registry of all active snapshots
 pub static SNAPSHOT_LIST: SnapshotList = SnapshotList::new_const();
 
 // ─────────────────────────────────────────────────────────────
 // SnapshotList
 // ─────────────────────────────────────────────────────────────
 
-/// Registre thread-safe des snapshots chargés en mémoire
+/// Thread-safe registry of snapshots loaded in memory
 pub struct SnapshotList {
     inner: SpinLock<BTreeMap<u64, Snapshot>>,
     next_id: AtomicU64,
@@ -46,7 +46,7 @@ impl SnapshotList {
         }
     }
 
-    // ── Allocation d'id ──────────────────────────────────────────────
+    // ── ID allocation ────────────────────────────────────────
 
     pub fn allocate_id(&self) -> ExofsResult<SnapshotId> {
         let raw = self.next_id.fetch_add(1, Ordering::AcqRel);
@@ -57,9 +57,9 @@ impl SnapshotList {
         Ok(SnapshotId(raw))
     }
 
-    // ── Enregistrement ───────────────────────────────────────────────
+    // ── Registration ─────────────────────────────────────────
 
-    /// Enregistre un snapshot — OOM-02 : try_reserve avant insert
+    /// Registers a snapshot — OOM-02: try_reserve before insert
     pub fn register(&self, snap: Snapshot) -> ExofsResult<()> {
         if self.count.load(Ordering::Acquire) >= SNAPSHOT_MAX_COUNT {
             return Err(ExofsError::BufferFull);
@@ -87,7 +87,7 @@ impl SnapshotList {
         Ok(())
     }
 
-    // ── Suppression ──────────────────────────────────────────────────
+    // ── Deletion ─────────────────────────────────────────────
 
     pub fn remove(&self, id: SnapshotId) -> ExofsResult<Snapshot> {
         let mut guard = self.inner.lock();
@@ -108,7 +108,7 @@ impl SnapshotList {
         Ok(snap)
     }
 
-    // ── Lecture ──────────────────────────────────────────────────────
+    // ── Read ─────────────────────────────────────────────────
 
     pub fn get(&self, id: SnapshotId) -> ExofsResult<Snapshot> {
         let guard = self.inner.lock();
@@ -134,7 +134,7 @@ impl SnapshotList {
         None
     }
 
-    // ── Modification ──────────────────────────────────────────────────
+    // ── Modification ─────────────────────────────────────────
 
     pub fn mutate<F>(&self, id: SnapshotId, f: F) -> ExofsResult<()>
     where
@@ -159,9 +159,9 @@ impl SnapshotList {
         })
     }
 
-    // ── Énumération ──────────────────────────────────────────────────
+    // ── Enumeration ──────────────────────────────────────────
 
-    /// OOM-02 : try_reserve avant push
+    /// OOM-02: try_reserve before push
     pub fn all_ids(&self) -> ExofsResult<Vec<SnapshotId>> {
         let guard = self.inner.lock();
         let mut out: Vec<SnapshotId> = Vec::new();
@@ -208,7 +208,7 @@ impl SnapshotList {
         Ok(out)
     }
 
-    // ── Statistiques ─────────────────────────────────────────────────
+    // ── Statistics ───────────────────────────────────────────
 
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Acquire)
@@ -250,7 +250,7 @@ impl SnapshotList {
         s
     }
 
-    // ── Maintenance ──────────────────────────────────────────────────
+    // ── Maintenance ──────────────────────────────────────────
 
     pub fn clear(&self) {
         let mut guard = self.inner.lock();
@@ -296,7 +296,7 @@ impl SnapshotList {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Types auxiliaires
+// Auxiliary types
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default)]

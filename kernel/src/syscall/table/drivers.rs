@@ -675,6 +675,21 @@ pub fn sys_pci_set_topology(
 ) -> i64 {
     stat_inc(SYS_PCI_SET_TOPOLOGY);
 
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0 {
+        return EACCES;
+    }
+    let caller_class = crate::security::service_class_of(Pid(caller_pid));
+    if !matches!(
+        caller_class,
+        crate::security::ServiceClass::InitServer
+            | crate::security::ServiceClass::DeviceServer
+            | crate::security::ServiceClass::VirtioDriver
+            | crate::security::ServiceClass::ExoShield
+    ) {
+        return EACCES;
+    }
+
     if has_parent == 0 {
         return EINVAL;
     }
@@ -715,6 +730,10 @@ pub fn sys_pci_find_device(
 
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
+        return EACCES;
+    }
+    let caller_class = crate::security::service_class_of(Pid(caller_pid));
+    if !crate::security::ipc_policy::is_ring1_trusted_class(caller_class) {
         return EACCES;
     }
 
@@ -759,28 +778,57 @@ static FB_INFO_AUTHORIZED_PID: core::sync::atomic::AtomicU32 =
 pub fn sys_framebuffer_info(out_ptr: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use core::sync::atomic::Ordering;
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    // Authorize only the first caller (fb_server at boot).
-    // Any different PID is rejected with EACCES.
-    let prev =
-        FB_INFO_AUTHORIZED_PID.compare_exchange(0, caller_pid, Ordering::AcqRel, Ordering::Acquire);
-    match prev {
-        Ok(_) => {}                                       // first caller authorized
-        Err(authorized) if authorized == caller_pid => {} // idempotent re-invocation
-        Err(_) => return EACCES,                          // unauthorized PID
+    if caller_pid == 0 {
+        return EACCES;
+    }
+    let caller_privileged = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(Pid(caller_pid))
+        .map(|pcb| pcb.ppid().0 <= 1 && pcb.creds.lock().euid == 0)
+        .unwrap_or(false)
+        || matches!(
+            crate::security::service_class_of(Pid(caller_pid)),
+            crate::security::ServiceClass::FbServer | crate::security::ServiceClass::InitServer
+        );
+    if !caller_privileged {
+        return EACCES;
+    }
+    // Authorize only the live fb_server; allow a restarted server to reclaim if the old owner died.
+    loop {
+        let authorized = FB_INFO_AUTHORIZED_PID.load(Ordering::Acquire);
+        if authorized == caller_pid {
+            break;
+        }
+        let can_claim = authorized == 0
+            || crate::process::core::registry::PROCESS_REGISTRY
+                .find_by_pid(Pid(authorized))
+                .map(|pcb| {
+                    matches!(
+                        pcb.state(),
+                        crate::process::core::pcb::ProcessState::Zombie
+                            | crate::process::core::pcb::ProcessState::Dead
+                    ) || pcb.is_exiting()
+                })
+                .unwrap_or(true);
+        if !can_claim {
+            return EACCES;
+        }
+        if FB_INFO_AUTHORIZED_PID
+            .compare_exchange(authorized, caller_pid, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            break;
+        }
     }
     stat_inc(SYS_FRAMEBUFFER_INFO);
     if out_ptr == 0 {
         return EFAULT;
-    }
-    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    if caller_pid == 0 {
-        return EACCES;
     }
     let Some((phys_addr, width, height, stride_pixels, bpp, format, size_bytes)) =
         crate::arch::x86_64::framebuffer_early::user_framebuffer_info()
     else {
         return ENOENT;
     };
+    crate::arch::x86_64::framebuffer_early::deactivate_for_userspace();
     if size_bytes == 0 || size_bytes > usize::MAX as u64 {
         return EINVAL;
     }

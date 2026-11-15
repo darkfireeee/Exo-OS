@@ -159,22 +159,24 @@ pub struct RpcHeader {
     pub flags: u16,
     /// Method identifier (MethodId)
     pub method_id: u32,
+    /// Alignment padding
+    _pad: u32,
     /// Unique cookie (client assigns, server echoes)
     pub cookie: u64,
-    /// Calling endpoint
-    pub caller_ep: u32,
-    /// Server endpoint
-    pub server_ep: u32,
+    /// Calling endpoint (full 64-bit EndpointId)
+    pub caller_ep: u64,
+    /// Server endpoint (full 64-bit EndpointId)
+    pub server_ep: u64,
     /// Calling process PID
     pub caller_pid: u32,
     /// Reply status (valid only for frame_type=Reply)
     pub status: u32,
     /// Payload size in bytes
     pub payload_len: u32,
+    /// Alignment padding
+    _pad2: u32,
     /// Client-desired timeout (nanoseconds, 0=default)
     pub timeout_ns: u64,
-    _pad: [u8; 8],
-    // Total: 4+1+1+2+4+8+4+4+4+4+4+8+8 = 56... + 8 pad = 64 bytes ✓
 }
 
 impl RpcHeader {
@@ -195,14 +197,15 @@ impl RpcHeader {
             frame_type: 0,
             flags: 0,
             method_id: method_id.0,
+            _pad: 0,
             cookie,
-            caller_ep: caller_ep.0.get() as u32,
-            server_ep: server_ep.0.get() as u32,
+            caller_ep: caller_ep.0.get(),
+            server_ep: server_ep.0.get(),
             caller_pid: caller_pid.0,
             status: 0,
             payload_len,
+            _pad2: 0,
             timeout_ns,
-            _pad: [0u8; 8],
         }
     }
 
@@ -213,14 +216,15 @@ impl RpcHeader {
             frame_type: 1,
             flags: 0,
             method_id: call.method_id,
+            _pad: 0,
             cookie: call.cookie,
             caller_ep: call.caller_ep,
             server_ep: call.server_ep,
             caller_pid: call.caller_pid,
             status: status as u32,
             payload_len,
+            _pad2: 0,
             timeout_ns: 0,
-            _pad: [0u8; 8],
         }
     }
 
@@ -291,14 +295,15 @@ impl RpcCallFrame {
                 frame_type: 0,
                 flags: 0,
                 method_id: 0,
+                _pad: 0,
                 cookie: 0,
                 caller_ep: 0,
                 server_ep: 0,
                 caller_pid: 0,
                 status: 0,
                 payload_len: 0,
+                _pad2: 0,
                 timeout_ns: 0,
-                _pad: [0u8; 8],
             },
             payload: [0u8; MAX_RPC_PAYLOAD],
         }
@@ -332,13 +337,14 @@ impl RpcCallFrame {
         if plen > MAX_RPC_PAYLOAD {
             return Err(IpcError::Invalid);
         }
-        if off + plen > buf.len() {
+        let end = off.checked_add(plen).ok_or(IpcError::Invalid)?;
+        if end > buf.len() {
             return Err(IpcError::Invalid);
         }
         let mut frame = Self::empty();
         frame.header = header;
         if plen > 0 {
-            frame.payload[..plen].copy_from_slice(&buf[off..off + plen]);
+            frame.payload[..plen].copy_from_slice(&buf[off..end]);
         }
         Ok(frame)
     }
@@ -360,14 +366,15 @@ impl RpcReplyFrame {
                 frame_type: 0,
                 flags: 0,
                 method_id: 0,
+                _pad: 0,
                 cookie: 0,
                 caller_ep: 0,
                 server_ep: 0,
                 caller_pid: 0,
                 status: 0,
                 payload_len: 0,
+                _pad2: 0,
                 timeout_ns: 0,
-                _pad: [0u8; 8],
             },
             payload: [0u8; MAX_RPC_PAYLOAD],
         }
@@ -399,13 +406,14 @@ impl RpcReplyFrame {
         if plen > MAX_RPC_PAYLOAD {
             return Err(IpcError::Invalid);
         }
-        if off + plen > buf.len() {
+        let end = off.checked_add(plen).ok_or(IpcError::Invalid)?;
+        if end > buf.len() {
             return Err(IpcError::Invalid);
         }
         let mut frame = Self::empty();
         frame.header = header;
         if plen > 0 {
-            frame.payload[..plen].copy_from_slice(&buf[off..off + plen]);
+            frame.payload[..plen].copy_from_slice(&buf[off..end]);
         }
         Ok(frame)
     }

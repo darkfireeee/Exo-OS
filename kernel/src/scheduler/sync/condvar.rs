@@ -123,43 +123,45 @@ impl CondVar {
             // Insert into wait queue BEFORE releasing mutex.
             // Ensures a notify_one() after release is not lost.
             self.waiters.insert(node);
-        }
 
-        // Mark TCB as asleep BEFORE releasing mutex.
-        if !tcb.is_null() {
-            (*tcb).set_state(TaskState::Sleeping);
-        }
-
-        // Release mutex (Drop guard).
-        drop(guard);
-
-        // BUG-FIX O: use schedule_block() instead of a busy loop.
-        // The previous busy loop caused two critical issues:
-        //   1. Burned 100% CPU during the entire wait.
-        //   2. Double-scheduling: notify_one() called rq.enqueue() while
-        //      this thread was still spinning on its CPU, permitting concurrent
-        //      execution of the same TCB on two distinct CPUs.
-        // schedule_block() properly suspends the thread by calling context_switch
-        // to the next thread of the run queue, without re-enqueuing the current one.
-        // The thread will be resumed only when notify_one()/notify_all() calls
-        // wake_one() → try_transition(Sleeping, Runnable) + rq.enqueue().
-        if !tcb.is_null() {
-            let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
-            if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
-                let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
-                // SAFETY: cpu_raw < MAX_CPUS, run queue initialized by scheduler::init().
-                let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
-                crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
+            // Mark TCB as asleep BEFORE releasing mutex.
+            if !tcb.is_null() {
+                (*tcb).set_state(TaskState::Sleeping);
             }
-        }
 
-        // Mark thread as ready again if still asleep.
-        if !tcb.is_null() {
-            let state = (*tcb).state();
-            if state == TaskState::Sleeping {
-                (*tcb).set_state(TaskState::Runnable);
-                CONDVAR_SPURIOUS.fetch_add(1, Ordering::Relaxed);
+            // Release mutex (Drop guard).
+            drop(guard);
+
+            if !tcb.is_null() {
+                let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
+                if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                    let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
+                    crate::scheduler::core::switch::schedule_block(cpu_id, &mut *tcb);
+                }
             }
+
+            // Mark thread as ready again if still asleep.
+            if !tcb.is_null() {
+                let state = (*tcb).state();
+                if state == TaskState::Sleeping {
+                    (*tcb).set_state(TaskState::Runnable);
+                    CONDVAR_SPURIOUS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        } else {
+            // EmergencyPool exhausted: cannot enqueue a WaitNode without losing wakeups.
+            // Drop mutex, yield cooperatively, and let caller loop recheck condition.
+            drop(guard);
+            if !tcb.is_null() {
+                let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
+                if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
+                    let cpu_id = crate::scheduler::core::task::CpuId(cpu_raw as u32);
+                    let _ = crate::scheduler::core::switch::schedule_yield(cpu_id, &mut *tcb);
+                }
+            } else {
+                core::hint::spin_loop();
+            }
+            CONDVAR_SPURIOUS.fetch_add(1, Ordering::Relaxed);
         }
 
         // Reacquire mutex.

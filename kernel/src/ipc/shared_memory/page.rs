@@ -101,8 +101,8 @@ impl PhysAddr {
 /// Size: exactly 64 bytes (one cache line).
 #[repr(C, align(64))]
 pub struct ShmPage {
-    /// Physical address of the page
-    pub phys_addr: PhysAddr,
+    /// Physical address of the page (atomic to prevent immutable-static mutation UB)
+    pub phys_addr: AtomicU64,
     /// Atomic reference count
     pub refcount: AtomicU32,
     /// Page flags (encoded PageFlags)
@@ -128,7 +128,7 @@ impl ShmPage {
     /// Creates an uninitialized page descriptor (phys_addr = NULL)
     pub const fn new_uninit() -> Self {
         Self {
-            phys_addr: PhysAddr::NULL,
+            phys_addr: AtomicU64::new(0),
             refcount: AtomicU32::new(0),
             flags: AtomicU32::new(0),
             pool_index: AtomicU32::new(0),
@@ -141,20 +141,18 @@ impl ShmPage {
     }
 
     /// Initializes page with a physical address and its flags.
-    ///
-    /// # Safety
-    /// Must be called only once at boot, prior to any concurrent access.
-    /// `phys_addr` is a non-atomic field: assignment occurs via
-    /// a raw pointer write (write-once pattern on static).
     pub fn init(&self, phys: PhysAddr, pool_idx: u32, flags: PageFlags) {
-        // SAFETY: init() called only once prior to any concurrent access; phys write-once on static.
-        unsafe {
-            self.set_phys_unchecked(phys);
-        }
+        self.phys_addr.store(phys.0, Ordering::Release);
         self.flags
             .store(flags.0 | PageFlags::NO_COW.0, Ordering::Relaxed);
         self.pool_index.store(pool_idx, Ordering::Relaxed);
         self.refcount.store(0, Ordering::Release);
+    }
+
+    /// Returns the physical address of this page.
+    #[inline(always)]
+    pub fn phys(&self) -> PhysAddr {
+        PhysAddr(self.phys_addr.load(Ordering::Acquire))
     }
 
     /// Increments reference count.
@@ -220,9 +218,7 @@ impl ShmPage {
 impl ShmPage {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn set_phys_unchecked(&self, phys: PhysAddr) {
-        // SAFETY: addr_of! creates a *const without intermediate reference — avoids UB
-        // of mutation via &T. Single write at init, the field is write-once.
-        core::ptr::write(core::ptr::addr_of!(self.phys_addr) as *mut PhysAddr, phys);
+        self.phys_addr.store(phys.0, Ordering::Release);
     }
 }
 

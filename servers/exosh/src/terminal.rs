@@ -181,7 +181,9 @@ pub fn read_line_interactive(line: &mut [u8; LINE_MAX], state: &mut ShellState) 
 
     loop {
         let Some(key) = read_shell_key_poll() else {
-            sleep_ms(5);
+            if !has_attached_input_stream() {
+                sleep_ms(20);
+            }
             continue;
         };
         match key {
@@ -522,20 +524,35 @@ pub fn recv_input_reply(reply_endpoint: u64, timeout_ms: u64) -> Option<syscall:
     Some(reply)
 }
 
-pub fn input_poll_event() -> Option<syscall::InputEventWire> {
+fn has_attached_input_stream() -> bool {
+    input_reply_endpoint()
+        .map(ensure_input_stream_attached)
+        .unwrap_or(false)
+}
+
+fn input_recv_event(timeout_ms: Option<u64>) -> Option<syscall::InputEventWire> {
     let reply_endpoint = input_reply_endpoint()?;
     if !ensure_input_stream_attached(reply_endpoint) {
         return None;
     }
     let mut reply = syscall::InputReply::default();
     let rc = unsafe {
-        syscall::syscall4(
-            syscall::SYS_EXO_IPC_RECV_NB,
-            reply_endpoint,
-            &mut reply as *mut syscall::InputReply as u64,
-            core::mem::size_of::<syscall::InputReply>() as u64,
-            0,
-        )
+        match timeout_ms {
+            Some(ms) => syscall::syscall4(
+                syscall::SYS_IPC_RECV,
+                reply_endpoint,
+                &mut reply as *mut syscall::InputReply as u64,
+                core::mem::size_of::<syscall::InputReply>() as u64,
+                syscall::IPC_FLAG_TIMEOUT | ms,
+            ),
+            None => syscall::syscall4(
+                syscall::SYS_EXO_IPC_RECV_NB,
+                reply_endpoint,
+                &mut reply as *mut syscall::InputReply as u64,
+                core::mem::size_of::<syscall::InputReply>() as u64,
+                0,
+            ),
+        }
     };
     if rc >= core::mem::size_of::<syscall::InputReply>() as i64 && reply.status == 0 {
         Some(reply.event)
@@ -544,14 +561,44 @@ pub fn input_poll_event() -> Option<syscall::InputEventWire> {
     }
 }
 
+pub fn input_poll_event() -> Option<syscall::InputEventWire> {
+    input_recv_event(None)
+}
+
+pub fn ensure_input_ready() {
+    let _ = has_attached_input_stream();
+}
+
+pub fn check_ctrl_c_poll() -> bool {
+    let mut i = 0usize;
+    while i < 32 {
+        let Some(event) = input_poll_event() else {
+            break;
+        };
+        if event.device == syscall::INPUT_DEVICE_KEYBOARD
+            && event.state == syscall::INPUT_KEY_PRESSED
+            && event.ascii == 0x03
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 pub fn check_interrupt_poll() -> bool {
-    if let Some(event) = input_poll_event() {
+    let mut i = 0usize;
+    while i < 32 {
+        let Some(event) = input_poll_event() else {
+            break;
+        };
         if event.device == syscall::INPUT_DEVICE_KEYBOARD
             && event.state == syscall::INPUT_KEY_PRESSED
             && (event.ascii == 0x03 || event.ascii == b'q')
         {
             return true;
         }
+        i += 1;
     }
     false
 }
@@ -597,6 +644,10 @@ pub fn map_byte_to_shell_key(byte: u8) -> Option<ShellKey> {
 }
 
 pub fn read_shell_key_poll() -> Option<ShellKey> {
+    if has_attached_input_stream() {
+        let event = input_recv_event(Some(50))?;
+        return map_input_event_to_shell_key(event);
+    }
     let byte = read_byte_poll()?;
     if byte == 0x1B {
         if let Some(key) = read_ansi_escape_key() {
@@ -731,5 +782,79 @@ pub fn read_byte_wait_ms(ms: u64) -> Option<u8> {
         waited += 1;
     }
     None
+}
+
+fn push_wl_msg(buf: &mut [u8], pos: &mut usize, obj_id: u32, opcode: u16, args: &[u32]) {
+    let size = (8 + args.len() * 4) as u16;
+    buf[*pos..*pos + 4].copy_from_slice(&obj_id.to_le_bytes());
+    buf[*pos + 4..*pos + 6].copy_from_slice(&opcode.to_le_bytes());
+    buf[*pos + 6..*pos + 8].copy_from_slice(&size.to_le_bytes());
+    *pos += 8;
+    for &arg in args {
+        buf[*pos..*pos + 4].copy_from_slice(&arg.to_le_bytes());
+        *pos += 4;
+    }
+}
+
+fn push_wl_str_msg(buf: &mut [u8], pos: &mut usize, obj_id: u32, opcode: u16, s: &[u8]) {
+    let str_len_with_nul = s.len() + 1;
+    let padded = (str_len_with_nul + 3) & !3;
+    let size = (8 + 4 + padded) as u16;
+    buf[*pos..*pos + 4].copy_from_slice(&obj_id.to_le_bytes());
+    buf[*pos + 4..*pos + 6].copy_from_slice(&opcode.to_le_bytes());
+    buf[*pos + 6..*pos + 8].copy_from_slice(&size.to_le_bytes());
+    *pos += 8;
+    buf[*pos..*pos + 4].copy_from_slice(&(str_len_with_nul as u32).to_le_bytes());
+    *pos += 4;
+    buf[*pos..*pos + s.len()].copy_from_slice(s);
+    for b in &mut buf[*pos + s.len()..*pos + padded] {
+        *b = 0;
+    }
+    *pos += padded;
+}
+
+#[allow(unused_unsafe)]
+pub fn register_exosh_wayland_surface() {
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
+    let mut req = syscall::FbRequest {
+        sender_pid: pid,
+        msg_type: syscall::DISPLAY_OP_WAYLAND_WIRE,
+        reply_endpoint: 0,
+        a: 0,
+        b: 0,
+        data: [0u8; 208],
+    };
+
+    let mut pos = 0usize;
+    // Use object IDs 10..=15 so we don't collide with `exo wayland` (IDs 2..=4).
+    // wl_display#1.get_registry(10)
+    push_wl_msg(&mut req.data, &mut pos, 1, 1, &[10]);
+    // wl_registry#10.bind(name=1 -> wl_compositor, id=11)
+    push_wl_msg(&mut req.data, &mut pos, 10, 0, &[1, 11]);
+    // wl_registry#10.bind(name=3 -> xdg_wm_base, id=12)
+    push_wl_msg(&mut req.data, &mut pos, 10, 0, &[3, 12]);
+    // wl_compositor#11.create_surface(13)
+    push_wl_msg(&mut req.data, &mut pos, 11, 0, &[13]);
+    // xdg_wm_base#12.get_xdg_surface(14, 13)
+    push_wl_msg(&mut req.data, &mut pos, 12, 2, &[14, 13]);
+    // xdg_surface#14.get_toplevel(15)
+    push_wl_msg(&mut req.data, &mut pos, 14, 1, &[15]);
+    // xdg_toplevel#15.set_title("ExoTerm - exosh (Wayland)")
+    push_wl_str_msg(&mut req.data, &mut pos, 15, 2, b"ExoTerm - exosh (Wayland)");
+    // wl_surface#13.commit()
+    push_wl_msg(&mut req.data, &mut pos, 13, 6, &[]);
+
+    req.a = pos as u64;
+    let ptr = (&req as *const syscall::FbRequest) as usize as u64;
+    let len = core::mem::size_of::<syscall::FbRequest>() as u64;
+    let _ = unsafe {
+        syscall::syscall4(
+            syscall::SYS_IPC_SEND,
+            syscall::FB_SERVER_ENDPOINT as u64,
+            ptr,
+            len,
+            (syscall::IPC_FLAG_TIMEOUT | 20) as u64,
+        )
+    };
 }
 

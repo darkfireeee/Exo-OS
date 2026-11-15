@@ -67,17 +67,22 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     // ── 1. CPU statistics (global instrumentation) ─────────────────────
     crate::scheduler::stats::per_cpu::inc_ticks(cpu_id as usize);
 
-    // ── 2. CFS vruntime ──────────────────────────────────────────────────
-    let rq = runqueue::run_queue(CpuId(cpu_id));
-    let ready_nr = rq.nr_running_usize();
+    // ── 2. Snapshot runqueue state & drain incoming migrations ───────────────
+    let (ready_nr, tw, highest_rt_prio, has_dl_runnable) = {
+        let mut rq = runqueue::run_queue(CpuId(cpu_id));
+        rq.drain_migrations();
+        (
+            rq.nr_running_usize(),
+            rq.total_cfs_weight(),
+            rq.rt_bitmap_highest_prio(),
+            crate::scheduler::timer::deadline_timer::dl_has_runnable(cpu_id as usize),
+        )
+    };
 
     // Accumulate elapsed time on this CPU.
     let cpu_idx = (cpu_id as usize).min(MAX_CPUS - 1);
 
     // BUG-FIX R: reset ELAPSED_NS to zero when a new thread is detected.
-    // Without this fix, a thread newly scheduled inherits time
-    // accumulated by the previous thread (voluntary switch: yield, sleep, mutex)
-    // and may be preempted on its very first tick, regardless of its CFS slice.
     let current_ptr = current as usize;
     if LAST_TCB_PTR[cpu_idx].load(Ordering::Relaxed) != current_ptr {
         ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
@@ -86,48 +91,36 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
 
     let elapsed = ELAPSED_NS[cpu_idx].fetch_add(TICK_NS, Ordering::Relaxed) + TICK_NS;
 
-    match tcb.policy {
-        SchedPolicy::Normal | SchedPolicy::Batch => {
-            // CFS vruntime is accounted at context switch with exact
-            // TSC delta. The tick only decides if the slice has expired;
-            // this avoids undercharging servers sleeping before 1ms.
-
-            // Current thread is dequeued from runqueue while running:
-            // including it in nr/total_weight avoids disabling preemption
-            // when only one other CFS thread is ready.
-            let nr = ready_nr.saturating_add(1);
-            let tw = rq
-                .total_cfs_weight()
-                .saturating_add(tcb.priority.cfs_weight() as u64);
-            let slice = timeslice_for(tcb, nr, tw);
-
-            // ── 3. CFS preemption ───────────────────────────────────────
-            if tick_check_preempt(tcb, elapsed, slice, nr) {
-                tcb.sched_state
-                    .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
-                ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
-                TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+    let higher_rt_waiting = highest_rt_prio.is_some_and(|p| p < tcb.priority.0);
+    let preempt_now = if tcb.is_idle() || tcb.policy == SchedPolicy::Idle {
+        ready_nr > 0 || higher_rt_waiting || has_dl_runnable
+    } else {
+        match tcb.policy {
+            SchedPolicy::Fifo => higher_rt_waiting || has_dl_runnable,
+            SchedPolicy::RoundRobin => {
+                higher_rt_waiting || has_dl_runnable || rr_tick(tcb, elapsed)
             }
+            SchedPolicy::Deadline => {
+                higher_rt_waiting
+                    || crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed)
+            }
+            SchedPolicy::Normal | SchedPolicy::Batch => {
+                let nr = ready_nr.saturating_add(1);
+                let full_tw = tw.saturating_add(tcb.priority.cfs_weight() as u64);
+                let slice = timeslice_for(tcb, nr, full_tw);
+                highest_rt_prio.is_some()
+                    || has_dl_runnable
+                    || tick_check_preempt(tcb, elapsed, slice, nr)
+            }
+            SchedPolicy::Idle => unreachable!(),
         }
-        SchedPolicy::RoundRobin if rr_tick(tcb, elapsed) => {
-            // ── 4. RR quantum ──────────────────────────────────────────
-            tcb.sched_state
-                .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
-            ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
-            TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        SchedPolicy::Deadline if crate::scheduler::policies::deadline::deadline_tick(tcb, elapsed) => {
-            // ── 4b. SCHED_DEADLINE budget ──────────────────────────────
-            // BUG-FIX S: verify EDF budget exhaustion on every tick.
-            // Without this fix, SCHED_DEADLINE threads never called
-            // `deadline_tick()`, ignored their `runtime_ns` and ran
-            // indefinitely without respecting their budget per period.
-            tcb.sched_state
-                .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
-            ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
-            TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        _ => {}
+    };
+
+    if preempt_now {
+        tcb.sched_state
+            .fetch_or(SCHED_NEED_RESCHED_BIT, Ordering::Release);
+        ELAPSED_NS[cpu_idx].store(0, Ordering::Relaxed);
+        TICK_PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
     }
 
     // ── 5. Hrtimers ───────────────────────────────────────────────────────

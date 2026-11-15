@@ -486,6 +486,7 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
         *frame_ptr.add(16) = ctx.child_rsp; // Userspace RSP
         *frame_ptr.add(17) = GDT_USER_DS as u64; // SS ring3
         child_tcb.kstack_ptr = kstack_top - 144;
+        crate::scheduler::fpu::clone_fpu_state(&parent.sched_tcb, child_tcb);
         child_tcb.signal_mask.store(
             parent.sched_tcb.signal_mask.load(Ordering::Acquire),
             Ordering::Release,

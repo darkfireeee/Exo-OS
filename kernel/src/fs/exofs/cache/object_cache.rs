@@ -1,11 +1,9 @@
-//! ObjectCache — cache d'objets structurés (superblock, btree nodes, etc.) (no_std).
-
-//! object_cache.rs — Cache d'objets structurés ExoFS (no_std).
+//! object_cache.rs — ExoFS structured object cache (no_std).
 //!
-//! `CachedObject` : wrapper autour d'un objet sérialisé (superblock, nœud B-tree, etc.).
-//! `ObjectCache` : cache avec comptage de références et éviction.
-//! `OBJECT_CACHE` : instance globale statique.
-//! Règles : OOM-02, ARITH-02, RECUR-01.
+//! `CachedObject`: wrapper around a serialized object (superblock, B-tree node, etc.).
+//! `ObjectCache`: cache with reference counting and eviction.
+//! `OBJECT_CACHE`: static global instance.
+//! Rules: OOM-02, ARITH-02, RECUR-01.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -148,7 +146,7 @@ impl ObjectCache {
     pub fn get(&self, id: &BlobId) -> Option<Box<[u8]>> {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
-        // L'emprunt de map se termine avant d'accéder à eviction.
+        // The map borrow ends before accessing eviction.
         let hit_data = inner.map.get_mut(id).map(|obj| {
             obj.touch(now);
             obj.ref_count = obj.ref_count.saturating_add(1);
@@ -254,10 +252,10 @@ impl ObjectCache {
         freed
     }
 }
-// ── Extensions ObjectCache ───────────────────────────────────────────────────
+// ── ObjectCache extensions ───────────────────────────────────────────────────
 
 impl ObjectCache {
-    /// Liste les IDs d'un kind donné.
+    /// Lists IDs of a given kind.
     pub fn ids_by_kind(&self, kind: ObjectKind) -> Vec<BlobId> {
         self.inner
             .lock()
@@ -268,7 +266,7 @@ impl ObjectCache {
             .collect()
     }
 
-    /// Compte les objets par kind.
+    /// Counts objects by kind.
     pub fn count_by_kind(&self, kind: ObjectKind) -> usize {
         self.inner
             .lock()
@@ -278,7 +276,7 @@ impl ObjectCache {
             .count()
     }
 
-    /// Vide uniquement les objets dirty (flush partiel).
+    /// Clears only dirty objects (partial flush).
     pub fn flush_dirty_only(&self) {
         let dirty = self.dirty_ids();
         for id in &dirty {
@@ -286,7 +284,7 @@ impl ObjectCache {
         }
     }
 
-    /// Retourne la taille totale des objets pinned.
+    /// Returns the total size of pinned objects.
     pub fn pinned_bytes(&self) -> u64 {
         self.inner
             .lock()
@@ -297,7 +295,7 @@ impl ObjectCache {
             .fold(0u64, |acc, v| acc.saturating_add(v))
     }
 
-    /// Force libération d'un objet non pinned par son kind (le plus ancien).
+    /// Forces eviction of an unpinned object by its kind (oldest).
     pub fn evict_oldest_of_kind(&self, kind: ObjectKind) -> Option<u64> {
         let mut inner = self.inner.lock();
         let victim = inner
@@ -494,7 +492,7 @@ mod tests {
     fn test_pinned_bytes_zero_initially() {
         let c = ObjectCache::new_const();
         c.insert(mk(6, 64)).test_unwrap();
-        // Pas de get() → pas de pin.
+        // No get() -> no pin.
         assert_eq!(c.pinned_bytes(), 0);
     }
 

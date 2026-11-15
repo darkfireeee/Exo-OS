@@ -73,7 +73,9 @@ ipc_fast_send:
     mov     %rdi, %rbx          # rbx = msg ptr (stable across entire function)
     mov     %rsi, %r12          # r12 = channel_id
 
-    # Check msg ptr alignment (mod 8 == 0).
+    # Check msg ptr non-null and alignment (mod 8 == 0).
+    test    %rdi, %rdi
+    jz      .Lfast_send_einval
     test    $7, %rdi
     jnz     .Lfast_send_einval
 
@@ -124,7 +126,9 @@ ipc_fast_recv:
     push    %rbx
     push    %r12
 
-    # Check dst alignment.
+    # Check dst non-null and alignment.
+    test    %rdi, %rdi
+    jz      .Lfast_recv_einval
     test    $7, %rdi
     jnz     .Lfast_recv_einval
 

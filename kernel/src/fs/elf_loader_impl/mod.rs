@@ -1,13 +1,13 @@
 //! # kernel/src/fs/elf_loader_impl/mod.rs
 //!
-//! Implémentation modulaire de `ElfLoader` pour charger les binaires ELF depuis ExoFS.
-//! Découpé en sous-modules spécialisés :
-//! - `trace` : Primitives de traçage et diagnostic port 0xE9.
-//! - `registry` : Registre des blobs ELF et métadonnées des segments mémoires.
-//! - `parser` : Décodage et validation des en-têtes ELF et Program Headers.
-//! - `image` : Installation des segments et VMAs dans l'espace d'adressage.
-//! - `stack` : Construction de la pile initiale utilisateur SysV et passage d'arguments.
-//! - `cache` : Cache de blobs ELF dédié au demand-paging évitant la pression SLUB.
+//! Modular implementation of `ElfLoader` to load ELF binaries from ExoFS.
+//! Split into specialized submodules:
+//! - `trace` : Tracing and port 0xE9 diagnostic primitives.
+//! - `registry` : ELF blob registry and memory segment metadata.
+//! - `parser` : ELF headers and Program Headers decoding and validation.
+//! - `image` : Segment and VMA installation in the address space.
+//! - `stack` : Initial SysV user stack construction and argument passing.
+//! - `cache` : Demand-paging dedicated ELF blob cache avoiding SLUB pressure.
 
 pub mod cache;
 pub mod image;
@@ -42,7 +42,7 @@ use stack::{
 };
 use trace::{trace_blob, trace_path};
 
-/// Implémentation du chargeur ELF via ExoFS.
+/// ELF loader implementation via ExoFS.
 pub struct ExoFsElfLoader;
 
 unsafe impl Send for ExoFsElfLoader {}
@@ -56,26 +56,26 @@ impl ElfLoader for ExoFsElfLoader {
         envp: &[&str],
         _cr3_in: u64,
     ) -> Result<ElfLoadResult, ElfLoadError> {
-        // ── 1. Résoudre le chemin ExoFS → BlobId ────────────────────────────
+        // ── 1. Resolve ExoFS path -> BlobId ────────────────────────────
         trace_path(b"elf: load ", path);
         let blob_id = resolve_blob_id(path.as_bytes())?;
         trace_blob(b"elf: resolved ", &blob_id);
         let file_id = register_elf_blob(blob_id).ok_or(ElfLoadError::OutOfMemory)?;
         clear_elf_segments(file_id);
 
-        // ── 2. Lire le blob depuis le cache ──────────────────────────────────
+        // ── 2. Read blob from cache ──────────────────────────────────
         let elf_data = read_blob_from_cache(&blob_id)?;
 
-        // ── 3. Valider l'en-tête ELF et détecter PT_INTERP ───────────────────
+        // ── 3. Validate ELF header and detect PT_INTERP ───────────────────
         validate_elf_header(&elf_data)?;
         let interp_path = read_interpreter_path(&elf_data)?;
-        let _ = default_interpreter_path; // conservé pour usage dynamique futur
+        let _ = default_interpreter_path; // kept for future dynamic usage
 
-        // ── 5. Créer le nouvel espace d'adressage ────────────────────────────
+        // ── 5. Create new address space ────────────────────────────
         let alloc = ElfWalkAllocator;
         let mut builder = PageTableBuilder::new(&alloc).map_err(|_| ElfLoadError::OutOfMemory)?;
-        // Copier les entrées kernel (PML4[256..512]) pour que le fils puisse
-        // atteindre le kernel lors des appels système
+        // Copy kernel entries (PML4[256..512]) so the child can
+        // reach the kernel during system calls
         unsafe {
             builder
                 .copy_kernel_entries()
@@ -84,7 +84,7 @@ impl ElfLoader for ExoFsElfLoader {
         let pml4_phys = builder.pml4_phys();
         let child_as = Box::new(UserAddressSpace::new(pml4_phys, 0));
 
-        // ── 6. Charger l'exécutable et éventuellement son interpréteur ───────
+        // ── 6. Load executable and optional interpreter ───────
         let main_image = install_elf_image(&elf_data, file_id, &child_as, 0)?;
         let mut entry_point = main_image.entry_point;
         let mut entry_arg0 = 0u64;
@@ -107,12 +107,12 @@ impl ElfLoader for ExoFsElfLoader {
             interp_image = Some((interp, image));
         }
 
-        // ── 7. brk_start = page suivante au-dessus du dernier segment ────────
+        // ── 7. brk_start = next page above last segment ────────
         let brk_start =
             main_image.brk_end.saturating_add(PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
         child_as.init_heap_bounds(brk_start);
 
-        // ── 7b. Page SignalTcb partagée Kernel/Userspace (AT_SIGNAL_TCB = 51) ─
+        // ── 7b. Kernel/Userspace shared SignalTcb page (AT_SIGNAL_TCB = 51) ─
         let rand_bytes = generate_random_16(file_id ^ main_image.entry_point);
         let rand_u64 = u64::from_le_bytes([
             rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3],
@@ -127,16 +127,16 @@ impl ElfLoader for ExoFsElfLoader {
             PAGE_SIZE,
             crate::memory::virt::VmaFlags::DONTEXPAND,
         )?;
-        let _ = sig_frame; // Déjà zéroïsé par map_anon_pages
+        let _ = sig_frame; // Already zeroed by map_anon_pages
 
-        // ── 7c. TLS statique initial (PT_TLS + GenericTcb) pour %fs (MSR_FS_BASE) ─
+        // ── 7c. Initial static TLS (PT_TLS + GenericTcb) for %fs (MSR_FS_BASE) ─
         const INITIAL_TLS_BASE_REGION: u64 = 0x0000_7FFF_FF50_0000;
         let tls_align = (main_image.tls_align as usize).max(16).next_power_of_two();
         let tls_memsz = main_image.tls_memsz as usize;
         let tls_filesz = (main_image.tls_filesz as usize).min(tls_memsz);
         let aligned_tls_memsz = (tls_memsz + tls_align - 1) & !(tls_align - 1);
         let static_tls_pages = aligned_tls_memsz.div_ceil(PAGE_SIZE);
-        let total_tls_pages = static_tls_pages + 1; // +1 page pour GenericTcb à [%fs:0]
+        let total_tls_pages = static_tls_pages + 1; // +1 page for GenericTcb at [%fs:0]
         let tls_alloc_len = total_tls_pages * PAGE_SIZE;
         let tls_frames = map_anon_pages(
             &mut builder,
@@ -167,7 +167,7 @@ impl ElfLoader for ExoFsElfLoader {
             )?;
         }
 
-        // Initialiser GenericTcb à tls_base ([%fs:0] = tls_end = tls_base, [%fs:16] = tcb_ptr = tls_base)
+        // Initialize GenericTcb at tls_base ([%fs:0] = tls_end = tls_base, [%fs:16] = tcb_ptr = tls_base)
         let mut tcb_header = [0u8; 40];
         tcb_header[0..8].copy_from_slice(&tls_base.to_le_bytes());
         tcb_header[8..16].copy_from_slice(&(tls_alloc_len as u64).to_le_bytes());
@@ -176,7 +176,7 @@ impl ElfLoader for ExoFsElfLoader {
         tcb_header[32..40].copy_from_slice(&signal_tcb_vaddr.to_le_bytes());
         write_anon_bytes(&tls_frames, INITIAL_TLS_BASE_REGION, tls_base, &tcb_header)?;
 
-        // ── 8. Pile utilisateur : bootstrap eager minimal, plafond layout partagé ─
+        // ── 8. User stack: minimal eager bootstrap, shared layout ceiling ─
         const STACK_TOP: u64 = USER_STACK_TOP.as_u64();
         const STACK_SIZE: usize = USER_STACK_BOOTSTRAP_SIZE;
         let stack_size = STACK_SIZE;
@@ -226,7 +226,7 @@ impl ElfLoader for ExoFsElfLoader {
             .remap_low_kernel_identity()
             .map_err(|_| ElfLoadError::OutOfMemory)?;
 
-        // ── 9. Finaliser ─────────────────────────────────────────────────────
+        // ── 9. Finalize ─────────────────────────────────────────────────────
         let child_cr3 = pml4_phys.as_u64();
         let addr_space_ptr = Box::into_raw(child_as) as usize;
 
@@ -252,7 +252,7 @@ impl FileFaultProvider for ExoFsElfLoader {
         dest_frame: Frame,
     ) -> Result<(), AllocError> {
         let blob_id = lookup_elf_blob(file_id).ok_or(AllocError::InvalidParams)?;
-        // FIX-25 : octets via cache (plus de relecture+rehash intégral par faute).
+        // FIX-25: bytes via cache (no more full reread+rehash per fault).
         let data_arc = load_blob_cached(&blob_id)?;
         let data = &data_arc[..];
         let dst_virt = phys_to_virt(dest_frame.start_address());
@@ -305,7 +305,7 @@ impl FileFaultProvider for ExoFsElfLoader {
     }
 }
 
-/// Instance statique du chargeur ELF.
+/// Static ELF loader instance.
 pub static EXO_ELF_LOADER: ExoFsElfLoader = ExoFsElfLoader;
 
 #[cfg(test)]

@@ -68,6 +68,19 @@ struct ExoProcessInfo {
     stime_ns: u64,
 }
 
+/// Denies inspection syscalls when the calling process is under `SANDBOX_FULL`.
+fn ensure_not_full_sandbox() -> Result<(), i64> {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid != 0
+        && (crate::security::zero_trust::process_restrictions(caller_pid)
+            & crate::security::zero_trust::context::restriction_flags::SANDBOX_FULL)
+            != 0
+    {
+        return Err(EPERM);
+    }
+    Ok(())
+}
+
 /// `exo_process_list(buf, capacity, entry_size)` — snapshot of the PCB registry.
 pub fn sys_exo_process_list(
     buf_ptr: u64,
@@ -78,6 +91,9 @@ pub fn sys_exo_process_list(
     _a6: u64,
 ) -> i64 {
     stat_inc(SYS_EXO_PROCESS_LIST);
+    if let Err(errno) = ensure_not_full_sandbox() {
+        return errno;
+    }
     let expected = core::mem::size_of::<ExoProcessInfo>();
     if entry_size != expected as u64 {
         return EINVAL;
@@ -136,6 +152,9 @@ fn perf_value(value: u64) -> i64 {
 /// `exo_perf_read(metric, index)` — read bounded kernel counters.
 pub fn sys_exo_perf_read(metric: u64, index: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PERF_READ);
+    if let Err(errno) = ensure_not_full_sandbox() {
+        return errno;
+    }
     match metric {
         EXO_PERF_SYSCALL_COUNT => {
             if index >= SYSCALL_TABLE_SIZE as u64 {

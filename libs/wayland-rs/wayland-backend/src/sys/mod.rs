@@ -1,0 +1,319 @@
+//! Implementations of the Wayland backends using the system `libwayland`
+
+use smallvec::SmallVec;
+use std::ffi::CString;
+use std::num::NonZeroU32;
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+use std::ptr::{self, NonNull};
+use std::sync::Arc;
+
+use wayland_sys::client::wl_proxy;
+use wayland_sys::common::{wl_argument, wl_array};
+
+use crate::protocol::{Argument, ArgumentType, Interface, OwnedArgument};
+
+#[cfg(any(test, feature = "client_system", feature = "server_system"))]
+use std::ffi::c_void;
+
+#[cfg(any(test, feature = "client_system"))]
+mod client_impl;
+#[cfg(any(test, feature = "server_system"))]
+mod server_impl;
+
+/// Magic static for wayland objects managed by wayland-client or wayland-server
+///
+/// This static serves no purpose other than existing at a stable address.
+static RUST_MANAGED: u8 = 42;
+
+/// Client-side implementation of a Wayland protocol backend using `libwayland`
+///
+/// Entrypoints are:
+/// - [`Backend::connect()`][client::Backend::connect()] method if you're creating the Wayland connection
+/// - [`Backend::from_foreign_display()`][client::Backend::from_foreign_display()] if you're interacting with an
+///   already existing Wayland connection through FFI.
+#[cfg(any(test, feature = "client_system"))]
+#[path = "../client_api.rs"]
+pub mod client;
+#[cfg(any(test, feature = "client_system"))]
+use client::{ObjectData, ObjectId};
+
+// API complements for FFI
+
+#[cfg(any(test, feature = "client_system"))]
+impl client::ObjectId {
+    /// Creates an object id from a libwayland-client pointer.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an [`InvalidId`][client::InvalidId] error if the interface of the proxy does
+    /// not match the provided interface.
+    ///
+    /// # Safety
+    ///
+    /// The provided pointer must be a valid pointer to a `wl_resource` and remain valid for as
+    /// long as the retrieved `ObjectId` is used.
+    pub unsafe fn from_ptr(
+        interface: &'static crate::protocol::Interface,
+        ptr: NonNull<c_void>,
+    ) -> Result<Self, client::InvalidId> {
+        Ok(Self {
+            id: unsafe { client_impl::InnerObjectId::from_ptr(interface, ptr.cast::<wl_proxy>()) }?,
+        })
+    }
+
+    /// Get the underlying libwayland pointer for this object
+    ///
+    /// # Errors
+    ///
+    /// This function returns an [`InvalidId`][client::InvalidId] error if proxy has already
+    /// been destroyed.
+    pub fn as_ptr(&self) -> Result<NonNull<c_void>, client::InvalidId> {
+        Ok(self.id.as_ptr()?.cast())
+    }
+
+    /// Get the underlying display pointer for this object.
+    ///
+    /// This pointer is associated with the original display this object
+    /// belongs to.
+    #[cfg(feature = "libwayland_client_1_23")]
+    pub fn display_ptr(&self) -> Result<NonNull<c_void>, crate::types::client::InvalidId> {
+        Ok(self.id.display_ptr()?.cast())
+    }
+}
+
+#[cfg(any(test, feature = "client_system"))]
+impl client::Backend {
+    /// Creates a Backend from a foreign `*mut wl_display`.
+    ///
+    /// This is useful if you are writing a library that is expected to plug itself into an existing
+    /// Wayland connection.
+    ///
+    /// This will initialize the [`Backend`][Self] in "guest" mode, meaning it will not close the
+    /// connection on drop. After the [`Backend`][Self] is dropped, if the server sends an event
+    /// to an object that was created from it, that event will be silently discarded. This may lead to
+    /// protocol errors if the server expects an answer to that event, as such you should make sure to
+    /// cleanup your Wayland state before dropping the [`Backend`][Self].
+    ///
+    /// # Safety
+    ///
+    /// You need to ensure the `*mut wl_display` remains live as long as the  [`Backend`][Self]
+    /// (or its clones) exist.
+    pub unsafe fn from_foreign_display(display: NonNull<c_void>) -> Self {
+        Self {
+            backend: unsafe {
+                client_impl::InnerBackend::from_foreign_display(
+                    display.cast::<wayland_sys::client::wl_display>(),
+                )
+            },
+        }
+    }
+
+    /// Returns the underlying `wl_display` pointer to this backend.
+    ///
+    /// This pointer is needed to interface with EGL, Vulkan and other C libraries.
+    ///
+    /// This pointer is only valid for the lifetime of the backend.
+    pub fn display_ptr(&self) -> *mut c_void {
+        self.backend.display_ptr().cast()
+    }
+
+    /// Take over handling for a proxy created by a third party.
+    ///
+    /// # Safety
+    ///
+    /// There must never be more than one party managing an object. This is only
+    /// safe to call when a third party gave you ownership of an unmanaged proxy.
+    ///
+    /// The caller is also responsible for making sure the passed interface matches
+    /// the proxy.
+    #[inline]
+    pub unsafe fn manage_object(
+        &self,
+        interface: &'static Interface,
+        proxy: *mut c_void,
+        data: Arc<dyn ObjectData>,
+    ) -> ObjectId {
+        unsafe { self.backend.manage_object(interface, proxy.cast::<wl_proxy>(), data) }
+    }
+}
+
+#[cfg(any(test, feature = "client_system"))]
+impl client::ReadEventsGuard {
+    /// The same as [`read`], but doesn't dispatch events.
+    ///
+    /// To dispatch them, use [`dispatch_inner_queue`].
+    ///
+    /// [`read`]: client::ReadEventsGuard::read
+    /// [`dispatch_inner_queue`]: client::Backend::dispatch_inner_queue
+    pub fn read_without_dispatch(mut self) -> Result<(), client::WaylandError> {
+        self.guard.read_non_dispatch()
+    }
+}
+
+#[cfg(all(feature = "rwh_06", feature = "client_system"))]
+impl rwh_06::HasDisplayHandle for client::Backend {
+    fn display_handle(&self) -> Result<rwh_06::DisplayHandle<'_>, rwh_06::HandleError> {
+        use std::ptr::NonNull;
+
+        // SAFETY:
+        // - The display_ptr will be valid, either because we have created the pointer or the caller which created the
+        //   backend has ensured the pointer is valid when `Backend::from_foreign_display` was called.
+        let ptr = unsafe { NonNull::new_unchecked(self.display_ptr().cast()) };
+        let handle = rwh_06::WaylandDisplayHandle::new(ptr);
+        let raw = rwh_06::RawDisplayHandle::Wayland(handle);
+
+        // SAFETY:
+        // - The display_ptr will be valid, either because we have created the pointer or the caller which created the
+        //   backend has ensured the pointer is valid when `Backend::from_foreign_display` was called.
+        // - The lifetime assigned to the DisplayHandle borrows the Backend, ensuring the display pointer
+        //   is valid..
+        // - The display_ptr will not change for the lifetime of the backend.
+        Ok(unsafe { rwh_06::DisplayHandle::borrow_raw(raw) })
+    }
+}
+
+/// Server-side implementation of a Wayland protocol backend using `libwayland`
+///
+/// The main entrypoint is the [`Backend::new()`][server::Backend::new()] method.
+#[cfg(any(test, feature = "server_system"))]
+#[path = "../server_api.rs"]
+pub mod server;
+
+#[cfg(any(test, feature = "server_system"))]
+impl server::ObjectId {
+    /// Creates an object from a C pointer.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an [`InvalidId`][server::InvalidId] error if the interface of the
+    /// resource does not match the provided interface.
+    ///
+    /// # Safety
+    ///
+    /// The provided pointer must be a valid pointer to a `wl_resource` and remain valid for as
+    /// long as the retrieved `ObjectId` is used.
+    pub unsafe fn from_ptr(
+        interface: &'static crate::protocol::Interface,
+        ptr: NonNull<c_void>,
+    ) -> Result<Self, server::InvalidId> {
+        Ok(Self {
+            id: unsafe {
+                server_impl::InnerObjectId::from_ptr(
+                    Some(interface),
+                    ptr.cast::<wayland_sys::server::wl_resource>(),
+                )
+            }?,
+        })
+    }
+
+    /// Returns the pointer that represents this object.
+    ///
+    /// The pointer may be used to interoperate with libwayland.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an [`InvalidId`][server::InvalidId] error if resource has already
+    /// been destroyed.
+    pub fn as_ptr(&self) -> Result<NonNull<c_void>, server::InvalidId> {
+        Ok(self.id.as_ptr()?.cast())
+    }
+}
+
+#[cfg(any(test, feature = "server_system"))]
+impl server::Handle {
+    /// Access the underlying `*mut wl_display` pointer
+    pub fn display_ptr(&self) -> *mut c_void {
+        self.handle.display_ptr().cast()
+    }
+}
+
+unsafe fn parse_arg<O>(
+    typ: &ArgumentType,
+    arg: &wl_argument,
+) -> OwnedArgument<Option<NonNull<O>>, Option<NonZeroU32>> {
+    match typ {
+        ArgumentType::Uint => OwnedArgument::Uint(unsafe { arg.u }),
+        ArgumentType::Int => OwnedArgument::Int(unsafe { arg.i }),
+        ArgumentType::Fixed => OwnedArgument::Fixed(unsafe { arg.f }),
+        ArgumentType::Fd => OwnedArgument::Fd(unsafe { OwnedFd::from_raw_fd(arg.h) }),
+        ArgumentType::Array => {
+            let array = unsafe { &*arg.a };
+            // Safety: the array provided by libwayland must be valid
+            let content = unsafe { std::slice::from_raw_parts(array.data as *mut u8, array.size) };
+            OwnedArgument::Array(Box::new(content.into()))
+        }
+        ArgumentType::Str(_) => {
+            let ptr = unsafe { arg.s };
+            // Safety: the c-string provided by libwayland must be valid
+            OwnedArgument::Str(if !ptr.is_null() {
+                // TODO: Should we error on invalid UTF-8?
+                let s = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+                Some(Box::new(s.into_owned()))
+            } else {
+                None
+            })
+        }
+        ArgumentType::Object(_) => OwnedArgument::Object(NonNull::new(unsafe { arg.o as *mut O })),
+        ArgumentType::NewId => OwnedArgument::NewId(NonZeroU32::new(unsafe { arg.n })),
+    }
+}
+
+struct SerializedArgs {
+    signature: &'static [ArgumentType],
+    args: SmallVec<[wl_argument; 4]>,
+}
+
+impl SerializedArgs {
+    fn new(signature: &'static [ArgumentType]) -> Self {
+        Self { signature, args: SmallVec::<[wl_argument; 4]>::with_capacity(signature.len()) }
+    }
+
+    fn add<O>(&mut self, arg: Argument<Option<NonNull<O>>, Option<NonZeroU32>>) {
+        self.args.push(match arg {
+            Argument::Uint(u) => wl_argument { u },
+            Argument::Int(i) => wl_argument { i },
+            Argument::Fixed(f) => wl_argument { f },
+            Argument::Fd(h) => wl_argument { h: h.as_raw_fd() },
+            Argument::Array(ref a) => {
+                let a = Box::new(wl_array {
+                    size: a.len(),
+                    alloc: a.len(),
+                    data: a.as_ptr() as *mut _,
+                });
+                wl_argument { a: Box::into_raw(a) }
+            }
+            Argument::Str(Some(ref s)) => {
+                // Panic if string contains internal \0 byte
+                let s = CString::new((**s).to_owned()).unwrap();
+                wl_argument { s: s.into_raw() }
+            }
+            Argument::Str(None) => wl_argument { s: std::ptr::null() },
+            Argument::Object(o) => {
+                wl_argument { o: o.map_or_else(ptr::null, |o| o.as_ptr()) as *const _ }
+            }
+            Argument::NewId(n) => wl_argument { n: n.map_or(0, |n| n.get()) },
+        });
+    }
+}
+
+impl Drop for SerializedArgs {
+    fn drop(&mut self) {
+        for (typ, arg) in self.signature.iter().zip(self.args.iter()) {
+            // Safety: the arglist provided arglist must be valid for associated signature
+            // and contains pointers to boxed arrays/cstrings as appropriate
+            if let ArgumentType::Array = typ {
+                let _ = unsafe { Box::from_raw(arg.a as *mut wl_array) };
+            } else if let ArgumentType::Str(_) = typ {
+                let ptr = unsafe { arg.s };
+                if !ptr.is_null() {
+                    let _ = unsafe { CString::from_raw(ptr as *mut _) };
+                }
+            }
+        }
+    }
+}
+
+fn cast_non_null_ref<T>(ptr: &NonNull<T>) -> &Option<NonNull<T>> {
+    // SAFETY: `Option<NonNull<T>>` is guaranteed to have same repr as `NonNull<T>`
+    unsafe { &*(ptr as *const _ as *const _) }
+}

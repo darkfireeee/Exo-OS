@@ -1,18 +1,18 @@
-//! path_index_split.rs — Division d un PathIndex en deux index fils.
+//! path_index_split.rs — Splitting a PathIndex into two child indices.
 //!
-//! Lorsqu un [`PathIndex`] dépasse son seuil de split (`needs_split() == true`),
-//! ce module le divise en un index "bas" (entrées hash < pivot) et un index "haut"
-//! (entrées hash >= pivot).
+//! When a [`PathIndex`] exceeds its split threshold (`needs_split() == true`),
+//! this module splits it into a "low" index (entries with hash < pivot) and a "high" index
+//! (entries with hash >= pivot).
 //!
-//! ## Stratégie
-//! - Tri des entrées par hash.
-//! - Pivot = médiane des hashes.
-//! - Index bas  : entrées [0..mid].
-//! - Index haut : entrées [mid..].
+//! ## Strategy
+//! - Sort entries by hash.
+//! - Pivot = median of hashes.
+//! - Low index  : entries [0..mid].
+//! - High index : entries [mid..].
 //!
-//! ## Règles spec appliquées
-//! - **ARITH-02** : `checked_add` sur les calculs de taille.
-//! - **OOM-02** : `try_reserve(1)` avant les insertions.
+//! ## Applied spec rules
+//! - **ARITH-02** : `checked_add` on size calculations.
+//! - **OOM-02** : `try_reserve(1)` before insertions.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -23,43 +23,43 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 
 // ── SplitResult ───────────────────────────────────────────────────────────────
 
-/// Résultat d un split.
+/// Result of a split operation.
 pub struct SplitResult {
-    /// Index fils "bas" (hashes inférieurs au pivot).
+    /// "Low" child index (hashes strictly lower than pivot).
     pub low: PathIndex,
-    /// Index fils "haut" (hashes supérieurs ou égaux au pivot).
+    /// "High" child index (hashes greater than or equal to pivot).
     pub high: PathIndex,
-    /// Hash pivot utilisé pour la division.
+    /// Pivot hash used for splitting.
     pub pivot_hash: u64,
-    /// Nombre d entrées transférées dans l index bas.
+    /// Number of entries transferred to low index.
     pub low_count: usize,
-    /// Nombre d entrées transférées dans l index haut.
+    /// Number of entries transferred to high index.
     pub high_count: usize,
 }
 
 // ── PathIndexSplitter ─────────────────────────────────────────────────────────
 
-/// Diviseur de PathIndex.
+/// PathIndex splitter.
 ///
-/// Consomme l index source et produit un [`SplitResult`].
+/// Consumes the source index and produces a [`SplitResult`].
 pub struct PathIndexSplitter;
 
 impl PathIndexSplitter {
-    /// Divise `src` en deux index fils équilibrés.
+    /// Splits `src` into two balanced child indices.
     ///
-    /// L index source est consommé (ses entrées sont drainées).
-    /// Les deux index fils partagent le même `parent_oid`.
+    /// The source index is consumed (its entries are drained).
+    /// Both child indices share the same `parent_oid`.
     ///
     /// # Errors
-    /// - [`ExofsError::InvalidArgument`]  si l index source a < 2 entrées.
-    /// - [`ExofsError::NoMemory`]         si allocation impossible.
-    /// - [`ExofsError::InternalError`]    si invariant interne violé.
+    /// - [`ExofsError::InvalidArgument`]  if source index has < 2 entries.
+    /// - [`ExofsError::NoMemory`]         if allocation fails.
+    /// - [`ExofsError::InternalError`]    if internal invariant is violated.
     pub fn split(src: &mut PathIndex, parent_oid: ObjectId) -> ExofsResult<SplitResult> {
         if src.len() < 2 {
             return Err(ExofsError::InvalidArgument);
         }
 
-        // ── 1. Collecte et tri par hash ───────────────────────────────────────
+        // ── 1. Collect and sort by hash ───────────────────────────────────────
         let mut sorted: Vec<InMemoryEntry> = Vec::new();
         for e in src.entries() {
             sorted.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -67,11 +67,11 @@ impl PathIndexSplitter {
         }
         sorted.sort_unstable_by_key(|e| e.hash);
 
-        // ── 2. Calcul du pivot (médiane) ──────────────────────────────────────
+        // ── 2. Compute pivot (median) ─────────────────────────────────────────
         let mid = sorted.len() / 2;
         let pivot_hash = sorted[mid].hash;
 
-        // ── 3. Création des deux index fils ───────────────────────────────────
+        // ── 3. Create the two child indices ───────────────────────────────────
         let mut low = PathIndex::new(parent_oid.clone());
         let mut high = PathIndex::new(parent_oid);
 
@@ -100,12 +100,12 @@ impl PathIndexSplitter {
         })
     }
 
-    /// Divise en appliquant un pivot hash fourni explicitement.
+    /// Splits by applying an explicitly provided pivot hash.
     ///
-    /// Utile quand le pivot doit être cohérent avec un arbre B+ existant.
+    /// Useful when the pivot must be consistent with an existing B+ tree.
     ///
     /// # Errors
-    /// Mêmes que [`split`].
+    /// Same as [`split`].
     pub fn split_at_hash(
         src: &mut PathIndex,
         parent_oid: ObjectId,
@@ -146,15 +146,15 @@ impl PathIndexSplitter {
         })
     }
 
-    /// Vérifie qu un split est nécessaire.
+    /// Checks whether a split is needed.
     #[inline]
     pub fn is_needed(idx: &PathIndex) -> bool {
         idx.needs_split()
     }
 
-    /// Calcule le pivot optimal (hash médian) sans modifier l index.
+    /// Computes the optimal pivot (median hash) without modifying the index.
     ///
-    /// Retourne `None` si l index a moins de 2 entrées.
+    /// Returns `None` if the index has fewer than 2 entries.
     pub fn optimal_pivot(idx: &PathIndex) -> Option<u64> {
         if idx.len() < 2 {
             return None;
@@ -169,14 +169,14 @@ impl PathIndexSplitter {
         Some(hashes[mid])
     }
 
-    /// Estimation de la taille sérialisée d un index après split.
+    /// Estimates serialized size of an index after split.
     ///
-    /// Permet de vérifier l espace disponible avant d effectuer le split.
+    /// Allows checking available space before performing the split.
     ///
     /// # ARITH-02
     pub fn estimate_split_size(src: &PathIndex) -> ExofsResult<(usize, usize)> {
         let half = src.len() / 2;
-        // Taille header + entrées moyennes (44 + ~16 octets de nom).
+        // Header size + average entries (44 + ~16 name bytes).
         let avg_entry: usize = 44_usize.checked_add(16).ok_or(ExofsError::OffsetOverflow)?;
         let half_entries = half
             .checked_mul(avg_entry)
@@ -194,12 +194,12 @@ impl PathIndexSplitter {
         Ok((low_size, high_size))
     }
 
-    /// Valide la cohérence d un SplitResult :
-    /// - low  : tous les hashes < pivot.
-    /// - high : tous les hashes >= pivot.
+    /// Validates consistency of a SplitResult:
+    /// - low  : all hashes < pivot.
+    /// - high : all hashes >= pivot.
     /// - low.len() + high.len() == original_count.
     pub fn verify_split(result: &SplitResult, original_count: usize) -> ExofsResult<()> {
-        // Vérifier cohérence count.
+        // Verify count consistency.
         let total = result
             .low_count
             .checked_add(result.high_count)
@@ -208,13 +208,13 @@ impl PathIndexSplitter {
             return Err(ExofsError::InternalError);
         }
 
-        // Vérifier hashes low < pivot.
+        // Verify hashes low < pivot.
         for e in result.low.entries() {
             if e.hash >= result.pivot_hash {
                 return Err(ExofsError::InternalError);
             }
         }
-        // Vérifier hashes high >= pivot.
+        // Verify hashes high >= pivot.
         for e in result.high.entries() {
             if e.hash < result.pivot_hash {
                 return Err(ExofsError::InternalError);
@@ -226,25 +226,25 @@ impl PathIndexSplitter {
 
 // ── SplitMetrics ──────────────────────────────────────────────────────────────
 
-/// Métriques collectées lors d un split.
+/// Metrics collected during a split.
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
-    /// Nombre total d entrées dans la source avant split.
+    /// Total number of entries in source before split.
     pub total_before: usize,
-    /// Nombre d entrées dans l index bas.
+    /// Number of entries in low index.
     pub low_count: usize,
-    /// Nombre d entrées dans l index haut.
+    /// Number of entries in high index.
     pub high_count: usize,
-    /// Ratio de déséquilibre (0.0 = parfaitement équilibré, 1.0 = tout d un côté).
+    /// Imbalance ratio (0 = perfectly balanced, 100 = all on one side).
     pub imbalance_pct: u32,
-    /// Hash pivot finalement utilisé.
+    /// Pivot hash ultimately used.
     pub used_pivot: u64,
-    /// Seuil de split de la source.
+    /// Split threshold of the source.
     pub source_threshold: u32,
 }
 
 impl SplitMetrics {
-    /// Construit les métriques depuis un SplitResult.
+    /// Constructs metrics from a SplitResult.
     pub fn from_result(result: &SplitResult, total_before: usize, source_threshold: u32) -> Self {
         let low = result.low_count as i64;
         let high = result.high_count as i64;
@@ -261,7 +261,7 @@ impl SplitMetrics {
         }
     }
 
-    /// `true` si le split est fortement déséquilibré (>75 % d un côté).
+    /// `true` if the split is heavily imbalanced (> 75% on one side).
     pub fn is_imbalanced(&self) -> bool {
         self.imbalance_pct > 75
     }
@@ -269,16 +269,16 @@ impl SplitMetrics {
 
 // ── SplitPolicy ───────────────────────────────────────────────────────────────
 
-/// Politique de split : comment choisir le pivot.
+/// Split policy: how to choose the pivot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitPolicy {
-    /// Pivot médian (équilibre maximal).
+    /// Median pivot (maximum balance).
     Median,
-    /// Pivot au 25e percentile (favorise l index haut).
+    /// 25th percentile pivot (favors high index).
     Percentile25,
-    /// Pivot au 75e percentile (favorise l index bas).
+    /// 75th percentile pivot (favors low index).
     Percentile75,
-    /// Pivot fourni explicitement.
+    /// Explicitly provided pivot.
     Explicit(u64),
 }
 
@@ -289,7 +289,7 @@ impl Default for SplitPolicy {
 }
 
 impl SplitPolicy {
-    /// Calcule le hash pivot selon la politique donnée.
+    /// Computes the pivot hash according to the given policy.
     ///
     /// # OOM-02
     pub fn compute_pivot(&self, src: &PathIndex) -> ExofsResult<u64> {
@@ -320,16 +320,16 @@ impl SplitPolicy {
 
 // ── SplitRequest ──────────────────────────────────────────────────────────────
 
-/// Requête de split avec politique configurable.
+/// Split request with configurable policy.
 pub struct SplitRequest {
     pub parent_oid: ObjectId,
     pub policy: SplitPolicy,
-    /// Si `true`, vérifie automatiquement le résultat après split.
+    /// If `true`, automatically verifies result after split.
     pub verify: bool,
 }
 
 impl SplitRequest {
-    /// Crée une requête de split avec politique médiane par défaut.
+    /// Creates a split request with median policy by default.
     pub fn new(parent_oid: ObjectId) -> Self {
         SplitRequest {
             parent_oid,
@@ -338,13 +338,13 @@ impl SplitRequest {
         }
     }
 
-    /// Modifie la politique.
+    /// Updates policy.
     pub fn with_policy(mut self, p: SplitPolicy) -> Self {
         self.policy = p;
         self
     }
 
-    /// Exécute le split.
+    /// Executes the split.
     pub fn execute(self, src: &mut PathIndex) -> ExofsResult<(SplitResult, SplitMetrics)> {
         let total_before = src.len();
         let source_thr = src.split_threshold;
@@ -358,21 +358,21 @@ impl SplitRequest {
     }
 }
 
-// ── Fonctions utilitaires ─────────────────────────────────────────────────────
+// ── Utility functions ─────────────────────────────────────────────────────────
 
-/// Divise un index en utilisant un split automatique (pivot médian).
+/// Splits an index using automatic split (median pivot).
 ///
-/// Raccourci vers [`PathIndexSplitter::split`].
+/// Shortcut to [`PathIndexSplitter::split`].
 pub fn auto_split(src: &mut PathIndex, parent_oid: ObjectId) -> ExofsResult<SplitResult> {
     PathIndexSplitter::split(src, parent_oid)
 }
 
-/// Retourne `true` si l index doit être splitté selon le seuil par défaut.
+/// Returns `true` if index should be split according to default threshold.
 pub fn should_split(idx: &PathIndex) -> bool {
     idx.needs_split()
 }
 
-/// Divise en collectant aussi les métriques (utile pour le monitoring).
+/// Splits while also collecting metrics (useful for monitoring).
 pub fn split_with_metrics(
     src: &mut PathIndex,
     parent_oid: ObjectId,

@@ -1,8 +1,8 @@
-//! relation_query.rs — Requêtes haut-niveau sur le graphe ExoFS
+//! relation_query.rs — High-level queries on the ExoFS graph
 //!
-//! Règles appliquées :
-//!  - RECUR-01 : aucune récursion
-//!  - OOM-02   : try_reserve avant tout push
+//! Applied rules:
+//!  - RECUR-01: no recursion
+//!  - OOM-02: try_reserve before any push
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -18,7 +18,7 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 // QueryResult
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat enrichi d une requête de relations.
+/// Enriched result of a relation query.
 #[derive(Clone, Debug, Default)]
 pub struct QueryResult {
     pub relations: Vec<Relation>,
@@ -41,7 +41,7 @@ impl QueryResult {
         Self::default()
     }
 
-    /// Filtre les relations du résultat selon un prédicat.
+    /// Filters the relations of the result according to a predicate.
     pub fn filter_by<F>(mut self, pred: F) -> Self
     where
         F: Fn(&Relation) -> bool,
@@ -51,7 +51,7 @@ impl QueryResult {
         self
     }
 
-    /// Limite le nombre de résultats.
+    /// Limits the number of results.
     pub fn limit(mut self, max: usize) -> Self {
         if self.relations.len() > max {
             self.relations.truncate(max);
@@ -66,29 +66,29 @@ impl QueryResult {
 // RelationQuery
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Façade de requêtes sur le graphe de relations.
+/// Query facade on the relation graph.
 pub struct RelationQuery;
 
 impl RelationQuery {
-    /// Toutes les relations sortantes d un blob.
+    /// All outgoing relations from a blob.
     pub fn outgoing(from: &BlobId) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_from(from);
         Self::load_ids(&ids)
     }
 
-    /// Toutes les relations entrantes vers un blob.
+    /// All incoming relations to a blob.
     pub fn incoming(to: &BlobId) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_to(to);
         Self::load_ids(&ids)
     }
 
-    /// Relations dans la direction donnée.
+    /// Relations in the given direction.
     pub fn in_direction(blob: &BlobId, direction: RelationDirection) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_in_direction(blob, direction);
         Self::load_ids(&ids)
     }
 
-    /// Relations sortantes d un certain type.
+    /// Outgoing relations of a specific kind.
     pub fn outgoing_by_kind(from: &BlobId, kind: RelationKind) -> ExofsResult<QueryResult> {
         let ids = RELATION_INDEX.ids_from(from);
         let mut rels: Vec<Relation> = Vec::new();
@@ -104,7 +104,7 @@ impl RelationQuery {
         Ok(QueryResult::from_rels(rels))
     }
 
-    /// Relations avec un filtre composite.
+    /// Relations with a composite filter.
     pub fn filtered(blob: &BlobId, filter: RelationFilter) -> ExofsResult<QueryResult> {
         let direction = filter.direction.unwrap_or(RelationDirection::Outgoing);
         let ids = RELATION_INDEX.ids_in_direction(blob, direction);
@@ -121,13 +121,13 @@ impl RelationQuery {
         Ok(QueryResult::from_rels(rels))
     }
 
-    /// Vérifie l existence d une relation directe `from → to` d un certain type.
+    /// Checks the existence of a direct relation `from → to` of a specific kind.
     pub fn has_direct_relation(from: &BlobId, to: &BlobId, kind: RelationKind) -> bool {
         RELATION_GRAPH.has_typed_edge(from, to, kind)
     }
 
-    /// Cherche tous les blobs accessibles depuis `start` en BFS.
-    /// (RECUR-01 — implémenté dans RelationWalker)
+    /// Searches all blobs reachable from `start` using BFS.
+    /// (RECUR-01 — implemented in RelationWalker)
     pub fn reachable_from(start: &BlobId, max_depth: u32) -> ExofsResult<Vec<BlobId>> {
         use super::relation_walker::RelationWalker;
         let w = RelationWalker::new(max_depth);
@@ -136,8 +136,8 @@ impl RelationQuery {
         Ok(visited)
     }
 
-    /// Cherche les blobs qui peuvent atteindre `target` en remontant les arcs.
-    /// (BFS sur graphe inversé)
+    /// Searches blobs that can reach `target` by traversing edges backwards.
+    /// (BFS on reversed graph)
     pub fn ancestors_of(target: &BlobId, max_depth: u32) -> ExofsResult<Vec<BlobId>> {
         use alloc::collections::VecDeque;
         let mut visited: alloc::collections::BTreeMap<[u8; 32], u32> =
@@ -168,7 +168,7 @@ impl RelationQuery {
         Ok(out)
     }
 
-    /// Compte les relations d un blob par direction.
+    /// Counts the relations of a blob by direction.
     pub fn count_relations(blob: &BlobId, direction: RelationDirection) -> usize {
         match direction {
             RelationDirection::Outgoing => RELATION_INDEX.out_degree(blob),
@@ -179,28 +179,28 @@ impl RelationQuery {
         }
     }
 
-    /// Retourne les neighbors de `blob` d un certain type.
+    /// Returns the neighbors of `blob` of a specific kind.
     pub fn neighbors_of_kind(blob: &BlobId, kind: RelationKind) -> Vec<BlobId> {
         RELATION_GRAPH.get_neighbors_by_kind(blob, kind)
     }
 
-    /// Retourne tous les voisins directs.
+    /// Returns all direct neighbors.
     pub fn all_neighbors(blob: &BlobId) -> Vec<BlobId> {
         RELATION_GRAPH.get_neighbors(blob)
     }
 
-    /// Charge une relation par son ID.
+    /// Loads a relation by its ID.
     pub fn load_by_id(id: RelationId) -> Option<ExofsResult<Relation>> {
         RELATION_STORAGE.load(id)
     }
 
-    /// Charge toutes les relations d un kind donné dans le store.
+    /// Loads all relations of a given kind from the store.
     pub fn all_of_kind(kind: RelationKind) -> ExofsResult<QueryResult> {
         let rels = RELATION_STORAGE.load_by_kind(kind)?;
         Ok(QueryResult::from_rels(rels))
     }
 
-    // Helper interne : charge les relations depuis une liste d IDs.
+    // Internal helper: loads relations from a list of IDs.
     fn load_ids(ids: &[RelationId]) -> ExofsResult<QueryResult> {
         let mut rels: Vec<Relation> = Vec::new();
         rels.try_reserve(ids.len())
@@ -215,10 +215,10 @@ impl RelationQuery {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QueryBuilder — API fluente
+// QueryBuilder — Fluent API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Builder pour construire une requête complexe.
+/// Builder to construct a complex query.
 pub struct QueryBuilder {
     blob: BlobId,
     filter: RelationFilter,
@@ -349,7 +349,7 @@ mod tests {
         let _store = RelationStorage::new_const();
         let _idx = RelationIndex::new_const();
         let _graph = RelationGraph::new_const();
-        // Pas de données : résultat vide.
+        // No data: empty result.
         let qr = QueryBuilder::new(blob(50))
             .kind(RelationKind::Parent)
             .active_only()
@@ -413,15 +413,15 @@ mod tests {
     #[test]
     fn test_all_of_kind_empty() {
         let qr = RelationQuery::all_of_kind(RelationKind::Snapshot).test_unwrap();
-        // Le store global peut contenir d'autres relations, mais la fonction
-        // ne doit pas paniquer.
+        // The global store may contain other relations, but the function
+        // must not panic.
         let _ = qr;
     }
 
     #[test]
     fn test_builder_no_kind() {
         let qr = QueryBuilder::new(blob(250)).execute().test_unwrap();
-        let _ = qr; // Résultat vide ou non — ne doit pas paniquer.
+        let _ = qr; // Empty result or not — must not panic.
     }
 
     #[test]

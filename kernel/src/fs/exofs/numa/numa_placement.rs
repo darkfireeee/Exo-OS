@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS NUMA — Stratégies de placement de blobs sur les nœuds NUMA
+// ExoFS NUMA — Blob placement strategies on NUMA nodes
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::numa_affinity::{NumaNodeId, AFFINITY_MAP, CpuId, MAX_NUMA_NODES};
@@ -10,19 +10,19 @@ use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 // ─── PlacementStrategy ────────────────────────────────────────────────────────
 
-/// Stratégie de placement des blobs sur les nœuds NUMA.
+/// Placement strategy for blobs on NUMA nodes.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacementStrategy {
-    /// Distribution cyclique entre nœuds actifs.
+    /// Cyclic distribution across active nodes.
     RoundRobin = 0,
-    /// Nœud de la tâche courante (hash de l'id blob).
+    /// Current task's node (hash of blob id).
     LocalFirst = 1,
-    /// Nœud avec le moins d'octets alloués (NUMA_STATS).
+    /// Node with least allocated bytes (NUMA_STATS).
     LeastUsed = 2,
-    /// Nœud fixe imposé par le gestionnaire.
+    /// Fixed node imposed by manager.
     Pinned = 3,
-    /// Hash cohérent sur l'identifiant du blob.
+    /// Consistent hash on the blob identifier.
     ContentHash = 4,
 }
 
@@ -50,16 +50,16 @@ impl PlacementStrategy {
 
 // ─── PlacementHint ────────────────────────────────────────────────────────────
 
-/// Indice de placement transmis à `preferred_node`.
+/// Placement hint passed to `preferred_node`.
 #[derive(Clone, Copy, Debug)]
 pub struct PlacementHint {
-    /// Id optionnel du blob à placer.
+    /// Optional id of the blob to place.
     pub blob_id: Option<BlobId>,
-    /// CPU demandeur, pour LocalFirst.
+    /// Requesting CPU, for LocalFirst.
     pub cpu_id: Option<u32>,
-    /// Nœud forcé, pour Pinned.
+    /// Forced node, for Pinned.
     pub pinned_node: Option<NumaNodeId>,
-    /// Taille du blob en octets.
+    /// Blob size in bytes.
     pub data_bytes: u64,
 }
 
@@ -92,21 +92,21 @@ impl PlacementHint {
 pub struct PlacementResult {
     pub node: NumaNodeId,
     pub strategy: PlacementStrategy,
-    /// Score de charge du nœud sélectionné au moment du placement.
+    /// Load score of selected node at placement time.
     pub load_score: u64,
 }
 
 // ─── NumaPlacement ───────────────────────────────────────────────────────────
 
-/// Moteur de placement NUMA des blobs.
+/// NUMA placement engine for blobs.
 pub struct NumaPlacement {
     strategy: AtomicU8,
     n_nodes: AtomicU8,
     rr_counter: AtomicU64,
     pinned_node: AtomicU8,
-    /// Compteur de placements total.
+    /// Total placement counter.
     place_count: AtomicU64,
-    /// Compteur de placements refusés (node invalide).
+    /// Denied placement counter (invalid node).
     place_errors: AtomicU64,
 }
 
@@ -122,7 +122,7 @@ impl NumaPlacement {
         }
     }
 
-    /// Initialise le moteur de placement.
+    /// Initializes the placement engine.
     pub fn init(&self, n_nodes: u8, strategy: PlacementStrategy) -> ExofsResult<()> {
         if n_nodes == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -134,7 +134,7 @@ impl NumaPlacement {
         Ok(())
     }
 
-    /// Fixe le nœud de l'épinglage (stratégie Pinned).
+    /// Sets pinned node (Pinned strategy).
     pub fn set_pinned_node(&self, node: NumaNodeId) -> ExofsResult<()> {
         if !node.is_valid() {
             return Err(ExofsError::InvalidArgument);
@@ -158,7 +158,7 @@ impl NumaPlacement {
 
     // ── Placement ─────────────────────────────────────────────────────────────
 
-    /// Retourne le nœud préféré pour un placement donné.
+    /// Returns the preferred node for a given placement.
     pub fn preferred_node(&self, hint: &PlacementHint) -> ExofsResult<PlacementResult> {
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;
         if n == 0 {
@@ -196,21 +196,21 @@ impl NumaPlacement {
         })
     }
 
-    /// Retourne le nœud préféré (simple, sans résultat étendu).
+    /// Returns the preferred node (simple, without extended result).
     pub fn node_for(&self, hint: &PlacementHint) -> usize {
         self.preferred_node(hint).map(|r| r.node.idx()).unwrap_or(0)
     }
 
-    // ── Stratégies privées ────────────────────────────────────────────────────
+    // ── Private strategies ────────────────────────────────────────────────────
 
     fn _round_robin(&self, n: usize) -> usize {
         let c = self.rr_counter.fetch_add(1, Ordering::Relaxed);
-        // ARITH-02 : wrapping_add déjà fait par fetch_add ; modulo safe car n>0
+        // ARITH-02: wrapping_add already performed by fetch_add; modulo safe as n>0
         (c as usize).wrapping_rem(n)
     }
 
     fn _local_first(&self, hint: &PlacementHint, n: usize) -> usize {
-        // Résolution du CPU vers son nœud NUMA réel via AFFINITY_MAP
+        // Resolve CPU to its actual NUMA node via AFFINITY_MAP
         if let Some(cpu) = hint.cpu_id {
             if let Some(node) = AFFINITY_MAP.node_of_cpu(CpuId(cpu as u32)) {
                 let idx = node.idx();
@@ -220,11 +220,11 @@ impl NumaPlacement {
             }
             return (cpu as usize).wrapping_rem(n);
         }
-        // Fallback : hash de BlobId
+        // Fallback: hash of BlobId
         if let Some(ref bid) = hint.blob_id {
             return self._blob_hash(bid, n);
         }
-        // Fallback : round-robin
+        // Fallback: round-robin
         self._round_robin(n)
     }
 
@@ -259,22 +259,22 @@ impl NumaPlacement {
         self._round_robin(n)
     }
 
-    /// Hash stable d'un BlobId sur [0, n[ (ARITH-02 : wrapping_rem).
+    /// Stable hash of a BlobId on [0, n[ (ARITH-02: wrapping_rem).
     fn _blob_hash(&self, bid: &BlobId, n: usize) -> usize {
         let b = bid.as_bytes();
-        // Prendre les 8 premiers octets comme u64
+        // Take first 8 bytes as u64
         let h = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
         (h as usize).wrapping_rem(n)
     }
 
-    // ── Statistiques ──────────────────────────────────────────────────────────
+    // ── Statistics ────────────────────────────────────────────────────────────
 
-    /// Distribution des placements par nœud (RECUR-01).
+    /// Placement distribution per node (RECUR-01).
     pub fn node_distribution(&self, _n_samples: usize) -> ExofsResult<Vec<(NumaNodeId, u64)>> {
         let n = self.n_nodes.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
         v.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
-        // On retourne la charge actuelle de chaque nœud comme proxy de la distribution
+        // Return current load of each node as distribution proxy
         let mut i = 0usize;
         while i < n {
             let score = NUMA_STATS.node_stats(i).load_score();
@@ -285,7 +285,7 @@ impl NumaPlacement {
         Ok(v)
     }
 
-    /// Vérifie que le nœud `node` est valide pour ce moteur.
+    /// Checks that node `node` is valid for this engine.
     pub fn validate_node(&self, node: NumaNodeId) -> ExofsResult<()> {
         if !node.is_valid() {
             return Err(ExofsError::InvalidArgument);
@@ -297,7 +297,7 @@ impl NumaPlacement {
         Ok(())
     }
 
-    /// Réinitialise les compteurs (pas la stratégie).
+    /// Resets counters (not strategy).
     pub fn reset_counters(&self) {
         self.rr_counter.store(0, Ordering::Relaxed);
         self.place_count.store(0, Ordering::Relaxed);
@@ -305,7 +305,7 @@ impl NumaPlacement {
     }
 }
 
-/// Singleton global du moteur de placement.
+/// Global singleton of the placement engine.
 pub static NUMA_PLACEMENT: NumaPlacement = NumaPlacement::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -382,11 +382,11 @@ mod tests {
     #[test]
     fn test_least_used_prefers_empty() {
         let p = init_p(4, PlacementStrategy::LeastUsed);
-        // Node 1 très chargé
+        // Node 1 heavily loaded
         NUMA_STATS.record_alloc(0, 100_000);
         NUMA_STATS.record_alloc(2, 100_000);
         NUMA_STATS.record_alloc(3, 100_000);
-        // Node 1 libre → devrait être sélectionné
+        // Node 1 free -> should be selected
         let node = p.node_for(&hint());
         assert_eq!(node, 1);
         NUMA_STATS.reset_all();
@@ -418,7 +418,7 @@ mod tests {
         p.node_for(&hint());
         p.reset_counters();
         assert_eq!(p.place_count(), 0);
-        // RR repart de 0
+        // RR restarts from 0
         assert_eq!(p.node_for(&hint()), 0);
     }
 

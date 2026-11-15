@@ -105,6 +105,34 @@ pub fn current_thread_raw() -> *mut ThreadControlBlock {
     CURRENT_THREAD_PER_CPU[cpu_id].load(Ordering::Acquire) as *mut ThreadControlBlock
 }
 
+/// Marks `target_cpu`'s current thread for preemption and triggers a reschedule
+/// IPI when `target_cpu` is a remote CPU.
+///
+/// # Safety
+/// Caller must ensure scheduler per-CPU state is initialized.
+pub unsafe fn notify_cpu_reschedule(target_cpu: usize) {
+    if target_cpu >= MAX_CPUS {
+        return;
+    }
+    let local_cpu = percpu::current_cpu_id() as usize;
+    if local_cpu == target_cpu {
+        let current = current_thread_raw();
+        if !current.is_null() {
+            (&*current).request_preemption();
+        }
+    } else {
+        let target_tcb =
+            CURRENT_THREAD_PER_CPU[target_cpu].load(Ordering::Acquire) as *mut ThreadControlBlock;
+        if !target_tcb.is_null() {
+            (&*target_tcb).request_preemption();
+        }
+        extern "C" {
+            fn arch_send_reschedule_ipi(target_cpu: u32);
+        }
+        arch_send_reschedule_ipi(target_cpu as u32);
+    }
+}
+
 /// Blocks current thread.
 ///
 /// To be called AFTER inserting thread into a wait queue (futex bucket,
@@ -118,8 +146,6 @@ pub fn current_thread_raw() -> *mut ThreadControlBlock {
 ///   cannot arrive between queue insertion and this call.
 /// - Thread must have a wakeup mechanism in place (waiter.woken, etc.).
 pub unsafe fn block_current_thread() {
-    use crate::scheduler::core::runqueue::run_queue;
-
     debug_assert!(
         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
         "block_current_thread: appelé avec PreemptGuard actif"
@@ -137,14 +163,11 @@ pub unsafe fn block_current_thread() {
     let tcb = &mut *tcb_ptr;
     let cpu_id = tcb.current_cpu();
     if (cpu_id.0 as usize) < MAX_CPUS {
-        let rq = run_queue(cpu_id);
         match tcb.state() {
             TaskState::Runnable => {
-                // SAFETY: tcb comes from current_thread_raw() (verified non-null)
-                // and rq is the run-queue of the CPU owning this thread. Preemption
-                // is disabled by the contract of block_current_thread() (unsafe fn).
+                // SAFETY: tcb comes from current_thread_raw() and cpu_id is valid.
                 unsafe {
-                    finish_preblock_wake(rq, tcb);
+                    finish_preblock_wake(cpu_id, tcb);
                 }
                 return;
             }
@@ -162,7 +185,7 @@ pub unsafe fn block_current_thread() {
                 return;
             }
         }
-        schedule_block(rq, tcb);
+        schedule_block(cpu_id, tcb);
         // Thread resumes here after wake_enqueue() is called.
     }
 }
@@ -274,10 +297,11 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     // cr0_clear_ts() clears CR0.TS to enable SSE/AVX; xrstor_for(next)
     // restores FPU state of `next` from its aligned per-thread XSAVE area.
     unsafe {
-        fpu::lazy::cr0_clear_ts();
-        if next.is_kthread() {
+        if next.is_kthread() || next.fpu_state_ptr == 0 {
+            fpu::lazy::cr0_set_ts();
             next.set_fpu_loaded(false);
         } else {
+            fpu::lazy::cr0_clear_ts();
             fpu::save_restore::xrstor_for(next);
         }
     }
@@ -358,6 +382,9 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
             match prev.policy {
                 SchedPolicy::Normal | SchedPolicy::Batch => {
                     prev.advance_vruntime(delta_ns, prev.priority.cfs_weight());
+                }
+                SchedPolicy::Deadline => {
+                    crate::scheduler::policies::deadline::consume_budget(prev, delta_ns);
                 }
                 _ => {}
             }
@@ -475,16 +502,25 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
 /// # Safety
 /// `rq` and `current` must be valid, executed in context of current thread.
 pub unsafe fn schedule_yield(
-    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    cpu_id: CpuId,
     current: &mut ThreadControlBlock,
 ) -> bool {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
     use crate::scheduler::core::preempt::IrqGuard;
     use core::ptr::NonNull;
 
+    if (cpu_id.0 as usize) >= MAX_CPUS {
+        return false;
+    }
+
     let ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    let (selected_next, irq_flags) = {
-        let irq = IrqGuard::new();
+    let selected = {
+        let mut rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+        rq.drain_migrations();
+
+        if current.state() != TaskState::Running {
+            return false;
+        }
 
         // Re-enqueue current BEFORE picking next (CFS round-robin).
         // SAFETY: current is a valid mutable reference, non-null by construction.
@@ -495,16 +531,17 @@ pub unsafe fn schedule_yield(
         current.set_state(TaskState::Runnable);
         if !rq.enqueue(ptr) {
             current.set_state(TaskState::Running);
+            rq.current = Some(ptr);
             return false;
         }
 
-        let selected = match pick_next_task(rq, None) {
+        let next_pick = match pick_next_task(&mut rq, None) {
             PickResult::Switch(next) if next != ptr => Some(next),
             PickResult::Switch(_) => {
                 // Current was chosen and dequeued. If another thread is ready,
                 // pick it and re-enqueue current behind it; otherwise yield is a no-op.
                 let replacement = if rq.nr_running_usize() > 0 {
-                    match pick_next_task(rq, None) {
+                    match pick_next_task(&mut rq, None) {
                         PickResult::Switch(next) if next != ptr => Some(next),
                         _ => None,
                     }
@@ -517,53 +554,46 @@ pub unsafe fn schedule_yield(
                         Some(next)
                     } else {
                         current.set_state(TaskState::Running);
-                        rq.enqueue(next);
+                        let _ = rq.enqueue(next);
+                        rq.current = Some(ptr);
                         None
                     }
                 } else {
                     current.set_state(TaskState::Running);
+                    rq.current = Some(ptr);
                     None
                 }
             }
             PickResult::KeepRunning | PickResult::GoIdle => {
                 let _ = rq.remove(ptr);
                 current.set_state(TaskState::Running);
+                rq.current = Some(ptr);
                 None
             }
         };
 
-        if selected.is_some() {
-            let flags = irq.release_keep_irqs_disabled();
-            (selected, Some(flags))
+        if let Some(next) = next_pick {
+            rq.current = Some(next);
+            let flags = rq.unlock_keep_irqs();
+            Some((next, flags))
         } else {
-            (None, None)
+            None
         }
     };
 
-    let Some(next) = selected_next else {
+    let Some((next, irq_flags)) = selected else {
         return false;
     };
-    let irq_flags = irq_flags.unwrap_or(0);
 
-    // SAFETY: next comes from run queue, always valid.
+    // SAFETY: next comes from run queue, always valid and distinct from current.
     let next_ref = &mut *next.as_ptr();
-    if !core::ptr::eq(current, next_ref) {
-        context_switch(current, next_ref);
-        // SAFETY: restores IF flag captured by IrqGuard on entry to
-        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
-        unsafe {
-            IrqGuard::restore_irq_flags(irq_flags);
-        }
-        true
-    } else {
-        // SAFETY: restores IF flag captured by IrqGuard on entry to
-        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
-        unsafe {
-            IrqGuard::restore_irq_flags(irq_flags);
-        }
-        current.set_state(TaskState::Running);
-        false
+    context_switch(current, next_ref);
+    // SAFETY: restores IF flag captured on entry to critical section;
+    // irq_flags is locally saved RFLAGS, Ring 0.
+    unsafe {
+        IrqGuard::restore_irq_flags(irq_flags);
     }
+    true
 }
 
 unsafe fn schedule_current(force: bool) -> bool {
@@ -573,12 +603,14 @@ unsafe fn schedule_current(force: bool) -> bool {
     }
 
     let current = &mut *tcb_ptr;
+    if current.state() != TaskState::Running {
+        return false;
+    }
     let cpu_id = current.current_cpu();
     if (cpu_id.0 as usize) >= MAX_CPUS {
         return false;
     }
 
-    let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
     let should_schedule = if force {
         // A cooperative yield is an explicit selection request. Do not
         // condition it on nr_running: this counter may be transiently
@@ -592,7 +624,7 @@ unsafe fn schedule_current(force: bool) -> bool {
     }
 
     let _ = current.take_need_resched();
-    schedule_yield(rq, current)
+    schedule_yield(cpu_id, current)
 }
 
 /// Honors `NEED_RESCHED` set by tick timer or IPI before returning
@@ -635,6 +667,10 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     use crate::scheduler::core::runqueue::run_queue;
     use core::ptr::NonNull;
 
+    if (cpu_id.0 as usize) >= MAX_CPUS {
+        return false;
+    }
+
     let current_ptr = current_thread_raw();
     let Some(current_nn) = NonNull::new(current_ptr) else {
         idle_sched_trace(b"idle_sched: no current\n");
@@ -642,46 +678,40 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
     };
     idle_sched_trace(b"idle_sched: enter\n");
 
-    let (selected_next, irq_flags) = {
-        let irq = IrqGuard::new();
-        let rq = run_queue(cpu_id);
+    let selected = {
+        let mut rq = run_queue(cpu_id);
+        rq.drain_migrations();
         let current = &mut *current_nn.as_ptr();
 
         if rq.nr_running_usize() == 0 && !current.need_resched() {
             idle_sched_trace(b"idle_sched: empty\n");
-            return false;
-        }
-        let _ = current.take_need_resched();
-
-        let selected = match pick_next_task(rq, Some(current_nn)) {
-            PickResult::Switch(next) if next != current_nn => {
-                idle_sched_trace(b"idle_sched: picked\n");
-                Some(next)
-            }
-            PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
-                idle_sched_trace(b"idle_sched: no next\n");
-                None
-            }
-        };
-
-        if selected.is_some() {
-            let flags = irq.release_keep_irqs_disabled();
-            (selected, Some(flags))
+            None
         } else {
-            (None, None)
+            let _ = current.take_need_resched();
+            match pick_next_task(&mut rq, Some(current_nn)) {
+                PickResult::Switch(next) if next != current_nn => {
+                    idle_sched_trace(b"idle_sched: picked\n");
+                    rq.current = Some(next);
+                    let flags = rq.unlock_keep_irqs();
+                    Some((next, flags))
+                }
+                PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
+                    idle_sched_trace(b"idle_sched: no next\n");
+                    None
+                }
+            }
         }
     };
 
-    let Some(next) = selected_next else {
+    let Some((next, irq_flags)) = selected else {
         return false;
     };
-    let irq_flags = irq_flags.unwrap_or(0);
 
     let current = &mut *current_nn.as_ptr();
     idle_sched_trace(b"idle_sched: switch\n");
     context_switch(current, &mut *next.as_ptr());
-    // SAFETY: restores IF flag captured by IrqGuard on entry to
-    // critical section; irq_flags is locally saved RFLAGS, Ring 0.
+    // SAFETY: restores IF flag captured on entry to critical section;
+    // irq_flags is locally saved RFLAGS, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }
@@ -700,18 +730,22 @@ pub unsafe fn schedule_idle_cpu_once(cpu_id: CpuId) -> bool {
 /// and state returned to `Running` instead of blocking.
 ///
 /// # Safety
-/// `current` must be current TCB of CPU associated with `rq`.
+/// `current` must be current TCB of `cpu_id`.
 pub unsafe fn finish_preblock_wake(
-    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    cpu_id: CpuId,
     current: &mut ThreadControlBlock,
 ) {
-    use crate::scheduler::core::preempt::IrqGuard;
     use core::ptr::NonNull;
 
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    let _irq = IrqGuard::new();
+    if (cpu_id.0 as usize) >= MAX_CPUS {
+        current.set_state(TaskState::Running);
+        return;
+    }
+    let mut rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
     let _ = rq.remove(current_ptr);
     current.set_state(TaskState::Running);
+    rq.current = Some(current_ptr);
 }
 
 /// Blocks current thread without re-enqueuing into run queue.
@@ -722,99 +756,122 @@ pub unsafe fn finish_preblock_wake(
 /// transitions state to `Runnable` AND re-enqueues it into RQ.
 ///
 /// # Safety
-/// - Preemption disabled required (PreemptGuard or IrqGuard).
-/// - `current` must already have state set to Sleeping/Uninterruptible.
+/// - Must execute in the context of `current` on `cpu_id`, without already
+///   holding `run_queue(cpu_id)`.
+/// - `current` must already have state set to Sleeping/Uninterruptible/Stopped/Dead.
 ///   Do NOT call if intending to preserve Running or Runnable state.
 pub unsafe fn schedule_block(
-    rq: &mut crate::scheduler::core::runqueue::PerCpuRunQueue,
+    cpu_id: CpuId,
     current: &mut ThreadControlBlock,
 ) {
     use crate::scheduler::core::pick_next::{pick_next_task, PickResult};
     use crate::scheduler::core::preempt::IrqGuard;
     use core::ptr::NonNull;
 
+    if (cpu_id.0 as usize) >= MAX_CPUS {
+        return;
+    }
+
     let current_ptr = NonNull::new_unchecked(current as *mut ThreadControlBlock);
-    match current.state() {
-        TaskState::Runnable => {
-            finish_preblock_wake(rq, current);
-            return;
-        }
-        TaskState::Running => return,
-        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead => {
-        }
-        _ => return,
-    }
-    let mut idle_thread = match rq.idle_thread {
-        Some(idle) => Some(idle),
-        None => {
-            let recovered = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0);
-            if let Some(idle) = recovered {
-                rq.set_idle_thread(idle);
-                if rq.current.is_none() {
-                    rq.current = Some(idle);
-                }
+    let selected = {
+        let mut rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
+        rq.drain_migrations();
+        match current.state() {
+            TaskState::Runnable => {
+                let _ = rq.remove(current_ptr);
+                current.set_state(TaskState::Running);
+                rq.current = Some(current_ptr);
+                return;
             }
-            recovered
-        }
-    };
-
-    if idle_thread.is_none() {
-        for _ in 0..1024 {
-            if let Some(idle) = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0) {
-                rq.set_idle_thread(idle);
-                if rq.current.is_none() {
-                    rq.current = Some(idle);
-                }
-                idle_thread = Some(idle);
-                break;
+            TaskState::Running => {
+                rq.current = Some(current_ptr);
+                return;
             }
-            core::hint::spin_loop();
+            TaskState::Sleeping
+            | TaskState::Uninterruptible
+            | TaskState::Stopped
+            | TaskState::Dead => {}
+            _ => return,
         }
-    }
 
-    let (selected_next, irq_flags) = {
-        let irq = IrqGuard::new();
+        let mut idle_thread = match rq.idle_thread {
+            Some(idle) => Some(idle),
+            None => {
+                let recovered = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0);
+                if let Some(idle) = recovered {
+                    rq.set_idle_thread(idle);
+                    if rq.current.is_none() {
+                        rq.current = Some(idle);
+                    }
+                }
+                recovered
+            }
+        };
+
+        if idle_thread.is_none() {
+            for _ in 0..1024 {
+                if let Some(idle) = crate::scheduler::core::boot_idle::published_boot_idle(rq.cpu.0)
+                {
+                    rq.set_idle_thread(idle);
+                    if rq.current.is_none() {
+                        rq.current = Some(idle);
+                    }
+                    idle_thread = Some(idle);
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+
         if current.is_queued() {
             let _ = rq.remove(current_ptr);
             current.clear_queued();
         }
-        let selected = match pick_next_task(rq, Some(current_ptr)) {
+        let next_candidate = match pick_next_task(&mut rq, Some(current_ptr)) {
             PickResult::Switch(next) if !core::ptr::eq(current, next.as_ptr()) => Some(next),
             PickResult::Switch(_) | PickResult::KeepRunning | PickResult::GoIdle => {
                 idle_thread.filter(|idle| !core::ptr::eq(current, idle.as_ptr()))
             }
         };
 
-        if selected.is_some() {
-            let flags = irq.release_keep_irqs_disabled();
-            (selected, Some(flags))
-        } else {
-            (None, None)
+        let Some(next) = next_candidate else {
+            current.set_state(TaskState::Running);
+            rq.current = Some(current_ptr);
+            return;
+        };
+
+        // Re-check under the run-queue lock in case a concurrent waker
+        // transitioned `current` back to Runnable before lock acquisition.
+        if !matches!(
+            current.state(),
+            TaskState::Sleeping
+                | TaskState::Uninterruptible
+                | TaskState::Stopped
+                | TaskState::Dead
+        ) {
+            let next_ref = &*next.as_ptr();
+            if !next_ref.is_idle() && next_ref.state() == TaskState::Runnable {
+                let _ = rq.enqueue(next);
+            }
+            let _ = rq.remove(current_ptr);
+            current.set_state(TaskState::Running);
+            rq.current = Some(current_ptr);
+            return;
         }
+
+        rq.current = Some(next);
+        let flags = rq.unlock_keep_irqs();
+        Some((next, flags))
     };
 
-    let Some(next) = selected_next else {
-        current.set_state(TaskState::Running);
+    let Some((next, irq_flags)) = selected else {
         return;
     };
-    let irq_flags = irq_flags.unwrap_or(0);
-
-    if !matches!(
-        current.state(),
-        TaskState::Sleeping | TaskState::Uninterruptible | TaskState::Stopped | TaskState::Dead
-    ) {
-        // SAFETY: restores IF flag captured by IrqGuard on entry to
-        // critical section; irq_flags is locally saved RFLAGS, Ring 0.
-        unsafe {
-            IrqGuard::restore_irq_flags(irq_flags);
-        }
-        return;
-    }
 
     // SAFETY: next comes from run queue or published idle TCB for this CPU.
     context_switch(current, &mut *next.as_ptr());
-    // SAFETY: restores IF flag captured by IrqGuard on entry to
-    // critical section; irq_flags is locally saved RFLAGS, Ring 0.
+    // SAFETY: restores IF flag captured on entry to critical section;
+    // irq_flags is locally saved RFLAGS, Ring 0.
     unsafe {
         IrqGuard::restore_irq_flags(irq_flags);
     }

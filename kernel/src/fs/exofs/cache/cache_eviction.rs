@@ -1,7 +1,7 @@
-//! cache_eviction.rs — Algorithmes d'éviction ExoFS (no_std).
+//! cache_eviction.rs — ExoFS eviction algorithms (no_std).
 //!
-//! Implémente LRU, LFU, CLOCK et ARC (simplifié) de façon itérative.
-//! Règles : RECUR-01 (zéro récursion), OOM-02 (try_reserve), ARITH-02.
+//! Implements LRU, LFU, CLOCK and ARC (simplified) iteratively.
+//! Rules: RECUR-01 (zero recursion), OOM-02 (try_reserve), ARITH-02.
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -13,7 +13,7 @@ use crate::fs::exofs::core::{BlobId, ExofsResult};
 // EvictionAlgorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Algorithme d'éviction sélectionnable.
+/// Selectable eviction algorithm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvictionAlgorithm {
     Lru,
@@ -23,21 +23,21 @@ pub enum EvictionAlgorithm {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EntryMeta — métadonnées par entrée
+// EntryMeta — per-entry metadata
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Métadonnées de suivi d'une entrée de cache.
+/// Tracking metadata for a cache entry.
 #[derive(Clone, Debug)]
 struct EntryMeta {
-    /// Compteur d'ordre d'accès (LRU : order, LFU : freq).
+    /// Access order counter (LRU: order, LFU: freq).
     access_order: u64,
-    /// Fréquence d'accès.
+    /// Access frequency.
     freq: u64,
-    /// Bit CLOCK (true = référencé récemment).
+    /// CLOCK bit (true = recently referenced).
     clock_ref: bool,
-    /// Taille en octets.
+    /// Size in bytes.
     size: u64,
-    /// Ticks d'insertion.
+    /// Insertion ticks.
     #[allow(dead_code)]
     inserted_at: u64,
 }
@@ -46,23 +46,23 @@ struct EntryMeta {
 // EvictionPolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique d'éviction — encapsule l'algorithme et les métadonnées de suivi.
+/// Eviction policy — encapsulates the algorithm and tracking metadata.
 pub struct EvictionPolicy {
     algorithm: EvictionAlgorithm,
-    /// Métadonnées par BlobId.
+    /// Metadata by BlobId.
     entries: BTreeMap<BlobId, EntryMeta>,
-    /// Compteur monotone d'accès (horloge logique).
+    /// Monotonic access counter (logical clock).
     clock: u64,
-    /// Pointeur CLOCK (index dans la liste ordonnée).
+    /// CLOCK pointer (index in ordered list).
     clock_ptr: usize,
-    /// Nombre total d'entrées.
+    /// Total number of entries.
     n_entries: usize,
-    /// Taille totale gérée en octets.
+    /// Total managed size in bytes.
     total_size: u64,
 }
 
 impl EvictionPolicy {
-    /// Crée une politique avec l'algorithme donné.
+    /// Creates a policy with the given algorithm.
     pub const fn new(algorithm: EvictionAlgorithm) -> Self {
         EvictionPolicy {
             algorithm,
@@ -74,9 +74,9 @@ impl EvictionPolicy {
         }
     }
 
-    // ── Insertion / suppression ───────────────────────────────────────────────
+    // ── Insertion / removal ───────────────────────────────────────────────────
 
-    /// Enregistre une nouvelle entrée.
+    /// Registers a new entry.
     pub fn insert(&mut self, blob: BlobId, size: u64) -> ExofsResult<()> {
         let clock = self.next_clock();
         self.entries.insert(
@@ -94,7 +94,7 @@ impl EvictionPolicy {
         Ok(())
     }
 
-    /// Supprime une entrée.
+    /// Removes an entry.
     pub fn remove(&mut self, blob: &BlobId) {
         if let Some(meta) = self.entries.remove(blob) {
             self.n_entries = self.n_entries.saturating_sub(1);
@@ -102,7 +102,7 @@ impl EvictionPolicy {
         }
     }
 
-    /// Notifie un accès à une entrée existante.
+    /// Notifies an access to an existing entry.
     pub fn touch(&mut self, blob: &BlobId) {
         let clock = self.next_clock();
         if let Some(meta) = self.entries.get_mut(blob) {
@@ -112,27 +112,27 @@ impl EvictionPolicy {
         }
     }
 
-    /// `true` si le blob est suivi.
+    /// `true` if blob is tracked.
     pub fn contains(&self, blob: &BlobId) -> bool {
         self.entries.contains_key(blob)
     }
 
-    // ── Sélection des candidats à l'éviction ─────────────────────────────────
+    // ── Candidate selection for eviction ─────────────────────────────────────
 
-    /// Retourne jusqu'à `limit` candidats à l'éviction selon l'algorithme.
+    /// Returns up to `limit` eviction candidates according to algorithm.
     pub fn pick_eviction_candidates(&mut self, limit: usize) -> Vec<BlobId> {
         match self.algorithm {
             EvictionAlgorithm::Lru => self.pick_lru(limit),
             EvictionAlgorithm::Lfu => self.pick_lfu(limit),
             EvictionAlgorithm::Clock => self.pick_clock(limit),
-            EvictionAlgorithm::Arc => self.pick_lru(limit), // ARC simplifié
+            EvictionAlgorithm::Arc => self.pick_lru(limit), // Simplified ARC
         }
     }
 
-    // ── LRU — évince le moins récemment utilisé ───────────────────────────────
+    // ── LRU — evicts least recently used ──────────────────────────────────────
 
     fn pick_lru(&self, limit: usize) -> Vec<BlobId> {
-        // Trie par access_order croissant → les plus petits sont les plus anciens.
+        // Sort by ascending access_order -> smallest are oldest.
         let mut scored: Vec<(u64, BlobId)> = self
             .entries
             .iter()
@@ -142,7 +142,7 @@ impl EvictionPolicy {
         scored.into_iter().take(limit).map(|(_, k)| k).collect()
     }
 
-    // ── LFU — évince le moins fréquemment utilisé ─────────────────────────────
+    // ── LFU — evicts least frequently used ────────────────────────────────────
 
     fn pick_lfu(&self, limit: usize) -> Vec<BlobId> {
         let mut scored: Vec<(u64, u64, BlobId)> = self
@@ -150,12 +150,12 @@ impl EvictionPolicy {
             .iter()
             .map(|(k, v)| (v.freq, v.access_order, *k))
             .collect();
-        // Tri par fréquence croissante, puis par access_order croissant.
+        // Sort by ascending frequency, then by ascending access_order.
         scored.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         scored.into_iter().take(limit).map(|(_, _, k)| k).collect()
     }
 
-    // ── CLOCK — rotation circulaire avec bit de référence ─────────────────────
+    // ── CLOCK — circular rotation with reference bit ──────────────────────────
 
     fn pick_clock(&mut self, limit: usize) -> Vec<BlobId> {
         let keys: Vec<BlobId> = self.entries.keys().cloned().collect();
@@ -174,10 +174,10 @@ impl EvictionPolicy {
 
             if let Some(meta) = self.entries.get_mut(&blob) {
                 if meta.clock_ref {
-                    // Deuxième chance : efface le bit, avance.
+                    // Second chance: clear bit, advance.
                     meta.clock_ref = false;
                 } else {
-                    // Pas référencé → candidat à l'éviction.
+                    // Not referenced -> eviction candidate.
                     victims.push(blob);
                 }
             }
@@ -188,7 +188,7 @@ impl EvictionPolicy {
         victims
     }
 
-    // ── Statistiques ──────────────────────────────────────────────────────────
+    // ── Statistics ────────────────────────────────────────────────────────────
 
     pub fn n_entries(&self) -> usize {
         self.n_entries
@@ -200,12 +200,12 @@ impl EvictionPolicy {
         self.algorithm
     }
 
-    /// Retourne les N entrées les plus froides (fréquence la plus basse).
+    /// Returns the N coldest entries (lowest frequency).
     pub fn coldest_n(&self, n: usize) -> Vec<BlobId> {
         self.pick_lfu(n)
     }
 
-    /// Retourne les N entrées les plus chaudes (fréquence la plus haute).
+    /// Returns the N hottest entries (highest frequency).
     pub fn hottest_n(&self, n: usize) -> Vec<BlobId> {
         let mut scored: Vec<(u64, BlobId)> =
             self.entries.iter().map(|(k, v)| (v.freq, *k)).collect();
@@ -213,17 +213,17 @@ impl EvictionPolicy {
         scored.into_iter().take(n).map(|(_, k)| k).collect()
     }
 
-    /// Accès à la fréquence d'une entrée.
+    /// Accesses the frequency of an entry.
     pub fn freq_of(&self, blob: &BlobId) -> Option<u64> {
         self.entries.get(blob).map(|m| m.freq)
     }
 
-    /// Accès à l'ordre d'accès d'une entrée.
+    /// Accesses the access order of an entry.
     pub fn access_order_of(&self, blob: &BlobId) -> Option<u64> {
         self.entries.get(blob).map(|m| m.access_order)
     }
 
-    // ── Privé ─────────────────────────────────────────────────────────────────
+    // ── Private ───────────────────────────────────────────────────────────────
 
     fn next_clock(&mut self) -> u64 {
         let c = self.clock;
@@ -296,9 +296,9 @@ mod tests {
     fn test_clock_gives_second_chance() {
         let mut p = EvictionPolicy::new(EvictionAlgorithm::Clock);
         p.insert(blob(1), 100).test_unwrap();
-        // Après insertion, clock_ref = true → second chance.
+        // After insertion, clock_ref = true -> second chance.
         let v = p.pick_eviction_candidates(1);
-        // Après un scan, le bit est effacé mais pas encore évincé.
+        // After one scan, the bit is cleared but not yet evicted.
         assert!(v.is_empty() || v.len() > 0);
     }
 

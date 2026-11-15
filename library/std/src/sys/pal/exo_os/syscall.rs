@@ -71,16 +71,23 @@ pub const SYS_READLINK: u64 = 89;
 pub const SYS_CHMOD: u64 = 90;
 pub const SYS_FCHMOD: u64 = 91;
 pub const SYS_GETPPID: u64 = 110;
+pub const SYS_PRCTL: u64 = 157;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_FUTEX: u64 = 202;
+pub const SYS_SCHED_SETAFFINITY: u64 = 203;
+pub const SYS_SCHED_GETAFFINITY: u64 = 204;
+pub const SYS_SET_TID_ADDRESS: u64 = 218;
 pub const SYS_CLOCK_GETTIME: u64 = 228;
+pub const SYS_CLOCK_GETRES: u64 = 229;
 pub const SYS_EXIT_GROUP: u64 = 231;
 pub const SYS_EPOLL_WAIT: u64 = 232;
 pub const SYS_EPOLL_CTL: u64 = 233;
+pub const SYS_UTIMENSAT: u64 = 280;
 pub const SYS_EPOLL_CREATE1: u64 = 291;
 pub const SYS_DUP3: u64 = 292;
 pub const SYS_PIPE2: u64 = 293;
 pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_MEMFD_CREATE: u64 = 319;
 
 pub const SYS_EXO_CAP_CREATE: u64 = 320;
 pub const SYS_EXO_CAP_DELEGATE: u64 = 321;
@@ -158,6 +165,48 @@ pub const SOCK_STREAM: i32 = 1;
 pub const SOCK_DGRAM: i32 = 2;
 pub const SOCK_NONBLOCK: i32 = 0o4000;
 pub const SOCK_CLOEXEC: i32 = 0o2000000;
+
+pub const CLONE_VM: u64 = 0x0000_0100;
+pub const CLONE_FS: u64 = 0x0000_0200;
+pub const CLONE_FILES: u64 = 0x0000_0400;
+pub const CLONE_SIGHAND: u64 = 0x0000_0800;
+pub const CLONE_THREAD: u64 = 0x0001_0000;
+pub const CLONE_SYSVSEM: u64 = 0x0004_0000;
+pub const CLONE_SETTLS: u64 = 0x0008_0000;
+pub const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
+pub const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
+pub const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
+
+pub const PR_SET_NAME: i32 = 15;
+pub const PR_GET_NAME: i32 = 16;
+
+pub const LOCK_SH: i32 = 1;
+pub const LOCK_EX: i32 = 2;
+pub const LOCK_NB: i32 = 4;
+pub const LOCK_UN: i32 = 8;
+
+pub const AT_FDCWD: i32 = -100;
+pub const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+pub const UTIME_NOW: i64 = (1 << 30) - 1;
+pub const UTIME_OMIT: i64 = (1 << 30) - 2;
+
+pub const TIOCGWINSZ: u64 = 0x5413;
+pub const POLLIN: i16 = 0x0001;
+pub const POLLOUT: i16 = 0x0004;
+pub const POLLHUP: i16 = 0x0010;
+
+pub const SOL_SOCKET: i32 = 1;
+pub const IPPROTO_IP: i32 = 0;
+pub const IPPROTO_TCP: i32 = 6;
+pub const SO_ERROR: i32 = 4;
+pub const SO_BROADCAST: i32 = 6;
+pub const SO_LINGER: i32 = 13;
+pub const SO_RCVTIMEO: i32 = 20;
+pub const SO_SNDTIMEO: i32 = 21;
+pub const TCP_NODELAY: i32 = 1;
+pub const IP_TTL: i32 = 2;
+pub const IP_MULTICAST_TTL: i32 = 33;
+pub const IP_MULTICAST_LOOP: i32 = 34;
 
 #[inline(always)]
 pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
@@ -559,17 +608,100 @@ pub fn exofs_open(path_cstr: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
     decode_ret(ret2).map(|fd| fd as i32)
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxStatAbi {
+    pub st_dev: u64,
+    pub st_ino: u64,
+    pub st_nlink: u64,
+    pub st_mode: u32,
+    pub st_uid: u32,
+    pub st_gid: u32,
+    pub __pad0: u32,
+    pub st_rdev: u64,
+    pub st_size: i64,
+    pub st_blksize: i64,
+    pub st_blocks: i64,
+    pub st_atim: RawTimespec,
+    pub st_mtim: RawTimespec,
+    pub st_ctim: RawTimespec,
+    pub __unused: [i64; 3],
+}
+
+const _: () = assert!(core::mem::size_of::<LinuxStatAbi>() == 144);
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PollFd {
+    pub fd: i32,
+    pub events: i16,
+    pub revents: i16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Winsize {
+    pub ws_row: u16,
+    pub ws_col: u16,
+    pub ws_xpixel: u16,
+    pub ws_ypixel: u16,
+}
+
 #[inline]
-pub fn exofs_stat(path_cstr: &[u8]) -> SysResult<ExoFsFileStat> {
+fn linux_stat_to_exofs(ls: &LinuxStatAbi) -> (ExoFsFileStat, u64) {
+    let mut object_id = [0u8; 32];
+    object_id[..8].copy_from_slice(&ls.st_ino.to_le_bytes());
+    let atime_ns = (ls.st_atim.tv_sec.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ls.st_atim.tv_nsec.max(0) as u64);
+    let mtime_ns = (ls.st_mtim.tv_sec.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ls.st_mtim.tv_nsec.max(0) as u64);
+    let ctime_ns = (ls.st_ctim.tv_sec.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ls.st_ctim.tv_nsec.max(0) as u64);
+    (
+        ExoFsFileStat {
+            object_id,
+            content_hash: [0u8; 32],
+            size: ls.st_size.max(0) as u64,
+            mode: ls.st_mode,
+            flags: 0,
+            ctime_ns,
+            mtime_ns,
+            generation: 0,
+        },
+        atime_ns,
+    )
+}
+
+#[inline]
+pub fn exofs_stat_with_atime(path_cstr: &[u8], follow_symlinks: bool) -> SysResult<(ExoFsFileStat, u64)> {
     if path_cstr.is_empty() {
         return Err(SysError::ENOENT);
+    }
+    let mut ls = LinuxStatAbi::default();
+    let nr = if follow_symlinks { SYS_STAT } else { SYS_LSTAT };
+    let ret = unsafe {
+        syscall2(
+            nr,
+            path_cstr.as_ptr() as u64,
+            &mut ls as *mut LinuxStatAbi as u64,
+        )
+    };
+    if let Ok(_) = decode_ret(ret) {
+        return Ok(linux_stat_to_exofs(&ls));
+    }
+    let err = decode_ret(ret).unwrap_err();
+    if !follow_symlinks {
+        return Err(err);
     }
     let trimmed_len = path_cstr
         .iter()
         .position(|&b| b == 0)
         .unwrap_or(path_cstr.len());
     let mut resolved = ExofsPathResolveResult::default();
-    let ret = unsafe {
+    let ret2 = unsafe {
         syscall6(
             SYS_EXOFS_PATH_RESOLVE,
             path_cstr.as_ptr() as u64,
@@ -580,26 +712,44 @@ pub fn exofs_stat(path_cstr: &[u8]) -> SysResult<ExoFsFileStat> {
             EXOFS_RIGHT_STAT as u64,
         )
     };
-    decode_ret(ret).map(|_| ExoFsFileStat {
-        object_id: resolved.object_id,
-        content_hash: resolved.blob_id,
-        size: resolved.size_bytes,
-        mode: if resolved.object_kind == 2 {
-            EXOFS_MODE_DIR
-        } else {
-            EXOFS_MODE_FILE
-        },
-        flags: resolved.flags,
-        ctime_ns: 0,
-        mtime_ns: 0,
-        generation: resolved.epoch_id,
+    decode_ret(ret2).and_then(|_| {
+        if resolved.link_count == 0 {
+            return Err(SysError::ENOENT);
+        }
+        Ok((
+            ExoFsFileStat {
+                object_id: resolved.object_id,
+                content_hash: resolved.blob_id,
+                size: resolved.size_bytes,
+                mode: if resolved.object_kind == 1 || resolved.object_kind == 2 {
+                    EXOFS_MODE_DIR
+                } else {
+                    EXOFS_MODE_FILE
+                },
+                flags: resolved.flags,
+                ctime_ns: 0,
+                mtime_ns: 0,
+                generation: resolved.epoch_id,
+            },
+            0,
+        ))
     })
 }
 
 #[inline]
-pub fn exofs_fstat(fd: i32) -> SysResult<ExoFsFileStat> {
+pub fn exofs_stat(path_cstr: &[u8]) -> SysResult<ExoFsFileStat> {
+    exofs_stat_with_atime(path_cstr, true).map(|(st, _)| st)
+}
+
+#[inline]
+pub fn exofs_lstat(path_cstr: &[u8]) -> SysResult<ExoFsFileStat> {
+    exofs_stat_with_atime(path_cstr, false).map(|(st, _)| st)
+}
+
+#[inline]
+pub fn exofs_fstat_with_atime(fd: i32) -> SysResult<(ExoFsFileStat, u64)> {
     let mut st = ExoFsFileStat::default();
-    let ret = unsafe {
+    let ret_obj = unsafe {
         syscall3(
             SYS_EXOFS_OBJECT_STAT,
             fd as u64,
@@ -607,7 +757,36 @@ pub fn exofs_fstat(fd: i32) -> SysResult<ExoFsFileStat> {
             EXOFS_STAT_LEN as u64,
         )
     };
-    decode_ret(ret).map(|_| st)
+    let mut ls = LinuxStatAbi::default();
+    let ret_posix = unsafe {
+        syscall2(
+            SYS_FSTAT,
+            fd as u64,
+            &mut ls as *mut LinuxStatAbi as u64,
+        )
+    };
+    match (decode_ret(ret_obj), decode_ret(ret_posix)) {
+        (Ok(_), Ok(_)) => {
+            let (pst, atime_ns) = linux_stat_to_exofs(&ls);
+            st.mode = pst.mode;
+            st.size = pst.size;
+            if pst.mtime_ns != 0 {
+                st.mtime_ns = pst.mtime_ns;
+            }
+            if pst.ctime_ns != 0 {
+                st.ctime_ns = pst.ctime_ns;
+            }
+            Ok((st, atime_ns))
+        }
+        (Ok(_), Err(_)) => Ok((st, st.mtime_ns)),
+        (Err(_), Ok(_)) => Ok(linux_stat_to_exofs(&ls)),
+        (Err(e), Err(_)) => Err(e),
+    }
+}
+
+#[inline]
+pub fn exofs_fstat(fd: i32) -> SysResult<ExoFsFileStat> {
+    exofs_fstat_with_atime(fd).map(|(st, _)| st)
 }
 
 #[inline]
@@ -817,24 +996,165 @@ pub fn exit_group(code: i32) -> ! {
 }
 
 #[inline]
+pub fn exit_thread(code: i32) -> ! {
+    unsafe {
+        let _ = syscall1(SYS_EXIT, code as u64);
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline]
 pub unsafe fn clone_raw(
     flags: u64,
     child_stack: usize,
     ptid: *mut u32,
     ctid: *mut u32,
     tls: usize,
+    entry_fn: u64,
 ) -> SysResult<u32> {
     let ret = unsafe {
-        syscall5(
+        syscall6(
             SYS_CLONE,
             flags,
             child_stack as u64,
             ptid as u64,
             ctid as u64,
             tls as u64,
+            entry_fn,
         )
     };
     decode_ret(ret).map(|tid| tid as u32)
+}
+
+#[inline]
+pub fn prctl(option: i32, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> SysResult<usize> {
+    let ret = unsafe { syscall5(SYS_PRCTL, option as u64, arg2, arg3, arg4, arg5) };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn sched_getaffinity(pid: i32, mask: &mut [u8]) -> SysResult<usize> {
+    let ret = unsafe {
+        syscall3(
+            SYS_SCHED_GETAFFINITY,
+            pid as i64 as u64,
+            mask.len() as u64,
+            mask.as_mut_ptr() as u64,
+        )
+    };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn flock(fd: i32, operation: i32) -> SysResult<()> {
+    let ret = unsafe { syscall2(SYS_FLOCK, fd as u64, operation as u64) };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn utimensat(
+    dirfd: i32,
+    path_cstr: Option<&[u8]>,
+    times: &[RawTimespec; 2],
+    flags: i32,
+) -> SysResult<()> {
+    let path_ptr = path_cstr.map(|p| p.as_ptr() as u64).unwrap_or(0);
+    let ret = unsafe {
+        syscall4(
+            SYS_UTIMENSAT,
+            dirfd as i64 as u64,
+            path_ptr,
+            times.as_ptr() as u64,
+            flags as u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn ioctl(fd: i32, req: u64, arg: u64) -> SysResult<usize> {
+    let ret = unsafe { syscall3(SYS_IOCTL, fd as u64, req, arg) };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn poll(fds: &mut [PollFd], timeout_ms: i32) -> SysResult<usize> {
+    let ret = unsafe {
+        syscall3(
+            SYS_POLL,
+            fds.as_mut_ptr() as u64,
+            fds.len() as u64,
+            timeout_ms as i64 as u64,
+        )
+    };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn setsockopt(fd: i32, level: i32, optname: i32, optval: &[u8]) -> SysResult<()> {
+    let ret = unsafe {
+        syscall5(
+            SYS_SETSOCKOPT,
+            fd as u64,
+            level as u64,
+            optname as u64,
+            optval.as_ptr() as u64,
+            optval.len() as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn getsockopt(fd: i32, level: i32, optname: i32, optval: &mut [u8]) -> SysResult<usize> {
+    let mut optlen = optval.len() as u32;
+    let ret = unsafe {
+        syscall5(
+            SYS_GETSOCKOPT,
+            fd as u64,
+            level as u64,
+            optname as u64,
+            optval.as_mut_ptr() as u64,
+            &mut optlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| optlen as usize)
+}
+
+#[inline]
+pub fn getsockname(fd: i32, addr: &mut SockAddrIn) -> SysResult<()> {
+    let mut addrlen = core::mem::size_of::<SockAddrIn>() as u32;
+    let ret = unsafe {
+        syscall3(
+            SYS_GETSOCKNAME,
+            fd as u64,
+            addr as *mut SockAddrIn as u64,
+            &mut addrlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn getpeername(fd: i32, addr: &mut SockAddrIn) -> SysResult<()> {
+    let mut addrlen = core::mem::size_of::<SockAddrIn>() as u32;
+    let ret = unsafe {
+        syscall3(
+            SYS_GETPEERNAME,
+            fd as u64,
+            addr as *mut SockAddrIn as u64,
+            &mut addrlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
+pub fn memfd_create(name_cstr: &[u8], flags: u32) -> SysResult<i32> {
+    let ret = unsafe { syscall2(SYS_MEMFD_CREATE, name_cstr.as_ptr() as u64, flags as u64) };
+    decode_ret(ret).map(|fd| fd as i32)
 }
 
 #[inline]

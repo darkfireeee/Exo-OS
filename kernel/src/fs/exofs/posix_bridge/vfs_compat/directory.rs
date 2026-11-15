@@ -18,7 +18,7 @@ use crate::fs::exofs::syscall::quota_query::{check_quota, quota_add_usage, quota
 use super::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registre VFS
+// VFS registry
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -59,7 +59,7 @@ impl DirectoryRegistry {
     }
 
     pub fn map(&self) -> &mut BTreeMap<ObjectIno, Vec<DirRecord>> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe { &mut *self.entries.get() }
     }
 

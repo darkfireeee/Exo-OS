@@ -1,8 +1,8 @@
-//! relation_batch.rs — Opérations batch atomiques sur les relations ExoFS
+//! relation_batch.rs — Atomic batch operations on ExoFS relations
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve avant tout push
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - OOM-02   : try_reserve before any push
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -12,32 +12,32 @@ use super::relation_graph::RELATION_GRAPH;
 use super::relation_index::RELATION_INDEX;
 use super::relation_storage::RELATION_STORAGE;
 use super::relation_type::{RelationKind, RelationType};
-use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01: replaces arch::time
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale d'un batch.
+/// Maximum batch size.
 pub const BATCH_MAX_OPS: usize = 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchOp — opération élémentaire
+// BatchOp — elementary operation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Opération élémentaire d'un batch.
+/// Elementary operation of a batch.
 #[derive(Clone, Debug)]
 pub enum BatchOp {
-    /// Insérer une relation from → to de type `rel_type`.
+    /// Insert a relation from -> to of type `rel_type`.
     Insert {
         from: BlobId,
         to: BlobId,
         rel_type: RelationType,
     },
-    /// Supprimer la relation identifiée par `id`.
+    /// Remove relation identified by `id`.
     Remove { id: RelationId },
-    /// Mettre à jour une relation existante (remplace par la nouvelle version).
+    /// Update existing relation (replaces with new version).
     Update { rel: Relation },
 }
 
@@ -45,12 +45,12 @@ pub enum BatchOp {
 // BatchPolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Comportement en cas d'erreur partielle.
+/// Behavior on partial error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatchPolicy {
-    /// Continue les opérations suivantes même en cas d'erreur.
+    /// Continues subsequent operations even on error.
     BestEffort,
-    /// Arrête au premier échec (pas de rollback partiel).
+    /// Stops at first failure (no partial rollback).
     FailFast,
 }
 
@@ -58,28 +58,28 @@ pub enum BatchPolicy {
 // BatchResult
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un batch.
+/// Result of a batch.
 #[derive(Clone, Debug, Default)]
 pub struct BatchResult {
-    /// Nombre d'insertions réussies.
+    /// Number of successful insertions.
     pub inserted: u32,
-    /// Nombre de suppressions réussies.
+    /// Number of successful removals.
     pub removed: u32,
-    /// Nombre de mises à jour réussies.
+    /// Number of successful updates.
     pub updated: u32,
-    /// Nombre d'opérations échouées.
+    /// Number of failed operations.
     pub failed: u32,
-    /// Premier code d'erreur rencontré (si applicable).
+    /// First error code encountered (if applicable).
     pub first_err: Option<ExofsError>,
 }
 
 impl BatchResult {
-    /// `true` si toutes les opérations ont réussi.
+    /// `true` if all operations succeeded.
     pub fn is_success(&self) -> bool {
         self.failed == 0
     }
 
-    /// Nombre total d'opérations effectuées (réussies + échouées).
+    /// Total number of operations performed (successful + failed).
     pub fn total_ops(&self) -> u32 {
         self.inserted
             .saturating_add(self.removed)
@@ -87,7 +87,7 @@ impl BatchResult {
             .saturating_add(self.failed)
     }
 
-    /// Nombre d'opérations réussies.
+    /// Number of successful operations.
     pub fn success_count(&self) -> u32 {
         self.inserted
             .saturating_add(self.removed)
@@ -103,10 +103,10 @@ impl BatchResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchStats — statistiques cumulées
+// BatchStats — cumulative statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques cumulées sur tous les batchs exécutés.
+/// Cumulative statistics over all executed batches.
 #[derive(Clone, Debug, Default)]
 pub struct BatchStats {
     pub total_batches: u64,
@@ -133,18 +133,18 @@ impl BatchStats {
 // RelationBatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Batch d'opérations sur les relations.
+/// Batch of operations on relations.
 ///
-/// Les opérations sont accumulées puis exécutées en une seule passe
-/// via `commit()`.  En mode `FailFast`, l'exécution s'arrête à la
-/// première erreur sans rollback partiel.
+/// Operations are accumulated then executed in a single pass
+/// via `commit()`. In `FailFast` mode, execution stops at the
+/// first error without partial rollback.
 pub struct RelationBatch {
     ops: Vec<BatchOp>,
     policy: BatchPolicy,
 }
 
 impl RelationBatch {
-    /// Crée un batch vide avec la politique par défaut (`BestEffort`).
+    /// Creates an empty batch with default policy (`BestEffort`).
     pub fn new() -> Self {
         RelationBatch {
             ops: Vec::new(),
@@ -152,7 +152,7 @@ impl RelationBatch {
         }
     }
 
-    /// Crée un batch avec une politique explicite.
+    /// Creates a batch with an explicit policy.
     pub fn with_policy(policy: BatchPolicy) -> Self {
         RelationBatch {
             ops: Vec::new(),
@@ -160,7 +160,7 @@ impl RelationBatch {
         }
     }
 
-    /// Ajoute une opération d'insertion.
+    /// Adds an insertion operation.
     pub fn add_insert(
         &mut self,
         from: BlobId,
@@ -175,7 +175,7 @@ impl RelationBatch {
         Ok(())
     }
 
-    /// Ajoute une opération de suppression.
+    /// Adds a removal operation.
     pub fn add_remove(&mut self, id: RelationId) -> ExofsResult<()> {
         if self.ops.len() >= BATCH_MAX_OPS {
             return Err(ExofsError::NoSpace);
@@ -185,7 +185,7 @@ impl RelationBatch {
         Ok(())
     }
 
-    /// Ajoute une opération de mise à jour.
+    /// Adds an update operation.
     pub fn add_update(&mut self, rel: Relation) -> ExofsResult<()> {
         if self.ops.len() >= BATCH_MAX_OPS {
             return Err(ExofsError::NoSpace);
@@ -195,25 +195,25 @@ impl RelationBatch {
         Ok(())
     }
 
-    /// Nombre d'opérations en attente.
+    /// Number of pending operations.
     pub fn len(&self) -> usize {
         self.ops.len()
     }
 
-    /// `true` si le batch est vide.
+    /// `true` if batch is empty.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }
 
-    /// Vide toutes les opérations sans les exécuter.
+    /// Clears all operations without executing them.
     pub fn clear(&mut self) {
         self.ops.clear();
     }
 
-    /// Exécute toutes les opérations dans l'ordre d'insertion.
+    /// Executes all operations in insertion order.
     ///
-    /// Retourne un `BatchResult` récapitulatif.
-    /// Le batch est consommé.
+    /// Returns a summary `BatchResult`.
+    /// The batch is consumed.
     pub fn commit(self) -> BatchResult {
         let policy = self.policy;
         let mut res = BatchResult::default();
@@ -238,7 +238,7 @@ impl RelationBatch {
         res
     }
 
-    // ── Interne ──────────────────────────────────────────────────────────────
+    // ── Internal ─────────────────────────────────────────────────────────────
 
     fn execute_op(op: BatchOp, tick: u64) -> ExofsResult<OpKind> {
         match op {
@@ -284,7 +284,7 @@ impl RelationBatch {
     }
 }
 
-/// Type d'opération réussie (usage interne).
+/// Type of successful operation (internal use).
 enum OpKind {
     Insert,
     Remove,
@@ -292,17 +292,17 @@ enum OpKind {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BatchBuilder — API fluente
+// BatchBuilder — fluent API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Constructeur fluent pour assembler rapidement un batch.
+/// Fluent builder to assemble a batch quickly.
 pub struct BatchBuilder {
     batch: RelationBatch,
     error: Option<ExofsError>,
 }
 
 impl BatchBuilder {
-    /// Crée un builder.
+    /// Creates a builder.
     pub fn new() -> Self {
         BatchBuilder {
             batch: RelationBatch::new(),
@@ -310,13 +310,13 @@ impl BatchBuilder {
         }
     }
 
-    /// Définit la politique en cas d'erreur.
+    /// Sets error policy.
     pub fn policy(mut self, p: BatchPolicy) -> Self {
         self.batch.policy = p;
         self
     }
 
-    /// Ajoute une insertion.
+    /// Adds an insertion.
     pub fn insert(mut self, from: BlobId, to: BlobId, kind: RelationKind) -> Self {
         if self.error.is_none() {
             let rt = RelationType::new(kind);
@@ -327,7 +327,7 @@ impl BatchBuilder {
         self
     }
 
-    /// Ajoute une suppression.
+    /// Adds a removal.
     pub fn remove(mut self, id: RelationId) -> Self {
         if self.error.is_none() {
             if let Err(e) = self.batch.add_remove(id) {
@@ -337,7 +337,7 @@ impl BatchBuilder {
         self
     }
 
-    /// Vérifie et retourne le batch prêt à être exécuté.
+    /// Verifies and returns the batch ready to be executed.
     pub fn build(self) -> ExofsResult<RelationBatch> {
         if let Some(e) = self.error {
             return Err(e);
@@ -345,17 +345,17 @@ impl BatchBuilder {
         Ok(self.batch)
     }
 
-    /// Construit et exécute directement.
+    /// Builds and executes directly.
     pub fn execute(self) -> ExofsResult<BatchResult> {
         Ok(self.build()?.commit())
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité
+// Convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Crée et exécute immédiatement un batch d'un seul Insert.
+/// Creates and immediately executes a batch containing a single Insert.
 pub fn insert_relation_now(from: BlobId, to: BlobId, rel_type: RelationType) -> ExofsResult<()> {
     let mut b = RelationBatch::new();
     b.add_insert(from, to, rel_type)?;
@@ -367,7 +367,7 @@ pub fn insert_relation_now(from: BlobId, to: BlobId, rel_type: RelationType) -> 
     }
 }
 
-/// Supprime une liste de relations en un seul batch.
+/// Removes a list of relations in a single batch.
 pub fn remove_relations_batch(ids: &[RelationId]) -> BatchResult {
     let mut b = RelationBatch::new();
     for &id in ids {
@@ -415,7 +415,7 @@ mod tests {
         let mut b = RelationBatch::with_policy(BatchPolicy::BestEffort);
         b.add_remove(RelationId(9999999)).test_unwrap();
         let res = b.commit();
-        // BestEffort : pas de panique, juste un failed.
+        // BestEffort: no panic, just a failed count.
         assert_eq!(res.failed, 1);
     }
 
@@ -425,7 +425,7 @@ mod tests {
         b.add_remove(RelationId(8888888)).test_unwrap();
         b.add_remove(RelationId(7777777)).test_unwrap();
         let res = b.commit();
-        // FailFast : s'arrête au premier échec.
+        // FailFast: stops at first failure.
         assert!(res.first_err.is_some());
         assert!(res.failed >= 1);
     }
@@ -476,7 +476,7 @@ mod tests {
             b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent))
                 .test_unwrap();
         }
-        // La prochaine doit échouer.
+        // Next one must fail.
         let err = b.add_insert(blob(0), blob(1), RelationType::new(RelationKind::Parent));
         assert!(err.is_err());
     }

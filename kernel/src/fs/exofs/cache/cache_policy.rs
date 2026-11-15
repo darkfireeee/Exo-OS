@@ -1,7 +1,7 @@
-//! cache_policy.rs — Politique et configuration du cache ExoFS (no_std).
+//! cache_policy.rs — ExoFS cache policy and configuration (no_std).
 //!
-//! Définit `CacheConfig`, `CachePolicy` et les seuils dynamiques (watermarks).
-//! Règles : ARITH-02 (arithmétique vérifiée), RECUR-01 (zéro récursion).
+//! Defines `CacheConfig`, `CachePolicy`, and dynamic thresholds (watermarks).
+//! Rules: ARITH-02 (checked arithmetic), RECUR-01 (zero recursion).
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
@@ -9,7 +9,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // EvictionAlgorithmKind
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Algorithme d'éviction.
+/// Eviction algorithm.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvictionAlgorithmKind {
@@ -19,7 +19,7 @@ pub enum EvictionAlgorithmKind {
     Lfu = 1,
     /// Adaptive Replacement Cache.
     Arc = 2,
-    /// CLOCK (approximation LRU bas coût).
+    /// CLOCK (low-cost LRU approximation).
     Clock = 3,
 }
 
@@ -48,13 +48,13 @@ impl EvictionAlgorithmKind {
 // WritePolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique d'écriture.
+/// Write policy.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WritePolicy {
-    /// Écriture synchrone vers le stockage à chaque modification.
+    /// Synchronous write to storage on every modification.
     WriteThrough = 0,
-    /// Écriture différée — accumule les dirty pages.
+    /// Deferred write — accumulates dirty pages.
     WriteBack = 1,
 }
 
@@ -68,15 +68,15 @@ impl WritePolicy {
 // PrefetchStrategy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stratégie de prélecture.
+/// Prefetch strategy.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrefetchStrategy {
-    /// Aucune prélecture.
+    /// No prefetching.
     None = 0,
-    /// Prélecture séquentielle (ahead_count blobs).
+    /// Sequential prefetch (ahead_count blobs).
     Linear = 1,
-    /// Prélecture adaptative basée sur les patterns d'accès.
+    /// Adaptive prefetch based on access patterns.
     Adaptive = 2,
 }
 
@@ -84,31 +84,31 @@ pub enum PrefetchStrategy {
 // CacheConfig
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration complète du cache.
+/// Complete cache configuration.
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
-    /// Taille maximale en octets.
+    /// Maximum size in bytes.
     pub max_bytes: u64,
-    /// Algorithme d'éviction.
+    /// Eviction algorithm.
     pub eviction_algo: EvictionAlgorithmKind,
-    /// Politique d'écriture.
+    /// Write policy.
     pub write_policy: WritePolicy,
-    /// Stratégie de prélecture.
+    /// Prefetch strategy.
     pub prefetch_strategy: PrefetchStrategy,
-    /// Nombre de blobs à pré-charger.
+    /// Number of blobs to prefetch.
     pub prefetch_ahead: u32,
-    /// Pourcentage maximum de pages sales avant flush forcé (0–100).
+    /// Maximum percentage of dirty pages before forced flush (0–100).
     pub dirty_ratio: u8,
-    /// Pourcentage minimum libre avant éviction proactive (0–100).
+    /// Minimum free percentage before proactive eviction (0–100).
     pub min_free_ratio: u8,
-    /// Si `true`, invalide les entrées périmées après `ttl_ticks`.
+    /// If `true`, invalidates stale entries after `ttl_ticks`.
     pub ttl_enabled: bool,
-    /// Durée de vie en ticks CPU (0 = infini).
+    /// Lifetime in CPU ticks (0 = infinite).
     pub ttl_ticks: u64,
 }
 
 impl CacheConfig {
-    /// Configuration standard 512 MiB avec ARC.
+    /// Standard 512 MiB configuration with ARC.
     pub fn default_512mib() -> Self {
         Self {
             max_bytes: 512 * 1024 * 1024,
@@ -123,7 +123,7 @@ impl CacheConfig {
         }
     }
 
-    /// Configuration minimale 32 MiB avec LRU — convient aux tests.
+    /// Minimal 32 MiB configuration with LRU — suitable for tests.
     pub fn minimal() -> Self {
         Self {
             max_bytes: 32 * 1024 * 1024,
@@ -138,7 +138,7 @@ impl CacheConfig {
         }
     }
 
-    /// Configuration pour environnement mémoire contraint.
+    /// Configuration for memory-constrained environments.
     pub fn low_memory() -> Self {
         Self {
             max_bytes: 4 * 1024 * 1024,
@@ -153,7 +153,7 @@ impl CacheConfig {
         }
     }
 
-    /// Valide la configuration. Retourne `InvalidArgument` si incohérente.
+    /// Validates the configuration. Returns `InvalidArgument` if inconsistent.
     pub fn validate(&self) -> ExofsResult<()> {
         if self.max_bytes == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -172,42 +172,42 @@ impl CacheConfig {
 // CachePolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique d'éviction avec seuils calculés.
+/// Eviction policy with calculated thresholds.
 #[derive(Clone, Debug)]
 pub struct CachePolicy {
     pub config: CacheConfig,
 }
 
 impl CachePolicy {
-    /// Construit une politique depuis une configuration.
+    /// Constructs a policy from a configuration.
     pub fn new(config: CacheConfig) -> Self {
         Self { config }
     }
 
-    /// Seuil haut : éviction proactive si `used > high_watermark()`.
+    /// High threshold: proactive eviction if `used > high_watermark()`.
     pub fn high_watermark(&self) -> u64 {
         let pct = (100u64).saturating_sub(self.config.min_free_ratio as u64);
         self.config.max_bytes / 100 * pct
     }
 
-    /// Seuil bas : arrêt de l'éviction quand `used < low_watermark()`.
+    /// Low threshold: stops eviction when `used < low_watermark()`.
     pub fn low_watermark(&self) -> u64 {
         let high_pct = (100u64).saturating_sub(self.config.min_free_ratio as u64);
         let low_pct = high_pct.saturating_sub(15).max(50);
         self.config.max_bytes / 100 * low_pct
     }
 
-    /// Limite de pages sales avant flush forcé.
+    /// Limit of dirty pages before forced flush.
     pub fn dirty_limit(&self) -> u64 {
         self.config.max_bytes / 100 * self.config.dirty_ratio as u64
     }
 
-    /// `true` si la pression mémoire est élevée.
+    /// `true` if memory pressure is high.
     pub fn is_under_pressure(&self, used: u64) -> bool {
         used >= self.high_watermark()
     }
 
-    /// Quantité à libérer pour atteindre `low_watermark`.
+    /// Amount of bytes to free to reach `low_watermark`.
     pub fn bytes_to_free(&self, used: u64) -> u64 {
         let low = self.low_watermark();
         if used <= low {
@@ -216,7 +216,7 @@ impl CachePolicy {
         used.saturating_sub(low)
     }
 
-    /// `true` si la TTL est activée et que l'entrée est expirée.
+    /// `true` if TTL is enabled and entry has expired.
     pub fn is_expired(&self, inserted_at: u64, now: u64) -> bool {
         if !self.config.ttl_enabled || self.config.ttl_ticks == 0 {
             return false;
@@ -224,17 +224,17 @@ impl CachePolicy {
         now.saturating_sub(inserted_at) >= self.config.ttl_ticks
     }
 
-    /// `true` si l'écriture en writeback est en retard.
+    /// `true` if writeback write is overdue.
     pub fn needs_writeback(&self, dirty_bytes: u64) -> bool {
         self.config.write_policy == WritePolicy::WriteBack && dirty_bytes >= self.dirty_limit()
     }
 
-    /// Accès à la configuration.
+    /// Access to configuration.
     pub fn config(&self) -> &CacheConfig {
         &self.config
     }
 
-    /// Modifie la taille max à chaud.
+    /// Dynamically resizes max bytes.
     pub fn resize(&mut self, new_max_bytes: u64) -> ExofsResult<()> {
         if new_max_bytes == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -245,23 +245,23 @@ impl CachePolicy {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CacheTier — niveaux de cache
+// CacheTier — cache levels
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau de cache (hiérarchie L1/L2/L3).
+/// Cache tier (L1/L2/L3 hierarchy).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CacheTier {
-    /// Cache chaud en RAM (plus rapide).
+    /// Hot cache in RAM (fastest).
     Hot = 0,
-    /// Cache tiède (fréquent mais pas récent).
+    /// Warm cache (frequent but not recent).
     Warm = 1,
-    /// Cache froid (rare, candidat à l'éviction).
+    /// Cold cache (rare, eviction candidate).
     Cold = 2,
 }
 
 impl CacheTier {
-    /// Détermine le tier d'une entrée à partir de son accès récent et sa fréquence.
+    /// Determines the tier of an entry from recent access and frequency.
     pub fn classify(access_count: u64, ticks_since_last: u64, hot_threshold: u64) -> Self {
         if ticks_since_last <= hot_threshold && access_count >= 4 {
             Self::Hot

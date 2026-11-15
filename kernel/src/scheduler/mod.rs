@@ -113,6 +113,9 @@ pub unsafe fn init(params: &SchedInitParams) {
     // Step 9 — Wait queues (verifies EmergencyPool is ready).
     self::sync::wait_queue::init();
 
+    // Step 9b — Register blocking futex hooks in memory::utils::futex_table.
+    self::timer::sleep::init_futex_hooks();
+
     // Step 10 — C-states.
     self::energy::c_states::init(nr_cpus);
 

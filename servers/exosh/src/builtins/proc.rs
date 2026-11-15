@@ -118,7 +118,9 @@ pub fn cmd_sleep(rest: &[u8]) {
         write_all(b"sleep: invalid milliseconds\n");
         return;
     };
-    sleep_ms(ms);
+    if sleep_ms_interruptible(ms) {
+        write_all(b"^C\n");
+    }
 }
 
 pub fn cmd_kill(rest: &[u8]) {

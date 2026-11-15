@@ -1,12 +1,12 @@
-//! audit_filter.rs — Filtrage des entrées du journal d'audit ExoFS (no_std).
+//! audit_filter.rs — Filtering ExoFS audit log entries (no_std).
 //!
-//! `FilterCriteria` spécifie un ensemble de conditions combinées par AND.
-//! `AuditFilter` applique les critères sur des listes ou des slices.
+//! `FilterCriteria` specifies a set of conditions combined via logical AND.
+//! `AuditFilter` applies criteria over lists or slices.
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
-//!  - RECUR-01 : zéro récursion
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
+//!  - RECUR-01 : zero recursion
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -18,42 +18,42 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // FilterCriteria
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensemble de critères de filtrage combinés par AND logique.
+/// Set of filtering criteria combined via logical AND.
 ///
-/// Un champ `None` signifie « pas de contrainte sur ce champ ».
+/// A `None` field means "no constraint on this field".
 #[derive(Clone, Debug, Default)]
 pub struct FilterCriteria {
-    /// Filtre sur l'UID de l'acteur.
+    /// Filter on actor UID.
     pub actor_uid: Option<u64>,
-    /// Filtre sur l'objet cible.
+    /// Filter on target object.
     pub object_id: Option<u64>,
-    /// Filtre sur l'opération.
+    /// Filter on operation.
     pub op: Option<AuditOp>,
-    /// Filtre sur le résultat.
+    /// Filter on result.
     pub result: Option<AuditResult>,
-    /// Sévérité minimale.
+    /// Minimum severity.
     pub min_severity: Option<AuditSeverity>,
-    /// Plage de ticks (`from` inclus).
+    /// Tick range (`from` inclusive).
     pub tick_from: Option<u64>,
-    /// Plage de ticks (`to` inclus).
+    /// Tick range (`to` inclusive).
     pub tick_to: Option<u64>,
-    /// Si `true`, ne retourne que les entrées mutantes.
+    /// If `true`, returns only mutating entries.
     pub only_mutating: bool,
-    /// Si `true`, ne retourne que les entrées de sécurité.
+    /// If `true`, returns only security entries.
     pub only_security: bool,
-    /// Numéro de séquence minimum.
+    /// Minimum sequence number.
     pub seq_min: Option<u64>,
-    /// Numéro de séquence maximum.
+    /// Maximum sequence number.
     pub seq_max: Option<u64>,
 }
 
 impl FilterCriteria {
-    /// Critères vides (accepte tout).
+    /// Empty criteria (accepts all).
     pub fn any() -> Self {
         Self::default()
     }
 
-    /// Filtre sur l'UID de l'acteur.
+    /// Filter on actor UID.
     pub fn by_actor(uid: u64) -> Self {
         FilterCriteria {
             actor_uid: Some(uid),
@@ -61,7 +61,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Filtre sur l'opération.
+    /// Filter on operation.
     pub fn by_op(op: AuditOp) -> Self {
         FilterCriteria {
             op: Some(op),
@@ -69,7 +69,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Filtre sur le résultat.
+    /// Filter on result.
     pub fn by_result(r: AuditResult) -> Self {
         FilterCriteria {
             result: Some(r),
@@ -77,7 +77,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Filtre sévérité minimale.
+    /// Filter on minimum severity.
     pub fn min_severity(sev: AuditSeverity) -> Self {
         FilterCriteria {
             min_severity: Some(sev),
@@ -85,7 +85,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Filtre par plage de ticks.
+    /// Filter by tick range.
     pub fn tick_range(from: u64, to: u64) -> Self {
         FilterCriteria {
             tick_from: Some(from),
@@ -94,7 +94,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Uniquement les entrées liées à la sécurité.
+    /// Security-related entries only.
     pub fn security_only() -> Self {
         FilterCriteria {
             only_security: true,
@@ -102,7 +102,7 @@ impl FilterCriteria {
         }
     }
 
-    /// Uniquement les entrées mutantes.
+    /// Mutating entries only.
     pub fn mutating_only() -> Self {
         FilterCriteria {
             only_mutating: true,
@@ -110,7 +110,7 @@ impl FilterCriteria {
         }
     }
 
-    // ── Builders par mutation ─────────────────────────────────────────────────
+    // ── Mutating builders ────────────────────────────────────────────────────
 
     pub fn with_actor(mut self, uid: u64) -> Self {
         self.actor_uid = Some(uid);
@@ -146,23 +146,23 @@ impl FilterCriteria {
 // AuditFilter
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Applique des critères de filtrage sur des entrées d'audit.
+/// Applies filtering criteria to audit entries.
 pub struct AuditFilter {
     criteria: FilterCriteria,
 }
 
 impl AuditFilter {
-    /// Crée un filtre avec les critères donnés.
+    /// Creates a filter with given criteria.
     pub fn new(criteria: FilterCriteria) -> Self {
         AuditFilter { criteria }
     }
 
-    /// Crée un filtre qui accepte tout.
+    /// Creates a filter that accepts everything.
     pub fn passthrough() -> Self {
         AuditFilter::new(FilterCriteria::any())
     }
 
-    /// Retourne `true` si l'entrée correspond à tous les critères.
+    /// Returns `true` if entry matches all criteria.
     pub fn matches(&self, e: &AuditEntry) -> bool {
         let c = &self.criteria;
 
@@ -221,9 +221,9 @@ impl AuditFilter {
         true
     }
 
-    // ── Application sur des collections ──────────────────────────────────────
+    // ── Application to collections ───────────────────────────────────────────
 
-    /// Filtre un slice et retourne les entrées correspondantes.
+    /// Filters a slice and returns matching entries.
     pub fn apply(&self, entries: &[AuditEntry]) -> ExofsResult<Vec<AuditEntry>> {
         let mut out: Vec<AuditEntry> = Vec::new();
         for e in entries {
@@ -235,7 +235,7 @@ impl AuditFilter {
         Ok(out)
     }
 
-    /// Filtre et retourne les N premières entrées correspondantes.
+    /// Filters and returns the first N matching entries.
     pub fn apply_limit(&self, entries: &[AuditEntry], max: usize) -> ExofsResult<Vec<AuditEntry>> {
         let mut out: Vec<AuditEntry> = Vec::new();
         for e in entries {
@@ -250,7 +250,7 @@ impl AuditFilter {
         Ok(out)
     }
 
-    /// Compte les entrées correspondantes sans les collecter.
+    /// Counts matching entries without collecting them.
     pub fn count(&self, entries: &[AuditEntry]) -> u64 {
         let mut n = 0u64;
         for e in entries {
@@ -261,12 +261,12 @@ impl AuditFilter {
         n
     }
 
-    /// `true` si au moins une entrée correspond.
+    /// `true` if at least one entry matches.
     pub fn any_match(&self, entries: &[AuditEntry]) -> bool {
         entries.iter().any(|e| self.matches(e))
     }
 
-    /// Retourne les indices des entrées correspondantes.
+    /// Returns indices of matching entries.
     pub fn matching_indices(&self, entries: &[AuditEntry]) -> ExofsResult<Vec<usize>> {
         let mut out: Vec<usize> = Vec::new();
         for (i, e) in entries.iter().enumerate() {
@@ -278,7 +278,7 @@ impl AuditFilter {
         Ok(out)
     }
 
-    /// Partitionne `entries` en (matching, non-matching).
+    /// Partitions `entries` into (matching, non-matching).
     pub fn partition(
         &self,
         entries: &[AuditEntry],
@@ -297,35 +297,35 @@ impl AuditFilter {
         Ok((yes, no))
     }
 
-    /// Accès aux critères courants.
+    /// Access current criteria.
     pub fn criteria(&self) -> &FilterCriteria {
         &self.criteria
     }
 
-    /// Met à jour les critères.
+    /// Updates criteria.
     pub fn set_criteria(&mut self, c: FilterCriteria) {
         self.criteria = c;
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FilterChain — chaîne de filtres (AND-chaîning)
+// FilterChain — filter chain (AND-chaining)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Chaîne de filtres appliqués séquentiellement (AND logique).
+/// Filter chain applied sequentially (logical AND).
 pub struct FilterChain {
     filters: Vec<AuditFilter>,
 }
 
 impl FilterChain {
-    /// Crée une chaîne vide (accepte tout).
+    /// Creates an empty chain (accepts all).
     pub fn new() -> Self {
         FilterChain {
             filters: Vec::new(),
         }
     }
 
-    /// Ajoute un filtre à la chaîne.
+    /// Appends a filter to the chain.
     pub fn push(&mut self, f: AuditFilter) -> ExofsResult<()> {
         self.filters
             .try_reserve(1)
@@ -334,12 +334,12 @@ impl FilterChain {
         Ok(())
     }
 
-    /// Teste si une entrée passe tous les filtres.
+    /// Tests if an entry passes all filters.
     pub fn matches(&self, e: &AuditEntry) -> bool {
         self.filters.iter().all(|f| f.matches(e))
     }
 
-    /// Applique la chaîne sur un slice.
+    /// Applies the chain to a slice.
     pub fn apply(&self, entries: &[AuditEntry]) -> ExofsResult<Vec<AuditEntry>> {
         let mut out: Vec<AuditEntry> = Vec::new();
         for e in entries {
@@ -351,12 +351,12 @@ impl FilterChain {
         Ok(out)
     }
 
-    /// Nombre de filtres dans la chaîne.
+    /// Number of filters in the chain.
     pub fn len(&self) -> usize {
         self.filters.len()
     }
 
-    /// `true` si la chaîne est vide.
+    /// `true` if the chain is empty.
     pub fn is_empty(&self) -> bool {
         self.filters.is_empty()
     }
@@ -488,11 +488,11 @@ mod tests {
     #[test]
     fn test_filter_tick_range() {
         let e = entry(AuditOp::Read, AuditResult::Success, 1);
-        // e.tick est fixé à 100 dans entry()
+        // e.tick is set to 100 in entry()
         let c = FilterCriteria::tick_range(50, 200);
         let f = AuditFilter::new(c);
         assert!(f.matches(&e));
-        // Hors plage.
+        // Out of range.
         let c2 = FilterCriteria::tick_range(200, 300);
         let f2 = AuditFilter::new(c2);
         assert!(!f2.matches(&e));

@@ -13,9 +13,10 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::topology::{nr_cpus, MAX_CPUS};
+use crate::scheduler::core::preempt::IrqGuard;
 use crate::scheduler::core::task::{CpuId, ThreadControlBlock};
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-CPU migration channel
@@ -23,8 +24,10 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 const MIGRATION_QUEUE_DEPTH: usize = 16;
 
-/// Circular migration queue for a target CPU.
+/// Circular migration queue for a target CPU, serialized by an IRQ-safe spinlock
+/// so concurrent pushes from multiple load-balancing CPUs cannot corrupt indices.
 struct MigrationQueue {
+    lock: AtomicBool,
     head: AtomicU32,
     tail: AtomicU32,
     slots: [core::sync::atomic::AtomicPtr<ThreadControlBlock>; MIGRATION_QUEUE_DEPTH],
@@ -33,34 +36,58 @@ struct MigrationQueue {
 impl MigrationQueue {
     const fn new() -> Self {
         Self {
+            lock: AtomicBool::new(false),
             head: AtomicU32::new(0),
             tail: AtomicU32::new(0),
             slots: [const { core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()) }; MIGRATION_QUEUE_DEPTH],
         }
     }
 
+    fn with_lock<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _irq = IrqGuard::new();
+        while self
+            .lock
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        struct Unlock<'a>(&'a AtomicBool);
+        impl Drop for Unlock<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
+            }
+        }
+        let _unlock = Unlock(&self.lock);
+        f()
+    }
+
     /// Enqueues `tcb` into queue. Returns `false` if full.
     fn push(&self, tcb: NonNull<ThreadControlBlock>) -> bool {
-        let tail = self.tail.load(Ordering::Acquire);
-        let next = (tail + 1) % MIGRATION_QUEUE_DEPTH as u32;
-        if next == self.head.load(Ordering::Acquire) {
-            return false; // Full.
-        }
-        self.slots[tail as usize].store(tcb.as_ptr(), Ordering::Release);
-        self.tail.store(next, Ordering::Release);
-        true
+        self.with_lock(|| {
+            let tail = self.tail.load(Ordering::Relaxed);
+            let next = (tail + 1) % MIGRATION_QUEUE_DEPTH as u32;
+            if next == self.head.load(Ordering::Relaxed) {
+                return false; // Full.
+            }
+            self.slots[tail as usize].store(tcb.as_ptr(), Ordering::Release);
+            self.tail.store(next, Ordering::Release);
+            true
+        })
     }
 
     /// Dequeues next TCB. Returns `None` if empty.
     fn pop(&self) -> Option<NonNull<ThreadControlBlock>> {
-        let head = self.head.load(Ordering::Acquire);
-        if head == self.tail.load(Ordering::Acquire) {
-            return None; // Empty.
-        }
-        let ptr = self.slots[head as usize].load(Ordering::Acquire);
-        let next = (head + 1) % MIGRATION_QUEUE_DEPTH as u32;
-        self.head.store(next, Ordering::Release);
-        NonNull::new(ptr)
+        self.with_lock(|| {
+            let head = self.head.load(Ordering::Relaxed);
+            if head == self.tail.load(Ordering::Relaxed) {
+                return None; // Empty.
+            }
+            let ptr = self.slots[head as usize].swap(core::ptr::null_mut(), Ordering::AcqRel);
+            let next = (head + 1) % MIGRATION_QUEUE_DEPTH as u32;
+            self.head.store(next, Ordering::Release);
+            NonNull::new(ptr)
+        })
     }
 }
 
@@ -91,6 +118,15 @@ pub static MIGRATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Re-enqueues `tcb` back onto its home CPU run queue when target queue is unavailable.
+unsafe fn re_enqueue_home(tcb: NonNull<ThreadControlBlock>) {
+    let home_raw = tcb.as_ref().cpu_id.load(Ordering::Acquire) as usize;
+    if home_raw < nr_cpus() {
+        let home_cpu = CpuId(home_raw as u32);
+        crate::scheduler::core::runqueue::run_queue(home_cpu).enqueue(tcb);
+    }
+}
+
 /// Requests migration of thread `tcb` to CPU `target`.
 ///
 /// Thread is enqueued into target CPU migration queue, and a reschedule
@@ -101,27 +137,35 @@ pub static MIGRATIONS_DROPPED: AtomicU64 = AtomicU64::new(0);
 pub unsafe fn request_migration(tcb: NonNull<ThreadControlBlock>, target: CpuId) {
     let target_idx = target.0 as usize;
     if target_idx >= nr_cpus() {
+        MIGRATIONS_DROPPED.fetch_add(1, Ordering::Relaxed);
+        re_enqueue_home(tcb);
         return;
     }
 
-    // MIGRATED flag: encoded in sched_state if necessary — no-op for stats alone.
-
     if !MIGRATION_QUEUES[target_idx].push(tcb) {
-        // Queue full. The thread was ALREADY dequeued from source run queue
-        // by cfs_dequeue_for_migration(). Without re-enqueuing, it disappears
-        // permanently (original comment was mistaken).
-        // BUG-FIX J: re-enqueue on home CPU to avoid losing the thread.
+        // Queue full: re-enqueue on home CPU to avoid losing the already-dequeued thread.
         MIGRATIONS_DROPPED.fetch_add(1, Ordering::Relaxed);
-        let home_raw = tcb.as_ref().cpu_id.load(Ordering::Acquire) as usize;
-        if home_raw < nr_cpus() {
-            // SAFETY: home_raw < nr_cpus() ≤ MAX_CPUS, run queue initialized.
-            let home_cpu = CpuId(home_raw as u32);
-            crate::scheduler::core::runqueue::run_queue(home_cpu).enqueue(tcb);
-        }
+        re_enqueue_home(tcb);
         return;
     }
     MIGRATIONS_SENT.fetch_add(1, Ordering::Relaxed);
     arch_send_reschedule_ipi(target.0);
+}
+
+/// Pops one pending migrated TCB targeting `cpu`, updating its `cpu_id`.
+///
+/// # Safety
+/// CPL 0, `cpu` must be the local CPU.
+pub(crate) unsafe fn pop_pending_migration(cpu: CpuId) -> Option<NonNull<ThreadControlBlock>> {
+    let idx = cpu.0 as usize;
+    if idx >= nr_cpus() {
+        return None;
+    }
+    let tcb = MIGRATION_QUEUES[idx].pop()?;
+    let tcb_mut = &mut *tcb.as_ptr();
+    tcb_mut.cpu_id.store(cpu.0 as u64, Ordering::Release);
+    MIGRATIONS_RECEIVED.fetch_add(1, Ordering::Relaxed);
+    Some(tcb)
 }
 
 /// Processes pending migrations for current CPU.
@@ -134,12 +178,7 @@ pub unsafe fn drain_pending_migrations(
     cpu: CpuId,
     drain_cb: unsafe fn(tcb: NonNull<ThreadControlBlock>),
 ) {
-    let q = &MIGRATION_QUEUES[cpu.0 as usize];
-    while let Some(tcb) = q.pop() {
-        // Update current CPU in TCB.
-        let tcb_mut = &mut *(tcb.as_ptr());
-        tcb_mut.cpu_id.store(cpu.0 as u64, Ordering::Release);
-        MIGRATIONS_RECEIVED.fetch_add(1, Ordering::Relaxed);
+    while let Some(tcb) = pop_pending_migration(cpu) {
         drain_cb(tcb);
     }
 }

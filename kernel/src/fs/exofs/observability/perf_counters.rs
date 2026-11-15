@@ -1,15 +1,15 @@
-//! perf_counters.rs — Compteurs de performance matériels/logiciels ExoFS (no_std).
+//! perf_counters.rs — Hardware/software performance counters for ExoFS (no_std).
 //!
-//! Fournit :
-//!  - `PerfCounterId`    : identifiant de compteur (enum 16 variants).
-//!  - `PerfCounterSet`   : set de compteurs atomiques.
-//!  - `PerfSnapshot`     : snapshot immutable.
-//!  - `PerfDelta`        : différence entre deux snapshots.
-//!  - `PerfRateWindow`   : ring pour calcul de taux glissant.
-//!  - `PERF_COUNTERS`    : singleton global.
+//! Provides :
+//!  - `PerfCounterId`    : counter identifier (16-variant enum).
+//!  - `PerfCounterSet`   : set of atomic counters.
+//!  - `PerfSnapshot`     : immutable snapshot.
+//!  - `PerfDelta`        : difference between two snapshots.
+//!  - `PerfRateWindow`   : ring for rolling rate calculation.
+//!  - `PERF_COUNTERS`    : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -71,7 +71,7 @@ impl PerfCounterId {
 
 // ─── PerfCounterSet ──────────────────────────────────────────────────────────
 
-/// Set de compteurs atomiques.
+/// Set of atomic counters.
 pub struct PerfCounterSet {
     counters: [AtomicU64; PerfCounterId::COUNT],
 }
@@ -100,7 +100,7 @@ impl PerfCounterSet {
         self.counters[id as usize].load(Ordering::Relaxed)
     }
 
-    // ── Helpers sémantiques ──────────────────────────────────────────────────
+    // ── Semantic Helpers ──────────────────────────────────────────────────
 
     pub fn inc_page_fault(&self) {
         self.inc(PerfCounterId::PageFaults);
@@ -155,7 +155,7 @@ impl PerfCounterSet {
         h.saturating_mul(1000).checked_div(t).unwrap_or(0)
     }
 
-    /// Ratio metadata/block I/O * 1000 (ARITH-02).
+    /// Metadata/block I/O ratio * 1000 (ARITH-02).
     pub fn metadata_ratio_pct10(&self) -> u64 {
         let meta = self
             .get(PerfCounterId::MetadataReads)
@@ -167,7 +167,7 @@ impl PerfCounterSet {
         meta.saturating_mul(1000).checked_div(total).unwrap_or(0)
     }
 
-    /// Snapshot atomique.
+    /// Atomic snapshot.
     pub fn snapshot(&self) -> PerfSnapshot {
         let mut values = [0u64; PerfCounterId::COUNT];
         let mut i = 0usize;
@@ -178,7 +178,7 @@ impl PerfCounterSet {
         PerfSnapshot { values }
     }
 
-    /// Remet à zéro.
+    /// Resets to zero.
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < PerfCounterId::COUNT {
@@ -250,9 +250,9 @@ impl PerfDelta {
 
 pub const PERF_RATE_WINDOW: usize = 16;
 
-/// Ring de snapshots horodatés pour calcul de taux glissant.
+/// Ring of timestamped snapshots for rolling rate calculation.
 pub struct PerfRateWindow {
-    slots: [AtomicU64; PERF_RATE_WINDOW], // iops par slot
+    slots: [AtomicU64; PERF_RATE_WINDOW], // iops per slot
     head: AtomicU64,
     count: AtomicU64,
 }
@@ -279,7 +279,7 @@ impl PerfRateWindow {
         }
     }
 
-    /// Moyenne glissante d'IOPS (ARITH-02 / RECUR-01).
+    /// Rolling mean of IOPS (ARITH-02 / RECUR-01).
     pub fn rolling_iops(&self) -> u64 {
         let n = self.count.load(Ordering::Relaxed);
         if n == 0 {
@@ -294,7 +294,7 @@ impl PerfRateWindow {
         sum.checked_div(n).unwrap_or(0)
     }
 
-    /// Copie les slots dans un Vec (OOM-02).
+    /// Copies slots into a Vec (OOM-02).
     pub fn to_vec(&self) -> ExofsResult<Vec<u64>> {
         let n = self.count.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
@@ -452,7 +452,7 @@ mod tests {
 
 // ─── PerfReport ──────────────────────────────────────────────────────────────
 
-/// Rapport synthétique des compteurs de performance pour un intervalle.
+/// Synthetic report of performance counters for an interval.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PerfReport {
     pub iops: u64,
@@ -463,7 +463,7 @@ pub struct PerfReport {
 }
 
 impl PerfReport {
-    /// Construit un rapport depuis le delta entre deux snapshots.
+    /// Constructs a report from the delta between two snapshots.
     pub fn from_delta(set: &PerfCounterSet, delta: &PerfDelta) -> Self {
         Self {
             iops: delta.iops(),

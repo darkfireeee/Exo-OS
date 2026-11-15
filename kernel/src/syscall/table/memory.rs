@@ -32,6 +32,21 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
         Err(e) => return e,
     };
     let _len_pages = len.saturating_add(4095) / 4096;
+    if (flags & 0x20) == 0 && fd >= 0 {
+        let pid = super::common::current_pid_u32();
+        return match crate::syscall::fs_bridge::fs_mmap_file(
+            addr,
+            len,
+            prot,
+            flags,
+            fd as u32,
+            off,
+            pid,
+        ) {
+            Ok(va) => va as i64,
+            Err(e) => e.to_kernel_errno() as i64,
+        };
+    }
     // Delegate to memory/virtual/mmap.rs
     match crate::memory::virt::mmap::do_mmap(addr, len, prot, flags, fd, off) {
         Ok(va) => va as i64,
@@ -73,6 +88,22 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64, _a4: u64, _a5: u64, _a6: u64
         Ok(_) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
+}
+
+/// `madvise(addr, len, advice)` -> 0 or errno.
+pub fn sys_madvise(addr: u64, len: u64, advice: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+    stat_inc(SYS_MADVISE);
+    if (addr & 0xFFF) != 0 {
+        return EINVAL;
+    }
+    if len == 0 {
+        return 0;
+    }
+    if addr >= crate::syscall::validation::USER_ADDR_MAX {
+        return EINVAL;
+    }
+    let _ = advice;
+    0
 }
 
 /// `brk(addr)` -> new boundary of data segment or errno.

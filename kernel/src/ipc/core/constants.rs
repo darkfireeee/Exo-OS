@@ -165,7 +165,7 @@ pub const RENDEZVOUS_MAX_WAITERS: usize = 256;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Number of bits of the sequence sliding window (ordering detection).
-pub const SEQ_WINDOW_BITS: u32 = 7; // window = 128 messages
+pub const SEQ_WINDOW_BITS: u32 = 6; // window = 64 messages (matches AtomicU64 bitmap)
 
 /// Sequence tolerance window: beyond this, the message is considered out-of-order.
 pub const SEQ_WINDOW_SIZE: u64 = 1 << SEQ_WINDOW_BITS;

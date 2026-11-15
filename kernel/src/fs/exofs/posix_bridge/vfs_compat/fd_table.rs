@@ -18,7 +18,7 @@ use crate::fs::exofs::syscall::quota_query::{check_quota, quota_add_usage, quota
 use super::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table des descripteurs ouverts
+// Open file descriptor table
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct OpenFdTable {
@@ -56,7 +56,7 @@ impl OpenFdTable {
 
     pub fn open_fd(&self, ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &mut *self.fds.get() };
         if self.fd_count.load(Ordering::Relaxed) >= VFS_OPEN_MAX {
             self.lock_release();
@@ -97,7 +97,7 @@ impl OpenFdTable {
     pub fn close_fd(&self, fd: u64) -> ExofsResult<()> {
         let caller = current_vfs_owner_pid();
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &mut *self.fds.get() };
         let mut found = false;
         let mut denied = false;
@@ -130,7 +130,7 @@ impl OpenFdTable {
     pub fn get_fd(&self, fd: u64) -> Option<VfsFd> {
         let caller = current_vfs_owner_pid();
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &*self.fds.get() };
         let mut r = None;
         let mut i = 0usize;
@@ -150,7 +150,7 @@ impl OpenFdTable {
     pub fn update_offset(&self, fd: u64, new_offset: u64) {
         let caller = current_vfs_owner_pid();
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
@@ -168,7 +168,7 @@ impl OpenFdTable {
 
     pub fn close_all_pid(&self, pid: u32) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
@@ -190,7 +190,7 @@ impl OpenFdTable {
     #[cfg(test)]
     pub fn reset_all(&self) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let fds = unsafe { &mut *self.fds.get() };
         let mut i = 0usize;
         while i < fds.len() {
@@ -225,7 +225,7 @@ pub fn vfs_owner_matches(entry: VfsFd, caller: u32) -> bool {
     }
     #[cfg(target_os = "none")]
     {
-        // En mode bare-metal : PID 1 (init) est privilégié, sinon vérification stricte
+        // In bare-metal mode: PID 1 (init) is privileged, otherwise strict verification
         caller == 1 || (entry.pid != 0 && entry.pid == caller)
     }
 }

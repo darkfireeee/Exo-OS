@@ -1,21 +1,21 @@
-//! metadata_export.rs — Sérialisation des métadonnées ExoFS (no_std, ASCII).
+//! metadata_export.rs — Serialization of ExoFS metadata (no_std, ASCII).
 //!
-//! Ce module fournit :
-//!  - `TextSink`              : trait de sortie texte (pas de std::io).
-//!  - `MetadataExporter`      : sérialisation blob/snapshot/chunk (clé=valeur).
-//!  - `BlobMeta`              : métadonnées d'un blob à exporter.
-//!  - `SnapshotMeta`          : métadonnées d'un snapshot.
-//!  - `ChunkMeta`             : métadonnées d'un chunk de déduplication.
-//!  - `ExportManifest`        : manifest complet d'une session d'export.
-//!  - `MetadataBinaryWriter`  : format binaire compact pour métadonnées.
-//!  - `ManifestBlobEntry`     : entrée d'un blob dans le manifest.
+//! This module provides:
+//!  - `TextSink`              : text output trait (no std::io).
+//!  - `MetadataExporter`      : blob/snapshot/chunk serialization (key=value).
+//!  - `BlobMeta`              : metadata of a blob to export.
+//!  - `SnapshotMeta`          : metadata of a snapshot.
+//!  - `ChunkMeta`             : metadata of a deduplication chunk.
+//!  - `ExportManifest`        : full manifest of an export session.
+//!  - `MetadataBinaryWriter`  : compact binary format for metadata.
+//!  - `ManifestBlobEntry`     : entry of a blob in the manifest.
 //!
-//! Format texte : ASCII clé=valeur, une paire par ligne, sections [section].
-//! Format binaire : magic 4 bytes, puis entrées fixes de 64 bytes.
+//! Text format: ASCII key=value, one pair per line, sections [section].
+//! Binary format: 4-byte magic, then fixed 64-byte entries.
 //!
-//! RECUR-01 : pas de récursion.
-//! OOM-02   : try_reserve avant push.
-//! ARITH-02 : saturating_* sur compteurs.
+//! RECUR-01 : no recursion.
+//! OOM-02   : try_reserve before push.
+//! ARITH-02 : saturating_* on counters.
 
 extern crate alloc;
 use super::incremental_export::EpochId;
@@ -24,19 +24,19 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write as FmtWrite;
 
-// ─── Trait de sortie texte ────────────────────────────────────────────────────
+// ─── Text Output Trait ───────────────────────────────────────────────────────
 
-/// Récepteur de texte ASCII (no_std — pas de std::io::Write).
+/// ASCII text receiver (no_std — no std::io::Write).
 pub trait TextSink {
     fn write_str(&mut self, s: &str) -> ExofsResult<()>;
 
-    /// Écrit une ligne terminée par '\n'.
+    /// Writes a line terminated by '\n'.
     fn write_line(&mut self, line: &str) -> ExofsResult<()> {
         self.write_str(line)?;
         self.write_str("\n")
     }
 
-    /// Écrit une paire clé=valeur.
+    /// Writes a key=value pair.
     fn write_kv(&mut self, key: &str, val: &str) -> ExofsResult<()> {
         self.write_str(key)?;
         self.write_str("=")?;
@@ -44,7 +44,7 @@ pub trait TextSink {
         self.write_str("\n")
     }
 
-    /// Écrit une section [section_name].
+    /// Writes a section [section_name].
     fn write_section(&mut self, name: &str) -> ExofsResult<()> {
         self.write_str("[")?;
         self.write_str(name)?;
@@ -52,9 +52,9 @@ pub trait TextSink {
     }
 }
 
-// ─── TextSink sur Vec<u8> ────────────────────────────────────────────────────
+// ─── TextSink on Vec<u8> ────────────────────────────────────────────────────
 
-/// Implémentation de TextSink vers un Vec<u8> (UTF-8 / ASCII).
+/// Implementation of TextSink to a Vec<u8> (UTF-8 / ASCII).
 pub struct VecTextSink {
     buf: Vec<u8>,
 }
@@ -96,28 +96,28 @@ impl TextSink for VecTextSink {
     }
 }
 
-// ─── Métadonnées de blob ──────────────────────────────────────────────────────
+// ─── Blob Metadata ──────────────────────────────────────────────────────────
 
-/// Métadonnées d'un blob pour l'export.
+/// Metadata of a blob for export.
 #[derive(Clone, Debug)]
 pub struct BlobMeta {
-    /// BlobId (blake3 des données brutes) — RÈGLE 11.
+    /// BlobId (blake3 of raw data) — RULE 11.
     pub blob_id: [u8; 32],
-    /// Taille des données brutes.
+    /// Size of raw data.
     pub size: u64,
-    /// Taille compressée (0 si non compressé).
+    /// Compressed size (0 if uncompressed).
     pub compressed_size: u64,
-    /// Epoch de création du blob.
+    /// Blob creation epoch.
     pub epoch: EpochId,
-    /// Flags de l'entrée (ENTRY_FLAG_*).
+    /// Entry flags (ENTRY_FLAG_*).
     pub flags: u8,
-    /// Nombre de références sur ce blob.
+    /// Reference count for this blob.
     pub ref_count: u32,
-    /// CRC32C des données.
+    /// Data CRC32C.
     pub crc32: u32,
-    /// Nom ou chemin associé (jusqu'à 64 bytes ASCII).
+    /// Associated name or path (up to 64 bytes ASCII).
     pub name: [u8; 64],
-    /// Longueur valide du nom.
+    /// Valid length of name.
     pub name_len: u8,
 }
 
@@ -136,20 +136,20 @@ impl BlobMeta {
         }
     }
 
-    /// Retourne le nom comme str si valide ASCII.
+    /// Returns name as str if valid ASCII.
     pub fn name_str(&self) -> &str {
         let len = self.name_len as usize;
         core::str::from_utf8(&self.name[..len]).unwrap_or("?")
     }
 
-    /// Définit le nom (tronqué à 64 bytes).
+    /// Sets the name (truncated to 64 bytes).
     pub fn set_name(&mut self, name: &[u8]) {
         let len = name.len().min(64);
         self.name[..len].copy_from_slice(&name[..len]);
         self.name_len = len as u8;
     }
 
-    /// Retourne le ratio de compression (× 1000, sans float).
+    /// Returns the compression ratio (× 1000, no floats).
     pub fn compression_ratio_pct10(&self) -> u32 {
         if self.size == 0 || self.compressed_size == 0 {
             return 1000;
@@ -161,26 +161,26 @@ impl BlobMeta {
     }
 }
 
-// ─── Métadonnées de snapshot ─────────────────────────────────────────────────
+// ─── Snapshot Metadata ──────────────────────────────────────────────────────
 
-/// Métadonnées d'un snapshot ExoFS.
+/// Metadata of an ExoFS snapshot.
 #[derive(Clone, Copy, Debug)]
 pub struct SnapshotMeta {
-    /// Identifiant numérique du snapshot.
+    /// Numeric identifier of snapshot.
     pub snapshot_id: u64,
-    /// Epoch au moment du snapshot.
+    /// Epoch at snapshot time.
     pub epoch: EpochId,
-    /// Nombre de blobs dans le snapshot.
+    /// Number of blobs in snapshot.
     pub blob_count: u32,
-    /// Taille totale des données.
+    /// Total data size.
     pub total_bytes: u64,
-    /// Taille totale compressée.
+    /// Total compressed size.
     pub compressed_bytes: u64,
-    /// Timestamp de création.
+    /// Creation timestamp.
     pub created_at: u64,
-    /// true si le snapshot est cohérent (aucune écriture en cours).
+    /// true if snapshot is consistent (no in-progress writes).
     pub is_consistent: bool,
-    /// true si le snapshot est l'état complet (non-incrémental).
+    /// true if snapshot is full state (non-incremental).
     pub is_full: bool,
 }
 
@@ -199,18 +199,18 @@ impl SnapshotMeta {
     }
 }
 
-// ─── Métadonnées de chunk ─────────────────────────────────────────────────────
+// ─── Chunk Metadata ─────────────────────────────────────────────────────────
 
-/// Métadonnées d'un chunk de déduplication.
+/// Metadata of a deduplication chunk.
 #[derive(Clone, Copy, Debug)]
 pub struct ChunkMeta {
-    /// Fingerprint (blake3) du chunk — 32 bytes.
+    /// Fingerprint (blake3) of chunk — 32 bytes.
     pub fingerprint: [u8; 32],
-    /// Nombre de blobs référençant ce chunk.
+    /// Number of blobs referencing this chunk.
     pub ref_count: u32,
-    /// Taille du chunk.
+    /// Chunk size.
     pub size: u32,
-    /// Offset dans le blob parent (si applicable).
+    /// Offset in parent blob (if applicable).
     pub offset: u64,
 }
 
@@ -225,14 +225,14 @@ impl ChunkMeta {
     }
 }
 
-// ─── Sérialiseur de métadonnées ───────────────────────────────────────────────
+// ─── Metadata Serializer ─────────────────────────────────────────────────────
 
-/// Sérialiseur de métadonnées ExoFS au format clé=valeur ASCII.
-/// RECUR-01 : toutes les méthodes utilisent des boucles while.
+/// ExoFS metadata serializer in ASCII key=value format.
+/// RECUR-01: all methods use while loops.
 pub struct MetadataExporter;
 
 impl MetadataExporter {
-    /// Sérialise les métadonnées d'un blob dans le sink.
+    /// Serializes metadata of a blob into the sink.
     pub fn write_blob_meta<S: TextSink>(sink: &mut S, meta: &BlobMeta) -> ExofsResult<()> {
         sink.write_section("blob")?;
         sink.write_kv("blob_id", &hex_lower(&meta.blob_id))?;
@@ -250,7 +250,7 @@ impl MetadataExporter {
         Ok(())
     }
 
-    /// Sérialise les métadonnées d'un snapshot.
+    /// Serializes metadata of a snapshot.
     pub fn write_snapshot_meta<S: TextSink>(sink: &mut S, meta: &SnapshotMeta) -> ExofsResult<()> {
         sink.write_section("snapshot")?;
         sink.write_kv("snapshot_id", &u64_to_str(meta.snapshot_id))?;
@@ -267,7 +267,7 @@ impl MetadataExporter {
         Ok(())
     }
 
-    /// Sérialise les métadonnées d'un chunk.
+    /// Serializes metadata of a chunk.
     pub fn write_chunk_meta<S: TextSink>(sink: &mut S, meta: &ChunkMeta) -> ExofsResult<()> {
         sink.write_section("chunk")?;
         sink.write_kv("fingerprint", &hex_lower(&meta.fingerprint))?;
@@ -277,7 +277,7 @@ impl MetadataExporter {
         Ok(())
     }
 
-    /// Sérialise une liste de blobs (RECUR-01 : boucle while).
+    /// Serializes a list of blobs (RECUR-01: while loop).
     pub fn write_blob_list<S: TextSink>(sink: &mut S, blobs: &[BlobMeta]) -> ExofsResult<()> {
         sink.write_section("blob_list")?;
         sink.write_kv("count", &usize_to_str(blobs.len()))?;
@@ -289,7 +289,7 @@ impl MetadataExporter {
         Ok(())
     }
 
-    /// Écrit l'en-tête d'un manifest.
+    /// Writes header of a manifest.
     pub fn write_manifest_header<S: TextSink>(
         sink: &mut S,
         session_id: u32,
@@ -307,23 +307,23 @@ impl MetadataExporter {
     }
 }
 
-// ─── Manifest d'export ────────────────────────────────────────────────────────
+// ─── Export Manifest ──────────────────────────────────────────────────────────
 
-/// Entrée blob dans le manifest.
+/// Blob entry in manifest.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct ManifestBlobEntry {
-    /// BlobId (RÈGLE 11 : blake3 des données brutes).
+    /// BlobId (RULE 11: blake3 of raw data).
     pub blob_id: [u8; 32],
-    /// Taille des données brutes.
+    /// Raw data size.
     pub size: u64,
-    /// Epoch de création.
+    /// Creation epoch.
     pub epoch: u64,
-    /// CRC32C des données.
+    /// Data CRC32C.
     pub crc32: u32,
     /// Flags.
     pub flags: u8,
-    /// Padding pour alignement sur 64 bytes.
+    /// Padding for 64-byte alignment.
     pub _pad: [u8; 11],
 }
 
@@ -347,7 +347,7 @@ impl ManifestBlobEntry {
 
     pub fn as_bytes(&self) -> [u8; 64] {
         let mut out = [0u8; 64];
-        // SAFETY: ManifestBlobEntry est #[repr(C)] et sa taille est vérifiée par const assert.
+        // SAFETY: ManifestBlobEntry is #[repr(C)] and its size is verified by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 64);
         }
@@ -355,7 +355,7 @@ impl ManifestBlobEntry {
     }
 }
 
-/// Manifest complet d'une session d'export (texte + binaire).
+/// Full manifest of an export session (text + binary).
 pub struct ExportManifest {
     pub session_id: u32,
     pub epoch_base: EpochId,
@@ -367,7 +367,7 @@ pub struct ExportManifest {
 }
 
 impl ExportManifest {
-    /// Crée un manifest vide.
+    /// Creates an empty manifest.
     pub fn new(session_id: u32, epoch_base: EpochId, epoch_target: EpochId) -> Self {
         Self {
             session_id,
@@ -380,7 +380,7 @@ impl ExportManifest {
         }
     }
 
-    /// Ajoute une entrée blob — OOM-02 : try_reserve.
+    /// Adds a blob entry — OOM-02: try_reserve.
     pub fn add_entry(&mut self, entry: ManifestBlobEntry) -> ExofsResult<()> {
         self.entries
             .try_reserve(1)
@@ -390,7 +390,7 @@ impl ExportManifest {
         Ok(())
     }
 
-    /// Ajoute un tombstone — OOM-02 : try_reserve.
+    /// Adds a tombstone — OOM-02: try_reserve.
     pub fn add_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.tombstones
             .try_reserve(1)
@@ -399,7 +399,7 @@ impl ExportManifest {
         Ok(())
     }
 
-    /// Sérialise le manifest en texte ASCII vers le sink.
+    /// Serializes the manifest into ASCII text to sink.
     pub fn write_text<S: TextSink>(&self, sink: &mut S) -> ExofsResult<()> {
         MetadataExporter::write_manifest_header(
             sink,
@@ -412,7 +412,7 @@ impl ExportManifest {
         sink.write_kv("total_bytes", &u64_to_str(self.total_bytes))?;
         sink.write_kv("archive_size", &u64_to_str(self.archive_size))?;
 
-        // Entrées blobs (RECUR-01 : boucle while)
+        // Blob entries (RECUR-01: while loop)
         sink.write_section("entries")?;
         let mut i = 0usize;
         while i < self.entries.len() {
@@ -424,7 +424,7 @@ impl ExportManifest {
             i = i.wrapping_add(1);
         }
 
-        // Tombstones (RECUR-01 : boucle while)
+        // Tombstones (RECUR-01: while loop)
         if !self.tombstones.is_empty() {
             sink.write_section("tombstones")?;
             let mut j = 0usize;
@@ -440,11 +440,11 @@ impl ExportManifest {
         self.entries.len()
     }
 
-    /// Vérifie l'intégrité du manifest (aucite entré avec size = 0 si non tombstone).
+    /// Verifies manifest integrity (no entry with size = 0 if not tombstone).
     pub fn validate(&self) -> bool {
         let mut i = 0usize;
         while i < self.entries.len() {
-            // Chaque entrée doit avoir un blob_id non nul
+            // Each entry must have a non-zero blob_id
             let all_zero = self.entries[i].blob_id.iter().all(|&b| b == 0);
             if all_zero {
                 return false;
@@ -455,12 +455,12 @@ impl ExportManifest {
     }
 }
 
-// ─── Écrivain binaire de métadonnées ─────────────────────────────────────────
+// ─── Metadata Binary Writer ───────────────────────────────────────────────────
 
-/// Magic du format binaire de manifest.
+/// Magic of binary manifest format.
 pub const META_BINARY_MAGIC: u32 = 0x4558_4D45; // "EXME"
 
-/// En-tête du format binaire compact.
+/// Header of compact binary format.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct MetaBinaryHeader {
@@ -497,14 +497,14 @@ impl MetaBinaryHeader {
     }
 
     pub fn validate_magic(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == META_BINARY_MAGIC
     }
 
     pub fn as_bytes(&self) -> [u8; 40] {
         let mut out = [0u8; 40];
-        // SAFETY: MetaBinaryHeader est #[repr(C)] et sa taille est vérifiée par const assert.
+        // SAFETY: MetaBinaryHeader is #[repr(C)] and its size is verified by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 40);
         }
@@ -512,7 +512,7 @@ impl MetaBinaryHeader {
     }
 }
 
-/// Écrivain de manifest au format binaire compact.
+/// Manifest writer in compact binary format.
 pub struct MetadataBinaryWriter {
     pub buf: Vec<u8>,
 }
@@ -522,7 +522,7 @@ impl MetadataBinaryWriter {
         Self { buf: Vec::new() }
     }
 
-    /// Sérialise le manifest en binaire — OOM-02 + RECUR-01.
+    /// Serializes manifest into binary — OOM-02 + RECUR-01.
     pub fn write_manifest(&mut self, manifest: &ExportManifest) -> ExofsResult<usize> {
         let hdr = MetaBinaryHeader::new(
             manifest.session_id,
@@ -543,13 +543,13 @@ impl MetadataBinaryWriter {
             .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(&hdr_bytes);
 
-        // Entrées (RECUR-01 : boucle while)
+        // Entries (RECUR-01: while loop)
         let mut i = 0usize;
         while i < manifest.entries.len() {
             self.buf.extend_from_slice(&manifest.entries[i].as_bytes());
             i = i.wrapping_add(1);
         }
-        // Tombstones (RECUR-01 : boucle while)
+        // Tombstones (RECUR-01: while loop)
         let mut j = 0usize;
         while j < manifest.tombstones.len() {
             self.buf.extend_from_slice(&manifest.tombstones[j]);
@@ -569,9 +569,9 @@ impl MetadataBinaryWriter {
     }
 }
 
-// ─── Fonctions utilitaires (no std, no alloc String si possible) ──────────────
+// ─── Utility Functions (no std, no alloc String if possible) ─────────────────
 
-/// Convertit un u64 en str ASCII décimale (buffer statique).
+/// Converts a u64 to decimal ASCII str (static buffer).
 fn u64_to_str(n: u64) -> String {
     let mut buf = String::new();
     let _ = write!(buf, "{}", n);
@@ -602,7 +602,7 @@ fn u8_to_hex(n: u8) -> String {
     buf
 }
 
-/// Encode un slice de bytes en hexadécimal minuscule (RECUR-01 : boucle while).
+/// Encodes a byte slice to lowercase hexadecimal (RECUR-01: while loop).
 fn hex_lower(data: &[u8]) -> String {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut s = String::new();
@@ -710,7 +710,7 @@ mod tests {
         assert!(manifest.validate());
 
         let mut manifest2 = ExportManifest::new(1, EpochId(0), EpochId(5));
-        // Entrée avec blob_id = [0; 32] invalide
+        // Entry with invalid blob_id = [0; 32]
         manifest2
             .add_entry(ManifestBlobEntry::new([0u8; 32], 100, EpochId(1), 0))
             .test_expect("ok");
@@ -722,7 +722,7 @@ mod tests {
         let manifest = ExportManifest::new(7, EpochId(1), EpochId(5));
         let mut writer = MetadataBinaryWriter::new();
         let n = writer.write_manifest(&manifest).test_expect("ok");
-        assert!(n >= 40); // au moins la taille du header
+        assert!(n >= 40); // at least header size
         let magic =
             u32::from_le_bytes([writer.buf[0], writer.buf[1], writer.buf[2], writer.buf[3]]);
         assert_eq!(magic, META_BINARY_MAGIC);

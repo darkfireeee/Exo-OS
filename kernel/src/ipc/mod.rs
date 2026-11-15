@@ -180,6 +180,9 @@ pub fn ipc_init(shm_base_phys: u64, n_numa_nodes: u32) {
         endpoint::registry::init_endpoint_registry();
     }
 
+    // 4b. Initialize static fastpath SPSC rings (cell sequences 0..RING_SIZE).
+    ring::spsc::init_spsc_rings();
+
     // 5. Connect the reverse SHM provider toward memory::virtual.
     shared_memory::memory_bridge::register_with_memory();
 

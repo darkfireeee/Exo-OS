@@ -5,6 +5,7 @@ use crate::ipc_bridge::{payload_u32, payload_u64, MemoryReply};
 
 const PAGE_SIZE: u64 = 4_096;
 const MAX_REGIONS: usize = 128;
+const MAX_SHM_ATTACHMENTS: usize = 8;
 const HANDLE_MIX_KEY: u64 = 0x9E37_79B9_7F4A_7C15;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -14,16 +15,35 @@ pub enum RegionKind {
 }
 
 #[derive(Clone, Copy)]
+struct SharedAttachment {
+    active: bool,
+    pid: u32,
+    mapped_addr: u64,
+}
+
+impl SharedAttachment {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            pid: 0,
+            mapped_addr: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct RegionEntry {
     active: bool,
     kind: RegionKind,
     handle: u64,
     owner_pid: u32,
+    allowed_pid: u32,
     base_addr: u64,
     length: u64,
     prot: u32,
     flags: u32,
     share_count: u16,
+    attachments: [SharedAttachment; MAX_SHM_ATTACHMENTS],
 }
 
 impl RegionEntry {
@@ -33,11 +53,13 @@ impl RegionEntry {
             kind: RegionKind::Private,
             handle: 0,
             owner_pid: 0,
+            allowed_pid: 0,
             base_addr: 0,
             length: 0,
             prot: 0,
             flags: 0,
             share_count: 0,
+            attachments: [SharedAttachment::empty(); MAX_SHM_ATTACHMENTS],
         }
     }
 }
@@ -107,6 +129,7 @@ impl MemoryService {
         requested_len: u64,
         prot: u32,
         extra_flags: u32,
+        allowed_pid: u32,
     ) -> Result<(RegionSnapshot, QuotaSnapshot), i64> {
         let length = Self::align_len(requested_len)?;
         let quota = self.quotas.reserve(owner_pid, length)?;
@@ -140,17 +163,27 @@ impl MemoryService {
 
         let handle = self.make_handle(owner_pid, idx);
         let initial_shares = if kind == RegionKind::Shared { 1 } else { 0 };
+        let mut attachments = [SharedAttachment::empty(); MAX_SHM_ATTACHMENTS];
+        if kind == RegionKind::Shared {
+            attachments[0] = SharedAttachment {
+                active: true,
+                pid: owner_pid,
+                mapped_addr: base as u64,
+            };
+        }
 
         self.regions[idx] = RegionEntry {
             active: true,
             kind,
             handle,
             owner_pid,
+            allowed_pid,
             base_addr: base as u64,
             length,
             prot,
             flags: extra_flags,
             share_count: initial_shares,
+            attachments,
         };
 
         Ok((
@@ -186,7 +219,7 @@ impl MemoryService {
             snapshot.handle,
             snapshot.base_addr,
             snapshot.length,
-            flags as u32,
+            flags,
         )
     }
 
@@ -204,9 +237,22 @@ impl MemoryService {
             Err(err) => return MemoryReply::error(err),
         };
 
-        match self.allocate_region(sender_pid, RegionKind::Private, size, prot, flags) {
+        match self.allocate_region(sender_pid, RegionKind::Private, size, prot, flags, 0) {
             Ok((snapshot, quota)) => Self::reply_with_region(snapshot, quota),
             Err(err) => MemoryReply::error(err),
+        }
+    }
+
+    fn unmap_attachment(pid: u32, addr: u64, length: u64) -> i64 {
+        // SAFETY: syscall réservé au memory_server ; le kernel démappe la VMA
+        // dans l'espace d'adressage du PID concerné.
+        unsafe {
+            syscall::syscall3(
+                syscall::SYS_EXO_MEM_MUNMAP_PID,
+                pid as u64,
+                addr,
+                length,
+            )
         }
     }
 
@@ -224,22 +270,39 @@ impl MemoryService {
         if region.owner_pid != sender_pid && sender_pid != 1 {
             return MemoryReply::error(syscall::EACCES);
         }
-        if region.kind == RegionKind::Shared && region.share_count > 1 {
+        if region.kind == RegionKind::Shared
+            && (region.share_count > 1
+                || region
+                    .attachments
+                    .iter()
+                    .any(|att| att.active && att.pid != region.owner_pid && sender_pid != 1))
+        {
             return MemoryReply::error(syscall::EBUSY);
         }
 
-        // SAFETY: syscall réservé au memory_server ; le kernel démappe la VMA
-        // dans l'espace du propriétaire réel.
-        let rc = unsafe {
-            syscall::syscall3(
-                syscall::SYS_EXO_MEM_MUNMAP_PID,
-                region.owner_pid as u64,
-                region.base_addr,
-                region.length,
-            )
-        };
-        if rc < 0 {
-            return MemoryReply::error(rc);
+        if region.kind == RegionKind::Shared {
+            let mut unmapped_any = false;
+            for att in region.attachments.iter() {
+                if !att.active {
+                    continue;
+                }
+                unmapped_any = true;
+                let rc = Self::unmap_attachment(att.pid, att.mapped_addr, region.length);
+                if rc < 0 && rc != syscall::ENOENT && rc != syscall::ESRCH {
+                    return MemoryReply::error(rc);
+                }
+            }
+            if !unmapped_any {
+                let rc = Self::unmap_attachment(region.owner_pid, region.base_addr, region.length);
+                if rc < 0 && rc != syscall::ENOENT && rc != syscall::ESRCH {
+                    return MemoryReply::error(rc);
+                }
+            }
+        } else {
+            let rc = Self::unmap_attachment(region.owner_pid, region.base_addr, region.length);
+            if rc < 0 {
+                return MemoryReply::error(rc);
+            }
         }
 
         self.regions[idx] = RegionEntry::empty();
@@ -347,7 +410,7 @@ impl MemoryService {
                 requested_pid as u64,
                 snapshot.used_bytes,
                 snapshot.limit_bytes,
-                snapshot.peak_bytes.min(u32::MAX as u64) as u32,
+                snapshot.peak_bytes,
             ),
             Err(err) => MemoryReply::error(err),
         }
@@ -366,8 +429,16 @@ impl MemoryService {
             Ok(value) => value,
             Err(err) => return MemoryReply::error(err),
         };
+        let allowed_pid = payload_u32(payload, 16).unwrap_or(0);
 
-        match self.allocate_region(sender_pid, RegionKind::Shared, size, prot, flags) {
+        match self.allocate_region(
+            sender_pid,
+            RegionKind::Shared,
+            size,
+            prot,
+            flags,
+            allowed_pid,
+        ) {
             Ok((snapshot, quota)) => Self::reply_with_region(snapshot, quota),
             Err(err) => MemoryReply::error(err),
         }
@@ -381,32 +452,74 @@ impl MemoryService {
         let Some(idx) = self.region_index(handle) else {
             return MemoryReply::error(syscall::ENOENT);
         };
-        let region = &mut self.regions[idx];
+        let region = self.regions[idx];
         if region.kind != RegionKind::Shared {
             return MemoryReply::error(syscall::EINVAL);
         }
 
-        // FIX-SHM-ATTACH (Security_Audit_Passe2 §D-02) : l'ancienne implémentation
-        // ignorait _sender_pid, permettant à tout processus connaissant un handle u64
-        // d'attacher la région partagée d'un autre PID sans autorisation.
-        //
-        // Règle : attacher est autorisé si :
-        //   1. sender_pid == owner_pid (propriétaire attache sa propre région)
-        //   2. sender_pid == 1 (init_server, supervision système)
-        //   3. share_count > 0 (propriétaire a publié la région via IPC)
-        //
-        // Un handle jamais transmis (share_count == 0, owner != sender)
-        // ne peut pas être attaché par un tiers.
-        let is_owner     = region.owner_pid == sender_pid;
-        let is_init      = sender_pid == 1;
-        let is_published = region.share_count > 0;
-        if !is_owner && !is_init && !is_published {
+        // Strict SHM ACL: only the owner, PID 1 (init_server), an explicitly authorized
+        // peer (`allowed_pid != 0 && allowed_pid == sender_pid`), or an already-attached PID
+        // may attach; guessing a handle never grants access (`is_published` removed).
+        let already_attached = region
+            .attachments
+            .iter()
+            .find(|att| att.active && att.pid == sender_pid)
+            .copied();
+        let is_owner = region.owner_pid == sender_pid;
+        let is_init = sender_pid == 1;
+        let is_allowed_peer = region.allowed_pid != 0 && region.allowed_pid == sender_pid;
+        if !is_owner && !is_init && !is_allowed_peer && already_attached.is_none() {
             return MemoryReply::error(syscall::EACCES);
         }
 
-        region.share_count = region.share_count.saturating_add(1);
+        if let Some(existing) = already_attached {
+            let mut snap = self.region_snapshot(idx);
+            snap.base_addr = existing.mapped_addr;
+            return match self.quotas.snapshot(region.owner_pid) {
+                Ok(quota) => Self::reply_with_region(snap, quota),
+                Err(err) => MemoryReply::error(err),
+            };
+        }
+
+        let Some(att_idx) = region.attachments.iter().position(|att| !att.active) else {
+            return MemoryReply::error(syscall::ENOSPC);
+        };
+        let hint_addr = payload_u64(payload, 8).unwrap_or(0);
+        let (src_pid, src_addr) = region
+            .attachments
+            .iter()
+            .find(|att| att.active)
+            .map(|att| (att.pid, att.mapped_addr))
+            .unwrap_or((region.owner_pid, region.base_addr));
+
+        // SAFETY: syscall réservé au memory_server ; partage zéro-copie de la VMA
+        // source vers l'espace d'adressage de sender_pid.
+        let mapped_addr = unsafe {
+            syscall::syscall6(
+                syscall::SYS_EXO_MEM_SHARE,
+                src_pid as u64,
+                src_addr,
+                sender_pid as u64,
+                region.length,
+                region.prot as u64,
+                hint_addr,
+            )
+        };
+        if mapped_addr < 0 {
+            return MemoryReply::error(mapped_addr);
+        }
+
+        self.regions[idx].attachments[att_idx] = SharedAttachment {
+            active: true,
+            pid: sender_pid,
+            mapped_addr: mapped_addr as u64,
+        };
+        self.regions[idx].share_count = self.regions[idx].share_count.saturating_add(1);
+
+        let mut snap = self.region_snapshot(idx);
+        snap.base_addr = mapped_addr as u64;
         match self.quotas.snapshot(region.owner_pid) {
-            Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
+            Ok(quota) => Self::reply_with_region(snap, quota),
             Err(err) => MemoryReply::error(err),
         }
     }
@@ -423,24 +536,50 @@ impl MemoryService {
         if region.kind != RegionKind::Shared {
             return MemoryReply::error(syscall::EINVAL);
         }
-        if sender_pid != region.owner_pid && sender_pid != 1 {
-            if region.share_count <= 1 {
-                return MemoryReply::error(syscall::EACCES);
+
+        let att_pos = region
+            .attachments
+            .iter()
+            .position(|att| att.active && att.pid == sender_pid);
+        let is_owner = sender_pid == region.owner_pid;
+        let is_init = sender_pid == 1;
+        if att_pos.is_none() && !is_owner && !is_init {
+            return MemoryReply::error(syscall::EACCES);
+        }
+
+        if let Some(att_idx) = att_pos {
+            let att = region.attachments[att_idx];
+            let rc = Self::unmap_attachment(att.pid, att.mapped_addr, region.length);
+            if rc < 0 && rc != syscall::ENOENT && rc != syscall::ESRCH {
+                return MemoryReply::error(rc);
             }
-            self.regions[idx].share_count = region.share_count.saturating_sub(1);
-            match self.quotas.snapshot(region.owner_pid) {
-                Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
-                Err(err) => MemoryReply::error(err),
+            self.regions[idx].attachments[att_idx] = SharedAttachment::empty();
+            let remaining = region.share_count.saturating_sub(1);
+            self.regions[idx].share_count = remaining;
+            if remaining > 0 {
+                return match self.quotas.snapshot(region.owner_pid) {
+                    Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
+                    Err(err) => MemoryReply::error(err),
+                };
             }
-        } else if region.share_count > 1 {
-            self.regions[idx].share_count = region.share_count - 1;
-            match self.quotas.snapshot(region.owner_pid) {
-                Ok(quota) => Self::reply_with_region(self.region_snapshot(idx), quota),
-                Err(err) => MemoryReply::error(err),
+        } else if region.share_count > 0 && !is_init {
+            return MemoryReply::error(syscall::EBUSY);
+        }
+
+        for att in self.regions[idx].attachments.iter() {
+            if !att.active {
+                continue;
             }
-        } else {
-            self.regions[idx].share_count = 0;
-            self.handle_free(sender_pid, payload)
+            let rc = Self::unmap_attachment(att.pid, att.mapped_addr, region.length);
+            if rc < 0 && rc != syscall::ENOENT && rc != syscall::ESRCH {
+                return MemoryReply::error(rc);
+            }
+        }
+
+        self.regions[idx] = RegionEntry::empty();
+        match self.quotas.release(region.owner_pid, region.length) {
+            Ok(quota) => MemoryReply::ok(0, 0, quota.used_bytes, 0),
+            Err(err) => MemoryReply::error(err),
         }
     }
 }

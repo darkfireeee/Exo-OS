@@ -17,6 +17,7 @@
 use crate::ipc::core::constants::{ENDPOINT_BACKLOG, MAX_ENDPOINT_NAME_LEN, MAX_ENDPOINT_OWNERS};
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::scheduler::core::task::ThreadId;
+use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +124,22 @@ impl EndpointName {
 // EndpointDesc — main descriptor
 // ─────────────────────────────────────────────────────────────────────────────
 
+struct BacklogRing {
+    slots: [PendingConnection; ENDPOINT_BACKLOG],
+    head: u32,
+    tail: u32,
+}
+
+impl BacklogRing {
+    const fn new() -> Self {
+        Self {
+            slots: [PendingConnection::EMPTY; ENDPOINT_BACKLOG],
+            head: 0,
+            tail: 0,
+        }
+    }
+}
+
 /// Full descriptor of an IPC endpoint.
 /// Fixed size — allocated from a static pool (endpoint/registry.rs).
 #[repr(C, align(64))]
@@ -143,12 +160,8 @@ pub struct EndpointDesc {
     pub config_flags: u32,
     /// Endpoint name (ASCII).
     pub name: EndpointName,
-    /// Backlog: queue of connections pending acceptance.
-    pub backlog: [PendingConnection; ENDPOINT_BACKLOG],
-    /// Backlog head (next index to accept).
-    pub backlog_head: AtomicU32,
-    /// Backlog tail (next free slot index).
-    pub backlog_tail: AtomicU32,
+    /// Backlog: mutex-protected FIFO ring of connections pending acceptance.
+    backlog: SpinLock<BacklogRing>,
     /// Total counter of accepted connections.
     pub total_accepted: AtomicU64,
     /// Total counter of refused connections (backlog full).
@@ -169,9 +182,7 @@ impl EndpointDesc {
             owner_count: 1,
             config_flags: 0,
             name,
-            backlog: [PendingConnection::EMPTY; ENDPOINT_BACKLOG],
-            backlog_head: AtomicU32::new(0),
-            backlog_tail: AtomicU32::new(0),
+            backlog: SpinLock::new(BacklogRing::new()),
             total_accepted: AtomicU64::new(0),
             total_refused: AtomicU64::new(0),
         }
@@ -212,33 +223,29 @@ impl EndpointDesc {
     /// Enqueues a connection into backlog.
     /// Returns `Err(WouldBlock)` if backlog is full.
     pub fn enqueue_connection(&self, conn: PendingConnection) -> Result<(), IpcError> {
-        let tail = self.backlog_tail.load(Ordering::Relaxed);
-        let head = self.backlog_head.load(Ordering::Acquire);
-        let next = (tail + 1) % ENDPOINT_BACKLOG as u32;
-        if next == head {
+        let mut ring = self.backlog.lock();
+        let next = (ring.tail + 1) % ENDPOINT_BACKLOG as u32;
+        if next == ring.head {
+            drop(ring);
             self.total_refused.fetch_add(1, Ordering::Relaxed);
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: tail in [0, ENDPOINT_BACKLOG), space verified (next != head), single producer.
-        unsafe {
-            let slot = core::ptr::addr_of!(self.backlog[tail as usize]) as *mut PendingConnection;
-            core::ptr::write(slot, conn);
-        }
-        self.backlog_tail.store(next, Ordering::Release);
+        let tail = ring.tail as usize;
+        ring.slots[tail] = conn;
+        ring.tail = next;
         Ok(())
     }
 
     /// Dequeues a connection from backlog.
     pub fn dequeue_connection(&self) -> Option<PendingConnection> {
-        let head = self.backlog_head.load(Ordering::Relaxed);
-        let tail = self.backlog_tail.load(Ordering::Acquire);
-        if head == tail {
+        let mut ring = self.backlog.lock();
+        if ring.head == ring.tail {
             return None; // empty backlog
         }
-        // SAFETY: head is in [0, ENDPOINT_BACKLOG) and tail != head.
-        let conn = unsafe { core::ptr::read(&self.backlog[head as usize]) };
-        let next = (head + 1) % ENDPOINT_BACKLOG as u32;
-        self.backlog_head.store(next, Ordering::Release);
+        let head = ring.head as usize;
+        let conn = ring.slots[head];
+        ring.head = ((head + 1) % ENDPOINT_BACKLOG) as u32;
+        drop(ring);
         self.total_accepted.fetch_add(1, Ordering::Relaxed);
         Some(conn)
     }
@@ -246,9 +253,8 @@ impl EndpointDesc {
     /// Returns number of pending connections in backlog.
     #[inline(always)]
     pub fn backlog_len(&self) -> usize {
-        let h = self.backlog_head.load(Ordering::Relaxed) as usize;
-        let t = self.backlog_tail.load(Ordering::Relaxed) as usize;
-        t.wrapping_sub(h) % ENDPOINT_BACKLOG
+        let ring = self.backlog.lock();
+        (ring.tail as usize).wrapping_sub(ring.head as usize) % ENDPOINT_BACKLOG
     }
 
     /// Checks whether a ThreadId owns this endpoint.

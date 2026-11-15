@@ -1,17 +1,17 @@
-//! path_cache.rs -- Cache LRU ring-buffer pour la resolution de chemins ExoFS.
+//! path_cache.rs -- LRU ring-buffer cache for ExoFS path resolution.
 //!
-//! Evite les lookups repetitifs dans les PathIndex on-disk en memorisant
-//! les correspondances (hash chemin => ObjectId) recemment resolues.
+//! Avoids repetitive lookups in on-disk PathIndex structures by memoizing
+//! recently resolved mappings (path hash => ObjectId).
 //!
-//! ## Caracteristiques
-//! - 256 entrees (ring-buffer, puissance de 2).
-//! - Remplacement LRU via horloge tick (read_ticks()).
+//! ## Characteristics
+//! - 256 entries (ring-buffer, power of 2).
+//! - LRU replacement via tick clock (read_ticks()).
 //! - Thread-safe via SpinLock.
-//! - Entrees invalidables par OID ou hash.
+//! - Entries can be invalidated by OID or hash.
 //!
-//! ## Regles spec
-//! - **PATH-07** : pas de buffer sur la pile kernel de taille PATH_MAX.
-//! - **OOM-02** : pas d allocation dynamique.
+//! ## Spec rules
+//! - **PATH-07** : no PATH_MAX-sized buffer on the kernel stack.
+//! - **OOM-02** : no dynamic allocation.
 
 extern crate alloc;
 
@@ -192,7 +192,7 @@ impl PathCache {
     }
 }
 
-// -- Cache global singleton --
+// -- Global singleton cache --
 pub static PATH_CACHE: PathCache = PathCache::new_const();
 pub fn init_path_cache() {
     PATH_CACHE.flush_all();
@@ -246,11 +246,11 @@ pub fn insert_with_policy(path: &[u8], oid: ObjectId, policy: CachePolicy) {
 
 // -- PathCachePrefetcher ---------------------------------------------------------
 
-/// Prefetcher : pré-charge des entrées dans le cache pour un accès anticipé.
+/// Prefetcher: pre-loads entries into the cache for anticipatory access.
 pub struct PathCachePrefetcher {
-    /// Nombre d entrées chargées depuis le dernier flush.
+    /// Number of entries loaded since the last flush.
     loaded: usize,
-    /// Limite de prefetch par cycle.
+    /// Prefetch limit per cycle.
     limit: usize,
 }
 
@@ -259,9 +259,9 @@ impl PathCachePrefetcher {
         PathCachePrefetcher { loaded: 0, limit }
     }
 
-    /// Pré-charge une association path/oid dans le cache global.
+    /// Pre-loads a path/oid mapping into the global cache.
     ///
-    /// Ne fait rien si la limite est atteinte ou si l entrée est déjà présente.
+    /// Does nothing if the limit is reached or if the entry is already present.
     pub fn prefetch(&mut self, path: &[u8], oid: ObjectId) {
         if self.loaded >= self.limit {
             return;
@@ -273,12 +273,12 @@ impl PathCachePrefetcher {
         }
     }
 
-    /// Retourne le nombre d entrées pré-chargées.
+    /// Returns the number of pre-loaded entries.
     pub fn loaded_count(&self) -> usize {
         self.loaded
     }
 
-    /// Réinitialise le compteur de prefetch.
+    /// Resets the prefetch counter.
     pub fn reset(&mut self) {
         self.loaded = 0;
     }
@@ -286,19 +286,19 @@ impl PathCachePrefetcher {
 
 // -- PathCacheWarmup ------------------------------------------------------------
 
-/// Réchauffe le cache avec une liste de paires (hash, oid).
+/// Warms up the cache with a list of (hash, oid) pairs.
 ///
-/// Idéal au démarrage pour repeupler le cache depuis des hints persistants.
+/// Ideal at startup to repopulate the cache from persistent hints.
 ///
 /// # OOM-02
-/// Aucune allocation — itère les paires fournies directement.
+/// Zero allocation — iterates over provided pairs directly.
 pub fn warmup_cache(pairs: &[(u64, ObjectId)]) {
     for (hash, oid) in pairs {
         PATH_CACHE.insert(*hash, oid.clone());
     }
 }
 
-/// Vide et retourne les statistiques courantes (pour un reporting périodique).
+/// Drains and returns current statistics (for periodic reporting).
 pub fn drain_stats() -> PathCacheStats {
     let stats = PATH_CACHE.stats();
     stats
@@ -306,27 +306,27 @@ pub fn drain_stats() -> PathCacheStats {
 
 // -- PathCacheGuard -------------------------------------------------------------
 
-/// Garde RAII qui invalide une entrée à sa destruction.
+/// RAII guard that invalidates an entry upon destruction.
 ///
-/// Utile pour invalider le cache lors d un rename ou d une suppression.
+/// Useful for invalidating the cache during a rename or deletion.
 pub struct PathCacheGuard {
     hash: u64,
 }
 
 impl PathCacheGuard {
-    /// Crée une garde pour l entrée correspondant à `path`.
+    /// Creates a guard for the entry corresponding to `path`.
     pub fn new(path: &[u8]) -> Self {
         PathCacheGuard {
             hash: fnv1a_hash(path),
         }
     }
 
-    /// Crée une garde pour un hash déjà calculé.
+    /// Creates a guard for an already computed hash.
     pub fn from_hash(hash: u64) -> Self {
         PathCacheGuard { hash }
     }
 
-    /// Invalide manuellement avant la destruction.
+    /// Manually invalidates before destruction.
     pub fn invalidate_now(&self) {
         PATH_CACHE.invalidate_hash(self.hash);
     }
@@ -340,7 +340,7 @@ impl Drop for PathCacheGuard {
 
 // -- PathCacheDump --------------------------------------------------------------
 
-/// Dump de l état du cache pour débogage.
+/// Cache state dump for debugging.
 #[derive(Debug, Clone)]
 pub struct CacheDumpEntry {
     pub slot: usize,
@@ -348,21 +348,21 @@ pub struct CacheDumpEntry {
     pub valid: bool,
 }
 
-/// Retourne un snapshot des entrées actives (pour diagnostic).
+/// Returns a snapshot of active entries (for diagnostics).
 ///
 /// # OOM-02
 pub fn dump_active_entries() -> alloc::vec::Vec<CacheDumpEntry> {
     use alloc::vec::Vec;
     let out: Vec<CacheDumpEntry> = Vec::new();
     let count = PATH_CACHE.active_count();
-    // Fournit un nombre approximatif de slots valides sans accès interne.
+    // Provides an approximate count of valid slots without internal access.
     let _ = count;
     out
 }
 
-// Accès aux slots via la méthode dédiée du PathCache.
+// Slot access via dedicated PathCache method.
 impl PathCache {
-    /// Itère les entrées valides et les collecte pour débogage.
+    /// Iterates over valid entries and collects them for debugging.
     pub fn dump(&self) -> alloc::vec::Vec<CacheDumpEntry> {
         use alloc::vec::Vec;
         let mut out: Vec<CacheDumpEntry> = Vec::new();
@@ -384,7 +384,7 @@ impl PathCache {
 
 // -- PathCacheHealthCheck -------------------------------------------------------
 
-/// Vérification de santé du cache.
+/// Cache health check.
 #[derive(Debug, Clone)]
 pub struct PathCacheHealth {
     pub active_entries: usize,
@@ -395,7 +395,7 @@ pub struct PathCacheHealth {
 }
 
 impl PathCacheHealth {
-    /// Collecte les métriques de santé courantes.
+    /// Collects current health metrics.
     pub fn collect() -> Self {
         let active = PATH_CACHE.active_count();
         let stats = PATH_CACHE.stats();
@@ -408,25 +408,25 @@ impl PathCacheHealth {
             eviction_count: stats.evictions,
         }
     }
-    /// `true` si le cache est saturé (> 90 %).
+    /// `true` if the cache is overloaded (> 90%).
     pub fn is_overloaded(&self) -> bool {
         self.load_factor_pct > 90
     }
-    /// `true` si le taux de hit est très faible (< 20 %).
+    /// `true` if the hit rate is very low (< 20%).
     pub fn has_poor_hit_rate(&self) -> bool {
         self.hit_rate_pct < 20
     }
 }
 
-/// Raccourci pour la vérification de santé.
+/// Shortcut for health check.
 pub fn check_cache_health() -> PathCacheHealth {
     PathCacheHealth::collect()
 }
 
-// -- PathCacheScope : portée avec invalidation automatique ─────────────────────
+// -- PathCacheScope: scope with automatic invalidation ─────────────────────
 
-/// Portée RAII qui invalide automatiquement toutes les entrées associées à un
-/// Répertoire parent donné à sa destruction. Utile lors d un rename de répertoire.
+/// RAII scope that automatically invalidates all entries associated with a
+/// given parent directory upon destruction. Useful when renaming a directory.
 pub struct PathCacheScope {
     parent_hash: u64,
 }

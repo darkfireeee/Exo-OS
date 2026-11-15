@@ -283,9 +283,14 @@ impl RpcServer {
         };
 
         let mut reply = RpcReplyFrame::empty();
-        reply.header = RpcHeader::new_reply(&call.header, status, plen as u32);
-        if plen > 0 {
-            reply.payload[..plen].copy_from_slice(&payload_buf[..plen]);
+        if plen > MAX_RPC_PAYLOAD {
+            self.total_errors.fetch_add(1, Ordering::Relaxed);
+            reply.header = RpcHeader::new_reply(&call.header, RpcStatus::InternalError, 0);
+        } else {
+            reply.header = RpcHeader::new_reply(&call.header, status, plen as u32);
+            if plen > 0 {
+                reply.payload[..plen].copy_from_slice(&payload_buf[..plen]);
+            }
         }
 
         let written = reply.serialize(reply_buf)?;

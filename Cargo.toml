@@ -127,10 +127,13 @@ static_assertions = { version = "1" }
 num-traits        = { version = "0.2", default-features = false, features = ["libm"] }
 
 [profile.dev]
-opt-level     = 0
+opt-level     = 2
 debug         = true
 panic         = "abort"
 codegen-units = 1             # Empêche le splitting CGU → global_asm! reste dans le même objet
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.dev.package.blake3]
 opt-level = 3

@@ -1,8 +1,8 @@
-//! cache_warming.rs — Pré-chargement du cache ExoFS au démarrage (no_std).
+//! cache_warming.rs — ExoFS cache pre-warming at startup (no_std).
 //!
-//! `CacheWarmer` : file de priorité pour le pré-chargement de blobs.
-//! `WarmingStrategy` : politique de prélecture.
-//! Règles : RECUR-01, OOM-02, ARITH-02.
+//! `CacheWarmer`: priority queue for blob pre-warming.
+//! `WarmingStrategy`: prefetch policy.
+//! Rules: RECUR-01, OOM-02, ARITH-02.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -13,16 +13,16 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 // WarmingStrategy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stratégie de pré-chargement.
+/// Pre-warming strategy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarmingStrategy {
-    /// Charge les blobs dans l'ordre séquentiel de la file.
+    /// Loads blobs in sequential queue order.
     Sequential,
-    /// Charge en priorité les blobs les plus fréquemment accédés.
+    /// Prioritizes blobs accessed most frequently.
     ByFrequency,
-    /// Charge en priorité les blobs les plus récemment accédés.
+    /// Prioritizes blobs accessed most recently.
     ByRecency,
-    /// Sélectif : seulement les blobs avec score > seuil.
+    /// Selective: only blobs with score >= threshold.
     Selective { min_score: u32 },
 }
 
@@ -30,25 +30,25 @@ pub enum WarmingStrategy {
 // WarmEntry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée dans la file de warming.
+/// Entry in the warming queue.
 #[derive(Clone, Debug)]
 pub struct WarmEntry {
-    /// Identifiant du blob.
+    /// Blob identifier.
     pub blob_id: BlobId,
-    /// Score combiné (fréquence * 1000 + recéence_relative).
+    /// Combined score (frequency * 1000 + relative_recency).
     pub score: u32,
-    /// Taille estimée en octets.
+    /// Estimated size in bytes.
     pub size_hint: u64,
-    /// Ticks du dernier accès.
+    /// Last access ticks.
     pub last_ticks: u64,
-    /// Nombre d'accès historiques.
+    /// Historical access count.
     pub freq: u32,
 }
 
 impl WarmEntry {
     pub fn new(blob_id: BlobId, freq: u32, last_ticks: u64, size_hint: u64) -> Self {
         let score = freq.saturating_mul(1000).saturating_add(
-            // normalise la récence (ticks récents = score plus haut)
+            // normalizes recency (recent ticks = higher score)
             if last_ticks > 0 {
                 (last_ticks % 1000) as u32
             } else {
@@ -69,13 +69,13 @@ impl WarmEntry {
 // CacheWarmer
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// File de pré-chargement de blobs avec stratégie ordonnable.
+/// Blob pre-warming queue with orderable strategy.
 pub struct CacheWarmer {
     queue: Vec<WarmEntry>,
     strategy: WarmingStrategy,
     warmed: u64,
     skipped: u64,
-    /// Taille maximale de la file.
+    /// Maximum queue size.
     max_queue: usize,
 }
 
@@ -90,9 +90,9 @@ impl CacheWarmer {
         }
     }
 
-    // ── File ─────────────────────────────────────────────────────────────────
+    // ── Queue ────────────────────────────────────────────────────────────────
 
-    /// Ajoute un blob à la file de warming.
+    /// Adds a blob to the warming queue.
     pub fn enqueue(&mut self, entry: WarmEntry) -> ExofsResult<()> {
         if self.queue.len() >= self.max_queue {
             return Err(ExofsError::NoSpace);
@@ -104,10 +104,10 @@ impl CacheWarmer {
         Ok(())
     }
 
-    /// Trie la file selon la stratégie.
+    /// Sorts the queue according to strategy.
     pub fn sort_queue(&mut self) {
         match self.strategy {
-            WarmingStrategy::Sequential => { /* ordre naturel, ne rien faire */ }
+            WarmingStrategy::Sequential => { /* natural order, do nothing */ }
             WarmingStrategy::ByFrequency => {
                 self.queue.sort_unstable_by(|a, b| b.freq.cmp(&a.freq));
             }
@@ -122,10 +122,10 @@ impl CacheWarmer {
         }
     }
 
-    /// Retire les `n` prochains blobs à charger.
+    /// Removes next `n` blobs to load.
     pub fn next_batch(&mut self, n: usize) -> Vec<WarmEntry> {
         let take = n.min(self.queue.len());
-        // Itératif : on draine les n premiers éléments.
+        // Iterative: drain first n elements.
         let mut batch = Vec::with_capacity(take);
         let remaining = self.queue.split_off(take);
         batch.extend(self.queue.drain(..));
@@ -134,7 +134,7 @@ impl CacheWarmer {
         batch
     }
 
-    // ── Statistiques ──────────────────────────────────────────────────────────
+    // ── Statistics ────────────────────────────────────────────────────────────
 
     pub fn queue_len(&self) -> usize {
         self.queue.len()
@@ -152,12 +152,12 @@ impl CacheWarmer {
         self.queue.is_empty()
     }
 
-    /// Vide la file.
+    /// Clears the queue.
     pub fn clear(&mut self) {
         self.queue.clear();
     }
 
-    /// Taille totale estimée des blobs en queue.
+    /// Estimated total size of queued blobs.
     pub fn queued_bytes(&self) -> u64 {
         self.queue
             .iter()
@@ -165,7 +165,7 @@ impl CacheWarmer {
             .fold(0u64, |acc, v| acc.saturating_add(v))
     }
 
-    /// Supprime les blobs déjà présents dans le cache (prédicat d'appartenance).
+    /// Removes blobs already present in the cache (membership predicate).
     pub fn dedup_with<F>(&mut self, already_cached: F)
     where
         F: Fn(&BlobId) -> bool,
@@ -286,10 +286,10 @@ mod tests {
     }
 }
 
-// ── Extensions CacheWarmer ───────────────────────────────────────────────────
+// ── CacheWarmer extensions ───────────────────────────────────────────────────
 
 impl CacheWarmer {
-    /// Insère un lot d'entrées sans échouer sur dépassement — retourne le nb inséré.
+    /// Inserts a batch of entries without failing on overflow — returns count inserted.
     pub fn enqueue_batch_best_effort(&mut self, entries: &[WarmEntry]) -> usize {
         let mut count = 0usize;
         for e in entries {
@@ -300,24 +300,24 @@ impl CacheWarmer {
         count
     }
 
-    /// Inspecte le premier élément sans le consommer.
+    /// Inspects the first element without consuming it.
     pub fn peek(&self) -> Option<&WarmEntry> {
         self.queue.first()
     }
 
-    /// Vide et retourne tous les éléments.
+    /// Drains and returns all elements.
     pub fn drain_all(&mut self) -> Vec<WarmEntry> {
         let all: Vec<WarmEntry> = self.queue.drain(..).collect();
         self.warmed = self.warmed.wrapping_add(all.len() as u64);
         all
     }
 
-    /// Retourne les blobs à score élevé sans les enlever de la file.
+    /// Returns high-scoring blobs without removing them from queue.
     pub fn high_priority(&self, min_score: u32) -> Vec<&WarmEntry> {
         self.queue.iter().filter(|e| e.score >= min_score).collect()
     }
 
-    /// Replace les entrées dont le score est en-dessous de `min_score`.
+    /// Prunes entries whose score is below `min_score`.
     pub fn prune_below(&mut self, min_score: u32) -> usize {
         let before = self.queue.len();
         self.queue.retain(|e| e.score >= min_score);
@@ -326,7 +326,7 @@ impl CacheWarmer {
         removed
     }
 
-    /// Nombre de blobs en attente avec size_hint > `threshold`.
+    /// Number of queued blobs with size_hint > `threshold`.
     pub fn count_large(&self, threshold: u64) -> usize {
         self.queue
             .iter()

@@ -1,15 +1,15 @@
-//! mod.rs — Pont POSIX pour ExoFS (posix_bridge)
+//! mod.rs — POSIX bridge for ExoFS (posix_bridge)
 //!
-//! Agrège les quatre sous-modules du pont POSIX :
-//!   - `fcntl_lock`     : verrous de plage d'octets POSIX (F_SETLK / F_GETLK)
-//!   - `inode_emulation`: mapping bidirectionnel object_id ↔ ino_t
-//!   - `mmap`           : gestion des mappings mémoire (mmap/munmap/msync/mprotect)
-//!   - `vfs_compat`     : couche VFS (lookup/open/read/write/getattr/readdir/…)
+//! Aggregates the four POSIX bridge submodules:
+//!   - `fcntl_lock`     : POSIX byte-range locks (F_SETLK / F_GETLK)
+//!   - `inode_emulation`: bidirectional mapping object_id <-> ino_t
+//!   - `mmap`           : memory mapping management (mmap/munmap/msync/mprotect)
+//!   - `vfs_compat`     : VFS layer (lookup/open/read/write/getattr/readdir/...)
 //!
-//! Fournit également `posix_bridge_init()`, `posix_bridge_shutdown()` et
-//! `posix_bridge_stats()` pour initialisation, arrêt et diagnostic.
+//! Also provides `posix_bridge_init()`, `posix_bridge_shutdown()`, and
+//! `posix_bridge_stats()` for initialization, teardown, and diagnostics.
 //!
-//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
+//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusively.
 
 pub mod fcntl_lock;
 pub mod inode_emulation;
@@ -17,7 +17,7 @@ pub mod mmap;
 pub mod vfs_compat;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Ré-exports ergonomiques
+// Ergonomic re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use fcntl_lock::{
@@ -45,7 +45,7 @@ pub use vfs_compat::{
 use crate::fs::exofs::core::ExofsResult;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// État global du pont
+// Global bridge state
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -55,38 +55,38 @@ static BRIDGE_INIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static BRIDGE_SHUTDOWN_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Snapshot des métriques du pont POSIX.
+/// POSIX bridge metrics snapshot.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PosixBridgeStats {
-    /// Nombre de verrous actifs (toutes tables confondues).
+    /// Number of active locks (across all tables).
     pub lock_count: usize,
-    /// Nombre d'objets verrouillés distincts.
+    /// Number of distinct locked objects.
     pub locked_objects: usize,
-    /// Nombre d'inodes en cache.
+    /// Number of cached inodes.
     pub inode_count: usize,
-    /// Prochain ino qui sera alloué.
+    /// Next ino to be allocated.
     pub next_ino: ObjectIno,
-    /// Nombre de mappings mémoire actifs.
+    /// Number of active memory mappings.
     pub mmap_count: usize,
-    /// Nombre d'octets totaux mappés.
+    /// Total number of mapped bytes.
     pub mmap_total_bytes: u64,
-    /// Nombre de descripteurs de fichiers ouverts.
+    /// Number of open file descriptors.
     pub open_fd_count: usize,
-    /// Le VFS ExoFS est-il enregistré ?
+    /// Is the ExoFS VFS registered?
     pub vfs_registered: bool,
-    /// Le pont a-t-il été initialisé ?
+    /// Has the bridge been initialized?
     pub initialized: bool,
-    /// Nombre d'initialisations depuis le démarrage.
+    /// Number of initializations since boot.
     pub init_count: u64,
-    /// Nombre d'arrêts depuis le démarrage.
+    /// Number of shutdowns since boot.
     pub shutdown_count: u64,
 }
 
-/// Collecte les statistiques de tous les sous-modules.
+/// Collects statistics across all submodules.
 pub fn posix_bridge_stats() -> PosixBridgeStats {
     PosixBridgeStats {
         lock_count: FCNTL_LOCK_TABLE.total_lock_count(),
@@ -104,36 +104,36 @@ pub fn posix_bridge_stats() -> PosixBridgeStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cycle de vie
+// Lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise l'ensemble du pont POSIX.
+/// Initializes the entire POSIX bridge.
 ///
-/// - Garantit la présence de l'inode racine.
-/// - Enregistre ExoFS comme opérateur VFS (idem no-op si déjà fait).
-/// - Idempotent : plusieurs appels sont sans danger.
+/// - Ensures the root inode is present.
+/// - Registers ExoFS as a VFS operator (no-op if already registered).
+/// - Idempotent: multiple invocations are safe.
 pub fn posix_bridge_init() -> ExofsResult<()> {
     if BRIDGE_INITIALIZED
         .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
         .is_err()
     {
-        // Déjà initialisé — incrément du compteur mais pas d'erreur.
+        // Already initialized — increment counter without returning an error.
         BRIDGE_INIT_COUNT.fetch_add(1, Ordering::Relaxed);
         return Ok(());
     }
-    // S'assure que l'inode racine est présent.
+    // Ensure the root inode is present.
     INODE_EMULATION.ensure_root()?;
-    // Enregistre les ops VFS.
-    let _ = register_exofs_vfs_ops(); // Peut retourner ObjectAlreadyExists si déjà enregistré — on ignore.
+    // Register VFS ops.
+    let _ = register_exofs_vfs_ops(); // May return ObjectAlreadyExists if already registered — ignored.
     BRIDGE_INIT_COUNT.fetch_add(1, Ordering::Relaxed);
     Ok(())
 }
 
-/// Arrête le pont POSIX : libère toutes les ressources.
+/// Shuts down the POSIX bridge: releases all resources.
 ///
-/// À appeler lors du démontage du système de fichiers.
+/// Must be called during filesystem unmount.
 pub fn posix_bridge_shutdown() {
-    // Libère les tables dans l'ordre inverse de leur initialisation.
+    // Release tables in reverse order of initialization.
     MMAP_TABLE.clear();
     FCNTL_LOCK_TABLE.clear();
     INODE_EMULATION.clear();
@@ -141,11 +141,11 @@ pub fn posix_bridge_shutdown() {
     BRIDGE_SHUTDOWN_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Libère toutes les ressources d'un processus (appel à exit/kill).
+/// Releases all resources belonging to a process (on exit/kill).
 ///
-/// - Supprime tous les mappings du pid.
-/// - Supprime tous les verrous du pid.
-/// - Ferme tous les fds du pid.
+/// - Removes all mappings for pid.
+/// - Removes all locks for pid.
+/// - Closes all fds for pid.
 pub fn posix_bridge_process_exit(pid: u32) {
     MMAP_TABLE.munmap_all_pid(pid);
     FCNTL_LOCK_TABLE.release_all_pid(pid as u64);
@@ -153,15 +153,15 @@ pub fn posix_bridge_process_exit(pid: u32) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Validations transversales
+// Cross-cutting validations
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vérifie la cohérence interne du pont (assertion de sanité).
-/// Retourne le nombre d'anomalies détectées.
-/// RECUR-01 : while.
+/// Verifies internal bridge consistency (sanity assertions).
+/// Returns the number of detected anomalies.
+/// RECUR-01: while.
 pub fn posix_bridge_check() -> usize {
     let mut anomalies = 0usize;
-    // Vérifie que la racine est enregistrée si le pont est initialisé.
+    // Verify that the root inode is registered if the bridge is initialized.
     if BRIDGE_INITIALIZED.load(Ordering::Acquire) {
         if !INODE_EMULATION.contains_ino(INO_ROOT) {
             anomalies = anomalies.wrapping_add(1);
@@ -173,14 +173,14 @@ pub fn posix_bridge_check() -> usize {
     anomalies
 }
 
-/// Retourne le nombre total de verrous actifs dans la table globale.
-/// Parcours RECUR-01 : while.
+/// Returns the total number of active locks in the global table.
+/// RECUR-01 traversal: while.
 pub fn total_lock_count() -> usize {
     FCNTL_LOCK_TABLE.total_lock_count()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes de version
+// Version constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const POSIX_BRIDGE_MAJOR: u8 = 1;
@@ -188,8 +188,8 @@ pub const POSIX_BRIDGE_MINOR: u8 = 0;
 pub const POSIX_BRIDGE_PATCH: u8 = 0;
 pub const POSIX_BRIDGE_MAGIC: u32 = 0x5042_5247; // "PBRG"
 
-/// Retourne la version du pont sous forme d'u32 encodé.
-/// ARITH-02 : wrapping_shl.
+/// Returns the bridge version encoded as a u32.
+/// ARITH-02: wrapping_shl.
 pub fn posix_bridge_version() -> u32 {
     ((POSIX_BRIDGE_MAJOR as u32).wrapping_shl(16))
         | ((POSIX_BRIDGE_MINOR as u32).wrapping_shl(8))
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn test_bridge_init_idempotent() {
         let b = AtomicBool::new(false);
-        // Vérifie que compare_exchange retourne Err si déjà true.
+        // Verify that compare_exchange returns Err if already true.
         b.store(true, Ordering::Relaxed);
         assert!(b
             .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_align_up_reexport() {
-        // align_up est ré-exporté depuis mmap.
+        // align_up is re-exported from mmap.
         assert_eq!(align_up(1, 4096), 4096);
     }
 
@@ -294,33 +294,33 @@ mod tests {
 
     #[test]
     fn test_posix_bridge_stats_size() {
-        // Sanity : la structure doit être de taille raisonnable.
+        // Sanity: structure must have a reasonable size.
         let sz = core::mem::size_of::<PosixBridgeStats>();
         assert!(sz > 0 && sz < 256);
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Configuration du pont
+// Bridge configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Paramètres de configuration du pont POSIX.
+/// POSIX bridge configuration parameters.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PosixBridgeConfig {
-    /// Nombre maximal de verrous par objet (défaut: MAX_LOCKS_PER_OBJECT).
+    /// Maximum number of locks per object (default: MAX_LOCKS_PER_OBJECT).
     pub max_locks_per_object: usize,
-    /// Nombre maximal d'objets verrouillés simultanément.
+    /// Maximum number of concurrently locked objects.
     pub max_locked_objects: usize,
-    /// Taille maximale du cache inode.
+    /// Maximum inode cache size.
     pub max_inode_cache: usize,
-    /// Nombre maximal de mappings mémoire actifs.
+    /// Maximum number of active memory mappings.
     pub max_mmap_entries: usize,
-    /// Nombre maximal de fds ouverts.
+    /// Maximum number of open fds.
     pub max_open_fds: usize,
-    /// Taille de page (doit être puissance de 2).
+    /// Page size (must be a power of two).
     pub page_size: u64,
-    /// Version de configuration.
+    /// Configuration version.
     pub version: u8,
 }
 
@@ -339,8 +339,8 @@ impl Default for PosixBridgeConfig {
 }
 
 impl PosixBridgeConfig {
-    /// Valide la configuration. Retourne le nombre d'erreurs.
-    /// RECUR-01 : pas de boucle ici (contrôles indépendants).
+    /// Validates configuration. Returns the number of errors.
+    /// RECUR-01: no loop here (independent checks).
     pub fn validate(&self) -> usize {
         let mut errors = 0usize;
         if self.max_locks_per_object == 0 {
@@ -366,10 +366,10 @@ impl PosixBridgeConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Diagnostics formatés
+// Formatted diagnostics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Rapport de diagnostic compact (serialisable en zone log).
+/// Compact diagnostic report (serializable into log area).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PosixBridgeDiag {
@@ -380,7 +380,7 @@ pub struct PosixBridgeDiag {
     pub check_fail: usize,
 }
 
-/// Construit un rapport de diagnostic complet.
+/// Builds a complete diagnostic report.
 pub fn posix_bridge_diag() -> PosixBridgeDiag {
     let cfg = PosixBridgeConfig::default();
     PosixBridgeDiag {
@@ -393,11 +393,11 @@ pub fn posix_bridge_diag() -> PosixBridgeDiag {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitaires d'encodage/décodage de noms
+// Name encoding/decoding utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Copie `name` dans un tableau de taille fixe N. Retourne la longueur copiée.
-/// OOM-02 n/a (tableau statique). ARITH-02 : min().
+/// Copies `name` into a fixed-size buffer N. Returns copied length.
+/// OOM-02 n/a (static array). ARITH-02: min().
 pub fn copy_name_to_buf<const N: usize>(name: &[u8], out: &mut [u8; N]) -> usize {
     let len = name.len().min(N).min(VFS_NAME_MAX);
     let mut i = 0usize;
@@ -408,8 +408,8 @@ pub fn copy_name_to_buf<const N: usize>(name: &[u8], out: &mut [u8; N]) -> usize
     len
 }
 
-/// Compare deux noms de façon constante-time (évite les oracles temporels).
-/// ARITH-02 : wrapping additions.
+/// Compares two names in constant time (prevents timing oracles).
+/// ARITH-02: wrapping additions.
 pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -423,8 +423,8 @@ pub fn names_equal(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Retourne la longueur d'un nom nul-terminé dans un tableau de taille fixe.
-/// RECUR-01 : while.
+/// Returns length of a null-terminated name in a fixed-size buffer.
+/// RECUR-01: while.
 pub fn strnlen(buf: &[u8], max: usize) -> usize {
     let limit = max.min(buf.len());
     let mut i = 0usize;
@@ -435,11 +435,11 @@ pub fn strnlen(buf: &[u8], max: usize) -> usize {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Opérations atomiques utilitaires
+// Atomic helper operations
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Incrémente un compteur atomique avec saturation à `max`.
-/// ARITH-02 : saturating_add.
+/// Increments an atomic counter saturated at `max`.
+/// ARITH-02: saturating_add.
 pub fn atomic_saturating_inc(counter: &core::sync::atomic::AtomicU64, max: u64) {
     let mut cur = counter.load(Ordering::Relaxed);
     while cur < max {
@@ -455,8 +455,8 @@ pub fn atomic_saturating_inc(counter: &core::sync::atomic::AtomicU64, max: u64) 
     }
 }
 
-/// Décrémente un compteur atomique avec plancher à 0.
-/// ARITH-02 : saturating_sub.
+/// Decrements an atomic counter floored at 0.
+/// ARITH-02: saturating_sub.
 pub fn atomic_saturating_dec(counter: &core::sync::atomic::AtomicU64) {
     let mut cur = counter.load(Ordering::Relaxed);
     while cur > 0 {
@@ -473,10 +473,10 @@ pub fn atomic_saturating_dec(counter: &core::sync::atomic::AtomicU64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de conversion mode/flags
+// Mode/flags conversion functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convertit un mode POSIX en flags inode ExoFS.
+/// Converts a POSIX mode into ExoFS inode flags.
 pub fn mode_to_inode_flags(mode: u32) -> u32 {
     let ty = mode & file_mode::S_IFMT;
     if ty == file_mode::S_IFDIR {
@@ -488,7 +488,7 @@ pub fn mode_to_inode_flags(mode: u32) -> u32 {
     inode_flags::REGULAR
 }
 
-/// Convertit des flags inode ExoFS en bits de type mode POSIX.
+/// Converts ExoFS inode flags into POSIX mode type bits.
 pub fn inode_flags_to_mode_type(flags: u32) -> u32 {
     if flags & inode_flags::DIRECTORY != 0 {
         return file_mode::S_IFDIR;
@@ -499,7 +499,7 @@ pub fn inode_flags_to_mode_type(flags: u32) -> u32 {
     file_mode::S_IFREG
 }
 
-/// Retourne vrai si les open_flags nécessitent un accès en écriture.
+/// Returns true if open_flags require write access.
 pub fn flags_require_write(flags: u32) -> bool {
     flags & open_flags::O_WRONLY != 0
         || flags & open_flags::O_RDWR != 0
@@ -507,7 +507,7 @@ pub fn flags_require_write(flags: u32) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests supplémentaires
+// Additional tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -523,7 +523,7 @@ mod tests_extra {
     #[test]
     fn test_config_invalid_page_size() {
         let mut cfg = PosixBridgeConfig::default();
-        cfg.page_size = 3000; // Pas une puissance de 2.
+        cfg.page_size = 3000; // Not a power of two.
         assert!(cfg.validate() > 0);
     }
 
@@ -617,7 +617,7 @@ mod tests_extra {
         let c = core::sync::atomic::AtomicU64::new(u64::MAX - 1);
         atomic_saturating_inc(&c, u64::MAX);
         assert_eq!(c.load(Ordering::Relaxed), u64::MAX);
-        atomic_saturating_inc(&c, u64::MAX); // ne dépasse pas
+        atomic_saturating_inc(&c, u64::MAX); // does not exceed
         assert_eq!(c.load(Ordering::Relaxed), u64::MAX);
     }
 
@@ -626,7 +626,7 @@ mod tests_extra {
         let c = core::sync::atomic::AtomicU64::new(1);
         atomic_saturating_dec(&c);
         assert_eq!(c.load(Ordering::Relaxed), 0);
-        atomic_saturating_dec(&c); // ne passe pas sous 0
+        atomic_saturating_dec(&c); // does not underflow below 0
         assert_eq!(c.load(Ordering::Relaxed), 0);
     }
 }

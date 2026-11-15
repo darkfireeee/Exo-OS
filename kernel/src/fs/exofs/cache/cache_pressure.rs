@@ -1,8 +1,8 @@
-//! cache_pressure.rs — Surveillance de la pression mémoire ExoFS (no_std).
+//! cache_pressure.rs — ExoFS memory pressure monitoring (no_std).
 //!
-//! `CachePressure` : détection multi-niveaux de la saturation du cache.
-//! `CACHE_PRESSURE` : instance globale lock-free.
-//! Règles : ARITH-02, ONDISK-03, RECUR-01.
+//! `CachePressure`: multi-level cache saturation detection.
+//! `CACHE_PRESSURE`: lock-free global instance.
+//! Rules: ARITH-02, ONDISK-03, RECUR-01.
 
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
@@ -12,18 +12,18 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // PressureLevel
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau de pression mémoire.
+/// Memory pressure level.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum PressureLevel {
-    /// Espace libre suffisant, aucune action requise.
+    /// Sufficient free space, no action required.
     #[default]
     Low = 0,
-    /// Premier seuil dépassé, surveiller.
+    /// First threshold exceeded, monitor.
     Medium = 1,
-    /// Pression sérieuse, lancer une éviction.
+    /// Serious pressure, trigger eviction.
     High = 2,
-    /// Cache saturé, refus de nouvelles insertions possible.
+    /// Cache saturated, rejection of new insertions possible.
     Critical = 3,
 }
 
@@ -46,12 +46,12 @@ impl PressureLevel {
         }
     }
 
-    /// `true` si des évictions sont nécessaires.
+    /// `true` if evictions are necessary.
     pub fn needs_eviction(self) -> bool {
         self >= Self::High
     }
 
-    /// `true` si les nouvelles insertions doivent être refusées.
+    /// `true` if new insertions must be rejected.
     pub fn must_reject_inserts(self) -> bool {
         self == Self::Critical
     }
@@ -61,7 +61,7 @@ impl PressureLevel {
 // PressureThresholds
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Seuils de pression en pourcentage (0–100) d'utilisation.
+/// Pressure thresholds as utilization percentage (0–100).
 #[derive(Clone, Copy, Debug)]
 pub struct PressureThresholds {
     pub medium_pct: u8,
@@ -103,7 +103,7 @@ impl PressureThresholds {
 // CachePressure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Moniteur de pression mémoire du cache, lock-free.
+/// Cache memory pressure monitor, lock-free.
 pub struct CachePressure {
     used_bytes: AtomicU64,
     max_bytes: AtomicU64,
@@ -346,10 +346,10 @@ mod tests {
     }
 }
 
-// ── Extensions CachePressure ──────────────────────────────────────────────
+// ── CachePressure extensions ──────────────────────────────────────────────
 
 impl CachePressure {
-    /// Calcule le % d'utilisation courant.
+    /// Computes current utilization percentage.
     pub fn used_pct(&self) -> u8 {
         let max = self.max_bytes.load(Ordering::Relaxed);
         let used = self.used_bytes.load(Ordering::Relaxed);
@@ -364,12 +364,12 @@ impl CachePressure {
         }
     }
 
-    /// `true` si la pression est au moins Medium.
+    /// `true` if pressure is at least Medium.
     pub fn is_elevated(&self) -> bool {
         self.level() >= PressureLevel::Medium
     }
 
-    /// Octets disponibles avant d'atteindre `high_watermark_pct`.
+    /// Available bytes before reaching `high_watermark_pct`.
     pub fn headroom(&self, high_pct: u8) -> u64 {
         let max = self.max_bytes.load(Ordering::Relaxed);
         let used = self.used_bytes.load(Ordering::Relaxed);

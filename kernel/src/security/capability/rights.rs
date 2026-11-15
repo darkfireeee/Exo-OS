@@ -133,8 +133,8 @@ impl Rights {
     /// Creates from raw bits — returns None if unrecognized bits present.
     #[inline(always)]
     pub const fn from_bits(bits: u32) -> Option<Self> {
-        // Accept only bits 0..15
-        if bits & !0x_0000_FFFF == 0 {
+        // Accept bits 0..19 (including NET_ISSUE..NET_OBSERVE in bits 16..19)
+        if bits & !0x_000F_FFFF == 0 {
             Some(Self(bits))
         } else {
             None

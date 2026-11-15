@@ -190,3 +190,15 @@ pub unsafe fn dl_tick(cpu: usize) {
         }
     }
 }
+
+/// Returns `true` if a runnable `SCHED_DEADLINE` thread is queued on CPU `cpu`.
+///
+/// # Safety
+/// Caller holds the CPU's run queue lock (or preemption disabled on local CPU).
+#[inline(always)]
+pub unsafe fn dl_has_runnable(cpu: usize) -> bool {
+    if cpu >= MAX_CPUS {
+        return false;
+    }
+    DL_QUEUES[cpu].assume_init_ref().count > 0
+}

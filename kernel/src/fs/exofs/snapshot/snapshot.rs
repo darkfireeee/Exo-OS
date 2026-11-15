@@ -1,12 +1,12 @@
-//! snapshot.rs — Structure et identifiant d'un snapshot ExoFS
+//! snapshot.rs — Structure and identifier of an ExoFS snapshot
 //!
-//! Définit la représentation disque (ONDISK-03 : pas d'AtomicXxx) et mémoire,
-//! ainsi que les opérations de sérialisation/vérification (HDR-03).
+//! Defines the on-disk representation (ONDISK-03: no AtomicXxx) and in-memory representation,
+//! as well as serialization and verification operations (HDR-03).
 //!
-//! Règles spec :
-//!   ONDISK-03 : types plain uniquement dans #[repr(C)]
-//!   HDR-03    : magic vérifié EN PREMIER, puis checksum Blake3
-//!   ARITH-02  : checked_add pour toute arithmétique
+//! Spec rules:
+//!   ONDISK-03: plain types only in #[repr(C)]
+//!   HDR-03   : magic verified FIRST, then Blake3 checksum
+//!   ARITH-02 : checked_add for all arithmetic
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -15,24 +15,24 @@ use crate::fs::exofs::core::blob_id::blake3_hash;
 use crate::fs::exofs::core::{BlobId, DiskOffset, EpochId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────
 
-/// Magic on-disk d'un snapshot : "SNAP"
+/// On-disk magic of a snapshot: "SNAP"
 pub const SNAPSHOT_MAGIC: u32 = 0x534E_4150;
 
-/// Taille fixe de l'en-tête disque (256 octets — ONDISK-03)
+/// Fixed size of the disk header (256 bytes — ONDISK-03)
 pub const SNAPSHOT_HEADER_SIZE: usize = 256;
 
-/// Version courante
+/// Current version
 pub const SNAPSHOT_FORMAT_VERSION: u8 = 1;
 
-/// Longueur max du nom d'un snapshot.
+/// Maximum length of a snapshot name.
 ///
-/// Cette valeur est bornée par le format on-disk de 256 octets.
+/// This value is bounded by the 256-byte on-disk format.
 pub const SNAPSHOT_NAME_LEN: usize = 112;
 
-/// Nombre maximal de snapshots simultanés
+/// Maximum number of concurrent snapshots
 pub const SNAPSHOT_MAX_COUNT: usize = 1024;
 
 // ─────────────────────────────────────────────────────────────
@@ -40,81 +40,81 @@ pub const SNAPSHOT_MAX_COUNT: usize = 1024;
 // ─────────────────────────────────────────────────────────────
 
 pub mod flags {
-    /// Snapshot en lecture seule (immuable)
+    /// Read-only snapshot (immutable)
     pub const READONLY: u32 = 1 << 0;
-    /// Protégé contre la suppression
+    /// Protected against deletion
     pub const PROTECTED: u32 = 1 << 1;
-    /// Associé à un stream réseau en cours
+    /// Associated with an ongoing network stream
     pub const STREAMING: u32 = 1 << 2;
-    /// Quota explicitement défini
+    /// Quota explicitly defined
     pub const QUOTA_SET: u32 = 1 << 3;
-    /// Snapshot monté
+    /// Mounted snapshot
     pub const MOUNTED: u32 = 1 << 4;
-    /// Snapshot en cours de restauration
+    /// Snapshot being restored
     pub const RESTORING: u32 = 1 << 5;
-    /// Snapshot orph. (parent introuvable)
+    /// Orphan snapshot (parent not found)
     pub const ORPHAN: u32 = 1 << 6;
-    /// Snapshot de type incrémental
+    /// Incremental snapshot type
     pub const INCREMENTAL: u32 = 1 << 7;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Structure disque (ONDISK-03 — types plain uniquement)
+// Disk structure (ONDISK-03 — plain types only)
 // ─────────────────────────────────────────────────────────────
 
-/// En-tête on-disk d'un snapshot (SNAPSHOT_HEADER_SIZE = 256 octets)
+/// On-disk header of a snapshot (SNAPSHOT_HEADER_SIZE = 256 bytes)
 ///
-/// Aucun AtomicXxx — ONDISK-03.
-/// Magic vérifié en premier — HDR-03.
+/// No AtomicXxx — ONDISK-03.
+/// Magic verified first — HDR-03.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SnapshotHeaderDisk {
-    /// Magic "SNAP" — vérifié EN PREMIER (HDR-03)
+    /// Magic "SNAP" — verified FIRST (HDR-03)
     pub magic: u32,
     /// Flags (flags::*)
     pub flags: u32,
-    /// Identifiant unique du snapshot
+    /// Unique snapshot identifier
     pub id: u64,
-    /// Époque de création
+    /// Creation epoch
     pub epoch_id: u64,
-    /// Identifiant du snapshot parent (0 = racine)
+    /// Parent snapshot identifier (0 = root)
     pub parent_id: u64,
-    /// Timestamp de création (ticks)
+    /// Creation timestamp (ticks)
     pub created_at: u64,
-    /// Nombre de blobs contenus
+    /// Number of blobs contained
     pub n_blobs: u64,
-    /// Taille totale des données (octets)
+    /// Total data size (bytes)
     pub total_bytes: u64,
-    /// Offset disque du catalogue de blobs (0 = inline)
+    /// Disk offset of the blob catalog (0 = inline)
     pub blob_catalog_offset: u64,
-    /// Racine Merkle des blob ids (Blake3 concaténé — HASH-02)
+    /// Merkle root of blob ids (concatenated Blake3 — HASH-02)
     pub root_blob: [u8; 32],
-    /// Taille du catalogue de blobs sur disque
+    /// Disk size of the blob catalog
     pub blob_catalog_size: u32,
-    /// Longueur du nom (en octets)
+    /// Name length (in bytes)
     pub name_len: u16,
-    /// Version du format
+    /// Format version
     pub version: u8,
-    /// Padding explicite pour conserver un format disque stable à 256 octets.
+    /// Explicit padding to keep a stable 256-byte disk format.
     pub _pad0: [u8; 9],
-    /// Nom du snapshot (UTF-8 null-padded)
+    /// Snapshot name (UTF-8 null-padded)
     pub name: [u8; SNAPSHOT_NAME_LEN],
-    /// Checksum Blake3 sur les SNAPSHOT_HEADER_SIZE - 32 premiers octets
+    /// Blake3 checksum over the first SNAPSHOT_HEADER_SIZE - 32 bytes
     pub checksum: [u8; 32],
 }
 
 const _SH_SIZE: () = assert!(
     core::mem::size_of::<SnapshotHeaderDisk>() == SNAPSHOT_HEADER_SIZE,
-    "SnapshotHeaderDisk doit faire exactement 256 octets"
+    "SnapshotHeaderDisk must be exactly 256 bytes"
 );
 
 impl SnapshotHeaderDisk {
-    /// Calcule le checksum Blake3 de l'en-tête (sur les 224 premiers octets)
+    /// Computes the Blake3 checksum of the header (over the first 224 bytes)
     pub fn compute_checksum(&self) -> [u8; 32] {
         let body_len = SNAPSHOT_HEADER_SIZE - 32;
         let mut body = [0u8; SNAPSHOT_HEADER_SIZE - 32];
-        // SAFETY: SnapshotHeaderDisk est #[repr(C)] et la taille est vérifiée
-        // par const assert; on copie uniquement le préfixe couvert par le hash.
+        // SAFETY: SnapshotHeaderDisk is #[repr(C)] and the size is verified
+        // by const assert; we copy only the prefix covered by the hash.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -125,7 +125,7 @@ impl SnapshotHeaderDisk {
         blake3_hash(&body)
     }
 
-    /// HDR-03 : vérifie magic EN PREMIER, puis checksum
+    /// HDR-03: verifies magic FIRST, then checksum
     pub fn verify(&self) -> ExofsResult<()> {
         if self.magic != SNAPSHOT_MAGIC {
             return Err(ExofsError::BadMagic);
@@ -144,16 +144,16 @@ impl SnapshotHeaderDisk {
         Ok(())
     }
 
-    /// Injecte le checksum calculé
+    /// Injects the computed checksum
     pub fn finalize(&mut self) {
         self.checksum = self.compute_checksum();
     }
 
-    /// Retourne le tableau d'octets bruts
+    /// Returns the raw byte array
     pub fn as_bytes(&self) -> [u8; SNAPSHOT_HEADER_SIZE] {
         let mut out = [0u8; SNAPSHOT_HEADER_SIZE];
-        // SAFETY: SnapshotHeaderDisk est #[repr(C)] et `out` a la taille
-        // fixe validée par const assert.
+        // SAFETY: SnapshotHeaderDisk is #[repr(C)] and `out` has the
+        // fixed size validated by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -164,50 +164,50 @@ impl SnapshotHeaderDisk {
         out
     }
 
-    /// Parse depuis un tampon brut
+    /// Parses from a raw buffer
     pub fn from_bytes(buf: &[u8]) -> ExofsResult<Self> {
         if buf.len() < SNAPSHOT_HEADER_SIZE {
             return Err(ExofsError::InvalidSize);
         }
-        // SAFETY: taille vérifiée, repr(C)
+        // SAFETY: verified size, repr(C)
         let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         Ok(hdr)
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Snapshot en mémoire
+// In-memory snapshot
 // ─────────────────────────────────────────────────────────────
 
-/// Représentation en RAM d'un snapshot
+/// RAM representation of a snapshot
 #[derive(Clone, Debug)]
 pub struct Snapshot {
-    /// Identifiant unique
+    /// Unique identifier
     pub id: SnapshotId,
-    /// Époque de création
+    /// Creation epoch
     pub epoch_id: EpochId,
-    /// Snapshot parent (None = racine)
+    /// Parent snapshot (None = root)
     pub parent_id: Option<SnapshotId>,
-    /// Racine Merkle des blobs (HASH-02 : calculé sur données RAW)
+    /// Merkle root of blobs (HASH-02: computed on RAW data)
     pub root_blob: BlobId,
-    /// Timestamp de création
+    /// Creation timestamp
     pub created_at: u64,
-    /// Nombre de blobs
+    /// Number of blobs
     pub n_blobs: u64,
-    /// Taille totale des données
+    /// Total data size
     pub total_bytes: u64,
     /// Flags (flags::*)
     pub flags: u32,
-    /// Offset catalogue blobs sur disque
+    /// Blob catalog offset on disk
     pub blob_catalog_offset: DiskOffset,
-    /// Taille du catalogue
+    /// Catalog size
     pub blob_catalog_size: u32,
-    /// Nom (null-padded)
+    /// Name (null-padded)
     pub name: [u8; SNAPSHOT_NAME_LEN],
 }
 
 impl Snapshot {
-    // ── Accesseurs de flags ───────────────────────────────────────────
+    // ── Flag accessors ───────────────────────────────────────────
 
     pub fn is_readonly(&self) -> bool {
         self.flags & flags::READONLY != 0
@@ -241,9 +241,9 @@ impl Snapshot {
         self.flags ^= flag;
     }
 
-    // ── Nom ──────────────────────────────────────────────────────────
+    // ── Name ──────────────────────────────────────────────────────────
 
-    /// Retourne le nom comme &str (UTF-8)
+    /// Returns the name as &str (UTF-8)
     pub fn name_str(&self) -> &str {
         let end = self
             .name
@@ -253,7 +253,7 @@ impl Snapshot {
         core::str::from_utf8(&self.name[..end]).unwrap_or("<invalid>")
     }
 
-    /// Longueur effective du nom
+    /// Effective length of the name
     pub fn name_len(&self) -> u16 {
         self.name
             .iter()
@@ -261,9 +261,9 @@ impl Snapshot {
             .unwrap_or(SNAPSHOT_NAME_LEN) as u16
     }
 
-    // ── Conversion disque ─────────────────────────────────────────────
+    // ── Disk conversion ─────────────────────────────────────────────
 
-    /// Construit l'en-tête disque correspondant
+    /// Constructs the corresponding disk header
     pub fn to_header_disk(&self) -> SnapshotHeaderDisk {
         let mut hdr = SnapshotHeaderDisk {
             magic: SNAPSHOT_MAGIC,
@@ -288,7 +288,7 @@ impl Snapshot {
         hdr
     }
 
-    /// Désérialise depuis un en-tête disque (HDR-03 : magic + checksum vérifiés)
+    /// Deserializes from a disk header (HDR-03: magic + checksum verified)
     pub fn from_header_disk(hdr: &SnapshotHeaderDisk) -> ExofsResult<Self> {
         hdr.verify()?;
 
@@ -316,24 +316,24 @@ impl Snapshot {
         })
     }
 
-    // ── Utilitaires stats ─────────────────────────────────────────────
+    // ── Stats utilities ─────────────────────────────────────────────
 
-    /// Âge en ticks par rapport à `now`
+    /// Age in ticks relative to `now`
     pub fn age_ticks(&self, now: u64) -> u64 {
         now.saturating_sub(self.created_at)
     }
 
-    /// Retourne true si ce snapshot est un descendant de `ancestor_id`
+    /// Returns true if this snapshot is a descendant of `ancestor_id`
     pub fn has_parent(&self, ancestor_id: SnapshotId) -> bool {
         self.parent_id == Some(ancestor_id)
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// SnapshotChain — chaîne d'ancêtres
+// SnapshotChain — ancestor chain
 // ─────────────────────────────────────────────────────────────
 
-/// Représente la chaîne de snapshots menant à un snapshot donné
+/// Represents the chain of snapshots leading to a given snapshot
 #[derive(Debug)]
 pub struct SnapshotChain {
     pub ids: Vec<SnapshotId>,
@@ -355,10 +355,10 @@ impl SnapshotChain {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SnapshotRef — référence légère (pas de clone complet)
+// SnapshotRef — lightweight reference (no full clone)
 // ─────────────────────────────────────────────────────────────
 
-/// Référence légère aux métadonnées essentielles d'un snapshot
+/// Lightweight reference to the essential metadata of a snapshot
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotRef {
     pub id: SnapshotId,
@@ -385,17 +385,17 @@ impl From<&Snapshot> for SnapshotRef {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Utilitaires
+// Utilities
 // ─────────────────────────────────────────────────────────────
 
-/// Vérifie un tampon comme en-tête snapshot (HDR-03)
+/// Verifies a buffer as a snapshot header (HDR-03)
 pub fn verify_snapshot_header(buf: &[u8]) -> ExofsResult<SnapshotHeaderDisk> {
     let hdr = SnapshotHeaderDisk::from_bytes(buf)?;
     hdr.verify()?;
     Ok(hdr)
 }
 
-/// Construit un nom de snapshot depuis une slice (null-padded)
+/// Constructs a snapshot name from a slice (null-padded)
 pub fn make_snapshot_name(src: &[u8]) -> [u8; SNAPSHOT_NAME_LEN] {
     let mut name = [0u8; SNAPSHOT_NAME_LEN];
     let len = src.len().min(SNAPSHOT_NAME_LEN);
@@ -476,7 +476,7 @@ mod tests {
             name: [0u8; SNAPSHOT_NAME_LEN],
         };
         let mut hdr = snap.to_header_disk();
-        hdr.n_blobs = 999; // Modifier sans recalculer le checksum
+        hdr.n_blobs = 999; // Modify without recalculating checksum
         assert!(matches!(hdr.verify(), Err(ExofsError::ChecksumMismatch)));
     }
 

@@ -68,8 +68,10 @@ impl Default for SeqSender {
 pub enum SeqCheck {
     /// Message in expected order: process immediately.
     InOrder,
-    /// Message ahead of window: buffer it.
+    /// Message ahead of window: buffered in out-of-order window.
     Future { gap: u64 },
+    /// Message beyond the sliding window capacity (reject).
+    OutOfWindow { gap: u64 },
     /// Message already received (duplicate to reject).
     Duplicate,
     /// Message too old, outside window (reject).
@@ -135,9 +137,9 @@ impl SeqReceiver {
             SeqCheck::InOrder
         } else if seq > expected {
             let gap = seq - expected;
-            if gap >= SEQ_WINDOW_SIZE {
+            if gap > SEQ_WINDOW_SIZE {
                 // Too far in the future — cannot buffer.
-                SeqCheck::Future { gap }
+                SeqCheck::OutOfWindow { gap }
             } else {
                 // Inside the window — mark the bit.
                 let bit = 1u64 << (gap - 1);

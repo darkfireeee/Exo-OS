@@ -455,8 +455,7 @@ pub fn sys_sched_yield() -> i64 {
         if tcb_ptr != 0 {
             let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
             let cpu_id = tcb.current_cpu();
-            let rq = crate::scheduler::run_queue(cpu_id);
-            crate::scheduler::schedule_yield(rq, tcb);
+            crate::scheduler::schedule_yield(cpu_id, tcb);
         }
     }
     0

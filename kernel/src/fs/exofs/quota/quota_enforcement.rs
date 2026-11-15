@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Enforcement (application des limites)
+// ExoFS Quota — Enforcement (limit enforcement)
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::quota_audit::{QuotaEvent, QUOTA_AUDIT};
@@ -9,16 +9,16 @@ use alloc::vec::Vec;
 
 // ─── EnforcementAction ────────────────────────────────────────────────────────
 
-/// Action décidée après vérification d'une limite.
+/// Action decided after checking a limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnforcementAction {
-    /// Opération autorisée sans réserve.
+    /// Operation permitted unconditionally.
     Allow,
-    /// Opération autorisée, mais seuil soft franchi.
+    /// Operation permitted, but soft threshold breached.
     AllowWithWarning,
-    /// Opération refusée : limite hard dépassée.
+    /// Operation denied: hard limit exceeded.
     Deny,
-    /// Opération refusée : délai de grâce expiré.
+    /// Operation denied: grace period expired.
     DenyGrace,
 }
 
@@ -41,7 +41,7 @@ impl EnforcementAction {
 
 // ─── EnforcementResult ────────────────────────────────────────────────────────
 
-/// Résultat détaillé d'une vérification de quota.
+/// Detailed result of a quota check.
 #[derive(Clone, Copy, Debug)]
 pub struct EnforcementResult {
     pub action: EnforcementAction,
@@ -53,7 +53,7 @@ pub struct EnforcementResult {
     pub limit_blobs: u64,
     pub limit_inodes: u64,
     pub grace_ticks: u64,
-    /// Taille de la requête en octets.
+    /// Request size in bytes.
     pub requested: u64,
 }
 
@@ -80,7 +80,7 @@ impl EnforcementResult {
         self.action.is_deny()
     }
 
-    /// Fraction utilisée en ‰ (bytes), ARITH-02.
+    /// Fraction used in ‰ (bytes), ARITH-02.
     pub fn bytes_ppt(self) -> u64 {
         if self.limit_bytes == 0 || self.limit_bytes == u64::MAX {
             return 0;
@@ -91,7 +91,7 @@ impl EnforcementResult {
             .unwrap_or(1000)
     }
 
-    /// Fraction utilisée en ‰ (inodes), ARITH-02.
+    /// Fraction used in ‰ (inodes), ARITH-02.
     pub fn inodes_ppt(self) -> u64 {
         if self.limit_inodes == 0 || self.limit_inodes == u64::MAX {
             return 0;
@@ -109,7 +109,7 @@ impl EnforcementResult {
 
 // ─── QuotaViolation ───────────────────────────────────────────────────────────
 
-/// Violation de quota enregistrée pour l'audit.
+/// Quota violation recorded for auditing.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaViolation {
     pub key: QuotaKey,
@@ -183,7 +183,7 @@ impl EnforcementStats {
 
 // ─── QuotaEnforcer ────────────────────────────────────────────────────────────
 
-/// Moteur d'application des limites de quota.
+/// Quota limit enforcement engine.
 pub struct QuotaEnforcer {
     stats: core::cell::UnsafeCell<EnforcementStats>,
     lock: core::sync::atomic::AtomicU64,
@@ -217,7 +217,7 @@ impl QuotaEnforcer {
 
     fn add_check(&self, result: &EnforcementResult) {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let s = unsafe { &mut *self.stats.get() };
         s.checks_total = s.checks_total.saturating_add(1);
         match result.action {
@@ -234,15 +234,15 @@ impl QuotaEnforcer {
 
     pub fn stats(&self) -> EnforcementStats {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let s = unsafe { *self.stats.get() };
         self.release();
         s
     }
 
-    // ── Vérifications ────────────────────────────────────────────────────────
+    // ── Checks ───────────────────────────────────────────────────────────────
 
-    /// Vérifie si l'entité `key` peut consommer `request_bytes` octets supplémentaires.
+    /// Checks whether the entity `key` can consume `request_bytes` additional bytes.
     pub fn check_bytes(
         &self,
         key: QuotaKey,
@@ -250,7 +250,7 @@ impl QuotaEnforcer {
         tick: u64,
     ) -> ExofsResult<EnforcementResult> {
         let entry = QUOTA_TRACKER.get_entry(key);
-        // Si aucune entrée, quota non configuré → autorisé
+        // If no entry, quota unconfigured -> allowed
         let limits = match QUOTA_TRACKER.get_limits(key) {
             Some(l) if !l.is_unlimited() => l,
             _ => return Ok(self._make_allow(key)),
@@ -272,7 +272,7 @@ impl QuotaEnforcer {
                 tick,
             )
         } else if limits.soft_bytes != u64::MAX && projected > limits.soft_bytes {
-            // Soft breach : vérifier si le délai de grâce est expiré
+            // Soft breach: check whether grace period has expired
             let grace_expired = if limits.grace_ticks > 0 {
                 entry.map(|e| e.grace_expired(tick)).unwrap_or(false)
             } else {
@@ -313,7 +313,7 @@ impl QuotaEnforcer {
         Ok(result)
     }
 
-    /// Vérifie les blobs.
+    /// Checks blobs.
     pub fn check_blobs(
         &self,
         key: QuotaKey,
@@ -382,7 +382,7 @@ impl QuotaEnforcer {
         Ok(result)
     }
 
-    /// Vérifie les inodes.
+    /// Checks inodes.
     pub fn check_inodes(
         &self,
         key: QuotaKey,
@@ -451,7 +451,7 @@ impl QuotaEnforcer {
         Ok(result)
     }
 
-    /// Vérification combinée bytes + blobs + inodes.
+    /// Combined check for bytes + blobs + inodes.
     pub fn check_write(
         &self,
         key: QuotaKey,
@@ -471,7 +471,7 @@ impl QuotaEnforcer {
         self.check_inodes(key, inodes, tick)
     }
 
-    /// Applique le résultat : retourne `Err(QuotaExceeded)` si refusé.
+    /// Applies the result: returns `Err(QuotaExceeded)` if denied.
     pub fn apply(&self, result: &EnforcementResult) -> ExofsResult<()> {
         if result.is_denied() {
             Err(ExofsError::QuotaExceeded)
@@ -480,7 +480,7 @@ impl QuotaEnforcer {
         }
     }
 
-    /// `check_write` puis `apply` en une seule opération.
+    /// `check_write` then `apply` in a single operation.
     pub fn check_and_apply(
         &self,
         key: QuotaKey,
@@ -493,7 +493,7 @@ impl QuotaEnforcer {
         self.apply(&r)
     }
 
-    // ── Helpers privés ────────────────────────────────────────────────────────
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     fn _make_allow(&self, key: QuotaKey) -> EnforcementResult {
         EnforcementResult::allow(key)
@@ -526,22 +526,22 @@ impl QuotaEnforcer {
         }
     }
 
-    /// Collecte les clés en hard-dépassement (RECUR-01).
+    /// Collects keys in hard exceedance (RECUR-01).
     pub fn hard_exceeded_keys(&self) -> ExofsResult<Vec<QuotaKey>> {
         QUOTA_TRACKER.hard_exceeded_keys()
     }
 
-    /// Réinitialise les statistiques d'enforcement.
+    /// Resets enforcement statistics.
     pub fn reset_stats(&self) {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let s = unsafe { &mut *self.stats.get() };
         *s = EnforcementStats::zero();
         self.release();
     }
 }
 
-/// Singleton global du moteur d'enforcement.
+/// Global singleton of the enforcement engine.
 pub static QUOTA_ENFORCER: QuotaEnforcer = QuotaEnforcer::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -577,7 +577,7 @@ mod tests {
     fn test_deny_over_hard_limit() {
         let enforcer = QuotaEnforcer::new_const();
         let key = setup_key(101, 1_000);
-        // Remplir l'usage
+        // Fill usage
         QUOTA_TRACKER.add_bytes(key, 900).test_unwrap();
         let r = enforcer.check_bytes(key, 200, 0).test_unwrap();
         assert!(r.is_denied());

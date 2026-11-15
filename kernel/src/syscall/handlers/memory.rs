@@ -10,12 +10,28 @@ pub fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) -
     if len == 0 {
         return EINVAL;
     }
+    let fd_i32 = fd as i32;
+    if (flags as u32 & 0x20) == 0 && fd_i32 >= 0 {
+        let pid = crate::syscall::fast_path::syscall_current_pid();
+        return match crate::syscall::fs_bridge::fs_mmap_file(
+            addr,
+            len as usize,
+            prot as u32,
+            flags as u32,
+            fd_i32 as u32,
+            off,
+            pid,
+        ) {
+            Ok(va) => va as i64,
+            Err(e) => e.to_kernel_errno() as i64,
+        };
+    }
     match crate::memory::virt::mmap::do_mmap(
         addr,
         len as usize,
         prot as u32,
         flags as u32,
-        fd as i32,
+        fd_i32,
         off,
     ) {
         Ok(va) => va as i64,

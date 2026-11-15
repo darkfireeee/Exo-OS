@@ -1,33 +1,33 @@
-//! path/mod.rs — Module de résolution de chemins ExoFS
+//! path/mod.rs — ExoFS path resolution module
 //!
-//! Ce module regroupe l ensemble des sous-modules de gestion des chemins :
+//! This module aggregates all path management submodules:
 //!
-//! * `path_component` — Composant de chemin validé
-//! * `path_index_tree` — Table de hachage interne pour les index
-//! * `path_index`      — Index on-disk de répertoire
-//! * `path_index_split`— Découpe d index
-//! * `path_index_merge`— Fusion d index
-//! * `path_cache`      — Cache de résolution
-//! * `canonicalize`    — Normalisation itérative de chemins
-//! * `symlink`         — Liens symboliques
-//! * `path_walker`     — Itération de chemin
-//! * `mount_point`     — Points de montage
-//! * `namespace`       — Espaces de nommage
-//! * `resolver`        — Résolution itérative complète
+//! * `path_component`   — Validated path component
+//! * `path_index_tree`  — Internal hash table for indices
+//! * `path_index`       — On-disk directory index
+//! * `path_index_split` — Index splitting
+//! * `path_index_merge` — Index merging
+//! * `path_cache`       — Resolution cache
+//! * `canonicalize`     — Iterative path normalization
+//! * `symlink`          — Symbolic links
+//! * `path_walker`      — Path iteration
+//! * `mount_point`      — Mount points
+//! * `namespace`        — Namespaces
+//! * `resolver`         — Full iterative resolution
 //!
-//! # Règles appliquées
+//! # Applied Rules
 //!
-//! | Règle     | Description                                       |
+//! | Rule      | Description                                       |
 //! |-----------|---------------------------------------------------|
-//! | RECUR-01  | Aucune récursion — boucles itératives seulement   |
-//! | PATH-07   | Jamais de [u8; PATH_MAX] sur la pile              |
-//! | OOM-02    | try_reserve avant tout push / insert              |
-//! | ARITH-02  | Arithmétique vérifiée (checked_add / checked_mul) |
-//! | HDR-03    | Magic vérifié en premier dans tout parse on-disk  |
-//! | ONDISK-03 | Pas d AtomicU64 dans les structs repr(C)          |
+//! | RECUR-01  | No recursion — iterative loops only               |
+//! | PATH-07   | Never allocate [u8; PATH_MAX] on stack            |
+//! | OOM-02    | try_reserve before any push / insert              |
+//! | ARITH-02  | Checked arithmetic (checked_add / checked_mul)    |
+//! | HDR-03    | Magic checked first in any on-disk parse          |
+//! | ONDISK-03 | No AtomicU64 in repr(C) structs                   |
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sous-modules
+// Submodules
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod canonicalize;
@@ -44,7 +44,7 @@ pub mod resolver;
 pub mod symlink;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — path_component
+// Re-exports — path_component
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use path_component::{
@@ -53,13 +53,13 @@ pub use path_component::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — path_index
+// Re-exports — path_index
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use path_index::{PathIndex, PathIndexEntry, PathIndexHeader, PATH_INDEX_MAGIC};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — path_cache
+// Re-exports — path_cache
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use path_cache::{
@@ -68,13 +68,13 @@ pub use path_cache::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — canonicalize
+// Re-exports — canonicalize
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use canonicalize::{canonicalize_path, canonicalize_to_vec, CanonicalPath, PathNormalizer};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — symlink
+// Re-exports — symlink
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use symlink::{
@@ -83,7 +83,7 @@ pub use symlink::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — mount_point
+// Re-exports — mount_point
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use mount_point::{
@@ -93,7 +93,7 @@ pub use mount_point::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — namespace
+// Re-exports — namespace
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use namespace::{
@@ -103,7 +103,7 @@ pub use namespace::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — resolver
+// Re-exports — resolver
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use resolver::{
@@ -112,7 +112,7 @@ pub use resolver::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — path_walker
+// Re-exports — path_walker
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use path_walker::{
@@ -120,38 +120,38 @@ pub use path_walker::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Réexports — path_index_split / merge
+// Re-exports — path_index_split / merge
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use path_index_merge::{MergeConflictPolicy, MergeMetrics, MergeResult, PathIndexMerger};
 pub use path_index_split::{PathIndexSplitter, SplitMetrics, SplitPolicy, SplitResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Initialisation du module
+// Module initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise tous les sous-systèmes du module path.
+/// Initializes all subsystems of the path module.
 ///
-/// À appeler une seule fois au démarrage du noyau, après que l allocateur
-/// est opérationnel.
+/// To be called once during kernel startup, after the allocator
+/// is operational.
 pub fn init(fs_root_oid: crate::fs::exofs::core::ObjectId) {
     path_index::ensure_mount_key_initialized();
     init_path_cache();
     let _ = init_namespaces(fs_root_oid);
 }
 
-/// Libère / remet à zéro les ressources du module path.
+/// Releases / resets resources of the path module.
 ///
-/// À appeler au démontage propre ou en cas d erreur fatale.
+/// To be called during clean unmount or fatal error.
 pub fn shutdown() {
     PATH_CACHE.flush_all();
     MOUNT_TABLE.flush();
     NAMESPACE_TABLE.flush_non_root();
 }
 
-/// Vérifie la santé globale du module.
+/// Verifies global module health.
 ///
-/// Retourne `true` si tous les invariants sont respectés.
+/// Returns `true` if all invariants hold.
 pub fn verify_health() -> bool {
     let cache_ok = PATH_CACHE.active_count() <= 256;
     let mounts_ok = MOUNT_TABLE.count() <= MOUNT_TABLE_MAX;
@@ -160,7 +160,7 @@ pub fn verify_health() -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests d intégration
+// Integration tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

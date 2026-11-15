@@ -62,7 +62,10 @@ impl StatsCollector {
     }
 
     pub fn note_register(&mut self, thread: ThreadSnapshot) {
-        let idx = self.ensure_slot(thread.pid, thread.tid);
+        let Some(idx) = self.ensure_slot(thread.pid, thread.tid) else {
+            return;
+        };
+        self.records[idx] = StatsRecord::empty();
         self.records[idx].active = true;
         self.records[idx].pid = thread.pid;
         self.records[idx].tid = thread.tid;
@@ -72,32 +75,42 @@ impl StatsCollector {
     }
 
     pub fn note_priority(&mut self, thread: ThreadSnapshot) {
-        let idx = self.ensure_slot(thread.pid, thread.tid);
+        let Some(idx) = self.ensure_slot(thread.pid, thread.tid) else {
+            return;
+        };
         self.records[idx].priority_weight = thread.priority_weight;
         self.records[idx].class = thread.class;
         self.records[idx].priority_updates = self.records[idx].priority_updates.saturating_add(1);
     }
 
     pub fn note_policy(&mut self, thread: ThreadSnapshot) {
-        let idx = self.ensure_slot(thread.pid, thread.tid);
+        let Some(idx) = self.ensure_slot(thread.pid, thread.tid) else {
+            return;
+        };
         self.records[idx].class = thread.class;
         self.records[idx].priority_weight = thread.priority_weight;
         self.records[idx].policy_updates = self.records[idx].policy_updates.saturating_add(1);
     }
 
     pub fn note_affinity(&mut self, thread: ThreadSnapshot) {
-        let idx = self.ensure_slot(thread.pid, thread.tid);
+        let Some(idx) = self.ensure_slot(thread.pid, thread.tid) else {
+            return;
+        };
         self.records[idx].affinity_mask = thread.affinity_mask;
         self.records[idx].affinity_updates = self.records[idx].affinity_updates.saturating_add(1);
     }
 
     pub fn note_yield(&mut self, pid: u32, tid: u32) {
-        let idx = self.ensure_slot(pid, tid);
+        let Some(idx) = self.ensure_slot(pid, tid) else {
+            return;
+        };
         self.records[idx].yield_count = self.records[idx].yield_count.saturating_add(1);
     }
 
     pub fn note_error(&mut self, pid: u32, tid: u32, err: i64) {
-        let idx = self.ensure_slot(pid, tid);
+        let Some(idx) = self.ensure_slot(pid, tid) else {
+            return;
+        };
         self.records[idx].last_error = err;
     }
 
@@ -124,20 +137,21 @@ impl StatsCollector {
         self.records.iter().filter(|entry| entry.active).count() as u32
     }
 
-    fn ensure_slot(&mut self, pid: u32, tid: u32) -> usize {
+    fn ensure_slot(&mut self, pid: u32, tid: u32) -> Option<usize> {
         if let Some(idx) = self
             .records
             .iter()
             .position(|entry| entry.active && entry.tid == tid)
         {
-            return idx;
+            return Some(idx);
         }
         if let Some(idx) = self.records.iter().position(|entry| !entry.active) {
+            self.records[idx] = StatsRecord::empty();
             self.records[idx].active = true;
             self.records[idx].pid = pid;
             self.records[idx].tid = tid;
-            return idx;
+            return Some(idx);
         }
-        0
+        None
     }
 }

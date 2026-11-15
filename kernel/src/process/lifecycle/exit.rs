@@ -10,7 +10,6 @@ use crate::process::core::pcb::{process_flags, ProcessControlBlock, ProcessState
 use crate::process::core::tcb::ProcessThread;
 use crate::process::signal::default::Signal;
 use crate::process::signal::delivery::send_signal_to_pid;
-use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::schedule_block;
 use crate::scheduler::core::task::TaskState;
 use core::sync::atomic::Ordering;
@@ -47,11 +46,24 @@ fn mark_exit(
     exit_status: u32,
     join_result: u64,
 ) {
+    let ctid = thread.clear_child_tid.swap(0, Ordering::AcqRel);
+    if ctid != 0 && ctid < crate::syscall::validation::USER_ADDR_MAX {
+        let phys_ctid = crate::syscall::validation::resolve_user_read_u32_and_phys(ctid)
+            .ok()
+            .map(|(_, phys)| phys);
+        let _ = crate::syscall::validation::write_user_typed::<u32>(ctid, 0);
+        // SAFETY: ctid is a validated canonical user address for this PCB.
+        unsafe {
+            crate::memory::utils::futex_table::wake_clear_child_tid(pcb.pid.0, ctid, phys_ctid);
+        }
+    }
+
     thread.join_result.store(join_result, Ordering::Release);
     thread.join_done.store(true, Ordering::Release);
     // FIX-PROC-JOIN-01: wake up threads blocked in pthread_join.
     crate::process::thread::join::wake_joiners();
     crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&thread.sched_tcb);
+    thread.sched_tcb.mark_exiting();
     thread.set_state(TaskState::Dead);
     unsafe {
         crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);
@@ -72,6 +84,8 @@ fn mark_exit(
         }
         close_all_pid_vfs(pcb.pid.0);
         drivers::driver_do_exit(pcb.pid.0);
+        let _ = crate::security::unregister_service(pcb.pid);
+        crate::security::zero_trust::clear_process_restrictions(pcb.pid.0);
 
         crate::security::exoledger::exo_ledger_append(
             crate::security::exoledger::ActionTag::Custom {
@@ -100,8 +114,7 @@ fn deschedule_exited_thread(thread: &mut ProcessThread) -> ! {
             }
             core::hint::spin_loop();
         }
-        let rq = run_queue(cpu_id);
-        schedule_block(rq, &mut thread.sched_tcb);
+        schedule_block(cpu_id, &mut thread.sched_tcb);
     }
     halt_forever()
 }

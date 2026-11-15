@@ -54,8 +54,8 @@ ExoOS enforces a strict privilege boundary between `#![no_std]` kernel/critical 
 
 - **Ring 0 & Critical Ring 1 (`#![no_std]`, `panic = "abort"`)**: `kernel/`, `exo-boot/`, shared ABI crates (`libs/exo_types`, `libs/exo-phoenix-ssr`, `servers/syscall_abi`), and Wave 0–2 system servers (`init_server`, `ipc_router`, `memory_server`, `device_server`, `crypto_server`, hardware drivers) remain strictly `#![no_std]`.
 - **Full `rust-lang/rust` `library/std` Port (`x86_64-unknown-exo.json`)**:
-  - **Platform Abstraction Layer (`library/std/src/sys/pal/exo_os/`)**: Pure-Rust PAL over ExoOS Ring 0/Ring 1 syscalls (`0..=549`), `GenericTcb`/`ExoTcb` static TLS (`%fs:0`), 0-syscall `sigaction` (`LOCK CMPXCHG16B`) and `sigprocmask` (`AtomicU64`) via the shared `SignalTcb` page (`AT_SIGNAL_TCB = 51`), and a 100% Rust `dlmalloc` global allocator over `SYS_MMAP`/`SYS_MREMAP`/`SYS_MUNMAP` with zero C symbols.
-  - **Modular `std::sys::*` Backends (`exo.rs`)**: Native support for `alloc`, `args`, `env`, `fd`, `fs`, `io`, `net`, `pipe`, `process` (`fork`/`execve`/`wait4`), `random` (`SYS_GETRANDOM` + `AT_RANDOM`), `stdio`, `sync` (`futex`), `thread`, `thread_local`, and `time`.
+  - **Platform Abstraction Layer (`library/std/src/sys/pal/exo_os/`)**: Pure-Rust PAL over ExoOS Ring 0/Ring 1 syscalls (`0..=549`), `GenericTcb`/`ExoTcb` static and per-thread dynamic TLS (`%fs:0`, `PT_TLS`), 0-syscall `sigaction` (`LOCK CMPXCHG16B`) and `sigprocmask` (`AtomicU64`) via the shared `SignalTcb` page (`AT_SIGNAL_TCB = 51`), and a 100% Rust `dlmalloc` global allocator over `SYS_MMAP`/`SYS_MREMAP`/`SYS_MUNMAP` with zero C symbols.
+  - **Modular `std::sys::*` Backends (`exo.rs`)**: Native support for `alloc`, `args`, `env`, `fd`, `fs` (including `flock`, `utimensat`, `lstat` symlinks, and iterative `canonicalize`), `io` (`ioctl(TIOCGWINSZ)` terminal detection), `net` (socket timeouts via `poll` + `SO_RCVTIMEO`/`SO_SNDTIMEO`, `peek`, `getsockname`/`getpeername`, `setsockopt`/`getsockopt`), `pipe`, `process` (`fork`/`execve`/`wait4` with `PATH` lookup and child capability `pledge`), `random` (`SYS_GETRANDOM` + `AT_RANDOM`), `stdio`, `sync` (real blocking kernel `SYS_FUTEX`), `thread` (real OS threads via `SYS_CLONE` with guard-paged stacks, `CLONE_SETTLS`, and `CLONE_CHILD_CLEARTID` futex join), `thread_local`, and `time`.
   - **ExoOS-Specific Extensions (`std::os::exo`)**:
     - `CapTokenExt`: Inspect, attenuate (`clone_for_child`), and delegate capability tokens (`AT_CAP_TOKEN = 52`).
     - `ExoFsExt`: Native CoW snapshots, B+Tree searches, and extended attributes on `std::fs::File`.
@@ -65,12 +65,12 @@ ExoOS enforces a strict privilege boundary between `#![no_std]` kernel/critical 
 
 ## Pure-Rust Wayland Stack (`wayland-rs`)
 
-With real `std`, `epoll`, and `AF_UNIX` with `SCM_RIGHTS` in place, ExoOS runs the official pure-Rust `wayland-rs` ecosystem in userspace (detailed in [`docs/wayland_rs_integration.md`](docs/wayland_rs_integration.md)):
+With real `std`, blocking `epoll`/`poll`, `SYS_MEMFD_CREATE`, shared physical page `mmap(MAP_SHARED)`, and `AF_UNIX` with `SCM_RIGHTS` in place, ExoOS runs the official pure-Rust `wayland-rs` ecosystem in userspace (detailed in [`docs/wayland_rs_integration.md`](docs/wayland_rs_integration.md)):
 
-- **Modular Wayland Crates (`libs/wayland-rs/`)**: Includes `wayland-backend` (pure Rust wire protocol engine), `wayland-client`, `wayland-server`, `wayland-protocols` (XDG Shell, compositor, etc.), and `wayland-cursor`.
-- **System Compatibility (`exo-rustix`)**: Lightweight `rustix` compatibility layer enabling standard Wayland server/client socket polling on `target_os = "exo"`.
-- **Compositor & Client Communication**: Zero-overhead IPC over Unix domain sockets (`AF_UNIX`) using file descriptor passing (`SCM_RIGHTS`) and `epoll` event dispatching.
-- **Live Verification**: `exosh` provides the `exo wayland` builtin verifying live compositor/client roundtrips (`wl_compositor`, `wl_shm`, `xdg_wm_base`, surface allocation).
+- **Modular Wayland Crates (`libs/wayland-rs/`)**: Tracked directly in the repository (`wayland-backend`, `wayland-client`, `wayland-server`, `wayland-protocols`, `wayland-cursor`, `wayland-scanner`).
+- **System Compatibility (`exo-rustix`)**: Lightweight `rustix` compatibility layer enabling standard Wayland server/client socket polling, `SCM_RIGHTS` ancillary FD transfer, and `memfd` operations on `target_os = "exo"`.
+- **Compositor & Client Communication**: Zero-copy shared memory pools (`wl_shm` over `SYS_MEMFD_CREATE` + `mmap(MAP_SHARED)`) and IPC over Unix domain sockets (`AF_UNIX`) using file descriptor passing (`SCM_RIGHTS`), peer-close `EPOLLHUP`/`POLLHUP` detection, and blocking `epoll_wait` event dispatching.
+- **Live Verification**: `exosh` provides the `exo wayland` builtin verifying live OS multi-threading (`std::thread::spawn` + `PT_TLS` + `SYS_FUTEX`) and full compositor/client roundtrips (`wl_compositor`, `wl_shm` pixel buffer verification via `SCM_RIGHTS` + `MAP_SHARED`, `xdg_wm_base`/`xdg_surface`/`xdg_toplevel` configure/ack_configure, and surface commits).
 
 ---
 

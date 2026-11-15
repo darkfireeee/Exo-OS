@@ -1,25 +1,25 @@
-//! Module ExoFS Dedup — déduplication de données (no_std).
+//! ExoFS Dedup module — data deduplication (no_std).
 //!
-//! Sous-modules :
-//!  - `chunking`           : traits et structures de base pour le découpage.
-//!  - `chunk_fingerprint`  : empreintes cryptographiques et rapides de chunks.
-//!  - `content_hash`       : calcul du BlobId (RÈGLE 11 : blake3 avant compres.).
-//!  - `chunker_fixed`      : découpage à taille fixe.
-//!  - `chunker_cdc`        : découpage content-defined (Rabin-Karp).
-//!  - `chunk_cache`        : cache LRU de chunks.
-//!  - `chunk_index`        : index global de tous les chunks.
-//!  - `blob_registry`      : registre des blobs avec ref-counting.
-//!  - `blob_sharing`       : suivi chunk ↔ blobs partagés.
-//!  - `dedup_policy`       : politiques de déduplication configurables.
-//!  - `dedup_stats`        : statistiques et métriques du moteur.
-//!  - `similarity_detect`  : détection de similarité par min-hashing.
-//!  - `dedup_api`          : API haut niveau du moteur.
+//! Submodules:
+//!  - `chunking`           : base traits and structures for chunk splitting.
+//!  - `chunk_fingerprint`  : cryptographic and fast chunk fingerprints.
+//!  - `content_hash`       : BlobId computation (RULE 11: blake3 before compression).
+//!  - `chunker_fixed`      : fixed-size chunking.
+//!  - `chunker_cdc`        : content-defined chunking (Rabin-Karp).
+//!  - `chunk_cache`        : chunk LRU cache.
+//!  - `chunk_index`        : global index of all chunks.
+//!  - `blob_registry`      : blob registry with ref-counting.
+//!  - `blob_sharing`       : chunk <-> shared blobs tracking.
+//!  - `dedup_policy`       : configurable deduplication policies.
+//!  - `dedup_stats`        : engine statistics and metrics.
+//!  - `similarity_detect`  : similarity detection via min-hashing.
+//!  - `dedup_api`          : high-level engine API.
 //!
-//! RÈGLE 11 : BlobId = blake3(données AVANT compression/chiffrement).
+//! RULE 11: BlobId = blake3(data BEFORE compression/encryption).
 //!
-//! RECUR-01 : aucune récursion dans tout le module.
-//! OOM-02   : try_reserve sur tous les Vec.
-//! ARITH-02 : saturating / checked / wrapping sur toute l'arithmétique.
+//! RECUR-01: zero recursion across the entire module.
+//! OOM-02  : try_reserve on all Vec allocations.
+//! ARITH-02: saturating / checked / wrapping on all arithmetic.
 
 pub mod blob_registry;
 pub mod blob_sharing;
@@ -36,7 +36,7 @@ pub mod dedup_stats;
 pub mod similarity_detect;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Re-exports publics
+// Public re-exports
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use chunking::{
@@ -85,12 +85,12 @@ pub use similarity_detect::{
 pub use dedup_api::{DedupApi, DedupApiSummary, DedupBatchReport, DedupHealthStatus, DedupResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DedupConfig — configuration centrale du module
+// DedupConfig — central module configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
-/// Configuration globale du module dedup.
+/// Global configuration for the dedup module.
 #[derive(Debug, Clone)]
 pub struct DedupConfig {
     pub policy: DedupPolicy,
@@ -126,70 +126,70 @@ impl DedupConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DedupModule — orchestrateur du module
+// DedupModule — module orchestrator
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Point d'entrée unifié du module de déduplication.
+/// Unified entry point for the deduplication module.
 pub struct DedupModule {
     pub config: DedupConfig,
     api: DedupApi,
 }
 
 impl DedupModule {
-    /// Initialise le module avec une configuration.
+    /// Initializes the module with a configuration.
     pub fn init(config: DedupConfig) -> ExofsResult<Self> {
         config.validate()?;
         let api = DedupApi::new(config.policy.clone())?;
         Ok(Self { config, api })
     }
 
-    /// Initialise avec la configuration par défaut.
+    /// Initializes with default configuration.
     pub fn init_default() -> ExofsResult<Self> {
         Self::init(DedupConfig::default())
     }
 
-    /// Déduplique un blob.
+    /// Deduplicates a blob.
     pub fn dedup(&self, data: &[u8]) -> ExofsResult<DedupResult> {
         self.api.dedup_blob(data)
     }
 
-    /// Déduplique un lot de blobs.
+    /// Deduplicates a batch of blobs.
     pub fn dedup_batch(&self, blobs: &[&[u8]]) -> ExofsResult<alloc::vec::Vec<DedupResult>> {
         self.api.dedup_batch(blobs)
     }
 
-    /// Supprime un blob et libère les chunks orphelins.
+    /// Deletes a blob and frees orphan chunks.
     pub fn delete(&self, blob_id: &crate::fs::exofs::core::BlobId) -> ExofsResult<u32> {
         self.api.delete_blob(blob_id)
     }
 
-    /// Contrôle de santé.
+    /// Health check.
     pub fn health_check(&self) -> DedupHealthStatus {
         self.api.health_check()
     }
 
-    /// Résumé de l'état.
+    /// State summary.
     pub fn summary(&self) -> DedupApiSummary {
         self.api.summary()
     }
 
-    /// Statistiques complètes.
+    /// Complete statistics snapshot.
     pub fn stats_snapshot(&self) -> DedupStatsSummary {
         DEDUP_STATS.snapshot()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité de niveau module
+// Module-level convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Déduplique un blob avec la politique par défaut.
-/// Fonction de commodité — utilise les singletons globaux.
+/// Deduplicates a blob using the default policy.
+/// Convenience function — uses global singletons.
 pub fn dedup_blob(data: &[u8]) -> ExofsResult<DedupResult> {
     DedupApi::with_default_policy()?.dedup_blob(data)
 }
 
-/// Vérifie l'intégrité de tout le sous-système de déduplication.
+/// Verifies integrity of the entire deduplication subsystem.
 pub fn verify_dedup_integrity() -> ExofsResult<()> {
     BLOB_REGISTRY.verify_integrity()?;
     BLOB_SHARING.verify_integrity()?;
@@ -197,13 +197,13 @@ pub fn verify_dedup_integrity() -> ExofsResult<()> {
     Ok(())
 }
 
-/// Retourne les statistiques actuelles de déduplication.
+/// Returns current deduplication statistics.
 pub fn current_stats() -> DedupStatsSummary {
     DEDUP_STATS.snapshot()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests d'intégration du module
+// Module integration tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -295,10 +295,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DedupGarbageCollector — collecteur de garbage pour les chunks orphelins
+// DedupGarbageCollector — garbage collector for orphan chunks
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un cycle de GC.
+/// Result of a GC cycle.
 #[derive(Debug, Clone, Copy)]
 pub struct GarbageCollectionResult {
     pub orphan_chunks_cleaned: usize,
@@ -316,13 +316,13 @@ impl GarbageCollectionResult {
     }
 }
 
-/// Collecteur de chunks et blobs orphelins.
+/// Garbage collector for orphan chunks and blobs.
 pub struct DedupGarbageCollector;
 
 impl DedupGarbageCollector {
-    /// Supprime tous les blobs orphelins (ref_count == 0).
+    /// Removes all orphan blobs (ref_count == 0).
     ///
-    /// RECUR-01 : boucle for.
+    /// RECUR-01 : for loop.
     /// ARITH-02 : saturating_add.
     pub fn collect_orphan_blobs() -> ExofsResult<GarbageCollectionResult> {
         let orphans = BLOB_REGISTRY.orphan_blobs()?;
@@ -343,9 +343,9 @@ impl DedupGarbageCollector {
         })
     }
 
-    /// Supprime tous les chunks orphelins de l'index.
+    /// Removes all orphan chunks from index.
     ///
-    /// RECUR-01 : boucle for.
+    /// RECUR-01 : for loop.
     /// ARITH-02 : saturating_add.
     pub fn collect_orphan_chunks() -> ExofsResult<GarbageCollectionResult> {
         let keys = CHUNK_INDEX.orphan_keys()?;
@@ -361,7 +361,7 @@ impl DedupGarbageCollector {
         })
     }
 
-    /// Cycle de GC complet.
+    /// Full GC cycle.
     pub fn full_collect() -> ExofsResult<GarbageCollectionResult> {
         let r1 = Self::collect_orphan_blobs()?;
         let r2 = Self::collect_orphan_chunks()?;
@@ -374,14 +374,14 @@ impl DedupGarbageCollector {
 }
 
 impl DedupModule {
-    /// Lance un cycle de garbage collection.
+    /// Triggers a garbage collection cycle.
     pub fn gc(&self) -> ExofsResult<GarbageCollectionResult> {
         DedupGarbageCollector::full_collect()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests GC
+// GC tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -391,7 +391,7 @@ mod tests_gc {
     #[test]
     fn test_gc_empty_state() {
         let r = DedupGarbageCollector::full_collect().test_unwrap();
-        let _ = r.orphan_blobs_cleaned; // accès sans panique
+        let _ = r.orphan_blobs_cleaned; // access without panic
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests_gc {
         let data = &[0xEEu8; CDC_AVG_SIZE];
         let r1 = m.dedup(data).test_unwrap();
         let r2 = m.dedup(data).test_unwrap();
-        // Le second appel doit reconnaître le blob.
+        // The second call must recognize the blob.
         assert!(!r2.is_new);
         assert_eq!(r1.blob_id.as_bytes(), r2.blob_id.as_bytes());
     }

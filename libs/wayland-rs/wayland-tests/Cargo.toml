@@ -1,0 +1,30 @@
+[package]
+name = "wayland-tests"
+version = "0.1.11"
+edition = "2024"
+rust-version = "1.86"
+publish = false
+
+[dependencies]
+rustix = "1.1.4"
+wayland-client = { path = "../wayland-client" }
+wayland-server = { path = "../wayland-server" }
+
+[dev-dependencies]
+wayland-protocols = { path = "../wayland-protocols", features = ["client", "server"] }
+tempfile = "3"
+
+[features]
+server_system = ["wayland-server/system"]
+client_system = ["wayland-client/system"]
+libwayland_client_1_23 = ["wayland-client/libwayland_1_23"]
+libwayland_server_1_22 = ["wayland-server/libwayland_1_22"]
+libwayland_server_1_23 = ["libwayland_server_1_22", "wayland-server/libwayland_1_23"]
+
+[[test]]
+name = "client_connect_to_env"
+harness = false
+
+[[test]]
+name = "client_connect_to_socket"
+harness = false

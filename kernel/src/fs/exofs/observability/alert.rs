@@ -1,17 +1,17 @@
-//! alert.rs — Système d'alertes ExoFS (no_std).
+//! alert.rs — ExoFS Alert System (no_std).
 //!
-//! Fournit :
-//!  - `AlertLevel`      : niveau d'alerte (Info/Warning/Error/Critical).
-//!  - `AlertCode`       : code d'alerte typé.
-//!  - `Alert`           : entrée 64 bytes repr C.
-//!  - `AlertLog`        : ring circulaire de 256 entrées (spinlock-free).
-//!  - `AlertFilter`     : filtre par niveau minimum.
-//!  - `AlertCounter`    : compteurs par niveau.
-//!  - `AlertManager`    : interface haut niveau.
-//!  - `ALERT_LOG`       : singleton global.
+//! Provides :
+//!  - `AlertLevel`      : alert level (Info/Warning/Error/Critical).
+//!  - `AlertCode`       : typed alert code.
+//!  - `Alert`           : 64-byte repr C entry.
+//!  - `AlertLog`        : 256-entry circular ring (spinlock-free).
+//!  - `AlertFilter`     : filter by minimum level.
+//!  - `AlertCounter`    : counters per level.
+//!  - `AlertManager`    : high-level interface.
+//!  - `ALERT_LOG`       : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -57,13 +57,13 @@ impl AlertLevel {
 
 // ─── AlertCode ────────────────────────────────────────────────────────────────
 
-/// Code d'alerte structuré (catégorie haute 8 bits + sous-code bas 8 bits).
+/// Structured alert code (high 8-bit category + low 8-bit subcode).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AlertCode(pub u16);
 
 impl AlertCode {
-    /// Construit un code d'alerte.
+    /// Constructs an alert code.
     pub const fn new(code: u16) -> Self {
         Self(code)
     }
@@ -93,7 +93,7 @@ impl AlertCode {
 
 // ─── Alert ────────────────────────────────────────────────────────────────────
 
-/// Entrée d'alerte (64 bytes, repr C).
+/// Alert entry (64 bytes, repr C).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Alert {
@@ -139,7 +139,7 @@ impl Alert {
         self.tick == 0
     }
 
-    /// Copie le message dans un Vec (OOM-02).
+    /// Copies the message into a Vec (OOM-02).
     pub fn msg_to_vec(&self) -> ExofsResult<Vec<u8>> {
         let mut end = 46usize;
         while end > 0 && self.msg[end.wrapping_sub(1)] == 0 {
@@ -160,19 +160,19 @@ impl Alert {
 
 pub const ALERT_RING_SIZE: usize = 256;
 
-/// Ring circulaire d'alertes (atomic head, UnsafeCell slots).
+/// Circular ring of alerts (atomic head, UnsafeCell slots).
 pub struct AlertLog {
     ring: [UnsafeCell<Alert>; ALERT_RING_SIZE],
     head: AtomicU64,
-    tick: AtomicU64, // tick interne monotone
-    // Compteurs par niveau
+    tick: AtomicU64, // internal monotonic tick
+    // Counters per level
     n_info: AtomicU64,
     n_warning: AtomicU64,
     n_error: AtomicU64,
     n_critical: AtomicU64,
 }
 
-// SAFETY: accès géré par index atomique tournant.
+// SAFETY: access managed by rotating atomic index.
 unsafe impl Sync for AlertLog {}
 unsafe impl Send for AlertLog {}
 
@@ -194,12 +194,12 @@ impl AlertLog {
         self.tick.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Ajoute une alerte dans le ring.
+    /// Adds an alert to the ring.
     pub fn push(&self, level: AlertLevel, code: AlertCode, msg: &[u8]) {
         let t = self.next_tick();
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % ALERT_RING_SIZE;
         let entry = Alert::new(t, level, code, msg);
-        // SAFETY: index tournant atomique — pas de double écriture simultanée.
+        // SAFETY: atomic rotating index — no concurrent double write.
         unsafe {
             *self.ring[idx].get() = entry;
         }
@@ -219,7 +219,7 @@ impl AlertLog {
         }
     }
 
-    /// Helpers sémantiques.
+    /// Semantic helpers.
     pub fn info(&self, code: AlertCode, msg: &[u8]) {
         self.push(AlertLevel::Info, code, msg);
     }
@@ -233,7 +233,7 @@ impl AlertLog {
         self.push(AlertLevel::Critical, code, msg);
     }
 
-    /// Compteurs par niveau.
+    /// Counters per level.
     pub fn count_info(&self) -> u64 {
         self.n_info.load(Ordering::Relaxed)
     }
@@ -254,15 +254,15 @@ impl AlertLog {
             .saturating_add(self.n_critical.load(Ordering::Relaxed))
     }
 
-    /// Dernier événement enregistré.
+    /// Latest recorded event.
     pub fn latest(&self) -> Alert {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(ALERT_RING_SIZE).wrapping_sub(1)) % ALERT_RING_SIZE;
-        // SAFETY: lecture diagnostic.
+        // SAFETY: diagnostic read.
         unsafe { *self.ring[idx].get() }
     }
 
-    /// Collecte les n dernières alertes (RECUR-01 : while / OOM-02).
+    /// Collects the last n alerts (RECUR-01: while / OOM-02).
     pub fn last_n(
         &self,
         n: usize,
@@ -280,7 +280,7 @@ impl AlertLog {
                 .wrapping_sub(i)
                 .wrapping_sub(1))
                 % ALERT_RING_SIZE;
-            // SAFETY: lecture diagnostic.
+            // SAFETY: diagnostic read.
             let a = unsafe { *self.ring[idx].get() };
             if a.is_empty() {
                 i = i.wrapping_add(1);
@@ -299,12 +299,12 @@ impl AlertLog {
         Ok(())
     }
 
-    /// Vérifie si le système est en état d'alerte critique active.
+    /// Checks if the system is in an active critical alert state.
     pub fn has_critical(&self) -> bool {
         self.n_critical.load(Ordering::Relaxed) > 0
     }
 
-    /// Ratio d'erreurs * 1000 (ARITH-02).
+    /// Error ratio * 1000 (ARITH-02).
     pub fn error_ratio_pct10(&self) -> u64 {
         let total = self.total_alerts();
         let err = self
@@ -315,16 +315,16 @@ impl AlertLog {
     }
 }
 
-/// Singleton global.
+/// Global singleton.
 pub static ALERT_LOG: AlertLog = AlertLog::new_const();
 
 // ─── AlertFilter ─────────────────────────────────────────────────────────────
 
-/// Filtre configurable par niveau minimum.
+/// Configurable filter by minimum level.
 #[derive(Clone, Copy, Debug)]
 pub struct AlertFilter {
     pub min_level: AlertLevel,
-    pub code_mask: Option<u8>, // catégorie de code à retenir (None = toutes)
+    pub code_mask: Option<u8>, // code category to retain (None = all)
 }
 
 impl AlertFilter {
@@ -362,7 +362,7 @@ impl AlertFilter {
 
 // ─── AlertManager ────────────────────────────────────────────────────────────
 
-/// Interface haut niveau pour émettre et inspecter les alertes.
+/// High-level interface to emit and inspect alerts.
 pub struct AlertManager<'a> {
     log: &'a AlertLog,
     filter: AlertFilter,
@@ -397,7 +397,7 @@ impl<'a> AlertManager<'a> {
                 .wrapping_sub(i)
                 .wrapping_sub(1))
                 % ALERT_RING_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             let a = unsafe { *self.log.ring[idx].get() };
             if !a.is_empty() && self.filter.matches(&a) {
                 out.push(a);

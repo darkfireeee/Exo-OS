@@ -19,7 +19,7 @@ use super::*;
 
 pub static VFS_REGISTERED: AtomicBool = AtomicBool::new(false);
 
-/// Enregistre ExoFS comme opérateur VFS actif.
+/// Registers ExoFS as active VFS operator.
 pub fn register_exofs_vfs_ops() -> ExofsResult<()> {
     if VFS_REGISTERED
         .compare_exchange(false, true, Ordering::Release, Ordering::Relaxed)
@@ -33,12 +33,12 @@ pub fn register_exofs_vfs_ops() -> ExofsResult<()> {
     Ok(())
 }
 
-/// Retourne vrai si le VFS ExoFS est enregistré.
+/// Returns true if ExoFS VFS is registered.
 pub fn vfs_is_registered() -> bool {
     VFS_REGISTERED.load(Ordering::Acquire)
 }
 
-/// Retourne le numéro d'inode de la racine du FS.
+/// Returns inode number of FS root.
 pub fn root_inode() -> ObjectIno {
     VFS_ROOT_INO
 }

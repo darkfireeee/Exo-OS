@@ -46,21 +46,25 @@ static BLOCK_HOOK: SpinLock<Option<BlockFn>> = SpinLock::new(None);
 /// Maximum number of IPC threads that can sleep simultaneously.
 pub const MAX_SLEEPING_IPC: usize = 128;
 
+const ENTRY_FREE: usize = 0;
+const ENTRY_PREPARING: usize = 1;
+const ENTRY_WOKEN_EARLY: usize = usize::MAX;
+
 #[repr(C)]
 struct SleepEntry {
     tid: u64,
-    tcb_ptr: usize, // *mut ThreadControlBlock encoded as usize
+    tcb_ptr: usize, // ENTRY_FREE / ENTRY_PREPARING / ENTRY_WOKEN_EARLY / *mut ThreadControlBlock
 }
 
 impl SleepEntry {
     const fn empty() -> Self {
-        Self { tid: 0, tcb_ptr: 0 }
+        Self { tid: 0, tcb_ptr: ENTRY_FREE }
     }
     fn is_free(&self) -> bool {
-        self.tcb_ptr == 0
+        self.tcb_ptr == ENTRY_FREE
     }
     fn is_pending_wake(&self) -> bool {
-        self.tcb_ptr == usize::MAX
+        self.tcb_ptr == ENTRY_WOKEN_EARLY
     }
 }
 
@@ -85,49 +89,81 @@ impl SleepRegistry {
         }
     }
 
-    /// Registers (tid, tcb), or consumes an early wakeup.
-    fn register(&mut self, tid: u64, tcb: *mut ThreadControlBlock) -> RegisterResult {
-        for e in self.entries.iter_mut() {
-            if e.tid == tid && e.is_pending_wake() {
-                *e = SleepEntry::empty();
-                return RegisterResult::AlreadyWoken;
+    /// Marks `tid` as preparing to sleep before re-checking its wait condition.
+    fn prepare(&mut self, tid: u64) {
+        let mut free_slot: Option<usize> = None;
+        for (i, e) in self.entries.iter_mut().enumerate() {
+            if e.tid == tid && !e.is_free() {
+                e.tcb_ptr = ENTRY_PREPARING;
+                return;
+            }
+            if free_slot.is_none() && e.is_free() {
+                free_slot = Some(i);
             }
         }
+        if let Some(i) = free_slot {
+            self.entries[i].tid = tid;
+            self.entries[i].tcb_ptr = ENTRY_PREPARING;
+        }
+    }
+
+    /// Removes any prepared/sleeping/early-wake entry for `tid`.
+    fn clear_tid(&mut self, tid: u64) {
         for e in self.entries.iter_mut() {
-            if e.is_free() {
-                e.tid = tid;
+            if e.tid == tid && !e.is_free() {
+                *e = SleepEntry::empty();
+            }
+        }
+    }
+
+    /// Registers `(tid, tcb)` and atomically transitions `tcb` to `TaskState::Sleeping`,
+    /// or consumes an early wakeup recorded during the prepare window.
+    fn commit_sleep(&mut self, tid: u64, tcb: *mut ThreadControlBlock) -> RegisterResult {
+        let mut free_slot: Option<usize> = None;
+        for (i, e) in self.entries.iter_mut().enumerate() {
+            if e.tid == tid && !e.is_free() {
+                if e.is_pending_wake() {
+                    *e = SleepEntry::empty();
+                    return RegisterResult::AlreadyWoken;
+                }
+                // ENTRY_PREPARING (or already registered) -> commit Sleeping under lock.
+                // SAFETY: caller validated non-null `tcb` pointing to static TCB pool.
+                unsafe { (*tcb).set_state(TaskState::Sleeping) };
                 e.tcb_ptr = tcb as usize;
                 return RegisterResult::Registered;
             }
+            if free_slot.is_none() && e.is_free() {
+                free_slot = Some(i);
+            }
+        }
+        if let Some(i) = free_slot {
+            // SAFETY: caller validated non-null `tcb` pointing to static TCB pool.
+            unsafe { (*tcb).set_state(TaskState::Sleeping) };
+            self.entries[i].tid = tid;
+            self.entries[i].tcb_ptr = tcb as usize;
+            return RegisterResult::Registered;
         }
         RegisterResult::Full
     }
 
-    /// Unregisters and returns the TCB for `tid`, or null if absent.
-    fn pop(&mut self, tid: u64) -> *mut ThreadControlBlock {
+    /// Pops sleeping TCB for `tid`, or converts `ENTRY_PREPARING` into `ENTRY_WOKEN_EARLY`.
+    /// Does NOT create orphan pending-wake records when `tid` has not prepared to sleep.
+    fn wake(&mut self, tid: u64) -> *mut ThreadControlBlock {
         for e in self.entries.iter_mut() {
-            if e.tid == tid && !e.is_free() && !e.is_pending_wake() {
+            if e.tid == tid && !e.is_free() {
+                if e.tcb_ptr == ENTRY_PREPARING {
+                    e.tcb_ptr = ENTRY_WOKEN_EARLY;
+                    return core::ptr::null_mut();
+                }
+                if e.is_pending_wake() {
+                    return core::ptr::null_mut();
+                }
                 let ptr = e.tcb_ptr as *mut ThreadControlBlock;
                 *e = SleepEntry::empty();
                 return ptr;
             }
         }
         core::ptr::null_mut()
-    }
-
-    fn mark_pending_wake(&mut self, tid: u64) {
-        for e in self.entries.iter_mut() {
-            if e.tid == tid && e.is_pending_wake() {
-                return;
-            }
-        }
-        for e in self.entries.iter_mut() {
-            if e.is_free() {
-                e.tid = tid;
-                e.tcb_ptr = usize::MAX;
-                return;
-            }
-        }
     }
 }
 
@@ -164,39 +200,48 @@ pub fn current_tid() -> u64 {
     unsafe { (*tcb_ptr).tid }
 }
 
+/// Prepares `tid` to block before its final condition check.
+#[inline]
+pub fn prepare_sleep(tid: u64) {
+    {
+        let _irq = IrqGuard::new();
+        SLEEP_REGISTRY.lock().prepare(tid);
+    }
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Cancels a prepared sleep when the wait condition resolved before blocking.
+#[inline]
+pub fn cancel_sleep(tid: u64) {
+    let _irq = IrqGuard::new();
+    SLEEP_REGISTRY.lock().clear_tid(tid);
+}
+
 /// Blocks the current thread identified by `tid`.
 ///
-/// Registers the (tid, tcb) pair in SLEEP_REGISTRY BEFORE blocking,
-/// allowing `wake_thread(tid)` to find the TCB.
-///
-/// After wakeup (by `wake_thread`), removes from registry and returns.
-/// If BLOCK_HOOK is not installed, performs a short spin (before scheduler init).
+/// Registers the `(tid, tcb)` pair in `SLEEP_REGISTRY` and marks `Sleeping`
+/// atomically under the registry lock BEFORE invoking the scheduler block hook.
 ///
 /// # Safety
 /// - The thread must be in an IPC wait queue (active IpcWaiter, futex waiter, etc.)
-/// - The caller must check the `woken` flag BEFORE calling this function
-///   to avoid blocking if wakeup already occurred.
+/// - The caller should pair `prepare_sleep(tid)` + condition check before calling
+///   `block_current(tid)`, or `cancel_sleep(tid)` on early exit.
 pub unsafe fn block_current(tid: u64) {
     let tcb_ptr = current_thread_raw();
 
     if !tcb_ptr.is_null() {
-        let tcb = &mut *tcb_ptr;
-        tcb.set_state(TaskState::Sleeping);
-        let registered = SLEEP_REGISTRY.lock().register(tid, tcb_ptr);
+        let registered = {
+            let _irq = IrqGuard::new();
+            SLEEP_REGISTRY.lock().commit_sleep(tid, tcb_ptr)
+        };
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         match registered {
-            RegisterResult::Registered => {
-                if tcb.state() == TaskState::Runnable {
-                    SLEEP_REGISTRY.lock().pop(tid);
-                    return;
-                }
-            }
+            RegisterResult::Registered => {}
             RegisterResult::AlreadyWoken => {
-                tcb.set_state(TaskState::Runnable);
+                // Early wake consumed; ensure thread stays Runnable/Running without enqueueing.
                 return;
             }
             RegisterResult::Full => {
-                tcb.set_state(TaskState::Running);
                 for _ in 0..10_000 {
                     core::hint::spin_loop();
                 }
@@ -205,39 +250,22 @@ pub unsafe fn block_current(tid: u64) {
         }
     }
 
-    // FIX-BLOCKHOOK (IPC deadlock): copy blocking function and release
-    // the BLOCK_HOOK lock BEFORE blocking.
-    //
-    // Old code `if let Some(block_fn) = *BLOCK_HOOK.lock() { block_fn() }`
-    // kept the SpinLockGuard alive during the ENTIRE body of `if let` — thus
-    // ACROSS the context switch performed by block_fn(). Consequences:
-    //   1. Any other thread calling block_current() (or hooks_installed())
-    //      meanwhile spun indefinitely -> deadlock as soon as TWO threads
-    //      sleep in IPC (vfs_server + tty_server during shell boot).
-    //   2. The PreemptGuard held by the guard violated the contract
-    //      `PreemptGuard::depth() == 0` of block_current_thread() (panic in
-    //      debug build).
+    // Copy blocking function and release BLOCK_HOOK lock BEFORE switching out.
     let block_fn_opt = {
         let guard = BLOCK_HOOK.lock();
-        match *guard {
-            Some(f) => Some(f),
-            None => None,
-        }
-    }; // ← BLOCK_HOOK guard released here, BEFORE blocking.
+        *guard
+    };
 
     if let Some(block_fn) = block_fn_opt {
         block_fn();
-        // After wakeup: unregister if not yet done by wake_thread.
-        if !tcb_ptr.is_null() {
-            SLEEP_REGISTRY.lock().pop(tid);
-        }
+        cancel_sleep(tid);
     } else {
         // Before scheduler init: short spin (~10 us at 3 GHz).
         for _ in 0..10_000 {
             core::hint::spin_loop();
         }
         if !tcb_ptr.is_null() {
-            SLEEP_REGISTRY.lock().pop(tid);
+            cancel_sleep(tid);
             (*tcb_ptr).set_state(TaskState::Running);
         }
     }
@@ -245,18 +273,17 @@ pub unsafe fn block_current(tid: u64) {
 
 /// Wakes the thread identified by `tid`.
 ///
-/// Finds TCB via SLEEP_REGISTRY, attempts TaskState::Sleeping ->
-/// Runnable transition, and enqueues it into the run queue of its CPU.
-/// No-op if the thread is not registered (early wakeup or called twice).
+/// Finds TCB via `SLEEP_REGISTRY`, attempts `TaskState::Sleeping -> Runnable`
+/// transition, and enqueues it into the run queue of its CPU.
+/// Only marks an early wakeup if the thread is currently in `prepare_sleep`.
 pub fn wake_thread(tid: u64) {
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     let tcb_ptr = {
-        let mut reg = SLEEP_REGISTRY.lock();
-        reg.pop(tid)
+        let _irq = IrqGuard::new();
+        SLEEP_REGISTRY.lock().wake(tid)
     };
 
     if tcb_ptr.is_null() {
-        let mut reg = SLEEP_REGISTRY.lock();
-        reg.mark_pending_wake(tid);
         return;
     }
     // SAFETY: tcb_ptr non-null (tested above); TCB in static pool, not freed during execution.
@@ -265,7 +292,7 @@ pub fn wake_thread(tid: u64) {
         let cpu_id = tcb.current_cpu();
         if (cpu_id.0 as usize) < MAX_CPUS {
             let _irq = IrqGuard::new();
-            let rq = run_queue(cpu_id);
+            let mut rq = run_queue(cpu_id);
             // CAS Sleeping -> Runnable protects against double wakeups.
             if tcb.try_transition(TaskState::Sleeping, TaskState::Runnable) {
                 // SAFETY: tcb_ptr is valid (lives in static pool of TCBs).

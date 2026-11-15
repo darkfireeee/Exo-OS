@@ -67,8 +67,7 @@ pub fn install_time_fn(f: TimeFn) {
 pub fn now_ns() -> u64 {
     let f_ptr = TIME_FN.load(Ordering::Relaxed);
     if f_ptr == 0 {
-        // Clock not initialized: return 0 (before TSC init).
-        return 0;
+        return crate::scheduler::timer::clock::monotonic_ns();
     }
     // SAFETY: f_ptr was stored via install_time_fn() from a valid TimeFn.
     let f: TimeFn = unsafe { core::mem::transmute(f_ptr) };

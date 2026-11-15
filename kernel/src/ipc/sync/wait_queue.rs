@@ -68,6 +68,11 @@ impl WakeReason {
     }
 }
 
+const WAITER_FREE: u32 = 0;
+const WAITER_INIT: u32 = 1;
+const WAITER_WAITING: u32 = 2;
+const WAITER_WOKEN_BASE: u32 = 3;
+
 /// A waiter in the IPC queue
 #[repr(C, align(64))]
 pub struct IpcWaiter {
@@ -85,7 +90,9 @@ pub struct IpcWaiter {
     pub enqueued_at: AtomicU64,
     /// Timeout (0 = infinite, in nanoseconds since enqueued_at)
     pub timeout_ns: AtomicU64,
-    _pad: [u8; 16],
+    /// Single atomic lifecycle/wakeup state preventing torn (active, woken, reason).
+    wait_state: AtomicU32,
+    _pad: [u8; 12],
 }
 
 // SAFETY: all fields are atomic
@@ -102,28 +109,33 @@ impl IpcWaiter {
             seq: AtomicU32::new(0),
             enqueued_at: AtomicU64::new(0),
             timeout_ns: AtomicU64::new(0),
-            _pad: [0u8; 16],
+            wait_state: AtomicU32::new(WAITER_FREE),
+            _pad: [0u8; 12],
         }
     }
 
     pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+        self.wait_state.load(Ordering::Acquire) >= WAITER_WAITING
     }
 
     pub fn is_woken(&self) -> bool {
-        self.woken.load(Ordering::Acquire)
+        self.wait_state.load(Ordering::Acquire) >= WAITER_WOKEN_BASE
     }
 
     pub fn try_wake(&self, reason: WakeReason) -> bool {
-        if !self.is_active() {
-            return false;
-        }
+        let woken_code = WAITER_WOKEN_BASE + (reason as u32);
         if self
-            .woken
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .wait_state
+            .compare_exchange(
+                WAITER_WAITING,
+                woken_code,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
         {
             self.reason.store(reason as u32, Ordering::Release);
+            self.woken.store(true, Ordering::Release);
             true
         } else {
             false
@@ -137,10 +149,16 @@ impl IpcWaiter {
     pub fn dequeue(&self) {
         self.active.store(false, Ordering::Release);
         self.seq.fetch_add(1, Ordering::Relaxed);
+        self.wait_state.store(WAITER_FREE, Ordering::Release);
     }
 
     pub fn wake_reason(&self) -> WakeReason {
-        WakeReason::from_u32(self.reason.load(Ordering::Acquire))
+        let st = self.wait_state.load(Ordering::Acquire);
+        if st >= WAITER_WOKEN_BASE {
+            WakeReason::from_u32(st - WAITER_WOKEN_BASE)
+        } else {
+            WakeReason::from_u32(self.reason.load(Ordering::Acquire))
+        }
     }
 }
 
@@ -204,10 +222,15 @@ impl IpcWaitQueue {
     /// Returns the waiter index, or `None` if the queue is full.
     pub fn enqueue(&self, thread_id: u64, timeout_ns: u64, now_ns: u64) -> Option<usize> {
         for i in 0..MAX_IPC_WAITERS {
-            // T8-015 FIX: atomic CAS false -> true to reserve slot exclusively
+            // Reserve slot exclusively via WAITER_FREE -> WAITER_INIT before touching fields.
             if self.waiters[i]
-                .active
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .wait_state
+                .compare_exchange(
+                    WAITER_FREE,
+                    WAITER_INIT,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
                 .is_ok()
             {
                 self.waiters[i]
@@ -218,7 +241,11 @@ impl IpcWaitQueue {
                     .store(timeout_ns, Ordering::Relaxed);
                 self.waiters[i].enqueued_at.store(now_ns, Ordering::Relaxed);
                 self.waiters[i].woken.store(false, Ordering::Relaxed);
-                self.waiters[i].reason.store(0, Ordering::Release);
+                self.waiters[i].reason.store(0, Ordering::Relaxed);
+                self.waiters[i].active.store(true, Ordering::Release);
+                self.waiters[i]
+                    .wait_state
+                    .store(WAITER_WAITING, Ordering::Release);
                 self.count.fetch_add(1, Ordering::Relaxed);
                 self.total_waits.fetch_add(1, Ordering::Relaxed);
                 return Some(i);
@@ -320,6 +347,11 @@ impl IpcWaitQueue {
                 crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
                 "IpcWaitQueue::wait: block_current() appelé avec PreemptGuard actif — deadlock garanti"
             );
+            super::sched_hooks::prepare_sleep(tid);
+            if w.is_woken() || check_closed() {
+                super::sched_hooks::cancel_sleep(tid);
+                continue;
+            }
             // SAFETY: waiter is active in table, wakeup is expected.
             unsafe {
                 super::sched_hooks::block_current(tid);

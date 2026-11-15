@@ -89,7 +89,7 @@ pub extern "C" fn _start() -> ! {
                 SERVER_ENDPOINT_ID,
                 &mut req as *mut FsIpcRequest as u64,
                 core::mem::size_of::<FsIpcRequest>() as u64,
-                syscall::IPC_FLAG_TIMEOUT,
+                syscall::IPC_FLAG_TIMEOUT | 5_000,
             )
         };
 
@@ -107,8 +107,6 @@ pub extern "C" fn _start() -> ! {
                 )
             };
         }
-
-        unsafe { syscall::syscall0(syscall::SYS_SCHED_YIELD) };
     }
 }
 

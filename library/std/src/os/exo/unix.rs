@@ -21,8 +21,104 @@ pub mod ffi {
 pub mod fs {
     #![stable(feature = "rust1", since = "1.0.0")]
 
-    use crate::fs::{FileType, Metadata, OpenOptions, Permissions};
+    use crate::fs::{DirBuilder, DirEntry, File, FileType, Metadata, OpenOptions, Permissions};
+    use crate::io;
+    use crate::path::Path;
     use crate::sys::{AsInner, AsInnerMut, FromInner};
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub trait FileExt {
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
+
+        #[stable(feature = "file_offset", since = "1.15.0")]
+        fn read_exact_at(&self, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
+            while !buf.is_empty() {
+                match self.read_at(buf, offset) {
+                    Ok(0) => {
+                        return Err(io::const_error!(
+                            io::ErrorKind::UnexpectedEof,
+                            "failed to fill whole buffer"
+                        ));
+                    }
+                    Ok(n) => {
+                        let tmp = buf;
+                        buf = &mut tmp[n..];
+                        offset += n as u64;
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<usize>;
+
+        #[stable(feature = "file_offset", since = "1.15.0")]
+        fn write_all_at(&self, mut buf: &[u8], mut offset: u64) -> io::Result<()> {
+            while !buf.is_empty() {
+                match self.write_at(buf, offset) {
+                    Ok(0) => {
+                        return Err(io::const_error!(
+                            io::ErrorKind::WriteZero,
+                            "failed to write whole buffer"
+                        ));
+                    }
+                    Ok(n) => {
+                        buf = &buf[n..];
+                        offset += n as u64;
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    impl FileExt for File {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+            self.as_inner().read_at(buf, offset)
+        }
+        fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<usize> {
+            self.as_inner().write_at(buf, offset)
+        }
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub trait DirEntryExt {
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn ino(&self) -> u64;
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    impl DirEntryExt for DirEntry {
+        fn ino(&self) -> u64 {
+            self.as_inner().ino()
+        }
+    }
+
+    #[stable(feature = "dir_builder", since = "1.6.0")]
+    pub trait DirBuilderExt {
+        #[stable(feature = "dir_builder", since = "1.6.0")]
+        fn mode(&mut self, mode: u32) -> &mut Self;
+    }
+
+    #[stable(feature = "dir_builder", since = "1.6.0")]
+    impl DirBuilderExt for DirBuilder {
+        fn mode(&mut self, mode: u32) -> &mut DirBuilder {
+            self.as_inner_mut().set_mode(mode);
+            self
+        }
+    }
+
+    #[stable(feature = "symlink", since = "1.1.0")]
+    pub fn symlink<P: AsRef<Path>, Q: AsRef<Path>>(original: P, link: Q) -> io::Result<()> {
+        crate::sys::fs::symlink(original.as_ref(), link.as_ref())
+    }
 
     #[stable(feature = "rust1", since = "1.0.0")]
     pub trait OpenOptionsExt {
@@ -112,10 +208,20 @@ pub mod fs {
             self.as_inner().stat.size
         }
         fn atime(&self) -> i64 {
-            (self.as_inner().stat.mtime_ns / 1_000_000_000) as i64
+            let ns = if self.as_inner().atime_ns != 0 {
+                self.as_inner().atime_ns
+            } else {
+                self.as_inner().stat.mtime_ns
+            };
+            (ns / 1_000_000_000) as i64
         }
         fn atime_nsec(&self) -> i64 {
-            (self.as_inner().stat.mtime_ns % 1_000_000_000) as i64
+            let ns = if self.as_inner().atime_ns != 0 {
+                self.as_inner().atime_ns
+            } else {
+                self.as_inner().stat.mtime_ns
+            };
+            (ns % 1_000_000_000) as i64
         }
         fn mtime(&self) -> i64 {
             (self.as_inner().stat.mtime_ns / 1_000_000_000) as i64
@@ -250,16 +356,54 @@ pub mod net {
 
     #[derive(Debug)]
     #[stable(feature = "unix_socket", since = "1.10.0")]
-    pub struct UnixStream(FileDesc);
+    pub struct UnixStream {
+        fd: FileDesc,
+        read_timeout_ns: crate::sync::atomic::AtomicU64,
+        write_timeout_ns: crate::sync::atomic::AtomicU64,
+        peer_path: Option<PathBuf>,
+    }
 
     impl UnixStream {
+        fn new(fd: FileDesc, peer_path: Option<PathBuf>) -> Self {
+            Self {
+                fd,
+                read_timeout_ns: crate::sync::atomic::AtomicU64::new(0),
+                write_timeout_ns: crate::sync::atomic::AtomicU64::new(0),
+                peer_path,
+            }
+        }
+
+        fn wait_io(&self, events: i16, is_read: bool) -> io::Result<()> {
+            use crate::sync::atomic::Ordering;
+            let ns = if is_read {
+                self.read_timeout_ns.load(Ordering::Acquire)
+            } else {
+                self.write_timeout_ns.load(Ordering::Acquire)
+            };
+            if ns == 0 {
+                return Ok(());
+            }
+            let timeout_ms = ((ns + 999_999) / 1_000_000).clamp(1, i32::MAX as u64) as i32;
+            let mut pfd = [syscall::PollFd {
+                fd: self.fd.as_raw_fd(),
+                events,
+                revents: 0,
+            }];
+            match syscall::poll(&mut pfd, timeout_ms) {
+                Ok(0) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+                Ok(_) => Ok(()),
+                Err(e) => Err(map_exo_err(e)),
+            }
+        }
+
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<UnixStream> {
-            let addr = sockaddr_un_from_path(path.as_ref())?;
+            let p = path.as_ref();
+            let addr = sockaddr_un_from_path(p)?;
             let raw = syscall::socket(AF_UNIX, SOCK_STREAM, 0).map_err(map_exo_err)?;
             let fd = unsafe { FileDesc::from_raw_fd(raw) };
             syscall::connect_unix(fd.as_raw_fd(), &addr).map_err(map_exo_err)?;
-            Ok(UnixStream(fd))
+            Ok(UnixStream::new(fd, Some(p.to_path_buf())))
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -267,15 +411,21 @@ pub mod net {
             let [a, b] = syscall::socketpair(AF_UNIX, SOCK_STREAM, 0).map_err(map_exo_err)?;
             unsafe {
                 Ok((
-                    UnixStream(FileDesc::from_raw_fd(a)),
-                    UnixStream(FileDesc::from_raw_fd(b)),
+                    UnixStream::new(FileDesc::from_raw_fd(a), None),
+                    UnixStream::new(FileDesc::from_raw_fd(b), None),
                 ))
             }
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn try_clone(&self) -> io::Result<UnixStream> {
-            self.0.duplicate().map(UnixStream)
+            use crate::sync::atomic::Ordering;
+            let s = UnixStream::new(self.fd.duplicate()?, self.peer_path.clone());
+            s.read_timeout_ns
+                .store(self.read_timeout_ns.load(Ordering::Acquire), Ordering::Release);
+            s.write_timeout_ns
+                .store(self.write_timeout_ns.load(Ordering::Acquire), Ordering::Release);
+            Ok(s)
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -285,36 +435,80 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-            Ok(SocketAddr { path: None })
+            Ok(SocketAddr {
+                path: self.peer_path.clone(),
+            })
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
-        pub fn set_read_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
+        pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            use crate::sync::atomic::Ordering;
+            let ns = match timeout {
+                Some(d) => {
+                    if d.is_zero() {
+                        return Err(io::const_error!(
+                            io::ErrorKind::InvalidInput,
+                            "cannot set a 0 duration timeout"
+                        ));
+                    }
+                    d.as_nanos().min(u64::MAX as u128) as u64
+                }
+                None => 0,
+            };
+            self.read_timeout_ns.store(ns, Ordering::Release);
             Ok(())
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
-        pub fn set_write_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
+        pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            use crate::sync::atomic::Ordering;
+            let ns = match timeout {
+                Some(d) => {
+                    if d.is_zero() {
+                        return Err(io::const_error!(
+                            io::ErrorKind::InvalidInput,
+                            "cannot set a 0 duration timeout"
+                        ));
+                    }
+                    d.as_nanos().min(u64::MAX as u128) as u64
+                }
+                None => 0,
+            };
+            self.write_timeout_ns.store(ns, Ordering::Release);
             Ok(())
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn read_timeout(&self) -> io::Result<Option<Duration>> {
-            Ok(None)
+            let ns = self.read_timeout_ns.load(crate::sync::atomic::Ordering::Acquire);
+            Ok(if ns == 0 { None } else { Some(Duration::from_nanos(ns)) })
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn write_timeout(&self) -> io::Result<Option<Duration>> {
-            Ok(None)
+            let ns = self.write_timeout_ns.load(crate::sync::atomic::Ordering::Acquire);
+            Ok(if ns == 0 { None } else { Some(Duration::from_nanos(ns)) })
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-            self.0.set_nonblocking(nonblocking)
+            self.fd.set_nonblocking(nonblocking)
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn take_error(&self) -> io::Result<Option<io::Error>> {
+            let mut buf = [0u8; 4];
+            if let Ok(4) = syscall::getsockopt(
+                self.fd.as_raw_fd(),
+                syscall::SOL_SOCKET,
+                syscall::SO_ERROR,
+                &mut buf,
+            ) {
+                let err = i32::from_ne_bytes(buf);
+                if err != 0 {
+                    return Ok(Some(io::Error::from_raw_os_error(err)));
+                }
+            }
             Ok(None)
         }
 
@@ -325,37 +519,43 @@ pub mod net {
                 Shutdown::Write => 1,
                 Shutdown::Both => 2,
             };
-            syscall::shutdown(self.0.as_raw_fd(), how).map_err(map_exo_err)
+            syscall::shutdown(self.fd.as_raw_fd(), how).map_err(map_exo_err)
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl Read for UnixStream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+            self.wait_io(syscall::POLLIN, true)?;
+            self.fd.read(buf)
         }
         fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-            self.0.read_vectored(bufs)
+            self.wait_io(syscall::POLLIN, true)?;
+            self.fd.read_vectored(bufs)
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl Read for &UnixStream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buf)
+            self.wait_io(syscall::POLLIN, true)?;
+            self.fd.read(buf)
         }
         fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-            self.0.read_vectored(bufs)
+            self.wait_io(syscall::POLLIN, true)?;
+            self.fd.read_vectored(bufs)
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl Write for UnixStream {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.write(buf)
+            self.wait_io(syscall::POLLOUT, false)?;
+            self.fd.write(buf)
         }
         fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-            self.0.write_vectored(bufs)
+            self.wait_io(syscall::POLLOUT, false)?;
+            self.fd.write_vectored(bufs)
         }
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
@@ -365,10 +565,12 @@ pub mod net {
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl Write for &UnixStream {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.write(buf)
+            self.wait_io(syscall::POLLOUT, false)?;
+            self.fd.write(buf)
         }
         fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-            self.0.write_vectored(bufs)
+            self.wait_io(syscall::POLLOUT, false)?;
+            self.fd.write_vectored(bufs)
         }
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
@@ -378,42 +580,42 @@ pub mod net {
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl AsFd for UnixStream {
         fn as_fd(&self) -> BorrowedFd<'_> {
-            self.0.as_fd()
+            self.fd.as_fd()
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl AsRawFd for UnixStream {
         fn as_raw_fd(&self) -> RawFd {
-            self.0.as_raw_fd()
+            self.fd.as_raw_fd()
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl FromRawFd for UnixStream {
         unsafe fn from_raw_fd(fd: RawFd) -> UnixStream {
-            UnixStream(unsafe { FileDesc::from_raw_fd(fd) })
+            UnixStream::new(unsafe { FileDesc::from_raw_fd(fd) }, None)
         }
     }
 
     #[stable(feature = "unix_socket", since = "1.10.0")]
     impl IntoRawFd for UnixStream {
         fn into_raw_fd(self) -> RawFd {
-            self.0.into_raw_fd()
+            self.fd.into_raw_fd()
         }
     }
 
     #[stable(feature = "io_safety", since = "1.63.0")]
     impl From<OwnedFd> for UnixStream {
         fn from(fd: OwnedFd) -> UnixStream {
-            UnixStream(FileDesc::from_inner(fd))
+            UnixStream::new(FileDesc::from_inner(fd), None)
         }
     }
 
     #[stable(feature = "io_safety", since = "1.63.0")]
     impl From<UnixStream> for OwnedFd {
         fn from(stream: UnixStream) -> OwnedFd {
-            stream.0.into_inner()
+            stream.fd.into_inner()
         }
     }
 
@@ -643,7 +845,110 @@ pub mod net {
     impl AsInner<FileDesc> for UnixStream {
         #[inline]
         fn as_inner(&self) -> &FileDesc {
-            &self.0
+            &self.fd
+        }
+    }
+}
+
+pub mod process {
+    #![stable(feature = "rust1", since = "1.0.0")]
+
+    use crate::ffi::OsStr;
+    use crate::process::{Command, ExitStatus};
+    use crate::sys::{AsInner, AsInnerMut, FromInner, IntoInner};
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub trait CommandExt {
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn uid(&mut self, id: u32) -> &mut Command;
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn gid(&mut self, id: u32) -> &mut Command;
+        #[stable(feature = "process_exec2", since = "1.9.0")]
+        fn arg0<S: AsRef<OsStr>>(&mut self, arg: S) -> &mut Command;
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    impl CommandExt for Command {
+        fn uid(&mut self, id: u32) -> &mut Command {
+            self.as_inner_mut().uid(id);
+            self
+        }
+        fn gid(&mut self, id: u32) -> &mut Command {
+            self.as_inner_mut().gid(id);
+            self
+        }
+        fn arg0<S: AsRef<OsStr>>(&mut self, arg: S) -> &mut Command {
+            self.as_inner_mut().arg0(arg.as_ref());
+            self
+        }
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub trait ExitStatusExt {
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn from_raw(raw: i32) -> Self;
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn signal(&self) -> Option<i32>;
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn core_dumped(&self) -> bool;
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn stopped_signal(&self) -> Option<i32>;
+        #[stable(feature = "rust1", since = "1.0.0")]
+        fn continued(&self) -> bool;
+        #[stable(feature = "exit_status_from", since = "1.12.0")]
+        fn into_raw(self) -> i32;
+    }
+
+    #[stable(feature = "rust1", since = "1.0.0")]
+    impl ExitStatusExt for ExitStatus {
+        fn from_raw(raw: i32) -> Self {
+            ExitStatus::from_inner(crate::sys::process::ExitStatus::from_raw(raw))
+        }
+        fn signal(&self) -> Option<i32> {
+            let raw = self.as_inner().into_raw();
+            let sig = raw & 0x7f;
+            if sig != 0 && sig != 0x7f { Some(sig) } else { None }
+        }
+        fn core_dumped(&self) -> bool {
+            let raw = self.as_inner().into_raw();
+            (raw & 0x7f) != 0 && (raw & 0x80) != 0
+        }
+        fn stopped_signal(&self) -> Option<i32> {
+            let raw = self.as_inner().into_raw();
+            if (raw & 0xff) == 0x7f { Some((raw >> 8) & 0xff) } else { None }
+        }
+        fn continued(&self) -> bool {
+            self.as_inner().into_raw() == 0xffff
+        }
+        fn into_raw(self) -> i32 {
+            self.as_inner().into_raw()
+        }
+    }
+}
+
+pub mod thread {
+    #![stable(feature = "thread_extensions", since = "1.9.0")]
+
+    use crate::thread::JoinHandle;
+
+    #[stable(feature = "thread_extensions", since = "1.9.0")]
+    pub type RawPthread = u64;
+
+    #[stable(feature = "thread_extensions", since = "1.9.0")]
+    pub trait JoinHandleExt {
+        #[stable(feature = "thread_extensions", since = "1.9.0")]
+        fn as_pthread_t(&self) -> RawPthread;
+        #[stable(feature = "thread_extensions", since = "1.9.0")]
+        fn into_pthread_t(self) -> RawPthread;
+    }
+
+    #[stable(feature = "thread_extensions", since = "1.9.0")]
+    impl<T> JoinHandleExt for JoinHandle<T> {
+        fn as_pthread_t(&self) -> RawPthread {
+            self.thread().id().as_u64().get()
+        }
+        fn into_pthread_t(self) -> RawPthread {
+            self.thread().id().as_u64().get()
         }
     }
 }
@@ -655,8 +960,17 @@ pub mod prelude {
     pub use super::ffi::{OsStrExt, OsStringExt};
     #[doc(no_inline)]
     #[stable(feature = "rust1", since = "1.0.0")]
-    pub use super::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    pub use super::fs::{
+        DirBuilderExt, DirEntryExt, FileExt, FileTypeExt, MetadataExt, OpenOptionsExt,
+        PermissionsExt,
+    };
     #[doc(no_inline)]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub use super::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+    #[doc(no_inline)]
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub use super::process::{CommandExt, ExitStatusExt};
+    #[doc(no_inline)]
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub use super::thread::JoinHandleExt;
 }

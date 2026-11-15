@@ -28,7 +28,7 @@ rm -f "$QMP" "$SERIAL" "$E9" "$INTLOG" "$STDOUT" "$SCREEN" "$PIDFILE"
 
 qemu-system-x86_64 \
   -machine q35 \
-  -m 256M \
+  -m 2G \
   -boot d \
   -vga std \
   -serial file:"$SERIAL" \

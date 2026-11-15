@@ -1,9 +1,9 @@
-/// test_standard.rs — Tests standard complets ExoFS
+/// test_standard.rs — Complete standard ExoFS tests
 ///
-/// Couvre : BlobCache, Superblock, lifecycle objet, paths, FDs,
-/// readdir, append, truncate, erreurs, persistence, epoch.
+/// Covers: BlobCache, Superblock, object lifecycle, paths, FDs,
+/// readdir, append, truncate, errors, persistence, epoch.
 ///
-/// Chaque test est autonome : reset_state() en début + fin.
+/// Each test is self-contained: reset_state() at start + end.
 extern crate alloc;
 
 use alloc::vec::Vec;
@@ -96,7 +96,7 @@ fn cache_mark_dirty_absent_returns_err() {
 fn cache_flush_all_clean_succeeds() {
     let c = BlobCache::new_const();
     ok(c.insert(blob(4), payload(0x33, 32)));
-    // aucun dirty → flush_all doit réussir
+    // no dirty -> flush_all must succeed
     ok(c.flush_all());
     assert_eq!(c.n_entries(), 0);
     assert_eq!(c.used_bytes(), 0);
@@ -109,7 +109,7 @@ fn cache_flush_all_with_dirty_returns_err() {
     ok(c.mark_dirty(&blob(5)));
     let err = c.flush_all().expect_err("doit échouer avec dirty");
     assert!(matches!(err, ExofsError::DirtyDataLoss(1)));
-    // données préservées
+    // data preserved
     assert_eq!(c.n_entries(), 1);
 }
 
@@ -121,7 +121,7 @@ fn cache_collect_dirty_returns_all_pending_writes() {
     ok(c.insert(blob(10), d1.clone()));
     ok(c.insert(blob(11), d2.clone()));
     ok(c.mark_dirty(&blob(10)));
-    // blob(11) reste clean
+    // blob(11) remains clean
 
     let dirty = c.collect_dirty();
     assert_eq!(dirty.len(), 1);
@@ -138,7 +138,7 @@ fn cache_mark_clean_after_writeback() {
     assert_eq!(c.dirty_ids().len(), 1);
     ok(c.mark_clean(&blob(6)));
     assert_eq!(c.dirty_ids().len(), 0);
-    // maintenant flush_all réussit
+    // now flush_all succeeds
     ok(c.flush_all());
 }
 
@@ -158,7 +158,7 @@ fn cache_overwrite_updates_size_correctly() {
     let c = BlobCache::new_const();
     ok(c.insert(blob(9), payload(0x88, 100)));
     assert_eq!(c.used_bytes(), 100);
-    // réécriture avec payload plus grand
+    // rewrite with larger payload
     ok(c.insert(blob(9), payload(0x99, 400)));
     assert_eq!(c.used_bytes(), 400);
 }
@@ -179,12 +179,12 @@ fn cache_flush_all_force_drops_dirty_without_error() {
     let c = BlobCache::new_const();
     ok(c.insert(blob(30), payload(0xBB, 64)));
     ok(c.mark_dirty(&blob(30)));
-    c.flush_all_force(); // ne panique pas, ne retourne pas d'erreur
+    c.flush_all_force(); // does not panic, does not return an error
     assert_eq!(c.n_entries(), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 2 — Superblock / Stockage
+// SECTION 2 — Superblock / Storage
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -253,8 +253,8 @@ fn superblock_mount_rejects_disk_too_small() {
 
 #[test]
 fn superblock_format_rejects_disk_too_small() {
-    // format() retourne InvalidSize (pas DiskTooSmall) pour les disques trop petits.
-    // Comportement intentionnel : format() utilise InvalidSize, mount() utilise DiskTooSmall.
+    // format() returns InvalidSize (not DiskTooSmall) for disks that are too small.
+    // Intentional behavior: format() uses InvalidSize, mount() uses DiskTooSmall.
     let result = SuperblockManager::format(
         4 * 1024 * 1024, // 4 MiB < 16 MiB minimum
         b"tiny",
@@ -353,7 +353,7 @@ fn blob_tampered_data_fails_verification() {
         |_| None,
     ));
 
-    // Corrompre un octet au milieu du payload
+    // Corrupt a byte in the middle of payload
     {
         let mut d = disk.borrow_mut();
         if let Some(blk) = d.get_mut(&result.offset.0) {
@@ -395,8 +395,8 @@ fn blob_write_empty_payload_rejected_by_design() {
     let next_off = RefCell::new(4096u64);
     let cfg = BlobWriterConfig::new(EpochId(3));
 
-    // ExoFS refuse intentionnellement les blobs disque vides : les objets
-    // vides sont représentés sans passer par le pipeline blob chiffré.
+    // ExoFS intentionally rejects empty disk blobs: empty
+    // objects are represented without going through the encrypted blob pipeline.
     let result = BlobWriter::write_blob(
         &[],
         &cfg,
@@ -497,7 +497,7 @@ fn fd_get_invalid_returns_err() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 5 — Lifecycle objet (syscall complet)
+// SECTION 5 — Object lifecycle (full syscall)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -522,7 +522,7 @@ fn object_partial_read_at_offset() {
     let data = payload(0x3C, 512);
     let fd = open_rdwr("/std/rw/partial");
     write_at(fd, &data, 0);
-    // lire 100 octets à partir de l'offset 100
+    // read 100 bytes starting from offset 100
     let got = read_at(fd, 100, 100);
     assert_eq!(got, data[100..200], "lecture partielle doit être correcte");
     close_fd(fd);
@@ -570,7 +570,7 @@ fn object_read_beyond_size_returns_partial() {
     let fd = open_rdwr("/std/rw/short");
     let data = payload(0x55, 64);
     write_at(fd, &data, 0);
-    // demander plus que la taille de l'objet
+    // request more than the object's size
     let got = read_at(fd, 256, 0);
     assert_eq!(
         got.len(),
@@ -605,7 +605,7 @@ fn object_write_zero_bytes_is_noop() {
     let fd = open_rdwr("/std/rw/zerobytes");
     let data = payload(0x77, 64);
     write_at(fd, &data, 0);
-    write_at(fd, &[], 0); // écriture vide
+    write_at(fd, &[], 0); // empty write
     let got = read_at(fd, 64, 0);
     assert_eq!(got, data, "écriture vide ne doit pas modifier le contenu");
     close_fd(fd);
@@ -613,7 +613,7 @@ fn object_write_zero_bytes_is_noop() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 6 — Paths et nommage
+// SECTION 6 — Paths and naming
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -704,7 +704,7 @@ fn readdir_lists_created_entries() {
     reset_state();
     let _disk = install_mock_disk(512, 8192);
 
-    // Créer des fichiers dans un même répertoire
+    // Create files in the same directory
     let fd_a = open_rdwr("/std/dir/listing/alpha.txt");
     let fd_b = open_rdwr("/std/dir/listing/beta.txt");
     let fd_c = open_rdwr("/std/dir/listing/gamma.txt");
@@ -715,7 +715,7 @@ fn readdir_lists_created_entries() {
     close_fd(fd_b);
     close_fd(fd_c);
 
-    // Ouvrir le répertoire avec kind=Directory pour que readdir fonctionne
+    // Open the directory with kind=Directory so readdir works
     let dir_fd = open_dir("/std/dir/listing");
     let buf = readdir_fd(dir_fd, 4096);
     let entries = parse_dirents(&buf);
@@ -739,7 +739,7 @@ fn readdir_empty_dir_returns_empty_or_dot_entries() {
     let dir_fd = open_dir("/std/dir/empty");
     let buf = readdir_fd(dir_fd, 4096);
     close_fd(dir_fd);
-    let _ = parse_dirents(&buf); // doit retourner sans panique
+    let _ = parse_dirents(&buf); // must return without panicking
     reset_state();
 }
 
@@ -766,7 +766,7 @@ fn readdir_buffer_too_small_truncates_gracefully() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 8 — Persistence (cache flush + relecture disque)
+// SECTION 8 — Persistence (cache flush + disk read back)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -777,16 +777,16 @@ fn persistence_reload_after_cache_eviction() {
     let path = "/std/persist/reload";
     let data = payload(0xBB, 1024);
 
-    // Écrire
+    // Write
     let fd = open_rdwr(path);
     write_at(fd, &data, 0);
     close_fd(fd);
 
-    // Vider le cache complètement (simuler redémarrage)
+    // Clear cache completely (simulate reboot)
     BLOB_CACHE.flush_all_force();
     OBJECT_TABLE.reset_all();
 
-    // Relire depuis le disque
+    // Read back from disk
     let fd2 = open_rdwr(path);
     let got = read_at(fd2, data.len(), 0);
     close_fd(fd2);
@@ -828,13 +828,13 @@ fn persistence_multiple_writes_survive_cache_flush() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 9 — Gestion des erreurs
+// SECTION 9 — Error handling
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn error_inline_data_max_constant_is_canonical() {
     use crate::fs::exofs::core::constants::INLINE_DATA_MAX;
-    // INLINE_DATA_MAX doit être 512 (valeur canonique post-fix CORR)
+    // INLINE_DATA_MAX must be 512 (canonical post-fix CORR value)
     assert_eq!(
         INLINE_DATA_MAX, 512,
         "INLINE_DATA_MAX doit être 512 (valeur canonique)"
@@ -845,7 +845,7 @@ fn error_inline_data_max_constant_is_canonical() {
 fn error_gc_delay_constant_is_unique() {
     use crate::fs::exofs::core::constants::GC_MIN_EPOCH_DELAY;
     assert!(GC_MIN_EPOCH_DELAY > 0, "GC_MIN_EPOCH_DELAY doit être > 0");
-    // Vérifier que la constante dépréciée pointe vers la même valeur
+    // Verify that the deprecated constant points to the same value
     #[allow(deprecated)]
     {
         use crate::fs::exofs::core::constants::GC_MIN_EPOCH_DELAY_SECS;

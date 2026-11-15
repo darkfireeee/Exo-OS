@@ -1,9 +1,9 @@
-//! namespace.rs — Table des espaces de nommage ExoFS
+//! namespace.rs — ExoFS namespace table
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ONDISK-03: pas d'AtomicU64 dans les structs repr(C)
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ONDISK-03: no AtomicU64 in repr(C) structs
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -12,19 +12,19 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum d'espaces de nommage simultanés.
+/// Maximum number of simultaneous namespaces.
 pub const NAMESPACE_TABLE_MAX: usize = 16;
 
-/// Taille maximale d'un nom de namespace.
+/// Maximum length of a namespace name.
 pub const NAMESPACE_NAME_MAX: usize = 64;
 
-/// Identifiant réservé de l'espace de nommage racine.
+/// Reserved identifier of the root namespace.
 pub const ROOT_NAMESPACE_ID: u64 = 1;
 
-/// Drapeaux de namespace.
+/// Namespace flags.
 pub const NS_FLAG_READONLY: u32 = 0x0001;
 pub const NS_FLAG_PRIVATE: u32 = 0x0002;
 pub const NS_FLAG_SHARED: u32 = 0x0004;
@@ -34,25 +34,25 @@ pub const NS_FLAG_UNCLONEABLE: u32 = 0x0008;
 // Namespace
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un espace de nommage : associe un ID unique à une racine de FS.
+/// A namespace: maps a unique ID to a filesystem root.
 #[derive(Clone)]
 pub struct Namespace {
-    /// Identifiant unique (0 = slot vide).
+    /// Unique identifier (0 = empty slot).
     pub id: u64,
-    /// OID racine de ce namespace.
+    /// Root OID of this namespace.
     pub root_oid: ObjectId,
-    /// Nom lisible (debug).
+    /// Human-readable name (debug).
     pub name: [u8; NAMESPACE_NAME_MAX],
-    /// Longueur valide du nom.
+    /// Valid length of the name.
     pub name_len: u8,
-    /// Drapeaux (NS_FLAG_*).
+    /// Flags (NS_FLAG_*).
     pub flags: u32,
-    /// Tick de création.
+    /// Creation tick.
     pub created_tick: u64,
 }
 
 impl Namespace {
-    /// Crée un namespace validé.
+    /// Creates a validated namespace.
     pub fn new(id: u64, root_oid: ObjectId, name: &[u8], flags: u32) -> ExofsResult<Self> {
         if name.is_empty() || name.len() > NAMESPACE_NAME_MAX {
             return Err(ExofsError::InvalidArgument);
@@ -69,19 +69,19 @@ impl Namespace {
         })
     }
 
-    /// Nom du namespace.
+    /// Namespace name.
     #[inline]
     pub fn name_str(&self) -> &[u8] {
         &self.name[..self.name_len as usize]
     }
 
-    /// `true` si aucun processus ne peut cloner ce namespace.
+    /// `true` if no process can clone this namespace.
     #[inline]
     pub fn is_uncloneable(&self) -> bool {
         self.flags & NS_FLAG_UNCLONEABLE != 0
     }
 
-    /// `true` si le namespace est en lecture seule.
+    /// `true` if the namespace is read-only.
     #[inline]
     pub fn is_readonly(&self) -> bool {
         self.flags & NS_FLAG_READONLY != 0
@@ -188,26 +188,26 @@ impl NamespaceTableInner {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NamespaceTable (publique, thread-safe)
+// NamespaceTable (public, thread-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale des espaces de nommage, protégée par SpinLock.
+/// Global namespace table, protected by SpinLock.
 pub struct NamespaceTable {
     inner: SpinLock<NamespaceTableInner>,
 }
 
 impl NamespaceTable {
-    /// Constructeur `const` pour initialisation statique.
+    /// `const` constructor for static initialization.
     pub const fn new_const() -> Self {
         NamespaceTable {
             inner: SpinLock::new(NamespaceTableInner::new()),
         }
     }
 
-    /// Initialise le namespace racine (à appeler une seule fois au boot).
+    /// Initializes the root namespace (must be called once at boot).
     pub fn init_root(&self, root_oid: ObjectId) -> ExofsResult<()> {
         let mut guard = self.inner.lock();
-        // Chercher si la racine existe déjà
+        // Check if root already exists
         if guard.find_by_id(ROOT_NAMESPACE_ID).is_some() {
             return Ok(());
         }
@@ -218,7 +218,7 @@ impl NamespaceTable {
             .count
             .checked_add(1)
             .ok_or(ExofsError::OffsetOverflow)?;
-        // next_id doit être > ROOT_NAMESPACE_ID
+        // next_id must be > ROOT_NAMESPACE_ID
         if guard.next_id <= ROOT_NAMESPACE_ID {
             guard.next_id = ROOT_NAMESPACE_ID
                 .checked_add(1)
@@ -227,45 +227,45 @@ impl NamespaceTable {
         Ok(())
     }
 
-    /// Enregistre un nouveau namespace.
+    /// Registers a new namespace.
     pub fn register(&self, name: &[u8], root_oid: ObjectId, flags: u32) -> ExofsResult<u64> {
         let ns = Namespace::new(0, root_oid, name, flags)?;
         let mut guard = self.inner.lock();
         guard.insert(ns)
     }
 
-    /// Supprime un namespace par son ID.  Le namespace racine ne peut pas
-    /// être supprimé (retourne `PermissionDenied`).
+    /// Removes a namespace by its ID. The root namespace cannot
+    /// be removed (returns `PermissionDenied`).
     pub fn unregister(&self, id: u64) -> ExofsResult<()> {
         let mut guard = self.inner.lock();
         guard.remove_by_id(id)
     }
 
-    /// Retourne l'OID racine d'un namespace.
+    /// Returns the root OID of a namespace.
     pub fn root_of(&self, id: u64) -> ExofsResult<ObjectId> {
         let guard = self.inner.lock();
         let i = guard.find_by_id(id).ok_or(ExofsError::ObjectNotFound)?;
         Ok(guard.entries[i].root_oid.clone())
     }
 
-    /// Cherche un namespace par ID et retourne une copie.
+    /// Looks up a namespace by ID and returns a copy.
     pub fn get(&self, id: u64) -> Option<Namespace> {
         let guard = self.inner.lock();
         guard.find_by_id(id).map(|i| guard.entries[i].clone())
     }
 
-    /// Cherche un namespace par nom.
+    /// Looks up a namespace by name.
     pub fn find_by_name(&self, name: &[u8]) -> Option<Namespace> {
         let guard = self.inner.lock();
         guard.find_by_name(name).map(|i| guard.entries[i].clone())
     }
 
-    /// Nombre de namespaces actifs.
+    /// Number of active namespaces.
     pub fn count(&self) -> usize {
         self.inner.lock().count
     }
 
-    /// Itère sur tous les namespaces actifs.
+    /// Iterates over all active namespaces.
     pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&Namespace),
@@ -278,7 +278,7 @@ impl NamespaceTable {
         }
     }
 
-    /// Vide la table (ne supprime pas la racine).
+    /// Flushes the table (does not remove root).
     pub fn flush_non_root(&self) {
         let mut guard = self.inner.lock();
         for i in 0..NAMESPACE_TABLE_MAX {
@@ -291,40 +291,40 @@ impl NamespaceTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Table globale des espaces de nommage.
+/// Global namespace table.
 pub static NAMESPACE_TABLE: NamespaceTable = NamespaceTable::new_const();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité
+// Convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le namespace racine.
+/// Initializes the root namespace.
 pub fn init_namespaces(root_oid: ObjectId) -> ExofsResult<()> {
     NAMESPACE_TABLE.init_root(root_oid)
 }
 
-/// Enregistre un namespace dans la table globale.
+/// Registers a namespace in the global table.
 #[inline]
 pub fn register_namespace(name: &[u8], root_oid: ObjectId, flags: u32) -> ExofsResult<u64> {
     NAMESPACE_TABLE.register(name, root_oid, flags)
 }
 
-/// Retourne l'OID racine d'un namespace.
+/// Returns the root OID of a namespace.
 #[inline]
 pub fn root_of(ns_id: u64) -> ExofsResult<ObjectId> {
     NAMESPACE_TABLE.root_of(ns_id)
 }
 
-/// Cherche un namespace par son identifiant.
+/// Looks up a namespace by its identifier.
 #[inline]
 pub fn lookup_namespace_by_id(id: u64) -> Option<Namespace> {
     NAMESPACE_TABLE.get(id)
 }
 
-/// Vérifie qu'un namespace est accessible en écriture.
+/// Checks that a namespace is writable.
 pub fn assert_writable(ns_id: u64) -> ExofsResult<()> {
     let ns = NAMESPACE_TABLE
         .get(ns_id)
@@ -336,11 +336,11 @@ pub fn assert_writable(ns_id: u64) -> ExofsResult<()> {
     }
 }
 
-/// Collecte tous les namespaces dans un Vec (OOM-02 : try_reserve).
+/// Collects all namespaces into a Vec (OOM-02: try_reserve).
 pub fn all_namespaces() -> ExofsResult<Vec<Namespace>> {
     let mut v: Vec<Namespace> = Vec::new();
     NAMESPACE_TABLE.for_each(|ns| {
-        // Ignorer OOM ici — best-effort dans un contexte d iter
+        // Ignore OOM here — best-effort in an iterator context
         let _ = v.try_reserve(1).map(|_| v.push(ns.clone()));
     });
     Ok(v)
@@ -410,6 +410,6 @@ mod tests {
         tbl.init_root(oid(1)).test_unwrap();
         tbl.register(b"x", oid(20), 0).test_unwrap();
         tbl.flush_non_root();
-        assert_eq!(tbl.count(), 1); // seule la racine reste
+        assert_eq!(tbl.count(), 1); // only root remains
     }
 }

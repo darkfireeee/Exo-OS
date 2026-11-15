@@ -1,8 +1,8 @@
-//! blob_cache.rs — Cache de blobs bruts ExoFS (no_std).
+//! blob_cache.rs — ExoFS raw blob cache (no_std).
 //!
-//! `BlobCache` : cache LRU/ARC de données blob indexées par `BlobId`.
-//! `BLOB_CACHE`  : instance globale statique.
-//! Règles : OOM-02, ARITH-02, RECUR-01.
+//! `BlobCache`: LRU/ARC cache of blob data indexed by `BlobId`.
+//! `BLOB_CACHE`: static global instance.
+//! Rules: OOM-02, ARITH-02, RECUR-01.
 
 extern crate alloc;
 use alloc::boxed::Box;
@@ -18,7 +18,7 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BLOB_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -30,23 +30,23 @@ const BLOB_PAGE_SIZE: usize = BLOB_ALLOC_PAGE_BYTES - ARC_HEADER_BYTES;
 // BlobEntry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée dans le cache de blobs.
+/// Entry in the blob cache.
 struct BlobEntry {
-    /// Données du blob, découpées en pages dont l'allocation totale avec
-    /// l'en-tête Arc tient dans 4 KiB.
+    /// Blob data, split into pages whose total allocation including
+    /// the Arc header fits in 4 KiB.
     pages: Vec<Option<Arc<[u8; BLOB_PAGE_SIZE]>>>,
-    /// Snapshot contigu partagé pour les lectures complètes via `get()`.
+    /// Shared contiguous snapshot for full reads via `get()`.
     snapshot: Option<Arc<[u8]>>,
-    /// Taille logique du blob.
+    /// Logical size of the blob.
     len: usize,
-    /// `true` si l'entrée a été modifiée et n'a pas encore été écrite sur disque.
+    /// `true` if entry was modified and not yet written to disk.
     dirty: bool,
-    /// Ticks d'insertion.
+    /// Insertion ticks.
     #[allow(dead_code)]
     inserted_at: u64,
-    /// Ticks du dernier accès.
+    /// Last access ticks.
     last_accessed: u64,
-    /// Nombre d'accès.
+    /// Number of accesses.
     access_count: u64,
 }
 
@@ -329,7 +329,7 @@ impl BlobCacheInner {
 // BlobCache
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cache de blobs bruts avec éviction et statistiques.
+/// Raw blob cache with eviction and statistics.
 pub struct BlobCache {
     inner: SpinLock<BlobCacheInner>,
     hits: AtomicU64,
@@ -349,9 +349,9 @@ impl BlobCache {
         }
     }
 
-    // ── Lecture ──────────────────────────────────────────────────────────────
+    // ── Read ─────────────────────────────────────────────────────────────────
 
-    /// Retourne un snapshot partagé des données du blob, ou `None` si absent.
+    /// Returns a shared snapshot of blob data, or `None` if absent.
     pub fn get(&self, id: &BlobId) -> Option<Arc<[u8]>> {
         let mut inner = self.inner.lock();
         let now = crate::arch::time::read_ticks();
@@ -377,12 +377,12 @@ impl BlobCache {
         Some(snapshot)
     }
 
-    /// Retourne la taille d'un blob sans cloner son contenu.
+    /// Returns the size of a blob without cloning its content.
     pub fn len(&self, id: &BlobId) -> Option<usize> {
         self.inner.lock().map.get(id).map(|e| e.len)
     }
 
-    /// Copie uniquement l'intervalle demandé d'un blob.
+    /// Copies only the requested range of a blob.
     pub fn read_at(&self, id: &BlobId, offset: usize, count: usize) -> ExofsResult<Vec<u8>> {
         if count == 0 {
             return Ok(Vec::new());
@@ -410,14 +410,14 @@ impl BlobCache {
         Ok(out)
     }
 
-    /// `true` si le blob est présent en cache.
+    /// `true` if blob is present in cache.
     pub fn contains(&self, id: &BlobId) -> bool {
         self.inner.lock().map.contains_key(id)
     }
 
-    // ── Écriture ─────────────────────────────────────────────────────────────
+    // ── Write ────────────────────────────────────────────────────────────────
 
-    /// Insère ou met à jour un blob dans le cache.
+    /// Inserts or updates a blob in the cache.
     #[track_caller]
     pub fn insert(&self, id: BlobId, data: Vec<u8>) -> ExofsResult<()> {
         let size = data.len() as u64;
@@ -425,7 +425,7 @@ impl BlobCache {
         let max = self.max_bytes;
         let mut inner = self.inner.lock();
 
-        // Si déjà présent, mettre à jour.
+        // If already present, update.
         if inner.map.contains_key(&id) {
             let old_size = inner.map[&id].len();
             inner.used = inner.used.saturating_sub(old_size);
@@ -440,7 +440,7 @@ impl BlobCache {
             return Ok(());
         }
 
-        // OOM-02 : réserver avant insertion.
+        // OOM-02: reserve before insertion.
         inner.evict_to_fit(size, max)?;
 
         let entry = BlobEntry::new(data, now)?;
@@ -451,7 +451,7 @@ impl BlobCache {
         Ok(())
     }
 
-    /// Ecrit un intervalle dans un blob sans cloner tout le blob existant.
+    /// Writes a range into a blob without cloning the entire existing blob.
     #[track_caller]
     pub fn write_at(&self, id: BlobId, offset: usize, bytes: &[u8]) -> ExofsResult<usize> {
         if bytes.is_empty() {
@@ -521,7 +521,7 @@ impl BlobCache {
         Ok(bytes.len())
     }
 
-    /// Redimensionne un blob sans materialiser son contenu dans un bloc contigu.
+    /// Resizes a blob without materializing its content into a contiguous block.
     pub fn resize(&self, id: BlobId, new_len: usize) -> ExofsResult<()> {
         let now = crate::arch::time::read_ticks();
         let max = self.max_bytes;
@@ -562,7 +562,7 @@ impl BlobCache {
         Ok(())
     }
 
-    /// Invalide (supprime) une entrée du cache.
+    /// Invalidates (removes) an entry from the cache.
     pub fn invalidate(&self, id: &BlobId) {
         let mut inner = self.inner.lock();
         if let Some(e) = inner.map.remove(id) {
@@ -573,7 +573,7 @@ impl BlobCache {
         }
     }
 
-    /// Marque une entrée comme dirty (non synchronisée).
+    /// Marks an entry as dirty (unsynchronized).
     pub fn mark_dirty(&self, id: &BlobId) -> ExofsResult<()> {
         let mut inner = self.inner.lock();
         match inner.map.get_mut(id) {
@@ -588,7 +588,7 @@ impl BlobCache {
         }
     }
 
-    /// Retourne les IDs de toutes les entrées dirty.
+    /// Returns IDs of all dirty entries.
     pub fn dirty_ids(&self) -> Vec<BlobId> {
         let inner = self.inner.lock();
         inner
@@ -599,7 +599,7 @@ impl BlobCache {
             .collect()
     }
 
-    /// Marque une entrée comme propre (après flush).
+    /// Marks an entry as clean (after flush).
     pub fn mark_clean(&self, id: &BlobId) -> ExofsResult<()> {
         let mut inner = self.inner.lock();
         match inner.map.get_mut(id) {
@@ -615,7 +615,7 @@ impl BlobCache {
         }
     }
 
-    /// Retourne vrai si l'entrée est présente et dirty.
+    /// Returns true if entry is present and dirty.
     pub fn is_dirty(&self, id: &BlobId) -> bool {
         self.inner
             .lock()
@@ -625,7 +625,7 @@ impl BlobCache {
             .unwrap_or(false)
     }
 
-    // ── Statistiques ──────────────────────────────────────────────────────────
+    // ── Statistics ────────────────────────────────────────────────────────────
 
     pub fn used_bytes(&self) -> u64 {
         self.inner.lock().used
@@ -635,7 +635,7 @@ impl BlobCache {
         self.inner.lock().map.len()
     }
 
-    /// Retourne la liste de tous les `BlobId` présents dans le cache.
+    /// Returns the list of all `BlobId`s present in the cache.
     pub fn list_keys(&self) -> ExofsResult<Vec<BlobId>> {
         let inner = self.inner.lock();
         let mut keys = Vec::new();
@@ -668,7 +668,7 @@ impl BlobCache {
         }
     }
 
-    /// Évince `n` entrées candidates (les plus froides).
+    /// Evicts `n` candidate entries (coldest).
     pub fn evict_n(&self, n: usize) -> u64 {
         let mut inner = self.inner.lock();
         let victims = inner.eviction.pick_eviction_candidates(n);
@@ -688,12 +688,12 @@ impl BlobCache {
         freed
     }
 
-    /// Évince uniquement les entrées clean.
+    /// Evicts clean entries only.
     ///
-    /// # Erreur
-    /// Retourne `Err(ExofsError::DirtyDataLoss(n))` si `n` entrées dirty
-    /// seraient perdues. Appeler `flush_dirty_to_disk()` avant, ou utiliser
-    /// `flush_all_force()` uniquement en contexte de panique/arrêt d'urgence.
+    /// # Error
+    /// Returns `Err(ExofsError::DirtyDataLoss(n))` if `n` dirty entries
+    /// would be lost. Call `flush_dirty_to_disk()` before, or use
+    /// `flush_all_force()` only in panic/emergency shutdown contexts.
     pub fn evict_clean_only(&self) -> ExofsResult<()> {
         let mut inner = self.inner.lock();
         let dirty_count = inner.map.values().filter(|e| e.dirty).count();
@@ -705,19 +705,19 @@ impl BlobCache {
         Ok(())
     }
 
-    /// Compatibilité historique : ne fait pas de writeback.
+    /// Historical compatibility: does not perform writeback.
     ///
-    /// Le nom précis est `evict_clean_only()`. Les nouveaux appels doivent
-    /// l'utiliser pour éviter de confondre éviction et persistance disque.
+    /// The precise name is `evict_clean_only()`. New callers should
+    /// use it to avoid confusing eviction and disk persistence.
     pub fn flush_all(&self) -> ExofsResult<()> {
         self.evict_clean_only()
     }
 
-    /// Vide le cache sans vérification — UNIQUEMENT pour panic/shutdown d'urgence.
+    /// Clears the cache without checking — ONLY for panic/emergency shutdown.
     ///
-    /// # Safety sémantique
-    /// Les entrées dirty sont perdues sans écriture disque.
-    /// Ne pas appeler en dehors d'un contexte d'arrêt non-récupérable.
+    /// # Semantic Safety
+    /// Dirty entries are lost without writing to disk.
+    /// Do not call outside of an unrecoverable shutdown context.
     pub fn flush_all_force(&self) {
         let mut inner = self.inner.lock();
         let lost: u64 = inner
@@ -733,9 +733,9 @@ impl BlobCache {
         inner.used = 0;
     }
 
-    /// Retourne les données de toutes les entrées dirty pour écriture disque.
+    /// Returns data of all dirty entries for disk write.
     ///
-    /// Le appelant est responsable d'appeler `mark_clean()` après écriture réussie.
+    /// The caller is responsible for calling `mark_clean()` after successful write.
     pub fn collect_dirty(&self) -> Vec<(BlobId, Box<[u8]>)> {
         let inner = self.inner.lock();
         inner

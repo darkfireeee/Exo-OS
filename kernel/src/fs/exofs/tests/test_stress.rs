@@ -1,10 +1,10 @@
-/// test_stress.rs — Tests de stress complets ExoFS
+/// test_stress.rs — Complete ExoFS stress tests
 ///
-/// Couvre : volume élevé d'opérations, pression mémoire cache,
-/// fragmentation, cycles rapides create/delete, données aléatoires
-/// de grande taille, fd exhaustion, intégrité sous charge.
+/// Covers: high operation volume, cache memory pressure,
+/// fragmentation, rapid create/delete cycles, large random
+/// data, fd exhaustion, integrity under load.
 ///
-/// Chaque test est autonome : reset_state() en début + fin.
+/// Each test is self-contained: reset_state() at start + end.
 extern crate alloc;
 
 use alloc::string::String;
@@ -31,7 +31,7 @@ fn ok<T, E: core::fmt::Debug>(res: Result<T, E>) -> T {
     }
 }
 
-/// Générateur pseudo-aléatoire déterministe (xorshift32).
+/// Deterministic pseudo-random generator (xorshift32).
 struct Xorshift32(u32);
 
 impl Xorshift32 {
@@ -69,7 +69,7 @@ fn blob_for(i: usize) -> BlobId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 1 — Volume élevé : BlobCache sous pression
+// SECTION 1 — High volume: BlobCache under pressure
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -77,14 +77,14 @@ fn stress_cache_1000_inserts_all_retrievable() {
     let c = BlobCache::new_const();
     let n = 1000usize;
 
-    // Insérer 1000 blobs distincts
+    // Insert 1000 distinct blobs
     for i in 0..n {
         let data = payload((i % 256) as u8, 64);
         ok(c.insert(blob_for(i), data));
     }
 
-    // Vérifier que les derniers blobs insérés (ceux non évincés) sont lisibles
-    // On teste les 200 derniers — ils sont les plus "chauds" dans le LRU
+    // Verify that the last inserted blobs (non-evicted ones) are readable
+    // We test the last 200 — they are the hottest in LRU
     let mut found = 0usize;
     for i in (n - 200)..n {
         if c.get(&blob_for(i)).is_some() {
@@ -101,7 +101,7 @@ fn stress_cache_1000_inserts_all_retrievable() {
 fn stress_cache_dirty_tracking_under_load() {
     let c = BlobCache::new_const();
 
-    // Insérer 200 blobs, marquer 100 comme dirty
+    // Insert 200 blobs, mark 100 as dirty
     for i in 0..200usize {
         ok(c.insert(blob_for(i), payload((i % 256) as u8, 32)));
         if i % 2 == 0 {
@@ -110,14 +110,14 @@ fn stress_cache_dirty_tracking_under_load() {
     }
 
     let dirty = c.dirty_ids();
-    // dirty_ids retourne les blobs présents ET dirty
-    // (certains peuvent avoir été évincés — ils ne comptent pas)
+    // dirty_ids returns blobs that are present AND dirty
+    // (some may have been evicted — they do not count)
     for id in &dirty {
-        // tous les ids dirty retournés doivent effectivement être dans le cache
+        // all returned dirty ids must actually be in cache
         assert!(c.contains(id), "dirty_id doit encore être dans le cache");
     }
 
-    // flush_all doit échouer s'il reste des dirty
+    // flush_all must fail if dirty entries remain
     if !dirty.is_empty() {
         assert!(
             c.flush_all().is_err(),
@@ -125,7 +125,7 @@ fn stress_cache_dirty_tracking_under_load() {
         );
     }
 
-    // collect_dirty → mark_clean → flush_all doit réussir
+    // collect_dirty -> mark_clean -> flush_all must succeed
     let pending = c.collect_dirty();
     for (id, _) in &pending {
         ok(c.mark_clean(id));
@@ -139,7 +139,7 @@ fn stress_cache_eviction_does_not_corrupt_remaining() {
     let c = BlobCache::new_const();
     let mut rng = Xorshift32::new(0xDEAD_BEEF);
 
-    // Insérer des blobs de taille variée pour provoquer des évictions
+    // Insert blobs of varying sizes to trigger evictions
     let mut payloads: Vec<(BlobId, Vec<u8>)> = Vec::new();
     for i in 0..500usize {
         let size = rng.next_range(64, 2048);
@@ -150,7 +150,7 @@ fn stress_cache_eviction_does_not_corrupt_remaining() {
         payloads.push((id, data));
     }
 
-    // Vérifier que chaque blob encore présent a son contenu intact
+    // Verify that each still-present blob has its content intact
     for (id, expected) in &payloads {
         if let Some(got) = c.get(id) {
             assert_eq!(
@@ -160,7 +160,7 @@ fn stress_cache_eviction_does_not_corrupt_remaining() {
                 id
             );
         }
-        // si évincé → OK, pas de vérification
+        // if evicted -> OK, no verification
     }
 }
 
@@ -187,7 +187,7 @@ fn stress_cache_overwrite_1000_same_key() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 2 — Volume élevé : Blob writer/reader
+// SECTION 2 — High volume: Blob writer/reader
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -226,7 +226,7 @@ fn stress_256_blob_roundtrips_varied_sizes() {
         records.push((result, data));
 
         if i % 32 == 0 {
-            // Vérification intermédiaire
+            // Intermediate verification
             for (r, expected) in &records {
                 let read = ok(BlobReader::read_blob(
                     r.offset,
@@ -253,7 +253,7 @@ fn stress_256_blob_roundtrips_varied_sizes() {
         }
     }
 
-    // Vérification finale de tous les blobs
+    // Final verification of all blobs
     for (r, expected) in &records {
         let read = ok(BlobReader::read_blob(
             r.offset,
@@ -318,7 +318,7 @@ fn stress_blob_ids_are_all_unique() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 3 — Stress FD table
+// SECTION 3 — FD table stress
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -326,18 +326,18 @@ fn stress_fd_table_many_open_close_cycles() {
     OBJECT_TABLE.reset_all();
     let mut open_fds: Vec<u32> = Vec::new();
 
-    // Ouvrir 64 FDs
+    // Open 64 FDs
     for i in 0..64usize {
         let fd = ok(OBJECT_TABLE.open(blob_for(i), open_flags::O_RDWR, 0, 0, 0));
         open_fds.push(fd);
     }
 
-    // Fermer tous
+    // Close all
     for fd in &open_fds {
         assert!(OBJECT_TABLE.close(*fd), "fermeture du fd {fd} doit réussir");
     }
 
-    // Tous doivent être invalides maintenant
+    // All must be invalid now
     for fd in &open_fds {
         assert!(
             OBJECT_TABLE.get(*fd).is_err(),
@@ -378,7 +378,7 @@ fn stress_fd_interleaved_open_close() {
     let mut active: Vec<u32> = Vec::new();
 
     for round in 0..200usize {
-        // Ouvrir 1-3 FDs
+        // Open 1-3 FDs
         let opens = rng.next_range(1, 4);
         for _ in 0..opens {
             let b = blob_for(rng.next_range(0, 50));
@@ -387,7 +387,7 @@ fn stress_fd_interleaved_open_close() {
             }
         }
 
-        // Fermer 0-2 FDs aléatoires
+        // Close 0-2 random FDs
         let closes = rng.next_range(0, 3).min(active.len());
         for _ in 0..closes {
             if active.is_empty() {
@@ -398,10 +398,10 @@ fn stress_fd_interleaved_open_close() {
             OBJECT_TABLE.close(fd);
         }
 
-        let _ = round; // éviter warning unused
+        let _ = round; // avoid warning unused
     }
 
-    // Fermer tous les FDs restants
+    // Close all remaining FDs
     for fd in active {
         OBJECT_TABLE.close(fd);
     }
@@ -410,7 +410,7 @@ fn stress_fd_interleaved_open_close() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 4 — Stress syscall layer (via mock disk)
+// SECTION 4 — Syscall layer stress (via mock disk)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -421,7 +421,7 @@ fn stress_100_files_write_read_verify() {
     let mut rng = Xorshift32::new(0xC0DE_CAFE);
     let mut records: Vec<(String, Vec<u8>)> = Vec::new();
 
-    // Créer 100 fichiers avec du contenu aléatoire
+    // Create 100 files with random content
     for i in 0..100usize {
         let path = alloc::format!("/stress/files/{i:03}.bin");
         let size = rng.next_range(16, 512);
@@ -434,7 +434,7 @@ fn stress_100_files_write_read_verify() {
         records.push((path, data));
     }
 
-    // Vérifier chaque fichier
+    // Verify each file
     for (path, expected) in &records {
         let fd = open_rdwr(path);
         let got = read_at(fd, expected.len(), 0);
@@ -463,7 +463,7 @@ fn stress_sequential_append_builds_large_file() {
     }
     close_fd(fd);
 
-    // Vérifier le contenu complet
+    // Verify complete content
     let fd2 = open_rdwr(path);
     let got = read_at(fd2, full_data.len(), 0);
     close_fd(fd2);
@@ -504,8 +504,8 @@ fn stress_interleaved_reads_writes_same_fd() {
     reset_state();
     let _disk = install_mock_disk(512, 16384);
 
-    // Initialiser l'objet avec un contenu nul pour que les lectures aient
-    // une base valide avant les écritures entrelacées
+    // Initialize object with zeroed content so reads have
+    // a valid base before interleaved writes
     let init_data = alloc::vec![0u8; 2048];
     let init_fd = open_rdwr("/stress/interleaved/rw");
     write_at(init_fd, &init_data, 0);
@@ -527,7 +527,7 @@ fn stress_interleaved_reads_writes_same_fd() {
             write_at(fd, &chunk, offset as u64);
             shadow[offset..offset + size].copy_from_slice(&chunk);
         } else {
-            // Read dans la zone valide
+            // Read within valid zone
             let readable_size = size.min(shadow.len().saturating_sub(offset));
             if readable_size == 0 {
                 continue;
@@ -553,7 +553,7 @@ fn stress_many_dirs_readdir_all_populated() {
     let num_dirs = 10usize;
     let files_per_dir = 5usize;
 
-    // Créer num_dirs répertoires avec files_per_dir fichiers chacun
+    // Create num_dirs directories with files_per_dir files each
     for d in 0..num_dirs {
         for f in 0..files_per_dir {
             let path = alloc::format!("/stress/dirs/dir{d:02}/file{f:02}.txt");
@@ -563,7 +563,7 @@ fn stress_many_dirs_readdir_all_populated() {
         }
     }
 
-    // Lire chaque répertoire avec open_dir (kind=Directory) et vérifier le contenu
+    // Read each directory with open_dir (kind=Directory) and verify content
     for d in 0..num_dirs {
         let dir_path = alloc::format!("/stress/dirs/dir{d:02}");
         let dir_fd = open_dir(&dir_path);
@@ -604,12 +604,12 @@ fn stress_persistence_100_files_survive_cache_flush() {
         records.push((path, data));
     }
 
-    // Flush total du cache
+    // Complete cache flush
     use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
     BLOB_CACHE.flush_all_force();
     OBJECT_TABLE.reset_all();
 
-    // Relire depuis le disque
+    // Read back from disk
     for (path, expected) in &records {
         let fd = open_rdwr(path);
         let got = read_at(fd, expected.len(), 0);
@@ -633,7 +633,7 @@ fn stress_large_write_fragmented_reads() {
     write_at(fd, &data, 0);
     close_fd(fd);
 
-    // Lire en petits morceaux aléatoires et vérifier chaque fragment
+    // Read in small random chunks and verify each fragment
     let fd2 = open_rdwr(path);
     let mut rng = Xorshift32::new(0xF4A6_3E87);
     let mut verified = 0usize;
@@ -659,7 +659,7 @@ fn stress_large_write_fragmented_reads() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SECTION 5 — Cohérence et invariants sous charge
+// SECTION 5 — Consistency and invariants under load
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -670,11 +670,11 @@ fn stress_concurrent_opens_same_path_consistent() {
     let path = "/stress/concurrent/shared";
     let data = payload(0x9A, 512);
 
-    // Premier écrivain
+    // First writer
     let fd_writer = open_rdwr(path);
     write_at(fd_writer, &data, 0);
 
-    // Plusieurs lecteurs simultanés (même path)
+    // Multiple concurrent readers (same path)
     let mut readers: Vec<u32> = (0..8).map(|_| open_rdwr(path)).collect();
 
     for fd in &readers {
@@ -704,7 +704,7 @@ fn stress_write_verify_under_cache_pressure() {
 
     for i in 0..n {
         let path = alloc::format!("/stress/pressure/{i:03}");
-        // Taille variable pour maximiser la pression sur l'éviction
+        // Variable size to maximize pressure on eviction
         let size = rng.next_range(256, 4096);
         let mut data = alloc::vec![0u8; size];
         rng.fill(&mut data);
@@ -714,14 +714,14 @@ fn stress_write_verify_under_cache_pressure() {
         close_fd(fd);
         records.push((path, data));
 
-        // Provoquer des évictions régulièrement
+        // Trigger evictions regularly
         if i % 10 == 9 {
             use crate::fs::exofs::cache::blob_cache::BLOB_CACHE;
             BLOB_CACHE.evict_n(5);
         }
     }
 
-    // Vérifier l'intégrité de tous les fichiers malgré les évictions
+    // Verify integrity of all files despite evictions
     for (path, expected) in &records {
         let fd = open_rdwr(path);
         let got = read_at(fd, expected.len(), 0);
@@ -746,7 +746,7 @@ fn stress_blob_id_collision_resistance() {
     let mut seen: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut rng = Xorshift32::new(0xC011_1510);
 
-    // 500 blobs de taille/contenu variés — zéro collision attendu (Blake3)
+    // 500 blobs of varying size/content — zero collisions expected (Blake3)
     for _ in 0..500 {
         let size = rng.next_range(1, 2048);
         let mut data = alloc::vec![0u8; size];

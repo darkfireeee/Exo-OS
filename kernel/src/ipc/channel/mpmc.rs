@@ -424,7 +424,12 @@ impl MpmcChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<MessageId, IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_SEND,
+        )?;
         self.send(data, flags)
     }
 
@@ -438,7 +443,12 @@ impl MpmcChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(usize, MsgFlags), IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_RECV,
+        )?;
         self.recv(buf, flags)
     }
 }

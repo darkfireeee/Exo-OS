@@ -101,8 +101,11 @@ pub static COW_BREAKER_STATS: CowBreakerStats = CowBreakerStats::new();
 pub unsafe fn break_cow(frame: Frame) -> CowBreakOutcome {
     let refcount = COW_TRACKER.ref_count(frame);
 
-    // If the frame is already exclusive, no copy is necessary.
+    // If the frame is already exclusive, release any stale ref_count=1 slot and avoid copying.
     if refcount <= 1 {
+        if COW_TRACKER.tracked_ref_count(frame).is_some() {
+            let _ = COW_TRACKER.dec(frame);
+        }
         COW_BREAKER_STATS
             .already_excl
             .fetch_add(1, Ordering::Relaxed);

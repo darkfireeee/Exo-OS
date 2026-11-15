@@ -7,8 +7,8 @@ use crate::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use crate::path::{Path, PathBuf};
 use crate::sys::fd::FileDesc;
 pub use crate::sys::fs::common::{Dir, copy, exists, remove_dir_all};
-use crate::sys::pal::syscall::{self, ExoDirEntry, ExoFsFileStat};
-use crate::sys::pal::{cstr_bytes, map_exo_err, unsupported};
+use crate::sys::pal::syscall::{self, ExoDirEntry, ExoFsFileStat, RawTimespec};
+use crate::sys::pal::{cstr_bytes, map_exo_err};
 use crate::sys::time::SystemTime;
 use crate::sys::{AsInner, AsInnerMut, FromInner, IntoInner};
 use crate::vec::Vec;
@@ -16,6 +16,7 @@ use crate::vec::Vec;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct FileAttr {
     pub(crate) stat: ExoFsFileStat,
+    pub(crate) atime_ns: u64,
 }
 
 impl FileAttr {
@@ -38,7 +39,14 @@ impl FileAttr {
     }
 
     pub fn accessed(&self) -> io::Result<SystemTime> {
-        self.modified()
+        let ns = if self.atime_ns != 0 {
+            self.atime_ns
+        } else {
+            self.stat.mtime_ns
+        };
+        let secs = (ns / 1_000_000_000) as i64;
+        let nsecs = (ns % 1_000_000_000) as i64;
+        Ok(SystemTime::new(secs, nsecs))
     }
 
     pub fn created(&self) -> io::Result<SystemTime> {
@@ -72,11 +80,30 @@ impl FilePermissions {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-pub struct FileTimes {}
+pub struct FileTimes {
+    accessed: Option<SystemTime>,
+    modified: Option<SystemTime>,
+}
 
 impl FileTimes {
-    pub fn set_accessed(&mut self, _t: SystemTime) {}
-    pub fn set_modified(&mut self, _t: SystemTime) {}
+    pub fn set_accessed(&mut self, t: SystemTime) {
+        self.accessed = Some(t);
+    }
+
+    pub fn set_modified(&mut self, t: SystemTime) {
+        self.modified = Some(t);
+    }
+
+    fn to_raw_timespecs(&self) -> [RawTimespec; 2] {
+        let omit = RawTimespec {
+            tv_sec: 0,
+            tv_nsec: syscall::UTIME_OMIT,
+        };
+        [
+            self.accessed.map(|t| t.as_timespec()).unwrap_or(omit),
+            self.modified.map(|t| t.as_timespec()).unwrap_or(omit),
+        ]
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -181,8 +208,9 @@ impl File {
     }
 
     pub fn file_attr(&self) -> io::Result<FileAttr> {
-        let stat = syscall::exofs_fstat(self.as_raw_fd()).map_err(map_exo_err)?;
-        Ok(FileAttr { stat })
+        let (stat, atime_ns) =
+            syscall::exofs_fstat_with_atime(self.as_raw_fd()).map_err(map_exo_err)?;
+        Ok(FileAttr { stat, atime_ns })
     }
 
     pub fn fsync(&self) -> io::Result<()> {
@@ -261,28 +289,41 @@ impl File {
         syscall::exofs_fchmod(self.as_raw_fd(), perm.mode).map_err(map_exo_err)
     }
 
-    pub fn set_times(&self, _times: FileTimes) -> io::Result<()> {
-        Ok(())
+    pub fn set_times(&self, times: FileTimes) -> io::Result<()> {
+        let raw = times.to_raw_timespecs();
+        syscall::utimensat(self.as_raw_fd(), None, &raw, 0).map_err(map_exo_err)
     }
 
     pub fn lock(&self) -> io::Result<()> {
-        unsupported()
+        syscall::flock(self.as_raw_fd(), syscall::LOCK_EX).map_err(map_exo_err)
     }
 
     pub fn lock_shared(&self) -> io::Result<()> {
-        unsupported()
+        syscall::flock(self.as_raw_fd(), syscall::LOCK_SH).map_err(map_exo_err)
     }
 
     pub fn try_lock(&self) -> Result<(), TryLockError> {
-        Err(TryLockError::Error(io::Error::from(io::ErrorKind::Unsupported)))
+        match syscall::flock(self.as_raw_fd(), syscall::LOCK_EX | syscall::LOCK_NB) {
+            Ok(()) => Ok(()),
+            Err(e) if e == syscall::SysError::EAGAIN || e == syscall::SysError::EBUSY => {
+                Err(TryLockError::WouldBlock)
+            }
+            Err(e) => Err(TryLockError::Error(map_exo_err(e))),
+        }
     }
 
     pub fn try_lock_shared(&self) -> Result<(), TryLockError> {
-        Err(TryLockError::Error(io::Error::from(io::ErrorKind::Unsupported)))
+        match syscall::flock(self.as_raw_fd(), syscall::LOCK_SH | syscall::LOCK_NB) {
+            Ok(()) => Ok(()),
+            Err(e) if e == syscall::SysError::EAGAIN || e == syscall::SysError::EBUSY => {
+                Err(TryLockError::WouldBlock)
+            }
+            Err(e) => Err(TryLockError::Error(map_exo_err(e))),
+        }
     }
 
     pub fn unlock(&self) -> io::Result<()> {
-        unsupported()
+        syscall::flock(self.as_raw_fd(), syscall::LOCK_UN).map_err(map_exo_err)
     }
 
     pub fn size(&self) -> Option<io::Result<u64>> {
@@ -331,12 +372,22 @@ pub fn set_perm(p: &Path, perm: FilePermissions) -> io::Result<()> {
     syscall::exofs_chmod(&cpath, perm.mode).map_err(map_exo_err)
 }
 
-pub fn set_times(_p: &Path, _times: FileTimes) -> io::Result<()> {
-    Ok(())
+pub fn set_times(p: &Path, times: FileTimes) -> io::Result<()> {
+    let cpath = cstr_bytes(p.as_os_str().as_bytes())?;
+    let raw = times.to_raw_timespecs();
+    syscall::utimensat(syscall::AT_FDCWD, Some(&cpath), &raw, 0).map_err(map_exo_err)
 }
 
-pub fn set_times_nofollow(_p: &Path, _times: FileTimes) -> io::Result<()> {
-    Ok(())
+pub fn set_times_nofollow(p: &Path, times: FileTimes) -> io::Result<()> {
+    let cpath = cstr_bytes(p.as_os_str().as_bytes())?;
+    let raw = times.to_raw_timespecs();
+    syscall::utimensat(
+        syscall::AT_FDCWD,
+        Some(&cpath),
+        &raw,
+        syscall::AT_SYMLINK_NOFOLLOW,
+    )
+    .map_err(map_exo_err)
 }
 
 pub fn readlink(p: &Path) -> io::Result<PathBuf> {
@@ -360,22 +411,73 @@ pub fn link(src: &Path, dst: &Path) -> io::Result<()> {
 
 pub fn stat(p: &Path) -> io::Result<FileAttr> {
     let cpath = cstr_bytes(p.as_os_str().as_bytes())?;
-    let st = syscall::exofs_stat(&cpath).map_err(map_exo_err)?;
-    Ok(FileAttr { stat: st })
+    let (stat, atime_ns) = syscall::exofs_stat_with_atime(&cpath, true).map_err(map_exo_err)?;
+    Ok(FileAttr { stat, atime_ns })
 }
 
 pub fn lstat(p: &Path) -> io::Result<FileAttr> {
-    stat(p)
+    let cpath = cstr_bytes(p.as_os_str().as_bytes())?;
+    let (stat, atime_ns) = syscall::exofs_stat_with_atime(&cpath, false).map_err(map_exo_err)?;
+    Ok(FileAttr { stat, atime_ns })
 }
 
 pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
-    if p.is_absolute() {
-        Ok(p.to_path_buf())
+    let initial = if p.is_absolute() {
+        p.to_path_buf()
     } else {
         let mut cwd = crate::sys::pal::os::getcwd()?;
         cwd.push(p);
-        Ok(cwd)
+        cwd
+    };
+
+    let mut cur = initial;
+    for _ in 0..40 {
+        let mut resolved = PathBuf::from("/");
+        let mut followed_symlink = false;
+        let components: Vec<OsString> = cur
+            .components()
+            .filter_map(|c| match c {
+                crate::path::Component::RootDir | crate::path::Component::CurDir => None,
+                crate::path::Component::ParentDir => Some(OsString::from("..")),
+                crate::path::Component::Normal(s) => Some(s.to_os_string()),
+                crate::path::Component::Prefix(_) => None,
+            })
+            .collect();
+
+        for (idx, comp) in components.iter().enumerate() {
+            if comp.as_os_str().as_bytes() == b".." {
+                resolved.pop();
+                if resolved.as_os_str().is_empty() {
+                    resolved.push("/");
+                }
+                continue;
+            }
+            resolved.push(comp);
+            let attr = lstat(&resolved)?;
+            if attr.file_type().is_symlink() {
+                let target = readlink(&resolved)?;
+                if target.is_absolute() {
+                    resolved = target;
+                } else {
+                    resolved.pop();
+                    resolved.push(target);
+                }
+                for rem in &components[idx + 1..] {
+                    resolved.push(rem);
+                }
+                cur = resolved.clone();
+                followed_symlink = true;
+                break;
+            }
+        }
+
+        if !followed_symlink {
+            let _ = stat(&resolved)?;
+            return Ok(resolved);
+        }
     }
+
+    Err(io::Error::from_raw_os_error(syscall::SysError::ELOOP.errno()))
 }
 
 #[derive(Debug)]
@@ -425,6 +527,8 @@ pub fn readdir(p: &Path) -> io::Result<ReadDir> {
                 full_path.push(&file_name);
                 let mode = if d_type == 4 {
                     syscall::EXOFS_MODE_DIR
+                } else if d_type == 10 {
+                    syscall::EXOFS_MODE_SYMLINK
                 } else {
                     syscall::EXOFS_MODE_FILE
                 };

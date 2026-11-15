@@ -256,8 +256,18 @@ pub fn do_mmap_in_as(
     }
     let end = VirtAddr::new(end_raw);
 
-    let page_flags = prot_to_page_flags(prot);
+    let is_shared = flags & MAP_SHARED != 0;
+    let page_flags = if is_shared {
+        prot_to_page_flags(prot) | PageFlags::PINNED
+    } else {
+        prot_to_page_flags(prot)
+    };
     let vma_flags = prot_to_vma_flags(prot, flags) | VmaFlags::ANONYMOUS;
+    let backing = if is_shared {
+        VmaBacking::Shared
+    } else {
+        VmaBacking::Anonymous
+    };
 
     // Allocate and insert VMA descriptor
     let vma = Box::new(VmaDescriptor::new(
@@ -265,7 +275,7 @@ pub fn do_mmap_in_as(
         end,
         vma_flags,
         page_flags,
-        VmaBacking::Anonymous,
+        backing,
     ));
     let vma_ptr = Box::into_raw(vma);
 
@@ -278,6 +288,132 @@ pub fn do_mmap_in_as(
         return Err(MmapError::InvalidAddress);
     }
 
+    if is_shared {
+        struct PtAllocOnly;
+        impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
+            fn alloc_frame(
+                &self,
+                flags: crate::memory::AllocFlags,
+            ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
+                crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
+            }
+            fn free_frame(&self, f: crate::memory::Frame) {
+                let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
+            }
+        }
+        let pt_alloc = PtAllocOnly;
+        let n_pages = len_aligned / PAGE_SIZE;
+        for i in 0..n_pages {
+            let Ok(frame) = crate::memory::physical::allocator::buddy::alloc_pages(
+                0,
+                crate::memory::AllocFlags::ZEROED,
+            ) else {
+                rollback_anon_pages(user_as, start, i);
+                return Err(MmapError::AllocFailed);
+            };
+            let virt = VirtAddr::new(start.as_u64() + (i * PAGE_SIZE) as u64);
+            if unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }.is_err() {
+                let _ = crate::memory::physical::allocator::buddy::free_pages(frame, 0);
+                rollback_anon_pages(user_as, start, i);
+                return Err(MmapError::AllocFailed);
+            }
+        }
+    }
+
+    Ok(start.as_u64() as usize)
+}
+
+/// Maps a slice of shared physical frames (e.g. file-backed or memfd `MAP_SHARED`)
+/// into the current user address space.
+pub fn do_mmap_shared_frames(
+    addr: u64,
+    len: usize,
+    prot: u32,
+    flags: u32,
+    frames: &[crate::memory::core::Frame],
+) -> Result<usize, MmapError> {
+    if len == 0 || frames.is_empty() {
+        return Err(MmapError::InvalidLength);
+    }
+    validate_prot(prot)?;
+
+    let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
+    let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
+
+    let len_aligned = len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
+    let n_pages = len_aligned / PAGE_SIZE;
+    if frames.len() < n_pages {
+        return Err(MmapError::InvalidLength);
+    }
+
+    let fixed = flags & MAP_FIXED != 0;
+    let base = if fixed {
+        if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
+            return Err(MmapError::InvalidAddress);
+        }
+        VirtAddr::new(addr)
+    } else {
+        let hint = if addr != 0 {
+            Some(VirtAddr::new(addr))
+        } else {
+            None
+        };
+        user_as
+            .find_free_gap(len_aligned, hint)
+            .ok_or(MmapError::OutOfVirtualMemory)?
+    };
+
+    let start = base;
+    let end_raw = base
+        .as_u64()
+        .checked_add(len_aligned as u64)
+        .ok_or(MmapError::OutOfVirtualMemory)?;
+    if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
+        return Err(MmapError::InvalidAddress);
+    }
+    let end = VirtAddr::new(end_raw);
+
+    let page_flags = prot_to_page_flags(prot) | PageFlags::PINNED;
+    let vma_flags = prot_to_vma_flags(prot, flags) | VmaFlags::SHARED;
+
+    let vma = Box::new(VmaDescriptor::new(
+        start,
+        end,
+        vma_flags,
+        page_flags,
+        VmaBacking::Shared,
+    ));
+    let vma_ptr = Box::into_raw(vma);
+    if !unsafe { user_as.insert_vma(vma_ptr) } {
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+        return Err(MmapError::InvalidAddress);
+    }
+
+    struct PtAllocOnly;
+    impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
+        fn alloc_frame(
+            &self,
+            flags: crate::memory::AllocFlags,
+        ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
+            crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
+        }
+        fn free_frame(&self, f: crate::memory::Frame) {
+            let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
+        }
+    }
+    let pt_alloc = PtAllocOnly;
+
+    for (i, &frame) in frames.iter().take(n_pages).enumerate() {
+        let virt = VirtAddr::new(start.as_u64() + (i * PAGE_SIZE) as u64);
+        if unsafe { user_as.map_page(virt, frame, page_flags, &pt_alloc) }.is_err() {
+            rollback_shm_into_process(user_as, start, i);
+            return Err(MmapError::AllocFailed);
+        }
+    }
+
     Ok(start.as_u64() as usize)
 }
 
@@ -285,100 +421,154 @@ pub fn do_mmap_in_as(
 // do_munmap
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Unmaps the virtual region starting at `addr`.
-///
-/// `addr` must be aligned to PAGE_SIZE.
-/// Unmaps all PTEs present in the VMA and frees their physical frames.
-///
-/// V-04: Synchronous TLB shootdown (all CPUs) BEFORE free_page.
-pub fn do_munmap(addr: u64, _len: usize) -> Result<(), MmapError> {
+/// Unmaps the virtual region `[addr, addr + align_up(len))` in the current process.
+pub fn do_munmap(addr: u64, len: usize) -> Result<(), MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
     // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
-    do_munmap_in_as(user_as, addr)
+    do_munmap_range_in_as(user_as, addr, len)
 }
 
-/// Unmaps a VMA in an explicit address space.
+/// Unmaps a full VMA starting at `addr` in an explicit address space.
 pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), MmapError> {
-    if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
+    if addr < PAGE_SIZE as u64 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
 
     user_as.stats.munmap_calls.fetch_add(1, Ordering::Relaxed);
 
-    match user_as.remove_vma(VirtAddr::new(addr)) {
-        None => Err(MmapError::NotMapped),
-        Some(vma_ptr) => {
-            // Retrieve VMA bounds and backing before freeing the descriptor.
-            let (vma_start, vma_end, vma_backing) = unsafe {
-                let vma = &*vma_ptr;
-                (vma.start, vma.end, vma.backing)
-            };
+    let removed_vma = user_as
+        .remove_vma(VirtAddr::new(addr))
+        .ok_or(MmapError::NotMapped)?;
+    let (vma_start, vma_end, vma_backing) = unsafe {
+        let vma = &*removed_vma;
+        (vma.start, vma.end, vma.backing)
+    };
+    let _ = unsafe { Box::from_raw(removed_vma) };
+    unmap_and_shootdown_range(user_as, vma_start, vma_end, vma_backing);
+    Ok(())
+}
 
-            // Free VmaDescriptor allocated by do_mmap / do_brk.
-            // SAFETY: the pointer is valid and we are the owners.
-            let _ = unsafe { Box::from_raw(vma_ptr) };
+/// Unmaps `[addr, addr + align_up(len))` in an explicit address space,
+/// splitting partial VMAs and unmapping across multiple VMAs cleanly.
+pub fn do_munmap_range_in_as(
+    user_as: &UserAddressSpace,
+    addr: u64,
+    len: usize,
+) -> Result<(), MmapError> {
+    if addr < PAGE_SIZE as u64 || !addr.is_multiple_of(PAGE_SIZE as u64) {
+        return Err(MmapError::InvalidAddress);
+    }
+    if len == 0 {
+        return Err(MmapError::InvalidLength);
+    }
+    let len_aligned = len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
+    let end_raw = addr
+        .checked_add(len_aligned as u64)
+        .ok_or(MmapError::InvalidLength)?;
+    if end_raw > crate::memory::core::layout::USER_END.as_u64() {
+        return Err(MmapError::InvalidAddress);
+    }
 
-            // V-04: process pages in batches to bound buffer size.
-            //   1. Unmap PTEs (integrated local TLB flush via unmap_page).
-            //   2. Synchronous TLB shootdown across all active CPUs.
-            //   3. Free accumulated physical frames.
-            // This separation guarantees no CPU can access a frame
-            // after its release via a stale TLB entry (V-04).
-            const BATCH: usize = 64; // 64 × 4 KiB = 256 KiB per batch
-            let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
+    user_as.stats.munmap_calls.fetch_add(1, Ordering::Relaxed);
 
-            let mut cursor = vma_start.as_u64();
-            while cursor < vma_end.as_u64() {
-                let mut frames = [crate::memory::core::types::Frame::containing(
-                    crate::memory::core::types::PhysAddr::new(0),
-                ); BATCH];
-                let mut count = 0usize;
+    let range_end = VirtAddr::new(end_raw);
+    let mut cursor = addr;
+    while cursor < end_raw {
+        match user_as.unmap_vma_range_next(VirtAddr::new(cursor), range_end) {
+            Ok(Some((sub_start, sub_end, vma_backing))) => {
+                unmap_and_shootdown_range(user_as, sub_start, sub_end, vma_backing);
+                cursor = sub_end.as_u64();
+            }
+            Ok(None) => break,
+            Err(_) => return Err(MmapError::AllocFailed),
+        }
+    }
+    Ok(())
+}
 
-                // Phase 1: unmap up to BATCH pages (integrated local flush).
-                while cursor < vma_end.as_u64() && count < BATCH {
-                    // SAFETY: canonical user addresses.
-                    if let Some(f) = unsafe { user_as.unmap_page(VirtAddr::new(cursor)) } {
-                        frames[count] = f;
-                        count += 1;
-                    }
-                    cursor += PAGE_SIZE as u64;
+fn unmap_and_shootdown_range(
+    user_as: &UserAddressSpace,
+    range_start: VirtAddr,
+    range_end: VirtAddr,
+    vma_backing: VmaBacking,
+) {
+    // V-04: process pages in batches to bound buffer size.
+    //   1. Unmap PTEs (integrated local TLB flush via unmap_page).
+    //   2. Synchronous TLB shootdown across all active CPUs.
+    //   3. Free accumulated physical frames.
+    // Steps 1-2 hold `user_as.lock_pt()` so remote memory copies cannot read/write
+    // frames that are about to be unmapped and freed in Step 3.
+    const BATCH: usize = 64; // 64 × 4 KiB = 256 KiB per batch
+    let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
+
+    let mut cursor = range_start.as_u64();
+    while cursor < range_end.as_u64() {
+        let mut frames = [crate::memory::core::types::Frame::containing(
+            crate::memory::core::types::PhysAddr::new(0),
+        ); BATCH];
+        let mut pinned = [false; BATCH];
+        let mut count = 0usize;
+
+        {
+            let _pt_guard = user_as.lock_pt();
+            let walker =
+                crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
+
+            // Phase 1: unmap up to BATCH pages (integrated local flush).
+            while cursor < range_end.as_u64() && count < BATCH {
+                let va = VirtAddr::new(cursor);
+                let is_pinned = crate::memory::virt::page_table::PageTableEntry::from_raw(
+                    walker.read_pte_raw(va),
+                )
+                .is_pinned();
+                // SAFETY: canonical user addresses.
+                if let Some(f) = unsafe { user_as.unmap_page(va) } {
+                    frames[count] = f;
+                    pinned[count] = is_pinned;
+                    count += 1;
                 }
+                cursor += PAGE_SIZE as u64;
+            }
 
-                if count == 0 {
+            if count == 0 {
+                continue;
+            }
+
+            // Phase 2: synchronous TLB shootdown (all CPUs) — V-04.
+            let batch_start = VirtAddr::new(
+                range_start
+                    .as_u64()
+                    .max(cursor - (count as u64 * PAGE_SIZE as u64)),
+            );
+            let batch_end = VirtAddr::new(cursor);
+            // SAFETY: canonical user range, called outside IRQ.
+            unsafe {
+                crate::memory::virt::shootdown_sync(
+                    crate::memory::virt::TlbFlushType::Range {
+                        start: batch_start,
+                        end: batch_end,
+                    },
+                    cpu_count,
+                );
+            }
+        }
+
+        // Phase 3: free frames (TLBs already invalidated everywhere & PTEs cleared).
+        // T4-001 FIX: NEVER free Shared/Device/Direct or pinned VMA frames to buddy allocator.
+        if vma_backing == VmaBacking::Anonymous {
+            for i in 0..count {
+                if pinned[i] {
                     continue;
                 }
-
-                // Phase 2: synchronous TLB shootdown (all CPUs) — V-04.
-                let batch_start = VirtAddr::new(
-                    vma_start
-                        .as_u64()
-                        .max(cursor - (count as u64 * PAGE_SIZE as u64)),
-                );
-                let batch_end = VirtAddr::new(cursor);
-                // SAFETY: canonical user range, called outside IRQ.
-                unsafe {
-                    crate::memory::virt::shootdown_sync(
-                        crate::memory::virt::TlbFlushType::Range {
-                            start: batch_start,
-                            end: batch_end,
-                        },
-                        cpu_count,
-                    );
-                }
-
-                // Phase 3: free frames (TLBs already invalidated everywhere).
-                // T4-001 FIX: NEVER free Shared/Device/Direct VMA frames to buddy allocator.
-                if vma_backing == VmaBacking::Anonymous {
-                    for i in 0..count {
-                        let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
-                        if remaining == 0 || remaining == u32::MAX {
-                            let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
-                        }
-                    }
+                let remaining = crate::memory::cow::tracker::COW_TRACKER.dec(frames[i]);
+                if remaining == 0 || remaining == u32::MAX {
+                    let _ = crate::memory::physical::allocator::buddy::free_page(frames[i]);
                 }
             }
-            Ok(())
         }
     }
 }
@@ -389,8 +579,7 @@ pub fn do_munmap_in_as(user_as: &UserAddressSpace, addr: u64) -> Result<(), Mmap
 
 /// Modifies permissions of an existing memory region.
 ///
-/// `addr` must be aligned to PAGE_SIZE and match the start of a VMA.
-/// Updates PTEs already present in page table AND invalidates TLB.
+/// Updates VMAs (splitting if partial) and present PTEs AND invalidates TLB.
 pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
     // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
@@ -405,7 +594,7 @@ pub fn do_mprotect_in_as(
     len: usize,
     prot: u32,
 ) -> Result<(), MmapError> {
-    if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
+    if addr < PAGE_SIZE as u64 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
     if len == 0 {
@@ -413,31 +602,24 @@ pub fn do_mprotect_in_as(
     }
     validate_prot(prot)?;
 
-    let vma_const_ptr = user_as
-        .find_vma(VirtAddr::new(addr))
-        .ok_or(MmapError::NotMapped)?;
-
-    // SAFETY: The VMA is valid and protected by the address space lock.
-    let vma: &mut VmaDescriptor = unsafe { &mut *(vma_const_ptr as *mut VmaDescriptor) };
-
-    let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let len_aligned = len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
     let range_start = VirtAddr::new(addr);
     let range_end_raw = addr
         .checked_add(len_aligned as u64)
         .ok_or(MmapError::InvalidLength)?;
+    if range_end_raw > crate::memory::core::layout::USER_END.as_u64() {
+        return Err(MmapError::InvalidAddress);
+    }
     let range_end = VirtAddr::new(range_end_raw);
-    if range_end.as_u64() > vma.end.as_u64() {
+
+    if !user_as.verify_vma_range_covered(range_start, range_end) {
         return Err(MmapError::NotMapped);
     }
 
-    let new_page_flags = prot_to_page_flags(prot);
-
-    // Update page flags in VMA (for future demand-faults).
-    vma.page_flags = new_page_flags;
-
-    // Update VMA flags (READ/WRITE/EXEC only).
-    let perm_mask = VmaFlags::READ | VmaFlags::WRITE | VmaFlags::EXEC;
-    let keep = VmaFlags::from_bits(vma.flags.bits() & !perm_mask.bits());
+    let base_page_flags = prot_to_page_flags(prot);
     let mut new_perm = VmaFlags::NONE;
     if prot & PROT_READ != 0 {
         new_perm |= VmaFlags::READ;
@@ -448,50 +630,181 @@ pub fn do_mprotect_in_as(
     if prot & PROT_EXEC != 0 {
         new_perm |= VmaFlags::EXEC;
     }
-    vma.flags = keep | new_perm;
 
-    // Apply new flags to PTEs already present in the table.
-    // Pages not yet faulted (demand paging) receive an Err which is ignored:
-    // they will inherit the new flags on their next fault via vma.page_flags.
-    let mut walker = crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
-    let mut cursor = range_start.as_u64();
-    while cursor < range_end.as_u64() {
-        let va = VirtAddr::new(cursor);
-        let old_entry =
-            crate::memory::virt::page_table::PageTableEntry::from_raw(walker.read_pte_raw(va));
-        let is_shared_cow = old_entry.is_cow()
-            || old_entry.frame().is_some_and(|f| {
-                crate::memory::cow::tracker::COW_TRACKER
-                    .tracked_ref_count(f)
-                    .is_some_and(|rc| rc > 1)
-            });
-        let pte_flags = if is_shared_cow && new_page_flags.contains(PageFlags::WRITABLE) {
-            new_page_flags
-                .clear(PageFlags::WRITABLE)
-                .set(PageFlags::COW)
-        } else {
-            new_page_flags
-        };
-        // remap_flags → Err if page absent (demand paging) → intentionally ignored.
-        let _ = walker.remap_flags(va, pte_flags);
-        cursor += PAGE_SIZE as u64;
-    }
-
-    // Invalidate TLB for the entire modified range, including if target AS
-    // runs on another CPU.
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
-    // SAFETY: canonical user addresses in [range_start, range_end), outside IRQ.
-    unsafe {
-        crate::memory::virt::shootdown_sync(
-            crate::memory::virt::TlbFlushType::Range {
-                start: range_start,
-                end: range_end,
-            },
-            cpu_count,
-        );
+    let mut cursor = addr;
+    while cursor < range_end_raw {
+        let (sub_start, sub_end, eff_page_flags, is_shared) = match user_as
+            .protect_vma_range_next(VirtAddr::new(cursor), range_end, base_page_flags, new_perm)
+        {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(true) => return Err(MmapError::AllocFailed),
+            Err(false) => return Err(MmapError::NotMapped),
+        };
+
+        {
+            let _pt_guard = user_as.lock_pt();
+            let mut walker =
+                crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
+            let mut pt_cursor = sub_start.as_u64();
+            while pt_cursor < sub_end.as_u64() {
+                let va = VirtAddr::new(pt_cursor);
+                let old_entry = crate::memory::virt::page_table::PageTableEntry::from_raw(
+                    walker.read_pte_raw(va),
+                );
+                let is_shared_cow = !is_shared
+                    && (old_entry.is_cow()
+                        || old_entry.frame().is_some_and(|f| {
+                            crate::memory::cow::tracker::COW_TRACKER
+                                .tracked_ref_count(f)
+                                .is_some_and(|rc| rc > 1)
+                        }));
+                let pte_flags = if is_shared_cow && eff_page_flags.contains(PageFlags::WRITABLE) {
+                    eff_page_flags
+                        .clear(PageFlags::WRITABLE)
+                        .set(PageFlags::COW)
+                } else {
+                    eff_page_flags
+                };
+                // remap_flags → Err if page absent (demand paging) → intentionally ignored.
+                let _ = walker.remap_flags(va, pte_flags);
+                pt_cursor += PAGE_SIZE as u64;
+            }
+
+            // SAFETY: canonical user addresses in [sub_start, sub_end), outside IRQ.
+            unsafe {
+                crate::memory::virt::shootdown_sync(
+                    crate::memory::virt::TlbFlushType::Range {
+                        start: sub_start,
+                        end: sub_end,
+                    },
+                    cpu_count,
+                );
+            }
+        }
+
+        cursor = sub_end.as_u64();
     }
 
     Ok(())
+}
+
+/// Shares an already-mapped shared physical range `[src_addr, src_addr + align_up(len))`
+/// from `src_as` into `dst_as`, placing it at `dst_hint` (or choosing a free gap if `0`).
+pub fn do_share_range_between_as(
+    src_as: &UserAddressSpace,
+    src_addr: u64,
+    dst_as: &UserAddressSpace,
+    dst_hint: u64,
+    len: usize,
+    prot: u32,
+) -> Result<usize, MmapError> {
+    if len == 0 {
+        return Err(MmapError::InvalidLength);
+    }
+    validate_prot(prot)?;
+    if src_addr < PAGE_SIZE as u64 || !src_addr.is_multiple_of(PAGE_SIZE as u64) {
+        return Err(MmapError::InvalidAddress);
+    }
+    let len_aligned = len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
+    let src_end_raw = src_addr
+        .checked_add(len_aligned as u64)
+        .ok_or(MmapError::InvalidLength)?;
+    let user_end = crate::memory::core::layout::USER_END.as_u64();
+    if src_end_raw > user_end {
+        return Err(MmapError::InvalidAddress);
+    }
+
+    if !src_as.verify_vma_range_covered(VirtAddr::new(src_addr), VirtAddr::new(src_end_raw)) {
+        return Err(MmapError::NotMapped);
+    }
+
+    let dst_start = if dst_hint != 0 {
+        if dst_hint < PAGE_SIZE as u64 || !dst_hint.is_multiple_of(PAGE_SIZE as u64) {
+            return Err(MmapError::InvalidAddress);
+        }
+        VirtAddr::new(dst_hint)
+    } else {
+        dst_as
+            .find_free_gap(len_aligned, None)
+            .ok_or(MmapError::OutOfVirtualMemory)?
+    };
+    let dst_end_raw = dst_start
+        .as_u64()
+        .checked_add(len_aligned as u64)
+        .ok_or(MmapError::OutOfVirtualMemory)?;
+    if dst_start.as_u64() < PAGE_SIZE as u64 || dst_end_raw > user_end {
+        return Err(MmapError::InvalidAddress);
+    }
+    let dst_end = VirtAddr::new(dst_end_raw);
+
+    let page_flags = prot_to_page_flags(prot) | PageFlags::PINNED;
+    let vma_flags = prot_to_vma_flags(prot, MAP_SHARED) | VmaFlags::SHARED;
+    let vma = Box::new(VmaDescriptor::new(
+        dst_start,
+        dst_end,
+        vma_flags,
+        page_flags,
+        VmaBacking::Shared,
+    ));
+    let vma_ptr = Box::into_raw(vma);
+    if !unsafe { dst_as.insert_vma(vma_ptr) } {
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+        return Err(MmapError::InvalidAddress);
+    }
+
+    struct PtAllocOnly;
+    impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
+        fn alloc_frame(
+            &self,
+            flags: crate::memory::AllocFlags,
+        ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
+            crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
+        }
+        fn free_frame(&self, f: crate::memory::Frame) {
+            let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
+        }
+    }
+    let pt_alloc = PtAllocOnly;
+
+    let same_as = core::ptr::eq(src_as, dst_as);
+    let (_g1, _g2) = if same_as {
+        (Some(src_as.lock_pt()), None)
+    } else if src_as.pid <= dst_as.pid {
+        (Some(src_as.lock_pt()), Some(dst_as.lock_pt()))
+    } else {
+        let d = dst_as.lock_pt();
+        let s = src_as.lock_pt();
+        (Some(s), Some(d))
+    };
+
+    let src_walker = crate::memory::virt::page_table::PageTableWalker::new(src_as.pml4_phys());
+    let n_pages = len_aligned / PAGE_SIZE;
+    for i in 0..n_pages {
+        let src_va = VirtAddr::new(src_addr + (i * PAGE_SIZE) as u64);
+        let dst_va = VirtAddr::new(dst_start.as_u64() + (i * PAGE_SIZE) as u64);
+        let src_pte = crate::memory::virt::page_table::PageTableEntry::from_raw(
+            src_walker.read_pte_raw(src_va),
+        );
+        if !src_pte.is_present() || !src_pte.is_user() || !src_pte.is_pinned() {
+            rollback_shm_into_process(dst_as, dst_start, i);
+            return Err(MmapError::PermissionDenied);
+        }
+        let Some(frame) = src_pte.frame() else {
+            rollback_shm_into_process(dst_as, dst_start, i);
+            return Err(MmapError::NotMapped);
+        };
+        if unsafe { dst_as.map_page(dst_va, frame, page_flags, &pt_alloc) }.is_err() {
+            rollback_shm_into_process(dst_as, dst_start, i);
+            return Err(MmapError::AllocFailed);
+        }
+    }
+
+    Ok(dst_start.as_u64() as usize)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -515,7 +828,7 @@ pub fn do_mremap_zero_copy(
     const MREMAP_FIXED: u64 = 0x2;
     const MREMAP_DONTUNMAP: u64 = 0x4;
 
-    if old_addr == 0 || !old_addr.is_multiple_of(PAGE_SIZE as u64) {
+    if old_addr < PAGE_SIZE as u64 || !old_addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
     if old_len == 0 || new_len == 0 {
@@ -527,15 +840,26 @@ pub fn do_mremap_zero_copy(
     if flags & MREMAP_MAYMOVE == 0 {
         return Ok(MremapZeroCopy::Unsupported);
     }
-    if flags & MREMAP_FIXED != 0 && (new_addr == 0 || !new_addr.is_multiple_of(PAGE_SIZE as u64)) {
+    if flags & MREMAP_FIXED != 0
+        && (new_addr < PAGE_SIZE as u64 || !new_addr.is_multiple_of(PAGE_SIZE as u64))
+    {
         return Err(MmapError::InvalidAddress);
     }
 
-    let old_len_aligned = (old_len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    let new_len_aligned = (new_len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let old_len_aligned = old_len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
+    let new_len_aligned = new_len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
     if new_len_aligned < old_len_aligned {
         return Ok(MremapZeroCopy::Unsupported);
     }
+    let old_end = old_addr
+        .checked_add(old_len_aligned as u64)
+        .ok_or(MmapError::InvalidLength)?;
     let old_start = VirtAddr::new(old_addr);
 
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
@@ -563,6 +887,13 @@ pub fn do_mremap_zero_copy(
         .as_u64()
         .checked_add(new_len_aligned as u64)
         .ok_or(MmapError::OutOfVirtualMemory)?;
+    let user_end = crate::memory::core::layout::USER_END.as_u64();
+    if target_start.as_u64() < PAGE_SIZE as u64 || target_end_raw > user_end {
+        return Err(MmapError::InvalidAddress);
+    }
+    if flags & MREMAP_FIXED != 0 && target_start.as_u64() < old_end && target_end_raw > old_addr {
+        return Err(MmapError::InvalidAddress);
+    }
     let target_end = VirtAddr::new(target_end_raw);
 
     let mut moved_vma = old_vma.clone_metadata();
@@ -837,6 +1168,16 @@ fn rollback_shm_into_process(user_as: &UserAddressSpace, virt_base: VirtAddr, n_
         let v = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
         unsafe {
             user_as.unmap_page(v);
+        }
+    }
+    free_removed_vma(user_as, virt_base);
+}
+
+fn rollback_anon_pages(user_as: &UserAddressSpace, virt_base: VirtAddr, n_pages: usize) {
+    for i in 0..n_pages {
+        let v = VirtAddr::new(virt_base.as_u64().saturating_add((i * PAGE_SIZE) as u64));
+        if let Some(frame) = unsafe { user_as.unmap_page(v) } {
+            let _ = crate::memory::physical::allocator::buddy::free_pages(frame, 0);
         }
     }
     free_removed_vma(user_as, virt_base);

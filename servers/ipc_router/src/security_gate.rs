@@ -39,8 +39,8 @@ use super::exocordon;
 /// et aux enveloppes ABI standard de transiter sans être faussement rejetés.
 const MAX_INLINE_PAYLOAD: usize = exo_syscall_abi::IPC_KERNEL_MAX_MSG_SIZE;
 
-/// Nombre maximum de paires src→dst tracées pour les statistiques.
-const MAX_TRACKED_PIDS: usize = 16;
+/// Nombre maximum de PIDs suivis pour les statistiques et violations.
+const MAX_TRACKED_PIDS: usize = 64;
 
 /// Seuil de violations avant enregistrement en quarantaine douce.
 /// Soft quarantine : les violations sont loguées mais init_server décide du kill.
@@ -103,9 +103,12 @@ static SOFT_QUARANTINE_COUNT: AtomicU32 = AtomicU32::new(0);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn find_or_alloc_slot(pid: u32) -> Option<usize> {
+fn find_or_alloc_slot(pid: u32, evict_clean_on_full: bool) -> Option<usize> {
+    if pid == 0 {
+        return None;
+    }
     for (i, s) in PID_STATS.iter().enumerate() {
-        if s.pid.load(Ordering::Relaxed) == pid {
+        if s.pid.load(Ordering::Acquire) == pid {
             return Some(i);
         }
     }
@@ -114,7 +117,23 @@ fn find_or_alloc_slot(pid: u32) -> Option<usize> {
             .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
+            s.violations.store(0, Ordering::Release);
+            s.allowed.store(0, Ordering::Release);
             return Some(i);
+        }
+    }
+    if evict_clean_on_full {
+        for (i, s) in PID_STATS.iter().enumerate() {
+            let old_pid = s.pid.load(Ordering::Acquire);
+            if old_pid != 0
+                && s.violations.load(Ordering::Acquire) == 0
+                && s.pid
+                    .compare_exchange(old_pid, pid, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
+                s.allowed.store(0, Ordering::Release);
+                return Some(i);
+            }
         }
     }
     None
@@ -144,7 +163,7 @@ pub fn check_message(
     match exocordon::check_ipc(src_pid, dst_pid) {
         Ok(()) => {
             TOTAL_ALLOWED.fetch_add(1, Ordering::Relaxed);
-            if let Some(i) = find_or_alloc_slot(src_pid) {
+            if let Some(i) = find_or_alloc_slot(src_pid, false) {
                 PID_STATS[i].allowed.fetch_add(1, Ordering::Relaxed);
             }
             SecurityVerdict::Allow
@@ -171,7 +190,7 @@ pub fn check_message(
 /// Si le seuil SOFT_QUARANTINE_THRESHOLD est atteint, incrémente le compteur
 /// de quarantaine douce (init_server notifié via heartbeat).
 pub fn record_violation(pid: u32, _violation_type: u8) {
-    if let Some(i) = find_or_alloc_slot(pid) {
+    if let Some(i) = find_or_alloc_slot(pid, true) {
         let prev = PID_STATS[i].violations.fetch_add(1, Ordering::Relaxed);
         if prev + 1 == SOFT_QUARANTINE_THRESHOLD {
             SOFT_QUARANTINE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -218,20 +237,24 @@ pub fn audit_log_violation(
     // la violation localement. Cette fonction ne fait que la notification
     // exo_shield (appelée par main.rs après un verdict de refus) ; un double
     // appel gonflerait artificiellement le seuil SOFT_QUARANTINE_THRESHOLD.
-    let _ = reason;
-
-    // FIX-AUDIT-IPC : envoi non-bloquant EVENT_REPORT vers exo_shield (endpoint 10).
-    // Layout : [event_type u32][src_pid u32][dst_pid u32][reason u8][pad 3B]
+    // Construire un ShieldRequest complet (8B header + 32B EVENT_REPORT payload).
+    // Note: sender_pid=2 (ipc_router) et msg_type=1 (EVENT_REPORT) évitent tout
+    // décalage avec ShieldRequest dans exo_shield/src/main.rs.
     const EXO_SHIELD_ENDPOINT: u64 = 10;
-    const EVENT_IPC_VIOLATION:  u32 = 0x0000_0010;
-    // Construire un petit buffer inline (12 bytes)
-    let mut buf = [0u8; 12];
-    buf[0..4].copy_from_slice(&EVENT_IPC_VIOLATION.to_le_bytes());
-    buf[4..8].copy_from_slice(&src_pid.to_le_bytes());
-    buf[8..12].copy_from_slice(&dst_pid.to_le_bytes());
+    const IPC_ROUTER_PID: u32 = 2;
+    const MSG_EVENT_REPORT: u32 = 1;
+    const EVENT_TYPE_IPC: u8 = 5;
+    const THREAT_LEVEL_HIGH: u8 = 2;
 
-    // FIX-ROUTER-FLAG-01 : flag 0x01 (NOWAIT) au lieu de 0x02 (IPC_FLAG_INJECT_SRC_PID
-    // qui écrasait EVENT_IPC_VIOLATION à l'offset [0..4] avec le PID du routeur).
+    let mut buf = [0u8; 40];
+    buf[0..4].copy_from_slice(&IPC_ROUTER_PID.to_le_bytes());
+    buf[4..8].copy_from_slice(&MSG_EVENT_REPORT.to_le_bytes());
+    buf[8..12].copy_from_slice(&src_pid.to_le_bytes());
+    buf[12] = EVENT_TYPE_IPC;
+    buf[16..20].copy_from_slice(&(reason as u32).to_le_bytes());
+    buf[20..28].copy_from_slice(&(dst_pid as u64).to_le_bytes());
+    buf[36] = THREAT_LEVEL_HIGH;
+
     let _ = unsafe {
         exo_syscall_abi::syscall6(
             exo_syscall_abi::SYS_IPC_SEND,
@@ -267,10 +290,16 @@ pub fn add_policy(
     _max_payload_size: u16,
     _allowed_msg_types: u32,
 ) -> bool {
-    matches!(
-        exocordon::check_ipc(src_pid, dst_pid),
-        Ok(()) | Err(exocordon::IpcError::QuotaExhausted)
-    )
+    let (Some(src_svc), Some(dst_svc)) = (
+        exocordon::service_id_of(src_pid),
+        exocordon::service_id_of(dst_pid),
+    ) else {
+        return false;
+    };
+    src_svc == dst_svc
+        || src_svc == exocordon::ServiceId::IpcBroker
+        || dst_svc == exocordon::ServiceId::IpcBroker
+        || exocordon::find_edge(src_svc, dst_svc).is_some()
 }
 
 /// Initialise la porte de sécurité.

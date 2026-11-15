@@ -77,8 +77,8 @@ impl BlockDevice for MockBlockDevice {
 }
 
 pub(crate) fn reset_state() {
-    // flush_all_force : dans les tests, on veut vider le cache sans erreur
-    // même si des entrées dirty existent (pas de disque réel à synchroniser).
+    // flush_all_force: in tests, we want to clear the cache without errors
+    // even if dirty entries exist (no real disk to synchronize).
     BLOB_CACHE.flush_all_force();
     OBJECT_TABLE.reset_all();
     OBJECT_STORE.reset_all();
@@ -170,9 +170,9 @@ pub(crate) fn close_fd(fd: u32) {
 
 use crate::fs::exofs::syscall::object_create::{sys_exofs_object_create, CreateArgs};
 
-/// Ouvre ou crée un objet RÉPERTOIRE (kind=1) et retourne son fd.
-/// Nécessaire pour readdir — open_rdwr crée un fichier ordinaire (kind=0).
-/// sys_exofs_object_create exige RIGHT_CREATE dans cap_rights (verify_cap).
+/// Opens or creates a DIRECTORY object (kind=1) and returns its fd.
+/// Required for readdir — open_rdwr creates an ordinary file (kind=0).
+/// sys_exofs_object_create requires RIGHT_CREATE in cap_rights (verify_cap).
 pub(crate) fn open_dir(path: &str) -> u32 {
     let bytes = path_bytes(path);
     let args = CreateArgs {
@@ -188,7 +188,7 @@ pub(crate) fn open_dir(path: &str) -> u32 {
         bytes.as_ptr() as u64,
         bytes.len() as u64,
         (open_flags::O_RDWR | open_flags::O_CREAT) as u64,
-        0, // out_ptr non requis — fd retourné directement
+        0, // out_ptr not required — fd returned directly
         (&args as *const CreateArgs) as u64,
         (RIGHT_READ | RIGHT_WRITE | RIGHT_CREATE | RIGHT_LIST) as u64,
     );
@@ -202,7 +202,7 @@ pub(crate) fn open_rdwr(path: &str) -> u32 {
     open_path(path, open_flags::O_RDWR)
 }
 
-/// Parse un buffer readdir en liste (nom, d_type).
+/// Parses a readdir buffer into a list of (name, d_type).
 pub(crate) fn parse_dirents(buf: &[u8]) -> Vec<(alloc::string::String, u8)> {
     use crate::fs::exofs::syscall::readdir::HEADER_SIZE;
     let mut out = alloc::vec::Vec::new();

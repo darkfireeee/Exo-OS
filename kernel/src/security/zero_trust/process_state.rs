@@ -26,7 +26,7 @@
 //   - Recycling: the slot is reset to 0 upon PID release (cf. lifecycle/wait).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use super::context::{restriction_flags, PrincipalId, SecurityContext, TrustLevel};
 use super::verify::ring1_trusted_mask;
@@ -42,6 +42,10 @@ const INIT_PID: u32 = 1;
 /// Restriction state per PID. `0` = no restriction.
 static PROCESS_RESTRICTIONS: [AtomicU64; MAX_TRACKED_PIDS] =
     [const { AtomicU64::new(0) }; MAX_TRACKED_PIDS];
+
+/// Explicit trust override per PID (`0` = dynamic default, `1 + (TrustLevel as u8)` = override).
+static PROCESS_TRUST_OVERRIDE: [AtomicU8; MAX_TRACKED_PIDS] =
+    [const { AtomicU8::new(0) }; MAX_TRACKED_PIDS];
 
 /// Adds restrictions to process `pid` (monotonic — can only HARDEN).
 ///
@@ -69,12 +73,62 @@ pub fn process_restrictions(pid: u32) -> u64 {
     PROCESS_RESTRICTIONS[idx].load(Ordering::Acquire)
 }
 
+/// Sets or clears an explicit trust override for `pid` (used by exo_shield quarantine).
+/// Protects kernel (`0`), init (`1`), and `ipc_router` (`2`).
+pub fn set_process_trust(pid: u32, trust: Option<TrustLevel>) -> bool {
+    if pid <= 2 {
+        return false;
+    }
+    let idx = pid as usize;
+    if idx >= MAX_TRACKED_PIDS {
+        return false;
+    }
+    let encoded = match trust {
+        None => 0,
+        Some(level) => (level as u8).saturating_add(1),
+    };
+    PROCESS_TRUST_OVERRIDE[idx].store(encoded, Ordering::Release);
+    true
+}
+
+/// Enforces kernel-side Zero-Trust quarantine for `pid` on behalf of `exo_shield`.
+pub fn quarantine_process(pid: u32) -> bool {
+    if pid <= 2 || (pid as usize) >= MAX_TRACKED_PIDS {
+        return false;
+    }
+    if crate::security::ipc_policy::service_class_of(crate::process::core::pid::Pid(pid))
+        == crate::security::ipc_policy::ServiceClass::ExoShield
+    {
+        return false;
+    }
+    let _ = set_process_trust(pid, Some(TrustLevel::Untrusted));
+    restrict_process(
+        pid,
+        restriction_flags::SANDBOX_FULL
+            | restriction_flags::NO_FORK
+            | restriction_flags::NO_EXEC
+            | restriction_flags::NO_NETWORK
+            | restriction_flags::FS_READONLY
+            | restriction_flags::NO_PROCESS_CREATE,
+    )
+}
+
+/// Releases a previously quarantined process from kernel-side Zero-Trust confinement.
+pub fn release_process_quarantine(pid: u32) -> bool {
+    if pid <= 2 || (pid as usize) >= MAX_TRACKED_PIDS {
+        return false;
+    }
+    clear_process_restrictions(pid);
+    true
+}
+
 /// Resets a PID's state. Called upon PID release (recycling) so
 /// a future process reusing this number starts WITHOUT inherited restrictions.
 pub fn clear_process_restrictions(pid: u32) {
     let idx = pid as usize;
     if idx < MAX_TRACKED_PIDS {
         PROCESS_RESTRICTIONS[idx].store(0, Ordering::Release);
+        PROCESS_TRUST_OVERRIDE[idx].store(0, Ordering::Release);
     }
 }
 
@@ -90,13 +144,30 @@ pub fn inherit_restrictions(parent_pid: u32, child_pid: u32) {
 /// **Authenticated** trust level of a PID, derived from actual system state.
 ///
 /// - init (PID 1) → System (most privileged process);
+/// - explicit quarantine/trust override (if set);
 /// - trusted Ring 1 service (mask maintained by `ipc_policy`) → Trusted;
 /// - everything else (apps, shell) → Normal.
 pub fn trust_for_pid(pid: u32) -> TrustLevel {
     if pid == INIT_PID {
         return TrustLevel::System;
     }
+    if let Some(slot) = PROCESS_TRUST_OVERRIDE.get(pid as usize) {
+        match slot.load(Ordering::Acquire) {
+            1 => return TrustLevel::Untrusted,
+            2 => return TrustLevel::Restricted,
+            3 => return TrustLevel::Normal,
+            4 => return TrustLevel::Trusted,
+            5 => return TrustLevel::Kernel,
+            6 => return TrustLevel::System,
+            _ => {}
+        }
+    }
     if pid < 64 && (ring1_trusted_mask() & (1u64 << pid)) != 0 {
+        return TrustLevel::Trusted;
+    }
+    if pid >= 64
+        && crate::security::ipc_policy::can_inject_src_pid(crate::process::core::pid::Pid(pid))
+    {
         return TrustLevel::Trusted;
     }
     TrustLevel::Normal
@@ -128,7 +199,9 @@ pub fn context_for_caller(pid: u32, tid: u32) -> SecurityContext {
 pub fn syscall_restriction_mask(nr: u64) -> u64 {
     use restriction_flags::*;
     match nr {
-        numbers::SYS_FORK | numbers::SYS_CLONE | numbers::SYS_VFORK => NO_FORK | NO_PROCESS_CREATE,
+        numbers::SYS_FORK | numbers::SYS_CLONE | numbers::SYS_VFORK => {
+            NO_FORK | NO_PROCESS_CREATE
+        }
         numbers::SYS_EXECVE => NO_EXEC | NO_PROCESS_CREATE,
         numbers::SYS_SOCKET
         | numbers::SYS_CONNECT
@@ -140,6 +213,70 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
         | numbers::SYS_SENDMSG
         | numbers::SYS_RECVMSG
         | numbers::SYS_SOCKETPAIR => NO_NETWORK,
+        numbers::SYS_OPEN
+        | numbers::SYS_OPENAT
+        | numbers::SYS_OPENAT2
+        | numbers::SYS_STAT
+        | numbers::SYS_LSTAT
+        | numbers::SYS_NEWFSTATAT
+        | numbers::SYS_STATFS
+        | numbers::SYS_STATX
+        | numbers::SYS_ACCESS
+        | numbers::SYS_FACCESSAT
+        | numbers::SYS_READLINK
+        | numbers::SYS_READLINKAT
+        | numbers::SYS_GETDENTS
+        | numbers::SYS_GETDENTS64
+        | numbers::SYS_EXOFS_PATH_RESOLVE
+        | numbers::SYS_EXOFS_OBJECT_OPEN
+        | numbers::SYS_EXOFS_OBJECT_READ
+        | numbers::SYS_EXOFS_OBJECT_STAT
+        | numbers::SYS_EXOFS_GET_CONTENT_HASH
+        | numbers::SYS_EXOFS_SNAPSHOT_LIST
+        | numbers::SYS_EXOFS_RELATION_QUERY
+        | numbers::SYS_EXOFS_QUOTA_QUERY
+        | numbers::SYS_EXOFS_OPEN_BY_PATH
+        | numbers::SYS_EXOFS_READDIR => NO_FS,
+        numbers::SYS_CREAT
+        | numbers::SYS_UNLINK
+        | numbers::SYS_UNLINKAT
+        | numbers::SYS_MKDIR
+        | numbers::SYS_MKDIRAT
+        | numbers::SYS_RMDIR
+        | numbers::SYS_RENAME
+        | numbers::SYS_RENAMEAT
+        | numbers::SYS_RENAMEAT2
+        | numbers::SYS_LINK
+        | numbers::SYS_LINKAT
+        | numbers::SYS_SYMLINK
+        | numbers::SYS_SYMLINKAT
+        | numbers::SYS_CHMOD
+        | numbers::SYS_FCHMOD
+        | numbers::SYS_FCHMODAT
+        | numbers::SYS_CHOWN
+        | numbers::SYS_FCHOWN
+        | numbers::SYS_LCHOWN
+        | numbers::SYS_FCHOWNAT
+        | numbers::SYS_TRUNCATE
+        | numbers::SYS_FTRUNCATE
+        | numbers::SYS_FALLOCATE
+        | numbers::SYS_UTIME
+        | numbers::SYS_UTIMES
+        | numbers::SYS_FUTIMESAT
+        | numbers::SYS_UTIMENSAT
+        | numbers::SYS_MKNOD
+        | numbers::SYS_MKNODAT
+        | numbers::SYS_EXOFS_OBJECT_WRITE
+        | numbers::SYS_EXOFS_OBJECT_CREATE
+        | numbers::SYS_EXOFS_OBJECT_DELETE
+        | numbers::SYS_EXOFS_OBJECT_SET_META
+        | numbers::SYS_EXOFS_SNAPSHOT_CREATE
+        | numbers::SYS_EXOFS_SNAPSHOT_MOUNT
+        | numbers::SYS_EXOFS_RELATION_CREATE
+        | numbers::SYS_EXOFS_GC_TRIGGER
+        | numbers::SYS_EXOFS_EXPORT_OBJECT
+        | numbers::SYS_EXOFS_IMPORT_OBJECT
+        | numbers::SYS_EXOFS_EPOCH_COMMIT => NO_FS | FS_READONLY,
         _ => 0,
     }
 }
@@ -169,6 +306,11 @@ pub fn pledge_promises_to_restrictions(promises: u64) -> u64 {
     }
     if promises & pledge_flags::INET == 0 {
         r |= NO_NETWORK;
+    }
+    if promises & (pledge_flags::RPATH | pledge_flags::WPATH | pledge_flags::CPATH) == 0 {
+        r |= NO_FS;
+    } else if promises & (pledge_flags::WPATH | pledge_flags::CPATH) == 0 {
+        r |= FS_READONLY;
     }
     r
 }
@@ -273,11 +415,23 @@ mod tests {
         assert!(r & NO_EXEC != 0);
         assert!(r & NO_NETWORK != 0);
 
-        // PROC|EXEC|INET promised → no restriction (on enforced flags).
+        // PROC|EXEC|INET|RPATH|WPATH|CPATH promised → no restriction (on enforced flags).
         let none = pledge_promises_to_restrictions(
-            pledge_flags::PROC | pledge_flags::EXEC | pledge_flags::INET,
+            pledge_flags::PROC
+                | pledge_flags::EXEC
+                | pledge_flags::INET
+                | pledge_flags::RPATH
+                | pledge_flags::WPATH
+                | pledge_flags::CPATH,
         );
         assert_eq!(none, 0);
+
+        // RPATH without WPATH/CPATH → FS_READONLY only (not NO_FS).
+        let ro = pledge_promises_to_restrictions(
+            pledge_flags::PROC | pledge_flags::EXEC | pledge_flags::INET | pledge_flags::RPATH,
+        );
+        assert_eq!(ro & NO_FS, 0);
+        assert!(ro & FS_READONLY != 0);
 
         // INET alone → network allowed, fork/exec restricted.
         let net_only = pledge_promises_to_restrictions(pledge_flags::INET);

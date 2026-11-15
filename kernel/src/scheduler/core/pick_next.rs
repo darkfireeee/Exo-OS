@@ -81,22 +81,23 @@ pub unsafe fn pick_next_task(
     assert_preempt_disabled();
 
     PICK_NEXT_TOTAL.fetch_add(1, Ordering::Relaxed);
+    rq.drain_migrations();
 
     // Fast path: if the current thread is RT and still the highest priority,
-    // do not switch (hot path optimization).
+    // do not switch unless an equal-priority SCHED_RR thread needs to rotate.
     if let Some(cur) = current {
         let cur_ref = cur.as_ref();
         if cur_ref.state() == TaskState::Running
             && (cur_ref.policy == crate::scheduler::core::task::SchedPolicy::Fifo
                 || cur_ref.policy == crate::scheduler::core::task::SchedPolicy::RoundRobin)
         {
-            // Check if a higher-priority RT thread is waiting.
             if let Some(best_prio) = rq.rt_bitmap_highest_prio() {
-                if best_prio < cur_ref.priority.0 {
-                    // Preempt current RT thread in favor of a higher-priority RT thread.
+                let rr_rotate = cur_ref.policy
+                    == crate::scheduler::core::task::SchedPolicy::RoundRobin
+                    && cur_ref.need_resched()
+                    && best_prio == cur_ref.priority.0;
+                if best_prio < cur_ref.priority.0 || rr_rotate {
                     PICK_RT_RT.fetch_add(1, Ordering::Relaxed);
-                    // Re-enqueue current: even FIFO must remain ready after
-                    // preemption by a higher RT priority.
                     cur_ref.set_state(TaskState::Runnable);
                     rq.enqueue(cur);
                     if let Some(next) = rq.dequeue_highest_rt() {

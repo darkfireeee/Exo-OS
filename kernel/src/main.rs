@@ -61,8 +61,8 @@ core::arch::global_asm!(
     ".short 5",
     ".short 0",
     ".long 20", // Framebuffer request tag
-    ".long 1024",
-    ".long 768",
+    ".long 1920",
+    ".long 1080",
     ".long 32",
     ".long 0", // padding 8-byte alignment before end tag
     ".short 0",

@@ -1,9 +1,9 @@
-//! relation_storage.rs — Stockage persistant des relations ExoFS
+//! relation_storage.rs — Persistent storage of ExoFS relations
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve avant tout insert
-//!  - ONDISK-03: AtomicU64 uniquement dans les structs non-repr(C)
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - OOM-02: try_reserve before any insert
+//!  - ONDISK-03: AtomicU64 only in non-repr(C) structs
+//!  - ARITH-02: checked arithmetic
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -16,17 +16,17 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre maximum de relations en mémoire simultanément.
+/// Maximum number of relations simultaneously in memory.
 pub const STORAGE_MAX_RELATIONS: usize = 65536;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StorageStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du stockage de relations.
+/// Storage statistics of relations.
 #[derive(Clone, Debug, Default)]
 pub struct StorageStats {
     pub total_persisted: u64,
@@ -39,9 +39,9 @@ pub struct StorageStats {
 // RelationStoreInner
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Partie intérieure du store protégée par SpinLock.
+/// Inner part of the store protected by a SpinLock.
 struct RelationStoreInner {
-    /// Map id → blob on-disk.
+    /// Map id → on-disk blob.
     store: BTreeMap<u64, RelationOnDisk>,
     stats: StorageStats,
 }
@@ -137,20 +137,20 @@ impl RelationStoreInner {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationStorage (publique, thread-safe)
+// RelationStorage (public, thread-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Stockage persistant des relations en mémoire.
+/// Persistent storage of relations in memory.
 ///
-/// Thread-safe via SpinLock.  L'allocateur d'ID utilise un AtomicU64
-/// en dehors de la zone repr(C) (ONDISK-03 ok).
+/// Thread-safe via SpinLock. The ID allocator uses an AtomicU64
+/// outside the repr(C) area (ONDISK-03 ok).
 pub struct RelationStorage {
     inner: SpinLock<RelationStoreInner>,
     next_id: AtomicU64,
 }
 
 impl RelationStorage {
-    /// Constructeur `const` pour initialisation statique.
+    /// `const` constructor for static initialization.
     pub const fn new_const() -> Self {
         RelationStorage {
             inner: SpinLock::new(RelationStoreInner::new_empty()),
@@ -158,7 +158,7 @@ impl RelationStorage {
         }
     }
 
-    /// Alloue un nouvel identifiant unique.
+    /// Allocates a new unique identifier.
     pub fn allocate_id(&self) -> RelationId {
         let raw = self.next_id.fetch_add(1, Ordering::Relaxed);
         let raw = if raw == 0 {
@@ -169,62 +169,62 @@ impl RelationStorage {
         RelationId(raw)
     }
 
-    /// Persiste une relation.
+    /// Persists a relation.
     pub fn persist(&self, rel: &Relation) -> ExofsResult<()> {
         self.inner.lock().persist(rel)
     }
 
-    /// Supprime une relation par son ID.  Retourne `false` si introuvable.
+    /// Removes a relation by its ID. Returns `false` if not found.
     pub fn remove(&self, id: RelationId) -> bool {
         self.inner.lock().remove(id.0)
     }
 
-    /// Charge une relation par son ID.
+    /// Loads a relation by its ID.
     pub fn load(&self, id: RelationId) -> Option<ExofsResult<Relation>> {
         self.inner.lock().load(id.0)
     }
 
-    /// Charge toutes les relations.
+    /// Loads all relations.
     pub fn load_all(&self) -> ExofsResult<Vec<Relation>> {
         self.inner.lock().load_all()
     }
 
-    /// Charge les relations d'un certain type.
+    /// Loads relations of a specific kind.
     pub fn load_by_kind(&self, kind: RelationKind) -> ExofsResult<Vec<Relation>> {
         self.inner.lock().load_by_kind(kind)
     }
 
-    /// Charge les relations dont le blob source est `from_blob`.
+    /// Loads relations whose source blob is `from_blob`.
     pub fn load_from(&self, from_blob: &BlobId) -> ExofsResult<Vec<Relation>> {
         self.inner.lock().load_from(from_blob.as_bytes())
     }
 
-    /// Charge les relations dont la destination est `to_blob`.
+    /// Loads relations whose destination is `to_blob`.
     pub fn load_to(&self, to_blob: &BlobId) -> ExofsResult<Vec<Relation>> {
         self.inner.lock().load_to(to_blob.as_bytes())
     }
 
-    /// `true` si une relation avec cet ID existe.
+    /// `true` if a relation with this ID exists.
     pub fn contains(&self, id: RelationId) -> bool {
         self.inner.lock().store.contains_key(&id.0)
     }
 
-    /// Nombre de relations stockées.
+    /// Number of stored relations.
     pub fn count(&self) -> usize {
         self.inner.lock().store.len()
     }
 
-    /// Statistiques du stockage.
+    /// Storage statistics.
     pub fn stats(&self) -> StorageStats {
         self.inner.lock().stats.clone()
     }
 
-    /// Vide tout le store.
+    /// Clears the entire store.
     pub fn flush(&self) {
         self.inner.lock().flush();
     }
 
-    /// Itère sur tous les IDs stockés.
+    /// Iterates over all stored IDs.
     pub fn all_ids(&self) -> Vec<RelationId> {
         let guard = self.inner.lock();
         let mut ids = Vec::new();
@@ -234,7 +234,7 @@ impl RelationStorage {
         ids
     }
 
-    /// Met à jour une relation existante (remplace par la nouvelle version).
+    /// Updates an existing relation (replaces with the new version).
     pub fn update(&self, rel: &Relation) -> ExofsResult<()> {
         let mut guard = self.inner.lock();
         if !guard.store.contains_key(&rel.id.0) {
@@ -244,7 +244,7 @@ impl RelationStorage {
         Ok(())
     }
 
-    /// Sérialise toutes les relations dans un Vec de blocs bruts.
+    /// Serializes all relations into a Vec of raw blocks.
     pub fn dump_raw(&self) -> ExofsResult<Vec<[u8; RELATION_ONDISK_SIZE]>> {
         let guard = self.inner.lock();
         let mut out = Vec::new();
@@ -256,7 +256,7 @@ impl RelationStorage {
         Ok(out)
     }
 
-    /// Recharge depuis des blocs bruts (import depuis disque).
+    /// Reloads from raw blocks (import from disk).
     pub fn load_raw(&self, raw: &[[u8; RELATION_ONDISK_SIZE]]) -> ExofsResult<usize> {
         let mut count = 0usize;
         for buf in raw {
@@ -270,17 +270,17 @@ impl RelationStorage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Store global des relations.
+/// Global relations store.
 pub static RELATION_STORAGE: RelationStorage = RelationStorage::new_const();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de commodité
+// Convenience functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Alloue un ID et persiste la relation en une seule opération.
+/// Allocates an ID and persists the relation in a single operation.
 pub fn create_relation(
     from: BlobId,
     to: BlobId,
@@ -293,7 +293,7 @@ pub fn create_relation(
     Ok(rel)
 }
 
-/// Purge toutes les relations soft-deleted du store.
+/// Purges all soft-deleted relations from the store.
 pub fn purge_deleted() -> ExofsResult<usize> {
     let all = RELATION_STORAGE.load_all()?;
     let mut n = 0usize;
@@ -306,8 +306,8 @@ pub fn purge_deleted() -> ExofsResult<usize> {
     Ok(n)
 }
 
-/// Vérifie la cohérence minimale du store.
-/// Retourne `true` si toutes les relations chargées sont parsables.
+/// Verifies minimal consistency of the store.
+/// Returns `true` if all loaded relations are parsable.
 pub fn verify_store_integrity() -> bool {
     let raw = match RELATION_STORAGE.dump_raw() {
         Ok(r) => r,

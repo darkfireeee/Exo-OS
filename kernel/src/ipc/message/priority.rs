@@ -16,6 +16,7 @@
 // RULE PRIO-02: RT level is ALWAYS consumed first.
 // RULE PRIO-03: no starvation -> configurable RT:NORMAL ratio.
 
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -56,14 +57,14 @@ pub const PRIO_INLINE_PAYLOAD: usize = 256;
 #[repr(C, align(64))]
 pub struct PrioMsgSlot {
     pub seq: u64,
-    pub src: u32,
-    pub dst: u32,
+    pub src: u64,
+    pub dst: u64,
     pub priority: u8,
     pub msg_type: u8,
     pub flags: u16,
     pub payload_len: u16,
+    _pad: [u8; 2],
     pub cookie: u64,
-    _pad: [u8; 5],
     pub payload: [u8; PRIO_INLINE_PAYLOAD],
 }
 
@@ -77,8 +78,8 @@ impl PrioMsgSlot {
             msg_type: 0,
             flags: 0,
             payload_len: 0,
+            _pad: [0u8; 2],
             cookie: 0,
-            _pad: [0u8; 5],
             payload: [0u8; PRIO_INLINE_PAYLOAD],
         }
     }
@@ -87,8 +88,8 @@ impl PrioMsgSlot {
         let plen = (msg.payload_len as usize).min(PRIO_INLINE_PAYLOAD);
         let mut slot = Self::empty();
         slot.seq = msg.seq;
-        slot.src = msg.src.0.get() as u32;
-        slot.dst = msg.dst.0.get() as u32;
+        slot.src = msg.src.0.get();
+        slot.dst = msg.dst.0.get();
         slot.priority = msg.priority;
         slot.msg_type = msg.msg_type as u8;
         slot.flags = msg.flags.bits();
@@ -108,85 +109,103 @@ unsafe impl Sync for PrioMsgSlot {}
 // Static ring for priority queue
 // ---------------------------------------------------------------------------
 
-/// Bounded circular ring for PrioMsgSlot (no dependency on SpscRing<T>)
+/// Bounded circular MPMC ring for PrioMsgSlot with per-slot sequence barriers.
 struct PrioRing<const N: usize> {
-    slots: [MaybeUninit<PrioMsgSlot>; N],
-    head: AtomicU32,
-    tail: AtomicU32,
-    capacity: u32,
+    slots: [UnsafeCell<MaybeUninit<PrioMsgSlot>>; N],
+    sequences: [AtomicU64; N],
+    head: AtomicU64,
+    tail: AtomicU64,
+    capacity: u64,
 }
 
 impl<const N: usize> PrioRing<N> {
     const fn new() -> Self {
-        const EMPTY: MaybeUninit<PrioMsgSlot> = MaybeUninit::uninit();
         Self {
-            slots: [EMPTY; N],
-            head: AtomicU32::new(0),
-            tail: AtomicU32::new(0),
-            capacity: N as u32,
+            slots: [const { UnsafeCell::new(MaybeUninit::uninit()) }; N],
+            sequences: [const { AtomicU64::new(0) }; N],
+            head: AtomicU64::new(0),
+            tail: AtomicU64::new(0),
+            capacity: N as u64,
         }
     }
 
     fn push(&self, slot: PrioMsgSlot) -> bool {
         loop {
-            let tail = self.tail.load(Ordering::Relaxed);
-            let head = self.head.load(Ordering::Acquire);
-            if tail.wrapping_sub(head) >= self.capacity {
-                return false; // full
-            }
-            match self.tail.compare_exchange_weak(
-                tail,
-                tail.wrapping_add(1),
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    let idx = (tail % self.capacity) as usize;
-                    // SAFETY: exclusive slot via CAS tail
-                    unsafe {
-                        (self.slots[idx].as_ptr() as *mut PrioMsgSlot).write(slot);
-                    }
-                    return true;
+            let pos = self.tail.load(Ordering::Acquire);
+            let idx = (pos % self.capacity) as usize;
+            let expected_seq = (pos / self.capacity) * 2;
+            let seq = self.sequences[idx].load(Ordering::Acquire);
+            if seq < expected_seq {
+                let head = self.head.load(Ordering::Acquire);
+                if pos.wrapping_sub(head) >= self.capacity {
+                    return false; // full
                 }
-                Err(_) => core::hint::spin_loop(),
+                core::hint::spin_loop();
+                continue;
             }
+            if seq > expected_seq {
+                core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .tail
+                .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                // SAFETY: exclusive ownership of slot `idx` at `pos` until `sequences[idx]` advances.
+                unsafe {
+                    (*self.slots[idx].get()).write(slot);
+                }
+                self.sequences[idx].store(expected_seq + 1, Ordering::Release);
+                return true;
+            }
+            core::hint::spin_loop();
         }
     }
 
     fn pop(&self) -> Option<PrioMsgSlot> {
         loop {
-            let head = self.head.load(Ordering::Relaxed);
-            let tail = self.tail.load(Ordering::Acquire);
-            if head == tail {
-                return None; // empty
-            }
-            match self.head.compare_exchange_weak(
-                head,
-                head.wrapping_add(1),
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    let idx = (head % self.capacity) as usize;
-                    // SAFETY: initialized slot (tail > head)
-                    let slot = unsafe { self.slots[idx].assume_init_read() };
-                    return Some(slot);
+            let pos = self.head.load(Ordering::Acquire);
+            let idx = (pos % self.capacity) as usize;
+            let expected_seq = (pos / self.capacity) * 2 + 1;
+            let seq = self.sequences[idx].load(Ordering::Acquire);
+            if seq < expected_seq {
+                let tail = self.tail.load(Ordering::Acquire);
+                if tail <= pos {
+                    return None; // empty
                 }
-                Err(_) => core::hint::spin_loop(),
+                // Producer claimed tail and is still writing payload.
+                core::hint::spin_loop();
+                continue;
             }
+            if seq > expected_seq {
+                core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .head
+                .compare_exchange_weak(pos, pos + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                // SAFETY: slot published by producer via `sequences[idx] = expected_seq` Release.
+                let slot = unsafe { (*self.slots[idx].get()).assume_init_read() };
+                self.sequences[idx].store((pos / self.capacity + 1) * 2, Ordering::Release);
+                return Some(slot);
+            }
+            core::hint::spin_loop();
         }
     }
 
     fn is_empty(&self) -> bool {
-        let head = self.head.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
         let tail = self.tail.load(Ordering::Acquire);
         head == tail
     }
 
     fn len(&self) -> u32 {
-        let tail = self.tail.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
         let head = self.head.load(Ordering::Acquire);
-        tail.wrapping_sub(head)
+        tail.wrapping_sub(head) as u32
     }
 }
 
@@ -373,14 +392,14 @@ pub struct PriorityQueueStats {
 // ---------------------------------------------------------------------------
 
 struct PrioQueueSlot {
-    queue: MaybeUninit<PriorityQueue>,
+    queue: UnsafeCell<MaybeUninit<PriorityQueue>>,
     occupied: AtomicBool,
 }
 
 impl PrioQueueSlot {
     const fn empty() -> Self {
         Self {
-            queue: MaybeUninit::uninit(),
+            queue: UnsafeCell::new(MaybeUninit::uninit()),
             occupied: AtomicBool::new(false),
         }
     }
@@ -409,10 +428,9 @@ impl PriorityQueueTable {
                     .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    // SAFETY: AcqRel CAS guarantees exclusivity; queue MaybeUninit<PriorityQueue> write-once.
+                    // SAFETY: AcqRel CAS guarantees slot exclusivity via UnsafeCell<MaybeUninit>.
                     unsafe {
-                        (self.slots[i].queue.as_ptr() as *mut PriorityQueue)
-                            .write(PriorityQueue::new(id));
+                        (*self.slots[i].queue.get()).write(PriorityQueue::new(id));
                     }
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
@@ -429,7 +447,7 @@ impl PriorityQueueTable {
         if !self.slots[idx].occupied.load(Ordering::Acquire) {
             return None;
         }
-        Some(unsafe { &*self.slots[idx].queue.as_ptr() })
+        Some(unsafe { (&*self.slots[idx].queue.get()).assume_init_ref() })
     }
 
     fn free(&self, idx: usize) -> bool {

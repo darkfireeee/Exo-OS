@@ -43,9 +43,6 @@ states/
 /clone
 
 
-# Third-party / vendor repositories
-libs/wayland-rs/
-
 # macOS
 .DS_Store
 

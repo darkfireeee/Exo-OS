@@ -1,0 +1,92 @@
+//! Debugging helpers to handle `WAYLAND_DEBUG` env variable.
+
+use std::{
+    fmt::Display,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use crate::protocol::{Argument, OwnedArgument};
+
+/// The `WAYLAND_DEBUG` env variable is set to debug client.
+pub fn has_debug_client_env() -> bool {
+    matches!(std::env::var_os("WAYLAND_DEBUG"), Some(str) if str == "1" || str == "client")
+}
+
+pub(crate) trait Arg: Display {}
+impl<Id: Display> Arg for OwnedArgument<Id> {}
+impl<'a, Id: Display> Arg for Argument<'a, Id> {}
+
+/// Print the dispatched message to stderr in a following format:
+///
+/// `[timestamp] <- interface@id.msg_name(args)`
+#[cfg_attr(unstable_coverage, coverage(off))]
+pub(crate) fn print_dispatched_message<A: Arg>(
+    interface: &str,
+    id: u32,
+    msg_name: &str,
+    args: &[A],
+) {
+    // Add timestamp to output.
+    print_timestamp();
+
+    eprint!(" <- {}@{}.{}, ({})", interface, id, msg_name, DisplaySlice(args));
+
+    // Add a new line.
+    eprintln!();
+}
+
+/// Print the send message to stderr in a following format:
+///
+/// `[timestamp] -> interface@id.msg_name(args)`
+#[cfg_attr(unstable_coverage, coverage(off))]
+pub(crate) fn print_send_message<A: Arg>(
+    interface: &str,
+    id: u32,
+    msg_name: &str,
+    args: &[A],
+    discarded: bool,
+) {
+    // Add timestamp to output.
+    print_timestamp();
+
+    if discarded {
+        eprint!("[discarded]");
+    }
+
+    eprint!(" -> {}@{}.{}({})", interface, id, msg_name, DisplaySlice(args));
+
+    // Add a new line.
+    eprintln!();
+}
+
+pub(crate) struct DisplaySlice<'a, D>(pub &'a [D]);
+
+impl<D: Display> Display for DisplaySlice<'_, D> {
+    #[cfg_attr(unstable_coverage, coverage(off))]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut it = self.0.iter();
+        if let Some(val) = it.next() {
+            write!(f, "{val}")?;
+        }
+        for val in it {
+            write!(f, ", {val}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Print timestamp in seconds.microseconds format.
+#[cfg_attr(unstable_coverage, coverage(off))]
+fn print_timestamp() {
+    if let Ok(timestamp) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        let secs = timestamp.as_secs();
+        // NOTE annotate timestamp so we know which library emmited the log entry.
+        eprint!(
+            "[{:02}:{:02}:{:02}.{:06}][rs]",
+            (secs / 3600) % 24,
+            (secs / 60) % 60,
+            secs % 60,
+            timestamp.subsec_micros()
+        );
+    }
+}

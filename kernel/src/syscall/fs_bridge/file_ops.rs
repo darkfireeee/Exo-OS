@@ -82,6 +82,169 @@ pub fn resize_regular_blob(blob_id: BlobId, length: u64) -> Result<(), FsBridgeE
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub struct SharedBlobPage {
+    pub blob_id: BlobId,
+    pub page_idx: u64,
+    pub frame: crate::memory::core::Frame,
+}
+
+pub static SHARED_BLOB_FRAMES: Mutex<Vec<SharedBlobPage>> = Mutex::new(Vec::new());
+
+pub fn get_or_alloc_shared_blob_frame(
+    blob_id: BlobId,
+    page_idx: u64,
+) -> Result<crate::memory::core::Frame, crate::memory::virt::mmap::MmapError> {
+    let mut table = SHARED_BLOB_FRAMES.lock();
+    if let Some(entry) = table
+        .iter()
+        .find(|p| p.blob_id == blob_id && p.page_idx == page_idx)
+    {
+        return Ok(entry.frame);
+    }
+
+    if table.try_reserve(1).is_err() {
+        return Err(crate::memory::virt::mmap::MmapError::AllocFailed);
+    }
+
+    let frame = crate::memory::physical::allocator::buddy::alloc_pages(
+        0,
+        crate::memory::AllocFlags::ZEROED,
+    )
+    .map_err(|_| crate::memory::virt::mmap::MmapError::AllocFailed)?;
+
+    let offset = (page_idx as usize).saturating_mul(4096);
+    if let Ok(data) = BLOB_CACHE.read_at(&blob_id, offset, 4096) {
+        if !data.is_empty() {
+            let dst = (crate::memory::core::PHYS_MAP_BASE.as_u64()
+                + frame.start_address().as_u64()) as *mut u8;
+            // SAFETY: `dst` points to a freshly allocated 4 KiB frame in the kernel physmap.
+            unsafe {
+                core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len().min(4096));
+            }
+        }
+    }
+
+    table.push(SharedBlobPage {
+        blob_id,
+        page_idx,
+        frame,
+    });
+    Ok(frame)
+}
+
+pub fn sync_shared_frames_to_blob(blob_id: &BlobId) {
+    let pages: Vec<(u64, crate::memory::core::Frame)> = {
+        let table = SHARED_BLOB_FRAMES.lock();
+        table
+            .iter()
+            .filter(|p| p.blob_id == *blob_id)
+            .map(|p| (p.page_idx, p.frame))
+            .collect()
+    };
+    if pages.is_empty() {
+        return;
+    }
+    let current_len = blob_len(blob_id);
+    for (page_idx, frame) in pages {
+        let start = (page_idx as usize).saturating_mul(4096);
+        let write_len = if current_len > start {
+            (current_len - start).min(4096)
+        } else {
+            4096
+        };
+        let src = (crate::memory::core::PHYS_MAP_BASE.as_u64()
+            + frame.start_address().as_u64()) as *const u8;
+        // SAFETY: `src` is a pinned 4 KiB physical frame mapped in the kernel physmap.
+        let slice = unsafe { core::slice::from_raw_parts(src, write_len) };
+        let _ = BLOB_CACHE.write_at(*blob_id, start, slice);
+    }
+}
+
+pub fn sync_blob_write_to_shared_frames(blob_id: &BlobId, start: usize, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let end = start.saturating_add(bytes.len());
+    let table = SHARED_BLOB_FRAMES.lock();
+    for entry in table.iter().filter(|p| p.blob_id == *blob_id) {
+        let page_start = (entry.page_idx as usize).saturating_mul(4096);
+        let page_end = page_start.saturating_add(4096);
+        let overlap_start = start.max(page_start);
+        let overlap_end = end.min(page_end);
+        if overlap_start < overlap_end {
+            let src_off = overlap_start - start;
+            let dst_off = overlap_start - page_start;
+            let copy_len = overlap_end - overlap_start;
+            let dst = (crate::memory::core::PHYS_MAP_BASE.as_u64()
+                + entry.frame.start_address().as_u64()
+                + dst_off as u64) as *mut u8;
+            // SAFETY: `dst` + `copy_len` is within the 4 KiB frame in the kernel physmap.
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes[src_off..].as_ptr(), dst, copy_len);
+            }
+        }
+    }
+}
+
+/// Maps a file or `memfd` descriptor into the current process's virtual address space.
+pub fn fs_mmap_file(
+    addr: u64,
+    len: usize,
+    prot: u32,
+    flags: u32,
+    fd: u32,
+    off: u64,
+    pid: u32,
+) -> Result<usize, crate::memory::virt::mmap::MmapError> {
+    use crate::memory::virt::mmap::{do_mmap, do_mmap_shared_frames, do_mprotect, MmapError};
+
+    if (off & 0xFFF) != 0 {
+        return Err(MmapError::InvalidAddress);
+    }
+    let resolved = resolve_fd(pid, fd).map_err(|_| MmapError::InvalidAddress)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(|_| MmapError::InvalidAddress)?;
+    {
+        use crate::fs::exofs::syscall::object_fd::open_flags;
+        if !open_flags::can_read(entry.flags) {
+            return Err(MmapError::PermissionDenied);
+        }
+        if (flags & 0x01) != 0 && (prot & 0x02) != 0 && !open_flags::can_write(entry.flags) {
+            return Err(MmapError::PermissionDenied);
+        }
+    }
+
+    let n_pages = (len + 4095) / 4096;
+    if flags & 0x01 != 0 {
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(n_pages)
+            .map_err(|_| MmapError::AllocFailed)?;
+        let base_page = off / 4096;
+        for i in 0..n_pages {
+            let frame = get_or_alloc_shared_blob_frame(entry.blob_id, base_page + i as u64)?;
+            frames.push(frame);
+        }
+        return do_mmap_shared_frames(addr, len, prot, flags, &frames);
+    }
+
+    // MAP_PRIVATE file-backed mapping: map anonymous pages and populate from file.
+    sync_shared_frames_to_blob(&entry.blob_id);
+    let temp_prot = prot | 0x2; // Ensure writable during initial file copy
+    let va = do_mmap(addr, len, temp_prot & 0x3, flags | 0x20, -1, 0)?;
+    if let Ok(data) = BLOB_CACHE.read_at(&entry.blob_id, off as usize, len) {
+        if !data.is_empty() {
+            let _ = copy_to_user(va as *mut u8, data.as_ptr(), data.len());
+        }
+    }
+    if prot != (temp_prot & 0x3) {
+        let _ = do_mprotect(va as u64, len, prot);
+    }
+    Ok(va)
+}
+
 #[inline]
 pub fn read_blob_at(
     blob_id: BlobId,
@@ -100,6 +263,7 @@ pub fn read_blob_at(
         return Err(FsBridgeError::Invalid);
     }
 
+    sync_shared_frames_to_blob(&blob_id);
     let data = BLOB_CACHE
         .read_at(&blob_id, offset as usize, count)
         .map_err(exofs_to_bridge_error)?;
@@ -134,6 +298,7 @@ pub fn write_blob_at(
     BLOB_CACHE
         .write_at(blob_id, start, &input)
         .map_err(exofs_to_bridge_error)?;
+    sync_blob_write_to_shared_frames(&blob_id, start, &input);
     Ok(count as i64)
 }
 
@@ -149,6 +314,7 @@ pub fn read_blob_bytes_at(
     if offset > usize::MAX as u64 {
         return Err(FsBridgeError::Invalid);
     }
+    sync_shared_frames_to_blob(&blob_id);
     BLOB_CACHE
         .read_at(&blob_id, offset as usize, count)
         .map_err(exofs_to_bridge_error)
@@ -167,6 +333,7 @@ pub fn write_blob_bytes_at(blob_id: BlobId, offset: u64, bytes: &[u8]) -> Result
     BLOB_CACHE
         .write_at(blob_id, start, bytes)
         .map_err(exofs_to_bridge_error)?;
+    sync_blob_write_to_shared_frames(&blob_id, start, bytes);
     Ok(bytes.len() as i64)
 }
 
@@ -201,41 +368,15 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        let data = BLOB_CACHE
-            .get(&entry.blob_id)
-            .map(|bytes| bytes.to_vec())
-            .unwrap_or_default();
-        if data.is_empty() {
-            return Err(FsBridgeError::WouldBlock);
-        }
-        let read_len = count.min(data.len());
-        copy_to_user(buf_ptr as *mut u8, data.as_ptr(), read_len)
-            .map_err(|_| FsBridgeError::Fault)?;
-        let remaining = data[read_len..].to_vec();
-        BLOB_CACHE
-            .insert(entry.blob_id, remaining)
-            .map_err(exofs_to_bridge_error)?;
-        let _ = BLOB_CACHE.mark_dirty(&entry.blob_id);
-        return Ok(read_len as i64);
+        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+        return read_pipe_to_user(entry.blob_id, buf_ptr, count, nonblock);
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
         if count < size_of::<u64>() {
             return Err(FsBridgeError::Invalid);
         }
-        let (value, flags) = eventfd_state(entry.blob_id)?;
-        if value == 0 {
-            return Err(FsBridgeError::WouldBlock);
-        }
-        let out = if flags & EFD_SEMAPHORE != 0 { 1 } else { value };
-        let next = if flags & EFD_SEMAPHORE != 0 {
-            value.saturating_sub(1)
-        } else {
-            0
-        };
-        write_user_typed(buf_ptr, out).map_err(|_| FsBridgeError::Fault)?;
-        store_eventfd_state(entry.blob_id, next, flags)?;
-        return Ok(size_of::<u64>() as i64);
+        return read_eventfd_to_user(entry.blob_id, buf_ptr);
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
@@ -243,15 +384,11 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        let data = read_socket_payload(entry.blob_id, count, true)?;
-        if data.is_empty() {
-            return Err(FsBridgeError::WouldBlock);
-        }
-        copy_to_user(buf_ptr as *mut u8, data.as_ptr(), data.len())
-            .map_err(|_| FsBridgeError::Fault)?;
-        return Ok(data.len() as i64);
+        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+        return socket_read_to_user(entry.blob_id, buf_ptr, count, true, nonblock);
     }
 
+    sync_shared_frames_to_blob(&entry.blob_id);
     let start = entry.cursor as usize;
     let data = match BLOB_CACHE.read_at(&entry.blob_id, start, count) {
         Ok(data) => data,
@@ -299,45 +436,24 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        if OBJECT_TABLE.readable_count_for(&entry.blob_id) == 0 {
-            let _ = crate::process::signal::delivery::send_signal_to_pid(
-                crate::process::core::pid::Pid(pid),
-                crate::process::signal::default::Signal::SIGPIPE,
-            );
-            return Err(FsBridgeError::BrokenPipe);
-        }
+        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
         let input = read_user_bytes(buf_ptr, count)?;
-        let mut data = BLOB_CACHE
-            .get(&entry.blob_id)
-            .map(|bytes| bytes.to_vec())
-            .unwrap_or_default();
-        data.try_reserve(input.len())
-            .map_err(|_| FsBridgeError::NoSpace)?;
-        data.extend_from_slice(&input);
-        BLOB_CACHE
-            .insert(entry.blob_id, data)
-            .map_err(exofs_to_bridge_error)?;
-        let _ = BLOB_CACHE.mark_dirty(&entry.blob_id);
-        return Ok(count as i64);
+        return write_pipe_bytes(entry.blob_id, &input, nonblock, pid);
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
         if count < size_of::<u64>() {
             return Err(FsBridgeError::Invalid);
         }
-        let add = read_user_typed::<u64>(buf_ptr).map_err(|_| FsBridgeError::Fault)?;
-        if add == u64::MAX {
-            return Err(FsBridgeError::Invalid);
-        }
-        let (value, flags) = eventfd_state(entry.blob_id)?;
-        let next = value.checked_add(add).ok_or(FsBridgeError::WouldBlock)?;
-        store_eventfd_state(entry.blob_id, next, flags)?;
-        return Ok(size_of::<u64>() as i64);
+        return write_eventfd_from_user(entry.blob_id, buf_ptr);
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        let input = read_user_bytes(buf_ptr, count)?;
         let peer = socket_peer_blob(entry.blob_id)?;
+        if peer == BlobId([0u8; 32]) {
+            return Err(FsBridgeError::NotConnected);
+        }
+        let input = read_user_bytes(buf_ptr, count)?;
         return append_socket_payload(peer, &input);
     }
 
@@ -352,6 +468,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     BLOB_CACHE
         .write_at(entry.blob_id, start, &input)
         .map_err(exofs_to_bridge_error)?;
+    sync_blob_write_to_shared_frames(&entry.blob_id, start, &input);
     OBJECT_TABLE
         .set_cursor(obj_fd, end as u64)
         .map_err(exofs_to_bridge_error)?;
@@ -745,6 +862,33 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
     }
     let resolved = resolve_fd(pid, fd)?;
     if is_tty_handle(resolved.handle) {
+        if request == 0x5413 {
+            // TIOCGWINSZ: struct winsize { u16 ws_row, ws_col, ws_xpixel, ws_ypixel }
+            if arg != 0 {
+                let (px_w, px_h) = crate::arch::x86_64::framebuffer_early::user_framebuffer_info()
+                    .map(|(_, w, h, _, _, _, _)| (w, h))
+                    .unwrap_or((1920, 1080));
+                let rows = (px_h.saturating_sub(240) / 16).clamp(24, u16::MAX as u32) as u16;
+                let cols = (px_w.saturating_sub(520) / 8).clamp(80, u16::MAX as u32) as u16;
+                let ws: [u16; 4] = [
+                    rows,
+                    cols,
+                    px_w.min(u16::MAX as u32) as u16,
+                    px_h.min(u16::MAX as u32) as u16,
+                ];
+                write_user_typed(arg, ws).map_err(|_| FsBridgeError::Fault)?;
+            }
+            return Ok(0);
+        }
+        if request == 0x5401 {
+            // TCGETS: query termios
+            if arg != 0 {
+                let termios = [0u8; 60];
+                copy_to_user(arg as *mut u8, termios.as_ptr(), termios.len())
+                    .map_err(|_| FsBridgeError::Fault)?;
+            }
+            return Ok(0);
+        }
         if request == 0x5402 || request == 0x5403 || request == 0x5404 || request == 0x5410 {
             let mut req = special::TtyRequestWire::zeroed();
             req.sender_pid = pid;

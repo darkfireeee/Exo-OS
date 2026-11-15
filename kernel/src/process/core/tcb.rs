@@ -90,6 +90,9 @@ fn try_process_thread_box(
         core::ptr::addr_of_mut!((*raw).detached).write(AtomicBool::new(false));
         core::ptr::addr_of_mut!((*raw).join_done).write(AtomicBool::new(false));
         core::ptr::addr_of_mut!((*raw).join_result).write(AtomicU64::new(0));
+        core::ptr::addr_of_mut!((*raw).clear_child_tid).write(AtomicU64::new(0));
+        core::ptr::addr_of_mut!((*raw).name)
+            .write(crate::scheduler::sync::spinlock::SpinLock::new([0u8; 16]));
         SigQueue::init_at(core::ptr::addr_of_mut!((*raw).sig_queue));
         RTSigQueue::init_at(core::ptr::addr_of_mut!((*raw).rt_sig_queue));
         Some(Box::from_raw(raw))
@@ -424,6 +427,10 @@ pub struct ProcessThread {
     pub join_done: AtomicBool,
     /// Return value of thread (ptr to userspace data).
     pub join_result: AtomicU64,
+    /// Userspace address cleared and woken via futex upon thread exit (`CLONE_CHILD_CLEARTID` / `set_tid_address`).
+    pub clear_child_tid: AtomicU64,
+    /// Per-thread name (16 bytes max, set via `prctl(PR_SET_NAME)`).
+    pub name: crate::scheduler::sync::spinlock::SpinLock<[u8; 16]>,
 
     // ── Signal queues ──────────────────────────────────────────────────────────
     /// Standard signal queue (signals 1..31).

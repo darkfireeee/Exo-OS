@@ -69,12 +69,16 @@ pub struct ProcessControlBlock {
     // ── Resources ─────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
     pub creds: SpinLock<Credentials>,
+    /// Lock-free effective UID mirror for syscall/audit hot paths.
+    pub euid_atomic: AtomicU32,
     /// Open file table.
     pub files: SpinLock<OpenFileTable>,
 
     // ── Virtual memory ────────────────────────────────────────────────────────
     /// Opaque pointer to virtual address space (managed by memory/virt/).
     pub address_space: AtomicUsize, // *mut opaque
+    /// Short leaf lock serializing `address_space` swap vs remote AS pinning.
+    pub as_lock: SpinLock<()>,
     /// Current CR3 (physical PML4 base).
     pub cr3: AtomicU64,
     /// Absolute current break of user heap.
@@ -176,8 +180,10 @@ impl ProcessControlBlock {
             thread_slots: [const { AtomicPtr::new(core::ptr::null_mut()) };
                 MAX_THREADS_PER_PROCESS],
             creds: SpinLock::new(creds),
+            euid_atomic: AtomicU32::new(creds.euid),
             files: SpinLock::new(files),
             address_space: AtomicUsize::new(addr_space),
+            as_lock: SpinLock::new(()),
             cr3: AtomicU64::new(cr3),
             brk_current: AtomicU64::new(0),
             brk_start: AtomicU64::new(0),
@@ -379,6 +385,13 @@ impl ProcessControlBlock {
     #[inline]
     pub fn set_euid(&self, euid: u32) {
         self.creds.lock().euid = euid;
+        self.euid_atomic.store(euid, Ordering::Release);
+    }
+
+    /// Lock-free read of effective UID.
+    #[inline(always)]
+    pub fn euid_fast(&self) -> u32 {
+        self.euid_atomic.load(Ordering::Acquire)
     }
 
     /// `setegid(egid)`.
@@ -409,6 +422,7 @@ impl ProcessControlBlock {
         }
         if euid != u32::MAX {
             c.euid = euid;
+            self.euid_atomic.store(euid, Ordering::Release);
         }
         if suid != u32::MAX {
             c.suid = suid;
@@ -547,6 +561,31 @@ impl ProcessControlBlock {
                 f(ptr);
             }
         }
+    }
+
+    /// Finds the `ProcessThread` matching `tid` within this process.
+    #[inline]
+    pub fn find_thread_by_tid(
+        &self,
+        tid: crate::process::core::pid::Tid,
+    ) -> *mut crate::process::core::tcb::ProcessThread {
+        let main_ptr = self.main_thread_rawptr.load(Ordering::Acquire);
+        if !main_ptr.is_null() {
+            // SAFETY: main_ptr points to a ProcessThread owned by this PCB.
+            if unsafe { (*main_ptr).tid == tid } {
+                return main_ptr;
+            }
+        }
+        for slot in &self.thread_slots {
+            let ptr = slot.load(Ordering::Acquire);
+            if !ptr.is_null() {
+                // SAFETY: ptr points to a ProcessThread registered in this PCB.
+                if unsafe { (*ptr).tid == tid } {
+                    return ptr;
+                }
+            }
+        }
+        core::ptr::null_mut()
     }
 
     /// Returns a living thread able to receive a signal.

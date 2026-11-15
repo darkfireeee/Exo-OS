@@ -1,28 +1,28 @@
-//! Wrapper LZ4 pour ExoFS — via crate lz4_flex (block mode, no_std).
+//! LZ4 wrapper for ExoFS — via lz4_flex crate (block mode, no_std).
 //!
-//! RÈGLE CRYPTO-CRATES : JAMAIS d'implémentation from scratch.
-//! Crate : lz4_flex v0.11.x, default-features = false
-//!   - Implémentation LZ4 block format pure Rust, no_std + alloc
-//!   - Conforme au format LZ4 block officiel (lz4.org)
-//!   - Pas de magic number / frame header — compressé brut (block mode)
+//! RULE CRYPTO-CRATES : NEVER implement from scratch.
+//! Crate: lz4_flex v0.11.x, default-features = false
+//!   - Pure Rust LZ4 block format implementation, no_std + alloc
+//!   - Conforms to official LZ4 block format (lz4.org)
+//!   - No magic number / frame header — raw compressed (block mode)
 //!
-//! RÈGLE OOM-02   : try_reserve avant tout push.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité — toutes les boucles sont dans lz4_flex.
+//! RULE OOM-02   : try_reserve before any push.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion — all loops are inside lz4_flex.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 use lz4_flex::block::{compress_into, decompress_into, get_maximum_output_size};
 
-/// Compresseur LZ4 (block mode) — wrapper crate lz4_flex.
+/// LZ4 compressor (block mode) — lz4_flex crate wrapper.
 pub struct Lz4Compressor;
 
 impl Lz4Compressor {
-    /// Compresse `input` et ajoute le résultat dans `output`.
-    /// Retourne la taille compressée ajoutée.
+    /// Compresses `input` and appends result to `output`.
+    /// Returns compressed size added.
     ///
-    /// OOM-02 : try_reserve avant tout resize.
+    /// OOM-02: try_reserve before any resize.
     pub fn compress(input: &[u8], output: &mut Vec<u8>) -> ExofsResult<usize> {
         if input.is_empty() {
             return Ok(0);
@@ -41,9 +41,9 @@ impl Lz4Compressor {
         Ok(n)
     }
 
-    /// Décompresse `input` vers `output` (taille de sortie connue).
+    /// Decompresses `input` into `output` (known decompressed size).
     ///
-    /// OOM-02 : try_reserve avant tout resize.
+    /// OOM-02: try_reserve before any resize.
     pub fn decompress(
         input: &[u8],
         output: &mut Vec<u8>,
@@ -62,24 +62,24 @@ impl Lz4Compressor {
         Ok(n)
     }
 
-    /// Retourne la borne supérieure du buffer de sortie pour une entrée de taille `n`.
+    /// Returns upper bound of output buffer for an input of size `n`.
     #[inline]
     pub fn compress_bound(n: usize) -> usize {
         get_maximum_output_size(n)
     }
 
-    /// Compresse et retourne un nouveau Vec.
+    /// Compresses and returns a new Vec.
     ///
-    /// OOM-02 : try_reserve via Self::compress.
+    /// OOM-02: try_reserve via Self::compress.
     pub fn compress_to_vec(input: &[u8]) -> ExofsResult<Vec<u8>> {
         let mut out = Vec::new();
         Self::compress(input, &mut out)?;
         Ok(out)
     }
 
-    /// Décompresse et retourne un nouveau Vec.
+    /// Decompresses and returns a new Vec.
     ///
-    /// OOM-02 : try_reserve via Self::decompress.
+    /// OOM-02: try_reserve via Self::decompress.
     pub fn decompress_to_vec(input: &[u8], decompressed_size: usize) -> ExofsResult<Vec<u8>> {
         let mut out = Vec::new();
         Self::decompress(input, &mut out, decompressed_size)?;

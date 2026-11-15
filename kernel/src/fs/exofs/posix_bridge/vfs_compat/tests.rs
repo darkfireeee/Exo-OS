@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_hash_name_nonzero() {
-        // Vérifie que le résultat n'est jamais 0.
+        // Verify that result is never 0.
         let h = hash_name(0, b"\x00");
         assert_ne!(h, 0);
     }

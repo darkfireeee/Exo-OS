@@ -1,11 +1,11 @@
-//! ChunkIndex — index global de tous les chunks connus (no_std).
+//! ChunkIndex — global index of all known chunks (no_std).
 //!
-//! Associe à chaque empreinte blake3 une entrée décrivant le chunk :
-//! le BlobId de référence, le nombre de références et la taille.
+//! Associates each blake3 fingerprint with an entry describing the chunk:
+//! reference BlobId, reference count, and size.
 //!
-//! RECUR-01 : aucune récursion.
-//! OOM-02   : try_reserve.
-//! ARITH-02 : saturating/checked/wrapping.
+//! RECUR-01: no recursion.
+//! OOM-02  : try_reserve.
+//! ARITH-02: saturating/checked/wrapping.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -16,7 +16,7 @@ use super::chunk_fingerprint::ChunkFingerprint;
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const CHUNK_INDEX_MAX_ENTRIES: usize = 1_000_000;
@@ -25,11 +25,11 @@ pub const CHUNK_INDEX_MAX_ENTRIES: usize = 1_000_000;
 // ChunkEntry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée de l'index pour un chunk donné.
+/// Index entry for a given chunk.
 #[derive(Clone, Debug)]
 pub struct ChunkEntry {
     pub fingerprint: ChunkFingerprint,
-    pub blob_id: BlobId, // blob de référence (première insertion).
+    pub blob_id: BlobId, // reference blob (first insertion).
     pub ref_count: u32,
     pub size: u32,
 }
@@ -44,7 +44,7 @@ impl ChunkEntry {
         }
     }
 
-    /// Incrémente le compteur de références (ARITH-02 checked).
+    /// Increments the reference counter (ARITH-02 checked).
     pub fn inc_ref(&mut self) -> ExofsResult<()> {
         self.ref_count = self
             .ref_count
@@ -53,9 +53,9 @@ impl ChunkEntry {
         Ok(())
     }
 
-    /// Décrémente le compteur de références.
+    /// Decrements the reference counter.
     ///
-    /// Retourne `true` si le compteur atteint zéro (suppression possible).
+    /// Returns `true` if the counter reaches zero (deletion possible).
     pub fn dec_ref(&mut self) -> bool {
         if self.ref_count > 0 {
             self.ref_count -= 1;
@@ -75,7 +75,7 @@ impl ChunkEntry {
 // ChunkIndexStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques de l'index.
+/// Index statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkIndexStats {
     pub total_entries: usize,
@@ -92,7 +92,7 @@ pub struct ChunkIndexStats {
 // ChunkIndex
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Index global de chunks, thread-safe (UnsafeCell + spinlock).
+/// Global thread-safe chunk index (UnsafeCell + spinlock).
 pub struct ChunkIndex {
     entries: UnsafeCell<BTreeMap<[u8; 32], ChunkEntry>>,
     lock: AtomicU64,
@@ -130,13 +130,13 @@ impl ChunkIndex {
         self.lock.store(0, Ordering::Release);
     }
     fn map(&self) -> &mut BTreeMap<[u8; 32], ChunkEntry> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired before.
         unsafe { &mut *self.entries.get() }
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ──────────────────────────────────────────────────────────
 
-    /// Recherche un chunk par son blake3.
+    /// Looks up a chunk by its blake3.
     pub fn lookup(&self, key: &[u8; 32]) -> Option<ChunkEntry> {
         self.acquire();
         let result = self.map().get(key).cloned();
@@ -145,16 +145,16 @@ impl ChunkIndex {
         result
     }
 
-    /// Insère un chunk (ou incrémente son ref_count s'il existe déjà).
+    /// Inserts a chunk (or increments its ref_count if it already exists).
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn insert(
         &self,
         fingerprint: ChunkFingerprint,
         blob_id: BlobId,
         size: u32,
     ) -> ExofsResult<bool> {
-        // true = nouveau chunk, false = déjà existant.
+        // true = new chunk, false = already existing.
         let key = fingerprint.blake3;
         self.acquire();
         let map = self.map();
@@ -177,9 +177,9 @@ impl ChunkIndex {
         Ok(is_new)
     }
 
-    /// Décrémente le ref_count et retire le chunk si orphelin.
+    /// Decrements the ref_count and removes the chunk if orphaned.
     ///
-    /// Retourne `true` si le chunk a été supprimé.
+    /// Returns `true` if the chunk was removed.
     pub fn decrement_ref(&self, key: &[u8; 32]) -> bool {
         self.acquire();
         let map = self.map();
@@ -200,7 +200,7 @@ impl ChunkIndex {
         removed
     }
 
-    /// Retire de force un chunk (peu importe le ref_count).
+    /// Forcefully removes a chunk (regardless of ref_count).
     pub fn force_remove(&self, key: &[u8; 32]) -> bool {
         self.acquire();
         let found = self.map().remove(key).is_some();
@@ -211,7 +211,7 @@ impl ChunkIndex {
         found
     }
 
-    /// Retourne vrai si un chunk est connu.
+    /// Returns true if a chunk is known.
     pub fn contains(&self, key: &[u8; 32]) -> bool {
         self.acquire();
         let found = self.map().contains_key(key);
@@ -219,7 +219,7 @@ impl ChunkIndex {
         found
     }
 
-    /// Retourne le nombre d'entrées.
+    /// Returns the number of entries.
     pub fn len(&self) -> usize {
         self.acquire();
         let n = self.map().len();
@@ -231,7 +231,7 @@ impl ChunkIndex {
         self.len() == 0
     }
 
-    /// Vide l'index.
+    /// Clears the index.
     pub fn clear(&self) {
         self.acquire();
         self.map().clear();
@@ -241,10 +241,10 @@ impl ChunkIndex {
         self.removals.store(0, Ordering::Relaxed);
     }
 
-    /// Collecte les clés orphelines (ref_count == 0).
+    /// Collects orphaned keys (ref_count == 0).
     ///
-    /// RECUR-01 : boucle for — pas de récursion.
-    /// OOM-02   : try_reserve.
+    /// RECUR-01: for loop — no recursion.
+    /// OOM-02  : try_reserve.
     pub fn orphan_keys(&self) -> ExofsResult<Vec<[u8; 32]>> {
         self.acquire();
         let mut keys: Vec<[u8; 32]> = Vec::new();
@@ -261,10 +261,10 @@ impl ChunkIndex {
         Ok(keys)
     }
 
-    /// Statistiques de l'index.
+    /// Index statistics.
     ///
-    /// RECUR-01 : boucle for.
-    /// ARITH-02 : saturating_add.
+    /// RECUR-01: for loop.
+    /// ARITH-02: saturating_add.
     pub fn stats(&self) -> ChunkIndexStats {
         self.acquire();
         let mut shared = 0usize;
@@ -295,7 +295,7 @@ impl ChunkIndex {
         }
     }
 
-    /// Vérifie l'intégrité grossière (ref_count > 0 pour toutes les entrées).
+    /// Verifies coarse integrity (ref_count > 0 for all entries).
     pub fn verify_integrity(&self) -> ExofsResult<()> {
         self.acquire();
         let bad = self.map().values().any(|v| v.ref_count == 0);
@@ -309,7 +309,7 @@ impl ChunkIndex {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statique global
+// Global static
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static CHUNK_INDEX: ChunkIndex = ChunkIndex::new_const();
@@ -402,7 +402,7 @@ mod tests {
         let idx = ChunkIndex::new_const();
         let f = fp(b"orp");
         idx.insert(f, blob(), 4).test_unwrap();
-        // force ref_count à 0
+        // force ref_count to 0
         idx.acquire();
         idx.map().get_mut(&f.blake3).test_unwrap().ref_count = 0;
         idx.release();
@@ -412,10 +412,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChunkIndexSnapshot — instantané de l'index pour audit/debug
+// ChunkIndexSnapshot — index snapshot for audit/debug
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée sérialisable pour un instantané de l'index.
+/// Serializable entry for an index snapshot.
 #[derive(Debug, Clone)]
 pub struct ChunkIndexSnapshotEntry {
     pub blake3: [u8; 32],
@@ -423,17 +423,17 @@ pub struct ChunkIndexSnapshotEntry {
     pub size: u32,
 }
 
-/// Instantané complet de l'index (pour audit ou migration).
+/// Complete index snapshot (for audit or migration).
 #[derive(Debug, Clone)]
 pub struct ChunkIndexSnapshot {
     pub entries: Vec<ChunkIndexSnapshotEntry>,
 }
 
 impl ChunkIndex {
-    /// Génère un instantané de l'index.
+    /// Generates an index snapshot.
     ///
-    /// RECUR-01 : boucle for.
-    /// OOM-02   : try_reserve.
+    /// RECUR-01: for loop.
+    /// OOM-02  : try_reserve.
     pub fn snapshot(&self) -> ExofsResult<ChunkIndexSnapshot> {
         self.acquire();
         let mut entries: Vec<ChunkIndexSnapshotEntry> = Vec::new();

@@ -14,8 +14,9 @@
 // RULE EVENT-01: no Vec, no Box. Tables are static.
 // RULE EVENT-02: spin-wait includes a timeout counter.
 
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -341,18 +342,23 @@ impl IpcCountingEvent {
 /// Maximum number of IpcEvents in global table
 pub const MAX_IPC_EVENTS: usize = 128;
 
+const SLOT_FREE: u8 = 0;
+const SLOT_INIT: u8 = 1;
+const SLOT_ACTIVE: u8 = 2;
+const SLOT_DESTROYING: u8 = 3;
+
 /// Slot in global table
 #[repr(C)]
 struct EventSlot {
-    event: MaybeUninit<IpcEvent>,
-    occupied: AtomicBool,
+    event: UnsafeCell<MaybeUninit<IpcEvent>>,
+    state: AtomicU8,
 }
 
 impl EventSlot {
     const fn empty() -> Self {
         Self {
-            event: MaybeUninit::uninit(),
-            occupied: AtomicBool::new(false),
+            event: UnsafeCell::new(MaybeUninit::uninit()),
+            state: AtomicU8::new(SLOT_FREE),
         }
     }
 }
@@ -363,8 +369,23 @@ struct IpcEventTable {
     count: AtomicU32,
 }
 
-// SAFETY: access protected by CAS on `occupied`
+// SAFETY: access protected by state machine CAS on `state` + `active_ops`
 unsafe impl Sync for IpcEventTable {}
+
+struct EventRef<'a>(&'a IpcEvent);
+
+impl<'a> Drop for EventRef<'a> {
+    fn drop(&mut self) {
+        self.0.active_ops.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl<'a> core::ops::Deref for EventRef<'a> {
+    type Target = IpcEvent;
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
 
 impl IpcEventTable {
     const fn new() -> Self {
@@ -377,17 +398,17 @@ impl IpcEventTable {
 
     fn alloc(&self, id: u32, mode: EventMode) -> Option<usize> {
         for i in 0..MAX_IPC_EVENTS {
-            if !self.slots[i].occupied.load(Ordering::Relaxed) {
+            if self.slots[i].state.load(Ordering::Relaxed) == SLOT_FREE {
                 if self.slots[i]
-                    .occupied
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .state
+                    .compare_exchange(SLOT_FREE, SLOT_INIT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    let ptr = self.slots[i].event.as_ptr() as *mut IpcEvent;
-                    // SAFETY: CAS AcqRel guarantees exclusivity; MaybeUninit<IpcEvent> write-once.
+                    // SAFETY: CAS AcqRel SLOT_FREE->SLOT_INIT guarantees exclusivity before publish.
                     unsafe {
-                        ptr.write(IpcEvent::new(id, mode));
+                        (*self.slots[i].event.get()).write(IpcEvent::new(id, mode));
                     }
+                    self.slots[i].state.store(SLOT_ACTIVE, Ordering::Release);
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
                 }
@@ -396,30 +417,56 @@ impl IpcEventTable {
         None
     }
 
-    fn get(&self, idx: usize) -> Option<&IpcEvent> {
+    fn acquire(&self, idx: usize) -> Option<EventRef<'_>> {
         if idx >= MAX_IPC_EVENTS {
             return None;
         }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+        if self.slots[idx].state.load(Ordering::Acquire) != SLOT_ACTIVE {
             return None;
         }
-        // SAFETY: slot initialized (occupied=true)
-        Some(unsafe { &*self.slots[idx].event.as_ptr() })
+        // SAFETY: slot was SLOT_ACTIVE; increment active_ops before re-validating state.
+        let ev = unsafe { (&*self.slots[idx].event.get()).assume_init_ref() };
+        ev.active_ops.fetch_add(1, Ordering::AcqRel);
+        if self.slots[idx].state.load(Ordering::Acquire) != SLOT_ACTIVE {
+            ev.active_ops.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        Some(EventRef(ev))
     }
 
-    fn free(&self, idx: usize) -> bool {
+    fn destroy(&self, idx: usize) -> bool {
         if idx >= MAX_IPC_EVENTS {
             return false;
         }
         if self.slots[idx]
-            .occupied
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
+            .state
+            .compare_exchange(
+                SLOT_ACTIVE,
+                SLOT_DESTROYING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
         {
-            self.count.fetch_sub(1, Ordering::Relaxed);
-            return true;
+            return false;
         }
-        false
+        // SAFETY: CAS SLOT_ACTIVE->SLOT_DESTROYING guarantees slot remains initialized while we drain.
+        let ev = unsafe { (&*self.slots[idx].event.get()).assume_init_ref() };
+        ev.close();
+        let mut spins = 0u64;
+        while ev.active_ops.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                // SAFETY: cooperative_reschedule temporarily yields if scheduler is active
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+        self.slots[idx].state.store(SLOT_FREE, Ordering::Release);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 
     fn count(&self) -> u32 {
@@ -434,14 +481,6 @@ static IPC_EVENT_TABLE: IpcEventTable = IpcEventTable::new();
 // Public API
 // ---------------------------------------------------------------------------
 
-struct ActiveOpGuard<'a>(&'a AtomicU32);
-
-impl<'a> Drop for ActiveOpGuard<'a> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Release);
-    }
-}
-
 /// Creates an IPC event in the global table.
 /// Returns the index (handle) of the event.
 pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
@@ -450,52 +489,32 @@ pub fn event_create(id: u32, mode: EventMode) -> Option<usize> {
 
 /// Sets event `idx`.
 pub fn event_set(idx: usize) -> Result<(), IpcError> {
-    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
-    e.active_ops.fetch_add(1, Ordering::AcqRel);
-    let _guard = ActiveOpGuard(&e.active_ops);
+    let e = IPC_EVENT_TABLE.acquire(idx).ok_or(IpcError::InvalidHandle)?;
     e.set();
     Ok(())
 }
 
 /// Clears event `idx`.
 pub fn event_clear(idx: usize) -> Result<(), IpcError> {
-    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
-    e.active_ops.fetch_add(1, Ordering::AcqRel);
-    let _guard = ActiveOpGuard(&e.active_ops);
+    let e = IPC_EVENT_TABLE.acquire(idx).ok_or(IpcError::InvalidHandle)?;
     e.clear();
     Ok(())
 }
 
 /// Checks the event state without waiting.
 pub fn event_is_set(idx: usize) -> Option<bool> {
-    IPC_EVENT_TABLE.get(idx).map(|e| e.is_set())
+    IPC_EVENT_TABLE.acquire(idx).map(|e| e.is_set())
 }
 
 /// Waits for event `idx` with spin-max.
 pub fn event_wait(idx: usize, spin_max: u64) -> Result<(), IpcError> {
-    let e = IPC_EVENT_TABLE.get(idx).ok_or(IpcError::InvalidHandle)?;
-    e.active_ops.fetch_add(1, Ordering::AcqRel);
-    let _guard = ActiveOpGuard(&e.active_ops);
+    let e = IPC_EVENT_TABLE.acquire(idx).ok_or(IpcError::InvalidHandle)?;
     e.wait(spin_max)
 }
 
 /// Destroys an event (frees its slot).
 pub fn event_destroy(idx: usize) -> bool {
-    if let Some(event) = IPC_EVENT_TABLE.get(idx) {
-        event.close();
-        let mut spins = 0u64;
-        while event.active_ops.load(Ordering::Acquire) > 0 {
-            core::hint::spin_loop();
-            spins += 1;
-            if spins % 128 == 0 {
-                // SAFETY: cooperative_reschedule temporarily yields if scheduler is active
-                unsafe {
-                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
-                }
-            }
-        }
-    }
-    IPC_EVENT_TABLE.free(idx)
+    IPC_EVENT_TABLE.destroy(idx)
 }
 
 /// Counter of created events.
@@ -505,5 +524,5 @@ pub fn event_count() -> u32 {
 
 /// Retrieves statistics snapshot for an event.
 pub fn event_stats(idx: usize) -> Option<IpcEventStats> {
-    IPC_EVENT_TABLE.get(idx).map(|e| e.snapshot())
+    IPC_EVENT_TABLE.acquire(idx).map(|e| e.snapshot())
 }

@@ -81,10 +81,10 @@ pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
         b"network_server" => Some(ServiceId::Network),
         b"scheduler_server" => Some(ServiceId::Scheduler),
         b"input_server" => Some(ServiceId::Input),
-        b"tty_server" => Some(ServiceId::Tty),
-        b"fb_server" => Some(ServiceId::Fb),
+        b"tty_server" | b"tty_input_stream" => Some(ServiceId::Tty),
+        b"fb_server" | b"fb_server_input" => Some(ServiceId::Fb),
         b"exo_shield" => Some(ServiceId::ExoShield),
-        b"exosh" => Some(ServiceId::Exosh),
+        b"exosh" | b"exosh_input_reply" => Some(ServiceId::Exosh),
         b"audio_server" => Some(ServiceId::Audio),
         b"usb_server" => Some(ServiceId::Usb),
         _ => None,
@@ -153,7 +153,7 @@ impl AuthEdge {
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
 ///   500_000+ — drivers et shell (haut débit)
-static AUTHORIZED_GRAPH: [AuthEdge; 67] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 111] = [
     // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
     AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
     AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
@@ -242,6 +242,58 @@ static AUTHORIZED_GRAPH: [AuthEdge; 67] = [
     AuthEdge::new(ServiceId::Usb,       ServiceId::Vfs,           2, 100_000),
     AuthEdge::new(ServiceId::ExoShield, ServiceId::Usb,           2, 50_000),
     AuthEdge::new(ServiceId::Usb,       ServiceId::ExoShield,     2, 50_000),
+
+    // ── Input <-> Fb (alignement exact avec ipc_policy.rs::POLICY) ───────────
+    AuthEdge::new(ServiceId::Input,     ServiceId::Fb,            2, 100_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::Input,         2, 100_000),
+
+    // ── Exosh <-> core & UI services ─────────────────────────────────────────
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Fb,            4, 500_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::Exosh,         4, 500_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Vfs,           4, 500_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::Exosh,         4, 500_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Memory,        4, 500_000),
+    AuthEdge::new(ServiceId::Memory,    ServiceId::Exosh,         4, 500_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Scheduler,     2, 100_000),
+    AuthEdge::new(ServiceId::Scheduler, ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Network,       2, 100_000),
+    AuthEdge::new(ServiceId::Network,   ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Device,        2, 100_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Audio,         2, 100_000),
+    AuthEdge::new(ServiceId::Audio,     ServiceId::Exosh,         2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Usb,           2, 100_000),
+    AuthEdge::new(ServiceId::Usb,       ServiceId::Exosh,         2, 100_000),
+
+    // ── Init <-> remaining Ring 1 & shell services ───────────────────────────
+    AuthEdge::new(ServiceId::Init,      ServiceId::Network,       4, 10_000),
+    AuthEdge::new(ServiceId::Network,   ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Input,         4, 10_000),
+    AuthEdge::new(ServiceId::Input,     ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Tty,           4, 10_000),
+    AuthEdge::new(ServiceId::Tty,       ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Fb,            4, 10_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Ps2,           4, 10_000),
+    AuthEdge::new(ServiceId::Ps2,       ServiceId::Init,          2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::VirtioDrivers, 4, 10_000),
+    AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Init,      2, 50_000),
+    AuthEdge::new(ServiceId::Init,      ServiceId::Exosh,         4, 10_000),
+    AuthEdge::new(ServiceId::Exosh,     ServiceId::Init,          2, 50_000),
+
+    // ── ExoShield <-> monitored Ring 1 services ──────────────────────────────
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Network,       2, 50_000),
+    AuthEdge::new(ServiceId::Network,   ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Vfs,           2, 50_000),
+    AuthEdge::new(ServiceId::Vfs,       ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Memory,        2, 50_000),
+    AuthEdge::new(ServiceId::Memory,    ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Device,        2, 50_000),
+    AuthEdge::new(ServiceId::Device,    ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Scheduler,     2, 50_000),
+    AuthEdge::new(ServiceId::Scheduler, ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield, ServiceId::Fb,            2, 50_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::ExoShield,     2, 50_000),
 ];
 
 const _: () = assert!(
@@ -250,11 +302,11 @@ const _: () = assert!(
 );
 
 // FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
-// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 67` ; toute
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 111` ; toute
 // évolution de la politique kernel doit être répercutée ici (et inversement).
 const _: () = assert!(
-    AUTHORIZED_GRAPH.len() == 67,
-    "DAG ExoCordon doit rester le miroir exact des 67 paires de ipc_policy.rs"
+    AUTHORIZED_GRAPH.len() == 111,
+    "DAG ExoCordon doit rester le miroir exact des 111 paires de ipc_policy.rs"
 );
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
@@ -277,8 +329,8 @@ static DYNAMIC_PIDS: [AtomicU64; MAX_DYNAMIC_SERVICES] = {
     [Z; MAX_DYNAMIC_SERVICES]
 };
 
-/// Associe un PID runtime à un ServiceId. Retourne false si la table est pleine
-/// ou si le PID/classe est réservé (Init=1 et IpcBroker=2 restent statiques).
+/// Associe un PID runtime à un ServiceId. Retourne false si la table est pleine,
+/// si le PID/classe est réservé, ou si une identité différente est déjà enregistrée.
 pub fn register_pid(pid: Pid, id: ServiceId) -> bool {
     if pid <= 2 || id == ServiceId::Init || id == ServiceId::IpcBroker {
         return false;
@@ -286,9 +338,16 @@ pub fn register_pid(pid: Pid, id: ServiceId) -> bool {
     let packed = (pid as u64) | ((id as u8 as u64) << 32);
     for slot in DYNAMIC_PIDS.iter() {
         let cur = slot.load(Ordering::Acquire);
-        if cur != 0 && cur as u32 == pid {
-            slot.store(packed, Ordering::Release);
-            return true;
+        if cur != 0 {
+            let slot_pid = cur as u32;
+            let slot_id = (cur >> 32) as u8;
+            if slot_pid == pid {
+                return slot_id == id as u8;
+            }
+            if slot_id == id as u8 {
+                // Empêche un autre PID de détourner un ServiceId déjà attribué.
+                return false;
+            }
         }
     }
     for slot in DYNAMIC_PIDS.iter() {

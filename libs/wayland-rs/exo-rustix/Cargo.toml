@@ -1,0 +1,18 @@
+[package]
+name = "rustix"
+version = "1.0.2"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Exo-OS native implementation of the rustix API surface required by wayland-rs"
+
+[features]
+default = []
+event = []
+fs = []
+net = []
+process = []
+shm = []
+
+[dependencies]
+bitflags = "2"

@@ -41,19 +41,19 @@ pub struct MemoryReply {
     pub handle: u64,
     pub value0: u64,
     pub value1: u64,
-    pub flags: u32,
-    pub _pad: [u8; 28],
+    pub flags: u64,
+    pub _pad: [u8; 24],
 }
 
 impl MemoryReply {
-    pub const fn ok(handle: u64, value0: u64, value1: u64, flags: u32) -> Self {
+    pub const fn ok(handle: u64, value0: u64, value1: u64, flags: u64) -> Self {
         Self {
             status: 0,
             handle,
             value0,
             value1,
             flags,
-            _pad: [0; 28],
+            _pad: [0; 24],
         }
     }
 
@@ -64,7 +64,7 @@ impl MemoryReply {
             value0: 0,
             value1: 0,
             flags: 0,
-            _pad: [0; 28],
+            _pad: [0; 24],
         }
     }
 }

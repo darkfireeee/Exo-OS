@@ -1,11 +1,11 @@
-//! snapshot_delete.rs — Suppression sécurisée d'un snapshot ExoFS
+//! snapshot_delete.rs — Safe deletion of an ExoFS snapshot
 //!
-//! Vérifie les conditions de suppression (protection, enfants actifs,
-//! montage en cours) avant de retirer le snapshot du registre.
+//! Verifies deletion conditions (protection, active children,
+//! ongoing mount) before removing the snapshot from the registry.
 //!
-//! Règles spec :
-//!   OOM-02   : try_reserve avant chaque Vec::push
-//!   ARITH-02 : checked_add pour compteurs
+//! Spec rules:
+//!   OOM-02   : try_reserve before each Vec::push
+//!   ARITH-02 : checked_add for counters
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -15,17 +15,17 @@ use super::snapshot_list::SNAPSHOT_LIST;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
-// Options de suppression
+// Deletion options
 // ─────────────────────────────────────────────────────────────
 
-/// Options transmises à `SnapshotDeleter::delete`
+/// Options passed to `SnapshotDeleter::delete`
 #[derive(Debug, Clone, Copy)]
 pub struct DeleteOptions {
-    /// Supprime récursivement les enfants avant le parent
+    /// Recursively deletes children before parent
     pub cascade: bool,
-    /// Force la suppression même si le snapshot est protégé
+    /// Forces deletion even if the snapshot is protected
     pub force: bool,
-    /// Ne supprime pas si le snapshot est monté
+    /// Does not delete if the snapshot is mounted
     pub skip_mounted: bool,
 }
 
@@ -40,40 +40,40 @@ impl Default for DeleteOptions {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Résultat
+// Result
 // ─────────────────────────────────────────────────────────────
 
-/// Résultat d'une suppression
+/// Result of a deletion
 #[derive(Debug, Clone)]
 pub struct DeleteResult {
-    /// Identifiant supprimé
+    /// Deleted identifier
     pub id: SnapshotId,
-    /// Octets libérés
+    /// Freed bytes
     pub freed_bytes: u64,
-    /// Nombre de snapshots enfants également supprimés (cascade)
+    /// Number of child snapshots also deleted (cascade)
     pub n_cascade: u32,
-    /// Identifiants des enfants supprimés (cascade)
+    /// Identifiers of deleted children (cascade)
     pub cascade_ids: Vec<SnapshotId>,
 }
 
 // ─────────────────────────────────────────────────────────────
-// Raisons de rejet
+// Rejection reasons
 // ─────────────────────────────────────────────────────────────
 
-/// Raison pour laquelle la suppression est impossible
+/// Reason why deletion is impossible
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteDenyReason {
-    /// Snapshot protégé contre la suppression
+    /// Snapshot protected against deletion
     Protected,
-    /// Des enfants existent (sans cascade activée)
+    /// Children exist (without cascade enabled)
     HasChildren,
-    /// Snapshot actuellement monté
+    /// Snapshot currently mounted
     Mounted,
-    /// Snapshot en cours de restauration
+    /// Snapshot currently being restored
     Restoring,
-    /// Snapshot en cours de streaming
+    /// Snapshot currently being streamed
     Streaming,
-    /// Snapshot introuvable
+    /// Snapshot not found
     NotFound,
 }
 
@@ -97,17 +97,17 @@ impl From<DeleteDenyReason> for ExofsError {
 pub struct SnapshotDeleter;
 
 impl SnapshotDeleter {
-    // ── Point d'entrée principal ─────────────────────────────────────
+    // ── Main entry point ─────────────────────────────────────
 
-    /// Supprime un snapshot après validation
+    /// Deletes a snapshot after validation
     pub fn delete(id: SnapshotId, opts: DeleteOptions) -> ExofsResult<DeleteResult> {
-        // Charger le snapshot pour validation
+        // Load snapshot for validation
         let snap = SNAPSHOT_LIST.get(id).map_err(|_| ExofsError::NotFound)?;
 
-        // Vérifier les pré-conditions
+        // Check preconditions
         Self::check_preconditions(&snap, opts)?;
 
-        // Gérer la suppression en cascade
+        // Handle cascade deletion
         let mut total_freed: u64 = 0;
         let mut cascade_ids: Vec<SnapshotId> = Vec::new();
         let mut n_cascade: u32 = 0;
@@ -115,14 +115,14 @@ impl SnapshotDeleter {
         if opts.cascade {
             Self::cascade_delete(id, opts, &mut total_freed, &mut cascade_ids, &mut n_cascade)?;
         } else {
-            // Vérification qu'aucun enfant n'existe
+            // Check that no children exist
             let children = SNAPSHOT_LIST.children_of(id)?;
             if !children.is_empty() {
                 return Err(ExofsError::from(DeleteDenyReason::HasChildren));
             }
         }
 
-        // Supprimer le snapshot principal
+        // Remove the main snapshot
         let removed = SNAPSHOT_LIST.remove(id)?;
         total_freed = total_freed.saturating_add(removed.total_bytes);
 
@@ -134,11 +134,11 @@ impl SnapshotDeleter {
         })
     }
 
-    // ── Suppressions multiples ───────────────────────────────────────
+    // ── Multiple deletions ───────────────────────────────────
 
-    /// Supprime plusieurs snapshots (sans cascade individuelle)
+    /// Deletes multiple snapshots (without individual cascade)
     ///
-    /// OOM-02 : try_reserve avant push
+    /// OOM-02: try_reserve before push
     pub fn delete_batch(ids: &[SnapshotId], opts: DeleteOptions) -> ExofsResult<Vec<DeleteResult>> {
         let mut results: Vec<DeleteResult> = Vec::new();
         results
@@ -151,7 +151,7 @@ impl SnapshotDeleter {
         Ok(results)
     }
 
-    // ── Vérification pré-conditions ──────────────────────────────────
+    // ── Precondition check ──────────────────────────────────
 
     pub fn check_preconditions(snap: &Snapshot, opts: DeleteOptions) -> ExofsResult<()> {
         if snap.is_protected() && !opts.force {
@@ -169,10 +169,10 @@ impl SnapshotDeleter {
         Ok(())
     }
 
-    // ── Suppression récursive ────────────────────────────────────────
+    // ── Recursive deletion ───────────────────────────────────────────
 
-    /// Supprime récursivement les enfants de manière itérative (RECUR-01).
-    /// Valide les préconditions sur tous les descendants avant toute suppression.
+    /// Recursively deletes children iteratively (RECUR-01).
+    /// Validates preconditions on all descendants before any deletion.
     fn cascade_delete(
         parent_id: SnapshotId,
         opts: DeleteOptions,
@@ -199,13 +199,13 @@ impl SnapshotDeleter {
             }
         }
 
-        // Vérification des préconditions pour tous les descendants avant suppression
+        // Verify preconditions for all descendants before deletion
         for &child_id in &to_delete {
             let child = SNAPSHOT_LIST.get(child_id).map_err(|_| ExofsError::NotFound)?;
             Self::check_preconditions(&child, opts)?;
         }
 
-        // Suppression effective en ordre inverse (feuilles avant branches)
+        // Effective deletion in reverse order (leaves before branches)
         while let Some(child_id) = to_delete.pop() {
             let removed = SNAPSHOT_LIST.remove(child_id)?;
             *total_freed = total_freed.saturating_add(removed.total_bytes);
@@ -217,9 +217,9 @@ impl SnapshotDeleter {
         Ok(())
     }
 
-    // ── Utilitaires de diagnostic ────────────────────────────────────
+    // ── Diagnostic utilities ─────────────────────────────────────────
 
-    /// Retourne true si le snapshot est éligible à la suppression
+    /// Returns true if the snapshot is eligible for deletion
     pub fn can_delete(id: SnapshotId, opts: DeleteOptions) -> bool {
         let Ok(snap) = SNAPSHOT_LIST.get(id) else {
             return false;
@@ -227,7 +227,7 @@ impl SnapshotDeleter {
         if Self::check_preconditions(&snap, opts).is_err() {
             return false;
         }
-        // Sans cascade : vérifier l'absence d'enfants
+        // Without cascade: verify absence of children
         if !opts.cascade {
             let Ok(children) = SNAPSHOT_LIST.children_of(id) else {
                 return false;
@@ -239,7 +239,7 @@ impl SnapshotDeleter {
         true
     }
 
-    /// Retourne la raison du rejet (ou None si suppression possible)
+    /// Returns the denial reason (or None if deletion is possible)
     pub fn deny_reason(id: SnapshotId, opts: DeleteOptions) -> Option<DeleteDenyReason> {
         let Ok(snap) = SNAPSHOT_LIST.get(id) else {
             return Some(DeleteDenyReason::NotFound);
@@ -267,7 +267,7 @@ impl SnapshotDeleter {
         None
     }
 
-    /// Calcule récursivement les octets totaux qui seraient libérés (dry-run)
+    /// Recursively estimates total bytes that would be freed (dry-run)
     pub fn estimate_cascade_freed(id: SnapshotId) -> ExofsResult<u64> {
         let snap = SNAPSHOT_LIST.get(id).map_err(|_| ExofsError::NotFound)?;
         let mut total = snap.total_bytes;
@@ -279,7 +279,7 @@ impl SnapshotDeleter {
         Ok(total)
     }
 
-    /// Retourne la liste ordonnée de suppression (enfants avant parents — dry-run)
+    /// Returns the ordered deletion list (children before parents — dry-run)
     pub fn deletion_order(id: SnapshotId) -> ExofsResult<Vec<SnapshotId>> {
         let mut order: Vec<SnapshotId> = Vec::new();
         Self::collect_order(id, &mut order)?;
@@ -292,7 +292,7 @@ impl SnapshotDeleter {
             Self::collect_order(child_id, order)?;
         }
         order.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
-        // OOM-02 déjà fait via try_reserve
+        // OOM-02 already ensured via try_reserve
         order.push(id);
         Ok(())
     }
@@ -392,7 +392,7 @@ mod tests {
         push_snap(&list, 2, 0, Some(1), 0);
         push_snap(&list, 3, 0, Some(2), 0);
         let order = SnapshotDeleter::deletion_order(SnapshotId(1)).test_unwrap();
-        // 3 doit apparaître avant 2, qui doit apparaître avant 1
+        // 3 must appear before 2, which must appear before 1
         let pos = |id: u64| order.iter().position(|s| s.0 == id).test_unwrap();
         assert!(pos(3) < pos(2));
         assert!(pos(2) < pos(1));

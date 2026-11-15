@@ -4,8 +4,6 @@ const POLL_INTERVAL_MS: u64 = 5;
 const BOOT_PHASE_TIMEOUT_MS: u64 = 300_000;
 const READY_TIMEOUT_GRACE_MS: u64 = 5_000;
 const CLOCK_MONOTONIC: u64 = 1;
-const POLL_YIELD_ROUNDS: usize = 4;
-const POLL_SPIN_ROUNDS: usize = 256;
 
 #[repr(C)]
 struct Timespec {
@@ -15,17 +13,21 @@ struct Timespec {
 
 #[inline]
 fn service_poll_delay() {
-    let mut yields = 0usize;
-    while yields < POLL_YIELD_ROUNDS {
+    let ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: (POLL_INTERVAL_MS * 1_000_000) as i64,
+    };
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_NANOSLEEP,
+            &ts as *const Timespec as u64,
+            0,
+        )
+    };
+    if rc < 0 {
         unsafe {
             let _ = syscall::syscall0(syscall::SYS_SCHED_YIELD);
         }
-        let mut spins = 0usize;
-        while spins < POLL_SPIN_ROUNDS {
-            core::hint::spin_loop();
-            spins += 1;
-        }
-        yields += 1;
     }
 }
 

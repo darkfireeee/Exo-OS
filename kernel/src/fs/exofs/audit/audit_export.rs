@@ -1,12 +1,12 @@
-//! audit_export.rs — Export du journal d'audit ExoFS vers des formats externes.
+//! audit_export.rs — ExoFS audit log export to external formats.
 //!
-//! Exporte les entrées du ring-buffer vers des blocs d'octets bruts, des
-//! slices filtrées ou des représentations textuelles compactes (ASCII, no_std).
+//! Exports ring-buffer entries to raw byte blocks,
+//! filtered slices, or compact textual representations (ASCII, no_std).
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
-//!  - RECUR-01 : zéro récursion
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
+//!  - RECUR-01 : zero recursion
 
 extern crate alloc;
 use alloc::string::String;
@@ -18,40 +18,40 @@ use super::audit_log::{AuditLog, AUDIT_LOG};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille maximale d'un export en nombre d'entrées.
+/// Maximum export size in number of entries.
 pub const EXPORT_MAX_ENTRIES: usize = 16384;
 
-/// Préfixe de ligne pour l'export texte.
+/// Line prefix for text export.
 const TEXT_LINE_PREFIX: &str = "[AUDIT]";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExportFormat — format de sortie
+// ExportFormat — output format
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Format de sortie de l'export.
+/// Export output format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportFormat {
-    /// Blocs binaires bruts (concaténation d'entrées de AUDIT_ENTRY_SIZE octets).
+    /// Raw binary blocks (concatenation of AUDIT_ENTRY_SIZE byte entries).
     Raw,
-    /// Sérialisation textuelle compacte (ASCII, une entrée par ligne).
+    /// Compact textual serialization (ASCII, one entry per line).
     Text,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExportRange — sélection des entrées
+// ExportRange — entry selection
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sélection des entrées à exporter.
+/// Entry selection to export.
 #[derive(Clone, Debug)]
 pub enum ExportRange {
-    /// Les N dernières.
+    /// The last N entries.
     LastN(usize),
-    /// Plage de numéros de séquence (inclus).
+    /// Sequence number range (inclusive).
     SeqRange(u64, u64),
-    /// Toutes les entrées disponibles.
+    /// All available entries.
     All,
 }
 
@@ -59,7 +59,7 @@ pub enum ExportRange {
 // ExportStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques d'un export.
+/// Export statistics.
 #[derive(Clone, Debug, Default)]
 pub struct ExportStats {
     pub n_exported: u32,
@@ -69,10 +69,10 @@ pub struct ExportStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExportResult — résultat complet d'un export
+// ExportResult — full export result
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un export.
+/// Result of an export.
 pub struct ExportResult {
     pub data: Vec<u8>,
     pub stats: ExportStats,
@@ -82,16 +82,16 @@ pub struct ExportResult {
 // AuditExporter
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Exporteur de journaux d'audit.
+/// Audit log exporter.
 pub struct AuditExporter {
-    /// Filtre optionnel appliqué avant export.
+    /// Optional filter applied before export.
     filter: Option<AuditFilter>,
-    /// Nombre total d'entrées exportées depuis la création.
+    /// Total entries exported since creation.
     total_exported: u64,
 }
 
 impl AuditExporter {
-    /// Crée un exporteur sans filtre.
+    /// Creates an exporter without filter.
     pub fn new() -> Self {
         AuditExporter {
             filter: None,
@@ -99,7 +99,7 @@ impl AuditExporter {
         }
     }
 
-    /// Crée un exporteur avec un filtre appliqué.
+    /// Creates an exporter with an applied filter.
     pub fn with_filter(filter: AuditFilter) -> Self {
         AuditExporter {
             filter: Some(filter),
@@ -107,24 +107,24 @@ impl AuditExporter {
         }
     }
 
-    /// Remplace le filtre.
+    /// Replaces the filter.
     pub fn set_filter(&mut self, f: AuditFilter) {
         self.filter = Some(f);
     }
 
-    /// Retire le filtre.
+    /// Removes the filter.
     pub fn clear_filter(&mut self) {
         self.filter = None;
     }
 
-    /// Nombre total d'entrées exportées.
+    /// Total number of exported entries.
     pub fn total_exported(&self) -> u64 {
         self.total_exported
     }
 
-    // ── Export principal ──────────────────────────────────────────────────────
+    // ── Main export ──────────────────────────────────────────────────────────
 
-    /// Exporte les entrées selon la plage et le format donnés.
+    /// Exports entries according to the given range and format.
     pub fn export(
         &mut self,
         range: &ExportRange,
@@ -133,7 +133,7 @@ impl AuditExporter {
         self.export_from(&AUDIT_LOG, range, format)
     }
 
-    /// Variante avec log explicite (utile pour les tests).
+    /// Variant with explicit log (useful for tests).
     pub fn export_from(
         &mut self,
         log: &AuditLog,
@@ -151,7 +151,7 @@ impl AuditExporter {
         Ok(result)
     }
 
-    // ── Helpers de collection ─────────────────────────────────────────────────
+    // ── Collection helpers ───────────────────────────────────────────────────
 
     fn collect_range(&self, log: &AuditLog, range: &ExportRange) -> ExofsResult<Vec<AuditEntry>> {
         let avail = log.available();
@@ -193,7 +193,7 @@ impl AuditExporter {
         Ok(entries)
     }
 
-    // ── Formats ───────────────────────────────────────────────────────────────
+    // ── Formats ──────────────────────────────────────────────────────────────
 
     fn export_raw(&self, entries: &[AuditEntry]) -> ExofsResult<ExportResult> {
         let mut stats = ExportStats::default();
@@ -220,7 +220,7 @@ impl AuditExporter {
         Ok(ExportResult { data, stats })
     }
 
-    /// Exporte en format texte ASCII :
+    /// Exports in ASCII text format:
     /// `[AUDIT] seq=<N> tick=<T> uid=<U> op=<OP> result=<R> sev=<S>`
     fn export_text(&self, entries: &[AuditEntry]) -> ExofsResult<ExportResult> {
         let mut stats = ExportStats::default();
@@ -277,31 +277,31 @@ impl AuditExporter {
         Ok(ExportResult { data, stats })
     }
 
-    // ── Raccourcis ────────────────────────────────────────────────────────────
+    // ── Shortcuts ────────────────────────────────────────────────────────────
 
-    /// Exporte toutes les entrées en binaire brut.
+    /// Exports all entries in raw binary.
     pub fn export_all_raw(&mut self) -> ExofsResult<ExportResult> {
         self.export(&ExportRange::All, ExportFormat::Raw)
     }
 
-    /// Exporte les N dernières entrées en texte.
+    /// Exports the last N entries in text.
     pub fn export_last_n_text(&mut self, n: usize) -> ExofsResult<ExportResult> {
         self.export(&ExportRange::LastN(n), ExportFormat::Text)
     }
 
-    /// Exporte une plage de séquences en texte.
+    /// Exports a sequence range in text.
     pub fn export_seq_range_text(&mut self, from: u64, to: u64) -> ExofsResult<ExportResult> {
         self.export(&ExportRange::SeqRange(from, to), ExportFormat::Text)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Formatage texte (no_std, pas de format! complexe)
+// Text formatting (no_std, no complex format!)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Formate une ligne d'entrée texte compacte.
+/// Formats a compact text entry line.
 ///
-/// Format : `[AUDIT] seq=<N> tick=<T> uid=<U> obj=<O> op=<OP> res=<R> sev=<S>\n`
+/// Format: `[AUDIT] seq=<N> tick=<T> uid=<U> obj=<O> op=<OP> res=<R> sev=<S>\n`
 fn format_entry_line(
     seq: u64,
     tick: u64,
@@ -337,7 +337,7 @@ fn push_kv_u64(s: &mut String, key: &str, val: u64) {
     s.push(' ');
 }
 
-/// Convertit `n` en décimal ASCII sans alloc.
+/// Converts `n` to ASCII decimal without alloc.
 fn push_u64_decimal(s: &mut String, mut n: u64) {
     if n == 0 {
         s.push('0');
@@ -350,7 +350,7 @@ fn push_u64_decimal(s: &mut String, mut n: u64) {
         n /= 10;
         len += 1;
     }
-    // Inverse.
+    // Reverse.
     for i in (0..len).rev() {
         s.push(buf[i] as char);
     }
@@ -505,7 +505,7 @@ mod tests {
         let res = exp
             .export_from(&log, &ExportRange::SeqRange(start, end), ExportFormat::Raw)
             .test_unwrap();
-        let _ = res; // Pas de panique.
+        let _ = res; // Do not panic.
     }
 
     #[test]

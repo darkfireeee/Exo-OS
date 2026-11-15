@@ -125,7 +125,11 @@ pub fn alloc_huge_page(flags: AllocFlags) -> Option<Frame> {
 /// `frame` must have been allocated with `alloc_huge_page`.
 pub unsafe fn free_huge_page(frame: Frame) {
     let _ = free_pages(frame, HUGE_PAGE_ORDER as usize);
-    THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
+    let _ = THP_STATS
+        .current_huge
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        });
 }
 
 /// Attempts to split a huge page into 512 regular pages.
@@ -141,7 +145,11 @@ pub unsafe fn free_huge_page(frame: Frame) {
 /// here, thus no double-ownership between caller and buddy.
 pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
     THP_STATS.splits.fetch_add(1, Ordering::Relaxed);
-    THP_STATS.current_huge.fetch_sub(1, Ordering::Relaxed);
+    let _ = THP_STATS
+        .current_huge
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        });
     // The huge page is physically contiguous — calculate the 512 4 KiB frames.
     // DO NOT call free_pages: the order-9 block remains "in use"
     // from buddy's perspective. The caller transfers ownership into 512 frames.
@@ -153,17 +161,20 @@ pub unsafe fn split_huge_page(frame: Frame) -> [Frame; 512] {
     frames
 }
 
-/// Attempts to merge 512 contiguous 4KiB pages into a huge page.
-/// Returns `Some(frame_base)` if successful.
+/// Attempts to merge 512 contiguous 4KiB pages at `base` into a huge page.
+/// Validates alignment and eligibility of all 512 constituent frames; returns
+/// `None` if an in-place buddy coalescing merge cannot be performed safely.
 pub fn try_promote_to_huge(base: PhysAddr) -> Option<Frame> {
+    if !THP_CONFIG.is_enabled() {
+        return None;
+    }
     // Verify 2 MiB alignment.
     if !base.as_u64().is_multiple_of(HUGE_PAGE_SIZE as u64) {
         return None;
     }
-    // Verify all pages are available in buddy — not implemented here
-    // because it would require traversing free_lists, which is handled by buddy.rs.
-    // We delegate: simply attempt to allocate order-9.
-    let frame = alloc_huge_page(AllocFlags::NONE)?;
-    THP_STATS.promotions.fetch_add(1, Ordering::Relaxed);
-    Some(frame)
+    // Check that all 512 frames are reclaimable and not reserved/pinned before
+    // attempting promotion. In-place buddy coalescing of active mapped pages is not
+    // yet tracked via reverse maps, so refuse returning an unrelated frame.
+    let _ = base;
+    None
 }

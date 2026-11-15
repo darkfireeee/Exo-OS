@@ -115,6 +115,37 @@ pub unsafe fn xrstor_for(tcb: &mut ThreadControlBlock) {
     tcb.set_fpu_loaded(true);
 }
 
+/// Copies parent's FPU/SIMD state into `child` across `fork()`.
+/// If `parent` currently holds live FPU registers (`fpu_loaded()`), saves directly
+/// from hardware into `child`'s `FpuState`; otherwise copies `parent`'s saved buffer.
+///
+/// # Safety
+/// `parent` and `child` must point to valid TCBs; called on `parent`'s active CPU.
+pub unsafe fn clone_fpu_state(parent: &ThreadControlBlock, child: &mut ThreadControlBlock) {
+    let parent_live = parent.fpu_loaded();
+    if !parent_live && parent.fpu_state_ptr == 0 {
+        return;
+    }
+    if child.fpu_state_ptr == 0 && !alloc_fpu_state(child) {
+        return;
+    }
+    let dst = &mut *(child.fpu_state_ptr as *mut FpuState);
+    if parent_live {
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+        dst.refresh_size();
+        if HAS_XSAVE.load(Ordering::Relaxed) {
+            let xcr0 = crate::arch::x86_64::cpu::fpu::read_xcr0();
+            arch_xsave64(dst.as_mut_ptr(), xcr0);
+        } else {
+            arch_fxsave64(dst.as_mut_ptr());
+        }
+    } else {
+        let src = &*(parent.fpu_state_ptr as *const FpuState);
+        core::ptr::copy_nonoverlapping(src as *const FpuState, dst as *mut FpuState, 1);
+    }
+    child.set_fpu_loaded(false);
+}
+
 /// Initializes FPU registers to their default state (FINIT + LDMXCSR).
 unsafe fn init_fpu_registers() {
     let mxcsr_val: u32 = 0x1F80;

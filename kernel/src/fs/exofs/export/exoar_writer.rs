@@ -1,19 +1,19 @@
-//! exoar_writer.rs — Création et finalisation d'archives ExoAR (no_std).
+//! exoar_writer.rs — Creation and finalization of ExoAR archives (no_std).
 //!
-//! Ce module fournit :
-//!  - `ArchiveSink`         : trait d'écriture séquentielle.
-//!  - `ExoarWriter`         : écrivain principal (header → blobs → footer).
-//!  - `ExoarBufferedWriter` : accumule les données en mémoire avant flush.
-//!  - `ExoarWriteStats`     : statistiques de l'archive en cours.
-//!  - `ExoarWriteOptions`   : configuration de l'écrivain.
-//!  - `ExoarWriteError`     : erreurs d'écriture spécifiques.
-//!  - `SinkVec`             : implémentation de ArchiveSink sur Vec<u8>.
+//! This module provides:
+//!  - `ArchiveSink`         : sequential write trait.
+//!  - `ExoarWriter`         : main writer (header → blobs → footer).
+//!  - `ExoarBufferedWriter` : accumulates data in memory before flush.
+//!  - `ExoarWriteStats`     : statistics of the in-progress archive.
+//!  - `ExoarWriteOptions`   : writer configuration.
+//!  - `ExoarWriteError`     : specific write errors.
+//!  - `SinkVec`             : implementation of ArchiveSink on Vec<u8>.
 //!
-//! RÈGLE 8  : magic écrit EN PREMIER pour chaque structure.
-//! RÈGLE 11 : BlobId = blake3(données brutes) — calculé ici.
-//! RECUR-01 : pas de récursion — boucles while.
-//! OOM-02   : try_reserve avant push.
-//! ARITH-02 : saturating_* / wrapping_* sur tous les compteurs.
+//! RULE 8  : magic written FIRST for each structure.
+//! RULE 11 : BlobId = blake3(raw data) — computed here.
+//! RECUR-01: no recursion — while loops.
+//! OOM-02  : try_reserve before push.
+//! ARITH-02: saturating_* / wrapping_* on all counters.
 
 extern crate alloc;
 use super::exoar_format::{
@@ -25,33 +25,33 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::mem::size_of;
 
-// ─── Trait de sortie ─────────────────────────────────────────────────────────
+// ─── Output Trait ────────────────────────────────────────────────────────────
 
-/// Abstraction d'écriture séquentielle vers une destination d'archive.
-/// RECUR-01 : les implémentations ne se rappellent pas elles-mêmes.
+/// Sequential write abstraction to an archive destination.
+/// RECUR-01: implementations do not call themselves recursively.
 pub trait ArchiveSink {
-    /// Écrit exactement `buf` dans la destination.
+    /// Writes exactly `buf` to the destination.
     fn write_all(&mut self, buf: &[u8]) -> ExofsResult<()>;
-    /// Retourne le nombre total d'octets écrits.
+    /// Returns the total number of bytes written.
     fn bytes_written(&self) -> u64;
 }
 
-// ─── Erreurs d'écriture ───────────────────────────────────────────────────────
+// ─── Write Errors ────────────────────────────────────────────────────────────
 
-/// Erreur spécifique à l'écriture d'archive ExoAR.
+/// Error specific to ExoAR archive writing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExoarWriteError {
-    /// L'archive a déjà été finalisée.
+    /// Archive has already been finalized.
     AlreadyFinalized,
-    /// L'archive n'a pas encore été initialisée (header non écrit).
+    /// Archive has not yet been initialized (header not written).
     NotStarted,
-    /// Trop d'entrées (dépasse EXOAR_MAX_ENTRIES).
+    /// Too many entries (exceeds EXOAR_MAX_ENTRIES).
     TooManyEntries,
-    /// Payload trop grand (dépasse EXOAR_MAX_PAYLOAD).
+    /// Payload too large (exceeds EXOAR_MAX_PAYLOAD).
     PayloadTooLarge,
-    /// Erreur d'allocation mémoire.
+    /// Memory allocation error.
     OutOfMemory,
-    /// Erreur d'écriture vers le sink.
+    /// Write error to sink.
     IoError,
 }
 
@@ -68,22 +68,22 @@ impl From<ExoarWriteError> for ExofsError {
     }
 }
 
-// ─── Options d'écriture ───────────────────────────────────────────────────────
+// ─── Write Options ───────────────────────────────────────────────────────────
 
-/// Options de configuration pour l'écrivain ExoAR.
+/// Configuration options for the ExoAR writer.
 #[derive(Clone, Copy, Debug)]
 pub struct ExoarWriteOptions {
-    /// Flags à placer dans ExoarHeader.
+    /// Flags to place in ExoarHeader.
     pub archive_flags: u32,
-    /// Epoch de base (source de l'incrémental).
+    /// Base epoch (source of incremental).
     pub epoch_base: u64,
-    /// Epoch cible (état à exporter).
+    /// Target epoch (state to export).
     pub epoch_target: u64,
-    /// Timestamp de création (secondes UNIX, 0 = non renseigné).
+    /// Creation timestamp (UNIX seconds, 0 = unspecified).
     pub created_at: u64,
-    /// Vérifier le CRC32C de chaque payload avant d'écrire.
+    /// Verify CRC32C of each payload before writing.
     pub verify_before_write: bool,
-    /// Écrire les tombstones (suppression).
+    /// Write tombstones (deletion records).
     pub write_tombstones: bool,
 }
 
@@ -122,22 +122,22 @@ impl ExoarWriteOptions {
     }
 }
 
-// ─── Statistiques d'écriture ─────────────────────────────────────────────────
+// ─── Write Statistics ────────────────────────────────────────────────────────
 
-/// Statistiques accumulées pendant l'écriture.
+/// Statistics accumulated during writing.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExoarWriteStats {
-    /// Nombre de blobs écrits.
+    /// Number of blobs written.
     pub blobs_written: u32,
-    /// Nombre de tombstones écrits.
+    /// Number of tombstones written.
     pub tombstones_written: u32,
-    /// Octets total de payload écrits.
+    /// Total payload bytes written.
     pub payload_bytes: u64,
-    /// Taille totale de l'archive en bytes.
+    /// Total archive size in bytes.
     pub archive_bytes: u64,
-    /// Nombre d'erreurs d'écriture ignorées.
+    /// Number of ignored write errors.
     pub write_errors: u32,
-    /// CRC32C global courant (accumulé au fil des écritures).
+    /// Current global CRC32C (accumulated over writes).
     pub running_crc: u32,
 }
 
@@ -153,29 +153,29 @@ impl ExoarWriteStats {
         }
     }
 
-    /// Retourne le nombre total d'entrées écrites.
+    /// Returns the total number of entries written.
     pub fn total_entries(&self) -> u32 {
         self.blobs_written.saturating_add(self.tombstones_written)
     }
 }
 
-// ─── État interne de l'écrivain ───────────────────────────────────────────────
+// ─── Internal Writer State ───────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WriterState {
-    /// Pas encore initialisé (header non écrit).
+    /// Not yet initialized (header not written).
     Idle,
-    /// En cours d'écriture des entrées.
+    /// In the process of writing entries.
     Writing,
-    /// Finalisé (footer écrit).
+    /// Finalized (footer written).
     Finalized,
 }
 
-// ─── Écrivain principal ───────────────────────────────────────────────────────
+// ─── Main Writer ─────────────────────────────────────────────────────────────
 
-/// Écrivain d'archives ExoAR, travaillant sur un `ArchiveSink`.
+/// ExoAR archive writer, operating on an `ArchiveSink`.
 ///
-/// Utilisation typique :
+/// Typical usage:
 /// ```ignore
 /// let mut sink = SinkVec::new();
 /// let mut writer = ExoarWriter::new(ExoarWriteOptions::default());
@@ -190,7 +190,7 @@ pub struct ExoarWriter {
 }
 
 impl ExoarWriter {
-    /// Crée un nouvel écrivain avec les options données.
+    /// Creates a new writer with the given options.
     pub const fn new(options: ExoarWriteOptions) -> Self {
         Self {
             options,
@@ -203,13 +203,13 @@ impl ExoarWriter {
         Self::new(ExoarWriteOptions::default())
     }
 
-    /// Retourne les statistiques courantes (lecture seule).
+    /// Returns current statistics (read-only).
     pub fn stats(&self) -> &ExoarWriteStats {
         &self.stats
     }
 
-    /// Écrit l'en-tête de l'archive. Doit être appelé en premier.
-    /// RÈGLE 8 : magic écrit EN PREMIER.
+    /// Writes the archive header. Must be called first.
+    /// RULE 8: magic written FIRST.
     pub fn begin<S: ArchiveSink>(&mut self, sink: &mut S) -> Result<(), ExoarWriteError> {
         if self.state != WriterState::Idle {
             return Err(ExoarWriteError::AlreadyFinalized);
@@ -228,10 +228,10 @@ impl ExoarWriter {
         Ok(())
     }
 
-    /// Écrit un blob de données dans l'archive.
-    /// RÈGLE 8  : ExoarEntryHeader magic est le premier champ écrit.
-    /// RÈGLE 11 : blob_id doit être blake3(data AVANT compression/chiffrement).
-    /// OOM-02   : pas d'allocation interne ici — travaille directement sur le sink.
+    /// Writes a data blob into the archive.
+    /// RULE 8  : ExoarEntryHeader magic is the first field written.
+    /// RULE 11 : blob_id must be blake3(data BEFORE compression/encryption).
+    /// OOM-02   : no internal allocation here — operates directly on the sink.
     pub fn write_blob<S: ArchiveSink>(
         &mut self,
         sink: &mut S,
@@ -280,7 +280,7 @@ impl ExoarWriter {
         Ok(())
     }
 
-    /// Écrit un tombstone (enregistrement de suppression de blob).
+    /// Writes a tombstone (blob deletion record).
     pub fn write_tombstone<S: ArchiveSink>(
         &mut self,
         sink: &mut S,
@@ -317,7 +317,7 @@ impl ExoarWriter {
         Ok(())
     }
 
-    /// Finalise l'archive (écrit le footer). Ne peut être appelé qu'une fois.
+    /// Finalizes the archive (writes footer). Can only be called once.
     pub fn finalize<S: ArchiveSink>(
         &mut self,
         sink: &mut S,
@@ -349,17 +349,17 @@ impl ExoarWriter {
         Ok(self.stats)
     }
 
-    /// Retourne true si l'archive est finalisée.
+    /// Returns true if the archive is finalized.
     pub fn is_finalized(&self) -> bool {
         self.state == WriterState::Finalized
     }
 }
 
-// ─── Écrivain bufferisé ───────────────────────────────────────────────────────
+// ─── Buffered Writer ─────────────────────────────────────────────────────────
 
-/// Écrivain bufferisé : accumule l'intégralité de l'archive en mémoire.
-/// Utile pour les petites archives ou les tests.
-/// OOM-02 : try_reserve avant chaque extension du buffer.
+/// Buffered writer: accumulates the full archive in memory.
+/// Useful for small archives or testing.
+/// OOM-02: try_reserve before every buffer extension.
 pub struct ExoarBufferedWriter {
     inner: ExoarWriter,
     buffer: Vec<u8>,
@@ -387,7 +387,7 @@ impl ExoarBufferedWriter {
         })
     }
 
-    /// Commence l'écriture de l'archive.
+    /// Begins writing the archive.
     pub fn begin(&mut self) -> Result<(), ExoarWriteError> {
         let mut sink = BufSink {
             buf: &mut self.buffer,
@@ -395,7 +395,7 @@ impl ExoarBufferedWriter {
         self.inner.begin(&mut sink)
     }
 
-    /// Écrit un blob dans le buffer.
+    /// Writes a blob into the buffer.
     pub fn write_blob(
         &mut self,
         blob_id: &[u8; 32],
@@ -410,7 +410,7 @@ impl ExoarBufferedWriter {
             .write_blob(&mut sink, blob_id, data, flags, epoch)
     }
 
-    /// Écrit un tombstone dans le buffer.
+    /// Writes a tombstone into the buffer.
     pub fn write_tombstone(
         &mut self,
         blob_id: &[u8; 32],
@@ -422,7 +422,7 @@ impl ExoarBufferedWriter {
         self.inner.write_tombstone(&mut sink, blob_id, epoch)
     }
 
-    /// Finalise l'archive et retourne le buffer complet.
+    /// Finalizes the archive and returns the full buffer.
     pub fn finalize(mut self) -> Result<(Vec<u8>, ExoarWriteStats), ExoarWriteError> {
         let mut sink = BufSink {
             buf: &mut self.buffer,
@@ -431,18 +431,18 @@ impl ExoarBufferedWriter {
         Ok((self.buffer, stats))
     }
 
-    /// Retourne une référence au buffer sans finaliser.
+    /// Returns a reference to the buffer without finalizing.
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
     }
 
-    /// Retourne les statistiques courantes.
+    /// Returns current statistics.
     pub fn stats(&self) -> &ExoarWriteStats {
         self.inner.stats()
     }
 }
 
-/// Sink interne vers un Vec<u8> (utilisé par ExoarBufferedWriter).
+/// Internal sink to a Vec<u8> (used by ExoarBufferedWriter).
 struct BufSink<'a> {
     buf: &'a mut Vec<u8>,
 }
@@ -461,10 +461,10 @@ impl<'a> ArchiveSink for BufSink<'a> {
     }
 }
 
-// ─── SinkVec (implémentation publique de ArchiveSink) ────────────────────────
+// ─── SinkVec (public implementation of ArchiveSink) ──────────────────────────
 
-/// Implémentation publique de `ArchiveSink` sur un `Vec<u8>`.
-/// Utile pour les tests et les usages où l'archive doit tenir en mémoire.
+/// Public implementation of `ArchiveSink` on a `Vec<u8>`.
+/// Useful for tests and use cases where the archive must fit in memory.
 pub struct SinkVec {
     buf: Vec<u8>,
 }
@@ -508,10 +508,10 @@ impl ArchiveSink for SinkVec {
     }
 }
 
-// ─── blake3 inline ────────────────────────────────────────────────────────────
+// ─── Inline blake3 ────────────────────────────────────────────────────────────
 
-/// Calcule le BlobId d'un slice de données (RÈGLE 11 : blake3 AVANT compression).
-/// En production, utiliser le vrai blake3 via crate::fs::exofs::dedup::content_hash.
+/// Computes the BlobId of a data slice (RULE 11: blake3 BEFORE compression).
+/// In production, use real blake3 via crate::fs::exofs::dedup::content_hash.
 pub fn compute_blob_id(data: &[u8]) -> [u8; 32] {
     *blob_id::compute_blob_id(data).as_bytes()
 }
@@ -549,7 +549,7 @@ mod tests {
         let (buf, stats) = w.finalize().test_expect("finalize");
         assert_eq!(stats.blobs_written, 1);
         assert_eq!(stats.payload_bytes, data.len() as u64);
-        // Relire l'archive
+        // Read archive back
         let mut src = SliceSource::new(&buf);
         let reader = ExoarReader::with_default_config();
         let mut rcv = CollectingReceiver::new();
@@ -617,12 +617,11 @@ mod tests {
         let mut sink = SinkVec::new();
         let mut w = ExoarWriter::new(ExoarWriteOptions::default());
         w.begin(&mut sink).test_expect("begin");
-        // Créer un fake "large" payload en manipulant directement la taille
-        // On ne peut pas allouer 256 MiB dans un test, donc on vérifie via
-        // une entrée avec taille déclarée incorrecte — on skip ce test UI
-        // et on vérifie que l'erreur est bien retournée pour une data vide
-        // mais avec un en-tête qui déclare une taille excessive.
-        // Test: la protection via EXOAR_MAX_PAYLOAD est bien activée.
+        // Create a fake "large" payload by directly manipulating size
+        // We cannot allocate 256 MiB in a unit test, so we verify via
+        // an entry with declared size - test UI skipped and ensure error
+        // returned for empty data with excessive declared size.
+        // Test: protection via EXOAR_MAX_PAYLOAD is active.
         assert_eq!(EXOAR_MAX_PAYLOAD, 256 * 1024 * 1024);
     }
 

@@ -234,7 +234,13 @@ impl RpcClient {
                     match RpcReplyFrame::deserialize(&reply_buf[..reply_size]) {
                         Ok(reply) => {
                             if reply.header.cookie != cookie {
-                                // Bad cookie — stale reply
+                                // Bad cookie — stale reply; verify timeout before continuing.
+                                if retry.timeout.is_expired() {
+                                    self.total_timeouts.fetch_add(1, Ordering::Relaxed);
+                                    RPC_TIMEOUT_STATS.record_timeout();
+                                    IPC_STATS.record(StatEvent::RpcTimeout);
+                                    return Err(IpcError::Timeout);
+                                }
                                 continue;
                             }
 

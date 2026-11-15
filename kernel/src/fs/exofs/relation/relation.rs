@@ -1,9 +1,9 @@
-//! relation.rs — Relation et identifiant ExoFS
+//! relation.rs — Relation and ExoFS identifier
 //!
-//! Règles appliquées :
-//!  - ONDISK-03: aucun AtomicU64 dans les structs repr(C, packed)
-//!  - HDR-03   : magic vérifié en premier lors du parse on-disk
-//!  - ARITH-02 : arithmétique vérifiée sur toutes les offsets
+//! Applied rules:
+//!  - ONDISK-03: no AtomicU64 in repr(C, packed) structs
+//!  - HDR-03   : magic verified first during on-disk parse
+//!  - ARITH-02 : checked arithmetic on all offsets
 
 use super::relation_type::{RelationFlags, RelationKind, RelationType, RelationWeight};
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
@@ -12,31 +12,31 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Magic identifiant une relation valide on-disk (b"RLTN").
+/// Magic identifying a valid on-disk relation (b"RLTN").
 pub const RELATION_MAGIC: u32 = 0x524C544E;
 
-/// Taille fixe du bloc on-disk d'une relation.
+/// Fixed size of a relation on-disk block.
 pub const RELATION_ONDISK_SIZE: usize = 96;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RelationId
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant unique d'une relation (64 bits, 0 = invalide).
+/// Unique relation identifier (64 bits, 0 = invalid).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelationId(pub u64);
 
 impl RelationId {
-    /// Identifiant invalide (sentinelle).
+    /// Invalid identifier (sentinel).
     pub const INVALID: Self = Self(0);
 
-    /// `true` si cet ID est valide.
+    /// `true` if this ID is valid.
     #[inline]
     pub fn is_valid(self) -> bool {
         self.0 != 0
     }
 
-    /// Génère l'ID suivant (wrapping, saute 0).
+    /// Generates next ID (wrapping, skips 0).
     pub fn next(self) -> Self {
         let n = self.0.wrapping_add(1);
         if n == 0 {
@@ -54,44 +54,44 @@ impl Default for RelationId {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationOnDisk — structure binaire fixe (96 octets)
+// RelationOnDisk — fixed binary structure (96 bytes)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Représentation on-disk d'une relation.
+/// On-disk representation of a relation.
 ///
-/// Taille fixe 96 octets pour alignement propre.
-/// Aucun `AtomicU64` (ONDISK-03).
+/// Fixed size 96 bytes for clean alignment.
+/// No `AtomicU64` (ONDISK-03).
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct RelationOnDisk {
-    /// Magic RELATION_MAGIC (HDR-03 : vérifié en premier).
+    /// Magic RELATION_MAGIC (HDR-03: verified first).
     pub magic: u32,
     /// Kind u8.
     pub kind: u8,
     /// Flags u16.
     pub flags: u16,
-    /// Padding pour alignement.
+    /// Padding for alignment.
     pub _pad0: u8,
-    /// Identifiant de la relation.
+    /// Relation identifier.
     pub id: u64,
-    /// BlobId source (32 octets).
+    /// Source BlobId (32 bytes).
     pub from_blob: [u8; 32],
-    /// BlobId destination (32 octets).
+    /// Destination BlobId (32 bytes).
     pub to_blob: [u8; 32],
-    /// Poids u32.
+    /// Weight u32.
     pub weight: u32,
-    /// Timestamp de création (ticks CPU).
+    /// Creation timestamp (CPU ticks).
     pub created_at: u64,
-    /// CRC32 simple des champs précédents (validation).
+    /// Simple CRC32 of previous fields (validation).
     pub crc32: u32,
 }
 
 const _CHECK_ONDISK: () = assert!(core::mem::size_of::<RelationOnDisk>() == RELATION_ONDISK_SIZE);
 
 impl RelationOnDisk {
-    /// Parse depuis un slice d'octets (HDR-03 : magic first, CRC validation).
+    /// Parses from a byte slice (HDR-03: magic first, CRC validation).
     pub fn from_bytes(buf: &[u8; RELATION_ONDISK_SIZE]) -> ExofsResult<Self> {
-        // HDR-03 : lire et valider le magic en premier.
+        // HDR-03: read and validate magic first.
         let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
         if magic != RELATION_MAGIC {
             return Err(ExofsError::InvalidMagic);
@@ -99,24 +99,24 @@ impl RelationOnDisk {
         if !Self::crc_ok(buf) {
             return Err(ExofsError::ChecksumMismatch);
         }
-        // Recopie manuelle pour éviter l'UB sur packed.
+        // Manual copy to prevent UB on packed.
         let mut d: [u8; RELATION_ONDISK_SIZE] = [0u8; RELATION_ONDISK_SIZE];
         d.copy_from_slice(buf);
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         Ok(unsafe { core::ptr::read_unaligned(d.as_ptr() as *const RelationOnDisk) })
     }
 
-    /// Sérialise dans un tableau de 96 octets.
+    /// Serializes into a 96-byte array.
     pub fn to_bytes(self) -> [u8; RELATION_ONDISK_SIZE] {
         let mut out = [0u8; RELATION_ONDISK_SIZE];
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by preconditions of calling function.
         unsafe {
             core::ptr::write_unaligned(out.as_mut_ptr() as *mut RelationOnDisk, self);
         }
         out
     }
 
-    /// Calcule un CRC32 simplifié (FNV-1a sur les 88 premiers octets).
+    /// Computes a simplified CRC32 (FNV-1a over first 88 bytes).
     pub fn compute_crc(buf: &[u8; RELATION_ONDISK_SIZE]) -> u32 {
         let mut h: u32 = 0x811c9dc5u32;
         for &b in &buf[..RELATION_ONDISK_SIZE - 4] {
@@ -125,7 +125,7 @@ impl RelationOnDisk {
         h
     }
 
-    /// `true` si le CRC est valide.
+    /// `true` if CRC is valid.
     pub fn crc_ok(buf: &[u8; RELATION_ONDISK_SIZE]) -> bool {
         let computed = Self::compute_crc(buf);
         let stored = u32::from_le_bytes([
@@ -139,28 +139,28 @@ impl RelationOnDisk {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Relation — représentation en mémoire
+// Relation — in-memory representation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Relation en mémoire entre deux blobs.
+/// In-memory relation between two blobs.
 #[derive(Clone, Debug)]
 pub struct Relation {
-    /// Identifiant unique.
+    /// Unique identifier.
     pub id: RelationId,
-    /// Blob source.
+    /// Source blob.
     pub from: BlobId,
-    /// Blob destination.
+    /// Destination blob.
     pub to: BlobId,
-    /// Type complet de la relation.
+    /// Complete relation type.
     pub rel_type: RelationType,
-    /// Ticks CPU à la création.
+    /// CPU ticks at creation.
     pub created_at: u64,
-    /// Ticks CPU de la dernière modification.
+    /// CPU ticks at last modification.
     pub updated_at: u64,
 }
 
 impl Relation {
-    /// Constructeur complet.
+    /// Full constructor.
     pub fn new(
         id: RelationId,
         from: BlobId,
@@ -178,19 +178,19 @@ impl Relation {
         }
     }
 
-    /// `true` si la relation est active (non supprimée, poids non nul).
+    /// `true` if relation is active (not deleted, non-zero weight).
     #[inline]
     pub fn is_active(&self) -> bool {
         self.rel_type.is_active()
     }
 
-    /// `true` si `from` == `to` (auto-relation / boucle simple).
+    /// `true` if `from` == `to` (self-relation / simple loop).
     #[inline]
     pub fn is_self_loop(&self) -> bool {
         self.from.as_bytes() == self.to.as_bytes()
     }
 
-    /// Sérialise vers `RelationOnDisk`.
+    /// Serializes to `RelationOnDisk`.
     pub fn to_on_disk(&self) -> RelationOnDisk {
         let mut d = RelationOnDisk {
             magic: RELATION_MAGIC,
@@ -204,7 +204,7 @@ impl Relation {
             created_at: self.created_at,
             crc32: 0,
         };
-        // Calculer et insérer le CRC.
+        // Compute and insert CRC.
         let mut buf = d.to_bytes();
         let crc = RelationOnDisk::compute_crc(&buf);
         let crc_bytes = crc.to_le_bytes();
@@ -213,7 +213,7 @@ impl Relation {
         d
     }
 
-    /// Désérialise depuis `RelationOnDisk`.
+    /// Deserializes from `RelationOnDisk`.
     pub fn from_on_disk(d: &RelationOnDisk) -> ExofsResult<Self> {
         let kind = RelationKind::from_u8(d.kind).ok_or(ExofsError::CorruptedStructure)?;
         let id = RelationId(d.id);
@@ -235,13 +235,13 @@ impl Relation {
         })
     }
 
-    /// Marque la relation comme supprimée (soft-delete).
+    /// Marks relation as deleted (soft-delete).
     pub fn mark_deleted(&mut self, tick: u64) {
         self.rel_type.flags = self.rel_type.flags.set(RelationFlags::DELETED);
         self.updated_at = tick;
     }
 
-    /// Retourne un résumé court (pour les logs).
+    /// Returns a short summary (for logs).
     pub fn summary(&self) -> RelationSummary {
         RelationSummary {
             id: self.id,
@@ -251,10 +251,10 @@ impl Relation {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationSummary — version légère pour callbacks
+// RelationSummary — lightweight version for callbacks
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Version allégée d'une relation (pour éviter les clones coûteux).
+/// Lightweight version of a relation (to avoid expensive clones).
 #[derive(Clone, Copy, Debug)]
 pub struct RelationSummary {
     pub id: RelationId,
@@ -262,10 +262,10 @@ pub struct RelationSummary {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationBuilder — constructeur fluent
+// RelationBuilder — fluent builder
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Builder pour créer une `Relation` de manière explicite.
+/// Builder to create a `Relation` explicitly.
 pub struct RelationBuilder {
     id: RelationId,
     from: Option<BlobId>,
@@ -302,9 +302,9 @@ impl RelationBuilder {
         self
     }
 
-    /// Construit la relation.
+    /// Builds the relation.
     ///
-    /// Retourne `Err(InvalidArgument)` si `from` ou `to` manque.
+    /// Returns `Err(InvalidArgument)` if `from` or `to` is missing.
     pub fn build(self) -> ExofsResult<Relation> {
         let from = self.from.ok_or(ExofsError::InvalidArgument)?;
         let to = self.to.ok_or(ExofsError::InvalidArgument)?;
@@ -418,7 +418,7 @@ mod tests {
             50,
         );
         let mut on_disk = rel.to_on_disk();
-        on_disk.kind = 0xFF; // valeur invalide
+        on_disk.kind = 0xFF; // invalid value
         assert!(Relation::from_on_disk(&on_disk).is_err());
     }
 

@@ -1,10 +1,10 @@
-//! resolver.rs — Résolution itérative de chemins ExoFS
+//! resolver.rs — Iterative ExoFS path resolution
 //!
-//! Règles critiques appliquées :
-//!  - RECUR-01 : zéro récursion — boucle `while` explicite
-//!  - PATH-07  : ResolveContext alloué sur le tas (Vec<PathComponent>)
-//!  - OOM-02   : try_reserve avant tout push
-//!  - ARITH-02 : arithmétique vérifiée
+//! Critical applied rules:
+//!  - RECUR-01 : zero recursion — explicit `while` loop
+//!  - PATH-07  : ResolveContext allocated on the heap (Vec<PathComponent>)
+//!  - OOM-02   : try_reserve before any push
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -20,47 +20,47 @@ use crate::fs::exofs::path::symlink::{SYMLINK_MAX_DEPTH, SYMLINK_STORE};
 // Trait PathResolver
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Interface que tout back-end de système de fichiers doit implémenter
-/// pour permettre la résolution de chemins.
+/// Interface that any filesystem backend must implement
+/// to enable path resolution.
 pub trait PathResolver {
-    /// Cherche `name` dans `dir_oid`.
+    /// Searches for `name` in `dir_oid`.
     ///
-    /// Retourne `(oid, is_symlink)` ou `None` si absent.
+    /// Returns `(oid, is_symlink)` or `None` if absent.
     fn lookup_in_dir(
         &self,
         dir_oid: &ObjectId,
         name: &PathComponent,
     ) -> ExofsResult<Option<(ObjectId, bool)>>;
 
-    /// Lit la cible d'un lien symbolique.
+    /// Reads target of a symbolic link.
     fn symlink_target(&self, oid: &ObjectId) -> ExofsResult<Vec<u8>>;
 
-    /// OID racine du système de fichiers.
+    /// Root OID of the filesystem.
     fn root_oid(&self) -> ObjectId;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ResolveContext — état sur le tas (PATH-07)
+// ResolveContext — heap-allocated state (PATH-07)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Contexte d'une résolution en cours.
+/// Context of an in-progress resolution.
 ///
-/// Alloué sur le tas pour éviter `[u8; PATH_MAX]` sur la pile (PATH-07).
+/// Allocated on the heap to avoid `[u8; PATH_MAX]` on the stack (PATH-07).
 pub struct ResolveContext {
-    /// OID courant lors de la descente.
+    /// Current OID during traversal.
     pub current_oid: ObjectId,
-    /// Composants restants à résoudre (ordre LIFO — dépilé par pop).
+    /// Remaining components to resolve (LIFO order — popped from end).
     pub remaining: Vec<PathComponent>,
-    /// Profondeur de résolution de symlinks.
+    /// Symlink resolution depth.
     pub symlink_depth: usize,
-    /// Chemin canonique original (pour le cache).
+    /// Original canonical path (for cache).
     pub canonical_path: Vec<u8>,
-    /// Drapeaux de résolution.
+    /// Resolution flags.
     pub flags: ResolveFlags,
 }
 
 impl ResolveContext {
-    /// Crée un contexte depuis un chemin canonique.
+    /// Creates a context from a canonical path.
     pub fn new(root: ObjectId, canonical: Vec<u8>, flags: ResolveFlags) -> ExofsResult<Self> {
         let mut remaining: Vec<PathComponent> = Vec::new();
         let mut parser = PathParser::new(&canonical)?;
@@ -75,7 +75,7 @@ impl ResolveContext {
             remaining.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             remaining.push(c);
         }
-        remaining.reverse(); // pop() donnera le prochain composant
+        remaining.reverse(); // pop() will yield next component
         Ok(ResolveContext {
             current_oid: root,
             remaining,
@@ -85,7 +85,7 @@ impl ResolveContext {
         })
     }
 
-    /// `true` si tous les composants ont été consommés.
+    /// `true` if all components have been consumed.
     #[inline]
     pub fn is_done(&self) -> bool {
         self.remaining.is_empty()
@@ -96,21 +96,21 @@ impl ResolveContext {
 // ResolveFlags
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Options de résolution.
+/// Resolution options.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ResolveFlags {
-    /// Ne pas suivre le symlink terminal.
+    /// Do not follow terminal symlink.
     pub no_follow_last: bool,
-    /// Ne pas traverser les points de montage.
+    /// Do not cross mount points.
     pub no_cross_mount: bool,
-    /// Utiliser le cache.
+    /// Use cache.
     pub use_cache: bool,
-    /// Mettre en cache le résultat.
+    /// Cache the result.
     pub cache_result: bool,
 }
 
 impl ResolveFlags {
-    /// Drapeaux par défaut (cache activé).
+    /// Default flags (cache enabled).
     pub const fn default_flags() -> Self {
         ResolveFlags {
             no_follow_last: false,
@@ -120,7 +120,7 @@ impl ResolveFlags {
         }
     }
 
-    /// Résolution sans suivi de symlink final (pour `lstat`).
+    /// Resolution without following final symlink (for `lstat`).
     pub const fn lstat_flags() -> Self {
         ResolveFlags {
             no_follow_last: true,
@@ -135,36 +135,36 @@ impl ResolveFlags {
 // ResolveResult
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat enrichi d'une résolution.
+/// Enriched resolution result.
 #[derive(Debug)]
 pub struct ResolveResult {
-    /// OID de l'objet résolu.
+    /// OID of resolved object.
     pub oid: ObjectId,
-    /// `true` si l'objet terminal est un symlink (en mode `no_follow_last`).
+    /// `true` if terminal object is a symlink (in `no_follow_last` mode).
     pub is_symlink: bool,
-    /// Nombre de symlinks suivis.
+    /// Number of symlinks traversed.
     pub symlink_hops: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// resolve_path — point d'entrée principal
+// resolve_path — main entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résout `path` depuis la racine du `resolver`.
+/// Resolves `path` from the root of `resolver`.
 ///
-/// Cette fonction est l'implémentation de référence :
-///   1. Canonicalise le chemin.
-///   2. Consulte le cache (si activé).
-///   3. Descend composant par composant (RECUR-01).
-///   4. Traverse les symlinks (itératif).
-///   5. Traverse les points de montage.
-///   6. Met en cache le résultat final (si activé).
+/// This function is the reference implementation:
+///   1. Canonicalizes path.
+///   2. Consults cache (if enabled).
+///   3. Descends component by component (RECUR-01).
+///   4. Traverses symlinks (iterative).
+///   5. Traverses mount points.
+///   6. Caches final result (if enabled).
 pub fn resolve_path<R: PathResolver>(path: &[u8], resolver: &R) -> ExofsResult<ObjectId> {
     let result = resolve_path_full(path, resolver, ResolveFlags::default_flags())?;
     Ok(result.oid)
 }
 
-/// Résout avec retour enrichi et drapeaux explicites.
+/// Resolves with enriched result and explicit flags.
 pub fn resolve_path_full<R: PathResolver>(
     path: &[u8],
     resolver: &R,
@@ -174,10 +174,10 @@ pub fn resolve_path_full<R: PathResolver>(
         return Err(ExofsError::PathTooLong);
     }
 
-    // 1. Canonicalisation
+    // 1. Canonicalization
     let canonical = canonicalize_to_vec(path)?;
 
-    // 2. Lookup cache
+    // 2. Cache lookup
     if flags.use_cache {
         if let CacheLookup::Hit(oid) = cached_lookup(&canonical) {
             return Ok(ResolveResult {
@@ -188,11 +188,11 @@ pub fn resolve_path_full<R: PathResolver>(
         }
     }
 
-    // 3. Préparer le contexte
+    // 3. Prepare context
     let root = resolver.root_oid();
     let mut ctx = ResolveContext::new(root, canonical.clone(), flags)?;
 
-    // 4. Descente itérative (RECUR-01 — zéro récursion)
+    // 4. Iterative descent (RECUR-01 — zero recursion)
     let mut iters: usize = 0;
     let max_iters: usize = 8192;
 
@@ -203,7 +203,7 @@ pub fn resolve_path_full<R: PathResolver>(
         iters = iters.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
 
         if ctx.is_done() {
-            // 5. Points de montage
+            // 5. Mount points
             if !flags.no_cross_mount {
                 if let Some(mounted) = MOUNT_TABLE.lookup_mount(&ctx.current_oid) {
                     ctx.current_oid = mounted;
@@ -215,14 +215,14 @@ pub fn resolve_path_full<R: PathResolver>(
         let comp = ctx.remaining.pop().ok_or(ExofsError::InternalError)?;
         let is_last = ctx.remaining.is_empty();
 
-        // Lookup dans le répertoire courant
+        // Lookup in current directory
         let found = resolver.lookup_in_dir(&ctx.current_oid, &comp)?;
         let (oid, is_symlink) = match found {
             None => return Err(ExofsError::ObjectNotFound),
             Some(entry) => entry,
         };
 
-        // Traversée du point de montage
+        // Mount point traversal
         let effective_oid = if !flags.no_cross_mount {
             MOUNT_TABLE
                 .lookup_mount(&oid)
@@ -232,7 +232,7 @@ pub fn resolve_path_full<R: PathResolver>(
         };
 
         if is_symlink && !(is_last && flags.no_follow_last) {
-            // Résolution du symlink
+            // Symlink resolution
             let new_depth = ctx
                 .symlink_depth
                 .checked_add(1)
@@ -242,7 +242,7 @@ pub fn resolve_path_full<R: PathResolver>(
             }
             ctx.symlink_depth = new_depth;
 
-            // Chercher d'abord dans le store local
+            // Check local store first
             let raw_target = if let Some(t) = SYMLINK_STORE.lookup(&oid) {
                 t
             } else {
@@ -253,7 +253,7 @@ pub fn resolve_path_full<R: PathResolver>(
                 return Err(ExofsError::PathTooLong);
             }
 
-            // Préparer une nouvelle séquence de composants depuis la cible
+            // Prepare new component sequence from target
             let target_canonical = canonicalize_to_vec(&raw_target)?;
             let new_root = if raw_target.first() == Some(&b'/') {
                 resolver.root_oid()
@@ -261,7 +261,7 @@ pub fn resolve_path_full<R: PathResolver>(
                 ctx.current_oid.clone()
             };
 
-            // Reconstruire la file de composants (remaining) depuis la cible
+            // Rebuild remaining component queue from target
             let mut new_remaining: Vec<PathComponent> = Vec::new();
             let mut parser = PathParser::new(&target_canonical)?;
             while let Some(c) = parser.next_component()? {
@@ -277,8 +277,8 @@ pub fn resolve_path_full<R: PathResolver>(
                     .map_err(|_| ExofsError::NoMemory)?;
                 new_remaining.push(c);
             }
-            // Ajouter les composants restants du chemin original
-            // (ils sont déjà en ordre LIFO dans ctx.remaining)
+            // Add remaining components of original path
+            // (already in LIFO order in ctx.remaining)
             while let Some(old_comp) = ctx.remaining.pop() {
                 new_remaining
                     .try_reserve(1)
@@ -297,7 +297,7 @@ pub fn resolve_path_full<R: PathResolver>(
 
     let result_oid = ctx.current_oid.clone();
 
-    // 6. Mise en cache
+    // 6. Cache insertion
     if flags.cache_result {
         PATH_CACHE.insert_path(&canonical, result_oid.clone());
     }
@@ -313,17 +313,17 @@ pub fn resolve_path_full<R: PathResolver>(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résout le chemin sans suivre le symlink terminal (`lstat` semantics).
+/// Resolves path without following terminal symlink (`lstat` semantics).
 pub fn resolve_no_follow<R: PathResolver>(path: &[u8], resolver: &R) -> ExofsResult<ResolveResult> {
     resolve_path_full(path, resolver, ResolveFlags::lstat_flags())
 }
 
-/// Résout un chemin et vérifie qu'il existe.
+/// Resolves a path and verifies whether it exists.
 pub fn path_exists<R: PathResolver>(path: &[u8], resolver: &R) -> bool {
     resolve_path(path, resolver).is_ok()
 }
 
-/// Résout le répertoire parent.
+/// Resolves parent directory.
 pub fn resolve_parent<R: PathResolver>(path: &[u8], resolver: &R) -> ExofsResult<ObjectId> {
     let canonical = canonicalize_to_vec(path)?;
     let slash = canonical.iter().rposition(|&b| b == b'/');
@@ -399,7 +399,7 @@ mod tests {
     fn test_resolve_no_follow() {
         let r = MockResolver;
         let res = resolve_no_follow(b"/lnk", &r).test_unwrap();
-        // Avec no_follow_last, on doit rester sur le symlink lui-même
+        // With no_follow_last, we must stay on the symlink itself
         assert_eq!(res.oid.0[0], 20);
     }
 

@@ -51,5 +51,5 @@ codegen-units = 1
 panic = "abort"
 
 [profile.dev]
-opt-level = 0
+opt-level = 2
 debug = true

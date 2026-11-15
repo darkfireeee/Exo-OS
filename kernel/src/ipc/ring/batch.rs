@@ -72,26 +72,46 @@ impl BatchBuffer {
     }
 
     /// Adds a message to the batch. Returns `true` if the batch should be flushed now.
-    pub fn add(&mut self, src: &[u8], flags: MsgFlags, current_tick: u64) -> bool {
-        // Payload limit per message in a batch.
-        let len = src.len().min(512);
+    /// Returns true when the batch buffer is at capacity.
+    #[inline(always)]
+    pub fn is_full(&self) -> bool {
+        self.count >= MAX_BATCH_SIZE
+    }
+
+    /// Attempts to add a message to the batch without silent truncation or drop.
+    pub fn try_add(
+        &mut self,
+        src: &[u8],
+        flags: MsgFlags,
+        current_tick: u64,
+    ) -> Result<bool, IpcError> {
+        if src.len() > 512 {
+            return Err(IpcError::MessageTooLarge);
+        }
+        if self.count >= MAX_BATCH_SIZE {
+            return Err(IpcError::QueueFull);
+        }
         if self.count == 0 {
-            // First message of new batch — define expiration.
             self.expire_tick.store(
                 current_tick + crate::ipc::core::constants::FUSION_MAX_DELAY_TICKS,
                 Ordering::Relaxed,
             );
         }
-        let idx = self.count;
-        if idx < MAX_BATCH_SIZE {
-            let entry = &mut self.entries[idx];
-            entry.flags = flags;
-            entry.len = len as u16;
-            entry.data[..len].copy_from_slice(&src[..len]);
-            self.count += 1;
+        let len = src.len();
+        let entry = &mut self.entries[self.count];
+        entry.flags = flags;
+        entry.len = len as u16;
+        entry.data[..len].copy_from_slice(src);
+        self.count += 1;
+        Ok(self.count >= FUSION_BATCH_THRESHOLD || self.count >= MAX_BATCH_SIZE)
+    }
+
+    /// Adds a message to the batch. Returns `true` if a flush is required.
+    pub fn add(&mut self, src: &[u8], flags: MsgFlags, current_tick: u64) -> bool {
+        match self.try_add(src, flags, current_tick) {
+            Ok(should_flush) => should_flush,
+            Err(_) => true,
         }
-        // Flush if: batch full OR threshold reached.
-        self.count >= FUSION_BATCH_THRESHOLD || self.count >= MAX_BATCH_SIZE
     }
 
     /// Checks if batch has expired (current tick > expire_tick).

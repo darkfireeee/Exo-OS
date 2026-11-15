@@ -1,14 +1,14 @@
-//! latency_histogram.rs — Histogramme de latences ExoFS (no_std).
+//! latency_histogram.rs — ExoFS Latency Histogram (no_std).
 //!
-//! Fournit :
-//!  - `LatencyBucket`    : borne supérieure de bucket en µs.
-//!  - `LatencyHistogram` : histogramme 16 buckets log2, atomique.
-//!  - `LatencySummary`   : résumé (min, max, mean, p50, p90, p99).
-//!  - `LatencyTracker`   : wrapper avec catégorie d'opération.
-//!  - `LATENCY_HIST`     : singleton global.
+//! Provides :
+//!  - `LatencyBucket`    : upper bucket bound in µs.
+//!  - `LatencyHistogram` : 16-bucket log2 atomic histogram.
+//!  - `LatencySummary`   : summary (min, max, mean, p50, p90, p99).
+//!  - `LatencyTracker`   : wrapper with operation category.
+//!  - `LATENCY_HIST`     : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -16,14 +16,14 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ─── Bornes des buckets ───────────────────────────────────────────────────────
+// ─── Bucket Bounds ───────────────────────────────────────────────────────
 //
-// Buckets log2 en µs : [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024,
+// Log2 buckets in µs : [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024,
 //                        4096, 16384, 65536, +inf]
 
 pub const NUM_BUCKETS: usize = 16;
 
-/// Bornes supérieures des buckets en µs (dernier = u64::MAX = overflow).
+/// Upper bounds of buckets in µs (last = u64::MAX = overflow).
 pub const BUCKET_UPPER_US: [u64; NUM_BUCKETS] = [
     1,
     2,
@@ -43,7 +43,7 @@ pub const BUCKET_UPPER_US: [u64; NUM_BUCKETS] = [
     u64::MAX,
 ];
 
-/// Retourne l'index du bucket pour une latence en µs.
+/// Returns bucket index for a latency in µs.
 pub fn bucket_index(us: u64) -> usize {
     let mut i = 0usize;
     while i < NUM_BUCKETS.saturating_sub(1) {
@@ -57,7 +57,7 @@ pub fn bucket_index(us: u64) -> usize {
 
 // ─── LatencyHistogram ────────────────────────────────────────────────────────
 
-/// Histogramme de latences atomique.
+/// Atomic latency histogram.
 pub struct LatencyHistogram {
     buckets: [AtomicU64; NUM_BUCKETS],
     count: AtomicU64,
@@ -66,7 +66,7 @@ pub struct LatencyHistogram {
     max_us: AtomicU64,
 }
 
-// SAFETY : AtomicU64 est Sync+Send.
+// SAFETY : AtomicU64 is Sync+Send.
 unsafe impl Sync for LatencyHistogram {}
 unsafe impl Send for LatencyHistogram {}
 
@@ -83,7 +83,7 @@ impl LatencyHistogram {
         }
     }
 
-    /// Enregistre une latence en µs.
+    /// Records a latency in µs.
     pub fn record(&self, us: u64) {
         let idx = bucket_index(us);
         self.buckets[idx].fetch_add(1, Ordering::Relaxed);
@@ -135,7 +135,7 @@ impl LatencyHistogram {
         self.max_us.load(Ordering::Relaxed)
     }
 
-    /// Moyenne en µs (ARITH-02).
+    /// Mean in µs (ARITH-02).
     pub fn mean_us(&self) -> u64 {
         let c = self.count.load(Ordering::Relaxed);
         self.sum_us
@@ -144,7 +144,7 @@ impl LatencyHistogram {
             .unwrap_or(0)
     }
 
-    /// Copie atomique des compteurs de buckets.
+    /// Atomic snapshot of bucket counters.
     pub fn bucket_snapshot(&self) -> [u64; NUM_BUCKETS] {
         let mut snap = [0u64; NUM_BUCKETS];
         let mut i = 0usize;
@@ -155,7 +155,7 @@ impl LatencyHistogram {
         snap
     }
 
-    /// Estime un percentile (0–100) depuis les buckets (RECUR-01 : while).
+    /// Estimates a percentile (0–100) from buckets (RECUR-01: while).
     pub fn percentile_us(&self, pct: u8) -> u64 {
         let total = self.count();
         if total == 0 {
@@ -178,7 +178,7 @@ impl LatencyHistogram {
         BUCKET_UPPER_US[NUM_BUCKETS.saturating_sub(1)]
     }
 
-    /// Résumé complet.
+    /// Complete summary.
     pub fn summary(&self) -> LatencySummary {
         LatencySummary {
             count: self.count(),
@@ -193,7 +193,7 @@ impl LatencyHistogram {
         }
     }
 
-    /// Remet le compteur à zéro.
+    /// Resets counters to zero.
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < NUM_BUCKETS {
@@ -211,7 +211,7 @@ pub static LATENCY_HIST: LatencyHistogram = LatencyHistogram::new_const();
 
 // ─── LatencySummary ──────────────────────────────────────────────────────────
 
-/// Résumé complet d'un histogramme.
+/// Complete summary of a histogram.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LatencySummary {
     pub count: u64,
@@ -226,7 +226,7 @@ pub struct LatencySummary {
 }
 
 impl LatencySummary {
-    /// Retourne l'index du bucket le plus chargé (RECUR-01 : while).
+    /// Returns the index of the most loaded bucket (RECUR-01: while).
     pub fn peak_bucket(&self) -> usize {
         let mut max_val = 0u64;
         let mut max_idx = 0usize;
@@ -241,7 +241,7 @@ impl LatencySummary {
         max_idx
     }
 
-    /// True si la latence p99 est sous le seuil donné.
+    /// True if p99 latency is below the given threshold.
     pub fn p99_ok(&self, threshold_us: u64) -> bool {
         self.p99_us <= threshold_us
     }
@@ -249,7 +249,7 @@ impl LatencySummary {
 
 // ─── LatencyTracker ──────────────────────────────────────────────────────────
 
-/// Wrapper multi-catégorie (read/write/flush/other).
+/// Multi-category wrapper (read/write/flush/other).
 pub struct LatencyTracker {
     read: LatencyHistogram,
     write: LatencyHistogram,
@@ -300,7 +300,7 @@ impl LatencyTracker {
         self.other.reset();
     }
 
-    /// Retourne true si toutes les catégories ont p99 ≤ seuil.
+    /// Returns true if all categories have p99 <= threshold.
     pub fn all_p99_ok(&self, threshold_us: u64) -> bool {
         self.read.percentile_us(99) <= threshold_us
             && self.write.percentile_us(99) <= threshold_us
@@ -311,7 +311,7 @@ impl LatencyTracker {
 pub static LATENCY_TRACKER: LatencyTracker = LatencyTracker::new_const();
 
 // ─── LatencyWindow ────────────────────────────────────────────────────────────
-// Ring de mesures récentes pour calcul de tendance.
+// Ring of recent measurements for trend calculation.
 
 pub const LATENCY_WINDOW_SIZE: usize = 32;
 
@@ -343,7 +343,7 @@ impl LatencyWindow {
         }
     }
 
-    /// Moyenne glissante (ARITH-02 / RECUR-01).
+    /// Rolling mean (ARITH-02 / RECUR-01).
     pub fn rolling_mean_us(&self) -> u64 {
         let n = self.count.load(Ordering::Relaxed);
         if n == 0 {
@@ -358,7 +358,7 @@ impl LatencyWindow {
         sum.checked_div(n).unwrap_or(0)
     }
 
-    /// Copie les échantillons occupés dans un Vec (OOM-02).
+    /// Copies occupied samples into a Vec (OOM-02).
     pub fn to_vec(&self) -> ExofsResult<Vec<u64>> {
         let n = self.count.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_percentile_p50() {
         let h = LatencyHistogram::new_const();
-        // 4 mesures dans le bucket 0 (<=1µs) et 4 dans bucket 4 (<=16µs)
+        // 4 measurements in bucket 0 (<=1µs) and 4 in bucket 4 (<=16µs)
         let mut i = 0usize;
         while i < 4 {
             h.record(1);

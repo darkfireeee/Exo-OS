@@ -33,6 +33,8 @@ struct RegistrySlot {
     pcb_ptr: AtomicPtr<ProcessControlBlock>,
     /// Active reference count on this PCB.
     refcount: AtomicU32,
+    /// Temporary active reader pins (never overwritten by insert()).
+    readers: AtomicU32,
 }
 
 impl RegistrySlot {
@@ -40,6 +42,7 @@ impl RegistrySlot {
         Self {
             pcb_ptr: AtomicPtr::new(core::ptr::null_mut()),
             refcount: AtomicU32::new(0),
+            readers: AtomicU32::new(0),
         }
     }
 }
@@ -181,14 +184,49 @@ impl ProcessRegistry {
         let slot = unsafe { &*self.slots.add(slot_idx) };
 
         let _guard = self.write_lock.lock();
-        let raw = slot.pcb_ptr.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        let raw = slot.pcb_ptr.swap(core::ptr::null_mut(), Ordering::SeqCst);
         if raw.is_null() {
             return Err(RegistryError::NotFound);
+        }
+        // Wait for any temporary pinned reader (e.g. remote memory syscall)
+        // that loaded `raw` before the swap to drop its guard before freeing PCB.
+        while slot.readers.load(Ordering::Acquire) != 0 {
+            core::hint::spin_loop();
         }
         self.count.fetch_sub(1, Ordering::Relaxed);
         self.removes.fetch_add(1, Ordering::Relaxed);
         // SAFETY: raw was placed in the table via Box::into_raw in insert().
         Ok(unsafe { Box::from_raw(raw) })
+    }
+
+    /// Temporarily pins `pid`'s registry slot so the PCB cannot be freed
+    /// while `f` inspects it.
+    pub fn with_pinned_pid<F, R>(&self, pid: Pid, f: F) -> Option<R>
+    where
+        F: FnOnce(&ProcessControlBlock) -> R,
+    {
+        self.lookups.fetch_add(1, Ordering::Relaxed);
+        let idx = pid.0 as usize;
+        if idx == 0 || idx > self.capacity {
+            return None;
+        }
+        let slot_idx = idx - 1;
+        // SAFETY: slot_idx < capacity.
+        let slot = unsafe { &*self.slots.add(slot_idx) };
+        slot.readers.fetch_add(1, Ordering::SeqCst);
+        struct ReaderGuard<'a>(&'a RegistrySlot);
+        impl Drop for ReaderGuard<'_> {
+            fn drop(&mut self) {
+                self.0.readers.fetch_sub(1, Ordering::Release);
+            }
+        }
+        let _pin = ReaderGuard(slot);
+        let raw = slot.pcb_ptr.load(Ordering::Acquire);
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: non-null raw = PCB still in table and pinned via `slot.readers`.
+        Some(f(unsafe { &*raw }))
     }
 
     /// Lockless lookup of a PCB by PID.
@@ -250,7 +288,10 @@ impl ProcessRegistry {
         let pcb = self.find_by_pid(pid)?;
         // SAFETY: SpinLock<Credentials> — short lock (few instructions),
         // no allocation or system call inside.
-        Some(f(&mut *pcb.creds.lock()))
+        let mut creds = pcb.creds.lock();
+        let out = f(&mut creds);
+        pcb.euid_atomic.store(creds.euid, Ordering::Release);
+        Some(out)
     }
 
     /// Registry statistics for monitoring system.

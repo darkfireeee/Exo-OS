@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Rapports et exports de quota
+// ExoFS Quota — Quota reports and exports
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::quota_audit::{audit_tick, AuditSummary, QUOTA_AUDIT};
@@ -8,13 +8,13 @@ use super::quota_tracker::{QuotaKey, QuotaUsage, QUOTA_TRACKER};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
-// ─── Seuils de sévérité (‰) ──────────────────────────────────────────────────
+// ─── Severity thresholds (‰) ────────────────────────────────────────────────
 
-/// Seuil warning (75 %).
+/// Warning threshold (75%).
 pub const SEVERITY_WARNING_PPT: u64 = 750;
-/// Seuil critical (90 %).
+/// Critical threshold (90%).
 pub const SEVERITY_CRITICAL_PPT: u64 = 900;
-/// Seuil emergency (100 %).
+/// Emergency threshold (100%).
 pub const SEVERITY_EMERGENCY_PPT: u64 = 1000;
 
 // ─── ReportDimension ─────────────────────────────────────────────────────────
@@ -38,17 +38,17 @@ impl ReportDimension {
 
 // ─── QuotaReportEntry ─────────────────────────────────────────────────────────
 
-/// Entrée de rapport pour une clé de quota.
+/// Report entry for a quota key.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaReportEntry {
     pub key: QuotaKey,
     pub usage: QuotaUsage,
     pub limits: QuotaLimits,
-    /// Usage bytes en ‰.
+    /// Byte usage in ‰.
     pub bytes_ppt: u64,
-    /// Usage blobs en ‰.
+    /// Blob usage in ‰.
     pub blobs_ppt: u64,
-    /// Usage inodes en ‰.
+    /// Inode usage in ‰.
     pub inodes_ppt: u64,
     pub soft_breach_bytes: bool,
     pub soft_breach_blobs: bool,
@@ -62,14 +62,14 @@ pub struct QuotaReportEntry {
 }
 
 impl QuotaReportEntry {
-    /// Calcule une entrée à partir des données de tracking.
+    /// Computes an entry from tracking data.
     pub fn compute(
         key: QuotaKey,
         usage: QuotaUsage,
         limits: QuotaLimits,
         breach_tick: u64,
     ) -> Self {
-        // ARITH-02 : saturating_mul + checked_div
+        // ARITH-02: saturating_mul + checked_div
         let bytes_ppt = if limits.hard_bytes == 0 || limits.hard_bytes == u64::MAX {
             0
         } else {
@@ -144,15 +144,15 @@ impl QuotaReportEntry {
         }
     }
 
-    /// Vrai si au moins une dimension est dans un état critique ou pire.
+    /// True if at least one dimension is in a critical state or worse.
     pub fn is_at_risk(&self) -> bool {
         self.severity >= 2
     }
-    /// Vrai si l'entité a dépassé une limite hard.
+    /// True if the entity exceeded a hard limit.
     pub fn has_hard_exceed(&self) -> bool {
         self.hard_exceed_bytes || self.hard_exceed_blobs || self.hard_exceed_inodes
     }
-    /// Dimension la plus chargée.
+    /// Most heavily loaded dimension.
     pub fn highest_dimension(&self) -> ReportDimension {
         if self.bytes_ppt >= self.blobs_ppt && self.bytes_ppt >= self.inodes_ppt {
             ReportDimension::Bytes
@@ -162,7 +162,7 @@ impl QuotaReportEntry {
             ReportDimension::Inodes
         }
     }
-    /// Poids total (ARITH-02).
+    /// Total weight (ARITH-02).
     pub fn total_weight(&self) -> u64 {
         self.bytes_ppt
             .saturating_add(self.blobs_ppt)
@@ -172,7 +172,7 @@ impl QuotaReportEntry {
 
 // ─── QuotaReport ──────────────────────────────────────────────────────────────
 
-/// Rapport complet de quota pour toutes les entités.
+/// Full quota report for all entities.
 pub struct QuotaReport {
     pub entries: Vec<QuotaReportEntry>,
     pub total_bytes_used: u64,
@@ -185,12 +185,12 @@ pub struct QuotaReport {
 }
 
 impl QuotaReport {
-    /// Génère un rapport à partir du tracker actuel (OOM-02, RECUR-01).
+    /// Generates a report from the current tracker (OOM-02, RECUR-01).
     pub fn from_tracker() -> ExofsResult<Self> {
         let tick = audit_tick();
         let audit_summary = QUOTA_AUDIT.summary();
 
-        // Snapshot des entrées (OOM-02)
+        // Snapshot entries (OOM-02)
         let all = QUOTA_TRACKER.snapshot_all()?;
         let n = all.len();
         let mut entries = Vec::new();
@@ -202,7 +202,7 @@ impl QuotaReport {
         let mut breach_count: usize = 0;
         let mut exceed_count: usize = 0;
 
-        // RECUR-01 : while sur l'indice
+        // RECUR-01: while loop on index
         let mut i = 0usize;
         while i < n {
             let se = &all[i];
@@ -233,7 +233,7 @@ impl QuotaReport {
         })
     }
 
-    /// Filtre les entrées à risque (severity ≥ 2).
+    /// Filters at-risk entries (severity >= 2).
     pub fn at_risk(&self) -> Vec<&QuotaReportEntry> {
         let mut v = Vec::new();
         let mut i = 0usize;
@@ -246,7 +246,7 @@ impl QuotaReport {
         v
     }
 
-    /// Filtre les entrées en limite hard dépassée.
+    /// Filters entries exceeding hard limits.
     pub fn exceeded(&self) -> Vec<&QuotaReportEntry> {
         let mut v = Vec::new();
         let mut i = 0usize;
@@ -259,7 +259,7 @@ impl QuotaReport {
         v
     }
 
-    /// Top-N consommateurs (bytes_ppt décroissant, RECUR-01 : while).
+    /// Top-N consumers (descending bytes_ppt, RECUR-01: while).
     pub fn top_consumers(&self, top_n: usize) -> Vec<&QuotaReportEntry> {
         let mut indices: Vec<usize> = Vec::new();
         if indices.try_reserve(self.entries.len()).is_err() {
@@ -270,7 +270,7 @@ impl QuotaReport {
             indices.push(i);
             i = i.wrapping_add(1);
         }
-        // Tri par insertion (RECUR-01 : pas de tri récursif)
+        // Insertion sort (RECUR-01: no recursive sorting)
         let mut j = 1usize;
         while j < indices.len() {
             let key_j = self.entries[indices[j]].total_weight();
@@ -291,7 +291,7 @@ impl QuotaReport {
         result
     }
 
-    /// Poids total de toutes les entités (ARITH-02).
+    /// Total weight of all entities (ARITH-02).
     pub fn global_weight(&self) -> u64 {
         let mut sum = 0u64;
         let mut i = 0usize;
@@ -313,7 +313,7 @@ impl QuotaReport {
 
 // ─── QuotaReporter ────────────────────────────────────────────────────────────
 
-/// Façade pour générer des rapports quota.
+/// Facade to generate quota reports.
 pub struct QuotaReporter;
 
 impl QuotaReporter {
@@ -321,12 +321,12 @@ impl QuotaReporter {
         Self
     }
 
-    /// Rapport complet.
+    /// Full report.
     pub fn full_report(&self) -> ExofsResult<QuotaReport> {
         QuotaReport::from_tracker()
     }
 
-    /// Liste des entités à risque uniquement.
+    /// List of at-risk entities only.
     pub fn at_risk_report(&self) -> ExofsResult<Vec<QuotaReportEntry>> {
         let report = QuotaReport::from_tracker()?;
         let risk = report.at_risk();
@@ -341,7 +341,7 @@ impl QuotaReporter {
         Ok(v)
     }
 
-    /// Ligne de résumé ASCII (max 64 octets).
+    /// ASCII summary line (max 64 bytes).
     pub fn summary_line(&self) -> ExofsResult<[u8; 64]> {
         let r = QuotaReport::from_tracker()?;
         let mut buf = [b' '; 64];
@@ -362,7 +362,7 @@ impl QuotaReporter {
         Ok(buf)
     }
 
-    /// Retourne les violations actives (hard_exceed).
+    /// Returns active violations (hard_exceed).
     pub fn active_violations(&self) -> ExofsResult<Vec<QuotaReportEntry>> {
         let report = QuotaReport::from_tracker()?;
         let exc = report.exceeded();
@@ -377,7 +377,7 @@ impl QuotaReporter {
         Ok(v)
     }
 
-    /// Ratio global d'utilisation bytes en ‰.
+    /// Global byte usage ratio in ‰.
     pub fn global_bytes_ppt(&self) -> ExofsResult<u64> {
         let report = QuotaReport::from_tracker()?;
         if report.entry_count() == 0 {
@@ -393,7 +393,7 @@ impl QuotaReporter {
     }
 }
 
-/// Instance globale du reporter.
+/// Global reporter instance.
 pub static QUOTA_REPORTER: QuotaReporter = QuotaReporter::new();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -484,7 +484,7 @@ mod tests {
     fn test_report_is_clean() {
         let _ = setup(200, 100_000, 50_000, 100);
         let r = QuotaReport::from_tracker().test_unwrap();
-        // Peut contenir d'autres entrées de tests précédents, on vérifie juste que ça compile
+        // May contain other entries from previous tests, just verifying that it compiles
         let _ = r.is_clean();
     }
 
@@ -493,7 +493,7 @@ mod tests {
         let _ = setup(201, 1_000, 500, 950);
         let r = QuotaReport::from_tracker().test_unwrap();
         let at_risk = r.at_risk();
-        // Au moins une entrée at-risk (la nôtre)
+        // At least one at-risk entry (ours)
         assert!(!at_risk.is_empty());
     }
 

@@ -1,4 +1,4 @@
-//! Tests unitaires — BlobId Blake3 (spec 2.1).
+//! Unit tests — BlobId Blake3 (spec 2.1).
 #[cfg(test)]
 mod tests {
     use crate::fs::exofs::core::BlobId;

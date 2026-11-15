@@ -142,7 +142,7 @@ pub fn shm_page_ref(page_idx: usize) -> Option<&'static ShmPage> {
 /// Returns physical address of page `page_idx`.
 pub fn shm_page_phys(page_idx: usize) -> Option<PhysAddr> {
     if page_idx < SHM_POOL_PAGES {
-        Some(POOL_PAGES[page_idx].phys_addr)
+        Some(POOL_PAGES[page_idx].phys())
     } else {
         None
     }
@@ -245,6 +245,89 @@ pub fn shm_alloc_contiguous(count: usize) -> Option<usize> {
         return Some(start);
     }
     None
+}
+
+fn word_range_mask(
+    word_idx: usize,
+    first_word: usize,
+    last_word: usize,
+    start: usize,
+    clamped_end: usize,
+) -> u64 {
+    let bit_lo = if word_idx == first_word { start % 64 } else { 0 };
+    let bit_hi = if word_idx == last_word {
+        (clamped_end - 1) % 64
+    } else {
+        63
+    };
+    let hi_mask = if bit_hi == 63 {
+        u64::MAX
+    } else {
+        (1u64 << (bit_hi + 1)) - 1
+    };
+    hi_mask & !((1u64 << bit_lo) - 1)
+}
+
+/// Allocates an SHM page whose index lies in `[start, end)`.
+pub fn shm_page_alloc_range(start: usize, end: usize) -> Option<usize> {
+    let clamped_end = end.min(SHM_POOL_PAGES);
+    if start >= clamped_end {
+        return None;
+    }
+    let first_word = start / 64;
+    let last_word = (clamped_end - 1) / 64;
+
+    for word_idx in first_word..=last_word {
+        let range_mask = word_range_mask(word_idx, first_word, last_word, start, clamped_end);
+        let word = &POOL_BITMAP[word_idx];
+        loop {
+            let full = word.load(Ordering::Acquire);
+            let avail = full & range_mask;
+            if avail == 0 {
+                break;
+            }
+            let bit = avail.trailing_zeros() as usize;
+            let mask = 1u64 << bit;
+            match word.compare_exchange_weak(
+                full,
+                full & !mask,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    let page_idx = word_idx * 64 + bit;
+                    if page_idx >= start && page_idx < clamped_end {
+                        POOL_PAGES[page_idx].ref_acquire();
+                        POOL_FREE_COUNT.fetch_sub(1, Ordering::Relaxed);
+                        return Some(page_idx);
+                    }
+                    word.fetch_or(mask, Ordering::Release);
+                    return None;
+                }
+                Err(_) => {
+                    core::hint::spin_loop();
+                    continue;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns the number of free SHM pages in `[start, end)`.
+pub fn shm_page_free_count_range(start: usize, end: usize) -> usize {
+    let clamped_end = end.min(SHM_POOL_PAGES);
+    if start >= clamped_end {
+        return 0;
+    }
+    let first_word = start / 64;
+    let last_word = (clamped_end - 1) / 64;
+    let mut count = 0usize;
+    for word_idx in first_word..=last_word {
+        let range_mask = word_range_mask(word_idx, first_word, last_word, start, clamped_end);
+        count += (POOL_BITMAP[word_idx].load(Ordering::Acquire) & range_mask).count_ones() as usize;
+    }
+    count
 }
 
 /// Releases a range of `count` contiguous pages starting at `start`.

@@ -88,6 +88,10 @@ pub fn bench_ipc(args: &[u8]) {
 
     let mut i = 0u64;
     while i < n {
+        if (i & 0x3F) == 0 && crate::terminal::check_ctrl_c_poll() {
+            write_all(b"^C (interrupted)\n");
+            return;
+        }
         let send_rc = unsafe {
             syscall::syscall6(
                 syscall::SYS_IPC_SEND,
@@ -158,6 +162,10 @@ pub fn bench_sched(args: &[u8]) {
 
     let mut i = 0u64;
     while i < n {
+        if (i & 0xFF) == 0 && crate::terminal::check_ctrl_c_poll() {
+            write_all(b"^C (interrupted)\n");
+            return;
+        }
         unsafe {
             syscall::syscall0(syscall::SYS_SCHED_YIELD);
         }
@@ -250,6 +258,10 @@ pub fn bench_crypto(args: &[u8]) {
 
     let mut i = 0u64;
     while i < n {
+        if (i & 0x3F) == 0 && crate::terminal::check_ctrl_c_poll() {
+            write_all(b"^C (interrupted)\n");
+            return;
+        }
         let send_rc = unsafe {
             syscall::syscall6(
                 syscall::SYS_IPC_SEND,
@@ -371,6 +383,12 @@ pub fn bench_fs(args: &[u8]) {
 
     let mut written_bytes = 0u64;
     while written_bytes < target_bytes {
+        if crate::terminal::check_ctrl_c_poll() {
+            let _ = close_fd(out_fd);
+            let _ = unsafe { syscall::syscall1(syscall::SYS_UNLINK, out_path.as_ptr() as u64) };
+            write_all(b"^C (interrupted)\n");
+            return;
+        }
         let this_write = (target_bytes - written_bytes).min(bench_chunk as u64) as usize;
         let rc = write_fd_all(out_fd, &buf[..this_write]);
         if rc < 0 {
@@ -422,6 +440,12 @@ pub fn bench_fs(args: &[u8]) {
 
         let mut read_this_open = 0u64;
         while total_read < target_bytes {
+            if crate::terminal::check_ctrl_c_poll() {
+                let _ = close_fd(in_fd);
+                let _ = unsafe { syscall::syscall1(syscall::SYS_UNLINK, out_path.as_ptr() as u64) };
+                write_all(b"^C (interrupted)\n");
+                return;
+            }
             let request = (target_bytes - total_read).min(bench_chunk as u64) as usize;
             let n_read = unsafe {
                 syscall::syscall3(

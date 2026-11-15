@@ -167,6 +167,11 @@ pub fn sys_exofs_object_delete(
         Err(e) => return e,
     };
 
+    // Zero-Trust MLS : vérification d'écriture avant suppression.
+    if let Err(errno) = super::validation::check_exofs_zt_access(false, true) {
+        return errno;
+    }
+
     // FIX-SEC-T0.4 : le faux `verify_cap` (bitmask auto-déclaré = théâtre) est retiré.
     // delete-par-chemin sera gaté par la **politique default-deny du TIER 1** (gater
     // ici sans la politique casserait `rm` POSIX, qui n'ouvre pas avant unlink).

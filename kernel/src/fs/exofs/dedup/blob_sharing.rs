@@ -1,12 +1,11 @@
-//! BlobSharing — suivi des chunks partagés entre plusieurs blobs (no_std).
+//! BlobSharing — tracking chunks shared across multiple blobs (no_std).
 //!
-//! Permet de savoir, pour chaque chunk (identifié par son blake3),
-//! la liste des blobs qui y font référence. Indispensable pour calculer
-//! les dépendances avant suppression d'un blob.
+//! Tracks, for each chunk (identified by its blake3), the list of blobs
+//! referencing it. Essential for computing dependencies before deleting a blob.
 //!
-//! RECUR-01 : aucune récursion.
-//! OOM-02   : try_reserve.
-//! ARITH-02 : saturating / checked / wrapping.
+//! RECUR-01: zero recursion.
+//! OOM-02  : try_reserve.
+//! ARITH-02: saturating / checked / wrapping.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -16,7 +15,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const SHARING_MAX_BLOBS_PER_CHUNK: usize = 4096;
@@ -26,7 +25,7 @@ pub const SHARING_MAX_ENTRIES: usize = 200_000;
 // SharedChunkRef
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensemble des blobs référençant un même chunk (identifié par blake3).
+/// Set of blobs referencing the same chunk (identified by blake3).
 #[derive(Clone, Debug)]
 pub struct SharedChunkRef {
     pub chunk_blake3: [u8; 32],
@@ -44,11 +43,11 @@ impl SharedChunkRef {
         })
     }
 
-    /// Ajoute un blob référençant ce chunk (pas de doublon).
+    /// Adds a blob referencing this chunk (no duplicates).
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn add_blob(&mut self, blob_id: BlobId) -> ExofsResult<()> {
-        // Éviter les doublons.
+        // Avoid duplicates.
         for existing in &self.blob_ids {
             if existing.as_bytes() == blob_id.as_bytes() {
                 return Ok(());
@@ -64,7 +63,7 @@ impl SharedChunkRef {
         Ok(())
     }
 
-    /// Retire un blob.
+    /// Removes a blob.
     pub fn remove_blob(&mut self, blob_id: &BlobId) {
         self.blob_ids.retain(|b| b.as_bytes() != blob_id.as_bytes());
     }
@@ -97,7 +96,7 @@ pub struct BlobSharingStats {
 // BlobSharing
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registre de partage chunk ↔ blobs, thread-safe.
+/// Chunk <-> blobs sharing registry, thread-safe.
 pub struct BlobSharing {
     refs: UnsafeCell<BTreeMap<[u8; 32], SharedChunkRef>>,
     lock: AtomicU64,
@@ -133,15 +132,15 @@ impl BlobSharing {
         self.lock.store(0, Ordering::Release);
     }
     fn map(&self) -> &mut BTreeMap<[u8; 32], SharedChunkRef> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         unsafe { &mut *self.refs.get() }
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Déclare qu'un blob utilise un chunk.
+    /// Declares that a blob uses a chunk.
     ///
-    /// OOM-02 : try_reserve dans SharedChunkRef.
+    /// OOM-02: try_reserve in SharedChunkRef.
     pub fn add_ref(&self, chunk_blake3: [u8; 32], blob_id: BlobId) -> ExofsResult<()> {
         self.acquire();
         let map = self.map();
@@ -169,8 +168,8 @@ impl BlobSharing {
         Ok(())
     }
 
-    /// Retire la référence d'un blob pour un chunk.
-    /// Supprime l'entrée si plus aucun blob ne référence le chunk.
+    /// Removes reference of a blob for a chunk.
+    /// Removes entry if no blob references the chunk anymore.
     pub fn remove_ref(&self, chunk_blake3: &[u8; 32], blob_id: &BlobId) -> bool {
         self.acquire();
         let map = self.map();
@@ -192,16 +191,16 @@ impl BlobSharing {
         removed
     }
 
-    /// Retire toutes les références d'un blob pour une liste de chunks.
+    /// Removes all references of a blob for a list of chunks.
     ///
-    /// RECUR-01 : boucle for.
+    /// RECUR-01: for loop.
     pub fn remove_blob_refs(&self, chunk_keys: &[[u8; 32]], blob_id: &BlobId) {
         for key in chunk_keys {
             self.remove_ref(key, blob_id);
         }
     }
 
-    /// Retourne les blobs partageant un chunk donné.
+    /// Returns blobs sharing a given chunk.
     pub fn blobs_for_chunk(&self, chunk_blake3: &[u8; 32]) -> Option<Vec<BlobId>> {
         self.acquire();
         let result = self.map().get(chunk_blake3).map(|e| e.blob_ids.clone());
@@ -209,7 +208,7 @@ impl BlobSharing {
         result
     }
 
-    /// Vérifie si un chunk est partagé entre plusieurs blobs.
+    /// Checks whether a chunk is shared across multiple blobs.
     pub fn is_shared(&self, chunk_blake3: &[u8; 32]) -> bool {
         self.acquire();
         let shared = self
@@ -221,9 +220,9 @@ impl BlobSharing {
         shared
     }
 
-    /// Retourne tous les chunks partagés (degree >= 2).
+    /// Returns all shared chunks (degree >= 2).
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn all_shared_chunks(&self) -> ExofsResult<Vec<[u8; 32]>> {
         self.acquire();
         let mut out: Vec<[u8; 32]> = Vec::new();
@@ -259,9 +258,9 @@ impl BlobSharing {
         self.removals.store(0, Ordering::Relaxed);
     }
 
-    /// Statistiques de partage.
+    /// Sharing statistics.
     ///
-    /// ARITH-02 : saturating_add.
+    /// ARITH-02: saturating_add.
     pub fn stats(&self) -> BlobSharingStats {
         self.acquire();
         let mut total = 0usize;
@@ -286,7 +285,7 @@ impl BlobSharing {
         }
     }
 
-    /// Vérifie l'intégrité (pas d'entrées vides).
+    /// Verifies integrity (no empty entries).
     pub fn verify_integrity(&self) -> ExofsResult<()> {
         self.acquire();
         let bad = self.map().values().any(|v| v.blob_ids.is_empty());
@@ -300,7 +299,7 @@ impl BlobSharing {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statique global
+// Global static
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static BLOB_SHARING: BlobSharing = BlobSharing::new_const();
@@ -379,7 +378,7 @@ mod tests {
         let bs = BlobSharing::new_const();
         bs.add_ref(chunk(8), blob(80)).test_unwrap();
         bs.add_ref(chunk(8), blob(81)).test_unwrap();
-        bs.add_ref(chunk(9), blob(90)).test_unwrap(); // non partagé
+        bs.add_ref(chunk(9), blob(90)).test_unwrap(); // not shared
         let shared = bs.all_shared_chunks().test_unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0], chunk(8));
@@ -394,27 +393,27 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BlobDependencyChecker — analyse des dépendances avant suppression
+// BlobDependencyChecker — dependency analysis before deletion
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de l'analyse de dépendances pour la suppression d'un blob.
+/// Result of dependency analysis for blob deletion.
 #[derive(Debug, Clone)]
 pub struct BlobDeletionAnalysis {
-    /// Chunks qui seraient orphelins après suppression de ce blob.
+    /// Chunks that would become orphaned after deleting this blob.
     pub chunks_to_delete: Vec<[u8; 32]>,
-    /// Chunks qui resteraient référencés par d'autres blobs.
+    /// Chunks that would remain referenced by other blobs.
     pub chunks_to_keep: Vec<[u8; 32]>,
-    /// Blobs qui partagent au moins un chunk avec le blob à supprimer.
+    /// Blobs sharing at least one chunk with the blob to delete.
     pub dependent_blobs: Vec<BlobId>,
 }
 
 impl BlobSharing {
-    /// Analyse les dépendances avant suppression d'un blob.
+    /// Analyzes dependencies before deleting a blob.
     ///
-    /// `chunk_keys` : liste des chunks du blob à supprimer.
+    /// `chunk_keys`: list of chunks of the blob to delete.
     ///
-    /// RECUR-01 : boucle for.
-    /// OOM-02   : try_reserve.
+    /// RECUR-01: for loop.
+    /// OOM-02  : try_reserve.
     pub fn analyze_deletion(
         &self,
         chunk_keys: &[[u8; 32]],
@@ -431,7 +430,7 @@ impl BlobSharing {
 
             match entry_clone {
                 None => {
-                    // Chunk plus dans le registre de partage → à supprimer.
+                    // Chunk not in sharing registry anymore -> to delete.
                     to_delete.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                     to_delete.push(*key);
                 }
@@ -442,7 +441,7 @@ impl BlobSharing {
                     } else {
                         to_keep.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                         to_keep.push(*key);
-                        // Collecter les blobs dépendants.
+                        // Collect dependent blobs.
                         for b in &entry.blob_ids {
                             if b.as_bytes() != blob_id.as_bytes() {
                                 let already = dep_blobs

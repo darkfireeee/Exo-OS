@@ -42,12 +42,14 @@ impl QuotaTable {
         }
     }
 
-    fn entry_mut(&mut self, pid: u32) -> Result<&mut QuotaEntry, i64> {
-        if let Some(idx) = self
-            .entries
+    fn find_index(&self, pid: u32) -> Option<usize> {
+        self.entries
             .iter()
             .position(|entry| entry.active && entry.pid == pid)
-        {
+    }
+
+    fn entry_mut(&mut self, pid: u32) -> Result<&mut QuotaEntry, i64> {
+        if let Some(idx) = self.find_index(pid) {
             return Ok(&mut self.entries[idx]);
         }
 
@@ -85,7 +87,10 @@ impl QuotaTable {
     }
 
     pub fn release(&mut self, pid: u32, bytes: u64) -> Result<QuotaSnapshot, i64> {
-        let entry = self.entry_mut(pid)?;
+        let Some(idx) = self.find_index(pid) else {
+            return Err(syscall::ENOENT);
+        };
+        let entry = &mut self.entries[idx];
         entry.used_bytes = entry.used_bytes.saturating_sub(bytes);
         let snapshot = QuotaSnapshot {
             used_bytes: entry.used_bytes,
@@ -111,12 +116,19 @@ impl QuotaTable {
         })
     }
 
-    pub fn snapshot(&mut self, pid: u32) -> Result<QuotaSnapshot, i64> {
-        let entry = self.entry_mut(pid)?;
+    pub fn snapshot(&self, pid: u32) -> Result<QuotaSnapshot, i64> {
+        if let Some(idx) = self.find_index(pid) {
+            let entry = &self.entries[idx];
+            return Ok(QuotaSnapshot {
+                used_bytes: entry.used_bytes,
+                peak_bytes: entry.peak_bytes,
+                limit_bytes: entry.limit_bytes,
+            });
+        }
         Ok(QuotaSnapshot {
-            used_bytes: entry.used_bytes,
-            peak_bytes: entry.peak_bytes,
-            limit_bytes: entry.limit_bytes,
+            used_bytes: 0,
+            peak_bytes: 0,
+            limit_bytes: DEFAULT_LIMIT_BYTES,
         })
     }
 }

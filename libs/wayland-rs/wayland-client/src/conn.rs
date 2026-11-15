@@ -1,0 +1,353 @@
+use std::{
+    env, fmt,
+    io::ErrorKind,
+    mem,
+    os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use wayland_backend::{
+    client::{Backend, InvalidId, ObjectData, ObjectId, ReadEventsGuard, WaylandError},
+    protocol::{ObjectInfo, ProtocolError},
+};
+
+use crate::{EventQueue, Proxy, protocol::wl_display::WlDisplay};
+
+/// The Wayland connection
+///
+/// This is the main type representing your connection to the Wayland server, though most of the interaction
+/// with the protocol are actually done using other types. The two main uses a simple app has for the
+/// [`Connection`] are:
+///
+/// - Obtaining the initial [`WlDisplay`] through the [`display()`][Self::display()] method.
+/// - Creating new [`EventQueue`]s with the [`new_event_queue()`][Self::new_event_queue()] method.
+///
+/// It can be created through the [`connect_to_env()`][Self::connect_to_env()] method to follow the
+/// configuration from the environment (which is what you'll do most of the time), or using the
+/// [`from_socket()`][Self::from_socket()] method if you retrieved your connected Wayland socket through
+/// other means.
+///
+/// In case you need to plug yourself into an external Wayland connection that you don't control, you'll
+/// likely get access to it as a [`Backend`], in which case you can create a [`Connection`] from it using
+/// the [`from_backend()`][Self::from_backend()] method.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub(crate) backend: Backend,
+}
+
+unsafe fn stream_from_wayland_socket_var() -> Result<Option<UnixStream>, ConnectError> {
+    if let Ok(txt) = env::var("WAYLAND_SOCKET") {
+        // We should connect to the provided WAYLAND_SOCKET
+        let fd = txt.parse::<RawFd>().map_err(|_| ConnectError::InvalidFd)?;
+        // Verify `fd` isn't negative, or stdin/out/err
+        if fd <= 2 {
+            return Err(ConnectError::InvalidFd);
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        // remove the variable so any child processes don't see it
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::remove_var("WAYLAND_SOCKET") };
+        let Ok(flags) = rustix::io::fcntl_getfd(&fd) else {
+            // Don't call `close` on drop
+            mem::forget(fd);
+            // Failed to call `F_GETFD`; likely closed file descriptor
+            return Err(ConnectError::InvalidFd);
+        };
+        if flags.contains(rustix::io::FdFlags::CLOEXEC) {
+            // If `CLOEXEC` is already set, this is not the file descriptor
+            // passed by the parent process, or it has already been consumed.
+            return Err(ConnectError::InvalidFd);
+        }
+        // set the `CLOEXEC` flag on this FD
+        rustix::io::fcntl_setfd(&fd, flags | rustix::io::FdFlags::CLOEXEC)
+            .map_err(|_| ConnectError::InvalidFd)?;
+        // setting the `CLOEXEC` flag worked
+        Ok(Some(UnixStream::from(fd)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn stream_from_wayland_display_var() -> Option<UnixStream> {
+    let socket_name = env::var_os("WAYLAND_DISPLAY").map(Into::<PathBuf>::into)?;
+
+    let socket_path = if socket_name.is_absolute() {
+        socket_name
+    } else {
+        let mut socket_path = env::var_os("XDG_RUNTIME_DIR").map(Into::<PathBuf>::into)?;
+        if !socket_path.is_absolute() {
+            return None;
+        }
+        socket_path.push(socket_name);
+        socket_path
+    };
+
+    UnixStream::connect(socket_path).ok()
+}
+
+impl Connection {
+    /// Try to connect to the Wayland server following the environment
+    ///
+    /// This first attempt to connect to the file descriptor specified in `WAYLAND_SOCKET`.
+    /// And then removes that variable from the environment. If that variable does
+    /// not exist, it then connects based on the `WAYLAND_DISPLAY` variable, like
+    /// [Self::connect_to_env_threadsafe]. This matches the behavior of `libwayland-client`.
+    ///
+    /// This is the standard way to initialize a Wayland connection.
+    ///
+    /// # Safety
+    ///
+    /// [Unsetting the env var may be unsound in a multithreaded
+    /// program](https://doc.rust-lang.org/std/env/fn.remove_var.html#safety), and if
+    /// the `WAYLAND_SOCKET` variable has a bogus value that is already an FD number in
+    /// use for something else, that may also be unsound.
+    ///
+    /// Ideally, a process using Wayland should call this once at the start of `main()`
+    /// before spawning other threads. [Self::connect_to_env_threadsafe] may be used if this
+    /// is not practical.
+    pub unsafe fn connect_to_env() -> Result<Self, ConnectError> {
+        let stream = if let Some(stream) = unsafe { stream_from_wayland_socket_var()? } {
+            stream
+        } else {
+            stream_from_wayland_display_var().ok_or(ConnectError::NoCompositor)?
+        };
+
+        Self::from_socket(stream)
+    }
+
+    /// Connect to the Wayland server using the `WAYLAND_DISPLAY` env var
+    ///
+    /// Unlike [`Self::connect_to_env`], this does **not** consider the `WAYLAND_SOCKET`
+    /// variable, which makes this function safe to call in any context. Under a normal
+    /// Wayland compositor, using `WAYLAND_DISPLAY` is generally sufficient.
+    pub fn connect_to_env_threadsafe() -> Result<Self, ConnectError> {
+        let stream = stream_from_wayland_display_var().ok_or(ConnectError::NoCompositor)?;
+        Self::from_socket(stream)
+    }
+
+    /// Initialize a Wayland connection from an already existing Unix stream
+    pub fn from_socket(stream: UnixStream) -> Result<Self, ConnectError> {
+        let backend = Backend::connect(stream).map_err(|_| ConnectError::NoWaylandLib)?;
+        Ok(Self { backend })
+    }
+
+    /// Get the `WlDisplay` associated with this connection
+    pub fn display(&self) -> WlDisplay {
+        let display_id = self.backend.display_id();
+        Proxy::from_id(self, display_id).unwrap()
+    }
+
+    /// Create a new event queue
+    pub fn new_event_queue<State>(&self) -> EventQueue<State> {
+        EventQueue::new(self.clone())
+    }
+
+    /// Wrap an existing [`Backend`] into a [`Connection`]
+    pub fn from_backend(backend: Backend) -> Self {
+        Self { backend }
+    }
+
+    /// Get the [`Backend`] underlying this [`Connection`]
+    pub fn backend(&self) -> Backend {
+        self.backend.clone()
+    }
+
+    /// Flush pending outgoing events to the server
+    ///
+    /// This needs to be done regularly to ensure the server receives all your requests, though several
+    /// dispatching methods do it implicitly (this is stated in their documentation when they do).
+    pub fn flush(&self) -> Result<(), WaylandError> {
+        self.backend.flush()
+    }
+
+    /// Start a synchronized read from the socket
+    ///
+    /// This is needed if you plan to wait on readiness of the Wayland socket using an event loop. See
+    /// [`ReadEventsGuard`] for details. Once the events are received, you'll then need to dispatch them from
+    /// their event queues using [`EventQueue::dispatch_pending()`].
+    ///
+    /// If you don't need to manage multiple event sources, see
+    /// [`EventQueue::blocking_dispatch()`] for a simpler mechanism.
+    #[must_use]
+    pub fn prepare_read(&self) -> Option<ReadEventsGuard> {
+        self.backend.prepare_read()
+    }
+
+    /// Do a roundtrip to the server
+    ///
+    /// This method will block until the Wayland server has processed and answered all your
+    /// preceding requests. This is notably useful during the initial setup of an app, to wait for
+    /// the initial state from the server.
+    ///
+    /// See [`EventQueue::roundtrip()`] for a version that includes the dispatching of the event queue.
+    pub fn roundtrip(&self) -> Result<usize, WaylandError> {
+        let done = Arc::new(SyncData::default());
+        let display = self.display();
+        self.send_request(
+            &display,
+            crate::protocol::wl_display::Request::Sync {},
+            Some(done.clone()),
+        )
+        .map_err(|_| WaylandError::Io(rustix::io::Errno::PIPE.into()))?;
+
+        let mut dispatched = 0;
+
+        loop {
+            self.backend.flush()?;
+
+            if let Some(guard) = self.backend.prepare_read() {
+                dispatched += blocking_read(guard)?;
+            } else {
+                dispatched += self.backend.dispatch_inner_queue()?;
+            }
+
+            // see if the successful read included our callback
+            if done.done.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+
+        Ok(dispatched)
+    }
+
+    /// Retrieve the protocol error that occured on the connection if any
+    ///
+    /// If this method returns [`Some`], it means your Wayland connection is already dead.
+    pub fn protocol_error(&self) -> Option<ProtocolError> {
+        match self.backend.last_error()? {
+            WaylandError::Protocol(err) => Some(err),
+            WaylandError::Io(_) => None,
+        }
+    }
+
+    /// Send a request associated with the provided object
+    ///
+    /// This is a low-level interface used by the code generated by `wayland-scanner`, you will likely
+    /// instead use the methods of the types representing each interface, or the [`Proxy::send_request()`] and
+    /// [`Proxy::send_constructor()`].
+    pub fn send_request<I: Proxy>(
+        &self,
+        proxy: &I,
+        request: I::Request<'_>,
+        data: Option<Arc<dyn ObjectData>>,
+    ) -> Result<ObjectId, InvalidId> {
+        let (msg, child_spec) = proxy.write_request(self, request)?;
+        self.backend.send_request(msg, data, child_spec)
+    }
+
+    /// Get the protocol information related to given object ID
+    pub fn object_info(&self, id: &ObjectId) -> Result<ObjectInfo, InvalidId> {
+        self.backend.info(id)
+    }
+
+    /// Get the object data for a given object ID
+    ///
+    /// This is a low-level interface used by the code generated by `wayland-scanner`, a higher-level
+    /// interface for manipulating the user-data assocated to [`Dispatch`][crate::Dispatch] implementations
+    /// is given as [`Proxy::data()`]. Also see [`Proxy::object_data()`].
+    pub fn get_object_data(&self, id: &ObjectId) -> Result<Arc<dyn ObjectData>, InvalidId> {
+        self.backend.get_data(id)
+    }
+
+    /// Set maximum buffer size.
+    #[cfg(feature = "libwayland_1_23")]
+    pub fn set_max_buffer_size(&self, max_buffer_size: Option<usize>) {
+        self.backend.set_max_buffer_size(max_buffer_size);
+    }
+}
+
+pub(crate) fn blocking_read(guard: ReadEventsGuard) -> Result<usize, WaylandError> {
+    let fd = guard.connection_fd();
+    let mut fds = [rustix::event::PollFd::new(
+        &fd,
+        rustix::event::PollFlags::IN | rustix::event::PollFlags::ERR,
+    )];
+
+    loop {
+        match rustix::event::poll(&mut fds, None) {
+            Ok(_) => break,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => return Err(WaylandError::Io(e.into())),
+        }
+    }
+
+    // at this point the fd is ready
+    match guard.read() {
+        Ok(n) => Ok(n),
+        // if we are still "wouldblock", just return 0; the caller will retry.
+        Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => Ok(0),
+        Err(e) => Err(e),
+    }
+}
+
+/// An error when trying to establish a Wayland connection.
+#[derive(Debug)]
+pub enum ConnectError {
+    /// The wayland library could not be loaded.
+    NoWaylandLib,
+
+    /// Could not find wayland compositor
+    NoCompositor,
+
+    /// `WAYLAND_SOCKET` was set but contained garbage
+    InvalidFd,
+}
+
+impl std::error::Error for ConnectError {}
+
+impl fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConnectError::NoWaylandLib => {
+                write!(f, "The wayland library could not be loaded")
+            }
+            ConnectError::NoCompositor => {
+                write!(f, "Could not find wayland compositor")
+            }
+            ConnectError::InvalidFd => {
+                write!(f, "WAYLAND_SOCKET was set but contained garbage")
+            }
+        }
+    }
+}
+
+impl AsFd for Connection {
+    /// Provides fd from [`Backend::poll_fd()`] for polling.
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.backend.poll_fd()
+    }
+}
+
+impl AsRawFd for Connection {
+    /// Provides fd from [`Backend::poll_fd()`] for polling.
+    fn as_raw_fd(&self) -> RawFd {
+        self.backend.poll_fd().as_raw_fd()
+    }
+}
+
+/*
+    wl_callback object data for wl_display.sync
+*/
+
+#[derive(Default)]
+pub(crate) struct SyncData {
+    pub(crate) done: AtomicBool,
+}
+
+impl ObjectData for SyncData {
+    fn event(
+        self: Arc<Self>,
+        _handle: &Backend,
+        _msg: wayland_backend::protocol::OwnedMessage<ObjectId>,
+    ) -> Option<Arc<dyn ObjectData>> {
+        self.done.store(true, Ordering::Relaxed);
+        None
+    }
+
+    fn destroyed(&self, _: &ObjectId) {}
+}

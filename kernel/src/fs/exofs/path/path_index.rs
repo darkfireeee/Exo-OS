@@ -1,20 +1,20 @@
-//! path_index.rs — Index de répertoire on-disk ExoFS (B-tree à plat trié par hash).
+//! path_index.rs — ExoFS on-disk directory index (flat B-tree sorted by hash).
 //!
-//! Le [`PathIndex`] est la structure qui mappe les noms d entrées d un répertoire
-//! vers leurs [`ObjectId`]. Chaque répertoire ExoFS possède exactement un PathIndex
-//! stocké comme payload dans son objet.
+//! The [`PathIndex`] is the structure that maps directory entry names
+//! to their [`ObjectId`]. Each ExoFS directory owns exactly one PathIndex
+//! stored as the payload in its object.
 //!
-//! ## Format on-disk
+//! ## On-disk format
 //! ```text
 //! [PathIndexHeader : 148 bytes]
 //! [PathIndexEntry  :  44 bytes] × entry_count
-//! [name_len bytes de nom pour chaque entrée, sans séparateur]
+//! [name_len bytes of name for each entry, without separator]
 //! ```
 //!
-//! ## Règles spec appliquées
-//! - **HDR-03** : magic vérifié EN PREMIER avant tout autre champ.
-//! - **ARITH-02** : `checked_add` / `checked_mul` sur tous les offsets.
-//! - **OOM-02** : `try_reserve(1)` avant chaque `Vec::push`.
+//! ## Applied spec rules
+//! - **HDR-03** : magic verified FIRST before any other field.
+//! - **ARITH-02** : `checked_add` / `checked_mul` on all offsets.
+//! - **OOM-02** : `try_reserve(1)` before each `Vec::push`.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -28,24 +28,24 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 #[cfg(target_os = "none")]
 use crate::fs::exofs::crypto::ENTROPY_POOL;
 
-// ── Constantes ────────────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
 
-/// Magic on-disk du PathIndex : `b"PIDX"`.
+/// On-disk magic of PathIndex: `b"PIDX"`.
 pub const PATH_INDEX_MAGIC: u32 = 0x50494458;
-/// Version actuelle du format.
+/// Current format version.
 pub const PATH_INDEX_VERSION: u16 = 1;
-/// Seuil de split : si entry_count dépasse cette valeur, split recommandé.
+/// Split threshold: if entry_count exceeds this value, split is recommended.
 pub const PATH_INDEX_SPLIT_THRESHOLD: u32 = 192;
-/// Seuil de merge : si entry_count est inférieur, merge envisageable.
+/// Merge threshold: if entry_count is lower, merge is considered.
 pub const PATH_INDEX_MERGE_THRESHOLD: u32 = 48;
 
-// Clé de montage SipHash globale (PATH-01 / S-12)
+// Global SipHash mount key (PATH-01 / S-12)
 static MOUNT_KEY_READY: AtomicBool = AtomicBool::new(false);
 static MOUNT_KEY_INIT_LOCK: AtomicBool = AtomicBool::new(false);
 static MOUNT_KEY_LO: AtomicU64 = AtomicU64::new(0);
 static MOUNT_KEY_HI: AtomicU64 = AtomicU64::new(0);
 
-/// Initialise la clé de montage SipHash depuis le CSPRNG si nécessaire.
+/// Initializes the SipHash mount key from CSPRNG if necessary.
 pub fn ensure_mount_key_initialized() {
     if MOUNT_KEY_READY.load(Ordering::Acquire) {
         return;
@@ -90,7 +90,7 @@ pub fn ensure_mount_key_initialized() {
     MOUNT_KEY_INIT_LOCK.store(false, Ordering::Release);
 }
 
-/// Retourne la clé de montage active (initialisée à la demande).
+/// Returns the active mount key (initialized on demand).
 pub fn mount_secret_key() -> [u8; 16] {
     ensure_mount_key_initialized();
     let lo = MOUNT_KEY_LO.load(Ordering::Acquire).to_le_bytes();
@@ -108,39 +108,39 @@ pub fn mount_secret_key() -> [u8; 16] {
 
 // ── PathIndexHeader ────────────────────────────────────────────────────────────
 
-/// En-tête on-disk d un PathIndex (148 octets, `repr(C, packed)`).
+/// On-disk header of a PathIndex (148 bytes, `repr(C, packed)`).
 ///
-/// **HDR-03** : `magic` est le premier champ et DOIT être vérifié avant tout accès.
-/// **ONDISK-03** : pas d `AtomicU64` ici.
+/// **HDR-03** : `magic` is the first field and MUST be verified before any access.
+/// **ONDISK-03** : no `AtomicU64` here.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct PathIndexHeader {
-    /// Magic `PATH_INDEX_MAGIC` — vérifié EN PREMIER (HDR-03).
+    /// Magic `PATH_INDEX_MAGIC` — checked FIRST (HDR-03).
     pub magic: u32,
-    /// Version du format (actuellement 1).
+    /// Format version (currently 1).
     pub version: u16,
-    /// Flags réservés.
+    /// Reserved flags.
     pub flags: u16,
-    /// OID du répertoire parent (zéro pour la racine).
+    /// Parent directory OID (zero for root).
     pub parent_oid: [u8; 32],
-    /// Nombre d entrées dans cet index.
+    /// Number of entries in this index.
     pub entry_count: u32,
-    /// OID de l index enfant "bas" après split (zéro si pas splitté).
+    /// OID of the "low" child index after split (zero if not split).
     pub split_low_oid: [u8; 32],
-    /// OID de l index enfant "haut" après split (zéro si pas splitté).
+    /// OID of the "high" child index after split (zero if not split).
     pub split_high_oid: [u8; 32],
-    /// Seuil de split configuré.
+    /// Configured split threshold.
     pub split_threshold: u32,
-    /// Padding d alignement.
+    /// Alignment padding.
     pub _pad: [u8; 4],
-    /// Checksum Blake3 des 116 octets précédents.
+    /// Blake3 checksum of the preceding 116 bytes.
     pub checksum: [u8; 32],
 }
 
 const _: () = assert!(size_of::<PathIndexHeader>() == 148);
 
 impl PathIndexHeader {
-    /// Crée un en-tête initialisé pour un nouveau PathIndex.
+    /// Creates an initialized header for a new PathIndex.
     pub fn new(parent_oid: [u8; 32]) -> Self {
         PathIndexHeader {
             magic: PATH_INDEX_MAGIC,
@@ -156,10 +156,10 @@ impl PathIndexHeader {
         }
     }
 
-    /// Vérifie le magic (HDR-03).
+    /// Checks magic (HDR-03).
     #[inline]
     pub fn check_magic(&self) -> ExofsResult<()> {
-        // SAFETY : packed struct — accès via copy pour eviter UB sur références.
+        // SAFETY: packed struct — copy access to avoid UB on references.
         let magic = self.magic;
         if magic != PATH_INDEX_MAGIC {
             Err(ExofsError::InvalidMagic)
@@ -168,7 +168,7 @@ impl PathIndexHeader {
         }
     }
 
-    /// Vérifie magic + version.
+    /// Checks magic + version.
     pub fn validate(&self) -> ExofsResult<()> {
         self.check_magic()?;
         if self.version != PATH_INDEX_VERSION {
@@ -180,18 +180,18 @@ impl PathIndexHeader {
 
 // ── PathIndexEntry ─────────────────────────────────────────────────────────────
 
-/// Entrée on-disk dans un PathIndex (44 octets, `repr(C, packed)`).
-/// Suivie immédiatement de `name_len` octets de nom.
+/// On-disk entry in a PathIndex (44 bytes, `repr(C, packed)`).
+/// Followed immediately by `name_len` name bytes.
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct PathIndexEntry {
-    /// Hash FNV-1a du nom.
+    /// FNV-1a hash of name.
     pub hash: u64,
-    /// OID de l objet nommé par cette entrée.
+    /// OID of the object named by this entry.
     pub object_id: [u8; 32],
-    /// Longueur du nom en octets.
+    /// Name length in bytes.
     pub name_len: u16,
-    /// Kind (0 = Dir, 1 = File, 2 = Symlink, voir ObjectKind).
+    /// Kind (0 = Dir, 1 = File, 2 = Symlink, see ObjectKind).
     pub kind: u8,
     /// Padding.
     pub _pad: u8,
@@ -200,7 +200,7 @@ pub struct PathIndexEntry {
 const _: () = assert!(size_of::<PathIndexEntry>() == 44);
 
 impl PathIndexEntry {
-    /// Taille totale on-disk = header 44 + name_len octets.
+    /// Total on-disk size = header 44 + name_len bytes.
     #[inline]
     pub fn on_disk_size(&self) -> usize {
         // ARITH-02
@@ -212,7 +212,7 @@ impl PathIndexEntry {
 
 // ── InMemoryEntry ─────────────────────────────────────────────────────────────
 
-/// Représentation en-mémoire d une entrée PathIndex.
+/// In-memory representation of a PathIndex entry.
 #[derive(Clone, Debug)]
 pub struct InMemoryEntry {
     pub hash: u64,
@@ -230,28 +230,28 @@ impl InMemoryEntry {
 
 // ── PathIndex ─────────────────────────────────────────────────────────────────
 
-/// Index de répertoire en mémoire, désérialisé depuis le on-disk.
+/// In-memory directory index, deserialized from on-disk data.
 ///
-/// Contient une [`PathIndexTree`] pour les lookups rapides et un `Vec<InMemoryEntry>`
-/// pour la sérialisation ordonnée.
+/// Contains a [`PathIndexTree`] for fast lookups and a `Vec<InMemoryEntry>`
+/// for ordered serialization.
 pub struct PathIndex {
-    /// OID du répertoire parent.
+    /// Parent directory OID.
     pub parent_oid: ObjectId,
-    /// Hash-table en mémoire pour lookups O(1).
+    /// In-memory hash-table for O(1) lookups.
     tree: PathIndexTree,
-    /// Entrées triées par hash pour la sérialisation.
+    /// Entries sorted by hash for serialization.
     entries: Vec<InMemoryEntry>,
-    /// Dirty flag : `true` si des modifications non sérialisées existent.
+    /// Dirty flag: `true` if unserialized mutations exist.
     pub dirty: bool,
-    /// Split threshold configuré.
+    /// Configured split threshold.
     pub split_threshold: u32,
-    /// Clé secrète SipHash-2-4 (PATH-01 / S-12).
-    /// Générée depuis security::crypto::rng au montage. Jamais [0u8;16] en production.
+    /// SipHash-2-4 secret key (PATH-01 / S-12).
+    /// Generated from security::crypto::rng at mount time. Never [0u8; 16] in production.
     mount_key: [u8; 16],
 }
 
 impl PathIndex {
-    /// Crée un index vide avec clé SipHash fournie au montage (PATH-01 / S-12).
+    /// Creates an empty index with SipHash key provided at mount (PATH-01 / S-12).
     pub fn new_with_key(parent_oid: ObjectId, mount_key: [u8; 16]) -> Self {
         PathIndex {
             parent_oid,
@@ -263,26 +263,26 @@ impl PathIndex {
         }
     }
 
-    /// Crée un index vide avec clé nulle (⚠️ tests uniquement — PATH-02).
+    /// Creates an empty index with null key (WARNING: tests only — PATH-02).
     pub fn new(parent_oid: ObjectId) -> Self {
         Self::new_with_key(parent_oid, mount_secret_key())
     }
 
-    /// Nombre d entrées dans l index.
+    /// Number of entries in the index.
     #[inline]
     pub fn len(&self) -> usize {
         self.tree.len()
     }
-    /// `true` si aucune entrée.
+    /// `true` if no entries.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
     }
 
-    /// Définit la clé SipHash de montage et reconstruit la table de hachage (PATH-01).
+    /// Sets the mount SipHash key and rebuilds the hash table (PATH-01).
     ///
-    /// Appeler après `from_bytes()` pour activer la protection HashDoS.
-    /// Reconstruit la tree avec la nouvelle clé — O(n).
+    /// Call after `from_bytes()` to enable HashDoS protection.
+    /// Rebuilds the tree with the new key — O(n).
     pub fn set_mount_key(&mut self, key: [u8; 16]) -> ExofsResult<()> {
         self.mount_key = key;
         self.tree = PathIndexTree::new_with_key(key);
@@ -300,26 +300,26 @@ impl PathIndex {
         Ok(())
     }
 
-    // ── Désérialisation ───────────────────────────────────────────────────────
+    // ── Deserialization ───────────────────────────────────────────────────────
 
-    /// Désérialise un PathIndex depuis des octets bruts.
+    /// Deserializes a PathIndex from raw bytes.
     ///
-    /// **HDR-03** : magic vérifié en premier.
+    /// **HDR-03** : magic checked first.
     ///
     /// # Errors
-    /// - [`ExofsError::InvalidMagic`]       si magic incorrect.
-    /// - [`ExofsError::CorruptedStructure`] si trop court / incohérent.
-    /// - [`ExofsError::NoMemory`]           si allocation impossible.
+    /// - [`ExofsError::InvalidMagic`]       if magic is incorrect.
+    /// - [`ExofsError::CorruptedStructure`] if too short / inconsistent.
+    /// - [`ExofsError::NoMemory`]           if allocation fails.
     pub fn from_bytes(data: &[u8]) -> ExofsResult<Self> {
-        // ── 1. Vérification de taille minimale ────────────────────────────────
+        // ── 1. Minimum size check ─────────────────────────────────────────────
         if data.len() < size_of::<PathIndexHeader>() {
             return Err(ExofsError::CorruptedStructure);
         }
 
-        // ── 2. Lecture de l en-tête (copie pour éviter UB sur packed) ─────────
+        // ── 2. Read header (copy to avoid UB on packed) ───────────────────────
         let hdr = read_header(data)?;
 
-        // ── 3. HDR-03 : magic EN PREMIER ─────────────────────────────────────
+        // ── 3. HDR-03 : magic FIRST ──────────────────────────────────────────
         hdr.check_magic()?;
         hdr.validate()?;
 
@@ -327,7 +327,7 @@ impl PathIndex {
         let parent_oid = ObjectId(hdr.parent_oid);
         let split_thr = hdr.split_threshold;
 
-        // ── 4. Lecture des entrées ────────────────────────────────────────────
+        // ── 4. Read entries ───────────────────────────────────────────────────
         let mut entries: Vec<InMemoryEntry> = Vec::new();
         let active_key = mount_secret_key();
         let mut tree = PathIndexTree::new_with_key(active_key);
@@ -353,15 +353,15 @@ impl PathIndex {
 
             let oid = ObjectId(raw_entry.object_id);
 
-            // Insérer dans la table de hachage si la capacité fixe le permet.
-            // Au-delà, on garde l'entrée dans `entries` et le lookup retombe
-            // sur un scan linéaire borné pour préserver les gros répertoires.
+            // Insert into hash table if fixed capacity allows.
+            // Beyond that, we keep the entry in `entries` and lookup falls
+            // back to a bounded linear scan to preserve large directories.
             match tree.insert(&comp, oid.clone(), raw_entry.kind) {
                 Ok(()) | Err(ExofsError::NoSpace) => {}
                 Err(_) => return Err(ExofsError::CorruptedStructure),
             }
 
-            // Construire InMemoryEntry.
+            // Build InMemoryEntry.
             let mut name_arr = [0u8; NAME_MAX + 1];
             name_arr[..name_bytes.len()].copy_from_slice(name_bytes);
             let ime = InMemoryEntry {
@@ -378,7 +378,7 @@ impl PathIndex {
             let _ = i; // suppress unused warning
         }
 
-        // ── 5. Vérifier cohérence entry_count ────────────────────────────────
+        // ── 5. Verify entry_count consistency ────────────────────────────────
         if entries.len() != entry_count {
             return Err(ExofsError::CorruptedStructure);
         }
@@ -393,15 +393,15 @@ impl PathIndex {
         })
     }
 
-    // ── Sérialisation ─────────────────────────────────────────────────────────
+    // ── Serialization ─────────────────────────────────────────────────────────
 
-    /// Sérialise l index en octets pour écriture on-disk.
+    /// Serializes the index to bytes for on-disk writing.
     ///
-    /// Tri les entrées par hash avant sérialisation pour garantir l ordre.
+    /// Sorts entries by hash before serialization to guarantee order.
     ///
     /// # OOM-02 / ARITH-02
     pub fn serialize(&self) -> ExofsResult<Vec<u8>> {
-        // Calculer la taille totale.
+        // Calculate total size.
         let mut total = size_of::<PathIndexHeader>();
         for e in &self.entries {
             total = total
@@ -414,11 +414,11 @@ impl PathIndex {
         let mut buf: Vec<u8> = Vec::new();
         buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
 
-        // Écrire l en-tête.
+        // Write header.
         let hdr = self.make_header();
         buf.extend_from_slice(&bytes_of_header(&hdr));
 
-        // Trier par hash avant écriture.
+        // Sort by hash before writing.
         let mut sorted: Vec<&InMemoryEntry> = self.entries.iter().collect();
         sorted.sort_unstable_by_key(|e| e.hash);
 
@@ -437,9 +437,9 @@ impl PathIndex {
         Ok(buf)
     }
 
-    // ── Opérations ────────────────────────────────────────────────────────────
+    // ── Operations ────────────────────────────────────────────────────────────
 
-    /// Recherche une entrée par composant.
+    /// Looks up an entry by component.
     pub fn lookup(&self, comp: &PathComponent) -> Option<(ObjectId, u8)> {
         if let Some(entry) = self.tree.find(comp) {
             return Some((entry.oid.clone(), entry.kind));
@@ -451,12 +451,12 @@ impl PathIndex {
             .map(|entry| (entry.oid.clone(), entry.kind))
     }
 
-    /// Insère une nouvelle entrée.
+    /// Inserts a new entry.
     ///
     /// # Errors
-    /// - [`ExofsError::ObjectAlreadyExists`] si le nom existe.
-    /// - [`ExofsError::NoSpace`] si l index est plein.
-    /// - [`ExofsError::NoMemory`] si allocation impossible.
+    /// - [`ExofsError::ObjectAlreadyExists`] if name exists.
+    /// - [`ExofsError::NoSpace`] if index is full.
+    /// - [`ExofsError::NoMemory`] if allocation fails.
     pub fn insert(&mut self, comp: &PathComponent, oid: ObjectId, kind: u8) -> ExofsResult<()> {
         if self.lookup(comp).is_some() {
             return Err(ExofsError::ObjectAlreadyExists);
@@ -487,10 +487,10 @@ impl PathIndex {
         Ok(())
     }
 
-    /// Supprime une entrée.
+    /// Removes an entry.
     ///
     /// # Errors
-    /// - [`ExofsError::ObjectNotFound`] si le nom n existe pas.
+    /// - [`ExofsError::ObjectNotFound`] if name does not exist.
     pub fn remove(&mut self, comp: &PathComponent) -> ExofsResult<()> {
         let tree_result = self.tree.remove(comp);
         let name = comp.as_bytes();
@@ -509,7 +509,7 @@ impl PathIndex {
         }
     }
 
-    /// Met à jour l OID d une entrée existante.
+    /// Updates the OID of an existing entry.
     pub fn update(&mut self, comp: &PathComponent, new_oid: ObjectId) -> ExofsResult<()> {
         let mut found = false;
 
@@ -536,34 +536,34 @@ impl PathIndex {
         Ok(())
     }
 
-    /// `true` si l index doit être splitté.
+    /// `true` if index needs to be split.
     #[inline]
     pub fn needs_split(&self) -> bool {
         self.entries.len() as u32 >= self.split_threshold
     }
 
-    /// `true` si l index est éligible à un merge.
+    /// `true` if index is eligible for merge.
     #[inline]
     pub fn needs_merge(&self) -> bool {
         (self.entries.len() as u32) < PATH_INDEX_MERGE_THRESHOLD
     }
 
-    /// Retourne la référence aux entrées en mémoire (pour split/merge).
+    /// Returns reference to in-memory entries (for split/merge).
     pub fn entries(&self) -> &[InMemoryEntry] {
         &self.entries
     }
 
-    /// Retourne une référence mutable aux entrées (pour split/merge).
+    /// Returns mutable reference to entries (for split/merge).
     pub fn entries_mut(&mut self) -> &mut Vec<InMemoryEntry> {
         &mut self.entries
     }
 
-    /// Retourne une référence à la tree (pour inspection).
+    /// Returns reference to tree (for inspection).
     pub fn tree(&self) -> &PathIndexTree {
         &self.tree
     }
 
-    // ── Helpers privés ────────────────────────────────────────────────────────
+    // ── Private helpers ────────────────────────────────────────────────────────
 
     fn make_header(&self) -> PathIndexHeader {
         let mut hdr = PathIndexHeader::new(self.parent_oid.0);
@@ -573,14 +573,14 @@ impl PathIndex {
     }
 }
 
-// ── Helpers de sérialisation (sans unsafe) ────────────────────────────────────
+// ── Serialization helpers (without unsafe) ────────────────────────────────────
 
 fn read_header(data: &[u8]) -> ExofsResult<PathIndexHeader> {
     if data.len() < size_of::<PathIndexHeader>() {
         return Err(ExofsError::CorruptedStructure);
     }
     let mut hdr = PathIndexHeader::new([0u8; 32]);
-    // Copie octet par octet, sans cast de représentation.
+    // Byte-by-byte copy, without representation casts.
     let src = &data[..size_of::<PathIndexHeader>()];
     let magic = u32::from_le_bytes([src[0], src[1], src[2], src[3]]);
     hdr.magic = magic;
@@ -706,9 +706,9 @@ mod tests {
             PathIndex::from_bytes(&bytes),
             Err(ExofsError::InvalidMagic)
         ));
-        // Mettre le bon magic.
+        // Put valid magic.
         bytes[0..4].copy_from_slice(&PATH_INDEX_MAGIC.to_le_bytes());
-        bytes[4..6].copy_from_slice(&(99u16).to_le_bytes()); // mauvaise version
+        bytes[4..6].copy_from_slice(&(99u16).to_le_bytes()); // wrong version
         assert!(matches!(
             PathIndex::from_bytes(&bytes),
             Err(ExofsError::CorruptedStructure)

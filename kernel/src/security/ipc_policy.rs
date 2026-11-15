@@ -71,6 +71,8 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::InputServer, ServiceClass::Ps2Driver),
     (ServiceClass::InputServer, ServiceClass::TtyServer),
     (ServiceClass::TtyServer, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::InputServer),
     (ServiceClass::TtyServer, ServiceClass::FbServer),
     (ServiceClass::FbServer, ServiceClass::TtyServer),
     (ServiceClass::DeviceServer, ServiceClass::FbServer),
@@ -112,10 +114,57 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::UsbServer, ServiceClass::VfsServer),
     (ServiceClass::ExoShield, ServiceClass::UsbServer),
     (ServiceClass::UsbServer, ServiceClass::ExoShield),
+    // Exosh <-> core & UI services
+    (ServiceClass::Exosh, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::VfsServer),
+    (ServiceClass::VfsServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::MemoryServer),
+    (ServiceClass::MemoryServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::SchedulerServer),
+    (ServiceClass::SchedulerServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::NetworkServer),
+    (ServiceClass::NetworkServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::DeviceServer),
+    (ServiceClass::DeviceServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::AudioServer),
+    (ServiceClass::AudioServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::UsbServer),
+    (ServiceClass::UsbServer, ServiceClass::Exosh),
+    // InitServer <-> remaining Ring 1 & shell services
+    (ServiceClass::InitServer, ServiceClass::NetworkServer),
+    (ServiceClass::NetworkServer, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::TtyServer),
+    (ServiceClass::TtyServer, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::Ps2Driver),
+    (ServiceClass::Ps2Driver, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::VirtioDriver),
+    (ServiceClass::VirtioDriver, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::Exosh),
+    (ServiceClass::Exosh, ServiceClass::InitServer),
+    // ExoShield <-> monitored Ring 1 services
+    (ServiceClass::ExoShield, ServiceClass::NetworkServer),
+    (ServiceClass::NetworkServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::VfsServer),
+    (ServiceClass::VfsServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::MemoryServer),
+    (ServiceClass::MemoryServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::DeviceServer),
+    (ServiceClass::DeviceServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::SchedulerServer),
+    (ServiceClass::SchedulerServer, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::ExoShield),
+    (ServiceClass::FbServer, ServiceClass::VirtioDriver),
+    (ServiceClass::VirtioDriver, ServiceClass::FbServer),
 ];
 
 const _: () = assert!(
-    POLICY.len() == 67,
+    POLICY.len() == 113,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -134,7 +183,7 @@ fn class_from_capability(cap_type: CapabilityType) -> ServiceClass {
 }
 
 #[inline]
-fn is_ring1_trusted_class(class: ServiceClass) -> bool {
+pub(crate) fn is_ring1_trusted_class(class: ServiceClass) -> bool {
     matches!(
         class,
         ServiceClass::InitServer

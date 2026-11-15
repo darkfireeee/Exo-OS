@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS NUMA — Migration de blobs entre nœuds NUMA
+// ExoFS NUMA — Blob migration between NUMA nodes
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::numa_affinity::MAX_NUMA_NODES;
@@ -12,19 +12,19 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MigrationStatus {
-    /// Blob migré avec succès.
+    /// Blob migrated successfully.
     Migrated,
-    /// Blob déjà sur le nœud cible.
+    /// Blob already on target node.
     AlreadyOnTarget,
-    /// Blob non trouvé.
+    /// Blob not found.
     NotFound,
-    /// Nœud invalide.
+    /// Invalid node.
     InvalidNode,
-    /// Erreur d'I/O lors du déplacement.
+    /// I/O error during move.
     IoError,
-    /// Pas de mémoire disponible.
+    /// No memory available.
     NoMemory,
-    /// Migration annulée (nœud source sous pression).
+    /// Migration cancelled (source node under pressure).
     Cancelled,
 }
 
@@ -114,28 +114,28 @@ impl MigrationResult {
 
 // ─── BlobNodeLocator (trait) ──────────────────────────────────────────────────
 
-/// Trait permettant à `NumaMigration` de localiser et déplacer des blobs.
+/// Trait allowing `NumaMigration` to locate and move blobs.
 pub trait BlobNodeLocator {
-    /// Retourne le nœud NUMA sur lequel réside le blob, ou None.
+    /// Returns the NUMA node where the blob resides, or None.
     fn node_of(&self, id: BlobId) -> Option<usize>;
-    /// Retourne la taille en octets du blob, ou None.
+    /// Returns the byte size of the blob, or None.
     fn byte_size(&self, id: BlobId) -> Option<u64>;
-    /// Déplace le blob vers le nœud cible.
+    /// Moves the blob to the target node.
     fn move_to_node(&self, id: BlobId, target: usize) -> ExofsResult<()>;
 }
 
 // ─── MigrationPolicy ─────────────────────────────────────────────────────────
 
-/// Politique de migration (seuils de déclenchement).
+/// Migration policy (trigger thresholds).
 #[derive(Clone, Copy, Debug)]
 pub struct MigrationPolicy {
-    /// Déséquilibre minimal en ‰ pour déclencher une migration automatique.
+    /// Minimum imbalance in ‰ to trigger automatic migration.
     pub imbalance_trigger_ppt: u64,
-    /// Nombre max de blobs simultanément en migration.
+    /// Maximum number of blobs concurrently migrating.
     pub max_concurrent: usize,
-    /// Taille minimale d'un blob pour migration (évite de migrer les petits blobs).
+    /// Minimum blob size for migration (avoids migrating small blobs).
     pub min_blob_bytes: u64,
-    /// Active les migrations automatiques.
+    /// Enables automatic migrations.
     pub auto_enabled: bool,
 }
 
@@ -158,7 +158,7 @@ impl MigrationPolicy {
 
 // ─── MigrationQueue ───────────────────────────────────────────────────────────
 
-/// Registre des migrations en cours (tableau plat, max 64 entrées).
+/// Active migration registry (flat array, max 64 entries).
 pub const MIGRATION_QUEUE_MAX: usize = 64;
 
 #[allow(dead_code)]
@@ -211,10 +211,10 @@ impl MigrationQueue {
         self.lock.store(0, Ordering::Release);
     }
 
-    /// Ajoute un blob en cours de migration.
+    /// Adds a blob currently migrating.
     pub fn push(&self, blob_id: BlobId, from: usize, to: usize) -> ExofsResult<()> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
         let mut i = 0usize;
         while i < MIGRATION_QUEUE_MAX {
@@ -235,10 +235,10 @@ impl MigrationQueue {
         Err(ExofsError::GcQueueFull)
     }
 
-    /// Retire un blob de la file de migration.
+    /// Removes a blob from the migration queue.
     pub fn remove(&self, blob_id: BlobId) {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
         let mut i = 0usize;
         while i < MIGRATION_QUEUE_MAX {
@@ -252,10 +252,10 @@ impl MigrationQueue {
         self.release();
     }
 
-    /// Vrai si un blob est déjà en cours de migration.
+    /// True if a blob is currently migrating.
     pub fn contains(&self, blob_id: BlobId) -> bool {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &*self.slots.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -277,7 +277,7 @@ impl MigrationQueue {
 
 // ─── NumaMigration ────────────────────────────────────────────────────────────
 
-/// Moteur de migration NUMA.
+/// NUMA migration engine.
 pub struct NumaMigration {
     policy: core::cell::UnsafeCell<MigrationPolicy>,
     queue: MigrationQueue,
@@ -318,7 +318,7 @@ impl NumaMigration {
     pub fn configure(&self, policy: MigrationPolicy) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             *self.policy.get() = policy;
         }
@@ -328,13 +328,13 @@ impl NumaMigration {
 
     pub fn policy(&self) -> MigrationPolicy {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let p = unsafe { *self.policy.get() };
         self.release();
         p
     }
 
-    /// Migre un blob vers un nœud cible.
+    /// Migrates a blob to a target node.
     pub fn migrate_blob(
         &self,
         locator: &dyn BlobNodeLocator,
@@ -342,13 +342,13 @@ impl NumaMigration {
         target_node: usize,
         tick: u64,
     ) -> MigrationResult {
-        // Validation du nœud cible
+        // Validate target node
         if target_node >= MAX_NUMA_NODES {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
             return MigrationResult::error(id, 0, target_node, MigrationStatus::InvalidNode, tick);
         }
 
-        // Localiser le blob
+        // Locate blob
         let from_node = match locator.node_of(id) {
             Some(n) => n,
             None => {
@@ -361,7 +361,7 @@ impl NumaMigration {
             return MigrationResult::already_on_target(id, from_node, tick);
         }
 
-        // Vérification double migration
+        // Check duplicate migration
         if self.queue.contains(id) {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
             return MigrationResult::error(
@@ -374,7 +374,7 @@ impl NumaMigration {
         }
 
         let policy = self.policy();
-        // Vérifier la limite concurrente (ARITH-02)
+        // Verify concurrency limit (ARITH-02)
         if self.queue.active_count() >= policy.max_concurrent {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
             return MigrationResult::error(
@@ -388,12 +388,12 @@ impl NumaMigration {
 
         let bytes = locator.byte_size(id).unwrap_or(0);
 
-        // Filtre taille minimale (ARITH-02 : comparaison simple)
+        // Minimum size filter (ARITH-02: simple comparison)
         if bytes < policy.min_blob_bytes && bytes > 0 {
             return MigrationResult::already_on_target(id, from_node, tick);
         }
 
-        // Enregistrer en file
+        // Enqueue
         if self.queue.push(id, from_node, target_node).is_err() {
             self.total_errors.fetch_add(1, Ordering::Relaxed);
             return MigrationResult::error(
@@ -405,13 +405,13 @@ impl NumaMigration {
             );
         }
 
-        // Appel effectif
+        // Perform move
         let result = locator.move_to_node(id, target_node);
         self.queue.remove(id);
 
         match result {
             Ok(()) => {
-                // Mettre à jour les statistiques
+                // Update statistics
                 NUMA_STATS.record_free(from_node, bytes);
                 NUMA_STATS.record_alloc(target_node, bytes);
                 NUMA_STATS.record_migration(from_node, target_node);
@@ -431,7 +431,7 @@ impl NumaMigration {
         }
     }
 
-    /// Migre un lot de blobs vers les nœuds les moins chargés (RECUR-01, OOM-02).
+    /// Migrates a batch of blobs to the least loaded nodes (RECUR-01, OOM-02).
     pub fn rebalance(
         &self,
         locator: &dyn BlobNodeLocator,
@@ -445,7 +445,7 @@ impl NumaMigration {
         let mut i = 0usize;
         while i < n {
             let id = blob_ids[i];
-            // Cibler le nœud le moins chargé
+            // Target least loaded node
             let target = NUMA_STATS.least_loaded_node();
             let r = self.migrate_blob(locator, id, target, tick);
             results.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -478,7 +478,7 @@ impl NumaMigration {
     }
 }
 
-/// Singleton global du moteur de migration.
+/// Global singleton of the migration engine.
 pub static NUMA_MIGRATION: NumaMigration = NumaMigration::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn test_migrate_already_on_target() {
         let m = NumaMigration::new_const();
-        // MockLocator retourne node=0, target=0
+        // MockLocator returns node=0, target=0
         let r = m.migrate_blob(&MockLocator, zero_blob(), 0, 0);
         assert_eq!(r.status, MigrationStatus::AlreadyOnTarget);
         assert!(r.is_success());

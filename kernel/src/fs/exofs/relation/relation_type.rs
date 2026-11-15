@@ -1,49 +1,49 @@
-//! relation_type.rs — Types et métadonnées des relations ExoFS
+//! relation_type.rs — Types and metadata of ExoFS relations
 //!
-//! Règles appliquées :
-//!  - ARITH-02 : arithmétique vérifiée sur les poids
-//!  - ONDISK-03: aucun AtomicU64 dans les structs repr(C)
+//! Applied rules:
+//!  - ARITH-02: checked arithmetic on weights
+//!  - ONDISK-03: no AtomicU64 in repr(C) structs
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RelationKind
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nature sémantique d'une relation entre deux blobs / objets ExoFS.
+/// Semantic nature of a relation between two blobs / ExoFS objects.
 ///
-/// Chaque variant a une valeur on-disk u8 fixe pour la sérialisation.
+/// Each variant has a fixed on-disk u8 value for serialization.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RelationKind {
-    /// `from` est le répertoire parent de `to`.
+    /// `from` is the parent directory of `to`.
     Parent = 0x01,
-    /// `from` est un enfant de `to`.
+    /// `from` is a child of `to`.
     Child = 0x02,
-    /// `from` est un lien symbolique vers `to`.
+    /// `from` is a symbolic link to `to`.
     Symlink = 0x03,
-    /// `from` est un hard link vers `to`.
+    /// `from` is a hard link to `to`.
     HardLink = 0x04,
-    /// Relation de comptage de références (P-Blob).
+    /// Reference counting relation (P-Blob).
     Refcount = 0x05,
-    /// `from` est une capture instantanée de `to`.
+    /// `from` is a snapshot of `to`.
     Snapshot = 0x06,
-    /// `to` est la base de laquelle `from` a été capturé.
+    /// `to` is the base from which `from` was snapshotted.
     SnapshotBase = 0x07,
-    /// `from` et `to` partagent des chunks (déduplication).
+    /// `from` and `to` share chunks (deduplication).
     Dedup = 0x08,
-    /// `from` est un clone Copy-on-Write de `to`.
+    /// `from` is a Copy-on-Write clone of `to`.
     Clone = 0x09,
-    /// Référence croisée arbitraire (extensible).
+    /// Arbitrary cross-reference (extensible).
     CrossRef = 0x0A,
-    /// Dépendance de données : `to` doit exister pour que `from` soit lisible.
+    /// Data dependency: `to` must exist for `from` to be readable.
     DataDep = 0x0B,
-    /// Métadonnées associées : `from` enrichit les métadonnées de `to`.
+    /// Associated metadata: `from` enriches metadata of `to`.
     Metadata = 0x0C,
 }
 
 impl RelationKind {
-    /// Convertit un octet on-disk en `RelationKind`.
+    /// Converts an on-disk byte to `RelationKind`.
     ///
-    /// Retourne `None` si la valeur est inconnue.
+    /// Returns `None` if the value is unknown.
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0x01 => Some(Self::Parent),
@@ -62,25 +62,25 @@ impl RelationKind {
         }
     }
 
-    /// Valeur on-disk.
+    /// On-disk value.
     #[inline]
     pub const fn to_u8(self) -> u8 {
         self as u8
     }
 
-    /// `true` si la relation est hiérarchique (parent/enfant).
+    /// `true` if the relation is hierarchical (parent/child).
     #[inline]
     pub fn is_hierarchical(self) -> bool {
         matches!(self, Self::Parent | Self::Child)
     }
 
-    /// `true` si la relation est un lien (symlink ou hard link).
+    /// `true` if the relation is a link (symlink or hard link).
     #[inline]
     pub fn is_link(self) -> bool {
         matches!(self, Self::Symlink | Self::HardLink)
     }
 
-    /// `true` si la relation implique un partage de contenu (dédup/clone/snapshot).
+    /// `true` if the relation implies content sharing (dedup/clone/snapshot).
     #[inline]
     pub fn is_content_sharing(self) -> bool {
         matches!(
@@ -89,8 +89,8 @@ impl RelationKind {
         )
     }
 
-    /// `true` si la relation constitue une dépendance forte (suppression impossible
-    /// sans nettoyer la relation).
+    /// `true` if the relation constitutes a strong dependency (deletion impossible
+    /// without cleaning up the relation).
     pub fn is_strong_dependency(self) -> bool {
         matches!(
             self,
@@ -98,7 +98,7 @@ impl RelationKind {
         )
     }
 
-    /// Étiquette lisible (pour logs, debug).
+    /// Human-readable label (for logs, debug).
     pub fn label(self) -> &'static str {
         match self {
             Self::Parent => "parent",
@@ -116,12 +116,12 @@ impl RelationKind {
         }
     }
 
-    /// `true` si la relation est orientée (from→to a un sens asymétrique).
+    /// `true` if the relation is directed (from→to has an asymmetric direction).
     pub fn is_directed(self) -> bool {
         !matches!(self, Self::Dedup | Self::CrossRef)
     }
 
-    /// Retourne le kind inverse naturel s'il en existe un.
+    /// Returns the natural inverse kind if one exists.
     pub fn inverse(self) -> Option<Self> {
         match self {
             Self::Parent => Some(Self::Child),
@@ -137,36 +137,36 @@ impl RelationKind {
 // RelationWeight
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Poids / priorité d'une relation pour les algorithmes de graphe.
+/// Weight / priority of a relation for graph algorithms.
 ///
-/// Un poids est un entier non-signé ; 0 est réservé (relation neutre).
-/// Plus le poids est élevé, plus la relation est "forte".
+/// A weight is an unsigned integer; 0 is reserved (neutral relation).
+/// The higher the weight, the "stronger" the relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RelationWeight(pub u32);
 
 impl RelationWeight {
-    /// Poids par défaut (relations ordinaires).
+    /// Default weight (ordinary relations).
     pub const DEFAULT: Self = Self(1);
-    /// Poids d'une relation forte (ex. : référence comptée).
+    /// Weight of a strong relation (e.g. counted reference).
     pub const STRONG: Self = Self(10);
-    /// Poids maximal autorisé.
+    /// Maximum allowed weight.
     pub const MAX: Self = Self(u32::MAX);
-    /// Poids nul (relation désactivée / marqueur de suppression).
+    /// Zero weight (disabled relation / tombstone marker).
     pub const ZERO: Self = Self(0);
 
-    /// Additionne deux poids avec saturation.
+    /// Adds two weights with saturation.
     #[inline]
     pub fn saturating_add(self, rhs: Self) -> Self {
         Self(self.0.saturating_add(rhs.0))
     }
 
-    /// Soustrait deux poids avec saturation (jamais négatif).
+    /// Subtracts two weights with saturation (never negative).
     #[inline]
     pub fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
     }
 
-    /// `true` si ce poids indique une relation forte (≥ STRONG).
+    /// `true` if this weight indicates a strong relation (≥ STRONG).
     #[inline]
     pub fn is_strong(self) -> bool {
         self.0 >= Self::STRONG.0
@@ -183,18 +183,18 @@ impl Default for RelationWeight {
 // RelationFlags
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Drapeaux booléens supplémentaires sur une relation.
+/// Additional boolean flags on a relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct RelationFlags(pub u16);
 
 impl RelationFlags {
-    /// Relation marquée comme supprimée (soft-delete).
+    /// Relation marked as deleted (soft-delete).
     pub const DELETED: Self = Self(0x0001);
-    /// Relation vérifiée (intégrité validée).
+    /// Relation verified (validated integrity).
     pub const VERIFIED: Self = Self(0x0002);
-    /// Relation générée automatiquement (pas par l'utilisateur).
+    /// Automatically generated relation (not by user).
     pub const AUTO: Self = Self(0x0004);
-    /// Relation temporaire (peut être purgée sans avertissement).
+    /// Temporary relation (can be purged without warning).
     pub const TEMPORARY: Self = Self(0x0008);
 
     pub fn has(self, flag: RelationFlags) -> bool {
@@ -224,7 +224,7 @@ impl RelationFlags {
 // RelationType
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type complet d'une relation : nature + poids + drapeaux.
+/// Complete relation type: kind + weight + flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RelationType {
     pub kind: RelationKind,
@@ -233,7 +233,7 @@ pub struct RelationType {
 }
 
 impl RelationType {
-    /// Crée un type avec poids par défaut et sans drapeaux.
+    /// Creates a type with default weight and without flags.
     pub const fn new(kind: RelationKind) -> Self {
         Self {
             kind,
@@ -242,7 +242,7 @@ impl RelationType {
         }
     }
 
-    /// Crée un type avec poids explicite.
+    /// Creates a type with explicit weight.
     pub const fn with_weight(kind: RelationKind, weight: u32) -> Self {
         Self {
             kind,
@@ -251,23 +251,23 @@ impl RelationType {
         }
     }
 
-    /// Ajoute un drapeau.
+    /// Adds a flag.
     pub fn with_flag(mut self, flag: RelationFlags) -> Self {
         self.flags = self.flags.set(flag);
         self
     }
 
-    /// `true` si la relation n'est pas supprimée et a un poids non nul.
+    /// `true` if the relation is not deleted and has non-zero weight.
     pub fn is_active(self) -> bool {
         !self.flags.is_deleted() && self.weight != RelationWeight::ZERO
     }
 
-    /// Poids u32 pour la sérialisation.
+    /// u32 weight for serialization.
     pub fn weight_u32(self) -> u32 {
         self.weight.0
     }
 
-    /// Drapeaux u16 pour la sérialisation.
+    /// u16 flags for serialization.
     pub fn flags_u16(self) -> u16 {
         self.flags.0
     }
@@ -280,39 +280,39 @@ impl Default for RelationType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationDirection — orientation d'une requête
+// RelationDirection — query orientation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Direction de parcours d'une relation.
+/// Traversal direction of a relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelationDirection {
-    /// Relations sortantes (from → to).
+    /// Outgoing relations (from → to).
     Outgoing,
-    /// Relations entrantes (to ← from).
+    /// Incoming relations (to ← from).
     Incoming,
-    /// Les deux directions.
+    /// Both directions.
     Both,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationFilter — filtre de sélection pour requêtes
+// RelationFilter — selection filter for queries
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Critères de filtrage pour les requêtes sur les relations.
+/// Filtering criteria for queries on relations.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RelationFilter {
-    /// Restreindre à un type donné (None = tous).
+    /// Restrict to a given kind (None = all).
     pub kind: Option<RelationKind>,
-    /// Poids minimum (None = aucun minimum).
+    /// Minimum weight (None = no minimum).
     pub min_weight: Option<u32>,
-    /// Exclure les relations soft-deleted.
+    /// Exclude soft-deleted relations.
     pub active_only: bool,
-    /// Direction de la recherche.
+    /// Search direction.
     pub direction: Option<RelationDirection>,
 }
 
 impl RelationFilter {
-    /// Filtre acceptant toutes les relations actives sortantes.
+    /// Filter accepting all active outgoing relations.
     pub const fn outgoing_active() -> Self {
         RelationFilter {
             kind: None,
@@ -322,7 +322,7 @@ impl RelationFilter {
         }
     }
 
-    /// Filtre pour un type précis, actif uniquement.
+    /// Filter for a specific kind, active only.
     pub fn by_kind(kind: RelationKind) -> Self {
         RelationFilter {
             kind: Some(kind),
@@ -332,7 +332,7 @@ impl RelationFilter {
         }
     }
 
-    /// `true` si le `RelationType` passe ce filtre.
+    /// `true` if `RelationType` matches this filter.
     pub fn matches(self, rt: RelationType) -> bool {
         if self.active_only && !rt.is_active() {
             return false;

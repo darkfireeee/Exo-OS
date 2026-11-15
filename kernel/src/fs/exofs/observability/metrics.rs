@@ -1,16 +1,16 @@
-//! metrics.rs — Métriques globales ExoFS (no_std).
+//! metrics.rs — ExoFS Global Metrics (no_std).
 //!
-//! Fournit :
-//!  - `MetricId`          : identifiant de métrique (enum).
-//!  - `MetricKind`        : type (counter / gauge / ratio).
-//!  - `ExofsMetrics`      : compteurs atomiques globaux.
-//!  - `MetricsSnapshot`   : snapshot immutable.
-//!  - `MetricsHistory`    : ring de snapshots horodatés.
-//!  - `MetricsDiff`       : différence entre deux snapshots.
-//!  - `EXOFS_METRICS`     : singleton global.
+//! Provides :
+//!  - `MetricId`          : metric identifier (enum).
+//!  - `MetricKind`        : kind (counter / gauge / ratio).
+//!  - `ExofsMetrics`      : global atomic counters.
+//!  - `MetricsSnapshot`   : immutable snapshot.
+//!  - `MetricsHistory`    : ring of timestamped snapshots.
+//!  - `MetricsDiff`       : difference between two snapshots.
+//!  - `EXOFS_METRICS`     : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─── MetricId ────────────────────────────────────────────────────────────────
 
-/// Identifiant structuré d'une métrique.
+/// Structured metric identifier.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MetricId {
@@ -75,19 +75,19 @@ impl MetricId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetricKind {
-    Counter, // monotone croissant
-    Gauge,   // valeur absolue instantanée
-    Ratio,   // rapport calculé (pas stocké directement)
+    Counter, // monotonically increasing
+    Gauge,   // instantaneous absolute value
+    Ratio,   // computed ratio (not stored directly)
 }
 
 // ─── ExofsMetrics ────────────────────────────────────────────────────────────
 
-/// Compteurs atomiques globaux du filesystem.
+/// Global atomic filesystem counters.
 pub struct ExofsMetrics {
     counters: [AtomicU64; MetricId::COUNT],
 }
 
-// SAFETY: AtomicU64 est Sync+Send.
+// SAFETY: AtomicU64 is Sync+Send.
 unsafe impl Sync for ExofsMetrics {}
 unsafe impl Send for ExofsMetrics {}
 
@@ -109,7 +109,7 @@ impl ExofsMetrics {
         self.counters[id as usize].load(Ordering::Relaxed)
     }
 
-    // ── Accesseurs sémantiques ───────────────────────────────────────────────
+    // ── Semantic Accessors ───────────────────────────────────────────────
 
     pub fn inc_read(&self, bytes: u64) {
         self.add(MetricId::Reads, 1);
@@ -166,7 +166,7 @@ impl ExofsMetrics {
         hits.saturating_mul(1000).checked_div(total).unwrap_or(0)
     }
 
-    /// Taux d'erreur * 1000 (ARITH-02).
+    /// Error rate * 1000 (ARITH-02).
     pub fn error_rate_pct10(&self) -> u64 {
         let ops = self
             .get(MetricId::Reads)
@@ -175,7 +175,7 @@ impl ExofsMetrics {
         err.saturating_mul(1000).checked_div(ops).unwrap_or(0)
     }
 
-    /// Snapshot atomique des compteurs.
+    /// Atomic snapshot of counters.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let mut values = [0u64; MetricId::COUNT];
         let mut i = 0usize;
@@ -186,7 +186,7 @@ impl ExofsMetrics {
         MetricsSnapshot { values }
     }
 
-    /// Remet tous les compteurs à zéro.
+    /// Resets all counters to zero.
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < MetricId::COUNT {
@@ -196,12 +196,12 @@ impl ExofsMetrics {
     }
 }
 
-/// Singleton global.
+/// Global singleton.
 pub static EXOFS_METRICS: ExofsMetrics = ExofsMetrics::new_const();
 
 // ─── MetricsSnapshot ─────────────────────────────────────────────────────────
 
-/// Snapshot immuable de tous les compteurs.
+/// Immutable snapshot of all counters.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MetricsSnapshot {
     pub values: [u64; MetricId::COUNT],
@@ -248,7 +248,7 @@ impl MetricsSnapshot {
         self.read_bytes().saturating_add(self.write_bytes())
     }
 
-    /// Différence avec un snapshot précédent.
+    /// Difference with a previous snapshot.
     pub fn diff(&self, prev: &MetricsSnapshot) -> MetricsDiff {
         let mut delta = [0u64; MetricId::COUNT];
         let mut i = 0usize;
@@ -262,7 +262,7 @@ impl MetricsSnapshot {
 
 // ─── MetricsDiff ─────────────────────────────────────────────────────────────
 
-/// Écart entre deux snapshots.
+/// Delta between two snapshots.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MetricsDiff {
     pub delta: [u64; MetricId::COUNT],
@@ -290,7 +290,7 @@ impl MetricsDiff {
 
 pub const METRICS_HISTORY_SIZE: usize = 64;
 
-/// Ring de snapshots horodatés.
+/// Ring of timestamped snapshots.
 pub struct MetricsHistory {
     slots: [MetricsHistorySlot; METRICS_HISTORY_SIZE],
     head: core::sync::atomic::AtomicU64,
@@ -302,7 +302,7 @@ pub struct MetricsHistorySlot {
     pub snapshot: MetricsSnapshot,
 }
 
-// SAFETY: accès par index tournant atomique.
+// SAFETY: access via atomic rotating index.
 unsafe impl Sync for MetricsHistory {}
 
 impl MetricsHistory {
@@ -319,10 +319,10 @@ impl MetricsHistory {
         }
     }
 
-    /// Enregistre le snapshot courant (tick fourni en paramètre).
+    /// Records current snapshot (tick provided as parameter).
     pub fn record(&self, tick: u64, snap: MetricsSnapshot) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % METRICS_HISTORY_SIZE;
-        // SAFETY: index tournant exclusif.
+        // SAFETY: exclusive rotating index.
         unsafe {
             let ptr = &self.slots[idx] as *const MetricsHistorySlot as *mut MetricsHistorySlot;
             (*ptr).tick = tick;
@@ -330,14 +330,14 @@ impl MetricsHistory {
         }
     }
 
-    /// Retourne le dernier slot enregistré.
+    /// Returns the latest recorded slot.
     pub fn latest(&self) -> MetricsHistorySlot {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(METRICS_HISTORY_SIZE).wrapping_sub(1)) % METRICS_HISTORY_SIZE;
         self.slots[idx]
     }
 
-    /// Itère les n derniers slots (RECUR-01 : while).
+    /// Iterates the last n slots (RECUR-01: while).
     pub fn last_n(&self, n: usize, out: &mut Vec<MetricsHistorySlot>) -> ExofsResult<()> {
         let n = n.min(METRICS_HISTORY_SIZE);
         out.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;

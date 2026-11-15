@@ -233,14 +233,23 @@ pub enum KasanError {
 /// # Safety
 /// `addr` must be in covered range [KERNEL_HEAP_START, +KASAN_HEAP_SIZE).
 pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanError> {
-    if !kasan_is_enabled() {
+    if !kasan_is_enabled() || size == 0 {
         return Ok(());
     }
-    if addr < KERNEL_HEAP_START.as_u64() || addr >= KERNEL_HEAP_START.as_u64() + KASAN_HEAP_SIZE {
+    let heap_end = KERNEL_HEAP_START.as_u64() + KASAN_HEAP_SIZE;
+    if addr < KERNEL_HEAP_START.as_u64() || addr >= heap_end {
         return Ok(()); // Outside covered range — no KASAN error (e.g. vmalloc).
     }
 
-    let end = addr + size as u64;
+    let end = match addr.checked_add(size as u64) {
+        Some(v) if v <= heap_end => v,
+        _ => {
+            KASAN_STATS
+                .overflow_detected
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(KasanError::BufferOverflow { addr });
+        }
+    };
     let mut cur = addr;
     while cur < end {
         let shadow = read_shadow(cur);
@@ -261,17 +270,18 @@ pub unsafe fn kasan_check_access(addr: u64, size: usize) -> Result<(), KasanErro
                 Some(KasanError::UninitMemory { addr: cur })
             }
             partial if partial > 0 && partial < 8 => {
-                // Check if access exceeds valid `partial` bytes.
-                let byte_in_word = (cur & 7) as u8;
-                let end_in_word = (byte_in_word + size as u8).min(8);
-                if end_in_word > partial {
+                // Check if access in the current 8-byte word exceeds valid `partial` bytes.
+                let byte_in_word = (cur & 7) as usize;
+                let span_in_word = ((end - cur) as usize).min(8 - byte_in_word);
+                let end_in_word = byte_in_word + span_in_word;
+                if end_in_word > partial as usize {
                     KASAN_STATS
                         .overflow_detected
                         .fetch_add(1, Ordering::Relaxed);
                     Some(KasanError::PartialAccess {
                         addr: cur,
                         accessible: partial,
-                        requested: end_in_word,
+                        requested: end_in_word as u8,
                     })
                 } else {
                     None

@@ -1,25 +1,25 @@
-//! Wrapper Zstd pour ExoFS — implémentation embarquée Ring 0 (Zstd frame minimal).
+//! Zstd wrapper for ExoFS — Ring 0 embedded implementation (minimal Zstd frame).
 //!
-//! L'implémentation embarquée supporte :
+//! The embedded implementation supports:
 //!   - Raw_Literals block (Block_Type = 0)
 //!   - RLE_Literals block (Block_Type = 1)
-//!   Compressed blocks (Block_Type = 2) ne sont pas supportés dans le kernel ;
-//!   un vrai payload compressé par Zstd doit utiliser le binding zstd-sys.
+//!   Compressed blocks (Block_Type = 2) are not supported in the kernel;
+//!   a real Zstd compressed payload must use the zstd-sys binding.
 //!
-//! RÈGLE OOM-02   : try_reserve avant tout push/resize.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE OOM-02   : try_reserve before any push/resize.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
-/// Niveau de compression par défaut (conforme zstd).
+/// Default compression level (zstd compliant).
 pub const ZSTD_DEFAULT_LEVEL: i32 = 3;
-/// Niveau de compression maximum (conforme zstd).
+/// Maximum compression level (zstd compliant).
 pub const ZSTD_MAX_LEVEL: i32 = 22;
-/// Magic number Zstd (RFC 8878 §3.1.1).
+/// Zstd magic number (RFC 8878 §3.1.1).
 const ZSTD_MAGIC: u32 = 0xFD2FB528;
 
 #[repr(C)]
@@ -34,23 +34,23 @@ fn zstd_alloc_layout(size: usize) -> Option<Layout> {
     Layout::from_size_align(total, core::mem::align_of::<usize>()).ok()
 }
 
-/// Shim `ZSTD_malloc` pour environnements noyau `no_std`.
+/// `ZSTD_malloc` shim for `no_std` kernel environments.
 ///
-/// Signature attendue par `zstd-sys` : `(opaque, size) -> ptr`.
+/// Signature expected by `zstd-sys`: `(opaque, size) -> ptr`.
 #[no_mangle]
 pub extern "C" fn ZSTD_malloc(_opaque: *mut c_void, size: usize) -> *mut c_void {
     let layout = match zstd_alloc_layout(size) {
         Some(l) => l,
         None => return core::ptr::null_mut(),
     };
-    // SAFETY: layout validé ci-dessus.
+    // SAFETY: layout validated above.
     let base = unsafe { alloc(layout) };
     if base.is_null() {
         return core::ptr::null_mut();
     }
 
     let header_ptr = base as *mut ZstdAllocHeader;
-    // SAFETY: header_ptr pointe vers une zone allouée de taille >= header.
+    // SAFETY: header_ptr points to allocated zone of size >= header.
     unsafe {
         (*header_ptr).size = size;
     }
@@ -59,9 +59,9 @@ pub extern "C" fn ZSTD_malloc(_opaque: *mut c_void, size: usize) -> *mut c_void 
     payload as *mut c_void
 }
 
-/// Shim `ZSTD_free` pour environnements noyau `no_std`.
+/// `ZSTD_free` shim for `no_std` kernel environments.
 ///
-/// Signature attendue par `zstd-sys` : `(opaque, address)`.
+/// Signature expected by `zstd-sys`: `(opaque, address)`.
 #[no_mangle]
 pub extern "C" fn ZSTD_free(_opaque: *mut c_void, address: *mut c_void) {
     if address.is_null() {
@@ -71,14 +71,14 @@ pub extern "C" fn ZSTD_free(_opaque: *mut c_void, address: *mut c_void) {
     let base = payload.wrapping_sub(core::mem::size_of::<ZstdAllocHeader>());
     let header_ptr = base as *mut ZstdAllocHeader;
 
-    // SAFETY: base a été produit par ZSTD_malloc, header valide.
+    // SAFETY: base was produced by ZSTD_malloc, header is valid.
     let size = unsafe { (*header_ptr).size };
     let layout = match zstd_alloc_layout(size) {
         Some(l) => l,
         None => return,
     };
 
-    // SAFETY: base/layout correspondent à l'allocation effectuée dans ZSTD_malloc.
+    // SAFETY: base/layout match allocation made in ZSTD_malloc.
     unsafe { dealloc(base, layout) };
 }
 
@@ -86,27 +86,27 @@ pub extern "C" fn ZSTD_free(_opaque: *mut c_void, address: *mut c_void) {
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration du compresseur Zstd.
+/// Zstd compressor configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZstdConfig {
-    /// Niveau de compression 1–22 (saturé automatiquement).
+    /// Compression level 1–22 (automatically clamped).
     pub level: i32,
 }
 
 impl ZstdConfig {
-    /// Configuration par défaut (niveau 3).
+    /// Default configuration (level 3).
     pub const fn default_config() -> Self {
         Self {
             level: ZSTD_DEFAULT_LEVEL,
         }
     }
 
-    /// Configuration haute qualité (niveau 9).
+    /// High quality configuration (level 9).
     pub const fn high_quality() -> Self {
         Self { level: 9 }
     }
 
-    /// Niveau saturé entre 1 et ZSTD_MAX_LEVEL.
+    /// Clamped level between 1 and ZSTD_MAX_LEVEL.
     pub fn clamped_level(self) -> i32 {
         self.level.max(1).min(ZSTD_MAX_LEVEL)
     }
@@ -119,18 +119,18 @@ impl Default for ZstdConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Compresseur principal
+// Main compressor
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compresseur/décompresseur Zstd (bloc stateless).
+/// Zstd compressor/decompressor (stateless block).
 pub struct ZstdCompressor;
 
 impl ZstdCompressor {
-    /// Compresse `input` vers `output` avec le niveau spécifié.
+    /// Compresses `input` into `output` with specified level.
     ///
-    /// OOM-02 : try_reserve avant resize.
+    /// OOM-02: try_reserve before resize.
     pub fn compress(input: &[u8], output: &mut Vec<u8>, level: i32) -> ExofsResult<usize> {
-        let _ = level; // niveau ignoré dans l'impl minimaliste (tout = raw)
+        let _ = level; // level ignored in minimal implementation (all = raw)
         if input.is_empty() {
             return Ok(0);
         }
@@ -146,9 +146,9 @@ impl ZstdCompressor {
         Ok(n)
     }
 
-    /// Décompresse `input` vers `output` (taille décompressée connue).
+    /// Decompresses `input` into `output` (known decompressed size).
     ///
-    /// OOM-02 : try_reserve avant resize.
+    /// OOM-02: try_reserve before resize.
     pub fn decompress(
         input: &[u8],
         output: &mut Vec<u8>,
@@ -165,26 +165,26 @@ impl ZstdCompressor {
         Ok(n)
     }
 
-    /// Compresse et retourne un nouveau `Vec<u8>`.
+    /// Compresses and returns a new `Vec<u8>`.
     pub fn compress_to_vec(input: &[u8], level: i32) -> ExofsResult<Vec<u8>> {
         let mut out = Vec::new();
         Self::compress(input, &mut out, level)?;
         Ok(out)
     }
 
-    /// Décompresse et retourne un nouveau `Vec<u8>`.
+    /// Decompresses and returns a new `Vec<u8>`.
     pub fn decompress_to_vec(input: &[u8], decompressed_size: usize) -> ExofsResult<Vec<u8>> {
         let mut out = Vec::new();
         Self::decompress(input, &mut out, decompressed_size)?;
         Ok(out)
     }
 
-    /// Retourne la borne supérieure du buffer de sortie pour `n` octets.
+    /// Returns upper bound of output buffer for `n` bytes.
     pub fn compress_bound(n: usize) -> usize {
         zstd_compress_bound(n)
     }
 
-    /// Teste si `data` commence par le magic Zstd.
+    /// Tests if `data` starts with Zstd magic.
     pub fn is_zstd_frame(data: &[u8]) -> bool {
         if data.len() < 4 {
             return false;
@@ -195,17 +195,17 @@ impl ZstdCompressor {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Décodeur par étapes (streaming stateful)
+// Stepwise decoder (stateful streaming)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Décodeur Zstd avec état (supporte plusieurs appels sequentiels).
+/// Stateful Zstd decoder (supports multiple sequential calls).
 pub struct ZstdDecoder {
     config: ZstdConfig,
     bytes_decoded: usize,
 }
 
 impl ZstdDecoder {
-    /// Crée un nouveau décodeur avec la configuration par défaut.
+    /// Creates a new decoder with default configuration.
     pub const fn new() -> Self {
         Self {
             config: ZstdConfig::default_config(),
@@ -213,7 +213,7 @@ impl ZstdDecoder {
         }
     }
 
-    /// Crée un décodeur avec une configuration personnalisée.
+    /// Creates a decoder with custom configuration.
     pub const fn with_config(config: ZstdConfig) -> Self {
         Self {
             config,
@@ -221,7 +221,7 @@ impl ZstdDecoder {
         }
     }
 
-    /// Décode `input` et accumule dans `output`. Retourne les octets ajoutés.
+    /// Decodes `input` and accumulates into `output`. Returns bytes added.
     pub fn decode(&mut self, input: &[u8], output: &mut Vec<u8>) -> ExofsResult<usize> {
         let prev_len = output.len();
         let bound = input.len().saturating_add(256);
@@ -237,31 +237,31 @@ impl ZstdDecoder {
         Ok(output.len() - prev_len)
     }
 
-    /// Retourne le total d'octets décompressés depuis la création.
+    /// Returns total bytes decompressed since creation.
     pub fn total_decoded(&self) -> usize {
         self.bytes_decoded
     }
 
-    /// Réinitialise le compteur.
+    /// Resets counter.
     pub fn reset(&mut self) {
         self.bytes_decoded = 0;
     }
 
-    /// Retourne la configuration.
+    /// Returns configuration.
     pub fn config(&self) -> ZstdConfig {
         self.config
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Implémentation frame minimale
+// Minimal frame implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn zstd_compress_bound(n: usize) -> usize {
     n.saturating_add(128).saturating_add(n >> 8)
 }
 
-/// Produit un Zstd Frame valide contenant les données en mode Raw_Literals.
+/// Produces a valid Zstd Frame containing data in Raw_Literals mode.
 fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     let mut p = 0usize;
     let use_rle = src
@@ -270,21 +270,21 @@ fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
         .map(|first| src.iter().all(|&b| b == first))
         .unwrap_or(false);
 
-    // Magic (4 octets).
+    // Magic (4 bytes).
     if p + 4 > dst.len() {
         return None;
     }
     dst[p..p + 4].copy_from_slice(&ZSTD_MAGIC.to_le_bytes());
     p += 4;
 
-    // Frame Descriptor minimal : FHD = 0x00 (Single_Segment=0, no checksum).
+    // Minimal Frame Descriptor: FHD = 0x00 (Single_Segment=0, no checksum).
     if p >= dst.len() {
         return None;
     }
     dst[p] = 0x00;
     p += 1;
 
-    // Block Header (3 octets) : Last_Block=1, Block_Type=Raw(0b00) ou RLE(0b01), Block_Size.
+    // Block Header (3 bytes): Last_Block=1, Block_Type=Raw(0b00) or RLE(0b01), Block_Size.
     let bsize = src.len() as u32;
     let block_type = if use_rle { 0x02u32 } else { 0x00u32 };
     let bh = (bsize << 3) | block_type | 0x01u32; // Last_Block bit
@@ -303,7 +303,7 @@ fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
         dst[p] = src[0];
         p += 1;
     } else {
-        // Données brutes.
+        // Raw data.
         if p + src.len() > dst.len() {
             return None;
         }
@@ -314,12 +314,12 @@ fn zstd_compress_raw(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     Some(p)
 }
 
-/// Décompresse un Zstd Frame (Raw_Literals + RLE_Literals supportés).
+/// Decompresses a Zstd Frame (Raw_Literals + RLE_Literals supported).
 fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     let mut sp = 0usize;
     let mut dp = 0usize;
 
-    // Vérifie magic.
+    // Check magic.
     if sp + 4 > src.len() {
         return None;
     }
@@ -329,13 +329,13 @@ fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
     }
     sp += 4;
 
-    // Frame Descriptor — on ignore, avance d'1 octet (implémentation minimale).
+    // Frame Descriptor — ignored, advance 1 byte (minimal implementation).
     if sp >= src.len() {
         return None;
     }
     sp += 1;
 
-    // Traitement itératif des blocs.
+    // Iterative block processing.
     loop {
         if sp + 3 > src.len() {
             return None;
@@ -352,7 +352,7 @@ fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
 
         match block_type {
             0 => {
-                // Raw_Literals : copie directe.
+                // Raw_Literals: direct copy.
                 if sp + block_size > src.len() {
                     return None;
                 }
@@ -364,7 +364,7 @@ fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
                 dp += block_size;
             }
             1 => {
-                // RLE_Literals : un octet répété `block_size` fois.
+                // RLE_Literals: single byte repeated `block_size` times.
                 if sp >= src.len() {
                     return None;
                 }
@@ -378,7 +378,7 @@ fn zstd_decompress_frame(src: &[u8], dst: &mut [u8]) -> Option<usize> {
                 }
                 dp += block_size;
             }
-            _ => return None, // Compressed_Block non supporté.
+            _ => return None, // Compressed_Block not supported.
         }
 
         if last_block {
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(decompressed.len(), input.len());
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_config_high_quality_level() {

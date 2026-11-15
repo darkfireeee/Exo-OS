@@ -1,9 +1,9 @@
-//! relation_cycle.rs — Détection de cycles itérative dans le DAG ExoFS
+//! relation_cycle.rs — Iterative cycle detection in the ExoFS DAG
 //!
-//! Règles appliquées :
-//!  - RECUR-01 : zéro récursion — DFS à pile explicite obligatoirement
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - RECUR-01 : zero recursion — explicit stack DFS strictly required
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -13,28 +13,28 @@ use super::relation_graph::RELATION_GRAPH;
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Profondeur maximale de détection par défaut.
+/// Default maximum detection depth.
 pub const CYCLE_DEFAULT_MAX_DEPTH: u32 = 128;
 
-/// Nombre maximum de nœuds visités lors d'une détection.
+/// Maximum number of visited nodes during detection.
 pub const CYCLE_DEFAULT_MAX_NODES: usize = 8192;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VisitState — états DFS
+// VisitState — DFS states
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État de visite d'un nœud dans le DFS de détection de cycles.
+/// Node visit state in cycle detection DFS.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum VisitState {
-    /// Non encore visité.
+    /// Not yet visited.
     Unvisited = 0,
-    /// Dans la pile DFS courante (potentiel cycle).
+    /// In current DFS stack (potential cycle).
     InStack = 1,
-    /// Traitement terminé (aucun cycle depuis ce nœud).
+    /// Processing completed (no cycle reachable from this node).
     Done = 2,
 }
 
@@ -42,24 +42,24 @@ enum VisitState {
 // CycleReport
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une détection de cycle.
+/// Result of a cycle detection.
 #[derive(Clone, Debug, Default)]
 pub struct CycleReport {
-    /// `true` si un cycle a été détecté.
+    /// `true` if a cycle was detected.
     pub has_cycle: bool,
-    /// Nœuds du cycle (vide si pas de cycle).
+    /// Cycle nodes (empty if no cycle).
     pub cycle_path: Vec<BlobId>,
-    /// Nombre de nœuds explorés avant de conclure.
+    /// Number of nodes explored before conclusion.
     pub n_explored: u32,
 }
 
 impl CycleReport {
-    /// Longueur du cycle détecté (0 si pas de cycle).
+    /// Length of detected cycle (0 if no cycle).
     pub fn cycle_len(&self) -> usize {
         self.cycle_path.len()
     }
 
-    /// Rapport sans cycle.
+    /// Report without cycle.
     pub fn no_cycle(n_explored: u32) -> Self {
         CycleReport {
             has_cycle: false,
@@ -68,7 +68,7 @@ impl CycleReport {
         }
     }
 
-    /// Rapport avec cycle.
+    /// Report with cycle.
     pub fn with_cycle(path: Vec<BlobId>, n_explored: u32) -> Self {
         CycleReport {
             has_cycle: true,
@@ -79,10 +79,10 @@ impl CycleReport {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DFS itératif — état de frame
+// Iterative DFS — frame state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un cadre de la pile DFS itérative.
+/// A frame in the iterative DFS stack.
 struct DfsFrame {
     node: BlobId,
     neighbor_idx: usize,
@@ -101,7 +101,7 @@ impl DfsFrame {
         })
     }
 
-    /// Prochain voisin non encore traité, ou `None` si terminé.
+    /// Next neighbor not yet processed, or `None` if finished.
     fn next_neighbor(&mut self) -> Option<BlobId> {
         if self.neighbor_idx < self.neighbors.len() {
             let n = self.neighbors[self.neighbor_idx];
@@ -117,47 +117,47 @@ impl DfsFrame {
 // RelationCycleDetector
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Détecteur de cycles dans le graphe de relations.
+/// Cycle detector in the relation graph.
 ///
-/// Utilise un DFS itératif à coloration tri-état (Unvisited / InStack / Done).
-/// RECUR-01 : aucun appel récursif.
+/// Uses an iterative DFS with tri-state coloring (Unvisited / InStack / Done).
+/// RECUR-01: no recursive calls.
 pub struct RelationCycleDetector;
 
 impl RelationCycleDetector {
-    /// Détecte si un cycle est accessible depuis `start`.
+    /// Detects if a cycle is reachable from `start`.
     ///
-    /// Itératif (RECUR-01) : pile explicite `Vec<DfsFrame>`.
+    /// Iterative (RECUR-01): explicit `Vec<DfsFrame>` stack.
     pub fn detect_from(start: BlobId, max_depth: u32) -> ExofsResult<CycleReport> {
         let mut state: BTreeMap<[u8; 32], VisitState> = BTreeMap::new();
-        let mut path: Vec<BlobId> = Vec::new(); // chemin courant
+        let mut path: Vec<BlobId> = Vec::new(); // current path
         let mut stack: Vec<DfsFrame> = Vec::new();
         let mut n_explored: u32 = 0;
 
-        // Initialisation
+        // Initialization
         state.insert(*start.as_bytes(), VisitState::InStack);
         path.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         path.push(start);
         stack.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
         stack.push(DfsFrame::new(start, 0)?);
 
-        // Boucle principale (RECUR-01)
+        // Main loop (RECUR-01)
         while let Some(frame) = stack.last_mut() {
             n_explored = n_explored
                 .checked_add(1)
                 .ok_or(ExofsError::OffsetOverflow)?;
 
             if n_explored as usize > CYCLE_DEFAULT_MAX_NODES {
-                // Limite de sécurité — pas de cycle trouvé dans la fenêtre.
+                // Safety limit — no cycle found in the window.
                 return Ok(CycleReport::no_cycle(n_explored));
             }
 
-            // Chercher le prochain voisin non traité.
+            // Look for next unprocessed neighbor.
             let next = frame.next_neighbor();
             let cur_depth = frame.depth;
 
             match next {
                 None => {
-                    // Tous les voisins ont été traités : ce nœud est Done.
+                    // All neighbors have been processed: this node is Done.
                     let node = frame.node;
                     stack.pop();
                     path.pop();
@@ -176,10 +176,10 @@ impl RelationCycleDetector {
 
                     match s {
                         VisitState::InStack => {
-                            // Cycle détecté !
-                            // Reconstituer le segment du cycle depuis `path`.
+                            // Cycle detected!
+                            // Reconstitute cycle segment from `path`.
                             let mut cycle: Vec<BlobId> = Vec::new();
-                            // Trouver l'index du nœud dans path.
+                            // Find node index in path.
                             let start_idx = path
                                 .iter()
                                 .position(|b| b.as_bytes() == &nbr_key)
@@ -190,11 +190,11 @@ impl RelationCycleDetector {
                             for n in &path[start_idx..] {
                                 cycle.push(*n);
                             }
-                            cycle.push(nbr); // arête de retour
+                            cycle.push(nbr); // back edge
                             return Ok(CycleReport::with_cycle(cycle, n_explored));
                         }
                         VisitState::Done => {
-                            // Déjà entièrement traité, pas de cycle par ici.
+                            // Fully processed, no cycle this way.
                         }
                         VisitState::Unvisited => {
                             let new_depth =
@@ -213,9 +213,9 @@ impl RelationCycleDetector {
         Ok(CycleReport::no_cycle(n_explored))
     }
 
-    /// Lance la détection depuis tous les nœuds du graphe.
+    /// Runs detection from all nodes in the graph.
     ///
-    /// Retourne le premier cycle trouvé ou un rapport sans cycle.
+    /// Returns the first cycle found or a report without cycle.
     pub fn detect_global(max_depth: u32) -> ExofsResult<CycleReport> {
         let all_edges = RELATION_GRAPH.all_edges();
         let mut seen: BTreeMap<[u8; 32], ()> = BTreeMap::new();
@@ -234,12 +234,12 @@ impl RelationCycleDetector {
         Ok(CycleReport::no_cycle(seen.len() as u32))
     }
 
-    /// Vérifie qu'ajouter l'arc `from → to` ne créerait pas de cycle.
+    /// Verifies that adding edge `from -> to` would not create a cycle.
     ///
-    /// Retourne `true` si l'ajout est sûr (pas de cycle).
+    /// Returns `true` if addition is safe (no cycle).
     pub fn is_safe_to_add(from: &BlobId, to: &BlobId, max_depth: u32) -> ExofsResult<bool> {
-        // Un cycle serait créé si `from` est déjà accessible depuis `to`.
-        // On lance un BFS depuis `to` et on vérifie si `from` est atteignable.
+        // A cycle would be created if `from` is already reachable from `to`.
+        // Run a BFS from `to` and check if `from` is reachable.
         use alloc::collections::VecDeque;
         let mut visited: BTreeMap<[u8; 32], ()> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
@@ -247,14 +247,14 @@ impl RelationCycleDetector {
         visited.insert(*to.as_bytes(), ());
         queue.push_back((*to, 0));
 
-        // Si from == to, cycle immédiat.
+        // If from == to, immediate cycle.
         if from.as_bytes() == to.as_bytes() {
             return Ok(false);
         }
 
         while let Some((node, depth)) = queue.pop_front() {
             if node.as_bytes() == from.as_bytes() {
-                return Ok(false); // cycle détecté si on ajoutait l'arc
+                return Ok(false); // cycle detected if edge were added
             }
             let next_depth = depth.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
             if next_depth > max_depth {
@@ -274,31 +274,31 @@ impl RelationCycleDetector {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TopologicalSorter — tri topologique itératif (Kahn)
+// TopologicalSorter — iterative topological sort (Kahn)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat du tri topologique.
+/// Topological sort result.
 #[derive(Debug, Default)]
 pub struct TopoResult {
-    /// Ordre topologique (du source vers les sinks).
+    /// Topological order (from source towards sinks).
     pub order: Vec<BlobId>,
-    /// `true` si un cycle a empêché un tri complet.
+    /// `true` if a cycle prevented a complete sort.
     pub has_cycle: bool,
 }
 
-/// Tri topologique de Kahn (itératif, RECUR-01).
+/// Kahn topological sort (iterative, RECUR-01).
 ///
-/// Requiert l'ensemble des nœuds et arcs fourni explicitement pour
-/// éviter toute dépendance à un état global mutable.
+/// Requires node and edge sets to be provided explicitly to
+/// avoid any dependency on global mutable state.
 pub struct TopologicalSorter;
 
 impl TopologicalSorter {
-    /// Tri topologique depuis les nœuds donnés.
+    /// Topological sort from given nodes.
     ///
-    /// - `nodes`     : liste des nœuds à trier.
-    /// - `edges`     : liste des arcs (from, to).
+    /// - `nodes`: list of nodes to sort.
+    /// - `edges`: list of edges (from, to).
     pub fn sort(nodes: &[BlobId], edges: &[(BlobId, BlobId)]) -> ExofsResult<TopoResult> {
-        // Calcule in-degree pour chaque nœud.
+        // Compute in-degree for each node.
         let mut in_degree: BTreeMap<[u8; 32], u32> = BTreeMap::new();
         let mut adj: BTreeMap<[u8; 32], Vec<BlobId>> = BTreeMap::new();
 
@@ -320,7 +320,7 @@ impl TopologicalSorter {
                 .ok_or(ExofsError::OffsetOverflow)?;
         }
 
-        // File de départ : tous les nœuds à in-degree 0.
+        // Starting queue: all nodes with in-degree 0.
         let mut queue: alloc::collections::VecDeque<BlobId> = alloc::collections::VecDeque::new();
         for (key, &deg) in &in_degree {
             if deg == 0 {
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_detect_isolated_no_cycle() {
-        // Nœud sans arcs sortants → pas de cycle.
+        // Node without outgoing edges -> no cycle.
         let r = RelationCycleDetector::detect_from(b(99), 10).test_unwrap();
         assert!(!r.has_cycle);
     }
@@ -391,23 +391,23 @@ mod tests {
 
     #[test]
     fn test_is_safe_to_add_self_loop() {
-        // from == to → cycle immédiat.
+        // from == to -> immediate cycle.
         let safe = RelationCycleDetector::is_safe_to_add(&b(10), &b(10), 5).test_unwrap();
         assert!(!safe);
     }
 
     #[test]
     fn test_is_safe_no_existing_arc() {
-        // Pas d'arc entre 20 et 21 → sûr d'ajouter.
+        // No edge between 20 and 21 -> safe to add.
         let safe = RelationCycleDetector::is_safe_to_add(&b(20), &b(21), 5).test_unwrap();
         assert!(safe);
     }
 
     #[test]
     fn test_detect_global_empty() {
-        // Graphe vide (ou nœuds sans arcs globaux vers des blobs fictifs).
+        // Empty graph (or nodes without global edges to fictitious blobs).
         let r = RelationCycleDetector::detect_global(10).test_unwrap();
-        // Pas de cycle dans un graphe vide.
+        // No cycle in empty graph.
         assert!(!r.has_cycle);
     }
 
@@ -421,7 +421,7 @@ mod tests {
         let res = TopologicalSorter::sort(&nodes, &edges).test_unwrap();
         assert!(!res.has_cycle);
         assert_eq!(res.order.len(), 3);
-        // 1 doit précéder 2 et 3.
+        // 1 must precede 2 and 3.
         let pos1 = res
             .order
             .iter()

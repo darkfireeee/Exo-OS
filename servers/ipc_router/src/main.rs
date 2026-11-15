@@ -49,13 +49,19 @@ impl Registry {
         }
     }
 
-    /// Enregistre un endpoint. Retourne false si la table est pleine.
+    /// Enregistre ou met à jour un endpoint de manière idempotente. Retourne false si la table est pleine.
     fn register_hash(&mut self, h: u64, endpoint: u32) -> bool {
-        let n = self.count.load(Ordering::Relaxed) as usize;
+        let n = (self.count.load(Ordering::Relaxed) as usize).min(64);
+        for i in 0..n {
+            if self.names[i] == h {
+                self.endpoints[i] = endpoint;
+                return true;
+            }
+        }
         if n >= 64 {
             return false;
         }
-        self.names[n]     = h;
+        self.names[n] = h;
         self.endpoints[n] = endpoint;
         self.count.store((n + 1) as u32, Ordering::Release);
         true
@@ -234,20 +240,27 @@ pub extern "C" fn _start() -> ! {
                             if looked_up > 0 && looked_up <= u32::MAX as i64 {
                                 let kernel_ep = looked_up as u32;
                                 if kernel_ep != ep {
-                                    debug_write(b"ipc_router: register ep mismatch, kernel wins\n");
+                                    debug_write(b"ipc_router: register rejected (endpoint mismatch)\n");
+                                    continue;
                                 }
-                                registry.register_hash(name_hash, kernel_ep);
-                                // FIX-EXOCORDON-03 : classifier le PID runtime de
-                                // l'expéditeur pour le DAG (les PIDs Ring1 sont
-                                // dynamiques, la table statique ne suffit pas).
-                                if let Some(sid) =
+                                let Some(sid) =
                                     exo_ipc_router::exocordon::service_id_for_name(&name_buf[..n])
-                                {
-                                    let _ = exo_ipc_router::exocordon::register_pid(
-                                        msg.sender_pid,
-                                        sid,
-                                    );
+                                else {
+                                    debug_write(b"ipc_router: register rejected (unknown service class)\n");
+                                    continue;
+                                };
+                                if !exo_ipc_router::exocordon::register_pid(msg.sender_pid, sid) {
+                                    debug_write(b"ipc_router: register rejected (pid/service hijack denied)\n");
+                                    continue;
                                 }
+                                let _ = registry.register_hash(name_hash, kernel_ep);
+                                let _ = exo_ipc_router::router::add_route(
+                                    kernel_ep,
+                                    10,
+                                    kernel_ep,
+                                    1,
+                                    exo_ipc_router::router::RoutePolicy::Direct,
+                                );
                             } else {
                                 debug_write(b"ipc_router: register rejected (unknown to kernel)\n");
                             }
@@ -293,11 +306,15 @@ pub extern "C" fn _start() -> ! {
                         );
                         continue;
                     }
+                    // Résoudre le next-hop configuré (fallback sur dest si route directe).
+                    let target_ep = exo_ipc_router::router::resolve_route(dest)
+                        .map(|(hop, _)| hop)
+                        .unwrap_or(dest);
                     // Forward via SYS_IPC_SEND vers l'endpoint de destination avec timeout de sécurité.
                     let _ = unsafe {
                         syscall::syscall6(
                             syscall::SYS_IPC_SEND,
-                            dest as u64,
+                            target_ep as u64,
                             payload_ptr(&msg, 4) as u64,
                             route_payload_len as u64,
                             syscall::IPC_FLAG_TIMEOUT | 10,

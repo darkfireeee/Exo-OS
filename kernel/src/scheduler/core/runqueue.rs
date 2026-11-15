@@ -20,8 +20,10 @@
 // LOCK ORDERING (regle_bonus.md): Memory locks -> Scheduler locks
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use super::preempt::MAX_CPUS;
+use super::preempt::{IrqGuard, MAX_CPUS};
 use super::task::{CpuId, SchedPolicy, TaskState, ThreadControlBlock};
+use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -252,8 +254,15 @@ impl CfsRunQueue {
         }
 
         // SAFETY: tcb is a valid NonNull — same invariant as enqueue().
-        let vr = unsafe { tcb.as_ref() }.vruntime.load(Ordering::Acquire);
-        let weight = unsafe { tcb.as_ref() }.priority.cfs_weight();
+        let tcb_ref = unsafe { tcb.as_ref() };
+        let weight = tcb_ref.priority.cfs_weight();
+        let slice_ns = self.timeslice_ns(weight);
+        crate::scheduler::policies::cfs::normalize_vruntime_on_enqueue(
+            tcb_ref,
+            self.min_vruntime.load(Ordering::Relaxed),
+            slice_ns,
+        );
+        let vr = tcb_ref.vruntime.load(Ordering::Acquire);
 
         // Bisection to find insertion position.
         let pos = {
@@ -303,7 +312,8 @@ impl CfsRunQueue {
         self.weight_sum = self.weight_sum.saturating_sub(weight);
         unsafe { tcb.as_ref() }.clear_queued();
 
-        // Update min_vruntime.
+        // Update min_vruntime monotonically so newly normalized or woken threads
+        // never drag the CFS virtual clock backward.
         if self.count > 0 {
             // SAFETY: tasks[0] is Some because self.count > 0.
             let new_min = unsafe {
@@ -313,8 +323,7 @@ impl CfsRunQueue {
                     .vruntime
                     .load(Ordering::Relaxed)
             };
-            // Release publication: readers observe bound after removal.
-            self.min_vruntime.store(new_min, Ordering::Release);
+            self.min_vruntime.fetch_max(new_min, Ordering::Release);
         }
 
         Some(tcb)
@@ -391,9 +400,12 @@ impl RunQueueStats {
 ///
 /// FIX-RQ-ALIGN-01: #[repr(C, align(64))] guarantees that two adjacent
 /// PerCpuRunQueue entries in PER_CPU_RQ[MAX_CPUS] do not share cache lines on
-/// their hot fields (cpu, stats, current) -> no SMP false sharing.
+/// their hot fields (stats, cpu, current) -> no SMP false sharing.
+/// `stats` MUST stay at offset 0 so `yield_fast_path` in `fast_path.s` reads `stats.nr_running`.
 #[repr(C, align(64))]
 pub struct PerCpuRunQueue {
+    /// Statistics (offset 0 — hardcoded in `fast_path.s`).
+    pub stats: RunQueueStats,
     /// Owning CPU ID.
     pub cpu: CpuId,
     /// Real-time queue.
@@ -404,29 +416,55 @@ pub struct PerCpuRunQueue {
     pub idle_thread: Option<NonNull<ThreadControlBlock>>,
     /// Current thread (currently running).
     pub current: Option<NonNull<ThreadControlBlock>>,
-    /// Statistics.
-    pub stats: RunQueueStats,
     /// Clock vruntime — monotonic time used for CFS lag.
     pub clock_task_ns: u64,
 }
 
-// FIX-RQ-ALIGN-01: compile-time alignment check.
+// FIX-RQ-ALIGN-01 + fast_path.s yield_fast_path offset assertions.
 const _: () = assert!(
     core::mem::align_of::<PerCpuRunQueue>() >= 64,
     "FIX-RQ-ALIGN-01: PerCpuRunQueue doit être aligné sur 64 octets minimum"
+);
+const _: () = assert!(
+    core::mem::offset_of!(PerCpuRunQueue, stats)
+        + core::mem::offset_of!(RunQueueStats, nr_running)
+        == 40,
+    "yield_fast_path (fast_path.s) expects stats.nr_running at offset 40"
 );
 
 impl PerCpuRunQueue {
     /// Creates a run queue for CPU `cpu`.
     pub fn new(cpu: CpuId) -> Self {
         Self {
+            stats: RunQueueStats::new(),
             cpu,
             rt: RtRunQueue::new(),
             cfs: CfsRunQueue::new(),
             idle_thread: None,
             current: None,
-            stats: RunQueueStats::new(),
             clock_task_ns: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn dec_nr_running(&self) {
+        let prev = self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+        self.update_load_avg(prev.saturating_sub(1) as u64);
+    }
+
+    /// Drains pending cross-CPU migrations targeting this CPU into its local run queue.
+    ///
+    /// # Safety
+    /// Caller holds this CPU's run queue lock.
+    pub unsafe fn drain_migrations(&mut self) {
+        while let Some(tcb) = crate::scheduler::smp::migration::pop_pending_migration(self.cpu) {
+            if !self.enqueue(tcb) {
+                let state = tcb.as_ref().state();
+                debug_assert!(
+                    state != TaskState::Runnable,
+                    "drain_migrations: failed to enqueue runnable migrated TCB"
+                );
+            }
         }
     }
 
@@ -530,7 +568,7 @@ impl PerCpuRunQueue {
         };
         if removed {
             unsafe { tcb.as_ref() }.clear_queued();
-            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            self.dec_nr_running();
         }
         removed
     }
@@ -554,8 +592,7 @@ impl PerCpuRunQueue {
             unsafe { crate::scheduler::timer::deadline_timer::dl_pick_next(self.cpu.0 as usize) };
         if let Some(tcb) = dl_candidate {
             self.stats.picks_dl.fetch_add(1, Ordering::Relaxed);
-            // BUG-FIX B (DL): decrement nr_running for DEADLINE thread.
-            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            self.dec_nr_running();
             return Some(tcb);
         }
 
@@ -563,8 +600,7 @@ impl PerCpuRunQueue {
         if self.cfs.count > 0 {
             self.stats.picks_cfs.fetch_add(1, Ordering::Relaxed);
             let tcb = self.cfs.dequeue_min()?;
-            // BUG-FIX B (CFS): decrement nr_running for CFS thread.
-            self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+            self.dec_nr_running();
             return Some(tcb);
         }
 
@@ -644,10 +680,14 @@ impl PerCpuRunQueue {
         &mut self,
         dst_cpu: CpuId,
     ) -> Option<NonNull<ThreadControlBlock>> {
-        // Search from the end of CFS array (descending order of vruntime).
+        // Search from the end of CFS array (descending order of vruntime),
+        // skipping `self.current` so a switching thread is never pulled mid-switch.
         let mut found_idx = None;
         for i in (0..self.cfs.count).rev() {
             if let Some(tcb) = self.cfs.tasks[i] {
+                if self.current == Some(tcb) {
+                    continue;
+                }
                 // SAFETY: tasks[i] is Some and valid (CfsRunQueue invariant).
                 if unsafe { tcb.as_ref() }.allowed_on(dst_cpu) {
                     found_idx = Some(i);
@@ -673,7 +713,7 @@ impl PerCpuRunQueue {
             self.cfs.weight_sum = self.cfs.weight_sum.saturating_sub(weight);
             unsafe { t.as_ref() }.clear_queued();
         }
-        self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
+        self.dec_nr_running();
         tcb
     }
 
@@ -692,36 +732,30 @@ impl PerCpuRunQueue {
     pub fn dequeue_highest_rt(&mut self) -> Option<NonNull<ThreadControlBlock>> {
         let tcb = self.rt.dequeue_highest()?;
         unsafe { tcb.as_ref() }.clear_queued();
-        let prev = self.stats.nr_running.fetch_sub(1, Ordering::Relaxed);
-        self.update_load_avg(prev.saturating_sub(1) as u64);
+        self.dec_nr_running();
         Some(tcb)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Global run queue array — 1 per CPU, static
+// Global run queue array — 1 per CPU, protected by per-CPU IRQ-safe spinlocks
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Global run queues — one per logical CPU.
-/// Unprotected because each CPU accesses ONLY its own (except migration).
-// Per-CPU run queues — initialized by init_percpu() prior to any access.
-// SAFETY: MaybeUninit avoids calling new() at compile time.
-use core::mem::MaybeUninit;
 static mut PER_CPU_RQ: [MaybeUninit<PerCpuRunQueue>; MAX_CPUS] = {
     // SAFETY: MaybeUninit::uninit() is valid for uninitialized storage.
     unsafe { MaybeUninit::uninit().assume_init() }
 };
+#[repr(C, align(64))]
+struct RqSpinLock(AtomicBool, [u8; 63]);
+
+static RQ_LOCKS: [RqSpinLock; MAX_CPUS] =
+    [const { RqSpinLock(AtomicBool::new(false), [0u8; 63]) }; MAX_CPUS];
+
 static RUNQUEUE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static RUNQUEUE_NR_CPUS: AtomicU32 = AtomicU32::new(0);
 
-/// Returns mutable pointer to run queue of given CPU.
-///
-/// # Safety
-/// The run queue MUST have been initialized by `init_percpu` prior to any call.
-/// Caller must guarantee it accesses the run queue of its own CPU
-/// with preemption disabled, OR that it holds the migration lock.
 #[inline(always)]
-pub unsafe fn run_queue(cpu: CpuId) -> &'static mut PerCpuRunQueue {
+fn validate_cpu_rq(cpu: CpuId) -> usize {
     assert!(
         (cpu.0 as usize) < MAX_CPUS,
         "run_queue: cpu {} hors limites (MAX_CPUS={})",
@@ -739,7 +773,124 @@ pub unsafe fn run_queue(cpu: CpuId) -> &'static mut PerCpuRunQueue {
         cpu.0,
         configured_cpus,
     );
-    PER_CPU_RQ[cpu.0 as usize].assume_init_mut()
+    cpu.0 as usize
+}
+
+#[inline(always)]
+fn acquire_rq_spinlock(idx: usize) {
+    while RQ_LOCKS[idx]
+        .0
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline(always)]
+fn release_rq_spinlock(idx: usize) {
+    RQ_LOCKS[idx].0.store(false, Ordering::Release);
+}
+
+/// RAII guard for exclusive IRQ-safe access to a CPU's `PerCpuRunQueue`.
+pub struct RunQueueGuard {
+    cpu_idx: usize,
+    irq: IrqGuard,
+}
+
+impl RunQueueGuard {
+    /// Releases the run-queue spinlock and preemption depth while keeping IRQs
+    /// disabled, returning saved `RFLAGS` for restoration after `context_switch`.
+    #[inline(always)]
+    pub fn unlock_keep_irqs(self) -> u64 {
+        let cpu_idx = self.cpu_idx;
+        let irq = unsafe { core::ptr::read(&self.irq) };
+        core::mem::forget(self);
+        release_rq_spinlock(cpu_idx);
+        irq.release_keep_irqs_disabled()
+    }
+}
+
+impl Deref for RunQueueGuard {
+    type Target = PerCpuRunQueue;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { PER_CPU_RQ[self.cpu_idx].assume_init_ref() }
+    }
+}
+
+impl DerefMut for RunQueueGuard {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { PER_CPU_RQ[self.cpu_idx].assume_init_mut() }
+    }
+}
+
+impl Drop for RunQueueGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        release_rq_spinlock(self.cpu_idx);
+    }
+}
+
+/// Pairwise RAII lock guard acquiring `min(a, b)` then `max(a, b)` (RULE LB-01).
+pub struct TwoRunQueuesGuard {
+    first_idx: usize,
+    second_idx: usize,
+    _irq: IrqGuard,
+}
+
+impl Drop for TwoRunQueuesGuard {
+    fn drop(&mut self) {
+        release_rq_spinlock(self.second_idx);
+        release_rq_spinlock(self.first_idx);
+    }
+}
+
+/// Executes with two run queues locked in strict increasing CPU order (`RULE LB-01`).
+///
+/// # Safety
+/// Both CPUs must be initialized and no run queue lock may already be held on this CPU.
+pub unsafe fn with_two_run_queues<R>(
+    a: CpuId,
+    b: CpuId,
+    f: impl FnOnce(&mut PerCpuRunQueue, &mut PerCpuRunQueue) -> R,
+) -> Option<R> {
+    if a == b {
+        return None;
+    }
+    let a_idx = validate_cpu_rq(a);
+    let b_idx = validate_cpu_rq(b);
+    let (first_idx, second_idx) = if a_idx < b_idx {
+        (a_idx, b_idx)
+    } else {
+        (b_idx, a_idx)
+    };
+    let irq = IrqGuard::new();
+    acquire_rq_spinlock(first_idx);
+    acquire_rq_spinlock(second_idx);
+    let _guard = TwoRunQueuesGuard {
+        first_idx,
+        second_idx,
+        _irq: irq,
+    };
+    let ptr_a = PER_CPU_RQ[a_idx].as_mut_ptr();
+    let ptr_b = PER_CPU_RQ[b_idx].as_mut_ptr();
+    Some(f(&mut *ptr_a, &mut *ptr_b))
+}
+
+/// Acquires the IRQ-safe per-CPU spinlock and returns an exclusive guard for `cpu`'s run queue.
+///
+/// # Safety
+/// The run queue MUST have been initialized by `init_percpu` prior to any call.
+/// Callers must never hold a `RunQueueGuard` across `context_switch()` (`unlock_keep_irqs` first).
+#[inline(always)]
+pub unsafe fn run_queue(cpu: CpuId) -> RunQueueGuard {
+    let idx = validate_cpu_rq(cpu);
+    let irq = IrqGuard::new();
+    acquire_rq_spinlock(idx);
+    RunQueueGuard { cpu_idx: idx, irq }
 }
 
 /// Initializes run queues for all CPUs.
@@ -750,6 +901,7 @@ pub fn init_percpu(nr_cpus: usize) {
     // SAFETY: init called once, prior to any user thread.
     unsafe {
         for i in 0..configured_cpus {
+            RQ_LOCKS[i].0.store(false, Ordering::Relaxed);
             PER_CPU_RQ[i].write(PerCpuRunQueue::new(CpuId(i as u32)));
         }
     }

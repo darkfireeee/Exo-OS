@@ -814,6 +814,22 @@ pub fn sleep_ms(ms: u64) {
     let _ = unsafe { syscall::syscall2(syscall::SYS_NANOSLEEP, &ts as *const _ as u64, 0) };
 }
 
+pub fn sleep_ms_interruptible(ms: u64) -> bool {
+    if check_ctrl_c_poll() {
+        return true;
+    }
+    let mut remaining = ms;
+    while remaining > 0 {
+        let slice = remaining.min(20);
+        sleep_ms(slice);
+        if check_ctrl_c_poll() {
+            return true;
+        }
+        remaining -= slice;
+    }
+    false
+}
+
 pub fn monotonic_ns() -> Option<u64> {
     let mut ts = Timespec::default();
     let rc = unsafe {

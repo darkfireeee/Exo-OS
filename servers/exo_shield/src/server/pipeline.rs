@@ -171,11 +171,27 @@ pub fn classify_event_ml(
     ml::ensemble_classify(event.pid, et_raw, &fv).classification
 }
 
+#[cfg(target_os = "none")]
+fn notify_kernel_containment(cmd: u32, pid: u32) -> bool {
+    if pid <= 2 || pid == runtime_pid() {
+        return false;
+    }
+    let arg = ((cmd as u64) << 32) | (pid as u64);
+    let rc = unsafe { syscall::syscall3(syscall::SYS_EXO_SHIELD_DRAIN, 0, 0, arg) };
+    rc >= 0
+}
+
+#[cfg(not(target_os = "none"))]
+fn notify_kernel_containment(_cmd: u32, _pid: u32) -> bool {
+    false
+}
+
 pub fn apply_containment(pid: u32, tick: u64) -> bool {
     let engine_ok = engine::mark_process_contained(pid, tick);
     let sandbox_ok = sandbox::quarantine_pid(pid);
     let firewall_ok = network::block_pid(pid);
-    if engine_ok || sandbox_ok || firewall_ok {
+    let kernel_ok = notify_kernel_containment(1, pid);
+    if engine_ok || sandbox_ok || firewall_ok || kernel_ok {
         forensics::record_timeline_event(
             forensics::TimelineEventType::ThreatDetected,
             pid,
@@ -184,14 +200,15 @@ pub fn apply_containment(pid: u32, tick: u64) -> bool {
             0,
         );
     }
-    engine_ok || sandbox_ok || firewall_ok
+    engine_ok || sandbox_ok || firewall_ok || kernel_ok
 }
 
 pub fn release_containment(pid: u32) -> bool {
     let engine_ok = engine::release_process(pid);
     let sandbox_ok = sandbox::release_quarantine(pid);
     let firewall_ok = network::unblock_pid(pid);
-    if engine_ok || sandbox_ok || firewall_ok {
+    let kernel_ok = notify_kernel_containment(2, pid);
+    if engine_ok || sandbox_ok || firewall_ok || kernel_ok {
         forensics::record_timeline_event(
             forensics::TimelineEventType::PolicyChange,
             pid,
@@ -200,7 +217,7 @@ pub fn release_containment(pid: u32) -> bool {
             0,
         );
     }
-    engine_ok || sandbox_ok || firewall_ok
+    engine_ok || sandbox_ok || firewall_ok || kernel_ok
 }
 
 pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) -> HookPipelineResult {
@@ -348,10 +365,11 @@ pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) ->
         engine::EventType::Syscall => {
             let args = [event.arg0, event.arg1, 0];
             let syscall_nr = event.opcode;
-            let sandbox_denied = if syscall_nr <= u8::MAX as u32 {
-                !sandbox::quarantine_allows_syscall(event.pid, syscall_nr as u8)
-            } else {
-                sandbox::is_pid_quarantined(event.pid)
+            let sandbox_denied = match u16::try_from(syscall_nr) {
+                Ok(nr) if (nr as usize) < sandbox::syscall_filter::MAX_SYSCALLS => {
+                    !sandbox::quarantine_allows_syscall(event.pid, nr)
+                }
+                _ => sandbox::is_pid_quarantined(event.pid),
             };
             if sandbox_denied || hooks::pre_syscall_check(event.pid, syscall_nr, args) {
                 result.blocked = true;

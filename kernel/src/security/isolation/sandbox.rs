@@ -65,7 +65,7 @@ pub mod syscall_nr {
     pub const GETUID: usize = 102;
     pub const GETGID: usize = 104;
 
-    pub const MAX_SYSCALL: usize = 256;
+    pub const MAX_SYSCALL: usize = 576;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,9 +99,9 @@ pub enum SandboxAction {
 ///   - `log_bitmap`    : 4 × u64 — 1 if syscall → log + deny
 #[derive(Clone)]
 pub struct SandboxPolicy {
-    allowed_bitmap: [u64; 4],
-    kill_bitmap: [u64; 4],
-    log_bitmap: [u64; 4],
+    allowed_bitmap: [u64; 9],
+    kill_bitmap: [u64; 9],
+    log_bitmap: [u64; 9],
     /// Number of recorded denials (instrumentation).
     denials: u64,
     /// Number of recorded allowances.
@@ -112,9 +112,9 @@ impl SandboxPolicy {
     /// Creates a deny-all policy (no syscall allowed).
     pub const fn deny_all() -> Self {
         Self {
-            allowed_bitmap: [0u64; 4],
-            kill_bitmap: [0u64; 4],
-            log_bitmap: [0u64; 4],
+            allowed_bitmap: [0u64; 9],
+            kill_bitmap: [0u64; 9],
+            log_bitmap: [0u64; 9],
             denials: 0,
             allows: 0,
         }
@@ -123,9 +123,9 @@ impl SandboxPolicy {
     /// Creates an allow-all policy (all syscalls allowed).
     pub const fn allow_all() -> Self {
         Self {
-            allowed_bitmap: [!0u64; 4],
-            kill_bitmap: [0u64; 4],
-            log_bitmap: [0u64; 4],
+            allowed_bitmap: [!0u64; 9],
+            kill_bitmap: [0u64; 9],
+            log_bitmap: [0u64; 9],
             denials: 0,
             allows: 0,
         }
@@ -262,7 +262,7 @@ impl SandboxPolicy {
 
     /// Restricts current policy with `other` (intersection of allowed).
     pub fn intersect_with(&mut self, other: &SandboxPolicy) {
-        for i in 0..4 {
+        for i in 0..9 {
             self.allowed_bitmap[i] &= other.allowed_bitmap[i];
             self.kill_bitmap[i] |= other.kill_bitmap[i];
             self.log_bitmap[i] |= other.log_bitmap[i];

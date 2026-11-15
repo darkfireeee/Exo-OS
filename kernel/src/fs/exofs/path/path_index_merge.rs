@@ -1,12 +1,12 @@
-//! path_index_merge.rs — Fusion de deux PathIndex en un seul index.
+//! path_index_merge.rs — Merging two PathIndex instances into a single index.
 //!
-//! Opération inverse du split. Utilisée lors du vidage d un sous-répertoire ou
-//! après une série de suppressions qui fait chuter le nombre d entrées en-dessous
-//! du seuil de merge.
+//! Inverse operation of split. Used when emptying a subdirectory or
+//! after a series of deletions that causes the number of entries to drop below
+//! the merge threshold.
 //!
-//! ## Règles spec appliquées
-//! - **ARITH-02** : `checked_add` sur les calculs de taille/count.
-//! - **OOM-02** : `try_reserve(1)` avant les insertions.
+//! ## Applied spec rules
+//! - **ARITH-02** : `checked_add` on size/count calculations.
+//! - **OOM-02** : `try_reserve(1)` before insertions.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -17,7 +17,7 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult, ObjectId};
 
 // ── MergeResult ───────────────────────────────────────────────────────────────
 
-/// Résultat d une fusion.
+/// Result of a merge operation.
 pub struct MergeResult {
     pub merged: PathIndex,
     pub total_count: usize,
@@ -39,7 +39,7 @@ pub struct MergeMetrics {
 pub struct PathIndexMerger;
 
 impl PathIndexMerger {
-    /// Fusionne `low` et `high` en un nouvel index.
+    /// Merges `low` and `high` into a new index.
     pub fn merge(
         low: &PathIndex,
         high: &PathIndex,
@@ -308,16 +308,16 @@ impl MergeRequest {
 
 // ── MergeValidator ───────────────────────────────────────────────────────────
 
-/// Validateur post-merge — vérifie l intégrité du résultat.
+/// Post-merge validator — verifies integrity of the result.
 pub struct MergeValidator;
 
 impl MergeValidator {
-    /// Vérifie que le résultat contient bien les entrées attendues.
+    /// Verifies that the result contains all expected entries.
     ///
-    /// - Aucune entrée en double.
-    /// - Toutes les entrées de `low` et `high` sont présentes (sauf doublons).
+    /// - No duplicate entries.
+    /// - All entries from `low` and `high` are present (except duplicates).
     pub fn verify(result: &MergeResult, low: &PathIndex, high: &PathIndex) -> ExofsResult<()> {
-        // Vérifier count cohérent.
+        // Verify count consistency.
         let max_expected = low
             .len()
             .checked_add(high.len())
@@ -325,14 +325,14 @@ impl MergeValidator {
         if result.total_count > max_expected {
             return Err(ExofsError::InternalError);
         }
-        // Vérifier que toutes les entrées de low sont dans merged.
+        // Verify that all entries from low are in merged.
         for e in low.entries() {
             let comp = validate_component(e.name_bytes()).map_err(|_| ExofsError::InternalError)?;
             if result.merged.lookup(&comp).is_none() {
                 return Err(ExofsError::InternalError);
             }
         }
-        // Vérifier que toutes les entrées de high sont dans merged.
+        // Verify that all entries from high are in merged.
         for e in high.entries() {
             let comp = validate_component(e.name_bytes()).map_err(|_| ExofsError::InternalError)?;
             if result.merged.lookup(&comp).is_none() {
@@ -342,16 +342,16 @@ impl MergeValidator {
         Ok(())
     }
 
-    /// Vérifie qu aucune entrée en double n existe dans l index fusionné.
+    /// Verifies that no duplicate entries exist in the merged index.
     pub fn verify_no_duplicates(merged: &PathIndex) -> ExofsResult<()> {
-        // Collecter tous les hashes.
+        // Collect all hashes.
         let mut hashes: Vec<u64> = Vec::new();
         for e in merged.entries() {
             hashes.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
             hashes.push(e.hash);
         }
         hashes.sort_unstable();
-        // Vérifier l unicité.
+        // Verify uniqueness.
         for w in hashes.windows(2) {
             if w[0] == w[1] {
                 return Err(ExofsError::InternalError);
@@ -363,14 +363,14 @@ impl MergeValidator {
 
 // ── MergeThresholdAdvisor ────────────────────────────────────────────────────
 
-/// Conseiller sur le seuil de merge.
+/// Advisor on the merge threshold.
 ///
-/// Recommande si une fusion est opportune en tenant compte de :
-/// - L occupation des deux index.
-/// - Le seuil de split configuré.
-/// - Un facteur d hysteresis pour éviter les boucles split/merge.
+/// Recommends whether a merge is opportune taking into account:
+/// - Occupancy of both indices.
+/// - Configured split threshold.
+/// - Hysteresis factor to prevent split/merge loops.
 pub struct MergeThresholdAdvisor {
-    /// Facteur d hysteresis : fusion conseillée si count < threshold * factor.
+    /// Hysteresis factor: merge recommended if count < threshold * factor.
     pub hysteresis_factor: u32,
 }
 
@@ -378,10 +378,10 @@ impl MergeThresholdAdvisor {
     pub fn new() -> Self {
         MergeThresholdAdvisor {
             hysteresis_factor: 50,
-        } // 50 % du seuil
+        } // 50% of threshold
     }
 
-    /// `true` si la fusion est conseillée.
+    /// `true` if merge is recommended.
     pub fn should_merge(&self, low: &PathIndex, high: &PathIndex) -> bool {
         let total = match low.len().checked_add(high.len()) {
             Some(t) => t,
@@ -393,7 +393,7 @@ impl MergeThresholdAdvisor {
         total <= threshold && PathIndexMerger::can_merge(low, high)
     }
 
-    /// Retourne le pourcentage d occupation combiné.
+    /// Returns combined occupancy percentage.
     pub fn combined_load_pct(&self, low: &PathIndex, high: &PathIndex) -> u32 {
         let total = low.len().saturating_add(high.len());
         (total as u32).saturating_mul(100) / PATH_INDEX_SPLIT_THRESHOLD.max(1)
@@ -406,9 +406,9 @@ impl Default for MergeThresholdAdvisor {
     }
 }
 
-// ── Utilitaires ───────────────────────────────────────────────────────────────
+// ── Utilities ───────────────────────────────────────────────────────────────
 
-/// Raccourci vers [`PathIndexMerger::merge`].
+/// Shortcut to [`PathIndexMerger::merge`].
 pub fn simple_merge(
     low: &PathIndex,
     high: &PathIndex,
@@ -417,12 +417,12 @@ pub fn simple_merge(
     PathIndexMerger::merge(low, high, parent_oid)
 }
 
-/// `true` si les deux index méritent d être fusionnés (seuils + capacité).
+/// `true` if both indices deserve to be merged (thresholds + capacity).
 pub fn should_merge(low: &PathIndex, high: &PathIndex) -> bool {
     low.needs_merge() && high.needs_merge() && PathIndexMerger::can_merge(low, high)
 }
 
-/// Fusionne et vérifie le résultat (mode sécurisé).
+/// Merges and verifies the result (safe mode).
 pub fn safe_merge(
     low: &PathIndex,
     high: &PathIndex,

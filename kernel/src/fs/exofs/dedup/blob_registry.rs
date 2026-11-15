@@ -1,14 +1,14 @@
-//! BlobRegistry — registre global des blobs dédupliqués (no_std).
+//! BlobRegistry — global registry of deduplicated blobs (no_std).
 //!
-//! Associe chaque BlobId (blake3 des données sources) à ses métadonnées :
-//! nombre de chunks, taille totale, compteur de références et liste
-//! compacte des empreintes blake3 des chunks qui le composent.
+//! Associates each BlobId (blake3 of source data) with its metadata:
+//! chunk count, total size, reference counter, and compact
+//! list of blake3 chunk fingerprints composing it.
 //!
-//! RÈGLE 11 : BlobId = blake3(données avant compression/chiffrement).
+//! RULE 11: BlobId = blake3(data before compression/encryption).
 //!
-//! RECUR-01 : aucune récursion — boucles while/for.
-//! OOM-02   : try_reserve.
-//! ARITH-02 : saturating / checked / wrapping.
+//! RECUR-01: zero recursion — while/for loops.
+//! OOM-02  : try_reserve.
+//! ARITH-02: saturating / checked / wrapping.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const BLOB_REGISTRY_MAX_ENTRIES: usize = 500_000;
@@ -28,21 +28,21 @@ pub const BLOB_MAX_CHUNKS_IN_REGISTRY: usize = 16384; // CHUNK_MAX_PER_BLOB
 // BlobEntry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée de registre pour un blob.
+/// Registry entry for a blob.
 #[derive(Clone, Debug)]
 pub struct BlobEntry {
     pub blob_id: BlobId,
     pub chunk_count: u32,
     pub total_size: u64,
     pub ref_count: u32,
-    /// Empreintes blake3 des chunks dans l'ordre.
+    /// Ordered blake3 chunk fingerprints.
     pub chunk_keys: Vec<[u8; 32]>,
 }
 
 impl BlobEntry {
-    /// Crée une nouvelle entrée de blob.
+    /// Creates a new blob entry.
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn new(blob_id: BlobId, total_size: u64, chunk_keys: Vec<[u8; 32]>) -> ExofsResult<Self> {
         let chunk_count = chunk_keys.len() as u32;
         Ok(Self {
@@ -54,9 +54,9 @@ impl BlobEntry {
         })
     }
 
-    /// Incrémente le compteur de références.
+    /// Increments reference counter.
     ///
-    /// ARITH-02 : checked_add.
+    /// ARITH-02: checked_add.
     pub fn inc_ref(&mut self) -> ExofsResult<()> {
         self.ref_count = self
             .ref_count
@@ -65,9 +65,9 @@ impl BlobEntry {
         Ok(())
     }
 
-    /// Décrémente le compteur de références.
+    /// Decrements reference counter.
     ///
-    /// Retourne `true` si le blob devient orphelin.
+    /// Returns `true` if blob becomes orphan.
     pub fn dec_ref(&mut self) -> bool {
         if self.ref_count > 0 {
             self.ref_count -= 1;
@@ -106,7 +106,7 @@ pub struct BlobRegistryStats {
 // BlobRegistry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registre global des blobs, thread-safe (UnsafeCell + spinlock AtomicU64).
+/// Global blob registry, thread-safe (UnsafeCell + spinlock AtomicU64).
 pub struct BlobRegistry {
     entries: UnsafeCell<BTreeMap<[u8; 32], BlobEntry>>,
     lock: AtomicU64,
@@ -144,13 +144,13 @@ impl BlobRegistry {
         self.lock.store(0, Ordering::Release);
     }
     fn map(&self) -> &mut BTreeMap<[u8; 32], BlobEntry> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         unsafe { &mut *self.entries.get() }
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Recherche un blob par son BlobId.
+    /// Searches for a blob by its BlobId.
     pub fn lookup(&self, blob_id: &BlobId) -> Option<BlobEntry> {
         let key = *blob_id.as_bytes();
         self.acquire();
@@ -160,10 +160,10 @@ impl BlobRegistry {
         result
     }
 
-    /// Enregistre un nouveau blob (ou incrémente ref_count s'il existe déjà).
+    /// Registers a new blob (or increments ref_count if already exists).
     ///
-    /// OOM-02 : try_reserve.
-    /// Retourne `true` si le blob est nouveau.
+    /// OOM-02: try_reserve.
+    /// Returns `true` if the blob is new.
     pub fn register(
         &self,
         blob_id: BlobId,
@@ -199,7 +199,7 @@ impl BlobRegistry {
         Ok(is_new)
     }
 
-    /// Décrémente le ref_count et supprime le blob si orphelin.
+    /// Decrements ref_count and deletes blob if orphan.
     pub fn deregister(&self, blob_id: &BlobId) -> bool {
         let key = *blob_id.as_bytes();
         self.acquire();
@@ -220,7 +220,7 @@ impl BlobRegistry {
         removed
     }
 
-    /// Vérifie si un blob est enregistré.
+    /// Checks whether a blob is registered.
     pub fn contains(&self, blob_id: &BlobId) -> bool {
         let key = *blob_id.as_bytes();
         self.acquire();
@@ -249,9 +249,9 @@ impl BlobRegistry {
         self.removals.store(0, Ordering::Relaxed);
     }
 
-    /// Retourne les BlobIds orphelins (ref_count == 0).
+    /// Returns orphan BlobIds (ref_count == 0).
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn orphan_blobs(&self) -> ExofsResult<Vec<BlobId>> {
         self.acquire();
         let mut result: Vec<BlobId> = Vec::new();
@@ -268,9 +268,9 @@ impl BlobRegistry {
         Ok(result)
     }
 
-    /// Statistiques complètes du registre.
+    /// Full registry statistics.
     ///
-    /// ARITH-02 : saturating_add.
+    /// ARITH-02: saturating_add.
     pub fn stats(&self) -> BlobRegistryStats {
         self.acquire();
         let mut shared = 0usize;
@@ -301,7 +301,7 @@ impl BlobRegistry {
         }
     }
 
-    /// Vérifie les invariants du registre.
+    /// Verifies registry invariants.
     pub fn verify_integrity(&self) -> ExofsResult<()> {
         self.acquire();
         let bad = self
@@ -318,7 +318,7 @@ impl BlobRegistry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statique global
+// Global static
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static BLOB_REGISTRY: BlobRegistry = BlobRegistry::new_const();
@@ -409,10 +409,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BlobEntryIterator — parcours en lot des entrées du registre
+// BlobEntryIterator — batch traversal of registry entries
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résumé compact d'un blob pour itération externe.
+/// Compact summary of a blob for external iteration.
 #[derive(Debug, Clone)]
 pub struct BlobSummary {
     pub blob_id: BlobId,
@@ -422,10 +422,10 @@ pub struct BlobSummary {
 }
 
 impl BlobRegistry {
-    /// Retourne tous les résumés de blobs (pour audit ou GC).
+    /// Returns all blob summaries (for audit or GC).
     ///
-    /// RECUR-01 : boucle for.
-    /// OOM-02   : try_reserve.
+    /// RECUR-01: for loop.
+    /// OOM-02  : try_reserve.
     pub fn all_summaries(&self) -> ExofsResult<Vec<BlobSummary>> {
         self.acquire();
         let mut out: Vec<BlobSummary> = Vec::new();
@@ -442,9 +442,9 @@ impl BlobRegistry {
         Ok(out)
     }
 
-    /// Retourne les blobs dont la taille dépasse `threshold_bytes`.
+    /// Returns blobs whose size exceeds `threshold_bytes`.
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn large_blobs(&self, threshold_bytes: u64) -> ExofsResult<Vec<BlobSummary>> {
         let all = self.all_summaries()?;
         let mut out: Vec<BlobSummary> = Vec::new();
@@ -457,7 +457,7 @@ impl BlobRegistry {
         Ok(out)
     }
 
-    /// Compte les blobs avec ref_count >= `min_refs` (partagés).
+    /// Counts blobs with ref_count >= `min_refs` (shared).
     pub fn count_shared_above(&self, min_refs: u32) -> usize {
         self.acquire();
         let n = self
@@ -514,7 +514,7 @@ mod tests_extra {
         let r = BlobRegistry::new_const();
         let id = bid(40);
         r.register(id.clone(), 32, ks(1)).test_unwrap();
-        // Forcer orphelin depuis l'extérieur
+        // Force orphan from outside
         r.acquire();
         r.map().get_mut(id.as_bytes()).test_unwrap().ref_count = 0;
         r.release();
@@ -525,6 +525,6 @@ mod tests_extra {
     #[test]
     fn test_global_registry_accessible() {
         let s = BLOB_REGISTRY.stats();
-        let _ = s.total_blobs; // accès sans panique
+        let _ = s.total_blobs; // access without panic
     }
 }

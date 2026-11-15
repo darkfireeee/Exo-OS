@@ -1,11 +1,11 @@
-//! snapshot_gc.rs — Garbage Collector de snapshots ExoFS
+//! snapshot_gc.rs — ExoFS snapshot Garbage Collector
 //!
-//! Supprime les snapshots expirés selon une politique de rétention
-//! (nombre max, âge max, quota global).
+//! Deletes expired snapshots according to a retention policy
+//! (max count, max age, global quota).
 //!
-//! Règles spec :
-//!   OOM-02   : try_reserve avant chaque push
-//!   ARITH-02 : checked_add pour accumulations
+//! Spec rules:
+//!   OOM-02   : try_reserve before each push
+//!   ARITH-02 : checked_add for accumulations
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -16,21 +16,21 @@ use super::snapshot_list::SNAPSHOT_LIST;
 use crate::fs::exofs::core::{ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
-// Politique de rétention
+// Retention policy
 // ─────────────────────────────────────────────────────────────
 
-/// Politique de rétention des snapshots
+/// Snapshot retention policy
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotRetentionPolicy {
-    /// Nombre maximum de snapshots conservés (0 = illimité)
+    /// Maximum number of retained snapshots (0 = unlimited)
     pub max_count: usize,
-    /// Âge maximum en ticks (0 = illimité)
+    /// Maximum age in ticks (0 = unlimited)
     pub max_age_ticks: u64,
-    /// Octets totaux maximum (0 = illimité)
+    /// Maximum total bytes (0 = unlimited)
     pub max_total_bytes: u64,
-    /// Ne supprime pas les snapshots protégés même s'ils dépassent le quota
+    /// Does not delete protected snapshots even if they exceed quota
     pub respect_protected: bool,
-    /// Supprime récursivement les enfants
+    /// Recursively deletes children
     pub cascade: bool,
 }
 
@@ -60,34 +60,34 @@ impl SnapshotRetentionPolicy {
         self
     }
 
-    /// Retourne true si aucune limite n'est définie
+    /// Returns true if no limit is defined
     pub fn is_unlimited(&self) -> bool {
         self.max_count == 0 && self.max_age_ticks == 0 && self.max_total_bytes == 0
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Rapport GC
+// GC report
 // ─────────────────────────────────────────────────────────────
 
-/// Rapport détaillé d'une passe GC
+/// Detailed report of a GC pass
 #[derive(Debug, Clone)]
 pub struct SnapshotGcReport {
-    /// Nombre de snapshots supprimés
+    /// Number of deleted snapshots
     pub n_deleted: u32,
-    /// Octets totaux libérés
+    /// Total freed bytes
     pub bytes_freed: u64,
-    /// Snapshots supprimés (ids)
+    /// Deleted snapshots (IDs)
     pub deleted_ids: Vec<SnapshotId>,
-    /// Snapshots ignorés (protégés, montés, etc.)
+    /// Skipped snapshots (protected, mounted, etc.)
     pub n_skipped: u32,
-    /// Nombre d'erreurs non fatales
+    /// Number of non-fatal errors
     pub n_errors: u32,
-    /// Durée de la passe (ticks)
+    /// Pass duration (ticks)
     pub duration_ticks: u64,
-    /// Politique appliquée
+    /// Applied policy
     pub policy: SnapshotRetentionPolicy,
-    /// Snapshots restants après GC
+    /// Remaining snapshots after GC
     pub remaining_count: usize,
 }
 
@@ -107,10 +107,10 @@ impl SnapshotGcReport {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Critères d'éligibilité
+// Eligibility criteria
 // ─────────────────────────────────────────────────────────────
 
-/// Raison pour laquelle un snapshot est candidat à la suppression
+/// Reason why a snapshot is a candidate for deletion
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GcReason {
     AgeExceeded,
@@ -118,7 +118,7 @@ pub enum GcReason {
     QuotaExceeded,
 }
 
-/// Snapshot candidat à la suppression
+/// Candidate snapshot for deletion
 #[derive(Debug, Clone, Copy)]
 pub struct GcCandidate {
     pub id: SnapshotId,
@@ -134,9 +134,9 @@ pub struct GcCandidate {
 pub struct SnapshotGc;
 
 impl SnapshotGc {
-    // ── Point d'entrée principal ─────────────────────────────────────
+    // ── Main entry point ─────────────────────────────────────
 
-    /// Lance une passe GC selon la politique donnée
+    /// Runs a GC pass according to the given policy
     pub fn run(policy: SnapshotRetentionPolicy, now: u64) -> ExofsResult<SnapshotGcReport> {
         if policy.is_unlimited() {
             return Ok(SnapshotGcReport::new(policy));
@@ -149,17 +149,17 @@ impl SnapshotGc {
             skip_mounted: true,
         };
 
-        // ── Phase 1 : Suppression par âge ───────────────────────────
+        // ── Phase 1: Deletion by age ─────────────────────────
         if policy.max_age_ticks > 0 {
             Self::gc_by_age(policy, now, opts, &mut report)?;
         }
 
-        // ── Phase 2 : Suppression par surplus de count ───────────────
+        // ── Phase 2: Deletion by excess count ────────────────
         if policy.max_count > 0 {
             Self::gc_by_count(policy, opts, &mut report)?;
         }
 
-        // ── Phase 3 : Suppression par quota bytes ────────────────────
+        // ── Phase 3: Deletion by quota bytes ─────────────────
         if policy.max_total_bytes > 0 {
             Self::gc_by_quota(policy, opts, &mut report)?;
         }
@@ -168,7 +168,7 @@ impl SnapshotGc {
         Ok(report)
     }
 
-    // ── GC par âge ───────────────────────────────────────────────────
+    // ── GC by age ────────────────────────────────────────────
 
     fn gc_by_age(
         policy: SnapshotRetentionPolicy,
@@ -201,7 +201,7 @@ impl SnapshotGc {
         Ok(())
     }
 
-    // ── GC par surplus de count ──────────────────────────────────────
+    // ── GC by excess count ───────────────────────────────────
 
     fn gc_by_count(
         policy: SnapshotRetentionPolicy,
@@ -214,7 +214,7 @@ impl SnapshotGc {
         }
 
         let excess = current - policy.max_count;
-        // Récupère tous les refs triés par created_at croissant (plus anciens en premier)
+        // Retrieves all refs sorted by created_at ascending (oldest first)
         let mut all = SNAPSHOT_LIST.all_refs()?;
         all.sort_by_key(|s| s.created_at);
 
@@ -227,7 +227,7 @@ impl SnapshotGc {
                 report.n_skipped = report.n_skipped.saturating_add(1);
                 continue;
             }
-            // Vérifier que l'id n'est pas déjà supprimé lors de cette passe
+            // Verify that the ID was not already deleted during this pass
             if SNAPSHOT_LIST.get(snap_ref.id).is_err() {
                 continue;
             }
@@ -252,7 +252,7 @@ impl SnapshotGc {
         Ok(())
     }
 
-    // ── GC par quota bytes ────────────────────────────────────────────
+    // ── GC by quota bytes ────────────────────────────────────────────
 
     fn gc_by_quota(
         policy: SnapshotRetentionPolicy,
@@ -265,7 +265,7 @@ impl SnapshotGc {
         }
 
         let mut all = SNAPSHOT_LIST.all_refs()?;
-        all.sort_by_key(|s| s.created_at); // plus anciens en premier
+        all.sort_by_key(|s| s.created_at); // oldest first
 
         for snap_ref in all {
             if current_bytes <= policy.max_total_bytes {
@@ -299,9 +299,9 @@ impl SnapshotGc {
         Ok(())
     }
 
-    // ── Analyse pré-GC ──────────────────────────────────────────────
+    // ── Pre-GC analysis ─────────────────────────────────────────────
 
-    /// Retourne les candidats éligibles sans les supprimer (dry-run)
+    /// Returns eligible candidates without deleting them (dry-run)
     pub fn dry_run(policy: SnapshotRetentionPolicy, now: u64) -> ExofsResult<Vec<GcCandidate>> {
         let mut candidates: Vec<GcCandidate> = Vec::new();
 
@@ -348,7 +348,7 @@ impl SnapshotGc {
         Ok(candidates)
     }
 
-    /// Octets estimés libérables selon la politique (sans suppression)
+    /// Estimated bytes that can be freed according to policy (without deletion)
     pub fn estimate_freed(policy: SnapshotRetentionPolicy, now: u64) -> ExofsResult<u64> {
         let candidates = Self::dry_run(policy, now)?;
         let mut total: u64 = 0;

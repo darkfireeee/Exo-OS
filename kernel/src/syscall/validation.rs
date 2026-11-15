@@ -707,6 +707,47 @@ pub fn write_user_typed<T: Copy>(ptr_raw: u64, value: T) -> Result<(), SyscallEr
     UserPtr::<T>::from_raw(ptr_raw).validate()?.write(value)
 }
 
+/// Returns the PID of the currently scheduled userspace thread, if any.
+pub fn current_user_pid() -> Option<u32> {
+    #[cfg(target_os = "none")]
+    {
+        let tcb_raw = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
+        if tcb_raw == 0 {
+            return None;
+        }
+        let tcb = unsafe { &*(tcb_raw as *const crate::scheduler::core::task::ThreadControlBlock) };
+        Some(tcb.pid.0)
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        None
+    }
+}
+
+/// Reads a 4-byte-aligned `u32` from userspace and returns `(value, physical_addr)`.
+pub fn resolve_user_read_u32_and_phys(uaddr: u64) -> Result<(u32, u64), SyscallError> {
+    validate_user_range(uaddr, core::mem::size_of::<u32>(), core::mem::align_of::<u32>())?;
+    #[cfg(target_os = "none")]
+    {
+        let user_as = current_user_address_space().ok_or_else(|| {
+            record_fault();
+            SyscallError::Fault
+        })?;
+        let phys = resolve_user_page(user_as, uaddr, false)?;
+        let kernel_src = crate::memory::core::phys_to_virt(phys).as_u64() as *const u32;
+        // SAFETY: `uaddr` is 4-byte aligned (verified above, so within a single 4K page)
+        // and `resolve_user_page` resolved its present user mapping into the physmap alias.
+        let val = unsafe { core::ptr::read_volatile(kernel_src) };
+        COPY_FROM_USER_BYTES.fetch_add(4, Ordering::Relaxed);
+        Ok((val, phys.as_u64()))
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        let val = read_user_typed::<u32>(uaddr)?;
+        Ok((val, uaddr))
+    }
+}
+
 /// Validates a buffer `(ptr, len)` and copies data into a kernel `Vec`.
 ///
 /// `max` is the allowed size limit (e.g. `IO_BUF_MAX` for `read()`).

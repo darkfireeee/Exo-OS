@@ -1,11 +1,11 @@
-//! Benchmark de compression ExoFS — microbenchmarks kernel Ring 0.
+//! ExoFS compression benchmark — Ring 0 kernel microbenchmarks.
 //!
-//! Évalue LZ4 vs Zstd pour une charge donnée et retourne les métriques.
-//! Utilisé par le scheduler adaptatif pour choisir l'algorithme optimal.
+//! Evaluates LZ4 vs Zstd for a given workload and returns metrics.
+//! Used by the adaptive scheduler to choose the optimal algorithm.
 //!
-//! RÈGLE OOM-02   : `try_reserve` avant tout push.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE OOM-02   : `try_reserve` before any push.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
 use crate::fs::exofs::compress::lz4_wrapper::Lz4Compressor;
@@ -17,30 +17,30 @@ use alloc::vec::Vec;
 // BenchResult
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un benchmark de compression pour un algorithme.
+/// Result of a compression benchmark for an algorithm.
 #[derive(Debug, Clone)]
 pub struct BenchResult {
     pub algorithm: CompressionAlgorithm,
     pub compressed_size: usize,
     pub compress_ticks: u64,
     pub decompress_ticks: u64,
-    /// Ratio compressé/original en % (100 = aucun bénéfice).
+    /// Compressed/original ratio in % (100 = no gain).
     pub ratio_percent: u64,
     pub original_size: usize,
 }
 
 impl BenchResult {
-    /// `true` si la compression apporte un bénéfice réel (< 95%).
+    /// `true` if compression brings a real benefit (< 95%).
     pub fn is_beneficial(&self) -> bool {
         self.ratio_percent < 95
     }
 
-    /// Économie en bytes (saturating).
+    /// Savings in bytes (saturating).
     pub fn bytes_saved(&self) -> usize {
         self.original_size.saturating_sub(self.compressed_size)
     }
 
-    /// Score global : ratio_percent * (compress_ticks + 1).
+    /// Global score: ratio_percent * (compress_ticks + 1).
     pub fn combined_score(&self) -> u64 {
         self.ratio_percent
             .saturating_mul(self.compress_ticks.saturating_add(1))
@@ -51,7 +51,7 @@ impl BenchResult {
 // BenchSummary
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bilan comparatif LZ4 vs Zstd.
+/// Comparative summary LZ4 vs Zstd.
 #[derive(Debug, Clone)]
 pub struct BenchSummary {
     pub lz4: BenchResult,
@@ -60,7 +60,7 @@ pub struct BenchSummary {
 }
 
 impl BenchSummary {
-    /// Algorithme avec le meilleur score combiné (ratio * ticks).
+    /// Algorithm with the best combined score (ratio * ticks).
     pub fn best_algorithm(&self) -> CompressionAlgorithm {
         if self.lz4.combined_score() <= self.zstd.combined_score() {
             CompressionAlgorithm::Lz4
@@ -69,7 +69,7 @@ impl BenchSummary {
         }
     }
 
-    /// Algorithme avec le meilleur ratio de compression.
+    /// Algorithm with the best compression ratio.
     pub fn best_ratio_algorithm(&self) -> CompressionAlgorithm {
         if self.lz4.ratio_percent <= self.zstd.ratio_percent {
             CompressionAlgorithm::Lz4
@@ -78,7 +78,7 @@ impl BenchSummary {
         }
     }
 
-    /// Algorithme le plus rapide en compression.
+    /// Fastest algorithm in compression.
     pub fn fastest_compress_algorithm(&self) -> CompressionAlgorithm {
         if self.lz4.compress_ticks <= self.zstd.compress_ticks {
             CompressionAlgorithm::Lz4
@@ -87,7 +87,7 @@ impl BenchSummary {
         }
     }
 
-    /// `true` si LZ4 est équivalent ou meilleur que Zstd (gain Zstd < 5%).
+    /// `true` if LZ4 is equivalent to or better than Zstd (Zstd gain < 5%).
     pub fn prefer_lz4(&self) -> bool {
         let zstd_gain = self
             .lz4
@@ -101,11 +101,11 @@ impl BenchSummary {
 // CompressBenchmark
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lance les benchmarks de compression LZ4 et Zstd.
+/// Runs LZ4 and Zstd compression benchmarks.
 pub struct CompressBenchmark;
 
 impl CompressBenchmark {
-    /// Benchmark LZ4 + Zstd sur `sample`, retourne le bilan comparatif.
+    /// Benchmarks LZ4 + Zstd on `sample`, returns comparative summary.
     pub fn run(sample: &[u8]) -> ExofsResult<BenchSummary> {
         let lz4 = Self::bench_algo(sample, CompressionAlgorithm::Lz4)?;
         let zstd = Self::bench_algo(sample, CompressionAlgorithm::Zstd)?;
@@ -117,7 +117,7 @@ impl CompressBenchmark {
         })
     }
 
-    /// Benchmark d'un algorithme unique.
+    /// Benchmark of a single algorithm.
     pub fn bench_algo(data: &[u8], algo: CompressionAlgorithm) -> ExofsResult<BenchResult> {
         let original_size = data.len();
         let mut compressed = Vec::new();
@@ -174,12 +174,12 @@ impl CompressBenchmark {
         })
     }
 
-    /// Benchmark de baseline (copie mémoire pure).
+    /// Baseline benchmark (pure memory copy).
     pub fn bench_baseline(data: &[u8]) -> ExofsResult<BenchResult> {
         Self::bench_algo(data, CompressionAlgorithm::None)
     }
 
-    /// Recommande l'algorithme optimal pour un échantillon donné.
+    /// Recommends optimal algorithm for a given sample.
     pub fn recommend(sample: &[u8]) -> ExofsResult<CompressionAlgorithm> {
         if sample.is_empty() {
             return Ok(CompressionAlgorithm::None);
@@ -294,13 +294,13 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BenchHistory — historique glissant des benchmarks
+// BenchHistory — rolling benchmark history
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Historique glissant des N derniers benchmarks.
-/// Utilisé par le scheduler adaptatif pour affiner la recommandation.
+/// Rolling history of last N benchmarks.
+/// Used by adaptive scheduler to refine recommendation.
 pub struct BenchHistory {
-    /// Recommandations récentes (circulaire).
+    /// Recent recommendations (circular).
     entries: [CompressionAlgorithm; 8],
     head: usize,
     count: usize,
@@ -315,7 +315,7 @@ impl BenchHistory {
         }
     }
 
-    /// Enregistre la recommandation d'un benchmark.
+    /// Records recommendation from a benchmark.
     pub fn push(&mut self, algo: CompressionAlgorithm) {
         self.entries[self.head] = algo;
         self.head = (self.head + 1) % 8;
@@ -324,7 +324,7 @@ impl BenchHistory {
         }
     }
 
-    /// Nombre de fois que LZ4 a été recommandé parmi les N derniers.
+    /// Number of times LZ4 was recommended among the last N.
     pub fn lz4_count(&self) -> usize {
         let mut n = 0usize;
         for i in 0..self.count {
@@ -335,7 +335,7 @@ impl BenchHistory {
         n
     }
 
-    /// Recommandation majoritaire de l'historique.
+    /// Majority recommendation of the history.
     pub fn majority_vote(&self) -> CompressionAlgorithm {
         if self.count == 0 {
             return CompressionAlgorithm::None;
@@ -396,7 +396,7 @@ mod history_tests {
         for _ in 0..10 {
             h.push(CompressionAlgorithm::Lz4);
         }
-        assert_eq!(h.len(), 8); // Capacité max
+        assert_eq!(h.len(), 8); // Max capacity
     }
 
     #[test]
@@ -408,7 +408,7 @@ mod history_tests {
         assert_eq!(h.lz4_count(), 2);
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_bench_summary_is_compressible_flag() {
@@ -450,7 +450,7 @@ mod history_tests {
     #[test]
     fn test_history_majority_empty() {
         let h = BenchHistory::new();
-        // Sur historique vide, le vote majoritaire ne doit pas paniquer.
+        // On empty history, majority vote must not panic.
         let _ = h.majority_vote();
     }
 

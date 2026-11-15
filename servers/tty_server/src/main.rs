@@ -11,7 +11,7 @@ use exo_tty::{LineDiscipline, LineEvent, Signal};
 const LINE_OUT_MAX: usize = syscall::TTY_LINE_MAX;
 const TTY_INPUT_STREAM_CHANNEL: u64 = 0x5454_5902;
 // Doit être PAIR car le bit 0 transporte IPC_FLAG_TIMEOUT (0x0001).
-const TTY_RECV_TIMEOUT_MS: u64 = 2;
+const TTY_RECV_TIMEOUT_MS: u64 = 20;
 const INPUT_DRAIN_LIMIT: usize = 32;
 const FB_SEND_RETRY_LIMIT: usize = 256;
 const FB_SEND_TIMEOUT_MS: u64 = 4;
@@ -234,6 +234,9 @@ fn tty_mut() -> &'static mut TtyState {
 
 fn handle_input(byte: u8) -> syscall::TtyReply {
     let state = tty_mut();
+    if !state.line.is_canonical() && !state.line.is_echo() && state.pending_reads_count == 0 {
+        return reply(0, 0, &[]);
+    }
     let event = state.line.input_byte(byte);
     match event {
         Some(LineEvent::LineReady { len }) => {
@@ -253,8 +256,10 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
             reply(0, 0, &[])
         }
         Some(LineEvent::Signal(Signal::Interrupt)) => {
-            console_write(b"^C\n");
             let state = tty_mut();
+            if state.foreground_pid != 0 || state.pending_reads_count > 0 {
+                console_write(b"^C\n");
+            }
             if state.pending_reads_count > 0 {
                 let p = state.pending_reads[0].take().unwrap();
                 for i in 0..3 { state.pending_reads[i] = state.pending_reads[i+1].take(); }
@@ -295,11 +300,15 @@ fn handle_input(byte: u8) -> syscall::TtyReply {
             reply(0, 0, &[byte])
         }
         Some(LineEvent::Backspace) => {
-            console_write(b"\x08 \x08");
+            if tty_mut().line.is_echo() {
+                console_write(b"\x08 \x08");
+            }
             reply(0, 0, b"\x08 \x08")
         }
         Some(LineEvent::ClearScreen) => {
-            console_write(b"\x0c");
+            if tty_mut().line.is_echo() {
+                console_write(b"\x0c");
+            }
             reply(0, 0, b"\x0c")
         }
         Some(LineEvent::Bell) => {
@@ -501,11 +510,9 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
             if req.a == 0x5402 || req.a == 0x5403 || req.a == 0x5404 {
                 state.line.set_echo(req.b & 1 != 0);
                 state.line.set_canonical(req.b & 2 != 0);
-                if req.b == 0 {
-                    state.ready_len = 0;
-                    let mut tmp = [0u8; LINE_OUT_MAX];
-                    let _ = state.line.take_line(&mut tmp);
-                }
+                state.ready_len = 0;
+                let mut tmp = [0u8; LINE_OUT_MAX];
+                let _ = state.line.take_line(&mut tmp);
             } else if req.a == 0x5410 {
                 let target = req.b as u32;
                 // Protection contre kill de serveurs système : seul un PID applicatif (> 19)
@@ -577,7 +584,7 @@ fn send_raw_call_reply(reply_ep: u64, cookie: u64, reply: &syscall::TtyReply) {
             reply_ep,
             out.as_ptr() as u64,
             total as u64,
-            syscall::IPC_FLAG_TIMEOUT,
+            0,
             0,
             0,
         )
@@ -594,7 +601,7 @@ fn send_tty_reply(reply_endpoint: u64, response: &syscall::TtyReply) {
             reply_endpoint,
             response as *const syscall::TtyReply as u64,
             core::mem::size_of::<syscall::TtyReply>() as u64,
-            syscall::IPC_FLAG_TIMEOUT,
+            0,
             0,
             0,
         )

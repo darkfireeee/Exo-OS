@@ -1,8 +1,8 @@
-//! cache_shrinker.rs — Réducteur de cache sous pression mémoire ExoFS (no_std).
+//! cache_shrinker.rs — ExoFS cache shrinker under memory pressure (no_std).
 //!
-//! `CacheShrinker` : réduit les caches du plus froid au plus chaud jusqu'à atteindre
-//! la cible de libération mémoire.
-//! Règles : RECUR-01, OOM-02, ARITH-02.
+//! `CacheShrinker`: shrinks caches from coldest to hottest until reaching
+//! the memory reclaim target.
+//! Rules: RECUR-01, OOM-02, ARITH-02.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -13,23 +13,23 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 // ShrinkTarget
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Requête de réduction envoyée aux réducteurs.
+/// Shrink request sent to shrinkers.
 #[derive(Clone, Copy, Debug)]
 pub struct ShrinkRequest {
-    /// Octets à libérer.
+    /// Bytes to free.
     pub bytes_to_free: u64,
-    /// Priorité : `true` = urgent, passer à travers tous les niveaux.
+    /// Priority: `true` = urgent, pass through all levels.
     pub urgent: bool,
 }
 
-/// Résultat d'une opération de réduction.
+/// Result of a shrink operation.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShrinkResult {
-    /// Octets effectivement libérés.
+    /// Bytes actually freed.
     pub freed_bytes: u64,
-    /// Entrées évincées.
+    /// Evicted entries.
     pub evicted_count: u64,
-    /// `true` si la cible a été atteinte.
+    /// `true` if target was reached.
     pub target_reached: bool,
 }
 
@@ -41,21 +41,21 @@ impl ShrinkResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ShrinkableCache — trait simulé avec pointeur de fonction
+// ShrinkableCache — simulated trait with function pointer
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Enregistrement d'un cache reductible.
+/// Registration of a shrinkable cache.
 #[derive(Clone, Copy)]
 pub struct CacheEntry {
-    /// Nom du cache (pour diagnostics).
+    /// Cache name (for diagnostics).
     pub name: &'static str,
-    /// Octets actuellement utilisés.
+    /// Currently used bytes.
     pub used: u64,
-    /// Capacité.
+    /// Capacity.
     pub cap: u64,
-    /// Priorité de réduction : 0 = premier (le plus froid).
+    /// Shrink priority: 0 = first (coldest).
     pub priority: u8,
-    /// Fonction de réduction.
+    /// Shrink function.
     pub shrink_fn: fn(bytes: u64) -> ShrinkResult,
 }
 
@@ -63,9 +63,9 @@ pub struct CacheEntry {
 // CacheShrinker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Gestionnaire de réduction multi-cache.
+/// Multi-cache shrink manager.
 ///
-/// Ne possède pas de lock car la liste est statiquement initialisée.
+/// Does not hold a lock because the list is statically initialized.
 pub struct CacheShrinker {
     caches: [Option<CacheEntry>; 8],
     n: usize,
@@ -81,9 +81,9 @@ impl CacheShrinker {
         }
     }
 
-    // ── Enregistrement ────────────────────────────────────────────────────────
+    // ── Registration ──────────────────────────────────────────────────────────
 
-    /// Enregistre un cache réductible.
+    /// Registers a shrinkable cache.
     pub fn register(&mut self, entry: CacheEntry) -> ExofsResult<()> {
         if self.n >= 8 {
             return Err(ExofsError::NoSpace);
@@ -93,11 +93,11 @@ impl CacheShrinker {
         Ok(())
     }
 
-    // ── Réduction ─────────────────────────────────────────────────────────────
+    // ── Shrinking ─────────────────────────────────────────────────────────────
 
-    /// Libère `bytes_to_free` octets en appelant les réducteurs du plus froid au plus chaud.
+    /// Frees `bytes_to_free` bytes by calling shrinkers from coldest to hottest.
     pub fn shrink_to_target(&self, req: ShrinkRequest) -> ShrinkResult {
-        // Récupère les caches présents et triés par priorité.
+        // Collect present caches sorted by priority.
         let mut sorted: Vec<CacheEntry> = self.caches[..self.n]
             .iter()
             .filter_map(|x| x.as_ref().cloned())
@@ -121,7 +121,7 @@ impl CacheShrinker {
         result
     }
 
-    /// Libère le maximum possible (flush émergence).
+    /// Frees maximum possible (emergency flush).
     pub fn shrink_all(&self) -> ShrinkResult {
         let total: u64 = self.caches[..self.n]
             .iter()
@@ -134,12 +134,12 @@ impl CacheShrinker {
         })
     }
 
-    /// Nombre de caches enregistrés.
+    /// Number of registered caches.
     pub fn n_caches(&self) -> usize {
         self.n
     }
 
-    /// Utilisation totale estimée.
+    /// Estimated total used.
     pub fn total_used(&self) -> u64 {
         self.caches[..self.n]
             .iter()
@@ -148,7 +148,7 @@ impl CacheShrinker {
             .fold(0u64, |acc, v| acc.saturating_add(v))
     }
 
-    /// Capacité totale estimée.
+    /// Estimated total capacity.
     pub fn total_cap(&self) -> u64 {
         self.caches[..self.n]
             .iter()
@@ -157,7 +157,7 @@ impl CacheShrinker {
             .fold(0u64, |acc, v| acc.saturating_add(v))
     }
 
-    /// Taux de remplissage global en pourcentage.
+    /// Global fill percentage.
     pub fn fill_pct(&self) -> u8 {
         let cap = self.total_cap();
         if cap == 0 {
@@ -227,7 +227,7 @@ mod tests {
         static ORDER: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
         fn shrink_a(b: u64) -> ShrinkResult {
-            // priorité 0 doit être appelé en premier
+            // priority 0 must be called first
             ShrinkResult {
                 freed_bytes: b,
                 evicted_count: 1,
@@ -251,7 +251,7 @@ mod tests {
             shrink_fn: shrink_a,
         })
         .test_unwrap();
-        // Le shrinker doit trier par priorité croissante.
+        // Shrinker must sort by ascending priority.
         let req = ShrinkRequest {
             bytes_to_free: 100,
             urgent: false,
@@ -315,9 +315,9 @@ mod tests {
     }
 }
 
-// ── Extensions CacheShrinker ───────────────────────────────────────────────────
+// ── CacheShrinker extensions ───────────────────────────────────────────────────
 
-/// Journal de réduction.
+/// Shrink log.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShrinkLogEntry {
     pub freed_bytes: u64,
@@ -325,7 +325,7 @@ pub struct ShrinkLogEntry {
     pub target_met: bool,
 }
 
-/// Tableau de bord agregé du shrinker.
+/// Aggregated shrinker dashboard.
 #[derive(Clone, Debug, Default)]
 pub struct ShrinkReport {
     pub total_freed: u64,
@@ -335,7 +335,7 @@ pub struct ShrinkReport {
 }
 
 impl CacheShrinker {
-    /// Réduit jusqu'à `pct`% de la capacité totale.
+    /// Shrinks down to `pct`% of total capacity.
     pub fn shrink_to_pct(&self, pct: u8) -> ShrinkResult {
         let cap = self.total_cap();
         let used = self.total_used();
@@ -351,7 +351,7 @@ impl CacheShrinker {
         })
     }
 
-    /// Génère un rapport de réduction d'urgence.
+    /// Generates an emergency shrink report.
     pub fn emergency_report(&self) -> ShrinkReport {
         let r = self.shrink_all();
         ShrinkReport {
@@ -362,7 +362,7 @@ impl CacheShrinker {
         }
     }
 
-    /// Retourne le taux de remplissage du cache `i`.
+    /// Returns fill percentage of cache `i`.
     pub fn fill_pct_of(&self, i: usize) -> u8 {
         if i >= self.n {
             return 0;
@@ -382,7 +382,7 @@ impl CacheShrinker {
         }
     }
 
-    /// Nom du cache `i`.
+    /// Name of cache `i`.
     pub fn cache_name(&self, i: usize) -> &'static str {
         if i >= self.n {
             return "";
@@ -390,7 +390,7 @@ impl CacheShrinker {
         self.caches[i].as_ref().map(|e| e.name).unwrap_or("")
     }
 
-    /// `true` si au moins un cache est à >90% de capacité.
+    /// `true` if at least one cache is at >90% capacity.
     pub fn any_critical(&self) -> bool {
         (0..self.n).any(|i| self.fill_pct_of(i) >= 90)
     }

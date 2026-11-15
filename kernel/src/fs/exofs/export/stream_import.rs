@@ -1,17 +1,17 @@
-//! stream_import.rs — Import de blobs en streaming (no_std).
+//! stream_import.rs — Streaming blob import (no_std).
 //!
-//! Ce module fournit :
-//!  - `BlobWriter`           : trait d'écriture de blobs dans le store ExoFS.
-//!  - `StreamImportConfig`   : paramètres d'une session d'import.
-//!  - `ConflictResolver`     : stratégie de résolution de conflits.
-//!  - `TombstoneHandler`     : gestion des blobs supprimés (tombstones).
-//!  - `ImportCheckpoint`     : point de reprise d'un import interrompu.
-//!  - `StreamImporter`       : moteur d'import chunk par chunk.
-//!  - `StreamImportReport`   : rapport de fin d'import.
-//!  - `ImportEntryHeader`    : en-tête d'entrée lue depuis le flux.
+//! This module provides:
+//!  - `BlobWriter`           : blob writing trait into ExoFS store.
+//!  - `StreamImportConfig`   : import session parameters.
+//!  - `ConflictResolver`     : conflict resolution strategy.
+//!  - `TombstoneHandler`     : deleted blob management (tombstones).
+//!  - `ImportCheckpoint`     : resume point for an interrupted import.
+//!  - `StreamImporter`       : chunk-by-chunk import engine.
+//!  - `StreamImportReport`   : end-of-import report.
+//!  - `ImportEntryHeader`    : entry header read from the stream.
 //!
-//! RECUR-01 : boucles while — aucune récursion.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops — no recursion.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
 extern crate alloc;
@@ -19,40 +19,40 @@ use super::incremental_export::EpochId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
-// ─── Trait d'écriture blob ────────────────────────────────────────────────────
+// ─── Blob Writing Trait ──────────────────────────────────────────────────────
 
-/// Écrivain de blobs dans le store ExoFS.
+/// Blob writer into the ExoFS store.
 pub trait BlobWriter {
-    /// Stocke un blob avec son identifiant (blake3, RÈGLE 11).
+    /// Stores a blob with its identifier (blake3, RULE 11).
     fn write_blob(&mut self, blob_id: &[u8; 32], data: &[u8]) -> ExofsResult<()>;
 
-    /// Indique si un blob existe déjà dans le store.
+    /// Indicates whether a blob already exists in the store.
     fn blob_exists(&self, blob_id: &[u8; 32]) -> bool;
 
-    /// Supprime un blob (traitement d'un tombstone).
+    /// Deletes a blob (processing a tombstone).
     fn delete_blob(&mut self, blob_id: &[u8; 32]) -> ExofsResult<()>;
 
-    /// Nombre de bytes stockés dans cette session.
+    /// Number of bytes stored in this session.
     fn bytes_written(&self) -> u64;
 }
 
-// ─── Résolution de conflits ───────────────────────────────────────────────────
+// ─── Conflict Resolution ──────────────────────────────────────────────────────
 
-/// Stratégie de résolution lorsqu'un blob importé existe déjà.
+/// Resolution strategy when an imported blob already exists.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConflictResolver {
-    /// Ignorer l'entrée entrante si le blob existe déjà.
+    /// Skip incoming entry if blob already exists.
     Skip,
-    /// Écraser le blob existant avec la version importée.
+    /// Overwrite existing blob with imported version.
     Overwrite,
-    /// Retourner une erreur et interrompre l'import.
+    /// Return an error and abort import.
     Fail,
-    /// Écraser uniquement si l'epoch importée est plus récente.
+    /// Overwrite only if imported epoch is newer.
     KeepNewer,
 }
 
 impl ConflictResolver {
-    /// Résout un conflit — retourne Ok(true) pour procéder à l'écriture, Ok(false) pour ignorer.
+    /// Resolves a conflict — returns Ok(true) to proceed with writing, Ok(false) to skip.
     pub fn resolve(
         &self,
         blob_id: &[u8; 32],
@@ -72,21 +72,21 @@ impl ConflictResolver {
     }
 }
 
-// ─── Gestionnaire de tombstones ───────────────────────────────────────────────
+// ─── Tombstone Handler ────────────────────────────────────────────────────────
 
-/// Mode de traitement des tombstones lors de l'import.
+/// Processing mode for tombstones during import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TombstoneHandler {
-    /// Supprimer le blob local s'il existe.
+    /// Delete local blob if it exists.
     Delete,
-    /// Ignorer le tombstone (le blob local n'est pas supprimé).
+    /// Ignore tombstone (local blob is not deleted).
     Ignore,
-    /// Retourner une erreur si le blob local existe.
+    /// Return an error if local blob exists.
     FailIfPresent,
 }
 
 impl TombstoneHandler {
-    /// Traite un tombstone — retourne Ok(true) pour déclencher la suppression locale.
+    /// Processes a tombstone — returns Ok(true) to trigger local deletion.
     pub fn handle(&self, blob_id: &[u8; 32], local_exists: bool) -> ExofsResult<bool> {
         let _ = blob_id;
         match self {
@@ -103,25 +103,25 @@ impl TombstoneHandler {
     }
 }
 
-// ─── En-tête d'entrée de flux ─────────────────────────────────────────────────
+// ─── Stream Entry Header ────────────────────────────────────────────────────
 
-/// En-tête de chaque entrée lue depuis un flux de données binaires.
+/// Header of each entry read from a binary data stream.
 ///
-/// Structure binaire compacte : 52 bytes.
+/// Compact binary structure: 52 bytes.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct ImportEntryHeader {
-    /// Magic de validation : 0x4558_494D ("EXIM").
+    /// Validation magic: 0x4558_494D ("EXIM").
     pub magic: u32,
-    /// Flags : IMPORT_FLAG_TOMBSTONE = 0x01, IMPORT_FLAG_VERIFIED = 0x02.
+    /// Flags: IMPORT_FLAG_TOMBSTONE = 0x01, IMPORT_FLAG_VERIFIED = 0x02.
     pub flags: u8,
     /// Padding.
     pub _pad: [u8; 3],
-    /// BlobId (blake3) — RÈGLE 11.
+    /// BlobId (blake3) — RULE 11.
     pub blob_id: [u8; 32],
-    /// Taille des données qui suivent (0 pour tombstone).
+    /// Size of following data (0 for tombstone).
     pub data_size: u64,
-    /// Réservé pour extensions de protocole.
+    /// Reserved for protocol extensions.
     pub _pad2: [u8; 4],
 }
 
@@ -130,12 +130,12 @@ const _: () = assert!(
     "ImportEntryHeader ABI size changed — verifier import stream ExoAR"
 );
 
-/// Magic de l'en-tête d'import.
+/// Magic of import header.
 pub const IMPORT_ENTRY_MAGIC: u32 = 0x4558_494D; // "EXIM"
 
-/// Flag : entrée est un tombstone.
+/// Flag: entry is a tombstone.
 pub const IMPORT_FLAG_TOMBSTONE: u8 = 0x01;
-/// Flag : blob_id déjà vérifié par l'émetteur.
+/// Flag: blob_id already verified by sender.
 pub const IMPORT_FLAG_VERIFIED: u8 = 0x02;
 
 impl ImportEntryHeader {
@@ -161,32 +161,32 @@ impl ImportEntryHeader {
         }
     }
 
-    /// Valide le magic EN PREMIER (RÈGLE 8).
+    /// Validates magic FIRST (RULE 8).
     pub fn validate_magic(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == IMPORT_ENTRY_MAGIC
     }
 
     pub fn is_tombstone(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         let f: u8 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         f & IMPORT_FLAG_TOMBSTONE != 0
     }
 
     pub fn data_size_unaligned(&self) -> u64 {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.data_size)) }
     }
 
     pub fn blob_id_unaligned(&self) -> [u8; 32] {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified prior to call, repr(C).
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.blob_id)) }
     }
 
     pub fn as_bytes(&self) -> [u8; 52] {
         let mut out = [0u8; 52];
-        // SAFETY: ImportEntryHeader est #[repr(C)] et sa taille est vérifiée par const assert.
+        // SAFETY: ImportEntryHeader is #[repr(C)] and its size is verified by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(self as *const Self as *const u8, out.as_mut_ptr(), 52);
         }
@@ -194,18 +194,18 @@ impl ImportEntryHeader {
     }
 }
 
-// ─── Point de reprise ─────────────────────────────────────────────────────────
+// ─── Resume Checkpoint ───────────────────────────────────────────────────────
 
-/// Point de reprise pour un import streaming interrompu.
+/// Resume point for an interrupted streaming import.
 #[derive(Clone, Copy, Debug)]
 pub struct ImportCheckpoint {
-    /// Offset dans le flux source (bytes).
+    /// Offset in source stream (bytes).
     pub source_offset: u64,
-    /// Nombre d'entrées traitées avec succès.
+    /// Number of successfully processed entries.
     pub entries_processed: u64,
-    /// Dernier BlobId importé.
+    /// Last imported BlobId.
     pub last_blob_id: [u8; 32],
-    /// true si le checkpoint est utilisable.
+    /// true if checkpoint is usable.
     pub valid: bool,
 }
 
@@ -231,22 +231,22 @@ impl ImportCheckpoint {
     }
 }
 
-// ─── Configuration d'import ───────────────────────────────────────────────────
+// ─── Import Configuration ─────────────────────────────────────────────────────
 
-/// Paramètres d'une session d'import streaming.
+/// Streaming import session parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct StreamImportConfig {
-    /// Identifiant de session.
+    /// Session identifier.
     pub session_id: u32,
-    /// Vérifier le blob_id (blake3) après réception — RÈGLE 11.
+    /// Verify blob_id (blake3) after reception — RULE 11.
     pub verify_blob_id: bool,
-    /// Nombre maximum d'entrées à importer (0 = illimité).
+    /// Maximum number of entries to import (0 = unlimited).
     pub max_entries: u32,
-    /// Stratégie de résolution de conflits.
+    /// Conflict resolution strategy.
     pub conflict: ConflictResolver,
-    /// Mode de traitement des tombstones.
+    /// Tombstone processing mode.
     pub tombstone_mode: TombstoneHandler,
-    /// Taille maximale autorisée d'un blob (0 = illimitée).
+    /// Maximum allowed blob size (0 = unlimited).
     pub max_blob_size: u64,
 }
 
@@ -278,9 +278,9 @@ impl StreamImportConfig {
     }
 }
 
-// ─── Rapport d'import ─────────────────────────────────────────────────────────
+// ─── Import Report ───────────────────────────────────────────────────────────
 
-/// Rapport de fin de session d'import streaming.
+/// End of streaming import session report.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StreamImportReport {
     pub blobs_imported: u64,
@@ -340,18 +340,18 @@ impl StreamImportReport {
     }
 }
 
-// ─── Source de flux ───────────────────────────────────────────────────────────
+// ─── Stream Source ────────────────────────────────────────────────────────────
 
-/// Source de données pour l'import (morceau par morceau).
+/// Data source for import (chunk by chunk).
 pub trait ImportSource {
-    /// Lit exactement `buf.len()` bytes depuis la source.
+    /// Reads exactly `buf.len()` bytes from the source.
     fn read_exact(&mut self, buf: &mut [u8]) -> ExofsResult<()>;
 
-    /// Retourne le nombre de bytes lus depuis le début.
+    /// Returns number of bytes read since the beginning.
     fn bytes_read(&self) -> u64;
 }
 
-/// Implémentation de ImportSource sur un slice (pour les tests).
+/// Implementation of ImportSource on a slice (for tests).
 pub struct SliceImportSource<'a> {
     data: &'a [u8],
     pos: usize,
@@ -380,14 +380,14 @@ impl<'a> ImportSource for SliceImportSource<'a> {
     }
 }
 
-// ─── Moteur d'import streaming ────────────────────────────────────────────────
+// ─── Streaming Import Engine ──────────────────────────────────────────────────
 
-/// Importe des blobs depuis un flux binaire vers le store ExoFS.
+/// Imports blobs from a binary stream into the ExoFS store.
 ///
-/// Format du flux attendu :
+/// Expected stream format:
 ///   [ ImportEntryHeader (52 bytes) | data (header.data_size bytes) ] × N
 ///
-/// RECUR-01 : boucle while unique.
+/// RECUR-01: single while loop.
 pub struct StreamImporter {
     config: StreamImportConfig,
     checkpoint: ImportCheckpoint,
@@ -413,35 +413,35 @@ impl StreamImporter {
         })
     }
 
-    /// Lance l'import depuis la source `src` vers le writer `writer`.
+    /// Starts import from source `src` to writer `writer`.
     ///
-    /// RECUR-01 : une seule boucle while sur les entrées.
+    /// RECUR-01: single while loop over entries.
     pub fn run<S: ImportSource, W: BlobWriter>(
         &mut self,
         src: &mut S,
         writer: &mut W,
     ) -> ExofsResult<StreamImportReport> {
-        let mut hdr_buf = [0u8; 52]; // taille de ImportEntryHeader
+        let mut hdr_buf = [0u8; 52]; // size of ImportEntryHeader
         let mut entries = 0u64;
 
         loop {
-            // Limite max_entries (ARITH-02 : comparaison saturante)
+            // max_entries limit (ARITH-02: saturating comparison)
             if self.config.max_entries > 0 && entries >= self.config.max_entries as u64 {
                 break;
             }
 
-            // Lecture de l'en-tête
+            // Read header
             if src.read_exact(&mut hdr_buf).is_err() {
-                // Fin de flux normale
+                // Normal end of stream
                 break;
             }
 
-            // Reinterprétation sûre en ImportEntryHeader
-            // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+            // Safe reinterpretation into ImportEntryHeader
+            // SAFETY: safety invariant verified by caller function preconditions.
             let hdr: ImportEntryHeader =
                 unsafe { core::ptr::read_unaligned(hdr_buf.as_ptr() as *const ImportEntryHeader) };
 
-            // RÈGLE 8 : magic EN PREMIER
+            // RULE 8: magic FIRST
             if !hdr.validate_magic() {
                 self.report.record_error();
                 break;
@@ -451,7 +451,7 @@ impl StreamImporter {
             let data_size = hdr.data_size_unaligned();
 
             if hdr.is_tombstone() {
-                // Traitement tombstone
+                // Tombstone processing
                 let local_exists = writer.blob_exists(&blob_id);
                 match self.config.tombstone_mode.handle(&blob_id, local_exists) {
                     Ok(true) => {
@@ -473,14 +473,14 @@ impl StreamImporter {
                 continue;
             }
 
-            // Vérification taille max (ARITH-02)
+            // Max size verification (ARITH-02)
             if self.config.max_blob_size > 0 && data_size > self.config.max_blob_size {
                 self.report.record_error();
                 self.report.record_skipped();
                 break;
             }
 
-            // Allocation du buffer de données — OOM-02 : try_reserve
+            // Allocate data buffer — OOM-02: try_reserve
             let mut payload: Vec<u8> = Vec::new();
             payload
                 .try_reserve(data_size as usize)
@@ -494,7 +494,7 @@ impl StreamImporter {
 
             self.report.bytes_received = self.report.bytes_received.saturating_add(data_size);
 
-            // Vérification blob_id — RÈGLE 11 : blake3(données brutes AVANT compression)
+            // Verify blob_id — RULE 11: blake3(raw data BEFORE compression)
             if self.config.verify_blob_id {
                 let computed = inline_blake3(&payload);
                 if computed != blob_id {
@@ -504,17 +504,17 @@ impl StreamImporter {
                 }
             }
 
-            // Résolution de conflit
+            // Conflict resolution
             let local_exists = writer.blob_exists(&blob_id);
             if local_exists {
-                let existing_epoch = None; // sans accès direct à l'epoch locale
+                let existing_epoch = None; // without direct access to local epoch
                 match self
                     .config
                     .conflict
                     .resolve(&blob_id, EpochId(0), existing_epoch)
                 {
                     Ok(true) => {
-                        // Écraser
+                        // Overwrite
                         match writer.write_blob(&blob_id, &payload) {
                             Ok(()) => self.report.record_imported(data_size, true),
                             Err(_) => self.report.record_error(),
@@ -556,9 +556,9 @@ impl StreamImporter {
     }
 }
 
-// ─── Constructeur de flux d'import ───────────────────────────────────────────
+// ─── Import Stream Builder ────────────────────────────────────────────────────
 
-/// Construit un flux binaire d'import depuis une liste de blobs.
+/// Builds a binary import stream from a list of blobs.
 pub struct ImportStreamBuilder {
     buf: Vec<u8>,
 }
@@ -568,7 +568,7 @@ impl ImportStreamBuilder {
         Self { buf: Vec::new() }
     }
 
-    /// Ajoute un blob au flux — OOM-02 : try_reserve.
+    /// Adds a blob to the stream — OOM-02: try_reserve.
     pub fn append_blob(&mut self, blob_id: [u8; 32], data: &[u8]) -> ExofsResult<()> {
         let hdr = ImportEntryHeader::new_blob(blob_id, data.len() as u64);
         let hdr_bytes = hdr.as_bytes();
@@ -581,7 +581,7 @@ impl ImportStreamBuilder {
         Ok(())
     }
 
-    /// Ajoute un tombstone au flux — OOM-02 : try_reserve.
+    /// Adds a tombstone to the stream — OOM-02: try_reserve.
     pub fn append_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         let hdr = ImportEntryHeader::new_tombstone(blob_id);
         let hdr_bytes = hdr.as_bytes();
@@ -603,7 +603,7 @@ impl ImportStreamBuilder {
     }
 }
 
-// ─── blake3 inline minimal ────────────────────────────────────────────────────
+// ─── Minimal inline blake3 ────────────────────────────────────────────────────
 
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
@@ -862,7 +862,7 @@ mod tests {
         let mut builder = ImportStreamBuilder::new();
         builder.append_blob(make_id(1), b"data").test_expect("ok");
         builder.append_tombstone(make_id(2)).test_expect("ok");
-        // Taille attendue : 52 + 4 (data) + 52 (tombstone)
+        // Expected size: 52 + 4 (data) + 52 (tombstone)
         assert_eq!(builder.len(), 52 + 4 + 52);
     }
 }

@@ -1,11 +1,11 @@
-//! snapshot_quota.rs — Gestion des quotas de snapshots ExoFS
+//! snapshot_quota.rs — ExoFS snapshot quota management
 //!
-//! Gère les quotas par snapshot (taille max) et les quotas globaux
-//! (total bytes, nombre max de snapshots).
+//! Manages per-snapshot quotas (maximum size) and global quotas
+//! (total bytes, maximum number of snapshots).
 //!
-//! Règles spec :
-//!   ARITH-02 : checked_add pour accumulateurs
-//!   OOM-02   : try_reserve avant push
+//! Spec rules:
+//!   ARITH-02 : checked_add for accumulators
+//!   OOM-02   : try_reserve before push
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -23,20 +23,20 @@ use crate::scheduler::sync::spinlock::SpinLock;
 pub static SNAPSHOT_QUOTA: SnapshotQuotaTable = SnapshotQuotaTable::new_const();
 
 // ─────────────────────────────────────────────────────────────
-// Quota par snapshot
+// Per-snapshot quota
 // ─────────────────────────────────────────────────────────────
 
-/// Entrée de quota pour un snapshot spécifique
+/// Quota entry for a specific snapshot
 #[derive(Debug, Clone, Copy)]
 pub struct SnapshotQuotaEntry {
     pub snap_id: SnapshotId,
-    /// Octets maximum autorisés (0 = illimité)
+    /// Maximum allowed bytes (0 = unlimited)
     pub max_bytes: u64,
-    /// Nombre maximum de blobs (0 = illimité)
+    /// Maximum number of blobs (0 = unlimited)
     pub max_blobs: u64,
-    /// Octets actuellement utilisés
+    /// Currently used bytes
     pub used_bytes: u64,
-    /// Blobs actuellement utilisés
+    /// Currently used blobs
     pub used_blobs: u64,
 }
 
@@ -51,7 +51,7 @@ impl SnapshotQuotaEntry {
         }
     }
 
-    /// Vérifie si une allocation de `bytes` / `blobs` est autorisée
+    /// Checks if an allocation of `bytes` / `blobs` is allowed
     pub fn can_allocate(&self, bytes: u64, blobs: u64) -> bool {
         let new_bytes = self.used_bytes.saturating_add(bytes);
         let new_blobs = self.used_blobs.saturating_add(blobs);
@@ -59,13 +59,13 @@ impl SnapshotQuotaEntry {
             && (self.max_blobs == 0 || new_blobs <= self.max_blobs)
     }
 
-    /// Retourne true si le quota est dépassé
+    /// Returns true if quota is exceeded
     pub fn is_exceeded(&self) -> bool {
         (self.max_bytes > 0 && self.used_bytes > self.max_bytes)
             || (self.max_blobs > 0 && self.used_blobs > self.max_blobs)
     }
 
-    /// Taux d'utilisation (0.0 – 1.0) — bytes
+    /// Utilization ratio (0.0 – 1.0) — bytes
     pub fn usage_ratio_bytes(&self) -> f64 {
         if self.max_bytes == 0 {
             return 0.0;
@@ -75,17 +75,17 @@ impl SnapshotQuotaEntry {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Quota global
+// Global quota
 // ─────────────────────────────────────────────────────────────
 
-/// Politique de quota global
+/// Global quota policy
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalQuotaPolicy {
-    /// Octets totaux maximum (0 = illimité)
+    /// Maximum total bytes (0 = unlimited)
     pub max_total_bytes: u64,
-    /// Nombre maximum de snapshots (0 = illimité)
+    /// Maximum number of snapshots (0 = unlimited)
     pub max_snap_count: usize,
-    /// Taille max par défaut d'un snapshot (0 = illimité)
+    /// Default max size of a snapshot (0 = unlimited)
     pub default_snap_max_bytes: u64,
 }
 
@@ -124,7 +124,7 @@ impl SnapshotQuotaTable {
         }
     }
 
-    // ── Politique globale ────────────────────────────────────────────
+    // ── Global policy ────────────────────────────────────────
 
     pub fn set_policy(&self, p: GlobalQuotaPolicy) {
         *self.policy.lock() = p;
@@ -134,23 +134,23 @@ impl SnapshotQuotaTable {
         *self.policy.lock()
     }
 
-    // ── Quota par snapshot ───────────────────────────────────────────
+    // ── Per-snapshot quota ───────────────────────────────────
 
-    /// Enregistre un quota pour un snapshot (OOM-02 : try_reserve)
+    /// Registers a quota for a snapshot (OOM-02: try_reserve)
     pub fn set(&self, snap_id: SnapshotId, max_bytes: u64, max_blobs: u64) -> ExofsResult<()> {
-        // Vérifier que le snapshot existe
+        // Verify snapshot exists
         let _ = SNAPSHOT_LIST.get_ref(snap_id)?;
 
         let entry = SnapshotQuotaEntry::new(snap_id, max_bytes, max_blobs);
         let mut guard = self.entries.lock();
         guard.insert(snap_id.0, entry);
-        // Flag QUOTA_SET dans le registre
+        // Set QUOTA_SET flag in registry
         drop(guard);
         SNAPSHOT_LIST.set_flags(snap_id, flags::QUOTA_SET)?;
         Ok(())
     }
 
-    /// Supprime le quota d'un snapshot
+    /// Deletes quota for a snapshot
     pub fn remove(&self, snap_id: SnapshotId) -> ExofsResult<()> {
         let mut guard = self.entries.lock();
         guard.remove(&snap_id.0).ok_or(ExofsError::NotFound)?;
@@ -159,10 +159,10 @@ impl SnapshotQuotaTable {
         Ok(())
     }
 
-    // ── Mise à jour utilisation ──────────────────────────────────────
+    // ── Usage update ────────────────────────────────────────
 
-    /// Met à jour les statistiques d'utilisation pour un snapshot
-    /// ARITH-02 : checked_add
+    /// Updates usage statistics for a snapshot.
+    /// ARITH-02: checked_add
     pub fn update_usage(
         &self,
         snap_id: SnapshotId,
@@ -188,7 +188,7 @@ impl SnapshotQuotaTable {
                 entry.used_blobs = entry.used_blobs.saturating_sub((-blobs_delta) as u64);
             }
         }
-        // Mise à jour compteur global
+        // Update global counter
         if bytes_delta >= 0 {
             loop {
                 let old = self.global_used_bytes.load(Ordering::Acquire);
@@ -220,11 +220,11 @@ impl SnapshotQuotaTable {
         Ok(())
     }
 
-    // ── Vérification avant allocation ────────────────────────────────
+    // ── Pre-allocation verification ─────────────────────────
 
-    /// Vérifie si une allocation est autorisée (quota per-snap + global)
+    /// Checks if an allocation is allowed (per-snap + global quota)
     pub fn check_allocation(&self, snap_id: SnapshotId, bytes: u64, blobs: u64) -> ExofsResult<()> {
-        // ── Quota global ────────────────────────────────────────
+        // ── Global quota ────────────────────────────────────────
         let policy = *self.policy.lock();
         if policy.max_total_bytes > 0 {
             let new_total = self
@@ -243,14 +243,14 @@ impl SnapshotQuotaTable {
             }
         }
 
-        // ── Quota par snapshot ──────────────────────────────────
+        // ── Per-snapshot quota ──────────────────────────────────
         let guard = self.entries.lock();
         if let Some(entry) = guard.get(&snap_id.0) {
             if !entry.can_allocate(bytes, blobs) {
                 return Err(ExofsError::InvalidSize);
             }
         } else if policy.default_snap_max_bytes > 0 {
-            // Quota par défaut si pas d'entrée explicite
+            // Default quota if no explicit entry
             let snap = SNAPSHOT_LIST
                 .get(snap_id)
                 .map_err(|_| ExofsError::NotFound)?;
@@ -265,9 +265,9 @@ impl SnapshotQuotaTable {
         Ok(())
     }
 
-    // ── Snapshots exceeded ───────────────────────────────────────────
+    // ── Exceeded snapshots ───────────────────────────────────
 
-    /// Retourne les snapshots dont le quota est dépassé
+    /// Returns snapshots whose quota is exceeded
     pub fn exceeded_snapshots(&self) -> ExofsResult<Vec<SnapshotId>> {
         let guard = self.entries.lock();
         let mut out: Vec<SnapshotId> = Vec::new();
@@ -280,7 +280,7 @@ impl SnapshotQuotaTable {
         Ok(out)
     }
 
-    // ── Requêtes ─────────────────────────────────────────────────────
+    // ── Queries ─────────────────────────────────────────────
 
     pub fn get(&self, snap_id: SnapshotId) -> Option<SnapshotQuotaEntry> {
         let guard = self.entries.lock();
@@ -298,7 +298,7 @@ impl SnapshotQuotaTable {
         Ok(out)
     }
 
-    // ── Statistiques globales ────────────────────────────────────────
+    // ── Global statistics ───────────────────────────────────
 
     pub fn global_used_bytes(&self) -> u64 {
         self.global_used_bytes.load(Ordering::Acquire)
@@ -423,7 +423,7 @@ mod tests {
         let qt = SnapshotQuotaTable::new_const();
         qt.set(SnapshotId(5), 0, 0).test_unwrap();
         qt.update_usage(SnapshotId(5), 100, 5).test_unwrap();
-        qt.update_usage(SnapshotId(5), -200, -10).test_unwrap(); // ne déborde pas
+        qt.update_usage(SnapshotId(5), -200, -10).test_unwrap(); // does not overflow
         let e = qt.get(SnapshotId(5)).test_unwrap();
         assert_eq!(e.used_bytes, 0);
     }

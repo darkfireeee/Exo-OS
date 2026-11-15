@@ -39,7 +39,10 @@ pub fn cmd_ping(rest: &[u8]) {
         if fd >= 0 {
             break;
         }
-        sleep_ms(50);
+        if sleep_ms_interruptible(50) {
+            write_all(b"^C\n");
+            return;
+        }
         attempts += 1;
     }
     if fd < 0 {
@@ -175,7 +178,10 @@ pub fn cmd_ping(rest: &[u8]) {
         write_all(b"us\n");
         seq = seq.saturating_add(1);
         if seq < count {
-            sleep_ms(250);
+            if sleep_ms_interruptible(250) {
+                write_all(b"^C\n--- ping interrupted ---\n");
+                break;
+            }
         }
     }
 
@@ -250,7 +256,10 @@ pub fn cmd_tcping(rest: &[u8]) {
         if fd >= 0 {
             break;
         }
-        sleep_ms(50);
+        if sleep_ms_interruptible(50) {
+            write_all(b"^C\n");
+            return;
+        }
         attempts += 1;
     }
     if fd < 0 {

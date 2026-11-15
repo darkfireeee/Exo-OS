@@ -10,7 +10,7 @@
 use crate::fs::File;
 use crate::os::fd::AsRawFd;
 use crate::process::Command;
-use crate::sys::{map_exo_err, runtime, syscall};
+use crate::sys::{AsInnerMut, map_exo_err, runtime, syscall};
 
 pub mod ffi;
 pub mod io;
@@ -352,6 +352,7 @@ pub trait ExoPledgeExt {
 #[stable(feature = "rust1", since = "1.0.0")]
 impl ExoPledgeExt for Command {
     fn pledge_permissions(&mut self, perms: CapPermissions) -> &mut Self {
+        self.as_inner_mut().pledge_mask(perms.0);
         let mut buf = [0u8; 20];
         let mut n = perms.0;
         let mut idx = buf.len();
@@ -368,6 +369,12 @@ impl ExoPledgeExt for Command {
         let val = core::str::from_utf8(&buf[idx..]).unwrap_or("0");
         self.env("EXO_PLEDGE_PERMS", val)
     }
+}
+
+/// Creates an anonymous shared memory file descriptor (`SYS_MEMFD_CREATE = 319`).
+#[stable(feature = "rust1", since = "1.0.0")]
+pub fn memfd_create(name_cstr: &[u8], flags: u32) -> crate::io::Result<i32> {
+    syscall::memfd_create(name_cstr, flags).map_err(map_exo_err)
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]

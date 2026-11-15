@@ -352,13 +352,16 @@ pub fn guard_page_violation_handler(virt: u64, kind: GuardRegionKind) -> ! {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Canonical address of a kernel stack for `cpu_id`.
-/// Convention: stacks at 0xFFFF_FF80_0000_0000 + cpu_id * 64 KiB.
+/// Reserves 1 low guard page + 64 KiB stack + 1 high guard page per CPU so
+/// adjacent CPU stacks never share a guard page.
 const KERNEL_STACK_BASE: u64 = 0xFFFF_FF80_0000_0000;
 const KERNEL_STACK_SIZE: u64 = 64 * 1024; // 64 KiB per CPU
 
 /// Returns (stack_base, stack_size) for `cpu_id`.
 pub fn cpu_stack_range(cpu_id: u32) -> (u64, u64) {
-    let base = KERNEL_STACK_BASE + cpu_id as u64 * KERNEL_STACK_SIZE;
+    let guard = PAGE_SIZE as u64;
+    let stride = KERNEL_STACK_SIZE + 2 * guard;
+    let base = KERNEL_STACK_BASE + guard + cpu_id as u64 * stride;
     (base, KERNEL_STACK_SIZE)
 }
 

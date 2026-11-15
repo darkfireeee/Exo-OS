@@ -30,7 +30,7 @@ pub fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
     let scan_type = req.payload[4];
     let priority = req.payload[5];
     let data_len = read_u32_le(&req.payload, 6) as usize;
-    let data_end = (10 + data_len).min(120);
+    let data_end = (10 + data_len).min(ipc_gate::EXO_SHIELD_CAP_TOKEN_OFFSET);
     let scan_data = &req.payload[10..data_end];
     let tick = current_tick();
 

@@ -1,17 +1,17 @@
-//! fcntl_lock.rs — Verrouillage byte-range POSIX (F_SETLK / F_GETLK / F_SETLKW)
+//! fcntl_lock.rs — POSIX byte-range locking (F_SETLK / F_GETLK / F_SETLKW)
 //!
-//! Implémente un gestionnaire de verrous byte-range compatible POSIX au-dessus
-//! des objets ExoFS. Chaque objet possède sa propre file de verrous indexée par
-//! son `object_id`. Les conflits Write/Write et Read/Write sont détectés.
+//! Implements a POSIX-compatible byte-range lock manager on top of
+//! ExoFS objects. Each object has its own lock queue indexed by its
+//! `object_id`. Write/Write and Read/Write conflicts are detected.
 //!
-//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
+//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusively.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MAX_LOCKS_PER_OBJECT: usize = 256;
@@ -23,7 +23,7 @@ pub const LOCK_RANGE_MAX: u64 = u64::MAX / 2;
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Type de verrou POSIX (équivalent F_RDLCK / F_WRLCK / F_UNLCK).
+/// POSIX lock type (equivalent to F_RDLCK / F_WRLCK / F_UNLCK).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockKind {
@@ -32,16 +32,16 @@ pub enum LockKind {
     Unlock = 2,
 }
 
-/// Commande `fcntl` supportée.
+/// Supported `fcntl` command.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FcntlCmd {
     GetLk = 0,  // F_GETLK
     SetLk = 1,  // F_SETLK
-    SetLkW = 2, // F_SETLKW (non-bloquant dans ce kernel — traité comme SetLk)
+    SetLkW = 2, // F_SETLKW (non-blocking in this kernel — treated as SetLk)
 }
 
-/// Entrée de verrou byte-range.
+/// Byte-range lock entry.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ByteRangeLock {
@@ -56,7 +56,7 @@ pub struct ByteRangeLock {
 
 const _: () = assert!(core::mem::size_of::<ByteRangeLock>() == 48);
 
-/// Résultat d'une requête F_GETLK.
+/// Result of an F_GETLK request.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LockInfo {
@@ -72,7 +72,7 @@ pub struct LockInfo {
 const _: () = assert!(core::mem::size_of::<LockInfo>() == 40);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrée de la table interne (par object_id)
+// Internal table entry (by object_id)
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ObjectLockSlot {
@@ -81,7 +81,7 @@ struct ObjectLockSlot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table globale — spinlock via UnsafeCell + AtomicU64
+// Global table — spinlock via UnsafeCell + AtomicU64
 // ─────────────────────────────────────────────────────────────────────────────
 
 use core::cell::UnsafeCell;
@@ -120,9 +120,9 @@ impl FcntlLockTable {
         self.spinlock.store(0, Ordering::Release);
     }
 
-    // ─── Cherche ou crée le slot pour un object_id ───
+    // ─── Search or create slot for an object_id ───
 
-    /// Cherche l'index du slot pour `object_id`. RECUR-01 : while.
+    /// Finds slot index for `object_id`. RECUR-01: while.
     fn find_slot(slots: &[ObjectLockSlot], object_id: u64) -> Option<usize> {
         let mut i = 0usize;
         while i < slots.len() {
@@ -134,23 +134,23 @@ impl FcntlLockTable {
         None
     }
 
-    // ─── Teste le chevauchement de deux plages ───
+    // ─── Test overlap between two ranges ───
 
-    /// Retourne vrai si [a_start, a_start+a_len) chevauche [b_start, b_start+b_len).
-    /// ARITH-02 : checked_add.
+    /// Returns true if [a_start, a_start+a_len) overlaps [b_start, b_start+b_len).
+    /// ARITH-02: checked_add.
     fn overlaps(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
         let a_end = a_start.saturating_add(a_len);
         let b_end = b_start.saturating_add(b_len);
         a_start < b_end && b_start < a_end
     }
 
-    /// Teste si un verrou entre en conflit avec les verrous existants.
-    /// RECUR-01 : while.
+    /// Tests if a lock conflicts with existing locks.
+    /// RECUR-01: while.
     fn has_conflict(existing: &[ByteRangeLock], candidate: &ByteRangeLock) -> Option<usize> {
         let mut i = 0usize;
         while i < existing.len() {
             let e = &existing[i];
-            // Même pid/tid → pas de conflit interne.
+            // Same pid/tid -> no internal conflict.
             if e.pid == candidate.pid && e.tid == candidate.tid {
                 i = i.wrapping_add(1);
                 continue;
@@ -164,10 +164,10 @@ impl FcntlLockTable {
         None
     }
 
-    // ─── API principale ───
+    // ─── Main API ───
 
-    /// Acquiert un verrou byte-range (F_SETLK / F_SETLKW).
-    /// OOM-02 : try_reserve. RECUR-01 : while.
+    /// Acquires a byte-range lock (F_SETLK / F_SETLKW).
+    /// OOM-02: try_reserve. RECUR-01: while.
     pub fn acquire(&self, lock: ByteRangeLock) -> ExofsResult<()> {
         if lock.kind == LockKind::Unlock {
             return self.release(lock.object_id, lock.pid, lock.tid, lock.start, lock.length);
@@ -186,7 +186,7 @@ impl FcntlLockTable {
     }
 
     fn acquire_inner(&self, lock: ByteRangeLock) -> ExofsResult<()> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
 
         if let Some(idx) = Self::find_slot(slots, lock.object_id) {
@@ -218,8 +218,8 @@ impl FcntlLockTable {
         Ok(())
     }
 
-    /// Libère les verrous d'un pid/tid sur une plage d'un objet.
-    /// RECUR-01 : while.
+    /// Releases locks of a pid/tid over a range of an object.
+    /// RECUR-01: while.
     pub fn release(
         &self,
         object_id: u64,
@@ -229,7 +229,7 @@ impl FcntlLockTable {
         length: u64,
     ) -> ExofsResult<()> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
         if let Some(idx) = Self::find_slot(slots, object_id) {
             let v = &mut slots[idx].locks;
@@ -240,7 +240,7 @@ impl FcntlLockTable {
                 let over = length == 0 || Self::overlaps(start, length, l.start, l.length);
                 if matches_owner && over {
                     v.remove(i);
-                    // ne pas incrémenter i — swap-remove alternatif
+                    // do not increment i — alternative swap-remove
                 } else {
                     i = i.wrapping_add(1);
                 }
@@ -254,11 +254,11 @@ impl FcntlLockTable {
         Ok(())
     }
 
-    /// Libère TOUS les verrous d'un pid (à la fermeture du processus).
-    /// RECUR-01 : while.
+    /// Releases ALL locks for a pid (upon process termination).
+    /// RECUR-01: while.
     pub fn release_all_pid(&self, pid: u64) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
         let mut si = 0usize;
         while si < slots.len() {
@@ -281,10 +281,10 @@ impl FcntlLockTable {
         self.lock_release();
     }
 
-    /// F_GETLK : teste si un verrou est possible, retourne le conflit s'il y en a un.
+    /// F_GETLK: tests if a lock is possible, returns the conflict if present.
     pub fn test_lock(&self, candidate: &ByteRangeLock) -> ExofsResult<Option<LockInfo>> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &*self.slots.get() };
         let result = if let Some(idx) = Self::find_slot(slots, candidate.object_id) {
             match Self::has_conflict(&slots[idx].locks, candidate) {
@@ -309,29 +309,29 @@ impl FcntlLockTable {
         result
     }
 
-    /// Retourne le nombre d'objets actuellement verrouillés.
-    /// Supprime toutes les verrous.
+    /// Clears all locks.
     pub fn clear(&self) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &mut *self.slots.get() };
         slots.clear();
         self.count.store(0, core::sync::atomic::Ordering::Relaxed);
         self.lock_release();
     }
 
+    /// Returns the number of currently locked objects.
     pub fn locked_object_count(&self) -> usize {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let n = unsafe { (*self.slots.get()).len() };
         self.lock_release();
         n
     }
 
-    /// Retourne le nombre de verrous actifs sur un objet.
+    /// Returns the number of active locks on an object.
     pub fn lock_count_for(&self, object_id: u64) -> usize {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &*self.slots.get() };
         let n = if let Some(idx) = Self::find_slot(slots, object_id) {
             slots[idx].locks.len()
@@ -342,10 +342,10 @@ impl FcntlLockTable {
         n
     }
 
-    /// Retourne le nombre total de verrous actifs tous objets confondus.
+    /// Returns total number of active locks across all objects.
     pub fn total_lock_count(&self) -> usize {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let slots = unsafe { &*self.slots.get() };
         let mut total = 0usize;
         let mut i = 0usize;
@@ -359,10 +359,10 @@ impl FcntlLockTable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers publics
+// Public helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Construit un ByteRangeLock de manière ergonomique.
+/// Ergonomically constructs a ByteRangeLock.
 pub fn make_lock(
     object_id: u64,
     pid: u64,
@@ -382,16 +382,16 @@ pub fn make_lock(
     }
 }
 
-/// Retourne vrai si deux plages se chevauchent.
-/// ARITH-02 : saturating_add.
+/// Returns true if two ranges overlap.
+/// ARITH-02: saturating_add.
 pub fn ranges_overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
     let a_end = a_start.saturating_add(a_len);
     let b_end = b_start.saturating_add(b_len);
     a_start < b_end && b_start < a_end
 }
 
-/// Retourne la taille totale d'une union de deux plages (sans trous).
-/// ARITH-02 : saturating_add/sub.
+/// Returns total size of a union of two ranges (without holes).
+/// ARITH-02: saturating_add/sub.
 pub fn union_range_size(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> u64 {
     let a_end = a_start.saturating_add(a_len);
     let b_end = b_start.saturating_add(b_len);
@@ -400,7 +400,7 @@ pub fn union_range_size(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> u
     end.saturating_sub(start)
 }
 
-/// Valide les paramètres d'un verrou.
+/// Validates lock parameters.
 pub fn validate_lock(lock: &ByteRangeLock) -> ExofsResult<()> {
     if lock.length == 0 {
         return Err(ExofsError::InvalidArgument);
@@ -527,7 +527,7 @@ mod tests {
     fn test_same_pid_no_conflict() {
         let t = tbl();
         t.acquire(mk(1, 100, 0, 512, LockKind::Write)).test_unwrap();
-        // Même pid → pas de conflit (règle POSIX)
+        // Same pid -> no conflict (POSIX rule)
         assert!(t.acquire(mk(1, 100, 0, 512, LockKind::Write)).is_ok());
     }
 }

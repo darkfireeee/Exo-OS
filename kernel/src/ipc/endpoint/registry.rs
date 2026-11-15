@@ -18,7 +18,7 @@
 // NO-ALLOC ZONE RULE: zero Vec/Box/Arc in this file.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-use crate::ipc::core::constants::MAX_ENDPOINTS;
+use crate::ipc::core::constants::{MAX_ENDPOINTS, MAX_ENDPOINT_NAME_LEN};
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::scheduler::sync::spinlock::SpinLock;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,7 +30,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// FNV-1a hash of a byte slice.
+/// FNV-1a hash of a byte slice (remapped away from sentinel EMPTY/TOMBSTONE).
 #[inline]
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash = FNV_OFFSET;
@@ -38,7 +38,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash ^= b as u64;
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    hash
+    if hash == RegistryEntry::EMPTY || hash == RegistryEntry::TOMBSTONE {
+        hash ^ 0x5555_5555_5555_5555
+    } else {
+        hash
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,10 +59,12 @@ struct RegistryEntry {
     hash: u64,
     /// Stored EndpointId.
     ep_id: u64,
+    /// Exact endpoint name bytes (prevents hash-collision aliasing).
+    name: [u8; MAX_ENDPOINT_NAME_LEN],
+    /// Byte length of `name`.
+    name_len: u8,
     /// Robin Hood distance from ideal position.
     rh_dist: RobinHoodDist,
-    /// Padding.
-    _pad: [u8; 6],
 }
 
 impl RegistryEntry {
@@ -69,9 +75,17 @@ impl RegistryEntry {
         Self {
             hash: Self::EMPTY,
             ep_id: 0,
+            name: [0u8; MAX_ENDPOINT_NAME_LEN],
+            name_len: 0,
             rh_dist: 0,
-            _pad: [0u8; 6],
         }
+    }
+
+    #[inline(always)]
+    fn matches(&self, hash: u64, name: &[u8]) -> bool {
+        self.hash == hash
+            && self.name_len as usize == name.len()
+            && &self.name[..self.name_len as usize] == name
     }
 
     #[inline(always)]
@@ -127,8 +141,9 @@ impl RegistryInner {
             self.slots[pos] = RegistryEntry {
                 hash: next_slot.hash,
                 ep_id: next_slot.ep_id,
+                name: next_slot.name,
+                name_len: next_slot.name_len,
                 rh_dist: next_slot.rh_dist - 1,
-                _pad: [0u8; 6],
             };
             pos = next;
         }
@@ -136,16 +151,19 @@ impl RegistryInner {
     }
 
     /// Inserts or updates an endpoint.
-    fn insert(&mut self, hash: u64, ep_id: u64) -> Result<(), IpcError> {
+    fn insert(&mut self, name: &[u8], hash: u64, ep_id: u64) -> Result<(), IpcError> {
         if self.count >= MAX_ENDPOINTS * 3 / 4 {
             // Table at 75% capacity — reject to avoid excessive collisions.
             return Err(IpcError::ResourceExhausted);
         }
         let mut pos = (hash as usize) % MAX_ENDPOINTS;
-        let dist: RobinHoodDist = 0;
         let mut cur_hash = hash;
         let mut cur_ep_id = ep_id;
-        let mut cur_dist = dist;
+        let mut cur_name = [0u8; MAX_ENDPOINT_NAME_LEN];
+        let copy_len = name.len().min(MAX_ENDPOINT_NAME_LEN);
+        cur_name[..copy_len].copy_from_slice(&name[..copy_len]);
+        let mut cur_name_len = copy_len as u8;
+        let mut cur_dist: RobinHoodDist = 0;
 
         loop {
             let slot = &mut self.slots[pos];
@@ -153,13 +171,14 @@ impl RegistryInner {
                 *slot = RegistryEntry {
                     hash: cur_hash,
                     ep_id: cur_ep_id,
+                    name: cur_name,
+                    name_len: cur_name_len,
                     rh_dist: cur_dist,
-                    _pad: [0u8; 6],
                 };
                 self.count += 1;
                 return Ok(());
             }
-            if slot.hash == cur_hash {
+            if slot.matches(cur_hash, &cur_name[..cur_name_len as usize]) {
                 if slot.ep_id == cur_ep_id {
                     return Ok(());
                 }
@@ -170,6 +189,8 @@ impl RegistryInner {
             if slot.rh_dist < cur_dist {
                 core::mem::swap(&mut slot.hash, &mut cur_hash);
                 core::mem::swap(&mut slot.ep_id, &mut cur_ep_id);
+                core::mem::swap(&mut slot.name, &mut cur_name);
+                core::mem::swap(&mut slot.name_len, &mut cur_name_len);
                 core::mem::swap(&mut slot.rh_dist, &mut cur_dist);
             }
             pos = (pos + 1) % MAX_ENDPOINTS;
@@ -180,9 +201,9 @@ impl RegistryInner {
         }
     }
 
-    /// Looks up an endpoint by hash.
+    /// Looks up an endpoint by name + hash.
     /// Returns EndpointId or None if not found.
-    fn lookup(&self, hash: u64) -> Option<u64> {
+    fn lookup(&self, name: &[u8], hash: u64) -> Option<u64> {
         let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let mut dist = 0usize;
         loop {
@@ -190,7 +211,7 @@ impl RegistryInner {
             if slot.is_empty() {
                 return None;
             }
-            if slot.hash == hash {
+            if slot.matches(hash, name) {
                 return Some(slot.ep_id);
             }
             // Robin Hood: if current distance exceeds slot distance, requested element
@@ -206,8 +227,8 @@ impl RegistryInner {
         }
     }
 
-    /// Removes an endpoint from registry.
-    fn remove(&mut self, hash: u64) -> bool {
+    /// Removes an endpoint from registry by exact name + hash.
+    fn remove(&mut self, name: &[u8], hash: u64) -> bool {
         let mut pos = (hash as usize) % MAX_ENDPOINTS;
         let mut dist = 0usize;
         loop {
@@ -215,7 +236,7 @@ impl RegistryInner {
             if slot.is_empty() {
                 return false;
             }
-            if slot.hash == hash {
+            if slot.matches(hash, name) {
                 self.backward_shift_delete(pos);
                 return true;
             }
@@ -280,24 +301,30 @@ impl NamedEndpointRegistry {
         }
         let hash = fnv1a(name);
         let mut inner = self.inner.lock();
-        inner.insert(hash, ep_id.get())?;
+        inner.insert(name, hash, ep_id.get())?;
         self.insert_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     /// Looks up an endpoint by name.
     pub fn lookup(&self, name: &[u8]) -> Option<EndpointId> {
+        if name.is_empty() || name.len() >= crate::ipc::core::MAX_ENDPOINT_NAME_LEN {
+            return None;
+        }
         self.lookup_count.fetch_add(1, Ordering::Relaxed);
         let hash = fnv1a(name);
         let inner = self.inner.lock();
-        inner.lookup(hash).and_then(EndpointId::new)
+        inner.lookup(name, hash).and_then(EndpointId::new)
     }
 
     /// Removes an endpoint from registry.
     pub fn unregister(&self, name: &[u8]) -> bool {
+        if name.is_empty() || name.len() >= crate::ipc::core::MAX_ENDPOINT_NAME_LEN {
+            return false;
+        }
         let hash = fnv1a(name);
         let mut inner = self.inner.lock();
-        inner.remove(hash)
+        inner.remove(name, hash)
     }
 
     /// Removes an endpoint from registry by its identifier.

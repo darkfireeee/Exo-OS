@@ -3,7 +3,7 @@
 //! This module decides when a request can remain on the public self-service
 //! path and when it must carry a kernel-verified service capability token.
 
-pub const EXO_SHIELD_CAP_TOKEN_OFFSET: usize = 100;
+pub const EXO_SHIELD_CAP_TOKEN_OFFSET: usize = 172;
 pub const EXO_SHIELD_CAP_TOKEN_LEN: usize = 20;
 
 const SCAN_REQUEST: u32 = 0;
@@ -11,6 +11,8 @@ const EVENT_REPORT: u32 = 1;
 const QUARANTINE_CMD: u32 = 2;
 const THREAT_QUERY: u32 = 3;
 const POLICY_UPDATE: u32 = 4;
+const HEARTBEAT: u32 = 5;
+const PMC_ANOMALY_REPORT: u32 = 6;
 
 const THREAT_QUERY_BY_ID: u8 = 0;
 const THREAT_QUERY_BY_PID: u8 = 1;
@@ -48,8 +50,15 @@ pub fn classify_service_cap_requirement(
     msg_type: u32,
     payload: &[u8],
 ) -> ServiceCapRequirement {
+    // Kernel, init_server, and ipc_router run in the trusted bootstrap/broker
+    // plane and emit telemetry/control probes without user capability tokens.
+    if sender_pid <= 2 {
+        return ServiceCapRequirement::NotRequired;
+    }
+
     match msg_type {
-        QUARANTINE_CMD | POLICY_UPDATE => ServiceCapRequirement::Required,
+        QUARANTINE_CMD | POLICY_UPDATE | PMC_ANOMALY_REPORT => ServiceCapRequirement::Required,
+        HEARTBEAT => ServiceCapRequirement::NotRequired,
         SCAN_REQUEST => {
             let target_pid = read_u32_le(payload, 0);
             if target_pid == 0 || target_pid == sender_pid {
@@ -96,7 +105,7 @@ mod tests {
 
     #[test]
     fn self_scan_stays_public() {
-        let mut payload = [0u8; 120];
+        let mut payload = [0u8; 192];
         payload[0..4].copy_from_slice(&42u32.to_le_bytes());
         payload[6..10].copy_from_slice(&32u32.to_le_bytes());
 
@@ -108,7 +117,7 @@ mod tests {
 
     #[test]
     fn cross_process_scan_requires_cap_with_tail_budget() {
-        let mut payload = [0u8; 120];
+        let mut payload = [0u8; 192];
         payload[0..4].copy_from_slice(&7u32.to_le_bytes());
         payload[6..10].copy_from_slice(&(MAX_SCAN_INLINE_DATA_WITH_CAP as u32).to_le_bytes());
 
@@ -126,7 +135,7 @@ mod tests {
 
     #[test]
     fn cross_process_event_report_requires_cap() {
-        let mut payload = [0u8; 120];
+        let mut payload = [0u8; 192];
         payload[0..4].copy_from_slice(&7u32.to_le_bytes());
 
         assert_eq!(
@@ -143,7 +152,7 @@ mod tests {
 
     #[test]
     fn detailed_threat_queries_require_cap() {
-        let mut payload = [0u8; 120];
+        let mut payload = [0u8; 192];
 
         payload[0] = THREAT_QUERY_BY_ID;
         assert_eq!(
@@ -180,7 +189,7 @@ mod tests {
 
     #[test]
     fn administrative_requests_always_require_cap() {
-        let payload = [0u8; 120];
+        let payload = [0u8; 192];
 
         assert_eq!(
             classify_service_cap_requirement(42, QUARANTINE_CMD, &payload),
@@ -190,6 +199,20 @@ mod tests {
             classify_service_cap_requirement(42, POLICY_UPDATE, &payload),
             ServiceCapRequirement::Required
         );
+        assert_eq!(
+            classify_service_cap_requirement(42, PMC_ANOMALY_REPORT, &payload),
+            ServiceCapRequirement::Required
+        );
+        assert_eq!(
+            classify_service_cap_requirement(42, HEARTBEAT, &payload),
+            ServiceCapRequirement::NotRequired
+        );
+        for trusted_pid in 0..=2u32 {
+            assert_eq!(
+                classify_service_cap_requirement(trusted_pid, PMC_ANOMALY_REPORT, &payload),
+                ServiceCapRequirement::NotRequired
+            );
+        }
         // Unknown message type fails closed (Required)
         assert_eq!(
             classify_service_cap_requirement(42, 9999, &payload),

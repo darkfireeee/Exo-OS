@@ -1,16 +1,16 @@
-//! space_tracker.rs — Suivi de l'espace disque ExoFS (no_std).
+//! space_tracker.rs — ExoFS Disk Space Tracking (no_std).
 //!
-//! Fournit :
-//!  - `SpaceZone`           : zone logique (data / metadata / gc_reserve).
-//!  - `SpaceZoneStats`      : stats par zone.
-//!  - `SpaceTracker`        : singleton de suivi global.
-//!  - `SpaceSnapshot`       : snapshot immutable.
-//!  - `SpaceQuota`          : quotas configurables.
-//!  - `FragmentationInfo`   : estimation de la fragmentation.
-//!  - `SPACE_TRACKER`       : singleton global.
+//! Provides :
+//!  - `SpaceZone`           : logical zone (data / metadata / gc_reserve).
+//!  - `SpaceZoneStats`      : stats per zone.
+//!  - `SpaceTracker`        : global tracking singleton.
+//!  - `SpaceSnapshot`       : immutable snapshot.
+//!  - `SpaceQuota`          : configurable quotas.
+//!  - `FragmentationInfo`   : fragmentation estimate.
+//!  - `SPACE_TRACKER`       : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -44,7 +44,7 @@ impl SpaceZone {
 
 // ─── SpaceZoneStats ──────────────────────────────────────────────────────────
 
-/// Statistiques par zone (en blocs).
+/// Statistics per zone (in blocks).
 pub struct SpaceZoneStats {
     total: AtomicU64,
     used: AtomicU64,
@@ -107,12 +107,12 @@ impl SpaceZoneStats {
 
 // ─── SpaceTracker ────────────────────────────────────────────────────────────
 
-/// Suivi global de l'espace disque par zone.
+/// Global tracking of disk space per zone.
 pub struct SpaceTracker {
     zones: [SpaceZoneStats; SpaceZone::COUNT],
     block_size: AtomicU64,
     total_extents: AtomicU64,
-    small_extents: AtomicU64, // extents < 4 blocs → indicateur fragmentation
+    small_extents: AtomicU64, // extents < 4 blocks -> fragmentation indicator
 }
 
 unsafe impl Sync for SpaceTracker {}
@@ -133,7 +133,7 @@ impl SpaceTracker {
         }
     }
 
-    /// Initialise les zones.
+    /// Initializes zones.
     pub fn init(
         &self,
         data_total: u64,
@@ -165,7 +165,7 @@ impl SpaceTracker {
         self.block_size.load(Ordering::Relaxed)
     }
 
-    /// Total blocs utilisés toutes zones confondues (RECUR-01 : while).
+    /// Total blocks used across all zones (RECUR-01: while).
     pub fn total_used_blocks(&self) -> u64 {
         let mut total = 0u64;
         let mut i = 0usize;
@@ -176,7 +176,7 @@ impl SpaceTracker {
         total
     }
 
-    /// Total blocs disponibles (RECUR-01 : while).
+    /// Total blocks available (RECUR-01: while).
     pub fn total_free_blocks(&self) -> u64 {
         let mut total = 0u64;
         let mut i = 0usize;
@@ -187,7 +187,7 @@ impl SpaceTracker {
         total
     }
 
-    /// Utilisation globale en % (ARITH-02).
+    /// Overall utilization in % (ARITH-02).
     pub fn usage_pct(&self) -> u8 {
         let mut all_total = 0u64;
         let mut all_used = 0u64;
@@ -207,17 +207,17 @@ impl SpaceTracker {
             .min(100)) as u8
     }
 
-    /// Bytes utilisés (ARITH-02).
+    /// Used bytes (ARITH-02).
     pub fn used_bytes(&self) -> u64 {
         self.total_used_blocks().saturating_mul(self.block_size())
     }
 
-    /// Bytes libres.
+    /// Free bytes.
     pub fn free_bytes(&self) -> u64 {
         self.total_free_blocks().saturating_mul(self.block_size())
     }
 
-    /// Enregistre un extent alloué.
+    /// Records an allocated extent.
     pub fn track_extent(&self, blocks: u64) {
         self.total_extents.fetch_add(1, Ordering::Relaxed);
         if blocks < 4 {
@@ -225,14 +225,14 @@ impl SpaceTracker {
         }
     }
 
-    /// Estimation de la fragmentation * 1000 (ARITH-02).
+    /// Fragmentation estimate * 1000 (ARITH-02).
     pub fn fragmentation_pct10(&self) -> u64 {
         let t = self.total_extents.load(Ordering::Relaxed);
         let s = self.small_extents.load(Ordering::Relaxed);
         s.saturating_mul(1000).checked_div(t).unwrap_or(0)
     }
 
-    /// Snapshot global.
+    /// Global snapshot.
     pub fn snapshot(&self) -> SpaceSnapshot {
         let mut zones = [(0u64, 0u64, 0u64); SpaceZone::COUNT];
         let mut i = 0usize;
@@ -258,10 +258,10 @@ pub static SPACE_TRACKER: SpaceTracker = SpaceTracker::new_const();
 
 // ─── SpaceSnapshot ───────────────────────────────────────────────────────────
 
-/// Snapshot immutable de l'état d'espace.
+/// Immutable snapshot of space state.
 #[derive(Clone, Copy, Debug)]
 pub struct SpaceSnapshot {
-    /// (total, used, reserved) par zone.
+    /// (total, used, reserved) per zone.
     pub zones: [(u64, u64, u64); SpaceZone::COUNT],
     pub block_size: u64,
     pub total_extents: u64,
@@ -292,7 +292,7 @@ impl SpaceSnapshot {
 
 // ─── SpaceQuota ──────────────────────────────────────────────────────────────
 
-/// Quotas d'utilisation par zone.
+/// Utilization quotas per zone.
 #[derive(Clone, Copy, Debug)]
 pub struct SpaceQuota {
     pub zone: SpaceZone,
@@ -315,7 +315,7 @@ impl SpaceQuota {
 
 // ─── FragmentationInfo ───────────────────────────────────────────────────────
 
-/// Informations de fragmentation calculées.
+/// Calculated fragmentation information.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FragmentationInfo {
     pub total_extents: u64,
@@ -444,7 +444,7 @@ mod tests {
 
 pub const SPACE_HISTORY_SIZE: usize = 32;
 
-/// Ring de snapshots d'utilisation pour suivi de tendance.
+/// Ring of utilization snapshots for trend tracking.
 pub struct SpaceHistory {
     usage_pct: [core::sync::atomic::AtomicU8; SPACE_HISTORY_SIZE],
     ticks: [AtomicU64; SPACE_HISTORY_SIZE],
@@ -478,7 +478,7 @@ impl SpaceHistory {
         }
     }
 
-    /// Moyenne d'utilisation sur les n derniers points (ARITH-02 / RECUR-01).
+    /// Average utilization over the last n points (ARITH-02 / RECUR-01).
     pub fn average_pct(&self) -> u8 {
         let n = self.count.load(Ordering::Relaxed);
         if n == 0 {
@@ -499,7 +499,7 @@ impl SpaceHistory {
         (sum.checked_div(n).unwrap_or(0).min(100)) as u8
     }
 
-    /// Trend: retourne true si l'utilisation augmente.
+    /// Trend: returns true if utilization is increasing.
     pub fn is_growing(&self) -> bool {
         let n = self.count.load(Ordering::Relaxed) as usize;
         if n < 2 {
@@ -515,7 +515,7 @@ impl SpaceHistory {
         last > prev
     }
 
-    /// Copie les points dans un Vec (OOM-02).
+    /// Copies points into a Vec (OOM-02).
     pub fn to_vec(&self) -> ExofsResult<Vec<u8>> {
         let n = self.count.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();

@@ -115,6 +115,10 @@ impl SubscriberTable {
         }
     }
     fn deliver_all(&self, event: syscall::InputEventWire, queue_depth: u32) -> bool {
+        const TTY_INPUT_STREAM_CHANNEL: u64 = 0x5454_5902;
+        const EXOSH_INPUT_REPLY_CHANNEL: u64 = 0x494E_5001;
+        const FB_INPUT_CHANNEL: u64 = 1;
+
         let mut delivered = false;
         let reply = syscall::InputReply {
             status: 0,
@@ -125,6 +129,15 @@ impl SubscriberTable {
         for slot in &self.endpoints {
             let ep = slot.load(Ordering::Acquire);
             if ep == 0 {
+                continue;
+            }
+            let ch = ep & 0xFFFF_FFFF;
+            if event.device == syscall::INPUT_DEVICE_MOUSE
+                && (ch == TTY_INPUT_STREAM_CHANNEL || ch == EXOSH_INPUT_REPLY_CHANNEL)
+            {
+                continue;
+            }
+            if event.device == syscall::INPUT_DEVICE_KEYBOARD && ch == FB_INPUT_CHANNEL {
                 continue;
             }
             let rc = unsafe {

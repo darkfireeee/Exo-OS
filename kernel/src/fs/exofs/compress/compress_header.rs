@@ -1,32 +1,32 @@
-//! En-tête de compression on-disk ExoFS.
+//! ExoFS on-disk compression header.
 //!
-//! Structure persistante 32-bytes précédant chaque blob compressé.
+//! Persistent 32-byte structure preceding each compressed blob.
 //!
-//! RÈGLE ONDISK-03 : #[repr(C)], taille assertée, aucun AtomicU64.
-//! RÈGLE ARITH-02  : arithmétique checked/saturating uniquement.
-//! RÈGLE MAGIC-01  : vérification du magic EN PREMIER dans tout parsing on-disk.
+//! RULE ONDISK-03 : #[repr(C)], asserted size, no AtomicU64.
+//! RULE ARITH-02  : checked/saturating arithmetic only.
+//! RULE MAGIC-01  : magic verification FIRST in all on-disk parsing.
 
 use crate::fs::exofs::compress::algorithm::CompressionAlgorithm;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Magic de l'en-tête de compression ExoFS ("CMPR" little-endian).
+/// ExoFS compression header magic ("CMPR" little-endian).
 pub const COMPRESSION_MAGIC: u32 = 0xC0_4D_50_52;
 
-/// Version actuelle du format d'en-tête.
+/// Current header format version.
 pub const HEADER_VERSION: u8 = 1;
 
-/// Taille fixe de l'en-tête on-disk.
+/// Fixed on-disk header size.
 pub const COMPRESSION_HEADER_SIZE: usize = 32;
 
-/// En-tête on-disk précédant les données compressées d'un blob ExoFS.
+/// On-disk header preceding compressed data of an ExoFS blob.
 ///
-/// Layout mémoire (32 bytes) :
+/// Memory layout (32 bytes):
 /// ```text
-/// offset  size  champ
+/// offset  size  field
 ///  0       4    magic
 ///  4       1    algorithm
 ///  5       1    level
@@ -40,34 +40,34 @@ pub const COMPRESSION_HEADER_SIZE: usize = 32;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CompressionHeader {
-    /// Magic : doit être COMPRESSION_MAGIC. Vérifié EN PREMIER.
+    /// Magic: must be COMPRESSION_MAGIC. Verified FIRST.
     pub magic: u32,
-    /// Algorithme utilisé (CompressionAlgorithm as u8).
+    /// Algorithm used (CompressionAlgorithm as u8).
     pub algorithm: u8,
-    /// Niveau de compression.
+    /// Compression level.
     pub level: u8,
-    /// Version du format d'en-tête.
+    /// Header format version.
     pub version: u8,
-    /// Flags réservés pour usage futur.
+    /// Flags reserved for future use.
     pub flags: u8,
-    /// Taille des données décompressées en bytes.
+    /// Decompressed data size in bytes.
     pub original_size: u64,
-    /// Taille des données compressées (sans cet en-tête).
+    /// Compressed data size (without this header).
     pub compressed_size: u64,
-    /// Checksum CRC32 des données compressées.
+    /// CRC32 checksum of compressed data.
     pub crc32: u32,
-    /// Réservé pour alignement futur.
+    /// Reserved for future alignment.
     pub _reserved: [u8; 4],
 }
 
-// Vérification statique de taille on-disk (ONDISK-03).
+// Static on-disk size check (ONDISK-03).
 const _: () = assert!(
     core::mem::size_of::<CompressionHeader>() == COMPRESSION_HEADER_SIZE,
-    "CompressionHeader doit faire exactement 32 bytes"
+    "CompressionHeader must be exactly 32 bytes"
 );
 
 impl CompressionHeader {
-    /// Crée un en-tête valide avec les paramètres donnés.
+    /// Creates a valid header with given parameters.
     pub fn new(
         algorithm: CompressionAlgorithm,
         level: u8,
@@ -88,12 +88,12 @@ impl CompressionHeader {
         }
     }
 
-    /// Parse depuis un buffer on-disk. MAGIC-01 : magic vérifié EN PREMIER.
+    /// Parses from an on-disk buffer. MAGIC-01: magic verified FIRST.
     pub fn from_bytes(buf: &[u8]) -> ExofsResult<Self> {
         if buf.len() < COMPRESSION_HEADER_SIZE {
             return Err(ExofsError::CorruptedStructure);
         }
-        // MAGIC-01 : magic EN PREMIER avant tout autre champ.
+        // MAGIC-01: magic FIRST before any other field.
         let magic = u32::from_le_bytes(
             buf[0..4]
                 .try_into()
@@ -102,27 +102,27 @@ impl CompressionHeader {
         if magic != COMPRESSION_MAGIC {
             return Err(ExofsError::InvalidMagic);
         }
-        // Vérifie l'algorithme.
+        // Check algorithm.
         let algo_byte = buf[4];
         if CompressionAlgorithm::from_u8(algo_byte).is_none() {
             return Err(ExofsError::NotSupported);
         }
-        // Vérifie la version.
+        // Check version.
         let version = buf[6];
         if version > HEADER_VERSION {
             return Err(ExofsError::IncompatibleVersion);
         }
-        // SAFETY: buf est de taille suffisante, repr(C) Plain Old Data.
+        // SAFETY: buf is sufficiently sized, repr(C) Plain Old Data.
         let header: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         Ok(header)
     }
 
-    /// Sérialise en bytes on-disk (32 bytes).
+    /// Serializes to on-disk bytes (32 bytes).
     ///
-    /// SAFETY: Self est #[repr(C)], Plain Old Data, taille assertée 32.
+    /// SAFETY: Self is #[repr(C)], Plain Old Data, asserted size 32.
     pub fn to_bytes(&self) -> [u8; COMPRESSION_HEADER_SIZE] {
         let mut out = [0u8; COMPRESSION_HEADER_SIZE];
-        // SAFETY: CompressionHeader est #[repr(C)] et la taille est vérifiée par const assert.
+        // SAFETY: CompressionHeader is #[repr(C)] and size is verified by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -133,19 +133,19 @@ impl CompressionHeader {
         out
     }
 
-    /// Retourne l'algorithme parsé.
+    /// Returns parsed algorithm.
     pub fn algorithm(&self) -> CompressionAlgorithm {
         CompressionAlgorithm::from_u8(self.algorithm).unwrap_or(CompressionAlgorithm::None)
     }
 
-    /// `true` si l'en-tête est structurellement valide.
+    /// `true` if header is structurally valid.
     pub fn is_valid(&self) -> bool {
         self.magic == COMPRESSION_MAGIC
             && CompressionAlgorithm::from_u8(self.algorithm).is_some()
             && self.version <= HEADER_VERSION
     }
 
-    /// Vérifie que `compressed_size` cohère avec le buffer payload fourni.
+    /// Verifies that `compressed_size` matches the provided payload buffer.
     pub fn validate_payload_len(&self, payload_len: usize) -> ExofsResult<()> {
         let expected = self.compressed_size as usize;
         if payload_len < expected {
@@ -154,18 +154,18 @@ impl CompressionHeader {
         Ok(())
     }
 
-    /// Taille totale on-disk (en-tête + données).
-    /// Arithmétique checked (ARITH-02).
+    /// Total on-disk size (header + data).
+    /// Checked arithmetic (ARITH-02).
     pub fn total_on_disk_size(&self) -> Option<u64> {
         (COMPRESSION_HEADER_SIZE as u64).checked_add(self.compressed_size)
     }
 
-    /// `true` si les données sont compressées (algorithme != None).
+    /// `true` if data is compressed (algorithm != None).
     pub fn is_compressed(&self) -> bool {
         self.algorithm() != CompressionAlgorithm::None
     }
 
-    /// Retourne les bytes du payload depuis un buffer complet.
+    /// Returns payload bytes from a full buffer.
     pub fn payload<'a>(&self, full_buf: &'a [u8]) -> ExofsResult<&'a [u8]> {
         let start = COMPRESSION_HEADER_SIZE;
         let end = start
@@ -184,35 +184,35 @@ impl Default for CompressionHeader {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CompressedBlobView — vue structurée d'un blob compressé
+// CompressedBlobView — structured view of a compressed blob
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vue structurée d'un buffer (en-tête parsé + payload emprunté).
+/// Structured view of a buffer (parsed header + borrowed payload).
 pub struct CompressedBlobView<'a> {
     pub header: CompressionHeader,
     pub payload: &'a [u8],
 }
 
 impl<'a> CompressedBlobView<'a> {
-    /// Parse depuis un buffer complet (en-tête + payload).
-    /// Valide le magic, l'algorithme, la cohérence des tailles.
+    /// Parses from a complete buffer (header + payload).
+    /// Validates magic, algorithm, and size consistency.
     pub fn parse(buf: &'a [u8]) -> ExofsResult<Self> {
         let header = CompressionHeader::from_bytes(buf)?;
         let payload = header.payload(buf)?;
         Ok(Self { header, payload })
     }
 
-    /// Taille originale des données (avant compression).
+    /// Original data size (before compression).
     pub fn original_size(&self) -> u64 {
         self.header.original_size
     }
 
-    /// Algorithme utilisé pour ce blob.
+    /// Algorithm used for this blob.
     pub fn algorithm(&self) -> CompressionAlgorithm {
         self.header.algorithm()
     }
 
-    /// Checksum CRC32 des données compressées.
+    /// CRC32 checksum of compressed data.
     pub fn crc32(&self) -> u32 {
         self.header.crc32
     }
@@ -367,10 +367,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HeaderBuilder — constructeur fluent pour les tests et le code de compression
+// HeaderBuilder — fluent builder for tests and compression code
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Constructeur fluent pour `CompressionHeader`.
+/// Fluent builder for `CompressionHeader`.
 pub struct HeaderBuilder {
     algorithm: CompressionAlgorithm,
     level: u8,

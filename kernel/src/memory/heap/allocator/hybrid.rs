@@ -97,7 +97,9 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
                 // Robustness fallback: if SLUB is not yet ready or fails
                 // intermittently, attempt large allocator to avoid early panic
                 // during boot.
-                match crate::memory::heap::large::vmalloc::kalloc(user_size, flags) {
+                match crate::memory::heap::large::vmalloc::kalloc_aligned(
+                    user_size, align, flags,
+                ) {
                     Ok(ptr) => {
                         HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
                         HEAP_STATS
@@ -113,8 +115,8 @@ pub fn alloc(size: usize, align: usize, flags: AllocFlags) -> Result<NonNull<u8>
             }
         }
     } else {
-        // Large allocation via large allocator
-        match crate::memory::heap::large::vmalloc::kalloc(user_size, flags) {
+        // Large or high-alignment (> 64 B) allocation via vmalloc
+        match crate::memory::heap::large::vmalloc::kalloc_aligned(user_size, align, flags) {
             Ok(ptr) => {
                 HEAP_STATS.large_allocs.fetch_add(1, Ordering::Relaxed);
                 HEAP_STATS

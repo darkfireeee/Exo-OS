@@ -140,7 +140,9 @@ pub fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
     let writable = entry.can_write();
 
     if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        readable = blob_len(&entry.blob_id) != 0;
+        readable = blob_len(&entry.blob_id) != 0
+            || OBJECT_TABLE.open_count_for(&entry.blob_id)
+                <= OBJECT_TABLE.readable_count_for(&entry.blob_id);
     } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
         readable = eventfd_state(entry.blob_id)
             .map(|(value, _)| value != 0)
@@ -149,6 +151,8 @@ pub fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
         readable = false;
     } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         readable = socket_is_readable(entry.blob_id);
+    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_EPOLL_TAG) {
+        readable = epoll_has_ready_watch(entry.blob_id, pid);
     }
 
     Ok((readable, writable))
@@ -168,11 +172,29 @@ pub fn flock_range_from_abi(fl: LinuxFlock) -> Result<(u64, u64), FsBridgeError>
     Ok((start, len))
 }
 
+/// Close an `OBJECT_TABLE` handle and clean up any pseudo-blob when its last reference drops.
+#[inline]
+pub fn close_object_handle_with_cleanup(obj_fd: u32) -> bool {
+    let maybe_blob = OBJECT_TABLE.get(obj_fd).ok().map(|e| e.blob_id);
+    if OBJECT_TABLE.close(obj_fd) {
+        if let Some(blob_id) = maybe_blob {
+            if OBJECT_TABLE.open_count_for(&blob_id) == 0 {
+                cleanup_closed_blob(blob_id);
+            }
+        }
+        true
+    } else {
+        false
+    }
+}
+
 /// `close(fd)`.
 #[inline]
 pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     let resolved = resolve_fd(pid, fd)?;
-    let handle = close_process_fd(pid, fd).unwrap_or(resolved.handle as u64);
+    let removed_from_pcb = close_process_fd(pid, fd);
+    let handle = removed_from_pcb.unwrap_or(resolved.handle as u64);
+    remove_epoll_watches_for_fd(pid, fd);
     if is_tty_handle_u64(handle) {
         return Ok(0);
     }
@@ -184,10 +206,10 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     }
     let obj_fd = handle as u32;
     let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
-    if pid != 0 && entry.owner_uid != 0 && entry.owner_uid != pid as u64 {
+    if removed_from_pcb.is_none() && pid != 0 && entry.owner_uid != 0 && entry.owner_uid != pid as u64 {
         return Err(FsBridgeError::BadFd);
     }
-    if OBJECT_TABLE.close(obj_fd) {
+    if close_object_handle_with_cleanup(obj_fd) {
         Ok(0)
     } else {
         Err(FsBridgeError::BadFd)
@@ -213,7 +235,7 @@ pub fn fs_dup(oldfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if let Some(fd) = install_process_fd(pid, handle as u64, resolved.flags) {
         Ok(fd as i64)
     } else {
-        let _ = OBJECT_TABLE.close(handle);
+        let _ = close_object_handle_with_cleanup(handle);
         Err(FsBridgeError::NoMemory)
     }
 }
@@ -229,9 +251,10 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
         return Ok(newfd as i64);
     }
     let resolved = resolve_fd(pid, oldfd)?;
+    remove_epoll_watches_for_fd(pid, newfd);
     if let Some(old_handle) = close_process_fd(pid, newfd) {
         if !is_tty_handle_u64(old_handle) && old_handle <= u32::MAX as u64 {
-            let _ = OBJECT_TABLE.close(old_handle as u32);
+            let _ = close_object_handle_with_cleanup(old_handle as u32);
         }
     }
     // POSIX specifies that FD_CLOEXEC must always be cleared on newfd during dup2
@@ -249,7 +272,7 @@ pub fn fs_dup2(oldfd: u32, newfd: u32, pid: u32) -> Result<i64, FsBridgeError> {
         if install_process_fd_at(pid, newfd, handle as u64, dup_flags) {
             Ok(newfd as i64)
         } else {
-            let _ = OBJECT_TABLE.close(handle);
+            let _ = close_object_handle_with_cleanup(handle);
             Err(FsBridgeError::NoMemory)
         }
     } else {

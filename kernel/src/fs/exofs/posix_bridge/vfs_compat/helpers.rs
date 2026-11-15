@@ -18,7 +18,7 @@ use crate::fs::exofs::syscall::quota_query::{check_quota, quota_add_usage, quota
 use super::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers internes
+// Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn blob_id_for_object(object_id: u64) -> BlobId {
@@ -55,7 +55,7 @@ pub fn resize_inode_data(entry: &InodeEntry, new_len: usize) -> ExofsResult<()> 
     Ok(())
 }
 
-/// Convertit un InodeEntry en VfsInode.
+/// Converts an InodeEntry into VfsInode.
 pub fn entry_to_vfs_inode(e: &InodeEntry) -> VfsInode {
     let mode = if e.flags & inode_flags::DIRECTORY != 0 {
         file_mode::DEFAULT_DIR
@@ -85,7 +85,7 @@ pub fn inode_kind(flags: u32) -> u8 {
     }
 }
 
-/// Construit un VfsDirent depuis un ino et un nom.
+/// Constructs a VfsDirent from an ino and a name.
 pub fn make_dirent(ino: ObjectIno, name: &[u8], kind: u8) -> VfsDirent {
     let mut d = VfsDirent {
         ino,
@@ -102,7 +102,7 @@ pub fn make_dirent(ino: ObjectIno, name: &[u8], kind: u8) -> VfsDirent {
     d
 }
 
-/// Valide un composant de nom (pas de '/', '\0', pas ".." admis ici).
+/// Validates a name component (no '/', '\0', no ".." allowed here).
 pub fn validate_name(name: &[u8]) -> ExofsResult<()> {
     let mut i = 0usize;
     while i < name.len() {
@@ -114,8 +114,8 @@ pub fn validate_name(name: &[u8]) -> ExofsResult<()> {
     Ok(())
 }
 
-/// Hash de nom déterministe : FNV-1a 64-bit sur (parent_ino, name).
-/// ARITH-02 : wrapping_mul/xor.
+/// Deterministic name hash: 64-bit FNV-1a on (parent_ino, name).
+/// ARITH-02: wrapping_mul/xor.
 pub fn hash_name(parent_ino: ObjectIno, name: &[u8]) -> u64 {
     pub const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     pub const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -131,7 +131,7 @@ pub fn hash_name(parent_ino: ObjectIno, name: &[u8]) -> u64 {
         h = h.wrapping_mul(FNV_PRIME) ^ (name[j] as u64);
         j = j.wrapping_add(1);
     }
-    // Évite oid == 0.
+    // Avoid oid == 0.
     if h == 0 {
         1
     } else {

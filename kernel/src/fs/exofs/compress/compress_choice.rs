@@ -1,13 +1,13 @@
-//! Sélection de l'algorithme de compression optimal pour un blob ExoFS.
+//! Selection of optimal compression algorithm for an ExoFS blob.
 //!
-//! La politique de compression est configurable :
-//! - `AlwaysLz4` : latence minimale, pas de décision adaptative.
-//! - `AlwaysZstd` : ratio maximal, plus lent.
-//! - `Adaptive`  : LZ4 pour petits blobs / hot path, Zstd pour grands blobs.
-//! - `None`      : aucune compression (pass-through).
+//! The compression policy is configurable:
+//! - `AlwaysLz4` : minimum latency, no adaptive decision.
+//! - `AlwaysZstd`: maximum ratio, slower.
+//! - `Adaptive`  : LZ4 for small blobs / hot path, Zstd for large blobs.
+//! - `None`      : no compression (pass-through).
 //!
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 use crate::fs::exofs::compress::algorithm::{
     CompressLevel, CompressionAlgorithm, CompressionProfile,
@@ -18,21 +18,21 @@ use crate::fs::exofs::compress::compress_threshold::CompressionThreshold;
 // CompressPolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique de choix de compression.
+/// Compression choice policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressPolicy {
-    /// Toujours choisir LZ4 (faible latence).
+    /// Always choose LZ4 (low latency).
     AlwaysLz4,
-    /// Toujours choisir Zstd (meilleur ratio).
+    /// Always choose Zstd (better ratio).
     AlwaysZstd,
-    /// Choix adaptatif basé sur la taille et l'entropie estimée.
+    /// Adaptive choice based on size and estimated entropy.
     Adaptive,
-    /// Aucune compression.
+    /// No compression.
     None,
 }
 
 impl CompressPolicy {
-    /// Nom lisible de la politique.
+    /// Human-readable policy name.
     pub const fn name(self) -> &'static str {
         match self {
             Self::AlwaysLz4 => "always_lz4",
@@ -42,20 +42,20 @@ impl CompressPolicy {
         }
     }
 
-    /// `true` si la politique peut effectivement compresser les données.
+    /// `true` if policy can effectively compress data.
     pub const fn is_compressing(self) -> bool {
         !matches!(self, Self::None)
     }
 
-    /// LZ4 à niveau par défaut (latence faible).
+    /// LZ4 at default level (low latency).
     pub const fn lz4_default() -> Self {
         Self::AlwaysLz4
     }
-    /// LZ4 à vitesse maximale.
+    /// LZ4 at maximum speed.
     pub const fn lz4_fast() -> Self {
         Self::AlwaysLz4
     }
-    /// Zstd à niveau par défaut (bon ratio).
+    /// Zstd at default level (good ratio).
     pub const fn zstd_default() -> Self {
         Self::AlwaysZstd
     }
@@ -71,7 +71,7 @@ impl Default for CompressPolicy {
 // DecisionReason + CompressDecision
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Raison de la décision de compression.
+/// Reason for the compression decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionReason {
     PolicyForced,
@@ -83,7 +83,7 @@ pub enum DecisionReason {
     Default,
 }
 
-/// Décision de compression retournée par `CompressionChoice`.
+/// Compression decision returned by `CompressionChoice`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompressDecision {
     pub algorithm: CompressionAlgorithm,
@@ -92,7 +92,7 @@ pub struct CompressDecision {
 }
 
 impl CompressDecision {
-    /// Profil (algorithm + level) de cette décision.
+    /// Profile (algorithm + level) of this decision.
     pub fn profile(self) -> CompressionProfile {
         CompressionProfile {
             algorithm: self.algorithm,
@@ -100,7 +100,7 @@ impl CompressDecision {
         }
     }
 
-    /// `true` si la compression sera effectivement appliquée.
+    /// `true` if compression will effectively be applied.
     pub fn will_compress(self) -> bool {
         self.algorithm.is_compressed()
     }
@@ -110,18 +110,18 @@ impl CompressDecision {
 // CompressionChoice
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sélecteur d'algorithme de compression.
+/// Compression algorithm selector.
 pub struct CompressionChoice {
     policy: CompressPolicy,
     threshold: CompressionThreshold,
-    /// Seuil de taille au-delà duquel Zstd est préféré à LZ4 en mode adaptatif.
+    /// Size threshold beyond which Zstd is preferred over LZ4 in adaptive mode.
     zstd_size_threshold: usize,
     lz4_level: CompressLevel,
     zstd_level: CompressLevel,
 }
 
 impl CompressionChoice {
-    /// Crée un sélecteur avec la politique donnée et les paramètres par défaut.
+    /// Creates a selector with given policy and default settings.
     pub const fn new(policy: CompressPolicy) -> Self {
         Self {
             policy,
@@ -132,19 +132,19 @@ impl CompressionChoice {
         }
     }
 
-    /// Configure le seuil adaptatif LZ4 → Zstd.
+    /// Configures adaptive threshold LZ4 -> Zstd.
     pub const fn with_zstd_threshold(mut self, bytes: usize) -> Self {
         self.zstd_size_threshold = bytes;
         self
     }
 
-    /// Configure le niveau LZ4 par défaut.
+    /// Configures default LZ4 level.
     pub const fn with_lz4_level(mut self, l: CompressLevel) -> Self {
         self.lz4_level = l;
         self
     }
 
-    /// Configure le niveau Zstd par défaut.
+    /// Configures default Zstd level.
     pub const fn with_zstd_level(mut self, l: CompressLevel) -> Self {
         self.zstd_level = l;
         self
@@ -158,10 +158,10 @@ impl CompressionChoice {
         self.policy = p;
     }
 
-    /// Décide l'algorithme et le niveau pour un blob donné.
-    /// RECUR-01 : pas de récursivité — logique purement itérative.
+    /// Decides algorithm and level for a given blob.
+    /// RECUR-01: no recursion — purely iterative logic.
     pub fn decide(&self, data: &[u8]) -> CompressDecision {
-        // 1. Politique None.
+        // 1. None policy.
         if self.policy == CompressPolicy::None {
             return CompressDecision {
                 algorithm: CompressionAlgorithm::None,
@@ -169,7 +169,7 @@ impl CompressionChoice {
                 reason: DecisionReason::PolicyForced,
             };
         }
-        // 2. Taille minimale.
+        // 2. Minimum size.
         if data.len() < self.threshold.min_size {
             return CompressDecision {
                 algorithm: CompressionAlgorithm::None,
@@ -177,7 +177,7 @@ impl CompressionChoice {
                 reason: DecisionReason::TooSmall,
             };
         }
-        // 3. Magic bytes (données déjà compressées).
+        // 3. Magic bytes (already compressed data).
         if self.threshold.detect_already_compressed
             && crate::fs::exofs::compress::compress_threshold::looks_compressed(data)
         {
@@ -187,7 +187,7 @@ impl CompressionChoice {
                 reason: DecisionReason::AlreadyCompressed,
             };
         }
-        // 4. Entropie trop haute.
+        // 4. Entropy too high.
         if self.threshold.detect_high_entropy {
             let e = crate::fs::exofs::compress::compress_threshold::estimate_entropy(data);
             if e >= self.threshold.entropy_threshold {
@@ -198,7 +198,7 @@ impl CompressionChoice {
                 };
             }
         }
-        // 5. Application de la politique.
+        // 5. Apply policy.
         match self.policy {
             CompressPolicy::AlwaysLz4 => CompressDecision {
                 algorithm: CompressionAlgorithm::Lz4,
@@ -233,7 +233,7 @@ impl CompressionChoice {
         }
     }
 
-    /// Décide et retourne le `CompressionProfile` directement.
+    /// Decides and returns `CompressionProfile` directly.
     pub fn decide_profile(&self, data: &[u8]) -> CompressionProfile {
         self.decide(data).profile()
     }
@@ -360,29 +360,29 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PolicyPreset — présets de configuration par cas d'usage
+// PolicyPreset — configuration presets per use case
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Présets de `CompressionChoice` pour différents cas d'usage.
+/// Presets of `CompressionChoice` for different use cases.
 pub struct PolicyPresets;
 
 impl PolicyPresets {
-    /// Hot path : LZ4 uniquement, sélecteur rapide, faible latence.
+    /// Hot path: LZ4 only, fast selector, low latency.
     pub const fn hot_path() -> CompressionChoice {
         CompressionChoice::new(CompressPolicy::AlwaysLz4)
     }
 
-    /// Cold storage : Zstd Default, ratio maximal.
+    /// Cold storage: Zstd Default, maximum ratio.
     pub const fn cold_storage() -> CompressionChoice {
         CompressionChoice::new(CompressPolicy::AlwaysZstd)
     }
 
-    /// Adaptatif : LZ4 pour < 32KiB, Zstd au-delà.
+    /// Adaptive: LZ4 for < 32KiB, Zstd beyond.
     pub const fn adaptive_default() -> CompressionChoice {
         CompressionChoice::new(CompressPolicy::Adaptive)
     }
 
-    /// Archivage : Zstd Best, sans détection d'entropie.
+    /// Archival: Zstd Best, without entropy detection.
     pub fn archival() -> CompressionChoice {
         CompressionChoice::new(CompressPolicy::AlwaysZstd)
             .with_zstd_level(crate::fs::exofs::compress::algorithm::CompressLevel::Best)
@@ -421,14 +421,14 @@ mod preset_tests {
         );
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_decision_has_reason() {
         let choice = CompressionChoice::new(CompressPolicy::default());
         let data = b"hello world test data";
         let dec = choice.decide(data);
-        // La décision doit avoir un reason valide.
+        // The decision must have a valid reason.
         let _ = dec.reason;
     }
 

@@ -16,6 +16,7 @@ pub(super) const CRYPTO_PHOENIX_WAKE_ENTROPY: u32 = 255;
 
 /// Stack/heap threshold switch for `sys_exo_ipc_call`.
 const STACK_RPC_BUF_MAX: usize = 512;
+const IPC_RECV_IDLE_NAP_NS: u64 = 50_000_000;
 
 #[inline]
 pub(super) fn zeroed_user_vec(len: usize) -> Result<Vec<u8>, i64> {
@@ -58,7 +59,10 @@ pub(super) fn validate_ipc_envelope_auth(
     if is_kernel_ephemeral_reply_endpoint(endpoint) {
         return Ok(IpcEnvelopeAuth::NotRequired);
     }
-    if caller_can_inject {
+    if caller_can_inject
+        || crate::security::service_class_of(crate::process::core::pid::Pid(caller_pid))
+            == crate::security::ServiceClass::Exosh
+    {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
     }
     // Non-ephemeral ABI non-format messages -> explicit rejection.
@@ -196,8 +200,6 @@ pub(super) fn normalize_ipc_recv_args(a1: u64, a2: u64, a3: u64, flags: u64) -> 
 }
 
 pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags: u64, nowait: bool) -> i64 {
-    const IPC_RECV_IDLE_NAP_NS: u64 = 2_000_000;
-
     let len = buf_len as usize;
     if len > 65_536 {
         return E2BIG;
@@ -248,11 +250,13 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
                         break Err(IpcError::Timeout);
                     }
                     let nap_ns = deadline.saturating_sub(now).min(IPC_RECV_IDLE_NAP_NS);
-                    if !crate::scheduler::timer::sleep_ns(nap_ns) {
-                        crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                    let slept = crate::scheduler::timer::sleep_ns_if(nap_ns, || {
+                        crate::ipc::channel::raw::has_registered_waiter(endpoint_id, current_tcb)
+                    });
+                    crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                    if !slept {
                         break Err(IpcError::Interrupted);
                     }
-                    crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
                 }
                 Err(err) => {
                     crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
@@ -273,11 +277,13 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
             ) {
                 Ok(Some(n)) => break Ok(n),
                 Ok(None) => {
-                    if !crate::scheduler::timer::sleep_ns(IPC_RECV_IDLE_NAP_NS) {
-                        crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                    let slept = crate::scheduler::timer::sleep_ns_if(IPC_RECV_IDLE_NAP_NS, || {
+                        crate::ipc::channel::raw::has_registered_waiter(endpoint_id, current_tcb)
+                    });
+                    crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
+                    if !slept {
                         break Err(IpcError::Interrupted);
                     }
-                    crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
                 }
                 Err(err) => {
                     crate::ipc::channel::raw::clear_waiter(endpoint_id, current_tcb);
@@ -295,6 +301,58 @@ pub(super) fn recv_ipc_message(endpoint: u64, buf_ptr: u64, buf_len: u64, flags:
             n as i64
         }
         Err(IpcError::Timeout) => crate::syscall::errno::ETIMEDOUT,
+        Err(err) => ipc_error_to_errno(err),
+    }
+}
+
+/// Validates envelope capability auth, applies anti-spoofing PID stamping, and
+/// rejects kernel-reserved IPC opcodes for both `send` and `call`.
+fn authorize_and_stamp_ipc_send(endpoint: u64, payload: &mut [u8], flags: u64) -> Result<(), i64> {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let caller_can_inject =
+        crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid));
+    let envelope_auth = validate_ipc_envelope_auth(endpoint, caller_pid, caller_can_inject, payload)?;
+    if flags & IPC_FLAG_INJECT_SRC_PID != 0 {
+        if payload.len() < core::mem::size_of::<u32>() {
+            return Err(EINVAL);
+        }
+        if !caller_can_inject && envelope_auth != IpcEnvelopeAuth::ValidToken {
+            return Err(EACCES);
+        }
+        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    } else if !caller_can_inject
+        && !is_kernel_ephemeral_reply_endpoint(endpoint)
+        && payload.len() >= core::mem::size_of::<u32>()
+    {
+        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    }
+    if is_reserved_kernel_ipc(endpoint, payload) {
+        return Err(EACCES);
+    }
+    Ok(())
+}
+
+/// Validates and stamps the outgoing RPC request, invokes synchronous `call_raw`,
+/// and copies any non-empty reply back to userspace.
+fn dispatch_ipc_call(
+    endpoint: u64,
+    server_ep: EndpointId,
+    request: &mut [u8],
+    response: &mut [u8],
+    resp_ptr: u64,
+) -> i64 {
+    if let Err(errno) = authorize_and_stamp_ipc_send(endpoint, request, 0) {
+        return errno;
+    }
+    match crate::ipc::rpc::call_raw(server_ep, request, response) {
+        Ok(reply_len) => {
+            if reply_len != 0
+                && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err()
+            {
+                return EFAULT;
+            }
+            reply_len as i64
+        }
         Err(err) => ipc_error_to_errno(err),
     }
 }
@@ -333,35 +391,48 @@ pub fn sys_exo_ipc_send(
         }
     }
 
-    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
-    let caller_can_inject =
-        crate::security::can_inject_src_pid(crate::process::core::pid::Pid(caller_pid));
-    let envelope_auth =
-        match validate_ipc_envelope_auth(endpoint, caller_pid, caller_can_inject, payload) {
-            Ok(auth) => auth,
-            Err(errno) => return errno,
+    if let Err(errno) = authorize_and_stamp_ipc_send(endpoint, payload, flags) {
+        return errno;
+    }
+    let nowait = (flags & !(IPC_RECV_TIMEOUT_FLAG | IPC_FLAG_INJECT_SRC_PID)) == 0
+        && (flags & IPC_RECV_TIMEOUT_FLAG != 0);
+    if nowait {
+        return match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0x0001) {
+            Ok(_) => 0,
+            Err(err) => ipc_error_to_errno(err),
         };
-    if flags & IPC_FLAG_INJECT_SRC_PID != 0 {
-        if len < core::mem::size_of::<u32>() {
-            return EINVAL;
-        }
-        if !caller_can_inject && envelope_auth != IpcEnvelopeAuth::ValidToken {
-            return EACCES;
-        }
-        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
     }
-    if !caller_can_inject && payload.len() == crate::ipc::core::constants::ABI_IPC_ENVELOPE_SIZE {
-        payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
-    }
-    if is_reserved_kernel_ipc(endpoint, payload) {
-        return EACCES;
-    }
-    let raw_flags = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
-        0x0001
+    let timeout_ms = if flags & IPC_RECV_TIMEOUT_FLAG != 0 {
+        flags & !(IPC_RECV_TIMEOUT_FLAG | IPC_FLAG_INJECT_SRC_PID)
     } else {
         0
     };
-    match crate::ipc::channel::raw::send_raw(endpoint_id, payload, raw_flags) {
+    if timeout_ms > 0 {
+        let deadline = crate::scheduler::timer::clock::monotonic_ns()
+            .saturating_add(timeout_ms.saturating_mul(1_000_000));
+        loop {
+            match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0x0001) {
+                Ok(_) => return 0,
+                Err(
+                    IpcError::Full
+                    | IpcError::QueueFull
+                    | IpcError::WouldBlock
+                    | IpcError::Retry,
+                ) => {
+                    let now = crate::scheduler::timer::clock::monotonic_ns();
+                    if now >= deadline {
+                        return ipc_error_to_errno(IpcError::Timeout);
+                    }
+                    let nap_ns = deadline.saturating_sub(now).min(IPC_RECV_IDLE_NAP_NS);
+                    if !crate::scheduler::timer::sleep_ns(nap_ns) {
+                        return ipc_error_to_errno(IpcError::Interrupted);
+                    }
+                }
+                Err(err) => return ipc_error_to_errno(err),
+            }
+        }
+    }
+    match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0) {
         Ok(_) => 0,
         Err(err) => ipc_error_to_errno(err),
     }
@@ -416,11 +487,19 @@ pub fn sys_exo_ipc_call(
     if flags != 0 {
         return EINVAL;
     }
-    if send_len != 0 && msg_ptr == 0 {
-        return EFAULT;
+    if send_len != 0 {
+        if let Err(e) =
+            UserBuf::validate(msg_ptr, send_len, crate::ipc::core::constants::MAX_MSG_SIZE)
+        {
+            return e.to_errno();
+        }
     }
-    if recv_len != 0 && resp_ptr == 0 {
-        return EFAULT;
+    if recv_len != 0 {
+        if let Err(e) =
+            UserBuf::validate(resp_ptr, recv_len, crate::ipc::core::constants::MAX_MSG_SIZE)
+        {
+            return e.to_errno();
+        }
     }
     if let Err(errno) = enforce_direct_ipc_policy(endpoint) {
         return errno;
@@ -440,21 +519,13 @@ pub fn sys_exo_ipc_call(
                 return EFAULT;
             }
         }
-        return match crate::ipc::rpc::call_raw(
+        return dispatch_ipc_call(
+            endpoint,
             server_ep,
-            &req_buf[..send_len],
+            &mut req_buf[..send_len],
             &mut resp_buf[..recv_len],
-        ) {
-            Ok(reply_len) => {
-                if reply_len != 0
-                    && copy_to_user(resp_ptr as *mut u8, resp_buf.as_ptr(), reply_len).is_err()
-                {
-                    return EFAULT;
-                }
-                reply_len as i64
-            }
-            Err(err) => ipc_error_to_errno(err),
-        };
+            resp_ptr,
+        );
     }
 
     let mut request = match zeroed_user_vec(send_len) {
@@ -472,15 +543,5 @@ pub fn sys_exo_ipc_call(
         Err(errno) => return errno,
     };
 
-    match crate::ipc::rpc::call_raw(server_ep, &request, &mut response) {
-        Ok(reply_len) => {
-            if reply_len != 0
-                && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err()
-            {
-                return EFAULT;
-            }
-            reply_len as i64
-        }
-        Err(err) => ipc_error_to_errno(err),
-    }
+    dispatch_ipc_call(endpoint, server_ep, &mut request, &mut response, resp_ptr)
 }

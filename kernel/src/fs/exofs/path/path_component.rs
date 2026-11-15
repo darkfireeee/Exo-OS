@@ -1,44 +1,44 @@
-//! path_component.rs — Composant de chemin ExoFS validé.
+//! path_component.rs — Validated ExoFS path component.
 //!
-//! Un [`PathComponent`] représente un segment individuel d un chemin de système
-//! de fichiers (entre deux séparateurs `/`). Il est garanti :
-//! - Non vide.
-//! - Longueur ≤ [`NAME_MAX`] (255 octets).
-//! - Sans octet nul (`\0`) ni slash (`/`).
-//! - Valide en UTF-8.
+//! A [`PathComponent`] represents an individual segment of a filesystem
+//! path (between two `/` separators). It is guaranteed to be:
+//! - Non-empty.
+//! - Length <= [`NAME_MAX`] (255 bytes).
+//! - Free of null bytes (`\0`) and slashes (`/`).
+//! - Valid UTF-8.
 //!
-//! Stockage fixe sur la pile — aucune allocation heap pour le composant lui-même.
-//! Le parseur [`PathParser`] découpe un chemin complet en composants de façon
-//! **itérative** (règle RECUR-01).
+//! Fixed stack storage — zero heap allocation for the component itself.
+//! The parser [`PathParser`] splits a complete path into components in an
+//! **iterative** manner (rule RECUR-01).
 //!
-//! # Règles spec appliquées
-//! - **RECUR-01** : parsing itératif, jamais récursif.
-//! - **OOM-02** : `try_reserve(1)` avant tout `Vec::push`.
-//! - **ARITH-02** : `checked_add` sur les offsets de lecture.
+//! # Applied spec rules
+//! - **RECUR-01** : iterative parsing, never recursive.
+//! - **OOM-02** : `try_reserve(1)` before any `Vec::push`.
+//! - **ARITH-02** : `checked_add` on read offsets.
 
 extern crate alloc;
 use alloc::vec::Vec;
 
-/// Longueur maximale d'un chemin complet ExoFS (en octets, nul exclu).
-/// Conforme POSIX PATH_MAX = 4096.
+/// Maximum length of an ExoFS full path (in bytes, excluding null).
+/// Conforms to POSIX PATH_MAX = 4096.
 pub const PATH_MAX: usize = 4096;
 use core::fmt;
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
-/// Longueur maximale d un composant de chemin (255 octets, POSIX NAME_MAX).
+/// Maximum length of a path component (255 bytes, POSIX NAME_MAX).
 pub const NAME_MAX: usize = 255;
 
 // ── PathComponent ─────────────────────────────────────────────────────────────
 
-/// Composant de chemin validé — stocké sur la pile, jamais sur le heap.
+/// Validated path component — stored on the stack, never on the heap.
 ///
-/// Taille : `NAME_MAX + 3` octets (stockage + longueur u16).
-/// Garanties post-construction :
-/// - Pas vide.
-/// - Pas de `b'/'` ni de `b'\0'`.
-/// - Valide UTF-8.
-/// - Longueur ≤ `NAME_MAX`.
+/// Size: `NAME_MAX + 3` bytes (storage + length u16).
+/// Post-construction guarantees:
+/// - Not empty.
+/// - No `b'/'` nor `b'\0'`.
+/// - Valid UTF-8.
+/// - Length <= `NAME_MAX`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PathComponent {
     bytes: [u8; NAME_MAX + 1],
@@ -46,55 +46,55 @@ pub struct PathComponent {
 }
 
 impl PathComponent {
-    /// Retourne les octets bruts du composant.
+    /// Returns raw bytes of the component.
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }
 
-    /// Longueur en octets.
+    /// Length in bytes.
     #[inline]
     pub fn len(&self) -> usize {
         self.len as usize
     }
 
-    /// `true` si le composant est vide (ne devrait jamais arriver après validation).
+    /// `true` if the component is empty (should never happen after validation).
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// `true` si le composant est `.` (répertoire courant).
+    /// `true` if the component is `.` (current directory).
     #[inline]
     pub fn is_dot(&self) -> bool {
         self.as_bytes() == b"."
     }
 
-    /// `true` si le composant est `..` (répertoire parent).
+    /// `true` if the component is `..` (parent directory).
     #[inline]
     pub fn is_dotdot(&self) -> bool {
         self.as_bytes() == b".."
     }
 
-    /// `true` si le composant est `.` ou `..`.
+    /// `true` if the component is `.` or `..`.
     #[inline]
     pub fn is_special(&self) -> bool {
         self.is_dot() || self.is_dotdot()
     }
 
-    /// Vue `&str` du composant (garanti UTF-8 après validation).
+    /// `&str` view of the component (guaranteed valid UTF-8 after validation).
     #[inline]
     pub fn as_str(&self) -> &str {
-        // SAFETY: `validate_component` garantit UTF-8 valide.
+        // SAFETY: `validate_component` guarantees valid UTF-8.
         unsafe { core::str::from_utf8_unchecked(self.as_bytes()) }
     }
 
-    /// Hash FNV-1a du composant (utilisé par `PathIndex` pour le tri).
+    /// FNV-1a hash of the component (used by `PathIndex` for sorting).
     pub fn fnv1a(&self) -> u64 {
         fnv1a_hash(self.as_bytes())
     }
 
-    /// Comparaison insensible à la casse ASCII (pour systèmes compatible Windows).
+    /// Case-insensitive ASCII comparison (for Windows-compatible systems).
     pub fn eq_ignore_ascii_case(&self, other: &PathComponent) -> bool {
         let a = self.as_bytes();
         let b = other.as_bytes();
@@ -106,7 +106,7 @@ impl PathComponent {
             .all(|(&x, &y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
     }
 
-    /// Construit depuis des octets déjà validés (usage interne).
+    /// Constructs from pre-validated bytes (internal use).
     pub(crate) fn from_validated(bytes: &[u8]) -> Self {
         debug_assert!(!bytes.is_empty());
         debug_assert!(bytes.len() <= NAME_MAX);
@@ -118,7 +118,7 @@ impl PathComponent {
         }
     }
 
-    /// Retourne une copie dans un tableau de taille fixe (utile pour les clés de BTreeMap).
+    /// Returns a copy in a fixed-size array (useful for BTreeMap keys).
     pub fn to_fixed_bytes(&self) -> ([u8; NAME_MAX + 1], u16) {
         (self.bytes, self.len)
     }
@@ -153,17 +153,17 @@ impl Ord for PathComponent {
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-/// Valide et retourne un composant de chemin depuis des octets bruts.
+/// Validates and returns a path component from raw bytes.
 ///
-/// # Règles de validation (dans l ordre)
-/// 1. Non vide.
-/// 2. Longueur ≤ `NAME_MAX`.
-/// 3. Pas de `b'/'` ni de `b'\0'`.
-/// 4. Valide UTF-8.
+/// # Validation rules (in order)
+/// 1. Non-empty.
+/// 2. Length <= `NAME_MAX`.
+/// 3. No `b'/'` nor `b'\0'`.
+/// 4. Valid UTF-8.
 ///
 /// # Errors
-/// - [`ExofsError::InvalidPathComponent`] si vide, contient `/`/`\0`, ou UTF-8 invalide.
-/// - [`ExofsError::PathTooLong`] si longueur > `NAME_MAX`.
+/// - [`ExofsError::InvalidPathComponent`] if empty, contains `/`/`\0`, or invalid UTF-8.
+/// - [`ExofsError::PathTooLong`] if length > `NAME_MAX`.
 pub fn validate_component(bytes: &[u8]) -> ExofsResult<PathComponent> {
     if bytes.is_empty() {
         return Err(ExofsError::InvalidPathComponent);
@@ -180,7 +180,7 @@ pub fn validate_component(bytes: &[u8]) -> ExofsResult<PathComponent> {
     Ok(PathComponent::from_validated(bytes))
 }
 
-/// Valide un composant sans construire la structure (vérification rapide).
+/// Validates a component without constructing the structure (fast check).
 pub fn is_valid_component(bytes: &[u8]) -> bool {
     if bytes.is_empty() || bytes.len() > NAME_MAX {
         return false;
@@ -191,12 +191,12 @@ pub fn is_valid_component(bytes: &[u8]) -> bool {
     core::str::from_utf8(bytes).is_ok()
 }
 
-// ── PathParser — découpage itératif (RECUR-01) ────────────────────────────────
+// ── PathParser — iterative splitting (RECUR-01) ────────────────────────────────
 
-/// Parseur itératif d un chemin complet.
+/// Iterative parser for a complete path.
 ///
-/// Découpe un chemin (ex : `/home/user/file.txt`) en composants validés.
-/// N est **jamais** récursif (règle RECUR-01).
+/// Splits a path (e.g. `/home/user/file.txt`) into validated components.
+/// Is **never** recursive (rule RECUR-01).
 ///
 /// # Usage
 /// ```ignore
@@ -204,22 +204,22 @@ pub fn is_valid_component(bytes: &[u8]) -> bool {
 /// while let Some(comp) = parser.next_component()? { ... }
 /// ```
 pub struct PathParser<'a> {
-    /// Source du chemin.
+    /// Path source.
     src: &'a [u8],
-    /// Position courante dans `src`.
+    /// Current position in `src`.
     pos: usize,
-    /// Indique si le chemin était absolu (commençait par `/`).
+    /// Indicates whether the path was absolute (started with `/`).
     is_abs: bool,
-    /// Composants restants à produire.
+    /// Remaining components to yield.
     done: bool,
 }
 
 impl<'a> PathParser<'a> {
-    /// Crée un parseur pour le chemin `path`.
+    /// Creates a parser for the path `path`.
     ///
     /// # Errors
-    /// - [`ExofsError::InvalidPathComponent`] si `path` est vide.
-    /// - [`ExofsError::PathTooLong`] si `path` dépasse 4096 octets.
+    /// - [`ExofsError::InvalidPathComponent`] if `path` is empty.
+    /// - [`ExofsError::PathTooLong`] if `path` exceeds 4096 bytes.
     pub fn new(path: &'a [u8]) -> ExofsResult<Self> {
         if path.is_empty() {
             return Err(ExofsError::InvalidPathComponent);
@@ -237,28 +237,28 @@ impl<'a> PathParser<'a> {
         })
     }
 
-    /// `true` si le chemin est absolu (commence par `/`).
+    /// `true` if the path is absolute (starts with `/`).
     #[inline]
     pub fn is_absolute(&self) -> bool {
         self.is_abs
     }
 
-    /// `true` si tous les composants ont été produits.
+    /// `true` if all components have been produced.
     #[inline]
     pub fn is_finished(&self) -> bool {
         self.done
     }
 
-    /// Retourne le prochain composant validé, ou `None` en fin de chemin.
+    /// Returns the next validated component, or `None` at the end of the path.
     ///
     /// # Errors
-    /// Propage les erreurs de [`validate_component`].
+    /// Propagates errors from [`validate_component`].
     pub fn next_component(&mut self) -> ExofsResult<Option<PathComponent>> {
         if self.done {
             return Ok(None);
         }
 
-        // Sauter les slashes consécutifs.
+        // Skip consecutive slashes.
         while self.pos < self.src.len() && self.src[self.pos] == b'/' {
             self.pos = self.pos.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
         }
@@ -268,7 +268,7 @@ impl<'a> PathParser<'a> {
             return Ok(None);
         }
 
-        // Trouver la fin du composant.
+        // Find the end of the component.
         let start = self.pos;
         while self.pos < self.src.len() && self.src[self.pos] != b'/' {
             self.pos = self.pos.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
@@ -284,10 +284,10 @@ impl<'a> PathParser<'a> {
         Ok(Some(comp))
     }
 
-    /// Collecte tous les composants restants dans un `Vec`.
+    /// Collects all remaining components into a `Vec`.
     ///
     /// # OOM-02
-    /// `try_reserve(1)` avant chaque `push`.
+    /// `try_reserve(1)` before each `push`.
     pub fn collect_all(&mut self) -> ExofsResult<Vec<PathComponent>> {
         let mut out = Vec::new();
         loop {
@@ -302,7 +302,7 @@ impl<'a> PathParser<'a> {
         Ok(out)
     }
 
-    /// Retourne le nombre de slashes restants (estimation pour la profondeur).
+    /// Returns the count of remaining slashes (estimate for depth).
     pub fn remaining_depth(&self) -> usize {
         if self.done {
             return 0;
@@ -326,25 +326,25 @@ impl<'a> Iterator for PathParser<'a> {
     }
 }
 
-// ── PathComponentBuf — vecteur de composants ──────────────────────────────────
+// ── PathComponentBuf — vector of components ──────────────────────────────────
 
-/// Vecteur de composants de chemin avec méthodes de manipulation.
+/// Vector of path components with manipulation methods.
 ///
-/// Toutes les modifications respectent **OOM-02** (`try_reserve(1)` avant push).
+/// All mutations respect **OOM-02** (`try_reserve(1)` before push).
 #[derive(Clone, Debug, Default)]
 pub struct PathComponentBuf {
     components: Vec<PathComponent>,
 }
 
 impl PathComponentBuf {
-    /// Crée un buffer vide.
+    /// Creates an empty buffer.
     pub fn new() -> Self {
         Self {
             components: Vec::new(),
         }
     }
 
-    /// Crée un buffer pré-dimensionné.
+    /// Creates a pre-allocated buffer.
     ///
     /// # OOM-02
     pub fn with_capacity(cap: usize) -> ExofsResult<Self> {
@@ -353,14 +353,14 @@ impl PathComponentBuf {
         Ok(Self { components: v })
     }
 
-    /// Parse un chemin complet et remplit le buffer.
+    /// Parses a complete path and populates the buffer.
     pub fn from_path(path: &[u8]) -> ExofsResult<Self> {
         let mut parser = PathParser::new(path)?;
         let comps = parser.collect_all()?;
         Ok(Self { components: comps })
     }
 
-    /// Ajoute un composant (OOM-02).
+    /// Adds a component (OOM-02).
     pub fn push(&mut self, comp: PathComponent) -> ExofsResult<()> {
         self.components
             .try_reserve(1)
@@ -369,34 +369,34 @@ impl PathComponentBuf {
         Ok(())
     }
 
-    /// Retire le dernier composant (`..` sémantique).
+    /// Pops the last component (semantic `..`).
     pub fn pop(&mut self) {
         self.components.pop();
     }
 
-    /// Nombre de composants.
+    /// Number of components.
     #[inline]
     pub fn len(&self) -> usize {
         self.components.len()
     }
-    /// `true` si aucun composant.
+    /// `true` if no components.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.components.is_empty()
     }
-    /// Vue slice.
+    /// Slice view.
     #[inline]
     pub fn as_slice(&self) -> &[PathComponent] {
         &self.components
     }
-    /// Itérateur.
+    /// Iterator.
     pub fn iter(&self) -> core::slice::Iter<'_, PathComponent> {
         self.components.iter()
     }
 
-    /// Reconstruction du chemin sous forme d octet (sans allocation pour de petits chemins).
+    /// Reconstructs the path as bytes (zero-allocation for small paths).
     ///
-    /// Max 4096 octets. Retourne `Err(PathTooLong)` si dépassé.
+    /// Max 4096 bytes. Returns `Err(PathTooLong)` if exceeded.
     pub fn to_bytes(&self) -> ExofsResult<Vec<u8>> {
         let mut out: Vec<u8> = Vec::new();
         let mut total: usize = 0;
@@ -423,14 +423,14 @@ impl PathComponentBuf {
         Ok(out)
     }
 
-    /// Applique la sémantique `.` et `..` : normalise le buffer en place.
+    /// Applies `.` and `..` semantics: normalizes the buffer in place.
     pub fn normalize(&mut self) -> ExofsResult<()> {
         let mut result: Vec<PathComponent> = Vec::new();
         for comp in self.components.drain(..) {
             if comp.is_dot() {
-                // Ignorer `.`
+                // Ignore `.`
             } else if comp.is_dotdot() {
-                result.pop(); // Remonter au parent.
+                result.pop(); // Go up to parent.
             } else {
                 result.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
                 result.push(comp);
@@ -440,12 +440,12 @@ impl PathComponentBuf {
         Ok(())
     }
 
-    /// Retourne le dernier composant (tail / basename).
+    /// Returns the last component (tail / basename).
     pub fn last(&self) -> Option<&PathComponent> {
         self.components.last()
     }
 
-    /// Retourne tous les composants sauf le dernier (dirname).
+    /// Returns all components except the last one (dirname).
     pub fn parent(&self) -> &[PathComponent] {
         let len = self.components.len();
         if len == 0 {
@@ -455,7 +455,7 @@ impl PathComponentBuf {
         }
     }
 
-    /// Étend avec des composants d un autre buffer (OOM-02).
+    /// Extends with components from another buffer (OOM-02).
     pub fn extend_from(&mut self, other: &PathComponentBuf) -> ExofsResult<()> {
         self.components
             .try_reserve(other.len())
@@ -467,9 +467,9 @@ impl PathComponentBuf {
     }
 }
 
-// ── Utilitaire de hachage ─────────────────────────────────────────────────────
+// ── Hash utilities ─────────────────────────────────────────────────────────────
 
-/// Hash FNV-1a rapide (kernel-safe, pas d allocation).
+/// Fast FNV-1a hash (kernel-safe, zero allocation).
 #[inline]
 pub fn fnv1a_hash(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -480,7 +480,7 @@ pub fn fnv1a_hash(data: &[u8]) -> u64 {
     h
 }
 
-/// Hash FNV-1a combiné de deux tranches (ex : namespace + composant).
+/// Combined FNV-1a hash of two slices (e.g. namespace + component).
 #[inline]
 pub fn fnv1a_combine(a: &[u8], b: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -497,27 +497,27 @@ pub fn fnv1a_combine(a: &[u8], b: &[u8]) -> u64 {
     h
 }
 
-/// Hash SipHash-2-4 avec clé de montage (LAC-05/PATH-01/S-12).
+/// SipHash-2-4 with mount key (LAC-05/PATH-01/S-12).
 ///
-/// Utiliser à la place de `fnv1a_hash` pour toute indexation de chemins
-/// dans un volume monté — `key` provient du `mount_key` de `PathIndex`.
+/// Use instead of `fnv1a_hash` for any path indexing in a mounted volume —
+/// `key` comes from `PathIndex`'s `mount_key`.
 ///
-/// ⚠️ PATH-02 : `key` doit être généré de manière aléatoire au montage.
-/// Ne jamais utiliser `[0u8; 16]` en production.
+/// WARNING PATH-02: `key` must be generated randomly at mount time.
+/// Never use `[0u8; 16]` in production.
 #[inline]
 pub fn siphash_keyed(key: &[u8; 16], data: &[u8]) -> u64 {
     use core::hash::Hasher;
     use siphasher::sip::SipHasher24;
-    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
+    // SAFETY: pointer computed from slice whose length has been checked.
     let k0 = u64::from_le_bytes(unsafe { *(key[0..8].as_ptr() as *const [u8; 8]) });
-    // SAFETY: pointeur calculé depuis une slice dont la longueur a été vérifiée.
+    // SAFETY: pointer computed from slice whose length has been checked.
     let k1 = u64::from_le_bytes(unsafe { *(key[8..16].as_ptr() as *const [u8; 8]) });
     let mut h = SipHasher24::new_with_keys(k0, k1);
     h.write(data);
     h.finish()
 }
 
-// ── Tests unitaires ───────────────────────────────────────────────────────────
+// ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 use crate::fs::exofs::test_support::TestUnwrapExt;

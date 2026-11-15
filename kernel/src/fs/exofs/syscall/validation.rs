@@ -61,6 +61,29 @@ pub const EQUOTA: i64 = -132;
 pub const EEPOCHFULL: i64 = -133;
 pub const ECOMMIT: i64 = -134;
 
+/// Vérifie la politique Zero-Trust MLS d'accès fichier pour le processus courant.
+pub(crate) fn check_exofs_zt_access(check_read: bool, check_write: bool) -> Result<(), i64> {
+    let tcb = crate::scheduler::core::switch::current_thread_raw();
+    let pid = if !tcb.is_null() {
+        // SAFETY: current_thread_raw() retourne le TCB actif sur ce CPU pendant le syscall.
+        unsafe { (*tcb).pid.0 }
+    } else {
+        0u32
+    };
+    if pid == 0 {
+        return Ok(());
+    }
+    let ctx = crate::security::zero_trust::context_for_caller(pid, 0);
+    let label = crate::security::zero_trust::SecurityLabel::user_default();
+    if check_read && crate::security::zero_trust::verify_file_read(&ctx, label, 0).is_err() {
+        return Err(EACCES);
+    }
+    if check_write && crate::security::zero_trust::verify_file_write(&ctx, label, 0).is_err() {
+        return Err(EACCES);
+    }
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ExofsError → errno POSIX
 // ─────────────────────────────────────────────────────────────────────────────

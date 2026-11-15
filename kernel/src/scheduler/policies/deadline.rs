@@ -123,14 +123,20 @@ pub fn release_thread(fraction: u64) {
 // Absolute deadline management
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Recalculates `deadline_abs` upon DEADLINE thread wakeup.
+/// Recalculates `deadline_abs` and replenishes `dl_remaining` when the thread's
+/// current period has elapsed (or on initial activation).
 ///
-/// EDF: upon activation, deadline_abs = now + deadline_params.deadline_ns
+/// If the thread wakes within an active period (`now < deadline_abs`), the
+/// existing deadline and remaining budget are preserved to prevent bandwidth cheating.
 pub fn refresh_deadline(tcb: &mut ThreadControlBlock) {
     let now = monotonic_ns();
     let deadline_ns = tcb.dl_period;
-    tcb.deadline_abs
-        .store(now.saturating_add(deadline_ns), Ordering::Release);
+    let cur_dl = tcb.deadline_abs.load(Ordering::Acquire);
+    if cur_dl == 0 || now >= cur_dl {
+        tcb.deadline_abs
+            .store(now.saturating_add(deadline_ns), Ordering::Release);
+        tcb.dl_remaining.store(tcb.dl_runtime, Ordering::Release);
+    }
 }
 
 /// Checks if thread missed its deadline.
@@ -145,25 +151,33 @@ pub fn check_deadline_miss(tcb: &ThreadControlBlock) -> bool {
     false
 }
 
-/// Returns remaining time (in ns) before thread absolute deadline.
-/// Returns 0 if deadline already passed or uninitialized.
+/// Returns remaining execution budget (in ns) for the current period.
 pub fn remaining_budget(tcb: &ThreadControlBlock) -> u64 {
-    let now = monotonic_ns();
-    let deadline_abs = tcb.deadline_abs.load(Ordering::Relaxed);
-    if deadline_abs == 0 || now >= deadline_abs {
-        0
-    } else {
-        deadline_abs - now
+    tcb.dl_remaining.load(Ordering::Acquire)
+}
+
+/// Accounts `delta_ns` of execution against a `SCHED_DEADLINE` thread's budget.
+pub fn consume_budget(tcb: &ThreadControlBlock, delta_ns: u64) {
+    if tcb.policy != SchedPolicy::Deadline || tcb.dl_runtime == 0 {
+        return;
     }
+    let _ = tcb
+        .dl_remaining
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |rem| {
+            Some(rem.saturating_sub(delta_ns))
+        });
 }
 
 /// Called during timer tick for a DEADLINE thread.
-/// Decrements remaining budget, returns `true` if budget is exhausted
-/// (thread must block until its next period).
+/// Returns `true` if its runtime budget for the current slice is exhausted.
 pub fn deadline_tick(tcb: &ThreadControlBlock, elapsed_ns: u64) -> bool {
     if tcb.policy != SchedPolicy::Deadline {
         return false;
     }
-    let budget = remaining_budget(tcb);
-    elapsed_ns >= budget
+    if tcb.dl_runtime == 0 {
+        let now = monotonic_ns();
+        let deadline_abs = tcb.deadline_abs.load(Ordering::Acquire);
+        return deadline_abs != 0 && now >= deadline_abs;
+    }
+    elapsed_ns >= remaining_budget(tcb)
 }

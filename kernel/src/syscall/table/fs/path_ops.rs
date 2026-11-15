@@ -679,3 +679,60 @@ pub fn sys_mknodat(dirfd: u64, path_ptr: u64, mode: u64, dev: u64, _a5: u64, _a6
         pid,
     ))
 }
+
+/// `utimensat(dirfd, pathname, times, flags)`.
+pub fn sys_utimensat(
+    dirfd: u64,
+    path_ptr: u64,
+    times_ptr: u64,
+    flags: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_UTIMENSAT);
+    let pid = current_pid_u32();
+    use crate::syscall::fs_bridge;
+    if path_ptr == 0 {
+        return fs_bridge::bridge_result(fs_bridge::fs_utimensat(
+            dirfd as i32,
+            None,
+            times_ptr,
+            flags as u32,
+            pid,
+        ));
+    }
+    let path = match read_user_path(path_ptr) {
+        Ok(p) => p,
+        Err(e) => return e.to_errno(),
+    };
+    fs_bridge::bridge_result(fs_bridge::fs_utimensat(
+        dirfd as i32,
+        Some(path.as_bytes()),
+        times_ptr,
+        flags as u32,
+        pid,
+    ))
+}
+
+/// `memfd_create(name, flags)` -> fd.
+pub fn sys_memfd_create(
+    name_ptr: u64,
+    flags: u64,
+    _a3: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_MEMFD_CREATE);
+    let pid = current_pid_u32();
+    let name = match read_user_path(name_ptr) {
+        Ok(n) => n,
+        Err(e) => return e.to_errno(),
+    };
+    use crate::syscall::fs_bridge;
+    fs_bridge::bridge_result(fs_bridge::fs_memfd_create(
+        name.as_bytes(),
+        flags as u32,
+        pid,
+    ))
+}

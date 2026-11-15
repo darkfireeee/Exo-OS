@@ -1,6 +1,6 @@
 // kernel/src/ipc/capability_bridge/check.rs
 
-use crate::ipc::core::types::IpcError;
+use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::security::access_control::{check_access, AccessError, ObjectKind};
 use crate::security::capability::{CapTable, CapToken, Rights};
 
@@ -18,9 +18,13 @@ pub fn capability_to_ipc_error(err: AccessError) -> IpcError {
 pub fn check_endpoint_access(
     table: &CapTable,
     token: CapToken,
+    ep_id: EndpointId,
     rights: Rights,
 ) -> Result<(), IpcError> {
     if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
+    if token.object_id().as_u64() != ep_id.get() {
         return Err(IpcError::PermissionDenied);
     }
     check_access(table, token, ObjectKind::IpcEndpoint, rights, "ipc")
@@ -31,9 +35,13 @@ pub fn check_endpoint_access(
 pub fn check_channel_access(
     table: &CapTable,
     token: CapToken,
+    channel_id: u64,
     rights: Rights,
 ) -> Result<(), IpcError> {
     if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
+    if token.object_id().as_u64() != channel_id {
         return Err(IpcError::PermissionDenied);
     }
     check_access(table, token, ObjectKind::IpcChannel, rights, "ipc")
@@ -41,8 +49,16 @@ pub fn check_channel_access(
 }
 
 #[inline]
-pub fn check_shm_access(table: &CapTable, token: CapToken, rights: Rights) -> Result<(), IpcError> {
+pub fn check_shm_access(
+    table: &CapTable,
+    token: CapToken,
+    region_id: u64,
+    rights: Rights,
+) -> Result<(), IpcError> {
     if !crate::security::is_security_ready() {
+        return Err(IpcError::PermissionDenied);
+    }
+    if token.object_id().as_u64() != region_id {
         return Err(IpcError::PermissionDenied);
     }
     check_access(table, token, ObjectKind::ShmRegion, rights, "ipc")

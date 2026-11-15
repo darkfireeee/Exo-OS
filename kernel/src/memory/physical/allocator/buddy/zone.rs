@@ -336,63 +336,59 @@ impl BuddyZone {
         for current_order in order..=BUDDY_MAX_ORDER {
             unsafe {
                 let head = &mut inner.orders[current_order].head as *mut FreeNode;
-                match FreeNode::pop(head) {
-                    None => continue,
-                    Some(node) => {
-                        inner.orders[current_order]
-                            .count
-                            .fetch_sub(1, Ordering::Relaxed);
+                while let Some(node) = FreeNode::pop(head) {
+                    inner.orders[current_order]
+                        .count
+                        .fetch_sub(1, Ordering::Relaxed);
 
-                        let phys = virt_to_phys_buddy(node as usize);
-                        if !self.contains_aligned_block(phys, current_order) {
-                            self.fail_count.fetch_add(1, Ordering::Relaxed);
-                            continue;
-                        }
-                        let popped_pfn = self.phys_to_pfn(phys);
-                        if self.descriptors_range_has_reserved(popped_pfn, 1usize << current_order)
-                        {
-                            self.fail_count.fetch_add(1, Ordering::Relaxed);
-                            continue;
-                        }
-                        if !inner.bitmap_range_is_free(popped_pfn, 1usize << current_order) {
-                            self.fail_count.fetch_add(1, Ordering::Relaxed);
-                            continue;
-                        }
-                        if !self.descriptors_range_is_free(popped_pfn, 1usize << current_order) {
-                            self.fail_count.fetch_add(1, Ordering::Relaxed);
-                            continue;
-                        }
-
-                        let block_phys = phys;
-                        for split_order in (order..current_order).rev() {
-                            let buddy_phys = PhysAddr::new(
-                                block_phys.as_u64() + (PAGE_SIZE << split_order) as u64,
-                            );
-
-                            let buddy_node = phys_to_virt_buddy(buddy_phys) as *mut FreeNode;
-                            FreeNode::init(buddy_node, split_order as u8);
-                            let buddy_head = &mut inner.orders[split_order].head as *mut FreeNode;
-                            FreeNode::insert_after(buddy_head, buddy_node);
-                            inner.orders[split_order]
-                                .count
-                                .fetch_add(1, Ordering::Relaxed);
-
-                            let buddy_pfn = self.phys_to_pfn(buddy_phys);
-                            for i in 0..(1usize << split_order) {
-                                inner.bitmap_clear(buddy_pfn + i);
-                            }
-
-                            self.split_count.fetch_add(1, Ordering::Relaxed);
-                        }
-
-                        let pfn = self.phys_to_pfn(block_phys);
-                        for i in 0..(1usize << order) {
-                            inner.bitmap_set(pfn + i);
-                        }
-                        self.mark_descriptors_allocated(pfn, 1usize << order);
-
-                        return Ok(block_phys);
+                    let phys = virt_to_phys_buddy(node as usize);
+                    if !self.contains_aligned_block(phys, current_order) {
+                        self.fail_count.fetch_add(1, Ordering::Relaxed);
+                        continue;
                     }
+                    let popped_pfn = self.phys_to_pfn(phys);
+                    if self.descriptors_range_has_reserved(popped_pfn, 1usize << current_order) {
+                        self.fail_count.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    if !inner.bitmap_range_is_free(popped_pfn, 1usize << current_order) {
+                        self.fail_count.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    if !self.descriptors_range_is_free(popped_pfn, 1usize << current_order) {
+                        self.fail_count.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+
+                    let block_phys = phys;
+                    for split_order in (order..current_order).rev() {
+                        let buddy_phys = PhysAddr::new(
+                            block_phys.as_u64() + (PAGE_SIZE << split_order) as u64,
+                        );
+
+                        let buddy_node = phys_to_virt_buddy(buddy_phys) as *mut FreeNode;
+                        FreeNode::init(buddy_node, split_order as u8);
+                        let buddy_head = &mut inner.orders[split_order].head as *mut FreeNode;
+                        FreeNode::insert_after(buddy_head, buddy_node);
+                        inner.orders[split_order]
+                            .count
+                            .fetch_add(1, Ordering::Relaxed);
+
+                        let buddy_pfn = self.phys_to_pfn(buddy_phys);
+                        for i in 0..(1usize << split_order) {
+                            inner.bitmap_clear(buddy_pfn + i);
+                        }
+
+                        self.split_count.fetch_add(1, Ordering::Relaxed);
+                    }
+
+                    let pfn = self.phys_to_pfn(block_phys);
+                    for i in 0..(1usize << order) {
+                        inner.bitmap_set(pfn + i);
+                    }
+                    self.mark_descriptors_allocated(pfn, 1usize << order);
+
+                    return Ok(block_phys);
                 }
             }
         }

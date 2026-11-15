@@ -150,6 +150,8 @@ endif
 QEMU_COMMON_FLAGS += -debugcon file:/tmp/e9k.txt
 # isa-debug-exit : permet à l'OS de signaler le code de sortie à QEMU
 QEMU_COMMON_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
+# QMP socket pour contrôle interactif et capture d'écran
+QEMU_COMMON_FLAGS += -qmp unix:/tmp/qmp-sock,server,nowait
 
 # Affichage interactif avec curseur hôte visible sous WSLg / X11
 ifneq ($(DISPLAY),)

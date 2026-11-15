@@ -1,4 +1,4 @@
-//! Tests unitaires — EpochRecord taille et layout (spec ONDISK-06).
+//! Unit tests — EpochRecord size and layout (spec ONDISK-06).
 #[cfg(test)]
 mod tests {
     use crate::fs::exofs::epoch::epoch_record::EpochRecord;

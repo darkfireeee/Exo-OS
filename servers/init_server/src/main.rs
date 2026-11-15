@@ -169,7 +169,7 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("fb_server", service_table::FB_SERVER_BIN),
     Service::new("tty_server", service_table::TTY_SERVER_BIN),
     Service::new("ps2_driver", service_table::PS2_DRIVER_BIN),
-    Service::new("exosh", service_table::EXOSH_BIN),
+    Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
     Service::new("crypto_server", service_table::CRYPTO_SERVER_BIN),
     Service::new("virtio_drivers", service_table::VIRTIO_DRIVERS_BIN),
     Service::new("e1000_driver", service_table::E1000_DRIVER_BIN),
@@ -177,9 +177,9 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("loopback_driver", service_table::LOOPBACK_DRIVER_BIN),
     Service::new("network_server", service_table::NETWORK_SERVER_BIN),
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
-    Service::new("exo_shield", service_table::EXO_SHIELD_BIN),
     Service::new("audio_server", service_table::AUDIO_SERVER_BIN),
     Service::new("usb_server", service_table::USB_SERVER_BIN),
+    Service::new("exosh", service_table::EXOSH_BIN),
 ];
 
 #[inline(always)]
@@ -235,7 +235,7 @@ fn play_boot_chime() {
             syscall::AUDIO_SERVER_ENDPOINT,
             &req as *const syscall::AudioRequest as u64,
             core::mem::size_of::<syscall::AudioRequest>() as u64,
-            0,
+            syscall::IPC_FLAG_TIMEOUT,
             0,
             0,
         );

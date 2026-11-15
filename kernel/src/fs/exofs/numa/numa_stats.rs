@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS NUMA — Statistiques par nœud NUMA
+// ExoFS NUMA — Statistics per NUMA node
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::numa_affinity::MAX_NUMA_NODES;
@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─── NumaNodeStats (snapshot) ─────────────────────────────────────────────────
 
-/// Snapshot read-only des compteurs d'un nœud.
+/// Read-only snapshot of a node's counters.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NumaNodeStats {
     pub allocs: u64,
@@ -27,15 +27,15 @@ pub struct NumaNodeStats {
 }
 
 impl NumaNodeStats {
-    /// Allocations nettes (allocs − frees), ARITH-02.
+    /// Net allocations (allocs − frees), ARITH-02.
     pub fn net_allocs(&self) -> u64 {
         self.allocs.saturating_sub(self.frees)
     }
-    /// Octets nets alloués, ARITH-02.
+    /// Net allocated bytes, ARITH-02.
     pub fn net_bytes(&self) -> u64 {
         self.bytes_alloc.saturating_sub(self.bytes_freed)
     }
-    /// Ratio d'utilisation en ‰ par rapport à `capacity_bytes` (ARITH-02).
+    /// Utilization ratio in ‰ relative to `capacity_bytes` (ARITH-02).
     pub fn usage_ppt(&self, capacity_bytes: u64) -> u64 {
         if capacity_bytes == 0 {
             return 0;
@@ -45,25 +45,25 @@ impl NumaNodeStats {
             .checked_div(capacity_bytes)
             .unwrap_or(1000)
     }
-    /// Bandwidth write en octets/tick, ARITH-02.
+    /// Write bandwidth in bytes/tick, ARITH-02.
     pub fn write_bw(&self, ticks_elapsed: u64) -> u64 {
         if ticks_elapsed == 0 {
             return 0;
         }
         self.write_bytes.checked_div(ticks_elapsed).unwrap_or(0)
     }
-    /// Bandwidth read en octets/tick, ARITH-02.
+    /// Read bandwidth in bytes/tick, ARITH-02.
     pub fn read_bw(&self, ticks_elapsed: u64) -> u64 {
         if ticks_elapsed == 0 {
             return 0;
         }
         self.read_bytes.checked_div(ticks_elapsed).unwrap_or(0)
     }
-    /// Vrai si le nœud est sous pression.
+    /// True if the node is under pressure.
     pub fn is_under_pressure(&self) -> bool {
         self.pressure_events > 0
     }
-    /// Score de charge brut (somme pondérée, ARITH-02).
+    /// Raw load score (weighted sum, ARITH-02).
     pub fn load_score(&self) -> u64 {
         self.net_bytes()
             .saturating_add(self.migrations_out.saturating_mul(4096))
@@ -73,7 +73,7 @@ impl NumaNodeStats {
 
 // ─── NumaStats ────────────────────────────────────────────────────────────────
 
-/// Compteurs atomiques par nœud NUMA.
+/// Atomic counters per NUMA node.
 pub struct NumaStats {
     allocs: [AtomicU64; MAX_NUMA_NODES],
     frees: [AtomicU64; MAX_NUMA_NODES],
@@ -143,9 +143,9 @@ impl NumaStats {
             || stats.pressure_events != 0
     }
 
-    // ── Enregistrements ───────────────────────────────────────────────────────
+    // ── Recordings ────────────────────────────────────────────────────────────
 
-    /// Enregistre une allocation de `bytes` sur le nœud.
+    /// Records an allocation of `bytes` on the node.
     pub fn record_alloc(&self, node: usize, bytes: u64) {
         if !self.guard(node) {
             return;
@@ -154,7 +154,7 @@ impl NumaStats {
         self.bytes_alloc[node].fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Enregistre une libération de `bytes` sur le nœud.
+    /// Records a deallocation of `bytes` on the node.
     pub fn record_free(&self, node: usize, bytes: u64) {
         if !self.guard(node) {
             return;
@@ -163,7 +163,7 @@ impl NumaStats {
         self.bytes_freed[node].fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Enregistre une migration (arrivée sur `to`, départ de `from`).
+    /// Records a migration (arrival on `to`, departure from `from`).
     pub fn record_migration(&self, from: usize, to: usize) {
         if self.guard(from) {
             self.migrations_out[from].fetch_add(1, Ordering::Relaxed);
@@ -173,7 +173,7 @@ impl NumaStats {
         }
     }
 
-    /// Enregistre une lecture.
+    /// Records a read.
     pub fn record_read(&self, node: usize, bytes: u64) {
         if !self.guard(node) {
             return;
@@ -182,7 +182,7 @@ impl NumaStats {
         self.read_bytes[node].fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Enregistre une écriture.
+    /// Records a write.
     pub fn record_write(&self, node: usize, bytes: u64) {
         if !self.guard(node) {
             return;
@@ -191,7 +191,7 @@ impl NumaStats {
         self.write_bytes[node].fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Enregistre une erreur.
+    /// Records an error.
     pub fn record_error(&self, node: usize) {
         if !self.guard(node) {
             return;
@@ -199,7 +199,7 @@ impl NumaStats {
         self.errors[node].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Enregistre un événement de pression mémoire.
+    /// Records a memory pressure event.
     pub fn record_pressure(&self, node: usize) {
         if !self.guard(node) {
             return;
@@ -207,9 +207,9 @@ impl NumaStats {
         self.pressure_events[node].fetch_add(1, Ordering::Relaxed);
     }
 
-    // ── Lecture ───────────────────────────────────────────────────────────────
+    // ── Reads ─────────────────────────────────────────────────────────────────
 
-    /// Snapshot des compteurs d'un nœud.
+    /// Snapshot of a node's counters.
     pub fn node_stats(&self, node: usize) -> NumaNodeStats {
         if !self.guard(node) {
             return NumaNodeStats::default();
@@ -230,7 +230,7 @@ impl NumaStats {
         }
     }
 
-    /// Snapshot de tous les nœuds (RECUR-01 : while, OOM-02).
+    /// Snapshot of all nodes (RECUR-01: while, OOM-02).
     pub fn all_nodes(&self) -> ExofsResult<Vec<(usize, NumaNodeStats)>> {
         let mut v = Vec::new();
         v.try_reserve(MAX_NUMA_NODES)
@@ -243,7 +243,7 @@ impl NumaStats {
         Ok(v)
     }
 
-    /// Nœud avec le plus faible score de charge (RECUR-01, ARITH-02).
+    /// Node with lowest load score (RECUR-01, ARITH-02).
     pub fn least_loaded_node(&self) -> usize {
         let mut best_node = 0usize;
         let mut best_score = u64::MAX;
@@ -270,7 +270,7 @@ impl NumaStats {
         }
     }
 
-    /// Nœud avec le plus grand score de charge (RECUR-01).
+    /// Node with highest load score (RECUR-01).
     pub fn most_loaded_node(&self) -> usize {
         let mut best_node = 0usize;
         let mut best_score = 0u64;
@@ -286,7 +286,7 @@ impl NumaStats {
         best_node
     }
 
-    /// Déséquilibre de charge entre nœuds en ‰ (ARITH-02, RECUR-01).
+    /// Load imbalance between nodes in ‰ (ARITH-02, RECUR-01).
     pub fn imbalance_ppt(&self) -> u64 {
         let mut max_score = 0u64;
         let mut min_score = u64::MAX;
@@ -318,7 +318,7 @@ impl NumaStats {
             .unwrap_or(0)
     }
 
-    /// Total allocations tous nœuds confondus (ARITH-02, RECUR-01).
+    /// Total allocations across all nodes (ARITH-02, RECUR-01).
     pub fn total_allocs(&self) -> u64 {
         let mut t = 0u64;
         let mut i = 0usize;
@@ -329,7 +329,7 @@ impl NumaStats {
         t
     }
 
-    /// Total bytes alloués tous nœuds confondus (ARITH-02, RECUR-01).
+    /// Total allocated bytes across all nodes (ARITH-02, RECUR-01).
     pub fn total_bytes_alloc(&self) -> u64 {
         let mut t = 0u64;
         let mut i = 0usize;
@@ -340,7 +340,7 @@ impl NumaStats {
         t
     }
 
-    /// Total migrations tous nœuds confondus (ARITH-02, RECUR-01).
+    /// Total migrations across all nodes (ARITH-02, RECUR-01).
     pub fn total_migrations(&self) -> u64 {
         let mut t = 0u64;
         let mut i = 0usize;
@@ -351,7 +351,7 @@ impl NumaStats {
         t
     }
 
-    /// Total erreurs tous nœuds confondus (ARITH-02).
+    /// Total errors across all nodes (ARITH-02).
     pub fn total_errors(&self) -> u64 {
         let mut t = 0u64;
         let mut i = 0usize;
@@ -362,12 +362,12 @@ impl NumaStats {
         t
     }
 
-    /// Vrai si le système NUMA est sain (aucune erreur, déséquilibre < 800‰).
+    /// True if the NUMA system is healthy (no errors, imbalance < 800‰).
     pub fn is_healthy(&self) -> bool {
         self.total_errors() == 0 && self.imbalance_ppt() < 800
     }
 
-    /// Réinitialise les compteurs d'un nœud.
+    /// Resets a node's counters.
     pub fn reset_node(&self, node: usize) {
         if !self.guard(node) {
             return;
@@ -386,7 +386,7 @@ impl NumaStats {
         self.pressure_events[node].store(0, Ordering::Relaxed);
     }
 
-    /// Réinitialise tous les nœuds (RECUR-01).
+    /// Resets all nodes (RECUR-01).
     pub fn reset_all(&self) {
         let mut i = 0usize;
         while i < MAX_NUMA_NODES {
@@ -396,7 +396,7 @@ impl NumaStats {
     }
 }
 
-/// Singleton global des statistiques NUMA.
+/// Global singleton of NUMA statistics.
 pub static NUMA_STATS: NumaStats = NumaStats::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn test_out_of_range_node_noop() {
         let s = NumaStats::new_const();
-        s.record_alloc(99, 4096); // doit être silencieux
+        s.record_alloc(99, 4096); // must be silent
         assert_eq!(s.total_allocs(), 0);
     }
 
@@ -492,8 +492,8 @@ mod tests {
         let s = NumaStats::new_const();
         s.record_alloc(0, 4096);
         s.record_alloc(1, 4096);
-        // Doit être 0 (chaque nœud a le même score)
-        // Mais free=0 donc net = allocs : identiques → imbalance = 0
+        // Must be 0 (each node has the same score)
+        // But free=0 so net = allocs: identical -> imbalance = 0
         assert_eq!(s.imbalance_ppt(), 0);
     }
 

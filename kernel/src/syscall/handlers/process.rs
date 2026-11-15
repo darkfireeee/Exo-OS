@@ -89,50 +89,14 @@ pub fn sys_execve(
 // exit() / exit_group()
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `exit(status)` — marks process as zombie, wakes up parent, then yields CPU.
+/// `exit(status)` — terminates the calling thread; marks process as zombie only if last thread.
 pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    let exit_code = (status & 0xFF) as u32;
-    // SAFETY: called only from syscall context — kernel GS active.
-    unsafe {
-        let tcb_ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
-        if tcb_ptr != 0 {
-            let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
-            let pid = crate::process::core::pid::Pid(tcb.pid.0);
-            if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
-                let ppid = pcb.ppid();
-                pcb.set_exiting();
-                pcb.exit_code
-                    .store(exit_code, core::sync::atomic::Ordering::Release);
-                pcb.set_state(crate::process::core::pcb::ProcessState::Zombie);
-                if ppid.0 != 0 {
-                    let _ = crate::process::signal::delivery::send_signal_to_pid(
-                        ppid,
-                        crate::process::signal::default::Signal::SIGCHLD,
-                    );
-                }
-                crate::process::lifecycle::wait::wake_waiting_parents(pcb.pid, ppid);
-                crate::process::lifecycle::fork::notify_vfork_completion(pid);
-            }
-            tcb.set_state(crate::scheduler::core::task::TaskState::Dead);
-            let cpu_id = tcb.current_cpu();
-            let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
-            crate::scheduler::core::switch::schedule_block(rq, &mut *(tcb_ptr as *mut _));
-        }
-    }
-    // Unreachable after schedule_block with Dead state.
-    loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack));
-        }
-    }
+    crate::syscall::table::process::sys_exit(status, 0, 0, 0, 0, 0)
 }
 
 /// `exit_group(status)` — terminates all threads in the group.
 pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
-    // Delegates to sys_exit for now.
-    // Iterating over sibling threads requires fully integrated process/.
-    sys_exit(status, 0, 0, 0, 0, 0)
+    crate::syscall::table::process::sys_exit_group(status, 0, 0, 0, 0, 0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -349,8 +313,17 @@ pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: 
         arg,
         initial_rsp: stack,
         tls_base: if flags & CLONE_SETTLS != 0 { tls } else { 0 },
-        target_cpu: 0,
-        pthread_out: ptid,
+        target_cpu: unsafe {
+            let p = crate::scheduler::core::switch::current_thread_raw();
+            if p.is_null() {
+                0
+            } else {
+                (*p).current_cpu().0
+            }
+        },
+        pthread_out: if flags & 0x0010_0000 != 0 { ptid } else { 0 },
+        child_tid_ptr: if flags & 0x0100_0000 != 0 { ctid } else { 0 },
+        clear_child_tid: if flags & 0x0020_0000 != 0 { ctid } else { 0 },
     };
     match crate::process::thread::creation::create_thread(&params) {
         Ok(handle) => handle.tid.0 as i64,

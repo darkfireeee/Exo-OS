@@ -51,6 +51,7 @@ const QUARANTINE_CMD: u32 = 2;
 const THREAT_QUERY: u32 = 3;
 const POLICY_UPDATE: u32 = 4;
 const HEARTBEAT: u32 = 5;
+const PMC_ANOMALY_REPORT: u32 = 6;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -669,6 +670,17 @@ pub fn policy_init() {
         110,
         false,
         1,
+    );
+    // 5. PMC anomaly telemetry is restricted to privileged system senders
+    //    (KERNEL_PID short-circuits to Allow; IPC_ROUTER_PID / INIT_SERVER_PID match rules 1-2).
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        PMC_ANOMALY_REPORT,
+        PolicyAction::Deny,
+        220,
+        false,
+        0,
     );
 }
 

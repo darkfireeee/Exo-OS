@@ -1,54 +1,54 @@
-//! Empreintes de chunks pour la déduplication ExoFS (no_std).
+//! Chunk fingerprints for ExoFS deduplication (no_std).
 //!
-//! Calcul d'empreintes cryptographiques (Blake3 simplifié) et d'empreintes
-//! rapides (FNV-1a 64 bits, XxHash64) pour le filtrage préliminaire.
+//! Cryptographic fingerprint computation (Blake3) and fast
+//! fingerprints (64-bit FNV-1a, XxHash64) for preliminary filtering.
 //!
-//! RECUR-01 : aucune récursion.
-//! OOM-02   : try_reserve sur tous les Vec.
-//! ARITH-02 : checked / saturating / wrapping sur toutes les arithmétiques.
+//! RECUR-01: no recursion.
+//! OOM-02  : try_reserve on all Vecs.
+//! ARITH-02: checked / saturating / wrapping on all arithmetic.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Taille d'une empreinte Blake3 (256 bits = 32 octets).
+/// Blake3 fingerprint size (256 bits = 32 bytes).
 pub const FINGERPRINT_LEN: usize = 32;
-/// Empreinte nulle (toutes les valeurs à 0).
+/// Null fingerprint (all values set to 0).
 pub const FINGERPRINT_ZERO: [u8; 32] = [0u8; 32];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FingerprintAlgorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Algorithme utilisé pour calculer l'empreinte d'un chunk.
+/// Algorithm used to compute a chunk fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FingerprintAlgorithm {
-    /// Blake3 (256 bits) — utilisé pour la déduplication cryptographique.
+    /// Blake3 (256 bits) — used for cryptographic deduplication.
     Blake3 = 0,
-    /// FNV-1a 64 bits — utilisé pour le filtrage rapide.
+    /// FNV-1a 64-bit — used for fast filtering.
     Fnv1a64 = 1,
-    /// XxHash64 — alternative rapide non-cryptographique.
+    /// XxHash64 — fast non-cryptographic alternative.
     XxHash64 = 2,
-    /// Double : Blake3 + FNV-1a (le plus robuste).
+    /// Double: Blake3 + FNV-1a (most robust).
     Double = 3,
 }
 
 impl FingerprintAlgorithm {
-    /// Retourne `true` si l'algorithme est cryptographiquement sûr.
+    /// Returns `true` if the algorithm is cryptographically secure.
     pub fn is_cryptographic(self) -> bool {
         matches!(self, Self::Blake3 | Self::Double)
     }
 
-    /// Retourne `true` si l'algorithme convient au filtrage rapide.
+    /// Returns `true` if the algorithm is suitable for fast filtering.
     pub fn is_fast(self) -> bool {
         !matches!(self, Self::Blake3)
     }
 
-    /// Retourne le nom lisible de l'algorithme.
+    /// Returns the readable name of the algorithm.
     pub fn name(self) -> &'static str {
         match self {
             Self::Blake3 => "blake3",
@@ -60,13 +60,13 @@ impl FingerprintAlgorithm {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hachage inline (no_std, pas de dépendances externes)
+// Inline hashing (no_std, no external dependencies)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Calcule un hash FNV-1a 64 bits.
+/// Computes a 64-bit FNV-1a hash.
 ///
-/// ARITH-02 : wrapping_mul / ^ (XOR).
-/// RECUR-01 : boucle itérative.
+/// ARITH-02: wrapping_mul / ^ (XOR).
+/// RECUR-01: iterative loop.
 pub fn fnv1a64(data: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01B3;
@@ -78,9 +78,9 @@ pub fn fnv1a64(data: &[u8]) -> u64 {
     h
 }
 
-/// Calcule un hash XxHash64 simplifié (ARITH-02 : wrapping_mul / rotate).
+/// Computes a simplified XxHash64 hash (ARITH-02: wrapping_mul / rotate).
 ///
-/// RECUR-01 : boucle itérative.
+/// RECUR-01: iterative loop.
 pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
     const P1: u64 = 0x9E3779B185EBCA87;
     const P2: u64 = 0xC2B2AE3D27D4EB4F;
@@ -129,7 +129,7 @@ pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
         h = seed.wrapping_add(P5);
     }
     h = h.wrapping_add(len as u64);
-    // Bytes restants.
+    // Remaining bytes.
     while pos.saturating_add(8) <= len {
         let b = &data[pos..pos + 8];
         let k1 = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
@@ -150,7 +150,7 @@ pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
     h
 }
 
-/// Calcule un hash Blake3 officiel standard (via crate blake3, features = ["pure"]).
+/// Computes a standard official Blake3 hash (via crate blake3, features = ["pure"]).
 #[inline]
 pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
     crate::fs::exofs::core::blake3_hash(data)
@@ -160,21 +160,21 @@ pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
 // ChunkFingerprint
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Empreinte complète d'un chunk.
+/// Complete chunk fingerprint.
 ///
-/// Contient l'empreinte cryptographique (Blake3) et l'empreinte rapide (FNV).
-/// L'égalité est définie sur les deux champs conjointement.
+/// Contains the cryptographic fingerprint (Blake3) and the fast fingerprint (FNV).
+/// Equality is defined on both fields jointly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkFingerprint {
-    /// Empreinte Blake3 (256 bits).
+    /// Blake3 fingerprint (256 bits).
     pub blake3: [u8; 32],
-    /// Empreinte rapide FNV-1a 64 bits.
+    /// Fast FNV-1a 64-bit fingerprint.
     pub fast_hash: u64,
-    /// Algorithme utilisé.
+    /// Algorithm used.
     pub algo: FingerprintAlgorithmId,
 }
 
-/// Identifiant d'algorithme stocké dans la fingerprint.
+/// Algorithm identifier stored in the fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum FingerprintAlgorithmId {
@@ -183,7 +183,7 @@ pub enum FingerprintAlgorithmId {
 }
 
 impl ChunkFingerprint {
-    /// Calcule l'empreinte depuis des données brutes.
+    /// Computes the fingerprint from raw data.
     pub fn compute(data: &[u8]) -> Self {
         let blake3 = blake3_hash(data);
         let fast_hash = fnv1a64(data);
@@ -194,7 +194,7 @@ impl ChunkFingerprint {
         }
     }
 
-    /// Construit depuis des octets pré-calculés.
+    /// Constructs from precomputed bytes.
     pub fn from_parts(blake3: [u8; 32], fast_hash: u64) -> Self {
         Self {
             blake3,
@@ -203,12 +203,12 @@ impl ChunkFingerprint {
         }
     }
 
-    /// Retourne `true` si l'empreinte est nulle (chunk vide).
+    /// Returns `true` if the fingerprint is zero (empty chunk).
     pub fn is_zero(&self) -> bool {
         self.blake3 == FINGERPRINT_ZERO
     }
 
-    /// Comparaison à temps constant (ARITH-02 : XOR accumulé).
+    /// Constant-time comparison (ARITH-02: accumulated XOR).
     pub fn constant_time_eq(&self, other: &Self) -> bool {
         let mut diff: u8 = 0;
         for (a, b) in self.blake3.iter().zip(other.blake3.iter()) {
@@ -218,12 +218,12 @@ impl ChunkFingerprint {
         diff == 0 && fast_diff == 0
     }
 
-    /// Retourne la clé de lookup (use blake3 as BTreeMap key).
+    /// Returns the lookup key (use blake3 as BTreeMap key).
     pub fn key(&self) -> &[u8; 32] {
         &self.blake3
     }
 
-    /// Retourne les 8 premiers octets comme u64 (pour indexation rapide).
+    /// Returns the first 8 bytes as u64 (for fast indexing).
     pub fn prefix_u64(&self) -> u64 {
         u64::from_le_bytes([
             self.blake3[0],
@@ -237,7 +237,7 @@ impl ChunkFingerprint {
         ])
     }
 
-    /// Retourne une représentation hexadécimale tronquée (8 octets = 16 chars).
+    /// Returns a truncated hexadecimal representation (8 bytes = 16 chars).
     pub fn short_hex(&self) -> [u8; 16] {
         let mut out = [0u8; 16];
         for (i, &b) in self.blake3[..8].iter().enumerate() {
@@ -251,25 +251,25 @@ impl ChunkFingerprint {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FingerprintSet — ensemble d'empreintes pour comparaison batch
+// FingerprintSet — set of fingerprints for batch comparison
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ensemble d'empreintes permettant la recherche rapide par fast_hash puis blake3.
+/// Set of fingerprints enabling fast search by fast_hash then blake3.
 pub struct FingerprintSet {
     entries: Vec<ChunkFingerprint>,
 }
 
 impl FingerprintSet {
-    /// Crée un ensemble vide.
+    /// Creates an empty set.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
     }
 
-    /// Ajoute une empreinte.
+    /// Inserts a fingerprint.
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn insert(&mut self, fp: ChunkFingerprint) -> ExofsResult<()> {
         self.entries
             .try_reserve(1)
@@ -278,9 +278,9 @@ impl FingerprintSet {
         Ok(())
     }
 
-    /// Recherche par empreinte complète (fast_hash préliminaire, blake3 confirmation).
+    /// Searches by full fingerprint (preliminary fast_hash, blake3 confirmation).
     ///
-    /// RECUR-01 : boucle itérative.
+    /// RECUR-01: iterative loop.
     pub fn contains(&self, fp: &ChunkFingerprint) -> bool {
         for e in &self.entries {
             if e.fast_hash == fp.fast_hash && e.constant_time_eq(fp) {
@@ -290,20 +290,20 @@ impl FingerprintSet {
         false
     }
 
-    /// Nombre d'empreintes.
+    /// Number of fingerprints.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// `true` si l'ensemble est vide.
+    /// Returns `true` if the set is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Calcule et retourne les empreintes dupliquées.
+    /// Computes and returns duplicate fingerprints.
     ///
-    /// OOM-02 : try_reserve.
-    /// RECUR-01 : O(n²) mais sans récursion.
+    /// OOM-02: try_reserve.
+    /// RECUR-01: O(n²) but without recursion.
     pub fn duplicates(&self) -> ExofsResult<Vec<ChunkFingerprint>> {
         let mut dups: Vec<ChunkFingerprint> = Vec::new();
         dups.try_reserve(self.entries.len())
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_fnv1a64_empty() {
         let h = fnv1a64(b"");
-        assert_ne!(h, 0); // valeur d'offset par défaut
+        assert_ne!(h, 0); // default offset value
     }
 
     #[test]

@@ -1,35 +1,35 @@
-//! audit_rotation.rs — Gestion de la rotation du journal d'audit ExoFS.
+//! audit_rotation.rs — Rotation management for the ExoFS audit log.
 //!
-//! La rotation déclenche la sérialisation du ring-buffer courant vers
-//! un segment archivé, puis remet les compteurs à zéro.
+//! Rotation triggers serialization of the current ring-buffer to
+//! an archived segment, then resets counters to zero.
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
-//!  - RECUR-01 : zéro récursion
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
+//!  - RECUR-01 : zero recursion
 
 extern crate alloc;
 use alloc::vec::Vec;
 
 use super::audit_entry::{AuditEntry, AUDIT_ENTRY_SIZE};
 use super::audit_log::{AuditLogStats, AUDIT_LOG};
-use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01: replaces arch::time
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RotationConfig
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration de la politique de rotation.
+/// Rotation policy configuration.
 #[derive(Clone, Debug)]
 pub struct RotationConfig {
-    /// Déclenche la rotation si le ring dépasse ce pourcentage de remplissage.
+    /// Triggers rotation if the ring exceeds this fill percentage.
     pub fill_threshold_pct: u8,
-    /// Déclenche la rotation si N ticks se sont écoulés depuis la dernière.
+    /// Triggers rotation if N ticks have elapsed since the last one.
     pub max_age_ticks: u64,
-    /// Nombre maximum de segments archivés conservés en mémoire.
+    /// Maximum number of archived segments retained in memory.
     pub max_segments: usize,
-    /// Si `true`, remet les compteurs du ring à zéro après rotation.
+    /// If `true`, resets ring counters to zero after rotation.
     pub reset_stats_on_rotate: bool,
 }
 
@@ -45,7 +45,7 @@ impl Default for RotationConfig {
 }
 
 impl RotationConfig {
-    /// Configuration minimale pour les tests.
+    /// Minimal configuration for tests.
     pub fn minimal() -> Self {
         RotationConfig {
             fill_threshold_pct: 1,
@@ -57,58 +57,58 @@ impl RotationConfig {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RotationReason — raison du déclenchement
+// RotationReason — trigger reason
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Raison pour laquelle la rotation a été déclenchée.
+/// Reason why rotation was triggered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RotationReason {
-    /// Ring proche de la saturation.
+    /// Ring near saturation.
     FillThreshold,
-    /// Âge maximum dépassé.
+    /// Maximum age exceeded.
     AgeExpired,
-    /// Rotation manuelle forcée.
+    /// Forced manual rotation.
     Manual,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuditSegment — segment archivé
+// AuditSegment — archived segment
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Segment d'audit archivé lors d'une rotation.
+/// Audit segment archived during a rotation.
 #[derive(Clone, Debug)]
 pub struct AuditSegment {
-    /// Numéro de séquence de la première entrée archivée.
+    /// Sequence number of the first archived entry.
     pub seq_start: u64,
-    /// Numéro de séquence de la dernière entrée archivée.
+    /// Sequence number of the last archived entry.
     pub seq_end: u64,
-    /// Tick du moment de la rotation.
+    /// Tick at the moment of rotation.
     pub rotated_at: u64,
-    /// Raison de la rotation.
+    /// Reason for rotation.
     pub reason: RotationReason,
-    /// Nombre d'entrées dans ce segment.
+    /// Number of entries in this segment.
     pub n_entries: u32,
-    /// Données brutes (entrées sérialisées).
+    /// Raw data (serialized entries).
     pub data: Vec<u8>,
 }
 
 impl AuditSegment {
-    /// Taille en octets du segment.
+    /// Segment size in bytes.
     pub fn byte_len(&self) -> usize {
         self.data.len()
     }
 
-    /// Nombre d'entrées.
+    /// Number of entries.
     pub fn len(&self) -> u32 {
         self.n_entries
     }
 
-    /// `true` si le segment ne contient aucune entrée.
+    /// `true` if the segment contains no entries.
     pub fn is_empty(&self) -> bool {
         self.n_entries == 0
     }
 
-    /// Désérialise une entrée à l'index `i` (0-based).
+    /// Deserializes an entry at index `i` (0-based).
     pub fn entry_at(&self, i: u32) -> Option<AuditEntry> {
         let off = (i as usize).checked_mul(AUDIT_ENTRY_SIZE)?;
         let end = off.checked_add(AUDIT_ENTRY_SIZE)?;
@@ -124,25 +124,25 @@ impl AuditSegment {
 // RotationReport
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Rapport produit après une rotation.
+/// Report produced after a rotation.
 #[derive(Clone, Debug)]
 pub struct RotationReport {
-    /// Nombre d'entrées archivées.
+    /// Number of archived entries.
     pub n_archived: u32,
-    /// Nombre de segments déjà présents après rotation.
+    /// Number of segments already present after rotation.
     pub n_segments: usize,
-    /// Ticks de démarrage.
+    /// Starting ticks.
     pub started_at: u64,
-    /// Ticks de fin.
+    /// Ending ticks.
     pub ended_at: u64,
-    /// Statistiques du log avant rotation.
+    /// Log statistics prior to rotation.
     pub stats_before: AuditLogStats,
-    /// Raison de la rotation.
+    /// Reason for rotation.
     pub reason: RotationReason,
 }
 
 impl RotationReport {
-    /// Durée de la rotation en ticks CPU.
+    /// Rotation duration in CPU ticks.
     pub fn duration_ticks(&self) -> u64 {
         self.ended_at.saturating_sub(self.started_at)
     }
@@ -152,17 +152,17 @@ impl RotationReport {
 // AuditRotation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Gestionnaire de rotation du journal d'audit.
+/// Audit log rotation manager.
 pub struct AuditRotation {
     config: RotationConfig,
-    /// Segments archivés (FIFO — le plus ancien est à l'index 0).
+    /// Archived segments (FIFO — oldest is at index 0).
     segments: Vec<AuditSegment>,
     last_rotate_tick: u64,
     total_rotations: u64,
 }
 
 impl AuditRotation {
-    /// Crée avec la configuration par défaut.
+    /// Creates with default configuration.
     pub fn new() -> Self {
         AuditRotation {
             config: RotationConfig::default(),
@@ -172,7 +172,7 @@ impl AuditRotation {
         }
     }
 
-    /// Crée avec une configuration explicite.
+    /// Creates with explicit configuration.
     pub fn with_config(config: RotationConfig) -> Self {
         AuditRotation {
             config,
@@ -182,9 +182,9 @@ impl AuditRotation {
         }
     }
 
-    // ── Politique de déclenchement ────────────────────────────────────────────
+    // ── Trigger policy ────────────────────────────────────────────────────────
 
-    /// Évalue si une rotation doit être déclenchée.
+    /// Evaluates whether a rotation should be triggered.
     pub fn should_rotate(&self) -> Option<RotationReason> {
         let stats = AUDIT_LOG.stats();
         if stats.ring_fill_pct >= self.config.fill_threshold_pct {
@@ -198,9 +198,9 @@ impl AuditRotation {
         None
     }
 
-    /// Lance une rotation si les conditions sont remplies.
+    /// Initiates a rotation if conditions are met.
     ///
-    /// Retourne `None` si aucune rotation n'était nécessaire.
+    /// Returns `None` if no rotation was necessary.
     pub fn maybe_rotate(&mut self) -> ExofsResult<Option<RotationReport>> {
         match self.should_rotate() {
             Some(reason) => Ok(Some(self.rotate_with_reason(reason)?)),
@@ -208,34 +208,34 @@ impl AuditRotation {
         }
     }
 
-    /// Rotation manuelle forcée.
+    /// Forced manual rotation.
     pub fn force_rotate(&mut self) -> ExofsResult<RotationReport> {
         self.rotate_with_reason(RotationReason::Manual)
     }
 
-    // ── Accès aux segments ────────────────────────────────────────────────────
+    // ── Segment access ────────────────────────────────────────────────────────
 
-    /// Nombre de segments archivés.
+    /// Number of archived segments.
     pub fn n_segments(&self) -> usize {
         self.segments.len()
     }
 
-    /// Segment à l'index `i` (0 = le plus ancien).
+    /// Segment at index `i` (0 = oldest).
     pub fn segment(&self, i: usize) -> Option<&AuditSegment> {
         self.segments.get(i)
     }
 
-    /// Supprime tous les segments archivés.
+    /// Removes all archived segments.
     pub fn clear_segments(&mut self) {
         self.segments.clear();
     }
 
-    /// Nombre total de rotations effectuées.
+    /// Total number of rotations performed.
     pub fn total_rotations(&self) -> u64 {
         self.total_rotations
     }
 
-    // ── Interne ───────────────────────────────────────────────────────────────
+    // ── Internal ──────────────────────────────────────────────────────────────
 
     fn rotate_with_reason(&mut self, reason: RotationReason) -> ExofsResult<RotationReport> {
         let started_at = exofs_ticks();
@@ -250,7 +250,7 @@ impl AuditRotation {
         )
         .map_err(|_| ExofsError::NoMemory)?;
 
-        // Sérialise toutes les entrées disponibles.
+        // Serialize all available entries.
         let seq_start = AUDIT_LOG.next_seq().wrapping_sub(avail as u64);
         let seq_end;
         let n_archived;
@@ -264,7 +264,7 @@ impl AuditRotation {
             seq_end = AUDIT_LOG.next_seq().wrapping_sub(1);
         }
 
-        // Crée le segment.
+        // Create the segment.
         let seg = AuditSegment {
             seq_start,
             seq_end,
@@ -274,7 +274,7 @@ impl AuditRotation {
             data,
         };
 
-        // Ajoute le segment, éjecte les plus anciens si nécessaire.
+        // Append the segment, evict oldest if necessary.
         self.segments
             .try_reserve(1)
             .map_err(|_| ExofsError::NoMemory)?;
@@ -283,7 +283,7 @@ impl AuditRotation {
             self.segments.remove(0);
         }
 
-        // Reset stats si configuré.
+        // Reset stats if configured.
         if self.config.reset_stats_on_rotate {
             AUDIT_LOG.reset_stats();
         }
@@ -375,7 +375,7 @@ mod tests {
         r.force_rotate().test_unwrap();
         fill_log(1);
         r.force_rotate().test_unwrap();
-        // Ne dépasse jamais max_segments.
+        // Never exceeds max_segments.
         assert!(r.n_segments() <= 2);
     }
 
@@ -384,7 +384,7 @@ mod tests {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
         let rep = r.force_rotate().test_unwrap();
-        // La durée est en ticks — peut être 0 sur machine rapide, jamais négatif.
+        // Duration is in ticks — may be 0 on fast hardware, never negative.
         assert!(rep.duration_ticks() < u64::MAX);
     }
 
@@ -408,8 +408,8 @@ mod tests {
     #[test]
     fn test_maybe_rotate_none_when_empty_log() {
         let r_no_fill = AuditRotation::new();
-        // Avec les seuils par défaut et un log peu rempli, pas de rotation.
-        let _ = r_no_fill; // Ne panique pas.
+        // With default thresholds and a low-fill log, no rotation.
+        let _ = r_no_fill; // Does not panic.
     }
 
     #[test]
@@ -433,8 +433,8 @@ mod tests {
 
     #[test]
     fn test_segment_is_empty_on_empty_log() {
-        // Ring vide → segment à 0 entrées.
-        // On teste via entry_at hors bornes.
+        // Empty ring -> 0-entry segment.
+        // Tested via out-of-bounds entry_at.
         let seg = AuditSegment {
             seq_start: 0,
             seq_end: 0,
@@ -452,7 +452,7 @@ mod tests {
         let mut r = AuditRotation::with_config(RotationConfig::minimal());
         fill_log(1);
         let rep = r.force_rotate().test_unwrap();
-        // stats_before.total_pushed doit être ≥ 1.
+        // stats_before.total_pushed must be >= 1.
         assert!(rep.stats_before.total_pushed >= 1);
     }
 

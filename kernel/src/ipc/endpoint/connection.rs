@@ -209,14 +209,17 @@ pub struct AcceptResult {
 /// # Return
 /// `Ok(ConnectResult)` with allocated ChannelId to receive reply.
 pub fn do_connect(
-    _ep_id: EndpointId,
+    ep_id: EndpointId,
     ep: &EndpointDesc,
     client: ThreadId,
     table: &CapTable,
     token: CapToken,
 ) -> Result<ConnectResult, IpcError> {
-    // Capability check: CONNECT required.
-    crate::ipc::capability_bridge::check_endpoint_access(table, token, Rights::IPC_CONNECT)
+    if ep_id != ep.id {
+        return Err(IpcError::InvalidParam);
+    }
+    // Capability check: CONNECT required and bound to target endpoint ID.
+    crate::ipc::capability_bridge::check_endpoint_access(table, token, ep.id, Rights::IPC_CONNECT)
         .map_err(|_| IpcError::PermissionDenied)?;
 
     if !ep.is_listening() {

@@ -1,15 +1,15 @@
-//! Lecteur de blob compressé ExoFS.
+//! ExoFS compressed blob reader.
 //!
-//! Ce module décompresse les blobs produits par `CompressWriter`.
-//! Il supporte :
-//!   - La détection automatique du format (magic ExoFS)
-//!   - La validation CRC32 après décompression
-//!   - La décompression brute (sans en-tête) pour usage interne
-//!   - Le suivi statistique des opérations
+//! This module decompresses blobs produced by `CompressWriter`.
+//! It supports:
+//!   - Automatic format detection (ExoFS magic)
+//!   - CRC32 validation after decompression
+//!   - Raw decompression (without header) for internal use
+//!   - Statistical tracking of operations
 //!
-//! RÈGLE OOM-02   : try_reserve avant tout push.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE OOM-02   : try_reserve before any push.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 use crate::fs::exofs::compress::algorithm::{
     validate_decompressed_size, CompressionAlgorithm,
@@ -24,28 +24,28 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statistiques de décompression
+// Decompression statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs de décompression.
+/// Decompression counters.
 #[derive(Debug, Default)]
 pub struct DecompressStats {
-    /// Nombre total de blobs décompressés.
+    /// Total number of decompressed blobs.
     pub total: u64,
-    /// Nombre de blobs LZ4 décompressés.
+    /// Number of LZ4 decompressed blobs.
     pub lz4: u64,
-    /// Nombre de blobs Zstd décompressés.
+    /// Number of Zstd decompressed blobs.
     pub zstd: u64,
-    /// Nombre de blobs passés en mode brut (pas d'en-tête).
+    /// Number of blobs passed through in raw mode (no header).
     pub raw: u64,
-    /// Erreurs CRC rencontrées.
+    /// CRC errors encountered.
     pub crc_errors: u64,
-    /// Erreurs de corruption structurelle.
+    /// Structural corruption errors.
     pub struct_errors: u64,
 }
 
 impl DecompressStats {
-    /// Crée un compteur vierge.
+    /// Creates clean counters.
     pub const fn new() -> Self {
         Self {
             total: 0,
@@ -57,7 +57,7 @@ impl DecompressStats {
         }
     }
 
-    /// Retourne le taux d'erreur CRC (0.0–1.0).
+    /// Returns CRC error rate (0.0–1.0).
     pub fn crc_error_rate(&self) -> f32 {
         if self.total == 0 {
             return 0.0;
@@ -70,17 +70,17 @@ impl DecompressStats {
 // DecompressReader
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Lecteur de blob compressé ExoFS.
+/// ExoFS compressed blob reader.
 ///
-/// Détecte automatiquement si le payload possède un en-tête ExoFS et
-/// décompresse en conséquence. Les blobs sans magic sont retournés bruts.
+/// Automatically detects if the payload has an ExoFS header and
+/// decompresses accordingly. Blobs without magic are returned raw.
 pub struct DecompressReader {
     stats: DecompressStats,
     validate_crc: bool,
 }
 
 impl DecompressReader {
-    /// Crée un lecteur avec validation CRC activée.
+    /// Creates a reader with CRC validation enabled.
     pub const fn new() -> Self {
         Self {
             stats: DecompressStats::new(),
@@ -88,7 +88,7 @@ impl DecompressReader {
         }
     }
 
-    /// Crée un lecteur sans validation CRC (mode rapide).
+    /// Creates a reader without CRC validation (fast mode).
     pub const fn fast_mode() -> Self {
         Self {
             stats: DecompressStats::new(),
@@ -96,10 +96,10 @@ impl DecompressReader {
         }
     }
 
-    /// Décompresse `payload` en détectant automatiquement le format.
+    /// Decompresses `payload` by automatically detecting the format.
     ///
-    /// - Si le payload commence par le magic ExoFS → décompresse via l'en-tête.
-    /// - Sinon → retourne une copie brute du payload.
+    /// - If payload starts with ExoFS magic -> decompresses via header.
+    /// - Otherwise -> returns raw copy of payload.
     pub fn decompress(&mut self, payload: &[u8]) -> ExofsResult<Vec<u8>> {
         if payload.len() >= 4 {
             let m = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
@@ -110,7 +110,7 @@ impl DecompressReader {
         self.decompress_raw_copy(payload)
     }
 
-    /// Décompresse en utilisant l'en-tête ExoFS (valide magic, version, CRC).
+    /// Decompresses using ExoFS header (validates magic, version, CRC).
     pub fn decompress_with_header(&mut self, payload: &[u8]) -> ExofsResult<Vec<u8>> {
         if payload.len() < COMPRESSION_HEADER_SIZE {
             self.stats.struct_errors = self.stats.struct_errors.saturating_add(1);
@@ -155,7 +155,7 @@ impl DecompressReader {
             }
         };
 
-        // Validation CRC.
+        // CRC validation.
         if self.validate_crc && algo != CompressionAlgorithm::None {
             let actual_crc = crc32_simple(&result);
             if actual_crc != header.crc32 {
@@ -168,7 +168,7 @@ impl DecompressReader {
         Ok(result)
     }
 
-    /// Décompresse sans en-tête (mode brut) avec l'algorithme explicite.
+    /// Decompresses without header (raw mode) with explicit algorithm.
     pub fn decompress_raw(
         &mut self,
         data: &[u8],
@@ -190,7 +190,7 @@ impl DecompressReader {
         Ok(result)
     }
 
-    /// Retourne `true` si le payload possède un en-tête ExoFS valide.
+    /// Returns `true` if the payload has a valid ExoFS header.
     pub fn is_compressed(payload: &[u8]) -> bool {
         if payload.len() < 4 {
             return false;
@@ -199,17 +199,17 @@ impl DecompressReader {
         m == COMPRESSION_MAGIC
     }
 
-    /// Retourne une référence aux statistiques accumulées.
+    /// Returns a reference to accumulated statistics.
     pub fn stats(&self) -> &DecompressStats {
         &self.stats
     }
 
-    /// Réinitialise les statistiques.
+    /// Resets statistics.
     pub fn reset_stats(&mut self) {
         self.stats = DecompressStats::new();
     }
 
-    // ── Méthode interne pour payload brut ─────────────────────────────────────
+    // ── Internal method for raw payload ───────────────────────────────────────
 
     fn decompress_raw_copy(&mut self, payload: &[u8]) -> ExofsResult<Vec<u8>> {
         let mut out = Vec::new();
@@ -285,7 +285,7 @@ mod tests {
     fn test_roundtrip_lz4() {
         let data = uniform(4096);
         let dec = roundtrip_lz4(&data);
-        // Si compressé, le roundtrip doit être identique.
+        // If compressed, roundtrip must be identical.
         let writer = CompressWriter::new(CompressPolicy::lz4_fast());
         let blob = writer.compress(&data).test_unwrap();
         if blob.algorithm == CompressionAlgorithm::Lz4 {
@@ -316,12 +316,12 @@ mod tests {
 
     #[test]
     fn test_bad_struct_size() {
-        // Payload avec juste le magic mais trop court → CorruptedStructure.
-        let bad = [0x45u8, 0x78, 0x4F, 0x46, 0x01, 0x02]; // EXOF... trop court
+        // Payload with just magic but too short -> CorruptedStructure.
+        let bad = [0x45u8, 0x78, 0x4F, 0x46, 0x01, 0x02]; // EXOF... too short
         let mut r = DecompressReader::new();
-        // Ne pas utiliser le magic ExoFS réel : ici on teste un magic random.
+        // Do not use real ExoFS magic: testing random magic here.
         let out = r.decompress(&bad);
-        // Soit Ok (pas de magic ExoFS) soit Err — pas de panique.
+        // Either Ok (no ExoFS magic) or Err — no panic.
         let _ = out;
     }
 
@@ -337,13 +337,13 @@ mod tests {
 
     #[test]
     fn test_fast_mode_no_crc_error() {
-        // En mode rapide (sans CRC), la décompression ne vérifie pas le CRC.
+        // In fast mode (no CRC), decompression does not verify CRC.
         let mut r = DecompressReader::fast_mode();
         let out = r.decompress(b"plain text no header").test_unwrap();
         assert_eq!(out.as_slice(), b"plain text no header");
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_roundtrip_zstd() {
@@ -352,7 +352,7 @@ mod tests {
         let blob = writer.compress(&data).test_unwrap();
         let mut r = DecompressReader::new();
         let dec = r.decompress(&blob.payload).test_unwrap();
-        // Si le writer a compressé (pas brut), le roundtrip est exact.
+        // If writer compressed (not raw), roundtrip is exact.
         if blob.algorithm != CompressionAlgorithm::None {
             assert_eq!(dec, data);
         }
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn test_fast_mode_correct_flag() {
         let r = DecompressReader::fast_mode();
-        // En mode rapide la validation CRC est désactivée — test indirect.
+        // In fast mode CRC validation is disabled — indirect test.
         assert_eq!(r.stats().crc_errors, 0);
     }
     #[test]

@@ -109,6 +109,15 @@ impl VmaTree {
         unsafe { Self::find_prev_node(self.root, addr) }
     }
 
+    /// Finds the leftmost VMA overlapping `[start, end)` in O(log n).
+    pub fn find_first_overlapping(&self, start: VirtAddr, end: VirtAddr) -> Option<&VmaDescriptor> {
+        if start.as_u64() >= end.as_u64() {
+            return None;
+        }
+        // SAFETY: read-only traversal under parent lock; VMAs in tree are non-overlapping.
+        unsafe { Self::find_first_overlapping_node(self.root, start, end) }
+    }
+
     /// Iterates over all VMAs in ascending order.
     pub fn iter(&self) -> VmaTreeIter<'_> {
         let stack = [core::ptr::null_mut::<VmaDescriptor>(); 64];
@@ -298,6 +307,33 @@ impl VmaTree {
             None
         } else {
             Some(&*best)
+        }
+    }
+
+    unsafe fn find_first_overlapping_node<'a>(
+        mut node: *mut VmaDescriptor,
+        start: VirtAddr,
+        end: VirtAddr,
+    ) -> Option<&'a VmaDescriptor> {
+        let mut best: *mut VmaDescriptor = core::ptr::null_mut();
+        while !node.is_null() {
+            let n = &*node;
+            if n.end.as_u64() > start.as_u64() {
+                best = node;
+                node = n.rb_left;
+            } else {
+                node = n.rb_right;
+            }
+        }
+        if best.is_null() {
+            None
+        } else {
+            let b = &*best;
+            if b.start.as_u64() < end.as_u64() {
+                Some(b)
+            } else {
+                None
+            }
         }
     }
 

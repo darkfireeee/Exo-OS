@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Politique et Limites
+// ExoFS Quota — Policy and Limits
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─── QuotaKind ────────────────────────────────────────────────────────────────
 
-/// Type d'entité soumise à un quota.
+/// Type of entity subject to a quota.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum QuotaKind {
@@ -35,27 +35,27 @@ impl QuotaKind {
 
 // ─── QuotaLimits ─────────────────────────────────────────────────────────────
 
-/// Limites de quota pour une entité (octets, blobs, inodes).
+/// Quota limits for an entity (bytes, blobs, inodes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuotaLimits {
-    /// Limite souple en octets (avertissement).
+    /// Soft limit in bytes (warning).
     pub soft_bytes: u64,
-    /// Limite dure en octets (blocage immédiat).
+    /// Hard limit in bytes (immediate denial).
     pub hard_bytes: u64,
-    /// Limite souple en nombre de blobs.
+    /// Soft limit in number of blobs.
     pub soft_blobs: u64,
-    /// Limite dure en nombre de blobs.
+    /// Hard limit in number of blobs.
     pub hard_blobs: u64,
-    /// Limite souple en nombre d'inodes.
+    /// Soft limit in number of inodes.
     pub soft_inodes: u64,
-    /// Limite dure en nombre d'inodes.
+    /// Hard limit in number of inodes.
     pub hard_inodes: u64,
-    /// Durée de grâce après dépassement soft (en ticks).
+    /// Grace period duration after soft breach (in ticks).
     pub grace_ticks: u64,
 }
 
 impl QuotaLimits {
-    /// Quotas illimités (valeur par défaut).
+    /// Unlimited quotas (default value).
     pub const fn unlimited() -> Self {
         Self {
             soft_bytes: u64::MAX,
@@ -68,7 +68,7 @@ impl QuotaLimits {
         }
     }
 
-    /// Valide les limites : soft ≤ hard pour chaque dimension.
+    /// Validates limits: soft <= hard for each dimension.
     pub fn validate(&self) -> ExofsResult<()> {
         if !Self::pair_is_valid(self.soft_bytes, self.hard_bytes) {
             return Err(ExofsError::InvalidArgument);
@@ -86,12 +86,12 @@ impl QuotaLimits {
         soft == u64::MAX || hard == u64::MAX || soft <= hard
     }
 
-    /// Vrai si toutes les limites sont à MAX (non contraignant).
+    /// True if all limits are at MAX (non-constraining).
     pub fn is_unlimited(&self) -> bool {
         self.hard_bytes == u64::MAX && self.hard_blobs == u64::MAX && self.hard_inodes == u64::MAX
     }
 
-    /// Calcul du pourcentage d'utilisation bytes en ‰ (ARITH-02).
+    /// Calculation of byte usage percentage in ‰ (ARITH-02).
     pub fn bytes_usage_ppt(&self, used: u64) -> u64 {
         if self.hard_bytes == 0 || self.hard_bytes == u64::MAX {
             return 0;
@@ -102,7 +102,7 @@ impl QuotaLimits {
             .min(1000)
     }
 
-    /// Calcul du pourcentage d'utilisation blobs en ‰.
+    /// Calculation of blob usage percentage in ‰.
     pub fn blobs_usage_ppt(&self, used: u64) -> u64 {
         if self.hard_blobs == 0 || self.hard_blobs == u64::MAX {
             return 0;
@@ -113,7 +113,7 @@ impl QuotaLimits {
             .min(1000)
     }
 
-    /// Calcul du pourcentage d'utilisation inodes en ‰.
+    /// Calculation of inode usage percentage in ‰.
     pub fn inodes_usage_ppt(&self, used: u64) -> u64 {
         if self.hard_inodes == 0 || self.hard_inodes == u64::MAX {
             return 0;
@@ -124,37 +124,37 @@ impl QuotaLimits {
             .min(1000)
     }
 
-    /// Vrai si la limite dure bytes est dépassée.
+    /// True if hard byte limit is exceeded.
     pub fn bytes_hard_exceeded(&self, used: u64) -> bool {
         self.hard_bytes != u64::MAX && used >= self.hard_bytes
     }
 
-    /// Vrai si la limite souple bytes est dépassée.
+    /// True if soft byte limit is exceeded.
     pub fn bytes_soft_exceeded(&self, used: u64) -> bool {
         self.soft_bytes != u64::MAX && used >= self.soft_bytes
     }
 
-    /// Vrai si la limite dure blobs est dépassée.
+    /// True if hard blob limit is exceeded.
     pub fn blobs_hard_exceeded(&self, used: u64) -> bool {
         self.hard_blobs != u64::MAX && used >= self.hard_blobs
     }
 
-    /// Vrai si la limite souple blobs est dépassée.
+    /// True if soft blob limit is exceeded.
     pub fn blobs_soft_exceeded(&self, used: u64) -> bool {
         self.soft_blobs != u64::MAX && used >= self.soft_blobs
     }
 
-    /// Vrai si la limite dure inodes est dépassée.
+    /// True if hard inode limit is exceeded.
     pub fn inodes_hard_exceeded(&self, used: u64) -> bool {
         self.hard_inodes != u64::MAX && used >= self.hard_inodes
     }
 
-    /// Vrai si la limite souple inodes est dépassée.
+    /// True if soft inode limit is exceeded.
     pub fn inodes_soft_exceeded(&self, used: u64) -> bool {
         self.soft_inodes != u64::MAX && used >= self.soft_inodes
     }
 
-    /// Octets disponibles avant la limite dure (saturating).
+    /// Bytes available before hard limit (saturating).
     pub fn bytes_remaining(&self, used: u64) -> u64 {
         if self.hard_bytes == u64::MAX {
             return u64::MAX;
@@ -162,7 +162,7 @@ impl QuotaLimits {
         self.hard_bytes.saturating_sub(used)
     }
 
-    /// Blobs disponibles avant la limite dure.
+    /// Blobs available before hard limit.
     pub fn blobs_remaining(&self, used: u64) -> u64 {
         if self.hard_blobs == u64::MAX {
             return u64::MAX;
@@ -170,7 +170,7 @@ impl QuotaLimits {
         self.hard_blobs.saturating_sub(used)
     }
 
-    /// Inodes disponibles avant la limite dure.
+    /// Inodes available before hard limit.
     pub fn inodes_remaining(&self, used: u64) -> u64 {
         if self.hard_inodes == u64::MAX {
             return u64::MAX;
@@ -181,24 +181,24 @@ impl QuotaLimits {
 
 // ─── PolicyFlags ─────────────────────────────────────────────────────────────
 
-/// Drapeaux de comportement d'une politique de quota.
+/// Behavior flags of a quota policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyFlags(pub u32);
 
 impl PolicyFlags {
-    /// Politique activée.
+    /// Policy enabled.
     pub const ENABLED: PolicyFlags = PolicyFlags(1 << 0);
-    /// Journaliser les dépassements soft.
+    /// Log soft breaches.
     pub const LOG_SOFT: PolicyFlags = PolicyFlags(1 << 1);
-    /// Journaliser les refus hard.
+    /// Log hard denials.
     pub const LOG_HARD: PolicyFlags = PolicyFlags(1 << 2);
-    /// Envoyer une alerte lors d'un dépassement soft.
+    /// Send an alert upon soft breach.
     pub const ALERT_SOFT: PolicyFlags = PolicyFlags(1 << 3);
-    /// Héritage des limites depuis le parent namespace.
+    /// Inheritance of limits from parent namespace.
     pub const INHERIT: PolicyFlags = PolicyFlags(1 << 4);
-    /// Mode strict : soft = hard (pas de grâce).
+    /// Strict mode: soft = hard (no grace period).
     pub const STRICT: PolicyFlags = PolicyFlags(1 << 5);
-    /// Activer la journalisation des modifications de limites.
+    /// Enable logging of limit modifications.
     pub const AUDIT_LIMITS: PolicyFlags = PolicyFlags(1 << 6);
 
     pub const fn default_flags() -> Self {
@@ -234,13 +234,13 @@ impl PolicyFlags {
 
 // ─── QuotaPolicy ─────────────────────────────────────────────────────────────
 
-/// Politique de quota associant limites, kind et comportement.
+/// Quota policy associating limits, kind, and behavior.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaPolicy {
     pub kind: QuotaKind,
     pub limits: QuotaLimits,
     pub flags: PolicyFlags,
-    /// Nom court ASCII[32] de la politique (paddé de zéros).
+    /// ASCII[32] short name of the policy (zero-padded).
     pub name: [u8; 32],
 }
 
@@ -284,7 +284,7 @@ impl QuotaPolicy {
         self.flags.is_strict()
     }
 
-    /// Retourne une politique stricte : soft = hard sur chaque dimension.
+    /// Returns a strict policy: soft = hard on each dimension.
     pub fn make_strict(mut self) -> Self {
         self.limits.soft_bytes = self.limits.hard_bytes;
         self.limits.soft_blobs = self.limits.hard_blobs;
@@ -294,34 +294,34 @@ impl QuotaPolicy {
         self
     }
 
-    /// Retourne la politique avec de nouvelles limites après validation.
+    /// Returns the policy with new limits after validation.
     pub fn with_limits(mut self, lim: QuotaLimits) -> ExofsResult<Self> {
         lim.validate()?;
         self.limits = lim;
         Ok(self)
     }
 
-    /// Vrai si les bytes dépassent la limite dure.
+    /// True if bytes exceed hard limit.
     pub fn bytes_hard_exceeded(&self, used: u64) -> bool {
         self.limits.bytes_hard_exceeded(used)
     }
 
-    /// Vrai si les bytes dépassent la limite souple.
+    /// True if bytes exceed soft limit.
     pub fn bytes_soft_exceeded(&self, used: u64) -> bool {
         self.limits.bytes_soft_exceeded(used)
     }
 
-    /// Vrai si les blobs dépassent la limite dure.
+    /// True if blobs exceed hard limit.
     pub fn blobs_hard_exceeded(&self, used: u64) -> bool {
         self.limits.blobs_hard_exceeded(used)
     }
 
-    /// Vrai si les inodes dépassent la limite dure.
+    /// True if inodes exceed hard limit.
     pub fn inodes_hard_exceeded(&self, used: u64) -> bool {
         self.limits.inodes_hard_exceeded(used)
     }
 
-    /// Score de sévérité (ARITH-02) : max des 3 taux en ‰.
+    /// Severity score (ARITH-02): max of the 3 ratios in ‰.
     pub fn severity_score(&self, bytes: u64, blobs: u64, inodes: u64) -> u64 {
         let sb = self.limits.bytes_usage_ppt(bytes);
         let bl = self.limits.blobs_usage_ppt(blobs);
@@ -332,11 +332,11 @@ impl QuotaPolicy {
 
 // ─── PolicyPresets ────────────────────────────────────────────────────────────
 
-/// Préréglages de politique courants.
+/// Common policy presets.
 pub struct PolicyPresets;
 
 impl PolicyPresets {
-    /// Politique utilisateur standard (1 GiB octets, 100k blobs, 50k inodes).
+    /// Standard user policy (1 GiB bytes, 100k blobs, 50k inodes).
     pub fn standard_user() -> QuotaPolicy {
         QuotaPolicy::named(
             QuotaKind::User,
@@ -348,12 +348,12 @@ impl PolicyPresets {
                 hard_blobs: 100_000,
                 soft_inodes: 45_000,
                 hard_inodes: 50_000,
-                grace_ticks: 3_600_000_000, // ~1h en µs
+                grace_ticks: 3_600_000_000, // ~1h in µs
             },
         )
     }
 
-    /// Politique projet (10 GiB, 1M blobs, 200k inodes).
+    /// Project policy (10 GiB, 1M blobs, 200k inodes).
     pub fn large_project() -> QuotaPolicy {
         QuotaPolicy::named(
             QuotaKind::Project,
@@ -370,7 +370,7 @@ impl PolicyPresets {
         )
     }
 
-    /// Politique sandbox restrictive (10 MiB, 1000 blobs).
+    /// Restrictive sandbox policy (10 MiB, 1000 blobs).
     pub fn sandbox() -> QuotaPolicy {
         QuotaPolicy::named(
             QuotaKind::User,
@@ -388,7 +388,7 @@ impl PolicyPresets {
         .make_strict()
     }
 
-    /// Politique groupe illimitée.
+    /// Unlimited group policy.
     pub fn unlimited_group() -> QuotaPolicy {
         QuotaPolicy::default_policy(QuotaKind::Group)
     }

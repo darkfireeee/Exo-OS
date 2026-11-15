@@ -1,9 +1,9 @@
-//! relation_walker.rs — Parcours itératif du graphe de relations ExoFS
+//! relation_walker.rs — Iterative traversal of the ExoFS relation graph
 //!
-//! Règles appliquées :
-//!  - RECUR-01 : zéro récursion — BFS/DFS à file/pile explicite
-//!  - OOM-02   : try_reserve avant tout push
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - RECUR-01: zero recursion — BFS/DFS with explicit queue/stack
+//!  - OOM-02: try_reserve before any push
+//!  - ARITH-02: checked arithmetic
 
 extern crate alloc;
 use alloc::collections::{BTreeMap, VecDeque};
@@ -14,44 +14,44 @@ use super::relation_type::RelationKind;
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Profondeur maximale de parcours par défaut.
+/// Default maximum traversal depth.
 pub const WALKER_DEFAULT_MAX_DEPTH: u32 = 64;
 
-/// Nombre maximum de nœuds visités par défaut.
+/// Default maximum number of visited nodes.
 pub const WALKER_DEFAULT_MAX_NODES: usize = 4096;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WalkResult
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un parcours de graphe.
+/// Result of a graph traversal.
 #[derive(Clone, Debug, Default)]
 pub struct WalkResult {
-    /// Tous les blobs visités (ordre de découverte).
+    /// All visited blobs (discovery order).
     pub visited: Vec<BlobId>,
-    /// Profondeur maximum atteinte.
+    /// Maximum depth reached.
     pub depth_reached: u32,
-    /// Nombre de transitions empruntées.
+    /// Number of edges traversed.
     pub n_edges_traversed: u32,
-    /// `true` si le parcours a été interrompu (limite dépassée).
+    /// `true` if the traversal was interrupted (limit exceeded).
     pub truncated: bool,
 }
 
 impl WalkResult {
-    /// `true` si le nœud a été visité.
+    /// `true` if the node was visited.
     pub fn contains(&self, blob: &BlobId) -> bool {
         self.visited.iter().any(|b| b.as_bytes() == blob.as_bytes())
     }
 
-    /// Nombre de nœuds visités.
+    /// Number of visited nodes.
     pub fn n_visited(&self) -> usize {
         self.visited.len()
     }
 
-    /// `true` si le résultat est vide.
+    /// `true` if the result is empty.
     pub fn is_empty(&self) -> bool {
         self.visited.is_empty()
     }
@@ -61,16 +61,16 @@ impl WalkResult {
 // WalkOptions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Options configurables pour un parcours.
+/// Configurable options for a traversal.
 #[derive(Clone, Debug)]
 pub struct WalkOptions {
-    /// Profondeur maximale.
+    /// Maximum depth.
     pub max_depth: u32,
-    /// Nombre maximum de nœuds à visiter.
+    /// Maximum number of nodes to visit.
     pub max_nodes: usize,
-    /// Filtrer par kind (aucun filtre si `None`).
+    /// Filter by kind (no filter if `None`).
     pub kind_filter: Option<RelationKind>,
-    /// Inclure les boucles (arc de A vers A).
+    /// Include self loops (edge from A to A).
     pub include_self_loops: bool,
 }
 
@@ -86,12 +86,12 @@ impl Default for WalkOptions {
 }
 
 impl WalkOptions {
-    /// Options pour un parcours en largeur (par défaut).
+    /// Options for breadth-first traversal (default).
     pub fn bfs_default() -> Self {
         Self::default()
     }
 
-    /// Options restreintes (faible profondeur, peu de nœuds).
+    /// Restricted options (shallow depth, few nodes).
     pub fn shallow(depth: u32) -> Self {
         WalkOptions {
             max_depth: depth,
@@ -100,7 +100,7 @@ impl WalkOptions {
         }
     }
 
-    /// Options avec filtre sur le type de relation.
+    /// Options with filter on relation kind.
     pub fn with_kind(kind: RelationKind) -> Self {
         WalkOptions {
             kind_filter: Some(kind),
@@ -113,17 +113,17 @@ impl WalkOptions {
 // RelationWalker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parcours itératif du graphe de relations.
+/// Iterative traversal of the relation graph.
 ///
-/// Supporte BFS (breadth-first) et DFS (depth-first itératif).
-/// RECUR-01 : aucune récursion.
+/// Supports BFS (breadth-first) and DFS (iterative depth-first).
+/// RECUR-01: no recursion.
 pub struct RelationWalker {
     pub max_depth: u32,
     pub options: WalkOptions,
 }
 
 impl RelationWalker {
-    /// Crée un walker avec la profondeur maximale donnée.
+    /// Creates a walker with the given maximum depth.
     pub fn new(max_depth: u32) -> Self {
         RelationWalker {
             max_depth,
@@ -134,7 +134,7 @@ impl RelationWalker {
         }
     }
 
-    /// Crée un walker avec des options complètes.
+    /// Creates a walker with full options.
     pub fn with_options(options: WalkOptions) -> Self {
         let max_depth = options.max_depth;
         RelationWalker { max_depth, options }
@@ -142,9 +142,9 @@ impl RelationWalker {
 
     // ── BFS ──────────────────────────────────────────────────────────────────
 
-    /// BFS depuis `start`.
+    /// BFS starting from `start`.
     ///
-    /// Itératif (RECUR-01) : utilise `VecDeque` comme file.
+    /// Iterative (RECUR-01): uses `VecDeque` as queue.
     pub fn bfs(&self, start: &BlobId) -> ExofsResult<WalkResult> {
         let mut visited: BTreeMap<[u8; 32], u32> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
@@ -194,9 +194,9 @@ impl RelationWalker {
 
     // ── DFS ──────────────────────────────────────────────────────────────────
 
-    /// DFS depuis `start`.
+    /// DFS starting from `start`.
     ///
-    /// Itératif (RECUR-01) : utilise `Vec` comme pile explicite.
+    /// Iterative (RECUR-01): uses `Vec` as explicit stack.
     pub fn dfs(&self, start: &BlobId) -> ExofsResult<WalkResult> {
         let mut visited: BTreeMap<[u8; 32], ()> = BTreeMap::new();
         let mut stack: Vec<(BlobId, u32)> = Vec::new();
@@ -233,7 +233,7 @@ impl RelationWalker {
             }
 
             let neighbors = self.collect_neighbors(&node);
-            // Inversion pour conserver l'ordre naturel dans la pile.
+            // Reverse to preserve natural order in the stack.
             for nbr in neighbors.into_iter().rev() {
                 if !visited.contains_key(nbr.as_bytes()) {
                     stack.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -249,23 +249,23 @@ impl RelationWalker {
         Ok(result)
     }
 
-    // ── Recherche de chemin ───────────────────────────────────────────────────
+    // ── Path finding ──────────────────────────────────────────────────────────
 
-    /// BFS jusqu'à un nœud cible.  Retourne le chemin ou `None` si inaccessible.
+    /// BFS up to a target node. Returns the path or `None` if unreachable.
     ///
-    /// Le chemin retourné inclut `start` et `target`.
+    /// The returned path includes `start` and `target`.
     pub fn find_path(&self, start: &BlobId, target: &BlobId) -> ExofsResult<Option<Vec<BlobId>>> {
-        // parent[node] = parent dans l'arbre BFS.
+        // parent[node] = parent in the BFS tree.
         let mut parent: BTreeMap<[u8; 32], [u8; 32]> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
-        let sentinel = [0xFFu8; 32]; // racine sans parent
+        let sentinel = [0xFFu8; 32]; // root without parent
 
         parent.insert(*start.as_bytes(), sentinel);
         queue.push_back((*start, 0));
 
         while let Some((node, depth)) = queue.pop_front() {
             if node.as_bytes() == target.as_bytes() {
-                // Reconstruction du chemin (RECUR-01 : boucle while)
+                // Path reconstruction (RECUR-01: while loop)
                 let mut path: Vec<BlobId> = Vec::new();
                 let mut cur = *target.as_bytes();
                 loop {
@@ -297,16 +297,16 @@ impl RelationWalker {
         Ok(None)
     }
 
-    /// `true` si `target` est accessible depuis `start`.
+    /// `true` if `target` is reachable from `start`.
     pub fn is_reachable(&self, start: &BlobId, target: &BlobId) -> ExofsResult<bool> {
-        // Optimisation: si start == target, c'est immédiatement vrai.
+        // Optimization: if start == target, it is immediately true.
         if start.as_bytes() == target.as_bytes() {
             return Ok(true);
         }
         Ok(self.find_path(start, target)?.is_some())
     }
 
-    // ── Helpers privés ───────────────────────────────────────────────────────
+    // ── Private helpers ──────────────────────────────────────────────────────
 
     fn collect_neighbors(&self, node: &BlobId) -> Vec<BlobId> {
         match self.options.kind_filter {
@@ -317,23 +317,23 @@ impl RelationWalker {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationStepWalker — parcours pas-à-pas
+// RelationStepWalker — step-by-step traversal
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'un pas du walker pas-à-pas.
+/// Result of a single step of the step-by-step walker.
 #[derive(Debug)]
 pub enum StepResult {
-    /// Un nouveau nœud a été découvert.
+    /// A new node has been discovered.
     Visited(BlobId),
-    /// Parcours terminé (aucun nœud restant).
+    /// Traversal finished (no remaining nodes).
     Done,
-    /// Erreur fatale.
+    /// Fatal error.
     Error(ExofsError),
 }
 
-/// Walker pas-à-pas : chaque appel à `step()` découvre un nœud.
+/// Step-by-step walker: each call to `step()` discovers one node.
 ///
-/// Utile pour intercaler la découverte avec d'autres traitements.
+/// Useful for interleaving discovery with other processing.
 pub struct RelationStepWalker {
     options: WalkOptions,
     queue: VecDeque<(BlobId, u32)>,
@@ -342,7 +342,7 @@ pub struct RelationStepWalker {
 }
 
 impl RelationStepWalker {
-    /// Crée un walker pas-à-pas depuis `start`.
+    /// Creates a step-by-step walker starting from `start`.
     pub fn new(start: BlobId, options: WalkOptions) -> ExofsResult<Self> {
         let mut visited: BTreeMap<[u8; 32], u32> = BTreeMap::new();
         let mut queue: VecDeque<(BlobId, u32)> = VecDeque::new();
@@ -356,7 +356,7 @@ impl RelationStepWalker {
         })
     }
 
-    /// Avance d'un nœud dans le BFS.
+    /// Advances by one node in the BFS.
     pub fn step(&mut self) -> StepResult {
         let (node, depth) = match self.queue.pop_front() {
             None => return StepResult::Done,
@@ -400,7 +400,7 @@ impl RelationStepWalker {
         StepResult::Visited(node)
     }
 
-    /// Achève le parcours complet et retourne le résultat.
+    /// Completes the full traversal and returns the result.
     pub fn finish(mut self) -> WalkResult {
         loop {
             match self.step() {
@@ -411,24 +411,24 @@ impl RelationStepWalker {
         self.result
     }
 
-    /// `true` si la file est vide (parcours terminé).
+    /// `true` if the queue is empty (traversal completed).
     pub fn is_done(&self) -> bool {
         self.queue.is_empty()
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions utilitaires
+// Utility functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tous les blobs accessibles depuis `start` sans limite de profondeur.
+/// All blobs reachable from `start` without depth limit.
 pub fn reachable_from_all(start: &BlobId) -> ExofsResult<Vec<BlobId>> {
     let w = RelationWalker::new(u32::MAX / 2);
     Ok(w.bfs(start)?.visited)
 }
 
-/// Distance en nombre de sauts entre deux blobs.
-/// Retourne `None` si `target` est inaccessible.
+/// Hop distance between two blobs.
+/// Returns `None` if `target` is unreachable.
 pub fn hop_distance(start: &BlobId, target: &BlobId) -> ExofsResult<Option<u32>> {
     if start.as_bytes() == target.as_bytes() {
         return Ok(Some(0));
@@ -443,7 +443,7 @@ pub fn hop_distance(start: &BlobId, target: &BlobId) -> ExofsResult<Option<u32>>
     }
 }
 
-/// Collecte tous les blobs à exactement `depth` sauts de `start`.
+/// Collects all blobs at exactly `depth` hops from `start`.
 pub fn nodes_at_depth(start: &BlobId, depth: u32) -> ExofsResult<Vec<BlobId>> {
     let mut current_layer: Vec<BlobId> = Vec::new();
     current_layer
@@ -509,7 +509,7 @@ mod tests {
     fn test_bfs_isolated_node() {
         let w = RelationWalker::new(10);
         let res = w.bfs(&b(99)).test_unwrap();
-        // Pas d'arcs depuis ce nœud → seul lui est visité.
+        // No edges from this node -> only it is visited.
         assert_eq!(res.n_visited(), 1);
         assert_eq!(res.depth_reached, 0);
         assert!(!res.truncated);
@@ -583,7 +583,7 @@ mod tests {
     fn test_step_walker_is_done() {
         let opts = WalkOptions::default();
         let sw = RelationStepWalker::new(b(10), opts).test_unwrap();
-        // La queue contient le nœud de départ donc !is_done().
+        // Queue contains the start node, so !is_done().
         assert!(!sw.is_done());
     }
 
@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn test_nodes_at_depth_zero() {
         let res = nodes_at_depth(&b(60), 0).test_unwrap();
-        // À profondeur 0, on retourne le nœud de départ.
+        // At depth 0, returns the start node.
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].as_bytes(), b(60).as_bytes());
     }

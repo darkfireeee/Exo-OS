@@ -1,12 +1,12 @@
-//! snapshot_protect.rs — Protection et rétention WORM des snapshots ExoFS
+//! snapshot_protect.rs — Protection and WORM retention of ExoFS snapshots
 //!
-//! Gère le flag PROTECTED ainsi qu'une politique de rétention immuable
-//! (mode WORM : Write-Once-Read-Many). Un snapshot sous WORM ne peut
-//! être déprotégé qu'après expiration de la durée de rétention.
+//! Manages the PROTECTED flag as well as an immutable retention policy
+//! (WORM mode: Write-Once-Read-Many). A snapshot under WORM cannot
+//! be unprotected until the retention duration has expired.
 //!
-//! Règles spec :
-//!   ARITH-02 : checked_add pour timestamps
-//!   OOM-02   : try_reserve avant chaque push
+//! Spec rules:
+//!   ARITH-02 : checked_add for timestamps
+//!   OOM-02   : try_reserve before each push
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -24,20 +24,20 @@ use crate::scheduler::sync::spinlock::SpinLock;
 pub static SNAPSHOT_PROTECT: SnapshotProtect = SnapshotProtect::new_const();
 
 // ─────────────────────────────────────────────────────────────
-// Politique WORM
+// WORM policy
 // ─────────────────────────────────────────────────────────────
 
-/// Politique WORM pour un snapshot
+/// WORM policy for a snapshot
 #[derive(Debug, Clone, Copy)]
 pub struct WormPolicy {
-    /// Timestamp d'activation (ticks)
+    /// Activation timestamp (ticks)
     pub activated_at: u64,
-    /// Durée de rétention (ticks) — 0 = permanente
+    /// Retention duration (ticks) — 0 = permanent
     pub retain_ticks: u64,
 }
 
 impl WormPolicy {
-    /// Retourne true si la politique a expiré
+    /// Returns true if the policy has expired
     pub fn is_expired(&self, now: u64) -> bool {
         if self.retain_ticks == 0 {
             return false;
@@ -45,7 +45,7 @@ impl WormPolicy {
         now.saturating_sub(self.activated_at) >= self.retain_ticks
     }
 
-    /// Timestamp d'expiration (0 si permanente)
+    /// Expiration timestamp (0 if permanent)
     pub fn expires_at(&self) -> u64 {
         if self.retain_ticks == 0 {
             return 0;
@@ -55,16 +55,16 @@ impl WormPolicy {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Entrée de protection
+// Protection entry
 // ─────────────────────────────────────────────────────────────
 
-/// Entrée de protection d'un snapshot
+/// Snapshot protection entry
 #[derive(Debug, Clone)]
 pub struct ProtectEntry {
     pub snap_id: SnapshotId,
     pub worm: Option<WormPolicy>,
     pub protected_at: u64,
-    /// Note libre (utf-8, max 64 octets)
+    /// Freeform note (UTF-8, max 64 bytes)
     pub note: [u8; 64],
 }
 
@@ -109,14 +109,14 @@ impl SnapshotProtect {
         }
     }
 
-    // ── Protéger ────────────────────────────────────────────────────
+    // ── Protect ────────────────────────────────────────────────────
 
-    /// Protège un snapshot (flag PROTECTED)
+    /// Protects a snapshot (PROTECTED flag)
     pub fn protect(&self, snap_id: SnapshotId, now: u64) -> ExofsResult<()> {
         self.protect_inner(snap_id, None, now)
     }
 
-    /// Protège un snapshot avec rétention WORM (`retain_ticks` ticks)
+    /// Protects a snapshot with WORM retention (`retain_ticks` ticks)
     pub fn protect_worm(
         &self,
         snap_id: SnapshotId,
@@ -136,10 +136,10 @@ impl SnapshotProtect {
         worm: Option<WormPolicy>,
         now: u64,
     ) -> ExofsResult<()> {
-        // Vérifier que le snapshot existe
+        // Verify snapshot exists
         let _ = SNAPSHOT_LIST.get_ref(snap_id)?;
 
-        // Poser le flag dans le registre
+        // Set flag in registry
         SNAPSHOT_LIST.set_flags(snap_id, flags::PROTECTED)?;
 
         let entry = ProtectEntry::new(snap_id, worm, now);
@@ -156,15 +156,15 @@ impl SnapshotProtect {
         Ok(())
     }
 
-    // ── Déprotéger ───────────────────────────────────────────────────
+    // ── Unprotect ───────────────────────────────────────────────────
 
-    /// Retire la protection d'un snapshot
+    /// Removes protection from a snapshot
     pub fn unprotect(&self, snap_id: SnapshotId, now: u64) -> ExofsResult<()> {
         let mut guard = self.entries.lock();
         let entry = guard.get(&snap_id.0).ok_or(ExofsError::NotFound)?;
 
         if !entry.can_unprotect(now) {
-            return Err(ExofsError::InvalidState); // WORM non expiré
+            return Err(ExofsError::InvalidState); // WORM not expired
         }
 
         let was_worm = entry.is_worm();
@@ -179,21 +179,21 @@ impl SnapshotProtect {
         Ok(())
     }
 
-    // ── Requêtes ────────────────────────────────────────────────────
+    // ── Queries ─────────────────────────────────────────────────────
 
-    /// Retourne true si le snapshot est protégé
+    /// Returns true if the snapshot is protected
     pub fn is_protected(&self, snap_id: SnapshotId) -> bool {
         let guard = self.entries.lock();
         guard.contains_key(&snap_id.0)
     }
 
-    /// Retourne l'entrée de protection (si elle existe)
+    /// Returns the protection entry (if it exists)
     pub fn get_entry(&self, snap_id: SnapshotId) -> Option<ProtectEntry> {
         let guard = self.entries.lock();
         guard.get(&snap_id.0).cloned()
     }
 
-    /// Retourne true si le snapshot est sous WORM et non expiré
+    /// Returns true if the snapshot is under WORM and not expired
     pub fn is_worm_active(&self, snap_id: SnapshotId, now: u64) -> bool {
         let guard = self.entries.lock();
         guard
@@ -202,7 +202,7 @@ impl SnapshotProtect {
             .map_or(false, |w| !w.is_expired(now))
     }
 
-    // ── Statistiques ────────────────────────────────────────────────
+    // ── Statistics ──────────────────────────────────────────────────
 
     pub fn n_protected(&self) -> usize {
         self.n_protected.load(Ordering::Acquire)
@@ -233,9 +233,9 @@ impl SnapshotProtect {
         }
     }
 
-    // ── Liste des entrées expirées ────────────────────────────────────
+    // ── Expired entries list ─────────────────────────────────────────
 
-    /// Retourne les snapshots WORM dont la rétention a expiré
+    /// Returns WORM snapshots whose retention has expired
     pub fn expired_worm(&self, now: u64) -> ExofsResult<Vec<SnapshotId>> {
         let guard = self.entries.lock();
         let mut out: Vec<SnapshotId> = Vec::new();
@@ -250,7 +250,7 @@ impl SnapshotProtect {
         Ok(out)
     }
 
-    /// Retourne tous les snapshots protégés (ids)
+    /// Returns all protected snapshots (IDs)
     pub fn all_protected(&self) -> ExofsResult<Vec<SnapshotId>> {
         let guard = self.entries.lock();
         let mut out: Vec<SnapshotId> = Vec::new();
@@ -262,7 +262,7 @@ impl SnapshotProtect {
         Ok(out)
     }
 
-    // ── Ajout de note ────────────────────────────────────────────────
+    // ── Note addition ───────────────────────────────────────────────
 
     pub fn set_note(&self, snap_id: SnapshotId, note: &[u8]) -> ExofsResult<()> {
         let mut guard = self.entries.lock();
@@ -275,7 +275,7 @@ impl SnapshotProtect {
         Ok(())
     }
 
-    // ── Nettoyage ────────────────────────────────────────────────────
+    // ── Cleanup ─────────────────────────────────────────────────────
 
     pub fn clear(&self) {
         let mut guard = self.entries.lock();
@@ -286,7 +286,7 @@ impl SnapshotProtect {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Statistiques
+// Statistics
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
@@ -337,7 +337,7 @@ mod tests {
         let p = SnapshotProtect::new_const();
         p.protect(SnapshotId(1), 0).test_unwrap();
         assert!(p.is_protected(SnapshotId(1)));
-        // Flag dans la liste
+        // Flag in list
         let snap = SNAPSHOT_LIST.get(SnapshotId(1)).test_unwrap();
         assert!(snap.is_protected());
     }
@@ -360,7 +360,7 @@ mod tests {
         push_snap(&list, 3);
         let p = SnapshotProtect::new_const();
         p.protect_worm(SnapshotId(3), 1000, 0).test_unwrap();
-        // Trop tôt
+        // Too early
         let err = p.unprotect(SnapshotId(3), 500);
         assert!(matches!(err, Err(ExofsError::InvalidState)));
     }

@@ -392,27 +392,27 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
             continue;
         }
 
-        // Frame is candidate for free or swap.
+        // Only reclaim unshared, non-dirty frames without tracked CoW/user references;
+        // dirty or user/shared frames require reverse-map PTE teardown + SwapPte install
+        // before freeing physical storage.
         let frame = frame_from_pfn(pfn);
         let frame_flags = FRAME_DESCRIPTORS.get(frame).flags();
+        let tracked_cow = crate::memory::cow::tracker::COW_TRACKER
+            .tracked_ref_count(frame)
+            .is_some();
 
-        if frame_flags.contains(FrameFlags::DIRTY) {
-            // Write to swap before freeing.
-            let swap_written = unsafe { try_swap_out(frame) };
-            if swap_written {
-                // Remove from inactive list and free physical frame.
-                INACTIVE_LIST.lock().remove(pfn);
-                let _ = free_page(frame);
-                result.freed += 1;
-                result.swapped += 1;
-                RECLAIM_STATS.swapped_out.fetch_add(1, Ordering::Relaxed);
-                RECLAIM_STATS.freed_direct.fetch_add(1, Ordering::Relaxed);
-            } else {
-                RECLAIM_STATS.swap_errors.fetch_add(1, Ordering::Relaxed);
-                result.skipped += 1;
-            }
+        if tracked_cow
+            || frame_flags.contains(FrameFlags::RESERVED)
+            || frame_flags.contains(FrameFlags::KERNEL)
+            || frame_flags.contains(FrameFlags::SHARED)
+            || frame_flags.contains(FrameFlags::USER)
+            || frame_flags.contains(FrameFlags::COW)
+            || frame_flags.contains(FrameFlags::DIRTY)
+        {
+            RECLAIM_STATS.skipped.fetch_add(1, Ordering::Relaxed);
+            result.skipped += 1;
         } else {
-            // Clean frame — direct free.
+            // Unmapped clean cache frame — safe to release directly.
             INACTIVE_LIST.lock().remove(pfn);
             let _ = free_page(frame);
             result.freed += 1;
@@ -441,6 +441,7 @@ pub fn kswapd_reclaim(target: usize, cpu_id: usize) -> ReclaimResult {
 ///
 /// # Safety
 /// Accesses physmap — requires PHYS_MAP_BASE to be initialized.
+#[allow(dead_code)]
 unsafe fn try_swap_out(frame: Frame) -> bool {
     let (dev_idx, slot) = match SWAP_BACKEND.alloc_slot() {
         Ok(pair) => pair,

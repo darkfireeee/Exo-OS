@@ -18,10 +18,10 @@ use crate::fs::exofs::syscall::quota_query::{check_quota, quota_add_usage, quota
 use super::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Opérations VFS — surface POSIX
+// VFS operations — POSIX surface
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résout `name` dans le répertoire `parent_ino`. Retourne l'ino fils.
+/// Resolves `name` in `parent_ino` directory. Returns child ino.
 pub fn vfs_lookup(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<ObjectIno> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
@@ -29,7 +29,7 @@ pub fn vfs_lookup(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<ObjectIno> 
     if name.len() > VFS_NAME_MAX {
         return Err(ExofsError::PathTooLong);
     }
-    // Vérifie que le parent est un répertoire.
+    // Verify that parent is a directory.
     let parent = INODE_EMULATION
         .get_entry(parent_ino)
         .ok_or(ExofsError::ObjectNotFound)?;
@@ -42,7 +42,7 @@ pub fn vfs_lookup(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<ObjectIno> 
         .ok_or(ExofsError::ObjectNotFound)
 }
 
-/// Crée le mapping d'un fichier sous `parent_ino`. Retourne l'ino créé.
+/// Creates a file mapping under `parent_ino`. Returns created ino.
 pub fn vfs_create(
     parent_ino: ObjectIno,
     name: &[u8],
@@ -63,7 +63,7 @@ pub fn vfs_create(
         return Err(ExofsError::NotADirectory);
     }
     let oid = hash_name(parent_ino, name);
-    // Vérifie qu'il n'existe pas déjà.
+    // Verify that it does not already exist.
     if INODE_EMULATION.contains_oid(oid) {
         return Err(ExofsError::ObjectAlreadyExists);
     }
@@ -92,7 +92,7 @@ pub fn vfs_create(
     Ok(ino)
 }
 
-/// Ouvre un inode et retourne un fd.
+/// Opens an inode and returns an fd.
 pub fn vfs_open(ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
     let entry = INODE_EMULATION
         .get_entry(ino)
@@ -113,7 +113,7 @@ pub fn vfs_open(ino: ObjectIno, flags: u32, pid: u32) -> ExofsResult<u64> {
     FD_TABLE.open_fd(ino, flags, pid)
 }
 
-/// Ferme un fd.
+/// Closes an fd.
 pub fn vfs_close(fd: u64) -> ExofsResult<()> {
     FD_TABLE.close_fd(fd)
 }
@@ -149,7 +149,7 @@ pub fn vfs_read(fd: u64, buf: &mut [u8], count: usize) -> ExofsResult<usize> {
     Ok(readable)
 }
 
-/// Écrit des données vers un fd.
+/// Writes data to an fd.
 pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     if count == 0 {
         return Ok(0);
@@ -195,7 +195,7 @@ pub fn vfs_write(fd: u64, buf: &[u8], count: usize) -> ExofsResult<usize> {
     Ok(written)
 }
 
-/// Retourne les métadonnées d'un inode.
+/// Returns inode metadata.
 pub fn vfs_getattr(ino: ObjectIno) -> ExofsResult<VfsInode> {
     let e = INODE_EMULATION
         .get_entry(ino)
@@ -203,7 +203,7 @@ pub fn vfs_getattr(ino: ObjectIno) -> ExofsResult<VfsInode> {
     Ok(entry_to_vfs_inode(&e))
 }
 
-/// Crée un répertoire.
+/// Creates a directory.
 pub fn vfs_mkdir(
     parent_ino: ObjectIno,
     name: &[u8],
@@ -221,7 +221,7 @@ pub fn vfs_mkdir(
     vfs_create(parent_ino, name, dir_mode, uid)
 }
 
-/// Supprime un fichier du répertoire parent.
+/// Unlinks a file from parent directory.
 pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
@@ -232,7 +232,7 @@ pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     let entry = INODE_EMULATION
         .get_entry(record.ino)
         .ok_or(ExofsError::ObjectNotFound)?;
-    // Ne peut pas unlink un répertoire.
+    // Cannot unlink a directory.
     if entry.flags & inode_flags::DIRECTORY != 0 {
         return Err(ExofsError::NotADirectory);
     }
@@ -252,7 +252,7 @@ pub fn vfs_unlink(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     Ok(())
 }
 
-/// Supprime un répertoire (doit être vide).
+/// Removes a directory (must be empty).
 pub fn vfs_rmdir(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
@@ -278,7 +278,7 @@ pub fn vfs_rmdir(parent_ino: ObjectIno, name: &[u8]) -> ExofsResult<()> {
     Ok(())
 }
 
-/// Renomme `old_name` de `old_parent` vers `new_parent/new_name`.
+/// Renames `old_name` from `old_parent` to `new_parent/new_name`.
 pub fn vfs_rename(
     old_parent: ObjectIno,
     old_name: &[u8],
@@ -293,7 +293,7 @@ pub fn vfs_rename(
     }
     validate_name(old_name)?;
     validate_name(new_name)?;
-    // Vérifie que les deux parents sont des répertoires.
+    // Verify that both parents are directories.
     let op = INODE_EMULATION
         .get_entry(old_parent)
         .ok_or(ExofsError::ObjectNotFound)?;
@@ -315,8 +315,8 @@ pub fn vfs_rename(
     Ok(())
 }
 
-/// Retourne un vecteur de VfsDirent pour un ino répertoire.
-/// OOM-02 : try_reserve. RECUR-01 : while.
+/// Returns a vector of VfsDirent for a directory ino.
+/// OOM-02: try_reserve. RECUR-01: while.
 pub fn vfs_readdir(parent_ino: ObjectIno, _offset: u64) -> ExofsResult<Vec<VfsDirent>> {
     let entry = INODE_EMULATION
         .get_entry(parent_ino)
@@ -328,7 +328,7 @@ pub fn vfs_readdir(parent_ino: ObjectIno, _offset: u64) -> ExofsResult<Vec<VfsDi
     let mut out: Vec<VfsDirent> = Vec::new();
     out.try_reserve(records.len().saturating_add(2))
         .map_err(|_| ExofsError::NoMemory)?;
-    // Toujours inclure "." et ".."
+    // Always include "." and ".."
     let dot = make_dirent(parent_ino, b".", 4);
     let dotdot = make_dirent(VFS_ROOT_INO, b"..", 4);
     out.push(dot);
@@ -342,7 +342,7 @@ pub fn vfs_readdir(parent_ino: ObjectIno, _offset: u64) -> ExofsResult<Vec<VfsDi
     Ok(out)
 }
 
-/// Tronque/étend un fichier à `new_size`.
+/// Truncates/extends a file to `new_size`.
 pub fn vfs_truncate(ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
     let e = INODE_EMULATION
         .get_entry(ino)
@@ -360,7 +360,7 @@ pub fn vfs_truncate(ino: ObjectIno, new_size: u64) -> ExofsResult<()> {
     Ok(())
 }
 
-/// Crée un lien symbolique.
+/// Creates a symbolic link.
 pub fn vfs_symlink(parent_ino: ObjectIno, name: &[u8], uid: u64) -> ExofsResult<ObjectIno> {
     if name.is_empty() {
         return Err(ExofsError::InvalidArgument);
@@ -388,12 +388,12 @@ pub fn vfs_symlink(parent_ino: ObjectIno, name: &[u8], uid: u64) -> ExofsResult<
     Ok(ino)
 }
 
-/// Ferme tous les fd d'un pid (exit/kill).
+/// Closes all fds of a pid (exit/kill).
 pub fn vfs_close_all_pid(pid: u32) {
     FD_TABLE.close_all_pid(pid);
 }
 
-/// Nombre de descripteurs ouverts.
+/// Number of open descriptors.
 pub fn vfs_open_count() -> usize {
     FD_TABLE.active_count()
 }

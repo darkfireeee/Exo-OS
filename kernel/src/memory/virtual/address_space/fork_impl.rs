@@ -12,7 +12,7 @@
 use crate::memory::core::{AllocError, AllocFlags, Frame, PhysAddr};
 use crate::memory::cow::tracker::COW_TRACKER;
 use crate::memory::physical::allocator::buddy;
-use crate::memory::virt::address_space::tlb::flush_all;
+use crate::memory::virt::address_space::tlb::{shootdown_sync, TlbFlushType};
 use crate::memory::virt::page_table::builder::PageTableBuilder;
 use crate::memory::virt::page_table::walker::FrameAllocatorForWalk;
 use crate::memory::virt::page_table::x86_64::{
@@ -196,7 +196,10 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
 
     fn flush_tlb_after_fork(&self, _parent_cr3: u64) {
         unsafe {
-            flush_all();
+            shootdown_sync(
+                TlbFlushType::All,
+                crate::arch::x86_64::acpi::madt::madt_cpu_count(),
+            );
         }
     }
 
@@ -223,11 +226,7 @@ unsafe fn clone_userspace_tables(
 
     for l4_idx in 0..256 {
         let src_entry = src_pml4[l4_idx];
-        if !src_entry.is_present() {
-            continue;
-        }
-        if !src_entry.is_user() {
-            dst_pml4[l4_idx] = src_entry;
+        if !src_entry.is_present() || !src_entry.is_user() {
             continue;
         }
 
@@ -251,16 +250,14 @@ unsafe fn clone_pdpt(
 
     for l3_idx in 0..512 {
         let src_entry = src_pdpt[l3_idx];
-        if !src_entry.is_present() {
-            continue;
-        }
-        if !src_entry.is_user() {
-            dst_pdpt[l3_idx] = src_entry;
+        if !src_entry.is_present() || !src_entry.is_user() {
             continue;
         }
         if src_entry.is_huge() {
-            if let Some(frame) = src_entry.frame() {
-                track_cow_frame(frame)?;
+            if !src_entry.is_pinned() {
+                if let Some(frame) = src_entry.frame() {
+                    track_cow_frame(frame)?;
+                }
             }
             let shared = shared_leaf_entry(src_entry);
             src_pdpt[l3_idx] = shared;
@@ -288,16 +285,14 @@ unsafe fn clone_pd(
 
     for l2_idx in 0..512 {
         let src_entry = src_pd[l2_idx];
-        if !src_entry.is_present() {
-            continue;
-        }
-        if !src_entry.is_user() {
-            dst_pd[l2_idx] = src_entry;
+        if !src_entry.is_present() || !src_entry.is_user() {
             continue;
         }
         if src_entry.is_huge() {
-            if let Some(frame) = src_entry.frame() {
-                track_cow_frame(frame)?;
+            if !src_entry.is_pinned() {
+                if let Some(frame) = src_entry.frame() {
+                    track_cow_frame(frame)?;
+                }
             }
             let shared = shared_leaf_entry(src_entry);
             src_pd[l2_idx] = shared;
@@ -322,17 +317,44 @@ unsafe fn clone_pt(
 ) -> Result<(), AddrSpaceCloneError> {
     let src_pt = phys_to_table_mut(src_pt_phys);
     let dst_pt = phys_to_table_mut(dst_pt_phys);
+    let mut cleared_writable = [false; 512];
 
     for l1_idx in 0..512 {
         let src_entry = src_pt[l1_idx];
         if src_entry.is_present() {
             if !src_entry.is_user() {
-                dst_pt[l1_idx] = src_entry;
                 continue;
             }
-            if let Some(frame) = src_entry.frame() {
-                track_cow_frame(frame)?;
+            let is_pinned = src_entry.is_pinned();
+            if !is_pinned {
+                if let Some(frame) = src_entry.frame() {
+                    if let Err(err) = track_cow_frame(frame) {
+                        for j in 0..l1_idx {
+                            let dst_e = dst_pt[j];
+                            if !dst_e.is_present() || !dst_e.is_user() || dst_e.is_pinned() {
+                                dst_pt[j] = PageTableEntry::from_raw(0);
+                                continue;
+                            }
+                            if let Some(f) = dst_e.frame() {
+                                let rem = COW_TRACKER.dec(f);
+                                if rem == 1 && cleared_writable[j] {
+                                    let _ = COW_TRACKER.dec(f);
+                                }
+                            }
+                            if cleared_writable[j] {
+                                src_pt[j] = PageTableEntry::from_raw(
+                                    (src_pt[j].raw() & !PageTableEntry::FLAG_COW)
+                                        | PageTableEntry::FLAG_WRITABLE,
+                                );
+                            }
+                            dst_pt[j] = PageTableEntry::from_raw(0);
+                        }
+                        return Err(err);
+                    }
+                }
             }
+            cleared_writable[l1_idx] =
+                !is_pinned && src_entry.is_writable() && !src_entry.is_cow();
             let shared = shared_leaf_entry(src_entry);
             src_pt[l1_idx] = shared;
             dst_pt[l1_idx] = shared;
@@ -355,6 +377,7 @@ fn shared_leaf_entry(src_entry: PageTableEntry) -> PageTableEntry {
     if src_entry.is_present()
         && src_entry.is_user()
         && (src_entry.is_writable() || src_entry.is_cow())
+        && (src_entry.raw() & PageTableEntry::FLAG_PINNED == 0)
     {
         PageTableEntry::from_raw(
             (src_entry.raw() & !PageTableEntry::FLAG_WRITABLE) | PageTableEntry::FLAG_COW,
@@ -379,7 +402,7 @@ unsafe fn free_userspace_tables(root_pml4_phys: PhysAddr) {
     let pml4 = phys_to_table_ref(root_pml4_phys);
     for l4_idx in 0..256 {
         let entry = pml4[l4_idx];
-        if entry.is_present() && entry.is_user() && !entry.is_huge() {
+        if entry.is_present() && !entry.is_huge() {
             free_pdpt_tree(entry.phys_addr());
         }
     }
@@ -393,11 +416,10 @@ unsafe fn free_pdpt_tree(pdpt_phys: PhysAddr) {
         if !entry.is_present() {
             continue;
         }
-        if !entry.is_user() {
-            continue;
-        }
         if entry.is_huge() {
-            release_huge_frame(entry, 18);
+            if entry.is_user() {
+                release_huge_frame(entry, 18);
+            }
         } else {
             free_pd_tree(entry.phys_addr());
         }
@@ -412,11 +434,10 @@ unsafe fn free_pd_tree(pd_phys: PhysAddr) {
         if !entry.is_present() {
             continue;
         }
-        if !entry.is_user() {
-            continue;
-        }
         if entry.is_huge() {
-            release_huge_frame(entry, 9);
+            if entry.is_user() {
+                release_huge_frame(entry, 9);
+            }
         } else {
             free_pt_tree(entry.phys_addr());
         }
@@ -440,6 +461,9 @@ unsafe fn free_pt_tree(pt_phys: PhysAddr) {
 }
 
 fn release_leaf_frame(entry: PageTableEntry) {
+    if entry.is_pinned() {
+        return;
+    }
     let Some(frame) = entry.frame() else {
         return;
     };
@@ -463,6 +487,9 @@ fn cow_teardown_underflow(entry: PageTableEntry, remaining: u32) -> bool {
 }
 
 fn release_huge_frame(entry: PageTableEntry, order: usize) {
+    if entry.is_pinned() {
+        return;
+    }
     let Some(frame) = entry.frame() else {
         return;
     };

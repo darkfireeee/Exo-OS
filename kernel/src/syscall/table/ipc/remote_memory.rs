@@ -64,18 +64,46 @@ fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
     }
 }
 
-fn user_as_for_pid(pid: u32) -> Result<&'static crate::memory::virt::UserAddressSpace, i64> {
+struct PinnedUserAddressSpace {
+    ptr: *const crate::memory::virt::UserAddressSpace,
+}
+
+impl core::ops::Deref for PinnedUserAddressSpace {
+    type Target = crate::memory::virt::UserAddressSpace;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: `pin_remote()` keeps `UserAddressSpace` alive until `Drop`.
+        unsafe { &*self.ptr }
+    }
+}
+
+impl Drop for PinnedUserAddressSpace {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: paired with `pin_remote()` in `user_as_for_pid`.
+        unsafe { &*self.ptr }.unpin_remote();
+    }
+}
+
+fn user_as_for_pid(pid: u32) -> Result<PinnedUserAddressSpace, i64> {
     if pid == 0 {
         return Err(EINVAL);
     }
-    let pcb = PROCESS_REGISTRY.find_by_pid(Pid(pid)).ok_or(ENOENT)?;
-    let as_ptr = pcb.address_space_ptr();
-    if as_ptr.is_null() {
-        return Err(ENOMEM);
-    }
-    // SAFETY: the PCB remains in PROCESS_REGISTRY during the syscall and
-    // address_space points to a UserAddressSpace created by lifecycle/create.
-    Ok(unsafe { &*(as_ptr as *const crate::memory::virt::UserAddressSpace) })
+    PROCESS_REGISTRY
+        .with_pinned_pid(Pid(pid), |pcb| {
+            let _as_guard = pcb.as_lock.lock();
+            let as_ptr = pcb.address_space_ptr();
+            if as_ptr.is_null() {
+                return Err(ENOMEM);
+            }
+            let ptr = as_ptr as *const crate::memory::virt::UserAddressSpace;
+            // SAFETY: `pcb` is pinned in `PROCESS_REGISTRY` and `as_lock`
+            // prevents `exec()` from swapping `pcb.address_space` until we pin it.
+            unsafe { &*ptr }.pin_remote();
+            Ok(PinnedUserAddressSpace { ptr })
+        })
+        .ok_or(ENOENT)?
 }
 
 fn validate_remote_user_range(addr: u64, len: usize) -> Result<(), i64> {
@@ -160,17 +188,21 @@ pub fn sys_exo_mem_copy_from_pid(
     let mut scratch = [0u8; 256];
     while copied < len {
         let src = remote_src + copied as u64;
-        let (phys, page_avail) = match remote_user_phys(user_as, src, false) {
-            Ok(v) => v,
-            Err(e) => return if copied == 0 { e } else { copied as i64 },
+        let n = {
+            let _pt_guard = user_as.lock_pt();
+            let (phys, page_avail) = match remote_user_phys(&user_as, src, false) {
+                Ok(v) => v,
+                Err(e) => return if copied == 0 { e } else { copied as i64 },
+            };
+            let n = (len - copied).min(page_avail).min(scratch.len());
+            let src_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *const u8;
+            // SAFETY: `remote_user_phys` validated the target PID translation under
+            // `user_as.lock_pt()`, preventing concurrent unmap/free during copy.
+            unsafe {
+                core::ptr::copy_nonoverlapping(src_ptr, scratch.as_mut_ptr(), n);
+            }
+            n
         };
-        let n = (len - copied).min(page_avail).min(scratch.len());
-        let src_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *const u8;
-        // SAFETY: `remote_user_phys` validated the target PID translation and
-        // `scratch` is a local kernel buffer of size `n`.
-        unsafe {
-            core::ptr::copy_nonoverlapping(src_ptr, scratch.as_mut_ptr(), n);
-        }
         if copy_to_user((local_dst + copied as u64) as *mut u8, scratch.as_ptr(), n).is_err() {
             return if copied == 0 { EFAULT } else { copied as i64 };
         }
@@ -219,26 +251,35 @@ pub fn sys_exo_mem_copy_to_pid(
     let mut scratch = [0u8; 256];
     while copied < len {
         let dst = remote_dst + copied as u64;
-        let (phys, page_avail) = match remote_user_phys(user_as, dst, true) {
-            Ok(v) => v,
-            Err(e) => return if copied == 0 { e } else { copied as i64 },
-        };
-        let n = (len - copied).min(page_avail).min(scratch.len());
+        let max_chunk = (len - copied).min(scratch.len()).min(
+            crate::memory::core::PAGE_SIZE
+                - ((dst as usize) & (crate::memory::core::PAGE_SIZE - 1)),
+        );
         if copy_from_user(
             scratch.as_mut_ptr(),
             (local_src + copied as u64) as *const u8,
-            n,
+            max_chunk,
         )
         .is_err()
         {
             return if copied == 0 { EFAULT } else { copied as i64 };
         }
-        let dst_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *mut u8;
-        // SAFETY: `remote_user_phys(..., write=true)` guarantees a user page
-        // present and writable; `scratch` contains `n` bytes copied from the caller.
-        unsafe {
-            core::ptr::copy_nonoverlapping(scratch.as_ptr(), dst_ptr, n);
-        }
+        let n = {
+            let _pt_guard = user_as.lock_pt();
+            let (phys, page_avail) = match remote_user_phys(&user_as, dst, true) {
+                Ok(v) => v,
+                Err(e) => return if copied == 0 { e } else { copied as i64 },
+            };
+            let n = max_chunk.min(page_avail);
+            let dst_ptr = phys_to_virt(PhysAddr::new(phys)).as_u64() as *mut u8;
+            // SAFETY: `remote_user_phys(..., write=true)` under `user_as.lock_pt()`
+            // guarantees a present writable user page that cannot be unmapped/protected
+            // while copying from `scratch`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(scratch.as_ptr(), dst_ptr, n);
+            }
+            n
+        };
         copied += n;
     }
     copied as i64
@@ -278,17 +319,17 @@ pub fn sys_exo_mem_map_pid(
         Ok(v) => v,
         Err(e) => return e,
     };
-    match crate::memory::virt::mmap::do_mmap_in_as(user_as, hint, len, prot, flags) {
+    match crate::memory::virt::mmap::do_mmap_in_as(&user_as, hint, len, prot, flags) {
         Ok(addr) => addr as i64,
         Err(e) => e.to_kernel_errno() as i64,
     }
 }
 
-/// `exo_mem_munmap_pid(target_pid, addr)` reserved for memory_server.
+/// `exo_mem_munmap_pid(target_pid, addr, len)` reserved for memory_server.
 pub fn sys_exo_mem_munmap_pid(
     target_pid: u64,
     addr: u64,
-    _len: u64,
+    len: u64,
     _a4: u64,
     _a5: u64,
     _a6: u64,
@@ -302,11 +343,21 @@ pub fn sys_exo_mem_munmap_pid(
         Ok(v) => v,
         Err(e) => return e,
     };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if len == 0 {
+        return EINVAL;
+    }
+    if let Err(e) = validate_remote_user_range(addr, len) {
+        return e;
+    }
     let user_as = match user_as_for_pid(target_pid) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    match crate::memory::virt::mmap::do_munmap_in_as(user_as, addr) {
+    match crate::memory::virt::mmap::do_munmap_range_in_as(&user_as, addr, len) {
         Ok(()) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }
@@ -342,7 +393,88 @@ pub fn sys_exo_mem_mprotect_pid(
         Ok(v) => v,
         Err(e) => return e,
     };
-    match crate::memory::virt::mmap::do_mprotect_in_as(user_as, addr, len, prot) {
+    match crate::memory::virt::mmap::do_mprotect_in_as(&user_as, addr, len, prot) {
+        Ok(()) => 0,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+/// `exo_mem_share(src_pid, src_addr, dst_pid, len, prot, dst_hint)` reserved for privileged servers.
+pub fn sys_exo_mem_share(
+    src_pid: u64,
+    src_addr: u64,
+    dst_pid: u64,
+    len: u64,
+    prot: u64,
+    dst_hint: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_SHARE);
+    let caller_pid = current_pid_u32();
+    if !caller_can_manage_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let src_pid = match checked_u32_sysarg(src_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let dst_pid = match checked_u32_sysarg(dst_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let prot = match checked_u32_sysarg(prot) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let src_as = match user_as_for_pid(src_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let dst_as = match user_as_for_pid(dst_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_share_range_between_as(
+        &src_as, src_addr, &dst_as, dst_hint, len, prot,
+    ) {
+        Ok(addr) => addr as i64,
+        Err(e) => e.to_kernel_errno() as i64,
+    }
+}
+
+/// `exo_mem_revoke(target_pid, addr, len)` reserved for privileged servers.
+pub fn sys_exo_mem_revoke(
+    target_pid: u64,
+    addr: u64,
+    len: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXO_MEM_REVOKE);
+    let caller_pid = current_pid_u32();
+    if !caller_can_manage_target_memory(caller_pid) {
+        return EPERM;
+    }
+    let target_pid = match checked_u32_sysarg(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let len = match checked_usize_sysarg(len) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if len == 0 {
+        return EINVAL;
+    }
+    let user_as = match user_as_for_pid(target_pid) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    match crate::memory::virt::mmap::do_munmap_range_in_as(&user_as, addr, len) {
         Ok(()) => 0,
         Err(e) => e.to_kernel_errno() as i64,
     }

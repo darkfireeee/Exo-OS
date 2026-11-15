@@ -92,8 +92,12 @@ pub struct ThreadCreateParams {
     pub tls_base: u64,
     /// Target CPU for enqueue.
     pub target_cpu: u32,
-    /// Address of pthread_t structure to populate.
+    /// Address of pthread_t / parent_tid structure to populate (`CLONE_PARENT_SETTID`).
     pub pthread_out: u64,
+    /// Address of child_tid structure to populate (`CLONE_CHILD_SETTID`).
+    pub child_tid_ptr: u64,
+    /// Address cleared and woken via futex upon thread exit (`CLONE_CHILD_CLEARTID`).
+    pub clear_child_tid: u64,
 }
 
 /// Handle to a created thread.
@@ -196,6 +200,20 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         if params.attr.detached {
             (*thread_ptr).detached.store(true, Ordering::Relaxed);
         }
+
+        // Configure CLONE_CHILD_CLEARTID before thread can be scheduled.
+        if params.clear_child_tid != 0 {
+            (*thread_ptr)
+                .clear_child_tid
+                .store(params.clear_child_tid, Ordering::Release);
+        }
+    }
+
+    if params.pthread_out != 0 {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(params.pthread_out, tid_raw);
+    }
+    if params.child_tid_ptr != 0 {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(params.child_tid_ptr, tid_raw);
     }
 
     if !pcb.register_thread_ptr(thread_ptr) {

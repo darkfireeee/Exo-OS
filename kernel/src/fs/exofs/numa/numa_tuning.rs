@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS NUMA — Politique NUMA adaptative et auto-tuning
+// ExoFS NUMA — Adaptive NUMA policy and auto-tuning
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::numa_affinity::MAX_NUMA_NODES;
@@ -12,15 +12,15 @@ use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TuningEvent {
-    /// Stratégie modifiée automatiquement.
+    /// Strategy modified automatically.
     StrategyChanged,
-    /// Déséquilibre détecté mais sous le seuil.
+    /// Imbalance detected but below threshold.
     ImbalanceDetected,
-    /// Intervention manuelle appliquée.
+    /// Manual override applied.
     ManualOverride,
-    /// Pas de changement nécessaire.
+    /// No change needed.
     NoChange,
-    /// Réinitialisation de la politique.
+    /// Policy reset.
     Reset,
 }
 
@@ -61,7 +61,7 @@ impl TuningReport {
 
 // ─── PressureZone ─────────────────────────────────────────────────────────────
 
-/// Niveau de pression mémoire sur un nœud.
+/// Memory pressure level on a node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PressureZone {
     Normal,
@@ -97,23 +97,23 @@ impl PressureZone {
 
 // ─── NumaPolicy ──────────────────────────────────────────────────────────────
 
-/// Politique NUMA adaptative.
+/// Adaptive NUMA policy.
 pub struct NumaPolicy {
-    /// Seuil de déséquilibre en ‰ pour déclencher le changement de stratégie.
+    /// Imbalance threshold in ‰ to trigger strategy change.
     migrate_threshold_ppt: AtomicU64,
-    /// Auto-tuning activé.
+    /// Auto-tuning enabled.
     auto_tune_enabled: AtomicU8,
-    /// Intervalle minimal entre deux évaluations (ticks).
+    /// Minimum interval between two evaluations (ticks).
     tune_interval_ticks: AtomicU64,
-    /// Dernier tick d'évaluation.
+    /// Last evaluation tick.
     last_tune_tick: AtomicU64,
-    /// Nombre total d'évaluations.
+    /// Total number of evaluations.
     evaluations: AtomicU64,
-    /// Nombre de changements de stratégie.
+    /// Number of strategy changes.
     strategy_changes: AtomicU64,
-    /// Capacité mémoire de référence par nœud en octets.
+    /// Reference memory capacity per node in bytes.
     node_capacity_bytes: [AtomicU64; MAX_NUMA_NODES],
-    /// Stratégie forcée manuellement (u8::MAX = aucune).
+    /// Manually forced strategy (u8::MAX = none).
     forced_strategy: AtomicU8,
 }
 
@@ -146,7 +146,7 @@ impl NumaPolicy {
         }
     }
 
-    /// Configure la politique.
+    /// Configures the policy.
     pub fn configure(
         &self,
         threshold_ppt: u64,
@@ -168,7 +168,7 @@ impl NumaPolicy {
         Ok(())
     }
 
-    /// Définit la capacité mémoire d'un nœud.
+    /// Sets a node's memory capacity.
     pub fn set_node_capacity(&self, node: usize, capacity_bytes: u64) -> ExofsResult<()> {
         if node >= MAX_NUMA_NODES {
             return Err(ExofsError::InvalidArgument);
@@ -177,7 +177,7 @@ impl NumaPolicy {
         Ok(())
     }
 
-    /// Force une stratégie (u8::MAX = libère la contrainte).
+    /// Forces a strategy (u8::MAX = releases constraint).
     pub fn force_strategy(&self, strategy: Option<PlacementStrategy>) {
         let v = strategy.map(|s| s as u8).unwrap_or(u8::MAX);
         self.forced_strategy.store(v, Ordering::Relaxed);
@@ -196,13 +196,13 @@ impl NumaPolicy {
         self.strategy_changes.load(Ordering::Relaxed)
     }
 
-    // ── Évaluation ────────────────────────────────────────────────────────────
+    // ── Evaluation ────────────────────────────────────────────────────────────
 
-    /// Évalue la charge des nœuds et ajuste la stratégie si nécessaire.
+    /// Evaluates node load and adjusts strategy if needed.
     pub fn evaluate(&self, current_tick: u64) -> TuningReport {
         let old_strategy = NUMA_PLACEMENT.strategy();
 
-        // Vérifier actif et intervalle
+        // Check active and interval
         if !self.auto_enabled() {
             return self._make_report(
                 TuningEvent::NoChange,
@@ -226,7 +226,7 @@ impl NumaPolicy {
         self.last_tune_tick.store(current_tick, Ordering::Relaxed);
         self.evaluations.fetch_add(1, Ordering::Relaxed);
 
-        // Stratégie forcée manuelle
+        // Manually forced strategy
         let forced = self.forced_strategy.load(Ordering::Relaxed);
         if forced != u8::MAX {
             let new_strat = PlacementStrategy::from_u8(forced);
@@ -242,7 +242,7 @@ impl NumaPolicy {
             );
         }
 
-        // Calcul du déséquilibre (ARITH-02 : saturating, checked_div, RECUR-01 : while)
+        // Imbalance computation (ARITH-02: saturating, checked_div, RECUR-01: while)
         let imbalance = self._compute_imbalance_ppt();
         let threshold = self.migrate_threshold_ppt.load(Ordering::Relaxed);
 
@@ -252,7 +252,7 @@ impl NumaPolicy {
             PlacementStrategy::LocalFirst
         };
 
-        // Appliquer si différent
+        // Apply if different
         let event = if new_strategy != old_strategy {
             let n = NUMA_PLACEMENT.n_nodes() as u8;
             let _ = NUMA_PLACEMENT.init(n, new_strategy);
@@ -267,7 +267,7 @@ impl NumaPolicy {
         self._make_report(event, imbalance, old_strategy, new_strategy, current_tick)
     }
 
-    /// Calcule le déséquilibre en ‰ entre nœuds (RECUR-01 : while, ARITH-02 : saturating).
+    /// Computes imbalance in ‰ between nodes (RECUR-01: while, ARITH-02: saturating).
     fn _compute_imbalance_ppt(&self) -> u64 {
         let mut max_score = 0u64;
         let mut min_score = u64::MAX;
@@ -291,7 +291,7 @@ impl NumaPolicy {
         if max_score == 0 || min_score == u64::MAX {
             return 0;
         }
-        // ARITH-02 : saturating_sub + checked_div
+        // ARITH-02: saturating_sub + checked_div
         let diff = max_score.saturating_sub(min_score);
         diff.saturating_mul(1000)
             .checked_div(max_score.max(1))
@@ -318,9 +318,9 @@ impl NumaPolicy {
         }
     }
 
-    // ── Pression par nœud ─────────────────────────────────────────────────────
+    // ── Pressure per node ─────────────────────────────────────────────────────
 
-    /// Niveau de pression courant d'un nœud (ARITH-02).
+    /// Current pressure level of a node (ARITH-02).
     pub fn pressure_zone(&self, node: usize) -> PressureZone {
         if node >= MAX_NUMA_NODES {
             return PressureZone::Normal;
@@ -333,7 +333,7 @@ impl NumaPolicy {
         PressureZone::from_ppt(ppt)
     }
 
-    /// Nœud en plus haute pression (RECUR-01 : while).
+    /// Node under highest pressure (RECUR-01: while).
     pub fn highest_pressure_node(&self) -> usize {
         let mut best = 0usize;
         let mut best_ppt = 0u64;
@@ -352,7 +352,7 @@ impl NumaPolicy {
         best
     }
 
-    /// Réinitialise le state de la politique.
+    /// Resets policy state.
     pub fn reset(&self) {
         self.last_tune_tick.store(0, Ordering::Relaxed);
         self.evaluations.store(0, Ordering::Relaxed);
@@ -361,7 +361,7 @@ impl NumaPolicy {
     }
 }
 
-/// Singleton global de la politique NUMA.
+/// Global singleton of NUMA policy.
 pub static NUMA_POLICY: NumaPolicy = NumaPolicy::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -408,9 +408,9 @@ mod tests {
     fn test_evaluate_before_interval_no_change() {
         let p = fresh_policy();
         p.configure(200, true, 100_000).test_unwrap();
-        // Premier appel OK
+        // First call OK
         p.evaluate(100_000);
-        // Deuxième appel trop tôt
+        // Second call too early
         let r = p.evaluate(100_001);
         assert_eq!(r.event, TuningEvent::NoChange);
     }
@@ -420,8 +420,8 @@ mod tests {
         let p = fresh_policy();
         p.configure(200, true, 1_000).test_unwrap();
         let r = p.evaluate(1_000);
-        // Doit avoir été évalué (pas NoChange si intervalle atteint)
-        // Mais sans données de charge il ne change rien
+        // Must have been evaluated (not NoChange if interval reached)
+        // But with no load data it changes nothing
         let _ = r;
         assert!(p.evaluations() >= 1);
     }
@@ -439,7 +439,7 @@ mod tests {
     fn test_force_strategy_clear() {
         let p = fresh_policy();
         p.force_strategy(None);
-        // Doit être u8::MAX
+        // Must be u8::MAX
         assert_eq!(p.forced_strategy.load(Ordering::Relaxed), u8::MAX);
     }
 
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn test_pressure_zone_empty_node() {
         let p = fresh_policy();
-        // Nœud sans capacité → Normal
+        // Node with no capacity -> Normal
         assert_eq!(p.pressure_zone(0), PressureZone::Normal);
     }
 
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn test_imbalance_no_capacity_is_zero() {
         let p = fresh_policy();
-        // Aucune capacité définie → imbalance = 0
+        // No defined capacity -> imbalance = 0
         let imb = p._compute_imbalance_ppt();
         assert_eq!(imb, 0);
     }
@@ -503,7 +503,7 @@ mod tests {
     fn test_report_is_balanced() {
         let p = fresh_policy();
         p.configure(300, true, 1).test_unwrap();
-        // Déséquilibre 0 < threshold 300 → balanced
+        // Imbalance 0 < threshold 300 -> balanced
         let r = p._make_report(
             TuningEvent::NoChange,
             0,

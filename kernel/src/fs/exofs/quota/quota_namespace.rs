@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Namespaces de quota
+// ExoFS Quota — Quota namespaces
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::quota_policy::{QuotaKind, QuotaLimits, QuotaPolicy};
@@ -17,7 +17,7 @@ pub const NS_ROOT_ID: u64 = 0;
 
 // ─── NamespaceId ─────────────────────────────────────────────────────────────
 
-/// Identifiant opaque d'un namespace de quota.
+/// Opaque identifier of a quota namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct NamespaceId(pub u64);
@@ -74,7 +74,7 @@ impl NamespaceFlags {
 
 // ─── QuotaNamespaceEntry ──────────────────────────────────────────────────────
 
-/// Entrée d'un namespace de quota.
+/// Entry of a quota namespace.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaNamespaceEntry {
     pub id: NamespaceId,
@@ -82,9 +82,9 @@ pub struct QuotaNamespaceEntry {
     pub policy: QuotaPolicy,
     pub flags: NamespaceFlags,
     pub name: [u8; NS_NAME_LEN],
-    /// Nombre d'entités suivies dans ce namespace.
+    /// Number of entities tracked in this namespace.
     pub entity_count: u64,
-    /// Tick de création.
+    /// Creation tick.
     pub created_tick: u64,
     pub occupied: bool,
 }
@@ -143,17 +143,17 @@ impl QuotaNamespaceEntry {
         self.flags.is_readonly()
     }
 
-    /// Vrai si ce namespace hérite les limites du parent.
+    /// True if this namespace inherits limits from its parent.
     pub fn is_inherited(&self) -> bool {
         self.flags.is_inherited()
     }
 
-    /// Retourne la clé de quota pour l'entité `id` dans ce namespace.
+    /// Returns the quota key for entity `id` in this namespace.
     pub fn key_for(&self, entity_id: u64) -> QuotaKey {
         QuotaKey::new(self.policy.kind, entity_id)
     }
 
-    /// Score de charge : entity_count / hard_bytes (ARITH-02).
+    /// Load score: entity_count / hard_bytes (ARITH-02).
     pub fn load_score(&self) -> u64 {
         if self.policy.limits.hard_bytes == 0 || self.policy.limits.hard_bytes == u64::MAX {
             return 0;
@@ -167,7 +167,7 @@ impl QuotaNamespaceEntry {
 
 // ─── QuotaNamespace ───────────────────────────────────────────────────────────
 
-/// Registre plat de namespaces de quota (max NAMESPACE_MAX).
+/// Flat registry of quota namespaces (max NAMESPACE_MAX).
 pub struct QuotaNamespace {
     entries: UnsafeCell<[QuotaNamespaceEntry; NAMESPACE_MAX]>,
     count: AtomicU64,
@@ -184,7 +184,7 @@ impl QuotaNamespace {
             entries: UnsafeCell::new([QuotaNamespaceEntry::empty(); NAMESPACE_MAX]),
             count: AtomicU64::new(0),
             lock: AtomicU64::new(0),
-            next_id: AtomicU64::new(1), // 0 = ROOT (pré-créé)
+            next_id: AtomicU64::new(1), // 0 = ROOT (pre-created)
         }
     }
 
@@ -203,7 +203,7 @@ impl QuotaNamespace {
     }
 
     fn find_idx(&self, id: NamespaceId) -> Option<usize> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -216,7 +216,7 @@ impl QuotaNamespace {
     }
 
     fn find_free_slot(&self) -> Option<usize> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -229,7 +229,7 @@ impl QuotaNamespace {
     }
 
     fn find_by_name(&self, name: &str) -> Option<usize> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -241,14 +241,14 @@ impl QuotaNamespace {
         None
     }
 
-    /// Alloue un nouveau NamespaceId.
+    /// Allocates a new NamespaceId.
     fn alloc_id(&self) -> NamespaceId {
         NamespaceId(self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Ajoute un namespace avec la politique donnée.
+    /// Adds a namespace with the given policy.
     pub fn add(
         &self,
         parent_id: NamespaceId,
@@ -273,24 +273,24 @@ impl QuotaNamespace {
         name: &str,
         tick: u64,
     ) -> ExofsResult<NamespaceId> {
-        // Vérifier que le parent existe (sauf ROOT)
+        // Verify that parent exists (except ROOT)
         if !parent_id.is_root() && self.find_idx(parent_id).is_none() {
             return Err(ExofsError::ObjectNotFound);
         }
-        // Vérifier le nom unique
+        // Verify unique name
         if self.find_by_name(name).is_some() {
             return Err(ExofsError::ObjectAlreadyExists);
         }
         let slot = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
         let id = self.alloc_id();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         entries[slot] = QuotaNamespaceEntry::new(id, parent_id, policy, name, tick);
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(id)
     }
 
-    /// Supprime un namespace (doit être vide).
+    /// Removes a namespace (must be empty).
     pub fn remove(&self, id: NamespaceId) -> ExofsResult<()> {
         if id.is_root() {
             return Err(ExofsError::PermissionDenied);
@@ -302,7 +302,7 @@ impl QuotaNamespace {
     }
 
     fn _remove_locked(&self, id: NamespaceId) -> ExofsResult<()> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = self.find_idx(id).ok_or(ExofsError::ObjectNotFound)?;
         if entries[idx].entity_count > 0 {
@@ -313,31 +313,31 @@ impl QuotaNamespace {
         Ok(())
     }
 
-    /// Lit une entrée par id.
+    /// Reads an entry by id.
     pub fn get(&self, id: NamespaceId) -> Option<QuotaNamespaceEntry> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(id).map(|i| entries[i]);
         self.release();
         r
     }
 
-    /// Recherche par nom.
+    /// Lookups by name.
     pub fn lookup_by_name(&self, name: &str) -> Option<QuotaNamespaceEntry> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_by_name(name).map(|i| entries[i]);
         self.release();
         r
     }
 
-    /// Met à jour la politique d'un namespace.
+    /// Updates the policy of a namespace.
     pub fn set_policy(&self, id: NamespaceId, policy: QuotaPolicy) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             if entries[idx].is_readonly() {
@@ -353,13 +353,13 @@ impl QuotaNamespace {
         result
     }
 
-    /// Met à jour les flags d'un namespace.
+    /// Updates the flags of a namespace.
     pub fn set_flags(&self, id: NamespaceId, flags: NamespaceFlags) -> ExofsResult<()> {
         if id.is_root() {
             return Err(ExofsError::PermissionDenied);
         }
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].flags = flags;
@@ -371,10 +371,10 @@ impl QuotaNamespace {
         result
     }
 
-    /// Incrémente le compteur d'entités d'un namespace.
+    /// Increments the entity counter of a namespace.
     pub fn inc_entity(&self, id: NamespaceId) -> ExofsResult<()> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].entity_count = entries[idx].entity_count.saturating_add(1);
@@ -386,10 +386,10 @@ impl QuotaNamespace {
         result
     }
 
-    /// Décrémente le compteur d'entités d'un namespace.
+    /// Decrements the entity counter of a namespace.
     pub fn dec_entity(&self, id: NamespaceId) -> ExofsResult<()> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             entries[idx].entity_count = entries[idx].entity_count.saturating_sub(1);
@@ -401,18 +401,18 @@ impl QuotaNamespace {
         result
     }
 
-    /// Nombre de namespaces actifs.
+    /// Number of active namespaces.
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed) as usize
     }
 
-    /// Snapshot de tous les namespaces (OOM-02, RECUR-01).
+    /// Snapshot of all namespaces (OOM-02, RECUR-01).
     pub fn list_all(&self) -> ExofsResult<Vec<QuotaNamespaceEntry>> {
         let n = self.count.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
         v.try_reserve(n).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -429,12 +429,12 @@ impl QuotaNamespace {
         Ok(v)
     }
 
-    /// Liste les enfants d'un namespace parent (RECUR-01 : while).
+    /// Lists children of a parent namespace (RECUR-01: while).
     pub fn children_of(&self, parent_id: NamespaceId) -> ExofsResult<Vec<NamespaceId>> {
         let mut v = Vec::new();
         v.try_reserve(8).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < NAMESPACE_MAX {
@@ -454,15 +454,15 @@ impl QuotaNamespace {
         Ok(v)
     }
 
-    /// Retourne les limites effectives (héritées si INHERITED flag).
+    /// Returns effective limits (inherited if INHERITED flag).
     pub fn effective_limits(&self, id: NamespaceId) -> Option<QuotaLimits> {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let result = if let Some(idx) = self.find_idx(id) {
             let e = &entries[idx];
             if e.is_inherited() {
-                // Chercher les limites du parent
+                // Look for parent limits
                 if let Some(pidx) = self.find_idx(e.parent_id) {
                     Some(entries[pidx].policy.limits)
                 } else {
@@ -478,11 +478,11 @@ impl QuotaNamespace {
         result
     }
 
-    /// Initialise le namespace root (id=0). Idempotent si déjà initialisé.
+    /// Initializes the root namespace (id=0). Idempotent if already initialized.
     pub fn init_root(&self, policy: QuotaPolicy, tick: u64) -> ExofsResult<()> {
         policy.validate()?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let mut existing_root = None;
         let mut free_slot = None;
@@ -519,7 +519,7 @@ impl QuotaNamespace {
     }
 }
 
-/// Singleton global du registre de namespaces.
+/// Global singleton of the namespace registry.
 pub static QUOTA_NAMESPACE: QuotaNamespace = QuotaNamespace::new_const();
 
 // ─── NamespaceStats ───────────────────────────────────────────────────────────

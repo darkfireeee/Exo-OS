@@ -1,4 +1,4 @@
-//! image.rs — Installation des segments ELF et VMAs dans l'espace d'adressage
+//! image.rs — Installation of ELF segments and VMAs in the address space
 
 use alloc::boxed::Box;
 use crate::memory::virt::vma::{VmaBacking, VmaDescriptor};
@@ -72,6 +72,10 @@ pub fn install_elf_image(
         }
         validate_user_segment_range(p_vaddr, p_memsz)?;
         register_elf_segment(file_id, p_offset as u64, p_filesz as u64)?;
+
+        if phdr_vaddr == 0 && p_offset <= e_phoff && e_phoff < p_offset.saturating_add(p_filesz) {
+            phdr_vaddr = p_vaddr.saturating_add((e_phoff - p_offset) as u64);
+        }
 
         install_elf_vma(
             child_as,

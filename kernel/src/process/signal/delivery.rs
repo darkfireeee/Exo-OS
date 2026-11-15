@@ -67,25 +67,23 @@ fn wake_thread_for_signal(sched: &ThreadControlBlock) {
     let _irq = IrqGuard::new();
     if !sched.try_transition(TaskState::Sleeping, TaskState::Runnable) {
         // Already Runnable/Running (signal will be delivered at next syscall
-        // return) — nothing to do.
+        // return) — still kick target CPU if remote so it notices promptly.
+        // SAFETY: scheduler per-CPU state is initialized before signal delivery wakes threads.
+        unsafe {
+            crate::scheduler::core::switch::notify_cpu_reschedule(cpu_raw);
+        }
         return;
     }
     // SAFETY: cpu_raw is bounded by MAX_CPUS and comes from CPU assigned to TCB;
-    // IRQs and preemption are disabled by IrqGuard during access.
-    let rq = unsafe { run_queue(CpuId(cpu_raw as u32)) };
-    // `sched` is the TCB of a living thread from process registry; TCB
-    // lives in static pool and is not freed during the call.
-    let nn = NonNull::from(sched);
-    rq.enqueue(nn);
-    // Preempt current if same CPU for rapid delivery (same logic
-    // as sleep_timer_wake).
-    let current = crate::scheduler::core::switch::current_thread_raw();
-    if !current.is_null() {
-        // SAFETY: valid current TCB published by scheduler.
-        let cur = unsafe { &*current };
-        if cur.current_cpu().0 as usize == cpu_raw {
-            cur.request_preemption();
-        }
+    // IRQs and preemption are disabled by run_queue guard.
+    {
+        let mut rq = unsafe { run_queue(CpuId(cpu_raw as u32)) };
+        let nn = NonNull::from(sched);
+        rq.enqueue(nn);
+    }
+    // SAFETY: scheduler per-CPU state is initialized before signal delivery wakes threads.
+    unsafe {
+        crate::scheduler::core::switch::notify_cpu_reschedule(cpu_raw);
     }
 }
 
@@ -391,8 +389,7 @@ fn deliver_one(
             // SAFETY: sched_tcb is the current TCB; sole holder on this CPU (preemption disabled).
             unsafe {
                 let cpu_id = thread.sched_tcb.current_cpu();
-                let rq = crate::scheduler::core::runqueue::run_queue(cpu_id);
-                crate::scheduler::schedule_block(rq, &mut *thread.sched_tcb);
+                crate::scheduler::schedule_block(cpu_id, &mut *thread.sched_tcb);
             }
         }
         SigActionKind::Cont => {
@@ -496,9 +493,12 @@ pub unsafe extern "C" fn proc_signal_on_exception_return(tcb_ptr: *mut u8, excfr
         }
     };
 
-    // Retrieve main ProcessThread.
-    // SAFETY: At this stage process is single-threaded; main_thread_ptr() == current thread.
-    let thread_ptr = pcb.main_thread_ptr();
+    // Resolve the interrupting/current ProcessThread by TID (fallback to main thread).
+    let tid = crate::process::core::pid::Tid(sched_tcb.tid as u32);
+    let mut thread_ptr = pcb.find_thread_by_tid(tid);
+    if thread_ptr.is_null() {
+        thread_ptr = pcb.main_thread_ptr();
+    }
     if thread_ptr.is_null() {
         return;
     }

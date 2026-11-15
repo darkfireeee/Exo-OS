@@ -134,7 +134,7 @@ const ZC_RING_MASK: usize = ZC_RING_SIZE - 1;
 #[repr(C, align(32))]
 struct ZcSlot {
     seq: AtomicU64,
-    zc: ZeroCopyRef,
+    zc: core::cell::UnsafeCell<ZeroCopyRef>,
     _pad: [u8; 4],
 }
 
@@ -142,11 +142,11 @@ impl ZcSlot {
     const fn zeroed() -> Self {
         Self {
             seq: AtomicU64::new(0),
-            zc: ZeroCopyRef {
+            zc: core::cell::UnsafeCell::new(ZeroCopyRef {
                 phys_addr: 0,
                 length: 0,
                 pool_idx: 0,
-            },
+            }),
             _pad: [0u8; 4],
         }
     }
@@ -204,13 +204,10 @@ impl ZeroCopyRing {
         if slot.seq.load(Ordering::Acquire) != pos {
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: SPSC — single producer. addr_of! avoids creating an intermediate &T,
-        // which avoids strict-aliasing UB.
-        // SAFETY: addr_of! avoids strict-aliasing UB; array_index_nospec (IPC-08).
+        // SAFETY: SPSC — single producer owns `slot` while `seq == pos`. `UnsafeCell`
+        // provides interior mutability through `&self` without creating `&mut`.
         unsafe {
-            let safe_idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
-            let s = core::ptr::addr_of!(self.slots[safe_idx]);
-            core::ptr::write(core::ptr::addr_of!((*s).zc) as *mut ZeroCopyRef, zc);
+            core::ptr::write(slot.zc.get(), zc);
         }
         slot.seq.store(pos + 1, Ordering::Release);
         self.head.store(pos + 1, Ordering::Relaxed);
@@ -224,11 +221,8 @@ impl ZeroCopyRing {
         if slot.seq.load(Ordering::Acquire) != pos + 1 {
             return Err(IpcError::WouldBlock);
         }
-        // SAFETY: validated sequence -> data available. SPSC -> single consumer.
-        let zc = unsafe {
-            let safe_idx = array_index_nospec((pos as usize) & ZC_RING_MASK, ZC_RING_SIZE);
-            core::ptr::read(&self.slots[safe_idx].zc) // IPC-08: safe_idx bounded by nospec
-        };
+        // SAFETY: SPSC — single consumer owns `slot` while `seq == pos + 1`.
+        let zc = unsafe { core::ptr::read(slot.zc.get()) };
         slot.seq.store(pos + ZC_RING_SIZE as u64, Ordering::Release);
         self.tail.store(pos + 1, Ordering::Relaxed);
         Ok(zc)

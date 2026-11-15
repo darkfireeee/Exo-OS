@@ -58,6 +58,7 @@ impl<P: PortIo> I8042<P> {
     }
 
     pub fn init(&mut self) -> Result<(), ControllerError> {
+        self.drain_output();
         self.write_command(CMD_DISABLE_KEYBOARD)?;
         self.write_command(CMD_DISABLE_AUX)?;
         self.drain_output();
@@ -74,8 +75,11 @@ impl<P: PortIo> I8042<P> {
         let _ = self.read_data(); // ACK 0xFA
         let _ = self.write_aux(0xF4);
         let _ = self.read_data(); // ACK 0xFA
+        self.drain_output();
 
-        self.write_command(CMD_ENABLE_KEYBOARD)
+        self.write_command(CMD_ENABLE_KEYBOARD)?;
+        self.drain_output();
+        Ok(())
     }
 
     pub fn poll_byte(&mut self) -> Option<u8> {
@@ -132,7 +136,10 @@ impl<P: PortIo> I8042<P> {
     }
 
     fn drain_output(&mut self) {
-        while self.io.read_u8(STATUS_PORT) & STATUS_OUTPUT_FULL != 0 {
+        for _ in 0..32 {
+            if self.io.read_u8(STATUS_PORT) & STATUS_OUTPUT_FULL == 0 {
+                break;
+            }
             let _ = self.io.read_u8(DATA_PORT);
         }
     }

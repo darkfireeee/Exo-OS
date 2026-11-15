@@ -128,6 +128,10 @@ pub fn sys_exofs_open_by_path(
     let mode32 = (mode & 0xFFFF_FFFF) as u32;
 
     let needs_write = (flags32 & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND)) != 0;
+    let needs_read = (flags32 & (O_WRONLY | O_RDWR)) != O_WRONLY;
+    if let Err(errno) = super::validation::check_exofs_zt_access(needs_read, needs_write) {
+        return errno;
+    }
     let cap = if needs_write {
         CapabilityType::ExoFsOpenByPathWrite
     } else {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// ExoFS Quota — Tracker d'utilisation
+// ExoFS Quota — Usage tracker
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 use super::quota_policy::{QuotaKind, QuotaLimits};
@@ -10,12 +10,12 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/// Nombre maximum d'entités suivies simultanément.
+/// Maximum number of simultaneously tracked entities.
 pub const QUOTA_MAX_ENTRIES: usize = 256;
 
 // ─── QuotaKey ─────────────────────────────────────────────────────────────────
 
-/// Clé unique d'une entité soumise à quota : (kind, entity_id).
+/// Unique key of an entity subject to quota: (kind, entity_id).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct QuotaKey {
     pub kind: u8, // QuotaKind as u8
@@ -45,7 +45,7 @@ impl QuotaKey {
 
 // ─── QuotaUsage ───────────────────────────────────────────────────────────────
 
-/// Consommation courante d'une entité.
+/// Current usage of an entity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QuotaUsage {
     pub bytes_used: u64,
@@ -62,42 +62,42 @@ impl QuotaUsage {
         }
     }
 
-    /// Ajoute des bytes (saturating, ARITH-02).
+    /// Adds bytes (saturating, ARITH-02).
     pub fn add_bytes(self, n: u64) -> Self {
         Self {
             bytes_used: self.bytes_used.saturating_add(n),
             ..self
         }
     }
-    /// Soustrait des bytes (saturating, ARITH-02).
+    /// Subtracts bytes (saturating, ARITH-02).
     pub fn sub_bytes(self, n: u64) -> Self {
         Self {
             bytes_used: self.bytes_used.saturating_sub(n),
             ..self
         }
     }
-    /// Ajoute des blobs (saturating).
+    /// Adds blobs (saturating).
     pub fn add_blobs(self, n: u64) -> Self {
         Self {
             blobs_used: self.blobs_used.saturating_add(n),
             ..self
         }
     }
-    /// Soustrait des blobs.
+    /// Subtracts blobs.
     pub fn sub_blobs(self, n: u64) -> Self {
         Self {
             blobs_used: self.blobs_used.saturating_sub(n),
             ..self
         }
     }
-    /// Ajoute des inodes.
+    /// Adds inodes.
     pub fn add_inodes(self, n: u64) -> Self {
         Self {
             inodes_used: self.inodes_used.saturating_add(n),
             ..self
         }
     }
-    /// Soustrait des inodes.
+    /// Subtracts inodes.
     pub fn sub_inodes(self, n: u64) -> Self {
         Self {
             inodes_used: self.inodes_used.saturating_sub(n),
@@ -105,7 +105,7 @@ impl QuotaUsage {
         }
     }
 
-    /// Total des octets + blobs + inodes pour tri.
+    /// Total of bytes + blobs + inodes for sorting.
     pub fn total_weight(&self) -> u64 {
         self.bytes_used
             .saturating_add(self.blobs_used)
@@ -115,15 +115,15 @@ impl QuotaUsage {
 
 // ─── QuotaEntry ───────────────────────────────────────────────────────────────
 
-/// Enregistrement interne combinant clé, utilisation et limites.
+/// Internal record combining key, usage, and limits.
 #[derive(Clone, Copy, Debug)]
 pub struct QuotaEntry {
     pub key: QuotaKey,
     pub usage: QuotaUsage,
     pub limits: QuotaLimits,
-    /// Tick du dernier dépassement soft (0 = pas de dépassement actif).
+    /// Tick of last soft breach (0 = no active breach).
     pub soft_breach_tick: u64,
-    /// Indique si l'entrée est occupée dans le tableau plat.
+    /// Indicates whether entry is occupied in the flat array.
     pub occupied: bool,
 }
 
@@ -148,22 +148,22 @@ impl QuotaEntry {
         }
     }
 
-    /// Pourcentage d'utilisation bytes en ‰.
+    /// Byte usage percentage in ‰.
     pub fn bytes_usage_ppt(&self) -> u64 {
         self.limits.bytes_usage_ppt(self.usage.bytes_used)
     }
 
-    /// Vrai si la limite dure bytes est dépassée.
+    /// True if hard byte limit is exceeded.
     pub fn bytes_hard_exceeded(&self) -> bool {
         self.limits.bytes_hard_exceeded(self.usage.bytes_used)
     }
 
-    /// Vrai si la limite souple bytes est dépassée.
+    /// True if soft byte limit is exceeded.
     pub fn bytes_soft_exceeded(&self) -> bool {
         self.limits.bytes_soft_exceeded(self.usage.bytes_used)
     }
 
-    /// Vrai si la grâce est expirée depuis le premier dépassement soft.
+    /// True if grace period expired since first soft breach.
     pub fn grace_expired(&self, current_tick: u64) -> bool {
         if self.soft_breach_tick == 0 {
             return false;
@@ -177,8 +177,8 @@ impl QuotaEntry {
 
 // ─── QuotaTracker ─────────────────────────────────────────────────────────────
 
-/// Table plate d'entrées de quota (max QUOTA_MAX_ENTRIES).
-/// Thread-safe via spinlock AtomicU64.
+/// Flat table of quota entries (max QUOTA_MAX_ENTRIES).
+/// Thread-safe via AtomicU64 spinlock.
 pub struct QuotaTracker {
     entries: UnsafeCell<[QuotaEntry; QUOTA_MAX_ENTRIES]>,
     count: AtomicU64,
@@ -219,10 +219,10 @@ impl QuotaTracker {
         self.lock.store(0, Ordering::Release);
     }
 
-    // ── Recherche linéaire (RECUR-01 : while) ─────────────────────────────
+    // ── Linear search (RECUR-01: while) ───────────────────────────────────
 
     fn find_idx(&self, key: QuotaKey) -> Option<usize> {
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -235,7 +235,7 @@ impl QuotaTracker {
     }
 
     fn find_free_slot(&self) -> Option<usize> {
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -247,9 +247,9 @@ impl QuotaTracker {
         None
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Insère ou met à jour les limites d'une entité.
+    /// Inserts or updates limits for an entity.
     pub fn set_limits(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
         limits.validate()?;
         self.acquire();
@@ -261,24 +261,24 @@ impl QuotaTracker {
     fn _set_limits_locked(&self, key: QuotaKey, limits: QuotaLimits) -> ExofsResult<()> {
         let opt_idx = self.find_idx(key);
         let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = opt_idx {
             entries[idx].limits = limits;
             return Ok(());
         }
-        // Nouvelle entrée
+        // New entry
         let slot = opt_slot.ok_or(ExofsError::NoSpace)?;
         entries[slot] = QuotaEntry::new(key, limits);
         self.count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
-    /// Retire une entité du tracker.
+    /// Removes an entity from tracker.
     pub fn remove(&self, key: QuotaKey) -> ExofsResult<()> {
         self.acquire();
         let opt_idx = self.find_idx(key);
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = opt_idx {
             let e = &entries[idx];
@@ -298,37 +298,37 @@ impl QuotaTracker {
         result
     }
 
-    /// Lit l'utilisation courante d'une entité.
+    /// Reads current usage of an entity.
     pub fn get_usage(&self, key: QuotaKey) -> Option<QuotaUsage> {
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i].usage);
         self.release();
         r
     }
 
-    /// Lit les limites d'une entité.
+    /// Reads limits of an entity.
     pub fn get_limits(&self, key: QuotaKey) -> Option<QuotaLimits> {
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i].limits);
         self.release();
         r
     }
 
-    /// Lit l'entrée complète.
+    /// Reads full entry.
     pub fn get_entry(&self, key: QuotaKey) -> Option<QuotaEntry> {
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let r = self.find_idx(key).map(|i| entries[i]);
         self.release();
         r
     }
 
-    /// Ajoute des bytes à une entité (crée si elle n'existe pas avec limites illimitées).
+    /// Adds bytes to an entity (creates if absent with unlimited limits).
     pub fn add_bytes(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_bytes_locked(key, n, true);
@@ -336,7 +336,7 @@ impl QuotaTracker {
         result
     }
 
-    /// Soustrait des bytes à une entité.
+    /// Subtracts bytes from an entity.
     pub fn sub_bytes(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_bytes_locked(key, n, false);
@@ -350,7 +350,7 @@ impl QuotaTracker {
             return Ok(0);
         }
         let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match opt_idx {
             Some(i) => i,
@@ -374,7 +374,7 @@ impl QuotaTracker {
         Ok(entries[idx].usage.bytes_used)
     }
 
-    /// Ajoute des blobs à une entité.
+    /// Adds blobs to an entity.
     pub fn add_blobs(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_blobs_locked(key, n, true);
@@ -382,7 +382,7 @@ impl QuotaTracker {
         result
     }
 
-    /// Soustrait des blobs.
+    /// Subtracts blobs.
     pub fn sub_blobs(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_blobs_locked(key, n, false);
@@ -396,7 +396,7 @@ impl QuotaTracker {
             return Ok(0);
         }
         let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match opt_idx {
             Some(i) => i,
@@ -418,7 +418,7 @@ impl QuotaTracker {
         Ok(entries[idx].usage.blobs_used)
     }
 
-    /// Ajoute des inodes.
+    /// Adds inodes.
     pub fn add_inodes(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_inodes_locked(key, n, true);
@@ -426,7 +426,7 @@ impl QuotaTracker {
         result
     }
 
-    /// Soustrait des inodes.
+    /// Subtracts inodes.
     pub fn sub_inodes(&self, key: QuotaKey, n: u64) -> ExofsResult<u64> {
         self.acquire();
         let result = self._mutate_inodes_locked(key, n, false);
@@ -440,7 +440,7 @@ impl QuotaTracker {
             return Ok(0);
         }
         let opt_slot = if opt_idx.is_none() { self.find_free_slot() } else { None };
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match opt_idx {
             Some(i) => i,
@@ -462,11 +462,11 @@ impl QuotaTracker {
         Ok(entries[idx].usage.inodes_used)
     }
 
-    /// Enregistre le tick du premier dépassement soft.
+    /// Records the tick of the first soft breach.
     pub fn record_soft_breach(&self, key: QuotaKey, tick: u64) {
         self.acquire();
         let opt_idx = self.find_idx(key);
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = opt_idx {
             if entries[idx].soft_breach_tick == 0 {
@@ -476,11 +476,11 @@ impl QuotaTracker {
         self.release();
     }
 
-    /// Efface le tick de dépassement soft (grâce terminée ou quota libéré).
+    /// Clears soft breach tick (grace period ended or quota freed).
     pub fn clear_soft_breach(&self, key: QuotaKey) {
         self.acquire();
         let opt_idx = self.find_idx(key);
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         if let Some(idx) = opt_idx {
             entries[idx].soft_breach_tick = 0;
@@ -488,7 +488,7 @@ impl QuotaTracker {
         self.release();
     }
 
-    /// Met à jour de façon atomique bytes, blobs et inodes sous un verrou unique.
+    /// Atomically updates bytes, blobs, and inodes under a single lock.
     pub fn mutate_usage(
         &self,
         key: QuotaKey,
@@ -506,7 +506,7 @@ impl QuotaTracker {
         } else {
             None
         };
-        // SAFETY: validité des données vérifiée sous spinlock.
+        // SAFETY: data validity checked under spinlock.
         let entries = unsafe { &mut *self.entries.get() };
         let idx = match opt_idx {
             Some(i) => i,
@@ -567,12 +567,12 @@ impl QuotaTracker {
         Ok(())
     }
 
-    /// Nombre d'entités actives.
+    /// Number of active entities.
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed) as usize
     }
 
-    /// Totaux agrégés.
+    /// Aggregated totals.
     pub fn total_bytes(&self) -> u64 {
         self.total_bytes.load(Ordering::Relaxed)
     }
@@ -583,13 +583,13 @@ impl QuotaTracker {
         self.total_inodes.load(Ordering::Relaxed)
     }
 
-    /// Snapshot de toutes les entrées actives (OOM-02).
+    /// Snapshot of all active entries (OOM-02).
     pub fn snapshot_all(&self) -> ExofsResult<Vec<QuotaEntry>> {
         let count = self.count.load(Ordering::Relaxed) as usize;
         let mut v = Vec::new();
         v.try_reserve(count).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -606,12 +606,12 @@ impl QuotaTracker {
         Ok(v)
     }
 
-    /// Retourne les clés de toutes les entités en franchissement hard.
+    /// Returns keys of all entities in hard exceedance.
     pub fn hard_exceeded_keys(&self) -> ExofsResult<Vec<QuotaKey>> {
         let mut v = Vec::new();
         v.try_reserve(16).map_err(|_| ExofsError::NoMemory)?;
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < QUOTA_MAX_ENTRIES {
@@ -628,10 +628,10 @@ impl QuotaTracker {
         Ok(v)
     }
 
-    /// Réinitialise l'usage d'une entité (conserve les limites).
+    /// Resets usage of an entity (preserves limits).
     pub fn reset_usage(&self, key: QuotaKey) -> ExofsResult<()> {
         self.acquire();
-        // SAFETY: validité des données vérifiée par les gardes ci-dessus.
+        // SAFETY: data validity checked under lock.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = self.find_idx(key) {
             let old = entries[idx].usage;
@@ -659,7 +659,7 @@ impl QuotaTracker {
     }
 }
 
-/// Singleton global du tracker de quotas.
+/// Global singleton of the quota tracker.
 pub static QUOTA_TRACKER: QuotaTracker = QuotaTracker::new_const();
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

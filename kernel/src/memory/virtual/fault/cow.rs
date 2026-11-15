@@ -48,7 +48,7 @@ pub fn handle_cow_fault<A: FaultAllocator>(
 
     let tracked_ref_count = COW_TRACKER.tracked_ref_count(old_frame);
     let can_restore_in_place =
-        tracked_ref_count.is_some_and(|rc| rc <= 1) || !old_entry.is_cow();
+        tracked_ref_count.map_or(true, |rc| rc <= 1) || !old_entry.is_cow();
 
     if can_restore_in_place {
         let new_raw = PageTableEntry::from_page_flags(old_frame, writable_flags).raw();

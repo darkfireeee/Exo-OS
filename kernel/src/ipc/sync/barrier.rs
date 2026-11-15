@@ -12,8 +12,9 @@
 // RULE BARRIER-02: spin-wait bounded by configurable timeout.
 // RULE BARRIER-03: AtomicU32 generation guarantees cyclic correctness.
 
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::ipc::core::types::IpcError;
 
@@ -46,17 +47,15 @@ pub enum BarrierResult {
 /// Cyclic IPC synchronization barrier (reusable).
 ///
 /// Supports up to `MAX_BARRIER_PARTIES` participants.  
-/// Reusable after each cycle thanks to generation counter.
+/// Reusable after each cycle thanks to packed `(generation, arrived)` counter.
 #[repr(C, align(64))]
 pub struct IpcBarrier {
     /// Opaque identifier
     pub id: u32,
     /// Number of participants required to cross the barrier
     parties: AtomicU32,
-    /// Arrival counter for current cycle
-    arrived: AtomicU32,
-    /// Generation number (current phase)
-    generation: AtomicU32,
+    /// Packed `(generation: u32) << 32 | (arrived: u32)` preventing cycle/reset races
+    gen_arrived: AtomicU64,
     /// Barrier phase
     phase: AtomicU32,
     /// Number of completed cycles
@@ -75,12 +74,16 @@ unsafe impl Sync for IpcBarrier {}
 unsafe impl Send for IpcBarrier {}
 
 impl IpcBarrier {
+    #[inline]
+    const fn pack_ga(gen: u32, arrived: u32) -> u64 {
+        ((gen as u64) << 32) | (arrived as u64)
+    }
+
     pub const fn new(id: u32, parties: u32) -> Self {
         Self {
             id,
             parties: AtomicU32::new(parties),
-            arrived: AtomicU32::new(0),
-            generation: AtomicU32::new(0),
+            gen_arrived: AtomicU64::new(0),
             phase: AtomicU32::new(phase_state::WAITING),
             cycles: AtomicU64::new(0),
             total_arrives: AtomicU64::new(0),
@@ -97,12 +100,12 @@ impl IpcBarrier {
 
     /// Returns number of participants that have already arrived in this cycle
     pub fn arrived_count(&self) -> u32 {
-        self.arrived.load(Ordering::Relaxed)
+        (self.gen_arrived.load(Ordering::Acquire) & 0xFFFF_FFFF) as u32
     }
 
     /// Returns current generation (phase)
     pub fn current_generation(&self) -> u32 {
-        self.generation.load(Ordering::Relaxed)
+        (self.gen_arrived.load(Ordering::Acquire) >> 32) as u32
     }
 
     // -----------------------------------------------------------------------
@@ -126,21 +129,38 @@ impl IpcBarrier {
 
         self.total_arrives.fetch_add(1, Ordering::Relaxed);
 
-        // Save current generation BEFORE incrementing `arrived`
-        let gen = self.generation.load(Ordering::Acquire);
         let parties = self.parties.load(Ordering::Relaxed);
-
-        // Increment arrival counter
-        let my_arrival = self.arrived.fetch_add(1, Ordering::AcqRel) + 1;
-
-        if my_arrival == parties {
-            // This thread is LEADER: release all waiters
-            self.cycles.fetch_add(1, Ordering::Relaxed);
-            // Reset counter to zero
-            self.arrived.store(0, Ordering::Relaxed);
-            // Move to next generation — wakes all waiters
-            self.generation.fetch_add(1, Ordering::Release);
-            return Ok(BarrierResult::Leader);
+        let gen: u32;
+        loop {
+            if !self.active.load(Ordering::Acquire) {
+                return Err(IpcError::Closed);
+            }
+            let cur = self.gen_arrived.load(Ordering::Acquire);
+            let cur_gen = (cur >> 32) as u32;
+            let cur_arrived = (cur & 0xFFFF_FFFF) as u32;
+            let next_arrived = cur_arrived + 1;
+            if next_arrived >= parties {
+                let next = Self::pack_ga(cur_gen.wrapping_add(1), 0);
+                if self
+                    .gen_arrived
+                    .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    self.cycles.fetch_add(1, Ordering::Relaxed);
+                    return Ok(BarrierResult::Leader);
+                }
+            } else {
+                let next = Self::pack_ga(cur_gen, next_arrived);
+                if self
+                    .gen_arrived
+                    .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    gen = cur_gen;
+                    break;
+                }
+            }
+            core::hint::spin_loop();
         }
 
         // This thread must wait for generation to change
@@ -156,35 +176,38 @@ impl IpcBarrier {
                 }
             }
 
-            if !self.active.load(Ordering::Relaxed) {
+            if !self.active.load(Ordering::Acquire) {
                 return Err(IpcError::Closed);
             }
 
-            let current_gen = self.generation.load(Ordering::Acquire);
-            if current_gen != gen {
+            if self.current_generation() != gen {
                 // Generation changed: barrier was crossed
                 return Ok(BarrierResult::Follower);
             }
 
             if spins >= limit {
-                // Check one last time if barrier was crossed before declaring timeout
-                if self.generation.load(Ordering::Acquire) != gen {
-                    return Ok(BarrierResult::Follower);
-                }
-                // T8-043 FIX: decrement arrived under CAS only if generation has not advanced
-                let mut cur = self.arrived.load(Ordering::Acquire);
-                while cur > 0 && self.generation.load(Ordering::Acquire) == gen {
-                    match self.arrived.compare_exchange_weak(
-                        cur,
-                        cur - 1,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    ) {
-                        Ok(_) => break,
-                        Err(actual) => cur = actual,
+                // Atomically decrement `arrived` ONLY if still in `gen`
+                loop {
+                    let cur = self.gen_arrived.load(Ordering::Acquire);
+                    let cur_gen = (cur >> 32) as u32;
+                    if cur_gen != gen {
+                        return Ok(BarrierResult::Follower);
                     }
+                    let cur_arrived = (cur & 0xFFFF_FFFF) as u32;
+                    if cur_arrived == 0 {
+                        break;
+                    }
+                    let next = Self::pack_ga(gen, cur_arrived - 1);
+                    if self
+                        .gen_arrived
+                        .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    core::hint::spin_loop();
                 }
-                if self.generation.load(Ordering::Acquire) != gen {
+                if self.current_generation() != gen {
                     return Ok(BarrierResult::Follower);
                 }
                 self.total_timeouts.fetch_add(1, Ordering::Relaxed);
@@ -200,18 +223,36 @@ impl IpcBarrier {
     /// Arrives at the barrier without waiting.
     /// Returns `true` if this thread completed the cycle (was the last).
     pub fn arrive(&self) -> bool {
-        if !self.active.load(Ordering::Acquire) {
-            return false;
-        }
         let parties = self.parties.load(Ordering::Relaxed);
-        let my_arrival = self.arrived.fetch_add(1, Ordering::AcqRel) + 1;
-        if my_arrival == parties {
-            self.arrived.store(0, Ordering::Relaxed);
-            self.cycles.fetch_add(1, Ordering::Relaxed);
-            self.generation.fetch_add(1, Ordering::Release);
-            true
-        } else {
-            false
+        loop {
+            if !self.active.load(Ordering::Acquire) {
+                return false;
+            }
+            let cur = self.gen_arrived.load(Ordering::Acquire);
+            let cur_gen = (cur >> 32) as u32;
+            let cur_arrived = (cur & 0xFFFF_FFFF) as u32;
+            let next_arrived = cur_arrived + 1;
+            if next_arrived >= parties {
+                let next = Self::pack_ga(cur_gen.wrapping_add(1), 0);
+                if self
+                    .gen_arrived
+                    .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    self.cycles.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+            } else {
+                let next = Self::pack_ga(cur_gen, next_arrived);
+                if self
+                    .gen_arrived
+                    .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    return false;
+                }
+            }
+            core::hint::spin_loop();
         }
     }
 
@@ -224,10 +265,15 @@ impl IpcBarrier {
         loop {
             core::hint::spin_loop();
             spins += 1;
-            if !self.active.load(Ordering::Relaxed) {
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+            if !self.active.load(Ordering::Acquire) {
                 return Err(IpcError::Closed);
             }
-            if self.generation.load(Ordering::Acquire) != expected_gen {
+            if self.current_generation() != expected_gen {
                 return Ok(());
             }
             if spins >= limit {
@@ -241,27 +287,43 @@ impl IpcBarrier {
     // Reset and destruction
     // -----------------------------------------------------------------------
 
+    fn advance_generation(&self) {
+        loop {
+            let cur = self.gen_arrived.load(Ordering::Acquire);
+            let gen = (cur >> 32) as u32;
+            let next = Self::pack_ga(gen.wrapping_add(1), 0);
+            if self
+                .gen_arrived
+                .compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
     /// Resets the barrier (emergency force reset).
     /// Wakes all waiters via generation change.
     pub fn reset(&self) {
-        self.arrived.store(0, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::Release);
+        self.advance_generation();
     }
 
     /// Marks barrier as destroyed. Current waiters will return Closed.
     pub fn destroy(&self) {
         self.active.store(false, Ordering::Release);
         // Release blocked waiters by advancing generation
-        self.generation.fetch_add(1, Ordering::Release);
+        self.advance_generation();
     }
 
     /// Retrieves statistics
     pub fn snapshot(&self) -> IpcBarrierStats {
+        let cur = self.gen_arrived.load(Ordering::Acquire);
         IpcBarrierStats {
             id: self.id,
             parties: self.parties.load(Ordering::Relaxed),
-            arrived: self.arrived.load(Ordering::Relaxed),
-            generation: self.generation.load(Ordering::Relaxed),
+            arrived: (cur & 0xFFFF_FFFF) as u32,
+            generation: (cur >> 32) as u32,
             cycles: self.cycles.load(Ordering::Relaxed),
             total_arrives: self.total_arrives.load(Ordering::Relaxed),
             total_timeouts: self.total_timeouts.load(Ordering::Relaxed),
@@ -284,17 +346,42 @@ pub struct IpcBarrierStats {
 // Global IPC barrier table
 // ---------------------------------------------------------------------------
 
+const SLOT_FREE: u8 = 0;
+const SLOT_INIT: u8 = 1;
+const SLOT_ACTIVE: u8 = 2;
+const SLOT_DESTROYING: u8 = 3;
+
 struct BarrierSlot {
-    barrier: MaybeUninit<IpcBarrier>,
-    occupied: AtomicBool,
+    barrier: UnsafeCell<MaybeUninit<IpcBarrier>>,
+    state: AtomicU8,
+    active_ops: AtomicU32,
 }
 
 impl BarrierSlot {
     const fn empty() -> Self {
         Self {
-            barrier: MaybeUninit::uninit(),
-            occupied: AtomicBool::new(false),
+            barrier: UnsafeCell::new(MaybeUninit::uninit()),
+            state: AtomicU8::new(SLOT_FREE),
+            active_ops: AtomicU32::new(0),
         }
+    }
+}
+
+struct BarrierRef<'a> {
+    slot: &'a BarrierSlot,
+    inner: &'a IpcBarrier,
+}
+
+impl<'a> Drop for BarrierRef<'a> {
+    fn drop(&mut self) {
+        self.slot.active_ops.fetch_sub(1, Ordering::Release);
+    }
+}
+
+impl<'a> core::ops::Deref for BarrierRef<'a> {
+    type Target = IpcBarrier;
+    fn deref(&self) -> &Self::Target {
+        self.inner
     }
 }
 
@@ -303,7 +390,7 @@ struct IpcBarrierTable {
     count: AtomicU32,
 }
 
-// SAFETY: access via CAS + MaybeUninit
+// SAFETY: access via state machine CAS + UnsafeCell<MaybeUninit> + active_ops
 unsafe impl Sync for IpcBarrierTable {}
 
 impl IpcBarrierTable {
@@ -320,15 +407,17 @@ impl IpcBarrierTable {
             return None;
         }
         for i in 0..MAX_IPC_BARRIERS {
-            if !self.slots[i].occupied.load(Ordering::Relaxed) {
+            if self.slots[i].state.load(Ordering::Relaxed) == SLOT_FREE {
                 if self.slots[i]
-                    .occupied
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                    .state
+                    .compare_exchange(SLOT_FREE, SLOT_INIT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
-                    let ptr = self.slots[i].barrier.as_ptr() as *mut IpcBarrier;
-                    // SAFETY: CAS AcqRel guarantees slot exclusivity; MaybeUninit<IpcBarrier> write-once.
-                    unsafe { ptr.write(IpcBarrier::new(id, parties)) }
+                    // SAFETY: CAS AcqRel SLOT_FREE->SLOT_INIT guarantees exclusivity before publish.
+                    unsafe {
+                        (*self.slots[i].barrier.get()).write(IpcBarrier::new(id, parties));
+                    }
+                    self.slots[i].state.store(SLOT_ACTIVE, Ordering::Release);
                     self.count.fetch_add(1, Ordering::Relaxed);
                     return Some(i);
                 }
@@ -337,33 +426,56 @@ impl IpcBarrierTable {
         None
     }
 
-    fn get(&self, idx: usize) -> Option<&IpcBarrier> {
+    fn get(&self, idx: usize) -> Option<BarrierRef<'_>> {
         if idx >= MAX_IPC_BARRIERS {
             return None;
         }
-        if !self.slots[idx].occupied.load(Ordering::Acquire) {
+        let slot = &self.slots[idx];
+        if slot.state.load(Ordering::Acquire) != SLOT_ACTIVE {
             return None;
         }
-        // SAFETY: occupied=true guarantees initialization
-        Some(unsafe { &*self.slots[idx].barrier.as_ptr() })
+        slot.active_ops.fetch_add(1, Ordering::AcqRel);
+        if slot.state.load(Ordering::Acquire) != SLOT_ACTIVE {
+            slot.active_ops.fetch_sub(1, Ordering::Release);
+            return None;
+        }
+        // SAFETY: slot state is SLOT_ACTIVE and active_ops > 0 pins it against reuse.
+        let inner = unsafe { (&*slot.barrier.get()).assume_init_ref() };
+        Some(BarrierRef { slot, inner })
     }
 
     fn free(&self, idx: usize) -> bool {
         if idx >= MAX_IPC_BARRIERS {
             return false;
         }
-        if let Some(b) = self.get(idx) {
-            b.destroy();
-        }
-        if self.slots[idx]
-            .occupied
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
+        let slot = &self.slots[idx];
+        if slot
+            .state
+            .compare_exchange(
+                SLOT_ACTIVE,
+                SLOT_DESTROYING,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
         {
-            self.count.fetch_sub(1, Ordering::Relaxed);
-            return true;
+            return false;
         }
-        false
+        // SAFETY: SLOT_ACTIVE->SLOT_DESTROYING keeps slot initialized until active_ops drains.
+        unsafe { (&*slot.barrier.get()).assume_init_ref().destroy() };
+        let mut spins = 0u64;
+        while slot.active_ops.load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+            spins += 1;
+            if spins % 128 == 0 {
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+        }
+        slot.state.store(SLOT_FREE, Ordering::Release);
+        self.count.fetch_sub(1, Ordering::Relaxed);
+        true
     }
 
     fn count(&self) -> u32 {

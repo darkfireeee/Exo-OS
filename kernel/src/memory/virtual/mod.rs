@@ -29,7 +29,8 @@ pub use fault::{
     handle_page_fault, FaultAllocator, FaultCause, FaultContext, FaultResult, FAULT_STATS,
 };
 pub use mmap::{
-    do_brk, do_mmap, do_mmap_in_as, do_mprotect, do_mprotect_in_as, do_mremap_zero_copy, do_munmap,
-    do_munmap_in_as, map_shm_into_process, register_current_as_getter, CurrentAsGetterFn,
-    MmapError, MremapZeroCopy, ShmMapError, ShmMapIntoResult,
+    do_brk, do_mmap, do_mmap_in_as, do_mmap_shared_frames, do_mprotect, do_mprotect_in_as,
+    do_mremap_zero_copy, do_munmap, do_munmap_in_as, map_shm_into_process,
+    register_current_as_getter, CurrentAsGetterFn, MmapError, MremapZeroCopy, ShmMapError,
+    ShmMapIntoResult,
 };

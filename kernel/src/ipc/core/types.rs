@@ -578,11 +578,12 @@ impl From<IpcCapError> for IpcError {
 /// ```
 #[inline(always)]
 pub fn array_index_nospec(index: usize, size: usize) -> usize {
-    // Linux kernel technique: arithmetic right-shift of sign of (index - size).
-    // If index < size  : index.wrapping_sub(size) -> negative value (signed) -> MSB=1
-    //                    -> shift yields 0xFFFF...FF -> mask is all-ones -> index unchanged.
-    // If index >= size : index.wrapping_sub(size) -> >= 0 (signed) -> MSB=0
-    //                    -> shift yields 0x0000...00 -> mask is all-zeros -> result = 0.
-    let mask = (index.wrapping_sub(size) as isize >> (isize::BITS - 1)) as usize;
+    if size == 0 || index >= size {
+        return 0;
+    }
+    // Classic Speculation-Safe Mask: valid for all sizes <= isize::MAX and avoids
+    // wraparound false positives when `index >= size + (1 << 63)`.
+    let mask = !((index | size.wrapping_sub(1).wrapping_sub(index)) as isize >> (isize::BITS - 1))
+        as usize;
     index & mask
 }

@@ -16,7 +16,7 @@
 //   - No imports from process/ or fs/
 
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{
@@ -45,13 +45,17 @@ pub const SUBSCRIBER_INVALID: SubscriberId = u32::MAX;
 // Subscriber slot
 // ---------------------------------------------------------------------------
 
+const SUB_INACTIVE: u8 = 0;
+const SUB_INITING: u8 = 1;
+const SUB_ACTIVE: u8 = 2;
+
 /// Private ring of a subscriber with its performance counters
 #[repr(C, align(64))]
 pub struct SubscriberSlot {
     /// Dedicated SPSC ring for this subscriber
     ring: SpscRing,
-    /// Active subscriber
-    active: AtomicBool,
+    /// Subscriber lifecycle state (0 = Inactive, 1 = Initializing, 2 = Active)
+    state: AtomicU8,
     /// Opaque identifier (e.g. consumer ThreadId)
     owner_id: AtomicU64,
     /// Count of received messages
@@ -70,7 +74,7 @@ impl SubscriberSlot {
     pub const fn new() -> Self {
         Self {
             ring: SpscRing::new(),
-            active: AtomicBool::new(false),
+            state: AtomicU8::new(SUB_INACTIVE),
             owner_id: AtomicU64::new(0),
             msgs_received: AtomicU64::new(0),
             msgs_dropped: AtomicU64::new(0),
@@ -80,21 +84,23 @@ impl SubscriberSlot {
 
     /// Initializes and activates this subscriber.
     pub fn activate(&self, owner_id: u64) {
+        self.state.store(SUB_INITING, Ordering::Release);
         self.owner_id.store(owner_id, Ordering::Relaxed);
-        // SAFETY: initialize ring before marking active
+        // SAFETY: initialize ring before publishing Active state
         self.ring.init();
-        self.active.store(true, Ordering::Release);
+        self.state.store(SUB_ACTIVE, Ordering::Release);
     }
 
-    /// Attempts to activate subscriber atomically (CAS).
+    /// Attempts to activate subscriber atomically (3-state CAS avoids use-before-init).
     pub fn try_activate(&self, owner_id: u64) -> bool {
         if self
-            .active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .state
+            .compare_exchange(SUB_INACTIVE, SUB_INITING, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             self.owner_id.store(owner_id, Ordering::Relaxed);
             self.ring.init();
+            self.state.store(SUB_ACTIVE, Ordering::Release);
             true
         } else {
             false
@@ -103,15 +109,15 @@ impl SubscriberSlot {
 
     /// Deactivates subscriber (no longer consumes future messages).
     pub fn deactivate(&self) {
-        self.active.store(false, Ordering::Release);
+        self.state.store(SUB_INACTIVE, Ordering::Release);
         self.owner_id.store(0, Ordering::Relaxed);
     }
 
     /// Attempts to deactivate subscriber atomically (CAS).
     pub fn try_deactivate(&self) -> bool {
         if self
-            .active
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .state
+            .compare_exchange(SUB_ACTIVE, SUB_INACTIVE, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
             self.owner_id.store(0, Ordering::Relaxed);
@@ -122,7 +128,7 @@ impl SubscriberSlot {
     }
 
     pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == SUB_ACTIVE
     }
 
     /// Writes a message into this subscriber's ring.
@@ -428,7 +434,12 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(MessageId, u32, u32), IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_SEND,
+        )?;
         self.publish(data, flags)
     }
 
@@ -442,7 +453,12 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<Option<SubscriberId>, IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_RECV,
+        )?;
         Ok(self.subscribe(owner_id))
     }
 
@@ -457,7 +473,12 @@ impl BroadcastChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(usize, MsgFlags), IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_RECV,
+        )?;
         self.recv(sub_id, buf)
     }
 }
@@ -523,7 +544,7 @@ impl BroadcastChannelTable {
 // SpinLock<BroadcastChannelTable> all-zero = valid (unlocked, empty table).
 // MaybeUninit::uninit() = 0 const-eval bytes, memory comes from .bss.
 static BROADCAST_TABLE: core::mem::MaybeUninit<SpinLock<BroadcastChannelTable>> =
-    core::mem::MaybeUninit::uninit();
+    core::mem::MaybeUninit::zeroed();
 
 #[inline(always)]
 fn broadcast_table() -> &'static SpinLock<BroadcastChannelTable> {

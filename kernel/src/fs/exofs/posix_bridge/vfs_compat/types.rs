@@ -2,7 +2,7 @@
 use crate::fs::exofs::posix_bridge::inode_emulation::ObjectIno;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const VFS_ROOT_INO: ObjectIno = 1;
@@ -10,8 +10,8 @@ pub const VFS_NAME_MAX: usize = 255;
 pub const VFS_PATH_MAX: usize = 4096;
 pub const VFS_OPEN_MAX: usize = 1024;
 pub const VFS_READDIR_BATCH: usize = 64;
-/// Magic propre à la couche namespace/VFS.
-/// Il est volontairement distinct du magic superblock ExoFS (`0x4558_4F46`).
+/// Magic specific to the namespace/VFS layer.
+/// Distinct from the ExoFS superblock magic (`0x4558_4F46`).
 pub const VFS_MAGIC: u32 = 0x5654_4654; // "VTFT"
 pub const VFS_VERSION: u8 = 1;
 pub const VFS_NAMESPACE_MAGIC: u32 = 0x5646_534E; // "VFSN"
@@ -21,7 +21,7 @@ pub const VFS_NAMESPACE_DIRENT_HEADER_SIZE: usize = 24;
 pub const VFS_NAMESPACE_BLOB_TAG: &[u8] = b"exo:posix-vfs-namespace:v1";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modes et types de fichiers
+// File modes and types
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub mod file_mode {
@@ -42,7 +42,7 @@ pub mod file_mode {
     pub const DEFAULT_FILE: u32 = S_IFREG | S_IRUSR | S_IWUSR;
 }
 
-/// Flags d'ouverture de fichier.
+/// File open flags.
 pub mod open_flags {
     pub const O_RDONLY: u32 = 0x0000;
     pub const O_WRONLY: u32 = 0x0001;
@@ -55,10 +55,10 @@ pub mod open_flags {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Structures POSIX exposées
+// Exposed POSIX structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Métadonnées d'un inode (stat-like).
+/// Inode metadata (stat-like).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VfsInode {
@@ -91,7 +91,7 @@ impl VfsInode {
     }
 }
 
-/// Entrée de répertoire.
+/// Directory entry.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct VfsDirent {
@@ -127,7 +127,7 @@ impl core::fmt::Debug for VfsDirent {
     }
 }
 
-/// Descripteur de fichier ouvert.
+/// Open file descriptor.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct VfsFd {

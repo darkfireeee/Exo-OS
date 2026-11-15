@@ -139,7 +139,7 @@ fn recv_reply(
                 }
                 #[cfg(not(test))]
                 unsafe {
-                    let nap_ns = deadline_ns.saturating_sub(now).min(2_000_000);
+                    let nap_ns = deadline_ns.saturating_sub(now).min(20_000_000);
                     if !crate::scheduler::timer::sleep_ns(nap_ns) {
                         let _ = crate::scheduler::core::switch::cooperative_reschedule();
                     }
@@ -241,9 +241,14 @@ pub fn call_raw(
     }
 
     let payload_len = reply_hdr.payload_len as usize;
-    let copy_len = payload_len.min(reply_buf.len()).min(MAX_CALL_PAYLOAD);
-    reply_buf[..copy_len]
-        .copy_from_slice(&raw_reply[CALL_HEADER_SIZE..CALL_HEADER_SIZE + copy_len]);
+    if payload_len > MAX_CALL_PAYLOAD || CALL_HEADER_SIZE.saturating_add(payload_len) > n {
+        return Err(IpcError::ProtocolError);
+    }
+    let copy_len = payload_len.min(reply_buf.len());
+    if copy_len > 0 {
+        reply_buf[..copy_len]
+            .copy_from_slice(&raw_reply[CALL_HEADER_SIZE..CALL_HEADER_SIZE + copy_len]);
+    }
     Ok(copy_len)
 }
 

@@ -109,8 +109,11 @@ struct SlabHeader {
     class_idx: u8,
     /// Cache color (offset in bytes to improve distribution).
     color_offset: u8,
-    _pad: [u8; 6],
+    _pad: [u8; 2],
+    magic: u32,
 }
+
+const SLAB_HEADER_MAGIC: u32 = 0x51AB_CACA;
 
 /// Header size — kept under PAGE_SIZE.
 const _: () = assert!(mem::size_of::<SlabHeader>() <= 64);
@@ -221,7 +224,7 @@ impl SlabCache {
         let mut inner = self.inner.lock();
 
         // 1. Try partial list
-        if let Some(ptr) = Self::alloc_from_list(&mut inner.partial_list, &self.info) {
+        if let Some(ptr) = Self::alloc_from_partial(&mut inner, &self.info) {
             self.stats.allocs.fetch_add(1, Ordering::Relaxed);
             self.stats.current_inuse.fetch_add(1, Ordering::Relaxed);
             return Ok(ptr);
@@ -260,6 +263,16 @@ impl SlabCache {
         let page_addr = ptr.as_ptr() as usize & !(PAGE_SIZE - 1);
         let header = page_addr as *mut SlabHeader;
 
+        if (*header).magic != SLAB_HEADER_MAGIC
+            || (*header).total == 0
+            || (*header).inuse == 0
+            || (*header).inuse > (*header).total
+        {
+            return;
+        }
+
+        let was_full = (*header).inuse == (*header).total;
+
         // Push onto slab freelist
         // SAFETY: `header` points to a valid SlabHeader (from our create_new_slab)
         let obj_ptr = ptr.as_ptr();
@@ -273,16 +286,19 @@ impl SlabCache {
 
         let r = &mut *inner;
         if inuse == 0 {
-            // SAFETY: valid header ptr (active slab); lists manipulated under lock.
+            // SAFETY: valid header ptr (active slab); remove only from its actual list.
             unsafe {
-                list_remove(header, &mut r.partial_list, &mut r.partial_count);
-                list_remove(header, &mut r.full_list, &mut r.full_count);
+                if was_full {
+                    list_remove(header, &mut r.full_list, &mut r.full_count);
+                } else {
+                    list_remove(header, &mut r.partial_list, &mut r.partial_count);
+                }
                 list_push_front(header, &mut r.free_list, &mut r.free_count);
             }
             self.stats.current_inuse.fetch_sub(1, Ordering::Relaxed);
             self.stats.frees.fetch_add(1, Ordering::Relaxed);
-        } else if inuse + 1 == (*header).total {
-            // SAFETY: valid header ptr; cache locked during this call.
+        } else if was_full {
+            // SAFETY: valid header ptr; move full slab back to partial list.
             unsafe {
                 list_remove(header, &mut r.full_list, &mut r.full_count);
                 list_push_front(header, &mut r.partial_list, &mut r.partial_count);
@@ -298,28 +314,35 @@ impl SlabCache {
 
     // ─────────────── internal helpers ───────────────────────────────────────
 
-    fn alloc_from_list(list: &mut *mut SlabHeader, info: &SizeClassInfo) -> Option<NonNull<u8>> {
-        if list.is_null() {
-            return None;
-        }
-        // SAFETY: list points to a valid SlabHeader (managed by this cache)
-        let header = unsafe { &mut **list };
-        if header.freelist.is_null() {
-            return None;
-        }
+    fn alloc_from_partial(inner: &mut SlabCacheInner, _info: &SizeClassInfo) -> Option<NonNull<u8>> {
+        while !inner.partial_list.is_null() {
+            let header_ptr = inner.partial_list;
+            // SAFETY: partial_list contains valid SlabHeaders owned by this cache.
+            let header = unsafe { &mut *header_ptr };
+            if header.freelist.is_null() {
+                // Drain any unexpected full slab off partial_list rather than stalling.
+                unsafe {
+                    list_remove(header_ptr, &mut inner.partial_list, &mut inner.partial_count);
+                    list_push_front(header_ptr, &mut inner.full_list, &mut inner.full_count);
+                }
+                continue;
+            }
 
-        let obj = header.freelist;
-        // SAFETY: obj points to a free object whose first bytes
-        //         contain the pointer to the next free element
-        let next = unsafe { core::ptr::read(obj as *const *mut u8) };
-        header.freelist = next;
-        header.inuse += 1;
+            let obj = header.freelist;
+            // SAFETY: obj points to a free object whose first bytes hold next free element.
+            let next = unsafe { core::ptr::read(obj as *const *mut u8) };
+            header.freelist = next;
+            header.inuse += 1;
 
-        if header.inuse == header.total {
-            // Slab now full — will be handled by caller if needed
+            if header.inuse == header.total || header.freelist.is_null() {
+                unsafe {
+                    list_remove(header_ptr, &mut inner.partial_list, &mut inner.partial_count);
+                    list_push_front(header_ptr, &mut inner.full_list, &mut inner.full_count);
+                }
+            }
+            return NonNull::new(obj);
         }
-        let _ = info;
-        NonNull::new(obj)
+        None
     }
 
     fn activate_free_slab(inner: &mut SlabCacheInner, info: &SizeClassInfo) -> Option<NonNull<u8>> {
@@ -332,7 +355,7 @@ impl SlabCache {
             list_remove(header, &mut inner.free_list, &mut inner.free_count);
             list_push_front(header, &mut inner.partial_list, &mut inner.partial_count);
         }
-        Self::alloc_from_list(&mut inner.partial_list, info)
+        Self::alloc_from_partial(inner, info)
     }
 
     /// Creates a new slab by mapping a physical page into reserved vmalloc space.
@@ -396,9 +419,10 @@ impl SlabCache {
                     total: objs_in_page as u32,
                     next: core::ptr::null_mut(),
                     prev: core::ptr::null_mut(),
-                    class_idx: 0,
+                    class_idx: size_class_for(info.size).unwrap_or(0) as u8,
                     color_offset: color as u8,
-                    _pad: [0; 6],
+                    _pad: [0; 2],
+                    magic: SLAB_HEADER_MAGIC,
                 },
             );
         }
@@ -413,7 +437,7 @@ impl SlabCache {
         }
 
         // Allocate first object
-        Self::alloc_from_list(&mut inner.partial_list, info).ok_or(AllocError::OutOfMemory)
+        Self::alloc_from_partial(inner, info).ok_or(AllocError::OutOfMemory)
     }
 }
 
@@ -444,6 +468,9 @@ unsafe fn list_remove(node: *mut SlabHeader, head: &mut *mut SlabHeader, count: 
     }
     let prev = (*node).prev;
     let next = (*node).next;
+    if prev.is_null() && *head != node {
+        return;
+    }
     if !prev.is_null() {
         (*prev).next = next;
     } else {

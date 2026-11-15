@@ -271,6 +271,13 @@ pub fn select_instance(service_id: u32) -> Option<u32> {
     }
 }
 
+#[inline]
+fn instance_selectable(inst: &ServiceInstance) -> bool {
+    inst.active.load(Ordering::Acquire) != 0
+        && inst.is_alive.load(Ordering::Acquire) != 0
+        && check_circuit(inst.pid) != CircuitState::Open
+}
+
 /// Sélection Round-Robin : alterne cycliquement entre les instances.
 fn select_round_robin(pool: &ServicePool, count: usize) -> Option<u32> {
     let start = pool.round_robin_index.fetch_add(1, Ordering::AcqRel) as usize;
@@ -278,18 +285,19 @@ fn select_round_robin(pool: &ServicePool, count: usize) -> Option<u32> {
     for offset in 0..count {
         let idx = (start + offset) % count;
         let inst = &pool.instances[idx];
-        if inst.active.load(Ordering::Acquire) != 0 &&
-           inst.is_alive.load(Ordering::Acquire) != 0 &&
-           check_circuit(inst.pid) == CircuitState::Closed {
+        if inst.active.load(Ordering::Acquire) != 0
+            && inst.is_alive.load(Ordering::Acquire) != 0
+            && check_circuit(inst.pid) == CircuitState::Closed
+        {
             return Some(inst.pid);
         }
     }
 
-    // Fallback : première instance vivante même si circuit est half-open
-    for idx in 0..count {
+    // Fallback : instance vivante en half-open (jamais CircuitState::Open).
+    for offset in 0..count {
+        let idx = (start + offset) % count;
         let inst = &pool.instances[idx];
-        if inst.active.load(Ordering::Acquire) != 0 &&
-           inst.is_alive.load(Ordering::Acquire) != 0 {
+        if instance_selectable(inst) {
             return Some(inst.pid);
         }
     }
@@ -304,9 +312,9 @@ fn select_least_loaded(pool: &ServicePool, count: usize) -> Option<u32> {
 
     for idx in 0..count {
         let inst = &pool.instances[idx];
-        if inst.active.load(Ordering::Acquire) == 0 { continue; }
-        if inst.is_alive.load(Ordering::Acquire) == 0 { continue; }
-        if check_circuit(inst.pid) != CircuitState::Closed { continue; }
+        if !instance_selectable(inst) {
+            continue;
+        }
 
         let load = inst.pending_messages.load(Ordering::Acquire);
         if load < best_load {
@@ -320,15 +328,13 @@ fn select_least_loaded(pool: &ServicePool, count: usize) -> Option<u32> {
 
 /// Sélection Weighted Random : probabiliste selon les poids.
 fn select_weighted_random(pool: &ServicePool, count: usize) -> Option<u32> {
-    // Somme des poids des instances vivantes
+    // Somme des poids des instances vivantes et éligibles.
     let mut total_weight: u64 = 0;
     let mut weights = [0u64; MAX_INSTANCES];
 
     for idx in 0..count {
         let inst = &pool.instances[idx];
-        if inst.active.load(Ordering::Acquire) != 0 &&
-           inst.is_alive.load(Ordering::Acquire) != 0 &&
-           check_circuit(inst.pid) == CircuitState::Closed {
+        if instance_selectable(inst) {
             weights[idx] = inst.weight as u64;
             total_weight += weights[idx];
         }
@@ -352,9 +358,8 @@ fn select_weighted_random(pool: &ServicePool, count: usize) -> Option<u32> {
         }
     }
 
-    // Fallback : dernière instance
     for idx in (0..count).rev() {
-        if pool.instances[idx].active.load(Ordering::Acquire) != 0 {
+        if instance_selectable(&pool.instances[idx]) {
             return Some(pool.instances[idx].pid);
         }
     }
@@ -368,9 +373,9 @@ fn select_priority_based(pool: &ServicePool, count: usize) -> Option<u32> {
 
     for idx in 0..count {
         let inst = &pool.instances[idx];
-        if inst.active.load(Ordering::Acquire) == 0 { continue; }
-        if inst.is_alive.load(Ordering::Acquire) == 0 { continue; }
-        if check_circuit(inst.pid) != CircuitState::Closed { continue; }
+        if !instance_selectable(inst) {
+            continue;
+        }
 
         if inst.priority > best_priority {
             best_priority = inst.priority;
@@ -397,7 +402,6 @@ pub fn check_circuit(pid: u32) -> CircuitState {
                 CircuitState::Open => {
                     let last = circuit.last_failure_tsc.load(Ordering::Acquire);
                     if now.wrapping_sub(last) > CIRCUIT_OPEN_DURATION_TSC {
-                        // Transition vers half-open
                         drop(circuits);
                         set_circuit_state(pid, CircuitState::HalfOpen);
                         return CircuitState::HalfOpen;
@@ -407,8 +411,10 @@ pub fn check_circuit(pid: u32) -> CircuitState {
                 CircuitState::HalfOpen => {
                     let last = circuit.last_failure_tsc.load(Ordering::Acquire);
                     if now.wrapping_sub(last) > CIRCUIT_HALF_OPEN_DURATION_TSC {
-                        // Timeout en half-open → retour à open
-                        return CircuitState::HalfOpen;
+                        // Expiration sans rétablissement → retour à Open.
+                        drop(circuits);
+                        set_circuit_state(pid, CircuitState::Open);
+                        return CircuitState::Open;
                     }
                     return CircuitState::HalfOpen;
                 }
@@ -426,12 +432,16 @@ pub fn check_circuit(pid: u32) -> CircuitState {
 /// Change l'état du circuit breaker.
 fn set_circuit_state(pid: u32, new_state: CircuitState) {
     let mut circuits = CIRCUITS.lock();
+    let now = read_tsc();
 
     for circuit in circuits.iter() {
         if circuit.active.load(Ordering::Acquire) != 0 && circuit.pid == pid {
             circuit.state.store(new_state as u8, Ordering::Release);
             if new_state == CircuitState::HalfOpen {
                 circuit.half_open_successes.store(0, Ordering::Release);
+                circuit.last_failure_tsc.store(now, Ordering::Release);
+            } else if new_state == CircuitState::Open {
+                circuit.last_failure_tsc.store(now, Ordering::Release);
             }
             return;
         }
@@ -608,17 +618,52 @@ pub fn register_instance(service_id: u32, pid: u32, weight: u32, priority: u8) -
     true
 }
 
-/// Retire une instance d'un pool.
+/// Retire une instance d'un pool en compactant le tableau pour préserver [0..count).
 pub fn unregister_instance(service_id: u32, pid: u32) -> bool {
-    let pools = POOLS.lock();
+    let mut pools = POOLS.lock();
 
     for i in 0..MAX_POOLS {
         if pools[i].active.load(Ordering::Acquire) != 0 && pools[i].service_id == service_id {
-            let count = pools[i].instance_count.load(Ordering::Acquire) as usize;
-            for j in 0..count.min(MAX_INSTANCES) {
+            let count = (pools[i].instance_count.load(Ordering::Acquire) as usize).min(MAX_INSTANCES);
+            for j in 0..count {
                 if pools[i].instances[j].active.load(Ordering::Acquire) != 0 && pools[i].instances[j].pid == pid {
-                    pools[i].instances[j].active.store(0, Ordering::Release);
-                    pools[i].instances[j].is_alive.store(0, Ordering::Release);
+                    let last = count - 1;
+                    if j != last {
+                        pools[i].instances[j].pid = pools[i].instances[last].pid;
+                        pools[i].instances[j].load_score.store(
+                            pools[i].instances[last].load_score.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].weight = pools[i].instances[last].weight;
+                        pools[i].instances[j].priority = pools[i].instances[last].priority;
+                        pools[i].instances[j].is_alive.store(
+                            pools[i].instances[last].is_alive.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].last_heartbeat_tsc.store(
+                            pools[i].instances[last].last_heartbeat_tsc.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].pending_messages.store(
+                            pools[i].instances[last].pending_messages.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].avg_latency.store(
+                            pools[i].instances[last].avg_latency.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].error_rate.store(
+                            pools[i].instances[last].error_rate.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                        pools[i].instances[j].active.store(
+                            pools[i].instances[last].active.load(Ordering::Acquire),
+                            Ordering::Release,
+                        );
+                    }
+                    pools[i].instances[last].pid = 0;
+                    pools[i].instances[last].active.store(0, Ordering::Release);
+                    pools[i].instances[last].is_alive.store(0, Ordering::Release);
                     pools[i].instance_count.fetch_sub(1, Ordering::Release);
                     return true;
                 }
@@ -628,8 +673,9 @@ pub fn unregister_instance(service_id: u32, pid: u32) -> bool {
     false
 }
 
-/// Met à jour la charge d'une instance.
+/// Met à jour la charge et rafraîchit le timestamp de heartbeat d'une instance.
 pub fn update_load(pid: u32, pending: u32, latency_tsc: u64) {
+    let now = read_tsc();
     let pools = POOLS.lock();
 
     for pool in pools.iter() {
@@ -640,6 +686,8 @@ pub fn update_load(pid: u32, pending: u32, latency_tsc: u64) {
                 pool.instances[j].pending_messages.store(pending, Ordering::Release);
                 pool.instances[j].avg_latency.store(latency_tsc, Ordering::Release);
                 pool.instances[j].load_score.store(pending, Ordering::Release);
+                pool.instances[j].last_heartbeat_tsc.store(now, Ordering::Release);
+                pool.instances[j].is_alive.store(1, Ordering::Release);
                 return;
             }
         }

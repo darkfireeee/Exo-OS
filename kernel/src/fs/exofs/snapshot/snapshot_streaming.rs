@@ -1,14 +1,14 @@
-//! snapshot_streaming.rs — Export en stream TLV d'un snapshot ExoFS
+//! snapshot_streaming.rs — TLV stream export of an ExoFS snapshot
 //!
-//! Produit un flux d'octets découpé en chunks TLV (Tag-Length-Value).
-//! Chaque chunk a un en-tête (HDR-03 : magic + checksum Blake3) et
-//! transporte soit un blob, soit un manifeste de snapshot.
+//! Produces a byte stream chunked into TLV (Tag-Length-Value) records.
+//! Each chunk has a header (HDR-03: magic + Blake3 checksum) and
+//! transports either a blob or a snapshot manifest.
 //!
-//! Règles spec :
-//!   HDR-03   : magic vérifié EN PREMIER dans StreamChunkHeader::verify()
-//!   HASH-02  : payload checksum = Blake3 sur données RAW
-//!   WRITE-02 : bytes_written vérifié après chaque push
-//!   OOM-02   : try_reserve avant chaque push
+//! Spec rules:
+//!   HDR-03   : magic verified FIRST in StreamChunkHeader::verify()
+//!   HASH-02  : payload checksum = Blake3 on RAW data
+//!   WRITE-02 : bytes_written verified after each push
+//!   OOM-02   : try_reserve before each push
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -20,7 +20,7 @@ use crate::fs::exofs::core::blob_id::{blake3_hash, compute_blob_id};
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult, SnapshotId};
 
 // ─────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────
 
 pub const STREAM_MAGIC: u32 = 0x5354_524D; // "STRM"
@@ -36,42 +36,42 @@ pub const STREAM_FORMAT_VERSION: u8 = 1;
 // StreamChunkHeader (HDR-03)
 // ─────────────────────────────────────────────────────────────
 
-/// En-tête d'un chunk de stream (64 octets — ONDISK-03 : pas d'Atomic)
+/// Header of a stream chunk (64 bytes — ONDISK-03: no Atomic)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct StreamChunkHeader {
-    /// Magic "STRM" — vérifié EN PREMIER (HDR-03)
+    /// Magic "STRM" — verified FIRST (HDR-03)
     pub magic: u32,
-    /// Version du format
+    /// Format version
     pub version: u8,
-    /// Type de chunk (MANIFEST, BLOB, END)
+    /// Chunk type (MANIFEST, BLOB, END)
     pub chunk_type: u8,
     /// _padding
     pub _pad0: [u8; 2],
-    /// Numéro de séquence
+    /// Sequence number
     pub seq: u64,
-    /// Identifiant du snapshot source
+    /// Source snapshot identifier
     pub snap_id: u64,
-    /// Identifiant Blake3 du blob transporté (ou racine si manifest)
+    /// Blake3 identifier of the transported blob (or root if manifest)
     pub blob_id: [u8; 32],
-    /// Taille du payload (octets)
+    /// Payload size (bytes)
     pub payload_len: u32,
-    /// Blake3 checksum de l'en-tête (sans les 4 derniers octets du slot)
-    /// NB : champ checksum = hash des 60 premiers octets de l'en-tête
+    /// Blake3 checksum of the header (without the last 4 bytes of the slot)
+    /// NB: checksum field = hash of the first 60 bytes of the header
     pub checksum: [u8; 4],
 }
 
 const _SCH_SIZE: () = assert!(
     core::mem::size_of::<StreamChunkHeader>() == STREAM_CHUNK_HDR_SIZE,
-    "StreamChunkHeader doit faire exactement 64 octets"
+    "StreamChunkHeader must be exactly 64 bytes"
 );
 
 impl StreamChunkHeader {
-    /// Calcule le checksum Blake3 (4 premiers octets du hash sur les 60 premiers octets)
+    /// Computes the Blake3 checksum (first 4 bytes of the hash over the first 60 bytes)
     fn compute_checksum(&self) -> [u8; 4] {
         let mut body = [0u8; STREAM_CHUNK_HDR_SIZE - 4];
-        // SAFETY: StreamChunkHeader est #[repr(C)] et la taille est vérifiée
-        // par const assert; on copie le préfixe couvert par le checksum court.
+        // SAFETY: StreamChunkHeader is #[repr(C)] and the size is verified
+        // by const assert; we copy the prefix covered by the short checksum.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -87,7 +87,7 @@ impl StreamChunkHeader {
         self.checksum = self.compute_checksum();
     }
 
-    /// HDR-03 : magic EN PREMIER, puis checksum
+    /// HDR-03: magic FIRST, then checksum
     pub fn verify(&self) -> ExofsResult<()> {
         if self.magic != STREAM_MAGIC {
             return Err(ExofsError::BadMagic);
@@ -108,8 +108,8 @@ impl StreamChunkHeader {
 
     pub fn as_bytes(&self) -> [u8; STREAM_CHUNK_HDR_SIZE] {
         let mut out = [0u8; STREAM_CHUNK_HDR_SIZE];
-        // SAFETY: StreamChunkHeader est #[repr(C)] et `out` a la taille
-        // fixe validée par const assert.
+        // SAFETY: StreamChunkHeader is #[repr(C)] and `out` has the
+        // fixed size validated by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -122,17 +122,17 @@ impl StreamChunkHeader {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Trait StreamWriter
+// StreamWriter trait
 // ─────────────────────────────────────────────────────────────
 
-/// Destination du stream de sortie
+/// Destination of the output stream
 pub trait StreamWriter: Send + Sync {
-    /// WRITE-02 : retourne bytes_written ; doit == data.len()
+    /// WRITE-02: returns bytes_written; must == data.len()
     fn write(&mut self, data: &[u8]) -> ExofsResult<usize>;
     fn flush(&mut self) -> ExofsResult<()>;
 }
 
-/// StreamWriter en mémoire (pour tests)
+/// In-memory StreamWriter (for tests)
 pub struct VecStreamWriter {
     pub buf: Vec<u8>,
 }
@@ -149,7 +149,7 @@ impl StreamWriter for VecStreamWriter {
             .try_reserve(data.len())
             .map_err(|_| ExofsError::NoMemory)?;
         self.buf.extend_from_slice(data);
-        Ok(data.len()) // WRITE-02 : retour correct
+        Ok(data.len()) // WRITE-02: correct return
     }
     fn flush(&mut self) -> ExofsResult<()> {
         Ok(())
@@ -157,16 +157,16 @@ impl StreamWriter for VecStreamWriter {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Options de streaming
+// Streaming options
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 pub struct StreamOptions {
-    /// Taille max d'un chunk de payload (octets)
+    /// Max size of a payload chunk (bytes)
     pub chunk_size: usize,
-    /// Inclure le manifest du snapshot en premier
+    /// Include snapshot manifest first
     pub with_manifest: bool,
-    /// Envoyer un chunk END en fin de stream
+    /// Send END chunk at end of stream
     pub with_end_marker: bool,
 }
 
@@ -181,7 +181,7 @@ impl Default for StreamOptions {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Résultat du streaming
+// Streaming result
 // ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -194,7 +194,7 @@ pub struct StreamResult {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Source de blobs pour le streaming
+// Blob source for streaming
 // ─────────────────────────────────────────────────────────────
 
 pub trait StreamBlobSource: Send + Sync {
@@ -202,7 +202,7 @@ pub trait StreamBlobSource: Send + Sync {
     fn read_blob(&self, snap_id: SnapshotId, blob_id: BlobId) -> ExofsResult<Vec<u8>>;
 }
 
-/// Source en mémoire (pour tests)
+/// In-memory source (for tests)
 pub struct MemStreamBlobSource {
     data: alloc::collections::BTreeMap<[u8; 32], Vec<u8>>,
     snap_blobs: alloc::collections::BTreeMap<u64, Vec<BlobId>>,
@@ -254,7 +254,7 @@ impl SnapshotStreamer {
         }
     }
 
-    // ── Point d'entrée ───────────────────────────────────────────────
+    // ── Entry point ──────────────────────────────────────────
 
     pub fn stream<S: StreamBlobSource, W: StreamWriter>(
         &self,
@@ -263,10 +263,10 @@ impl SnapshotStreamer {
         writer: &mut W,
         opts: StreamOptions,
     ) -> ExofsResult<StreamResult> {
-        // Vérifier que le snapshot existe
+        // Verify that snapshot exists
         let snap = SNAPSHOT_LIST.get(snap_id)?;
 
-        // Marquer comme en streaming
+        // Mark as streaming
         SNAPSHOT_LIST.set_flags(snap_id, flags::STREAMING)?;
 
         let result = self.run_stream(snap_id, &snap, source, writer, opts);
@@ -291,14 +291,14 @@ impl SnapshotStreamer {
             aborted: false,
         };
 
-        // ── Manifest ─────────────────────────────────────────────────
+        // ── Manifest ─────────────────────────────────────────
         if opts.with_manifest {
             let bytes = self.send_manifest(snap_id, snap, writer)?;
             result.bytes_sent = result.bytes_sent.saturating_add(bytes as u64);
             result.n_chunks = result.n_chunks.checked_add(1).ok_or(ExofsError::Overflow)?;
         }
 
-        // ── Blobs ─────────────────────────────────────────────────────
+        // ── Blobs ────────────────────────────────────────────
         let blob_ids = source.list_blobs(snap_id)?;
         for blob_id in &blob_ids {
             if self.aborted.load(Ordering::Acquire) {
@@ -312,7 +312,7 @@ impl SnapshotStreamer {
             result.n_blobs = result.n_blobs.checked_add(1).ok_or(ExofsError::Overflow)?;
         }
 
-        // ── Fin ───────────────────────────────────────────────────────
+        // ── End ──────────────────────────────────────────────
         if opts.with_end_marker {
             let bytes = self.send_end(snap_id, writer)?;
             result.bytes_sent = result.bytes_sent.saturating_add(bytes as u64);
@@ -323,7 +323,7 @@ impl SnapshotStreamer {
         Ok(result)
     }
 
-    // ── Envoi d'un manifest ──────────────────────────────────────────
+    // ── Manifest sending ─────────────────────────────────────────────
 
     fn send_manifest<W: StreamWriter>(
         &self,
@@ -331,7 +331,7 @@ impl SnapshotStreamer {
         snap: &super::snapshot::Snapshot,
         writer: &mut W,
     ) -> ExofsResult<usize> {
-        // Payload : root_blob (32) + n_blobs (8) + total_bytes (8) = 48 octets
+        // Payload: root_blob (32) + n_blobs (8) + total_bytes (8) = 48 bytes
         let mut payload: Vec<u8> = Vec::new();
         payload.try_reserve(48).map_err(|_| ExofsError::NoMemory)?;
         payload.extend_from_slice(snap.root_blob.as_bytes());
@@ -348,7 +348,7 @@ impl SnapshotStreamer {
         Ok(total)
     }
 
-    // ── Envoi d'un blob ──────────────────────────────────────────────
+    // ── Blob sending ─────────────────────────────────────────────────
 
     fn send_blob<W: StreamWriter>(
         &self,
@@ -358,7 +358,7 @@ impl SnapshotStreamer {
         writer: &mut W,
         opts: &StreamOptions,
     ) -> ExofsResult<usize> {
-        // Pour les gros blobs on peut découper en sous-chunks
+        // For large blobs we can split into sub-chunks
         let mut total_sent = 0usize;
         let mut offset = 0usize;
         while offset < data.len() || data.is_empty() {
@@ -375,14 +375,14 @@ impl SnapshotStreamer {
         Ok(total_sent)
     }
 
-    // ── Envoi du marqueur END ────────────────────────────────────────
+    // ── Send END marker ──────────────────────────────────────────────
 
     fn send_end<W: StreamWriter>(&self, snap_id: SnapshotId, writer: &mut W) -> ExofsResult<usize> {
         let hdr = self.build_header(snap_id, CHUNK_TYPE_END, BlobId([0u8; 32]), 0);
         self.write_chunk(&hdr, &[], writer)
     }
 
-    // ── Construction de l'en-tête ────────────────────────────────────
+    // ── Header construction ──────────────────────────────────────────
 
     fn build_header(
         &self,
@@ -407,23 +407,23 @@ impl SnapshotStreamer {
         hdr
     }
 
-    // ── Écriture d'un chunk ──────────────────────────────────────────
+    // ── Chunk writing ────────────────────────────────────────────────
 
-    /// WRITE-02 : vérifie bytes_written après chaque write
+    /// WRITE-02: verifies bytes_written after each write
     fn write_chunk<W: StreamWriter>(
         &self,
         hdr: &StreamChunkHeader,
         payload: &[u8],
         writer: &mut W,
     ) -> ExofsResult<usize> {
-        // Écrire l'en-tête
+        // Write header
         let hdr_bytes = hdr.as_bytes();
         let n = writer.write(&hdr_bytes)?;
         if n != hdr_bytes.len() {
             return Err(ExofsError::ShortWrite);
         } // WRITE-02
 
-        // Écrire le payload
+        // Write payload
         let mut total = n;
         if !payload.is_empty() {
             let m = writer.write(payload)?;
@@ -435,7 +435,7 @@ impl SnapshotStreamer {
         Ok(total)
     }
 
-    // ── Annulation ───────────────────────────────────────────────────
+    // ── Abort ────────────────────────────────────────────────────────
 
     pub fn abort(&self) {
         self.aborted.store(true, Ordering::Release);
@@ -530,7 +530,7 @@ mod tests {
             )
             .test_unwrap();
         assert!(result.bytes_sent > 0);
-        // Au moins : manifest + 1 blob + END = 3 chunks
+        // At least: manifest + 1 blob + END = 3 chunks
         assert!(result.n_chunks >= 3);
     }
 

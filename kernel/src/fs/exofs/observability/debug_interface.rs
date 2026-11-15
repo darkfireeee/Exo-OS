@@ -283,7 +283,7 @@ impl DebugQueue {
             return Err(ExofsError::Resource);
         }
         let idx = self.cmd_head.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             (*self.commands.get())[idx] = cmd;
         }
@@ -298,7 +298,7 @@ impl DebugQueue {
             return None;
         }
         let idx = self.cmd_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let cmd = unsafe {
             let slot = &mut (*self.commands.get())[idx];
             let cmd = *slot;
@@ -315,7 +315,7 @@ impl DebugQueue {
             return Err(ExofsError::Resource);
         }
         let idx = self.resp_head.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             (*self.responses.get())[idx] = resp;
         }
@@ -329,7 +329,7 @@ impl DebugQueue {
             return None;
         }
         let idx = self.resp_tail.fetch_add(1, Ordering::Relaxed) as usize % DEBUG_QUEUE_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let resp = unsafe {
             let slot = &mut (*self.responses.get())[idx];
             let resp = *slot;
@@ -373,7 +373,7 @@ pub static DEBUG_QUEUE: DebugQueue = DebugQueue::new_const();
 
 // ─── DebugSession ─────────────────────────────────────────────────────────────
 
-/// Exécute des commandes de debug sans état persistant.
+/// Executes debug commands without persistent state.
 pub struct DebugSession<'a> {
     queue: &'a DebugQueue,
     exec_cnt: AtomicU64,
@@ -389,7 +389,7 @@ impl<'a> DebugSession<'a> {
         }
     }
 
-    /// Dispatch d'une commande — retourne la réponse.
+    /// Dispatches a command — returns the response.
     pub fn execute(&self, cmd: DebugCommand) -> DebugResponse {
         self.exec_cnt.fetch_add(1, Ordering::Relaxed);
         let id = cmd.command_id();
@@ -417,7 +417,7 @@ impl<'a> DebugSession<'a> {
         resp
     }
 
-    /// Exécute la commande et pousse la réponse dans la queue.
+    /// Executes the command and pushes the response into the queue.
     pub fn dispatch(&self, cmd: DebugCommand) -> ExofsResult<()> {
         let resp = self.execute(cmd);
         self.queue.push_response(resp)
@@ -425,7 +425,7 @@ impl<'a> DebugSession<'a> {
 
     fn run_self_test(&self) -> DebugResponse {
         let id = DebugCommandId::SelfTest;
-        // Test d'auto-vérification : vérifie que la queue est cohérente.
+        // Self-verification test: verifies that the queue is consistent.
         let cmd_ok = DEBUG_QUEUE.cmd_pending() <= DEBUG_QUEUE_SIZE as u64;
         let resp_ok = DEBUG_QUEUE.resp_pending() <= DEBUG_QUEUE_SIZE as u64;
         if cmd_ok && resp_ok {
@@ -435,7 +435,7 @@ impl<'a> DebugSession<'a> {
         }
     }
 
-    /// Traite tous les commandes en attente dans la queue.
+    /// Processes all pending commands in the queue.
     pub fn process_pending(&self) -> ExofsResult<u64> {
         let mut processed = 0u64;
         while let Some(cmd) = self.queue.pop_cmd() {

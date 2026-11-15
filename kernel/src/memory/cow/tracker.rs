@@ -162,6 +162,14 @@ impl CowTracker {
                 first_tombstone = Some(slot);
             }
         }
+        if let Some(insert_slot) = first_tombstone {
+            let entry_ins = &self.table[insert_slot];
+            entry_ins.frame_idx.store(idx, Ordering::Relaxed);
+            entry_ins.ref_count.store(2, Ordering::Relaxed);
+            self.tracked_count.fetch_add(1, Ordering::Relaxed);
+            self.inc_count.fetch_add(1, Ordering::Relaxed);
+            return Ok(2);
+        }
         // Table full — degenerate case.
         let overflow = self.overflow_count.fetch_add(1, Ordering::Relaxed) + 1;
         Self::log_overflow(overflow);

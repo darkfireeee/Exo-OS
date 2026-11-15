@@ -38,6 +38,10 @@ impl SystemTime {
         SystemTime(Timespec::new(tv_sec, tv_nsec))
     }
 
+    pub(crate) fn as_timespec(&self) -> syscall::RawTimespec {
+        self.0.t
+    }
+
     pub fn now() -> SystemTime {
         let t = syscall::clock_gettime(CLOCK_REALTIME).unwrap_or_default();
         SystemTime(Timespec { t })

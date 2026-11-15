@@ -98,6 +98,113 @@ static SAVED_PAGESZ: AtomicUsize = AtomicUsize::new(4096);
 static SAVED_ARGC: AtomicUsize = AtomicUsize::new(0);
 static SAVED_ARGV: AtomicUsize = AtomicUsize::new(0);
 static SAVED_ENVP: AtomicUsize = AtomicUsize::new(0);
+static SAVED_PHDR: AtomicUsize = AtomicUsize::new(0);
+static SAVED_PHENT: AtomicUsize = AtomicUsize::new(0);
+static SAVED_PHNUM: AtomicUsize = AtomicUsize::new(0);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Elf64Phdr {
+    p_type: u32,
+    p_flags: u32,
+    p_offset: u64,
+    p_vaddr: u64,
+    p_paddr: u64,
+    p_filesz: u64,
+    p_memsz: u64,
+    p_align: u64,
+}
+
+const PT_LOAD: u32 = 1;
+const PT_PHDR: u32 = 6;
+const PT_TLS: u32 = 7;
+
+/// Allocates and initializes a per-thread TLS block (`.tdata` + `.tbss` + `ExoTcb` at `%fs:0`).
+/// Returns `(mmap_base_ptr, mmap_alloc_len, fs_base_vaddr)`.
+pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
+    use super::alloc_dlmalloc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, sys_mmap};
+
+    let phdr_addr = SAVED_PHDR.load(Ordering::Acquire);
+    let phent = SAVED_PHENT.load(Ordering::Acquire);
+    let phnum = SAVED_PHNUM.load(Ordering::Acquire);
+
+    let mut pt_phdr_vaddr = 0u64;
+    let mut tls_vaddr = 0u64;
+    let mut tls_filesz = 0usize;
+    let mut tls_memsz = 0usize;
+    let mut tls_align = 16usize;
+
+    if phdr_addr != 0 && phent >= core::mem::size_of::<Elf64Phdr>() && phnum > 0 {
+        for i in 0..phnum {
+            let ph_ptr = (phdr_addr + i * phent) as *const Elf64Phdr;
+            let ph = unsafe { ph_ptr.read_unaligned() };
+            if ph.p_type == PT_PHDR {
+                pt_phdr_vaddr = ph.p_vaddr;
+            } else if ph.p_type == PT_TLS {
+                tls_vaddr = ph.p_vaddr;
+                tls_filesz = ph.p_filesz as usize;
+                tls_memsz = ph.p_memsz as usize;
+                tls_align = (ph.p_align as usize).max(16).next_power_of_two();
+            }
+        }
+    }
+
+    let load_bias = if pt_phdr_vaddr != 0 {
+        phdr_addr.wrapping_sub(pt_phdr_vaddr as usize)
+    } else {
+        0
+    };
+
+    let filesz = tls_filesz.min(tls_memsz);
+    let aligned_tls_memsz = (tls_memsz + tls_align - 1) & !(tls_align - 1);
+    let page_sz = page_size();
+    let static_tls_pages = if aligned_tls_memsz == 0 {
+        0
+    } else {
+        (aligned_tls_memsz + page_sz - 1) / page_sz
+    };
+    let total_tls_pages = static_tls_pages + 1;
+    let tls_alloc_len = total_tls_pages * page_sz;
+
+    let raw_base = unsafe {
+        sys_mmap(
+            0,
+            tls_alloc_len,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            !0,
+            0,
+        )?
+    };
+
+    let tls_base = raw_base + static_tls_pages * page_sz;
+    if filesz > 0 && tls_vaddr != 0 {
+        let src_ptr = load_bias.wrapping_add(tls_vaddr as usize) as *const u8;
+        let dst_ptr = (tls_base - aligned_tls_memsz) as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, filesz);
+        }
+    }
+
+    let tcb_ptr = tls_base as *mut ExoTcb;
+    let sig_tcb = GLOBAL_SIGNAL_TCB_ADDR.load(Ordering::Acquire) as *mut SignalTcb;
+    unsafe {
+        (*tcb_ptr).tls_end = tls_base as *mut u8;
+        (*tcb_ptr).tls_len = tls_alloc_len;
+        (*tcb_ptr).tcb_ptr = tcb_ptr;
+        (*tcb_ptr).tcb_len = page_sz;
+        (*tcb_ptr).os_specific = sig_tcb;
+    }
+
+    Ok((raw_base as *mut u8, tls_alloc_len, tls_base as u64))
+}
+
+/// Frees a per-thread TLS block previously allocated with [`allocate_thread_tls`].
+pub unsafe fn free_thread_tls(alloc_base: *mut u8, alloc_len: usize) {
+    if !alloc_base.is_null() && alloc_len > 0 {
+        let _ = unsafe { super::alloc_dlmalloc::sys_munmap(alloc_base as usize, alloc_len) };
+    }
+}
 
 #[inline]
 pub fn signal_tcb() -> Option<&'static SignalTcb> {
@@ -321,6 +428,7 @@ pub fn fork() -> Result<u32, i32> {
             core::ptr::null_mut(),
             core::ptr::null_mut(),
             0,
+            0,
         )
     }
     .map_err(|e| e.errno())?;
@@ -366,6 +474,15 @@ pub unsafe fn exo_rt_init_from_stack(
                 break;
             }
             match a_type {
+                AT_PHDR => {
+                    SAVED_PHDR.store(a_val, Ordering::Release);
+                }
+                AT_PHENT => {
+                    SAVED_PHENT.store(a_val, Ordering::Release);
+                }
+                AT_PHNUM => {
+                    SAVED_PHNUM.store(a_val, Ordering::Release);
+                }
                 AT_PAGESZ => {
                     if a_val != 0 {
                         SAVED_PAGESZ.store(a_val, Ordering::Release);

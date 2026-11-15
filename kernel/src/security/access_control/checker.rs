@@ -91,6 +91,29 @@ impl core::fmt::Display for AccessError {
 /// Same complexity as `verify()`: O(1).
 /// Audit overhead ≈ 1 atomic write into ring buffer.
 #[inline]
+fn current_audit_identity() -> (u32, u32, u16) {
+    #[cfg(target_os = "none")]
+    {
+        let tcb = crate::scheduler::core::switch::current_thread_raw();
+        if !tcb.is_null() {
+            // SAFETY: current_thread_raw() returns the current running TCB on this CPU.
+            let t = unsafe { &*tcb };
+            let pid = t.pid.0;
+            let uid = if pid == 0 {
+                0
+            } else {
+                crate::process::core::registry::PROCESS_REGISTRY
+                    .find_by_pid(crate::process::core::pid::Pid(pid))
+                    .map(|pcb| pcb.euid_fast() as u16)
+                    .unwrap_or(0)
+            };
+            return (pid, t.tid as u32, uid);
+        }
+    }
+    (0, 0, 0)
+}
+
+#[inline]
 pub fn check_access(
     table: &CapTable,
     token: CapToken,
@@ -98,14 +121,15 @@ pub fn check_access(
     required: Rights,
     caller: &'static str,
 ) -> Result<(), AccessError> {
+    let (pid, tid, uid) = current_audit_identity();
     match cap_verify(table, token, required) {
         Ok(()) => {
             // ── Success — filterable audit log (Capability category)
             audit::log_event(
                 AuditCategory::Capability,
-                0,
-                0,
-                0,
+                pid,
+                tid,
+                uid,
                 0,
                 0,
                 AuditOutcome::Allow,
@@ -115,18 +139,18 @@ pub fn check_access(
         }
         Err(CapError::ObjectNotFound) => {
             // Security violation — always logged (RULE AUDIT-02)
-            audit::log_security_violation(0, 0, 0, 0, [0u8; 8]);
+            audit::log_security_violation(pid, tid, uid, 0, [0u8; 8]);
             Err(AccessError::ObjectNotFound { object })
         }
         Err(CapError::InsufficientRights) => {
-            audit::audit_capability_deny(0, 0, 0, required.bits());
+            audit::audit_capability_deny(pid, tid, uid, required.bits());
             Err(AccessError::InsufficientRights {
                 had: Rights::NONE,
                 needed: required,
             })
         }
         Err(e) => {
-            audit::audit_capability_deny(0, 0, 0, required.bits());
+            audit::audit_capability_deny(pid, tid, uid, required.bits());
             Err(AccessError::CapabilityDenied {
                 reason: e,
                 object,

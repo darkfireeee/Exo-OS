@@ -1,10 +1,10 @@
-//! path_walker.rs — Itération itérative de chemin dans l'arbre ExoFS
+//! path_walker.rs — Iterative path walking in the ExoFS tree
 //!
-//! Règles critiques appliquées :
-//!  - RECUR-01 : zéro récursion — machine à états itérative
-//!  - OOM-02   : try_reserve avant chaque push
-//!  - PATH-07  : pas de [u8; PATH_MAX] sur la pile
-//!  - ARITH-02 : arithmétique vérifiée sur toutes les offsets
+//! Critical applied rules:
+//!  - RECUR-01 : zero recursion — iterative state machine
+//!  - OOM-02   : try_reserve before each push
+//!  - PATH-07  : no [u8; PATH_MAX] on stack
+//!  - ARITH-02 : checked arithmetic on all offsets
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -14,65 +14,65 @@ use crate::fs::exofs::path::path_component::{validate_component, PathComponent, 
 use crate::fs::exofs::path::symlink::SYMLINK_MAX_DEPTH;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Etat du walker
+// Walker state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// État courant de la machine à états du `PathWalker`.
+/// Current state of the `PathWalker` state machine.
 #[derive(Debug)]
 pub enum WalkerState {
-    /// Positionnement initial avant le premier pas.
+    /// Initial positioning before first step.
     AtRoot,
-    /// Dans un répertoire, composants restants à descendre.
+    /// Inside a directory, remaining components to descend.
     InDirectory {
         dir_oid: ObjectId,
         remaining: Vec<PathComponent>,
     },
-    /// Un symlink vient d'être rencontré.
+    /// A symlink was just encountered.
     AtSymlink { target: Vec<u8>, depth: usize },
-    /// Résolution terminée avec succès.
+    /// Resolution completed successfully.
     Done { oid: ObjectId },
-    /// Résolution terminée en erreur.
+    /// Resolution terminated with error.
     Failed(ExofsError),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Résultat d'un pas
+// Step result
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat renvoyé par `PathWalker::step()`.
+/// Result returned by `PathWalker::step()`.
 #[derive(Debug)]
 pub enum WalkerStepResult {
-    /// Un composant a été consommé, la résolution continue.
+    /// A component was consumed, resolution continues.
     Continue,
-    /// Résolution terminée — l'OID final est disponible.
+    /// Resolution complete — final OID is available.
     Done(ObjectId),
-    /// Un symlink a été rencontré, sa cible est fournie.
+    /// A symlink was encountered, its target is provided.
     SymlinkEncountered(Vec<u8>),
-    /// Erreur fatale.
+    /// Fatal error.
     Error(ExofsError),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait de callback
+// Callback trait
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Trait que l'appelant doit implémenter pour alimenter le walker.
+/// Trait that caller must implement to feed the walker.
 ///
-/// Le walker ne fait **aucune** I/O directe — il délègue toutes les
-/// résolutions à ce trait.
+/// The walker does **no** direct I/O — it delegates all
+/// resolutions to this trait.
 pub trait WalkerBackend {
-    /// Recherche un composant dans un répertoire.
-    /// Retourne `(oid, is_symlink)` ou `None` si absent.
+    /// Looks up a component in a directory.
+    /// Returns `(oid, is_symlink)` or `None` if absent.
     fn lookup(
         &self,
         dir_oid: &ObjectId,
         component: &PathComponent,
     ) -> ExofsResult<Option<(ObjectId, bool)>>;
 
-    /// Lit la cible d'un lien symbolique.
+    /// Reads target of a symbolic link.
     fn symlink_target(&self, oid: &ObjectId) -> ExofsResult<Vec<u8>>;
 
-    /// OID de la racine du système de fichiers.
+    /// Filesystem root OID.
     fn root_oid(&self) -> ObjectId;
 }
 
@@ -80,24 +80,24 @@ pub trait WalkerBackend {
 // PathWalker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Itérateur de chemin à état explicite.
+/// Explicit state path iterator.
 ///
-/// Chaque appel à `step()` avance d'un composant.  L'appelant doit
-/// continuer jusqu'à `WalkerStepResult::Done` ou `::Error`.
+/// Each call to `step()` advances by one component. The caller must
+/// continue until `WalkerStepResult::Done` or `::Error`.
 pub struct PathWalker {
-    /// OID du répertoire racine de résolution.
+    /// Root directory OID for resolution.
     pub root_oid: ObjectId,
-    /// État courant.
+    /// Current state.
     pub state: WalkerState,
-    /// Profondeur de résolution de symlinks.
+    /// Symlink resolution depth.
     pub symlink_depth: usize,
 }
 
 impl PathWalker {
-    /// Crée un nouveau walker sur `path` depuis `root`.
+    /// Creates a new walker on `path` from `root`.
     ///
-    /// - Parse le chemin avec `PathParser` (itératif, RECUR-01).
-    /// - Les composants sont stockés en ordre inverse pour `pop()` efficace.
+    /// - Parses the path with `PathParser` (iterative, RECUR-01).
+    /// - Components are stored in reverse order for efficient `pop()`.
     pub fn new(root: ObjectId, path: &[u8]) -> ExofsResult<Self> {
         if path.len() > crate::fs::exofs::path::path_component::PATH_MAX {
             return Err(ExofsError::PathTooLong);
@@ -105,7 +105,7 @@ impl PathWalker {
         let mut components: Vec<PathComponent> = Vec::new();
         let mut parser = PathParser::new(path)?;
         while let Some(comp) = parser.next_component()? {
-            // Ignorer les composants "."
+            // Ignore "." components
             let bytes = comp.as_bytes();
             if bytes == b"." {
                 continue;
@@ -115,7 +115,7 @@ impl PathWalker {
                 .map_err(|_| ExofsError::NoMemory)?;
             components.push(comp);
         }
-        // Inverser pour que le prochain composant soit en queue.
+        // Reverse so the next component is at the tail.
         components.reverse();
         Ok(PathWalker {
             root_oid: root.clone(),
@@ -127,13 +127,13 @@ impl PathWalker {
         })
     }
 
-    /// Avance d'un pas dans la résolution.
+    /// Advances by one step in resolution.
     ///
-    /// Itératif (RECUR-01) — aucun appel interne récursif.
+    /// Iterative (RECUR-01) — zero internal recursive calls.
     pub fn step<B: WalkerBackend>(&mut self, backend: &B) -> WalkerStepResult {
         match &mut self.state {
             WalkerState::AtRoot => {
-                // Transition vers InDirectory à la racine sans composants.
+                // Transition to InDirectory at root without components.
                 let root = backend.root_oid();
                 self.state = WalkerState::Done { oid: root.clone() };
                 WalkerStepResult::Done(root)
@@ -146,7 +146,7 @@ impl PathWalker {
             WalkerState::AtSymlink { target, depth } => {
                 let tgt = core::mem::take(target);
                 let d = *depth;
-                // Remonte au contexte InDirectory reconstruit depuis le symlink.
+                // Go back to InDirectory context reconstructed from symlink.
                 let mut components: Vec<PathComponent> = Vec::new();
                 let parser = match PathParser::new(&tgt) {
                     Ok(p) => p,
@@ -178,7 +178,7 @@ impl PathWalker {
                 let start = if tgt.first() == Some(&b'/') {
                     backend.root_oid()
                 } else {
-                    // Symlink relatif : partir du parent courant (root par défaut ici)
+                    // Relative symlink: start from current parent (root by default here)
                     self.root_oid.clone()
                 };
                 self.symlink_depth = d;
@@ -192,18 +192,18 @@ impl PathWalker {
             WalkerState::InDirectory { dir_oid, remaining } => {
                 match remaining.pop() {
                     None => {
-                        // Plus de composants : résolution terminée.
+                        // No more components: resolution finished.
                         let oid = dir_oid.clone();
                         self.state = WalkerState::Done { oid: oid.clone() };
                         WalkerStepResult::Done(oid)
                     }
                     Some(comp) => {
-                        // Composant ".." : remonter (pas supporté sans parent-tracking —
-                        // indiquer erreur contrôlée).
+                        // Component "..": go up (unsupported without parent-tracking —
+                        // report controlled error).
                         if comp.as_bytes() == b".." {
-                            // On ne dispose pas du parent ici, on retourne
-                            // l'OID courant pour les cas de chemins normalisés.
-                            // Un appelant avec canonicalize_path doit d'abord normaliser.
+                            // Parent is not tracked here, return
+                            // current OID for normalized path cases.
+                            // Caller with canonicalize_path must normalize first.
                             let oid = dir_oid.clone();
                             self.state = WalkerState::Done { oid: oid.clone() };
                             return WalkerStepResult::Done(oid);
@@ -249,7 +249,7 @@ impl PathWalker {
                                 }
                             }
                             Ok(Some((oid, false))) => {
-                                // Répertoire ou fichier ordinaire
+                                // Directory or ordinary file
                                 let new_dir = oid;
                                 let rem_empty = remaining.is_empty();
                                 if rem_empty {
@@ -269,9 +269,9 @@ impl PathWalker {
         }
     }
 
-    /// Résout le chemin jusqu'au bout.
+    /// Resolves path to completion.
     ///
-    /// Itératif (RECUR-01) — boucle `while` explicite.
+    /// Iterative (RECUR-01) — explicit `while`/`loop`.
     pub fn collect_to_end<B: WalkerBackend>(&mut self, backend: &B) -> ExofsResult<ObjectId> {
         let mut iters: usize = 0;
         let max_iters: usize = 4096;
@@ -291,25 +291,25 @@ impl PathWalker {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers publics
+// Public helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résout `path` depuis `root` en utilisant `backend`.
+/// Resolves `path` from `root` using `backend`.
 ///
-/// - Normalise d'abord le chemin (via `canonicalize_to_vec`).
-/// - Puis crée un `PathWalker` et itère jusqu'à la fin.
+/// - First normalizes path (via `canonicalize_to_vec`).
+/// - Then creates a `PathWalker` and iterates to completion.
 pub fn walk_path<B: WalkerBackend>(
     root: ObjectId,
     path: &[u8],
     backend: &B,
 ) -> ExofsResult<ObjectId> {
-    // Normalisation (supprime //, /., gère ..)
+    // Normalization (removes //, /., handles ..)
     let normalized = crate::fs::exofs::path::canonicalize::canonicalize_to_vec(path)?;
     let mut walker = PathWalker::new(root, &normalized)?;
     walker.collect_to_end(backend)
 }
 
-/// Résout uniquement le composant final d'un chemin (basename).
+/// Resolves only the final component of a path (basename).
 pub fn basename(path: &[u8]) -> ExofsResult<PathComponent> {
     let mut last: Option<PathComponent> = None;
     let mut parser = PathParser::new(path)?;
@@ -321,16 +321,16 @@ pub fn basename(path: &[u8]) -> ExofsResult<PathComponent> {
     last.ok_or(ExofsError::InvalidPathComponent)
 }
 
-/// Résout le chemin jusqu'au répertoire parent (dirname semantics).
+/// Resolves path up to parent directory (dirname semantics).
 ///
-/// Retourne l'OID du répertoire contenant le dernier composant.
+/// Returns OID of directory containing the last component.
 pub fn walk_parent<B: WalkerBackend>(
     root: ObjectId,
     path: &[u8],
     backend: &B,
 ) -> ExofsResult<(ObjectId, PathComponent)> {
     let normalized = crate::fs::exofs::path::canonicalize::canonicalize_to_vec(path)?;
-    // Trouver la dernière occurrence de '/'
+    // Find last occurrence of '/'
     let slash_pos = normalized.iter().rposition(|&b| b == b'/');
     let (parent_path, child_bytes) = match slash_pos {
         None => (b"/" as &[u8], normalized.as_slice()),

@@ -218,6 +218,12 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     drop(pcb_box);
 
     if addr_space_ptr != 0 && !is_vfork_shared {
+        // SAFETY: `addr_space_ptr` stays allocated until `free_addr_space` below,
+        // and any in-flight remote AS borrower will decrement `remote_refs` to 0.
+        unsafe {
+            (*(addr_space_ptr as *const crate::memory::virt::UserAddressSpace))
+                .wait_remote_unpinned();
+        }
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
             .free_addr_space(addr_space_ptr);
     }

@@ -174,20 +174,18 @@ pub static SWAP_IN_STATS: SwapInStats = SwapInStats::new();
 // SWAP PTE DECODING
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Extracts the swap device index and block number from a raw PTE.
+/// Decodes a swap PTE encoded via `crate::memory::swap::backend::SwapPte`.
 ///
-/// Exo-OS format:
-///   device  = (pte_raw >> 8) & 0xF      (4 bits → 16 devices max)
-///   block   = (pte_raw >> 12) & ((1<<52)-1)  (52 bits of block number)
-/// Returns `None` if `pte_raw == 0` (PTE never written).
+/// Format (`SwapPte`): bit 0 = 0 (not present), bit 1 = `SWAP_FLAG`,
+/// bits [11:9] = `dev_idx` (0..7), bits [63:12] = `slot`.
 #[inline]
 fn decode_swap_pte(pte_raw: u64) -> Option<(u8, u64)> {
-    if pte_raw == 0 {
+    use crate::memory::swap::backend::SwapPte;
+    if !SwapPte::is_swap(pte_raw) {
         return None;
     }
-    let device = ((pte_raw >> 8) & 0xF) as u8;
-    let block = (pte_raw >> 12) & ((1u64 << 52) - 1);
-    Some((device, block))
+    let sp = SwapPte(pte_raw);
+    Some((sp.dev_idx() as u8, sp.slot().as_u64()))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ pub fn current_owner_pid() -> u64 {
 pub fn owner_matches(entry: ObjectFdEntry, owner_pid: u64) -> bool {
     #[cfg(target_os = "none")]
     {
-        owner_pid == 1 || (entry.owner_uid != 0 && entry.owner_uid == owner_pid)
+        owner_pid == 0 || owner_pid == 1 || entry.owner_uid == 0 || entry.owner_uid == owner_pid
     }
     #[cfg(not(target_os = "none"))]
     {

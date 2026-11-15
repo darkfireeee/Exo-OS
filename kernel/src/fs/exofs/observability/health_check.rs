@@ -1,16 +1,16 @@
-//! health_check.rs — Vérification de santé du filesystem ExoFS (no_std).
+//! health_check.rs — ExoFS Filesystem Health Check (no_std).
 //!
-//! Fournit :
-//!  - `HealthStatus`        : état de santé (enum 5 niveaux).
-//!  - `HealthProbeId`       : identifiant de sonde.
-//!  - `HealthProbeResult`   : résultat d'une sonde.
-//!  - `HealthProbeRing`     : ring des résultats récents.
-//!  - `HealthThresholds`    : seuils configurable.
-//!  - `HealthCheck`         : évaluateur principal.
-//!  - `HEALTH`              : singleton global.
+//! Provides :
+//!  - `HealthStatus`        : health state (5-level enum).
+//!  - `HealthProbeId`       : probe identifier.
+//!  - `HealthProbeResult`   : probe result.
+//!  - `HealthProbeRing`     : ring of recent results.
+//!  - `HealthThresholds`    : configurable thresholds.
+//!  - `HealthCheck`         : main evaluator.
+//!  - `HEALTH`              : global singleton.
 //!
-//! RECUR-01 : while uniquement.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops only.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_*.
 
 extern crate alloc;
@@ -25,10 +25,10 @@ use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HealthStatus {
     Healthy = 0,
-    Degraded = 1, // Performances dégradées mais fonctionnel.
-    Warning = 2,  // Seuils dépassés, attention requise.
-    Critical = 3, // Espace faible / erreurs fréquentes.
-    ReadOnly = 4, // Monté en lecture seule.
+    Degraded = 1, // Degraded performance but functional.
+    Warning = 2,  // Thresholds exceeded, attention required.
+    Critical = 3, // Low space / frequent errors.
+    ReadOnly = 4, // Mounted read-only.
     Unmounted = 5,
 }
 
@@ -63,7 +63,7 @@ impl HealthStatus {
         matches!(self, Self::ReadOnly | Self::Unmounted)
     }
 
-    /// Retourne le pire des deux états.
+    /// Returns the worse of the two states.
     pub fn worst(self, other: Self) -> Self {
         if other > self {
             other
@@ -107,12 +107,12 @@ impl HealthProbeId {
 
 // ─── HealthProbeResult ───────────────────────────────────────────────────────
 
-/// Résultat d'une sonde de santé.
+/// Health probe result.
 #[derive(Clone, Copy, Debug)]
 pub struct HealthProbeResult {
     pub probe: HealthProbeId,
     pub status: HealthStatus,
-    pub value: u64, // valeur mesurée (unité dépend de la sonde)
+    pub value: u64, // measured value (unit depends on probe)
     pub tick: u64,
 }
 
@@ -149,13 +149,13 @@ impl HealthProbeResult {
 
 pub const PROBE_RING_SIZE: usize = 64;
 
-/// Ring des résultats de sondes récents.
+/// Ring of recent probe results.
 pub struct HealthProbeRing {
     slots: [UnsafeCell<HealthProbeResult>; PROBE_RING_SIZE],
     head: AtomicU64,
 }
 
-// SAFETY: accès par index atomique tournant.
+// SAFETY: access via rotating atomic index.
 unsafe impl Sync for HealthProbeRing {}
 unsafe impl Send for HealthProbeRing {}
 
@@ -183,7 +183,7 @@ impl HealthProbeRing {
 
     pub fn push(&self, r: HealthProbeResult) {
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % PROBE_RING_SIZE;
-        // SAFETY: index atomique tournant.
+        // SAFETY: rotating atomic index.
         unsafe {
             *self.slots[idx].get() = r;
         }
@@ -192,11 +192,11 @@ impl HealthProbeRing {
     pub fn latest(&self) -> HealthProbeResult {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(PROBE_RING_SIZE).wrapping_sub(1)) % PROBE_RING_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe { *self.slots[idx].get() }
     }
 
-    /// Collecte les n derniers résultats filtrés par probe (OOM-02 / RECUR-01).
+    /// Collects the last n results filtered by probe (OOM-02 / RECUR-01).
     pub fn last_n_for_probe(
         &self,
         probe: HealthProbeId,
@@ -214,7 +214,7 @@ impl HealthProbeRing {
                 .wrapping_sub(i)
                 .wrapping_sub(1))
                 % PROBE_RING_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             let r = unsafe { *self.slots[idx].get() };
             if r.tick > 0 && r.probe == probe {
                 out.push(r);
@@ -228,13 +228,13 @@ impl HealthProbeRing {
 
 // ─── HealthThresholds ────────────────────────────────────────────────────────
 
-/// Seuils configurables par sonde.
+/// Configurable thresholds per probe.
 #[derive(Clone, Copy, Debug)]
 pub struct HealthThresholds {
-    pub space_warn_pct: u8,    // % utilisation → Warning
-    pub space_crit_pct: u8,    // % utilisation → Critical
-    pub error_warn_pct10: u64, // taux d'erreur * 1000 → Warning
-    pub error_crit_pct10: u64, // taux d'erreur * 1000 → Critical
+    pub space_warn_pct: u8,    // % usage -> Warning
+    pub space_crit_pct: u8,    // % usage -> Critical
+    pub error_warn_pct10: u64, // error rate * 1000 -> Warning
+    pub error_crit_pct10: u64, // error rate * 1000 -> Critical
     pub latency_warn_us: u64,
     pub latency_crit_us: u64,
 }
@@ -264,7 +264,7 @@ impl HealthThresholds {
 
 // ─── HealthCheck ─────────────────────────────────────────────────────────────
 
-/// Évaluateur de santé du filesystem.
+/// Filesystem health evaluator.
 pub struct HealthCheck {
     status: AtomicU8,
     thresholds: UnsafeCell<HealthThresholds>,
@@ -298,7 +298,7 @@ impl HealthCheck {
     }
 
     pub fn set_status(&self, s: HealthStatus) {
-        // Ne jamais rétrograder ReadOnly/Unmounted automatiquement.
+        // Never automatically downgrade ReadOnly/Unmounted.
         let cur = self.status();
         if !cur.is_terminal() {
             self.status.store(s as u8, Ordering::Release);
@@ -313,20 +313,20 @@ impl HealthCheck {
         self.status().is_writable()
     }
 
-    /// Met à jour les seuils (SAFETY : appelé sans concurrent dans init).
+    /// Updates thresholds (SAFETY: called without concurrency during init).
     pub fn set_thresholds(&self, t: HealthThresholds) {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             *self.thresholds.get() = t;
         }
     }
 
     fn thresholds(&self) -> &HealthThresholds {
-        // SAFETY: lecture seule après init.
+        // SAFETY: read-only after init.
         unsafe { &*self.thresholds.get() }
     }
 
-    /// Évalue l'état d'espace (entreable avec des valeurs externes).
+    /// Evaluates space state (invokable with external values).
     pub fn probe_space(&self, usage_pct: u8, tick: u64) -> HealthProbeResult {
         let thr = self.thresholds();
         let status = if usage_pct >= thr.space_crit_pct {
@@ -346,7 +346,7 @@ impl HealthCheck {
         r
     }
 
-    /// Évalue le taux d'erreur.
+    /// Evaluates error rate.
     pub fn probe_error_rate(&self, errors: u64, total_ops: u64, tick: u64) -> HealthProbeResult {
         let thr = self.thresholds();
         let rate = errors
@@ -370,7 +370,7 @@ impl HealthCheck {
         r
     }
 
-    /// Évalue la latence P99 en µs.
+    /// Evaluates P99 latency in µs.
     pub fn probe_latency(&self, p99_us: u64, tick: u64) -> HealthProbeResult {
         let thr = self.thresholds();
         let status = if p99_us >= thr.latency_crit_us {
@@ -390,7 +390,7 @@ impl HealthCheck {
         r
     }
 
-    /// Évaluation globale : combine plusieurs sondes → pire état.
+    /// Global evaluation: combines multiple probes -> worst state.
     pub fn evaluate(
         &self,
         usage_pct: u8,
@@ -439,7 +439,7 @@ mod tests {
     fn test_status_readonly_not_downgraded() {
         let h = HealthCheck::new_const();
         h.force_status(HealthStatus::ReadOnly);
-        h.set_status(HealthStatus::Healthy); // ne doit pas changer
+        h.set_status(HealthStatus::Healthy); // must not change
         assert_eq!(h.status(), HealthStatus::ReadOnly);
     }
 

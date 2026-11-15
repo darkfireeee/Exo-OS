@@ -183,10 +183,11 @@ pub fn add_route(
     }
 
     // Ajouter une nouvelle route
-    let slot = if count < MAX_ROUTES {
+    let appended = count < MAX_ROUTES;
+    let slot = if appended {
         count
     } else {
-        // Chercher un slot inactif
+        // Chercher un slot inactif sans dépasser MAX_ROUTES
         let mut found = None;
         for i in 0..MAX_ROUTES {
             if !table[i].is_active() {
@@ -212,16 +213,21 @@ pub fn add_route(
     table[slot].messages_dropped.store(0, Ordering::Release);
     table[slot].bytes_forwarded.store(0, Ordering::Release);
 
-    ROUTE_COUNT.fetch_add(1, Ordering::Release);
+    if appended {
+        ROUTE_COUNT.fetch_add(1, Ordering::Release);
+    }
     true
 }
 
 /// Retire une route de la table avec compaction O(1) pour préserver la contiguïté.
 pub fn remove_route(dest_service_id: u32) -> bool {
     let mut table = ROUTE_TABLE.lock();
-    let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
+    let count = (ROUTE_COUNT.load(Ordering::Acquire) as usize).min(MAX_ROUTES);
+    if count == 0 {
+        return false;
+    }
 
-    for i in 0..count.min(MAX_ROUTES) {
+    for i in 0..count {
         if table[i].dest_service_id == dest_service_id && table[i].is_active() {
             let last = count - 1;
             if i != last {
@@ -282,109 +288,110 @@ pub fn resolve_route(dest_service_id: u32) -> Option<(u32, RoutePolicy)> {
 }
 
 /// Détermine la politique de routage basée sur le DAG ExoCordon.
-/// Vérifie que la communication src→dst est autorisée.
-pub fn apply_policy(src_pid: u32, dst_pid: u32) -> RoutePolicy {
+/// Retourne `None` si la communication `src -> dst` est interdite.
+pub fn apply_policy(src_pid: u32, dst_pid: u32) -> Option<RoutePolicy> {
     // Vérifier d'abord ExoCordon
     if crate::exocordon::check_ipc(src_pid, dst_pid).is_err() {
-        // Communication non autorisée — pas de routage
-        return RoutePolicy::Direct; // Sera bloqué en amont
+        return None;
     }
 
     // Si la route existe, utiliser sa politique
     if let Some((_, policy)) = resolve_route(dst_pid) {
-        return policy;
+        return Some(policy);
     }
 
     // Par défaut : routage direct
-    RoutePolicy::Direct
+    Some(RoutePolicy::Direct)
+}
+
+#[inline]
+fn send_ipc(dest_pid: u32, payload: &[u8], payload_len: usize) -> i64 {
+    unsafe {
+        syscall_abi::syscall6(
+            syscall_abi::SYS_IPC_SEND,
+            dest_pid as u64,
+            payload.as_ptr() as u64,
+            payload_len as u64,
+            0,
+            0,
+            0,
+        )
+    }
+}
+
+fn record_route_stat(dst_pid: u32, ok: bool, payload_len: usize) {
+    let table = ROUTE_TABLE.lock();
+    let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
+    for i in 0..count.min(MAX_ROUTES) {
+        if table[i].dest_service_id == dst_pid && table[i].is_active() {
+            if ok {
+                table[i].messages_routed.fetch_add(1, Ordering::Relaxed);
+                table[i]
+                    .bytes_forwarded
+                    .fetch_add(payload_len as u64, Ordering::Relaxed);
+            } else {
+                table[i].messages_dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            break;
+        }
+    }
 }
 
 /// Transmet un message IPC selon la politique de routage.
 /// Retourne true si le message a été transmis avec succès.
 pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: usize) -> bool {
-    let policy = apply_policy(src_pid, dst_pid);
+    if payload_len > payload.len() {
+        return false;
+    }
+    let Some(policy) = apply_policy(src_pid, dst_pid) else {
+        return false;
+    };
 
     match policy {
         RoutePolicy::Direct | RoutePolicy::Forwarded => {
             let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
-            // FIX-ROUTER-01: utiliser la constante ABI au lieu du numéro hardcodé.
-            // 302 = SYS_EXO_IPC_RECV_NB (réception non-bloquante) ≠ SYS_IPC_SEND (300).
-            // FIX-ROUTER-02: l'argument 4 de SYS_IPC_SEND est `flags`, pas src_pid.
-            // Passer src_pid ici activait des bits arbitraires (0x1 = TIMEOUT,
-            // 0x2 = INJECT_SRC_PID) selon la valeur du PID. flags = 0 comme main.rs.
-            let result = unsafe {
-                syscall_abi::syscall6(
-                    syscall_abi::SYS_IPC_SEND,
-                    dest as u64,
-                    payload.as_ptr() as u64,
-                    payload_len as u64,
-                    0, 0, 0,
-                )
-            };
-
-            let table = ROUTE_TABLE.lock();
-            let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
-            for i in 0..count.min(MAX_ROUTES) {
-                if table[i].dest_service_id == dst_pid && table[i].is_active() {
-                    if result >= 0 {
-                        table[i].messages_routed.fetch_add(1, Ordering::Relaxed);
-                        table[i].bytes_forwarded.fetch_add(payload_len as u64, Ordering::Relaxed);
-                    } else {
-                        table[i].messages_dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    break;
-                }
-            }
-
+            let result = send_ipc(dest, payload, payload_len);
+            record_route_stat(dst_pid, result >= 0, payload_len);
             result >= 0
         }
         RoutePolicy::Broadcast => {
-            // Envoyer à tous les services actifs
-            let table = ROUTE_TABLE.lock();
-            let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
-            let mut sent = 0u32;
-
-            for i in 0..count.min(MAX_ROUTES) {
-                if table[i].is_active() {
-                    let dest = if table[i].next_hop_pid != 0 {
-                        table[i].next_hop_pid
-                    } else {
-                        table[i].dest_service_id
-                    };
-                    // FIX-ROUTER-01/02: constante ABI + flags=0 — même correction
-                    // que le chemin Direct/Forwarded.
-                    let result = unsafe {
-                        syscall_abi::syscall6(
-                            syscall_abi::SYS_IPC_SEND,
-                            dest as u64,
-                            payload.as_ptr() as u64,
-                            payload_len as u64,
-                            0, 0, 0,
-                        )
-                    };
-                    if result >= 0 {
-                        sent += 1;
+            // Collecter les destinations actives sans garder ROUTE_TABLE verrouillé pendant l'IPC.
+            let mut targets = [0u32; MAX_ROUTES];
+            let mut target_count = 0usize;
+            {
+                let table = ROUTE_TABLE.lock();
+                let count = ROUTE_COUNT.load(Ordering::Acquire) as usize;
+                for i in 0..count.min(MAX_ROUTES) {
+                    if table[i].is_active() {
+                        let dest = if table[i].next_hop_pid != 0 {
+                            table[i].next_hop_pid
+                        } else {
+                            table[i].dest_service_id
+                        };
+                        if dest != 2 && target_count < MAX_ROUTES {
+                            targets[target_count] = dest;
+                            target_count += 1;
+                        }
                     }
                 }
             }
 
+            let mut sent = 0u32;
+            for &dest in &targets[..target_count] {
+                if crate::exocordon::check_ipc(src_pid, dest).is_ok()
+                    && send_ipc(dest, payload, payload_len) >= 0
+                {
+                    sent += 1;
+                }
+            }
             sent > 0
         }
         RoutePolicy::LoadBalanced => {
-            // FIX-ROUTER-02: l'ancien fallback rappelait forward_message() qui
-            // re-résolvait la même politique LoadBalanced → récursion infinie.
-            // Envoi direct vers l'instance résolue (sélection multi-instance via
-            // load_balancer à brancher quand les pools seront peuplés).
-            let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
-            let result = unsafe {
-                syscall_abi::syscall6(
-                    syscall_abi::SYS_IPC_SEND,
-                    dest as u64,
-                    payload.as_ptr() as u64,
-                    payload_len as u64,
-                    0, 0, 0,
-                )
-            };
+            let dest = crate::load_balancer::select_instance(dst_pid)
+                .or_else(|| resolve_route(dst_pid).map(|(d, _)| d))
+                .unwrap_or(dst_pid);
+            let result = send_ipc(dest, payload, payload_len);
+            record_route_stat(dst_pid, result >= 0, payload_len);
             result >= 0
         }
     }

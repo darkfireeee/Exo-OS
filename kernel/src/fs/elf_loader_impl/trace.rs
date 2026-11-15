@@ -1,4 +1,4 @@
-//! trace.rs — Primitives de traçage et débogage du chargeur ELF
+//! trace.rs — ELF loader tracing and debugging primitives
 
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 use crate::fs::exofs::cache::BLOB_CACHE;

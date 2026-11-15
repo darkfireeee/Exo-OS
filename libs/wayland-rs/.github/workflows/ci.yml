@@ -1,0 +1,479 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+    - master
+    tags:
+      - 'release-[0-9]+-[0-9]+-[0-9]+'
+  pull_request:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+  clippy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Get cargo-cache latest version
+        id: cargocacheversion
+        run: echo "version=$(cargo search 'cargo-cache' --limit 1 | head -n 1 | cut -d ' ' -f 3 | cut -d '"' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Cargo binaries cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-cache
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-cargo-binaries-${{ steps.cargocacheversion.outputs.version }}
+
+      - name: Install cargo-cache
+        run: cargo install cargo-cache --version ${{ steps.cargocacheversion.outputs.version }}
+
+      - name: Clean cargo cache of old items
+        run: cargo cache clean-unref
+
+      - name: Get rustc version for caching
+        id: rustcversion
+        run: echo "version=$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Build cache
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-clippy-${{ steps.rustcversion.outputs.version }}-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: System dependencies
+        run: sudo apt-get install libwayland-dev
+
+      - name: Clippy
+        run: cargo clippy --all --all-features --all-targets -- -D warnings
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  check-minimal:
+    needs:
+      - format
+      - clippy-check
+    env:
+      RUSTFLAGS: "-D warnings"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: System dependencies
+        run: sudo apt-get install libwayland-dev
+
+      - name: Downgrade to minimal dependencies
+        run: cargo update -Z minimal-versions
+
+      - name: Check
+        run: cargo check --all --all-features
+  
+  msrv:
+    needs:
+      - format
+      - clippy-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.86.0
+
+      - name: Get rustc version for caching
+        id: rustcversion
+        run: echo "version=$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Build cache
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-test-${{ steps.rustcversion.outputs.version }}-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: System dependencies
+        run: sudo apt-get install libwayland-dev
+
+      - name: Check
+        run: cargo check --all --all-features
+
+  test-wayland-1_24:
+    needs:
+      - format
+      - clippy-check
+    env:
+      RUSTFLAGS: "-D warnings"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: System dependencies
+        run: sudo apt-get install meson
+
+      - name: Build libwayland
+        run: |
+          wget https://gitlab.freedesktop.org/wayland/wayland/-/archive/1.24.0/wayland-1.24.0.tar.gz
+          tar xf wayland-1.24.0.tar.gz
+          cd wayland-1.24.0
+          meson setup build -Dprefix=$PWD/../wayland-install -Ddocumentation=false
+          meson compile -C build
+          meson install -C build
+
+      - name: Check
+        env:
+          PKG_CONFIG_PATH: "${{ github.workspace }}/wayland-install/lib/x86_64-linux-gnu/pkgconfig"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/wayland-install/lib/x86_64-linux-gnu"
+        run: cargo test -p wayland-tests --features client_system,libwayland_client_1_23,libwayland_server_1_23
+
+  check-redox:
+    needs:
+      - format
+      - clippy-check
+    env:
+      RUSTFLAGS: "-D warnings"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-redox
+
+      - name: Check
+        run: cargo check --target x86_64-unknown-redox -p wayland-client -p wayland-server
+  
+  coverage-main:
+    needs:
+      - format
+      - clippy-check
+      
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: System dependencies
+        run: sudo apt-get install libwayland-dev
+
+      - name: Update libwayland-server0 to newer release
+        run: wget http://mirrors.kernel.org/ubuntu/pool/main/w/wayland/libwayland-server0_1.26.0-1_amd64.deb && sudo dpkg -i libwayland-server0_1.26.0-1_amd64.deb
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rustfmt
+
+      - name: Runtime directory
+        run: |
+          mkdir -p $(pwd)/.runtime
+          echo "XDG_RUNTIME_DIR=$(pwd)/.runtime" >> $GITHUB_ENV
+
+      - name: Get grcov latest version
+        id: grcovversion
+        run: echo "version=$(cargo search 'grcov' --limit 1 | head -n 1 | cut -d ' ' -f 3 | cut -d '"' -f 2)" >> $GITHUB_OUTPUT
+      
+      - name: grcov cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/grcov
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-grcov-${{ steps.grcovversion.outputs.version }}
+
+      - name: Install grcov
+        run: cargo install grcov --version ${{ steps.grcovversion.outputs.version }}
+
+      - name: Run tests
+        run: cargo test --workspace --exclude 'wayland-tests' --all-features
+        env:
+          LLVM_PROFILE_FILE: "wayland-rs-%p-%m.profraw"
+          RUSTFLAGS: "-Cinstrument-coverage --cfg coverage --cfg unstable_coverage"
+
+      - name: Coverage
+        run: grcov . --binary-path ./target/debug -s . -t lcov --branch --llvm --ignore-not-existing --ignore 'wayland-backend/src/test/*' --ignore '*/examples/*' --ignore '*/tests/*' --ignore '*/.cargo/registry/*' --excl-br-start "mod tests \{" --excl-start "mod tests \{" --excl-br-line "#\[derive\(" --excl-line "#\[derive\(" -o lcov.info
+
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v1
+        with:
+          flags: main
+  
+  coverage-tests:
+    needs:
+      - format
+      - clippy-check
+      
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        client_feature: ["libwayland_client_1_23", "client_system"]
+        server_feature: ["libwayland_server_1_23", "server_system", "server_system,libwayland_server_1_22"]
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+      
+      - name: System dependencies
+        run: sudo apt-get install libwayland-dev
+      
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview, rustfmt
+
+      - name: Runtime directory
+        run: |
+          mkdir -p $(pwd)/.runtime
+          echo "XDG_RUNTIME_DIR=$(pwd)/.runtime" >> $GITHUB_ENV
+
+      - name: Get grcov latest version
+        id: grcovversion
+        run: echo "version=$(cargo search 'grcov' --limit 1 | head -n 1 | cut -d ' ' -f 3 | cut -d '"' -f 2)" >> $GITHUB_OUTPUT
+      
+      - name: grcov cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/grcov
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-grcov-${{ steps.grcovversion.outputs.version }}
+
+      - name: Install grcov
+        run: cargo install grcov --version ${{ steps.grcovversion.outputs.version }}
+
+      - name: Run tests
+        run: cargo test -p wayland-tests --features "${{ matrix.client_feature }} ${{ matrix.server_feature}}"
+        env:
+          LLVM_PROFILE_FILE: "wayland-rs-%p-%m.profraw"
+          RUSTFLAGS: "-Cinstrument-coverage --cfg coverage --cfg unstable_coverage"
+      
+      - name: Coverage
+        run: grcov . --binary-path ./target/debug -s . -t lcov --branch --llvm --ignore-not-existing --ignore 'wayland-tests/*' --ignore '*/examples/*' --ignore '*/tests/*' --ignore '*/.cargo/registry/*' --excl-br-start "mod tests \{" --excl-start "mod tests \{" --excl-br-line "#\[derive\(" --excl-line "#\[derive\(" -o lcov.info
+
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v1
+        with:
+          flags: test-${{ matrix.client_feature }}-${{ matrix.server_feature }}
+
+  doc:
+    name: Documentation on Github Pages
+    runs-on: ubuntu-latest
+    needs:
+      - format
+      - clippy-check
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get date for registry cache
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cargo registry cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ steps.date.outputs.date }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: System dependencies
+        run: sudo apt-get install libwayland-client0 libwayland-server0
+
+      - name: Build Documentation
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --all --no-deps --all-features
+
+      - name: Setup index
+        run: cp ./doc/index.html ./doc/rust.css ./target/doc/
+
+      - name: Upload static files as artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./target/doc
+
+      - name: Deploy to GitHub Pages
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master'  }}
+        uses: actions/deploy-pages@v4
+
+  publish:
+    needs:
+      - format
+      - doc
+      - check-minimal
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Publish crates
+        uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CRATES_TOKEN }}
+          args: --no-verify
+          dry-run: ${{ !(github.repository == 'Smithay/wayland-rs' && startsWith(github.ref, 'refs/tags/release-')) }}
+          ignore-unpublished-changes: ${{ !(github.repository == 'Smithay/wayland-rs' && startsWith(github.ref, 'refs/tags/release-')) }}
+
+permissions:
+  pages: write
+  id-token: write

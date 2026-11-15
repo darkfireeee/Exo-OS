@@ -334,11 +334,13 @@ impl CapTable {
             self.count.fetch_add(1, Ordering::Relaxed);
             0
         } else {
-            // Update of existing slot (re-grant after revocation)
+            // Update of existing slot (re-grant after revocation) — bump generation to invalidate stale tokens
             let current_gen = entry.generation.load(Ordering::Acquire);
+            let next_gen = current_gen.wrapping_add(1).max(1);
+            entry.generation.store(next_gen, Ordering::Release);
             entry.rights.store(rights.bits(), Ordering::Release);
             entry.type_tag.store(type_tag as u32, Ordering::Release);
-            current_gen
+            next_gen
         };
 
         self.stats.grants.fetch_add(1, Ordering::Relaxed);
@@ -359,6 +361,7 @@ impl CapTable {
             // Reset rights to zero — immediately invalidates check_object and check_right_any_type
             self.entries[idx].rights.store(0, Ordering::Release);
             self.stats.revocations.fetch_add(1, Ordering::Relaxed);
+            crate::security::exokairos::cap_deadline_table::remove(object_id);
             Ok(())
         } else {
             Err(CapError::ObjectNotFound)
@@ -389,6 +392,7 @@ impl CapTable {
     #[inline]
     pub(super) fn increment_generation(&self, object_id: ObjectId, ord: Ordering) {
         if let Some(idx) = self.find_slot(object_id) {
+            self.entries[idx].rights.store(0, Ordering::Release);
             self.entries[idx].generation.fetch_add(1, ord);
         }
     }

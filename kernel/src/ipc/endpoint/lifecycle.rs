@@ -18,7 +18,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 use super::descriptor::{EndpointDesc, EndpointName, EndpointState};
-use super::registry::{register_endpoint, unregister_endpoint};
+use super::registry::{register_endpoint, unregister_endpoint_by_id};
 use crate::ipc::core::constants::MAX_ENDPOINTS;
 use crate::ipc::core::types::{alloc_endpoint_id, EndpointId, IpcError};
 use crate::scheduler::core::task::ThreadId;
@@ -175,7 +175,7 @@ pub fn endpoint_close(ep_id: EndpointId) -> Result<(), IpcError> {
     })
 }
 
-/// Destroys an endpoint (only if active_conns == 0).
+/// Destroys an endpoint (only if active_conns == 0 and `name` matches descriptor).
 pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> {
     let mut pool = EP_POOL_DESCS.lock();
     let slot_idx = pool.iter().position(|slot| {
@@ -192,13 +192,21 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
         None => return Err(IpcError::EndpointNotFound),
     };
 
-    let conns = pool[idx]
+    let (conns, name_matches) = pool[idx]
         .as_ref()
         .map(|desc| {
             // SAFETY: slot is Some and protected by EP_POOL_DESCS.
-            unsafe { desc.as_ref().active_conns.load(Ordering::Acquire) }
+            let d = unsafe { desc.as_ref() };
+            (
+                d.active_conns.load(Ordering::Acquire),
+                d.name.eq_bytes(name),
+            )
         })
-        .unwrap_or(u32::MAX);
+        .unwrap_or((u32::MAX, false));
+
+    if !name_matches {
+        return Err(IpcError::InvalidParam);
+    }
 
     if conns != 0 {
         return Err(IpcError::WouldBlock);
@@ -207,7 +215,7 @@ pub fn endpoint_destroy(name: &[u8], ep_id: EndpointId) -> Result<(), IpcError> 
     pool[idx] = None;
     drop(pool); // release lock before modifying bitmap and registry
     EP_POOL_BITMAP.free(idx);
-    unregister_endpoint(name);
+    unregister_endpoint_by_id(ep_id);
     Ok(())
 }
 

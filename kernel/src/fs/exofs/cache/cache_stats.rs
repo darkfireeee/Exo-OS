@@ -1,47 +1,47 @@
-//! cache_stats.rs — Métriques atomiques du cache ExoFS (no_std).
+//! cache_stats.rs — ExoFS cache atomic metrics (no_std).
 //!
-//! `CacheStats` : compteurs atomiques lock-free pour les opérations de cache.
-//! `CacheStatsSnapshot` : copie cohérente pour inspection.
-//! Règles : ONDISK-03 (pas d'AtomicU64 dans repr(C)), ARITH-02.
+//! `CacheStats`: lock-free atomic counters for cache operations.
+//! `CacheStatsSnapshot`: coherent copy for inspection.
+//! Rules: ONDISK-03 (no AtomicU64 in repr(C)), ARITH-02.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Instance globale des statistiques de cache.
+/// Global instance of cache statistics.
 pub static CACHE_STATS: CacheStats = CacheStats::new_const();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CacheStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs atomiques des opérations de cache.
+/// Atomic counters for cache operations.
 ///
-/// Tous les compteurs sont monotones (croissants) sauf `total_bytes` et
-/// `dirty_bytes` qui peuvent décroître lors d'évictions / flushes.
+/// All counters are monotonic (increasing) except `total_bytes` and
+/// `dirty_bytes` which can decrease during evictions / flushes.
 pub struct CacheStats {
-    /// Nombre total de hits (blob trouvé en cache).
+    /// Total number of hits (blob found in cache).
     pub hits: AtomicU64,
-    /// Nombre total de misses (blob absent du cache).
+    /// Total number of misses (blob absent from cache).
     pub misses: AtomicU64,
-    /// Nombre total d'évictions.
+    /// Total number of evictions.
     pub evictions: AtomicU64,
-    /// Nombre total d'insertions.
+    /// Total number of insertions.
     pub insertions: AtomicU64,
-    /// Nombre total d'invalidations manuelles.
+    /// Total number of manual invalidations.
     pub invalidations: AtomicU64,
-    /// Nombre d'opérations de warming (prélecture).
+    /// Number of warming (prefetch) operations.
     pub warmings: AtomicU64,
-    /// Octets actuellement en cache (approximatif).
+    /// Bytes currently in cache (approximate).
     pub total_bytes: AtomicU64,
-    /// Octets dirty en attente de writeback.
+    /// Dirty bytes awaiting writeback.
     pub dirty_bytes: AtomicU64,
-    /// Nombre de flushes writeback déclenchés.
+    /// Number of triggered writeback flushes.
     pub flushes: AtomicU64,
-    /// Nombre d'opérations de shrink.
+    /// Number of shrink operations.
     pub shrinks: AtomicU64,
 }
 
 impl CacheStats {
-    /// Constructeur `const` pour `static`.
+    /// `const` constructor for `static`.
     pub const fn new_const() -> Self {
         Self {
             hits: AtomicU64::new(0),
@@ -57,7 +57,7 @@ impl CacheStats {
         }
     }
 
-    // ── Enregistrement ────────────────────────────────────────────────────────
+    // ── Recording ─────────────────────────────────────────────────────────────
 
     pub fn record_hit(&self) {
         self.hits.fetch_add(1, Ordering::Relaxed);
@@ -105,7 +105,7 @@ impl CacheStats {
         self.shrinks.fetch_add(1, Ordering::Relaxed);
     }
 
-    // ── Lecture ───────────────────────────────────────────────────────────────
+    // ── Read ──────────────────────────────────────────────────────────────────
 
     pub fn hits(&self) -> u64 {
         self.hits.load(Ordering::Relaxed)
@@ -138,7 +138,7 @@ impl CacheStats {
         self.shrinks.load(Ordering::Relaxed)
     }
 
-    /// Ratio de hit en pourcentage (0 si aucun accès).
+    /// Hit ratio percentage (0 if no accesses).
     pub fn hit_ratio_pct(&self) -> u64 {
         let h = self.hits.load(Ordering::Relaxed);
         let m = self.misses.load(Ordering::Relaxed);
@@ -149,12 +149,12 @@ impl CacheStats {
         h * 100 / total
     }
 
-    /// `true` si le ratio de hit est supérieur à `min_pct`.
+    /// `true` if hit ratio is greater than or equal to `min_pct`.
     pub fn is_effective(&self, min_pct: u64) -> bool {
         self.hit_ratio_pct() >= min_pct
     }
 
-    /// Remet tous les compteurs à zéro.
+    /// Resets all counters to zero.
     pub fn reset(&self) {
         self.hits.store(0, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
@@ -168,7 +168,7 @@ impl CacheStats {
         self.shrinks.store(0, Ordering::Relaxed);
     }
 
-    /// Retourne un snapshot cohérent des compteurs.
+    /// Returns a coherent snapshot of the counters.
     pub fn snapshot(&self) -> CacheStatsSnapshot {
         CacheStatsSnapshot {
             hits: self.hits.load(Ordering::Relaxed),
@@ -189,7 +189,7 @@ impl CacheStats {
 // CacheStatsSnapshot
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Copie ponctuelle des métriques de cache.
+/// Point-in-time copy of cache metrics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CacheStatsSnapshot {
     pub hits: u64,
@@ -217,12 +217,12 @@ impl CacheStatsSnapshot {
         self.hits * 100 / total
     }
 
-    /// `true` si aucune activité enregistrée.
+    /// `true` if no activity recorded.
     pub fn is_idle(&self) -> bool {
         self.total_accesses() == 0
     }
 
-    /// Différence entre deux snapshots.
+    /// Difference between two snapshots.
     pub fn delta(&self, prev: &CacheStatsSnapshot) -> CacheStatsDelta {
         CacheStatsDelta {
             d_hits: self.hits.wrapping_sub(prev.hits),
@@ -237,7 +237,7 @@ impl CacheStatsSnapshot {
 // CacheStatsDelta
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Évolution des métriques entre deux snapshots.
+/// Evolution of metrics between two snapshots.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CacheStatsDelta {
     pub d_hits: u64,
@@ -247,7 +247,7 @@ pub struct CacheStatsDelta {
 }
 
 impl CacheStatsDelta {
-    /// `true` si les performances se sont dégradées (plus de misses que de hits).
+    /// `true` if performance degraded (more misses than hits).
     pub fn is_degraded(&self) -> bool {
         self.d_misses > self.d_hits
     }
@@ -377,10 +377,10 @@ mod tests {
     }
 }
 
-// ── Extensions CacheStats ──────────────────────────────────────────────────
+// ── CacheStats extensions ──────────────────────────────────────────────────
 
 impl CacheStats {
-    /// Copie les compteurs les plus importants dans un tableau [hits, misses, evictions, bytes].
+    /// Copies the most important counters into an array [hits, misses, evictions, bytes].
     pub fn to_array(&self) -> [u64; 4] {
         [
             self.hits.load(Ordering::Relaxed),
@@ -390,24 +390,24 @@ impl CacheStats {
         ]
     }
 
-    /// `true` si le cache n'a jamais servi aucune requête.
+    /// `true` if the cache never served any request.
     pub fn is_cold(&self) -> bool {
         self.hits.load(Ordering::Relaxed) == 0 && self.misses.load(Ordering::Relaxed) == 0
     }
 
-    /// Met à jour `total_bytes` directement (pour synchronisation externe).
+    /// Updates `total_bytes` directly (for external synchronization).
     pub fn set_total_bytes(&self, bytes: u64) {
         self.total_bytes.store(bytes, Ordering::Relaxed);
     }
 }
 
 impl CacheStatsSnapshot {
-    /// `true` si le ratio de hit dépasse `min_pct`.
+    /// `true` if hit ratio exceeds `min_pct`.
     pub fn is_effective(&self, min_pct: u64) -> bool {
         self.hit_ratio_pct() >= min_pct
     }
 
-    /// Octets par accès (0 si aucun accès).
+    /// Bytes per access (0 if no accesses).
     pub fn bytes_per_access(&self) -> u64 {
         let total = self.total_accesses();
         if total == 0 {

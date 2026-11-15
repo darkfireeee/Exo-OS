@@ -1,16 +1,16 @@
-//! stream_export.rs — Export de blobs en streaming (no_std, aucune archive complète en RAM).
+//! stream_export.rs — Streaming blob export (no_std, no full archive in RAM).
 //!
-//! Ce module fournit :
-//!  - `BlobDataProvider`    : trait de fourniture de données blob.
-//!  - `StreamSink`          : trait de sortie chunk par chunk.
-//!  - `StreamExportConfig`  : paramètres d'un export en streaming.
-//!  - `StreamFilter`         : filtre sélectif sur les blobs à exporter.
-//!  - `StreamExporter`      : moteur d'export sans archive complète en RAM.
-//!  - `StreamExportBatch`   : lot d'export avec checkpoint.
-//!  - `StreamExportReport`  : rapport de fin d'export.
+//! This module provides:
+//!  - `BlobDataProvider`    : blob data provider trait.
+//!  - `StreamSink`          : chunk-by-chunk output trait.
+//!  - `StreamExportConfig`  : streaming export parameters.
+//!  - `StreamFilter`        : selective filter on exported blobs.
+//!  - `StreamExporter`      : export engine without full archive in RAM.
+//!  - `StreamExportBatch`   : export batch with checkpoint.
+//!  - `StreamExportReport`  : end-of-export report.
 //!
-//! RECUR-01 : boucles while — aucune récursion.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops — no recursion.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
 extern crate alloc;
@@ -18,59 +18,59 @@ use super::incremental_export::EpochId;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
-// ─── Trait de fourniture de données ──────────────────────────────────────────
+// ─── Data Provider Trait ──────────────────────────────────────────────────
 
-/// Fournisseur de données blob — implémenté par la couche de stockage ExoFS.
+/// Blob data provider — implemented by the ExoFS storage layer.
 pub trait BlobDataProvider {
-    /// Lit les données d'un blob identifié par son BlobId (blake3 RÈGLE 11).
-    /// Retourne une tranche valide jusqu'au prochain appel.
+    /// Reads data of a blob identified by its BlobId (blake3 RULE 11).
+    /// Returns a slice valid until the next call.
     fn provide_blob(&self, blob_id: &[u8; 32]) -> ExofsResult<&[u8]>;
 
-    /// Retourne l'epoch de création d'un blob.
+    /// Returns the creation epoch of a blob.
     fn blob_epoch(&self, blob_id: &[u8; 32]) -> ExofsResult<EpochId>;
 
-    /// Indique si un blob existe dans le store.
+    /// Indicates whether a blob exists in the store.
     fn blob_exists(&self, blob_id: &[u8; 32]) -> bool;
 }
 
-// ─── Trait de sortie streaming ────────────────────────────────────────────────
+// ─── Streaming Output Trait ────────────────────────────────────────────────
 
-/// Récepteur de chunks d'export (streaming).
+/// Export chunk receiver (streaming).
 pub trait StreamSink {
-    /// Reçoit un chunk de données brutes.
+    /// Receives a raw data chunk.
     fn write_chunk(&mut self, data: &[u8]) -> ExofsResult<()>;
 
-    /// Indique le début d'une nouvelle entrée blob.
+    /// Indicates the start of a new blob entry.
     fn begin_entry(&mut self, blob_id: &[u8; 32], size: u64) -> ExofsResult<()>;
 
-    /// Finalise l'entrée courante.
+    /// Finalizes the current entry.
     fn end_entry(&mut self) -> ExofsResult<()>;
 
-    /// Nombre de bytes écrits dans le sink.
+    /// Number of bytes written to the sink.
     fn bytes_written(&self) -> u64;
 }
 
-// ─── Filtre d'export ──────────────────────────────────────────────────────────
+// ─── Export Filter ──────────────────────────────────────────────────────────
 
-/// Mode de filtrage appliqué aux blobs lors de l'export.
+/// Filtering mode applied to blobs during export.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FilterMode {
-    /// Exporter tous les blobs (pas de filtre).
+    /// Export all blobs (no filter).
     AcceptAll,
-    /// N'exporter que les blobs dont l'epoch est dans [min, max].
+    /// Only export blobs whose epoch is in [min, max].
     EpochRange { min: u64, max: u64 },
-    /// N'exporter que les blobs de taille < max_size.
+    /// Only export blobs with size < max_size.
     MaxSize(u64),
-    /// Exclure les blobs dont la taille > threshold (blobs volumineux ignorés).
+    /// Exclude blobs whose size > threshold (large blobs ignored).
     ExcludeLarge(u64),
 }
 
-/// Filtre de sélection des blobs lors de l'export.
+/// Filter for selecting blobs during export.
 pub struct StreamFilter {
     mode: FilterMode,
-    /// Nombre de blobs acceptés.
+    /// Number of accepted blobs.
     accepted: u64,
-    /// Nombre de blobs rejetés.
+    /// Number of rejected blobs.
     rejected: u64,
 }
 
@@ -91,7 +91,7 @@ impl StreamFilter {
         Self::new(FilterMode::EpochRange { min, max })
     }
 
-    /// Teste si un blob doit être exporté.
+    /// Tests whether a blob should be exported.
     pub fn should_export(&mut self, blob_id: &[u8; 32], epoch: EpochId, size: u64) -> bool {
         let _ = blob_id;
         let accept = match self.mode {
@@ -116,24 +116,24 @@ impl StreamFilter {
     }
 }
 
-// ─── Configuration d'export streaming ────────────────────────────────────────
+// ─── Streaming Export Configuration ────────────────────────────────────────
 
-/// Paramètres de la session d'export en streaming.
+/// Streaming export session parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct StreamExportConfig {
-    /// Identifiant de session.
+    /// Session identifier.
     pub session_id: u32,
-    /// Vérifier le blob_id (RÈGLE 11) avant export.
+    /// Verify blob_id (RULE 11) before export.
     pub verify_blob_id: bool,
-    /// Taille d'un bloc de transfert (doit diviser la payload).
+    /// Transfer block size (must divide payload).
     pub block_size: u32,
-    /// Nombre maximum de blobs à exporter (0 = illimité).
+    /// Maximum number of blobs to export (0 = unlimited).
     pub max_blobs: u32,
-    /// Émettre des tombstones pour les blobs supprimés.
+    /// Emit tombstones for deleted blobs.
     pub include_tombstones: bool,
-    /// Epoch minimale (0 = tous depuis le début).
+    /// Minimum epoch (0 = all from beginning).
     pub epoch_min: u64,
-    /// Epoch maximale (u64::MAX = jusqu'à l'epoch courante).
+    /// Maximum epoch (u64::MAX = up to current epoch).
     pub epoch_max: u64,
 }
 
@@ -162,7 +162,7 @@ impl StreamExportConfig {
         }
     }
 
-    /// Valide la configuration — retourne Err si invalide.
+    /// Validates configuration — returns Err if invalid.
     pub fn validate(&self) -> ExofsResult<()> {
         if self.block_size == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -174,9 +174,9 @@ impl StreamExportConfig {
     }
 }
 
-// ─── Rapport d'export streaming ───────────────────────────────────────────────
+// ─── Streaming Export Report ───────────────────────────────────────────────
 
-/// Rapport de fin de session d'export en streaming.
+/// End of streaming export session report.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StreamExportReport {
     pub blobs_exported: u64,
@@ -186,7 +186,7 @@ pub struct StreamExportReport {
     pub bytes_written_to_sink: u64,
     pub errors: u32,
     pub is_complete: bool,
-    /// Dernier blob_id exporté (pour checkpoint).
+    /// Last exported blob_id (for checkpoint).
     pub last_blob_id: [u8; 32],
 }
 
@@ -224,20 +224,20 @@ impl StreamExportReport {
     }
 }
 
-// ─── Checkpoint d'export streaming ───────────────────────────────────────────
+// ─── Streaming Export Checkpoint ───────────────────────────────────────────
 
-/// Point de reprise pour un export streaming interrompu.
+/// Resume point for an interrupted streaming export.
 #[derive(Clone, Copy, Debug)]
 pub struct StreamCheckpoint {
-    /// Index du prochain blob à exporter dans la liste.
+    /// Index of next blob to export in the list.
     pub next_index: usize,
-    /// BlobId du dernier blob exporté avec succès.
+    /// BlobId of last successfully exported blob.
     pub last_exported: [u8; 32],
-    /// Nombre de blobs exportés jusqu'à ce point.
+    /// Number of blobs exported up to this point.
     pub exported_so_far: u64,
-    /// Epoch du dernier blob exporté.
+    /// Epoch of last exported blob.
     pub last_epoch: u64,
-    /// true si le checkpoint est utilisable pour reprise.
+    /// true if checkpoint can be used for resume.
     pub valid: bool,
 }
 
@@ -265,13 +265,13 @@ impl StreamCheckpoint {
     }
 }
 
-// ─── Moteur d'export streaming ────────────────────────────────────────────────
+// ─── Streaming Export Engine ────────────────────────────────────────────────
 
-/// Exporte des blobs vers un StreamSink chunk par chunk, sans archive complète en RAM.
+/// Exports blobs to a StreamSink chunk by chunk, without full archive in RAM.
 ///
-/// L'export s'effectue en deux passes :
-///   1. Blobs actifs (RECUR-01 : boucle while).
-///   2. Tombstones (RECUR-01 : boucle while).
+/// Export is performed in two passes:
+///   1. Active blobs (RECUR-01: while loop).
+///   2. Tombstones (RECUR-01: while loop).
 pub struct StreamExporter {
     config: StreamExportConfig,
     checkpoint: StreamCheckpoint,
@@ -288,7 +288,7 @@ impl StreamExporter {
         })
     }
 
-    /// Reprend un export depuis un checkpoint précédent.
+    /// Resumes an export from a previous checkpoint.
     pub fn resume(config: StreamExportConfig, checkpoint: StreamCheckpoint) -> ExofsResult<Self> {
         config.validate()?;
         Ok(Self {
@@ -298,12 +298,12 @@ impl StreamExporter {
         })
     }
 
-    /// Lance l'export d'une liste de blobs vers le sink.
+    /// Starts export of a list of blobs to the sink.
     ///
-    /// `blob_ids`  : liste triée des BlobId à exporter.
-    /// `tombstones`: liste des BlobId supprimés depuis la dernière session.
+    /// `blob_ids`: sorted list of BlobIds to export.
+    /// `tombstones`: list of deleted BlobIds since last session.
     ///
-    /// RECUR-01 : deux boucles while indépendantes.
+    /// RECUR-01: two independent while loops.
     pub fn run<P: BlobDataProvider, S: StreamSink>(
         &mut self,
         provider: &P,
@@ -315,9 +315,9 @@ impl StreamExporter {
         let start = self.checkpoint.next_index;
         let mut idx = start;
 
-        // ── Phase 1 : Blobs actifs ────────────────────────────────────────────
+        // ── Phase 1: Active blobs ─────────────────────────────────────────────
         while idx < blob_ids.len() {
-            // Limite max_blobs
+            // max_blobs limit
             if self.config.max_blobs > 0
                 && self.report.blobs_exported >= self.config.max_blobs as u64
             {
@@ -326,7 +326,7 @@ impl StreamExporter {
 
             let blob_id = &blob_ids[idx];
 
-            // Epoch du blob
+            // Blob epoch
             let epoch = match provider.blob_epoch(blob_id) {
                 Ok(e) => e,
                 Err(_) => {
@@ -337,7 +337,7 @@ impl StreamExporter {
                 }
             };
 
-            // Lecture des données blob
+            // Read blob data
             let data = match provider.provide_blob(blob_id) {
                 Ok(d) => d,
                 Err(_) => {
@@ -350,14 +350,14 @@ impl StreamExporter {
 
             let size = data.len() as u64;
 
-            // Filtre
+            // Filter
             if !filter.should_export(blob_id, epoch, size) {
                 self.report.record_skipped();
                 idx = idx.wrapping_add(1);
                 continue;
             }
 
-            // Vérification blob_id (RÈGLE 11 : blake3 des données brutes)
+            // Verify blob_id (RULE 11: blake3 of raw data)
             if self.config.verify_blob_id {
                 let computed = inline_blake3(data);
                 if computed != *blob_id {
@@ -368,14 +368,14 @@ impl StreamExporter {
                 }
             }
 
-            // Émission vers le sink
+            // Emit to sink
             if let Err(_) = sink.begin_entry(blob_id, size) {
                 self.report.record_error();
                 idx = idx.wrapping_add(1);
                 continue;
             }
 
-            // Envoi par blocs (ARITH-02 + RECUR-01 : boucle while)
+            // Send by blocks (ARITH-02 + RECUR-01: while loop)
             let block = self.config.block_size as usize;
             let mut offset = 0usize;
             let mut ok = true;
@@ -397,12 +397,12 @@ impl StreamExporter {
             idx = idx.wrapping_add(1);
         }
 
-        // ── Phase 2 : Tombstones ───────────────────────────────────────────────
+        // ── Phase 2: Tombstones ───────────────────────────────────────────────
         if self.config.include_tombstones {
             let mut tj = 0usize;
             while tj < tombstones.len() {
                 let bid = &tombstones[tj];
-                // Émettre une entrée de taille 0 pour signifier une suppression
+                // Emit size 0 entry to signify deletion
                 if sink.begin_entry(bid, 0).is_ok() {
                     let _ = sink.end_entry();
                     self.report.record_tombstone();
@@ -426,9 +426,9 @@ impl StreamExporter {
     }
 }
 
-// ─── Lot d'export avec checkpoint ────────────────────────────────────────────
+// ─── Export Batch with Checkpoint ────────────────────────────────────────────
 
-/// État d'un lot d'export.
+/// State of an export batch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BatchState {
     Pending,
@@ -438,16 +438,16 @@ pub enum BatchState {
     Paused,
 }
 
-/// Lot d'export streaming avec support de checkpoint.
+/// Streaming export batch with checkpoint support.
 pub struct StreamExportBatch {
     pub batch_id: u32,
     pub state: BatchState,
     pub config: StreamExportConfig,
     pub checkpoint: StreamCheckpoint,
     pub report: StreamExportReport,
-    /// Liste de blob_ids à exporter dans ce lot.
+    /// List of blob_ids to export in this batch.
     blob_ids: Vec<[u8; 32]>,
-    /// Tombstones du lot.
+    /// Tombstones of the batch.
     tombstones: Vec<[u8; 32]>,
 }
 
@@ -464,7 +464,7 @@ impl StreamExportBatch {
         }
     }
 
-    /// Ajoute un blob_id au lot — OOM-02 : try_reserve.
+    /// Adds a blob_id to the batch — OOM-02: try_reserve.
     pub fn add_blob(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.blob_ids
             .try_reserve(1)
@@ -473,7 +473,7 @@ impl StreamExportBatch {
         Ok(())
     }
 
-    /// Ajoute un tombstone au lot — OOM-02 : try_reserve.
+    /// Adds a tombstone to the batch — OOM-02: try_reserve.
     pub fn add_tombstone(&mut self, blob_id: [u8; 32]) -> ExofsResult<()> {
         self.tombstones
             .try_reserve(1)
@@ -482,7 +482,7 @@ impl StreamExportBatch {
         Ok(())
     }
 
-    /// Lance l'export du lot.
+    /// Runs the batch export.
     pub fn run<P: BlobDataProvider, S: StreamSink>(
         &mut self,
         provider: &P,
@@ -518,9 +518,9 @@ impl StreamExportBatch {
     }
 }
 
-// ─── blake3 inline minimal (no_std) ─────────────────────────────────────────
+// ─── Minimal Inline blake3 (no_std) ─────────────────────────────────────────
 
-/// hash blake3 simplifié (production : remplacer par crate::fs::exofs::dedup::content_hash).
+/// Simplified blake3 hash (production: replace with crate::fs::exofs::dedup::content_hash).
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
         0x6b08_c647u32,
@@ -552,9 +552,9 @@ fn inline_blake3(data: &[u8]) -> [u8; 32] {
     out
 }
 
-// ─── VecStreamSink de test ────────────────────────────────────────────────────
+// ─── Test VecStreamSink ────────────────────────────────────────────────────
 
-/// Implémentation de StreamSink vers Vec<u8> (pour les tests).
+/// Implementation of StreamSink to Vec<u8> (for tests).
 pub struct VecStreamSink {
     buf: Vec<u8>,
     entries: u32,
@@ -752,7 +752,7 @@ mod tests {
         let mut provider = MockProvider::new();
         let mut ids = Vec::new();
         for i in 0u8..5 {
-            let data = [i; 64]; // 64 bytes de tag i
+            let data = [i; 64]; // 64 bytes of tag i
             ids.push(provider.add(&data, EpochId(i as u64)));
         }
         let cfg = StreamExportConfig {

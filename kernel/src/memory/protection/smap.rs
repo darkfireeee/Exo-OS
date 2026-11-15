@@ -117,7 +117,10 @@ pub fn smap_supported() -> bool {
 /// CPL 0. The window must be closed by `clac()` as early as possible.
 #[inline(always)]
 pub unsafe fn stac() {
-    core::arch::asm!("stac", options(nostack, nomem, preserves_flags));
+    if !SMAP_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    core::arch::asm!("stac", options(nostack, nomem));
     SMAP_STATS.stac_count.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -127,7 +130,10 @@ pub unsafe fn stac() {
 /// CPL 0.
 #[inline(always)]
 pub unsafe fn clac() {
-    core::arch::asm!("clac", options(nostack, nomem, preserves_flags));
+    if !SMAP_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    core::arch::asm!("clac", options(nostack, nomem));
     SMAP_STATS.clac_count.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -145,11 +151,12 @@ pub unsafe fn enable_smap() {
     }
     let cr4 = read_cr4();
     if cr4 & CR4_SMAP_BIT != 0 {
+        SMAP_ACTIVE.store(true, Ordering::Release);
         SMAP_STATS.redundant_enable.fetch_add(1, Ordering::Relaxed);
         return;
     }
     // Ensure AC = 0 before enabling SMAP to avoid opening a window.
-    clac();
+    core::arch::asm!("clac", options(nostack, nomem));
     write_cr4(cr4 | CR4_SMAP_BIT);
     SMAP_STATS.enable_count.fetch_add(1, Ordering::Relaxed);
     SMAP_ACTIVE.store(true, Ordering::Release);

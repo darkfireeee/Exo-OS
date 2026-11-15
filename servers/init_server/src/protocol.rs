@@ -1,7 +1,7 @@
 use super::syscall;
 
 pub const SERVER_ENDPOINT_ID: u64 = 1;
-pub const IPC_RECV_TIMEOUT_MS: u64 = 10;
+pub const IPC_RECV_TIMEOUT_MS: u64 = 200;
 pub const SERVICE_NAME_MAX: usize = 64;
 
 pub const INIT_MSG_HEARTBEAT: u32 = 0;

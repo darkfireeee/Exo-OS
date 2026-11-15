@@ -28,7 +28,7 @@ use crate::security::capability::{CapTable, CapToken, Rights};
 pub const MAX_RAW_SLOTS: usize = 128;
 
 /// Ring depth per mailbox (power of 2).
-pub const RAW_RING_DEPTH: usize = 16;
+pub const RAW_RING_DEPTH: usize = 64;
 
 const RAW_RING_MASK: usize = RAW_RING_DEPTH - 1;
 
@@ -262,6 +262,9 @@ fn find_slot(ep_id: u64) -> Option<usize> {
 // Mailbox management API
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Lifecycle serialization for `mailbox_open` and `mailbox_close` (prevents duplicate slots and reuse wipe races).
+static MAILBOX_LIFECYCLE_LOCK: SpinLock<()> = SpinLock::new(());
+
 /// Opens a mailbox for `ep_id`.
 ///
 /// Idempotent: if a slot already exists for this `ep_id`, returns `true`.
@@ -271,6 +274,7 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
     if id == 0 {
         return false;
     }
+    let _guard = MAILBOX_LIFECYCLE_LOCK.lock();
     // Idempotence: already open?
     if find_slot(id).is_some() {
         return true;
@@ -279,13 +283,16 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
     let start = (id as usize).wrapping_mul(2654435761) % MAX_RAW_SLOTS;
     for i in 0..MAX_RAW_SLOTS {
         let idx = (start + i) % MAX_RAW_SLOTS;
-        if RAW_TABLE[idx]
+        match RAW_TABLE[idx]
             .endpoint_id
             .compare_exchange(0, id, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
         {
-            OPEN_COUNT.fetch_add(1, Ordering::Relaxed);
-            return true;
+            Ok(_) => {
+                OPEN_COUNT.fetch_add(1, Ordering::Relaxed);
+                return true;
+            }
+            Err(existing) if existing == id => return true,
+            Err(_) => {}
         }
     }
     false // table full
@@ -294,25 +301,26 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
 /// Closes mailbox associated with `ep_id` and empties its ring.
 pub fn mailbox_close(ep_id: EndpointId) {
     let id = ep_id.get();
+    if id == 0 {
+        return;
+    }
+    let _guard = MAILBOX_LIFECYCLE_LOCK.lock();
     if let Some(idx) = find_slot(id) {
         let slot = &RAW_TABLE[idx];
         let waiter = {
-            // T8-007 FIX: lock ring before CAS to guarantee
-            // that no in-progress send_raw can enqueue a message during or after reset.
             let mut ring = slot.ring.lock();
-            if slot
-                .endpoint_id
-                .compare_exchange(id, 0, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
+            if slot.endpoint_id.load(Ordering::Acquire) == id {
                 let w = slot.take_waiter_locked();
                 ring.reset();
+                // Release endpoint_id only after ring has been reset under lock.
+                slot.endpoint_id.store(0, Ordering::Release);
                 OPEN_COUNT.fetch_sub(1, Ordering::Relaxed);
                 w
             } else {
                 core::ptr::null_mut()
             }
         };
+        drop(_guard);
         wake_waiter_outside_lock(waiter);
     }
 }
@@ -478,6 +486,9 @@ pub fn recv_raw_or_register_waiter(
     if id == 0 {
         return Err(IpcError::NullEndpoint);
     }
+    if find_slot(id).is_none() && !mailbox_open(ep_id) {
+        return Err(IpcError::OutOfResources);
+    }
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
     let mut ring = slot.ring.lock();
@@ -501,6 +512,23 @@ pub fn recv_raw_or_register_waiter(
         }
         Err(err) => Err(err),
     }
+}
+
+/// Returns `true` if `waiter_tcb` is still registered on `ep_id` AND its ring is still empty.
+pub fn has_registered_waiter(ep_id: EndpointId, waiter_tcb: *mut ThreadControlBlock) -> bool {
+    if waiter_tcb.is_null() {
+        return false;
+    }
+    let id = ep_id.get();
+    let Some(idx) = find_slot(id) else {
+        return false;
+    };
+    let slot = &RAW_TABLE[idx];
+    let ring = slot.ring.lock();
+    if slot.endpoint_id.load(Ordering::Acquire) != id {
+        return false;
+    }
+    ring.is_empty() && slot.waiter.load(Ordering::Acquire) == waiter_tcb as usize
 }
 
 /// Clears registered waiter on mailbox if it matches `tcb`.
@@ -635,7 +663,12 @@ pub fn send_raw_checked(
     table: &CapTable,
     token: CapToken,
 ) -> Result<MessageId, IpcError> {
-    crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
+    crate::ipc::capability_bridge::check_channel_access(
+        table,
+        token,
+        ep_id.get(),
+        Rights::IPC_SEND,
+    )?;
     send_raw(ep_id, data, flags)
 }
 
@@ -649,7 +682,12 @@ pub fn recv_raw_checked(
     table: &CapTable,
     token: CapToken,
 ) -> Result<usize, IpcError> {
-    crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
+    crate::ipc::capability_bridge::check_channel_access(
+        table,
+        token,
+        ep_id.get(),
+        Rights::IPC_RECV,
+    )?;
     recv_raw(ep_id, buf, flags)
 }
 

@@ -1,9 +1,9 @@
-//! relation_graph.rs — Graphe d adjacence des relations ExoFS
+//! relation_graph.rs — Adjacency graph of ExoFS relations
 //!
-//! Règles appliquées :
-//!  - RECUR-01 : aucune récursion
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
+//! Applied rules:
+//!  - RECUR-01 : no recursion
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -16,10 +16,10 @@ use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 use crate::scheduler::sync::spinlock::SpinLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Edge — arête du graphe
+// Edge — graph edge
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Arête dans le graphe d adjacence.
+/// Edge in the adjacency graph.
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub id: RelationId,
@@ -71,7 +71,7 @@ impl GraphInner {
             weight: rel.rel_type.weight_u32(),
         };
         if let Some(v) = self.adj.get_mut(&from_key) {
-            // Pas de doublon.
+            // No duplicates.
             if v.iter().any(|e| e.id == rel.id) {
                 return Ok(());
             }
@@ -142,10 +142,10 @@ impl GraphInner {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RelationGraph (publique, thread-safe)
+// RelationGraph (public, thread-safe)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Graphe d adjacence des relations ExoFS, thread-safe.
+/// Adjacency graph of ExoFS relations, thread-safe.
 pub struct RelationGraph {
     inner: SpinLock<GraphInner>,
     total_adds: AtomicU64,
@@ -161,14 +161,14 @@ impl RelationGraph {
         }
     }
 
-    /// Ajoute une relation au graphe.
+    /// Adds a relation to the graph.
     pub fn add_relation(&self, rel: &Relation) -> ExofsResult<()> {
         self.inner.lock().add(rel)?;
         self.total_adds.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
-    /// Supprime une relation du graphe.
+    /// Removes a relation from the graph.
     pub fn remove_relation(&self, rel: &Relation) -> bool {
         let removed = self.inner.lock().remove(rel);
         if removed {
@@ -177,42 +177,42 @@ impl RelationGraph {
         removed
     }
 
-    /// Tous les voisins directs de `from`.
+    /// All direct neighbors of `from`.
     pub fn get_neighbors(&self, from: &BlobId) -> Vec<BlobId> {
         self.inner.lock().neighbors(from.as_bytes())
     }
 
-    /// Voisins d un certain type.
+    /// Neighbors of a specific kind.
     pub fn get_neighbors_by_kind(&self, from: &BlobId, kind: RelationKind) -> Vec<BlobId> {
         self.inner.lock().neighbors_by_kind(from.as_bytes(), kind)
     }
 
-    /// Toutes les arêtes sortantes de `from`.
+    /// All outgoing edges from `from`.
     pub fn get_edges_from(&self, from: &BlobId) -> Vec<Edge> {
         self.inner.lock().edges_from(from.as_bytes())
     }
 
-    /// Arêtes sortantes fortes (weight ≥ STRONG).
+    /// Strong outgoing edges (weight >= STRONG).
     pub fn get_strong_edges(&self, from: &BlobId) -> Vec<Edge> {
         self.inner.lock().strong_edges_from(from.as_bytes())
     }
 
-    /// Degré sortant d un nœud.
+    /// Out-degree of a node.
     pub fn out_degree(&self, from: &BlobId) -> usize {
         self.inner.lock().out_degree(from.as_bytes())
     }
 
-    /// Nombre de nœuds (blobs avec au moins une relation sortante).
+    /// Number of nodes (blobs with at least one outgoing relation).
     pub fn n_nodes(&self) -> usize {
         self.inner.lock().adj.len()
     }
 
-    /// Nombre total d arêtes.
+    /// Total number of edges.
     pub fn n_edges(&self) -> u64 {
         self.inner.lock().n_edges_total()
     }
 
-    /// Statistiques.
+    /// Statistics.
     pub fn stats(&self) -> GraphStats {
         GraphStats {
             n_nodes: self.n_nodes(),
@@ -222,7 +222,7 @@ impl RelationGraph {
         }
     }
 
-    /// `true` si un arc direct `from → to` (de n importe quel type) existe.
+    /// `true` if a direct edge `from -> to` (of any type) exists.
     pub fn has_direct_edge(&self, from: &BlobId, to: &BlobId) -> bool {
         let guard = self.inner.lock();
         guard
@@ -232,7 +232,7 @@ impl RelationGraph {
             .unwrap_or(false)
     }
 
-    /// `true` si un arc direct d un type précis existe.
+    /// `true` if a direct edge of a specific type exists.
     pub fn has_typed_edge(&self, from: &BlobId, to: &BlobId, kind: RelationKind) -> bool {
         let guard = self.inner.lock();
         guard
@@ -245,14 +245,14 @@ impl RelationGraph {
             .unwrap_or(false)
     }
 
-    /// Vide le graphe.
+    /// Clears the graph.
     pub fn flush(&self) {
         self.inner.lock().flush();
         self.total_adds.store(0, Ordering::Relaxed);
         self.total_rems.store(0, Ordering::Relaxed);
     }
 
-    /// Copie toutes les arêtes de tous les nœuds (pour dump/inspection).
+    /// Copies all edges across all nodes (for dump/inspection).
     pub fn all_edges(&self) -> Vec<(BlobId, Edge)> {
         let guard = self.inner.lock();
         let mut out = Vec::new();
@@ -267,7 +267,7 @@ impl RelationGraph {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Singleton global
+// Global singleton
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static RELATION_GRAPH: RelationGraph = RelationGraph::new_const();
@@ -362,7 +362,7 @@ mod tests {
         let g = RelationGraph::new_const();
         g.add_relation(&rel(10, blob(50), blob(51))).test_unwrap();
         g.add_relation(&rel(11, blob(52), blob(53))).test_unwrap();
-        // 2 sources distinctes → 2 nœuds.
+        // 2 distinct sources -> 2 nodes.
         assert_eq!(g.n_nodes(), 2);
     }
 
@@ -414,7 +414,7 @@ mod tests {
     fn test_get_strong_edges_empty() {
         let g = RelationGraph::new_const();
         g.add_relation(&rel(18, blob(110), blob(111))).test_unwrap();
-        // rel() crée des relations avec weight 0 → pas strong
+        // rel() creates relations with weight 0 -> not strong
         let strong = g.get_strong_edges(&blob(110));
         assert!(strong.is_empty());
     }

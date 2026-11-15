@@ -1,13 +1,13 @@
-//! CdcChunker — Content-Defined Chunking avec Rabin-Karp rolling hash (no_std).
+//! CdcChunker — Content-Defined Chunking with Rabin-Karp rolling hash (no_std).
 //!
-//! Implémente le CDC avec fenêtre glissante Rabin-Karp pour trouver les
-//! frontières de chunks indépendantes du positionnement dans le flux.
+//! Implements CDC with a Rabin-Karp sliding window to find chunk boundaries
+//! independent of stream positioning.
 //!
-//! RÈGLE : les frontières sont déterministes pour un même flux de données.
+//! RULE: boundaries are deterministic for the same data stream.
 //!
-//! RECUR-01 : aucune récursion — boucle while.
-//! OOM-02   : try_reserve sur tous les Vec.
-//! ARITH-02 : checked / saturating / wrapping + mulmod61 pour Rabin.
+//! RECUR-01: no recursion — while loop.
+//! OOM-02  : try_reserve on all Vecs.
+//! ARITH-02: checked / saturating / wrapping + mulmod61 for Rabin.
 
 use super::chunk_fingerprint::{blake3_hash, fnv1a64};
 use super::chunking::{
@@ -18,31 +18,31 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes CDC
+// CDC Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const CDC_MIN_SIZE: usize = 2048; // 2 KiB minimum.
-pub const CDC_AVG_SIZE: usize = 8192; // 8 KiB cible.
+pub const CDC_AVG_SIZE: usize = 8192; // 8 KiB target.
 pub const CDC_MAX_SIZE: usize = 65536; // 64 KiB maximum.
-/// Masque déclenchant une coupure (log2(avg_size) bits à 0).
+/// Mask triggering a cut (log2(avg_size) bits to 0).
 #[allow(dead_code)]
 const CDC_MASK: u64 = (CDC_AVG_SIZE as u64) - 1; // = 0x1FFF
-/// Base du polynôme de Rabin.
+/// Base of Rabin polynomial.
 const RABIN_BASE: u64 = 257;
-/// Module de Mersenne M61 = 2^61 - 1.
+/// Mersenne prime modulus M61 = 2^61 - 1.
 const RABIN_MOD: u64 = (1u64 << 61) - 1;
-/// Taille de la fenêtre glissante.
+/// Sliding window size.
 const WINDOW_SIZE: usize = 64;
-/// RABIN_BASE^WINDOW_SIZE mod M61 (calculé à la compilation).
+/// RABIN_BASE^WINDOW_SIZE mod M61 (computed at compile time).
 const RABIN_POW: u64 = pow_mod(RABIN_BASE, WINDOW_SIZE as u64, RABIN_MOD);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Arithmétique M61
+// M61 Arithmetic
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Multiplication modulaire M61 sans overflow 128 bits.
+/// M61 modular multiplication without 128-bit overflow.
 ///
-/// ARITH-02 : u128 intermédiaire pour éviter le débordement 64 bits.
+/// ARITH-02: intermediate u128 to prevent 64-bit overflow.
 const fn mulmod61(a: u64, b: u64) -> u64 {
     let p = (a as u128) * (b as u128);
     let hi = (p >> 61) as u64;
@@ -55,7 +55,7 @@ const fn mulmod61(a: u64, b: u64) -> u64 {
     }
 }
 
-/// Exponentiation modulaire M61 (RECUR-01 : boucle — pas de récursion).
+/// M61 modular exponentiation (RECUR-01: loop — no recursion).
 const fn pow_mod(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
     let mut result = 1u64;
     base %= modulus;
@@ -70,10 +70,10 @@ const fn pow_mod(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RollingHash — fenêtre glissante de Rabin-Karp
+// RollingHash — Rabin-Karp sliding window
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fenêtre glissante Rabin-Karp pour le CDC.
+/// Rabin-Karp sliding window for CDC.
 struct RollingHash {
     window: [u8; WINDOW_SIZE],
     wpos: usize,
@@ -89,9 +89,9 @@ impl RollingHash {
         }
     }
 
-    /// Avance la fenêtre d'un octet et met à jour le hash.
+    /// Advances the window by one byte and updates the hash.
     ///
-    /// ARITH-02 : wrapping_add / wrapping_sub via mulmod61.
+    /// ARITH-02: wrapping_add / wrapping_sub via mulmod61.
     fn roll(&mut self, byte: u8) -> u64 {
         let old = self.window[self.wpos] as u64;
         self.window[self.wpos] = byte;
@@ -100,7 +100,7 @@ impl RollingHash {
         let term_old = mulmod61(old, RABIN_POW);
         let term_new = byte as u64 % RABIN_MOD;
         let h = mulmod61(self.hash, RABIN_BASE);
-        // Soustraction modulaire M61.
+        // M61 modular subtraction.
         let h = if h >= term_old {
             h - term_old
         } else {
@@ -111,7 +111,7 @@ impl RollingHash {
         self.hash
     }
 
-    /// Remet la fenêtre à zéro.
+    /// Resets the window to zero.
     #[allow(dead_code)]
     fn reset(&mut self) {
         self.window = [0u8; WINDOW_SIZE];
@@ -124,7 +124,7 @@ impl RollingHash {
 // CdcConfig
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration du chunker CDC.
+/// CDC chunker configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct CdcConfig {
     pub min_size: usize,
@@ -159,7 +159,7 @@ impl CdcConfig {
         Ok(())
     }
 
-    /// Masque CDC calculé depuis avg_size.
+    /// CDC mask computed from avg_size.
     fn mask(&self) -> u64 {
         (self.avg_size as u64).saturating_sub(1)
     }
@@ -169,7 +169,7 @@ impl CdcConfig {
 // CdcChunker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Découpeur CDC (Content-Defined Chunking) via rolling hash de Rabin-Karp.
+/// CDC (Content-Defined Chunking) chunker using Rabin-Karp rolling hash.
 pub struct CdcChunker {
     config: CdcConfig,
 }
@@ -195,10 +195,10 @@ impl CdcChunker {
         })
     }
 
-    /// Cherche la frontière CDC dans la plage `data[start..]`.
+    /// Looks for the CDC boundary within the range `data[start..]`.
     ///
-    /// Retourne la taille du chunk depuis `start`.
-    /// RECUR-01 : boucle for — pas de récursion.
+    /// Returns the chunk size from `start`.
+    /// RECUR-01: for loop — no recursion.
     fn find_boundary(&self, data: &[u8], start: usize) -> usize {
         let total = data.len();
         let min = self.config.min_size;
@@ -210,11 +210,11 @@ impl CdcChunker {
         }
         let mut rh = RollingHash::new();
         let cut_end = end.min(max);
-        // Phase 1 : avance au minimum sans chercher de frontière.
+        // Phase 1: advance to minimum without looking for a boundary.
         for i in 0..min.min(cut_end) {
             rh.roll(data[start + i]);
         }
-        // Phase 2 : recherche de frontière CDC.
+        // Phase 2: search for CDC boundary.
         for i in min..cut_end {
             let h = rh.roll(data[start + i]);
             if h & mask == 0 {
@@ -226,10 +226,10 @@ impl CdcChunker {
 }
 
 impl Chunker for CdcChunker {
-    /// Découpe `data` en chunks CDC.
+    /// Splits `data` into CDC chunks.
     ///
-    /// RECUR-01 : boucle while.
-    /// OOM-02   : try_reserve.
+    /// RECUR-01: while loop.
+    /// OOM-02  : try_reserve.
     fn chunk(&self, data: &[u8]) -> ExofsResult<Vec<DedupChunk>> {
         let total = data.len();
         if total == 0 {
@@ -287,19 +287,19 @@ impl Chunker for CdcChunker {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CdcStats — statistiques de découpage CDC
+// CdcStats — CDC chunking statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques avancées pour le découpage CDC.
+/// Advanced statistics for CDC chunking.
 #[derive(Debug, Clone)]
 pub struct CdcStats {
     pub base: ChunkStats,
-    pub forced_max_cuts: usize, // Chunks coupés à max_size (pas de frontière naturelle).
-    pub natural_cuts: usize,    // Chunks coupés sur frontière CDC naturelle.
+    pub forced_max_cuts: usize, // Chunks cut at max_size (no natural boundary).
+    pub natural_cuts: usize,    // Chunks cut on natural CDC boundary.
 }
 
 impl CdcStats {
-    /// Calcule les stats CDC depuis une liste de chunks et la config.
+    /// Computes CDC stats from a list of chunks and the config.
     pub fn compute(chunks: &[DedupChunk], config: &CdcConfig) -> ExofsResult<Self> {
         let base = ChunkStats::from_chunks(chunks)?;
         let mut forced = 0usize;
@@ -397,14 +397,14 @@ mod tests {
         let d2 = &[0xFFu8; CDC_AVG_SIZE * 2];
         let c1 = cdc().chunk(d1).test_unwrap();
         let c2 = cdc().chunk(d2).test_unwrap();
-        // Au moins un chunk différent.
+        // At least one different chunk.
         let any_diff = c1.iter().zip(c2.iter()).any(|(a, b)| a.blake3 != b.blake3);
         assert!(any_diff);
     }
 
     #[test]
     fn test_cdc_invalid_config() {
-        assert!(CdcChunker::with_sizes(10, 4096, 65536).is_err()); // min trop petit
+        assert!(CdcChunker::with_sizes(10, 4096, 65536).is_err()); // min too small
         assert!(CdcChunker::with_sizes(2048, 100, 65536).is_err()); // avg < min
     }
 
@@ -441,10 +441,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AdaptiveCdcChunker — CDC adaptatif avec plusieurs niveaux de granularité
+// AdaptiveCdcChunker — adaptive CDC with multiple granularity levels
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Niveau de granularité du CDC adaptatif.
+/// Granularity level for adaptive CDC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CdcSharpness {
     Coarse, // avg = CDC_MAX_SIZE / 2
@@ -472,7 +472,7 @@ impl CdcSharpness {
     }
 }
 
-/// Chunker CDC adaptatif qui choisit le niveau de granularité selon la taille.
+/// Adaptive CDC chunker that chooses granularity level based on size.
 pub struct AdaptiveCdcChunker {
     coarse: CdcChunker,
     normal: CdcChunker,
@@ -488,9 +488,9 @@ impl AdaptiveCdcChunker {
         })
     }
 
-    /// Choisit le chunker adapté à la taille du blob.
+    /// Chooses the chunker adapted to the blob size.
     ///
-    /// RECUR-01 : pas de récursion.
+    /// RECUR-01: no recursion.
     pub fn chunk_adaptive(&self, data: &[u8]) -> ExofsResult<Vec<DedupChunk>> {
         let len = data.len();
         if len >= CDC_MAX_SIZE * 8 {

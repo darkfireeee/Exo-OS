@@ -123,7 +123,7 @@ pub unsafe fn bind_boot_idle_threads(nr_cpus: usize) {
         let Some(idle) = published_boot_idle(idx as u32) else {
             continue;
         };
-        let rq = unsafe { run_queue(CpuId(idx as u32)) };
+        let mut rq = unsafe { run_queue(CpuId(idx as u32)) };
         rq.set_idle_thread(idle);
         if rq.current.is_none() {
             rq.current = Some(idle);

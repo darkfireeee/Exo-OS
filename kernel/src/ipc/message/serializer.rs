@@ -5,7 +5,7 @@
 // and a minimal framing protocol.
 //
 // Frame format:
-//   [MsgFrameHeader (32 bytes)] [payload (N bytes)] [padding (0-7 bytes)]
+//   [MsgFrameHeader (48 bytes)] [payload (N bytes)] [padding (0-7 bytes)]
 //
 // The serializer operates on stack-allocated buffers or input slices.
 // Deserialization is zero-copy (reference into source buffer).
@@ -35,7 +35,7 @@ pub unsafe trait SerdeFixed: Sized + Copy {
 
     /// Serializes in place at `buf[offset..]`. Returns offset + SIZE.
     fn serialize_into(&self, buf: &mut [u8], offset: usize) -> Result<usize, IpcError> {
-        let end = offset + Self::SIZE;
+        let end = offset.checked_add(Self::SIZE).ok_or(IpcError::Invalid)?;
         if end > buf.len() {
             return Err(IpcError::Invalid);
         }
@@ -49,7 +49,7 @@ pub unsafe trait SerdeFixed: Sized + Copy {
 
     /// Deserializes from `buf[offset..]`. Returns (Self, offset + SIZE).
     fn deserialize_from(buf: &[u8], offset: usize) -> Result<(Self, usize), IpcError> {
-        let end = offset + Self::SIZE;
+        let end = offset.checked_add(Self::SIZE).ok_or(IpcError::Invalid)?;
         if end > buf.len() {
             return Err(IpcError::Invalid);
         }
@@ -73,9 +73,9 @@ pub const FRAME_MAGIC: u32 = 0xEA04_4950; // "EA\x04IPC"
 /// Serialization protocol version
 pub const FRAME_VERSION: u8 = 1;
 
-/// IPC frame header (32 bytes, repr(C))
+/// IPC frame header (48 bytes, repr(C))
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct MsgFrameHeader {
     /// Validation magic number
     pub magic: u32,
@@ -87,18 +87,22 @@ pub struct MsgFrameHeader {
     pub flags: u16,
     /// Payload length in bytes
     pub payload_len: u32,
+    /// Alignment padding
+    _pad: u32,
     /// Sequence number
     pub seq: u64,
-    /// Source endpoint
-    pub src: u32,
-    /// Destination endpoint
-    pub dst: u32,
+    /// Source endpoint (full 64-bit EndpointId)
+    pub src: u64,
+    /// Destination endpoint (full 64-bit EndpointId)
+    pub dst: u64,
     /// Correlation cookie
     pub cookie: u64,
-    // Total: 4+1+1+2+4+8+4+4+4 = 32 bytes — no _pad needed
 }
 
-// SAFETY: repr(C, packed), all fields are primitives
+const _MSG_FRAME_HEADER_SIZE_CHECK: () =
+    assert!(core::mem::size_of::<MsgFrameHeader>() == 48);
+
+// SAFETY: repr(C), all fields are primitives with no implicit padding
 unsafe impl SerdeFixed for MsgFrameHeader {}
 
 impl MsgFrameHeader {
@@ -110,9 +114,10 @@ impl MsgFrameHeader {
             msg_type: msg.msg_type as u8,
             flags: msg.flags.bits(),
             payload_len: msg.payload_len as u32,
+            _pad: 0,
             seq: msg.seq,
-            src: msg.src.0.get() as u32,
-            dst: msg.dst.0.get() as u32,
+            src: msg.src.0.get(),
+            dst: msg.dst.0.get(),
             cookie: msg.cookie,
         }
     }
@@ -122,7 +127,7 @@ impl MsgFrameHeader {
     }
 
     pub fn frame_size(&self) -> usize {
-        size_of::<MsgFrameHeader>() + self.payload_len as usize
+        size_of::<MsgFrameHeader>().saturating_add(self.payload_len as usize)
     }
 }
 
@@ -134,7 +139,7 @@ impl MsgFrameHeader {
 ///
 /// Output format:
 /// ```text
-/// [MsgFrameHeader: 32 bytes] [payload: payload_len bytes]
+/// [MsgFrameHeader: 48 bytes] [payload: payload_len bytes]
 /// ```
 ///
 /// Returns total bytes written, or `Err(IpcError::Invalid)` if
@@ -189,13 +194,14 @@ pub fn deserialize_message(buf: &[u8]) -> Result<DeserializedMessage<'_>, IpcErr
     }
 
     let plen = header.payload_len as usize;
-    if buf.len() < off + plen {
+    let end = off.checked_add(plen).ok_or(IpcError::Invalid)?;
+    if buf.len() < end {
         return Err(IpcError::Invalid);
     }
 
     Ok(DeserializedMessage {
         header,
-        payload: &buf[off..off + plen],
+        payload: &buf[off..end],
     })
 }
 
@@ -209,10 +215,10 @@ pub fn deserialize_into_owned(buf: &[u8]) -> Result<IpcMessage, IpcError> {
 
     let mut msg = IpcMessage::empty();
     msg.seq = dm.header.seq;
-    msg.src = NonZeroU64::new(dm.header.src as u64)
+    msg.src = NonZeroU64::new(dm.header.src)
         .map(EndpointId)
         .unwrap_or(EndpointId::INVALID);
-    msg.dst = NonZeroU64::new(dm.header.dst as u64)
+    msg.dst = NonZeroU64::new(dm.header.dst)
         .map(EndpointId)
         .unwrap_or(EndpointId::INVALID);
     msg.msg_type = MessageType::from_u8(dm.header.msg_type);
@@ -265,7 +271,7 @@ impl<'a> Iterator for MessageFrameIter<'a> {
             Err(e) => Some(Err(e)),
             Ok(dm) => {
                 let frame_size = dm.header.frame_size();
-                self.offset += frame_size;
+                self.offset = self.offset.checked_add(frame_size).unwrap_or(self.buf.len());
                 Some(Ok(dm))
             }
         }
@@ -278,7 +284,7 @@ impl<'a> Iterator for MessageFrameIter<'a> {
 
 /// Writes a u32 LE to `buf[offset]`. Returns offset + 4.
 pub fn write_u32(buf: &mut [u8], offset: usize, v: u32) -> Result<usize, IpcError> {
-    let end = offset + 4;
+    let end = offset.checked_add(4).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }
@@ -288,7 +294,7 @@ pub fn write_u32(buf: &mut [u8], offset: usize, v: u32) -> Result<usize, IpcErro
 
 /// Reads a u32 LE from `buf[offset]`. Returns (value, offset + 4).
 pub fn read_u32(buf: &[u8], offset: usize) -> Result<(u32, usize), IpcError> {
-    let end = offset + 4;
+    let end = offset.checked_add(4).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }
@@ -303,7 +309,7 @@ pub fn read_u32(buf: &[u8], offset: usize) -> Result<(u32, usize), IpcError> {
 
 /// Writes a u64 LE to `buf[offset]`.
 pub fn write_u64(buf: &mut [u8], offset: usize, v: u64) -> Result<usize, IpcError> {
-    let end = offset + 8;
+    let end = offset.checked_add(8).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }
@@ -313,7 +319,7 @@ pub fn write_u64(buf: &mut [u8], offset: usize, v: u64) -> Result<usize, IpcErro
 
 /// Reads a u64 LE from `buf[offset]`.
 pub fn read_u64(buf: &[u8], offset: usize) -> Result<(u64, usize), IpcError> {
-    let end = offset + 8;
+    let end = offset.checked_add(8).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }
@@ -332,8 +338,9 @@ pub fn read_u64(buf: &[u8], offset: usize) -> Result<(u64, usize), IpcError> {
 
 /// Writes a byte slice into buffer, preceded by its length (u32 LE).
 pub fn write_bytes(buf: &mut [u8], offset: usize, data: &[u8]) -> Result<usize, IpcError> {
-    let off = write_u32(buf, offset, data.len() as u32)?;
-    let end = off + data.len();
+    let len_u32 = u32::try_from(data.len()).map_err(|_| IpcError::MessageTooLarge)?;
+    let off = write_u32(buf, offset, len_u32)?;
+    let end = off.checked_add(data.len()).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }
@@ -344,7 +351,7 @@ pub fn write_bytes(buf: &mut [u8], offset: usize, data: &[u8]) -> Result<usize, 
 /// Reads a byte slice from buffer (read with its u32 LE length).
 pub fn read_bytes(buf: &[u8], offset: usize) -> Result<(&[u8], usize), IpcError> {
     let (len, off) = read_u32(buf, offset)?;
-    let end = off + len as usize;
+    let end = off.checked_add(len as usize).ok_or(IpcError::Invalid)?;
     if end > buf.len() {
         return Err(IpcError::Invalid);
     }

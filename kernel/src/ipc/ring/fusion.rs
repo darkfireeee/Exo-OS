@@ -152,12 +152,24 @@ impl FusionRing {
         self.metrics.msgs_since_last.fetch_add(1, Ordering::Relaxed);
 
         let mode = self.mode.load(Ordering::Relaxed);
-        if mode == 0 {
-            // DIRECT MODE — immediate transmission.
+        if mode == 0 || src.len() > 512 {
+            // DIRECT MODE or >512B payload: flush any buffered batch first to preserve FIFO order.
+            if self.batch.count() > 0 {
+                self.batch.flush_to_ring(&self.inner);
+                if self.batch.count() > 0 {
+                    return Err(IpcError::QueueFull);
+                }
+            }
             self.inner.push_copy(src, flags).map(|_| ())
         } else {
-            // BATCH MODE — accumulate then flush if necessary.
-            let should_flush = self.batch.add(src, flags, tick);
+            // BATCH MODE — flush first if batch is full so new message is never dropped.
+            if self.batch.is_full() {
+                self.batch.flush_to_ring(&self.inner);
+                if self.batch.is_full() {
+                    return Err(IpcError::QueueFull);
+                }
+            }
+            let should_flush = self.batch.try_add(src, flags, tick)?;
             if should_flush || self.batch.is_expired(tick) {
                 let _ = self.batch.flush_to_ring(&self.inner);
             }

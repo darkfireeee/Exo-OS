@@ -1,6 +1,6 @@
-//! Helpers de tests ExoFS pour remplacer les unwrap()/expect().
+//! ExoFS test helpers to replace unwrap()/expect().
 
-/// Extension commune pour `Result` et `Option` dans les tests.
+/// Common extension for `Result` and `Option` in tests.
 pub trait TestUnwrapExt<T> {
     fn test_unwrap(self) -> T;
     fn test_expect(self, msg: &str) -> T;

@@ -199,13 +199,11 @@ impl WaitQueue {
                 let transitioned = (*tcb).try_transition(TaskState::Sleeping, TaskState::Runnable);
                 if transitioned {
                     // BUG-FIX L: validate cpu_id bounds before run_queue().
-                    // In release mode, debug_assert is no-op → UB if cpu out of bounds.
                     let cpu_raw = (*tcb).cpu_id.load(Ordering::Relaxed) as usize;
                     if cpu_raw < crate::scheduler::core::preempt::MAX_CPUS {
-                        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
                         let cpu_id = CpuId(cpu_raw as u32);
-                        let rq = run_queue(cpu_id);
-                        rq.enqueue(NonNull::new_unchecked(tcb));
+                        run_queue(cpu_id).enqueue(NonNull::new_unchecked(tcb));
+                        crate::scheduler::core::switch::notify_cpu_reschedule(cpu_raw);
                     }
                 }
             }
@@ -296,8 +294,7 @@ impl WaitQueue {
         // V-38 / PREEMPT-BLOCK: FORBIDDEN to block under active PreemptGuard.
         crate::scheduler::core::preempt::assert_preempt_enabled();
         let cpu_id = CpuId((*tcb).cpu_id.load(Ordering::Relaxed) as u32);
-        let rq = run_queue(cpu_id);
-        crate::scheduler::core::switch::schedule_block(rq, &mut *tcb);
+        crate::scheduler::core::switch::schedule_block(cpu_id, &mut *tcb);
 
         // 6. After wakeup: node already freed by waker.
         !(*tcb).has_signal_pending()

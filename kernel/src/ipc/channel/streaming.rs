@@ -85,9 +85,9 @@ impl StreamBuffer {
         }
     }
 
-    /// Initializes buffer with simulated physical address.
-    pub fn init(&mut self, phys_addr: u64, capacity: usize) {
-        self.zc = ZeroCopyBuffer::init(phys_addr, capacity as u32, 0);
+    /// Initializes buffer with simulated physical address and pool index.
+    pub fn init(&mut self, phys_addr: u64, capacity: usize, idx: u32) {
+        self.zc = ZeroCopyBuffer::init(phys_addr, capacity as u32, idx);
         self.available.store(1, Ordering::Release);
     }
 
@@ -145,7 +145,7 @@ impl StreamPool {
 
         for i in 0..count {
             let phys = base + (i * granule_bytes) as u64;
-            self.buffers[i].init(phys, granule_bytes);
+            self.buffers[i].init(phys, granule_bytes, i as u32);
         }
         self.total = count;
     }
@@ -174,6 +174,7 @@ impl StreamPool {
                 return None;
             }
             buf.data_len.store(data_len, Ordering::Relaxed);
+            buf.zc.length.store(data_len as u32, Ordering::Release);
             Some(buf.zc.to_ref())
         } else {
             None
@@ -293,6 +294,7 @@ impl StreamChannel {
     /// Initializes channel with physical base and granularity.
     pub fn init(&mut self, base_phys: u64, granule: StreamGranule, buffer_count: usize) {
         self.id = alloc_channel_id();
+        self.ring.init();
         self.pool.init(base_phys, granule, buffer_count);
         self.granule.store(granule as u32, Ordering::Relaxed);
     }

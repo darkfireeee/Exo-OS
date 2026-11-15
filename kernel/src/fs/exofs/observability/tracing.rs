@@ -57,7 +57,7 @@ impl TraceLevel {
 
 // ─── ComponentId ─────────────────────────────────────────────────────────────
 
-/// Masque binaire identifiant un sous-composant ExoFS.
+/// Bitmask identifying an ExoFS subcomponent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ComponentId(pub u32);
@@ -92,7 +92,7 @@ impl ComponentId {
 
 // ─── TraceEvent ───────────────────────────────────────────────────────────────
 
-/// Événement de trace de 128 octets (repr C, taille fixe, copiable).
+/// Trace event of 128 bytes (repr C, fixed size, copyable).
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct TraceEvent {
@@ -119,7 +119,7 @@ impl TraceEvent {
         }
     }
 
-    /// Construit un événement depuis un &str (tronqué à TRACE_MSG_LEN octets).
+    /// Constructs an event from a &str (truncated to TRACE_MSG_LEN bytes).
     pub fn new(tick: u64, comp: ComponentId, level: TraceLevel, text: &str) -> Self {
         let mut evt = Self::zeroed();
         evt.tick = tick;
@@ -143,7 +143,7 @@ impl TraceEvent {
         TraceLevel::from_u8(self.level)
     }
 
-    /// Copie le message dans un Vec (OOM-02).
+    /// Copies the message into a Vec (OOM-02).
     pub fn msg_to_vec(&self) -> ExofsResult<Vec<u8>> {
         let len = self
             .msg
@@ -212,7 +212,7 @@ pub struct TraceRing {
     head: AtomicU64,
     count: AtomicU64,
     dropped: AtomicU64,
-    /// Niveau minimum actif (Off = ring désactivé).
+    /// Active minimum level (Off = ring disabled).
     min_level: AtomicU64,
 }
 
@@ -244,7 +244,7 @@ impl TraceRing {
             return;
         }
         let idx = self.head.fetch_add(1, Ordering::Relaxed) as usize % TRACE_RING_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             (*self.events.get())[idx] = evt;
         }
@@ -256,7 +256,7 @@ impl TraceRing {
         }
     }
 
-    /// Émission simplifiée par composant/level/message.
+    /// Simplified emission by component/level/message.
     pub fn emit(&self, tick: u64, comp: ComponentId, level: TraceLevel, msg: &str) {
         self.push(TraceEvent::new(tick, comp, level, msg));
     }
@@ -267,7 +267,7 @@ impl TraceRing {
         }
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(1)) % TRACE_RING_SIZE;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let evt = unsafe { (*self.events.get())[idx] };
         if evt.is_empty() {
             None
@@ -276,7 +276,7 @@ impl TraceRing {
         }
     }
 
-    /// Retourne les n derniers événements filtrés (OOM-02, RECUR-01).
+    /// Returns the last n filtered events (OOM-02, RECUR-01).
     pub fn last_n_filtered(&self, n: usize, filter: &TraceFilter) -> ExofsResult<Vec<TraceEvent>> {
         let count = self.count.load(Ordering::Relaxed) as usize;
         let capacity = n.min(count);
@@ -286,7 +286,7 @@ impl TraceRing {
         let mut i = 0usize;
         while i < count && v.len() < n {
             let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(i + 1)) % TRACE_RING_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             let evt = unsafe { (*self.events.get())[idx] };
             if filter.matches(&evt) {
                 v.try_reserve(1).map_err(|_| ExofsError::NoMemory)?;
@@ -307,7 +307,7 @@ impl TraceRing {
     pub fn reset(&self) {
         let mut i = 0usize;
         while i < TRACE_RING_SIZE {
-            // SAFETY: type entièrement initialisable par zéros (repr(C) avec champs numériques).
+            // SAFETY: type entirely initializable with zeroes (repr(C) with numerical fields).
             unsafe {
                 (*self.events.get())[i] = TraceEvent::zeroed();
             }
@@ -323,7 +323,7 @@ pub static TRACE_RING: TraceRing = TraceRing::new_const();
 
 // ─── TraceSession ─────────────────────────────────────────────────────────────
 
-/// Session de capture de traces pour un composant.
+/// Trace capture session for a component.
 pub struct TraceSession<'a> {
     ring: &'a TraceRing,
     component: ComponentId,
@@ -386,7 +386,7 @@ pub struct TraceSummary {
 }
 
 impl TraceSummary {
-    /// Calcule le résumé depuis le ring (RECUR-01 : boucle while).
+    /// Computes summary from the ring (RECUR-01: while loop).
     pub fn from_ring(ring: &TraceRing) -> ExofsResult<Self> {
         let count = ring.count.load(Ordering::Relaxed) as usize;
         let mut s = Self {
@@ -401,7 +401,7 @@ impl TraceSummary {
         let mut i = 0usize;
         while i < count {
             let idx = (head.wrapping_add(TRACE_RING_SIZE).wrapping_sub(i + 1)) % TRACE_RING_SIZE;
-            // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+            // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
             let evt = unsafe { (*ring.events.get())[idx] };
             match TraceLevel::from_u8(evt.level) {
                 TraceLevel::Error => s.error_count = s.error_count.saturating_add(1),
@@ -417,7 +417,7 @@ impl TraceSummary {
         Ok(s)
     }
 
-    /// Taux d'erreurs en ‰.
+    /// Error rate in ‰.
     pub fn error_ratio_ppt(&self) -> u64 {
         if self.total_events == 0 {
             return 0;
@@ -428,12 +428,12 @@ impl TraceSummary {
             .unwrap_or(0)
     }
 
-    /// Vrai si des erreurs ont été tracées.
+    /// True if errors have been traced.
     pub fn has_errors(&self) -> bool {
         self.error_count > 0
     }
 
-    /// Vrai si le ring a perdu des événements.
+    /// True if the ring has dropped events.
     pub fn has_dropped(&self) -> bool {
         self.dropped > 0
     }

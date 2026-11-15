@@ -1,12 +1,8 @@
-//! PathCache — cache de résolution de chemins ExoFS (no_std).
+//! path_cache.rs — ExoFS path resolution cache (no_std).
 //!
-//! RÈGLE 10 : pas de buffers PATH_MAX sur la pile kernel.
-
-//! path_cache.rs — Cache de résolution de chemins ExoFS (no_std).
-//!
-//! Règle : pas de buffers PATH_MAX sur la pile kernel.
-//! Clé = FNV-1a 64-bit du chemin + vérification anti-collision.
-//! Règles : OOM-02, ARITH-02, RECUR-01.
+//! Rule 10: no PATH_MAX buffers on the kernel stack.
+//! Key = 64-bit FNV-1a of the path + anti-collision verification.
+//! Rules: OOM-02, ARITH-02, RECUR-01.
 
 extern crate alloc;
 use alloc::collections::BTreeMap;
@@ -23,7 +19,7 @@ use crate::scheduler::sync::spinlock::SpinLock;
 
 #[derive(Clone, Debug)]
 pub struct PathEntry {
-    /// Chemin complet sur heap (jamais sur stack).
+    /// Full path on heap (never on stack).
     pub path: String,
     pub inode_id: u64,
     pub flags: u32,
@@ -137,7 +133,7 @@ impl PathCache {
     // ── Insertion ─────────────────────────────────────────────────────────────
 
     pub fn insert(&self, path: &[u8], inode_id: u64, flags: u32) -> ExofsResult<()> {
-        // Chemin sur heap (Règle RECUR-01 + préservation UTF-8 stricte).
+        // Path on heap (RECUR-01 rule + strict UTF-8 preservation).
         let path_str = match core::str::from_utf8(path) {
             Ok(valid_str) => {
                 let mut s = String::new();
@@ -215,7 +211,7 @@ impl PathCache {
         count
     }
 
-    // ── Statistiques ────────────────────────────────────────────────────────
+    // ── Statistics ──────────────────────────────────────────────────────────
 
     pub fn n_entries(&self) -> usize {
         self.inner.lock().map.len()
@@ -234,10 +230,10 @@ impl PathCache {
     }
 }
 
-// ── Extensions PathCache ───────────────────────────────────────────────────────
+// ── PathCache extensions ───────────────────────────────────────────────────────
 
 impl PathCache {
-    /// Insère ou ré-insère si TTL expiré.
+    /// Inserts or re-inserts if TTL expired.
     pub fn lookup_or_insert(
         &self,
         path: &[u8],
@@ -255,7 +251,7 @@ impl PathCache {
         self.lookup(path).ok_or(ExofsError::InternalError)
     }
 
-    /// Insère un lot de chemins. Stoppe au premier échec OOM.
+    /// Inserts a batch of paths. Stops at first OOM failure.
     pub fn insert_batch(&self, entries: &[(&[u8], u64, u32)]) -> ExofsResult<usize> {
         let mut count = 0usize;
         for &(path, inode_id, flags) in entries {
@@ -265,7 +261,7 @@ impl PathCache {
         Ok(count)
     }
 
-    /// Renomme un chemin (mise à jour atomique sous lock).
+    /// Renames a path (atomic update under lock).
     pub fn rename(&self, old_path: &[u8], new_path: &[u8]) -> ExofsResult<()> {
         let old_key = Self::fnv1a(old_path);
         let entry = {
@@ -285,7 +281,7 @@ impl PathCache {
         }
     }
 
-    /// Retourne les N chemins les plus récemment accédés.
+    /// Returns the N most recently accessed paths.
     pub fn hottest_n(&self, n: usize) -> Vec<PathEntry> {
         let inner = self.inner.lock();
         let mut entries: Vec<PathEntry> = inner.map.values().cloned().collect();
@@ -294,7 +290,7 @@ impl PathCache {
         entries
     }
 
-    /// Nombre de chemins par profondeur.
+    /// Number of paths by depth.
     pub fn depth_histogram(&self) -> [usize; 8] {
         let inner = self.inner.lock();
         let mut hist = [0usize; 8];
@@ -370,7 +366,7 @@ mod tests {
     fn test_evict_stale() {
         let c = PathCache::new_const();
         c.insert(b"/old", 1, 0).test_unwrap();
-        // Force le tick à 0 via update direct.
+        // Force tick to 0 via direct update.
         {
             c.inner
                 .lock()
@@ -412,7 +408,7 @@ mod tests {
         let c = PathCache::new_const();
         c.insert(b"/hot", 1, 0).test_unwrap();
         c.insert(b"/cold", 2, 0).test_unwrap();
-        // accéder plusieurs fois à /hot
+        // Access /hot multiple times.
         c.lookup(b"/hot");
         c.lookup(b"/hot");
         c.lookup(b"/hot");

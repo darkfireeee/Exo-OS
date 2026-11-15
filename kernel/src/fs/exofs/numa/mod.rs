@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MIT
-// ExoFS NUMA — Module principal (façade publique)
+// ExoFS NUMA — Main module (public facade)
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 
 //! # ExoFS NUMA
 //!
-//! Ce module gère la topologie NUMA pour le système de fichiers ExoFS :
-//! - **Affinité**   : carte CPU↔nœud NUMA avec distances inter-nœuds.
-//! - **Statistiques**: compteurs atomiques par nœud (allocs, I/O, migrations).
-//! - **Placement**  : stratégies de placement (RoundRobin, LeastUsed, ContentHash…).
-//! - **Migration**  : déplacement de blobs entre nœuds avec file de contrôle.
-//! - **Tuning**     : politique adaptative qui ajuste les stratégies dynamiquement.
+//! This module manages NUMA topology for the ExoFS file system:
+//! - **Affinity**   : CPU ↔ NUMA node map with inter-node distances.
+//! - **Statistics**: atomic counters per node (allocs, I/O, migrations).
+//! - **Placement**  : placement strategies (RoundRobin, LeastUsed, ContentHash…).
+//! - **Migration**  : moving blobs between nodes with control queue.
+//! - **Tuning**     : adaptive policy adjusting strategies dynamically.
 //!
-//! ## Règles d'implémentation
-//! - RECUR-01 : aucune récursion, boucles `while` uniquement.
-//! - OOM-02   : `try_reserve(n).map_err(|_| ExofsError::NoMemory)?` avant push.
+//! ## Implementation rules
+//! - RECUR-01 : zero recursion, `while` loops only.
+//! - OOM-02   : `try_reserve(n).map_err(|_| ExofsError::NoMemory)?` before push.
 //! - ARITH-02 : `saturating_add/sub`, `checked_div`, `wrapping_add/mul`.
-//! - Jamais `FsError` : uniquement `ExofsError` / `ExofsResult`.
+//! - Never `FsError` : `ExofsError` / `ExofsResult` exclusively.
 
 pub mod numa_affinity;
 pub mod numa_migration;
@@ -23,15 +23,15 @@ pub mod numa_placement;
 pub mod numa_stats;
 pub mod numa_tuning;
 
-// ─── Réexports publics ────────────────────────────────────────────────────────
+// ─── Public re-exports ────────────────────────────────────────────────────────
 
-// Affinité
+// Affinity
 pub use numa_affinity::{
     AffinityMap, AffinityNodeEntry, CpuId, NumaNodeId, AFFINITY_MAP, CPU_NODE_NONE, MAX_CPUS,
     MAX_NUMA_NODES,
 };
 
-// Statistiques
+// Statistics
 pub use numa_stats::{NumaNodeStats, NumaStats, NUMA_STATS};
 
 // Placement
@@ -53,20 +53,20 @@ use alloc::vec::Vec;
 
 // ─── NumaConfig ───────────────────────────────────────────────────────────────
 
-/// Configuration globale du module NUMA.
+/// Global configuration for the NUMA module.
 #[derive(Clone, Copy, Debug)]
 pub struct NumaConfig {
-    /// Nombre de nœuds NUMA actifs.
+    /// Number of active NUMA nodes.
     pub n_nodes: u8,
-    /// Stratégie de placement initiale.
+    /// Initial placement strategy.
     pub initial_strategy: PlacementStrategy,
-    /// Auto-tuning activé.
+    /// Auto-tuning enabled.
     pub auto_tune: bool,
-    /// Seuil de déséquilibre en ‰ (entre 0 et 1000).
+    /// Imbalance threshold in ‰ (between 0 and 1000).
     pub imbalance_threshold_ppt: u64,
-    /// Intervalle entre évaluations de tuning.
+    /// Interval between tuning evaluations.
     pub tune_interval_ticks: u64,
-    /// Capacité mémoire de référence par nœud (octets, 0 = inconnue).
+    /// Reference memory capacity per node (bytes, 0 = unknown).
     pub node_capacity_bytes: u64,
 }
 
@@ -131,7 +131,7 @@ impl NumaModuleState {
 
 // ─── NumaModule ───────────────────────────────────────────────────────────────
 
-/// Façade principale du module NUMA.
+/// Main facade for the NUMA module.
 pub struct NumaModule {
     config: core::cell::UnsafeCell<NumaConfig>,
     state: core::cell::UnsafeCell<NumaModuleState>,
@@ -165,33 +165,33 @@ impl NumaModule {
         self.lock.store(0, Ordering::Release);
     }
 
-    /// Initialise le module NUMA.
+    /// Initializes the NUMA module.
     pub fn init(&self, cfg: NumaConfig, _tick: u64) -> ExofsResult<()> {
         cfg.validate()?;
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let state = unsafe { &mut *self.state.get() };
         if *state == NumaModuleState::Ready {
             self.release();
             return Ok(());
         }
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             *self.config.get() = cfg;
         }
         self.release();
 
-        // Initialiser le placement
+        // Initialize placement
         NUMA_PLACEMENT.init(cfg.n_nodes, cfg.initial_strategy)?;
 
-        // Configurer le tuning
+        // Configure tuning
         NUMA_POLICY.configure(
             cfg.imbalance_threshold_ppt,
             cfg.auto_tune,
             cfg.tune_interval_ticks,
         )?;
 
-        // Capacité mémoire par nœud si fournie
+        // Memory capacity per node if provided
         if cfg.node_capacity_bytes > 0 {
             let mut i = 0usize;
             while i < cfg.n_nodes as usize {
@@ -201,7 +201,7 @@ impl NumaModule {
         }
 
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         *unsafe { &mut *self.state.get() } = NumaModuleState::Ready;
         self.release();
         Ok(())
@@ -209,7 +209,7 @@ impl NumaModule {
 
     pub fn state(&self) -> NumaModuleState {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let s = unsafe { *self.state.get() };
         self.release();
         s
@@ -217,7 +217,7 @@ impl NumaModule {
 
     pub fn config(&self) -> NumaConfig {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let c = unsafe { *self.config.get() };
         self.release();
         c
@@ -225,28 +225,28 @@ impl NumaModule {
 
     // ── Placement ─────────────────────────────────────────────────────────────
 
-    /// Retourne le nœud NUMA préféré pour un blob.
+    /// Returns the preferred NUMA node for a blob.
     pub fn preferred_node_for(&self, blob_id: Option<BlobId>) -> ExofsResult<NumaNodeId> {
         let hint = PlacementHint::simple(blob_id);
         let result = NUMA_PLACEMENT.preferred_node(&hint)?;
         Ok(result.node)
     }
 
-    /// Enregistre une allocation sur un nœud.
+    /// Records an allocation on a node.
     pub fn record_alloc(&self, node: NumaNodeId, bytes: u64) {
         if node.is_valid() {
             NUMA_STATS.record_alloc(node.idx(), bytes);
         }
     }
 
-    /// Enregistre une libération sur un nœud.
+    /// Records a deallocation on a node.
     pub fn record_free(&self, node: NumaNodeId, bytes: u64) {
         if node.is_valid() {
             NUMA_STATS.record_free(node.idx(), bytes);
         }
     }
 
-    /// Enregistre une opération I/O.
+    /// Records an I/O operation.
     pub fn record_io(&self, node: NumaNodeId, read_bytes: u64, write_bytes: u64) {
         if !node.is_valid() {
             return;
@@ -259,33 +259,33 @@ impl NumaModule {
         }
     }
 
-    // ── Affinité ──────────────────────────────────────────────────────────────
+    // ── Affinity ──────────────────────────────────────────────────────────────
 
-    /// Enregistre un CPU sur un nœud.
+    /// Registers a CPU on a node.
     pub fn register_cpu(&self, cpu: CpuId, node: NumaNodeId) -> ExofsResult<()> {
         AFFINITY_MAP.register_cpu(cpu, node)
     }
 
-    /// Nœud NUMA d'un CPU.
+    /// NUMA node of a CPU.
     pub fn node_of_cpu(&self, cpu: CpuId) -> Option<NumaNodeId> {
         AFFINITY_MAP.node_of_cpu(cpu)
     }
 
     // ── Tuning ────────────────────────────────────────────────────────────────
 
-    /// Lance une évaluation du tuning.
+    /// Triggers a tuning evaluation.
     pub fn tune(&self, tick: u64) -> TuningReport {
         NUMA_POLICY.evaluate(tick)
     }
 
-    /// Pression sur un nœud.
+    /// Pressure on a node.
     pub fn pressure_zone(&self, node: NumaNodeId) -> PressureZone {
         NUMA_POLICY.pressure_zone(node.idx())
     }
 
-    // ── Santé ─────────────────────────────────────────────────────────────────
+    // ── Health ────────────────────────────────────────────────────────────────
 
-    /// Vrai si le système NUMA est sain.
+    /// True if the NUMA system is healthy.
     pub fn is_healthy(&self) -> bool {
         if !self.state().is_ready() {
             return false;
@@ -293,7 +293,7 @@ impl NumaModule {
         NUMA_STATS.is_healthy() && NUMA_MIGRATION.is_healthy()
     }
 
-    /// Snapshot des statistiques de tous les nœuds (OOM-02, RECUR-01).
+    /// Snapshot of all node statistics (OOM-02, RECUR-01).
     pub fn all_node_stats(&self) -> ExofsResult<Vec<NumaNodeStats>> {
         let n = self.config().n_nodes as usize;
         let mut v = Vec::new();
@@ -307,7 +307,7 @@ impl NumaModule {
         Ok(v)
     }
 
-    /// Réinitialise toutes les statistiques.
+    /// Resets all statistics.
     pub fn reset_all_stats(&self) {
         NUMA_STATS.reset_all();
         NUMA_MIGRATION.reset_stats();
@@ -316,12 +316,12 @@ impl NumaModule {
     }
 }
 
-/// Singleton global du module NUMA.
+/// Global singleton of the NUMA module.
 pub static NUMA: NumaModule = NumaModule::new_const();
 
-// ─── Fonctions utilitaires globales ───────────────────────────────────────────
+// ─── Global utility functions ─────────────────────────────────────────────────
 
-/// Initialise le module NUMA avec la configuration par défaut.
+/// Initializes the NUMA module with default configuration.
 pub fn numa_init(n_nodes: u8, tick: u64) -> ExofsResult<()> {
     let cfg = if n_nodes <= 1 {
         NumaConfig::default_config()
@@ -331,7 +331,7 @@ pub fn numa_init(n_nodes: u8, tick: u64) -> ExofsResult<()> {
     NUMA.init(cfg, tick)
 }
 
-/// Retourne le nœud NUMA préféré pour un blob (façade simple).
+/// Returns the preferred NUMA node for a blob (simple facade).
 pub fn numa_preferred_node(blob_id: Option<BlobId>) -> usize {
     NUMA.preferred_node_for(blob_id)
         .map(|n| n.idx())

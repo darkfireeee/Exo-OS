@@ -1,4 +1,4 @@
-//! stack.rs — Construction de la pile initiale utilisateur et passage des arguments
+//! stack.rs — Initial user stack construction and argument passing
 
 use alloc::vec::Vec;
 use crate::memory::core::layout::{
@@ -109,7 +109,7 @@ pub fn build_dynamic_handoff(
     handoff
 }
 
-/// Alloue et mappe les pages de pile utilisateur (toutes ZEROED, USER_DATA).
+/// Allocates and maps user stack pages (all ZEROED, USER_DATA).
 pub fn map_stack_pages<A: FrameAllocatorForWalk>(
     builder: &mut PageTableBuilder<A>,
     _alloc: &A,
@@ -336,9 +336,9 @@ pub fn build_initial_process_stack_with_auxv(
 
     sp &= !15u64;
 
-    // Chaque entrée AuxEntry occupe 2 slots u64 (type, val), donc un nombre pair de u64.
-    // Le slot de padding conserve RSP % 16 == 8 à l'entrée de `extern "C" fn _start`
-    // sans déplacer argc hors de [RSP] (et les stubs ASM `_start` alignent via `and rsp, -16`).
+    // Each AuxEntry occupies 2 u64 slots (type, val), hence an even number of u64s.
+    // The padding slot preserves RSP % 16 == 8 at entry of `extern "C" fn _start`
+    // without displacing argc out of [RSP] (and ASM `_start` stubs align via `and rsp, -16`).
     let pointer_slots = argv_ptrs.len() + envp_ptrs.len() + (auxv_entries.len() * 2) + 3;
     if pointer_slots & 1 == 0 {
         push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;

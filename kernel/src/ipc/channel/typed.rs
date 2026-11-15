@@ -208,7 +208,7 @@ use crate::scheduler::sync::spinlock::SpinLock;
 // SpinLock<TypedChannelTable> all-zero = valid (lock free, empty table).
 // MaybeUninit::uninit() = 0 const-eval bytes, memory comes from .bss.
 static TYPED_CHANNEL_TABLE: core::mem::MaybeUninit<SpinLock<TypedChannelTable>> =
-    core::mem::MaybeUninit::uninit();
+    core::mem::MaybeUninit::zeroed();
 
 #[inline(always)]
 fn typed_table() -> &'static SpinLock<TypedChannelTable> {

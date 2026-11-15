@@ -95,6 +95,11 @@ impl ObjectFdTable {
             self.errors.fetch_add(1, Ordering::Relaxed);
             return Err(ExofsError::InvalidArgument);
         }
+        let effective_owner = if owner_uid == 0 {
+            current_owner_pid()
+        } else {
+            owner_uid
+        };
         self.acquire();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
         let r = unsafe { &mut *self.inner.get() }.open_slot(
@@ -102,7 +107,7 @@ impl ObjectFdTable {
             flags,
             size,
             epoch_id,
-            owner_uid,
+            effective_owner,
             self.next_hint.load(Ordering::Relaxed),
         );
         self.release();
@@ -117,11 +122,16 @@ impl ObjectFdTable {
         r
     }
 
-    /// Ferme un fd. Retourne true si le fd existait.
+    /// Ferme un fd. Retourne true si le fd existait et appartient au PID appelant.
     pub fn close(&self, fd: u32) -> bool {
         self.acquire();
+        let owner = current_owner_pid();
         // SAFETY: accès exclusif garanti par lock atomique acquis avant.
-        let found = unsafe { &mut *self.inner.get() }.close_slot(fd);
+        let inner = unsafe { &mut *self.inner.get() };
+        let found = match inner.get_entry(fd) {
+            Ok(entry) if owner_matches(entry, owner) => inner.close_slot(fd),
+            _ => false,
+        };
         self.release();
         if found {
             self.closes.fetch_add(1, Ordering::Relaxed);

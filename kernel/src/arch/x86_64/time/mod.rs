@@ -87,11 +87,134 @@ pub unsafe fn time_init() {
     // ── Step 6: Initialize ktime seqlock ──────────────────────────────────────
     ktime::init_ktime(tsc_now, 0, tsc_hz);
 
+    // ── Step 6b: Seed wall-clock offset from CMOS RTC (UTC) ───────────────────
+    if let Some(wall_ns) = read_cmos_rtc_unix_ns() {
+        // SAFETY: Called once on BSP right after ktime initialization in Ring 0.
+        unsafe {
+            ktime::set_wall_time(wall_ns);
+        }
+    }
+
     // ── Step 7: Scheduler clock compatibility shim ────────────────────────────
     crate::scheduler::timer::clock::init(tsc_hz);
 
     // ── Diagnostic log ────────────────────────────────────────────────────────
     debug_log_time_init(tsc_hz);
+}
+
+#[inline]
+unsafe fn cmos_read(reg: u8) -> u8 {
+    crate::arch::x86_64::outb(0x70, reg);
+    crate::arch::x86_64::inb(0x71)
+}
+
+#[inline]
+fn from_bcd(val: u8) -> u8 {
+    ((val >> 4) & 0x0F).saturating_mul(10).saturating_add(val & 0x0F)
+}
+
+fn days_from_civil(year: i64, month: u64, day: u64) -> i64 {
+    let y = year - if month <= 2 { 1 } else { 0 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + (doe as i64) - 719_468
+}
+
+/// Reads the MC146818 CMOS RTC (UTC) and converts it to nanoseconds since the Unix epoch.
+fn read_cmos_rtc_unix_ns() -> Option<u64> {
+    #[derive(PartialEq, Eq, Copy, Clone)]
+    struct RtcRaw {
+        sec: u8,
+        min: u8,
+        hour: u8,
+        day: u8,
+        month: u8,
+        year: u8,
+        century: u8,
+        reg_b: u8,
+    }
+
+    let sample = || -> RtcRaw {
+        // Wait briefly for any Update-In-Progress bit to clear.
+        for _ in 0..10_000 {
+            let status_a = unsafe { cmos_read(0x0A) };
+            if status_a == 0xFF || (status_a & 0x80) == 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        unsafe {
+            RtcRaw {
+                sec: cmos_read(0x00),
+                min: cmos_read(0x02),
+                hour: cmos_read(0x04),
+                day: cmos_read(0x07),
+                month: cmos_read(0x08),
+                year: cmos_read(0x09),
+                century: cmos_read(0x32),
+                reg_b: cmos_read(0x0B),
+            }
+        }
+    };
+
+    let mut cur = sample();
+    for _ in 0..8 {
+        let next = sample();
+        if next == cur {
+            break;
+        }
+        cur = next;
+    }
+
+    if cur.reg_b == 0xFF && cur.year == 0xFF {
+        return None;
+    }
+
+    let is_binary = (cur.reg_b & 0x04) != 0;
+    let is_24h = (cur.reg_b & 0x02) != 0;
+    let conv = |v: u8| if is_binary { v } else { from_bcd(v) };
+
+    let sec = conv(cur.sec);
+    let min = conv(cur.min);
+    let is_pm = (cur.hour & 0x80) != 0;
+    let mut hour = conv(cur.hour & 0x7F);
+    if !is_24h {
+        if is_pm && hour < 12 {
+            hour = hour.saturating_add(12);
+        } else if !is_pm && hour == 12 {
+            hour = 0;
+        }
+    }
+    let day = conv(cur.day);
+    let month = conv(cur.month);
+    let year_2d = conv(cur.year);
+    let century_bcd = conv(cur.century);
+
+    if sec > 59 || min > 59 || hour > 23 || !(1..=31).contains(&day) || !(1..=12).contains(&month) {
+        return None;
+    }
+
+    let full_year = if (19..=21).contains(&century_bcd) {
+        (century_bcd as i64) * 100 + (year_2d as i64)
+    } else {
+        2000 + (year_2d as i64)
+    };
+    if full_year < 1970 {
+        return None;
+    }
+
+    let days = days_from_civil(full_year, month as u64, day as u64);
+    if days < 0 {
+        return None;
+    }
+    let total_secs = (days as u64)
+        .saturating_mul(86_400)
+        .saturating_add((hour as u64) * 3600)
+        .saturating_add((min as u64) * 60)
+        .saturating_add(sec as u64);
+    Some(total_secs.saturating_mul(1_000_000_000))
 }
 
 // ── Local Primitives ──────────────────────────────────────────────────────────

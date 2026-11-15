@@ -1,50 +1,50 @@
-//! tar_compat.rs — Compatibilité POSIX ustar avec le format ExoAR (no_std).
+//! tar_compat.rs — POSIX ustar compatibility with the ExoAR format (no_std).
 //!
-//! Ce module fournit :
-//!  - `TarBlock`            : bloc tar de 512 bytes.
-//!  - `TarHeader`           : en-tête ustar (512 bytes).
-//!  - `TarEntryKind`        : type d'entrée tar (Regular/Dir/Symlink/...).
-//!  - `TarEntry`            : entrée tar avec métadonnées et données.
-//!  - `TarEmitter`          : émet des blobs ExoFS sous forme de tar.
-//!  - `TarParser`           : analyse un flux tar.
-//!  - `TarSink`             : trait de sortie tar.
-//!  - `TarSource`           : trait de lecture tar.
-//!  - `TarToExoarConverter` : convertit un flux tar en archive ExoAR.
-//!  - `ExoarToTarConverter` : convertit des blobs ExoAR en flux tar.
+//! This module provides:
+//!  - `TarBlock`            : 512-byte tar block.
+//!  - `TarHeader`           : ustar header (512 bytes).
+//!  - `TarEntryKind`        : tar entry kind (Regular/Dir/Symlink/...).
+//!  - `TarEntry`            : tar entry with metadata and data.
+//!  - `TarEmitter`          : emits ExoFS blobs as tar entries.
+//!  - `TarParser`           : parses a tar stream.
+//!  - `TarSink`             : tar output sink trait.
+//!  - `TarSource`           : tar input source trait.
+//!  - `TarToExoarConverter` : converts a tar stream into an ExoAR archive.
+//!  - `ExoarToTarConverter` : converts ExoAR blobs into a tar stream.
 //!
 //! Format : POSIX.1-2001 / GNU tar ustar.
 //!
-//! RECUR-01 : boucles while — aucune récursion.
-//! OOM-02   : try_reserve avant push.
+//! RECUR-01 : while loops — no recursion.
+//! OOM-02   : try_reserve before push.
 //! ARITH-02 : saturating_*, checked_div, wrapping_add.
 
 extern crate alloc;
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-/// Taille d'un bloc tar POSIX.
+/// Size of a POSIX tar block.
 pub const TAR_BLOCK_SIZE: usize = 512;
 
-/// Magic du format ustar.
+/// ustar format magic.
 pub const TAR_MAGIC: &[u8; 6] = b"ustar ";
 
-/// Version ustar.
+/// ustar version.
 pub const TAR_VERSION: &[u8; 2] = b"00";
 
-/// Taille max d'un nom de fichier tar.
+/// Maximum size of a tar file name.
 pub const TAR_NAME_MAX: usize = 100;
 
-/// Taille max d'un préfixe tar.
+/// Maximum size of a tar prefix.
 pub const TAR_PREFIX_MAX: usize = 155;
 
-/// Taille max d'un lien symbolique.
+/// Maximum size of a symlink target.
 pub const TAR_LINKNAME_MAX: usize = 100;
 
-// ─── Type d'entrée tar ────────────────────────────────────────────────────────
+// ─── Tar Entry Kind ──────────────────────────────────────────────────────────
 
-/// Type d'entrée tar (champ typeflag).
+/// Tar entry kind (typeflag field).
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum TarEntryKind {
@@ -90,9 +90,9 @@ impl TarEntryKind {
     }
 }
 
-// ─── Bloc tar ─────────────────────────────────────────────────────────────────
+// ─── Tar Block ─────────────────────────────────────────────────────────────────
 
-/// Un bloc tar de 512 bytes.
+/// A 512-byte tar block.
 #[derive(Clone, Copy)]
 #[repr(C, align(512))]
 pub struct TarBlock(pub [u8; TAR_BLOCK_SIZE]);
@@ -112,10 +112,10 @@ impl TarBlock {
     }
 }
 
-// ─── En-tête tar ustar ────────────────────────────────────────────────────────
+// ─── ustar Tar Header ────────────────────────────────────────────────────────
 
-/// En-tête ustar — 512 bytes.
-/// Offsets selon POSIX.1-2001.
+/// ustar header — 512 bytes.
+/// Offsets per POSIX.1-2001.
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct TarHeader {
@@ -163,7 +163,7 @@ impl TarHeader {
         }
     }
 
-    /// Crée un en-tête pour un fichier régulier ExoFS.
+    /// Creates a header for a regular ExoFS file.
     pub fn new_regular(name: &[u8], size: u64, mtime: u64) -> Self {
         let mut hdr = Self::zero();
         let n = name.len().min(TAR_NAME_MAX);
@@ -176,11 +176,11 @@ impl TarHeader {
         hdr.typeflag = TarEntryKind::Regular.as_byte();
         hdr.magic.copy_from_slice(TAR_MAGIC);
         hdr.version.copy_from_slice(TAR_VERSION);
-        // checksum calculé séparément
+        // checksum computed separately
         hdr
     }
 
-    /// Crée un en-tête pour un répertoire.
+    /// Creates a header for a directory.
     pub fn new_directory(name: &[u8], mtime: u64) -> Self {
         let mut hdr = Self::zero();
         let n = name.len().min(TAR_NAME_MAX);
@@ -194,40 +194,40 @@ impl TarHeader {
         hdr
     }
 
-    /// Retourne le type d'entrée.
+    /// Returns the entry kind.
     pub fn entry_kind(&self) -> TarEntryKind {
         TarEntryKind::from_byte(self.typeflag)
     }
 
-    /// Retourne la taille décodée depuis le champ octal.
+    /// Returns the size decoded from the octal field.
     pub fn decoded_size(&self) -> u64 {
         parse_octal12(&self.size)
     }
 
-    /// Retourne le mtime décodé.
+    /// Returns the decoded mtime.
     pub fn decoded_mtime(&self) -> u64 {
         parse_octal12(&self.mtime)
     }
 
-    /// Valide le magic ustar.
+    /// Validates the ustar magic.
     pub fn validate_magic(&self) -> bool {
         &self.magic[..6] == TAR_MAGIC || &self.magic[..5] == b"ustar"
     }
 
-    /// Retourne le nom comme slice valide (sans nuls).
+    /// Returns the name as a valid slice (without trailing nulls).
     pub fn name_trimmed(&self) -> &[u8] {
         trim_nul(&self.name)
     }
 
-    /// Calcule le checksum (somme des octets, champ checksum = 8 espaces durant calcul).
+    /// Computes the checksum (sum of bytes, checksum field = 8 spaces during calculation).
     pub fn compute_checksum(&self) -> u32 {
         tar_checksum_compute(self)
     }
 
-    /// Écrit le checksum dans l'en-tête.
+    /// Writes the checksum into the header.
     pub fn finalize_checksum(&mut self) {
         let csum = tar_checksum_compute(self);
-        // Format : "%06o\0 " (6 chiffres octaux, nul, espace)
+        // Format: "%06o\0 " (6 octal digits, null, space)
         let mut buf = [b' '; 8];
         write_octal6(&mut buf, csum as u64);
         buf[6] = 0;
@@ -235,14 +235,14 @@ impl TarHeader {
         self.checksum.copy_from_slice(&buf);
     }
 
-    /// Vérifie le checksum.
+    /// Verifies the checksum.
     pub fn verify_checksum(&self) -> bool {
         tar_checksum_verify(self)
     }
 
     pub fn as_bytes(&self) -> [u8; TAR_BLOCK_SIZE] {
         let mut out = [0u8; TAR_BLOCK_SIZE];
-        // SAFETY: TarHeader est #[repr(C)] et `out` a la taille validée par const assert.
+        // SAFETY: TarHeader is #[repr(C)] and `out` has the size verified by const assert.
         unsafe {
             core::ptr::copy_nonoverlapping(
                 self as *const Self as *const u8,
@@ -254,28 +254,28 @@ impl TarHeader {
     }
 
     pub fn from_block(block: &TarBlock) -> Self {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer with sufficient length, verified prior to call, repr(C).
         unsafe { core::ptr::read_unaligned(block.0.as_ptr() as *const TarHeader) }
     }
 }
 
-// ─── Traits de sortie / entrée tar ───────────────────────────────────────────
+// ─── Tar Output / Input Traits ───────────────────────────────────────────
 
-/// Récepteur de blocs tar (sortie).
+/// Tar block receiver (output).
 pub trait TarSink {
     fn write_block(&mut self, block: &TarBlock) -> ExofsResult<()>;
     fn blocks_written(&self) -> u64;
 }
 
-/// Source de blocs tar (entrée).
+/// Tar block source (input).
 pub trait TarSource {
     fn read_block(&mut self, block: &mut TarBlock) -> ExofsResult<bool>;
     fn blocks_read(&self) -> u64;
 }
 
-// ─── Entrée tar ───────────────────────────────────────────────────────────────
+// ─── Tar Entry ───────────────────────────────────────────────────────────────
 
-/// Entrée tar parsée avec ses données.
+/// Parsed tar entry with its data.
 pub struct TarEntry {
     pub kind: TarEntryKind,
     pub name: Vec<u8>,
@@ -290,9 +290,9 @@ impl TarEntry {
     }
 }
 
-// ─── Émetteur tar ─────────────────────────────────────────────────────────────
+// ─── Tar Emitter ─────────────────────────────────────────────────────────────
 
-/// Statistiques de l'émetteur tar.
+/// Tar emitter statistics.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TarEmitStats {
     pub entries_emitted: u32,
@@ -300,7 +300,7 @@ pub struct TarEmitStats {
     pub dirs_emitted: u32,
 }
 
-/// Émet des blobs ExoFS sous forme d'entrées tar vers un TarSink.
+/// Emits ExoFS blobs as tar entries to a TarSink.
 pub struct TarEmitter {
     stats: TarEmitStats,
 }
@@ -312,8 +312,8 @@ impl TarEmitter {
         }
     }
 
-    /// Émet un blob sous forme d'entrée tar régulière.
-    /// Le nom est dérivé du blob_id hex (RECUR-01 : pas de récursion).
+    /// Emits a blob as a regular tar entry.
+    /// The name is derived from the hex blob_id (RECUR-01: no recursion).
     pub fn emit_blob<S: TarSink>(
         &mut self,
         sink: &mut S,
@@ -323,13 +323,13 @@ impl TarEmitter {
         mtime: u64,
     ) -> ExofsResult<()> {
         let _ = blob_id;
-        // En-tête
+        // Header
         let mut hdr = TarHeader::new_regular(name, data.len() as u64, mtime);
         hdr.finalize_checksum();
         let hdr_block = TarBlock(hdr.as_bytes());
         sink.write_block(&hdr_block)?;
 
-        // Données par blocs de 512 bytes (RECUR-01 : boucle while)
+        // Data in 512-byte blocks (RECUR-01: while loop)
         let mut offset = 0usize;
         while offset < data.len() {
             let end = (offset.saturating_add(TAR_BLOCK_SIZE)).min(data.len());
@@ -344,7 +344,7 @@ impl TarEmitter {
         Ok(())
     }
 
-    /// Émet un répertoire.
+    /// Emits a directory.
     pub fn emit_directory<S: TarSink>(
         &mut self,
         sink: &mut S,
@@ -359,7 +359,7 @@ impl TarEmitter {
         Ok(())
     }
 
-    /// Émet les deux blocs finaux nuls de fin d'archive.
+    /// Emits the two final null blocks marking end-of-archive.
     pub fn finalize<S: TarSink>(&mut self, sink: &mut S) -> ExofsResult<()> {
         let zero = TarBlock::zero();
         sink.write_block(&zero)?;
@@ -372,9 +372,9 @@ impl TarEmitter {
     }
 }
 
-// ─── Parser tar ───────────────────────────────────────────────────────────────
+// ─── Tar Parser ───────────────────────────────────────────────────────────────
 
-/// Rapport de parsing tar.
+/// Tar parsing report.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TarParseReport {
     pub entries_parsed: u32,
@@ -389,9 +389,9 @@ impl TarParseReport {
     }
 }
 
-/// Parse un flux tar et retourne les entrées.
+/// Parses a tar stream and returns entries.
 ///
-/// RECUR-01 : boucle while unique sur les blocs.
+/// RECUR-01: single while loop over blocks.
 pub struct TarParser {
     report: TarParseReport,
     strict_checksum: bool,
@@ -411,7 +411,7 @@ impl TarParser {
         }
     }
 
-    /// Parse le flux tar et retourne a list d'entrées.
+    /// Parses the tar stream and returns a list of entries.
     pub fn parse_all<S: TarSource>(&mut self, src: &mut S) -> ExofsResult<Vec<TarEntry>> {
         let mut entries: Vec<TarEntry> = Vec::new();
         let mut consecutive_zeros = 0u32;
@@ -427,20 +427,20 @@ impl TarParser {
                 consecutive_zeros = consecutive_zeros.saturating_add(1);
                 if consecutive_zeros >= 2 {
                     break;
-                } // Fin d'archive POSIX
+                } // End of POSIX archive
                 continue;
             }
             consecutive_zeros = 0;
 
             let hdr = TarHeader::from_block(&block);
 
-            // Validation magic
+            // Magic validation
             if !hdr.validate_magic() {
                 self.report.errors = self.report.errors.saturating_add(1);
                 break;
             }
 
-            // Vérification checksum
+            // Checksum verification
             if self.strict_checksum && !hdr.verify_checksum() {
                 self.report.errors = self.report.errors.saturating_add(1);
                 self.report.entries_skipped = self.report.entries_skipped.saturating_add(1);
@@ -452,13 +452,13 @@ impl TarParser {
             let mtime = hdr.decoded_mtime();
             let name_raw = hdr.name_trimmed();
 
-            // Copie du nom — OOM-02
+            // Name copy — OOM-02
             let mut name: Vec<u8> = Vec::new();
             name.try_reserve(name_raw.len())
                 .map_err(|_| ExofsError::NoMemory)?;
             name.extend_from_slice(name_raw);
 
-            // Lecture des données (blocs entiers)
+            // Read data (full blocks)
             let blocks_needed = (size.saturating_add(511)) / 512;
             let mut data: Vec<u8> = Vec::new();
 
@@ -467,7 +467,7 @@ impl TarParser {
                     .map_err(|_| ExofsError::NoMemory)?;
                 let mut remaining = size;
                 let mut db = 0u64;
-                // RECUR-01 : boucle while sur les blocs de données
+                // RECUR-01: while loop over data blocks
                 while db < blocks_needed {
                     let mut dblock = TarBlock::zero();
                     if !src.read_block(&mut dblock)? {
@@ -481,7 +481,7 @@ impl TarParser {
                     db = db.wrapping_add(1);
                 }
             } else if size > 0 {
-                // Données non lues mais blocs à sauter
+                // Data not read but blocks must be skipped
                 let mut db = 0u64;
                 while db < blocks_needed {
                     let mut _skip = TarBlock::zero();
@@ -512,9 +512,9 @@ impl TarParser {
     }
 }
 
-// ─── Convertisseur tar → ExoAR ────────────────────────────────────────────────
+// ─── Tar → ExoAR Converter ────────────────────────────────────────────────
 
-/// Résultat de la conversion tar → ExoAR.
+/// Result of tar → ExoAR conversion.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TarToExoarResult {
     pub entries_converted: u32,
@@ -529,9 +529,9 @@ impl TarToExoarResult {
     }
 }
 
-/// Convertit un flux tar en liste de (blob_id, data) utilisable par ExoarWriter.
+/// Converts a tar stream into a list of (blob_id, data) usable by ExoarWriter.
 ///
-/// RECUR-01 : boucle while sur les entrées parsées.
+/// RECUR-01: while loop over parsed entries.
 pub struct TarToExoarConverter {
     pub result: TarToExoarResult,
 }
@@ -543,8 +543,8 @@ impl TarToExoarConverter {
         }
     }
 
-    /// Parse le flux tar et converti les entrées Regular en blobs.
-    /// Retourne Vec<(blob_id, data)>.
+    /// Parses the tar stream and converts Regular entries into blobs.
+    /// Returns Vec<(blob_id, data)>.
     pub fn convert<S: TarSource>(&mut self, src: &mut S) -> ExofsResult<Vec<([u8; 32], Vec<u8>)>> {
         let mut parser = TarParser::new();
         let entries = parser.parse_all(src)?;
@@ -553,11 +553,11 @@ impl TarToExoarConverter {
         let mut blobs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
 
         let mut i = 0usize;
-        // RECUR-01 : boucle while
+        // RECUR-01: while loop
         while i < entries.len() {
             let entry = &entries[i];
             if entry.kind.has_data() && !entry.data.is_empty() {
-                // RÈGLE 11 : blob_id = blake3(données brutes AVANT compression)
+                // RULE 11: blob_id = blake3(raw data BEFORE compression)
                 let blob_id = inline_blake3(&entry.data);
                 let mut data: Vec<u8> = Vec::new();
                 data.try_reserve(entry.data.len())
@@ -575,11 +575,11 @@ impl TarToExoarConverter {
     }
 }
 
-// ─── Convertisseur ExoAR → tar ────────────────────────────────────────────────
+// ─── ExoAR → Tar Converter ────────────────────────────────────────────────
 
-/// Convertit des blobs ExoFS en flux tar.
+/// Converts ExoFS blobs into a tar stream.
 ///
-/// RECUR-01 : boucle while sur les blobs.
+/// RECUR-01: while loop over blobs.
 pub struct ExoarToTarConverter {
     pub emitter: TarEmitter,
 }
@@ -591,7 +591,7 @@ impl ExoarToTarConverter {
         }
     }
 
-    /// Convertit une liste de (blob_id, name, data) en flux tar.
+    /// Converts a list of (blob_id, name, data) into a tar stream.
     pub fn convert<S: TarSink>(
         &mut self,
         sink: &mut S,
@@ -599,7 +599,7 @@ impl ExoarToTarConverter {
         mtime: u64,
     ) -> ExofsResult<()> {
         let mut i = 0usize;
-        // RECUR-01 : boucle while
+        // RECUR-01: while loop
         while i < blobs.len() {
             let (blob_id, name, data) = blobs[i];
             self.emitter.emit_blob(sink, &blob_id, data, name, mtime)?;
@@ -614,9 +614,9 @@ impl ExoarToTarConverter {
     }
 }
 
-// ─── Implémentations de TarSink / TarSource sur Vec<u8> ──────────────────────
+// ─── TarSink / TarSource Implementations on Vec<u8> ──────────────────────
 
-/// TarSink vers Vec<u8>.
+/// TarSink backed by Vec<u8>.
 pub struct VecTarSink {
     buf: Vec<u8>,
     blocks: u64,
@@ -651,7 +651,7 @@ impl TarSink for VecTarSink {
     }
 }
 
-/// TarSource depuis un slice.
+/// TarSource backed by a slice.
 pub struct SliceTarSource<'a> {
     data: &'a [u8],
     pos: usize,
@@ -685,16 +685,16 @@ impl<'a> TarSource for SliceTarSource<'a> {
     }
 }
 
-// ─── Fonctions de checksum tar ────────────────────────────────────────────────
+// ─── Tar Checksum Functions ────────────────────────────────────────────────
 
-/// Calcule le checksum POSIX tar (somme non signée des 512 bytes,
-/// avec le champ checksum traité comme 8 espaces — RECUR-01 : boucle while).
+/// Computes the POSIX tar checksum (unsigned sum of all 512 bytes,
+/// with the checksum field treated as 8 spaces — RECUR-01: while loop).
 pub fn tar_checksum_compute(hdr: &TarHeader) -> u32 {
     let raw = hdr.as_bytes();
     let mut sum = 0u32;
     let mut i = 0usize;
     while i < TAR_BLOCK_SIZE {
-        // Offset 148..156 = champ checksum → traité comme des espaces
+        // Offset 148..156 = checksum field -> treated as spaces
         let byte = if i >= 148 && i < 156 { b' ' } else { raw[i] };
         sum = sum.wrapping_add(byte as u32);
         i = i.wrapping_add(1);
@@ -702,16 +702,16 @@ pub fn tar_checksum_compute(hdr: &TarHeader) -> u32 {
     sum
 }
 
-/// Vérifie le checksum tar.
+/// Verifies the tar checksum.
 pub fn tar_checksum_verify(hdr: &TarHeader) -> bool {
     let stored = parse_octal8(&hdr.checksum);
     let computed = tar_checksum_compute(hdr) as u64;
     stored == computed
 }
 
-// ─── Fonctions octal ─────────────────────────────────────────────────────────
+// ─── Octal Functions ─────────────────────────────────────────────────────────
 
-/// Écrit un nombre en octal ASCII dans un buffer de 8 bytes.
+/// Writes a number in ASCII octal into an 8-byte buffer.
 fn write_octal8(buf: &mut [u8; 8], val: u64) {
     let mut v = val;
     let mut i = 6i32;
@@ -723,7 +723,7 @@ fn write_octal8(buf: &mut [u8; 8], val: u64) {
     }
 }
 
-/// Écrit un nombre en octal ASCII dans un buffer de 12 bytes.
+/// Writes a number in ASCII octal into a 12-byte buffer.
 fn write_octal12(buf: &mut [u8; 12], val: u64) {
     let mut v = val;
     let mut i = 10i32;
@@ -735,7 +735,7 @@ fn write_octal12(buf: &mut [u8; 12], val: u64) {
     }
 }
 
-/// Écrit un nombre en octal ASCII dans les 6 premiers bytes d'un buffer de 8.
+/// Writes a number in ASCII octal into the first 6 bytes of an 8-byte buffer.
 fn write_octal6(buf: &mut [u8; 8], val: u64) {
     let mut v = val;
     let mut i = 5i32;
@@ -746,7 +746,7 @@ fn write_octal6(buf: &mut [u8; 8], val: u64) {
     }
 }
 
-/// Parse un nombre octal ASCII depuis un buffer de 8 bytes.
+/// Parses an ASCII octal number from an 8-byte buffer.
 fn parse_octal8(buf: &[u8; 8]) -> u64 {
     let mut val = 0u64;
     let mut i = 0usize;
@@ -761,7 +761,7 @@ fn parse_octal8(buf: &[u8; 8]) -> u64 {
     val
 }
 
-/// Parse un nombre octal ASCII depuis un buffer de 12 bytes.
+/// Parses an ASCII octal number from a 12-byte buffer.
 fn parse_octal12(buf: &[u8; 12]) -> u64 {
     let mut val = 0u64;
     let mut i = 0usize;
@@ -776,7 +776,7 @@ fn parse_octal12(buf: &[u8; 12]) -> u64 {
     val
 }
 
-/// Retourne la partie non-nulle d'un slice (name trimming).
+/// Returns the non-null part of a slice (name trimming).
 fn trim_nul(s: &[u8]) -> &[u8] {
     let mut end = s.len();
     while end > 0 && s[end - 1] == 0 {
@@ -785,7 +785,7 @@ fn trim_nul(s: &[u8]) -> &[u8] {
     &s[..end]
 }
 
-// ─── blake3 inline minimal ────────────────────────────────────────────────────
+// ─── Minimal inline blake3 ────────────────────────────────────────────────────
 
 fn inline_blake3(data: &[u8]) -> [u8; 32] {
     let mut state = [
@@ -973,7 +973,7 @@ mod tests {
         let mut converter = ExoarToTarConverter::new();
         converter.convert(&mut sink, blobs, 0).test_expect("ok");
         assert_eq!(converter.stats().entries_emitted, 2);
-        // Le flux doit contenir au moins 4 blocs (2 headers + 2 data_blocks + 2 zeros)
+        // The stream must contain at least 4 blocks (2 headers + 2 data_blocks + 2 zeros)
         assert!(sink.blocks_written() >= 4);
     }
 

@@ -135,14 +135,13 @@ impl AuditRing {
     ///
     /// Implements an OVERWRITE policy if buffer is full (RULE AUDIT-03).
     fn push(&mut self, record: AuditRecord) {
-        let idx = self.head.fetch_add(1, Ordering::Relaxed) % RING_SIZE;
-        // Check if unconsumed element will be overwritten
+        let head_raw = self.head.fetch_add(1, Ordering::Relaxed);
+        let idx = head_raw % RING_SIZE;
+        // Check if unconsumed element will be overwritten using monotonic indices
         let tail = self.tail.load(Ordering::Relaxed);
-        let head = idx;
-        // Circular distance
-        let used = head.wrapping_sub(tail) % RING_SIZE;
-        if used >= RING_SIZE - 1 {
-            // Buffer full: advance tail (overwrites oldest)
+        let used = head_raw.wrapping_sub(tail);
+        if used >= RING_SIZE {
+            // Buffer full: advance tail to preserve at most RING_SIZE - 1 unread entries
             self.tail.fetch_add(1, Ordering::Relaxed);
             self.overflow.fetch_add(1, Ordering::Relaxed);
         }
@@ -158,8 +157,8 @@ impl AuditRing {
         let mut count = 0usize;
         while count < out.len() {
             let tail = self.tail.load(Ordering::Relaxed);
-            let head = self.head.load(Ordering::Relaxed) % RING_SIZE;
-            if tail % RING_SIZE == head {
+            let head_raw = self.head.load(Ordering::Relaxed);
+            if head_raw == tail {
                 break;
             }
             let idx = tail % RING_SIZE;
@@ -174,7 +173,7 @@ impl AuditRing {
     fn pending(&self) -> usize {
         let head = self.head.load(Ordering::Relaxed);
         let tail = self.tail.load(Ordering::Relaxed);
-        head.wrapping_sub(tail) % RING_SIZE
+        head.wrapping_sub(tail).min(RING_SIZE)
     }
 }
 
@@ -252,6 +251,7 @@ pub fn log_event(
         data,
     };
 
+    let _irq = crate::scheduler::IrqGuard::new();
     AUDIT_RING.lock().push(record);
     EVENTS_LOGGED.fetch_add(1, Ordering::Relaxed);
     if critical {
@@ -277,11 +277,13 @@ pub fn log_security_violation(pid: u32, tid: u32, uid: u16, syscall_nr: u32, dat
 ///
 /// Returns number of copied events.
 pub fn flush_to_userspace(out: &mut [AuditRecord]) -> usize {
+    let _irq = crate::scheduler::IrqGuard::new();
     AUDIT_RING.lock().drain(out)
 }
 
 /// Number of events pending read.
 pub fn pending_events() -> usize {
+    let _irq = crate::scheduler::IrqGuard::new();
     AUDIT_RING.lock().pending()
 }
 
@@ -308,11 +310,16 @@ pub struct AuditLoggerStats {
 }
 
 pub fn audit_logger_stats() -> AuditLoggerStats {
+    let _irq = crate::scheduler::IrqGuard::new();
+    let ring = AUDIT_RING.lock();
+    let overflow_count = ring.overflow.load(Ordering::Relaxed);
+    let pending = ring.pending();
+    drop(ring);
     AuditLoggerStats {
         events_logged: EVENTS_LOGGED.load(Ordering::Relaxed),
         events_dropped: EVENTS_DROPPED.load(Ordering::Relaxed),
         events_critical: EVENTS_CRITICAL.load(Ordering::Relaxed),
-        overflow_count: AUDIT_RING.lock().overflow.load(Ordering::Relaxed),
-        pending: AUDIT_RING.lock().pending(),
+        overflow_count,
+        pending,
     }
 }

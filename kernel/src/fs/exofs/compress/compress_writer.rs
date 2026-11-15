@@ -1,8 +1,8 @@
-//! Écrivain de blob compressé ExoFS.
+//! ExoFS compressed blob writer.
 //!
-//! RÈGLE OOM-02   : try_reserve avant tout push.
-//! RÈGLE ARITH-02 : arithmétique checked/saturating.
-//! RÈGLE RECUR-01 : aucune récursivité.
+//! RULE OOM-02   : try_reserve before any push.
+//! RULE ARITH-02 : checked/saturating arithmetic.
+//! RULE RECUR-01 : no recursion.
 
 use crate::fs::exofs::compress::algorithm::{CompressLevel, CompressionAlgorithm};
 use crate::fs::exofs::compress::compress_choice::{CompressPolicy, CompressionChoice};
@@ -17,29 +17,29 @@ use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Résultat de compression
+// Compression result
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat d'une opération de compression.
+/// Result of a compression operation.
 #[derive(Debug)]
 pub struct CompressResult {
-    /// Payload final : en-tête (32 B) + données compressées.
+    /// Final payload: header (32 B) + compressed data.
     pub payload: Vec<u8>,
-    /// Algorithme effectivement utilisé.
+    /// Algorithm actually used.
     pub algorithm: CompressionAlgorithm,
-    /// Taille originale.
+    /// Original size.
     pub original_size: usize,
-    /// Taille du payload compressé (sans en-tête).
+    /// Compressed payload size (without header).
     pub compressed_size: usize,
 }
 
 impl CompressResult {
-    /// Taille totale (en-tête inclus).
+    /// Total size (header included).
     pub fn total_size(&self) -> usize {
         self.payload.len()
     }
 
-    /// Longueur du payload (alias de total_size).
+    /// Payload length (alias of total_size).
     pub fn len(&self) -> usize {
         self.payload.len()
     }
@@ -47,7 +47,7 @@ impl CompressResult {
         self.payload.is_empty()
     }
 
-    /// Ratio de compression (0.0 = parfait, 1.0 = aucune compression).
+    /// Compression ratio (0.0 = perfect, 1.0 = no compression).
     pub fn compression_ratio(&self) -> f32 {
         if self.original_size == 0 {
             return 0.0;
@@ -55,7 +55,7 @@ impl CompressResult {
         self.compressed_size as f32 / self.original_size as f32
     }
 
-    /// Octets économisés par rapport à la taille originale.
+    /// Bytes saved compared to original size.
     pub fn space_saved(&self) -> usize {
         self.original_size.saturating_sub(self.compressed_size)
     }
@@ -65,7 +65,7 @@ impl CompressResult {
 // CompressWriter
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Écrivain de blob ExoFS compressé.
+/// ExoFS compressed blob writer.
 pub struct CompressWriter {
     choice: CompressionChoice,
     #[allow(dead_code)]
@@ -73,7 +73,7 @@ pub struct CompressWriter {
 }
 
 impl CompressWriter {
-    /// Crée un écrivain avec la politique donnée.
+    /// Creates a writer with given policy.
     pub fn new(policy: CompressPolicy) -> Self {
         Self {
             choice: CompressionChoice::new(policy),
@@ -81,7 +81,7 @@ impl CompressWriter {
         }
     }
 
-    /// Crée un écrivain avec un threshold personnalisé.
+    /// Creates a writer with a custom threshold.
     pub fn with_threshold(policy: CompressPolicy, threshold: CompressionThreshold) -> Self {
         Self {
             choice: CompressionChoice::new(policy),
@@ -89,7 +89,7 @@ impl CompressWriter {
         }
     }
 
-    /// Compresse `data` et retourne un blob ExoFS (en-tête + payload).
+    /// Compresses `data` and returns an ExoFS blob (header + payload).
     pub fn compress(&self, data: &[u8]) -> ExofsResult<CompressResult> {
         if data.is_empty() {
             return Ok(CompressResult {
@@ -107,7 +107,7 @@ impl CompressWriter {
         }
     }
 
-    /// Estime la taille de sortie maximale sans compression effective.
+    /// Estimates maximum output size without actual compression.
     pub fn estimate_output_size(&self, data: &[u8]) -> usize {
         match self.choice.decide(data).algorithm {
             CompressionAlgorithm::Lz4 => {
@@ -120,7 +120,7 @@ impl CompressWriter {
         }
     }
 
-    // ── Méthodes internes──────────────────────────────────────────────────────
+    // ── Internal methods ──────────────────────────────────────────────────────
 
     fn store_raw(&self, data: &[u8]) -> ExofsResult<CompressResult> {
         let mut payload = Vec::new();
@@ -205,23 +205,23 @@ impl CompressWriter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pipeline de compression
+// Compression pipeline
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pipeline combinant décision, compression et validation CRC.
+/// Pipeline combining decision, compression, and CRC validation.
 pub struct CompressionPipeline {
     writer: CompressWriter,
 }
 
 impl CompressionPipeline {
-    /// Crée un pipeline avec la politique donnée.
+    /// Creates a pipeline with given policy.
     pub fn new(policy: CompressPolicy) -> Self {
         Self {
             writer: CompressWriter::new(policy),
         }
     }
 
-    /// Compresse et vérifie le CRC dans le même appel.
+    /// Compresses and verifies CRC in the same call.
     pub fn compress_and_validate(&self, data: &[u8]) -> ExofsResult<CompressResult> {
         let result = self.writer.compress(data)?;
         if result.algorithm != CompressionAlgorithm::None
@@ -237,14 +237,14 @@ impl CompressionPipeline {
         Ok(result)
     }
 
-    /// Estime la taille de sortie.
+    /// Estimates output size.
     pub fn estimate_size(&self, data: &[u8]) -> usize {
         self.writer.estimate_output_size(data)
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilitaires internes
+// Internal utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn build_payload(header: &CompressionHeader, compressed: &[u8]) -> ExofsResult<Vec<u8>> {
@@ -260,7 +260,7 @@ fn build_payload(header: &CompressionHeader, compressed: &[u8]) -> ExofsResult<V
     Ok(payload)
 }
 
-/// CRC32 IEEE léger — aucune table statique (ONDISK-03).
+/// Lightweight IEEE CRC32 — no static tables (ONDISK-03).
 pub(crate) fn crc32_simple(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in data {
@@ -342,7 +342,7 @@ mod tests {
         let w = CompressWriter::new(CompressPolicy::default());
         let data = pseudo_random(200);
         let r = w.compress(&data).test_unwrap();
-        // Doit soit stocker brut soit compresser — ne doit pas échouer.
+        // Must either store raw or compress — must not fail.
         assert!(r.total_size() > 0 || r.original_size == 0);
     }
 
@@ -396,7 +396,7 @@ mod tests {
         assert!(r.total_size() > 0);
     }
 
-    // ── Tests supplémentaires ─────────────────────────────────────────────────
+    // ── Additional tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_compress_small_data_no_panic() {
@@ -416,12 +416,12 @@ mod tests {
     #[test]
     fn test_crc32_empty() {
         let c = crc32_simple(b"");
-        assert_eq!(c, 0x0000_0000); // CRC32 de la chaîne vide
+        assert_eq!(c, 0x0000_0000); // CRC32 of empty string
     }
 
     #[test]
     fn test_crc32_known_value() {
-        // CRC32 de "123456789" = 0xCBF43926 (IEEE polynomial)
+        // CRC32 of "123456789" = 0xCBF43926 (IEEE polynomial)
         let c = crc32_simple(b"123456789");
         assert_eq!(c, 0xCBF4_3926);
     }
@@ -453,7 +453,7 @@ mod tests {
         let w = CompressWriter::new(CompressPolicy::lz4_fast());
         let data = uniform(2048);
         let r = w.compress(&data).test_unwrap();
-        // Vérifie la cohérence interne du résultat.
+        // Verify internal result consistency.
         assert!(r.original_size == data.len());
     }
     #[test]

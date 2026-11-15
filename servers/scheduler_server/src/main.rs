@@ -29,6 +29,28 @@ use realtime_admit::RealtimeAdmission;
 use stats_collector::StatsCollector;
 use thread_table::ThreadTable;
 
+const fn is_rt_privileged(sender_pid: u32, owner_pid: u32) -> bool {
+    sender_pid == 1 || sender_pid == 8 || (sender_pid == owner_pid && sender_pid <= 10)
+}
+
+#[repr(C)]
+struct SchedParam {
+    sched_priority: i32,
+}
+
+fn posix_policy_and_param(class: SchedulingClass, nice: i8) -> (u32, SchedParam) {
+    match class {
+        SchedulingClass::Cfs => (0, SchedParam { sched_priority: 0 }),
+        SchedulingClass::Batch => (3, SchedParam { sched_priority: 0 }),
+        SchedulingClass::Idle => (5, SchedParam { sched_priority: 0 }),
+        SchedulingClass::Realtime => {
+            let rt_prio = (50i32 - (nice as i32) * 2).clamp(1, 99);
+            (2, SchedParam { sched_priority: rt_prio })
+        }
+        SchedulingClass::Deadline => (6, SchedParam { sched_priority: 0 }),
+    }
+}
+
 struct SchedulerService {
     advisor: PolicyAdvisor,
     threads: ThreadTable,
@@ -70,6 +92,11 @@ impl SchedulerService {
         };
         let class = SchedulingClass::from_u32(raw_class).unwrap_or(SchedulingClass::Cfs);
         let profile = self.advisor.recommend(raw_nice, 8, class);
+        if matches!(profile.class, SchedulingClass::Realtime | SchedulingClass::Deadline)
+            && !is_rt_privileged(sender_pid, sender_pid)
+        {
+            return SchedulerReply::error(exo_syscall_abi::EPERM);
+        }
 
         match self.threads.register(
             sender_pid,
@@ -116,7 +143,7 @@ impl SchedulerService {
         let profile = self
             .advisor
             .recommend(raw_nice, latency_hint, existing.class);
-        if let Err(err) = apply_kernel_priority(existing.pid, profile.nice) {
+        if let Err(err) = apply_kernel_priority(existing.tid, profile.nice) {
             self.stats.note_error(existing.pid, existing.tid, err);
             return SchedulerReply::error(err);
         }
@@ -175,40 +202,36 @@ impl SchedulerService {
             None => return SchedulerReply::error(exo_syscall_abi::ENOENT),
         };
 
-        if matches!(class, SchedulingClass::Realtime | SchedulingClass::Deadline) {
-            // FIX-SCHED-RT (Security_Application_Audit §GAP-05 + Passe2 §D-03) :
-            // L'admission temps-réel était possible sans vérification de privilege.
-            // Tout processus Ring1 pouvait s'auto-escalader en SCHED_REALTIME.
-            //
-            // Règle : seuls sont autorisés à demander Realtime/Deadline :
-            //   PID 1  (init_server — démarre les serveurs critiques en RT)
-            //   PID 8  (scheduler_server lui-même — auto-configuration)
-            //   PID == owner_pid == sender_pid ET sender_pid <= 10
-            //          (serveurs Ring1 de base qui s'auto-configurent au démarrage)
-            //
-            // En production (feature "strict_rt_caps"), seul un CapToken
-            // de type CAP_SCHED_RT sera accepté. En v0.2.0 dev, on utilise
-            // la liste statique ci-dessus.
-            const RT_ALLOWED_PIDS: &[u32] = &[1, 8];
-            let is_rt_privileged = RT_ALLOWED_PIDS.contains(&sender_pid)
-                || (sender_pid == owner_pid && sender_pid <= 10);
-            if !is_rt_privileged {
+        let is_rt = matches!(class, SchedulingClass::Realtime | SchedulingClass::Deadline);
+        let mut admitted_rt = false;
+        if is_rt {
+            if !is_rt_privileged(sender_pid, owner_pid) {
                 return SchedulerReply::error(exo_syscall_abi::EPERM);
             }
             if let Err(err) = self.realtime.admit(tid, runtime_us, period_us) {
                 self.stats.note_error(owner_pid, tid, err);
                 return SchedulerReply::error(err);
             }
+            admitted_rt = true;
         }
 
-        if let Err(err) = apply_kernel_policy(owner_pid, class) {
+        let kernel_res = apply_kernel_policy(tid, class, profile.nice).and_then(|()| {
+            if is_rt {
+                Ok(())
+            } else {
+                apply_kernel_priority(tid, profile.nice)
+            }
+        });
+        if let Err(err) = kernel_res {
+            if admitted_rt {
+                let _ = self.realtime.release(tid);
+            }
             self.stats.note_error(owner_pid, tid, err);
             return SchedulerReply::error(err);
         }
 
-        if let Err(err) = apply_kernel_priority(owner_pid, profile.nice) {
-            self.stats.note_error(owner_pid, tid, err);
-            return SchedulerReply::error(err);
+        if !is_rt {
+            let _ = self.realtime.release(tid);
         }
 
         match self.threads.update_class(sender_pid, tid, class, flags) {
@@ -230,7 +253,12 @@ impl SchedulerService {
                     snapshot.class.as_u32(),
                 )
             }
-            Err(err) => SchedulerReply::error(err),
+            Err(err) => {
+                if admitted_rt {
+                    let _ = self.realtime.release(tid);
+                }
+                SchedulerReply::error(err)
+            }
         }
     }
 
@@ -251,7 +279,7 @@ impl SchedulerService {
             None => return SchedulerReply::error(exo_syscall_abi::ENOENT),
         };
 
-        if let Err(err) = apply_kernel_affinity(owner_pid, affinity_mask) {
+        if let Err(err) = apply_kernel_affinity(tid, affinity_mask) {
             self.stats.note_error(owner_pid, tid, err);
             return SchedulerReply::error(err);
         }
@@ -282,12 +310,6 @@ impl SchedulerService {
             None => return SchedulerReply::error(exo_syscall_abi::ENOENT),
         };
 
-        // SAFETY: appel sans argument, effet borné au thread courant.
-        let rc = unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_SCHED_YIELD) };
-        if rc < 0 {
-            self.stats.note_error(owner_pid, tid, rc);
-            return SchedulerReply::error(rc);
-        }
         self.stats.note_yield(owner_pid, tid);
         let yields = self
             .stats
@@ -356,6 +378,10 @@ impl SchedulerService {
             Some(_) => return SchedulerReply::error(exo_syscall_abi::EPERM),
             None => return SchedulerReply::error(exo_syscall_abi::ENOENT),
         };
+
+        if !is_rt_privileged(sender_pid, owner_pid) {
+            return SchedulerReply::error(exo_syscall_abi::EPERM);
+        }
 
         match self.realtime.admit(tid, runtime_us, period_us) {
             Ok(snapshot) => SchedulerReply::ok(
@@ -448,13 +474,13 @@ fn panic(_info: &PanicInfo) -> ! {
     }
 }
 
-fn apply_kernel_priority(pid: u32, nice: i8) -> Result<(), i64> {
-    // SAFETY: ABI POSIX standard `setpriority(PRIO_PROCESS=0, pid, nice)`.
+fn apply_kernel_priority(tid: u32, nice: i8) -> Result<(), i64> {
+    // SAFETY: ABI POSIX standard `setpriority(PRIO_PROCESS=0, tid, nice)`.
     let rc = unsafe {
         exo_syscall_abi::syscall3(
             exo_syscall_abi::SYS_SETPRIORITY,
             0,
-            pid as u64,
+            tid as u64,
             (nice as i64) as u64,
         )
     };
@@ -465,14 +491,15 @@ fn apply_kernel_priority(pid: u32, nice: i8) -> Result<(), i64> {
     }
 }
 
-fn apply_kernel_policy(pid: u32, class: SchedulingClass) -> Result<(), i64> {
-    // SAFETY: `sched_setscheduler(pid, policy, NULL)` côté noyau peut être absent ; fallback accepté.
+fn apply_kernel_policy(tid: u32, class: SchedulingClass, nice: i8) -> Result<(), i64> {
+    let (posix_policy, param) = posix_policy_and_param(class, nice);
+    // SAFETY: `param` points to a valid `#[repr(C)] SchedParam` for the duration of the syscall.
     let rc = unsafe {
         exo_syscall_abi::syscall3(
             exo_syscall_abi::SYS_SCHED_SETSCHEDULER,
-            pid as u64,
-            class.as_u32() as u64,
-            0,
+            tid as u64,
+            posix_policy as u64,
+            &param as *const SchedParam as u64,
         )
     };
     if rc < 0 && rc != exo_syscall_abi::ENOSYS {
@@ -482,13 +509,13 @@ fn apply_kernel_policy(pid: u32, class: SchedulingClass) -> Result<(), i64> {
     }
 }
 
-fn apply_kernel_affinity(pid: u32, affinity_mask: u64) -> Result<(), i64> {
+fn apply_kernel_affinity(tid: u32, affinity_mask: u64) -> Result<(), i64> {
     let mask = affinity_mask;
     // SAFETY: pointeur vers une valeur locale immuable valide pendant l’appel.
     let rc = unsafe {
         exo_syscall_abi::syscall3(
             exo_syscall_abi::SYS_SCHED_SETAFFINITY,
-            pid as u64,
+            tid as u64,
             core::mem::size_of::<u64>() as u64,
             &mask as *const u64 as u64,
         )

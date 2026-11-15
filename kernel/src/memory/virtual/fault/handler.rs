@@ -167,15 +167,24 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
         return handle_present_permission_fault(ctx, vma, alloc);
     }
 
-    // Dispatch according to cause.
-    if ctx.cause == FaultCause::Write && vma.flags.contains(VmaFlags::COW) {
-        // CoW break
-        FAULT_STATS.cow_breaks.fetch_add(1, Ordering::Relaxed);
-        return super::cow::handle_cow_fault(ctx, vma, alloc);
+    let page_addr =
+        VirtAddr::new(ctx.fault_addr.as_u64() & !(crate::memory::core::PAGE_SIZE as u64 - 1));
+    let raw_pte = alloc.read_pte_raw(page_addr);
+
+    if crate::memory::integrity::guard_pages::is_guard_pte(raw_pte) {
+        FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
+        return FaultResult::Segfault {
+            addr: ctx.fault_addr,
+        };
     }
 
-    // Demand paging or swap-in
-    if vma.flags.contains(VmaFlags::ANONYMOUS) || vma.backing == VmaBacking::File {
+    if crate::memory::swap::backend::SwapPte::is_swap(raw_pte) {
+        FAULT_STATS.swap_ins.fetch_add(1, Ordering::Relaxed);
+        super::swap_in::handle_swap_in(ctx, vma, alloc)
+    } else if vma.flags.contains(VmaFlags::ANONYMOUS)
+        || vma.backing == VmaBacking::File
+        || raw_pte == 0
+    {
         match super::demand_paging::handle_demand_paging(ctx, vma, alloc) {
             FaultResult::Handled => {
                 FAULT_STATS.demand_paging.fetch_add(1, Ordering::Relaxed);
@@ -184,7 +193,6 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
             other => other,
         }
     } else {
-        // Backup: swap-in
         FAULT_STATS.swap_ins.fetch_add(1, Ordering::Relaxed);
         super::swap_in::handle_swap_in(ctx, vma, alloc)
     }

@@ -1,11 +1,11 @@
-//! ChunkCache — Cache LRU de chunks dédupliqués (no_std).
+//! ChunkCache — LRU cache for deduplicated chunks (no_std).
 //!
-//! Stocke les données des chunks récemment accédés pour éviter
-//! de relire le stockage. Utilise un compteur d'accès pour LRU approximatif.
+//! Stores data of recently accessed chunks to avoid
+//! reading storage repeatedly. Uses access counter for approximate LRU.
 //!
-//! RECUR-01 : aucune récursion — boucles while/for.
-//! OOM-02   : try_reserve sur tous les Vec.
-//! ARITH-02 : saturating / checked / wrapping.
+//! RECUR-01: zero recursion — while/for loops.
+//! OOM-02  : try_reserve on all Vec allocations.
+//! ARITH-02: saturating / checked / wrapping.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -16,19 +16,19 @@ use super::chunk_fingerprint::{blake3_hash, ChunkFingerprint};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const CHUNK_CACHE_DEFAULT_CAPACITY: usize = 1024;
 pub const CHUNK_CACHE_MAX_CAPACITY: usize = 65536;
-/// Quota max en octets pour éviter de saturer la RAM (64 MiB).
+/// Max quota in bytes to avoid saturating RAM (64 MiB).
 pub const CHUNK_CACHE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ChunkCacheEntry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée du cache pour un chunk.
+/// Cache entry for a chunk.
 #[derive(Clone)]
 pub struct ChunkCacheEntry {
     pub fingerprint: ChunkFingerprint,
@@ -38,9 +38,9 @@ pub struct ChunkCacheEntry {
 }
 
 impl ChunkCacheEntry {
-    /// Crée une entrée de cache depuis un fingerprint et des données.
+    /// Creates a cache entry from a fingerprint and data.
     ///
-    /// OOM-02 : try_reserve.
+    /// OOM-02: try_reserve.
     pub fn new(fingerprint: ChunkFingerprint, data: &[u8]) -> ExofsResult<Self> {
         let mut v: Vec<u8> = Vec::new();
         v.try_reserve(data.len())
@@ -55,7 +55,7 @@ impl ChunkCacheEntry {
         })
     }
 
-    /// Incrémente le compteur d'accès (ARITH-02 saturating).
+    /// Increments access counter (ARITH-02 saturating).
     pub fn touch(&mut self) {
         self.accesses = self.accesses.saturating_add(1);
     }
@@ -65,7 +65,7 @@ impl ChunkCacheEntry {
 // ChunkCacheStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du cache.
+/// Cache statistics.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkCacheStats {
     pub capacity: usize,
@@ -81,7 +81,7 @@ pub struct ChunkCacheStats {
 // ChunkCache
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cache de chunks thread-safe (UnsafeCell + spinlock AtomicU64).
+/// Thread-safe chunk cache (UnsafeCell + spinlock AtomicU64).
 pub struct ChunkCache {
     entries: UnsafeCell<BTreeMap<[u8; 32], ChunkCacheEntry>>,
     lock: AtomicU64,
@@ -96,7 +96,7 @@ unsafe impl Sync for ChunkCache {}
 unsafe impl Send for ChunkCache {}
 
 impl ChunkCache {
-    /// Constructeur const pour statique.
+    /// Const constructor for static initialization.
     pub const fn new_const(capacity: usize) -> Self {
         Self {
             entries: UnsafeCell::new(BTreeMap::new()),
@@ -133,13 +133,13 @@ impl ChunkCache {
     }
 
     fn map(&self) -> &mut BTreeMap<[u8; 32], ChunkCacheEntry> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         unsafe { &mut *self.entries.get() }
     }
 
-    // ── API publique ──────────────────────────────────────────────────────────
+    // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Récupère les données d'un chunk par son blake3.
+    /// Retrieves chunk data by its blake3.
     pub fn get(&self, key: &[u8; 32]) -> Option<Vec<u8>> {
         self.acquire();
         let result = if let Some(entry) = self.map().get_mut(key) {
@@ -160,24 +160,24 @@ impl ChunkCache {
         result
     }
 
-    /// Insère un chunk dans le cache.
+    /// Inserts a chunk into the cache.
     ///
-    /// OOM-02 : try_reserve.
-    /// ARITH-02 : saturating_add.
+    /// OOM-02: try_reserve.
+    /// ARITH-02: saturating_add.
     pub fn insert(&self, fingerprint: ChunkFingerprint, data: &[u8]) -> ExofsResult<()> {
         let key = fingerprint.blake3;
         let data_len = data.len() as u64;
         let entry = ChunkCacheEntry::new(fingerprint, data)?;
         self.acquire();
         let map = self.map();
-        // Si déjà présent — mise à jour simple.
+        // If already present — simple update.
         if map.contains_key(&key) {
             map.insert(key, entry);
             self.release();
             self.total_bytes.fetch_add(data_len, Ordering::Relaxed);
             return Ok(());
         }
-        // Éviction si plein.
+        // Evict if full.
         if map.len() >= self.capacity {
             self.evict_one_locked(map);
         }
@@ -187,7 +187,7 @@ impl ChunkCache {
         Ok(())
     }
 
-    /// Retire une entrée du cache.
+    /// Removes an entry from the cache.
     pub fn remove(&self, key: &[u8; 32]) -> bool {
         self.acquire();
         let found = self.map().remove(key).is_some();
@@ -195,7 +195,7 @@ impl ChunkCache {
         found
     }
 
-    /// Vide entièrement le cache.
+    /// Clears the entire cache.
     pub fn clear(&self) {
         self.acquire();
         self.map().clear();
@@ -206,7 +206,7 @@ impl ChunkCache {
         self.total_bytes.store(0, Ordering::Relaxed);
     }
 
-    /// Retourne le nombre d'entrées actuelles.
+    /// Returns current number of entries.
     pub fn len(&self) -> usize {
         self.acquire();
         let n = self.map().len();
@@ -218,7 +218,7 @@ impl ChunkCache {
         self.len() == 0
     }
 
-    /// Vérifie si une clé est dans le cache (sans accès).
+    /// Checks whether a key is in the cache (without access).
     pub fn contains(&self, key: &[u8; 32]) -> bool {
         self.acquire();
         let found = self.map().contains_key(key);
@@ -226,7 +226,7 @@ impl ChunkCache {
         found
     }
 
-    /// Statistiques du cache.
+    /// Cache statistics.
     pub fn stats(&self) -> ChunkCacheStats {
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
@@ -250,9 +250,9 @@ impl ChunkCache {
         }
     }
 
-    /// Éviction LRU approximatif : retire l'entrée avec le moins d'accès.
+    /// Approximate LRU eviction: removes entry with the fewest accesses.
     ///
-    /// RECUR-01 : boucle for — pas de récursion.
+    /// RECUR-01: for loop — no recursion.
     fn evict_one_locked(&self, map: &mut BTreeMap<[u8; 32], ChunkCacheEntry>) {
         if map.is_empty() {
             return;
@@ -271,7 +271,7 @@ impl ChunkCache {
         }
     }
 
-    /// Éviction forcée de plusieurs entrées LRU.
+    /// Forced eviction of multiple LRU entries.
     pub fn evict_n(&self, n: usize) {
         if n == 0 {
             return;
@@ -286,9 +286,9 @@ impl ChunkCache {
         self.release();
     }
 
-    /// Vérifie l'intégrité des entrées : recalcule le blake3 des données.
+    /// Verifies entry integrity: recomputes blake3 of data.
     ///
-    /// RECUR-01 : boucle for — pas de récursion.
+    /// RECUR-01: for loop — no recursion.
     pub fn verify_integrity(&self) -> ExofsResult<()> {
         self.acquire();
         let mut bad = None::<[u8; 32]>;
@@ -309,7 +309,7 @@ impl ChunkCache {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statique global
+// Global static
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static CHUNK_CACHE: ChunkCache = ChunkCache::new_const(CHUNK_CACHE_DEFAULT_CAPACITY);
@@ -422,10 +422,10 @@ mod tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChunkCacheConfig — configuration avancée du cache
+// ChunkCacheConfig — advanced cache configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration complète du cache de chunks.
+/// Full chunk cache configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkCacheConfig {
     pub capacity: usize,

@@ -1,6 +1,6 @@
 //! Syscall filtering for the exo_shield sandbox.
 //!
-//! Implements a deny-by-default syscall bitmap (256 bits = 4 × u64),
+//! Implements a deny-by-default syscall bitmap (576 bits = 9 × u64),
 //! per-PID filter profiles (max 16), and violation tracking.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -9,6 +9,12 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 // Constants
 // ---------------------------------------------------------------------------
 
+/// Maximum number of supported syscall numbers in `SyscallBitmap` (`9 * 64`).
+pub const MAX_SYSCALLS: usize = 576;
+
+/// Number of `u64` words in `SyscallBitmap`.
+pub const BITMAP_WORDS: usize = 9;
+
 /// Maximum number of per-PID filter profiles.
 pub const MAX_FILTER_PROFILES: usize = 16;
 
@@ -16,67 +22,79 @@ pub const MAX_FILTER_PROFILES: usize = 16;
 pub const MAX_VIOLATIONS: usize = 32;
 
 // ---------------------------------------------------------------------------
-// Syscall bitmap — 256 bits (4 × u64)
+// Syscall bitmap — 576 bits (9 × u64)
 // ---------------------------------------------------------------------------
 
-/// A 256-bit bitmap where each bit corresponds to a syscall number.
+/// A 576-bit bitmap where each bit corresponds to a syscall number (`0..576`).
 /// Bit set → syscall is *allowed*.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SyscallBitmap {
-    bits: [u64; 4],
+    bits: [u64; BITMAP_WORDS],
 }
 
 impl SyscallBitmap {
     /// Create a new bitmap with all bits clear (deny all).
     pub const fn deny_all() -> Self {
-        Self { bits: [0u64; 4] }
+        Self {
+            bits: [0u64; BITMAP_WORDS],
+        }
     }
 
     /// Create a new bitmap with all bits set (allow all).
     pub const fn allow_all() -> Self {
         Self {
-            bits: [u64::MAX; 4],
+            bits: [u64::MAX; BITMAP_WORDS],
         }
     }
 
-    /// Allow a syscall by number.
-    pub fn allow(&mut self, nr: u8) {
-        let word = (nr as usize) / 64;
-        let bit = (nr as u64) % 64;
+    /// Allow a syscall by number (`0..MAX_SYSCALLS`).
+    pub fn allow(&mut self, nr: u16) {
+        let idx = nr as usize;
+        if idx >= MAX_SYSCALLS {
+            return;
+        }
+        let word = idx / 64;
+        let bit = (idx % 64) as u64;
         self.bits[word] |= 1u64 << bit;
     }
 
-    /// Deny a syscall by number.
-    pub fn deny(&mut self, nr: u8) {
-        let word = (nr as usize) / 64;
-        let bit = (nr as u64) % 64;
+    /// Deny a syscall by number (`0..MAX_SYSCALLS`).
+    pub fn deny(&mut self, nr: u16) {
+        let idx = nr as usize;
+        if idx >= MAX_SYSCALLS {
+            return;
+        }
+        let word = idx / 64;
+        let bit = (idx % 64) as u64;
         self.bits[word] &= !(1u64 << bit);
     }
 
-    /// Check whether a syscall is allowed.
-    pub fn is_allowed(&self, nr: u8) -> bool {
-        let word = (nr as usize) / 64;
-        let bit = (nr as u64) % 64;
+    /// Check whether a syscall is allowed. Out-of-range numbers fail closed (`false`).
+    pub fn is_allowed(&self, nr: u16) -> bool {
+        let idx = nr as usize;
+        if idx >= MAX_SYSCALLS {
+            return false;
+        }
+        let word = idx / 64;
+        let bit = (idx % 64) as u64;
         self.bits[word] & (1u64 << bit) != 0
     }
 
     /// Merge another bitmap into this one (union — any bit set in either
     /// becomes allowed).
     pub fn union(&mut self, other: &SyscallBitmap) {
-        self.bits[0] |= other.bits[0];
-        self.bits[1] |= other.bits[1];
-        self.bits[2] |= other.bits[2];
-        self.bits[3] |= other.bits[3];
+        for i in 0..BITMAP_WORDS {
+            self.bits[i] |= other.bits[i];
+        }
     }
 
     /// Intersect another bitmap into this one (intersection — only bits set
     /// in *both* remain allowed).
     pub fn intersect(&mut self, other: &SyscallBitmap) {
-        self.bits[0] &= other.bits[0];
-        self.bits[1] &= other.bits[1];
-        self.bits[2] &= other.bits[2];
-        self.bits[3] &= other.bits[3];
+        for i in 0..BITMAP_WORDS {
+            self.bits[i] &= other.bits[i];
+        }
     }
 
     /// Count the number of allowed syscalls.
@@ -90,7 +108,7 @@ impl SyscallBitmap {
 
     /// Get raw bits for a specific word.
     pub fn word(&self, idx: usize) -> u64 {
-        self.bits[idx.min(3)]
+        self.bits[idx.min(BITMAP_WORDS - 1)]
     }
 }
 
@@ -105,7 +123,7 @@ pub struct SyscallViolation {
     /// PID that committed the violation.
     pid: u32,
     /// Syscall number that was denied.
-    syscall_nr: u8,
+    syscall_nr: u16,
     /// Timestamp of the violation (arbitrary tick unit).
     timestamp: u64,
     /// Whether the violation was lethal (process killed).
@@ -113,7 +131,7 @@ pub struct SyscallViolation {
 }
 
 impl SyscallViolation {
-    pub const fn new(pid: u32, syscall_nr: u8, timestamp: u64, lethal: bool) -> Self {
+    pub const fn new(pid: u32, syscall_nr: u16, timestamp: u64, lethal: bool) -> Self {
         Self {
             pid,
             syscall_nr,
@@ -125,7 +143,7 @@ impl SyscallViolation {
     pub fn pid(&self) -> u32 {
         self.pid
     }
-    pub fn syscall_nr(&self) -> u8 {
+    pub fn syscall_nr(&self) -> u16 {
         self.syscall_nr
     }
     pub fn timestamp(&self) -> u64 {
@@ -188,13 +206,13 @@ impl SyscallFilterProfile {
     }
 
     /// Check whether a syscall is allowed for this profile's PID.
-    pub fn check_syscall(&self, nr: u8) -> bool {
+    pub fn check_syscall(&self, nr: u16) -> bool {
         self.bitmap.is_allowed(nr)
     }
 
     /// Record a violation.  Returns `true` if the violation threshold has
     /// been reached (suggesting the process should be killed).
-    pub fn record_violation(&mut self, nr: u8, timestamp: u64) -> bool {
+    pub fn record_violation(&mut self, nr: u16, timestamp: u64) -> bool {
         let idx = (self.violation_head % MAX_VIOLATIONS as u32) as usize;
         let lethal = self.total_violations + 1 >= self.violation_threshold as u64;
         self.violations[idx] = SyscallViolation::new(self.pid, nr, timestamp, lethal);
@@ -204,12 +222,12 @@ impl SyscallFilterProfile {
     }
 
     /// Allow a syscall in this profile.
-    pub fn allow(&mut self, nr: u8) {
+    pub fn allow(&mut self, nr: u16) {
         self.bitmap.allow(nr);
     }
 
     /// Deny a syscall in this profile.
-    pub fn deny(&mut self, nr: u8) {
+    pub fn deny(&mut self, nr: u16) {
         self.bitmap.deny(nr);
     }
 
@@ -346,7 +364,7 @@ impl SyscallFilterManager {
 
     /// Check whether a syscall is allowed for a given PID.  Falls back to
     /// the global default bitmap if no per-PID profile exists.
-    pub fn check_syscall(&self, pid: u32, nr: u8) -> bool {
+    pub fn check_syscall(&self, pid: u32, nr: u16) -> bool {
         if let Some(profile) = self.get_profile(pid) {
             profile.check_syscall(nr)
         } else {
@@ -357,7 +375,7 @@ impl SyscallFilterManager {
     /// Record a violation for a PID.  If no profile exists, one is not
     /// automatically created — the violation is counted globally.
     /// Returns `true` if the PID should be killed (threshold exceeded).
-    pub fn record_violation(&mut self, pid: u32, nr: u8, timestamp: u64) -> bool {
+    pub fn record_violation(&mut self, pid: u32, nr: u16, timestamp: u64) -> bool {
         self.global_violations.fetch_add(1, Ordering::Relaxed);
         if let Some(profile) = self.get_profile_mut(pid) {
             profile.record_violation(nr, timestamp)
@@ -420,12 +438,16 @@ mod tests {
         let mut bm = SyscallBitmap::deny_all();
         bm.allow(1); // write
         bm.allow(60); // exit
+        bm.allow(549); // high Exo-OS syscall
         assert!(bm.is_allowed(1));
         assert!(bm.is_allowed(60));
+        assert!(bm.is_allowed(549));
         assert!(!bm.is_allowed(0));
-        assert_eq!(bm.count_allowed(), 2);
+        assert_eq!(bm.count_allowed(), 3);
         bm.deny(1);
+        bm.deny(549);
         assert!(!bm.is_allowed(1));
+        assert!(!bm.is_allowed(549));
     }
 
     #[test]

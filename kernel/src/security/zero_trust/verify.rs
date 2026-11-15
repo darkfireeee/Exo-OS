@@ -50,15 +50,22 @@ pub fn ring1_trusted_mask() -> u64 {
 }
 
 #[inline]
+fn is_ring1_pid_trusted(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if let Some(bit) = ring1_bit(pid) {
+        if (RING1_TRUSTED_MASK.load(Ordering::Acquire) & bit) != 0 {
+            return true;
+        }
+    }
+    pid >= 64
+        && crate::security::ipc_policy::can_inject_src_pid(crate::process::core::pid::Pid(pid))
+}
+
+#[inline]
 pub fn ring1_pair_trusted(sender_pid: u32, receiver_pid: u32) -> bool {
-    let Some(sender_bit) = ring1_bit(sender_pid) else {
-        return false;
-    };
-    let Some(receiver_bit) = ring1_bit(receiver_pid) else {
-        return false;
-    };
-    let mask = RING1_TRUSTED_MASK.load(Ordering::Acquire);
-    (mask & sender_bit) != 0 && (mask & receiver_bit) != 0
+    is_ring1_pid_trusted(sender_pid) && is_ring1_pid_trusted(receiver_pid)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

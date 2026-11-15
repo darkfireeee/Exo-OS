@@ -199,6 +199,10 @@ pub fn verify_module_signature(header: &ModuleHeader, code: &[u8]) -> Result<(),
     }
 
     // Check size
+    if header.module_size == 0 || code.len() != header.module_size as usize {
+        SIGN_STATS.failures.fetch_add(1, Ordering::Relaxed);
+        return Err(CodeSignError::CorruptedMetadata);
+    }
     if header.module_size > MAX_MODULE_SIZE {
         SIGN_STATS.failures.fetch_add(1, Ordering::Relaxed);
         return Err(CodeSignError::ModuleTooLarge);

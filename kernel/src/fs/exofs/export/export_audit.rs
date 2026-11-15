@@ -1,85 +1,85 @@
-//! export_audit.rs — Journal d'audit temps-réel des opérations export/import
-//! (no_std, Ring0, thread-safe par AtomicU64 + UnsafeCell).
+//! export_audit.rs — Real-time audit log of export/import operations
+//! (no_std, Ring0, thread-safe via AtomicU64 + UnsafeCell).
 //!
-//! Ce module fournit :
-//!  - `ExportAuditLog`    : anneau circulaire de 512 entrées d'audit.
-//!  - `ExportEvent`       : énumération de tous les événements traçables.
-//!  - `ExportAuditEntry`  : structure de 64 bytes par entrée d'audit.
-//!  - `ExportAuditStats`  : compteurs agrégés par type d'événement.
-//!  - `ExportAuditQuery`  : consultation des N dernières entrées.
-//!  - `ExportSession`     : session d'export/import avec suivi d'état.
-//!  - `ExportSessionConfig`: paramètres d'une session.
+//! This module provides:
+//!  - `ExportAuditLog`     : circular ring of 512 audit entries.
+//!  - `ExportEvent`        : enumeration of all traceable events.
+//!  - `ExportAuditEntry`   : 64-byte structure per audit entry.
+//!  - `ExportAuditStats`   : aggregated counters per event type.
+//!  - `ExportAuditQuery`   : querying the last N entries.
+//!  - `ExportSession`      : export/import session with state tracking.
+//!  - `ExportSessionConfig`: session configuration parameters.
 //!
-//! RECUR-01 : pas de récursion — boucles while/for.
-//! ARITH-02 : saturating_* / wrapping_* sur les compteurs.
+//! RECUR-01 : no recursion — while/for loops.
+//! ARITH-02 : saturating_* / wrapping_* on counters.
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
-/// Capacité de l'anneau circulaire (puissance de 2 pour masquage).
+// ─── Constants ───────────────────────────────────────────────────────────────
+/// Capacity of circular ring (power of 2 for masking).
 pub const EXPORT_AUDIT_RING: usize = 512;
 const RING_MASK: usize = EXPORT_AUDIT_RING - 1;
 
-// ─── Singleton global ────────────────────────────────────────────────────────
-/// Journal d'audit global du module export.
+// ─── Global Singleton ────────────────────────────────────────────────────────
+/// Global audit log of export module.
 pub static EXPORT_AUDIT: ExportAuditLog = ExportAuditLog::new_const();
 
-// ─── Événements d'audit ───────────────────────────────────────────────────────
+// ─── Audit Events ────────────────────────────────────────────────────────────
 
-/// Événements traçables dans le journal d'audit export.
+/// Traceable events in the export audit log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ExportEvent {
-    /// Session d'export démarrée.
+    /// Export session started.
     ExportStarted = 0,
-    /// Session d'export terminée avec succès.
+    /// Export session completed successfully.
     ExportCompleted = 1,
-    /// Session d'export interrompue par erreur.
+    /// Export session aborted due to error.
     ExportFailed = 2,
-    /// Session d'import démarrée.
+    /// Import session started.
     ImportStarted = 3,
-    /// Session d'import terminée avec succès.
+    /// Import session completed successfully.
     ImportCompleted = 4,
-    /// Session d'import interrompue par erreur.
+    /// Import session aborted due to error.
     ImportFailed = 5,
-    /// Blob exporté vers l'archive.
+    /// Blob exported to archive.
     BlobExported = 6,
-    /// Blob importé depuis l'archive.
+    /// Blob imported from archive.
     BlobImported = 7,
-    /// Tombstone exporté.
+    /// Tombstone exported.
     TombstoneExported = 8,
-    /// Tombstone importé.
+    /// Tombstone imported.
     TombstoneImported = 9,
-    /// Erreur CRC32C détectée sur un payload.
+    /// CRC32C error detected on a payload.
     CrcError = 10,
-    /// BlobId ne correspond pas au hash des données (RÈGLE 11).
+    /// BlobId does not match data hash (RULE 11).
     BlobIdMismatch = 11,
-    /// Magic invalide détecté dans l'archive (RÈGLE 8).
+    /// Invalid magic detected in archive (RULE 8).
     MagicError = 12,
-    /// Conflit de blob résolu (blob déjà présent).
+    /// Blob conflict resolved (blob already present).
     ConflictResolved = 13,
-    /// Entrée ignorée (filtrée par politique).
+    /// Entry skipped (filtered by policy).
     EntrySkipped = 14,
-    /// Archive compressée.
+    /// Archive compressed.
     CompressionApplied = 15,
-    /// Archive décompressée.
+    /// Archive decompressed.
     DecompressionDone = 16,
-    /// Vérification d'intégrité réussie.
+    /// Integrity verification succeeded.
     IntegrityVerified = 17,
-    /// Vérification d'intégrité échouée.
+    /// Integrity verification failed.
     IntegrityFailed = 18,
-    /// Checkpoint de reprise enregistré.
+    /// Recovery checkpoint saved.
     CheckpointSaved = 19,
-    /// Session d'export/import démarrée (alias générique).
+    /// Export/import session started (generic alias).
     SessionStarted = 20,
-    /// Session d'export/import terminée avec succès (alias générique).
+    /// Export/import session completed successfully (generic alias).
     SessionCompleted = 21,
-    /// Session d'export/import interrompue par erreur (alias générique).
+    /// Export/import session aborted due to error (generic alias).
     SessionFailed = 22,
-    /// Export incrémental effectué.
+    /// Incremental export performed.
     IncrementalExport = 23,
-    /// Événement inconnu / réservé.
+    /// Unknown / reserved event.
     Unknown = 255,
 }
 
@@ -110,7 +110,7 @@ impl ExportEvent {
         }
     }
 
-    /// Retourne true si l'événement représente une erreur.
+    /// Returns true if the event represents an error.
     pub fn is_error(&self) -> bool {
         matches!(
             self,
@@ -123,7 +123,7 @@ impl ExportEvent {
         )
     }
 
-    /// Retourne true si l'événement concerne un blob individuel.
+    /// Returns true if the event concerns an individual blob.
     pub fn is_blob_event(&self) -> bool {
         matches!(
             self,
@@ -132,38 +132,38 @@ impl ExportEvent {
     }
 }
 
-// ─── Entrée d'audit ───────────────────────────────────────────────────────────
+// ─── Audit Entry ─────────────────────────────────────────────────────────────
 
-/// Entrée d'audit : 64 bytes, alignée et copiable.
+/// Audit entry: 64 bytes, aligned and copyable.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct ExportAuditEntry {
-    /// Type d'événement.
+    /// Event type.
     pub event: ExportEvent,
-    /// Padding après enum.
+    /// Padding after enum.
     pub _pad: [u8; 3],
-    /// Identifiant de session (session_id).
+    /// Session identifier (session_id).
     pub session_id: u32,
-    /// Séquence monotone (numéro d'ordre global).
+    /// Monotonic sequence (global sequence number).
     pub seq: u64,
-    /// Epoch ou timestamp (selon contexte).
+    /// Epoch or timestamp (depending on context).
     pub epoch: u64,
-    /// BlobId associé (8 premiers bytes pour compacité).
+    /// Associated BlobId (first 8 bytes for compactness).
     pub blob_id_prefix: [u8; 8],
-    /// Bytes supplémentaires de BlobId.
+    /// Additional BlobId bytes.
     pub blob_id_mid: [u8; 16],
-    /// Taille du payload impliqué (0 si non applicable).
+    /// Size of payload involved (0 if not applicable).
     pub payload_size: u64,
-    /// Code d'erreur (0 = succès).
+    /// Error code (0 = success).
     pub error_code: u32,
-    /// Padding final pour atteindre 64 bytes.
+    /// Final padding to reach 64 bytes.
     pub _pad2: [u8; 4],
 }
 
 const _: () = assert!(core::mem::size_of::<ExportAuditEntry>() == 64);
 
 impl ExportAuditEntry {
-    /// Crée une entrée d'audit vide.
+    /// Creates an empty audit entry.
     pub const fn new_empty() -> Self {
         Self {
             event: ExportEvent::Unknown,
@@ -179,7 +179,7 @@ impl ExportAuditEntry {
         }
     }
 
-    /// Crée une entrée de blob exporté.
+    /// Creates an exported blob entry.
     pub fn blob_exported(session_id: u32, blob_id: &[u8; 32], size: u64, epoch: u64) -> Self {
         let mut e = Self::new_empty();
         e.event = ExportEvent::BlobExported;
@@ -191,7 +191,7 @@ impl ExportAuditEntry {
         e
     }
 
-    /// Crée une entrée de blob importé.
+    /// Creates an imported blob entry.
     pub fn blob_imported(session_id: u32, blob_id: &[u8; 32], size: u64) -> Self {
         let mut e = Self::new_empty();
         e.event = ExportEvent::BlobImported;
@@ -202,7 +202,7 @@ impl ExportAuditEntry {
         e
     }
 
-    /// Crée une entrée d'erreur.
+    /// Creates an error entry.
     pub fn error(session_id: u32, event: ExportEvent, code: u32) -> Self {
         let mut e = Self::new_empty();
         e.event = event;
@@ -211,15 +211,15 @@ impl ExportAuditEntry {
         e
     }
 
-    /// Retourne true si l'entrée représente une erreur.
+    /// Returns true if the entry represents an error.
     pub fn is_error(&self) -> bool {
         self.event.is_error()
     }
 }
 
-// ─── Statistiques d'audit ────────────────────────────────────────────────────
+// ─── Audit Statistics ────────────────────────────────────────────────────────
 
-/// Compteurs agrégés des événements d'audit.
+/// Aggregated counters of audit events.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExportAuditStats {
     pub exports_started: u32,
@@ -295,7 +295,7 @@ impl ExportAuditStats {
         }
     }
 
-    /// Retourne true si aucune erreur n'a été enregistrée.
+    /// Returns true if no errors were recorded.
     pub fn is_clean(&self) -> bool {
         self.exports_failed == 0
             && self.imports_failed == 0
@@ -305,19 +305,19 @@ impl ExportAuditStats {
     }
 }
 
-// ─── Journal d'audit (anneau circulaire, thead-safe) ─────────────────────────
+// ─── Audit Log (circular ring, thread-safe) ──────────────────────────────────
 
-/// Journal d'audit pour le module export — anneau circulaire, thread-safe.
-/// Implémenté avec UnsafeCell + AtomicU64 spinlock (pattern Ring0).
+/// Audit log for the export module — circular ring, thread-safe.
+/// Implemented with UnsafeCell + AtomicU64 spinlock (Ring0 pattern).
 pub struct ExportAuditLog {
     entries: UnsafeCell<[ExportAuditEntry; EXPORT_AUDIT_RING]>,
-    /// Pointeur d'écriture (head), wrapping sur EXPORT_AUDIT_RING.
+    /// Write pointer (head), wrapping over EXPORT_AUDIT_RING.
     head: AtomicU64,
-    /// Compteur de séquence global.
+    /// Global sequence counter.
     seq: AtomicU64,
-    /// Spinlock (0 = libre, 1 = pris).
+    /// Spinlock (0 = free, 1 = held).
     lock: AtomicU64,
-    /// Statistiques intégrées.
+    /// Integrated statistics.
     stats: UnsafeCell<ExportAuditStats>,
 }
 
@@ -325,7 +325,7 @@ unsafe impl Sync for ExportAuditLog {}
 unsafe impl Send for ExportAuditLog {}
 
 impl ExportAuditLog {
-    /// Constructeur const pour le singleton statique.
+    /// Const constructor for the static singleton.
     pub const fn new_const() -> Self {
         Self {
             entries: UnsafeCell::new([ExportAuditEntry::new_empty(); EXPORT_AUDIT_RING]),
@@ -336,7 +336,7 @@ impl ExportAuditLog {
         }
     }
 
-    /// Acquiert le spinlock (busy-wait, Ring0 safe).
+    /// Acquires the spinlock (busy-wait, Ring0 safe).
     fn acquire(&self) {
         while self
             .lock
@@ -347,19 +347,19 @@ impl ExportAuditLog {
         }
     }
 
-    /// Libère le spinlock.
+    /// Releases the spinlock.
     fn release(&self) {
         self.lock.store(0, Ordering::Release);
     }
 
-    /// Enregistre un événement dans le journal.
+    /// Records an event in the log.
     pub fn record(&self, mut entry: ExportAuditEntry) {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         entry.seq = seq;
         self.acquire();
         let head = self.head.load(Ordering::Relaxed);
         let idx = (head as usize) & RING_MASK;
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by the caller function preconditions.
         unsafe {
             let entries = &mut *self.entries.get();
             entries[idx] = entry;
@@ -370,7 +370,7 @@ impl ExportAuditLog {
         self.release();
     }
 
-    /// Enregistre un événement simple (sans BlobId).
+    /// Records a simple event (without BlobId).
     pub fn log_event(&self, session_id: u32, event: ExportEvent) {
         let mut entry = ExportAuditEntry::new_empty();
         entry.event = event;
@@ -378,40 +378,40 @@ impl ExportAuditLog {
         self.record(entry);
     }
 
-    /// Enregistre un blob exporté.
+    /// Records an exported blob.
     pub fn log_blob_exported(&self, session_id: u32, blob_id: &[u8; 32], size: u64, epoch: u64) {
         let entry = ExportAuditEntry::blob_exported(session_id, blob_id, size, epoch);
         self.record(entry);
     }
 
-    /// Enregistre un blob importé.
+    /// Records an imported blob.
     pub fn log_blob_imported(&self, session_id: u32, blob_id: &[u8; 32], size: u64) {
         let entry = ExportAuditEntry::blob_imported(session_id, blob_id, size);
         self.record(entry);
     }
 
-    /// Enregistre une erreur.
+    /// Records an error.
     pub fn log_error(&self, session_id: u32, event: ExportEvent, code: u32) {
         let entry = ExportAuditEntry::error(session_id, event, code);
         self.record(entry);
     }
 
-    /// Retourne une copie des statistiques actuelles.
+    /// Returns a copy of current statistics.
     pub fn stats(&self) -> ExportAuditStats {
         self.acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         let s = unsafe { *self.stats.get() };
         self.release();
         s
     }
 
-    /// Retourne le nombre total d'événements enregistrés.
+    /// Returns total number of recorded events.
     pub fn total_events(&self) -> u64 {
         self.seq.load(Ordering::Relaxed)
     }
 
-    /// Copie les N dernières entrées dans `out` (RECUR-01 : boucle while).
-    /// Retourne le nombre d'entrées copiées.
+    /// Copies the last N entries into `out` (RECUR-01: while loop).
+    /// Returns the number of copied entries.
     pub fn last_n(&self, out: &mut [ExportAuditEntry]) -> usize {
         if out.is_empty() {
             return 0;
@@ -421,7 +421,7 @@ impl ExportAuditLog {
         let total = self.seq.load(Ordering::Relaxed) as usize;
         let available = total.min(EXPORT_AUDIT_RING);
         let n = out.len().min(available);
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         let entries_ref = unsafe { &*self.entries.get() };
         let mut i = 0usize;
         while i < n {
@@ -433,7 +433,7 @@ impl ExportAuditLog {
         n
     }
 
-    /// Retourne la dernière entrée enregistrée, ou None si le journal est vide.
+    /// Returns the last recorded entry, or None if the log is empty.
     pub fn last_entry(&self) -> Option<ExportAuditEntry> {
         if self.seq.load(Ordering::Relaxed) == 0 {
             return None;
@@ -441,14 +441,14 @@ impl ExportAuditLog {
         self.acquire();
         let head = self.head.load(Ordering::Relaxed) as usize;
         let idx = (head.wrapping_sub(1)) & RING_MASK;
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired prior.
         let entry = unsafe { (*self.entries.get())[idx] };
         self.release();
         Some(entry)
     }
 
-    /// Retourne le nombre d'erreurs parmi les dernières `n` entrées.
-    /// RECUR-01 : boucle while.
+    /// Returns the number of errors among the last `n` entries.
+    /// RECUR-01: while loop.
     pub fn count_errors_in_last_n(&self, n: usize) -> usize {
         let cap = n.min(EXPORT_AUDIT_RING);
         let mut buf = [ExportAuditEntry::new_empty(); EXPORT_AUDIT_RING];
@@ -464,10 +464,10 @@ impl ExportAuditLog {
         count
     }
 
-    /// Remet à zéro le journal et les statistiques.
+    /// Resets the log and statistics to zero.
     pub fn reset(&self) {
         self.acquire();
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by the caller function preconditions.
         unsafe {
             let entries = &mut *self.entries.get();
             let mut i = 0usize;
@@ -482,15 +482,15 @@ impl ExportAuditLog {
         self.release();
     }
 
-    /// Retourne true si aucune erreur n'est dans les statistiques courantes.
+    /// Returns true if no error is present in current statistics.
     pub fn is_clean(&self) -> bool {
         self.stats().is_clean()
     }
 }
 
-// ─── Session d'export/import ─────────────────────────────────────────────────
+// ─── Export/Import Session ───────────────────────────────────────────────────
 
-/// État d'une session d'export ou d'import.
+/// State of an export or import session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
     Idle,
@@ -499,7 +499,7 @@ pub enum SessionState {
     Failed,
 }
 
-/// Session d'export/import avec suivi de durée et d'état.
+/// Export/import session with duration and state tracking.
 pub struct ExportSession {
     pub session_id: u32,
     pub state: SessionState,
@@ -512,7 +512,7 @@ pub struct ExportSession {
 }
 
 impl ExportSession {
-    /// Crée une nouvelle session d'export.
+    /// Creates a new export session.
     pub fn new_export(session_id: u32, epoch_start: u64) -> Self {
         Self {
             session_id,
@@ -526,7 +526,7 @@ impl ExportSession {
         }
     }
 
-    /// Crée une nouvelle session d'import.
+    /// Creates a new import session.
     pub fn new_import(session_id: u32) -> Self {
         Self {
             session_id,
@@ -540,7 +540,7 @@ impl ExportSession {
         }
     }
 
-    /// Démarre la session.
+    /// Starts the session.
     pub fn start(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Running;
         let event = if self.is_import {
@@ -551,7 +551,7 @@ impl ExportSession {
         audit.log_event(self.session_id, event);
     }
 
-    /// Enregistre un blob traité.
+    /// Records a processed blob.
     pub fn record_blob(&mut self, blob_id: &[u8; 32], size: u64, audit: &ExportAuditLog) {
         self.blobs_processed = self.blobs_processed.saturating_add(1);
         self.bytes_processed = self.bytes_processed.saturating_add(size);
@@ -562,13 +562,13 @@ impl ExportSession {
         }
     }
 
-    /// Enregistre une erreur.
+    /// Records an error.
     pub fn record_error(&mut self, event: ExportEvent, code: u32, audit: &ExportAuditLog) {
         self.errors = self.errors.saturating_add(1);
         audit.log_error(self.session_id, event, code);
     }
 
-    /// Termine la session avec succès.
+    /// Completes the session successfully.
     pub fn complete(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Completed;
         let event = if self.is_import {
@@ -579,7 +579,7 @@ impl ExportSession {
         audit.log_event(self.session_id, event);
     }
 
-    /// Termine la session avec échec.
+    /// Terminates the session with failure.
     pub fn fail(&mut self, audit: &ExportAuditLog) {
         self.state = SessionState::Failed;
         let event = if self.is_import {
@@ -590,35 +590,35 @@ impl ExportSession {
         audit.log_event(self.session_id, event);
     }
 
-    /// Retourne true si la session est terminée (succès ou échec).
+    /// Returns true if the session is finished (success or failure).
     pub fn is_done(&self) -> bool {
         matches!(self.state, SessionState::Completed | SessionState::Failed)
     }
 
-    /// Retourne true si aucune erreur n'a été enregistrée.
+    /// Returns true if no errors were recorded.
     pub fn is_clean(&self) -> bool {
         self.errors == 0
     }
 }
 
-// ─── Configuration de session ────────────────────────────────────────────────
+// ─── Session Configuration ──────────────────────────────────────────────────
 
-/// Paramètre de configuration d'une session.
+/// Configuration parameter of a session.
 #[derive(Clone, Copy, Debug)]
 pub struct ExportSessionConfig {
-    /// Identifiant de session (doit être unique par session active).
+    /// Session identifier (must be unique per active session).
     pub session_id: u32,
-    /// Epoch de départ (export incrémental).
+    /// Base epoch (incremental export).
     pub epoch_base: u64,
-    /// Epoch cible.
+    /// Target epoch.
     pub epoch_target: u64,
-    /// Vérifier le BlobId =  blake3(données) — RÈGLE 11.
+    /// Verify BlobId = blake3(data) — RULE 11.
     pub verify_blob_ids: bool,
-    /// Vérifier les CRC32C des payloads.
+    /// Verify payload CRC32C checksums.
     pub verify_crc: bool,
-    /// Nombre maximal de blobs à traiter (0 = illimité).
+    /// Maximum number of blobs to process (0 = unlimited).
     pub max_blobs: u32,
-    /// Taille maximale totale en bytes (0 = illimitée).
+    /// Maximum total size in bytes (0 = unlimited).
     pub max_bytes: u64,
 }
 

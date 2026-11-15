@@ -67,7 +67,7 @@ pub const SYS_INIT_MODULE: u32 = 175;
 /// delete_module (unload a kernel module).
 pub const SYS_DELETE_MODULE: u32 = 176;
 /// bpf (load BPF program — potential escalation).
-pub const SYS_BPF: u32 = 321;
+pub const SYS_BPF: u32 = 360;
 /// keyctl (key management — potential info leak).
 pub const SYS_KEYCTL: u32 = 250;
 /// perf_event_open (performance monitoring — can leak data).
@@ -197,7 +197,7 @@ impl SyscallSeqEntry {
             sequence: [0; MAX_SEQ_LENGTH],
             seq_pos: 0,
             seq_len: 0,
-            matched_pattern: 0,
+            matched_pattern: 0xFF,
             _pad: [0; 3],
         }
     }
@@ -429,7 +429,7 @@ fn update_sequence(pid: u32, syscall_nr: u32) -> u8 {
             table[slot].sequence = [0; MAX_SEQ_LENGTH];
             table[slot].seq_pos = 0;
             table[slot].seq_len = 0;
-            table[slot].matched_pattern = 0;
+            table[slot].matched_pattern = 0xFF;
             slot
         }
     };
@@ -503,16 +503,18 @@ pub fn pre_syscall_check(pid: u32, syscall_nr: u32, _args: [u64; 3]) -> bool {
             // For the model, ptrace is monitored but not auto-blocked.
         }
 
-        // kexec_load and init_module are always blocked for non-kernel PIDs
-        if syscall_nr == SYS_KEXEC_LOAD || syscall_nr == SYS_INIT_MODULE {
-            if pid != 0 {
-                BLOCKED_SYSCALLS.fetch_add(1, Ordering::Relaxed);
-                return true;
-            }
+        // Kernel-only module/BPF/kexec syscalls are always blocked for userspace PIDs
+        if matches!(
+            syscall_nr,
+            SYS_KEXEC_LOAD | SYS_INIT_MODULE | SYS_DELETE_MODULE | SYS_BPF
+        ) && pid != 0
+        {
+            BLOCKED_SYSCALLS.fetch_add(1, Ordering::Relaxed);
+            return true;
         }
 
-        // reboot by non-init is blocked
-        if syscall_nr == SYS_REBOOT && pid != 1 {
+        // Privilege-sensitive host syscalls are blocked outside PID 0 / PID 1
+        if matches!(syscall_nr, SYS_REBOOT | SYS_MOUNT | SYS_CHROOT) && pid > 1 {
             BLOCKED_SYSCALLS.fetch_add(1, Ordering::Relaxed);
             return true;
         }
@@ -595,7 +597,7 @@ pub fn analyze_syscall_sequence(pid: u32) -> Option<(u8, u8)> {
     let table = SEQ_TABLE.lock();
 
     for i in 0..MAX_SEQ_ENTRIES {
-        if table[i].pid == pid && table[i].matched_pattern != 0 {
+        if table[i].pid == pid && table[i].matched_pattern != 0xFF {
             let pat_idx = table[i].matched_pattern as usize;
             if pat_idx < MAX_KNOWN_SEQUENCES {
                 let threat = ATTACK_PATTERNS[pat_idx].threat_level;

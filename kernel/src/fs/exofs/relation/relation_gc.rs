@@ -1,9 +1,9 @@
-//! relation_gc.rs — Collecteur de relations orphelines ExoFS
+//! relation_gc.rs — Orphaned relations collector in ExoFS
 //!
-//! Règles appliquées :
-//!  - OOM-02   : try_reserve systématique
-//!  - ARITH-02 : arithmétique vérifiée
-//!  - RECUR-01 : aucune récursion
+//! Applied rules:
+//!  - OOM-02   : systematic try_reserve
+//!  - ARITH-02 : checked arithmetic
+//!  - RECUR-01 : no recursion
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -11,18 +11,18 @@ use alloc::vec::Vec;
 use super::relation_graph::RELATION_GRAPH;
 use super::relation_index::RELATION_INDEX;
 use super::relation_storage::RELATION_STORAGE;
-use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01 : remplace arch::time
+use crate::fs::exofs::core::clock::exofs_ticks; // DAG-01: replaces arch::time
 use crate::fs::exofs::core::{BlobId, ExofsError, ExofsResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BlobExistsChecker
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Interface pour vérifier l'existence d'un blob.
+/// Interface to check blob existence.
 ///
-/// Le GC délègue la vérification à l'implémentation fournie par l'appelant.
+/// GC delegates check to implementation provided by caller.
 pub trait BlobExistsChecker: Send + Sync {
-    /// `true` si le blob identifié par `key` existe encore dans le store.
+    /// `true` if blob identified by `key` still exists in store.
     fn exists(&self, key: &[u8; 32]) -> bool;
 }
 
@@ -30,26 +30,26 @@ pub trait BlobExistsChecker: Send + Sync {
 // GcPolicy
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Politique de collecte.
+/// Collection policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GcPolicy {
-    /// Supprime uniquement les relations orphelines (from ou to disparu).
+    /// Removes only orphaned relations (from or to disappeared).
     OrphansOnly,
-    /// Supprime aussi les relations soft-deleted.
+    /// Also removes soft-deleted relations.
     IncludeDeleted,
-    /// Supprime toutes les relations dont l'âge dépasse `max_age_ticks`.
+    /// Removes all relations whose age exceeds `max_age_ticks`.
     ByAge { max_age_ticks: u64 },
-    /// Combinaison de toutes les politiques.
+    /// Combination of all policies.
     Full,
 }
 
 impl GcPolicy {
-    /// `true` si les suppressions soft-delete doivent être purgées.
+    /// `true` if soft-deleted relations should be purged.
     pub fn purge_deleted(self) -> bool {
         matches!(self, GcPolicy::IncludeDeleted | GcPolicy::Full)
     }
 
-    /// `true` si les relations trop vieilles doivent être purgées.
+    /// `true` if relations that are too old should be purged.
     pub fn purge_by_age(self) -> Option<u64> {
         match self {
             GcPolicy::ByAge { max_age_ticks } => Some(max_age_ticks),
@@ -63,30 +63,30 @@ impl GcPolicy {
 // RelationGcReport
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Rapport de GC.
+/// GC report.
 #[derive(Clone, Debug, Default)]
 pub struct RelationGcReport {
-    /// Nombre de relations examinées.
+    /// Number of examined relations.
     pub examined: u32,
-    /// Nombre de relations supprimées.
+    /// Number of purged relations.
     pub purged: u32,
-    /// Nombre de relations conservées.
+    /// Number of retained relations.
     pub kept: u32,
-    /// Nombre d'erreurs rencontrées.
+    /// Number of encountered errors.
     pub errors: u32,
-    /// Ticks de début du GC.
+    /// GC start ticks.
     pub started_at: u64,
-    /// Ticks de fin du GC.
+    /// GC end ticks.
     pub ended_at: u64,
 }
 
 impl RelationGcReport {
-    /// Durée du GC en ticks CPU.
+    /// GC duration in CPU ticks.
     pub fn duration_ticks(&self) -> u64 {
         self.ended_at.saturating_sub(self.started_at)
     }
 
-    /// Taux de purge (purged / examined), en pourcents.
+    /// Purge rate (purged / examined), in percent.
     pub fn purge_rate_pct(&self) -> u32 {
         if self.examined == 0 {
             return 0;
@@ -94,17 +94,17 @@ impl RelationGcReport {
         ((self.purged as u64 * 100) / self.examined as u64) as u32
     }
 
-    /// `true` si aucune erreur.
+    /// `true` if no errors.
     pub fn is_clean(&self) -> bool {
         self.errors == 0
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GcCandidate — relation candidate à la suppression
+// GcCandidate — candidate relation for deletion
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Relation identifiée comme candidate à la purge.
+/// Relation identified as candidate for purge.
 #[derive(Clone, Debug)]
 pub struct GcCandidate {
     pub blob_from: [u8; 32],
@@ -112,16 +112,16 @@ pub struct GcCandidate {
     pub reason: GcReason,
 }
 
-/// Raison de la candidature.
+/// Reason for candidacy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GcReason {
-    /// Le blob source n'existe plus.
+    /// Source blob no longer exists.
     FromBlobMissing,
-    /// Le blob destination n'existe plus.
+    /// Destination blob no longer exists.
     ToBlobMissing,
     /// Relation soft-deleted.
     SoftDeleted,
-    /// Relation trop ancienne.
+    /// Relation too old.
     TooOld,
 }
 
@@ -129,13 +129,13 @@ pub enum GcReason {
 // RelationGc
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Collecteur de relations orphelines.
+/// Orphaned relations collector.
 pub struct RelationGc;
 
 impl RelationGc {
-    /// Purge les relations orphelines selon la politique donnée.
+    /// Purges orphaned relations according to given policy.
     ///
-    /// Itératif (RECUR-01) — simple boucle `for` sur les relations.
+    /// Iterative (RECUR-01) — simple `for` loop over relations.
     pub fn run(checker: &dyn BlobExistsChecker, policy: GcPolicy) -> ExofsResult<RelationGcReport> {
         let started_at = exofs_ticks();
         let all = RELATION_STORAGE.load_all()?;
@@ -192,9 +192,9 @@ impl RelationGc {
         Ok(report)
     }
 
-    /// Purge uniquement les relations liées à un blob donné (supprimé).
+    /// Purges only relations linked to a given (deleted) blob.
     ///
-    /// Utilisé lors d'un soft-delete ou d'une purge d'objet.
+    /// Used during soft-delete or object purge.
     pub fn purge_blob(key: &[u8; 32]) -> ExofsResult<u32> {
         let blob = BlobId(*key);
 
@@ -213,7 +213,7 @@ impl RelationGc {
                         n_purged = n_purged.checked_add(1).ok_or(ExofsError::OffsetOverflow)?;
                     }
                     Err(_) => {
-                        // Relation corrompue — supprime quand même du store.
+                        // Corrupted relation — still remove from store.
                         RELATION_STORAGE.remove(*id);
                         n_purged = n_purged.saturating_add(1);
                     }
@@ -224,9 +224,9 @@ impl RelationGc {
         Ok(n_purged)
     }
 
-    /// Collecte les candidats à la purge sans les supprimer.
+    /// Collects purge candidates without deleting them.
     ///
-    /// Utile pour inspecter ce qui serait purgé avant de lancer un vrai GC.
+    /// Useful to inspect what would be purged before running a real GC.
     pub fn dry_run(checker: &dyn BlobExistsChecker) -> ExofsResult<Vec<GcCandidate>> {
         let all = RELATION_STORAGE.load_all()?;
         let mut candidates: Vec<GcCandidate> = Vec::new();
@@ -270,15 +270,15 @@ impl RelationGc {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GcScheduler — planification heuristique du GC
+// GcScheduler — heuristic GC scheduling
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Critère de déclenchement automatique du GC.
+/// Automatic GC trigger criterion.
 #[derive(Clone, Debug)]
 pub struct GcTrigger {
-    /// Déclenche si le nombre de relations dépasse ce seuil.
+    /// Triggers if number of relations exceeds this threshold.
     pub max_relations: usize,
-    /// Déclenche si N ticks se sont écoulés depuis le dernier GC.
+    /// Triggers if N ticks have elapsed since last GC.
     pub min_interval_ticks: u64,
 }
 
@@ -291,7 +291,7 @@ impl Default for GcTrigger {
     }
 }
 
-/// Planificateur de GC — décide quand il est opportun de lancer un GC.
+/// GC scheduler — decides when it is appropriate to run a GC.
 pub struct GcScheduler {
     trigger: GcTrigger,
     last_gc_tick: u64,
@@ -299,7 +299,7 @@ pub struct GcScheduler {
 }
 
 impl GcScheduler {
-    /// Crée un planificateur avec les triggers par défaut.
+    /// Creates a scheduler with default triggers.
     pub fn new() -> Self {
         GcScheduler {
             trigger: GcTrigger::default(),
@@ -308,7 +308,7 @@ impl GcScheduler {
         }
     }
 
-    /// Crée avec des triggers explicites.
+    /// Creates with explicit triggers.
     pub fn with_trigger(trigger: GcTrigger) -> Self {
         GcScheduler {
             trigger,
@@ -317,7 +317,7 @@ impl GcScheduler {
         }
     }
 
-    /// `true` si un GC devrait être lancé maintenant.
+    /// `true` if a GC should be run now.
     pub fn should_run(&self) -> bool {
         let now = exofs_ticks();
         let n_rels = RELATION_STORAGE.count();
@@ -326,9 +326,9 @@ impl GcScheduler {
         n_rels >= self.trigger.max_relations || interval >= self.trigger.min_interval_ticks
     }
 
-    /// Lance le GC si les conditions sont remplies.
+    /// Runs GC if conditions are met.
     ///
-    /// Retourne `None` si le GC n'a pas été lancé.
+    /// Returns `None` if GC was not run.
     pub fn maybe_run(
         &mut self,
         checker: &dyn BlobExistsChecker,
@@ -343,7 +343,7 @@ impl GcScheduler {
         Ok(Some(report))
     }
 
-    /// Nombre total de GC exécutés depuis la création.
+    /// Total number of GCs executed since creation.
     pub fn total_runs(&self) -> u64 {
         self.total_gc_runs
     }
@@ -369,7 +369,7 @@ mod tests {
         BlobId([b; 32])
     }
 
-    /// Checker qui marque tous les blobs comme existants.
+    /// Checker that marks all blobs as existing.
     struct AllExist;
     impl BlobExistsChecker for AllExist {
         fn exists(&self, _key: &[u8; 32]) -> bool {
@@ -377,7 +377,7 @@ mod tests {
         }
     }
 
-    /// Checker qui marque tous les blobs comme supprimés.
+    /// Checker that marks all blobs as deleted.
     #[allow(dead_code)]
     struct NoneExist;
     impl BlobExistsChecker for NoneExist {
@@ -422,10 +422,10 @@ mod tests {
 
     #[test]
     fn test_dry_run_all_exist() {
-        // Toutes les relations ont their blobs existants → aucun candidat.
+        // All relations have their blobs existing -> no candidates.
         let candidates = RelationGc::dry_run(&AllExist).test_unwrap();
-        // Des relations globales peuvent exister dans le store global —
-        // on vérifie seulement que la fonction ne panique pas.
+        // Global relations may exist in global store —
+        // only verify the function does not panic.
         let _ = candidates;
     }
 
@@ -447,10 +447,10 @@ mod tests {
 
     #[test]
     fn test_purge_blob_missing() {
-        // Blob inexistant → aucune relation à purger.
+        // Nonexistent blob -> no relations to purge.
         let n = RelationGc::purge_blob(&[0xABu8; 32]).test_unwrap();
-        // On ne sait pas combien il y en a dans le store global,
-        // mais la fonction ne doit pas paniquer.
+        // Unknown how many are in global store,
+        // but function must not panic.
         let _ = n;
     }
 
@@ -458,9 +458,9 @@ mod tests {
     fn test_gc_run_all_exist() {
         let checker = AllExist;
         let report = RelationGc::run(&checker, GcPolicy::OrphansOnly).test_unwrap();
-        // Aucun orphelin car tous les blobs existent.
+        // No orphans because all blobs exist.
         assert!(report.is_clean());
-        // purged peut être 0 ou plus selon l'état du store global.
+        // purged may be 0 or more depending on global store state.
         let _ = report;
     }
 

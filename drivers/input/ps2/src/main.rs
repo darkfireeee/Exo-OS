@@ -26,7 +26,7 @@ const IRQ_SOURCE_IOAPIC_EDGE: u64 = 0;
 #[cfg(target_os = "none")]
 const IRQ_ACK_HANDLED: u64 = 0;
 #[cfg(target_os = "none")]
-const IRQ_RECV_TIMEOUT_MS: u64 = 10;
+const IRQ_RECV_TIMEOUT_MS: u64 = 50;
 #[cfg(target_os = "none")]
 const IRQ_DRAIN_LIMIT: usize = 64;
 

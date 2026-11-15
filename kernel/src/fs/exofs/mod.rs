@@ -1,6 +1,6 @@
-// ExoFS — API publique du module
+// ExoFS — Public module API
 // Ring 0, no_std
-// Responsabilités : exofs_init(), exofs_register_fs()
+// Responsibilities: exofs_init(), exofs_register_fs()
 
 pub mod audit;
 pub mod cache;
@@ -24,7 +24,7 @@ pub mod snapshot;
 pub mod storage;
 pub mod syscall;
 
-/// Tests unitaires, intégration, fuzz (spec 2.0)
+/// Unit tests, integration, fuzz (spec 2.0)
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]
@@ -41,28 +41,28 @@ use crate::rust_core::sync::atomic::{AtomicBool, Ordering};
 
 const EXOFS_WRITEBACK_INTERVAL_NS: u64 = 5_000_000_000;
 
-/// Macro de log noyau — no-op en attendant le système de log Ring-0.
+/// Kernel log macro — no-op awaiting the Ring-0 logging system.
 #[allow(unused_macros)]
 macro_rules! log_kernel {
     ($($arg:tt)*) => {};
 }
 
-/// État global du module ExoFS — initialisé une seule fois au boot
+/// Global ExoFS module state — initialized once at boot
 static EXOFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
-/// FIX-F1 : déverrouille le volume ExoFS s'il est chiffré, en installant la clé
-/// de volume dérivée de `passphrase`. À appeler au **montage** (après
-/// `boot_recovery_sequence`) une fois qu'une passphrase est disponible.
+/// FIX-F1: unlocks the ExoFS volume if encrypted, installing the volume
+/// key derived from `passphrase`. To be called at **mount** time (after
+/// `boot_recovery_sequence`) once a passphrase is available.
 ///
-/// - `Ok(true)`  : volume chiffré déverrouillé (chiffrement-at-rest actif).
-/// - `Ok(false)` : volume NON chiffré → no-op (chemin en clair, aucune régression).
-/// - `Err(..)`   : passphrase incorrecte / superblock corrompu.
+/// - `Ok(true)`  : encrypted volume unlocked (encryption-at-rest active).
+/// - `Ok(false)` : volume NOT encrypted -> no-op (plaintext path, zero regression).
+/// - `Err(..)`   : incorrect passphrase / corrupted superblock.
 ///
-/// ⚠️ La **source** de la passphrase (paramètre de boot `exofs.key=` / clé scellée
-/// TPM) est une décision de déploiement — délibérément NON câblée par défaut, pour
-/// ne pas embarquer une passphrase en dur (= fausse sécurité). Voir
-/// `docs/SECURITE/AUDIT-100-PERCENT.md` (F1). Lecture+déchiffrement du volume sont
-/// déjà entièrement implémentés (`crypto::at_rest`, partagé avec mkfs via `exo-fscrypt`).
+/// ⚠️ The **source** of the passphrase (boot parameter `exofs.key=` / TPM-sealed
+/// key) is a deployment decision — deliberately NOT hardwired by default, to
+/// avoid embedding a hardcoded passphrase (= false security). See
+/// `docs/SECURITE/AUDIT-100-PERCENT.md` (F1). Volume reading+decryption are
+/// already fully implemented (`crypto::at_rest`, shared with mkfs via `exo-fscrypt`).
 pub fn unlock_encrypted_volume(passphrase: &[u8]) -> Result<bool, ExofsError> {
     use crate::fs::exofs::crypto::at_rest;
     use crate::fs::exofs::storage::superblock::{ExoSuperblockDisk, SUPERBLOCK_DISK_SIZE};
@@ -86,13 +86,13 @@ pub fn unlock_encrypted_volume(passphrase: &[u8]) -> Result<bool, ExofsError> {
     Ok(true)
 }
 
-/// Initialise ExoFS au boot du kernel.
-/// Appelée par le VFS dispatcher après montage de la racine.
+/// Initializes ExoFS at kernel boot.
+/// Called by VFS dispatcher after root mount.
 ///
-/// # Erreurs
-/// - `ExofsError::AlreadyMounted` si appelée deux fois
-/// - `ExofsError::CorruptSuperblock` si le superblock disque est invalide
-/// - `ExofsError::RecoveryFailed` si la séquence de recovery échoue
+/// # Errors
+/// - `ExofsError::AlreadyMounted` if called twice
+/// - `ExofsError::CorruptSuperblock` if the disk superblock is invalid
+/// - `ExofsError::RecoveryFailed` if the recovery sequence fails
 pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     if EXOFS_INITIALIZED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -101,12 +101,12 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
         return Err(ExofsError::AlreadyMounted);
     }
 
-    // FIX-BOOT-FS : marqueurs de diagnostic E9 (préfixe '#') pour pinpointer un
-    // éventuel blocage dans exofs_init. À retirer après validation boot.
+    // FIX-BOOT-FS: E9 diagnostic markers ('#' prefix) to pinpoint any
+    // lockup in exofs_init. To be removed after boot validation.
     #[inline(always)]
     fn fsdbg(tag: u8) {
-        // SAFETY: port 0xE9 = ISA debug device QEMU, sans effet mémoire.
-        // `::core` car `core` est ambigu ici (module crate::fs::exofs::core).
+        // SAFETY: port 0xE9 = QEMU ISA debug device, no memory effect.
+        // `::core` because `core` is ambiguous here (crate::fs::exofs::core module).
         unsafe {
             ::core::arch::asm!("out 0xE9, al", in("al") b'#', options(nomem, nostack));
             ::core::arch::asm!("out 0xE9, al", in("al") tag, options(nomem, nostack));
@@ -114,11 +114,11 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     }
     fsdbg(b'0');
 
-    // Phase de montage du driver block virtio
+    // Virtio block driver mounting phase
     crate::fs::exofs::storage::virtio_adapter::init_global_disk();
     fsdbg(b'1');
 
-    // Repli Ramdisk (module Multiboot2 exofs_root) si virtio-blk absent (ex: Live ISO)
+    // Ramdisk fallback (Multiboot2 exofs_root module) if virtio-blk absent (e.g. Live ISO)
     if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
         fsdbg(b'M');
         if crate::fs::exofs::storage::ramdisk::init_global_disk_ramdisk() {
@@ -126,9 +126,9 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
         }
     }
 
-    // Repli ATA/IDE (PIO, 0x1F0 maître) si virtio-blk et ramdisk absents — Bochs (qui n'émule
-    // ni virtio ni AHCI/NVMe) ou QEMU machine `pc`. Permet de lire le rootfs ExoFS
-    // depuis un disque IDE legacy pour le diagnostic #25 sous Bochs.
+    // ATA/IDE fallback (PIO, 0x1F0 master) if virtio-blk and ramdisk absent — Bochs (which emulates
+    // neither virtio nor AHCI/NVMe) or QEMU `pc` machine. Allows reading ExoFS rootfs
+    // from a legacy IDE disk for diagnostic #25 under Bochs.
     if !crate::fs::exofs::storage::virtio_adapter::has_global_disk() {
         fsdbg(b'I');
         if crate::fs::exofs::storage::ata_pio::init_global_disk_ata() {
@@ -136,15 +136,15 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
         }
     }
 
-    // FIX-GPT : si le disque est partitionné GPT, localiser la partition ExoFS
-    // ROOT par son type-GUID et décaler toute l'I/O ExoFS vers son LBA de début
-    // (parseur partagé `exo-partition`). ADDITIF : disque brut / MBR legacy / GPT
-    // sans partition ROOT → aucun décalage, le superblock reste lu au LBA 0
-    // (comportement des images mkfs actuelles, zéro régression). Toute erreur de
-    // parsing (CRC/signature) retombe sur LBA 0.
+    // FIX-GPT: if disk is GPT-partitioned, locate the ExoFS ROOT partition
+    // by its type-GUID and shift all ExoFS I/O to its starting LBA
+    // (shared `exo-partition` parser). ADDENDUM: raw disk / legacy MBR / GPT
+    // without ROOT partition -> no shift, superblock remains read at LBA 0
+    // (behavior of current mkfs images, zero regression). Any parsing
+    // error (CRC/signature) falls back to LBA 0.
     if let Some(rp) = crate::fs::exofs::storage::partition_scan::resolve_exofs_partition() {
-        // Le volume ExoFS = partition ROOT : la taille effective (utilisée par le
-        // boot recovery pour borner ses lectures) devient celle de la partition.
+        // ExoFS volume = ROOT partition: effective size (used by
+        // boot recovery to bound its reads) becomes that of the partition.
         let bs = crate::fs::exofs::storage::virtio_adapter::current_global_disk()
             .map(|d| d.block_size() as u64)
             .unwrap_or(512);
@@ -155,14 +155,14 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     register_storage_flush_barrier();
     fsdbg(b'2');
 
-    // Phase 1 : Recovery boot — sélectionne l'Epoch valide
+    // Phase 1: Boot recovery — selects valid Epoch
     boot_recovery_sequence(disk_size_bytes).map_err(|_| ExofsError::RecoveryFailed)?;
     fsdbg(b'3');
 
-    // Phase 2 : Enregistrement VFS (register_exofs_syscalls() — appelé via exofs_register_fs()).
-    // Omis ici : enregistrement effectué après le boot via exofs_register_fs().
+    // Phase 2: VFS registration (register_exofs_syscalls() — called via exofs_register_fs()).
+    // Omitted here: registration performed after boot via exofs_register_fs().
 
-    // Phase 3 : Initialisation de la couche de compatibilité POSIX
+    // Phase 3: POSIX compatibility layer initialization
     posix_bridge::posix_bridge_init()?;
     fsdbg(b'4');
     crate::process::lifecycle::exit::register_vfs_close_all_pid_hook(
@@ -171,10 +171,16 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     crate::process::lifecycle::exec::register_close_exec_handles_hook(
         crate::syscall::fs_bridge::close_exec_handles_for_pid,
     );
+    crate::process::core::pcb::file_table::register_fork_dup_handle_hook(
+        crate::syscall::fs_bridge::dup_handle_for_fork,
+    );
+    crate::process::core::pcb::file_table::register_close_handle_hook(
+        crate::syscall::fs_bridge::close_handle_on_exit,
+    );
 
-    // Phase 4 : Threads background GC/writeback
-    // Le kthread GC tourne en priorité basse — il appelle run_gc_two_phase() en boucle.
-    // Le scheduler l'interrompt entre les cycles.
+    // Phase 4: Background GC/writeback threads
+    // GC kthread runs at low priority — it calls run_gc_two_phase() in a loop.
+    // Scheduler preempts it between cycles.
     let gc_params = KthreadParams {
         name: "exofs-gc",
         entry: exofs_gc_kthread,
@@ -182,7 +188,7 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
         target_cpu: 0,
         priority: Priority(130), // nice +10: background, but not starved behind idle.
     };
-    // Ignorer l'erreur si le scheduler n'est pas encore actif au boot
+    // Ignore error if scheduler is not yet active at boot
     let _ = create_kthread(&gc_params);
     fsdbg(b'5');
     let writeback_params = KthreadParams {
@@ -203,10 +209,10 @@ pub fn exofs_init(mut disk_size_bytes: u64) -> Result<(), ExofsError> {
     Ok(())
 }
 
-/// Fonction d'entrée du kthread GC ExoFS.
+/// ExoFS GC kthread entry function.
 ///
-/// S'exécute en boucle au niveau de priorité basse.
-/// À chaque passage : récupère les blobs orphelins d'au moins 2 epochs de retard.
+/// Executes in a loop at low priority level.
+/// On each pass: reclaims orphan blobs at least 2 epochs old.
 fn exofs_gc_kthread(_arg: usize) -> ! {
     // Background GC must never win the first userspace handoff. It only scans
     // after epochs have matured; before that it backs off without touching the
@@ -216,12 +222,14 @@ fn exofs_gc_kthread(_arg: usize) -> ! {
     loop {
         let current_epoch = crate::fs::exofs::syscall::epoch_commit::current_epoch();
         if current_epoch > 2 {
-            // Lance un cycle GC complet (scan + collect) pour les epochs âgées de > 2.
+            // Runs a complete GC cycle (scan + collect) for epochs older than 2.
             let epoch_threshold = current_epoch - 2;
             let _ = crate::fs::exofs::syscall::gc_trigger::run_gc_two_phase(epoch_threshold);
         }
 
-        gc_backoff();
+        if !crate::scheduler::timer::sleep_ns(EXOFS_WRITEBACK_INTERVAL_NS) {
+            gc_backoff();
+        }
     }
 }
 
@@ -237,12 +245,12 @@ fn exofs_writeback_kthread(_arg: usize) -> ! {
 }
 
 fn exofs_writeback_dirty() -> Result<(), ExofsError> {
-    // FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2) : le writeback ne persiste plus les blobs
-    // bruts isolément — il déclenche un commit d'epoch transactionnel complet
-    // (flush des blobs dirty + journal + EpochRoot/Record + barrières NVMe), seul
-    // garant de l'atomicité et d'un état recouvrable au reboot. `commit_current_
-    // epoch` court-circuite proprement s'il n'y a rien à committer ou si un commit
-    // concourant (fsync/sync) est déjà en cours.
+    // FIX-EXOFS-CORE-1 (AUDIT-EXOFS §2): writeback no longer persists raw blobs
+    // in isolation — it triggers a full transactional epoch commit
+    // (flush of dirty blobs + journal + EpochRoot/Record + NVMe barriers), the only
+    // guarantee of atomicity and recoverable state on reboot. `commit_current_
+    // epoch` short-circuits cleanly if there is nothing to commit or if a concurrent
+    // commit (fsync/sync) is already in progress.
     if BLOB_CACHE.collect_dirty().is_empty() {
         return Ok(());
     }
@@ -266,28 +274,28 @@ fn register_storage_flush_barrier() {
     );
 }
 
-/// Enregistre ExoFS dans la table VFS du kernel.
-/// Retourne le pointeur sur les opérations VFS.
+/// Registers ExoFS in the kernel VFS table.
+/// Returns pointer to VFS operations.
 pub fn exofs_register_fs() -> Result<(), ExofsError> {
     posix_bridge::vfs_compat::register_exofs_vfs_ops()
 }
 
-/// Démontage propre : flush epoch, attente GC, sync superblock.
+/// Clean unmount: flush epoch, await GC, sync superblock.
 pub fn exofs_shutdown() -> Result<(), ExofsError> {
     if !EXOFS_INITIALIZED.load(Ordering::Acquire) {
         return Ok(());
     }
 
-    // Commit l'epoch courante (force=true, flush tous les blobs en attente).
-    // Utilise l'API interne do_shutdown_commit() qui ne passe pas par userspace.
+    // Commit current epoch (force=true, flush all pending blobs).
+    // Uses internal do_shutdown_commit() API which does not go through userspace.
     let commit_args = EpochCommitArgs {
         flags: epoch_flags::FORCE,
         _pad: 0,
-        epoch_id: 0, // 0 = epoch courante
-        checksum: 0, // pas de vérification checksum au shutdown
+        epoch_id: 0, // 0 = current epoch
+        checksum: 0, // no checksum verification at shutdown
         hints: 0,
     };
-    // Ignorer une erreur CommitInProgress (un commit concourant finira le travail).
+    // Ignore CommitInProgress error (a concurrent commit will finish the work).
     match do_shutdown_commit(&commit_args) {
         Ok(_) | Err(ExofsError::CommitInProgress) => {}
         Err(e) => return Err(e),

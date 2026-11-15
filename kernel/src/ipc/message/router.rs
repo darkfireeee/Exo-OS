@@ -41,17 +41,17 @@ pub const MAX_HOPS: usize = 8;
 /// An entry in the routing table: src_id -> next_hop + metadata.
 #[repr(C, align(32))]
 pub struct RouteEntry {
-    /// Source endpoint (lookup key)
-    pub src: AtomicU32,
-    /// Next-hop (destination EndpointId)
-    pub next_hop: AtomicU32,
+    /// Source endpoint (lookup key, full 64-bit EndpointId)
+    pub src: AtomicU64,
+    /// Next-hop (destination EndpointId, full 64-bit)
+    pub next_hop: AtomicU64,
     /// Route cost (for path selection if multiple routes to same src)
     pub cost: AtomicU32,
     /// Entry is valid
     pub valid: AtomicBool,
+    _pad: [u8; 3],
     /// Forwarding statistics
     pub fwd_count: AtomicU64,
-    _pad: [u8; 3],
 }
 
 // SAFETY: all fields are atomic
@@ -61,16 +61,16 @@ unsafe impl Send for RouteEntry {}
 impl RouteEntry {
     pub const fn empty() -> Self {
         Self {
-            src: AtomicU32::new(0),
-            next_hop: AtomicU32::new(0),
+            src: AtomicU64::new(0),
+            next_hop: AtomicU64::new(0),
             cost: AtomicU32::new(0),
             valid: AtomicBool::new(false),
-            fwd_count: AtomicU64::new(0),
             _pad: [0u8; 3],
+            fwd_count: AtomicU64::new(0),
         }
     }
 
-    pub fn is_match(&self, ep_id: u32) -> bool {
+    pub fn is_match(&self, ep_id: u64) -> bool {
         self.valid.load(Ordering::Relaxed) && self.src.load(Ordering::Relaxed) == ep_id
     }
 }
@@ -100,7 +100,7 @@ impl RoutingTable {
     }
 
     /// Adds or replaces a route src -> next_hop.
-    fn add(&self, src: u32, next_hop: u32, cost: u32) -> Result<(), IpcError> {
+    fn add(&self, src: u64, next_hop: u64, cost: u32) -> Result<(), IpcError> {
         // Search for an existing entry for src
         for i in 0..MAX_ROUTES {
             if self.entries[i].valid.load(Ordering::Relaxed)
@@ -129,7 +129,7 @@ impl RoutingTable {
     }
 
     /// Removes route for `src`.
-    fn remove(&self, src: u32) -> bool {
+    fn remove(&self, src: u64) -> bool {
         for i in 0..MAX_ROUTES {
             if self.entries[i].is_match(src) {
                 self.entries[i].valid.store(false, Ordering::Release);
@@ -141,7 +141,7 @@ impl RoutingTable {
     }
 
     /// Resolves next-hop for `src`. Returns None if no route.
-    fn lookup(&self, src: u32) -> Option<u32> {
+    fn lookup(&self, src: u64) -> Option<u64> {
         for i in 0..MAX_ROUTES {
             if self.entries[i].is_match(src) {
                 self.entries[i].fwd_count.fetch_add(1, Ordering::Relaxed);
@@ -153,7 +153,7 @@ impl RoutingTable {
 
     /// Resolves with loop detection (multi-hop).
     /// Returns the final EndpointId after MAX_HOPS hops max.
-    fn resolve_final(&self, start: u32) -> Result<u32, IpcError> {
+    fn resolve_final(&self, start: u64) -> Result<u64, IpcError> {
         let mut current = start;
         let mut hops = 0usize;
 
@@ -222,29 +222,29 @@ impl IpcRouter {
         cost: u32,
     ) -> Result<(), IpcError> {
         let guard = self.table.lock();
-        guard.add(src.0.get() as u32, next_hop.0.get() as u32, cost)
+        guard.add(src.0.get(), next_hop.0.get(), cost)
     }
 
     /// Removes route for src.
     pub fn remove_route(&self, src: EndpointId) -> bool {
         let guard = self.table.lock();
-        guard.remove(src.0.get() as u32)
+        guard.remove(src.0.get())
     }
 
     /// Direct lookup: immediate next-hop for src.
     pub fn next_hop(&self, src: EndpointId) -> Option<EndpointId> {
         let guard = self.table.lock();
         guard
-            .lookup(src.0.get() as u32)
-            .and_then(|v| NonZeroU64::new(v as u64))
+            .lookup(src.0.get())
+            .and_then(NonZeroU64::new)
             .map(EndpointId)
     }
 
     /// Multi-hop final resolution: returns terminal endpoint.
     pub fn resolve(&self, src: EndpointId) -> Result<EndpointId, IpcError> {
         let guard = self.table.lock();
-        match guard.resolve_final(src.0.get() as u32) {
-            Ok(id) => Ok(NonZeroU64::new(id as u64)
+        match guard.resolve_final(src.0.get()) {
+            Ok(id) => Ok(NonZeroU64::new(id)
                 .map(EndpointId)
                 .unwrap_or(EndpointId::INVALID)),
             Err(e) => {
@@ -269,11 +269,11 @@ impl IpcRouter {
     /// If no route is found, msg.dst remains unchanged (direct delivery).
     pub fn route_message(&self, msg: &mut IpcMessage) -> Result<(), IpcError> {
         let guard = self.table.lock();
-        let dst_raw = msg.dst.0.get() as u32;
+        let dst_raw = msg.dst.0.get();
         match guard.resolve_final(dst_raw) {
             Ok(final_dst) => {
                 if final_dst != dst_raw {
-                    msg.dst = NonZeroU64::new(final_dst as u64)
+                    msg.dst = NonZeroU64::new(final_dst)
                         .map(EndpointId)
                         .unwrap_or(EndpointId::INVALID);
                     self.forwarded.fetch_add(1, Ordering::Relaxed);
@@ -295,7 +295,7 @@ impl IpcRouter {
         // An endpoint is always reachable to itself.
         // Resolution succeeds if no loop exists.
         let guard = self.table.lock();
-        guard.resolve_final(dst.0.get() as u32).is_ok()
+        guard.resolve_final(dst.0.get()).is_ok()
     }
 
     /// Router statistics snapshot.

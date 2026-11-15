@@ -143,8 +143,11 @@ impl NumaBitmap {
         let local = pool_idx - base;
         let wi = local / 64;
         let bit = local % 64;
-        self.bits[wi].fetch_or(1u64 << bit, Ordering::Release);
-        self.free_count.fetch_add(1, Ordering::Relaxed);
+        let mask = 1u64 << bit;
+        let prev = self.bits[wi].fetch_or(mask, Ordering::Release);
+        if (prev & mask) == 0 {
+            self.free_count.fetch_add(1, Ordering::Relaxed);
+        }
         true
     }
 
@@ -269,10 +272,17 @@ impl NumaManager {
         }
 
         let n = self.active_nodes();
-        let preferred = preferred_node.index().min(n.saturating_sub(1));
+        if n == 0 {
+            self.stats.remote_misses.fetch_add(1, Ordering::Relaxed);
+            return shm_page_alloc();
+        }
+        let preferred = preferred_node.index().min(n - 1);
 
-        // Attempt on preferred node
-        if let Some(idx) = self.nodes[preferred].alloc_local() {
+        // Attempt on preferred node directly against the global SHM pool bitmap
+        let pref_base = preferred * NUMA_PAGES_PER_NODE;
+        if let Some(idx) =
+            super::pool::shm_page_alloc_range(pref_base, pref_base + NUMA_PAGES_PER_NODE)
+        {
             self.stats.local_hits.fetch_add(1, Ordering::Relaxed);
             return Some(idx);
         }
@@ -280,7 +290,9 @@ impl NumaManager {
         // Attempt on other nodes (round-robin)
         for delta in 1..n {
             let node = (preferred + delta) % n;
-            if let Some(idx) = self.nodes[node].alloc_local() {
+            let base = node * NUMA_PAGES_PER_NODE;
+            if let Some(idx) = super::pool::shm_page_alloc_range(base, base + NUMA_PAGES_PER_NODE)
+            {
                 self.stats.remote_misses.fetch_add(1, Ordering::Relaxed);
                 return Some(idx);
             }
@@ -293,24 +305,19 @@ impl NumaManager {
 
     /// Frees a page (automatic node detection).
     pub fn free_page(&self, pool_idx: usize) {
+        if !shm_page_free(pool_idx) {
+            return;
+        }
         if !self.is_initialized() {
-            shm_page_free(pool_idx);
             return;
         }
 
         let n = self.active_nodes();
-        for i in 0..n {
-            if self.nodes[i].free_local(pool_idx) {
-                self.stats.local_frees.fetch_add(1, Ordering::Relaxed);
-                // Also free in global pool for consistency
-                shm_page_free(pool_idx);
-                return;
-            }
+        if pool_idx < n * NUMA_PAGES_PER_NODE {
+            self.stats.local_frees.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.stats.remote_frees.fetch_add(1, Ordering::Relaxed);
         }
-
-        // Page outside NUMA partition (global pool)
-        self.stats.remote_frees.fetch_add(1, Ordering::Relaxed);
-        shm_page_free(pool_idx);
     }
 
     /// Returns the number of free pages on `node`.
@@ -318,7 +325,8 @@ impl NumaManager {
         if !node.is_valid() || node.index() >= self.active_nodes() {
             return 0;
         }
-        self.nodes[node.index()].free_count()
+        let base = node.index() * NUMA_PAGES_PER_NODE;
+        super::pool::shm_page_free_count_range(base, base + NUMA_PAGES_PER_NODE)
     }
 
     /// Snapshot of NUMA statistics.

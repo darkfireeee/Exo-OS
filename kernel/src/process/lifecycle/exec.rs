@@ -223,6 +223,17 @@ pub fn do_execve(
     if pcb.thread_count.load(Ordering::Acquire) != 1 {
         return Err(ExecError::ThreadGroupNotSingle);
     }
+    if pcb.pid.0 != 0 {
+        let ctx = crate::security::zero_trust::context_for_caller(pcb.pid.0, 0);
+        if crate::security::zero_trust::verify_syscall(
+            &ctx,
+            crate::syscall::numbers::SYS_EXECVE,
+        )
+        .is_err()
+        {
+            return Err(ExecError::PermissionDenied);
+        }
+    }
 
     // Validate path and argument length.
     if path.len() > 4096 {
@@ -442,10 +453,13 @@ pub fn do_execve(
         );
     }
 
-    // Update PCB with new address space.
-    pcb.cr3.store(elf_result.cr3, Ordering::Release);
-    pcb.address_space
-        .store(elf_result.addr_space_ptr, Ordering::Release);
+    // Update PCB with new address space while serializing against remote AS pins.
+    {
+        let _as_guard = pcb.as_lock.lock();
+        pcb.cr3.store(elf_result.cr3, Ordering::Release);
+        pcb.address_space
+            .store(elf_result.addr_space_ptr, Ordering::Release);
+    }
     pcb.signal_tcb_vaddr
         .store(elf_result.signal_tcb_vaddr, Ordering::Release);
     pcb.brk_start.store(elf_result.brk_start, Ordering::Release);
@@ -462,6 +476,12 @@ pub fn do_execve(
     );
 
     if old_as_ptr != 0 && old_as_ptr != elf_result.addr_space_ptr && !old_as_is_vfork_shared {
+        // SAFETY: `old_as_ptr` has not yet been freed and no new borrower can acquire it
+        // after `pcb.address_space` was updated under `pcb.as_lock`.
+        unsafe {
+            (*(old_as_ptr as *const crate::memory::virt::UserAddressSpace))
+                .wait_remote_unpinned();
+        }
         crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER.free_addr_space(old_as_ptr);
     }
 

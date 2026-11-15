@@ -4,7 +4,7 @@
 // Layer 0 — no external dependency except `spin`.
 
 use super::descriptor::{VmaDescriptor, VmaFlags};
-use crate::memory::core::{AllocError, Frame, PageFlags, PAGE_SIZE};
+use crate::memory::core::{AllocError, Frame, PAGE_SIZE};
 use crate::memory::physical::frame::ref_count::{AtomicRefCount, RefCountDecResult};
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -137,7 +137,6 @@ pub fn mark_vma_cow(vma: &mut VmaDescriptor) {
     // the descriptor flags — the table walk will be done by address_space::fork().
     if vma.flags.contains(VmaFlags::WRITE) && !vma.flags.contains(VmaFlags::SHARED) {
         vma.flags |= VmaFlags::COW;
-        vma.page_flags = vma.page_flags & !PageFlags::WRITABLE | PageFlags::COW;
     }
     COW_STATS
         .shared_pages

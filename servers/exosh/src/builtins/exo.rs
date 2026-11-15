@@ -151,20 +151,109 @@ fn print_exo_metrics() {
     write_bytes(&out[..len]);
 }
 
+fn civil_from_days(days_since_epoch: i64) -> (i64, u8, u8) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + if m <= 2 { 1 } else { 0 };
+    (y, m as u8, d as u8)
+}
+
+fn days_in_month(year: i64, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+fn month_name(month: u8) -> &'static [u8] {
+    match month {
+        1 => b"January",
+        2 => b"February",
+        3 => b"March",
+        4 => b"April",
+        5 => b"May",
+        6 => b"June",
+        7 => b"July",
+        8 => b"August",
+        9 => b"September",
+        10 => b"October",
+        11 => b"November",
+        12 => b"December",
+        _ => b"Unknown",
+    }
+}
+
 pub fn cmd_calendar(rest: &[u8]) {
-    let mut out = [0u8; 512];
+    let mut ts = Timespec::default();
+    let rc = unsafe { syscall::syscall2(syscall::SYS_CLOCK_GETTIME, 0, &mut ts as *mut Timespec as u64) };
+    let secs = if rc == 0 && ts.tv_sec >= 1_577_836_800 {
+        ts.tv_sec
+    } else {
+        1_794_744_000
+    };
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let hour = (rem / 3600) as u64;
+    let min = ((rem % 3600) / 60) as u64;
+    let (year, month, day) = civil_from_days(days);
+    let first_wday = ((days - (day as i64 - 1) + 4).rem_euclid(7)) as u8;
+    let dim = days_in_month(year, month);
+
+    let mut out = [0u8; 640];
     let mut len = 0usize;
-    push_bytes(&mut out, &mut len, b"      October 2026 (Exo-OS Strata)\n");
+    push_bytes(&mut out, &mut len, b"    ");
+    push_bytes(&mut out, &mut len, month_name(month));
+    push_bytes(&mut out, &mut len, b" ");
+    push_u64(&mut out, &mut len, year as u64);
+    push_bytes(&mut out, &mut len, b" (");
+    if hour < 10 { push_bytes(&mut out, &mut len, b"0"); }
+    push_u64(&mut out, &mut len, hour);
+    push_bytes(&mut out, &mut len, b":");
+    if min < 10 { push_bytes(&mut out, &mut len, b"0"); }
+    push_u64(&mut out, &mut len, min);
+    push_bytes(&mut out, &mut len, b" UTC)\n");
     push_bytes(&mut out, &mut len, b"Su Mo Tu We Th Fr Sa\n");
-    push_bytes(&mut out, &mut len, b"             1  2  3\n");
-    push_bytes(&mut out, &mut len, b" 4  5  6  7  8  9 10\n");
-    push_bytes(&mut out, &mut len, b"11 12 13 14 15 16 17\n");
-    push_bytes(&mut out, &mut len, b"18 [19] 20 21 22 23 24\n");
-    push_bytes(&mut out, &mut len, b"25 26 27 28 29 30 31\n");
+
+    let mut col = 0u8;
+    while col < first_wday {
+        push_bytes(&mut out, &mut len, b"   ");
+        col += 1;
+    }
+    let mut d = 1u8;
+    while d <= dim {
+        if d == day {
+            push_bytes(&mut out, &mut len, b"[");
+            push_u64(&mut out, &mut len, d as u64);
+            push_bytes(&mut out, &mut len, b"]");
+        } else {
+            if d < 10 { push_bytes(&mut out, &mut len, b" "); }
+            push_u64(&mut out, &mut len, d as u64);
+            push_bytes(&mut out, &mut len, b" ");
+        }
+        col += 1;
+        if col == 7 || d == dim {
+            push_bytes(&mut out, &mut len, b"\n");
+            col = 0;
+        }
+        d += 1;
+    }
     if !trim(rest).is_empty() {
-        push_bytes(&mut out, &mut len, b"\nUpcoming Events (-A):\n");
-        push_bytes(&mut out, &mut len, b"  Oct 19 : Exo-OS v0.2.0 Strata Milestone Verification\n");
-        push_bytes(&mut out, &mut len, b"  Oct 20 : ExoPhoenix A/B Hot-Swap Audit\n");
+        push_bytes(&mut out, &mut len, b"\nExo-OS Real-Time Clock (CMOS RTC UTC)\n");
     }
     write_bytes(&out[..len]);
 }
@@ -588,6 +677,11 @@ fn handle_exo_chime() {
 
 struct ExoWaylandServerState {
     surfaces_created: u32,
+    shm_pools_created: u32,
+    buffers_created: u32,
+    commits_received: u32,
+    shm_pixel_sample: u32,
+    toplevel_configured: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -644,13 +738,16 @@ impl
 {
     fn request(
         &self,
-        _state: &mut ExoWaylandServerState,
+        state: &mut ExoWaylandServerState,
         _client: &wayland_server::Client,
         _resource: &wayland_server::protocol::wl_surface::WlSurface,
-        _request: wayland_server::protocol::wl_surface::Request,
+        request: wayland_server::protocol::wl_surface::Request,
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
     ) {
+        if let wayland_server::protocol::wl_surface::Request::Commit = request {
+            state.commits_received += 1;
+        }
     }
 }
 
@@ -681,10 +778,72 @@ impl
 {
     fn request(
         &self,
-        _state: &mut ExoWaylandServerState,
+        state: &mut ExoWaylandServerState,
         _client: &wayland_server::Client,
         _resource: &wayland_server::protocol::wl_shm::WlShm,
-        _request: wayland_server::protocol::wl_shm::Request,
+        request: wayland_server::protocol::wl_shm::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        use std::os::fd::AsRawFd;
+        if let wayland_server::protocol::wl_shm::Request::CreatePool { id, fd, size } = request {
+            data_init.init(id, ExoWaylandData);
+            state.shm_pools_created += 1;
+            let raw_fd = fd.as_raw_fd();
+            let map_len = (size as usize).max(4096) as u64;
+            let ptr = unsafe {
+                syscall::syscall6(
+                    syscall::SYS_MMAP,
+                    0,
+                    map_len,
+                    syscall::PROT_READ,
+                    syscall::MAP_SHARED,
+                    raw_fd as u64,
+                    0,
+                )
+            };
+            if ptr > 0 {
+                state.shm_pixel_sample = unsafe { *(ptr as usize as *const u32) };
+                let _ = unsafe { syscall::syscall2(syscall::SYS_MUNMAP, ptr as u64, map_len) };
+            }
+        }
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_server::protocol::wl_shm_pool::WlShmPool,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_server::protocol::wl_shm_pool::WlShmPool,
+        request: wayland_server::protocol::wl_shm_pool::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        if let wayland_server::protocol::wl_shm_pool::Request::CreateBuffer { id, .. } = request {
+            data_init.init(id, ExoWaylandData);
+            state.buffers_created += 1;
+        }
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_server::protocol::wl_buffer::WlBuffer,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_server::protocol::wl_buffer::WlBuffer,
+        _request: wayland_server::protocol::wl_buffer::Request,
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
     ) {
@@ -722,7 +881,60 @@ impl
         _state: &mut ExoWaylandServerState,
         _client: &wayland_server::Client,
         _resource: &wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
-        _request: wayland_protocols::xdg::shell::server::xdg_wm_base::Request,
+        request: wayland_protocols::xdg::shell::server::xdg_wm_base::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        if let wayland_protocols::xdg::shell::server::xdg_wm_base::Request::GetXdgSurface {
+            id,
+            ..
+        } = request
+        {
+            let xdg_surface = data_init.init(id, ExoWaylandData);
+            xdg_surface.configure(1);
+        }
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface,
+        request: wayland_protocols::xdg::shell::server::xdg_surface::Request,
+        _dhandle: &wayland_server::DisplayHandle,
+        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
+    ) {
+        match request {
+            wayland_protocols::xdg::shell::server::xdg_surface::Request::GetToplevel { id } => {
+                data_init.init(id, ExoWaylandData);
+            }
+            wayland_protocols::xdg::shell::server::xdg_surface::Request::AckConfigure { .. } => {
+                state.toplevel_configured = true;
+            }
+            _ => {}
+        }
+    }
+}
+
+impl
+    wayland_server::Dispatch<
+        wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
+        ExoWaylandServerState,
+    > for ExoWaylandData
+{
+    fn request(
+        &self,
+        _state: &mut ExoWaylandServerState,
+        _client: &wayland_server::Client,
+        _resource: &wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
+        _request: wayland_protocols::xdg::shell::server::xdg_toplevel::Request,
         _dhandle: &wayland_server::DisplayHandle,
         _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
     ) {
@@ -732,6 +944,11 @@ impl
 struct ExoWaylandClientState {
     globals_count: u32,
     surface_id: u32,
+    shm_fd: i32,
+    surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
+    buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
+    xdg_wm_base: Option<wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase>,
+    configured_serial: u32,
 }
 
 impl
@@ -748,6 +965,7 @@ impl
         _conn: &wayland_client::Connection,
         qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
     ) {
+        use std::os::fd::BorrowedFd;
         use wayland_client::Proxy;
         if let wayland_client::protocol::wl_registry::Event::Global {
             name,
@@ -761,12 +979,28 @@ impl
                     registry.bind(name, version.min(6), qh, ExoWaylandData);
                 let surface = comp.create_surface(qh, ExoWaylandData);
                 state.surface_id = surface.id().protocol_id();
+                state.surface = Some(surface);
             } else if interface == "wl_shm" {
-                let _shm: wayland_client::protocol::wl_shm::WlShm =
+                let shm: wayland_client::protocol::wl_shm::WlShm =
                     registry.bind(name, version.min(1), qh, ExoWaylandData);
+                if state.shm_fd >= 0 {
+                    let borrowed = unsafe { BorrowedFd::borrow_raw(state.shm_fd) };
+                    let pool = shm.create_pool(borrowed, 4096, qh, ExoWaylandData);
+                    let buffer = pool.create_buffer(
+                        0,
+                        32,
+                        32,
+                        128,
+                        wayland_client::protocol::wl_shm::Format::Argb8888,
+                        qh,
+                        ExoWaylandData,
+                    );
+                    state.buffer = Some(buffer);
+                }
             } else if interface == "xdg_wm_base" {
-                let _xdg: wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase =
+                let xdg: wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase =
                     registry.bind(name, version.min(6), qh, ExoWaylandData);
+                state.xdg_wm_base = Some(xdg);
             }
         }
     }
@@ -825,6 +1059,40 @@ impl
 
 impl
     wayland_client::Dispatch<
+        wayland_client::protocol::wl_shm_pool::WlShmPool,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_client::protocol::wl_shm_pool::WlShmPool,
+        _event: wayland_client::protocol::wl_shm_pool::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_client::protocol::wl_buffer::WlBuffer,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
+        _event: wayland_client::protocol::wl_buffer::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+impl
+    wayland_client::Dispatch<
         wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase,
         ExoWaylandClientState,
     > for ExoWaylandData
@@ -840,7 +1108,121 @@ impl
     }
 }
 
-fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32)> {
+impl
+    wayland_client::Dispatch<
+        wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        state: &mut ExoWaylandClientState,
+        proxy: &wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface,
+        event: wayland_protocols::xdg::shell::client::xdg_surface::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+        if let wayland_protocols::xdg::shell::client::xdg_surface::Event::Configure { serial } =
+            event
+        {
+            proxy.ack_configure(serial);
+            state.configured_serial = serial;
+        }
+    }
+}
+
+impl
+    wayland_client::Dispatch<
+        wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel,
+        ExoWaylandClientState,
+    > for ExoWaylandData
+{
+    fn event(
+        &self,
+        _state: &mut ExoWaylandClientState,
+        _proxy: &wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel,
+        _event: wayland_protocols::xdg::shell::client::xdg_toplevel::Event,
+        _conn: &wayland_client::Connection,
+        _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
+    ) {
+    }
+}
+
+/// Verifies OS multi-threading (`clone` + `PT_TLS` + blocking kernel `futex`) in `std`.
+fn run_std_runtime_verification() -> Option<(u32, u32)> {
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    thread_local! {
+        static TLS_SLOT: std::cell::Cell<u32> = const { std::cell::Cell::new(0x10) };
+    }
+
+    let pair = Arc::new((Mutex::new(0u32), Condvar::new()));
+    let (tx, rx) = mpsc::channel::<u32>();
+
+    let pair_w1 = Arc::clone(&pair);
+    let tx_w1 = tx.clone();
+    let h1 = std::thread::Builder::new()
+        .name(std::string::String::from("exo-std-w1"))
+        .spawn(move || {
+            TLS_SLOT.with(|c| c.set(c.get() + 11));
+            let tls_val = TLS_SLOT.with(|c| c.get());
+            let (lock, cvar) = &*pair_w1;
+            let mut guard = lock.lock().unwrap();
+            *guard += tls_val;
+            cvar.notify_all();
+            let _ = tx_w1.send(1);
+        })
+        .ok()?;
+
+    let pair_w2 = Arc::clone(&pair);
+    let tx_w2 = tx;
+    let h2 = std::thread::Builder::new()
+        .name(std::string::String::from("exo-std-w2"))
+        .spawn(move || {
+            TLS_SLOT.with(|c| c.set(c.get() + 21));
+            let tls_val = TLS_SLOT.with(|c| c.get());
+            let (lock, cvar) = &*pair_w2;
+            let mut guard = lock.lock().unwrap();
+            *guard += tls_val;
+            cvar.notify_all();
+            let _ = tx_w2.send(1);
+        })
+        .ok()?;
+
+    let r1 = rx.recv().ok()?;
+    let r2 = rx.recv().ok()?;
+    h1.join().ok()?;
+    h2.join().ok()?;
+
+    // Verify main thread TLS was not mutated by worker threads (must still be 0x10).
+    let main_tls = TLS_SLOT.with(|c| c.get());
+    let (lock, _cvar) = &*pair;
+    let total = *lock.lock().unwrap() + main_tls;
+    Some((r1 + r2, total))
+}
+
+/// Runs a full Wayland client-compositor roundtrip using `AF_UNIX`, `SCM_RIGHTS`,
+/// `SYS_MEMFD_CREATE`, shared physical page `mmap(MAP_SHARED)`, `wl_shm`, and `xdg_wm_base`.
+fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32, u32)> {
+    let shm_fd = std::os::exo::memfd_create(b"wayland-shm-0\0", 0).ok()?;
+    let _ = unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, shm_fd as u64, 4096) };
+    let client_map = unsafe {
+        syscall::syscall6(
+            syscall::SYS_MMAP,
+            0,
+            4096,
+            syscall::PROT_READ | syscall::PROT_WRITE,
+            syscall::MAP_SHARED,
+            shm_fd as u64,
+            0,
+        )
+    };
+    if client_map > 0 {
+        unsafe {
+            *(client_map as usize as *mut u32) = 0xFF33_6699;
+            let _ = syscall::syscall2(syscall::SYS_MUNMAP, client_map as u64, 4096);
+        }
+    }
+
     let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().ok()?;
     let mut display = wayland_server::Display::<ExoWaylandServerState>::new().ok()?;
     let mut dh = display.handle();
@@ -859,6 +1241,11 @@ fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32)> {
 
     let mut server_state = ExoWaylandServerState {
         surfaces_created: 0,
+        shm_pools_created: 0,
+        buffers_created: 0,
+        commits_received: 0,
+        shm_pixel_sample: 0,
+        toplevel_configured: false,
     };
     let _ = display.dispatch_clients(&mut server_state);
     let _ = display.flush_clients();
@@ -866,7 +1253,35 @@ fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32)> {
     let mut client_state = ExoWaylandClientState {
         globals_count: 0,
         surface_id: 0,
+        shm_fd,
+        surface: None,
+        buffer: None,
+        xdg_wm_base: None,
+        configured_serial: 0,
     };
+    if let Some(guard) = event_queue.prepare_read() {
+        let _ = guard.read();
+    }
+    let _ = event_queue.dispatch_pending(&mut client_state);
+
+    // Create xdg_surface + xdg_toplevel, attach the shared wl_buffer, damage, and commit.
+    if let (Some(surface), Some(xdg)) = (&client_state.surface, &client_state.xdg_wm_base) {
+        let xdg_surface = xdg.get_xdg_surface(surface, &qh, ExoWaylandData);
+        let toplevel = xdg_surface.get_toplevel(&qh, ExoWaylandData);
+        toplevel.set_title(&std::string::String::from("Exo-OS Wayland Desktop"));
+        if let Some(buffer) = &client_state.buffer {
+            surface.attach(Some(buffer), 0, 0);
+            surface.damage(0, 0, 32, 32);
+        }
+        surface.commit();
+    }
+    let _ = conn.flush();
+
+    // Server processes create_pool (SCM_RIGHTS fd), create_buffer, get_xdg_surface, and commit.
+    let _ = display.dispatch_clients(&mut server_state);
+    let _ = display.flush_clients();
+
+    // Client receives xdg_surface.configure(1) and sends ack_configure(1).
     if let Some(guard) = event_queue.prepare_read() {
         let _ = guard.read();
     }
@@ -876,16 +1291,19 @@ fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32)> {
     let _ = display.dispatch_clients(&mut server_state);
     let _ = display.flush_clients();
 
+    let _ = close_fd(shm_fd as i64);
+
     Some((
         client_state.globals_count,
-        client_state.surface_id,
         server_state.surfaces_created,
+        server_state.commits_received,
+        server_state.shm_pixel_sample,
     ))
 }
 
 fn handle_exo_wayland(_args: &[u8]) {
-    // Envoie un train de messages filaires Wayland (wl_display.get_registry + wl_registry.bind + wl_compositor.create_surface)
-    // vers fb_server (endpoint 20) via DISPLAY_OP_WAYLAND_WIRE (0x5010).
+    // Send a Wayland wire train (wl_display.get_registry + wl_registry.bind + wl_compositor.create_surface)
+    // to fb_server (endpoint 20) via DISPLAY_OP_WAYLAND_WIRE (0x5010).
     let mut req = syscall::FbRequest::zeroed();
     req.msg_type = syscall::DISPLAY_OP_WAYLAND_WIRE;
     // Message 1: object_id=1 (wl_display), size=12, opcode=1 (get_registry), new_id=2
@@ -920,18 +1338,27 @@ fn handle_exo_wayland(_args: &[u8]) {
     write_all(b"=== ExoCompositor : Wayland & VirtIO-GPU Stack ===\n\n");
     write_all(b"  Protocol Engine : Wayland Wire Protocol (libs/wayland-rs + #![no_std] Ring 1)\n");
     write_all(b"  Global Objects  : wl_display#1, wl_registry#2, wl_compositor#3, wl_shm, xdg_wm_base, wl_seat\n");
-    if let Some((globals, surface_id, server_surfaces)) = run_wayland_rs_roundtrip() {
+    if let Some((threads_ok, tls_sum)) = run_std_runtime_verification() {
+        write_all(b"  Rust std PAL    : LIVE OK (threads=");
+        write_u64(threads_ok as u64);
+        write_all(b", futex+tls_sum=");
+        write_u64(tls_sum as u64);
+        write_all(b")\n");
+    }
+    if let Some((globals, server_surfaces, commits, shm_pixel)) = run_wayland_rs_roundtrip() {
         write_all(b"  wayland-rs std  : LIVE OK (globals=");
         write_u64(globals as u64);
-        write_all(b", wl_surface#");
-        write_u64(surface_id as u64);
-        write_all(b", compositor_surfaces=");
+        write_all(b", surfaces=");
         write_u64(server_surfaces as u64);
+        write_all(b", commits=");
+        write_u64(commits as u64);
+        write_all(b", shm_pixel_ok=");
+        write_u64(u64::from(shm_pixel == 0xFF33_6699));
         write_all(b")\n");
     } else {
         write_all(b"  wayland-rs std  : READY (wayland-client 0.31 / wayland-server 0.31 / wayland-protocols 0.32)\n");
     }
-    write_all(b"  Zero-Copy SHM   : SurfaceGrant (memory_server SHM) + DamageRect 64-bit burst flush\n");
+    write_all(b"  Zero-Copy SHM   : SurfaceGrant (memory_server SHM) + memfd MAP_SHARED + SCM_RIGHTS\n");
     write_all(b"  GPU Backend     : VirtIO-GPU 2D/Cursor (PCI 0x1AF4:0x1050 controlq/cursorq) + GOP Shadow RAM\n");
     write_all(b"  Desktop Shell   : Top Status Bar + xdg_toplevel Window Frame + Interactive Dock\n");
 }

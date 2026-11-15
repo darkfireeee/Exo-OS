@@ -1,37 +1,37 @@
-//! exoar_format.rs — Format binaire d'archive ExoAR (no_std, ExoFS-native).
+//! exoar_format.rs — ExoAR binary archive format (no_std, ExoFS-native).
 //!
-//! Structure sur disque :
-//!   ExoarHeader   (128 bytes) — en-tête global de l'archive
-//!   [ ExoarEntryHeader (96 bytes) + payload bytes ] × N entrées
-//!   ExoarFooter   (32 bytes) — magic fin + CRC32 global + compteur
+//! On-disk structure:
+//!   ExoarHeader   (128 bytes) — global archive header
+//!   [ ExoarEntryHeader (96 bytes) + payload bytes ] x N entries
+//!   ExoarFooter   (32 bytes) — end magic + global CRC32 + counter
 //!
-//! RÈGLE 8  : le magic est validé EN PREMIER dans toute lecture.
-//! RÈGLE 11 : BlobId = blake3(données brutes AVANT compression/chiffrement).
-//! ARITH-02 : saturating_* / checked_* sur tous les compteurs.
-//! RECUR-01 : pas de récursion.
+//! RULE 8 : magic is validated FIRST in any read.
+//! RULE 11: BlobId = blake3(raw data BEFORE compression/encryption).
+//! ARITH-02: saturating_* / checked_* on all counters.
+//! RECUR-01: no recursion.
 
 use core::mem::size_of;
 
-// ─── Constantes magiques ─────────────────────────────────────────────────────
-/// Magic d'en-tête ExoAR : "EXOAR_AR" en little-endian.
+// ─── Magic constants ─────────────────────────────────────────────────────
+/// ExoAR header magic: "EXOAR_AR" in little-endian.
 pub const EXOAR_MAGIC: u64 = 0x4558_4F41_525F_4152;
 
-/// Magic d'entrée blob : "EXEN" en LE.
+/// Blob entry magic: "EXEN" in LE.
 pub const EXOAR_ENTRY_MAGIC: u32 = 0x4558_454E;
 
-/// Magic de footer : "EXEO" en LE.
+/// Footer magic: "EXEO" in LE.
 pub const EXOAR_FOOTER_MAGIC: u32 = 0x4558_454F;
 
-/// Version courante du format ExoAR.
+/// Current version of ExoAR format.
 pub const EXOAR_VERSION: u16 = 2;
 
-/// Taille minimale d'une archive valide (header + footer seuls).
+/// Minimum size of a valid archive (header + footer alone).
 pub const EXOAR_MIN_SIZE: usize = size_of::<ExoarHeader>() + size_of::<ExoarFooter>();
 
-/// Nombre maximal d'entrées dans une archive ExoAR.
+/// Maximum number of entries in an ExoAR archive.
 pub const EXOAR_MAX_ENTRIES: u32 = 0x0010_0000;
 
-/// Taille maximale d'un payload d'entrée (256 MiB).
+/// Maximum entry payload size (256 MiB).
 pub const EXOAR_MAX_PAYLOAD: u64 = 256 * 1024 * 1024;
 
 #[inline]
@@ -40,22 +40,22 @@ fn pod_to_array<T: Copy, const N: usize>(value: &T) -> [u8; N] {
     if size_of::<T>() != N {
         return out;
     }
-    // SAFETY: `out` a exactement la taille de `T`; copie byte-à-byte sans
-    // fabriquer de référence typée aliasée.
+    // SAFETY: `out` has exactly the size of `T`; byte-by-byte copy without
+    // constructing an aliased typed reference.
     unsafe {
         core::ptr::copy_nonoverlapping(value as *const T as *const u8, out.as_mut_ptr(), N);
     }
     out
 }
 
-// ─── Flags d'archive ─────────────────────────────────────────────────────────
+// ─── Archive flags ─────────────────────────────────────────────────────────
 pub const ARCHIVE_FLAG_INCREMENTAL: u32 = 0x0001;
 pub const ARCHIVE_FLAG_VERIFIED: u32 = 0x0002;
 pub const ARCHIVE_FLAG_COMPRESSED: u32 = 0x0004;
 pub const ARCHIVE_FLAG_ENCRYPTED: u32 = 0x0008;
 pub const ARCHIVE_FLAG_SNAPSHOT: u32 = 0x0010;
 
-// ─── Flags d'entrée ──────────────────────────────────────────────────────────
+// ─── Entry flags ──────────────────────────────────────────────────────────
 pub const ENTRY_FLAG_COMPRESSED: u8 = 0x01;
 pub const ENTRY_FLAG_ENCRYPTED: u8 = 0x02;
 pub const ENTRY_FLAG_TOMBSTONE: u8 = 0x04;
@@ -64,24 +64,24 @@ pub const ENTRY_FLAG_DIRECTORY: u8 = 0x10;
 pub const ENTRY_FLAG_VERIFIED: u8 = 0x20;
 pub const ENTRY_FLAG_FOREIGN: u8 = 0x40;
 
-// ─── Algorithmes de compression ──────────────────────────────────────────────
+// ─── Compression algorithms ──────────────────────────────────────────────
 pub const COMPRESS_NONE: u8 = 0;
 pub const COMPRESS_LZ4: u8 = 1;
 pub const COMPRESS_ZSTD: u8 = 2;
 pub const COMPRESS_SNAPPY: u8 = 3;
 
-// ─── Algorithmes de chiffrement ──────────────────────────────────────────────
+// ─── Cipher algorithms ──────────────────────────────────────────────
 pub const CIPHER_NONE: u8 = 0;
 pub const CIPHER_AES256GCM: u8 = 1;
 pub const CIPHER_CHACHA20: u8 = 2;
 
-// ─── Structures binaires ─────────────────────────────────────────────────────
+// ─── Binary structures ─────────────────────────────────────────────────────
 
-/// En-tête global de l'archive ExoAR (128 bytes, packed).
+/// Global ExoAR archive header (128 bytes, packed).
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct ExoarHeader {
-    /// Magic validé EN PREMIER — RÈGLE 8.
+    /// Magic validated FIRST — RULE 8.
     pub magic: u64,
     pub version: u16,
     pub flags: u32,
@@ -102,7 +102,7 @@ const _HEADER_SIZE: () = assert!(
 );
 
 impl ExoarHeader {
-    /// Crée un en-tête valide avec magic et version.
+    /// Creates a valid header with magic and version.
     pub const fn new(flags: u32, epoch_base: u64, epoch_target: u64) -> Self {
         Self {
             magic: EXOAR_MAGIC,
@@ -120,23 +120,23 @@ impl ExoarHeader {
         }
     }
 
-    /// Valide le magic — RÈGLE 8 : EN PREMIER.
+    /// Validates magic — RULE 8: FIRST.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let m: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_MAGIC
     }
 
-    /// Valide la version du format (1 ≤ version ≤ EXOAR_VERSION).
+    /// Validates format version (1 <= version <= EXOAR_VERSION).
     #[inline]
     pub fn validate_version(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let v: u16 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.version)) };
         v >= 1 && v <= EXOAR_VERSION
     }
 
-    /// Validation complète : magic + version + entry_count.
+    /// Complete validation: magic + version + entry_count.
     pub fn validate(&self) -> bool {
         if !self.validate_magic() {
             return false;
@@ -144,30 +144,30 @@ impl ExoarHeader {
         if !self.validate_version() {
             return false;
         }
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec <= EXOAR_MAX_ENTRIES
     }
 
-    /// Retourne true si l'archive est incrémentale.
+    /// Returns true if archive is incremental.
     #[inline]
     pub fn is_incremental(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let f: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.flags)) };
         f & ARCHIVE_FLAG_INCREMENTAL != 0
     }
 
-    /// Sérialise en octets.
+    /// Serializes to bytes.
     pub fn as_bytes(&self) -> [u8; 128] {
         pod_to_array::<Self, 128>(self)
     }
 
-    /// Désérialise depuis un slice de bytes (magic EN PREMIER).
+    /// Deserializes from a byte slice (magic FIRST).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < size_of::<Self>() {
             return None;
         }
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by preconditions of caller.
         let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         if !hdr.validate_magic() {
             return None;
@@ -176,15 +176,15 @@ impl ExoarHeader {
     }
 }
 
-/// En-tête d'une entrée blob (96 bytes, packed).
+/// Blob entry header (96 bytes, packed).
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct ExoarEntryHeader {
-    /// Magic validé EN PREMIER — RÈGLE 8.
+    /// Magic validated FIRST — RULE 8.
     pub magic: u32,
     pub flags: u8,
     pub compress_algo: u8,
-    /// BlobId = blake3(données brutes) — RÈGLE 11.
+    /// BlobId = blake3(raw data) — RULE 11.
     pub blob_id: [u8; 32],
     pub payload_size: u64,
     pub original_size: u64,
@@ -200,7 +200,7 @@ const _ENTRY_SIZE: () = assert!(
 );
 
 impl ExoarEntryHeader {
-    /// Crée un en-tête d'entrée valide avec magic.
+    /// Creates a valid entry header with magic.
     pub fn new(blob_id: [u8; 32], payload_size: u64, original_size: u64) -> Self {
         Self {
             magic: EXOAR_ENTRY_MAGIC,
@@ -216,18 +216,18 @@ impl ExoarEntryHeader {
         }
     }
 
-    /// Valide le magic — RÈGLE 8.
+    /// Validates magic — RULE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_ENTRY_MAGIC
     }
 
-    /// Valide la taille payload ≤ EXOAR_MAX_PAYLOAD.
+    /// Validates payload size <= EXOAR_MAX_PAYLOAD.
     #[inline]
     pub fn validate_size(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.payload_size)) };
         ps <= EXOAR_MAX_PAYLOAD
     }
@@ -253,17 +253,17 @@ impl ExoarEntryHeader {
         self.flags & ENTRY_FLAG_HARDLINK != 0
     }
 
-    /// Sérialise en octets.
+    /// Serializes to bytes.
     pub fn as_bytes(&self) -> [u8; 96] {
         pod_to_array::<Self, 96>(self)
     }
 
-    /// Désérialise depuis un slice (RÈGLE 8 : magic EN PREMIER).
+    /// Deserializes from a slice (RULE 8: magic FIRST).
     pub fn from_bytes(buf: &[u8]) -> Option<Self> {
         if buf.len() < size_of::<Self>() {
             return None;
         }
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by preconditions of caller.
         let hdr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         if !hdr.validate_magic() {
             return None;
@@ -275,11 +275,11 @@ impl ExoarEntryHeader {
     }
 }
 
-/// Footer de l'archive ExoAR (32 bytes, packed).
+/// ExoAR archive footer (32 bytes, packed).
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub struct ExoarFooter {
-    /// Magic validé EN PREMIER — RÈGLE 8.
+    /// Magic validated FIRST — RULE 8.
     pub magic: u32,
     pub entry_count: u32,
     pub global_crc32: u32,
@@ -305,10 +305,10 @@ impl ExoarFooter {
         }
     }
 
-    /// Valide le magic — RÈGLE 8.
+    /// Validates magic — RULE 8.
     #[inline]
     pub fn validate_magic(&self) -> bool {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let m: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.magic)) };
         m == EXOAR_FOOTER_MAGIC
     }
@@ -317,7 +317,7 @@ impl ExoarFooter {
         if !self.validate_magic() {
             return false;
         }
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let ec: u32 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.entry_count)) };
         ec == expected_entries
     }
@@ -330,7 +330,7 @@ impl ExoarFooter {
         if buf.len() < size_of::<Self>() {
             return None;
         }
-        // SAFETY: invariant de sécurité vérifié par les préconditions de la fonction appelante.
+        // SAFETY: safety invariant verified by preconditions of caller.
         let ftr: Self = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const Self) };
         if !ftr.validate_magic() {
             return None;
@@ -339,7 +339,7 @@ impl ExoarFooter {
     }
 }
 
-/// Résumé de statistiques d'une archive ExoAR.
+/// Statistics summary of an ExoAR archive.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExoarSummary {
     pub entry_count: u32,
@@ -366,7 +366,7 @@ impl ExoarSummary {
         }
     }
 
-    /// Enregistre une entrée dans le résumé.
+    /// Records an entry into summary.
     pub fn record_entry(&mut self, hdr: &ExoarEntryHeader, crc_ok: bool) {
         self.entry_count = self.entry_count.saturating_add(1);
         if hdr.is_tombstone() {
@@ -378,9 +378,9 @@ impl ExoarSummary {
         if hdr.is_encrypted() {
             self.encrypted_count = self.encrypted_count.saturating_add(1);
         }
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let ps: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let os: u64 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
         self.total_payload_bytes = self.total_payload_bytes.saturating_add(ps);
         self.total_original_bytes = self.total_original_bytes.saturating_add(os);
@@ -389,7 +389,7 @@ impl ExoarSummary {
         }
     }
 
-    /// Ratio de compression en pourcentage × 10 (évite le float). Ex: 650 = 65.0%.
+    /// Compression ratio as percentage x 10 (avoids float). E.g.: 650 = 65.0%.
     pub fn compression_ratio_pct10(&self) -> u32 {
         if self.total_original_bytes == 0 {
             return 1000;
@@ -411,7 +411,7 @@ impl ExoarSummary {
     }
 }
 
-/// Type d'une entrée ExoAR, dérivé de ses flags.
+/// ExoAR entry kind, derived from its flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExoarEntryKind {
     Blob,
@@ -439,7 +439,7 @@ impl ExoarEntryKind {
     }
 }
 
-/// Informations d'une entrée ExoAR après parsing.
+/// ExoAR entry information after parsing.
 #[derive(Clone, Copy, Debug)]
 pub struct ExoarEntryInfo {
     pub kind: ExoarEntryKind,
@@ -453,16 +453,16 @@ pub struct ExoarEntryInfo {
 
 impl ExoarEntryInfo {
     pub fn from_entry_header(hdr: &ExoarEntryHeader) -> Self {
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let payload_size =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_size)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let original_size =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.original_size)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let declared_crc32 =
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.payload_crc32)) };
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         let epoch = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(hdr.epoch)) };
         Self {
             kind: ExoarEntryKind::from_flags(hdr.flags),
@@ -483,7 +483,7 @@ impl ExoarEntryInfo {
 
 // ─── CRC32C (Castagnoli) ─────────────────────────────────────────────────────
 
-/// Table de CRC32C précalculée à la compilation.
+/// CRC32C table precalculated at compile time.
 const CRC32C_TABLE: [u32; 256] = {
     let mut table = [0u32; 256];
     let mut i = 0usize;
@@ -504,7 +504,7 @@ const CRC32C_TABLE: [u32; 256] = {
     table
 };
 
-/// Met à jour un CRC32C avec des données supplémentaires (RECUR-01 : boucle while).
+/// Updates a CRC32C with additional data (RECUR-01: while loop).
 pub fn crc32c_update(mut crc: u32, data: &[u8]) -> u32 {
     crc = !crc;
     let mut i = 0usize;
@@ -647,7 +647,7 @@ mod tests {
         let bytes = hdr.as_bytes();
         let parsed = ExoarEntryHeader::from_bytes(&bytes).test_expect("parse ok");
         assert_eq!(parsed.blob_id, blob_id);
-        // SAFETY: tampon de longueur suffisante, vérifié avant appel, repr(C).
+        // SAFETY: buffer of sufficient length, verified before call, repr(C).
         assert_eq!(
             unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(parsed.payload_size)) },
             256u64

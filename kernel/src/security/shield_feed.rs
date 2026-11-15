@@ -146,6 +146,14 @@ pub fn push_event(pid: u32, event_type: u8, severity: u8, opcode: u32, arg0: u64
 /// Drains up to `out.len()` events into `out`. Returns the number of copied items.
 /// Called by drain syscall (exo_shield server).
 pub fn drain(out: &mut [ShieldEvent]) -> usize {
+    let n = peek(out);
+    advance(n);
+    n
+}
+
+/// Peeks up to `out.len()` events into `out` without advancing the tail.
+/// Pair with `advance(n)` once the caller finishes delivering them to userspace.
+pub fn peek(out: &mut [ShieldEvent]) -> usize {
     if out.is_empty() {
         return 0;
     }
@@ -158,8 +166,20 @@ pub fn drain(out: &mut [ShieldEvent]) -> usize {
         tail = tail.wrapping_add(1);
         n += 1;
     }
-    TAIL.store(tail, Ordering::Release);
     n
+}
+
+/// Advances the drain tail by up to `count` already-peeked events.
+pub fn advance(count: usize) {
+    if count == 0 {
+        return;
+    }
+    let _ring = RING.lock();
+    let head = HEAD.load(Ordering::Acquire);
+    let tail = TAIL.load(Ordering::Relaxed);
+    let avail = head.wrapping_sub(tail);
+    let step = count.min(avail);
+    TAIL.store(tail.wrapping_add(step), Ordering::Release);
 }
 
 /// Feed statistics snapshot.

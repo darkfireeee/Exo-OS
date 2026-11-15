@@ -1,16 +1,16 @@
-//! audit_log.rs — Ring-buffer lock-free pour le journal d'audit ExoFS (no_std).
+//! audit_log.rs — Lock-free ring-buffer for the ExoFS audit log (no_std).
 //!
-//! Ring-buffer de 65 536 entrées fixes en production.
-//! Sous `#[cfg(test)]`, la capacité est réduite pour éviter d'allouer plusieurs
-//! mégaoctets sur la pile des threads de test.
-//! Les écritures sont lock-free via `fetch_add` atomique.
-//! Les lectures sont diagnostiques (pas de garantie stricte de cohérence
-//! en cas de lecture concurrente intense, acceptable pour l'audit).
+//! Fixed 65,536-entry ring-buffer in production.
+//! Under `#[cfg(test)]`, capacity is reduced to avoid allocating several
+//! megabytes on the test threads' stack.
+//! Writes are lock-free via atomic `fetch_add`.
+//! Reads are diagnostic (no strict consistency guarantee
+//! under intense concurrent reading, acceptable for audit).
 //!
-//! Règles :
-//!  - ONDISK-03 : pas d'AtomicU64 dans les structs repr(C)
-//!  - ARITH-02  : arithmetic overflow via wrapping
-//!  - RECUR-01  : zéro récursion
+//! Rules:
+//!  - ONDISK-03: no AtomicU64 in repr(C) structs
+//!  - ARITH-02: arithmetic overflow via wrapping
+//!  - RECUR-01: zero recursion
 
 use super::audit_entry::{AuditEntry, AuditResult, AuditSeverity, AUDIT_ENTRY_SIZE};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -19,24 +19,24 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::fs::exofs::test_support::TestUnwrapExt;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes du ring-buffer
+// Ring-buffer constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Nombre d'entrées dans le ring-buffer (puissance de 2 pour masquage rapide).
+/// Number of entries in the ring-buffer (power of 2 for fast masking).
 #[cfg(test)]
 pub const RING_SIZE: usize = 1024;
-/// Taille de production du journal d'audit.
+/// Production size of the audit log.
 #[cfg(not(test))]
 pub const RING_SIZE: usize = 65536;
 
-/// Masque pour le calcul de l'index mod RING_SIZE sans division.
+/// Mask for calculating the index mod RING_SIZE without division.
 const RING_MASK: usize = RING_SIZE - 1;
 
-/// Capacité mémoire du ring-buffer en octets.
+/// Memory capacity of the ring-buffer in bytes.
 pub const RING_CAPACITY_BYTES: usize = RING_SIZE * AUDIT_ENTRY_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUDIT_LOG — instance globale
+// AUDIT_LOG — global instance
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub static AUDIT_LOG: AuditLog = AuditLog::new_const();
@@ -45,11 +45,11 @@ pub static AUDIT_LOG: AuditLog = AuditLog::new_const();
 // AuditLog
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ring-buffer non-bloquant pour les entrées d'audit.
+/// Non-blocking ring-buffer for audit entries.
 ///
-/// - `head` : prochain indice d'écriture (toujours croissant).
-/// - `count`: nombre total d'entrées enregistrées depuis le démarrage.
-/// - `n_overwritten`: nombre d'entrées écrasées par wrap-around.
+/// - `head`: next write index (monotonically increasing).
+/// - `count`: total number of entries recorded since boot.
+/// - `n_overwritten`: number of entries overwritten by wrap-around.
 pub struct AuditLog {
     ring: [core::cell::UnsafeCell<AuditEntry>; RING_SIZE],
     head: AtomicU64,
@@ -60,11 +60,11 @@ pub struct AuditLog {
     n_errors: AtomicU64,
 }
 
-// SAFETY: accès au ring uniquement via `fetch_add` atomique sur `head`.
+// SAFETY: ring access exclusively via atomic `fetch_add` on `head`.
 unsafe impl Sync for AuditLog {}
 
 impl AuditLog {
-    /// Constructeur `const` pour usage en `static`.
+    /// `const` constructor for use in `static`.
     pub const fn new_const() -> Self {
         const ZERO_ENTRY: AuditEntry = AuditEntry {
             tick: 0,
@@ -92,13 +92,12 @@ impl AuditLog {
         }
     }
 
-    // ── Écriture ──────────────────────────────────────────────────────────────
+    // ── Writes ───────────────────────────────────────────────────────────────
 
-    /// Enregistre une entrée (lock-free).
+    /// Records an entry (lock-free).
     ///
-    /// `fetch_add` alloue un slot unique. Si le ring était plein, l'entrée
-    /// la plus ancienne est silencieusement écrasée et `n_overwritten` est
-    /// incrémenté.
+    /// `fetch_add` allocates a unique slot. If the ring was full, the oldest
+    /// entry is silently overwritten and `n_overwritten` is incremented.
     pub fn push(&self, mut entry: AuditEntry) {
         let seq = self.head.fetch_add(1, Ordering::Relaxed);
         let total = self.count.fetch_add(1, Ordering::Relaxed);
@@ -106,12 +105,12 @@ impl AuditLog {
 
         let idx = (seq as usize) & RING_MASK;
 
-        // Si le ring est plein, on va écraser une ancienne entrée.
+        // If the ring is full, an old entry will be overwritten.
         if total >= RING_SIZE as u64 {
             self.n_overwritten.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Mise à jour des compteurs de criticité.
+        // Update severity counters.
         if entry.is_security() {
             self.n_security.fetch_add(1, Ordering::Relaxed);
         }
@@ -125,25 +124,25 @@ impl AuditLog {
             self.n_errors.fetch_add(1, Ordering::Relaxed);
         }
 
-        // SAFETY: index unique via fetch_add + masquage ; pas de data race
-        // car chaque push écrit dans un slot différent (modulo RING_SIZE,
-        // l'écrasement est acceptable pour le journal d'audit).
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: unique index via fetch_add + masking; no data race
+        // because each push writes to a different slot (modulo RING_SIZE,
+        // overwriting is acceptable for the audit log).
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         unsafe {
             *self.ring[idx].get() = entry;
         }
     }
 
-    // ── Lecture ───────────────────────────────────────────────────────────────
+    // ── Reads ────────────────────────────────────────────────────────────────
 
-    /// Lit l'entrée à la position absolue `pos` (modulo RING_SIZE).
+    /// Reads the entry at absolute position `pos` (modulo RING_SIZE).
     pub fn read_at(&self, pos: usize) -> AuditEntry {
         let idx = pos & RING_MASK;
-        // SAFETY: lecture diagnostique, pas de garantie stricte.
+        // SAFETY: diagnostic read, no strict guarantee.
         unsafe { *self.ring[idx].get() }
     }
 
-    /// Lit l'entrée à l'indice courant (dernier écrit − 1).
+    /// Reads the entry at the current index (last written − 1).
     pub fn read_last(&self) -> Option<AuditEntry> {
         let h = self.head.load(Ordering::Relaxed);
         if h == 0 {
@@ -152,9 +151,9 @@ impl AuditLog {
         Some(self.read_at((h.wrapping_sub(1)) as usize))
     }
 
-    /// Copie les `n` dernières entrées dans `out` (lecture séquentielle).
-    /// `n` est borné à `RING_SIZE`.
-    /// Retourne le nombre d'entrées effectivement copiées.
+    /// Copies the `n` most recent entries into `out` (sequential read).
+    /// `n` is clamped to `RING_SIZE`.
+    /// Returns the number of entries actually copied.
     pub fn read_recent_into(&self, out: &mut [AuditEntry], n: usize) -> usize {
         let head = self.head.load(Ordering::Relaxed) as usize;
         let total = self.count.load(Ordering::Relaxed) as usize;
@@ -166,8 +165,8 @@ impl AuditLog {
         avail
     }
 
-    /// Itère sur toutes les entrées valides dans l'ordre chronologique
-    /// et appelle `f(entry)` pour chacune (itératif, RECUR-01).
+    /// Iterates over all valid entries in chronological order
+    /// and invokes `f(entry)` for each (iterative, RECUR-01).
     pub fn for_each<F>(&self, mut f: F)
     where
         F: FnMut(&AuditEntry),
@@ -184,44 +183,44 @@ impl AuditLog {
         }
     }
 
-    // ── Statistiques ──────────────────────────────────────────────────────────
+    // ── Statistics ───────────────────────────────────────────────────────────
 
-    /// Nombre total d'entrées enregistrées depuis le démarrage.
+    /// Total number of entries recorded since boot.
     pub fn count(&self) -> u64 {
         self.count.load(Ordering::Relaxed)
     }
 
-    /// Prochain numéro de séquence (= head).
+    /// Next sequence number (= head).
     pub fn next_seq(&self) -> u64 {
         self.head.load(Ordering::Relaxed)
     }
 
-    /// Nombre d'entrées disponibles dans le ring (borné à RING_SIZE).
+    /// Number of available entries in the ring (clamped to RING_SIZE).
     pub fn available(&self) -> usize {
         (self.count.load(Ordering::Relaxed) as usize).min(RING_SIZE)
     }
 
-    /// Nombre d'entrées écrasées par débordement.
+    /// Number of entries overwritten by overflow.
     pub fn n_overwritten(&self) -> u64 {
         self.n_overwritten.load(Ordering::Relaxed)
     }
 
-    /// Nombre d'entrées de sécurité enregistrées.
+    /// Number of security entries recorded.
     pub fn n_security(&self) -> u64 {
         self.n_security.load(Ordering::Relaxed)
     }
 
-    /// Nombre d'entrées critiques ou alertes.
+    /// Number of critical or alert entries.
     pub fn n_critical(&self) -> u64 {
         self.n_critical.load(Ordering::Relaxed)
     }
 
-    /// Nombre d'entrées en erreur (Error ou Timeout).
+    /// Number of entries in error (Error or Timeout).
     pub fn n_errors(&self) -> u64 {
         self.n_errors.load(Ordering::Relaxed)
     }
 
-    /// Retourne un snapshot des statistiques du log.
+    /// Returns a snapshot of the log statistics.
     pub fn stats(&self) -> AuditLogStats {
         AuditLogStats {
             total_pushed: self.count.load(Ordering::Relaxed),
@@ -237,7 +236,7 @@ impl AuditLog {
         }
     }
 
-    /// Remet tous les compteurs à zéro (usage: tests ou rotation).
+    /// Resets all counters to zero (usage: tests or rotation).
     pub fn reset_stats(&self) {
         self.n_overwritten.store(0, Ordering::Relaxed);
         self.n_security.store(0, Ordering::Relaxed);
@@ -245,7 +244,7 @@ impl AuditLog {
         self.n_errors.store(0, Ordering::Relaxed);
     }
 
-    /// Vérifie que le ring-buffer est sain (magic valide sur N entrées).
+    /// Checks that the ring-buffer is healthy (valid magic on N entries).
     pub fn sanity_check(&self, n: usize) -> AuditLogHealth {
         let avail = self.available();
         let sample = n.min(avail);
@@ -269,7 +268,7 @@ impl AuditLog {
 // AuditLogStats
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques du ring-buffer.
+/// Ring-buffer statistics.
 #[derive(Clone, Debug, Default)]
 pub struct AuditLogStats {
     pub total_pushed: u64,
@@ -278,12 +277,12 @@ pub struct AuditLogStats {
     pub n_security: u64,
     pub n_critical: u64,
     pub n_errors: u64,
-    /// Pourcentage de remplissage (0-100).
+    /// Fill percentage (0-100).
     pub ring_fill_pct: u8,
 }
 
 impl AuditLogStats {
-    /// `true` si le ring est plein à plus de 80%.
+    /// `true` if the ring is more than 80% full.
     pub fn is_near_full(&self) -> bool {
         self.ring_fill_pct >= 80
     }
@@ -293,7 +292,7 @@ impl AuditLogStats {
 // AuditLogHealth
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Résultat de la vérification de sanité.
+/// Sanity check result.
 #[derive(Clone, Debug)]
 pub struct AuditLogHealth {
     pub sampled: u32,
@@ -302,7 +301,7 @@ pub struct AuditLogHealth {
 }
 
 impl AuditLogHealth {
-    /// `true` si aucune entrée corrompue dans l'échantillon.
+    /// `true` if no corrupted entry in the sample.
     pub fn is_clean(&self) -> bool {
         self.corrupt == 0
     }
@@ -435,7 +434,7 @@ mod tests {
     #[test]
     fn test_available_bounded_by_ring_size() {
         let log = AuditLog::new_const();
-        // Les entrées poussées ne peuvent pas dépasser RING_SIZE.
+        // Pushed entries cannot exceed RING_SIZE.
         assert!(log.available() <= RING_SIZE);
     }
 
@@ -444,7 +443,7 @@ mod tests {
         let log = AuditLog::new_const();
         push_simple(&log, AuditOp::Create, AuditResult::Success);
         let h = log.sanity_check(1);
-        // fill_pct est toujours ≤ 100.
+        // fill_pct is always <= 100.
         assert!(h.fill_pct <= 100);
     }
 
@@ -452,7 +451,7 @@ mod tests {
     fn test_stats_near_full_false_on_fresh() {
         let log = AuditLog::new_const();
         let stat = log.stats();
-        // Un ring vide n'est pas « proche du plein ».
+        // An empty ring is not "near full".
         assert!(!stat.is_near_full());
     }
 

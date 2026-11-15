@@ -7,6 +7,21 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Once;
+
+pub type ForkDupHandleHook = fn(handle: u64) -> Option<u64>;
+pub type CloseHandleHook = fn(handle: u64);
+
+static FORK_DUP_HANDLE_HOOK: Once<ForkDupHandleHook> = Once::new();
+static CLOSE_HANDLE_HOOK: Once<CloseHandleHook> = Once::new();
+
+pub fn register_fork_dup_handle_hook(hook: ForkDupHandleHook) {
+    let _ = FORK_DUP_HANDLE_HOOK.call_once(|| hook);
+}
+
+pub fn register_close_handle_hook(hook: CloseHandleHook) {
+    let _ = CLOSE_HANDLE_HOOK.call_once(|| hook);
+}
 
 /// A file descriptor: opaque (managed by fs/ via integer handle).
 #[derive(Copy, Clone, Debug)]
@@ -234,8 +249,12 @@ impl OpenFileTable {
 
     /// Closes all descriptors without allocation, for exit/reap paths.
     pub fn close_all_noalloc(&mut self) {
+        let hook = CLOSE_HANDLE_HOOK.get().copied();
         for slot in &mut self.descriptors {
-            if slot.take().is_some() {
+            if let Some(entry) = slot.take() {
+                if let Some(h) = hook {
+                    h(entry.handle);
+                }
                 self.close_count.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -250,11 +269,18 @@ impl OpenFileTable {
 
     /// Fallible clone of the table for fork().
     pub fn try_clone_for_fork(&self) -> Option<Self> {
+        let hook = FORK_DUP_HANDLE_HOOK.get().copied();
         let mut descriptors = Vec::new();
         descriptors.try_reserve_exact(self.descriptors.len()).ok()?;
         let mut idx = 0usize;
         while idx < self.descriptors.len() {
-            descriptors.push(self.descriptors[idx]);
+            let mut desc = self.descriptors[idx];
+            if let (Some(h), Some(d)) = (hook, desc.as_mut()) {
+                if let Some(new_handle) = h(d.handle) {
+                    d.handle = new_handle;
+                }
+            }
+            descriptors.push(desc);
             idx += 1;
         }
         Some(Self {

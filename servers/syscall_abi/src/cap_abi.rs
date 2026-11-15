@@ -20,20 +20,28 @@ pub enum CapObjectType {
     SecurityDomain = 8,
 }
 
-/// Droits standardisés sous forme de bitmask u32
+/// Droits standardisés sous forme de bitmask u32 (synchronisés avec kernel Rights)
 pub mod rights {
     pub const READ: u32 = 1 << 0;
     pub const WRITE: u32 = 1 << 1;
     pub const EXECUTE: u32 = 1 << 2;
     pub const GRANT: u32 = 1 << 3;
     pub const REVOKE: u32 = 1 << 4;
-    pub const IPC_SEND: u32 = 1 << 5;
-    pub const IPC_RECV: u32 = 1 << 6;
-    pub const DMA_MAP: u32 = 1 << 7;
-    pub const IRQ_BIND: u32 = 1 << 8;
-    pub const NET_TX: u32 = 1 << 9;
-    pub const NET_RX: u32 = 1 << 10;
-    pub const NET_ADMIN: u32 = 1 << 11;
+    pub const DELEGATE: u32 = 1 << 5;
+    pub const IPC_CONNECT: u32 = 1 << 6;
+    pub const IPC_SEND: u32 = 1 << 7;
+    pub const IPC_RECV: u32 = 1 << 8;
+    pub const IPC_MANAGE: u32 = 1 << 9;
+    pub const MEM_MAP: u32 = 1 << 10;
+    pub const MEM_PROTECT: u32 = 1 << 11;
+    pub const MEM_UNMAP: u32 = 1 << 12;
+    pub const DEV_MMIO: u32 = 1 << 13;
+    pub const DMA_MAP: u32 = 1 << 14;
+    pub const IRQ_BIND: u32 = 1 << 15;
+    pub const NET_TX: u32 = 1 << 16;
+    pub const NET_RX: u32 = 1 << 17;
+    pub const NET_ADMIN: u32 = 1 << 18;
+    pub const NET_OBSERVE: u32 = 1 << 19;
 }
 
 /// Jeton de capacité fil (exactement 20 octets)

@@ -1,4 +1,4 @@
-//! Module relation/ — graphe de relations entre blobs ExoFS (no_std).
+//! Module relation/ — relation graph between ExoFS blobs (no_std).
 
 pub mod relation;
 pub mod relation_batch;
@@ -23,31 +23,31 @@ pub use relation_type::{RelationKind, RelationType};
 pub use relation_walker::{RelationWalker, WalkResult};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fonctions de cycle de vie du module
+// Module lifecycle functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Initialise le module relation (idempotent).
+/// Initializes the relation module (idempotent).
 ///
-/// À appeler lors du montage du système de fichiers ExoFS.
+/// To be called when mounting the ExoFS filesystem.
 pub fn init() {
-    // Les stores sont des statics initialisés avec `new_const()` —
-    // aucune allocation n'est nécessaire à l'init. Cette fonction
-    // est conservée pour être appelée explicitement dans `exofs::init()`
-    // et indiquer l'ordre d'initialisation.
+    // The stores are statics initialized with `new_const()` —
+    // no allocation is required at init. This function
+    // is preserved to be called explicitly in `exofs::init()`
+    // and indicate initialization order.
 }
 
-/// Libère les ressources volatiles et vide les structures en mémoire.
+/// Releases volatile resources and flushes in-memory structures.
 ///
-/// À appeler lors du démontage du système de fichiers ou shutdown noyau.
+/// To be called when unmounting the filesystem or during kernel shutdown.
 pub fn shutdown() {
     RELATION_GRAPH.flush();
     RELATION_INDEX.flush();
-    // `RELATION_STORAGE` flush les blocs on-disk si implémenté.
+    // `RELATION_STORAGE` flushes on-disk blocks if implemented.
 }
 
-/// Vérifie la cohérence des structures internes.
+/// Verifies consistency of internal structures.
 ///
-/// Retourne `true` si toutes les contraintes de sanité sont respectées.
+/// Returns `true` if all sanity constraints are satisfied.
 pub fn verify_health() -> bool {
     use relation_storage::STORAGE_MAX_RELATIONS;
     let n = RELATION_STORAGE.count();
@@ -55,8 +55,8 @@ pub fn verify_health() -> bool {
         return false;
     }
 
-    // Le nombre d arêtes dans le graphe doit rester cohérent avec
-    // le nombre de relations persistées.
+    // The number of edges in the graph must remain consistent with
+    // the number of persisted relations.
     let n_edges = RELATION_GRAPH.n_edges() as usize;
     if n_edges > n.saturating_mul(2) {
         return false;

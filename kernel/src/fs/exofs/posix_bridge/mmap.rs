@@ -1,11 +1,11 @@
-//! mmap.rs — Gestion des mappings mémoire POSIX pour ExoFS
+//! mmap.rs — POSIX memory mapping management for ExoFS
 //!
-//! Implémente mmap/munmap/msync/mprotect en s'appuyant sur les blobs ExoFS.
-//! Les mappings partagés (MAP_SHARED | PROT_WRITE) déclenchent une promotion
-//! de l'objet vers la classe 2 (writable). Les mappings privés (MAP_PRIVATE)
-//! produisent un instantané CoW en mémoire.
+//! Implements mmap/munmap/msync/mprotect relying on ExoFS blobs.
+//! Shared mappings (MAP_SHARED | PROT_WRITE) trigger promotion of the
+//! object to class 2 (writable). Private mappings (MAP_PRIVATE)
+//! produce an in-memory CoW snapshot.
 //!
-//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusivement.
+//! RECUR-01 / OOM-02 / ARITH-02 — ExofsError exclusively.
 
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 use alloc::vec::Vec;
@@ -13,21 +13,21 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constantes
+// Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub const MMAP_MAX_MAPPINGS: usize = 2048;
 pub const MMAP_PAGE_SIZE: u64 = 4096;
 pub const MMAP_BASE_VIRT: u64 = 0x0001_0000_0000_0000;
-pub const MMAP_VIRT_STRIDE: u64 = 0x0000_0000_0010_0000; // 1 MiB entre chaque mapping
+pub const MMAP_VIRT_STRIDE: u64 = 0x0000_0000_0010_0000; // 1 MiB between each mapping
 pub const MMAP_MAGIC: u32 = 0x4D4D_4150; // "MMAP"
 pub const MMAP_VERSION: u8 = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Flags et protections
+// Flags and protections
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flags de mapping mémoire (MAP_*).
+/// Memory mapping flags (MAP_*).
 pub mod map_flags {
     pub const MAP_SHARED: u32 = 0x01;
     pub const MAP_PRIVATE: u32 = 0x02;
@@ -38,7 +38,7 @@ pub mod map_flags {
     pub const MAP_HUGETLB: u32 = 0x40;
 }
 
-/// Protections de mapping mémoire (PROT_*).
+/// Memory mapping protections (PROT_*).
 pub mod map_prot {
     pub const PROT_NONE: u32 = 0x00;
     pub const PROT_READ: u32 = 0x01;
@@ -46,7 +46,7 @@ pub mod map_prot {
     pub const PROT_EXEC: u32 = 0x04;
 }
 
-/// État interne d'un mapping.
+/// Internal state of a mapping.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MappingState {
@@ -57,10 +57,10 @@ pub enum MappingState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Entrée de mapping
+// Mapping entry
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Entrée de la table des mappings mémoire.
+/// Memory mapping table entry.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MmapEntry {
@@ -113,7 +113,7 @@ impl MmapEntry {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Table des mappings
+// Mapping table
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub struct MmapTable {
@@ -154,7 +154,7 @@ impl MmapTable {
         self.spinlock.store(0, Ordering::Release);
     }
 
-    // ─── Allocation d'adresse virtuelle ───
+    // ─── Virtual address allocation ───
 
     fn alloc_virt(&self, length: u64) -> u64 {
         let aligned = align_up(length, MMAP_PAGE_SIZE);
@@ -164,7 +164,7 @@ impl MmapTable {
         base
     }
 
-    // ─── Recherche interne (RECUR-01 : while) ───
+    // ─── Internal lookup (RECUR-01: while) ───
 
     fn find_by_vaddr(entries: &[MmapEntry], vaddr: u64) -> Option<usize> {
         let mut i = 0usize;
@@ -234,10 +234,10 @@ impl MmapTable {
         Ok(())
     }
 
-    // ─── API publique ───
+    // ─── Public API ───
 
-    /// Crée un nouveau mapping. Retourne l'adresse virtuelle.
-    /// OOM-02 : try_reserve avant push.
+    /// Creates a new mapping. Returns virtual address.
+    /// OOM-02: try_reserve before push.
     pub fn mmap(
         &self,
         object_id: u64,
@@ -268,7 +268,7 @@ impl MmapTable {
         flags: u32,
         pid: u32,
     ) -> ExofsResult<u64> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let active = Self::count_active(entries);
         if active >= MMAP_MAX_MAPPINGS {
@@ -305,7 +305,7 @@ impl MmapTable {
         Ok(virt_addr)
     }
 
-    /// Supprime un mapping à partir de virt_addr.
+    /// Removes a mapping starting at virt_addr.
     pub fn munmap(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
         if length == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -317,7 +317,7 @@ impl MmapTable {
     }
 
     fn munmap_inner(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -340,7 +340,7 @@ impl MmapTable {
         }
     }
 
-    /// Synchronise un mapping (marque Dirty → flush).
+    /// Synchronizes a mapping (marks Dirty -> flush).
     pub fn msync(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
         if length == 0 {
             return Err(ExofsError::InvalidArgument);
@@ -352,7 +352,7 @@ impl MmapTable {
     }
 
     fn msync_inner(&self, virt_addr: u64, length: u64) -> ExofsResult<()> {
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let mut found = false;
         let mut i = 0usize;
@@ -374,10 +374,10 @@ impl MmapTable {
         }
     }
 
-    /// Confirme la fin du flush (Dirty → Active).
+    /// Confirms flush completion (Dirty -> Active).
     pub fn msync_complete(&self, virt_addr: u64) -> ExofsResult<()> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_by_vaddr(entries, virt_addr) {
             entries[idx].state = MappingState::Active;
@@ -389,7 +389,7 @@ impl MmapTable {
         result
     }
 
-    /// Change les protections d'un mapping.
+    /// Changes mapping protections.
     pub fn mprotect(&self, virt_addr: u64, prot: u32) -> ExofsResult<()> {
         let known_prot =
             map_prot::PROT_READ | map_prot::PROT_WRITE | map_prot::PROT_EXEC | map_prot::PROT_NONE;
@@ -400,7 +400,7 @@ impl MmapTable {
             return Err(ExofsError::PermissionDenied);
         }
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_exact(entries, virt_addr) {
             entries[idx].prot = prot;
@@ -415,21 +415,21 @@ impl MmapTable {
         result
     }
 
-    /// Retourne une copie de l'entrée à une adresse virtuelle.
+    /// Returns a copy of the entry at a virtual address.
     pub fn find_mapping(&self, virt_addr: u64) -> Option<MmapEntry> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let r = Self::find_by_vaddr(entries, virt_addr).map(|i| entries[i]);
         self.lock_release();
         r
     }
 
-    /// Retourne toutes les entrées actives pour un pid.
-    /// OOM-02 : try_reserve. RECUR-01 : while.
+    /// Returns all active entries for a pid.
+    /// OOM-02: try_reserve. RECUR-01: while.
     pub fn mappings_for_pid(&self, pid: u32) -> ExofsResult<Vec<MmapEntry>> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let mut out: Vec<MmapEntry> = Vec::new();
         out.try_reserve(entries.len())
@@ -445,10 +445,10 @@ impl MmapTable {
         Ok(out)
     }
 
-    /// Supprime tous les mappings d'un pid (appelé à la mort du processus).
+    /// Removes all mappings for a pid (called on process death).
     pub fn munmap_all_pid(&self, pid: u32) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let mut i = 0usize;
         while i < entries.len() {
@@ -464,25 +464,25 @@ impl MmapTable {
         self.lock_release();
     }
 
-    /// Nombre de mappings actifs.
+    /// Number of active mappings.
     pub fn mapping_count(&self) -> usize {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &*self.entries.get() };
         let n = Self::count_active(entries);
         self.lock_release();
         n
     }
 
-    /// Taille totale mappée.
+    /// Total mapped size.
     pub fn total_mapped_bytes(&self) -> u64 {
         self.total_mapped.load(Ordering::Relaxed)
     }
 
-    /// Marque un mapping comme Dirty (page fault write).
+    /// Marks a mapping as Dirty (write page fault).
     pub fn mark_dirty(&self, virt_addr: u64) -> ExofsResult<()> {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let result = if let Some(idx) = Self::find_by_vaddr(entries, virt_addr) {
             if entries[idx].is_shared() && entries[idx].is_writable() {
@@ -496,10 +496,10 @@ impl MmapTable {
         result
     }
 
-    /// Purge les entrées Removed.
+    /// Purges Removed entries.
     pub fn compact(&self) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         let mut i = 0usize;
         while i < entries.len() {
@@ -512,10 +512,10 @@ impl MmapTable {
         self.lock_release();
     }
 
-    /// Vide entièrement la table.
+    /// Clears table entirely.
     pub fn clear(&self) {
         self.lock_acquire();
-        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        // SAFETY: exclusive access guaranteed by atomic lock acquired beforehand.
         let entries = unsafe { &mut *self.entries.get() };
         entries.clear();
         self.total_mapped.store(0, Ordering::Relaxed);
@@ -527,14 +527,14 @@ impl MmapTable {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Aligne `v` sur `align` (puissance de 2). ARITH-02.
+/// Aligns `v` to `align` (power of 2). ARITH-02.
 pub fn align_up(v: u64, align: u64) -> u64 {
     debug_assert!(align.is_power_of_two());
     let mask = align.wrapping_sub(1);
     v.wrapping_add(mask) & !mask
 }
 
-/// Vérifie qu'un offset est aligné sur une page.
+/// Verifies that an offset is page-aligned.
 pub fn validate_page_aligned(offset: u64) -> ExofsResult<()> {
     if offset & (MMAP_PAGE_SIZE.wrapping_sub(1)) != 0 {
         Err(ExofsError::InvalidArgument)
@@ -547,12 +547,12 @@ fn prot_has_write_exec(prot: u32) -> bool {
     prot & map_prot::PROT_WRITE != 0 && prot & map_prot::PROT_EXEC != 0
 }
 
-/// Calcule le nombre de pages nécessaires.
+/// Calculates the number of required pages.
 pub fn pages_for(length: u64) -> u64 {
     align_up(length, MMAP_PAGE_SIZE) / MMAP_PAGE_SIZE
 }
 
-/// Retourne vrai si deux plages se chevauchent. ARITH-02 saturating.
+/// Returns true if two ranges overlap. ARITH-02 saturating.
 pub fn ranges_overlap(a: u64, la: u64, b: u64, lb: u64) -> bool {
     let ae = a.saturating_add(la);
     let be = b.saturating_add(lb);

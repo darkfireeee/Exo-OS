@@ -1,15 +1,15 @@
-//! Statistiques de compression ExoFS.
+//! ExoFS compression statistics.
 //!
-//! Compteurs atomiques par algorithme, globalaux, et snapshots point-in-time.
-//! Les compteurs AtomicU64 sont en mémoire uniquement (ONDISK-03 : interdit dans repr(C)).
+//! Atomic counters per algorithm, global counters, and point-in-time snapshots.
+//! AtomicU64 counters are in-memory only (ONDISK-03: prohibited in repr(C)).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AlgoStats — statistiques par algorithme
+// AlgoStats — statistics per algorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteurs de compression/décompression pour un algorithme donné.
+/// Compression/decompression counters for a given algorithm.
 pub struct AlgoStats {
     pub compressed_count: AtomicU64,
     pub compressed_bytes_in: AtomicU64,
@@ -33,7 +33,7 @@ impl AlgoStats {
         }
     }
 
-    /// Enregistre une compression (succès ou échec).
+    /// Records a compression (success or failure).
     pub fn record_compress(&self, bytes_in: u64, bytes_out: u64, ok: bool) {
         self.compressed_count.fetch_add(1, Ordering::Relaxed);
         self.compressed_bytes_in
@@ -46,7 +46,7 @@ impl AlgoStats {
         }
     }
 
-    /// Enregistre une décompression (succès ou échec).
+    /// Records a decompression (success or failure).
     pub fn record_decompress(&self, bytes_out: u64, ok: bool) {
         self.decompress_count.fetch_add(1, Ordering::Relaxed);
         if ok {
@@ -57,7 +57,7 @@ impl AlgoStats {
         }
     }
 
-    /// Ratio de compression moyen (0–100, 100 = aucun bénéfice).
+    /// Average compression ratio (0–100, 100 = no benefit).
     pub fn avg_ratio_percent(&self) -> u64 {
         let out = self.compressed_bytes_out.load(Ordering::Relaxed);
         let inn = self.compressed_bytes_in.load(Ordering::Relaxed);
@@ -67,12 +67,12 @@ impl AlgoStats {
         (out * 100) / inn
     }
 
-    /// `true` si au moins une compression a réussi.
+    /// `true` if at least one compression succeeded.
     pub fn has_activity(&self) -> bool {
         self.compressed_count.load(Ordering::Relaxed) > 0
     }
 
-    /// Taux d'erreur de compression (0–100).
+    /// Compression error rate (0–100).
     pub fn error_rate_percent(&self) -> u64 {
         let total = self.compressed_count.load(Ordering::Relaxed);
         let errors = self.compress_errors.load(Ordering::Relaxed);
@@ -82,7 +82,7 @@ impl AlgoStats {
         (errors * 100) / total
     }
 
-    /// Snapshot point-in-time des compteurs de cet algorithme.
+    /// Point-in-time snapshot of this algorithm's counters.
     pub fn snapshot(&self) -> AlgoStatsSnapshot {
         AlgoStatsSnapshot {
             compressed_count: self.compressed_count.load(Ordering::Relaxed),
@@ -95,7 +95,7 @@ impl AlgoStats {
         }
     }
 
-    /// Remet tous les compteurs à zéro.
+    /// Resets all counters to zero.
     pub fn reset(&self) {
         self.compressed_count.store(0, Ordering::Relaxed);
         self.compressed_bytes_in.store(0, Ordering::Relaxed);
@@ -108,10 +108,10 @@ impl AlgoStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AlgoStatsSnapshot — vue immuable
+// AlgoStatsSnapshot — immutable view
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Vue immuable des compteurs d'un algorithme.
+/// Immutable view of an algorithm's counters.
 #[derive(Debug, Clone, Default)]
 pub struct AlgoStatsSnapshot {
     pub compressed_count: u64,
@@ -124,7 +124,7 @@ pub struct AlgoStatsSnapshot {
 }
 
 impl AlgoStatsSnapshot {
-    /// Ratio de compression moyen (0–100).
+    /// Average compression ratio (0–100).
     pub fn avg_ratio_percent(&self) -> u64 {
         if self.compressed_bytes_in == 0 {
             return 100;
@@ -132,7 +132,7 @@ impl AlgoStatsSnapshot {
         (self.compressed_bytes_out * 100) / self.compressed_bytes_in
     }
 
-    /// Économie totale de bytes (bytes_in - bytes_out), saturating.
+    /// Total byte savings (bytes_in - bytes_out), saturating.
     pub fn bytes_saved(&self) -> u64 {
         self.compressed_bytes_in
             .saturating_sub(self.compressed_bytes_out)
@@ -140,20 +140,20 @@ impl AlgoStatsSnapshot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CompressionStats — statistiques globales
+// CompressionStats — global statistics
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Statistiques globales de compression pour tous les algorithmes.
+/// Global compression statistics for all algorithms.
 pub struct CompressionStats {
     pub lz4: AlgoStats,
     pub zstd: AlgoStats,
-    /// Blobs ignorés car ratio ≥ seuil (données incompressibles).
+    /// Blobs skipped because ratio >= threshold (incompressible data).
     pub skipped_incompressible: AtomicU64,
-    /// Blobs ignorés car trop petits.
+    /// Blobs skipped because too small.
     pub skipped_too_small: AtomicU64,
-    /// Blobs ignorés car déjà compressés (magic détecté).
+    /// Blobs skipped because already compressed (magic detected).
     pub skipped_already_compressed: AtomicU64,
-    /// Nombre total d'appels au writer.
+    /// Total number of calls to writer.
     pub total_requests: AtomicU64,
 }
 
@@ -169,33 +169,33 @@ impl CompressionStats {
         }
     }
 
-    /// Enregistre un skip pour données incompressibles.
+    /// Records a skip for incompressible data.
     pub fn record_skip_incompressible(&self) {
         self.skipped_incompressible.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Alias de compatibilité avec le code existant.
+    /// Compatibility alias with existing code.
     pub fn record_skip(&self) {
         self.record_skip_incompressible();
     }
 
-    /// Enregistre un skip pour données trop petites.
+    /// Records a skip for data that is too small.
     pub fn record_skip_too_small(&self) {
         self.skipped_too_small.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Enregistre un skip pour données déjà compressées.
+    /// Records a skip for already compressed data.
     pub fn record_skip_already_compressed(&self) {
         self.skipped_already_compressed
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Incrémente le compteur de requêtes totales.
+    /// Increments the total requests counter.
     pub fn record_request(&self) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Snapshot global combinant LZ4 + Zstd.
+    /// Global snapshot combining LZ4 + Zstd.
     pub fn global_snapshot(&self) -> CompressionStatsSnapshot {
         let lz4 = self.lz4.snapshot();
         let zstd = self.zstd.snapshot();
@@ -209,7 +209,7 @@ impl CompressionStats {
         }
     }
 
-    /// Remet tous les compteurs à zéro.
+    /// Resets all counters to zero.
     pub fn reset(&self) {
         self.lz4.reset();
         self.zstd.reset();
@@ -219,7 +219,7 @@ impl CompressionStats {
         self.total_requests.store(0, Ordering::Relaxed);
     }
 
-    /// Total des bytes économisés par toutes les compressions réussies.
+    /// Total bytes saved across all successful compressions.
     pub fn total_bytes_saved(&self) -> u64 {
         self.lz4
             .snapshot()
@@ -229,10 +229,10 @@ impl CompressionStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CompressionStatsSnapshot — vue immuable globale
+// CompressionStatsSnapshot — global immutable view
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Snapshot global immuable de toutes les statistiques de compression.
+/// Global immutable snapshot of all compression statistics.
 #[derive(Debug, Clone, Default)]
 pub struct CompressionStatsSnapshot {
     pub lz4: AlgoStatsSnapshot,
@@ -244,34 +244,34 @@ pub struct CompressionStatsSnapshot {
 }
 
 impl CompressionStatsSnapshot {
-    /// Total skips toutes raisons confondues.
+    /// Total skips across all reasons.
     pub fn total_skipped(&self) -> u64 {
         self.skipped_incompressible
             .saturating_add(self.skipped_too_small)
             .saturating_add(self.skipped_already_compressed)
     }
 
-    /// Total des bytes effectivement compressés (entrée LZ4 + Zstd).
+    /// Total bytes effectively compressed (LZ4 + Zstd input).
     pub fn total_input_bytes(&self) -> u64 {
         self.lz4
             .compressed_bytes_in
             .saturating_add(self.zstd.compressed_bytes_in)
     }
 
-    /// Total sorties compressées.
+    /// Total compressed outputs.
     pub fn total_output_bytes(&self) -> u64 {
         self.lz4
             .compressed_bytes_out
             .saturating_add(self.zstd.compressed_bytes_out)
     }
 
-    /// Économies totales (bytes_in - bytes_out), saturating.
+    /// Total savings (bytes_in - bytes_out), saturating.
     pub fn total_bytes_saved(&self) -> u64 {
         self.total_input_bytes()
             .saturating_sub(self.total_output_bytes())
     }
 
-    /// Ratio global moyen (0–100).
+    /// Global average ratio (0–100).
     pub fn global_ratio_percent(&self) -> u64 {
         let inn = self.total_input_bytes();
         let out = self.total_output_bytes();
@@ -282,7 +282,7 @@ impl CompressionStatsSnapshot {
     }
 }
 
-/// Statistiques globales de compression (singleton statique).
+/// Global compression statistics (static singleton).
 pub static COMPRESSION_STATS: CompressionStats = CompressionStats::new();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn test_total_bytes_saved_saturating() {
         let g = CompressionStats::new();
-        g.lz4.record_compress(100, 200, true); // "sortie > entrée"
+        g.lz4.record_compress(100, 200, true); // "output > input"
                                                // bytes_saved = 100 - 200 = saturate at 0
         assert_eq!(g.total_bytes_saved(), 0);
     }

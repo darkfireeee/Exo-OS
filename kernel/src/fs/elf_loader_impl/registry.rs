@@ -1,4 +1,4 @@
-//! registry.rs — Registre des blobs ELF et métadonnées de segments
+//! registry.rs — ELF blob registry and segment metadata
 
 use crate::fs::exofs::core::types::BlobId;
 use crate::memory::core::AllocError;

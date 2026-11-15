@@ -1,0 +1,241 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::sync_channel,
+};
+
+use wayland_tests::{TestServer, server_ignore_global_impl, server_ignore_impl, wayc, ways};
+
+use ways::protocol::wl_compositor::WlCompositor as ServerCompositor;
+use ways::protocol::wl_output::WlOutput as ServerOutput;
+use ways::protocol::wl_shell::WlShell as ServerShell;
+
+use wayc::globals::{Global, GlobalList, GlobalListHandler};
+use wayc::protocol::{wl_compositor, wl_subcompositor};
+
+#[test]
+fn client_global_helpers_init() {
+    let kill_switch = Arc::new(AtomicBool::new(false));
+    let server_kill_switch = kill_switch.clone();
+
+    let mut server = TestServer::new();
+    server.display.handle().create_global::<ServerHandler, ServerCompositor, _>(4, ());
+    server.display.handle().create_global::<ServerHandler, ServerOutput, _>(2, ());
+    server.display.handle().create_global::<ServerHandler, ServerShell, _>(1, ());
+
+    let (_, client) = server.add_client::<()>();
+
+    // spawn a thread for the server loop as the client global init helpers to a blocking roundtrip
+    let server_thread = ::std::thread::spawn(move || {
+        loop {
+            server.display.dispatch_clients(&mut ServerHandler).unwrap();
+            server.display.flush_clients().unwrap();
+            if server_kill_switch.load(Ordering::Acquire) {
+                break;
+            }
+        }
+    });
+
+    let queue = client.conn.new_event_queue::<ClientHandler>();
+    let globals = GlobalList::init(&client.conn, &queue.handle()).unwrap();
+
+    assert_eq!(
+        globals.clone_list(),
+        &[
+            Global { name: 1, interface: "wl_compositor".into(), version: 4 },
+            Global { name: 2, interface: "wl_output".into(), version: 2 },
+            Global { name: 3, interface: "wl_shell".into(), version: 1 },
+        ]
+    );
+
+    // ensure bind works as expected
+    // Too high version fails
+    assert!(
+        globals
+            .bind_singleton::<wl_compositor::WlCompositor, _, _>(
+                5..=5,
+                &queue.handle(),
+                wayc::NoopIgnore
+            )
+            .is_err()
+    );
+    // Missing global fails
+    assert!(
+        globals
+            .bind_singleton::<wl_subcompositor::WlSubcompositor, _, _>(
+                1..=1,
+                &queue.handle(),
+                wayc::NoopIgnore
+            )
+            .is_err()
+    );
+    // Compatible spec succeeds
+    assert!(
+        globals
+            .bind_singleton::<wl_compositor::WlCompositor, _, _>(
+                1..=5,
+                &queue.handle(),
+                wayc::NoopIgnore
+            )
+            .is_ok()
+    );
+
+    // cleanup
+    kill_switch.store(true, Ordering::Release);
+    server_thread.join().unwrap();
+}
+
+#[test]
+fn client_global_helpers_dynamic() {
+    let kill_switch = Arc::new(AtomicBool::new(false));
+    let server_kill_switch = kill_switch.clone();
+
+    let mut server = TestServer::new();
+    server.display.handle().create_global::<ServerHandler, ServerCompositor, _>(4, ());
+    server.display.handle().create_global::<ServerHandler, ServerShell, _>(1, ());
+
+    let (_, client) = server.add_client::<()>();
+
+    let (tx, rx) = sync_channel(0);
+
+    // spawn a thread for the server loop as the client global init helpers to a blocking roundtrip
+    let server_thread = ::std::thread::spawn(move || {
+        let mut output = None;
+        loop {
+            if let Ok(()) = rx.try_recv() {
+                if let Some(id) = output.take() {
+                    server.display.handle().remove_global::<ServerHandler>(&id);
+                } else {
+                    // create the global
+                    output = Some(
+                        server
+                            .display
+                            .handle()
+                            .create_global::<ServerHandler, ServerOutput, _>(2, ()),
+                    );
+                }
+            }
+            server.display.dispatch_clients(&mut ServerHandler).unwrap();
+            server.display.flush_clients().unwrap();
+            if server_kill_switch.load(Ordering::Acquire) {
+                break;
+            }
+        }
+    });
+
+    let mut queue = client.conn.new_event_queue::<ClientHandler>();
+    let globals = GlobalList::init(&client.conn, &queue.handle()).unwrap();
+
+    assert_eq!(
+        globals.clone_list(),
+        &[
+            Global { name: 1, interface: "wl_compositor".into(), version: 4 },
+            Global { name: 2, interface: "wl_shell".into(), version: 1 },
+        ]
+    );
+
+    // create the wl_output
+    tx.send(()).unwrap();
+
+    let mut state = ClientHandler(false);
+    queue.blocking_dispatch(&mut state).unwrap();
+    assert!(state.0);
+    assert_eq!(
+        globals.clone_list(),
+        &[
+            Global { name: 1, interface: "wl_compositor".into(), version: 4 },
+            Global { name: 2, interface: "wl_shell".into(), version: 1 },
+            Global { name: 3, interface: "wl_output".into(), version: 2 },
+        ]
+    );
+
+    // destroy the wl_output
+    tx.send(()).unwrap();
+
+    let mut state = ClientHandler(false);
+    queue.blocking_dispatch(&mut state).unwrap();
+    assert!(!state.0);
+    assert_eq!(
+        globals.clone_list(),
+        &[
+            Global { name: 1, interface: "wl_compositor".into(), version: 4 },
+            Global { name: 2, interface: "wl_shell".into(), version: 1 },
+        ]
+    );
+
+    // cleanup
+    kill_switch.store(true, Ordering::Release);
+    server_thread.join().unwrap();
+}
+
+#[test]
+#[should_panic]
+fn too_high_global_version() {
+    let kill_switch = Arc::new(AtomicBool::new(false));
+    let server_kill_switch = kill_switch.clone();
+
+    let mut server = TestServer::new();
+    server.display.handle().create_global::<ServerHandler, ServerCompositor, _>(4, ());
+
+    let (_, client) = server.add_client::<()>();
+
+    // spawn a thread for the server loop as the client global init helpers to a blocking roundtrip
+    let server_thread = ::std::thread::spawn(move || {
+        loop {
+            server.display.dispatch_clients(&mut ServerHandler).unwrap();
+            server.display.flush_clients().unwrap();
+            if server_kill_switch.load(Ordering::Acquire) {
+                break;
+            }
+        }
+    });
+
+    let queue = client.conn.new_event_queue::<ClientHandler>();
+    let globals = GlobalList::init(&client.conn, &queue.handle()).unwrap();
+
+    // kill the server now to avoit a deadlock of the test, as we're about to panic
+    kill_switch.store(true, Ordering::Release);
+    server_thread.join().unwrap();
+
+    let max_compositor_version =
+        <wl_compositor::WlCompositor as wayland_client::Proxy>::interface().version;
+    // invoking bind with too high a target version should panic
+    let _ = globals.bind_singleton::<wl_compositor::WlCompositor, _, _>(
+        1..=max_compositor_version + 1,
+        &queue.handle(),
+        wayc::NoopIgnore,
+    );
+}
+
+struct ServerHandler;
+
+server_ignore_impl!(ServerHandler => [ServerCompositor, ServerShell, ServerOutput]);
+server_ignore_global_impl!(ServerHandler => [ServerCompositor, ServerShell, ServerOutput]);
+
+struct ClientHandler(bool);
+
+impl GlobalListHandler for ClientHandler {
+    fn runtime_add_global(
+        &mut self,
+        _globals: &wayc::globals::GlobalList,
+        _conn: &wayc::Connection,
+        _qh: &wayc::QueueHandle<Self>,
+        global: &Global,
+    ) {
+        assert_eq!(global.name, 3);
+        assert_eq!(global.interface, "wl_output");
+        assert_eq!(global.version, 2);
+        self.0 = true;
+    }
+
+    fn runtime_remove_global(
+        &mut self,
+        _globals: &wayc::globals::GlobalList,
+        _conn: &wayc::Connection,
+        _qh: &wayc::QueueHandle<Self>,
+        global: &Global,
+    ) {
+        assert_eq!(global.name, 3);
+        self.0 = false;
+    }
+}

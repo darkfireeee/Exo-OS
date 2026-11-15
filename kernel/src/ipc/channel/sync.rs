@@ -139,14 +139,13 @@ impl SyncSlot {
     }
 
     /// Resets slot to Idle for next rendezvous.
-    /// SAFETY: must be called only when slot is free (no race).
+    /// SAFETY: must be called only when slot is owned by caller prior to Idle publish.
     pub unsafe fn reset(&self) {
         self.payload_len.store(0, Ordering::Relaxed);
         self.flags.store(0, Ordering::Relaxed);
         self.msg_id.store(0, Ordering::Relaxed);
         self.timestamp_ns.store(0, Ordering::Relaxed);
         self.sender_tid.store(0, Ordering::Relaxed);
-        self.receiver_tid.store(0, Ordering::Relaxed);
         self.sequence.fetch_add(1, Ordering::Release);
         self.state
             .store(RendezVousState::Idle as u32, Ordering::Release);
@@ -237,18 +236,50 @@ impl SyncChannel {
 
     /// Closes channel — wakes up any blocked sender/receiver with Cancelled.
     pub fn close(&self) {
-        self.closed.store(1, Ordering::Release);
+        let _ = self
+            .closed
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
         let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
         let receiver_tid = self.slot.receiver_tid.load(Ordering::Relaxed);
         // Signal any pending wait
         let state = self.slot.state.load(Ordering::Acquire);
         if RendezVousState::from_u32(state) == RendezVousState::SenderWaiting {
-            self.slot
-                .state
-                .store(RendezVousState::Cancelled as u32, Ordering::Release);
+            let _ = self.slot.state.compare_exchange(
+                RendezVousState::SenderWaiting as u32,
+                RendezVousState::Cancelled as u32,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
         }
         wake_tid(sender_tid);
         wake_tid(receiver_tid);
+    }
+
+    /// Atomically claims destruction (`0|1 -> 2`) and wakes pending threads.
+    fn begin_destroy(&self) -> bool {
+        loop {
+            let cur = self.closed.load(Ordering::Acquire);
+            if cur == 2 {
+                return false;
+            }
+            if self
+                .closed
+                .compare_exchange_weak(cur, 2, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let sender_tid = self.slot.sender_tid.load(Ordering::Relaxed);
+                let receiver_tid = self.slot.receiver_tid.load(Ordering::Relaxed);
+                let _ = self.slot.state.compare_exchange(
+                    RendezVousState::SenderWaiting as u32,
+                    RendezVousState::Cancelled as u32,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                wake_tid(sender_tid);
+                wake_tid(receiver_tid);
+                return true;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -364,25 +395,36 @@ impl SyncChannel {
             }
 
             if deadline_expired(deadline_ns) {
-                let _ = self.slot.state.compare_exchange(
-                    RendezVousState::SenderWaiting as u32,
-                    RendezVousState::Cancelled as u32,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-                wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
-                self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
-                return Err(IpcError::Timeout);
+                if self
+                    .slot
+                    .state
+                    .compare_exchange(
+                        RendezVousState::SenderWaiting as u32,
+                        RendezVousState::Cancelled as u32,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
+                    // SAFETY: exclusive transition SenderWaiting -> Cancelled; reset slot to Idle so channel does not wedge.
+                    unsafe { self.slot.reset() };
+                    self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
+                    return Err(IpcError::Timeout);
+                }
+                // Receiver concurrently claimed/acked or channel closed; handle state on next iteration.
+                continue;
             }
 
             // After short spin phase: real block.
             if spins == 64 {
-                // Check one last time before blocking.
-                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-                if s2 == RendezVousState::ReceiverAcked || s2 == RendezVousState::Cancelled {
-                    continue; // Will be handled on next iteration
-                }
                 if timeout_ns == 0 {
+                    crate::ipc::sync::sched_hooks::prepare_sleep(my_tid);
+                    let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                    if s2 != RendezVousState::SenderWaiting || self.is_closed() {
+                        crate::ipc::sync::sched_hooks::cancel_sleep(my_tid);
+                        continue; // Will be handled on next iteration
+                    }
                     // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
@@ -393,6 +435,10 @@ impl SyncChannel {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
                 } else {
+                    let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                    if s2 != RendezVousState::SenderWaiting {
+                        continue; // Will be handled on next iteration
+                    }
                     unsafe {
                         let _ = crate::scheduler::core::switch::cooperative_reschedule();
                     }
@@ -485,22 +531,34 @@ impl SyncChannel {
                 return Err(IpcError::Closed);
             }
             if deadline_expired(deadline_ns) {
-                let _ = self.slot.state.compare_exchange(
-                    RendezVousState::SenderWaiting as u32,
-                    RendezVousState::Cancelled as u32,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-                wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
-                return Err(IpcError::Timeout);
+                if self
+                    .slot
+                    .state
+                    .compare_exchange(
+                        RendezVousState::SenderWaiting as u32,
+                        RendezVousState::Cancelled as u32,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    wake_tid(self.slot.receiver_tid.load(Ordering::Relaxed));
+                    // SAFETY: exclusive transition SenderWaiting -> Cancelled; reset to Idle so channel stays usable.
+                    unsafe { self.slot.reset() };
+                    self.stats.sends_timeout.fetch_add(1, Ordering::Relaxed);
+                    return Err(IpcError::Timeout);
+                }
+                continue;
             }
             // Real blocking after 64 spin iterations.
             if spins == 64 {
-                let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
-                if s2 != RendezVousState::SenderWaiting {
-                    continue;
-                }
                 if timeout_ns == 0 {
+                    crate::ipc::sync::sched_hooks::prepare_sleep(my_tid);
+                    let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                    if s2 != RendezVousState::SenderWaiting || self.is_closed() {
+                        crate::ipc::sync::sched_hooks::cancel_sleep(my_tid);
+                        continue;
+                    }
                     // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
@@ -511,6 +569,10 @@ impl SyncChannel {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
                 } else {
+                    let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                    if s2 != RendezVousState::SenderWaiting {
+                        continue;
+                    }
                     unsafe {
                         let _ = crate::scheduler::core::switch::cooperative_reschedule();
                     }
@@ -549,19 +611,65 @@ impl SyncChannel {
             }
         } else {
             let my_tid = crate::ipc::sync::sched_hooks::current_tid();
-            self.slot.receiver_tid.store(my_tid, Ordering::Relaxed);
+            self.slot.receiver_tid.store(my_tid, Ordering::Release);
             let mut spins: u32 = 0;
+            let mut total_spins: u64 = 0;
             loop {
                 let s = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
                 if s == RendezVousState::SenderWaiting {
+                    let _ = self.slot.receiver_tid.compare_exchange(
+                        my_tid,
+                        0,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    );
                     break;
                 }
                 if self.is_closed() {
+                    let _ = self.slot.receiver_tid.compare_exchange(
+                        my_tid,
+                        0,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    );
                     return Err(IpcError::Closed);
                 }
                 core::hint::spin_loop();
                 spins += 1;
+                total_spins += 1;
+                if total_spins > 2_000_000 {
+                    let _ = self.slot.receiver_tid.compare_exchange(
+                        my_tid,
+                        0,
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    );
+                    return Err(IpcError::Timeout);
+                }
                 if spins == 64 {
+                    crate::ipc::sync::sched_hooks::prepare_sleep(my_tid);
+                    // Re-check SenderWaiting / closure before blocking to avoid lost wakeups.
+                    let s2 = RendezVousState::from_u32(self.slot.state.load(Ordering::Acquire));
+                    if s2 == RendezVousState::SenderWaiting {
+                        crate::ipc::sync::sched_hooks::cancel_sleep(my_tid);
+                        let _ = self.slot.receiver_tid.compare_exchange(
+                            my_tid,
+                            0,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        );
+                        break;
+                    }
+                    if self.is_closed() {
+                        crate::ipc::sync::sched_hooks::cancel_sleep(my_tid);
+                        let _ = self.slot.receiver_tid.compare_exchange(
+                            my_tid,
+                            0,
+                            Ordering::Release,
+                            Ordering::Relaxed,
+                        );
+                        return Err(IpcError::Closed);
+                    }
                     // RULE PREEMPT-BLOCK (B6): blocking with PreemptGuard active = deadlock.
                     debug_assert!(
                         crate::scheduler::core::preempt::PreemptGuard::depth() == 0,
@@ -572,9 +680,6 @@ impl SyncChannel {
                         crate::ipc::sync::sched_hooks::block_current(my_tid);
                     }
                     spins = 0;
-                }
-                if spins > 2_000_000 {
-                    return Err(IpcError::Timeout);
                 }
             }
         }
@@ -699,7 +804,12 @@ impl SyncChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<MessageId, IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_SEND)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_SEND,
+        )?;
         self.send(data, flags)
     }
 
@@ -714,7 +824,12 @@ impl SyncChannel {
         table: &CapTable,
         token: CapToken,
     ) -> Result<(MessageId, usize, MsgFlags), IpcError> {
-        crate::ipc::capability_bridge::check_channel_access(table, token, Rights::IPC_RECV)?;
+        crate::ipc::capability_bridge::check_channel_access(
+            table,
+            token,
+            self.id.get(),
+            Rights::IPC_RECV,
+        )?;
         self.recv(buf, flags)
     }
 }
@@ -856,18 +971,28 @@ pub fn sync_channel_close(idx: usize) -> Result<(), IpcError> {
 
 /// Destroys and frees synchronous channel identified by `idx`.
 pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
-    let mut tbl = SYNC_CHANNEL_TABLE.lock();
-    if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
-        return Err(IpcError::InvalidHandle);
-    }
-    // Close channel to wake up waiting threads before destruction
-    let chan = unsafe { tbl.get_unchecked(idx) };
-    chan.close();
+    let chan_ptr: *const SyncChannel = {
+        let tbl = SYNC_CHANNEL_TABLE.lock();
+        if idx >= SYNC_CHANNEL_TABLE_SIZE || !tbl.used[idx] {
+            return Err(IpcError::InvalidHandle);
+        }
+        // SAFETY: used[idx] verified under spinlock above.
+        let chan = unsafe { tbl.get_unchecked(idx) };
+        if !chan.begin_destroy() {
+            return Err(IpcError::InvalidHandle);
+        }
+        chan as *const SyncChannel
+    };
 
-    // T8-002 FIX: wait until in-flight operations are complete before freeing slot
+    // Wait outside SYNC_CHANNEL_TABLE.lock() until in-flight operations finish.
+    // SAFETY: `chan_ptr` stays valid until `tbl.free(idx)` succeeds, and `begin_destroy()`
+    // guarantees only this caller can transition to destruction.
     let mut spins = 0u32;
-    while chan.active_ops.load(Ordering::Acquire) != 0 {
+    while unsafe { (*chan_ptr).active_ops.load(Ordering::Acquire) } != 0 {
         if spins >= 256 {
+            unsafe {
+                (*chan_ptr).closed.store(1, Ordering::Release);
+            }
             return Err(IpcError::Retry);
         }
         core::hint::spin_loop();
@@ -879,6 +1004,7 @@ pub fn sync_channel_destroy(idx: usize) -> Result<(), IpcError> {
         }
     }
 
+    let mut tbl = SYNC_CHANNEL_TABLE.lock();
     if !tbl.free(idx) {
         return Err(IpcError::InvalidHandle);
     }

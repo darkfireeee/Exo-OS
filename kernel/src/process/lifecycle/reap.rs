@@ -18,7 +18,6 @@ use crate::process::core::pcb::ProcessState;
 use crate::process::core::pid::{Pid, Tid};
 use crate::process::core::registry::PROCESS_REGISTRY;
 use crate::process::lifecycle::create::{create_kthread, KthreadParams};
-use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::switch::{cooperative_reschedule, current_thread_raw, schedule_block};
 use crate::scheduler::core::task::{CpuId, Priority, TaskState};
 use crate::scheduler::sync::wait_queue::{WaitNode, WaitQueue};
@@ -245,12 +244,10 @@ fn sleep_until_work() {
     drop(sleep_guard);
 
     let cpu_id = CpuId(unsafe { (*tcb).cpu_id.load(Ordering::Relaxed) as u32 });
-    // SAFETY: `cpu_id` comes from current executing TCB.
-    let rq = unsafe { run_queue(cpu_id) };
     // SAFETY: thread is now visible in wait queue, so wakeup
     // will not be lost. `schedule_block` resumes only after wake_one().
     unsafe {
-        schedule_block(rq, &mut *tcb);
+        schedule_block(cpu_id, &mut *tcb);
     }
 }
 
@@ -310,7 +307,18 @@ fn reap_entry(entry: ReaperEntry) {
                                 )
                                 .is_ok()
                         {
-                            // SAFETY: thread allocated by Box::into_raw, state Dead.
+                            // Ensure no CPU is still running on this thread's kernel stack during switch-out.
+                            let tcb_raw = unsafe { (*ptr).tcb_ptr() as usize };
+                            for _ in 0..4096 {
+                                let still_on_cpu = crate::scheduler::core::switch::CURRENT_THREAD_PER_CPU
+                                    .iter()
+                                    .any(|c| c.load(Ordering::Acquire) == tcb_raw);
+                                if !still_on_cpu {
+                                    break;
+                                }
+                                core::hint::spin_loop();
+                            }
+                            // SAFETY: thread allocated by Box::into_raw, state Dead, and off all CPUs.
                             unsafe {
                                 let thread_box = alloc::boxed::Box::from_raw(ptr);
                                 drop(thread_box);

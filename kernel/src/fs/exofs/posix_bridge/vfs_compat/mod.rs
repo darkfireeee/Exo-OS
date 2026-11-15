@@ -1,13 +1,13 @@
-//! # kernel::fs::exofs::posix_bridge::vfs_compat — Couche de compatibilité VFS
+//! # kernel::fs::exofs::posix_bridge::vfs_compat — VFS compatibility layer
 //!
-//! Organisation modulaire ségréguée :
-//! - `types`     : Constantes POSIX, structures VfsInode, VfsDirent, VfsFd
-//! - `fd_table`  : Table des descripteurs de fichiers ouverts et isolation par PID
-//! - `directory` : Registre des répertoires et hiérarchie en mémoire
-//! - `persist`   : Persistance et sérialisation du namespace sur disque ExoFS
-//! - `ops`       : Surface POSIX (lookup, create, open, read, write, getattr, readdir, ...)
-//! - `helpers`   : Helpers internes de conversion d'inodes, hashing et validation de noms
-//! - `tests`     : Tests unitaires de conformité
+//! Segregated modular organization:
+//! - `types`     : POSIX constants, VfsInode, VfsDirent, VfsFd structures
+//! - `fd_table`  : Open file descriptor table and PID isolation
+//! - `directory` : Directory registry and in-memory hierarchy
+//! - `persist`   : Namespace persistence and serialization onto ExoFS disk
+//! - `ops`       : POSIX surface (lookup, create, open, read, write, getattr, readdir, ...)
+//! - `helpers`   : Internal helpers for inode conversion, hashing, and name validation
+//! - `tests`     : Conformance unit tests
 
 pub mod types;
 pub mod fd_table;

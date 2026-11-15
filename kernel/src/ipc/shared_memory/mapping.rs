@@ -276,7 +276,9 @@ pub fn shm_map(
         }
         // Calculate effective permissions (intersection)
         let rp = ShmPermissions(requested_perms.0 & desc.permissions);
-        if requested_perms.can_write() && !rp.can_write() {
+        if (requested_perms.can_read() && !rp.can_read())
+            || (requested_perms.can_write() && !rp.can_write())
+        {
             return Err(IpcError::PermissionDenied);
         }
         let n = desc.page_count();
@@ -300,23 +302,45 @@ pub fn shm_map(
         }
     };
 
-    // Calculate or use virtual address
-    // If hint_virt == NULL, we use a dummy virtual address based on
-    // the physical address of the first page (the real memory manager would place
-    // it correctly in the process's address space).
+    // Calculate a free user virtual gap when hint_virt == NULL, or validate user range.
     let virt_base = if hint_virt.is_null() {
-        let phys = {
-            let dir = SHM_DESC_DIR.lock();
-            // SAFETY: desc_idx allocated by alloc() in SHM_DESC_DIR; lock held during access.
-            unsafe { dir.get(desc_idx) }
-                .and_then(|d| d.page_phys(0))
-                .unwrap_or(PhysAddr::NULL)
-        };
-        // Virtual address = physical address in stub implementation
-        // (will be replaced by memory::virtual::find_vma() during integration)
-        VirtAddr(phys.0)
+        let gap_addr = crate::process::core::registry::PROCESS_REGISTRY
+            .find_by_pid(crate::process::core::pid::Pid(pid.0))
+            .and_then(|pcb| {
+                let as_ptr = pcb.address_space_ptr()
+                    as *const crate::memory::virt::address_space::UserAddressSpace;
+                if as_ptr.is_null() {
+                    return None;
+                }
+                // SAFETY: `pcb` owns a live UserAddressSpace while present in PROCESS_REGISTRY.
+                let user_as = unsafe { &*as_ptr };
+                user_as
+                    .find_free_gap(size_bytes as usize, None)
+                    .map(|va| va.as_u64())
+            });
+        match gap_addr {
+            Some(va) => VirtAddr(va),
+            None => {
+                if vmm_hooks_ready() {
+                    let dir = SHM_DESC_DIR.lock();
+                    if let Some(desc) = unsafe { dir.get(desc_idx) } {
+                        desc.remove_mapping();
+                    }
+                    SHM_MAPPING_TABLE.lock().free(mapping_idx);
+                    return Err(IpcError::OutOfResources);
+                }
+                // Standalone unit tests without initialized VMM hooks.
+                VirtAddr(crate::memory::virt::address_space::USER_MMAP_BASE)
+            }
+        }
     } else {
-        if !hint_virt.is_page_aligned() || !hint_virt.is_canonical() {
+        let user_end = crate::memory::core::layout::USER_END.as_u64();
+        let range_ok = hint_virt.0 >= PAGE_SIZE as u64
+            && hint_virt
+                .0
+                .checked_add(size_bytes as u64)
+                .map_or(false, |end| end <= user_end);
+        if !hint_virt.is_page_aligned() || !hint_virt.is_canonical() || !range_ok {
             let dir = SHM_DESC_DIR.lock();
             if let Some(desc) = unsafe { dir.get(desc_idx) } {
                 desc.remove_mapping();
@@ -378,17 +402,49 @@ pub fn shm_map(
         // If no hook -> simulated mapping (dev/test mode)
     }
 
-    // Register mapping in table
-    {
-        let tbl = SHM_MAPPING_TABLE.lock();
-        let m = &tbl.entries[mapping_idx];
-        m.desc_idx.store(desc_idx as u32, Ordering::Relaxed);
-        m.process_id.store(pid.0, Ordering::Relaxed);
-        m.virt_base.store(virt_base.0, Ordering::Relaxed);
-        m.permissions
-            .store(region_perms.0 as u32, Ordering::Relaxed);
-        m.mapped_pages.store(n_pages as u32, Ordering::Relaxed);
-        m.mark_active();
+    // Register mapping in table after verifying descriptor is still active.
+    // Lock order matches shm_map/shm_unmap_for_process: SHM_MAPPING_TABLE -> SHM_DESC_DIR.
+    let desc_still_active = {
+        let mut tbl = SHM_MAPPING_TABLE.lock();
+        let still_active = {
+            let dir = SHM_DESC_DIR.lock();
+            if let Some(d) = unsafe { dir.get(desc_idx) } {
+                if d.is_active() {
+                    true
+                } else {
+                    d.remove_mapping();
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if still_active {
+            let m = &tbl.entries[mapping_idx];
+            m.desc_idx.store(desc_idx as u32, Ordering::Relaxed);
+            m.process_id.store(pid.0, Ordering::Relaxed);
+            m.virt_base.store(virt_base.0, Ordering::Relaxed);
+            m.permissions
+                .store(region_perms.0 as u32, Ordering::Relaxed);
+            m.mapped_pages.store(n_pages as u32, Ordering::Relaxed);
+            m.mark_active();
+        } else {
+            tbl.free(mapping_idx);
+        }
+        still_active
+    };
+
+    if !desc_still_active {
+        if let Some(unmap_fn) = *UNMAP_PAGE_HOOK.lock() {
+            for i in 0..n_pages.min(MAX_SHM_PAGES_PER_DESC) {
+                if !phys_addrs[i].is_null() {
+                    let v = virt_base.0 + (i * PAGE_SIZE) as u64;
+                    // SAFETY: unmap_fn is a validated hook; v was just mapped above.
+                    unsafe { unmap_fn(v, pid.0) };
+                }
+            }
+        }
+        return Err(IpcError::InvalidHandle);
     }
 
     Ok(ShmMapResult {

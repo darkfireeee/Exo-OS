@@ -1,12 +1,12 @@
-//! canonicalize.rs -- Normalisation iterative de chemins ExoFS.
+//! canonicalize.rs — Iterative path canonicalization in ExoFS.
 //!
-//! Supprime les doubles slashes, resout les composants "." et ".."
-//! de facon *iterative* (regle RECUR-01). Aucune recursion.
+//! Strips double slashes, resolves "." and ".." components
+//! *iteratively* (rule RECUR-01). No recursion.
 //!
-//! ## Regles spec
-//! - **RECUR-01** : iteratif -- jamais recursif.
-//! - **ARITH-02** : checked_add sur tous les calculs doffset.
-//! - **OOM-02** : try_reserve(1) avant push.
+//! ## Spec Rules
+//! - **RECUR-01**: iterative — never recursive.
+//! - **ARITH-02**: checked_add on all offset calculations.
+//! - **OOM-02**: try_reserve(1) before push.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -14,13 +14,13 @@ use alloc::vec::Vec;
 use super::path_component::{validate_component, PathComponent, PathParser};
 use crate::fs::exofs::core::{ExofsError, ExofsResult};
 
-/// Longueur maximale dun chemin (4096 octets, POSIX PATH_MAX).
+/// Maximum path length (4096 bytes, POSIX PATH_MAX).
 pub const PATH_MAX: usize = 4096;
 
-// -- Stack de composants a taille fixe -----------------------------------------
+// -- Fixed-size component stack --------------------------------------------
 
-/// Stack de composants de chemin, stockee sur la pile (pas de Vec).
-/// Capacite : 64 composants max (chemin de 64 niveaux de profondeur).
+/// Path component stack, stored on the stack (no Vec).
+/// Capacity: 64 components max (path depth of up to 64 levels).
 pub struct ComponentStack {
     data: [Option<PathComponent>; 64],
     top: usize,
@@ -28,7 +28,7 @@ pub struct ComponentStack {
 
 impl ComponentStack {
     pub fn new() -> Self {
-        // SAFETY : Option<PathComponent> est Copy-capable ici (Clone au moins)
+        // SAFETY: Option<PathComponent> is Copy-capable here (Clone at least)
         ComponentStack {
             data: core::array::from_fn(|_| None),
             top: 0,
@@ -71,24 +71,24 @@ impl Default for ComponentStack {
 
 // -- canonicalize_path --------------------------------------------------------
 
-/// Normalise un chemin brut en supprimant les redondances.
+/// Canonicalizes a raw path by removing redundancies.
 ///
-/// Operations effectuees :
-/// 1. Collaps des slashes consecutifs ( => ).
-/// 2. Suppression des composants  (repertoire courant).
-/// 3. Resolution des composants  (repertoire parent).
-/// 4. Verification de PATH_MAX.
+/// Operations performed:
+/// 1. Collapse consecutive slashes (`//` => `/`).
+/// 2. Remove `.` components (current directory).
+/// 3. Resolve `..` components (parent directory).
+/// 4. Verification of PATH_MAX.
 ///
-/// Ecrit le resultat dans  et retourne la longueur ecrite.
+/// Writes the result into `buf` and returns the written length.
 ///
-/// # Regles spec
-/// - **RECUR-01** : aucune recursion -- toutes les operations sont iteratives.
-/// - **ARITH-02** : checked_add sur tous les offsets.
+/// # Spec rules
+/// - **RECUR-01**: no recursion — all operations are iterative.
+/// - **ARITH-02**: checked_add on all offsets.
 ///
 /// # Errors
-/// -           si le resultat depasse PATH_MAX.
-/// -  si un composant est invalide.
-/// -         si calcul darithmetique deborde.
+/// - If the result exceeds PATH_MAX.
+/// - If a component is invalid.
+/// - If arithmetic calculation overflows.
 pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
     if input.is_empty() {
         return Err(ExofsError::InvalidPathComponent);
@@ -100,16 +100,16 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
     let is_abs = input.first() == Some(&b'/');
     let mut stack = ComponentStack::new();
 
-    // -- Phase 1 : parse iteratif et resolution . / .. (RECUR-01) --
+    // -- Phase 1: iterative parse and resolve . / .. (RECUR-01) --
     let mut parser = PathParser::new(input)?;
     loop {
         match parser.next_component()? {
             None => break,
             Some(comp) => {
                 if comp.is_dot() {
-                    // Ignorer . -- on reste dans le meme repertoire.
+                    // Ignore . -- stay in the same directory.
                 } else if comp.is_dotdot() {
-                    // .. -- remonter dun niveau si possible.
+                    // .. -- move up one level if possible.
                     stack.pop();
                 } else {
                     stack.push(comp)?;
@@ -118,7 +118,7 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
         }
     }
 
-    // -- Phase 2 : reconstruction iterative dans buf --
+    // -- Phase 2: iterative reconstruction into buf --
     let mut pos: usize = 0;
 
     if is_abs {
@@ -151,12 +151,12 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
         pos = end;
     }
 
-    // Chemin vide apres normalisation = racine ou vide.
+    // Empty path after canonicalization = root or empty.
     if pos == 0 {
         if is_abs {
-            // Deja ecrit le /
+            // Already wrote the /
         } else {
-            // Chemin relatif vide -- retourner .
+            // Empty relative path -- return .
             if buf.len() < 1 {
                 return Err(ExofsError::PathTooLong);
             }
@@ -173,9 +173,9 @@ pub fn canonicalize_path(input: &[u8], buf: &mut [u8]) -> ExofsResult<usize> {
 
 // -- canonicalize_to_vec ------------------------------------------------------
 
-/// Version qui alloue le resultat dans un Vec.
+/// Version that allocates the result into a Vec.
 ///
-/// # OOM-02 : try_reserve
+/// # OOM-02: try_reserve
 pub fn canonicalize_to_vec(input: &[u8]) -> ExofsResult<Vec<u8>> {
     let mut buf = [0u8; PATH_MAX];
     let n = canonicalize_path(input, &mut buf)?;
@@ -187,14 +187,14 @@ pub fn canonicalize_to_vec(input: &[u8]) -> ExofsResult<Vec<u8>> {
 
 // -- normalize_components ──────────────────────────────────────────────────────
 
-/// Normalise une sequence de composants deja parses.
+/// Normalizes a sequence of already parsed components.
 ///
-/// Resout les . et .. dans la sequence. Retourne un Vec de composants propres.
+/// Resolves . and .. in the sequence. Returns a Vec of clean components.
 pub fn normalize_components(input: &[PathComponent]) -> ExofsResult<Vec<PathComponent>> {
     let mut stack: Vec<PathComponent> = Vec::new();
     for comp in input {
         if comp.is_dot() {
-            // Ignorer.
+            // Ignore.
         } else if comp.is_dotdot() {
             stack.pop();
         } else {
@@ -207,14 +207,14 @@ pub fn normalize_components(input: &[PathComponent]) -> ExofsResult<Vec<PathComp
 
 // -- CanonicalPath ─────────────────────────────────────────────────────────────
 
-/// Chemin canonique, garanti valide, stocke comme Vec<u8>.
+/// Canonical path, guaranteed valid, stored as Vec<u8>.
 #[derive(Clone, Debug)]
 pub struct CanonicalPath {
     bytes: Vec<u8>,
 }
 
 impl CanonicalPath {
-    /// Cree un CanonicalPath depuis un chemin brut.
+    /// Creates a CanonicalPath from a raw path.
     pub fn new(input: &[u8]) -> ExofsResult<Self> {
         let bytes = canonicalize_to_vec(input)?;
         Ok(CanonicalPath { bytes })
@@ -230,7 +230,7 @@ impl CanonicalPath {
         self.bytes.is_empty()
     }
 
-    /// Retourne le composant final (basename).
+    /// Returns the final component (basename).
     pub fn basename(&self) -> Option<&[u8]> {
         let b = &self.bytes;
         if b == b"/" {
@@ -247,7 +247,7 @@ impl CanonicalPath {
         Some(&b[start..])
     }
 
-    /// Retourne le chemin sans le dernier composant (dirname).
+    /// Returns the path without the last component (dirname).
     pub fn dirname(&self) -> &[u8] {
         let b = &self.bytes;
         match b.iter().rposition(|&c| c == b'/') {
@@ -257,13 +257,13 @@ impl CanonicalPath {
         }
     }
 
-    /// Teste si ce chemin est un prefixe de .
+    /// Tests if this path is a prefix of `other`.
     pub fn is_prefix_of(&self, other: &[u8]) -> bool {
         other.starts_with(&self.bytes)
             && (other.len() == self.bytes.len() || other.get(self.bytes.len()) == Some(&b'/'))
     }
 
-    /// Joint ce chemin avec un composant supplementaire.
+    /// Joins this path with an additional component.
     pub fn join(&self, comp: &PathComponent) -> ExofsResult<Self> {
         let total = self
             .bytes
@@ -285,20 +285,20 @@ impl CanonicalPath {
     }
 }
 
-// -- PathNormalizer : validateur strict ──────────────────────────────────────
+// -- PathNormalizer: strict validator ────────────────────────────────────────
 
-/// Validateur de chemin canonique.
+/// Canonical path validator.
 ///
-/// Vérifie les propriétés du chemin APRES canonicalisation :
-/// - Commence par `/` (si absolu).
-/// - Aucun `//`, `/.`, `/..`.
-/// - Chaque composant valide selon les règles ExoFS.
+/// Verifies path properties AFTER canonicalization:
+/// - Starts with `/` (if absolute).
+/// - No `//`, `/.`, `/..`.
+/// - Each component valid according to ExoFS rules.
 pub struct PathNormalizer;
 
 impl PathNormalizer {
-    /// Vérifie qu un chemin est déjà canonique (rapide, sans allocation).
+    /// Verifies that a path is already canonical (fast, no allocation).
     ///
-    /// Retourne `Ok(())` si le chemin est correct, une erreur sinon.
+    /// Returns `Ok(())` if the path is valid, an error otherwise.
     pub fn verify(path: &[u8]) -> ExofsResult<()> {
         if path.is_empty() {
             return Err(ExofsError::InvalidPathComponent);
@@ -334,7 +334,7 @@ impl PathNormalizer {
         Ok(())
     }
 
-    /// Vérifie ET retourne le chemin normalisé (canonique strict).
+    /// Verifies AND returns the normalized path (strict canonical).
     pub fn verify_and_return(path: &[u8]) -> ExofsResult<CanonicalPath> {
         Self::verify(path)?;
         let bytes = {
@@ -350,11 +350,11 @@ impl PathNormalizer {
     }
 }
 
-// -- string_to_components : chemin => Vec de composants ─────────────────────
+// -- split_canonical: path => Vec of components ─────────────────────────────
 
-/// Découpe un chemin canonique en composants, sans résoudre . ni ..
+/// Splits a canonical path into components, without resolving . or ..
 ///
-/// Le chemin doit être déjà canonique (résultat de `canonicalize_path`).
+/// The path must already be canonical (result of `canonicalize_path`).
 pub fn split_canonical(path: &[u8]) -> ExofsResult<alloc::vec::Vec<PathComponent>> {
     use alloc::vec::Vec;
     let mut out: Vec<PathComponent> = Vec::new();
@@ -384,7 +384,7 @@ pub fn split_canonical(path: &[u8]) -> ExofsResult<alloc::vec::Vec<PathComponent
     Ok(out)
 }
 
-/// Joint une liste de composants en un chemin absolu.
+/// Joins a list of components into an absolute path.
 pub fn join_components(comps: &[PathComponent]) -> ExofsResult<alloc::vec::Vec<u8>> {
     use alloc::vec::Vec;
     let mut total: usize = 1; // leading '/'
@@ -410,7 +410,7 @@ pub fn join_components(comps: &[PathComponent]) -> ExofsResult<alloc::vec::Vec<u
     Ok(out)
 }
 
-// -- Tests supplémentaires ────────────────────────────────────────────────────
+// -- Extra tests ──────────────────────────────────────────────────────────────
 #[cfg(test)]
 use crate::fs::exofs::test_support::TestUnwrapExt;
 #[cfg(test)]

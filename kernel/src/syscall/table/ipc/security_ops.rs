@@ -46,6 +46,10 @@ pub fn sys_exo_cap_create(
             )
             .is_err()
             {
+                let _ = crate::security::capability::revoke_handle_by_caller(
+                    caller_pid,
+                    token.object_id().as_u64() as u32,
+                );
                 return EFAULT;
             }
             token.object_id().as_u64() as i64
@@ -162,7 +166,7 @@ pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, 
 pub fn sys_exo_shield_drain(
     buf_ptr: u64,
     count: u64,
-    _a3: u64,
+    cmd_and_pid: u64,
     _a4: u64,
     _a5: u64,
     _a6: u64,
@@ -174,11 +178,22 @@ pub fn sys_exo_shield_drain(
     if caller_pid == 0 {
         return EPERM;
     }
-    // Only exo_shield drains the feed.
+    // Only exo_shield drains the feed or issues kernel containment updates.
     if crate::security::ipc_policy::service_class_of(crate::process::core::pid::Pid(caller_pid))
         != crate::security::ipc_policy::ServiceClass::ExoShield
     {
         return EACCES;
+    }
+
+    if cmd_and_pid != 0 {
+        let cmd = (cmd_and_pid >> 32) as u32;
+        let target_pid = (cmd_and_pid & 0xFFFF_FFFF) as u32;
+        let ok = match cmd {
+            1 => crate::security::zero_trust::quarantine_process(target_pid),
+            2 => crate::security::zero_trust::release_process_quarantine(target_pid),
+            _ => return EINVAL,
+        };
+        return if ok { 0 } else { EINVAL };
     }
 
     let count = count as usize;
@@ -193,15 +208,16 @@ pub fn sys_exo_shield_drain(
     }
 
     let mut events = [ShieldEvent::zero(); 64];
-    let drained = crate::security::shield_feed::drain(&mut events[..n]);
-    if drained == 0 {
+    let peeked = crate::security::shield_feed::peek(&mut events[..n]);
+    if peeked == 0 {
         return 0;
     }
-    let copy_bytes = drained * SHIELD_EVENT_SIZE;
+    let copy_bytes = peeked * SHIELD_EVENT_SIZE;
     if copy_to_user(buf_ptr as *mut u8, events.as_ptr() as *const u8, copy_bytes).is_err() {
         return EFAULT;
     }
-    drained as i64
+    crate::security::shield_feed::advance(peeked);
+    peeked as i64
 }
 
 #[cfg(test)]
